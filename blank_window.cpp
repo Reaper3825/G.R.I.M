@@ -1,7 +1,5 @@
-#pragma once
 
 // blank_window.cpp
-
 #include <SFML/Graphics.hpp>
 
 int main() {
