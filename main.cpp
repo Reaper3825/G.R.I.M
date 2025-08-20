@@ -7,7 +7,7 @@ A Wadkins
 using namespace std;
 
 //Variable declarations
-int a = 5;
+int a = 6;
 int main() {
 cout << a << endl;
     return 0;
