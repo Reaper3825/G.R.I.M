@@ -1,7 +1,6 @@
 #pragma once
 
-// blank_window.h
-// Header for a blank window application
+// blank_window.cpp
 
 #include <string>
 
