@@ -5,21 +5,8 @@ A Wadkins
 // Start
 #include <iostream>
 using namespace std;
+
 int main() {
-    // Declare variables
-    int num1, num2, sum;
-
-    // Input two integers
-    cout << "Enter first integer: ";
-    cin >> num1;
-    cout << "Enter second integer: ";
-    cin >> num2;
-
-    // Calculate the sum
-    sum = num1 + num2;
-
-    // Output the result
-    cout << "The sum of " << num1 << " and " << num2 << " is " << sum << "." << endl;
-
+cout << "Hello, World!" << endl;
     return 0;
 }
