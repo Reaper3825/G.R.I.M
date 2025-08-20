@@ -2,18 +2,18 @@
 
 // blank_window.cpp
 
-#include <string>
+#include <SFML/Graphics.hpp>
 
-class BlankWindow {
-public:
-    BlankWindow(const std::string& title, int width, int height);
-    ~BlankWindow();
-
-    void show();
-    void close();
-
-private:
-    // Platform-specific window handle (opaque pointer)
-    struct Impl;
-    Impl* pImpl;
-};
+int main() {
+    sf::RenderWindow window(sf::VideoMode(800, 600), "Blank Window");
+    while (window.isOpen()) {
+        sf::Event event;
+        while (window.pollEvent(event)) {
+            if (event.type == sf::Event::Closed)
+                window.close();
+        }
+        window.clear();
+        window.display();
+    }
+    return 0;
+}
