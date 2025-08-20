@@ -6,7 +6,9 @@ A Wadkins
 #include <iostream>
 using namespace std;
 
+//Variable declarations
+int a = 5;
 int main() {
-cout << "Hello, World!" << endl;
+cout << a << endl;
     return 0;
 }
