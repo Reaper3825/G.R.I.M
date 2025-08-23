@@ -1,4 +1,4 @@
-#include <iostream
+#include <iostream>
 #include <SFML/Graphics.hpp>
 int a = 6;
 
