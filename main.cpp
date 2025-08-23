@@ -6,14 +6,18 @@
 #include <filesystem>
 #include <chrono>
 #include <algorithm>
-#include <cmath> // for std::fmod
+#include <cmath>
 #include "commands.hpp"
 
 namespace fs = std::filesystem;
 
 int main() {
     // Window
-    sf::RenderWindow window(sf::VideoMode(800, 600), "G.R.I.M");
+sf::RenderWindow window(
+    sf::VideoMode(800, 600),
+    "G.R.I.M",
+    sf::Style::Resize | sf::Style::Close | sf::Style::Titlebar
+);
     window.setPosition({100,100});
     window.setKeyRepeatEnabled(true); // allows holding backspace
 
@@ -67,6 +71,21 @@ int main() {
         sf::Event event;
         while (window.pollEvent(event)) {
             if (event.type == sf::Event::Closed) window.close();
+
+            while (window.pollEvent(event)) {
+    if (event.type == sf::Event::Closed) window.close();
+
+    // Handle window resize
+    if (event.type == sf::Event::Resized) {
+        sf::FloatRect visibleArea(0, 0, event.size.width, event.size.height);
+        window.setView(sf::View(visibleArea));
+
+        chatBox.setPosition(20.f, event.size.height - 60.f);
+        chatText.setPosition(25.f, event.size.height - 55.f);
+    }
+
+    // ... existing key and text input handling here ...
+}
 
             // ---------- Key press events ----------
             if (event.type == sf::Event::KeyPressed) {
