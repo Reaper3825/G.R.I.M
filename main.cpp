@@ -1,11 +1,11 @@
 #include <iostream>
 #include <SFML/Graphics.hpp>
 #include <string>
+#include <vector>
 #include <filesystem>
 namespace fs = std::filesystem;
 
-// var declarations
-std::string a = "G.R.I.M"; //Title
+std::string a = "G.R.I.M"; // Title
 
 int main() {
     sf::RenderWindow window(sf::VideoMode(800, 600), "Blank Window");
@@ -17,25 +17,31 @@ int main() {
         return -1;
     }
 
-    // --- Title text ---
+    // ---- Config ----
+    const int maxMessages = 15;
+
+    // ---- Title text ----
     sf::Text label(a, font, 32);
     label.setFillColor(sf::Color::Black);
-    sf::FloatRect bounds = label.getLocalBounds();
-    label.setOrigin(bounds.width / 2.f, bounds.height / 2.f);
+    {
+        sf::FloatRect b = label.getLocalBounds();
+        label.setOrigin(b.width / 2.f, b.height / 2.f);
+    }
     label.setPosition(800.f / 2.f, 100.f);
 
-    // --- Chat box background ---
-    sf::RectangleShape chatBox(sf::Vector2f(760, 40));  // width, height
+    // ---- Chat box ----
+    sf::RectangleShape chatBox(sf::Vector2f(760, 40));
     chatBox.setFillColor(sf::Color(200, 200, 200));
-    chatBox.setPosition(20, 540);  // bottom of window
+    chatBox.setPosition(20, 540);
 
-    // --- User input text ---
+    // ---- User input state ----
     std::string userInput;
-    sf::Text chatText;
-    chatText.setFont(font);
-    chatText.setCharacterSize(20);
+    sf::Text chatText("", font, 20);
     chatText.setFillColor(sf::Color::Black);
     chatText.setPosition(25, 545);
+
+    // ---- Chat history ----
+    std::vector<std::string> chatHistory;
 
     while (window.isOpen()) {
         sf::Event event;
@@ -45,41 +51,44 @@ int main() {
             if (event.type == sf::Event::KeyPressed &&
                 event.key.code == sf::Keyboard::Escape) window.close();
 
-            // --- Text entry handling ---
+            // Text entry
             if (event.type == sf::Event::TextEntered) {
                 if (event.text.unicode == '\b') {
-                    // backspace
-                    if (!userInput.empty())
-                        userInput.pop_back();
+                    if (!userInput.empty()) userInput.pop_back();
                 } else if (event.text.unicode == '\r') {
-                    // enter key (command finished)
-                    std::cout << "Command entered: " << userInput << std::endl;
-                    userInput.clear(); // reset input after "sending"
-                } else if (event.text.unicode < 128) {
-                    // normal char
+                    // Submit current input to history
+                    if (!userInput.empty()) {
+                        chatHistory.push_back(userInput);
+                        std::cout << "Message: " << userInput << std::endl;
+                        userInput.clear();
+                    }
+                } else if (event.text.unicode < 128 && event.text.unicode >= 32) {
+                    // append printable ASCII
                     userInput += static_cast<char>(event.text.unicode);
                 }
                 chatText.setString(userInput);
             }
         }
-        int maxMessages = 15;
-        int startIndex = (chatHistory.size() > maxMessages) ? chatHistory.size() - maxMessages : 0;
-        float y = 520.f;  // start just above chat box
-        for (int i = startIndex; i < chatHistory.size(); i++) {
+
+        // ---- DRAW ----
+        window.clear(sf::Color(225, 225, 225));
+        window.draw(label);
+
+        // Draw chat history (last maxMessages), stacked upward above chat box
+        int startIndex = (chatHistory.size() > maxMessages)
+                         ? static_cast<int>(chatHistory.size()) - maxMessages
+                         : 0;
+        float y = 520.f; // just above chat box
+        for (int i = static_cast<int>(chatHistory.size()) - 1; i >= startIndex; --i) {
             sf::Text msg(chatHistory[i], font, 20);
             msg.setFillColor(sf::Color::Black);
-            msg.setPosition(25, y);
+            msg.setPosition(25.f, y);
             window.draw(msg);
-            y -= 25.f;  // stack upwards
+            y -= 25.f;
         }
 
-        window.clear(sf::Color(225, 225, 225));
-        window.draw(label);     // Title
-
-        //Draw chat history
-
-        window.draw(chatBox);   // Chat box background
-        window.draw(chatText);  // Chat box text
+        window.draw(chatBox);
+        window.draw(chatText);
         window.display();
     }
 }
