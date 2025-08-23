@@ -8,7 +8,6 @@ int main() {
 
     sf::RenderWindow window(sf::VideoMode(800, 600), "Blank Window");
     window.setPosition({100,100});
-
     while (window.isOpen()) {
         sf::Event event;
         while (window.pollEvent(event)) {
