@@ -22,8 +22,6 @@ int main() {
 
       sf::Text label(a, font, 32);   //use string variable directly
     label.setFillColor(sf::Color::Black);
-
-       // Center text in the window
     sf::FloatRect bounds = label.getLocalBounds();
     label.setOrigin(bounds.width / 2.f, bounds.height / 2.f);
     label.setPosition(950.f/2.f, 600.f/2.f);
