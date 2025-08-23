@@ -129,6 +129,7 @@ if (event.text.unicode == '\r') {
                 chatHistory.push_back("System: " + each);
             }
         }
+    }
         scrollOffset = 0; // jump back to newest
     }
     userInput.clear();
