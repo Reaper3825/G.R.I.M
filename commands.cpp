@@ -4,6 +4,7 @@
 #include <vector>
 #include <chrono>
 #include <iostream>
+#include "nlp.hpp"
 
 // ---------- Helpers ----------
 static std::string trim(const std::string& s) {
@@ -170,5 +171,9 @@ std::string handleCommand(const std::string& raw, fs::path& currentDir) {
         return out.str();
     }
 
-    return "Error: unknown command. Type 'help' for options.";
+
+std::string reply = parseNaturalLanguage(line, currentDir);
+if (!reply.empty()) return reply;
+
+return "Error: unknown command. Type 'help' for options.";
 }
