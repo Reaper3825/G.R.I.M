@@ -24,19 +24,15 @@ int main() {
         return -1;
     }
 
-    // Config
     const int maxMessages = 15;
 
     // Title
     sf::Text label("G.R.I.M", font, 32);
-    {
-        sf::FloatRect b = label.getLocalBounds();
-        label.setOrigin(b.width/2.f, b.height/2.f);
-    }
+    { sf::FloatRect b = label.getLocalBounds(); label.setOrigin(b.width/2.f, b.height/2.f); }
     label.setFillColor(sf::Color::Black);
     label.setPosition(800.f/2.f, 50.f);
 
-    // Chat box (input area)
+    // Chat box
     sf::RectangleShape chatBox(sf::Vector2f(760, 40));
     chatBox.setFillColor(sf::Color(200, 200, 200));
     chatBox.setPosition(20.f, 540.f);
@@ -47,7 +43,7 @@ int main() {
     chatText.setFillColor(sf::Color::Black);
     chatText.setPosition(25.f, 545.f);
 
-    // Blinking caret
+    // Caret
     sf::Clock caretClock;
     const float caretBlinkPeriod = 0.5f;
     sf::RectangleShape caret(sf::Vector2f(2.f, 20.f));
@@ -57,9 +53,10 @@ int main() {
     std::vector<std::string> chatHistory;
     int scrollOffset = 0;
 
-    // Command history (for Up/Down navigation)
+    // Command history
     std::vector<std::string> commandHistory;
-    int historyIndex = -1; // -1 means "not browsing history"
+    int historyIndex = -1;
+
     // File manager state
     fs::path currentDir = fs::current_path();
     chatHistory.push_back("System: Type 'help' to see commands.");
@@ -71,7 +68,12 @@ int main() {
         while (window.pollEvent(event)) {
             if (event.type == sf::Event::Closed) window.close();
 
-              if (event.key.code == sf::Keyboard::Up) {
+            // ---------- Key press events ----------
+            if (event.type == sf::Event::KeyPressed) {
+                if (event.key.code == sf::Keyboard::Escape) window.close();
+
+                // History navigation
+                if (event.key.code == sf::Keyboard::Up) {
                     if (!commandHistory.empty()) {
                         if (historyIndex == -1) historyIndex = (int)commandHistory.size();
                         if (historyIndex > 0) historyIndex--;
@@ -85,7 +87,7 @@ int main() {
                             historyIndex++;
                             userInput = commandHistory[historyIndex];
                         } else {
-                            historyIndex = -1; // back to "new input"
+                            historyIndex = -1;
                             userInput.clear();
                         }
                         chatText.setString(userInput);
@@ -101,53 +103,59 @@ int main() {
                 }
             }
 
-            // Mouse wheel scroll
+            // ---------- Mouse wheel scroll ----------
             if (event.type == sf::Event::MouseWheelScrolled) {
                 if (event.mouseWheelScroll.wheel == sf::Mouse::VerticalWheel) {
                     int delta = (event.mouseWheelScroll.delta > 0 ? 3 : -3);
-                    scrollOffset = std::clamp(scrollOffset + (delta>0?1:-1)*3, 0,
-                                              std::max(0, (int)chatHistory.size()-1));
+                    scrollOffset = std::clamp(scrollOffset + (delta>0?1:-1)*3,
+                                              0, std::max(0, (int)chatHistory.size()-1));
                 }
             }
 
-            // Text entry
+            // ---------- Text input ----------
             if (event.type == sf::Event::TextEntered) {
-if (event.text.unicode == '\r') {
-    std::string line = userInput;
-    if (!line.empty()) {
-        chatHistory.push_back("You: " + line);
+                if (event.text.unicode == '\b') {
+                    if (!userInput.empty()) userInput.pop_back();
+                    chatText.setString(userInput);
+                } else if (event.text.unicode == '\r') {
+                    std::string line = userInput;
+                    if (!line.empty()) {
+                        chatHistory.push_back("You: " + line);
 
-        // save in command history
-        commandHistory.push_back(line);
-        historyIndex = -1; // reset browsing
+                        // Save in command history
+                        commandHistory.push_back(line);
+                        historyIndex = -1;
 
-        std::string reply = handleCommand(line, currentDir);
-        if (!reply.empty()) {
-            std::istringstream iss(reply);
-            std::string each;
-            while (std::getline(iss, each)) {
-                chatHistory.push_back("System: " + each);
+                        std::string reply = handleCommand(line, currentDir);
+                        if (!reply.empty()) {
+                            std::istringstream iss(reply);
+                            std::string each;
+                            while (std::getline(iss, each)) {
+                                chatHistory.push_back("System: " + each);
+                            }
+                        }
+                        scrollOffset = 0; // jump to newest
+                    }
+                    userInput.clear();
+                    chatText.setString(userInput);
+                } else if (event.text.unicode < 128 && event.text.unicode >= 32) {
+                    userInput += static_cast<char>(event.text.unicode);
+                    chatText.setString(userInput);
+                }
             }
         }
-    }
-        scrollOffset = 0; // jump back to newest
-    }
-    userInput.clear();
-    chatText.setString(userInput);
-}
 
-
-        // ----- DRAW -----
+        // ---------- DRAW ----------
         window.clear(sf::Color(225, 225, 225));
         window.draw(label);
 
-        // Draw chat history (with scroll offset)
+        // Draw chat history
         int total = (int)chatHistory.size();
         int visible = maxMessages;
         int startIndex = std::max(0, total - visible - scrollOffset);
         int endIndex   = std::max(0, total - 1 - scrollOffset);
 
-        float y = 520.f; // start above input box
+        float y = 520.f;
         for (int i = endIndex; i >= startIndex; --i) {
             sf::Text msg(chatHistory[i], font, 20);
             msg.setFillColor(sf::Color::Black);
@@ -160,7 +168,7 @@ if (event.text.unicode == '\r') {
         window.draw(chatBox);
         window.draw(chatText);
 
-        // Caret position (blinking at end of text)
+        // Caret
         sf::Vector2f caretPos = chatText.findCharacterPos(userInput.size());
         caret.setPosition(caretPos.x, chatText.getPosition().y);
         caret.setSize(sf::Vector2f(2.f, (float)chatText.getCharacterSize()));
