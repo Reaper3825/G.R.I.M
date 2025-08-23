@@ -5,7 +5,7 @@
 std::string a = "initialized";
 
 int main() {
-    std::cout << "Value of a: " << a << std::endl;
+    std::cout << "Opertion: " << a << std::endl;
 
     sf::RenderWindow window(sf::VideoMode(800, 600), "Blank Window");
     window.setPosition({100,100});
