@@ -6,7 +6,7 @@ namespace fs = std::filesystem;
 
 // var declarations
 std::string a = "G.R.I.M"; //Title
-int maxMessages = 15;
+
 int main() {
     sf::RenderWindow window(sf::VideoMode(800, 600), "Blank Window");
     window.setPosition({100,100});
@@ -62,7 +62,7 @@ int main() {
                 chatText.setString(userInput);
             }
         }
-        // --- Render ---
+        int maxMessages = 15;
         int startIndex = (chatHistory.size() > maxMessages) ? chatHistory.size() - maxMessages : 0;
         float y = 520.f;  // start just above chat box
         for (int i = startIndex; i < chatHistory.size(); i++) {
