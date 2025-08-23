@@ -9,13 +9,6 @@ int main() {
     sf::RenderWindow window(sf::VideoMode(800, 600), "Blank Window");
     window.setPosition({100,100});
 
-    sf::CircleShape circle(50.f);              // radius 50
-    circle.setPointCount(100);                 // smoother circle
-    circle.setFillColor(sf::Color::Green);
-    circle.setOutlineColor(sf::Color::Red);    // outline to make it pop
-    circle.setOutlineThickness(3.f);
-    circle.setPosition(200.f, 200.f);          // top-left of circle’s bounding box
-
     while (window.isOpen()) {
         sf::Event event;
         while (window.pollEvent(event)) {
@@ -28,7 +21,7 @@ int main() {
         // if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) circle.move(2.f, 0.f);
 
         window.clear(sf::Color(127, 30, 30));   // Background color
-        window.draw(circle);
+
         window.display();
     }
 }
