@@ -27,7 +27,7 @@ int main() {
         // comment movement out for now to avoid it zipping off-screen
         // if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) circle.move(2.f, 0.f);
 
-        window.clear(sf::Color(30, 30, 30));   // dark gray background
+        window.clear(sf::Color(127, 30, 30));   // Background color
         window.draw(circle);
         window.display();
     }
