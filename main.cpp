@@ -4,10 +4,11 @@
 #include <vector>
 #include <sstream>
 #include <filesystem>
+#include <chrono>
 
 namespace fs = std::filesystem;
 
-// Helpers
+// ---------- Helpers ----------
 static std::string trim(const std::string& s) {
     size_t b = s.find_first_not_of(" \t\r\n");
     if (b == std::string::npos) return "";
@@ -30,7 +31,7 @@ static fs::path resolvePath(const fs::path& currentDir, const std::string& userP
     return fs::weakly_canonical(currentDir / p);
 }
 
-// Command handler: returns a string response
+// ---------- Command handler ----------
 static std::string handleCommand(const std::string& raw, fs::path& currentDir) {
     std::string line = trim(raw);
     if (line.empty()) return "";
@@ -50,7 +51,7 @@ static std::string handleCommand(const std::string& raw, fs::path& currentDir) {
             "  copy <src> <dst>          - copy file or directory (recursive)\n"
             "  mkdir <path>              - create directory (including parents)\n"
             "  rm <path>                 - remove file or empty directory\n"
-            "  rmolder <days> [-r] [-n]   - remove files last modified more than <days> ago\n"
+            "  rmolder <days> [-r] [-n]  - remove files older than <days> (last write time)\n"
             "                               -r recurse, -n dry-run\n";
     }
 
@@ -94,7 +95,6 @@ static std::string handleCommand(const std::string& raw, fs::path& currentDir) {
 
         if (!fs::exists(src, ec)) return "Error: source does not exist.";
 
-        // If dst is an existing dir, move into it using src's filename
         if (fs::exists(dst, ec) && fs::is_directory(dst, ec)) {
             dst = dst / src.filename();
         }
@@ -145,11 +145,72 @@ static std::string handleCommand(const std::string& raw, fs::path& currentDir) {
         std::error_code ec;
 
         if (!fs::exists(p, ec)) return "Error: path does not exist.";
-        // remove() removes files or empty dirs; it will fail on non-empty dirs (safer).
-        bool ok = fs::remove(p, ec);
+        bool ok = fs::remove(p, ec); // files or empty dirs only
         if (ec) return std::string("Error removing: ") + ec.message();
         if (!ok) return "Error: could not remove (directory may not be empty).";
         return "Removed.";
+    }
+
+    // rmolder
+    if (cmd == "rmolder") {
+        if (args.size() < 2) return "Error: rmolder requires <days>.";
+        int days = 0;
+        try { days = std::stoi(args[1]); } catch (...) { return "Error: <days> must be an integer."; }
+        if (days < 0) return "Error: <days> must be >= 0.";
+
+        bool recursive = false;
+        bool dryRun = false;
+        for (size_t i = 2; i < args.size(); ++i) {
+            if (args[i] == "-r") recursive = true;
+            else if (args[i] == "-n") dryRun = true;
+            else return "Error: unknown flag '" + args[i] + "'. Use -r or -n.";
+        }
+
+        auto now_ft = fs::file_time_type::clock::now();
+        auto cutoff_ft = now_ft - std::chrono::hours(24LL * days);
+
+        std::error_code ec;
+        std::size_t checked = 0, matched = 0, removed = 0, failed = 0;
+
+        std::ostringstream out;
+        out << "Scanning " << (recursive ? "recursively " : "") << "for files older than "
+            << days << " day(s) in: " << currentDir.string() << "\n";
+
+        if (!fs::exists(currentDir, ec) || !fs::is_directory(currentDir, ec)) {
+            return "Error: current directory invalid.";
+        }
+
+        auto process = [&](const fs::directory_entry& entry) {
+            if (entry.is_regular_file(ec)) {
+                ++checked;
+                auto ftime = entry.last_write_time(ec);
+                if (!ec && ftime < cutoff_ft) {
+                    ++matched;
+                    out << (dryRun ? "[DRY] " : "") << "old: " << entry.path().filename().string() << "\n";
+                    if (!dryRun) {
+                        fs::remove(entry.path(), ec);
+                        if (ec) { ++failed; out << "  -> remove failed: " << ec.message() << "\n"; }
+                        else { ++removed; }
+                    }
+                }
+            }
+        };
+
+        if (recursive) {
+            for (const auto& entry : fs::recursive_directory_iterator(currentDir, ec)) {
+                if (ec) break;
+                process(entry);
+            }
+        } else {
+            for (const auto& entry : fs::directory_iterator(currentDir, ec)) {
+                if (ec) break;
+                process(entry);
+            }
+        }
+
+        out << "Checked: " << checked << ", Matched: " << matched;
+        if (!dryRun) out << ", Removed: " << removed << ", Failed: " << failed;
+        return out.str();
     }
 
     return "Error: unknown command. Type 'help' for options.";
@@ -190,13 +251,11 @@ int main() {
     chatText.setFillColor(sf::Color::Black);
     chatText.setPosition(25.f, 545.f);
 
-    // Chat history/messages
+    // Chat history
     std::vector<std::string> chatHistory;
 
-    // File manager state: current working directory (starts as process cwd)
+    // File manager state
     fs::path currentDir = fs::current_path();
-
-    // Show initial info
     chatHistory.push_back(std::string("System: Type 'help' to see commands."));
     chatHistory.push_back(std::string("System: cwd = ") + currentDir.string());
 
@@ -208,17 +267,13 @@ int main() {
             if (event.type == sf::Event::KeyPressed &&
                 event.key.code == sf::Keyboard::Escape) window.close();
 
-            // Text entry
             if (event.type == sf::Event::TextEntered) {
                 if (event.text.unicode == '\b') {
                     if (!userInput.empty()) userInput.pop_back();
                 } else if (event.text.unicode == '\r') {
                     std::string line = trim(userInput);
                     if (!line.empty()) {
-                        // Push user's message
                         chatHistory.push_back(std::string("You: ") + line);
-
-                        // Handle command, push system reply (could be multi-line)
                         std::string reply = handleCommand(line, currentDir);
                         if (!reply.empty()) {
                             std::istringstream iss(reply);
@@ -260,4 +315,3 @@ int main() {
     }
     return 0;
 }
-
