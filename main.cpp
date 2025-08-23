@@ -112,31 +112,29 @@ int main() {
 
             // Text entry
             if (event.type == sf::Event::TextEntered) {
-                if (event.text.unicode == '\b') {
-                    if (!userInput.empty()) userInput.pop_back();
-                    chatText.setString(userInput);
-                } else if (event.text.unicode == '\r') {
-                    std::string line = userInput;
-                    if (!line.empty()) {
-                        chatHistory.push_back("You: " + line);
-                        std::string reply = handleCommand(line, currentDir);
-                        if (!reply.empty()) {
-                            std::istringstream iss(reply);
-                            std::string each;
-                            while (std::getline(iss, each)) {
-                                chatHistory.push_back("System: " + each);
-                            }
-                        }
-                        scrollOffset = 0; // jump back to newest
-                    }
-                    userInput.clear();
-                    chatText.setString(userInput);
-                } else if (event.text.unicode < 128 && event.text.unicode >= 32) {
-                    userInput += static_cast<char>(event.text.unicode);
-                    chatText.setString(userInput);
-                }
+if (event.text.unicode == '\r') {
+    std::string line = userInput;
+    if (!line.empty()) {
+        chatHistory.push_back("You: " + line);
+
+        // save in command history
+        commandHistory.push_back(line);
+        historyIndex = -1; // reset browsing
+
+        std::string reply = handleCommand(line, currentDir);
+        if (!reply.empty()) {
+            std::istringstream iss(reply);
+            std::string each;
+            while (std::getline(iss, each)) {
+                chatHistory.push_back("System: " + each);
             }
         }
+        scrollOffset = 0; // jump back to newest
+    }
+    userInput.clear();
+    chatText.setString(userInput);
+}
+
 
         // ----- DRAW -----
         window.clear(sf::Color(225, 225, 225));
