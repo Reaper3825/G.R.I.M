@@ -17,9 +17,6 @@ int main() {
                 event.key.code == sf::Keyboard::Escape) window.close();
         }
 
-        // comment movement out for now to avoid it zipping off-screen
-        // if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) circle.move(2.f, 0.f);
-
         window.clear(sf::Color(225, 225, 225));   // Background color
 
         window.display();
