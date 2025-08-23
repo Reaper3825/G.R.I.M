@@ -6,7 +6,7 @@ namespace fs = std::filesystem;
 
 // var declarations
 std::string a = "G.R.I.M"; //Title
-
+int maxMessages = 15;
 int main() {
     sf::RenderWindow window(sf::VideoMode(800, 600), "Blank Window");
     window.setPosition({100,100});
@@ -56,15 +56,28 @@ int main() {
                     std::cout << "Command entered: " << userInput << std::endl;
                     userInput.clear(); // reset input after "sending"
                 } else if (event.text.unicode < 128) {
-                    // normal ASCII character
+                    // normal char
                     userInput += static_cast<char>(event.text.unicode);
                 }
                 chatText.setString(userInput);
             }
         }
+        // --- Render ---
+        int startIndex = (chatHistory.size() > maxMessages) ? chatHistory.size() - maxMessages : 0;
+        float y = 520.f;  // start just above chat box
+        for (int i = startIndex; i < chatHistory.size(); i++) {
+            sf::Text msg(chatHistory[i], font, 20);
+            msg.setFillColor(sf::Color::Black);
+            msg.setPosition(25, y);
+            window.draw(msg);
+            y -= 25.f;  // stack upwards
+        }
 
         window.clear(sf::Color(225, 225, 225));
         window.draw(label);     // Title
+
+        //Draw chat history
+
         window.draw(chatBox);   // Chat box background
         window.draw(chatText);  // Chat box text
         window.display();
