@@ -5,7 +5,6 @@ int a = 6;
 int main() {
     std::cout << "Value of a: " << a << std::endl;
 
-    std::cout << "Before window\n";                 // 👈
     sf::RenderWindow window(sf::VideoMode(800, 600), "Blank Window");
     std::cout << "After window\n";                  // 👈
 
