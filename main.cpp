@@ -1,10 +1,11 @@
 #include <iostream>
 #include <SFML/Graphics.hpp>
-
-stdin a = Startup;
+#include <string>  
+// var declarations
+std::string a = "initialized";
 
 int main() {
-    std::cout << a << std::endl;
+    std::cout << "Value of a: " << a << std::endl;
 
     sf::RenderWindow window(sf::VideoMode(800, 600), "Blank Window");
     window.setPosition({100,100});
