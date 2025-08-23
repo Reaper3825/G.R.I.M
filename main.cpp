@@ -4,9 +4,7 @@ A Wadkins
 */
 // Start
 #include <iostream>
-using namespace std;
-
-//Variable declarations
+#include <SFML/Graphics.hpp>
 int a = 6;
 int main() {
 cout << a << endl;
