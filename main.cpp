@@ -12,7 +12,7 @@ int main() {
      sf::Font font;
    
      // Load a font from file
-     if (!font.loadFromFile("DejaVuSans.ttf")) {
+     if (!font.loadFromFile("resources/DejaVuSans.ttf")) {
         std::cerr << "Could not load font\n";
         return -1;
     }
