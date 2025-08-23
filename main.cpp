@@ -30,7 +30,7 @@ static fs::path resolvePath(const fs::path& currentDir, const std::string& userP
     return fs::weakly_canonical(currentDir / p);
 }
 
-// Command handler: returns a multi-line string response
+// Command handler: returns a string response
 static std::string handleCommand(const std::string& raw, fs::path& currentDir) {
     std::string line = trim(raw);
     if (line.empty()) return "";
@@ -49,7 +49,9 @@ static std::string handleCommand(const std::string& raw, fs::path& currentDir) {
             "  move <src> <dst>          - move/rename file or directory\n"
             "  copy <src> <dst>          - copy file or directory (recursive)\n"
             "  mkdir <path>              - create directory (including parents)\n"
-            "  rm <path>                 - remove file or empty directory\n";
+            "  rm <path>                 - remove file or empty directory\n"
+            "  rmolder <days> [-r] [-n]   - remove files last modified more than <days> ago\n"
+            "                               -r recurse, -n dry-run\n";
     }
 
     // pwd
