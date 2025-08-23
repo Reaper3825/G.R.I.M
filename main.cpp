@@ -57,6 +57,9 @@ int main() {
     std::vector<std::string> chatHistory;
     int scrollOffset = 0;
 
+    // Command history (for Up/Down navigation)
+    std::vector<std::string> commandHistory;
+    int historyIndex = -1; // -1 means "not browsing history"
     // File manager state
     fs::path currentDir = fs::current_path();
     chatHistory.push_back("System: Type 'help' to see commands.");
@@ -68,13 +71,23 @@ int main() {
         while (window.pollEvent(event)) {
             if (event.type == sf::Event::Closed) window.close();
 
-            if (event.type == sf::Event::KeyPressed) {
-                if (event.key.code == sf::Keyboard::Escape) window.close();
-
-                // Delete key (acts like backspace at end)
-                if (event.key.code == sf::Keyboard::Delete) {
-                    if (!userInput.empty()) {
-                        userInput.pop_back();
+              if (event.key.code == sf::Keyboard::Up) {
+                    if (!commandHistory.empty()) {
+                        if (historyIndex == -1) historyIndex = (int)commandHistory.size();
+                        if (historyIndex > 0) historyIndex--;
+                        userInput = commandHistory[historyIndex];
+                        chatText.setString(userInput);
+                    }
+                }
+                if (event.key.code == sf::Keyboard::Down) {
+                    if (!commandHistory.empty() && historyIndex != -1) {
+                        if (historyIndex < (int)commandHistory.size()-1) {
+                            historyIndex++;
+                            userInput = commandHistory[historyIndex];
+                        } else {
+                            historyIndex = -1; // back to "new input"
+                            userInput.clear();
+                        }
                         chatText.setString(userInput);
                     }
                 }
