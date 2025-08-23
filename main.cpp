@@ -168,7 +168,7 @@ static std::string handleCommand(const std::string& raw, fs::path& currentDir) {
 
 int main() {
     // Window
-    sf::RenderWindow window(sf::VideoMode(800, 600), "Blank Window");
+    sf::RenderWindow window(sf::VideoMode(800, 600), "G.R.I.M");
     window.setPosition({100,100});
     window.setKeyRepeatEnabled(true); // so holding Backspace repeats
 
