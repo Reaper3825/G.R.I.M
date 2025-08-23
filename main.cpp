@@ -1,7 +1,7 @@
 #include <iostream>
 #include <SFML/Graphics.hpp>
 
-string a = Startup;
+stdin a = Startup;
 
 int main() {
     std::cout << a << std::endl;
