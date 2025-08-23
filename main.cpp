@@ -1,8 +1,11 @@
 #include <iostream>
 #include <SFML/Graphics.hpp>
-#include <string>  
+#include <string>
+#include <filesystem>
+using namespace fs = std::filesystem;
+
 // var declarations
-std::string a = "initialized";
+std::string a = "G.R.I.M"; //Title
 
 int main() {
     std::cout << "Opertion: " << a << std::endl;
@@ -23,7 +26,7 @@ int main() {
        // Center text in the window
     sf::FloatRect bounds = label.getLocalBounds();
     label.setOrigin(bounds.width / 2.f, bounds.height / 2.f);
-    label.setPosition(800.f/2.f, 600.f/2.f);
+    label.setPosition(950.f/2.f, 600.f/2.f);
 
     while (window.isOpen()) {
         sf::Event event;
