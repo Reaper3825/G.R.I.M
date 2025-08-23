@@ -35,7 +35,7 @@ int main() {
 
 
         window.clear(sf::Color(225, 225, 225));   // Background color
-
+        window.draw(label); // Draw the text
         window.display();
     }
 }
