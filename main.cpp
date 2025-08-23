@@ -9,35 +9,26 @@ int main() {
     sf::RenderWindow window(sf::VideoMode(800, 600), "Blank Window");
     window.setPosition({100,100});
 
-    // Create a green circle
-    sf::CircleShape circle(50.f);         // radius 50
+    sf::CircleShape circle(50.f);              // radius 50
+    circle.setPointCount(100);                 // smoother circle
     circle.setFillColor(sf::Color::Green);
-    circle.setPosition(200.f, 200.f);     // starting position
+    circle.setOutlineColor(sf::Color::Red);    // outline to make it pop
+    circle.setOutlineThickness(3.f);
+    circle.setPosition(200.f, 200.f);          // top-left of circle’s bounding box
 
     while (window.isOpen()) {
         sf::Event event;
         while (window.pollEvent(event)) {
-            if (event.type == sf::Event::Closed)
-                window.close();
-
-            // Close if Escape is pressed
-            if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::Escape)
-                window.close();
+            if (event.type == sf::Event::Closed) window.close();
+            if (event.type == sf::Event::KeyPressed &&
+                event.key.code == sf::Keyboard::Escape) window.close();
         }
 
-        // Move circle with arrow keys
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up))
-            circle.move(0.f, -2.f);
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down))
-            circle.move(0.f, 2.f);
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left))
-            circle.move(-2.f, 0.f);
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right))
-            circle.move(2.f, 0.f);
+        // comment movement out for now to avoid it zipping off-screen
+        // if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) circle.move(2.f, 0.f);
 
-        // --- DRAW SECTION ---
-        window.clear();
-        window.draw(circle);   // <--- draw your shapes/sprites here
+        window.clear(sf::Color(30, 30, 30));   // dark gray background
+        window.draw(circle);
         window.display();
     }
 }
