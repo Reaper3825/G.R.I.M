@@ -1,12 +1,23 @@
-/*
-A Wadkins
-8/20/25
-*/
-// Start
-#include <iostream>
+#include <iostream
 #include <SFML/Graphics.hpp>
 int a = 6;
+
 int main() {
-cout << a << endl;
-    return 0;
+    std::cout << "Value of a: " << a << std::endl;
+
+    std::cout << "Before window\n";                 // 👈
+    sf::RenderWindow window(sf::VideoMode(800, 600), "Blank Window");
+    std::cout << "After window\n";                  // 👈
+
+    window.setPosition({100,100});                  // 👈 avoids off‑screen weirdness
+
+    while (window.isOpen()) {
+        sf::Event event;
+        while (window.pollEvent(event)) {
+            if (event.type == sf::Event::Closed)
+                window.close();
+        }
+        window.clear();
+        window.display();
+    }
 }
