@@ -6,6 +6,7 @@
 #include <iostream>
 #include "nlp.hpp"
 #include "ai.hpp"
+#include "nlp_rules.hpp"
 
 
 // ---------- Helpers ----------
@@ -15,11 +16,17 @@ static std::string trim(const std::string& s) {
     size_t e = s.find_last_not_of(" \t\r\n");
     return s.substr(b, e - b + 1);
 }
+if (cmd == "reloadnlp") {
+    bool ok = loadNlpRules("nlp_rules.json");
+    return ok ? "NLP rules reloaded." : "Failed to reload nlp_rules.json.";
+}
+
 static std::vector<std::string> split(const std::string& line) {
     std::vector<std::string> out; std::istringstream iss(line); std::string tok;
     while (iss >> tok) out.push_back(tok);
     return out;
 }
+
 static fs::path resolvePath(const fs::path& currentDir, const std::string& userPath) {
     fs::path p(userPath);
     if (p.is_absolute()) return fs::weakly_canonical(p);
