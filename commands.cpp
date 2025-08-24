@@ -16,6 +16,7 @@ static std::string trim(const std::string& s) {
     size_t e = s.find_last_not_of(" \t\r\n");
     return s.substr(b, e - b + 1);
 }
+
 if (cmd == "reloadnlp") {
     bool ok = loadNlpRules("nlp_rules.json");
     return ok ? "NLP rules reloaded." : "Failed to reload nlp_rules.json.";
