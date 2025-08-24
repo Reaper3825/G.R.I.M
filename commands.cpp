@@ -5,6 +5,8 @@
 #include <chrono>
 #include <iostream>
 #include "nlp.hpp"
+#include "ai.hpp"
+
 
 // ---------- Helpers ----------
 static std::string trim(const std::string& s) {
@@ -172,8 +174,17 @@ std::string handleCommand(const std::string& raw, fs::path& currentDir) {
     }
 
 
-std::string reply = parseNaturalLanguage(line, currentDir);
-if (!reply.empty()) return reply;
+    // ---- AI integration ----
+    if (cmd == "ai") {
+        std::string query = (line.size() > 3) ? line.substr(3) : "";
+        if (query.empty()) return "Usage: ai <your question>";
+        return callAI(query);
+    }
 
-return "Error: unknown command. Type 'help' for options.";
+    // ---- Natural language fallback ----
+    std::string reply = parseNaturalLanguage(line, currentDir);
+    if (!reply.empty()) return reply;
+
+    // ---- Final fallback ----
+    return "Error: unknown command. Type 'help' for options.";
 }
