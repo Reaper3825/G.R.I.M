@@ -89,8 +89,8 @@ sf::RenderWindow window(
 
     // File manager state
     fs::path currentDir = fs::current_path();
-    chatHistory.push_back("System: Type 'help' to see commands.");
-    chatHistory.push_back("System: cwd = " + currentDir.string());
+    chatHistory.push_back("Grim: Type 'help' to see commands.");
+    chatHistory.push_back("Grim: cwd = " + currentDir.string());
 
     // ---------------- Main loop ----------------
     while (window.isOpen()) {
@@ -176,7 +176,7 @@ sf::RenderWindow window(
                             std::istringstream iss(reply);
                             std::string each;
                             while (std::getline(iss, each)) {
-                                chatHistory.push_back("System: " + each);
+                                chatHistory.push_back("Grim: " + each);
                             }
                         }
                         scrollOffset = 0; // jump to newest
