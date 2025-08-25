@@ -213,7 +213,7 @@ for (int i = endIndex; i >= startIndex; --i) {
         int startIndex = std::max(0, total - visible - scrollOffset);
         int endIndex   = std::max(0, total - 1 - scrollOffset);
 
-        float y = 520.f;
+        
         for (int i = endIndex; i >= startIndex; --i) {
             sf::Text msg(chatHistory[i], font, 20);
             msg.setFillColor(sf::Color::Black);
