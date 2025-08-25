@@ -11,6 +11,30 @@
 
 namespace fs = std::filesystem;
 
+#include <sstream>
+
+// Wrap text into multiple lines that fit within maxWidth
+std::string wrapText(const std::string& str, const sf::Font& font, unsigned int charSize, float maxWidth) {
+    std::istringstream iss(str);
+    std::string word, line, output;
+    sf::Text temp("", font, charSize);
+
+    while (iss >> word) {
+        std::string testLine = line + (line.empty() ? "" : " ") + word;
+        temp.setString(testLine);
+        if (temp.getLocalBounds().width > maxWidth) {
+            // push current line into output
+            if (!line.empty()) output += line + "\n";
+            line = word;
+        } else {
+            line = testLine;
+        }
+    }
+    if (!line.empty()) output += line;
+    return output;
+}
+
+
 int main() {
     // Window
 sf::RenderWindow window(
@@ -23,7 +47,7 @@ sf::RenderWindow window(
 
     // Font
     sf::Font font;
-    if (!font.loadFromFile("resources/DejaVuSans.ttf")) {
+    if (!font.loadFromFile("resources/DejaVuSeriff.ttf")) {
         std::cerr << "Could not load font\n";
         return -1;
     }
@@ -31,7 +55,7 @@ sf::RenderWindow window(
     const int maxMessages = 15;
 
     // Title
-    sf::Text label("G.R.I.M", font, 32);
+    sf::Text label("G.R.I.M", font, 30);
     { sf::FloatRect b = label.getLocalBounds(); label.setOrigin(b.width/2.f, b.height/2.f); }
     label.setFillColor(sf::Color::Black);
     label.setPosition(800.f/2.f, 50.f);
@@ -167,6 +191,21 @@ sf::RenderWindow window(
         // ---------- DRAW ----------
         window.clear(sf::Color(225, 225, 225));
         window.draw(label);
+
+        float y = event.size.height - 80.f; // or 520.f for fixed
+for (int i = endIndex; i >= startIndex; --i) {
+    std::string wrapped = wrapText(chatHistory[i], font, 20, 740.f); // 740 = width inside box
+    std::istringstream iss(wrapped);
+    std::string line;
+    while (std::getline(iss, line)) {
+        sf::Text msg(line, font, 20);
+        msg.setFillColor(sf::Color::Black);
+        msg.setPosition(25.f, y);
+        window.draw(msg);
+        y -= 25.f; // move up for next line
+    }
+}
+
 
         // Draw chat history
         int total = (int)chatHistory.size();
