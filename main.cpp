@@ -200,7 +200,8 @@ std::cout << "Width: " << size.x << ", Height: " << size.y << std::endl;
         }
 
     // ---------- DRAW ----------
-window.clear(sf::Color(225, 225, 225));
+  sf::Vector2u winSize = window.getSize(); 
+    window.clear(sf::Color(225, 225, 225));
 window.draw(label);
 
 // Draw chat history (with wrapping)
