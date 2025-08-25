@@ -49,6 +49,9 @@ sf::RenderWindow window(
     "G.R.I.M",
     sf::Style::Resize | sf::Style::Close | sf::Style::Titlebar
 );
+sf::Vector2u size = window.getSize();
+std::cout << "Width: " << size.x << ", Height: " << size.y << std::endl;
+
     window.setPosition({500,500});
     window.setKeyRepeatEnabled(true); // allows holding backspace
 
@@ -65,12 +68,13 @@ sf::RenderWindow window(
     sf::Text label("G.R.I.M", font, 30);
     { sf::FloatRect b = label.getLocalBounds(); label.setOrigin(b.width/2.f, b.height/2.f); }
     label.setFillColor(sf::Color::Black);
-    label.setPosition(WindowWidth/2.f, 50.f);
+    label.setPosition(winSize.x / 2.f, 50.f);
 
     // Chat box
     sf::RectangleShape chatBox(sf::Vector2f(760, 40));
     chatBox.setFillColor(sf::Color(200, 200, 200));
-    chatBox.setPosition(20.f, 540.f);
+    chatBox.setPosition(20.f, winSize.y - 60.f);
+
 
     // Input text
     std::string userInput;
@@ -207,7 +211,9 @@ int endIndex   = std::max(0, total - 1 - scrollOffset);
 
 float y = chatBox.getPosition().y - historyYDis; // start just above chat box
 for (int i = endIndex; i >= startIndex; --i) {
-    std::string wrapped = wrapText(chatHistory[i], font, 20, 740.f); // 740px wide
+    float chatAreaWidth = winSize.x - 60.f; // window width minus margins
+std::string wrapped = wrapText(chatHistory[i], font, 20, chatAreaWidth);
+
     std::istringstream iss(wrapped);
     std::string line;
     std::vector<std::string> lines;
