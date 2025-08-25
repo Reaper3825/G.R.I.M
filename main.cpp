@@ -188,54 +188,49 @@ sf::RenderWindow window(
             }
         }
 
-        // ---------- DRAW ----------
-        window.clear(sf::Color(225, 225, 225));
-        window.draw(label);
+    // ---------- DRAW ----------
+window.clear(sf::Color(225, 225, 225));
+window.draw(label);
 
-        float y = event.size.height - 80.f; // or 520.f for fixed
-for (int i = historyIndex; i >= startIndex; --i) {
-    std::string wrapped = wrapText(chatHistory[i], font, 20, 740.f); // 740 = width inside box
+// Draw chat history (with wrapping)
+int total = (int)chatHistory.size();
+int visible = maxMessages;
+int startIndex = std::max(0, total - visible - scrollOffset);
+int endIndex   = std::max(0, total - 1 - scrollOffset);
+
+float y = 520.f; // start just above chat box
+for (int i = endIndex; i >= startIndex; --i) {
+    std::string wrapped = wrapText(chatHistory[i], font, 20, 740.f); // 740px wide
     std::istringstream iss(wrapped);
     std::string line;
+    std::vector<std::string> lines;
     while (std::getline(iss, line)) {
-        sf::Text msg(line, font, 20);
+        lines.push_back(line);
+    }
+    for (int j = (int)lines.size() - 1; j >= 0; --j) {
+        sf::Text msg(lines[j], font, 20);
         msg.setFillColor(sf::Color::Black);
         msg.setPosition(25.f, y);
         window.draw(msg);
-        y -= 25.f; // move up for next line
+        y -= 25.f;
     }
 }
 
+// Input box + text
+window.draw(chatBox);
+window.draw(chatText);
 
-        // Draw chat history
-        int total = (int)chatHistory.size();
-        int visible = maxMessages;
-        int startIndex = std::max(0, total - visible - scrollOffset);
-        int endIndex   = std::max(0, total - 1 - scrollOffset);
+// Caret
+sf::Vector2f caretPos = chatText.findCharacterPos(userInput.size());
+caret.setPosition(caretPos.x, chatText.getPosition().y);
+caret.setSize(sf::Vector2f(2.f, (float)chatText.getCharacterSize()));
 
-        
-        for (int i = endIndex; i >= startIndex; --i) {
-            sf::Text msg(chatHistory[i], font, 20);
-            msg.setFillColor(sf::Color::Black);
-            msg.setPosition(25.f, y);
-            window.draw(msg);
-            y -= 25.f;
-        }
+bool showCaret = (std::fmod(caretClock.getElapsedTime().asSeconds(),
+                            caretBlinkPeriod*2.f) < caretBlinkPeriod);
+if (showCaret) window.draw(caret);
 
-        // Input box + text
-        window.draw(chatBox);
-        window.draw(chatText);
+window.display();
 
-        // Caret
-        sf::Vector2f caretPos = chatText.findCharacterPos(userInput.size());
-        caret.setPosition(caretPos.x, chatText.getPosition().y);
-        caret.setSize(sf::Vector2f(2.f, (float)chatText.getCharacterSize()));
-
-        bool showCaret = (std::fmod(caretClock.getElapsedTime().asSeconds(),
-                                    caretBlinkPeriod*2.f) < caretBlinkPeriod);
-        if (showCaret) window.draw(caret);
-
-        window.display();
     }
     return 0;
 }
