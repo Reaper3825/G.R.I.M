@@ -1,6 +1,6 @@
 {
   "tone": "optimistic",
   "optimism_level": 0.8,
-  "encouragement_phrases": ["Yay!", "You can do it!", "Keep going!"],
+  "encouragement_phrases": ["Yay!", "You can do it!", "Keep going!,"],
   "formality": "casual"
 }
