@@ -200,7 +200,7 @@ int visible = maxMessages;
 int startIndex = std::max(0, total - visible - scrollOffset);
 int endIndex   = std::max(0, total - 1 - scrollOffset);
 
-float y = chatbox.getPosition().y - 20.f; // start just above chat box
+float y = chatBox.getPosition().y - 20.f; // start just above chat box
 for (int i = endIndex; i >= startIndex; --i) {
     std::string wrapped = wrapText(chatHistory[i], font, 20, 740.f); // 740px wide
     std::istringstream iss(wrapped);
