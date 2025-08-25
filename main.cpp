@@ -49,7 +49,7 @@ sf::RenderWindow window(
     "G.R.I.M",
     sf::Style::Resize | sf::Style::Close | sf::Style::Titlebar
 );
-    window.setPosition({100,100});
+    window.setPosition({500,500});
     window.setKeyRepeatEnabled(true); // allows holding backspace
 
     // Font
@@ -65,7 +65,7 @@ sf::RenderWindow window(
     sf::Text label("G.R.I.M", font, 30);
     { sf::FloatRect b = label.getLocalBounds(); label.setOrigin(b.width/2.f, b.height/2.f); }
     label.setFillColor(sf::Color::Black);
-    label.setPosition(800.f/2.f, 50.f);
+    label.setPosition(WindowWidth/2.f, 50.f);
 
     // Chat box
     sf::RectangleShape chatBox(sf::Vector2f(760, 40));
