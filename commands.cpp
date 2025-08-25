@@ -8,33 +8,23 @@
 #include "ai.hpp"
 #include "nlp_rules.hpp"
 
-
-// ---------- Helpers ----------
 static std::string trim(const std::string& s) {
     size_t b = s.find_first_not_of(" \t\r\n");
     if (b == std::string::npos) return "";
     size_t e = s.find_last_not_of(" \t\r\n");
     return s.substr(b, e - b + 1);
 }
-
-if (cmd == "reloadnlp") {
-    bool ok = loadNlpRules("nlp_rules.json");
-    return ok ? "NLP rules reloaded." : "Failed to reload nlp_rules.json.";
-}
-
 static std::vector<std::string> split(const std::string& line) {
     std::vector<std::string> out; std::istringstream iss(line); std::string tok;
     while (iss >> tok) out.push_back(tok);
     return out;
 }
-
 static fs::path resolvePath(const fs::path& currentDir, const std::string& userPath) {
     fs::path p(userPath);
     if (p.is_absolute()) return fs::weakly_canonical(p);
     return fs::weakly_canonical(currentDir / p);
 }
 
-// ---------- Command handler ----------
 std::string handleCommand(const std::string& raw, fs::path& currentDir) {
     std::string line = trim(raw);
     if (line.empty()) return "";
@@ -54,7 +44,15 @@ std::string handleCommand(const std::string& raw, fs::path& currentDir) {
             "  mkdir <path>              - create directory (including parents)\n"
             "  rm <path>                 - remove file or empty directory\n"
             "  rmolder <days> [-r] [-n]  - remove files older than <days> (last write time)\n"
-            "                               -r recurse, -n dry-run\n";
+            "                               -r recurse, -n dry-run\n"
+            "  reloadnlp                 - reload nlp_rules.json\n"
+            "  ai <prompt>               - ask local model via Ollama\n";
+    }
+
+    // reloadnlp
+    if (cmd == "reloadnlp") {
+        bool ok = loadNlpRules("nlp_rules.json");
+        return ok ? "NLP rules reloaded." : "Failed to reload nlp_rules.json.";
     }
 
     // pwd
@@ -181,7 +179,6 @@ std::string handleCommand(const std::string& raw, fs::path& currentDir) {
         return out.str();
     }
 
-
     // ---- AI integration ----
     if (cmd == "ai") {
         std::string query = (line.size() > 3) ? line.substr(3) : "";
@@ -190,8 +187,8 @@ std::string handleCommand(const std::string& raw, fs::path& currentDir) {
     }
 
     // ---- Natural language fallback ----
-    std::string reply = parseNaturalLanguage(line, currentDir);
-    if (!reply.empty()) return reply;
+    if (auto mapped = parseNaturalLanguage(line, currentDir); !mapped.empty())
+        return mapped;
 
     // ---- Final fallback ----
     return "Error: unknown command. Type 'help' for options.";
