@@ -14,6 +14,10 @@ namespace fs = std::filesystem;
 #include <sstream>
     // Global Variable Declarations
     int historyYDis = 30; // history offset
+    float WindowWidth = 400;
+    float WindowHeight = 800;
+ 
+
 
 
     // Wrap text into multiple lines that fit within maxWidth
@@ -41,7 +45,7 @@ std::string wrapText(const std::string& str, const sf::Font& font, unsigned int 
 int main() {
     // Window
 sf::RenderWindow window(
-    sf::VideoMode(800, 600),
+    sf::VideoMode(WindowWidth, WindowHeight),
     "G.R.I.M",
     sf::Style::Resize | sf::Style::Close | sf::Style::Titlebar
 );
@@ -201,7 +205,7 @@ int visible = maxMessages;
 int startIndex = std::max(0, total - visible - scrollOffset);
 int endIndex   = std::max(0, total - 1 - scrollOffset);
 
-float y = chatBox.getPosition().y - HistoryYDis; // start just above chat box
+float y = chatBox.getPosition().y - historyYDis; // start just above chat box
 for (int i = endIndex; i >= startIndex; --i) {
     std::string wrapped = wrapText(chatHistory[i], font, 20, 740.f); // 740px wide
     std::istringstream iss(wrapped);
