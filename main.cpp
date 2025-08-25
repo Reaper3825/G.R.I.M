@@ -193,7 +193,7 @@ sf::RenderWindow window(
         window.draw(label);
 
         float y = event.size.height - 80.f; // or 520.f for fixed
-for (int i = endIndex; i >= startIndex; --i) {
+for (int i = historyIndex; i >= startIndex; --i) {
     std::string wrapped = wrapText(chatHistory[i], font, 20, 740.f); // 740 = width inside box
     std::istringstream iss(wrapped);
     std::string line;
