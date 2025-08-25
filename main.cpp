@@ -47,7 +47,7 @@ sf::RenderWindow window(
 
     // Font
     sf::Font font;
-    if (!font.loadFromFile("resources/DejaVuSeriff.ttf")) {
+    if (!font.loadFromFile("resources/DejaVuSans.ttf")) {
         std::cerr << "Could not load font\n";
         return -1;
     }
