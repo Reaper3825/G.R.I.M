@@ -12,8 +12,10 @@
 namespace fs = std::filesystem;
 
 #include <sstream>
+    // Global Variable Declarations
 
-// Wrap text into multiple lines that fit within maxWidth
+
+    // Wrap text into multiple lines that fit within maxWidth
 std::string wrapText(const std::string& str, const sf::Font& font, unsigned int charSize, float maxWidth) {
     std::istringstream iss(str);
     std::string word, line, output;
@@ -197,7 +199,8 @@ int total = (int)chatHistory.size();
 int visible = maxMessages;
 int startIndex = std::max(0, total - visible - scrollOffset);
 int endIndex   = std::max(0, total - 1 - scrollOffset);
-float y = 520.f; // start just above chat box
+
+float y = chatbox.getPosition().y - 20.f; // start just above chat box
 for (int i = endIndex; i >= startIndex; --i) {
     std::string wrapped = wrapText(chatHistory[i], font, 20, 740.f); // 740px wide
     std::istringstream iss(wrapped);
