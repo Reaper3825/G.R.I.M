@@ -1102,7 +1102,11 @@ CMakeFiles/GRIM.dir/main.cpp.obj: D:/GRIM\ Local/G.R.I.M/main.cpp \
   C:/msys64/mingw64/include/_mingw_secapi.h \
   C:/msys64/mingw64/include/_mingw_stat64.h \
   C:/msys64/mingw64/include/_timeval.h \
+  C:/msys64/mingw64/include/assert.h \
   C:/msys64/mingw64/include/c++/15.2.0/algorithm \
+  C:/msys64/mingw64/include/c++/15.2.0/any \
+  C:/msys64/mingw64/include/c++/15.2.0/array \
+  C:/msys64/mingw64/include/c++/15.2.0/backward/auto_ptr.h \
   C:/msys64/mingw64/include/c++/15.2.0/backward/binders.h \
   C:/msys64/mingw64/include/c++/15.2.0/bit \
   C:/msys64/mingw64/include/c++/15.2.0/bits/algorithmfwd.h \
@@ -1110,6 +1114,9 @@ CMakeFiles/GRIM.dir/main.cpp.obj: D:/GRIM\ Local/G.R.I.M/main.cpp \
   C:/msys64/mingw64/include/c++/15.2.0/bits/alloc_traits.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/allocated_ptr.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/allocator.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/atomic_base.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/atomic_lockfree_defines.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/atomic_wait.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/basic_ios.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/basic_ios.tcc \
   C:/msys64/mingw64/include/c++/15.2.0/bits/basic_string.h \
@@ -1128,15 +1135,20 @@ CMakeFiles/GRIM.dir/main.cpp.obj: D:/GRIM\ Local/G.R.I.M/main.cpp \
   C:/msys64/mingw64/include/c++/15.2.0/bits/exception.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/exception_defines.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/exception_ptr.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/forward_list.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/forward_list.tcc \
   C:/msys64/mingw64/include/c++/15.2.0/bits/fs_dir.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/fs_fwd.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/fs_ops.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/fs_path.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/functexcept.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/functional_hash.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/gslice.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/gslice_array.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/hash_bytes.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/hashtable.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/hashtable_policy.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/indirect_array.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/invoke.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/ios_base.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/istream.tcc \
@@ -1149,6 +1161,7 @@ CMakeFiles/GRIM.dir/main.cpp.obj: D:/GRIM\ Local/G.R.I.M/main.cpp \
   C:/msys64/mingw64/include/c++/15.2.0/bits/locale_facets_nonio.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/locale_facets_nonio.tcc \
   C:/msys64/mingw64/include/c++/15.2.0/bits/localefwd.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/mask_array.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/max_size_type.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/memory_resource.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/memoryfwd.h \
@@ -1169,13 +1182,19 @@ CMakeFiles/GRIM.dir/main.cpp.obj: D:/GRIM\ Local/G.R.I.M/main.cpp \
   C:/msys64/mingw64/include/c++/15.2.0/bits/ranges_algobase.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/ranges_base.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/ranges_cmp.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/ranges_uninitialized.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/ranges_util.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/refwrap.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/requires_hosted.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/shared_ptr.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/shared_ptr_atomic.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/shared_ptr_base.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/slice_array.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/specfun.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/sstream.tcc \
   C:/msys64/mingw64/include/c++/15.2.0/bits/std_abs.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/std_function.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/std_mutex.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/stl_algo.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/stl_algobase.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/stl_bvector.h \
@@ -1188,7 +1207,10 @@ CMakeFiles/GRIM.dir/main.cpp.obj: D:/GRIM\ Local/G.R.I.M/main.cpp \
   C:/msys64/mingw64/include/c++/15.2.0/bits/stl_iterator_base_types.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/stl_map.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/stl_multimap.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/stl_numeric.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/stl_pair.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/stl_raw_storage_iter.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/stl_relops.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/stl_tempbuf.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/stl_tree.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/stl_uninitialized.h \
@@ -1204,11 +1226,17 @@ CMakeFiles/GRIM.dir/main.cpp.obj: D:/GRIM\ Local/G.R.I.M/main.cpp \
   C:/msys64/mingw64/include/c++/15.2.0/bits/uses_allocator.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/uses_allocator_args.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/utility.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/valarray_after.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/valarray_array.h \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/valarray_array.tcc \
+  C:/msys64/mingw64/include/c++/15.2.0/bits/valarray_before.h \
   C:/msys64/mingw64/include/c++/15.2.0/bits/vector.tcc \
   C:/msys64/mingw64/include/c++/15.2.0/bits/version.h \
+  C:/msys64/mingw64/include/c++/15.2.0/cassert \
   C:/msys64/mingw64/include/c++/15.2.0/cctype \
   C:/msys64/mingw64/include/c++/15.2.0/cerrno \
   C:/msys64/mingw64/include/c++/15.2.0/clocale \
+  C:/msys64/mingw64/include/c++/15.2.0/cmath \
   C:/msys64/mingw64/include/c++/15.2.0/codecvt \
   C:/msys64/mingw64/include/c++/15.2.0/compare \
   C:/msys64/mingw64/include/c++/15.2.0/concepts \
@@ -1216,6 +1244,7 @@ CMakeFiles/GRIM.dir/main.cpp.obj: D:/GRIM\ Local/G.R.I.M/main.cpp \
   C:/msys64/mingw64/include/c++/15.2.0/cstdint \
   C:/msys64/mingw64/include/c++/15.2.0/cstdio \
   C:/msys64/mingw64/include/c++/15.2.0/cstdlib \
+  C:/msys64/mingw64/include/c++/15.2.0/cstring \
   C:/msys64/mingw64/include/c++/15.2.0/ctime \
   C:/msys64/mingw64/include/c++/15.2.0/cwchar \
   C:/msys64/mingw64/include/c++/15.2.0/cwctype \
@@ -1231,6 +1260,8 @@ CMakeFiles/GRIM.dir/main.cpp.obj: D:/GRIM\ Local/G.R.I.M/main.cpp \
   C:/msys64/mingw64/include/c++/15.2.0/ext/string_conversions.h \
   C:/msys64/mingw64/include/c++/15.2.0/ext/type_traits.h \
   C:/msys64/mingw64/include/c++/15.2.0/filesystem \
+  C:/msys64/mingw64/include/c++/15.2.0/forward_list \
+  C:/msys64/mingw64/include/c++/15.2.0/functional \
   C:/msys64/mingw64/include/c++/15.2.0/initializer_list \
   C:/msys64/mingw64/include/c++/15.2.0/iomanip \
   C:/msys64/mingw64/include/c++/15.2.0/ios \
@@ -1241,13 +1272,20 @@ CMakeFiles/GRIM.dir/main.cpp.obj: D:/GRIM\ Local/G.R.I.M/main.cpp \
   C:/msys64/mingw64/include/c++/15.2.0/limits \
   C:/msys64/mingw64/include/c++/15.2.0/locale \
   C:/msys64/mingw64/include/c++/15.2.0/map \
+  C:/msys64/mingw64/include/c++/15.2.0/memory \
   C:/msys64/mingw64/include/c++/15.2.0/new \
   C:/msys64/mingw64/include/c++/15.2.0/numbers \
+  C:/msys64/mingw64/include/c++/15.2.0/numeric \
+  C:/msys64/mingw64/include/c++/15.2.0/optional \
   C:/msys64/mingw64/include/c++/15.2.0/ostream \
   C:/msys64/mingw64/include/c++/15.2.0/pstl/execution_defs.h \
   C:/msys64/mingw64/include/c++/15.2.0/pstl/glue_algorithm_defs.h \
+  C:/msys64/mingw64/include/c++/15.2.0/pstl/glue_memory_defs.h \
+  C:/msys64/mingw64/include/c++/15.2.0/pstl/glue_numeric_defs.h \
   C:/msys64/mingw64/include/c++/15.2.0/pstl/pstl_config.h \
+  C:/msys64/mingw64/include/c++/15.2.0/ranges \
   C:/msys64/mingw64/include/c++/15.2.0/ratio \
+  C:/msys64/mingw64/include/c++/15.2.0/span \
   C:/msys64/mingw64/include/c++/15.2.0/sstream \
   C:/msys64/mingw64/include/c++/15.2.0/stdexcept \
   C:/msys64/mingw64/include/c++/15.2.0/stdlib.h \
@@ -1255,11 +1293,26 @@ CMakeFiles/GRIM.dir/main.cpp.obj: D:/GRIM\ Local/G.R.I.M/main.cpp \
   C:/msys64/mingw64/include/c++/15.2.0/string \
   C:/msys64/mingw64/include/c++/15.2.0/string_view \
   C:/msys64/mingw64/include/c++/15.2.0/system_error \
+  C:/msys64/mingw64/include/c++/15.2.0/tr1/bessel_function.tcc \
+  C:/msys64/mingw64/include/c++/15.2.0/tr1/beta_function.tcc \
+  C:/msys64/mingw64/include/c++/15.2.0/tr1/ell_integral.tcc \
+  C:/msys64/mingw64/include/c++/15.2.0/tr1/exp_integral.tcc \
+  C:/msys64/mingw64/include/c++/15.2.0/tr1/gamma.tcc \
+  C:/msys64/mingw64/include/c++/15.2.0/tr1/hypergeometric.tcc \
+  C:/msys64/mingw64/include/c++/15.2.0/tr1/legendre_function.tcc \
+  C:/msys64/mingw64/include/c++/15.2.0/tr1/modified_bessel_func.tcc \
+  C:/msys64/mingw64/include/c++/15.2.0/tr1/poly_hermite.tcc \
+  C:/msys64/mingw64/include/c++/15.2.0/tr1/poly_laguerre.tcc \
+  C:/msys64/mingw64/include/c++/15.2.0/tr1/riemann_zeta.tcc \
+  C:/msys64/mingw64/include/c++/15.2.0/tr1/special_function_util.h \
   C:/msys64/mingw64/include/c++/15.2.0/tuple \
   C:/msys64/mingw64/include/c++/15.2.0/type_traits \
   C:/msys64/mingw64/include/c++/15.2.0/typeinfo \
   C:/msys64/mingw64/include/c++/15.2.0/unordered_map \
+  C:/msys64/mingw64/include/c++/15.2.0/utility \
+  C:/msys64/mingw64/include/c++/15.2.0/valarray \
   C:/msys64/mingw64/include/c++/15.2.0/vector \
+  C:/msys64/mingw64/include/c++/15.2.0/version \
   C:/msys64/mingw64/include/c++/15.2.0/x86_64-w64-mingw32/bits/atomic_word.h \
   C:/msys64/mingw64/include/c++/15.2.0/x86_64-w64-mingw32/bits/c++allocator.h \
   C:/msys64/mingw64/include/c++/15.2.0/x86_64-w64-mingw32/bits/c++config.h \
@@ -1284,6 +1337,53 @@ CMakeFiles/GRIM.dir/main.cpp.obj: D:/GRIM\ Local/G.R.I.M/main.cpp \
   C:/msys64/mingw64/include/limits.h \
   C:/msys64/mingw64/include/locale.h \
   C:/msys64/mingw64/include/malloc.h \
+  C:/msys64/mingw64/include/math.h \
+  C:/msys64/mingw64/include/nlohmann/adl_serializer.hpp \
+  C:/msys64/mingw64/include/nlohmann/byte_container_with_subtype.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/abi_macros.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/conversions/from_json.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/conversions/to_chars.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/conversions/to_json.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/exceptions.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/hash.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/input/binary_reader.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/input/input_adapters.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/input/json_sax.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/input/lexer.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/input/parser.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/input/position_t.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/iterators/internal_iterator.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/iterators/iter_impl.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/iterators/iteration_proxy.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/iterators/iterator_traits.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/iterators/json_reverse_iterator.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/iterators/primitive_iterator.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/json_custom_base_class.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/json_pointer.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/json_ref.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/macro_scope.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/macro_unscope.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/meta/call_std/begin.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/meta/call_std/end.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/meta/cpp_future.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/meta/detected.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/meta/identity_tag.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/meta/is_sax.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/meta/std_fs.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/meta/type_traits.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/meta/void_t.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/output/binary_writer.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/output/output_adapters.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/output/serializer.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/string_concat.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/string_escape.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/string_utils.hpp \
+  C:/msys64/mingw64/include/nlohmann/detail/value_t.hpp \
+  C:/msys64/mingw64/include/nlohmann/json.hpp \
+  C:/msys64/mingw64/include/nlohmann/json_fwd.hpp \
+  C:/msys64/mingw64/include/nlohmann/ordered_map.hpp \
+  C:/msys64/mingw64/include/nlohmann/thirdparty/hedley/hedley.hpp \
+  C:/msys64/mingw64/include/nlohmann/thirdparty/hedley/hedley_undef.hpp \
   C:/msys64/mingw64/include/process.h \
   C:/msys64/mingw64/include/pthread.h \
   C:/msys64/mingw64/include/pthread_compat.h \
@@ -1294,6 +1394,7 @@ CMakeFiles/GRIM.dir/main.cpp.obj: D:/GRIM\ Local/G.R.I.M/main.cpp \
   C:/msys64/mingw64/include/sdks/_mingw_ddk.h \
   C:/msys64/mingw64/include/sec_api/stdio_s.h \
   C:/msys64/mingw64/include/sec_api/stdlib_s.h \
+  C:/msys64/mingw64/include/sec_api/string_s.h \
   C:/msys64/mingw64/include/sec_api/sys/timeb_s.h \
   C:/msys64/mingw64/include/sec_api/wchar_s.h \
   C:/msys64/mingw64/include/signal.h \
@@ -1301,6 +1402,7 @@ CMakeFiles/GRIM.dir/main.cpp.obj: D:/GRIM\ Local/G.R.I.M/main.cpp \
   C:/msys64/mingw64/include/stdint.h \
   C:/msys64/mingw64/include/stdio.h \
   C:/msys64/mingw64/include/stdlib.h \
+  C:/msys64/mingw64/include/string.h \
   C:/msys64/mingw64/include/swprintf.inl \
   C:/msys64/mingw64/include/sys/timeb.h \
   C:/msys64/mingw64/include/sys/types.h \
@@ -1313,7 +1415,8 @@ CMakeFiles/GRIM.dir/main.cpp.obj: D:/GRIM\ Local/G.R.I.M/main.cpp \
   C:/msys64/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/stddef.h \
   C:/msys64/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/stdint.h \
   C:/msys64/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/syslimits.h \
-  D:/GRIM\ Local/G.R.I.M/NLP.hpp
+  D:/GRIM\ Local/G.R.I.M/NLP.hpp \
+  D:/GRIM\ Local/G.R.I.M/ai.hpp
 
 CMakeFiles/GRIM.dir/nlp.cpp.obj: D:/GRIM\ Local/G.R.I.M/nlp.cpp \
   C:/msys64/mingw64/include/_mingw.h \
