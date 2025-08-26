@@ -187,7 +187,18 @@ std::string handleCommand(const std::string& raw, fs::path& currentDir) {
     }
 
     // ---- Natural language fallback ----
-    if (auto mapped = parseNaturalLanguage(line, currentDir); !mapped.empty())
+Intent intent = g_nlp.parse(line);
+if (intent.matched) {
+    // For example: if intent was "open_app"
+    if (intent.name == "open_app") {
+        auto it = intent.slots.find("app");
+        if (it != intent.slots.end()) {
+            std::cout << ">> would open app: " << it->second << "\n";
+        }
+    }
+    // Add more intent handlers here...
+}
+
         return mapped;
 
     // ---- Final fallback ----
