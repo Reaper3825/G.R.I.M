@@ -1,12 +1,41 @@
 #pragma once
 #include <string>
-#include <filesystem>   // needed for std::filesystem::path
+#include <unordered_map>
+#include <vector>
+#include <filesystem>
 
-namespace fs = std::filesystem;   // bring in shorthand "fs"
+struct Slot {
+    std::string name;
+    std::string value;
+};
 
-// forward declarations
-bool loadNlpRules(const std::string& path);
-std::string mapTextToCommand(const std::string& text);
+struct Intent {
+    std::string name;                       // e.g., "open_app"
+    float score = 0.0f;                     // 0..1, for tie-breaking
+    std::unordered_map<std::string, std::string> slots; // {"app":"notepad"}
+    bool matched = false;
+};
 
-// declare the NLP parser correctly
-std::string parseNaturalLanguage(const std::string& line, fs::path& currentDir);
+class NLP {
+public:
+    // Load rules from JSON on disk (hot-reload friendly)
+    bool load_rules(const std::string& json_path, std::string* error_out = nullptr);
+
+    // Parse user text into Intent
+    Intent parse(const std::string& text) const;
+
+    // For debugging: list the known intent names
+    std::vector<std::string> list_intents() const;
+
+private:
+    struct Rule {
+        std::string intent;
+        std::string description; // optional doc string
+        std::string pattern;     // regex
+        std::vector<std::string> slot_names; // capture-group names
+        float score_boost = 0.0f;
+        bool case_insensitive = true;
+    };
+
+    std::vector<Rule> rules_;
+};
