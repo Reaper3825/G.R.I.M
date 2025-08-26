@@ -5,7 +5,7 @@
 // Load rules from a JSON file.
 // - Never throws; returns true if rules loaded and non-empty.
 // - Safe to call multiple times; later calls replace existing rules.
-bool loadNlpRules(const std::string& path) noexcept;
+bool loadNlpRules(const std::string& path);
 
 // Reload using the last successful path.
 // - Returns true if reload succeeded, false otherwise.
