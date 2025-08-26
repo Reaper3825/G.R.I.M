@@ -1,235 +1,168 @@
-#include <iostream>
+// main.cpp
 #include <SFML/Graphics.hpp>
+#include <iostream>
+#include <deque>
 #include <string>
-#include <vector>
 #include <sstream>
 #include <filesystem>
-#include <chrono>
-#include <algorithm>
-#include <cmath>
-#include "commands.hpp"
-#include "nlp.hpp" // so you can use parseNaturalLanguage()
+#include "NLP.hpp"
 
 namespace fs = std::filesystem;
 
-// ---------------- Global Vars ----------------
-int   historyYDis   = 30;
-unsigned int WindowWidth  = 400;
-unsigned int WindowHeight = 800;
+static const float kWindowW = 480.f;
+static const float kWindowH = 800.f;
+static const size_t kMaxHistory = 100; // lines kept in memory
 
-// Wrap text into multiple lines that fit within maxWidth
-std::string wrapText(const std::string& str, const sf::Font& font, unsigned int charSize, float maxWidth) {
-    std::istringstream iss(str);
-    std::string word, line, output;
-    sf::Text temp("", font, charSize);
-
-    while (iss >> word) {
-        std::string testLine = line + (line.empty() ? "" : " ") + word;
-        temp.setString(testLine);
-        if (temp.getLocalBounds().width > maxWidth) {
-            if (!line.empty()) output += line + "\n";
-            line = word;
-        } else {
-            line = testLine;
-        }
+// Simple text history buffer
+class ConsoleHistory {
+public:
+    void push(const std::string& line) {
+        if (lines.size() >= kMaxHistory) lines.pop_front();
+        lines.push_back(line);
     }
-    if (!line.empty()) output += line;
-    return output;
-}
+    const std::deque<std::string>& data() const { return lines; }
+private:
+    std::deque<std::string> lines;
+};
 
 int main() {
-    // ---------- Window ----------
-    sf::RenderWindow window(
-        sf::VideoMode(WindowWidth, WindowHeight),
-        "G.R.I.M",
-        sf::Style::Resize | sf::Style::Close | sf::Style::Titlebar
-    );
-    window.setPosition({500, 500});
-    window.setKeyRepeatEnabled(true);
-
-    // ---------- Font ----------
-    sf::Font font;
-    if (!font.loadFromFile("resources/DejaVuSans.ttf")) {
-        std::cerr << "Could not load font\n";
-        return -1;
+    // --- Load NLP rules
+    NLP nlp;
+    std::string err;
+    std::string rulesPath = "nlp_rules.json";
+    if (!nlp.load_rules(rulesPath, &err)) {
+        std::cerr << "[NLP] Failed to load rules from " << rulesPath << " : " << err << "\n";
+        // Not fatal; you can still run the UI
+    } else {
+        std::cerr << "[NLP] Loaded rules. Intents:";
+        for (auto& s : nlp.list_intents()) std::cerr << " " << s;
+        std::cerr << "\n";
     }
 
-    const int maxMessages = 15;
+    // --- Create window
+    sf::RenderWindow window(sf::VideoMode((unsigned)kWindowW, (unsigned)kWindowH), "GRIM");
+    window.setVerticalSyncEnabled(true);
 
-    // ---------- Title ----------
-    sf::Text label("G.R.I.M", font, 30);
-    label.setFillColor(sf::Color::Black);
+    // --- Load font
+    sf::Font font;
+    std::string fontPath = "DejaVuSans.ttf"; // put this file next to the exe or project root
+    if (!font.loadFromFile(fontPath)) {
+        std::cerr << "[WARN] Could not load font: " << fontPath << "\n"
+                  << "       Text will not render. Place a TTF named DejaVuSans.ttf next to the exe.\n";
+    }
 
-    // ---------- Chat box ----------
-    sf::RectangleShape chatBox;
-    chatBox.setFillColor(sf::Color(200, 200, 200));
+    // --- UI geometry
+    const float inputHeight = 34.f;
+    sf::RectangleShape inputBar({kWindowW, inputHeight});
+    inputBar.setFillColor(sf::Color(30, 30, 35));
+    inputBar.setPosition(0.f, kWindowH - inputHeight);
 
-    // ---------- Input text + caret ----------
-    std::string userInput;
-    sf::Text chatText("", font, 20);
-    chatText.setFillColor(sf::Color::Black);
+    sf::Text inputText;
+    inputText.setFont(font);
+    inputText.setCharacterSize(18);
+    inputText.setFillColor(sf::Color::White);
+    inputText.setPosition(8.f, kWindowH - inputHeight + 6.f);
 
+    sf::Text historyText;
+    historyText.setFont(font);
+    historyText.setCharacterSize(18);
+    historyText.setFillColor(sf::Color::White);
+    historyText.setPosition(8.f, 8.f);
+
+    ConsoleHistory history;
+    std::string buffer;
+
+    auto addHistory = [&](const std::string& line){
+        history.push(line);
+        std::cout << line << "\n";
+    };
+
+    addHistory("GRIM is ready. Type a command and press Enter. Type 'quit' to exit.");
+    if (!err.empty()) addHistory(std::string("[NLP] Rules load error: ") + err);
+
+    // caret blink
     sf::Clock caretClock;
-    const float caretBlinkPeriod = 0.5f;
-    sf::RectangleShape caret(sf::Vector2f(2.f, 20.f));
-    caret.setFillColor(sf::Color::Black);
+    bool caretVisible = true;
 
-    // ---------- Histories ----------
-    std::vector<std::string> chatHistory;
-    int scrollOffset = 0;
-    std::vector<std::string> commandHistory;
-    int historyIndex = -1;
-
-    // ---------- File manager state ----------
-    fs::path currentDir = fs::current_path();
-    chatHistory.push_back("Grim: Type 'help' to see commands.");
-    chatHistory.push_back("Grim: cwd = " + currentDir.string());
-
-    // ---------------- Main loop ----------------
     while (window.isOpen()) {
-        sf::Event event;
-        while (window.pollEvent(event)) {
-            if (event.type == sf::Event::Closed) window.close();
+        // --- handle events
+        sf::Event e;
+        while (window.pollEvent(e)) {
+            if (e.type == sf::Event::Closed) window.close();
 
-            // Handle window resize
-            if (event.type == sf::Event::Resized) {
-                sf::FloatRect visibleArea(0.f, 0.f,
-                    static_cast<float>(event.size.width),
-                    static_cast<float>(event.size.height));
-                window.setView(sf::View(visibleArea));
+            if (e.type == sf::Event::KeyPressed) {
+                if (e.key.code == sf::Keyboard::Escape) window.close();
             }
 
-            // ---------- Key press events ----------
-            if (event.type == sf::Event::KeyPressed) {
-                if (event.key.code == sf::Keyboard::Escape) window.close();
+            if (e.type == sf::Event::TextEntered) {
+                // handle basic text input
+                if (e.text.unicode == 8) { // backspace
+                    if (!buffer.empty()) buffer.pop_back();
+                } else if (e.text.unicode == 13 || e.text.unicode == 10) { // Enter
+                    std::string line = buffer;
+                    buffer.clear();
 
-                if (event.key.code == sf::Keyboard::Up) {
-                    if (!commandHistory.empty()) {
-                        if (historyIndex == -1) historyIndex = (int)commandHistory.size();
-                        if (historyIndex > 0) historyIndex--;
-                        userInput = commandHistory[historyIndex];
-                        chatText.setString(userInput);
+                    if (line == "quit" || line == "exit") {
+                        window.close();
+                        break;
                     }
-                }
-                if (event.key.code == sf::Keyboard::Down) {
-                    if (!commandHistory.empty() && historyIndex != -1) {
-                        if (historyIndex < (int)commandHistory.size() - 1) {
-                            historyIndex++;
-                            userInput = commandHistory[historyIndex];
-                        } else {
-                            historyIndex = -1;
-                            userInput.clear();
-                        }
-                        chatText.setString(userInput);
+
+                    if (line.empty()) {
+                        addHistory("> ");
+                        continue;
                     }
-                }
 
-                if (event.key.code == sf::Keyboard::PageUp) {
-                    scrollOffset = std::min<int>(std::max(0, (int)chatHistory.size() - 1),
-                                                 scrollOffset + 3);
-                }
-                if (event.key.code == sf::Keyboard::PageDown) {
-                    scrollOffset = std::max(0, scrollOffset - 3);
-                }
-            }
+                    addHistory("> " + line);
 
-            // ---------- Mouse wheel scroll ----------
-            if (event.type == sf::Event::MouseWheelScrolled &&
-                event.mouseWheelScroll.wheel == sf::Mouse::VerticalWheel) {
-                int step = (event.mouseWheelScroll.delta > 0) ? 3 : -3;
-                int maxOffset = std::max(0, (int)chatHistory.size() - 1);
-                scrollOffset = std::clamp(scrollOffset - step, 0, maxOffset);
-            }
-
-            // ---------- Text input ----------
-            if (event.type == sf::Event::TextEntered) {
-                if (event.text.unicode == 8) { // backspace
-                    if (!userInput.empty()) userInput.pop_back();
-                    chatText.setString(userInput);
-
-                } else if (event.text.unicode == '\r') { // enter
-                    std::string line = userInput;
-                    if (!line.empty()) {
-                        chatHistory.push_back("You: " + line);
-                        commandHistory.push_back(line);
-                        historyIndex = -1;
-
-                        std::string reply = parseNaturalLanguage(line, currentDir);
-                        if (reply.empty()) {
-                            reply = handleCommand(line, currentDir);
+                    // parse with NLP
+                    Intent intent = nlp.parse(line);
+                    if (!intent.matched) {
+                        addHistory("[NLP] No intent matched.");
+                    } else {
+                        std::ostringstream oss;
+                        oss << "[NLP] intent=" << intent.name << " score=" << intent.score;
+                        addHistory(oss.str());
+                        for (const auto& kv : intent.slots) {
+                            addHistory("  " + kv.first + " = " + kv.second);
                         }
 
-                        if (!reply.empty()) {
-                            std::istringstream iss(reply);
-                            std::string each;
-                            while (std::getline(iss, each)) {
-                                chatHistory.push_back("Grim: " + each);
-                            }
-                        }
-                        scrollOffset = 0;
+                        // Route to your actions here:
+                        // e.g., if (intent.name == "open_app") { launch(intent.slots["app"]); }
                     }
-                    userInput.clear();
-                    chatText.setString(userInput);
-
-                } else if (event.text.unicode >= 32 && event.text.unicode < 128) {
-                    userInput += static_cast<char>(event.text.unicode);
-                    chatText.setString(userInput);
+                } else {
+                    // filter control chars
+                    if (e.text.unicode >= 32 && e.text.unicode < 127) {
+                        buffer.push_back(static_cast<char>(e.text.unicode));
+                    }
                 }
             }
         }
 
-        // ---------- Layout ----------
-        sf::Vector2u winSize = window.getSize();
-
-        sf::FloatRect b = label.getLocalBounds();
-        label.setOrigin(b.width / 2.f, b.height / 2.f);
-        label.setPosition((float)winSize.x / 2.f, 30.f);
-
-        chatBox.setSize(sf::Vector2f(std::max(0u, winSize.x - 40u), 40.f));
-        chatBox.setPosition(20.f, (float)winSize.y - 60.f);
-
-        chatText.setPosition(chatBox.getPosition().x + 5.f,
-                             chatBox.getPosition().y + 5.f);
-        caret.setSize(sf::Vector2f(2.f, (float)chatText.getCharacterSize()));
-
-        // ---------- DRAW ----------
-        window.clear(sf::Color(225, 225, 225));
-        window.draw(label);
-
-        // Draw chat history
-        int total = (int)chatHistory.size();
-        int startIndex = std::max(0, total - maxMessages - scrollOffset);
-        int endIndex   = std::max(0, total - 1 - scrollOffset);
-
-        float y = chatBox.getPosition().y - (float)historyYDis;
-        float chatAreaWidth = (float)winSize.x - 60.f;
-
-        for (int i = endIndex; i >= startIndex; --i) {
-            std::string wrapped = wrapText(chatHistory[i], font, 20, chatAreaWidth);
-            std::istringstream iss(wrapped);
-            std::string line;
-            std::vector<std::string> lines;
-            while (std::getline(iss, line)) {
-                lines.push_back(line);
-            }
-            for (int j = (int)lines.size() - 1; j >= 0; --j) {
-                sf::Text msg(lines[j], font, 20);
-                msg.setFillColor(sf::Color::Black);
-                msg.setPosition(25.f, y);
-                window.draw(msg);
-                y -= 25.f;
-            }
+        // update caret
+        if (caretClock.getElapsedTime().asSeconds() > 0.5f) {
+            caretVisible = !caretVisible;
+            caretClock.restart();
         }
 
-        window.draw(chatBox);
-        window.draw(chatText);
+        // render
+        window.clear(sf::Color(18, 18, 22));
 
-        // Caret blink
-        sf::Vector2f caretPos = chatText.findCharacterPos(userInput.size());
-        caret.setPosition(caretPos.x, chatText.getPosition().y);
-        bool showCaret = (std::fmod(caretClock.getElapsedTime().asSeconds(),
-                                    caretBlinkPeriod * 2.f) < caretBlinkPeriod);
-        if (showCaret) window.draw(caret);
+        // draw history
+        if (font.getInfo().family != "") {
+            std::ostringstream hist;
+            for (const auto& line : history.data()) hist << line << "\n";
+            historyText.setString(hist.str());
+            window.draw(historyText);
+        }
+
+        // draw input bar + text
+        window.draw(inputBar);
+        if (font.getInfo().family != "") {
+            std::string toShow = buffer;
+            if (caretVisible) toShow.push_back('_');
+            inputText.setString(toShow);
+            window.draw(inputText);
+        }
 
         window.display();
     }
