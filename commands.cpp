@@ -4,9 +4,13 @@
 #include <vector>
 #include <chrono>
 #include <iostream>
-#include "nlp.hpp"
+#include <system_error>
+#include "NLP.hpp"   // <-- new NLP
 #include "ai.hpp"
-#include "nlp_rules.hpp"
+
+// If commands.hpp doesn't define fs alias, uncomment:
+// #include <filesystem>
+// namespace fs = std::filesystem;
 
 static std::string trim(const std::string& s) {
     size_t b = s.find_first_not_of(" \t\r\n");
@@ -25,7 +29,25 @@ static fs::path resolvePath(const fs::path& currentDir, const std::string& userP
     return fs::weakly_canonical(currentDir / p);
 }
 
+// ---- NLP singletons / helpers ----
+static NLP g_nlp;
+static bool g_nlp_loaded = false;
+
+static void ensureNlpLoadedOnce() {
+    if (g_nlp_loaded) return;
+    std::string err;
+    if (!g_nlp.load_rules("nlp_rules.json", &err)) {
+        std::cerr << "[NLP] Failed to load nlp_rules.json: " << err << "\n";
+    } else {
+        std::cerr << "[NLP] Loaded NLP rules.\n";
+    }
+    g_nlp_loaded = true;
+}
+
+// ---- command handler ----
 std::string handleCommand(const std::string& raw, fs::path& currentDir) {
+    ensureNlpLoadedOnce();
+
     std::string line = trim(raw);
     if (line.empty()) return "";
     auto args = split(line);
@@ -51,7 +73,10 @@ std::string handleCommand(const std::string& raw, fs::path& currentDir) {
 
     // reloadnlp
     if (cmd == "reloadnlp") {
-        bool ok = loadNlpRules("nlp_rules.json");
+        std::string err;
+        bool ok = g_nlp.load_rules("nlp_rules.json", &err);
+        if (!ok && !err.empty()) std::cerr << "[NLP] " << err << "\n";
+        g_nlp_loaded = true;
         return ok ? "NLP rules reloaded." : "Failed to reload nlp_rules.json.";
     }
 
@@ -186,20 +211,43 @@ std::string handleCommand(const std::string& raw, fs::path& currentDir) {
         return callAI(query);
     }
 
-    // ---- Natural language fallback ----
-Intent intent = g_nlp.parse(line);
-if (intent.matched) {
-    // For example: if intent was "open_app"
-    if (intent.name == "open_app") {
-        auto it = intent.slots.find("app");
-        if (it != intent.slots.end()) {
-            std::cout << ">> would open app: " << it->second << "\n";
+    // ---- Natural language fallback (NLP) ----
+    {
+        Intent intent = g_nlp.parse(line);
+        if (intent.matched) {
+            // Example handlers (expand as needed)
+            if (intent.name == "open_app") {
+                auto it = intent.slots.find("app");
+                if (it != intent.slots.end()) {
+                    // TODO: hook into your real launcher
+                    return "Would open app: " + it->second;
+                }
+                return "open_app intent matched, but no 'app' slot found.";
+            }
+            if (intent.name == "search_web") {
+                auto it = intent.slots.find("query");
+                if (it != intent.slots.end()) {
+                    // TODO: call your search function
+                    return "Would search web for: " + it->second;
+                }
+                return "search_web intent matched, but no 'query' provided.";
+            }
+            if (intent.name == "set_timer") {
+                auto it = intent.slots.find("minutes");
+                if (it != intent.slots.end()) {
+                    return "Would set timer for " + it->second + " minute(s).";
+                }
+                return "set_timer intent matched, but no minutes found.";
+            }
+            // Default: echo the recognized intent and slots
+            std::ostringstream oss;
+            oss << "Recognized intent: " << intent.name << "\n";
+            for (auto& kv : intent.slots) {
+                oss << "  " << kv.first << " = " << kv.second << "\n";
+            }
+            return oss.str();
         }
     }
-    // Add more intent handlers here...
-}
-
-        return mapped;
 
     // ---- Final fallback ----
     return "Error: unknown command. Type 'help' for options.";
