@@ -14,15 +14,15 @@
 namespace fs = std::filesystem;
 
 // ----------------------- Tunables -----------------------
-static float   kWindowW        = 560.f;
-static float   kWindowH        = 860.f;
-static float   kTitleBarH      = 48.f;   // banner at the top
-static float   kInputBarH      = 44.f;   // chat input height
-static float   kSidePad        = 12.f;   // left/right padding
-static float   kLineSpacing    = 1.25f;  // line spacing multiplier
-static unsigned kFontSize      = 18;     // history & input font size
-static unsigned kTitleFontSize = 22;     // title font size
-static size_t  kMaxHistory     = 1000;   // max raw lines to store
+static float    kTitleBarH      = 48.f;   // banner at the top
+static float    kInputBarH      = 44.f;   // chat input height
+static float    kSidePad        = 12.f;   // left/right padding
+static float    kTopPad         = 6.f;    // top padding under title
+static float    kBottomPad      = 6.f;    // bottom padding above input
+static float    kLineSpacing    = 1.25f;  // line spacing multiplier
+static unsigned kFontSize       = 18;     // history & input font size
+static unsigned kTitleFontSize  = 22;     // title font size
+static size_t   kMaxHistory     = 1000;   // max raw lines to store
 // --------------------------------------------------------
 
 struct WrappedLine {
@@ -37,17 +37,15 @@ public:
         raw_.push_back({line, color});
         dirty_ = true; // needs re-wrap on next draw
     }
-    const std::deque<WrappedLine>& raw() const { return raw_; }
     void clear() { raw_.clear(); dirty_ = true; }
 
-    // Wrap to given width using provided sf::Text as measurer
-    void ensureWrapped(float maxWidth, sf::Text& measurer, float lineSpacingMult) {
+    void ensureWrapped(float maxWidth, sf::Text& measurer) {
         if (!dirty_ && lastWrapWidth_ == maxWidth && lastFontSize_ == measurer.getCharacterSize())
             return;
 
         wrapped_.clear();
         for (const auto& ln : raw_) {
-            wrapLine(ln, maxWidth, measurer, lineSpacingMult, wrapped_);
+            wrapLine(ln, maxWidth, measurer, wrapped_);
         }
         dirty_ = false;
         lastWrapWidth_ = maxWidth;
@@ -55,16 +53,15 @@ public:
     }
 
     const std::vector<WrappedLine>& wrapped() const { return wrapped_; }
+    size_t wrappedCount() const { return wrapped_.size(); }
 
 private:
-    static void wrapLine(const WrappedLine& ln, float maxW, sf::Text& meas, float, std::vector<WrappedLine>& out) {
-        // fast path empty
+    static void wrapLine(const WrappedLine& ln, float maxW, sf::Text& meas, std::vector<WrappedLine>& out) {
         if (ln.text.empty()) { out.push_back({"", ln.color}); return; }
 
-        // measure + break by words
-        std::string word;
-        std::string current;
+        std::string word, current;
         std::istringstream iss(ln.text);
+
         auto flush = [&](bool force=false){
             if (force || !current.empty()) {
                 out.push_back({current, ln.color});
@@ -145,7 +142,7 @@ static std::string findFontPath(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-    // --- NLP load (exe dir first) ---
+    // --- NLP load ---
     NLP nlp;
     {
         std::error_code ec;
@@ -164,7 +161,7 @@ int main(int argc, char** argv) {
     }
 
     // --- Window ---
-    sf::RenderWindow window(sf::VideoMode((unsigned)kWindowW, (unsigned)kWindowH), "GRIM");
+    sf::RenderWindow window(sf::VideoMode(560, 860), "GRIM");
     window.setVerticalSyncEnabled(true);
 
     // --- Font ---
@@ -176,10 +173,9 @@ int main(int argc, char** argv) {
         std::cerr << "[INFO] Using font: " << fontPath << "\n";
     }
 
-    // --- Geometry / UI elements ---
-    sf::RectangleShape titleBar({kWindowW, kTitleBarH});
+    // --- Geometry / UI elements (sizes/positions updated each frame) ---
+    sf::RectangleShape titleBar;
     titleBar.setFillColor(sf::Color(26, 26, 30));
-    titleBar.setPosition(0.f, 0.f);
 
     sf::Text titleText;
     if (font.getInfo().family != "") {
@@ -187,22 +183,17 @@ int main(int argc, char** argv) {
         titleText.setCharacterSize(kTitleFontSize);
         titleText.setFillColor(sf::Color(220, 220, 235));
         titleText.setString("G R I M");
-        // centered each frame in render loop (to handle resizes)
     }
 
-    sf::RectangleShape inputBar({kWindowW, kInputBarH});
+    sf::RectangleShape inputBar;
     inputBar.setFillColor(sf::Color(30, 30, 35));
-    inputBar.setPosition(0.f, kWindowH - kInputBarH);
 
-    sf::Text inputText;
+    sf::Text inputText, lineText;
     if (font.getInfo().family != "") {
         inputText.setFont(font);
         inputText.setCharacterSize(kFontSize);
         inputText.setFillColor(sf::Color::White);
-    }
 
-    sf::Text lineText; // measurer / drawer
-    if (font.getInfo().family != "") {
         lineText.setFont(font);
         lineText.setCharacterSize(kFontSize);
         lineText.setFillColor(sf::Color::White);
@@ -217,41 +208,25 @@ int main(int argc, char** argv) {
 
     std::string buffer;
     fs::path currentDir = fs::current_path();
-
     addHistory("GRIM is ready. Type 'help' for commands. Type 'quit' to exit.", sf::Color(160, 200, 255));
 
-    // caret
+    // caret + scrolling
     sf::Clock caretClock; bool caretVisible = true;
-
-    // scrolling
     float scrollOffsetLines = 0.f; // 0 = bottom (latest). Positive = scrolled up.
+
     auto clampScroll = [&](float maxLines){
         if (scrollOffsetLines < 0) scrollOffsetLines = 0;
         if (scrollOffsetLines > maxLines) scrollOffsetLines = maxLines;
     };
 
-    auto historyAreaTop = [&](){ return kTitleBarH + 6.f; };
-    auto historyAreaBottom = [&](){ return kWindowH - kInputBarH - 6.f; };
-    auto historyAreaHeight = [&](){ return std::max(0.f, historyAreaBottom() - historyAreaTop()); };
-    auto historyAreaWidth  = [&](){ return std::max(10.f, kWindowW - 2.f * kSidePad); };
-
-    // main loop
     while (window.isOpen()) {
+        // Poll events (no manual size tracking needed)
         sf::Event e;
         while (window.pollEvent(e)) {
             if (e.type == sf::Event::Closed) window.close();
 
-            if (e.type == sf::Event::Resized) {
-                kWindowW = (float)e.size.width;
-                kWindowH = (float)e.size.height;
-                titleBar.setSize({kWindowW, kTitleBarH});
-                inputBar.setSize({kWindowW, kInputBarH});
-                inputBar.setPosition(0.f, kWindowH - kInputBarH);
-            }
-
             if (e.type == sf::Event::KeyPressed) {
                 if (e.key.code == sf::Keyboard::Escape) window.close();
-                // scrolling by keys
                 if (e.key.code == sf::Keyboard::PageUp)   { scrollOffsetLines += 10.f; }
                 if (e.key.code == sf::Keyboard::PageDown) { scrollOffsetLines -= 10.f; if (scrollOffsetLines < 0.f) scrollOffsetLines = 0.f; }
                 if (e.key.code == sf::Keyboard::Home)     { scrollOffsetLines = 1e6f; } // clamp later
@@ -260,7 +235,6 @@ int main(int argc, char** argv) {
 
             if (e.type == sf::Event::MouseWheelScrolled) {
                 if (e.mouseWheelScroll.wheel == sf::Mouse::VerticalWheel) {
-                    // up is positive on SFML
                     scrollOffsetLines += (e.mouseWheelScroll.delta > 0 ? 3.f : -3.f);
                     if (scrollOffsetLines < 0.f) scrollOffsetLines = 0.f;
                 }
@@ -291,48 +265,53 @@ int main(int argc, char** argv) {
                         addHistory("  reloadnlp                 - reload nlp_rules.json");
                         addHistory("  ai <prompt>               - ask local model via Ollama");
                         addHistory("Try: 'open notepad', 'search cats', 'timer for 3 min'");
+                        scrollOffsetLines = 0.f;
                         continue;
                     }
-                    if (cmd == "pwd") { addHistory(currentDir.string()); continue; }
+                    if (cmd == "pwd") { addHistory(currentDir.string()); scrollOffsetLines = 0.f; continue; }
                     if (cmd == "cd") {
-                        if (args.size() < 2) { addHistory("Error: cd requires a path."); continue; }
+                        if (args.size() < 2) { addHistory("Error: cd requires a path."); scrollOffsetLines = 0.f; continue; }
                         fs::path target = resolvePath(currentDir, args[1]);
                         std::error_code ec;
-                        if (!fs::exists(target, ec)) { addHistory("Error: path does not exist."); continue; }
-                        if (!fs::is_directory(target, ec)) { addHistory("Error: not a directory."); continue; }
+                        if (!fs::exists(target, ec)) { addHistory("Error: path does not exist."); scrollOffsetLines = 0.f; continue; }
+                        if (!fs::is_directory(target, ec)) { addHistory("Error: not a directory."); scrollOffsetLines = 0.f; continue; }
                         currentDir = target;
                         addHistory("Directory changed to: " + currentDir.string());
+                        scrollOffsetLines = 0.f;
                         continue;
                     }
                     if (cmd == "list") {
                         std::error_code ec;
                         if (!fs::exists(currentDir, ec) || !fs::is_directory(currentDir, ec)) {
-                            addHistory("Error: current directory invalid."); continue;
+                            addHistory("Error: current directory invalid."); scrollOffsetLines = 0.f; continue;
                         }
                         for (const auto& entry : fs::directory_iterator(currentDir, ec)) {
                             if (ec) break;
                             bool isDir = entry.is_directory(ec);
                             addHistory(std::string(isDir ? "[D] " : "    ") + entry.path().filename().string());
                         }
+                        scrollOffsetLines = 0.f;
                         continue;
                     }
                     if (cmd == "mkdir") {
-                        if (args.size() < 2) { addHistory("Error: mkdir requires <path>."); continue; }
+                        if (args.size() < 2) { addHistory("Error: mkdir requires <path>."); scrollOffsetLines = 0.f; continue; }
                         fs::path p = resolvePath(currentDir, args[1]);
                         std::error_code ec; fs::create_directories(p, ec);
                         if (ec) addHistory("Error creating directory: " + ec.message());
                         else addHistory("Directory created.");
+                        scrollOffsetLines = 0.f;
                         continue;
                     }
                     if (cmd == "rm") {
-                        if (args.size() < 2) { addHistory("Error: rm requires <path>."); continue; }
+                        if (args.size() < 2) { addHistory("Error: rm requires <path>."); scrollOffsetLines = 0.f; continue; }
                         fs::path p = resolvePath(currentDir, args[1]);
                         std::error_code ec;
-                        if (!fs::exists(p, ec)) { addHistory("Error: path does not exist."); continue; }
+                        if (!fs::exists(p, ec)) { addHistory("Error: path does not exist."); scrollOffsetLines = 0.f; continue; }
                         bool ok = fs::remove(p, ec);
                         if (ec) addHistory("Error removing: " + ec.message());
                         else if (!ok) addHistory("Error: could not remove (directory may not be empty).");
                         else addHistory("Removed.");
+                        scrollOffsetLines = 0.f;
                         continue;
                     }
                     if (cmd == "reloadnlp") {
@@ -345,11 +324,12 @@ int main(int argc, char** argv) {
                                                                : nlp.load_rules(rulesPathCwd.string(), &err);
                         if (!ok) addHistory("Failed to reload nlp_rules.json: " + err, sf::Color(255,140,140));
                         else addHistory("NLP rules reloaded.", sf::Color(140,255,180));
+                        scrollOffsetLines = 0.f;
                         continue;
                     }
                     if (cmd == "ai") {
                         std::string query = (line.size() > 3) ? trim(line.substr(3)) : "";
-                        if (query.empty()) { addHistory("Usage: ai <your question>"); continue; }
+                        if (query.empty()) { addHistory("Usage: ai <your question>"); scrollOffsetLines = 0.f; continue; }
                         try {
                             std::string answer = callAI(query);
                             if (answer.empty()) answer = "[AI] (empty response)";
@@ -359,6 +339,7 @@ int main(int argc, char** argv) {
                         } catch (const std::exception& ex) {
                             addHistory(std::string("[AI] Error: ") + ex.what(), sf::Color(255,140,140));
                         }
+                        scrollOffsetLines = 0.f;
                         continue;
                     }
 
@@ -371,9 +352,8 @@ int main(int argc, char** argv) {
                             std::ostringstream oss;
                             oss << "[NLP] intent=" << intent.name << " score=" << intent.score;
                             addHistory(oss.str(), sf::Color(180, 255, 180));
-                            for (const auto& kv : intent.slots) {
-                                addHistory("  " + kv.first + " = " + kv.second);
-                            }
+                            for (const auto& kv : intent.slots) addHistory("  " + kv.first + " = " + kv.second);
+
                             if (intent.name == "open_app") {
                                 auto it = intent.slots.find("app");
                                 if (it != intent.slots.end()) addHistory("Would open app: " + it->second);
@@ -385,10 +365,8 @@ int main(int argc, char** argv) {
                                 if (it != intent.slots.end()) addHistory("Would set timer for " + it->second + " minute(s).");
                             }
                         }
+                        scrollOffsetLines = 0.f;
                     }
-
-                    // Jump to bottom on new input
-                    scrollOffsetLines = 0.f;
                 } else {
                     if (e.text.unicode >= 32 && e.text.unicode < 127) {
                         buffer.push_back(static_cast<char>(e.text.unicode));
@@ -403,55 +381,60 @@ int main(int argc, char** argv) {
             caretClock.restart();
         }
 
-        // --------- Wrapping & scrolling computations ----------
-        // Prepare measurer
-        if (font.getInfo().family != "") {
-            lineText.setCharacterSize(kFontSize);
-        }
+        // --------- Layout from live window size ----------
+        sf::Vector2u ws = window.getSize();
+        float winW = static_cast<float>(ws.x);
+        float winH = static_cast<float>(ws.y);
 
-        // Pixels per text line (approx)
-        float lineHeightPx = kLineSpacing * (float)kFontSize;
+        // Bars sizes/positions
+        titleBar.setSize({winW, kTitleBarH});
+        titleBar.setPosition(0.f, 0.f);
 
-        // Wrap to visible width
-        float wrapWidth = historyAreaWidth();
-        history.ensureWrapped(wrapWidth, lineText, kLineSpacing);
+        inputBar.setSize({winW, kInputBarH});
+        inputBar.setPosition(0.f, winH - kInputBarH);
 
-        // How many lines fit in the viewport?
-        float viewLinesF = std::max(1.f, historyAreaHeight() / lineHeightPx);
-        size_t wrappedCount = history.wrapped().size();
-
-        // Max scroll is when top aligns to first line
-        float maxScroll = (wrappedCount > (size_t)viewLinesF) ? (wrappedCount - (size_t)viewLinesF) : 0.f;
-        clampScroll(maxScroll);
-
-        // Title center position (recompute per frame)
+        // Title centered
         if (font.getInfo().family != "") {
             sf::FloatRect tb = titleText.getLocalBounds();
-            titleText.setPosition((kWindowW - tb.width) * 0.5f, (kTitleBarH - tb.height) * 0.5f - 6.f);
+            titleText.setPosition((winW - tb.width) * 0.5f, (kTitleBarH - tb.height) * 0.5f - 6.f);
         }
 
-        // Input text placement
+        // Input text
         if (font.getInfo().family != "") {
             std::string toShow = buffer;
             if (caretVisible) toShow.push_back('_');
             inputText.setString(toShow);
-            inputText.setPosition(kSidePad, kWindowH - kInputBarH + (kInputBarH - (float)kFontSize) * 0.5f - 2.f);
+            inputText.setPosition(kSidePad, winH - kInputBarH + (kInputBarH - (float)kFontSize) * 0.5f - 2.f);
         }
 
-        // Render
-        window.clear(sf::Color(18, 18, 22));
-
-        // Title
-        window.draw(titleBar);
-        if (font.getInfo().family != "") window.draw(titleText);
-
-        // History text block (clipped conceptually by staying in bounds)
-        float y = historyAreaTop();
+        // Wrapping & scrolling
         if (font.getInfo().family != "") {
-            // compute starting index
+            lineText.setCharacterSize(kFontSize);
+
+            float lineHeightPx = kLineSpacing * (float)kFontSize;
+            float histTop = kTitleBarH + kTopPad;
+            float histBottom = winH - kInputBarH - kBottomPad;
+            float histHeight = std::max(0.f, histBottom - histTop);
+            float wrapWidth = std::max(10.f, winW - 2.f * kSidePad);
+
+            history.ensureWrapped(wrapWidth, lineText);
+
+            float viewLinesF = std::max(1.f, histHeight / lineHeightPx);
+            size_t wrappedCount = history.wrappedCount();
+
+            float maxScroll = (wrappedCount > (size_t)viewLinesF) ? (wrappedCount - (size_t)viewLinesF) : 0.f;
+            clampScroll(maxScroll);
+
+            // Render
+            window.clear(sf::Color(18, 18, 22));
+            window.draw(titleBar);
+            window.draw(titleText);
+
+            // draw wrapped lines within viewport from the bottom (latest)
             long start = std::max(0L, (long)wrappedCount - (long)std::ceil(viewLinesF) - (long)std::floor(scrollOffsetLines));
             long end   = std::min<long>(wrappedCount, start + (long)std::ceil(viewLinesF) + 1);
 
+            float y = histTop;
             for (long i = start; i < end; ++i) {
                 if (i < 0 || i >= (long)history.wrapped().size()) continue;
                 const auto& wl = history.wrapped()[i];
@@ -460,33 +443,38 @@ int main(int argc, char** argv) {
                 lineText.setPosition(kSidePad, y);
                 window.draw(lineText);
                 y += lineHeightPx;
-                if (y > historyAreaBottom()) break;
+                if (y > histBottom) break;
             }
 
-            // minimal scrollbar indicator (right side)
+            // minimal scrollbar
             if (wrappedCount > (size_t)viewLinesF) {
-                float trackTop = historyAreaTop();
-                float trackH   = historyAreaHeight();
+                float trackTop = histTop;
+                float trackH   = histHeight;
                 float thumbH   = std::max(20.f, trackH * (viewLinesF / (float)wrappedCount));
                 float t = (maxScroll <= 0.f) ? 0.f : (scrollOffsetLines / maxScroll); // 0..1
                 float thumbTop = trackTop + (trackH - thumbH) * t;
 
                 sf::RectangleShape track({4.f, trackH});
                 track.setFillColor(sf::Color(50,50,58));
-                track.setPosition(kWindowW - 6.f, trackTop);
+                track.setPosition(winW - 6.f, trackTop);
 
                 sf::RectangleShape thumb({4.f, thumbH});
                 thumb.setFillColor(sf::Color(120,120,135));
-                thumb.setPosition(kWindowW - 6.f, thumbTop);
+                thumb.setPosition(winW - 6.f, thumbTop);
 
                 window.draw(track);
                 window.draw(thumb);
             }
-        }
 
-        // Input bar
-        window.draw(inputBar);
-        if (font.getInfo().family != "") window.draw(inputText);
+            // input bar + text
+            window.draw(inputBar);
+            window.draw(inputText);
+        } else {
+            // No font: still draw bars to indicate layout
+            window.clear(sf::Color(18, 18, 22));
+            window.draw(titleBar);
+            window.draw(inputBar);
+        }
 
         window.display();
     }
