@@ -1,9 +1,26 @@
 [
-  { "match": "where am i", "command": "pwd" },
-  { "match": "list files", "command": "ls" },
-  { "match": "show files", "command": "ls" },
-  { "match": "go to ",     "command": "cd ", "mode": "prefix" },
-  { "match": "open ",      "command": "cd ", "mode": "prefix" },
-  { "match": "root",       "command": "root" },
-  { "match": "up one level","command": "up" }
+  {
+    "intent": "open_app",
+    "description": "Open a local application by name",
+    "pattern": "^\\s*(open|launch|start)\\s+([\\w\\.\\-]+)\\s*$",
+    "slot_names": ["verb","app"],
+    "score_boost": 0.3,
+    "case_insensitive": true
+  },
+  {
+    "intent": "search_web",
+    "description": "Search the web for a query",
+    "pattern": "^(google|search|look up)\\s+(.+)$",
+    "slot_names": ["verb","query"],
+    "score_boost": 0.2,
+    "case_insensitive": true
+  },
+  {
+    "intent": "set_timer",
+    "description": "Set a timer in minutes",
+    "pattern": "^(set\\s+)?timer\\s+for\\s+(\\d+)\\s*(minutes|min|m)\\b",
+    "slot_names": ["_opt","minutes"],
+    "score_boost": 0.25,
+    "case_insensitive": true
+  }
 ]
