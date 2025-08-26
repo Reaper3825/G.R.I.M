@@ -145,37 +145,77 @@ int main() {
             }
 
             // ---------- Text input ----------
-            if (event.type == sf::Event::TextEntered) {
-                if (event.text.unicode == 8) { // Backspace
-                    if (!userInput.empty()) userInput.pop_back();
-                    chatText.setString(userInput);
-                } else if (event.text.unicode == 13) { // Return
-                    std::string line = userInput;
-                    if (!line.empty()) {
-                        chatHistory.push_back("You: " + line);
+// ---------- Text input ----------
+if (event.type == sf::Event::TextEntered) {
+    if (event.text.unicode == 8) { // Backspace
+        if (!userInput.empty()) userInput.pop_back();
+        chatText.setString(userInput);
 
-                        // Save in command history
-                        commandHistory.push_back(line);
-                        historyIndex = -1;
+    } else if (event.text.unicode == '\r') { // Enter key
+        std::string line = userInput;
+        if (!line.empty()) {
+            chatHistory.push_back("You: " + line);
 
-                        std::string reply = handleCommand(line, currentDir);
-                        if (!reply.empty()) {
-                            std::istringstream iss(reply);
-                            std::string each;
-                            while (std::getline(iss, each)) {
-                                chatHistory.push_back("Grim: " + each);
-                            }
-                        }
-                        scrollOffset = 0; // jump to newest
-                    }
-                    userInput.clear();
-                    chatText.setString(userInput);
+            // Save in command history
+            commandHistory.push_back(line);
+            historyIndex = -1;
+
+            // First try natural-language parser
+            std::string reply = parseNaturalLanguage(line, currentDir);
+            if (reply.empty()) {
+                // Fall back to explicit command syntax
+                reply = handleCommand(line, currentDir);
+            }
+
+            if (!reply.empty()) {
+                std::istringstream iss(reply);
+                std::string each;
+                while (std::getline(iss, each)) {
+                    chatHistory.push_back("Grim: " + each);
+                }
+            }
+            scrollOffset = 0;
+        }
+        userInput.clear();
+        chatText.setString(userInput);
+
+    } else if (event.text.unicode >= 32 && event.text.unicode < 128) { 
+        // Printable ASCII
+        userInput += static_cast<char>(event.text.unicode);
+        chatText.setString(userInput);
+    }
+}
+
+        // Save in command history
+        commandHistory.push_back(line);
+        historyIndex = -1;
+
+        // first try natural-language parser
+        std::string reply = parseNaturalLanguage(line, currentDir);
+        if (reply.empty()) {
+            // fall back to explicit command syntax
+            reply = handleCommand(line, currentDir);
+        }
+
+        if (!reply.empty()) {
+            std::istringstream iss(reply);
+            std::string each;
+            while (std::getline(iss, each)) {
+                chatHistory.push_back("Grim: " + each);
+            }
+        }
+        scrollOffset = 0;
+    }
+    userInput.clear();
+    chatText.setString(userInput);
+}
+
                 } else if (event.text.unicode >= 32 && event.text.unicode < 128) { // Printable ASCII
                     userInput += static_cast<char>(event.text.unicode);
                     chatText.setString(userInput);
                 }
             }
-        }
+        
 
         // ---------- Layout (per-frame, so it reacts to resize) ----------
         sf::Vector2u winSize = window.getSize();
