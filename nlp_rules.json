@@ -1,0 +1,9 @@
+[
+  { "match": "where am i", "command": "pwd" },
+  { "match": "list files", "command": "ls" },
+  { "match": "show files", "command": "ls" },
+  { "match": "go to ",     "command": "cd ", "mode": "prefix" },
+  { "match": "open ",      "command": "cd ", "mode": "prefix" },
+  { "match": "root",       "command": "root" },
+  { "match": "up one level","command": "up" }
+]
