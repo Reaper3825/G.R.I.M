@@ -48,25 +48,21 @@ else()
   )
 endif()
 
-# 2) Fonts (optional system fallback if missing)
-set(GRIM_FONT_SRC "")
-if (EXISTS "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")
-  set(GRIM_FONT_SRC "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")
-elseif (EXISTS "C:/Windows/Fonts/arial.ttf")
-  set(GRIM_FONT_SRC "C:/Windows/Fonts/arial.ttf")
-elseif (EXISTS "C:/Windows/Fonts/segoeui.ttf")
-  set(GRIM_FONT_SRC "C:/Windows/Fonts/segoeui.ttf")
-endif()
+# 2) Fonts: copy the first .ttf we find in resources/
+file(GLOB FONT_FILES "${CMAKE_SOURCE_DIR}/resources/*.ttf")
+list(GET FONT_FILES 0 GRIM_FONT_SRC)
 
 if (GRIM_FONT_SRC)
+  message(STATUS "Using default font: ${GRIM_FONT_SRC}")
   add_custom_command(TARGET GRIM POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${GRIM_FONT_SRC}"
-            "$<TARGET_FILE_DIR:GRIM>/DejaVuSans.ttf"
+            "$<TARGET_FILE_DIR:GRIM>/DefaultFont.ttf"
   )
 else()
-  message(WARNING "No default font found. Make sure you add one into resources/.")
+  message(WARNING "No .ttf font found in resources/. Text may not render.")
 endif()
+
 
 # 3) Always copy the entire resources/ folder (future-proof asset handling)
 if (EXISTS "${CMAKE_SOURCE_DIR}/resources")
