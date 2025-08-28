@@ -10,15 +10,15 @@ set(CMAKE_MAKEFILE_DEPENDS
   "/Users/austinwadkins/Documents/G.R.I.M/CMakeLists.txt"
   "CMakeFiles/4.1.0/CMakeCXXCompiler.cmake"
   "CMakeFiles/4.1.0/CMakeSystem.cmake"
+  "/opt/homebrew/lib/cmake/SFML/SFMLConfig.cmake"
+  "/opt/homebrew/lib/cmake/SFML/SFMLConfigDependencies.cmake"
+  "/opt/homebrew/lib/cmake/SFML/SFMLConfigVersion.cmake"
+  "/opt/homebrew/lib/cmake/SFML/SFMLSharedTargets-release.cmake"
+  "/opt/homebrew/lib/cmake/SFML/SFMLSharedTargets.cmake"
   "/opt/homebrew/lib/cmake/cpr/cprConfig.cmake"
   "/opt/homebrew/lib/cmake/cpr/cprConfigVersion.cmake"
   "/opt/homebrew/lib/cmake/cpr/cprTargets-release.cmake"
   "/opt/homebrew/lib/cmake/cpr/cprTargets.cmake"
-  "/opt/homebrew/opt/sfml@2/lib/cmake/SFML/SFMLConfig.cmake"
-  "/opt/homebrew/opt/sfml@2/lib/cmake/SFML/SFMLConfigDependencies.cmake"
-  "/opt/homebrew/opt/sfml@2/lib/cmake/SFML/SFMLConfigVersion.cmake"
-  "/opt/homebrew/opt/sfml@2/lib/cmake/SFML/SFMLSharedTargets-release.cmake"
-  "/opt/homebrew/opt/sfml@2/lib/cmake/SFML/SFMLSharedTargets.cmake"
   "/opt/homebrew/share/cmake/Modules/CMakeCXXCompiler.cmake.in"
   "/opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp"
   "/opt/homebrew/share/cmake/Modules/CMakeCXXInformation.cmake"
@@ -130,4 +130,5 @@ set(CMAKE_MAKEFILE_PRODUCTS
 # Dependency information for all targets:
 set(CMAKE_DEPEND_INFO_FILES
   "CMakeFiles/GRIM.dir/DependInfo.cmake"
+  "CMakeFiles/copy_resources.dir/DependInfo.cmake"
   )
