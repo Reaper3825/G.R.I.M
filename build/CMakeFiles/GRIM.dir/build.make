@@ -159,9 +159,9 @@ GRIM: CMakeFiles/GRIM.dir/nlp.cpp.o
 GRIM: CMakeFiles/GRIM.dir/nlp_rules.cpp.o
 GRIM: CMakeFiles/GRIM.dir/ai.cpp.o
 GRIM: CMakeFiles/GRIM.dir/build.make
-GRIM: /opt/homebrew/opt/sfml@2/lib/libsfml-graphics.2.6.2.dylib
-GRIM: /opt/homebrew/opt/sfml@2/lib/libsfml-window.2.6.2.dylib
-GRIM: /opt/homebrew/opt/sfml@2/lib/libsfml-system.2.6.2.dylib
+GRIM: /opt/homebrew/lib/libsfml-graphics.2.6.2.dylib
+GRIM: /opt/homebrew/lib/libsfml-window.2.6.2.dylib
+GRIM: /opt/homebrew/lib/libsfml-system.2.6.2.dylib
 GRIM: /opt/homebrew/lib/libcpr.1.12.0.dylib
 GRIM: /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/libcurl.tbd
 GRIM: /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/libcurl.tbd

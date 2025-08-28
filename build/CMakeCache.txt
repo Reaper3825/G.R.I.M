@@ -121,9 +121,6 @@ CMAKE_OSX_DEPLOYMENT_TARGET:STRING=
 // inside the indicated SDK.
 CMAKE_OSX_SYSROOT:STRING=
 
-//No help, variable specified on the command line.
-CMAKE_PREFIX_PATH:UNINITIALIZED=/opt/homebrew/opt/sfml@2;/opt/homebrew/opt/nlohmann-json
-
 //Value Computed by CMake
 CMAKE_PROJECT_COMPAT_VERSION:STATIC=
 
@@ -244,10 +241,10 @@ PKG_CONFIG_ARGN:STRING=
 PKG_CONFIG_EXECUTABLE:FILEPATH=/opt/homebrew/bin/pkg-config
 
 //The directory containing a CMake configuration file for SFML.
-SFML_DIR:PATH=/opt/homebrew/opt/sfml@2/lib/cmake/SFML
+SFML_DIR:PATH=/opt/homebrew/lib/cmake/SFML
 
 //Path to a file.
-SFML_DOC_DIR:PATH=/opt/homebrew/opt/sfml@2/share/doc/SFML
+SFML_DOC_DIR:PATH=/opt/homebrew/share/doc/SFML
 
 //The directory containing a CMake configuration file for cpr.
 cpr_DIR:PATH=/opt/homebrew/lib/cmake/cpr
