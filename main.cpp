@@ -220,8 +220,7 @@ int main(int argc, char** argv) {
     };
 
     while (window.isOpen()) {
-        int winx = window.getSize().x;
-        int winy = window.getSize().y;
+        
         // Poll events (no manual size tracking needed)
         sf::Event e;
         while (window.pollEvent(e)) {
@@ -390,15 +389,15 @@ int main(int argc, char** argv) {
 
         // Bars sizes/positions
         titleBar.setSize({winx, kTitleBarH});
-        titleBar.setPosition(0.f, 0.f);
+        titleBar.setPosition(winW.f, 0.f);
 
-        inputBar.setSize({winy, kInputBarH});
+        inputBar.setSize({winW, kInputBarH});
         inputBar.setPosition(0.f, winH - kInputBarH);
 
         // Title centered
         if (font.getInfo().family != "") {
             sf::FloatRect tb = titleText.getLocalBounds();
-            titleText.setPosition((winW - tb.width) * 0.5f, (kTitleBarH - tb.height) * 0.5f - 6.f);
+            titleText.setPosition((winW/2), (kTitleBarH - tb.height) * 0.5f - 6.f);
         }
 
         // Input text
