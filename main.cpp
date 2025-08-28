@@ -385,8 +385,8 @@ int main(int argc, char** argv) {
 
         // --------- Layout from live window size ----------
         sf::Vector2u ws = window.getSize();
-        float winW = static_cast<float>(ws.x);
-        float winH = static_cast<float>(ws.y);
+        float winW = getwindowsize().x;
+        float winH = getwindowsize().y;
 
         // Bars sizes/positions
         titleBar.setSize({winx, kTitleBarH});
