@@ -161,7 +161,7 @@ int main(int argc, char** argv) {
     }
 
     // --- Window ---
-    sf::RenderWindow window(sf::VideoMode(560, 860), "GRIM");
+    sf::RenderWindow window(sf::VideoMode(500, 800), "GRIM");
     window.setVerticalSyncEnabled(true);
 
     // --- Font ---
@@ -220,6 +220,8 @@ int main(int argc, char** argv) {
     };
 
     while (window.isOpen()) {
+        int winx = window.getSize().x;
+        int winy = window.getSize().y;
         // Poll events (no manual size tracking needed)
         sf::Event e;
         while (window.pollEvent(e)) {
@@ -327,7 +329,7 @@ int main(int argc, char** argv) {
                         scrollOffsetLines = 0.f;
                         continue;
                     }
-                    if (cmd == "ai") {
+                    if (cmd == "grim") {
                         std::string query = (line.size() > 3) ? trim(line.substr(3)) : "";
                         if (query.empty()) { addHistory("Usage: ai <your question>"); scrollOffsetLines = 0.f; continue; }
                         try {
@@ -387,10 +389,10 @@ int main(int argc, char** argv) {
         float winH = static_cast<float>(ws.y);
 
         // Bars sizes/positions
-        titleBar.setSize({winW, kTitleBarH});
+        titleBar.setSize({winx, kTitleBarH});
         titleBar.setPosition(0.f, 0.f);
 
-        inputBar.setSize({winW, kInputBarH});
+        inputBar.setSize({winy, kInputBarH});
         inputBar.setPosition(0.f, winH - kInputBarH);
 
         // Title centered
