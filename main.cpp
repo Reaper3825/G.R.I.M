@@ -265,7 +265,7 @@ int main(int argc, char** argv) {
                         addHistory("  mkdir <path>              - create directory");
                         addHistory("  rm <path>                 - remove file or empty directory");
                         addHistory("  reloadnlp                 - reload nlp_rules.json");
-                        addHistory("  ai <prompt>               - ask local model via Ollama");
+                        addHistory("  grim <prompt>               - ask local model via Ollama");
                         addHistory("Try: 'open notepad', 'search cats', 'timer for 3 min'");
                         scrollOffsetLines = 0.f;
                         continue;
@@ -331,15 +331,15 @@ int main(int argc, char** argv) {
                     }
                     if (cmd == "grim") {
                         std::string query = (line.size() > 3) ? trim(line.substr(3)) : "";
-                        if (query.empty()) { addHistory("Usage: ai <your question>"); scrollOffsetLines = 0.f; continue; }
+                        if (query.empty()) { addHistory("Usage: grim <your question>"); scrollOffsetLines = 0.f; continue; }
                         try {
                             std::string answer = callAI(query);
-                            if (answer.empty()) answer = "[AI] (empty response)";
+                            if (answer.empty()) answer = "[grim] (empty response)";
                             std::istringstream iss(answer);
                             std::string l;
                             while (std::getline(iss, l)) addHistory(l, sf::Color(200, 220, 255));
                         } catch (const std::exception& ex) {
-                            addHistory(std::string("[AI] Error: ") + ex.what(), sf::Color(255,140,140));
+                            addHistory(std::string("[grim] Error: ") + ex.what(), sf::Color(255,140,140));
                         }
                         scrollOffsetLines = 0.f;
                         continue;
