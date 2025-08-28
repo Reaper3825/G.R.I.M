@@ -4,7 +4,7 @@
 # compile CXX with /usr/bin/c++
 CXX_DEFINES = 
 
-CXX_INCLUDES = -isystem /opt/homebrew/opt/sfml@2/include -isystem /opt/homebrew/include
+CXX_INCLUDES = -isystem /opt/homebrew/include
 
 CXX_FLAGSarm64 = -std=gnu++20 -arch arm64
 
