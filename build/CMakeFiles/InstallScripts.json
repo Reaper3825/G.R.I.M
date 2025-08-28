@@ -1,7 +1,7 @@
 {
 	"InstallScripts" : 
 	[
-		"D:/GRIM Local/G.R.I.M/build/cmake_install.cmake"
+		"/Users/austinwadkins/Documents/G.R.I.M/build/cmake_install.cmake"
 	],
 	"Parallel" : false
 }
