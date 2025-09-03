@@ -6,7 +6,7 @@ CXX_DEFINES =
 
 CXX_INCLUDES = -isystem /opt/homebrew/include
 
-CXX_FLAGSarm64 = -std=gnu++20 -arch arm64
+CXX_FLAGSarm64 = -g -std=gnu++20 -arch arm64
 
-CXX_FLAGS = -std=gnu++20 -arch arm64
+CXX_FLAGS = -g -std=gnu++20 -arch arm64
 
