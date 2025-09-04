@@ -1,0 +1,28 @@
+{
+  "open_app": [
+    "open",
+    "launch",
+    "start",
+    "run",
+    "execute",
+    "boot"
+  ],
+  "search_web": [
+    "search",
+    "google",
+    "look",
+    "lookup",
+    "find",
+    "query",
+    "browse"
+  ],
+  "set_timer": [
+    "timer",
+    "reminder",
+    "alarm",
+    "countdown",
+    "time",
+    "settimer",
+    "clock"
+  ]
+}

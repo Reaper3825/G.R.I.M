@@ -12,7 +12,7 @@ add_executable(GRIM
     nlp.cpp
     nlp_rules.cpp
     ai.cpp
-    NLP.cpp
+    synonyms.cpp
 )
 
 # ---- Dependencies ----
@@ -48,7 +48,20 @@ else()
   )
 endif()
 
-# 2) Fonts (optional system fallback if missing)
+# 2) Synonyms file
+set(GRIM_SYNONYMS_SRC "${CMAKE_SOURCE_DIR}/synonyms.json")
+if (EXISTS "${GRIM_SYNONYMS_SRC}")
+  add_custom_command(TARGET GRIM POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${GRIM_SYNONYMS_SRC}"
+            "$<TARGET_FILE_DIR:GRIM>/synonyms.json"
+  )
+else()
+  message(WARNING "synonyms.json not found in source; please create one.")
+endif()
+
+
+# 3) Fonts (optional system fallback if missing)
 set(GRIM_FONT_SRC "")
 if (EXISTS "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")
   set(GRIM_FONT_SRC "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")
@@ -68,7 +81,7 @@ else()
   message(WARNING "No default font found. Make sure you add one into resources/.")
 endif()
 
-# 3) Always copy the entire resources/ folder (future-proof asset handling)
+# 4) Always copy the entire resources/ folder (future-proof asset handling)
 if (EXISTS "${CMAKE_SOURCE_DIR}/resources")
   add_custom_target(copy_resources ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -79,8 +92,3 @@ if (EXISTS "${CMAKE_SOURCE_DIR}/resources")
 else()
   message(WARNING "No resources/ folder found. Skipping copy.")
 endif()
-
-# ---- Optional nicer output dirs ----
-# set_target_properties(GRIM PROPERTIES
-#   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
-# )

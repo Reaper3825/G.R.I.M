@@ -3,23 +3,17 @@
 #include <fstream>
 #include <sstream>
 #include <cctype>
+#include <iostream>
 
 // Minimal JSON loader without deps.
 // If you prefer, swap with nlohmann/json later.
 // For now, we expect a very simple, fixed structure and parse crudely.
 namespace mini_json {
-    // Not a general parser; assumes your file is formatted like in the example below.
-    // If you want robust JSON, use nlohmann/json single-header later.
     static std::string read_all(const std::string& path) {
         std::ifstream f(path);
         std::ostringstream ss;
         ss << f.rdbuf();
         return ss.str();
-    }
-
-    static std::string strip_ws(std::string s) {
-        s.erase(remove_if(s.begin(), s.end(), [](unsigned char c){return std::isspace(c);}), s.end());
-        return s;
     }
 }
 
@@ -33,27 +27,11 @@ bool NLP::load_rules(const std::string& json_path, std::string* error_out) {
         return false;
     }
 
-    // SUPER SIMPLE parsing expecting an array of objects like:
-    // [
-    //   {"intent":"open_app","pattern":"^open\\s+(\\w+)$","slot_names":["app"],"score_boost":0.2},
-    //   ...
-    // ]
-    // To keep this tiny, we’ll search for objects and pull fields with naive slicing.
-    // Swap to a real JSON library when you want robustness.
-
     size_t i = 0;
-    auto next = [&](char c){
-        while (i < txt.size() && std::isspace((unsigned char)txt[i])) ++i;
-        return (i < txt.size() && txt[i] == c);
-    };
 
-    // Find start of array
-    while (i < txt.size() && txt[i] != '[') ++i;
-    if (i == txt.size()) {
-        if (error_out) *error_out = "Rules JSON missing opening '['";
-        return false;
-    }
-    ++i; // skip [
+    auto skip_ws = [&]() {
+        while (i < txt.size() && std::isspace((unsigned char)txt[i])) ++i;
+    };
 
     auto read_quoted = [&]() -> std::string {
         while (i < txt.size() && txt[i] != '"') ++i;
@@ -70,10 +48,6 @@ bool NLP::load_rules(const std::string& json_path, std::string* error_out) {
         }
         if (i < txt.size() && txt[i] == '"') ++i; // closing "
         return out;
-    };
-
-    auto skip_ws = [&](){
-        while (i < txt.size() && std::isspace((unsigned char)txt[i])) ++i;
     };
 
     auto read_number = [&]() -> float {
@@ -109,11 +83,19 @@ bool NLP::load_rules(const std::string& json_path, std::string* error_out) {
         return out;
     };
 
+    // Find start of array
+    while (i < txt.size() && txt[i] != '[') ++i;
+    if (i == txt.size()) {
+        if (error_out) *error_out = "Rules JSON missing opening '['";
+        return false;
+    }
+    ++i; // skip [
+
     // Read objects
     skip_ws();
     while (i < txt.size() && txt[i] != ']') {
         skip_ws();
-        if (txt[i] != '{') { ++i; continue; }
+        if (i >= txt.size() || txt[i] != '{') { ++i; continue; }
         ++i; // {
 
         Rule r;
@@ -135,8 +117,8 @@ bool NLP::load_rules(const std::string& json_path, std::string* error_out) {
                 else if (key == "score_boost") r.score_boost = read_number();
                 else if (key == "case_insensitive") r.case_insensitive = read_bool();
                 else {
-                    // skip value naively
-                    if (i < txt.size() && txt[i] == '"') read_quoted();
+                    // skip unknown value
+                    if (i < txt.size() && txt[i] == '"') (void)read_quoted();
                     else if (i < txt.size() && txt[i] == '[') (void)read_slot_array();
                     else if (i < txt.size() && std::isdigit((unsigned char)txt[i])) (void)read_number();
                     else ++i;
@@ -151,7 +133,6 @@ bool NLP::load_rules(const std::string& json_path, std::string* error_out) {
 
         if (i < txt.size() && txt[i] == '}') ++i; // }
 
-        // store rule if valid
         if (!r.intent.empty() && !r.pattern.empty())
             rules_.push_back(std::move(r));
 
@@ -171,23 +152,32 @@ Intent NLP::parse(const std::string& text) const {
     Intent best;
     for (const auto& r : rules_) {
         std::regex_constants::syntax_option_type flags = std::regex_constants::ECMAScript;
-        if (r.case_insensitive) flags = (std::regex_constants::syntax_option_type)(flags | std::regex_constants::icase);
+        if (r.case_insensitive) {
+            flags = (std::regex_constants::syntax_option_type)(flags | std::regex_constants::icase);
+        }
 
-        std::regex rx(r.pattern, flags);
-        std::smatch m;
-        if (std::regex_search(text, m, rx)) {
-            Intent cur;
-            cur.name = r.intent;
-            cur.matched = true;
-            cur.score = 0.5f + r.score_boost; // base score; you can tune this
+        try {
+            std::regex rx(r.pattern, flags);
+            std::smatch m;
+            if (std::regex_search(text, m, rx)) {
+                Intent cur;
+                cur.name = r.intent;
+                cur.matched = true;
+                cur.score = 0.5f + r.score_boost;
 
-            // Capture groups mapped to slot_names
-            for (size_t gi = 1; gi < m.size() && gi-1 < r.slot_names.size(); ++gi) {
-                cur.slots[r.slot_names[gi-1]] = m[gi].str();
+                // Capture groups → slots
+                for (size_t gi = 1; gi < m.size() && gi-1 < r.slot_names.size(); ++gi) {
+                    cur.slots[r.slot_names[gi-1]] = m[gi].str();
+                }
+
+                if (!best.matched || cur.score > best.score) {
+                    best = std::move(cur);
+                }
             }
-
-            // Prefer higher score or first match if equal
-            if (!best.matched || cur.score > best.score) best = std::move(cur);
+        } catch (const std::regex_error& ex) {
+            std::cerr << "[REGEX ERROR] intent=" << r.intent
+                      << " pattern=" << r.pattern
+                      << " error=" << ex.what() << "\n";
         }
     }
     return best;
