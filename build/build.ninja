@@ -80,6 +80,12 @@ build CMakeFiles/GRIM.dir/synonyms.cpp.obj: CXX_COMPILER__GRIM_unscanned_ D$:/GR
   OBJECT_DIR = CMakeFiles\GRIM.dir
   OBJECT_FILE_DIR = CMakeFiles\GRIM.dir
 
+build CMakeFiles/GRIM.dir/aliases.cpp.obj: CXX_COMPILER__GRIM_unscanned_ D$:/GRIM/G.R.I.M/aliases.cpp || cmake_object_order_depends_target_GRIM
+  DEP_FILE = CMakeFiles\GRIM.dir\aliases.cpp.obj.d
+  FLAGS = -std=gnu++20
+  OBJECT_DIR = CMakeFiles\GRIM.dir
+  OBJECT_FILE_DIR = CMakeFiles\GRIM.dir
+
 
 # =============================================================================
 # Link build statements for EXECUTABLE target GRIM
@@ -88,7 +94,7 @@ build CMakeFiles/GRIM.dir/synonyms.cpp.obj: CXX_COMPILER__GRIM_unscanned_ D$:/GR
 #############################################
 # Link the executable GRIM.exe
 
-build GRIM.exe: CXX_EXECUTABLE_LINKER__GRIM_ CMakeFiles/GRIM.dir/main.cpp.obj CMakeFiles/GRIM.dir/commands.cpp.obj CMakeFiles/GRIM.dir/nlp.cpp.obj CMakeFiles/GRIM.dir/nlp_rules.cpp.obj CMakeFiles/GRIM.dir/ai.cpp.obj CMakeFiles/GRIM.dir/synonyms.cpp.obj | C$:/msys64/mingw64/lib/libsfml-graphics.dll.a C$:/msys64/mingw64/lib/libsfml-window.dll.a C$:/msys64/mingw64/lib/libsfml-system.dll.a C$:/msys64/mingw64/lib/libcpr.dll.a C$:/msys64/mingw64/lib/libcurl.dll.a || copy_resources
+build GRIM.exe: CXX_EXECUTABLE_LINKER__GRIM_ CMakeFiles/GRIM.dir/main.cpp.obj CMakeFiles/GRIM.dir/commands.cpp.obj CMakeFiles/GRIM.dir/nlp.cpp.obj CMakeFiles/GRIM.dir/nlp_rules.cpp.obj CMakeFiles/GRIM.dir/ai.cpp.obj CMakeFiles/GRIM.dir/synonyms.cpp.obj CMakeFiles/GRIM.dir/aliases.cpp.obj | C$:/msys64/mingw64/lib/libsfml-graphics.dll.a C$:/msys64/mingw64/lib/libsfml-window.dll.a C$:/msys64/mingw64/lib/libsfml-system.dll.a C$:/msys64/mingw64/lib/libcpr.dll.a C$:/msys64/mingw64/lib/libcurl.dll.a || copy_resources
   LINK_LIBRARIES = C:/msys64/mingw64/lib/libsfml-graphics.dll.a  C:/msys64/mingw64/lib/libsfml-window.dll.a  C:/msys64/mingw64/lib/libsfml-system.dll.a  C:/msys64/mingw64/lib/libcpr.dll.a  C:/msys64/mingw64/lib/libcurl.dll.a  -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32
   OBJECT_DIR = CMakeFiles\GRIM.dir
   POST_BUILD = C:\WINDOWS\system32\cmd.exe /C "cd /D D:\GRIM\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -E copy_if_different D:/GRIM/G.R.I.M/nlp_rules.json D:/GRIM/G.R.I.M/build/nlp_rules.json && cd /D D:\GRIM\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -E copy_if_different D:/GRIM/G.R.I.M/synonyms.json D:/GRIM/G.R.I.M/build/synonyms.json && cd /D D:\GRIM\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -E copy_if_different C:/Windows/Fonts/arial.ttf D:/GRIM/G.R.I.M/build/DejaVuSans.ttf"

@@ -9,11 +9,31 @@
 #include <algorithm>
 #include "NLP.hpp"
 #include "ai.hpp"
+#include "aliases.hpp"
 #include "synonyms.hpp"
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
+
+
+static std::string findOnPath(const std::string& app) {
+    char buffer[MAX_PATH];
+    DWORD result = SearchPathA(
+        NULL,
+        app.c_str(),
+        ".exe",            // try with .exe extension automatically
+        MAX_PATH,
+        buffer,
+        NULL
+    );
+    if (result > 0 && result < MAX_PATH) {
+        return std::string(buffer);
+    }
+    return app;
+}
 #endif
+
+
 
 namespace fs = std::filesystem;
 
@@ -163,6 +183,9 @@ int main(int argc, char** argv) {
 
     // Load synonyms
     loadSynonyms("synonyms.json");
+    // Load aliases
+    loadAliases("app_aliases.json");
+
 
     sf::RenderWindow window(sf::VideoMode(500,800),"GRIM");
     window.setVerticalSyncEnabled(true);
@@ -257,46 +280,119 @@ int main(int argc, char** argv) {
                         line = oss.str();
                     }
 
-                    // Built-in commands...
-                    if(cmd=="help"){ /* ... */ }
-                    else if(cmd=="pwd"){ /* ... */ }
-                    else if(cmd=="cd"){ /* ... */ }
-                    else if(cmd=="list"){ /* ... */ }
-                    else if(cmd=="mkdir"){ /* ... */ }
-                    else if(cmd=="rm"){ /* ... */ }
-                    else if(cmd=="reloadnlp"){ /* ... */ }
-                    else if(cmd=="grim"){ /* ... */ }
-                    else {
-                        // NLP fallback
-                        Intent intent=nlp.parse(line);
-                        if(!intent.matched) {
-                            addHistory("[NLP] No intent matched.",sf::Color(255,200,140));
-                        } else {
-                            std::ostringstream oss;
-                            oss<<"[NLP] intent="<<intent.name<<" score="<<intent.score;
-                            addHistory(oss.str(),sf::Color(180,255,180));
-                            for(auto& kv:intent.slots) addHistory("  "+kv.first+" = "+kv.second);
-                            //Opening Apps
-                            if(intent.name=="open_app"){
-                                auto it=intent.slots.find("app");
-                                if(it!=intent.slots.end()){
-                                    std::string app=it->second;
-                                    addHistory("Opening app: "+app);
+                    // NLP fallback
+Intent intent = nlp.parse(line);
+if(!intent.matched) {
+    addHistory("[NLP] No intent matched.", sf::Color(255,200,140));
+} else {
+    std::ostringstream oss;
+    oss << "[NLP] intent=" << intent.name << " score=" << intent.score;
+    addHistory(oss.str(), sf::Color(180,255,180));
+    for(auto& kv : intent.slots) addHistory("  " + kv.first + " = " + kv.second);
+
+    if(intent.name=="open_app") {
+        auto it=intent.slots.find("app");
+        if(it!=intent.slots.end()) {
+            std::string app = it->second;
+            addHistory("Opening app: " + app);
 #ifdef _WIN32
-                                    HINSTANCE result=ShellExecuteA(NULL,"open",app.c_str(),NULL,NULL,SW_SHOWNORMAL);
-                                    if((INT_PTR)result<=32)
-                                        addHistory("Failed to open app: "+app,sf::Color(255,140,140));
+            HINSTANCE result=ShellExecuteA(NULL,"open",app.c_str(),NULL,NULL,SW_SHOWNORMAL);
+            if((INT_PTR)result<=32)
+                addHistory("Failed to open app: " + app, sf::Color(255,140,140));
 #else
-                                    int ret=system(app.c_str());
-                                    if(ret!=0) addHistory("Failed to open app: "+app,sf::Color(255,140,140));
+            int ret=system(app.c_str());
+            if(ret!=0) addHistory("Failed to open app: " + app, sf::Color(255,140,140));
 #endif
-                                }//End of opening apps
-                            }
-                            else if(intent.name=="search_web"){ /* ... */ }
-                            else if(intent.name=="set_timer"){ /* ... */ }
-                        }
-                    }
-                }
+        }
+    }
+    else if(intent.name=="search_web") {
+        auto it=intent.slots.find("query");
+        if(it!=intent.slots.end()) {
+            addHistory("[Web] Searching for: " + it->second);
+            // TODO: hook into your web search logic
+        }
+    }
+    else if(intent.name=="set_timer") {
+        auto it=intent.slots.find("minutes");
+        if(it!=intent.slots.end()) {
+            addHistory("[Timer] Setting timer for " + it->second + " minutes.");
+            // TODO: hook into your timer logic
+        }
+    }
+    else if(intent.name=="clean") {
+        addHistory("[Clean] Removing files in: " + currentDir.string());
+        // TODO: delete files
+    }
+    else if(intent.name=="show_help") {
+        addHistory("Available commands: help, pwd, cd <dir>, list, mkdir <name>, rm <target>, reloadnlp, grim <query>, open <app>, search <q>, timer <min>");
+    }
+    else if(intent.name=="show_pwd") {
+        addHistory(currentDir.string());
+    }
+    else if(intent.name=="change_dir") {
+        auto it=intent.slots.find("path");
+        if(it!=intent.slots.end()) {
+            fs::path newPath = resolvePath(currentDir, it->second);
+            std::error_code ec;
+            if(fs::exists(newPath,ec) && fs::is_directory(newPath,ec)) {
+                currentDir = newPath;
+                fs::current_path(currentDir, ec);
+                addHistory("[cd] Changed directory to " + currentDir.string());
+            } else {
+                addHistory("[cd] Directory not found: " + it->second, sf::Color(255,140,140));
+            }
+        }
+    }
+    else if(intent.name=="list_dir") {
+        std::error_code ec;
+        addHistory("[ls] Listing contents of: " + currentDir.string());
+        for(auto& e : fs::directory_iterator(currentDir, ec)) {
+            addHistory("  " + e.path().filename().string());
+        }
+    }
+    else if(intent.name=="make_dir") {
+        auto it=intent.slots.find("dirname");
+        if(it!=intent.slots.end()) {
+            std::error_code ec;
+            fs::path newDir = currentDir / it->second;
+            if(fs::create_directory(newDir, ec)) {
+                addHistory("[mkdir] Created: " + newDir.string());
+            } else {
+                addHistory("[mkdir] Failed to create: " + newDir.string(), sf::Color(255,140,140));
+            }
+        }
+    }
+    else if(intent.name=="remove_file") {
+        auto it=intent.slots.find("target");
+        if(it!=intent.slots.end()) {
+            std::error_code ec;
+            fs::path target = currentDir / it->second;
+            if(fs::remove_all(target, ec) > 0) {
+                addHistory("[rm] Removed: " + target.string());
+            } else {
+                addHistory("[rm] Failed to remove: " + target.string(), sf::Color(255,140,140));
+            }
+        }
+    }
+    else if(intent.name=="reload_nlp") {
+        std::string err;
+        bool ok = nlp.load_rules("nlp_rules.json", &err);
+        if(ok) addHistory("[NLP] Reloaded rules.");
+        else   addHistory("[NLP] Reload failed: " + err, sf::Color(255,140,140));
+    }
+    else if(intent.name=="grim_ai") {
+        auto it=intent.slots.find("query");
+        if(it!=intent.slots.end()) {
+            try {
+                std::string reply = callAI(it->second);
+                addHistory("[AI] " + reply, sf::Color(180,200,255));
+            } catch(const std::exception& e) {
+                addHistory(std::string("[AI] Error: ") + e.what(), sf::Color(255,140,140));
+            }
+        }
+    }
+}
+
                 else if(e.text.unicode>=32 && e.text.unicode<127) buffer.push_back((char)e.text.unicode);
             }
         }

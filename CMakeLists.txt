@@ -13,6 +13,7 @@ add_executable(GRIM
     nlp_rules.cpp
     ai.cpp
     synonyms.cpp
+    aliases.cpp
 )
 
 # ---- Dependencies ----
