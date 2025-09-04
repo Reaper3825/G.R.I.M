@@ -259,29 +259,22 @@ int main(int argc, char** argv) {
                     if(!buffer.empty()) buffer.pop_back();
                 }
                 else if(e.text.unicode==13||e.text.unicode==10){ // enter
-                    std::string line=trim(buffer);
-                    buffer.clear();
-                    if(line=="quit"||line=="exit"){ window.close(); break; }
-                    if(!line.empty()) addHistory("> "+line,sf::Color(150,255,150));
-                    else { addHistory("> "); continue; }
+    std::string line=trim(buffer);
+    buffer.clear();
+    if(line=="quit"||line=="exit"){ window.close(); break; }
+    if(!line.empty()) addHistory("> "+line,sf::Color(150,255,150));
+    else { addHistory("> "); continue; }
 
-                    auto args = split(line);
-                    std::string cmd = args.empty() ? "" : args[0];
+    auto args = split(line);
+    std::string cmd = args.empty() ? "" : args[0];
 
-                    // Normalize synonyms
-                    cmd = normalizeWord(cmd);
-                    if (!args.empty()) {
-                        args[0] = cmd;
-                        std::ostringstream oss;
-                        for (size_t i = 0; i < args.size(); ++i) {
-                            if (i > 0) oss << " ";
-                            oss << args[i];
-                        }
-                        line = oss.str();
-                    }
+    // Normalize synonyms just for direct checks (if you keep any legacy ones)
+    cmd = normalizeWord(cmd);
 
-                    // NLP fallback
-Intent intent = nlp.parse(line);
+    // NLP fallback
+    std::cerr << "[DEBUG] Raw line for NLP: '" << line << "'\n";
+    Intent intent = nlp.parse(line);
+
 if(!intent.matched) {
     addHistory("[NLP] No intent matched.", sf::Color(255,200,140));
 } else {
@@ -290,26 +283,31 @@ if(!intent.matched) {
     addHistory(oss.str(), sf::Color(180,255,180));
     for(auto& kv : intent.slots) addHistory("  " + kv.first + " = " + kv.second);
 
-    if(intent.name=="open_app") {
-        auto it=intent.slots.find("app");
-        if(it!=intent.slots.end()) {
-            std::string app = it->second;
-            addHistory("Opening app: " + app);
+    std::cerr << "[DEBUG] Matched intent name: " << intent.name << "\n";
+
+    else if(intent.name=="open_app") {
+    auto it=intent.slots.find("app");
+    if(it!=intent.slots.end()) {
+        std::string app = it->second;
+        addHistory("Opening app: " + app);
+
 #ifdef _WIN32
-            HINSTANCE result=ShellExecuteA(NULL,"open",app.c_str(),NULL,NULL,SW_SHOWNORMAL);
-            if((INT_PTR)result<=32)
-                addHistory("Failed to open app: " + app, sf::Color(255,140,140));
+        std::string fullPath = findOnPath(app);
+        HINSTANCE result=ShellExecuteA(NULL,"open",fullPath.c_str(),NULL,NULL,SW_SHOWNORMAL);
+        if((INT_PTR)result<=32)
+            addHistory("Failed to open app: " + fullPath,sf::Color(255,140,140));
 #else
-            int ret=system(app.c_str());
-            if(ret!=0) addHistory("Failed to open app: " + app, sf::Color(255,140,140));
+        int ret=system(app.c_str());
+        if(ret!=0) addHistory("Failed to open app: " + app,sf::Color(255,140,140));
 #endif
-        }
     }
+
+
     else if(intent.name=="search_web") {
         auto it=intent.slots.find("query");
         if(it!=intent.slots.end()) {
             addHistory("[Web] Searching for: " + it->second);
-            // TODO: hook into your web search logic
+            // TODO: hook into your web search logic (or forward to callAI)
         }
     }
     else if(intent.name=="set_timer") {
@@ -391,7 +389,9 @@ if(!intent.matched) {
             }
         }
     }
-}
+} // closes "else" block for intent.matched
+
+                }
 
                 else if(e.text.unicode>=32 && e.text.unicode<127) buffer.push_back((char)e.text.unicode);
             }
