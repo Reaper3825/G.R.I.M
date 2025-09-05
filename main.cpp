@@ -271,9 +271,9 @@ int main(int argc, char** argv) {
     // Normalize synonyms just for direct checks (if you keep any legacy ones)
     cmd = normalizeWord(cmd);
 
-    // NLP fallback
-    std::cerr << "[DEBUG] Raw line for NLP: '" << line << "'\n";
-    Intent intent = nlp.parse(line);
+// NLP fallback
+std::cerr << "[DEBUG] Raw line for NLP: '" << line << "'\n";
+Intent intent = nlp.parse(line);
 
 if(!intent.matched) {
     addHistory("[NLP] No intent matched.", sf::Color(255,200,140));
@@ -285,31 +285,76 @@ if(!intent.matched) {
 
     std::cerr << "[DEBUG] Matched intent name: " << intent.name << "\n";
 
-    else if(intent.name=="open_app") {
-    auto it=intent.slots.find("app");
-    if(it!=intent.slots.end()) {
+    if(intent.name=="open_app") {
+    auto it = intent.slots.find("app");
+    if(it != intent.slots.end()) {
         std::string app = it->second;
-        addHistory("Opening app: " + app);
+
+        // 🔍 Resolve alias
+        std::string resolved = resolveAlias(app);
+        if(resolved.empty()) resolved = app;
 
 #ifdef _WIN32
-        std::string fullPath = findOnPath(app);
-        HINSTANCE result=ShellExecuteA(NULL,"open",fullPath.c_str(),NULL,NULL,SW_SHOWNORMAL);
-        if((INT_PTR)result<=32)
-            addHistory("Failed to open app: " + fullPath,sf::Color(255,140,140));
+        std::string fullPath = resolved;
+
+        // Only call findOnPath if not already an .exe path
+        if(!(fullPath.size() > 4 &&
+             (fullPath.substr(fullPath.size()-4) == ".exe" ||
+              fullPath.substr(fullPath.size()-4) == ".EXE"))) {
+            fullPath = findOnPath(resolved);
+        }
+
+        addHistory("Opening app: " + fullPath);
+        std::cerr << "[DEBUG] Launching path (CreateProcess): " << fullPath << "\n";
+
+        STARTUPINFOA si = { sizeof(si) };
+        PROCESS_INFORMATION pi;
+        BOOL success = CreateProcessA(
+            fullPath.c_str(),   // exe path
+            NULL,               // command line args
+            NULL, NULL, FALSE,
+            DETACHED_PROCESS,   // 🚀 detached so it survives GRIM exit
+            NULL, NULL,
+            &si,
+            &pi
+        );
+
+        if (!success) {
+            DWORD err = GetLastError();
+            addHistory("Failed to open app: " + fullPath, sf::Color(255,140,140));
+            std::cerr << "[DEBUG] CreateProcess failed with error " << err << "\n";
+        } else {
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        }
 #else
-        int ret=system(app.c_str());
-        if(ret!=0) addHistory("Failed to open app: " + app,sf::Color(255,140,140));
+        int ret = system(resolved.c_str());
+        if(ret != 0) {
+            addHistory("Failed to open app: " + resolved, sf::Color(255,140,140));
+        }
 #endif
     }
+}
 
 
     else if(intent.name=="search_web") {
-        auto it=intent.slots.find("query");
-        if(it!=intent.slots.end()) {
-            addHistory("[Web] Searching for: " + it->second);
-            // TODO: hook into your web search logic (or forward to callAI)
+    auto it = intent.slots.find("query");
+    if(it != intent.slots.end()) {
+        std::string query = it->second;
+        addHistory("[Web] Searching for: " + query);
+
+        try {
+            // Forward to AI like: "Search the web for ..."
+            std::string prompt = "Search the web and summarize results for: " + query;
+            std::string reply = callAI(prompt);
+
+            addHistory("[Web Result] " + reply, sf::Color(180,200,255));
+        } catch(const std::exception& e) {
+            addHistory(std::string("[Web] Error: ") + e.what(), sf::Color(255,140,140));
         }
     }
+}
+
     else if(intent.name=="set_timer") {
         auto it=intent.slots.find("minutes");
         if(it!=intent.slots.end()) {
@@ -390,6 +435,7 @@ if(!intent.matched) {
         }
     }
 } // closes "else" block for intent.matched
+
 
                 }
 
