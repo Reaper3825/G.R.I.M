@@ -113,13 +113,20 @@
 ,
 {
   "intent": "recall",
-  "description": "Recall stored facts from long-term memory",
-  "pattern": "^(recall|show memory|what do you remember)$",
-  "slot_names": [],
-  "case_insensitive": true,
-  "score_boost": 0.5
+  "description": "Recall memory",
+  "pattern": "^(?:what(?:'s|s| is)?|recall)\\s+(.+)$",
+  "slot_names": ["key"],
+  "score_boost": 0.3,
+  "case_insensitive": true
+},
+{
+  "intent": "forget",
+  "description": "Forget a stored memory",
+  "pattern": "^(?:forget|remove|delete)\\s+(.+)$",
+  "slot_names": ["key"],
+  "score_boost": 0.3,
+  "case_insensitive": true
 }
-
 
 
 ]
