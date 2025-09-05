@@ -11,20 +11,24 @@
   {
   "intent": "search_web",
   "description": "Search the web for a query",
-  "pattern": "^search\\s+(.*)$",
-  "slot_names": ["verb", "query"],
+  "pattern": "^(google|search|look up)\\s+(.+)$",
+  "slot_names": ["verb","query"],
   "score_boost": 0.2,
   "case_insensitive": true
 }
+
 ,
   {
-    "intent": "set_timer",
-    "description": "Set a timer in minutes",
-    "pattern": "^(set\\s+)?timer\\s+for\\s+(\\d+)\\s*(minutes|min|m)\\b",
-    "slot_names": ["_opt","minutes"],
-    "score_boost": 0.25,
-    "case_insensitive": true
-  },
+  "intent": "set_timer",
+  "description": "Set a timer for seconds, minutes, or hours",
+  "pattern": "^(set\\s+)?timer\\s+for\\s+(\\d+)\\s*(seconds|second|secs|s|minutes|min|m|hours|hour|h)\\b",
+  "slot_names": ["verb", "amount", "unit"],
+  "case_insensitive": true
+}
+
+
+
+,
   {
     "intent": "clean",
     "description": "Remove files from current directory",
