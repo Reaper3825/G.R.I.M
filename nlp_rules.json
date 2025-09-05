@@ -11,11 +11,12 @@
   {
   "intent": "search_web",
   "description": "Search the web for a query",
-  "pattern": "^search\\s+(.*)$",
-  "slot_names": ["verb", "query"],
+  "pattern": "^(google|search|look up)\\s+(.+)$",
+  "slot_names": ["verb","query"],
   "score_boost": 0.2,
   "case_insensitive": true
 }
+
 ,
   {
     "intent": "set_timer",

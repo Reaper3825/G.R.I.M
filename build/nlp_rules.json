@@ -2,18 +2,17 @@
   {
   "intent": "open_app",
   "description": "Open a local application by name",
-  "pattern": "^(open|launch|start)\\s+(.+)\\s*$",
+  "pattern": "^(open|launch|start)\\s+(.*)$",
   "slot_names": ["verb","app"],
   "score_boost": 0.3,
   "case_insensitive": true
 }
-
 ,
   {
   "intent": "search_web",
   "description": "Search the web for a query",
-  "pattern": "^(search_web)\\s+(.+)$",
-  "slot_names": ["verb","query"],
+  "pattern": "^search\\s+(.*)$",
+  "slot_names": ["verb", "query"],
   "score_boost": 0.2,
   "case_insensitive": true
 }
