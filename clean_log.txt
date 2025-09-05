@@ -1,0 +1,2 @@
+[ ] Moved: D:\grim\G.R.I.M\old.log -> D:\grim\G.R.I.M\.grim_trash\old.log
+[ ] Moved: D:\grim\G.R.I.M\test.tmp -> D:\grim\G.R.I.M\.grim_trash\test.tmp
