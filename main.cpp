@@ -11,11 +11,12 @@
 #include <chrono>
 #include <iomanip>
 #include <fstream>
-
+#include <unordered_set>
 #include "NLP.hpp"
 #include "ai.hpp"
 #include "aliases.hpp"
 #include "synonyms.hpp"
+#include <unordered_map>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -100,9 +101,6 @@ static std::string findOnPath(const std::string& app) {
 }
 #endif
 
-
-
-
 //Timers
 struct Timer {
     int seconds;
@@ -110,6 +108,7 @@ struct Timer {
     bool done = false;
 };
 std::vector<Timer> timers;
+
 // ---------------- Memory ----------------
 std::deque<std::string> contextMemory;
 const size_t kMaxContext = 10;
@@ -139,8 +138,28 @@ void saveMemory() {
     out << longTermMemory.dump(4); // pretty print with indent
 }
 
+// Normalize a memory key (shared by remember, recall, forget)
+static std::string normalizeKey(std::string key) {
+    // lowercase
+    std::transform(key.begin(), key.end(), key.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
 
+    // trim
+    key.erase(key.begin(), std::find_if(key.begin(), key.end(),
+        [](unsigned char ch){ return !std::isspace(ch); }));
+    key.erase(std::find_if(key.rbegin(), key.rend(),
+        [](unsigned char ch){ return !std::isspace(ch); }).base(), key.end());
 
+    // underscores → spaces
+    std::replace(key.begin(), key.end(), '_', ' ');
+
+    // strip leading "my "
+    if (key.rfind("my ", 0) == 0) {
+        key = key.substr(3);
+    }
+
+    return key;
+}
 
 // Build a prompt with last N exchanges
 std::string buildContextPrompt(const std::string& query) {
@@ -152,9 +171,6 @@ std::string buildContextPrompt(const std::string& query) {
     return oss.str();
 }
 
-
-
-
 // ---------------- Tunables ----------------
 static float    kTitleBarH      = 48.f;
 static float    kInputBarH      = 44.f;
@@ -165,7 +181,6 @@ static float    kLineSpacing    = 1.3f;   // tweaked
 static unsigned kFontSize       = 18;
 static unsigned kTitleFontSize  = 24;     // tweaked
 static size_t   kMaxHistory     = 1000;
-// -------------------------------------------
 
 // -------- Font discovery helper ------------
 static std::string findAnyFontInResources(int argc, char** argv) {
@@ -194,8 +209,7 @@ static std::string findAnyFontInResources(int argc, char** argv) {
 #endif
     return {};
 }
-// -------------------------------------------
-
+// ---------- ConsoleHistory -----------------
 struct WrappedLine {
     std::string text;
     sf::Color color{sf::Color::White};
@@ -279,8 +293,9 @@ static fs::path resolvePath(const fs::path& cur,const std::string& u){
     fs::path p(u);
     return p.is_absolute()?fs::weakly_canonical(p,ec):fs::weakly_canonical(cur/p,ec);
 }
-// -------------------------------------------
 
+// -------------------------------------------
+// ----------------- main --------------------
 int main(int argc, char** argv) {
     // Load long-term memory
     loadMemory();
@@ -302,14 +317,15 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Load synonyms
+    // Load synonyms & aliases
     loadSynonyms("synonyms.json");
-    // Load aliases
     loadAliases("app_aliases.json");
 
+    // Create window
     sf::RenderWindow window(sf::VideoMode(600,900), "GRIM", sf::Style::Default);
     window.setVerticalSyncEnabled(true);
 
+    // Load font
     sf::Font font;
     std::string fontPath=findAnyFontInResources(argc,argv);
     if(fontPath.empty()||!font.loadFromFile(fontPath))
@@ -317,6 +333,7 @@ int main(int argc, char** argv) {
     else
         std::cerr<<"[INFO] Using font: "<<fontPath<<"\n";
 
+    // UI elements
     sf::RectangleShape titleBar; titleBar.setFillColor(sf::Color(26,26,30));
     sf::Text titleText;
     if(font.getInfo().family!=""){
@@ -354,14 +371,15 @@ int main(int argc, char** argv) {
         if(scrollOffsetLines<0)scrollOffsetLines=0;
         if(scrollOffsetLines>m)scrollOffsetLines=m;
     };
-        while(window.isOpen()) {
+    // ---------------- main loop ----------------
+    while(window.isOpen()) {
         sf::Event e;
         while(window.pollEvent(e)) {
             if(e.type==sf::Event::Closed) window.close();
-             if(e.type == sf::Event::Resized) {
-        sf::FloatRect visibleArea(0.f, 0.f, e.size.width, e.size.height);
-        window.setView(sf::View(visibleArea));
-    }
+            if(e.type == sf::Event::Resized) {
+                sf::FloatRect visibleArea(0.f, 0.f, e.size.width, e.size.height);
+                window.setView(sf::View(visibleArea));
+            }
             if(e.type==sf::Event::KeyPressed) {
                 if(e.key.code==sf::Keyboard::Escape) window.close();
                 if(e.key.code==sf::Keyboard::PageUp) scrollOffsetLines+=10.f;
@@ -381,7 +399,7 @@ int main(int argc, char** argv) {
                 if(e.text.unicode==8) { // backspace
                     if(!buffer.empty()) buffer.pop_back();
                 }
-                else if(e.text.unicode==13||e.text.unicode==10) { // enter
+                else if(e.text.unicode==13||e.text.unicode==10) { // enter pressed
                     std::string line=trim(buffer);
                     buffer.clear();
                     if(line=="quit"||line=="exit"){ window.close(); break; }
@@ -475,137 +493,136 @@ int main(int argc, char** argv) {
                             }
                         }
                         else if(intent.name=="clean") {
-    auto it = intent.slots.find("target");
-    std::string arg = (it!=intent.slots.end()) ? it->second : "";
-    std::cerr << "[DEBUG] clean arg='" << arg << "'\n";
+                            auto it = intent.slots.find("target");
+                            std::string arg = (it!=intent.slots.end()) ? it->second : "";
+                            std::cerr << "[DEBUG] clean arg='" << arg << "'\n";
 
-    std::error_code ec;
-    fs::path trashDir = currentDir / ".grim_trash";
-    fs::create_directories(trashDir, ec);
+                            std::error_code ec;
+                            fs::path trashDir = currentDir / ".grim_trash";
+                            fs::create_directories(trashDir, ec);
 
-    std::ofstream logFile("clean_log.txt", std::ios::app);
+                            std::ofstream logFile("clean_log.txt", std::ios::app);
 
-    int removed = 0;
-    std::vector<std::string> preview;
+                            int removed = 0;
+                            std::vector<std::string> preview;
 
-    if(arg == "purge") {
-        if(fs::exists(trashDir, ec)) {
-            removed = fs::remove_all(trashDir, ec);
-            addHistory("[Clean] Purged " + std::to_string(removed) + " items from trash.");
-        } else {
-            addHistory("[Clean] Trash folder is empty.");
-        }
-    }
-    else {
-        for(auto& e : fs::directory_iterator(currentDir, ec)) {
-            if(e.is_regular_file(ec)) {
-                // Rules: older than 30 days OR junk extensions
-                std::string ext = e.path().extension().string();
-                bool oldEnough = isOlderThan(e.path(), 30);
-                bool junkType = (ext==".tmp"||ext==".log"||ext==".bak"||ext==".cache");
+                            if(arg == "purge") {
+                                if(fs::exists(trashDir, ec)) {
+                                    removed = fs::remove_all(trashDir, ec);
+                                    addHistory("[Clean] Purged " + std::to_string(removed) + " items from trash.");
+                                } else {
+                                    addHistory("[Clean] Trash folder is empty.");
+                                }
+                            }
+                            else {
+                                for(auto& e : fs::directory_iterator(currentDir, ec)) {
+                                    if(e.is_regular_file(ec)) {
+                                        // Rules: older than 30 days OR junk extensions
+                                        std::string ext = e.path().extension().string();
+                                        bool oldEnough = isOlderThan(e.path(), 30);
+                                        bool junkType = (ext==".tmp"||ext==".log"||ext==".bak"||ext==".cache");
 
-                if(oldEnough || junkType) {
-                    preview.push_back(e.path().filename().string());
+                                        if(oldEnough || junkType) {
+                                            preview.push_back(e.path().filename().string());
 
-                    if(arg == "confirm") {
-                        fs::path dest = trashDir / e.path().filename();
-                        fs::rename(e.path(), dest, ec);
+                                            if(arg == "confirm") {
+                                                fs::path dest = trashDir / e.path().filename();
+                                                fs::rename(e.path(), dest, ec);
 
-                        if(!ec) {
-                            removed++;
-                            auto t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-                            logFile << "[" << std::put_time(std::localtime(&t), "%F %T") 
-                                    << "] Moved: " << e.path().string() << " -> " << dest.string() << "\n";
+                                                if(!ec) {
+                                                    removed++;
+                                                    auto t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+                                                    logFile << "[" << std::put_time(std::localtime(&t), "%F %T") 
+                                                            << "] Moved: " << e.path().string() << " -> " << dest.string() << "\n";
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if(arg == "confirm") {
+                                    if(removed > 0)
+                                        addHistory("[Clean] Moved " + std::to_string(removed) + " files to trash.");
+                                    else
+                                        addHistory("[Clean] No old/junk files to remove.");
+                                } else {
+                                    if(!preview.empty()) {
+                                        addHistory("[Clean Preview] Files that can be cleaned:", sf::Color(200,200,255));
+                                        for(auto& f : preview) addHistory("  " + f, sf::Color(180,180,200));
+                                        addHistory("Run 'clean confirm' to move these to trash.", sf::Color(200,255,200));
+                                    } else {
+                                        addHistory("[Clean Preview] No removable files found.");
+                                    }
+                                }
+                            }
                         }
-                    }
-                }
-            }
-        }
-
-        if(arg == "confirm") {
-            if(removed > 0)
-                addHistory("[Clean] Moved " + std::to_string(removed) + " files to trash.");
-            else
-                addHistory("[Clean] No old/junk files to remove.");
-        } else {
-            if(!preview.empty()) {
-                addHistory("[Clean Preview] Files that can be cleaned:", sf::Color(200,200,255));
-                for(auto& f : preview) addHistory("  " + f, sf::Color(180,180,200));
-                addHistory("Run 'clean confirm' to move these to trash.", sf::Color(200,255,200));
-            } else {
-                addHistory("[Clean Preview] No removable files found.");
-            }
-        }
-    }
-}
                         else if(intent.name=="show_help") {
-    // Title
-    addHistory("⚔️  GRIM Command Reference", sf::Color(200,200,255));
-    addHistory("──────────────────────────", sf::Color(120,120,135));
+                            // Title
+                            addHistory("⚔️  GRIM Command Reference", sf::Color(200,200,255));
+                            addHistory("──────────────────────────", sf::Color(120,120,135));
 
-    // System commands
-    addHistory("🔧  System Commands", sf::Color(180,220,255));
-    addHistory("  help            – Show this help menu");
-    addHistory("  pwd             – Show current directory");
-    addHistory("  cd <dir>        – Change directory");
-    addHistory("  ls              – List contents of directory");
-    addHistory("  mkdir <name>    – Create a new directory");
-    addHistory("  rm <target>     – Remove a file or folder");
-    addHistory("  clean           – Preview removable junk files");
-    addHistory("  clean confirm   – Move junk files to .grim_trash/");
-    addHistory("  clean purge     – Permanently delete .grim_trash/");
+                            // System commands
+                            addHistory("🔧  System Commands", sf::Color(180,220,255));
+                            addHistory("  help            – Show this help menu");
+                            addHistory("  pwd             – Show current directory");
+                            addHistory("  cd <dir>        – Change directory");
+                            addHistory("  ls              – List contents of directory");
+                            addHistory("  mkdir <name>    – Create a new directory");
+                            addHistory("  rm <target>     – Remove a file or folder");
+                            addHistory("  clean           – Preview removable junk files");
+                            addHistory("  clean confirm   – Move junk files to .grim_trash/");
+                            addHistory("  clean purge     – Permanently delete .grim_trash/");
 
-    // AI commands
-    addHistory("  AI Commands", sf::Color(180,255,180));
-    addHistory("  grim <query>    – Ask GRIM a question");
-    addHistory("  search <query>  – Search the web (AI summarized)");
+                            // AI commands
+                            addHistory("  AI Commands", sf::Color(180,255,180));
+                            addHistory("  grim <query>    – Ask GRIM a question");
+                            addHistory("  search <query>  – Search the web (AI summarized)");
 
-    // Utility commands
-    addHistory("  Utility Commands", sf::Color(255,220,180));
-    addHistory("  timer <minutes> – Set a countdown timer");
+                            // Utility commands
+                            addHistory("  Utility Commands", sf::Color(255,220,180));
+                            addHistory("  timer <minutes> – Set a countdown timer");
 
-    // NLP/config commands
-    addHistory("  NLP & Config", sf::Color(255,200,200));
-    addHistory("  reloadnlp       – Reload NLP rules from file");
-    addHistory("  quit / exit     – Close GRIM");
+                            // NLP/config commands
+                            addHistory("  NLP & Config", sf::Color(255,200,200));
+                            addHistory("  reloadnlp       – Reload NLP rules from file");
+                            addHistory("  quit / exit     – Close GRIM");
 
-    // Dashboard section
-    addHistory("──────────────────────────", sf::Color(120,120,135));
-    addHistory("  System Status", sf::Color(200,200,255));
+                            // Dashboard section
+                            addHistory("──────────────────────────", sf::Color(120,120,135));
+                            addHistory("  System Status", sf::Color(200,200,255));
 
-    // Current directory
-    addHistory(" Current dir: " + currentDir.string(), sf::Color(200,200,255));
+                            // Current directory
+                            addHistory(" Current dir: " + currentDir.string(), sf::Color(200,200,255));
 
-    // Active timers
-    int activeTimers = 0;
-    for (auto& t : timers) {
-        if (!t.done) activeTimers++;
-    }
-    addHistory("⏱ Active timers: " + std::to_string(activeTimers), sf::Color(200,255,200));
+                            // Active timers
+                            int activeTimers = 0;
+                            for (auto& t : timers) {
+                                if (!t.done) activeTimers++;
+                            }
+                            addHistory("⏱ Active timers: " + std::to_string(activeTimers), sf::Color(200,255,200));
 
-    // Trash folder count
-    std::error_code ec;
-    fs::path trashDir = currentDir / ".grim_trash";
-    if (fs::exists(trashDir, ec) && fs::is_directory(trashDir, ec)) {
-        size_t count = std::distance(fs::directory_iterator(trashDir, ec), {});
-        addHistory("🗑  Trash folder: " + std::to_string(count) + " item(s)", sf::Color(255,200,180));
-    } else {
-        addHistory("🗑  Trash folder: empty", sf::Color(255,200,180));
-    }
+                            // Trash folder count
+                            std::error_code ec;
+                            fs::path trashDir = currentDir / ".grim_trash";
+                            if (fs::exists(trashDir, ec) && fs::is_directory(trashDir, ec)) {
+                                size_t count = std::distance(fs::directory_iterator(trashDir, ec), {});
+                                addHistory("🗑  Trash folder: " + std::to_string(count) + " item(s)", sf::Color(255,200,180));
+                            } else {
+                                addHistory("🗑  Trash folder: empty", sf::Color(255,200,180));
+                            }
 
-    // CPU + RAM usage
-    int cpuLoad = getCPULoad();
-    size_t usedMB = getMemoryUsageMB();
-    size_t totalMB = getTotalSystemMemoryMB();
+                            // CPU + RAM usage
+                            int cpuLoad = getCPULoad();
+                            size_t usedMB = getMemoryUsageMB();
+                            size_t totalMB = getTotalSystemMemoryMB();
 
-    if (cpuLoad >= 0) {
-        addHistory(" CPU Load: " + std::to_string(cpuLoad) + "%", sf::Color(180,220,255));
-    }
-    if (totalMB > 0) {
-        addHistory(" Memory: " + std::to_string(usedMB) + " MB / " + std::to_string(totalMB) + " MB", sf::Color(180,255,200));
-    }
-}
-
+                            if (cpuLoad >= 0) {
+                                addHistory(" CPU Load: " + std::to_string(cpuLoad) + "%", sf::Color(180,220,255));
+                            }
+                            if (totalMB > 0) {
+                                addHistory(" Memory: " + std::to_string(usedMB) + " MB / " + std::to_string(totalMB) + " MB", sf::Color(180,255,200));
+                            }
+                        }
                         else if(intent.name=="show_pwd") {
                             addHistory(currentDir.string());
                         }
@@ -661,64 +678,220 @@ int main(int argc, char** argv) {
                             else   addHistory("[NLP] Reload failed: " + err, sf::Color(255,140,140));
                         }
                         else if(intent.name=="grim_ai") {
-    auto it=intent.slots.find("query");
-    if(it!=intent.slots.end()) {
-        try {
-            // Build context-aware prompt
-            std::string prompt = buildContextPrompt(it->second);
-            std::string reply = callAI(prompt);
+                            auto it=intent.slots.find("query");
+                            if(it!=intent.slots.end()) {
+                                try {
+                                    // Build context-aware prompt
+                                    std::string prompt = buildContextPrompt(it->second);
+                                    std::string reply = callAI(prompt);
 
-            // Save both sides to memory
-            saveToMemory("User: " + it->second);
-            saveToMemory("GRIM: " + reply);
+                                    // Save both sides to memory
+                                    saveToMemory("User: " + it->second);
+                                    saveToMemory("GRIM: " + reply);
 
-            addHistory("[AI] " + reply, sf::Color(180,200,255));
-        } catch(const std::exception& e) {
-            addHistory(std::string("[AI] Error: ") + e.what(), sf::Color(255,140,140));
-        }
+                                    addHistory("[AI] " + reply, sf::Color(180,200,255));
+                                } catch(const std::exception& e) {
+                                    addHistory(std::string("[AI] Error: ") + e.what(), sf::Color(255,140,140));
+                                }
+                            }
+                        }
+                        else if (intent.name == "remember") {
+                            auto itKey = intent.slots.find("key");
+                            auto itVal = intent.slots.find("value");
+
+                            if (itKey != intent.slots.end() && itVal != intent.slots.end()) {
+                                std::string key = itKey->second;
+                                std::string value = itVal->second;
+
+                                // Normalize key
+                                std::string normKey = normalizeKey(key);
+
+                                // Save to memory
+                                longTermMemory[normKey] = value;
+                                saveMemory();
+
+                                // Pretty display
+                                std::string prettyKey = normKey;
+                                if (!prettyKey.empty()) {
+                                    prettyKey[0] = std::toupper(static_cast<unsigned char>(prettyKey[0]));
+                                }
+
+                                addHistory("🧠 Remembered: " + prettyKey + " = " + value,
+                                           sf::Color(180,255,180));
+                            }
+                        }
+                        else if (intent.name == "recall") {
+                            std::string key;
+                            auto it = intent.slots.find("key");
+                            if (it != intent.slots.end()) {
+                                key = it->second;
+                                // Strip trailing punctuation
+                                while (!key.empty() && (key.back()=='?' || key.back()=='.' || key.back()=='!' )) {
+                                    key.pop_back();
+                                }
+                            }
+
+                            // === recall helpers (normalize, plural, etc.) ===
+                            auto normalizePlural = [](std::string s) {
+                                if (s.size() > 3 && s.substr(s.size()-3) == "ies") {
+                                    return s.substr(0, s.size()-3) + "y";  // parties → party
+                                }
+                                if (s.size() > 1 && s.back() == 's' && s[s.size()-2] != 's') {
+                                    return s.substr(0, s.size()-1);        // cats → cat
+                                }
+                                return s;
+                            };
+
+                            auto splitWords = [](const std::string& s) {
+                                std::vector<std::string> words;
+                                std::istringstream iss(s);
+                                std::string w;
+                                while (iss >> w) words.push_back(w);
+                                return words;
+                            };
+
+                            auto prettifyKey = [](const std::string& rawKey) {
+                                std::string k = rawKey;
+                                std::replace(k.begin(), k.end(), '_', ' ');
+                                if (k.rfind("my ", 0) == 0) {
+                                    k = k.substr(3);
+                                }
+                                return k;
+                            };
+
+                            auto formatValue = [&](const nlohmann::json& val) -> std::string {
+                                if (val.is_string()) {
+                                    return val.get<std::string>();
+                                } else if (val.is_array()) {
+                                    std::ostringstream oss;
+                                    for (size_t i = 0; i < val.size(); ++i) {
+                                        if (val[i].is_string()) {
+                                            oss << val[i].get<std::string>();
+                                            if (i < val.size() - 1) oss << ", ";
+                                        }
+                                    }
+                                    return oss.str();
+                                }
+                                return val.dump();
+                            };
+
+                            // Normalized input
+                            std::string keyLower = normalizeKey(key);       // shared helper
+                            std::string keySingular = normalizePlural(keyLower);
+                            auto keyWords = splitWords(keyLower);
+
+                            std::ostringstream response;
+
+                            // === Case 1: Exact match ===
+                            if (!key.empty() && longTermMemory.contains(keyLower)) {
+                                auto& val = longTermMemory[keyLower];
+                                response << "Your " << prettifyKey(keyLower) << " is " << formatValue(val) << ".";
+                            }
+                            else if (!key.empty() && longTermMemory.contains(keySingular)) {
+                                auto& val = longTermMemory[keySingular];
+                                response << "Your " << prettifyKey(keySingular) << " is " << formatValue(val) << ".";
+                            }
+                            // === Case 2: No key given ===
+                            else if (key.empty()) {
+                                response << "Here's what I remember about you:\n";
+                                for (auto& [k, val] : longTermMemory.items()) {
+                                    std::string prettyKey = prettifyKey(k);
+                                    response << "  - Your " << prettyKey << " is " << formatValue(val) << ".\n";
+                                }
+                            }
+                            // === Case 3: Fuzzy match with scoring ===
+                            else {
+                                std::vector<std::pair<std::string,std::string>> candidates;
+                                std::unordered_map<std::string,int> scores;
+
+                                auto tokenize = [&](const std::string& s) {
+                                    std::vector<std::string> words;
+                                    std::istringstream iss(s);
+                                    std::string w;
+                                    while (iss >> w) {
+                                        w = normalizePlural(normalizeKey(w));
+                                        words.push_back(w);
+                                    }
+                                    return words;
+                                };
+
+                                auto inputTokens = tokenize(keyLower);
+
+                                for (auto& [k, val] : longTermMemory.items()) {
+                                    auto kTokens = tokenize(k);
+                                    int overlap = 0;
+
+                                    for (auto& kw : kTokens) {
+                                        for (auto& iw : inputTokens) {
+                                            if (kw == iw) {
+                                                overlap++;
+                                            }
+                                        }
+                                    }
+
+                                    if (overlap > 0) {
+                                        scores[k] = overlap;
+                                    }
+                                }
+
+                                if (scores.empty()) {
+                                    response << "Sorry, I don't remember anything about that.";
+                                } else {
+                                    int maxScore = 0;
+                                    for (auto& [_, sc] : scores) maxScore = std::max(maxScore, sc);
+
+                                    for (auto& [k, sc] : scores) {
+                                        if (sc == maxScore) {
+                                            candidates.push_back({k, formatValue(longTermMemory[k])});
+                                        }
+                                    }
+
+                                    if (candidates.size() == 1) {
+                                        response << "I think your " << prettifyKey(candidates[0].first)
+                                                 << " is " << candidates[0].second << ".";
+                                    } else {
+                                        response << "I'm not sure which you mean. Did you mean ";
+                                        for (size_t i = 0; i < candidates.size(); ++i) {
+                                            std::string pretty = prettifyKey(candidates[i].first);
+                                            response << pretty;
+                                            if (i < candidates.size() - 2) response << ", ";
+                                            else if (i == candidates.size() - 2) response << " or ";
+                                        }
+                                        response << "?";
+                                    }
+                                }
+                            }
+
+                            std::string finalResponse = response.str();
+                            addHistory(finalResponse, sf::Color(180,200,255));
+                            saveToMemory("GRIM: " + finalResponse);
+                        }
+                        else if (intent.name == "forget") {
+                            auto itKey = intent.slots.find("key");
+                            if (itKey != intent.slots.end()) {
+                                std::string key = itKey->second;
+
+                                // Normalize key
+                                std::string normKey = normalizeKey(key);
+
+                                if (longTermMemory.contains(normKey)) {
+                                    longTermMemory.erase(normKey);
+                                    saveMemory();
+                                    addHistory("🗑️ Forgot: " + normKey, sf::Color(255,180,180));
+                                } else {
+                                    addHistory("⚠️ I don’t remember anything about \"" + normKey + "\".",
+                                               sf::Color(255,200,120));
+                                }
+                            }
+                        }
+                        
+                    } // end intent.matched else
+                }     else if(e.text.unicode>=32 && e.text.unicode<127) {
+        buffer.push_back((char)e.text.unicode);
     }
-}
-else if (intent.name == "remember") {
-    auto itKey = intent.slots.find("key");
-    auto itVal = intent.slots.find("value");
-
-    if (itKey != intent.slots.end() && itVal != intent.slots.end()) {
-        std::string key = itKey->second;
-        std::string value = itVal->second;
-
-        // Normalize key a little (lowercase, no spaces)
-        std::string normKey = key;
-        std::transform(normKey.begin(), normKey.end(), normKey.begin(), ::tolower);
-        std::replace(normKey.begin(), normKey.end(), ' ', '_');
-
-        longTermMemory[normKey] = value;
-        saveMemory();
-
-        addHistory("🧠 Remembered: " + key + " = " + value, sf::Color(180,255,180));
-    }
-}
-
-else if (intent.name == "recall") {
-    if (!longTermMemory.empty()) {
-        addHistory("🧠 Recalling stored facts:", sf::Color(200,200,255));
-        for (auto& [k, v] : longTermMemory.items()) {
-            addHistory("  - " + k + " = " + v.get<std::string>(), sf::Color(180,180,200));
-        }
-    } else {
-        addHistory("🧠 No facts stored yet.", sf::Color(255,200,200));
-    }
-}
-
-
-
-                    }
-                }
-                else if(e.text.unicode>=32 && e.text.unicode<127) {
-                    buffer.push_back((char)e.text.unicode);
-                }
-            }
-        }
-
+    // end enter key
+            } // end TextEntered
+        } // end pollEvent
         // Timers update
         for(auto& t : timers) {
             if(!t.done && t.clock.getElapsedTime().asSeconds() >= t.seconds) {
@@ -728,8 +901,8 @@ else if (intent.name == "recall") {
         }
 
         // Caret blink
-        if(caretClock.getElapsedTime().asSeconds()>0.5f){
-            caretVisible=!caretVisible;
+        if(caretClock.getElapsedTime().asSeconds() > 0.5f) {
+            caretVisible = !caretVisible;
             caretClock.restart();
         }
 
@@ -813,6 +986,7 @@ else if (intent.name == "recall") {
         }
 
         window.display();
-    }
-}
+    } // end while(window.isOpen())
 
+    return 0;
+} // end main
