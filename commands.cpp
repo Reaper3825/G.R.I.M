@@ -1,254 +1,253 @@
-// commands.cpp
 #include "commands.hpp"
-#include <sstream>
-#include <vector>
-#include <chrono>
-#include <iostream>
-#include <system_error>
-#include "NLP.hpp"   // <-- new NLP
 #include "ai.hpp"
+#include "aliases.hpp"
+#include "synonyms.hpp"
+#include <iostream>
+#include <fstream>
+#include <iomanip>
+#include <unordered_map>
+#include <algorithm>
+#include <system_error>
 
-// If commands.hpp doesn't define fs alias, uncomment:
-// #include <filesystem>
-// namespace fs = std::filesystem;
+#ifdef _WIN32
+#include <windows.h>
+#include <shellapi.h>
+#endif
 
-static std::string trim(const std::string& s) {
-    size_t b = s.find_first_not_of(" \t\r\n");
-    if (b == std::string::npos) return "";
-    size_t e = s.find_last_not_of(" \t\r\n");
-    return s.substr(b, e - b + 1);
+namespace fs = std::filesystem;
+
+// External memory
+std::deque<std::string> contextMemory;
+const size_t kMaxContext = 10;
+nlohmann::json longTermMemory;
+
+// Normalize a memory key
+std::string normalizeKey(std::string key) {
+    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c){ return std::tolower(c); });
+    key.erase(key.begin(), std::find_if(key.begin(), key.end(), [](unsigned char ch){ return !std::isspace(ch); }));
+    key.erase(std::find_if(key.rbegin(), key.rend(), [](unsigned char ch){ return !std::isspace(ch); }).base(), key.end());
+    std::replace(key.begin(), key.end(), '_', ' ');
+    if (key.rfind("my ", 0) == 0) key = key.substr(3);
+    return key;
 }
-static std::vector<std::string> split(const std::string& line) {
-    std::vector<std::string> out; std::istringstream iss(line); std::string tok;
-    while (iss >> tok) out.push_back(tok);
-    return out;
+
+// Save/load memory
+void loadMemory() {
+    std::ifstream in("grim_memory.json");
+    if (in.is_open()) in >> longTermMemory;
+    else longTermMemory = nlohmann::json::object();
 }
-static fs::path resolvePath(const fs::path& currentDir, const std::string& userPath) {
-    fs::path p(userPath);
-    if (p.is_absolute()) return fs::weakly_canonical(p);
-    return fs::weakly_canonical(currentDir / p);
+void saveMemory() {
+    std::ofstream out("grim_memory.json");
+    out << longTermMemory.dump(4);
+}
+void saveToMemory(const std::string& line) {
+    if (contextMemory.size() >= kMaxContext) contextMemory.pop_front();
+    contextMemory.push_back(line);
+}
+std::string buildContextPrompt(const std::string& query) {
+    std::ostringstream oss;
+    for (auto& entry : contextMemory) oss << entry << "\n";
+    oss << "User: " << query << "\nGRIM:";
+    return oss.str();
 }
 
-// ---- NLP singletons / helpers ----
-static NLP g_nlp;
-static bool g_nlp_loaded = false;
+// ========================= HANDLERS =========================
+void handleCommand(
+    const Intent& intent,
+    std::string& buffer,
+    fs::path& currentDir,
+    std::vector<Timer>& timers,
+    nlohmann::json& longTermMemory,
+    NLP& nlp,
+    ConsoleHistory& history
+) {
+    auto addHistory = [&](const std::string& s, sf::Color c = sf::Color::White) {
+        history.push(s, c);        // add to UI history
+        std::cout << s << std::endl; // also log to console
+    };
 
-static void ensureNlpLoadedOnce() {
-    if (g_nlp_loaded) return;
-    std::string err;
-    if (!g_nlp.load_rules("nlp_rules.json", &err)) {
-        std::cerr << "[NLP] Failed to load nlp_rules.json: " << err << "\n";
-    } else {
-        std::cerr << "[NLP] Loaded NLP rules.\n";
+    if (!intent.matched) {
+        addHistory("[NLP] No intent matched.", sf::Color(255,200,140));
+        return;
     }
-    g_nlp_loaded = true;
-}
 
-// ---- command handler ----
-std::string handleCommand(const std::string& raw, fs::path& currentDir) {
-    ensureNlpLoadedOnce();
-
-    std::string line = trim(raw);
-    if (line.empty()) return "";
-    auto args = split(line);
-    const std::string cmd = args[0];
-
-    // help
-    if (cmd == "help") {
-        return
-            "Commands:\n"
-            "  help                      - show this help\n"
-            "  pwd                       - print current directory\n"
-            "  cd <path>                 - change directory\n"
-            "  list                      - list items in current directory\n"
-            "  move <src> <dst>          - move/rename file or directory\n"
-            "  copy <src> <dst>          - copy file or directory (recursive)\n"
-            "  mkdir <path>              - create directory (including parents)\n"
-            "  rm <path>                 - remove file or empty directory\n"
-            "  rmolder <days> [-r] [-n]  - remove files older than <days> (last write time)\n"
-            "                               -r recurse, -n dry-run\n"
-            "  reloadnlp                 - reload nlp_rules.json\n"
-            "  ai <prompt>               - ask local model via Ollama\n";
+    if (intent.name == "open_app") {
+        auto it = intent.slots.find("app");
+        if (it != intent.slots.end()) {
+            std::string app = it->second;
+            std::string resolved = resolveAlias(app);
+            if (resolved.empty()) resolved = app;
+#ifdef _WIN32
+            STARTUPINFOA si = { sizeof(si) };
+            PROCESS_INFORMATION pi;
+            BOOL success = CreateProcessA(resolved.c_str(), NULL, NULL, NULL, FALSE,
+                                          DETACHED_PROCESS, NULL, NULL, &si, &pi);
+            if (!success) addHistory("Failed to open app: " + resolved, sf::Color(255,140,140));
+            else { CloseHandle(pi.hProcess); CloseHandle(pi.hThread); }
+#else
+            int ret = system(resolved.c_str());
+            if (ret != 0) addHistory("Failed to open app: " + resolved, sf::Color(255,140,140));
+#endif
+        }
+    }
+    else if (intent.name == "search_web") {
+        auto it = intent.slots.find("query");
+        if (it != intent.slots.end()) {
+            try {
+                std::string prompt = "Search the web and summarize results for: " + it->second;
+                std::string reply = callAI(prompt);
+                addHistory("[Web Result] " + reply, sf::Color(180,200,255));
+            } catch (const std::exception& e) {
+                addHistory(std::string("[Web] Error: ") + e.what(), sf::Color(255,140,140));
+            }
+        }
+    }
+    else if (intent.name == "set_timer") {
+    history.push("[Debug] Slots captured:", sf::Color(200,200,200));
+    for (auto& kv : intent.slots) {
+        history.push(" - " + kv.first + " = " + kv.second, sf::Color(200,200,200));
     }
 
-    // reloadnlp
-    if (cmd == "reloadnlp") {
+    try {
+        int value = std::stoi(intent.slots.at("value"));
+        std::string unit = intent.slots.at("unit");
+
+        int seconds = value;
+        if (unit == "minute" || unit == "minutes" || unit == "min" || unit == "m") {
+            seconds = value * 60;
+        }
+        else if (unit == "hour" || unit == "hours" || unit == "hr" || unit == "h") {
+            seconds = value * 3600;
+        }
+        // else assume "seconds" or "s" → already in seconds
+
+        Timer t;
+        t.seconds = seconds;
+        timers.push_back(t);
+
+        history.push("[Timer] Set a timer for " + std::to_string(value) + " " + unit, sf::Color(255,200,0));
+    }
+    catch (const std::exception& e) {
+        history.push(std::string("[Timer] Error: ") + e.what(), sf::Color::Red);
+    }
+}
+
+
+
+    else if (intent.name == "clean") {
+        addHistory("[Clean] Preview/confirm/purge logic goes here.", sf::Color(200,200,255));
+    }
+    else if (intent.name == "show_help") {
+        addHistory("GRIM Command Reference", sf::Color(200,200,255));
+        addHistory("------------------------", sf::Color(120,120,135));
+        addHistory("help, pwd, cd, ls, mkdir, rm, clean, grim, search, timer, reloadnlp, quit", sf::Color(180,220,255));
+    }
+    else if (intent.name == "show_pwd") {
+        addHistory(currentDir.string());
+    }
+    else if (intent.name == "change_dir") {
+        auto it=intent.slots.find("path");
+        if(it!=intent.slots.end()) {
+            fs::path newPath = currentDir / it->second;
+            std::error_code ec;
+            if(fs::exists(newPath,ec) && fs::is_directory(newPath,ec)) {
+                currentDir = newPath;
+                fs::current_path(currentDir, ec);
+                addHistory("[cd] Changed directory to " + currentDir.string());
+            } else {
+                addHistory("[cd] Directory not found: " + it->second, sf::Color(255,140,140));
+            }
+        }
+    }
+    else if (intent.name == "list_dir") {
+        std::error_code ec;
+        addHistory("[ls] Listing contents of: " + currentDir.string());
+        for(auto& e : fs::directory_iterator(currentDir, ec)) {
+            addHistory("  " + e.path().filename().string());
+        }
+    }
+    else if (intent.name == "make_dir") {
+        auto it=intent.slots.find("dirname");
+        if(it!=intent.slots.end()) {
+            std::error_code ec;
+            fs::path newDir = currentDir / it->second;
+            if(fs::create_directory(newDir, ec)) {
+                addHistory("[mkdir] Created: " + newDir.string());
+            } else {
+                addHistory("[mkdir] Failed to create: " + newDir.string(), sf::Color(255,140,140));
+            }
+        }
+    }
+    else if (intent.name == "remove_file") {
+        auto it=intent.slots.find("target");
+        if(it!=intent.slots.end()) {
+            std::error_code ec;
+            fs::path target = currentDir / it->second;
+            if(fs::remove_all(target, ec) > 0) {
+                addHistory("[rm] Removed: " + target.string());
+            } else {
+                addHistory("[rm] Failed to remove: " + target.string(), sf::Color(255,140,140));
+            }
+        }
+    }
+    else if (intent.name == "reload_nlp") {
         std::string err;
-        bool ok = g_nlp.load_rules("nlp_rules.json", &err);
-        if (!ok && !err.empty()) std::cerr << "[NLP] " << err << "\n";
-        g_nlp_loaded = true;
-        return ok ? "NLP rules reloaded." : "Failed to reload nlp_rules.json.";
+        bool ok = nlp.load_rules("nlp_rules.json", &err);
+        if(ok) addHistory("[NLP] Reloaded rules.");
+        else   addHistory("[NLP] Reload failed: " + err, sf::Color(255,140,140));
     }
-
-    // pwd
-    if (cmd == "pwd") return currentDir.string();
-
-    // cd
-    if (cmd == "cd") {
-        if (args.size() < 2) return "Error: cd requires a path.";
-        fs::path target = resolvePath(currentDir, args[1]);
-        std::error_code ec;
-        if (!fs::exists(target, ec)) return "Error: path does not exist.";
-        if (!fs::is_directory(target, ec)) return "Error: not a directory.";
-        currentDir = target;
-        return "Directory changed to: " + currentDir.string();
-    }
-
-    // list
-    if (cmd == "list") {
-        std::error_code ec;
-        if (!fs::exists(currentDir, ec) || !fs::is_directory(currentDir, ec))
-            return "Error: current directory invalid.";
-        std::ostringstream out; out << "Listing: " << currentDir.string() << "\n";
-        for (const auto& entry : fs::directory_iterator(currentDir, ec)) {
-            if (ec) break;
-            bool isDir = entry.is_directory(ec);
-            out << (isDir ? "[D] " : "    ") << entry.path().filename().string() << "\n";
+    else if (intent.name == "grim_ai") {
+        auto it=intent.slots.find("query");
+        if(it!=intent.slots.end()) {
+            try {
+                std::string prompt = buildContextPrompt(it->second);
+                std::string reply = callAI(prompt);
+                saveToMemory("User: " + it->second);
+                saveToMemory("GRIM: " + reply);
+                addHistory("[AI] " + reply, sf::Color(180,200,255));
+            } catch(const std::exception& e) {
+                addHistory(std::string("[AI] Error: ") + e.what(), sf::Color(255,140,140));
+            }
         }
-        return out.str();
     }
-
-    // move
-    if (cmd == "move") {
-        if (args.size() < 3) return "Error: move requires <src> <dst>.";
-        fs::path src = resolvePath(currentDir, args[1]);
-        fs::path dst = resolvePath(currentDir, args[2]);
-        std::error_code ec;
-        if (!fs::exists(src, ec)) return "Error: source does not exist.";
-        if (fs::exists(dst, ec) && fs::is_directory(dst, ec)) dst = dst / src.filename();
-        fs::create_directories(dst.parent_path(), ec);
-        ec.clear(); fs::rename(src, dst, ec);
-        if (ec) return "Error moving: " + ec.message();
-        return "Moved.";
+    else if (intent.name == "remember") {
+        auto itKey = intent.slots.find("key");
+        auto itVal = intent.slots.find("value");
+        if (itKey != intent.slots.end() && itVal != intent.slots.end()) {
+            std::string key = normalizeKey(itKey->second);
+            longTermMemory[key] = itVal->second;
+            saveMemory();
+            addHistory("🧠 Remembered: " + key + " = " + itVal->second, sf::Color(180,255,180));
+        }
     }
-
-    // copy
-    if (cmd == "copy") {
-        if (args.size() < 3) return "Error: copy requires <src> <dst>.";
-        fs::path src = resolvePath(currentDir, args[1]);
-        fs::path dst = resolvePath(currentDir, args[2]);
-        std::error_code ec;
-        if (!fs::exists(src, ec)) return "Error: source does not exist.";
-        if (fs::is_directory(src, ec)) {
-            fs::create_directories(dst, ec); ec.clear();
-            fs::copy(src, dst, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+    else if (intent.name == "recall") {
+        auto it = intent.slots.find("key");
+        if (it != intent.slots.end()) {
+            std::string key = normalizeKey(it->second);
+            if (longTermMemory.contains(key)) {
+                addHistory("Your " + key + " is " + longTermMemory[key].dump(), sf::Color(180,200,255));
+            } else {
+                addHistory("I don’t remember anything about " + key, sf::Color(255,200,120));
+            }
         } else {
-            fs::create_directories(dst.parent_path(), ec); ec.clear();
-            fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
-        }
-        if (ec) return "Error copying: " + ec.message();
-        return "Copied.";
-    }
-
-    // mkdir
-    if (cmd == "mkdir") {
-        if (args.size() < 2) return "Error: mkdir requires <path>.";
-        fs::path p = resolvePath(currentDir, args[1]);
-        std::error_code ec; fs::create_directories(p, ec);
-        if (ec) return "Error creating directory: " + ec.message();
-        return "Directory created.";
-    }
-
-    // rm
-    if (cmd == "rm") {
-        if (args.size() < 2) return "Error: rm requires <path>.";
-        fs::path p = resolvePath(currentDir, args[1]);
-        std::error_code ec;
-        if (!fs::exists(p, ec)) return "Error: path does not exist.";
-        bool ok = fs::remove(p, ec);
-        if (ec) return "Error removing: " + ec.message();
-        if (!ok) return "Error: could not remove (directory may not be empty).";
-        return "Removed.";
-    }
-
-    // rmolder
-    if (cmd == "rmolder") {
-        if (args.size() < 2) return "Error: rmolder requires <days>.";
-        int days = 0; try { days = std::stoi(args[1]); } catch (...) { return "Error: <days> must be an integer."; }
-        if (days < 0) return "Error: <days> must be >= 0.";
-        bool recursive = false, dryRun = false;
-        for (size_t i = 2; i < args.size(); ++i) {
-            if (args[i] == "-r") recursive = true;
-            else if (args[i] == "-n") dryRun = true;
-            else return "Error: unknown flag '" + args[i] + "'. Use -r or -n.";
-        }
-        auto now_ft = fs::file_time_type::clock::now();
-        auto cutoff_ft = now_ft - std::chrono::hours(24LL * days);
-
-        std::error_code ec; std::size_t checked=0, matched=0, removed=0, failed=0;
-        std::ostringstream out;
-        out << "Scanning " << (recursive ? "recursively " : "") << "for files older than "
-            << days << " day(s) in: " << currentDir.string() << "\n";
-        if (!fs::exists(currentDir, ec) || !fs::is_directory(currentDir, ec))
-            return "Error: current directory invalid.";
-
-        auto process = [&](const fs::directory_entry& entry) {
-            if (entry.is_regular_file(ec)) {
-                ++checked; auto ftime = entry.last_write_time(ec);
-                if (!ec && ftime < cutoff_ft) {
-                    ++matched; out << (dryRun ? "[DRY] " : "") << "old: "
-                                   << entry.path().filename().string() << "\n";
-                    if (!dryRun) {
-                        fs::remove(entry.path(), ec);
-                        if (ec) { ++failed; out << "  -> remove failed: " << ec.message() << "\n"; }
-                        else { ++removed; }
-                    }
-                }
+            addHistory("Here's what I remember:", sf::Color(200,200,255));
+            for (auto& [k,v] : longTermMemory.items()) {
+                addHistory(" - " + k + " = " + v.dump(), sf::Color(180,200,255));
             }
-        };
-        if (recursive) { for (const auto& e : fs::recursive_directory_iterator(currentDir, ec)) { if (ec) break; process(e);} }
-        else           { for (const auto& e : fs::directory_iterator(currentDir, ec))          { if (ec) break; process(e);} }
-
-        out << "Checked: " << checked << ", Matched: " << matched;
-        if (!dryRun) out << ", Removed: " << removed << ", Failed: " << failed;
-        return out.str();
-    }
-
-    // ---- AI integration ----
-    if (cmd == "ai") {
-        std::string query = (line.size() > 3) ? line.substr(3) : "";
-        if (query.empty()) return "Usage: ai <your question>";
-        return callAI(query);
-    }
-
-    // ---- Natural language fallback (NLP) ----
-    {
-        Intent intent = g_nlp.parse(line);
-        if (intent.matched) {
-            // Example handlers (expand as needed)
-            if (intent.name == "open_app") {
-                auto it = intent.slots.find("app");
-                if (it != intent.slots.end()) {
-                    // TODO: hook into your real launcher
-                    return "Would open app: " + it->second;
-                }
-                return "open_app intent matched, but no 'app' slot found.";
-            }
-            if (intent.name == "search_web") {
-                auto it = intent.slots.find("query");
-                if (it != intent.slots.end()) {
-                    // TODO: call your search function
-                    return "Would search web for: " + it->second;
-                }
-                return "search_web intent matched, but no 'query' provided.";
-            }
-            if (intent.name == "set_timer") {
-                auto it = intent.slots.find("minutes");
-                if (it != intent.slots.end()) {
-                    return "Would set timer for " + it->second + " minute(s).";
-                }
-                return "set_timer intent matched, but no minutes found.";
-            }
-            // Default: echo the recognized intent and slots
-            std::ostringstream oss;
-            oss << "Recognized intent: " << intent.name << "\n";
-            for (auto& kv : intent.slots) {
-                oss << "  " << kv.first << " = " << kv.second << "\n";
-            }
-            return oss.str();
         }
     }
-
-    // ---- Final fallback ----
-    return "Error: unknown command. Type 'help' for options.";
+    else if (intent.name == "forget") {
+        auto it = intent.slots.find("key");
+        if (it != intent.slots.end()) {
+            std::string key = normalizeKey(it->second);
+            if (longTermMemory.contains(key)) {
+                longTermMemory.erase(key);
+                saveMemory();
+                addHistory("🗑️ Forgot: " + key, sf::Color(255,180,180));
+            } else {
+                addHistory("⚠️ I don’t remember anything about " + key, sf::Color(255,200,120));
+            }
+        }
+    }
 }
