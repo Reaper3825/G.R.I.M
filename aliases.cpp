@@ -1,32 +1,25 @@
-//aliases.cpp
 #include "aliases.hpp"
+#include <nlohmann/json.hpp>
 #include <fstream>
-#include <sstream>
-#include <iostream>
-#include <cctype>
-#include <nlohmann/json.hpp> // you already have this for ai.hpp
+#include <unordered_map>
 
-std::unordered_map<std::string, std::string> appAliases;
+static std::unordered_map<std::string, std::string> aliasMap;
 
-bool loadAliases(const std::string& path) {
-    try {
-        std::ifstream f(path);
-        if (!f.is_open()) {
-            std::cerr << "[WARN] Could not open alias file: " << path << "\n";
-            return false;
-        }
-        nlohmann::json j;
-        f >> j;
+void loadAliases(const std::string& filename) {
+    std::ifstream in(filename);
+    if(!in.is_open()) return;
 
-        appAliases.clear();
-        for (auto it = j.begin(); it != j.end(); ++it) {
-            appAliases[it.key()] = it.value();
-        }
-
-        std::cerr << "[INFO] Loaded " << appAliases.size() << " aliases from " << path << "\n";
-        return true;
-    } catch (const std::exception& e) {
-        std::cerr << "[ERROR] Failed to load aliases: " << e.what() << "\n";
-        return false;
+    nlohmann::json j;
+    in >> j;
+    for(auto& [k, v] : j.items()) {
+        aliasMap[k] = v;
     }
+}
+
+std::string resolveAlias(const std::string& name) {
+    auto it = aliasMap.find(name);
+    if(it != aliasMap.end()) {
+        return it->second;
+    }
+    return {};
 }
