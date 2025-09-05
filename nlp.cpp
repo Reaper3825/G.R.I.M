@@ -1,151 +1,76 @@
 #include "NLP.hpp"
+#include <nlohmann/json.hpp>
 #include <regex>
 #include <fstream>
 #include <sstream>
-#include <cctype>
 #include <iostream>
 
-// Minimal JSON loader without deps.
-// If you prefer, swap with nlohmann/json later.
-// For now, we expect a very simple, fixed structure and parse crudely.
-namespace mini_json {
-    static std::string read_all(const std::string& path) {
-        std::ifstream f(path);
-        std::ostringstream ss;
-        ss << f.rdbuf();
-        return ss.str();
-    }
-}
-
-// --- NLP impl ---
-bool NLP::load_rules(const std::string& json_path, std::string* error_out) {
+// --- Internal helper: parse rules from JSON ---
+bool NLP::parse_rules(const std::string& txt, std::string* error_out) {
     rules_.clear();
 
-    auto txt = mini_json::read_all(json_path);
-    if (txt.empty()) {
-        if (error_out) *error_out = "Failed to read rules file or it was empty: " + json_path;
-        return false;
-    }
+    try {
+        auto j = nlohmann::json::parse(txt);
 
-    size_t i = 0;
+        if (!j.is_array()) {
+            if (error_out) *error_out = "Rules JSON must be an array";
+            std::cerr << "[NLP] parse_rules: JSON was not an array\n";
+            return false;
+        }
 
-    auto skip_ws = [&]() {
-        while (i < txt.size() && std::isspace((unsigned char)txt[i])) ++i;
-    };
+        for (auto& item : j) {
+            if (!item.is_object()) continue;
 
-    auto read_quoted = [&]() -> std::string {
-        while (i < txt.size() && txt[i] != '"') ++i;
-        if (i == txt.size()) return {};
-        ++i; // skip "
-        std::string out;
-        while (i < txt.size() && txt[i] != '"') {
-            if (txt[i] == '\\' && i + 1 < txt.size()) {
-                out.push_back(txt[i+1]);
-                i += 2;
+            Rule r;
+            r.intent           = item.value("intent", "");
+            r.description      = item.value("description", "");
+            r.pattern          = item.value("pattern", "");
+            r.slot_names       = item.value("slot_names", std::vector<std::string>{});
+            r.score_boost      = item.value("score_boost", 0.0f);
+            r.case_insensitive = item.value("case_insensitive", true);
+
+            if (!r.intent.empty() && !r.pattern.empty()) {
+                std::cerr << "[NLP] Loaded rule: intent=" << r.intent
+                          << " pattern=" << r.pattern
+                          << " slots=" << r.slot_names.size()
+                          << " boost=" << r.score_boost << "\n";
+                rules_.push_back(std::move(r));
             } else {
-                out.push_back(txt[i++]);
+                std::cerr << "[NLP] Skipped invalid rule (missing intent or pattern)\n";
             }
         }
-        if (i < txt.size() && txt[i] == '"') ++i; // closing "
-        return out;
-    };
-
-    auto read_number = [&]() -> float {
-        skip_ws();
-        size_t start = i;
-        while (i < txt.size() && (std::isdigit((unsigned char)txt[i]) || txt[i]=='.' || txt[i]=='-' || txt[i]=='+')) ++i;
-        try {
-            return std::stof(txt.substr(start, i-start));
-        } catch (...) { return 0.0f; }
-    };
-
-    auto read_bool = [&]() -> bool {
-        skip_ws();
-        if (txt.compare(i, 4, "true") == 0) { i += 4; return true; }
-        if (txt.compare(i, 5, "false") == 0) { i += 5; return false; }
-        return true;
-    };
-
-    auto read_slot_array = [&]() -> std::vector<std::string> {
-        std::vector<std::string> out;
-        skip_ws();
-        if (i >= txt.size() || txt[i] != '[') return out;
-        ++i; // [
-        skip_ws();
-        while (i < txt.size() && txt[i] != ']') {
-            skip_ws();
-            if (txt[i] == '"') out.push_back(read_quoted());
-            skip_ws();
-            if (i < txt.size() && txt[i] == ',') { ++i; }
-            skip_ws();
-        }
-        if (i < txt.size() && txt[i] == ']') ++i;
-        return out;
-    };
-
-    // Find start of array
-    while (i < txt.size() && txt[i] != '[') ++i;
-    if (i == txt.size()) {
-        if (error_out) *error_out = "Rules JSON missing opening '['";
+    } catch (const std::exception& e) {
+        if (error_out) *error_out = e.what();
+        std::cerr << "[NLP] Failed to parse rules JSON: " << e.what() << "\n";
         return false;
-    }
-    ++i; // skip [
-
-    // Read objects
-    skip_ws();
-    while (i < txt.size() && txt[i] != ']') {
-        skip_ws();
-        if (i >= txt.size() || txt[i] != '{') { ++i; continue; }
-        ++i; // {
-
-        Rule r;
-        r.case_insensitive = true;
-
-        // read fields until '}'
-        while (i < txt.size() && txt[i] != '}') {
-            skip_ws();
-            if (txt[i] == '"') {
-                auto key = read_quoted();
-                skip_ws();
-                if (i < txt.size() && txt[i] == ':') ++i;
-                skip_ws();
-
-                if (key == "intent") r.intent = read_quoted();
-                else if (key == "description") r.description = read_quoted();
-                else if (key == "pattern") r.pattern = read_quoted();
-                else if (key == "slot_names") r.slot_names = read_slot_array();
-                else if (key == "score_boost") r.score_boost = read_number();
-                else if (key == "case_insensitive") r.case_insensitive = read_bool();
-                else {
-                    // skip unknown value
-                    if (i < txt.size() && txt[i] == '"') (void)read_quoted();
-                    else if (i < txt.size() && txt[i] == '[') (void)read_slot_array();
-                    else if (i < txt.size() && std::isdigit((unsigned char)txt[i])) (void)read_number();
-                    else ++i;
-                }
-
-                skip_ws();
-                if (i < txt.size() && txt[i] == ',') ++i;
-            } else {
-                ++i;
-            }
-        }
-
-        if (i < txt.size() && txt[i] == '}') ++i; // }
-
-        if (!r.intent.empty() && !r.pattern.empty())
-            rules_.push_back(std::move(r));
-
-        skip_ws();
-        if (i < txt.size() && txt[i] == ',') ++i;
-        skip_ws();
     }
 
     if (rules_.empty()) {
-        if (error_out) *error_out = "No valid rules found in " + json_path;
+        if (error_out) *error_out = "No valid rules found.";
+        std::cerr << "[NLP] parse_rules: no rules parsed\n";
         return false;
     }
+
+    std::cerr << "[NLP] parse_rules: loaded " << rules_.size() << " rules total\n";
     return true;
+}
+
+// --- Public APIs ---
+
+bool NLP::load_rules(const std::string& json_path, std::string* error_out) {
+    std::ifstream f(json_path);
+    if (!f) {
+        if (error_out) *error_out = "Failed to open " + json_path;
+        std::cerr << "[NLP] load_rules: could not open file " << json_path << "\n";
+        return false;
+    }
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    return parse_rules(ss.str(), error_out);
+}
+
+bool NLP::load_rules_from_string(const std::string& jsonStr, std::string* error_out) {
+    return parse_rules(jsonStr, error_out);
 }
 
 Intent NLP::parse(const std::string& text) const {
@@ -153,7 +78,7 @@ Intent NLP::parse(const std::string& text) const {
     for (const auto& r : rules_) {
         std::regex_constants::syntax_option_type flags = std::regex_constants::ECMAScript;
         if (r.case_insensitive) {
-            flags = (std::regex_constants::syntax_option_type)(flags | std::regex_constants::icase);
+            flags = static_cast<std::regex_constants::syntax_option_type>(flags | std::regex_constants::icase);
         }
 
         try {
@@ -171,14 +96,23 @@ Intent NLP::parse(const std::string& text) const {
                 }
 
                 if (!best.matched || cur.score > best.score) {
-                    best = std::move(cur);
+                    best = cur;
                 }
+
+                // Debug log
+                std::cerr << "[NLP] Matched intent=" << cur.name
+                          << " score=" << cur.score
+                          << " slots=" << cur.slots.size() << "\n";
             }
         } catch (const std::regex_error& ex) {
             std::cerr << "[REGEX ERROR] intent=" << r.intent
                       << " pattern=" << r.pattern
                       << " error=" << ex.what() << "\n";
         }
+    }
+
+    if (!best.matched) {
+        std::cerr << "[NLP] No intent matched for input: \"" << text << "\"\n";
     }
     return best;
 }
