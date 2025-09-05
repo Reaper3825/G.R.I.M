@@ -38,7 +38,30 @@ bool loadSynonyms(const std::string& path) {
     }
 }
 
-// ⚠️ This must be **outside** of loadSynonyms
+bool loadSynonymsFromString(const std::string& jsonStr) {
+    try {
+        nlohmann::json j = nlohmann::json::parse(jsonStr);
+
+        synonymMap.clear();
+        for (auto& [canonical, words] : j.items()) {
+            for (auto& w : words) {
+                std::string word = w.get<std::string>();
+                std::transform(word.begin(), word.end(), word.begin(), ::tolower);
+                synonymMap[word] = canonical;
+            }
+        }
+
+        std::cerr << "[INFO] Synonyms loaded from string. "
+                  << synonymMap.size() << " entries.\n";
+        return true;
+    } catch (const std::exception& ex) {
+        std::cerr << "[ERROR] Failed to parse synonyms string: "
+                  << ex.what() << "\n";
+        return false;
+    }
+}
+
+// Normalize a word to its canonical form (returns input if no match)
 std::string normalizeWord(const std::string& input) {
     std::string word = input;
     std::transform(word.begin(), word.end(), word.begin(), ::tolower);

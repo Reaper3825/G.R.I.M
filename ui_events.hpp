@@ -6,6 +6,8 @@
 #include "NLP.hpp"
 #include "console_history.hpp"
 #include "timer.hpp"
+#include <nlohmann/json.hpp>
+
 
 // Process all SFML events, update buffer/history, and handle commands.
 // Returns false if the window should close.
@@ -14,6 +16,7 @@ bool processEvents(
     std::string& buffer,
     std::filesystem::path& currentDir,
     std::vector<Timer>& timers,
+    nlohmann::json& longTermMemory, 
     NLP& nlp,
     ConsoleHistory& history
 );

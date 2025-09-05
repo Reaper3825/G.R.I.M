@@ -27,7 +27,6 @@
 
 namespace fs = std::filesystem;
 
-// ----------------- main -----------------
 int main(int argc, char** argv) {
     // --- Load persistent memory ---
     loadMemory();
@@ -35,26 +34,31 @@ int main(int argc, char** argv) {
     // --- NLP setup ---
     NLP nlp;
     {
-        std::error_code ec;
-        fs::path exeDir = (argc > 0) ? fs::path(argv[0]).parent_path() : fs::current_path(ec);
-        fs::path rulesExe = exeDir / "nlp_rules.json";
-        fs::path rulesCwd = "nlp_rules.json";
-        std::string err;
-        bool ok = fs::exists(rulesExe, ec)
-            ? nlp.load_rules(rulesExe.string(), &err)
-            : nlp.load_rules(rulesCwd.string(), &err);
-        if (!ok) std::cerr << "[NLP] Failed to load rules: " << err << "\n";
+        std::string rulesText = loadTextResource("nlp_rules.json", argc, argv);
+        if (!rulesText.empty()) {
+            std::string err;
+            if (!nlp.load_rules_from_string(rulesText, &err)) {
+                std::cerr << "[NLP] Failed to parse rules: " << err << "\n";
+            }
+        } else {
+            std::cerr << "[NLP] Could not load nlp_rules.json\n";
+        }
     }
 
     // --- Load synonyms & aliases ---
-    loadSynonyms("synonyms.json");
-    loadAliases("app_aliases.json");
+    {
+        std::string synText = loadTextResource("synonyms.json", argc, argv);
+        if (!synText.empty()) loadSynonymsFromString(synText);
+
+        std::string aliasText = loadTextResource("app_aliases.json", argc, argv);
+        if (!aliasText.empty()) loadAliasesFromString(aliasText);
+    }
 
     // --- Create window ---
     sf::RenderWindow window(sf::VideoMode(600, 900), "GRIM", sf::Style::Default);
     window.setVerticalSyncEnabled(true);
 
-    // --- History (must exist before font discovery) ---
+    // --- History ---
     ConsoleHistory history;
     auto addHistory = [&](const std::string& s, sf::Color c = sf::Color::White) { 
         history.push(s, c); 
@@ -85,7 +89,8 @@ int main(int argc, char** argv) {
     // ----------------- Main loop -----------------
     while (window.isOpen()) {
         // --- Process events ---
-        if (!processEvents(window, buffer, currentDir, timers, nlp, history)) break;
+        if (!processEvents(window, buffer, currentDir, timers, longTermMemory, nlp, history))
+            break;
 
         // --- Timers ---
         for (auto& t : timers) {

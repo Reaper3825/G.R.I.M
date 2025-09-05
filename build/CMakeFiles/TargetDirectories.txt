@@ -2,3 +2,7 @@ D:/GRIM/G.R.I.M/build/CMakeFiles/GRIM.dir
 D:/GRIM/G.R.I.M/build/CMakeFiles/copy_resources.dir
 D:/GRIM/G.R.I.M/build/CMakeFiles/edit_cache.dir
 D:/GRIM/G.R.I.M/build/CMakeFiles/rebuild_cache.dir
+D:/GRIM/G.R.I.M/build/CMakeFiles/list_install_components.dir
+D:/GRIM/G.R.I.M/build/CMakeFiles/install.dir
+D:/GRIM/G.R.I.M/build/CMakeFiles/install/local.dir
+D:/GRIM/G.R.I.M/build/CMakeFiles/install/strip.dir

@@ -21,6 +21,9 @@ public:
     // Load rules from JSON on disk (hot-reload friendly)
     bool load_rules(const std::string& json_path, std::string* error_out = nullptr);
 
+    // Load rules directly from a JSON string (for portable/system hybrid mode)
+    bool load_rules_from_string(const std::string& jsonStr, std::string* error_out = nullptr);
+
     // Parse user text into Intent
     Intent parse(const std::string& text) const;
 
@@ -38,4 +41,7 @@ private:
     };
 
     std::vector<Rule> rules_;
+
+    // 🔑 new private helper to unify parsing logic
+    bool parse_rules(const std::string& txt, std::string* error_out);
 };

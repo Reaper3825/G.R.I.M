@@ -1,36 +1,47 @@
 #pragma once
-#include <SFML/Graphics.hpp>
 #include <string>
-#include <vector>
-#include <deque>
 #include <filesystem>
-#include <nlohmann/json.hpp>
+#include <vector>
+#include <unordered_map>
+#include <functional>
 #include "NLP.hpp"
 #include "console_history.hpp"
 #include "timer.hpp"
+#include <nlohmann/json.hpp>
 
+struct CommandContext {
+    std::string& buffer;
+    std::filesystem::path& currentDir;
+    std::vector<Timer>& timers;
+    nlohmann::json& longTermMemory;
+    NLP& nlp;
+    ConsoleHistory& history;
+};
 
-// ---------------- Global Memory ----------------
-extern std::deque<std::string> contextMemory;
-extern const size_t kMaxContext;
-extern nlohmann::json longTermMemory;
+// Type for a command function
+using CommandFunc = std::function<void(const std::vector<std::string>& args, CommandContext& ctx)>;
 
-// ---------------- Memory Helpers ----------------
-std::string normalizeKey(std::string key);
-void loadMemory();
-void saveMemory();
-void saveToMemory(const std::string& line);
-std::string buildContextPrompt(const std::string& query);
+struct Command {
+    std::string name;
+    std::string description;
+    CommandFunc func;
+};
 
-// ---------------- Command Handler ----------------
-// Called by main.cpp after NLP parses user input
-void handleCommand(
-    const Intent& intent,
-    std::string& buffer,
-    std::filesystem::path& currentDir,
-    std::vector<Timer>& timers,
-    nlohmann::json& longTermMemory,
-    NLP& nlp,
-    ConsoleHistory& history
-);
+class CommandRegistry {
+public:
+    void registerCommand(const std::string& name, const std::string& description, CommandFunc func);
+    void execute(const std::string& name, const std::vector<std::string>& args, CommandContext& ctx);
+    void listCommands(ConsoleHistory& history) const;
 
+private:
+    std::unordered_map<std::string, Command> commands_;
+};
+
+// ✅ Unified NLP-aware handler
+bool handleCommand(const Intent& intent,
+                   std::string& buffer,
+                   std::filesystem::path& currentDir,
+                   std::vector<Timer>& timers,
+                   nlohmann::json& longTermMemory,
+                   NLP& nlp,
+                   ConsoleHistory& history);
