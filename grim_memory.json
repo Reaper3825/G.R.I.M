@@ -1,12 +1,14 @@
 {
     "dog_name": "artemis",
     "facts": [
-        "my dog's name is Artemis"
     ],
-    "my_dog": "a Golden Retriever",
+    "favorite color": "green",
+    "my best friend's name": "josh",
+    "my dog": "a Golden Retriever",
+    "my favorite color": "green",
     "projects": [
         "Scepterfall",
         "GRIM"
     ],
-    "user_name": "Austin"
+    "user name": "Austin"
 }
