@@ -20,11 +20,13 @@
 ,
   {
   "intent": "set_timer",
-  "description": "Set a timer for seconds, minutes, or hours",
-  "pattern": "^(set\\s+)?timer\\s+for\\s+(\\d+)\\s*(seconds|second|secs|s|minutes|min|m|hours|hour|h)\\b",
-  "slot_names": ["verb", "amount", "unit"],
+  "pattern": "^(set\\s+(a\\s+)?)?(timer|alarm)(\\s+for)?\\s+(\\d+)\\s*(seconds|second|s|minutes|min|m|hours|hour|h|hr)\\b",
+  "slot_names": ["_opt1","_opt2","type","_opt3","value","unit"],
+  "score_boost": 0.25,
   "case_insensitive": true
 }
+
+
 
 
 

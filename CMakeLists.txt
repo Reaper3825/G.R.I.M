@@ -14,6 +14,18 @@ add_executable(GRIM
     ai.cpp
     synonyms.cpp
     aliases.cpp
+    # headers (for IDE visibility)
+    commands.hpp
+    console_history.hpp
+    NLP.hpp
+    ai.hpp
+    aliases.hpp
+    synonyms.hpp
+    resources.cpp
+    ui_helpers.cpp
+    ui_draw.cpp
+    ui_events.cpp
+    
 )
 
 # ---- Dependencies ----
@@ -60,7 +72,6 @@ if (EXISTS "${GRIM_SYNONYMS_SRC}")
 else()
   message(WARNING "synonyms.json not found in source; please create one.")
 endif()
-
 
 # 3) Fonts (optional system fallback if missing)
 set(GRIM_FONT_SRC "")
