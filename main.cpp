@@ -1,4 +1,5 @@
 #include <SFML/Graphics.hpp>
+#include <nlohmann/json.hpp>
 #include <iostream>
 #include <deque>
 #include <string>
@@ -7,21 +8,87 @@
 #include <filesystem>
 #include <system_error>
 #include <algorithm>
+#include <chrono>
+#include <iomanip>
+#include <fstream>
+
 #include "NLP.hpp"
 #include "ai.hpp"
 #include "aliases.hpp"
 #include "synonyms.hpp"
+
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
+#include <psapi.h>
+#endif
 
+// Alias for filesystem
+namespace fs = std::filesystem;
 
+// ---------------- Helper Functions ----------------
+
+// Get current RAM usage in MB
+size_t getMemoryUsageMB() {
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS_EX pmc;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) {
+        return pmc.WorkingSetSize / (1024 * 1024);
+    }
+#endif
+    return 0;
+}
+
+// Get total system RAM in MB
+size_t getTotalSystemMemoryMB() {
+#ifdef _WIN32
+    MEMORYSTATUSEX statex;
+    statex.dwLength = sizeof(statex);
+    if (GlobalMemoryStatusEx(&statex)) {
+        return statex.ullTotalPhys / (1024 * 1024);
+    }
+#endif
+    return 0;
+}
+
+// Get CPU load (very rough, Windows only)
+int getCPULoad() {
+#ifdef _WIN32
+    static FILETIME prevIdle, prevKernel, prevUser;
+    FILETIME idle, kernel, user;
+    if (GetSystemTimes(&idle, &kernel, &user)) {
+        ULONGLONG idleDiff   = ((ULARGE_INTEGER*)&idle)->QuadPart   - ((ULARGE_INTEGER*)&prevIdle)->QuadPart;
+        ULONGLONG kernelDiff = ((ULARGE_INTEGER*)&kernel)->QuadPart - ((ULARGE_INTEGER*)&prevKernel)->QuadPart;
+        ULONGLONG userDiff   = ((ULARGE_INTEGER*)&user)->QuadPart   - ((ULARGE_INTEGER*)&prevUser)->QuadPart;
+
+        prevIdle = idle; prevKernel = kernel; prevUser = user;
+
+        ULONGLONG total = kernelDiff + userDiff;
+        if (total == 0) return 0;
+        return (int)((total - idleDiff) * 100 / total);
+    }
+#endif
+    return -1; // -1 means “not available”
+}
+
+// Utility: check if file is older than X days
+bool isOlderThan(const fs::path& p, int days) {
+    std::error_code ec;
+    auto ftime = fs::last_write_time(p, ec);
+    if (ec) return false;
+    auto sysTime = decltype(ftime)::clock::to_sys(ftime);
+    auto cutoff = std::chrono::system_clock::now() - std::chrono::hours(24*days);
+    return sysTime < cutoff;
+}
+
+#ifdef _WIN32
+// Search for an application on PATH and return full path
 static std::string findOnPath(const std::string& app) {
     char buffer[MAX_PATH];
     DWORD result = SearchPathA(
         NULL,
         app.c_str(),
-        ".exe",            // try with .exe extension automatically
+        ".exe",  // try with .exe extension automatically
         MAX_PATH,
         buffer,
         NULL
@@ -33,28 +100,70 @@ static std::string findOnPath(const std::string& app) {
 }
 #endif
 
+
+
+
 //Timers
 struct Timer {
     int seconds;
     sf::Clock clock;
     bool done = false;
-
 };
 std::vector<Timer> timers;
+// ---------------- Memory ----------------
+std::deque<std::string> contextMemory;
+const size_t kMaxContext = 10;
+
+// Save user/AI lines into memory
+void saveToMemory(const std::string& line) {
+    if (contextMemory.size() >= kMaxContext) {
+        contextMemory.pop_front();
+    }
+    contextMemory.push_back(line);
+}
+nlohmann::json longTermMemory;
+
+// Load memory from disk
+void loadMemory() {
+    std::ifstream in("grim_memory.json");
+    if (in.is_open()) {
+        in >> longTermMemory;
+    } else {
+        longTermMemory = nlohmann::json::object();
+    }
+}
+
+// Save memory to disk
+void saveMemory() {
+    std::ofstream out("grim_memory.json");
+    out << longTermMemory.dump(4); // pretty print with indent
+}
 
 
 
-namespace fs = std::filesystem;
+
+// Build a prompt with last N exchanges
+std::string buildContextPrompt(const std::string& query) {
+    std::ostringstream oss;
+    for (auto& entry : contextMemory) {
+        oss << entry << "\n";
+    }
+    oss << "User: " << query << "\nGRIM:";
+    return oss.str();
+}
+
+
+
 
 // ---------------- Tunables ----------------
 static float    kTitleBarH      = 48.f;
 static float    kInputBarH      = 44.f;
-static float    kSidePad        = 12.f;
-static float    kTopPad         = 6.f;
-static float    kBottomPad      = 6.f;
-static float    kLineSpacing    = 1.25f;
+static float    kSidePad        = 14.f;   // tweaked
+static float    kTopPad         = 8.f;
+static float    kBottomPad      = 8.f;
+static float    kLineSpacing    = 1.3f;   // tweaked
 static unsigned kFontSize       = 18;
-static unsigned kTitleFontSize  = 22;
+static unsigned kTitleFontSize  = 24;     // tweaked
 static size_t   kMaxHistory     = 1000;
 // -------------------------------------------
 
@@ -173,6 +282,9 @@ static fs::path resolvePath(const fs::path& cur,const std::string& u){
 // -------------------------------------------
 
 int main(int argc, char** argv) {
+    // Load long-term memory
+    loadMemory();
+
     // NLP load
     NLP nlp;
     {
@@ -195,8 +307,7 @@ int main(int argc, char** argv) {
     // Load aliases
     loadAliases("app_aliases.json");
 
-
-    sf::RenderWindow window(sf::VideoMode(500,800),"GRIM");
+    sf::RenderWindow window(sf::VideoMode(600,900), "GRIM", sf::Style::Default);
     window.setVerticalSyncEnabled(true);
 
     sf::Font font;
@@ -243,295 +354,465 @@ int main(int argc, char** argv) {
         if(scrollOffsetLines<0)scrollOffsetLines=0;
         if(scrollOffsetLines>m)scrollOffsetLines=m;
     };
-
-    while(window.isOpen()) {
-    sf::Event e;
-    while(window.pollEvent(e)) {
-        if(e.type==sf::Event::Closed) window.close();
-        if(e.type==sf::Event::KeyPressed) {
-            if(e.key.code==sf::Keyboard::Escape) window.close();
-            if(e.key.code==sf::Keyboard::PageUp) scrollOffsetLines+=10.f;
-            if(e.key.code==sf::Keyboard::PageDown) {
-                scrollOffsetLines-=10.f;
+        while(window.isOpen()) {
+        sf::Event e;
+        while(window.pollEvent(e)) {
+            if(e.type==sf::Event::Closed) window.close();
+             if(e.type == sf::Event::Resized) {
+        sf::FloatRect visibleArea(0.f, 0.f, e.size.width, e.size.height);
+        window.setView(sf::View(visibleArea));
+    }
+            if(e.type==sf::Event::KeyPressed) {
+                if(e.key.code==sf::Keyboard::Escape) window.close();
+                if(e.key.code==sf::Keyboard::PageUp) scrollOffsetLines+=10.f;
+                if(e.key.code==sf::Keyboard::PageDown) {
+                    scrollOffsetLines-=10.f;
+                    if(scrollOffsetLines<0) scrollOffsetLines=0.f;
+                }
+                if(e.key.code==sf::Keyboard::Home) scrollOffsetLines=1e6f;
+                if(e.key.code==sf::Keyboard::End) scrollOffsetLines=0.f;
+            }
+            if(e.type==sf::Event::MouseWheelScrolled && e.mouseWheelScroll.wheel==sf::Mouse::VerticalWheel) {
+                scrollOffsetLines+=(e.mouseWheelScroll.delta>0?3.f:-3.f);
                 if(scrollOffsetLines<0) scrollOffsetLines=0.f;
             }
-            if(e.key.code==sf::Keyboard::Home) scrollOffsetLines=1e6f;
-            if(e.key.code==sf::Keyboard::End) scrollOffsetLines=0.f;
+
+            if(e.type==sf::Event::TextEntered) {
+                if(e.text.unicode==8) { // backspace
+                    if(!buffer.empty()) buffer.pop_back();
+                }
+                else if(e.text.unicode==13||e.text.unicode==10) { // enter
+                    std::string line=trim(buffer);
+                    buffer.clear();
+                    if(line=="quit"||line=="exit"){ window.close(); break; }
+                    if(!line.empty()) addHistory("> "+line,sf::Color(150,255,150));
+                    else { addHistory("> "); continue; }
+
+                    auto args = split(line);
+                    std::string cmd = args.empty() ? "" : args[0];
+                    cmd = normalizeWord(cmd);
+
+                    // --- NLP Processing ---
+                    std::cerr << "[DEBUG] Raw line for NLP: '" << line << "'\n";
+                    Intent intent = nlp.parse(line);
+
+                    if(!intent.matched) {
+                        addHistory("[NLP] No intent matched.", sf::Color(255,200,140));
+                    } else {
+                        std::ostringstream oss;
+                        oss << "[NLP] intent=" << intent.name << " score=" << intent.score;
+                        addHistory(oss.str(), sf::Color(180,255,180));
+                        for(auto& kv : intent.slots) addHistory("  " + kv.first + " = " + kv.second);
+
+                        std::cerr << "[DEBUG] Matched intent name: " << intent.name << "\n";
+
+                        // === Intent Handlers ===
+                        if(intent.name=="open_app") {
+                            auto it=intent.slots.find("app");
+                            if(it!=intent.slots.end()) {
+                                std::string app = it->second;
+                                std::string resolved = resolveAlias(app);
+                                if(resolved.empty()) resolved = app;
+
+#ifdef _WIN32
+                                std::string fullPath = resolved;
+                                if(!(fullPath.size()>4 &&
+                                   (fullPath.substr(fullPath.size()-4)==".exe" ||
+                                    fullPath.substr(fullPath.size()-4)==".EXE"))) {
+                                    fullPath = findOnPath(resolved);
+                                }
+
+                                addHistory("Opening app: " + fullPath);
+                                std::cerr << "[DEBUG] Launching path (CreateProcess): " << fullPath << "\n";
+
+                                STARTUPINFOA si = { sizeof(si) };
+                                PROCESS_INFORMATION pi;
+                                BOOL success = CreateProcessA(
+                                    fullPath.c_str(),
+                                    NULL, NULL, NULL, FALSE,
+                                    DETACHED_PROCESS,
+                                    NULL, NULL,
+                                    &si,
+                                    &pi
+                                );
+
+                                if (!success) {
+                                    DWORD err = GetLastError();
+                                    addHistory("Failed to open app: " + fullPath, sf::Color(255,140,140));
+                                    std::cerr << "[DEBUG] CreateProcess failed with error " << err << "\n";
+                                } else {
+                                    CloseHandle(pi.hProcess);
+                                    CloseHandle(pi.hThread);
+                                }
+#else
+                                int ret = system(resolved.c_str());
+                                if(ret != 0) {
+                                    addHistory("Failed to open app: " + resolved, sf::Color(255,140,140));
+                                }
+#endif
+                            }
+                        }
+                        else if(intent.name=="search_web") {
+                            auto it=intent.slots.find("query");
+                            if(it!=intent.slots.end()) {
+                                std::string query = it->second;
+                                addHistory("[Web] Searching for: " + query);
+                                try {
+                                    std::string prompt = "Search the web and summarize results for: " + query;
+                                    std::string reply = callAI(prompt);
+                                    addHistory("[Web Result] " + reply, sf::Color(180,200,255));
+                                } catch(const std::exception& e) {
+                                    addHistory(std::string("[Web] Error: ")+e.what(), sf::Color(255,140,140));
+                                }
+                            }
+                        }
+                        else if(intent.name=="set_timer") {
+                            auto it=intent.slots.find("minutes");
+                            if(it!=intent.slots.end()) {
+                                int mins = std::stoi(it->second);
+                                timers.push_back({mins*60, sf::Clock(), false});
+                                addHistory("[Timer] Started a timer for " + std::to_string(mins) + " minutes.");
+                            }
+                        }
+                        else if(intent.name=="clean") {
+    auto it = intent.slots.find("target");
+    std::string arg = (it!=intent.slots.end()) ? it->second : "";
+    std::cerr << "[DEBUG] clean arg='" << arg << "'\n";
+
+    std::error_code ec;
+    fs::path trashDir = currentDir / ".grim_trash";
+    fs::create_directories(trashDir, ec);
+
+    std::ofstream logFile("clean_log.txt", std::ios::app);
+
+    int removed = 0;
+    std::vector<std::string> preview;
+
+    if(arg == "purge") {
+        if(fs::exists(trashDir, ec)) {
+            removed = fs::remove_all(trashDir, ec);
+            addHistory("[Clean] Purged " + std::to_string(removed) + " items from trash.");
+        } else {
+            addHistory("[Clean] Trash folder is empty.");
         }
-        if(e.type==sf::Event::MouseWheelScrolled && e.mouseWheelScroll.wheel==sf::Mouse::VerticalWheel) {
-            scrollOffsetLines+=(e.mouseWheelScroll.delta>0?3.f:-3.f);
-            if(scrollOffsetLines<0) scrollOffsetLines=0.f;
-        }
+    }
+    else {
+        for(auto& e : fs::directory_iterator(currentDir, ec)) {
+            if(e.is_regular_file(ec)) {
+                // Rules: older than 30 days OR junk extensions
+                std::string ext = e.path().extension().string();
+                bool oldEnough = isOlderThan(e.path(), 30);
+                bool junkType = (ext==".tmp"||ext==".log"||ext==".bak"||ext==".cache");
 
-        if(e.type==sf::Event::TextEntered) {
-            if(e.text.unicode==8) { // backspace
-                if(!buffer.empty()) buffer.pop_back();
-            }
-            else if(e.text.unicode==13||e.text.unicode==10) { // enter
-                std::string line=trim(buffer);
-                buffer.clear();
-                if(line=="quit"||line=="exit"){ window.close(); break; }
-                if(!line.empty()) addHistory("> "+line,sf::Color(150,255,150));
-                else { addHistory("> "); continue; }
+                if(oldEnough || junkType) {
+                    preview.push_back(e.path().filename().string());
 
-                auto args = split(line);
-                std::string cmd = args.empty() ? "" : args[0];
-                cmd = normalizeWord(cmd);
+                    if(arg == "confirm") {
+                        fs::path dest = trashDir / e.path().filename();
+                        fs::rename(e.path(), dest, ec);
 
-                // --- NLP Processing ---
-                std::cerr << "[DEBUG] Raw line for NLP: '" << line << "'\n";
-                Intent intent = nlp.parse(line);
-
-                if(!intent.matched) {
-                    addHistory("[NLP] No intent matched.", sf::Color(255,200,140));
-                } else {
-                    std::ostringstream oss;
-                    oss << "[NLP] intent=" << intent.name << " score=" << intent.score;
-                    addHistory(oss.str(), sf::Color(180,255,180));
-                    for(auto& kv : intent.slots) addHistory("  " + kv.first + " = " + kv.second);
-
-                    std::cerr << "[DEBUG] Matched intent name: " << intent.name << "\n";
-
-                    // === Intent Handlers ===
-                    if(intent.name=="open_app") {
-                        auto it=intent.slots.find("app");
-                        if(it!=intent.slots.end()) {
-                            std::string app = it->second;
-                            std::string resolved = resolveAlias(app);
-                            if(resolved.empty()) resolved = app;
-
-        #ifdef _WIN32
-                            std::string fullPath = resolved;
-                            if(!(fullPath.size()>4 &&
-                               (fullPath.substr(fullPath.size()-4)==".exe" ||
-                                fullPath.substr(fullPath.size()-4)==".EXE"))) {
-                                fullPath = findOnPath(resolved);
-                            }
-
-                            addHistory("Opening app: " + fullPath);
-                            std::cerr << "[DEBUG] Launching path (CreateProcess): " << fullPath << "\n";
-
-                            STARTUPINFOA si = { sizeof(si) };
-                            PROCESS_INFORMATION pi;
-                            BOOL success = CreateProcessA(
-                                fullPath.c_str(),
-                                NULL, NULL, NULL, FALSE,
-                                DETACHED_PROCESS,
-                                NULL, NULL,
-                                &si,
-                                &pi
-                            );
-
-                            if (!success) {
-                                DWORD err = GetLastError();
-                                addHistory("Failed to open app: " + fullPath, sf::Color(255,140,140));
-                                std::cerr << "[DEBUG] CreateProcess failed with error " << err << "\n";
-                            } else {
-                                CloseHandle(pi.hProcess);
-                                CloseHandle(pi.hThread);
-                            }
-        #else
-                            int ret = system(resolved.c_str());
-                            if(ret != 0) {
-                                addHistory("Failed to open app: " + resolved, sf::Color(255,140,140));
-                            }
-        #endif
-                        }
-                    }
-                    else if(intent.name=="search_web") {
-                        auto it=intent.slots.find("query");
-                        if(it!=intent.slots.end()) {
-                            std::string query = it->second;
-                            addHistory("[Web] Searching for: " + query);
-                            try {
-                                std::string prompt = "Search the web and summarize results for: " + query;
-                                std::string reply = callAI(prompt);
-                                addHistory("[Web Result] " + reply, sf::Color(180,200,255));
-                            } catch(const std::exception& e) {
-                                addHistory(std::string("[Web] Error: ")+e.what(), sf::Color(255,140,140));
-                            }
-                        }
-                    }
-                    else if(intent.name=="set_timer") {
-                        auto it=intent.slots.find("minutes");
-                        if(it!=intent.slots.end()) {
-                            int mins = std::stoi(it->second);
-                            timers.push_back({mins, sf::Clock(), false});
-                            addHistory("[Timer] Started a timer for " + std::to_string(mins) + " minutes.");
-                        }
-                    }
-                    else if(intent.name=="clean") {
-                        addHistory("[Clean] Removing files in: " + currentDir.string());
-                    }
-                    else if(intent.name=="show_help") {
-                        addHistory("Available commands: help, pwd, cd <dir>, list, mkdir <name>, rm <target>, reloadnlp, grim <query>, open <app>, search <q>, timer <n>");
-                    }
-                    else if(intent.name=="show_pwd") {
-                        addHistory(currentDir.string());
-                    }
-                    else if(intent.name=="change_dir") {
-                        auto it=intent.slots.find("path");
-                        if(it!=intent.slots.end()) {
-                            fs::path newPath = resolvePath(currentDir, it->second);
-                            std::error_code ec;
-                            if(fs::exists(newPath,ec) && fs::is_directory(newPath,ec)) {
-                                currentDir = newPath;
-                                fs::current_path(currentDir, ec);
-                                addHistory("[cd] Changed directory to " + currentDir.string());
-                            } else {
-                                addHistory("[cd] Directory not found: " + it->second, sf::Color(255,140,140));
-                            }
-                        }
-                    }
-                    else if(intent.name=="list_dir") {
-                        std::error_code ec;
-                        addHistory("[ls] Listing contents of: " + currentDir.string());
-                        for(auto& e : fs::directory_iterator(currentDir, ec)) {
-                            addHistory("  " + e.path().filename().string());
-                        }
-                    }
-                    else if(intent.name=="make_dir") {
-                        auto it=intent.slots.find("dirname");
-                        if(it!=intent.slots.end()) {
-                            std::error_code ec;
-                            fs::path newDir = currentDir / it->second;
-                            if(fs::create_directory(newDir, ec)) {
-                                addHistory("[mkdir] Created: " + newDir.string());
-                            } else {
-                                addHistory("[mkdir] Failed to create: " + newDir.string(), sf::Color(255,140,140));
-                            }
-                        }
-                    }
-                    else if(intent.name=="remove_file") {
-                        auto it=intent.slots.find("target");
-                        if(it!=intent.slots.end()) {
-                            std::error_code ec;
-                            fs::path target = currentDir / it->second;
-                            if(fs::remove_all(target, ec) > 0) {
-                                addHistory("[rm] Removed: " + target.string());
-                            } else {
-                                addHistory("[rm] Failed to remove: " + target.string(), sf::Color(255,140,140));
-                            }
-                        }
-                    }
-                    else if(intent.name=="reload_nlp") {
-                        std::string err;
-                        bool ok = nlp.load_rules("nlp_rules.json", &err);
-                        if(ok) addHistory("[NLP] Reloaded rules.");
-                        else   addHistory("[NLP] Reload failed: " + err, sf::Color(255,140,140));
-                    }
-                    else if(intent.name=="grim_ai") {
-                        auto it=intent.slots.find("query");
-                        if(it!=intent.slots.end()) {
-                            try {
-                                std::string reply = callAI(it->second);
-                                addHistory("[AI] " + reply, sf::Color(180,200,255));
-                            } catch(const std::exception& e) {
-                                addHistory(std::string("[AI] Error: ") + e.what(), sf::Color(255,140,140));
-                            }
+                        if(!ec) {
+                            removed++;
+                            auto t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+                            logFile << "[" << std::put_time(std::localtime(&t), "%F %T") 
+                                    << "] Moved: " << e.path().string() << " -> " << dest.string() << "\n";
                         }
                     }
                 }
             }
-            else if(e.text.unicode>=32 && e.text.unicode<127) {
-                buffer.push_back((char)e.text.unicode);
+        }
+
+        if(arg == "confirm") {
+            if(removed > 0)
+                addHistory("[Clean] Moved " + std::to_string(removed) + " files to trash.");
+            else
+                addHistory("[Clean] No old/junk files to remove.");
+        } else {
+            if(!preview.empty()) {
+                addHistory("[Clean Preview] Files that can be cleaned:", sf::Color(200,200,255));
+                for(auto& f : preview) addHistory("  " + f, sf::Color(180,180,200));
+                addHistory("Run 'clean confirm' to move these to trash.", sf::Color(200,255,200));
+            } else {
+                addHistory("[Clean Preview] No removable files found.");
             }
         }
-    } // <-- closes pollEvent
-
-    // Timers update once per frame
-    for(auto& t : timers) {
-    if(!t.done && t.clock.getElapsedTime().asSeconds() >= t.seconds) {
-        addHistory("[Timer] Timer finished!", sf::Color(255,200,0));
-        t.done = true;
     }
 }
+                        else if(intent.name=="show_help") {
+    // Title
+    addHistory("⚔️  GRIM Command Reference", sf::Color(200,200,255));
+    addHistory("──────────────────────────", sf::Color(120,120,135));
 
+    // System commands
+    addHistory("🔧  System Commands", sf::Color(180,220,255));
+    addHistory("  help            – Show this help menu");
+    addHistory("  pwd             – Show current directory");
+    addHistory("  cd <dir>        – Change directory");
+    addHistory("  ls              – List contents of directory");
+    addHistory("  mkdir <name>    – Create a new directory");
+    addHistory("  rm <target>     – Remove a file or folder");
+    addHistory("  clean           – Preview removable junk files");
+    addHistory("  clean confirm   – Move junk files to .grim_trash/");
+    addHistory("  clean purge     – Permanently delete .grim_trash/");
 
-    // Caret blink
-    if(caretClock.getElapsedTime().asSeconds()>0.5f){
-        caretVisible=!caretVisible;
-        caretClock.restart();
+    // AI commands
+    addHistory("  AI Commands", sf::Color(180,255,180));
+    addHistory("  grim <query>    – Ask GRIM a question");
+    addHistory("  search <query>  – Search the web (AI summarized)");
+
+    // Utility commands
+    addHistory("  Utility Commands", sf::Color(255,220,180));
+    addHistory("  timer <minutes> – Set a countdown timer");
+
+    // NLP/config commands
+    addHistory("  NLP & Config", sf::Color(255,200,200));
+    addHistory("  reloadnlp       – Reload NLP rules from file");
+    addHistory("  quit / exit     – Close GRIM");
+
+    // Dashboard section
+    addHistory("──────────────────────────", sf::Color(120,120,135));
+    addHistory("  System Status", sf::Color(200,200,255));
+
+    // Current directory
+    addHistory(" Current dir: " + currentDir.string(), sf::Color(200,200,255));
+
+    // Active timers
+    int activeTimers = 0;
+    for (auto& t : timers) {
+        if (!t.done) activeTimers++;
     }
+    addHistory("⏱ Active timers: " + std::to_string(activeTimers), sf::Color(200,255,200));
 
-    // --- Drawing ---
-    sf::Vector2u ws=window.getSize();
-    float winW=ws.x, winH=ws.y;
-    titleBar.setSize({winW,kTitleBarH}); titleBar.setPosition(0.f,0.f);
-    inputBar.setSize({winW,kInputBarH}); inputBar.setPosition(0.f,winH-kInputBarH);
-
-    if(font.getInfo().family!=""){
-        sf::FloatRect tb=titleText.getLocalBounds();
-        titleText.setPosition((winW-tb.width)*0.5f,(kTitleBarH-tb.height)*0.5f-6.f);
-    }
-
-    if(font.getInfo().family!=""){
-        std::string toShow=buffer;
-        if(caretVisible) toShow.push_back('_');
-        inputText.setString(toShow);
-        inputText.setPosition(kSidePad,winH-kInputBarH+(kInputBarH-(float)kFontSize)*0.5f-2.f);
-    }
-
-    if(font.getInfo().family!=""){
-        lineText.setCharacterSize(kFontSize);
-        float lineH=kLineSpacing*(float)kFontSize;
-        float histTop=kTitleBarH+kTopPad;
-        float histBottom=winH-kInputBarH-kBottomPad;
-        float histH=std::max(0.f,histBottom-histTop);
-        float wrapW=std::max(10.f,winW-2.f*kSidePad);
-
-        history.ensureWrapped(wrapW,lineText);
-        float viewLines=std::max(1.f,histH/lineH);
-        size_t wrapCount=history.wrappedCount();
-        float maxScroll=(wrapCount>(size_t)viewLines)?(wrapCount-(size_t)viewLines):0.f;
-        clampScroll(maxScroll);
-
-        window.clear(sf::Color(18,18,22));
-        window.draw(titleBar);
-        window.draw(titleText);
-
-        long start=std::max(0L,(long)wrapCount-(long)std::ceil(viewLines)-(long)std::floor(scrollOffsetLines));
-        long end=std::min<long>(wrapCount,start+(long)std::ceil(viewLines)+1);
-        float y=histTop;
-
-        for(long i=start;i<end;++i){
-            if(i<0||i>=(long)history.wrapped().size()) continue;
-            auto& wl=history.wrapped()[i];
-            lineText.setString(wl.text);
-            lineText.setFillColor(wl.color);
-            lineText.setPosition(kSidePad,y);
-            window.draw(lineText);
-            y+=lineH;
-            if(y>histBottom) break;
-        }
-
-        if(wrapCount>(size_t)viewLines){
-            float trackTop=histTop, trackH=histH;
-            float thumbH=std::max(20.f,trackH*(viewLines/(float)wrapCount));
-            float t=(maxScroll<=0.f)?0.f:(scrollOffsetLines/maxScroll);
-            float thumbTop=trackTop+(trackH-thumbH)*t;
-
-            sf::RectangleShape track({4.f,trackH});
-            track.setFillColor(sf::Color(50,50,58));
-            track.setPosition(winW-6.f,trackTop);
-
-            sf::RectangleShape thumb({4.f,thumbH});
-            thumb.setFillColor(sf::Color(120,120,135));
-            thumb.setPosition(winW-6.f,thumbTop);
-
-            window.draw(track);
-            window.draw(thumb);
-        }
-
-        window.draw(inputBar);
-        window.draw(inputText);
+    // Trash folder count
+    std::error_code ec;
+    fs::path trashDir = currentDir / ".grim_trash";
+    if (fs::exists(trashDir, ec) && fs::is_directory(trashDir, ec)) {
+        size_t count = std::distance(fs::directory_iterator(trashDir, ec), {});
+        addHistory("🗑  Trash folder: " + std::to_string(count) + " item(s)", sf::Color(255,200,180));
     } else {
-        window.clear(sf::Color(18,18,22));
-        window.draw(titleBar);
-        window.draw(inputBar);
+        addHistory("🗑  Trash folder: empty", sf::Color(255,200,180));
     }
 
-    window.display();
+    // CPU + RAM usage
+    int cpuLoad = getCPULoad();
+    size_t usedMB = getMemoryUsageMB();
+    size_t totalMB = getTotalSystemMemoryMB();
+
+    if (cpuLoad >= 0) {
+        addHistory(" CPU Load: " + std::to_string(cpuLoad) + "%", sf::Color(180,220,255));
+    }
+    if (totalMB > 0) {
+        addHistory(" Memory: " + std::to_string(usedMB) + " MB / " + std::to_string(totalMB) + " MB", sf::Color(180,255,200));
+    }
 }
- // <-- closes while(window.isOpen())
-} // <-- closes int main()
+
+                        else if(intent.name=="show_pwd") {
+                            addHistory(currentDir.string());
+                        }
+                        else if(intent.name=="change_dir") {
+                            auto it=intent.slots.find("path");
+                            if(it!=intent.slots.end()) {
+                                fs::path newPath = resolvePath(currentDir, it->second);
+                                std::error_code ec;
+                                if(fs::exists(newPath,ec) && fs::is_directory(newPath,ec)) {
+                                    currentDir = newPath;
+                                    fs::current_path(currentDir, ec);
+                                    addHistory("[cd] Changed directory to " + currentDir.string());
+                                } else {
+                                    addHistory("[cd] Directory not found: " + it->second, sf::Color(255,140,140));
+                                }
+                            }
+                        }
+                        else if(intent.name=="list_dir") {
+                            std::error_code ec;
+                            addHistory("[ls] Listing contents of: " + currentDir.string());
+                            for(auto& e : fs::directory_iterator(currentDir, ec)) {
+                                addHistory("  " + e.path().filename().string());
+                            }
+                        }
+                        else if(intent.name=="make_dir") {
+                            auto it=intent.slots.find("dirname");
+                            if(it!=intent.slots.end()) {
+                                std::error_code ec;
+                                fs::path newDir = currentDir / it->second;
+                                if(fs::create_directory(newDir, ec)) {
+                                    addHistory("[mkdir] Created: " + newDir.string());
+                                } else {
+                                    addHistory("[mkdir] Failed to create: " + newDir.string(), sf::Color(255,140,140));
+                                }
+                            }
+                        }
+                        else if(intent.name=="remove_file") {
+                            auto it=intent.slots.find("target");
+                            if(it!=intent.slots.end()) {
+                                std::error_code ec;
+                                fs::path target = currentDir / it->second;
+                                if(fs::remove_all(target, ec) > 0) {
+                                    addHistory("[rm] Removed: " + target.string());
+                                } else {
+                                    addHistory("[rm] Failed to remove: " + target.string(), sf::Color(255,140,140));
+                                }
+                            }
+                        }
+                        else if(intent.name=="reload_nlp") {
+                            std::string err;
+                            bool ok = nlp.load_rules("nlp_rules.json", &err);
+                            if(ok) addHistory("[NLP] Reloaded rules.");
+                            else   addHistory("[NLP] Reload failed: " + err, sf::Color(255,140,140));
+                        }
+                        else if(intent.name=="grim_ai") {
+    auto it=intent.slots.find("query");
+    if(it!=intent.slots.end()) {
+        try {
+            // Build context-aware prompt
+            std::string prompt = buildContextPrompt(it->second);
+            std::string reply = callAI(prompt);
+
+            // Save both sides to memory
+            saveToMemory("User: " + it->second);
+            saveToMemory("GRIM: " + reply);
+
+            addHistory("[AI] " + reply, sf::Color(180,200,255));
+        } catch(const std::exception& e) {
+            addHistory(std::string("[AI] Error: ") + e.what(), sf::Color(255,140,140));
+        }
+    }
+}
+else if (intent.name == "remember") {
+    auto itKey = intent.slots.find("key");
+    auto itVal = intent.slots.find("value");
+
+    if (itKey != intent.slots.end() && itVal != intent.slots.end()) {
+        std::string key = itKey->second;
+        std::string value = itVal->second;
+
+        // Normalize key a little (lowercase, no spaces)
+        std::string normKey = key;
+        std::transform(normKey.begin(), normKey.end(), normKey.begin(), ::tolower);
+        std::replace(normKey.begin(), normKey.end(), ' ', '_');
+
+        longTermMemory[normKey] = value;
+        saveMemory();
+
+        addHistory("🧠 Remembered: " + key + " = " + value, sf::Color(180,255,180));
+    }
+}
+
+else if (intent.name == "recall") {
+    if (!longTermMemory.empty()) {
+        addHistory("🧠 Recalling stored facts:", sf::Color(200,200,255));
+        for (auto& [k, v] : longTermMemory.items()) {
+            addHistory("  - " + k + " = " + v.get<std::string>(), sf::Color(180,180,200));
+        }
+    } else {
+        addHistory("🧠 No facts stored yet.", sf::Color(255,200,200));
+    }
+}
+
+
+
+                    }
+                }
+                else if(e.text.unicode>=32 && e.text.unicode<127) {
+                    buffer.push_back((char)e.text.unicode);
+                }
+            }
+        }
+
+        // Timers update
+        for(auto& t : timers) {
+            if(!t.done && t.clock.getElapsedTime().asSeconds() >= t.seconds) {
+                addHistory("[Timer] Timer finished!", sf::Color(255,200,0));
+                t.done = true;
+            }
+        }
+
+        // Caret blink
+        if(caretClock.getElapsedTime().asSeconds()>0.5f){
+            caretVisible=!caretVisible;
+            caretClock.restart();
+        }
+
+        // --- Drawing ---
+        float winW = window.getSize().x;
+        float winH = window.getSize().y;
+        titleBar.setSize({winW,kTitleBarH}); titleBar.setPosition(0.f,0.f);
+        inputBar.setSize({winW,kInputBarH}); inputBar.setPosition(0.f,winH-kInputBarH);
+
+        if(font.getInfo().family!=""){
+            // Centered title
+            sf::FloatRect tb = titleText.getLocalBounds();
+            titleText.setOrigin(tb.left + tb.width/2.f, 0.f);
+            titleText.setPosition(winW/2.f, (kTitleBarH - tb.height) / 2.f - tb.top);
+
+            // Input buffer caret alignment
+            std::string toShow=buffer;
+            if(caretVisible) toShow.push_back('_');
+            inputText.setString(toShow);
+            inputText.setPosition(kSidePad, winH-kInputBarH+(kInputBarH-(float)kFontSize)*0.5f);
+        }
+
+        if(font.getInfo().family!=""){
+            lineText.setCharacterSize(kFontSize);
+            float lineH=kLineSpacing*(float)kFontSize;
+            float histTop=kTitleBarH+kTopPad;
+            float histBottom=winH-kInputBarH-kBottomPad;
+            float histH=std::max(0.f,histBottom-histTop);
+            float wrapW=std::max(10.f,winW-2.f*kSidePad);
+
+            history.ensureWrapped(wrapW,lineText);
+            float viewLines=std::max(1.f,histH/lineH);
+            size_t wrapCount=history.wrappedCount();
+            float maxScroll=(wrapCount>(size_t)viewLines)?(wrapCount-(size_t)viewLines):0.f;
+            clampScroll(maxScroll);
+
+            window.clear(sf::Color(18,18,22));
+            window.draw(titleBar);
+            window.draw(titleText);
+
+            long start=std::max(0L,(long)wrapCount-(long)std::ceil(viewLines)-(long)std::floor(scrollOffsetLines));
+            long end=std::min<long>(wrapCount,start+(long)std::ceil(viewLines)+1);
+            float y=histTop;
+
+            for(long i=start;i<end;++i){
+                if(i<0||i>=(long)history.wrapped().size()) continue;
+                auto& wl=history.wrapped()[i];
+                lineText.setString(wl.text);
+                lineText.setFillColor(wl.color);
+                lineText.setPosition(kSidePad,y);
+                window.draw(lineText);
+                y+=lineH;
+                if(y>histBottom) break;
+            }
+
+            // Scrollbar with min thumb size
+            if(wrapCount>(size_t)viewLines){
+                float trackTop=histTop, trackH=histH;
+                float thumbH=std::max(30.f,trackH*(viewLines/(float)wrapCount));
+                float t=(maxScroll<=0.f)?0.f:(scrollOffsetLines/maxScroll);
+                float thumbTop=trackTop+(trackH-thumbH)*t;
+
+                sf::RectangleShape track({6.f,trackH});
+                track.setFillColor(sf::Color(50,50,58));
+                track.setPosition(winW-8.f,trackTop);
+
+                sf::RectangleShape thumb({6.f,thumbH});
+                thumb.setFillColor(sf::Color(120,120,135));
+                thumb.setPosition(winW-8.f,thumbTop);
+
+                window.draw(track);
+                window.draw(thumb);
+            }
+
+            window.draw(inputBar);
+            window.draw(inputText);
+        } else {
+            window.clear(sf::Color(18,18,22));
+            window.draw(titleBar);
+            window.draw(inputBar);
+        }
+
+        window.display();
+    }
+}
+

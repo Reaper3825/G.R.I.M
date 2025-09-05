@@ -30,13 +30,15 @@
 
 ,
   {
-    "intent": "clean",
-    "description": "Remove files from current directory",
-    "pattern": "^\\s*clean\\b.*$",
-    "slot_names": [],
-    "score_boost": 0.25,
-    "case_insensitive": true
-  },
+  "intent": "clean",
+  "description": "Clean directory by preview, confirm, or purge",
+  "pattern": "^clean(?:\\s+(\\w+))?$",
+  "slot_names": ["target"],
+  "case_insensitive": true
+}
+
+
+,
   {
     "intent": "show_help",
     "description": "Show available commands",
@@ -100,5 +102,22 @@
     "slot_names": ["verb", "query"],
     "score_boost": 0.4,
     "case_insensitive": true
-  }
+  },
+  {
+  "intent": "remember",
+  "description": "Store a fact in GRIM's long-term memory",
+  "pattern": "^remember\\s+(.+?)\\s+is\\s+(.+)$",
+  "slot_names": ["key", "value"],
+  "case_insensitive": true
+}
+,
+{
+  "intent": "recall",
+  "description": "Recall stored facts from long-term memory",
+  "pattern": "^recall(?:\\s+memory)?$",
+  "slot_names": [],
+  "case_insensitive": true
+}
+
+
 ]
