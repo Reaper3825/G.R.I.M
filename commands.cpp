@@ -10,8 +10,55 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
+#include <psapi.h>     // GlobalMemoryStatusEx, MEMORYSTATUSEX
+#include <winternl.h>  // ULONGLONG, ULARGE_INTEGER
 
-// Helper: try to resolve exe name to full path using Windows search
+// ---------------- Windows Helpers ----------------
+
+// --- CPU usage helper ---
+static ULARGE_INTEGER lastIdleTime   = {};
+static ULARGE_INTEGER lastKernelTime = {};
+static ULARGE_INTEGER lastUserTime   = {};
+
+double getCPUUsage() {
+    FILETIME idleTime, kernelTime, userTime;
+    if (!GetSystemTimes(&idleTime, &kernelTime, &userTime))
+        return -1.0;
+
+    ULARGE_INTEGER idle, kernel, user;
+    idle.LowPart   = idleTime.dwLowDateTime;
+    idle.HighPart  = idleTime.dwHighDateTime;
+    kernel.LowPart = kernelTime.dwLowDateTime;
+    kernel.HighPart= kernelTime.dwHighDateTime;
+    user.LowPart   = userTime.dwLowDateTime;
+    user.HighPart  = userTime.dwHighDateTime;
+
+    ULONGLONG idleDiff   = idle.QuadPart   - lastIdleTime.QuadPart;
+    ULONGLONG kernelDiff = kernel.QuadPart - lastKernelTime.QuadPart;
+    ULONGLONG userDiff   = user.QuadPart   - lastUserTime.QuadPart;
+    ULONGLONG sysTotal   = kernelDiff + userDiff;
+
+    lastIdleTime   = idle;
+    lastKernelTime = kernel;
+    lastUserTime   = user;
+
+    if (sysTotal == 0) return 0.0;
+    return (double)(sysTotal - idleDiff) * 100.0 / (double)sysTotal;
+}
+
+// --- Memory usage helper ---
+double getMemoryUsagePercent(DWORDLONG &usedMB, DWORDLONG &totalMB) {
+    MEMORYSTATUSEX memInfo;
+    memInfo.dwLength = sizeof(MEMORYSTATUSEX);
+    GlobalMemoryStatusEx(&memInfo);
+
+    totalMB = memInfo.ullTotalPhys / (1024 * 1024);
+    usedMB  = (memInfo.ullTotalPhys - memInfo.ullAvailPhys) / (1024 * 1024);
+
+    return (double)usedMB * 100.0 / (double)totalMB;
+}
+
+// --- Helper: resolve exe name on PATH ---
 static std::string findOnPath(const std::string& app) {
     char buffer[MAX_PATH];
     DWORD result = SearchPathA(
@@ -22,7 +69,8 @@ static std::string findOnPath(const std::string& app) {
     }
     return app; // fallback
 }
-#endif
+#endif // _WIN32
+
 
 namespace fs = std::filesystem;
 
@@ -42,58 +90,57 @@ bool handleCommand(const Intent& intent,
 
     // ---- open_app ----
     if (intent.name == "open_app") {
-    auto it = intent.slots.find("app");
-    if (it != intent.slots.end()) {
-        std::string appName = it->second;
-        std::string resolved = resolveAlias(appName);
-        if (resolved.empty()) resolved = appName;
+        auto it = intent.slots.find("app");
+        if (it != intent.slots.end()) {
+            std::string appName = it->second;
+            std::string resolved = resolveAlias(appName);
+            if (resolved.empty()) resolved = appName;
 
 #ifdef _WIN32
-        if (resolved.find(':') == std::string::npos &&
-            resolved.find('/') == std::string::npos) {
-            resolved = findOnPath(resolved);
-        }
-
-        // If it looks like an .exe, run it directly with CreateProcess
-        if (resolved.ends_with(".exe")) {
-            STARTUPINFOA si{};
-            PROCESS_INFORMATION pi{};
-            si.cb = sizeof(si);
-
-            if (CreateProcessA(
-                    resolved.c_str(),   // application
-                    NULL,               // command line
-                    NULL, NULL, FALSE,
-                    0, NULL, NULL,
-                    &si, &pi))
-            {
-                CloseHandle(pi.hProcess);
-                CloseHandle(pi.hThread);
-                history.push("[INFO] Opened: " + resolved, sf::Color(0,255,0));
-            } else {
-                history.push("[ERROR] Failed to open: " + resolved, sf::Color::Red);
+            if (resolved.find(':') == std::string::npos &&
+                resolved.find('/') == std::string::npos) {
+                resolved = findOnPath(resolved);
             }
-        } else {
-            // Assume it's a URL or non-.exe, let ShellExecute handle it
-            HINSTANCE result = ShellExecuteA(
-                NULL, "open", resolved.c_str(),
-                NULL, NULL, SW_SHOWNORMAL
-            );
-            if ((INT_PTR)result <= 32) {
-                history.push("[ERROR] Failed to open: " + resolved, sf::Color::Red);
+
+            // If it looks like an .exe, run it directly with CreateProcess
+            if (resolved.ends_with(".exe")) {
+                STARTUPINFOA si{};
+                PROCESS_INFORMATION pi{};
+                si.cb = sizeof(si);
+
+                if (CreateProcessA(
+                        resolved.c_str(),   // application
+                        NULL,               // command line
+                        NULL, NULL, FALSE,
+                        0, NULL, NULL,
+                        &si, &pi))
+                {
+                    CloseHandle(pi.hProcess);
+                    CloseHandle(pi.hThread);
+                    history.push("[INFO] Opened: " + resolved, sf::Color::Green);
+                } else {
+                    history.push("[ERROR] Failed to open: " + resolved, sf::Color::Red);
+                }
             } else {
-                history.push("[INFO] Opened: " + resolved, sf::Color(0,255,0));
+                // Assume it's a URL or non-.exe, let ShellExecute handle it
+                HINSTANCE result = ShellExecuteA(
+                    NULL, "open", resolved.c_str(),
+                    NULL, NULL, SW_SHOWNORMAL
+                );
+                if ((INT_PTR)result <= 32) {
+                    history.push("[ERROR] Failed to open: " + resolved, sf::Color::Red);
+                } else {
+                    history.push("[INFO] Opened: " + resolved, sf::Color::Green);
+                }
             }
-        }
 #else
-        int rc = system(resolved.c_str());
-        if (rc != 0) history.push("[ERROR] Failed to launch: " + resolved, sf::Color::Red);
-        else history.push("[INFO] Opened: " + resolved, sf::Color(0,255,0));
+            int rc = system(resolved.c_str());
+            if (rc != 0) history.push("[ERROR] Failed to launch: " + resolved, sf::Color::Red);
+            else history.push("[INFO] Opened: " + resolved, sf::Color::Green);
 #endif
+        }
+        return true;
     }
-    return true;
-}
-
 
     // ---- search_web ----
     if (intent.name == "search_web") {
@@ -257,6 +304,48 @@ bool handleCommand(const Intent& intent,
         }
         return true;
     }
+            // ---- system_info ----
+    if (intent.name == "system_info") {
+#ifdef _WIN32
+        // --- CPU usage ---
+        double cpuLoad = getCPUUsage();
+
+        // --- Memory usage ---
+        DWORDLONG totalMB = 0, usedMB = 0;
+        double memPercent = getMemoryUsagePercent(usedMB, totalMB);
+
+        // --- CPU cores ---
+        SYSTEM_INFO sysInfo;
+        GetSystemInfo(&sysInfo);
+        int cpuCount = sysInfo.dwNumberOfProcessors;
+
+        // --- GPU info (basic adapter name) ---
+        std::string gpuName = "[Unavailable]";
+        DISPLAY_DEVICEA dd;
+        dd.cb = sizeof(dd);
+        if (EnumDisplayDevicesA(NULL, 0, &dd, 0)) {
+            gpuName = dd.DeviceString;
+        }
+
+        // --- Push results to history ---
+        history.push("[System Info]", sf::Color::Cyan);
+        history.push("CPU Cores : " + std::to_string(cpuCount), sf::Color::Yellow);
+        if (cpuLoad >= 0.0) {
+            history.push("CPU Usage : " + std::to_string((int)cpuLoad) + "%", sf::Color::Yellow);
+        } else {
+            history.push("CPU Usage : [Unavailable]", sf::Color::Red);
+        }
+        history.push("Memory    : " + std::to_string(usedMB) + " MB / " +
+                     std::to_string(totalMB) + " MB (" + std::to_string((int)memPercent) + "%)",
+                     sf::Color::Green);
+        history.push("GPU       : " + gpuName, sf::Color(180, 255, 180));
+#else
+        history.push("[System Info]", sf::Color::Cyan);
+        history.push("System info not implemented on this platform yet.", sf::Color::Red);
+#endif
+        return true;
+    }
+
 
     return true;
 }
