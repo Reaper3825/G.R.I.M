@@ -103,6 +103,15 @@ int main(int argc, char** argv) {
         // --- Caret blink ---
         caretVisible = updateCaretBlink(caretClock, caretVisible);
 
+        // --- Wrap history for current window width ---
+        sf::Text meas;
+        meas.setFont(font);
+        meas.setCharacterSize(kFontSize); // from ui_config.hpp
+        history.ensureWrapped(
+            static_cast<float>(window.getSize().x) - (2 * kSidePad), 
+            meas
+        );
+
         // --- Draw UI ---
         drawUI(window, font, history, buffer, caretVisible, scrollOffsetLines);
     }
