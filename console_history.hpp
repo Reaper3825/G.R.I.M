@@ -8,7 +8,7 @@
 // A single wrapped line with text + color
 struct WrappedLine {
     std::string text;
-    sf::Color color{sf::Color::White};
+    sf::Color color{ sf::Color::White };
 };
 
 class ConsoleHistory {
