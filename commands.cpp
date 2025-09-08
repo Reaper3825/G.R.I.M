@@ -83,7 +83,7 @@ bool handleCommand(const Intent& intent,
                    NLP& nlp,
                    ConsoleHistory& history)
 {
-    if (!intent.matched) {
+    if (!intent.matched) {  
         history.push("[WARN] No command matched.", sf::Color(200,200,200));
         return true;
     }

@@ -1,6 +1,10 @@
 {
   "tone": "optimistic",
   "optimism_level": 0.8,
-  "encouragement_phrases": ["Yay!", "You can do it!", "Keep going!,"],
-  "formality": "casual"
+  "encouragement_phrases": ["Yay!", "You can do it!", "Keep going!"],
+  "formality": "casual",
+
+  "backend": "auto",
+  "ollama_url": "http://127.0.0.1:11434",
+  "localai_url": "http://127.0.0.1:8080/v1"
 }
