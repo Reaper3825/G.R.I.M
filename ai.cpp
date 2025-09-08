@@ -6,6 +6,7 @@
 
 // Global JSON object for long-term memory
 nlohmann::json longTermMemory;
+nlohmann::json aiConfig; // for backend + tone/style
 
 void loadMemory() {
     std::ifstream f("memory.json");
@@ -35,34 +36,93 @@ void saveMemory() {
     }
 }
 
+void loadAIConfig() {
+    std::ifstream f("ai_config.json");
+    if (f) {
+        try {
+            f >> aiConfig;
+            std::cerr << "[Config] Loaded ai_config.json\n";
+        } catch (const std::exception& e) {
+            std::cerr << "[Config] Failed to parse ai_config.json: " << e.what() << "\n";
+            aiConfig = nlohmann::json::object();
+        }
+    } else {
+        std::cerr << "[Config] No ai_config.json found, using defaults.\n";
+        aiConfig = nlohmann::json::object();
+    }
+}
+
+std::string resolveBackendURL() {
+    std::string backend = "auto";
+    if (aiConfig.contains("backend")) {
+        backend = aiConfig["backend"].get<std::string>();
+    }
+
+    if (backend == "auto") {
+        // Detect OS
+#if defined(_WIN32) || defined(_WIN64)
+        backend = "ollama";
+#elif defined(__linux__)
+        backend = "localai";
+#elif defined(__APPLE__)
+        backend = "ollama";
+#else
+        backend = "localai";
+#endif
+    }
+
+    if (backend == "ollama") {
+        return aiConfig.value("ollama_url", "http://127.0.0.1:11434");
+    } else {
+        return aiConfig.value("localai_url", "http://127.0.0.1:8080/v1");
+    }
+}
+
 std::string callAI(const std::string& prompt) {
+    std::string url = resolveBackendURL();
+
     nlohmann::json body = {
-        {"model", "mistral"},
+        {"model", "mistral"},   // TODO: could also be configurable
         {"prompt", prompt},
         {"stream", false}
     };
 
+    // Build correct endpoint depending on backend type
+    std::string endpoint;
+    if (url.find("8080") != std::string::npos) {
+        // LocalAI expects /chat/completions or /generate depending on mode
+        endpoint = url + "/chat/completions";
+        body = {
+            {"model", "gemma:2b"},
+            {"messages", {{{"role", "user"}, {"content", prompt}}}}
+        };
+    } else {
+        // Ollama
+        endpoint = url + "/api/generate";
+    }
+
     cpr::Response r = cpr::Post(
-        cpr::Url{"http://localhost:11434/api/generate"},
+        cpr::Url{endpoint},
         cpr::Header{{"Content-Type", "application/json"}},
         cpr::Body{body.dump()}
     );
 
-    // Network error (connection refused, etc.)
     if (r.error) {
-        return std::string("Error calling Ollama: ") + r.error.message;
+        return std::string("Error calling AI: ") + r.error.message;
     }
-    // Non-200 HTTP
     if (r.status_code != 200) {
-        return "Ollama HTTP " + std::to_string(r.status_code) + ": " + r.text;
+        return "AI HTTP " + std::to_string(r.status_code) + ": " + r.text;
     }
 
     try {
         auto j = nlohmann::json::parse(r.text);
-        if (j.contains("response"))
-            return j["response"].get<std::string>();
-        return "[No 'response' field in Ollama reply]";
+        if (j.contains("response")) {
+            return j["response"].get<std::string>(); // Ollama
+        } else if (j.contains("choices")) {
+            return j["choices"][0]["message"]["content"].get<std::string>(); // LocalAI
+        }
+        return "[No valid field in AI reply]";
     } catch (const std::exception& e) {
-        return std::string("Error parsing Ollama JSON: ") + e.what();
+        return std::string("Error parsing AI JSON: ") + e.what();
     }
 }
