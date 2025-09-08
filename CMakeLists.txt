@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GRIM LANGUAGES CXX)
+project(GRIM CXX)
 
 # ---- Language / build settings ----
 set(CMAKE_CXX_STANDARD 20)
@@ -38,7 +38,7 @@ set(GRIM_SOURCES
 set(GRIM_HEADERS
     commands.hpp
     console_history.hpp
-    NLP.hpp
+    nlp.hpp
     ai.hpp
     aliases.hpp
     synonyms.hpp
@@ -53,12 +53,22 @@ set(GRIM_HEADERS
 add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
 
 # ---- Dependencies ----
-find_package(SFML 2.5 COMPONENTS graphics window system REQUIRED)
-find_package(cpr REQUIRED)
 
-target_link_libraries(GRIM PRIVATE sfml-graphics sfml-window sfml-system cpr::cpr)
+# SFML via pkg-config (works reliably on Pi)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SFML REQUIRED sfml-graphics sfml-window sfml-system)
+
+include_directories(${SFML_INCLUDE_DIRS})
+link_directories(${SFML_LIBRARY_DIRS})
+target_link_libraries(GRIM PRIVATE ${SFML_LIBRARIES})
+
+# CPR (manual linking: installed under /usr/local)
+include_directories(/usr/local/include)
+link_directories(/usr/local/lib)
+target_link_libraries(GRIM PRIVATE cpr ssl crypto)
 
 target_include_directories(GRIM PRIVATE ${CMAKE_SOURCE_DIR})
+target_sources(GRIM PRIVATE ${GRIM_HEADERS})
 
 # ---- Compile-time resource paths ----
 include(GNUInstallDirs)
@@ -66,16 +76,14 @@ include(GNUInstallDirs)
 if(GRIM_PORTABLE)
   target_compile_definitions(GRIM PRIVATE GRIM_PORTABLE_ONLY=1)
 else()
-  # System install mode: tell GRIM where to look for resources
   set(GRIM_DATADIR "${CMAKE_INSTALL_FULL_DATADIR}/grim")
   target_compile_definitions(GRIM PRIVATE GRIM_DATA_DIR="${GRIM_DATADIR}")
 endif()
 
 # ---- Asset handling ----
 
-# 1) NLP rules
 set(GRIM_RULES_SRC "${CMAKE_SOURCE_DIR}/nlp_rules.json")
-if (EXISTS "${GRIM_RULES_SRC}")
+if(EXISTS "${GRIM_RULES_SRC}")
   add_custom_command(TARGET GRIM POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${GRIM_RULES_SRC}"
@@ -98,9 +106,8 @@ else()
   )
 endif()
 
-# 2) Synonyms
 set(GRIM_SYNONYMS_SRC "${CMAKE_SOURCE_DIR}/synonyms.json")
-if (EXISTS "${GRIM_SYNONYMS_SRC}")
+if(EXISTS "${GRIM_SYNONYMS_SRC}")
   add_custom_command(TARGET GRIM POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${GRIM_SYNONYMS_SRC}"
@@ -108,9 +115,8 @@ if (EXISTS "${GRIM_SYNONYMS_SRC}")
   )
 endif()
 
-# 3) Aliases
 set(GRIM_ALIASES_SRC "${CMAKE_SOURCE_DIR}/app_aliases.json")
-if (EXISTS "${GRIM_ALIASES_SRC}")
+if(EXISTS "${GRIM_ALIASES_SRC}")
   add_custom_command(TARGET GRIM POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${GRIM_ALIASES_SRC}"
@@ -118,17 +124,16 @@ if (EXISTS "${GRIM_ALIASES_SRC}")
   )
 endif()
 
-# 4) Fonts (fallback)
 set(GRIM_FONT_SRC "")
-if (EXISTS "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")
+if(EXISTS "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")
   set(GRIM_FONT_SRC "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")
-elseif (EXISTS "C:/Windows/Fonts/arial.ttf")
+elseif(EXISTS "C:/Windows/Fonts/arial.ttf")
   set(GRIM_FONT_SRC "C:/Windows/Fonts/arial.ttf")
-elseif (EXISTS "C:/Windows/Fonts/segoeui.ttf")
+elseif(EXISTS "C:/Windows/Fonts/segoeui.ttf")
   set(GRIM_FONT_SRC "C:/Windows/Fonts/segoeui.ttf")
 endif()
 
-if (GRIM_FONT_SRC)
+if(GRIM_FONT_SRC)
   add_custom_command(TARGET GRIM POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${GRIM_FONT_SRC}"
@@ -136,8 +141,7 @@ if (GRIM_FONT_SRC)
   )
 endif()
 
-# 5) Resources folder
-if (EXISTS "${CMAKE_SOURCE_DIR}/resources")
+if(EXISTS "${CMAKE_SOURCE_DIR}/resources")
   add_custom_target(copy_resources ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_SOURCE_DIR}/resources"
@@ -152,19 +156,16 @@ install(TARGETS GRIM
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-# Install JSON config files if they exist
 foreach(FILE nlp_rules.json synonyms.json app_aliases.json)
   if(EXISTS "${CMAKE_SOURCE_DIR}/${FILE}")
     install(FILES "${CMAKE_SOURCE_DIR}/${FILE}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim)
   endif()
 endforeach()
 
-# Install font if provided
-if (GRIM_FONT_SRC)
+if(GRIM_FONT_SRC)
   install(FILES "${GRIM_FONT_SRC}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim)
 endif()
 
-# Install resources folder
-if (EXISTS "${CMAKE_SOURCE_DIR}/resources")
+if(EXISTS "${CMAKE_SOURCE_DIR}/resources")
   install(DIRECTORY "${CMAKE_SOURCE_DIR}/resources" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim)
 endif()
