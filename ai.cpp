@@ -1,8 +1,8 @@
 #include "ai.hpp"
 #include <cpr/cpr.h>
-#include <nlohmann/json.hpp>
 #include <iostream>
 #include <fstream>
+#include <nlohmann/json.hpp>
 
 // Global JSON object for long-term memory
 nlohmann::json longTermMemory;
@@ -36,20 +36,27 @@ void saveMemory() {
     }
 }
 
-void loadAIConfig() {
-    std::ifstream f("ai_config.json");
-    if (f) {
-        try {
-            f >> aiConfig;
-            std::cerr << "[Config] Loaded ai_config.json\n";
-        } catch (const std::exception& e) {
-            std::cerr << "[Config] Failed to parse ai_config.json: " << e.what() << "\n";
-            aiConfig = nlohmann::json::object();
-        }
-    } else {
-        std::cerr << "[Config] No ai_config.json found, using defaults.\n";
-        aiConfig = nlohmann::json::object();
-    }
+nlohmann::json loadAIConfig(const std::string& path) {
+    std::ifstream f(path);
+    if (!f.is_open()) {
+    std::cerr << "[Config] No " << path << "found, using defaults.\n";
+    aiConfig = nlohmann::json::object();
+    return aiConfig;
+}
+
+try {
+    nlohmann::json config;
+    f >> config;
+    std::cout << "AI config loaded successfully\n";
+    aiConfig = config;
+    return aiConfig;
+} catch (const std::exception& e) {
+    std::cerr << "Error parsing AI config: " << e.what() << std::endl;
+    aiConfig = nlohmann::json::object();
+    return aiConfig;
+}
+
+     
 }
 
 std::string resolveBackendURL() {
