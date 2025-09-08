@@ -54,7 +54,7 @@ add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
 
 # ---- Dependencies ----
 find_package(SFML 2.5 COMPONENTS graphics window system REQUIRED)
-find_package(cpr CONFIG REQUIRED)
+find_package(cpr REQUIRED)
 
 target_link_libraries(GRIM PRIVATE sfml-graphics sfml-window sfml-system cpr::cpr)
 
