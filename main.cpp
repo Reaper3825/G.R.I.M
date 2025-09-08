@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
     // --- Load persistent memory ---
     loadMemory();
 
-    // --- Load AI config (tone, backend, URLs) ---
+    // --- Load AI config ---
     loadAIConfig();
 
     // --- NLP setup ---
