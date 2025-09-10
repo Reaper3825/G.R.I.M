@@ -7,7 +7,7 @@
 
 namespace fs = std::filesystem;
 
-std::string getResourcePath(void) {
+std::string getResourcePath() {
 #if defined(GRIM_PORTABLE_ONLY)
     // Portable mode: resources live next to executable
     fs::path exePath;

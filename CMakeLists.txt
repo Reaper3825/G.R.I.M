@@ -23,17 +23,17 @@ option(GRIM_PORTABLE "Enable portable mode (resources next to exe)" ON)
 set(GRIM_SOURCES
     main.cpp
     ai.cpp
+    bootstrap.cpp
+    resources.cpp 
     commands.cpp
     nlp.cpp
     nlp_rules.cpp
     synonyms.cpp
     aliases.cpp
     console_history.cpp
-    resources.cpp
     ui_helpers.cpp
     ui_draw.cpp
     ui_events.cpp
-    bootstrap.cpp
 )
 
 set(GRIM_HEADERS
