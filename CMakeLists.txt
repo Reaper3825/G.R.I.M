@@ -22,10 +22,10 @@ option(GRIM_PORTABLE "Enable portable mode (resources next to exe)" ON)
 # ---- Sources ----
 set(GRIM_SOURCES
     main.cpp
+    ai.cpp
     commands.cpp
     nlp.cpp
     nlp_rules.cpp
-    ai.cpp
     synonyms.cpp
     aliases.cpp
     console_history.cpp
@@ -33,14 +33,15 @@ set(GRIM_SOURCES
     ui_helpers.cpp
     ui_draw.cpp
     ui_events.cpp
-    resources.cpp
+    bootstrap.cpp
 )
 
 set(GRIM_HEADERS
+    ai.hpp
+    bootstrap.hpp
     commands.hpp
     console_history.hpp
     nlp.hpp
-    ai.hpp
     aliases.hpp
     synonyms.hpp
     resources.hpp
@@ -49,14 +50,13 @@ set(GRIM_HEADERS
     ui_draw.hpp
     ui_events.hpp
     timer.hpp
-    resources.hpp
 )
 
 add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
 
 # ---- Dependencies ----
 
-# SFML via pkg-config (works reliably on Pi)
+# SFML via pkg-config
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SFML REQUIRED sfml-graphics sfml-window sfml-system)
 
@@ -64,13 +64,18 @@ include_directories(${SFML_INCLUDE_DIRS})
 link_directories(${SFML_LIBRARY_DIRS})
 target_link_libraries(GRIM PRIVATE ${SFML_LIBRARIES})
 
-# CPR (manual linking: installed under /usr/local)
-include_directories(/usr/local/include)
-link_directories(/usr/local/lib)
-target_link_libraries(GRIM PRIVATE cpr ssl crypto)
+# CPR (try find_package first, fallback to /usr/local)
+find_package(cpr QUIET)
+if(cpr_FOUND)
+  target_link_libraries(GRIM PRIVATE cpr::cpr)
+else()
+  message(WARNING "cpr not found via find_package, falling back to /usr/local")
+  include_directories(/usr/local/include)
+  link_directories(/usr/local/lib)
+  target_link_libraries(GRIM PRIVATE cpr ssl crypto)
+endif()
 
 target_include_directories(GRIM PRIVATE ${CMAKE_SOURCE_DIR})
-target_sources(GRIM PRIVATE ${GRIM_HEADERS})
 
 # ---- Compile-time resource paths ----
 include(GNUInstallDirs)
@@ -82,50 +87,58 @@ else()
   target_compile_definitions(GRIM PRIVATE GRIM_DATA_DIR="${GRIM_DATADIR}")
 endif()
 
-# ---- Asset handling ----
+# ---- Resource defaults ----
+set(GRIM_RESOURCES
+    nlp_rules.json
+    synonyms.json
+    app_aliases.json
+    ai_config.json
+    memory.json
+)
 
-set(GRIM_RULES_SRC "${CMAKE_SOURCE_DIR}/nlp_rules.json")
-if(EXISTS "${GRIM_RULES_SRC}")
-  add_custom_command(TARGET GRIM POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${GRIM_RULES_SRC}"
-            "$<TARGET_FILE_DIR:GRIM>/nlp_rules.json"
-  )
-else()
-  message(WARNING "nlp_rules.json not found in source; generating default.")
-  set(GRIM_RULES_DEFAULT
+# Default JSON contents (fallbacks written into build dir if missing)
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/nlp_rules.json")
+  file(WRITE "${CMAKE_BINARY_DIR}/nlp_rules.json"
     "[\n"
     "  {\"intent\":\"open_app\",\"pattern\":\"^\\\\s*(open|launch|start)\\\\s+([\\\\w\\\\.\\\\-]+)\\\\s*$\",\"slot_names\":[\"verb\",\"app\"],\"score_boost\":0.3,\"case_insensitive\":true},\n"
     "  {\"intent\":\"search_web\",\"pattern\":\"^(google|search|look up)\\\\s+(.+)$\",\"slot_names\":[\"verb\",\"query\"],\"score_boost\":0.2,\"case_insensitive\":true},\n"
     "  {\"intent\":\"set_timer\",\"pattern\":\"^(set\\\\s+)?timer\\\\s+for\\\\s+(\\\\d+)\\\\s*(seconds|s|minutes|min|m|hours|h)\\\\b\",\"slot_names\":[\"_opt\",\"value\",\"unit\"],\"score_boost\":0.25,\"case_insensitive\":true}\n"
     "]\n"
   )
-  file(WRITE "${CMAKE_BINARY_DIR}/nlp_rules.json" "${GRIM_RULES_DEFAULT}")
-  add_custom_command(TARGET GRIM POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_BINARY_DIR}/nlp_rules.json"
-            "$<TARGET_FILE_DIR:GRIM>/nlp_rules.json"
+endif()
+
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/synonyms.json")
+  file(WRITE "${CMAKE_BINARY_DIR}/synonyms.json" "{}\n")
+endif()
+
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/app_aliases.json")
+  file(WRITE "${CMAKE_BINARY_DIR}/app_aliases.json" "{}\n")
+endif()
+
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/ai_config.json")
+  file(WRITE "${CMAKE_BINARY_DIR}/ai_config.json"
+    "{\n  \"backend\": \"auto\",\n  \"ollama_url\": \"http://127.0.0.1:11434\",\n  \"localai_url\": \"http://127.0.0.1:8080/v1\"\n}\n"
   )
 endif()
 
-set(GRIM_SYNONYMS_SRC "${CMAKE_SOURCE_DIR}/synonyms.json")
-if(EXISTS "${GRIM_SYNONYMS_SRC}")
-  add_custom_command(TARGET GRIM POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${GRIM_SYNONYMS_SRC}"
-            "$<TARGET_FILE_DIR:GRIM>/synonyms.json"
-  )
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/memory.json")
+  file(WRITE "${CMAKE_BINARY_DIR}/memory.json" "{}\n")
 endif()
 
-set(GRIM_ALIASES_SRC "${CMAKE_SOURCE_DIR}/app_aliases.json")
-if(EXISTS "${GRIM_ALIASES_SRC}")
+foreach(FILE ${GRIM_RESOURCES})
+  if(EXISTS "${CMAKE_SOURCE_DIR}/${FILE}")
+    set(SRC_FILE "${CMAKE_SOURCE_DIR}/${FILE}")
+  else()
+    set(SRC_FILE "${CMAKE_BINARY_DIR}/${FILE}")
+  endif()
   add_custom_command(TARGET GRIM POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${GRIM_ALIASES_SRC}"
-            "$<TARGET_FILE_DIR:GRIM>/app_aliases.json"
+            "${SRC_FILE}"
+            "$<TARGET_FILE_DIR:GRIM>/${FILE}"
   )
-endif()
+endforeach()
 
+# ---- Fonts ----
 set(GRIM_FONT_SRC "")
 if(EXISTS "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")
   set(GRIM_FONT_SRC "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")
@@ -143,6 +156,34 @@ if(GRIM_FONT_SRC)
   )
 endif()
 
+# ---- Whisper model (pre-download) ----
+set(WHISPER_MODEL_DIR "${CMAKE_SOURCE_DIR}/whisper.cpp/models")
+set(WHISPER_MODEL_FILE "${WHISPER_MODEL_DIR}/ggml-small.bin")
+
+if(NOT EXISTS "${WHISPER_MODEL_FILE}")
+  message(STATUS "Whisper model not found, will attempt to download at build time.")
+
+  file(MAKE_DIRECTORY "${WHISPER_MODEL_DIR}")
+
+  add_custom_command(
+    OUTPUT "${WHISPER_MODEL_FILE}"
+    COMMAND ${CMAKE_COMMAND} -E echo "Downloading Whisper model (ggml-small.bin)..."
+    COMMAND curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
+            -o "${WHISPER_MODEL_FILE}"
+    COMMENT "Fetching Whisper model"
+    VERBATIM
+  )
+
+  add_custom_target(fetch_whisper_model ALL
+    DEPENDS "${WHISPER_MODEL_FILE}"
+  )
+
+  add_dependencies(GRIM fetch_whisper_model)
+else()
+  message(STATUS "Whisper model already exists: ${WHISPER_MODEL_FILE}")
+endif()
+
+# ---- Resources folder ----
 if(EXISTS "${CMAKE_SOURCE_DIR}/resources")
   add_custom_target(copy_resources ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -153,14 +194,15 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/resources")
 endif()
 
 # ---- Install rules ----
-
 install(TARGETS GRIM
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-foreach(FILE nlp_rules.json synonyms.json app_aliases.json)
+foreach(FILE ${GRIM_RESOURCES})
   if(EXISTS "${CMAKE_SOURCE_DIR}/${FILE}")
     install(FILES "${CMAKE_SOURCE_DIR}/${FILE}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim)
+  else()
+    install(FILES "${CMAKE_BINARY_DIR}/${FILE}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim)
   endif()
 endforeach()
 
@@ -170,4 +212,8 @@ endif()
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/resources")
   install(DIRECTORY "${CMAKE_SOURCE_DIR}/resources" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim)
+endif()
+
+if(EXISTS "${WHISPER_MODEL_FILE}")
+  install(FILES "${WHISPER_MODEL_FILE}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim/models)
 endif()

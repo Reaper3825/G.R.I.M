@@ -18,10 +18,12 @@ void loadMemory() {
         } catch (const std::exception& e) {
             std::cerr << "[Memory] Failed to parse memory.json: " << e.what() << "\n";
             longTermMemory = nlohmann::json::object();
+            saveMemory();
         }
     } else {
-        std::cerr << "[Memory] No memory.json found. Starting fresh.\n";
+        std::cerr << "[Memory] No memory.json found. Creating new file.\n";
         longTermMemory = nlohmann::json::object();
+        saveMemory();
     }
 }
 
@@ -41,8 +43,17 @@ void saveMemory() {
 void loadAIConfig(const std::string& filename) {
     std::ifstream f(filename);
     if (!f.is_open()) {
-        std::cerr << "[Config] No " << filename << " found, using defaults.\n";
-        aiConfig = nlohmann::json::object();
+        std::cerr << "[Config] No " << filename << " found, creating defaults.\n";
+        aiConfig = {
+            {"backend", "auto"},
+            {"ollama_url", "http://127.0.0.1:11434"},
+            {"localai_url", "http://127.0.0.1:8080/v1"}
+        };
+        std::ofstream out(filename);
+        if (out) {
+            out << aiConfig.dump(2);
+            std::cerr << "[Config] Default " << filename << " created.\n";
+        }
         return;
     }
 
@@ -51,7 +62,11 @@ void loadAIConfig(const std::string& filename) {
         std::cout << "[Config] AI config loaded successfully from " << filename << "\n";
     } catch (const std::exception& e) {
         std::cerr << "[Config] Error parsing " << filename << ": " << e.what() << std::endl;
-        aiConfig = nlohmann::json::object();
+        aiConfig = {
+            {"backend", "auto"},
+            {"ollama_url", "http://127.0.0.1:11434"},
+            {"localai_url", "http://127.0.0.1:8080/v1"}
+        };
     }
 }
 
@@ -75,11 +90,15 @@ std::string resolveBackendURL() {
 #endif
     }
 
+    std::string url;
     if (backend == "ollama") {
-        return aiConfig.value("ollama_url", "http://127.0.0.1:11434");
+        url = aiConfig.value("ollama_url", "http://127.0.0.1:11434");
     } else {
-        return aiConfig.value("localai_url", "http://127.0.0.1:8080/v1");
+        url = aiConfig.value("localai_url", "http://127.0.0.1:8080/v1");
     }
+
+    std::cout << "[Config] Using backend: " << backend << " (" << url << ")\n";
+    return url;
 }
 
 // ---------------- Core AI call ----------------
@@ -105,6 +124,9 @@ std::string callAI(const std::string& prompt) {
         // Ollama
         endpoint = url + "/api/generate";
     }
+
+    std::cout << "[AI] Sending prompt to " << endpoint << " using model "
+              << body["model"] << "\n";
 
     cpr::Response r = cpr::Post(
         cpr::Url{endpoint},
