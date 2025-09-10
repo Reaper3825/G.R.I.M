@@ -4,7 +4,7 @@
 #include <filesystem>
 #include <nlohmann/json.hpp>
 
-#include "NLP.hpp"
+#include "nlp.hpp"
 #include "console_history.hpp"
 #include "timer.hpp"
 
