@@ -1,5 +1,7 @@
 #include "resources.hpp"
 #include "console_history.hpp"
+#include "./resources.hpp"
+
 
 #include <filesystem>
 #include <fstream>
