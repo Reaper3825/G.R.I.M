@@ -26,17 +26,12 @@ std::string getResourcePath() {
 #endif
     return (exePath / "resources").string();
 #else
-    // Installed mode: use system data directory set by CMake
-    return std::string(GRIM_DATA_DIR) + "/resources";
-#endif
-}
-
-std::string getResourcePath() {
+    // Default: look in executable’s parent folder/resources
     fs::path exePath = fs::canonical("/proc/self/exe").parent_path();
     fs::path resPath = exePath.parent_path() / "resources";
     return resPath.string();
+#endif
 }
-
 
 std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* history) {
     fs::path resDir = getResourcePath();
