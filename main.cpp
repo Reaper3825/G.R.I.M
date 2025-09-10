@@ -18,6 +18,8 @@
 #include "ui_helpers.hpp"
 #include "ui_draw.hpp"
 #include "ui_events.hpp"
+#include "bootstrap.hpp"
+
 
 #ifdef _WIN32
 #include <windows.h>
@@ -33,6 +35,9 @@ int main(int argc, char** argv) {
 
 // --- Load AI config ---
 loadAIConfig("ai_config.json");
+
+// --- Bootstrap check ---
+runBootstrapChecks(argc, argv);
 
 
     // --- NLP setup ---
