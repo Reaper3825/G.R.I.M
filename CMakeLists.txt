@@ -98,7 +98,8 @@ target_include_directories(voice PRIVATE
     ${CMAKE_SOURCE_DIR}/external/whisper.cpp
     ${PORTAUDIO_INCLUDE_DIR}
 )
-target_link_libraries(voice PRIVATE whisper cpr::cpr ${PORTAUDIO_LIBRARY})
+target_link_libraries(voice PRIVATE whisper ${PORTAUDIO_LIBRARY})
+
 
 # ---- Compile-time resource paths ----
 include(GNUInstallDirs)
