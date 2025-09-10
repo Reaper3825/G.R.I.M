@@ -1,0 +1,144 @@
+[
+  {
+    "intent": "open_app",
+    "description": "Open a local application by name",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+|can you\\s+)?(open|launch|start|run)\\s+(?:up\\s+)?(.+)$",
+    "slot_names": ["verb","app"],
+    "score_boost": 0.3,
+    "case_insensitive": true
+  },
+
+  {
+    "intent": "search_web",
+    "description": "Search the web for a query",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+|can you\\s+)?(google|search|look up|find)\\s+(.+)$",
+    "slot_names": ["verb","query"],
+    "score_boost": 0.25,
+    "case_insensitive": true
+  },
+
+  {
+    "intent": "set_timer",
+    "description": "Set a timer or alarm with time units",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+|can you\\s+)?(?:set|start)?\\s*(?:a\\s+)?(timer|alarm)(?:\\s+for)?\\s+(\\d+)\\s*(seconds?|second|s|minutes?|mins?|min|m|hours?|hour|h|hr)\\b",
+    "slot_names": ["type","value","unit"],
+    "score_boost": 0.3,
+    "case_insensitive": true
+  },
+
+  {
+    "intent": "clean",
+    "description": "Clean directory by preview, confirm, or purge",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?clean(?:\\s+(\\w+))?$",
+    "slot_names": ["target"],
+    "case_insensitive": true
+  },
+
+  {
+    "intent": "show_help",
+    "description": "Show available commands",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|can you\\s+|please\\s+)?(help|commands|what can you do)$",
+    "slot_names": ["verb"],
+    "score_boost": 0.25,
+    "case_insensitive": true
+  },
+
+  {
+    "intent": "show_pwd",
+    "description": "Show the current working directory",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(pwd|print working directory|where am i)$",
+    "slot_names": ["verb"],
+    "score_boost": 0.25,
+    "case_insensitive": true
+  },
+
+  {
+    "intent": "change_dir",
+    "description": "Change current directory",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(cd)\\s+(.+)$",
+    "slot_names": ["verb", "path"],
+    "score_boost": 0.3,
+    "case_insensitive": true
+  },
+
+  {
+    "intent": "list_dir",
+    "description": "List files in the current directory",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(ls|list|dir|show files)$",
+    "slot_names": ["verb"],
+    "score_boost": 0.2,
+    "case_insensitive": true
+  },
+
+  {
+    "intent": "make_dir",
+    "description": "Create a new directory",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(mkdir|make dir|create dir)\\s+(.+)$",
+    "slot_names": ["verb", "dirname"],
+    "score_boost": 0.3,
+    "case_insensitive": true
+  },
+
+  {
+    "intent": "remove_file",
+    "description": "Remove a file or directory",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(rm|delete|remove)\\s+(.+)$",
+    "slot_names": ["verb", "target"],
+    "score_boost": 0.3,
+    "case_insensitive": true
+  },
+
+  {
+    "intent": "reload_nlp",
+    "description": "Reload NLP rules from file",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(reloadnlp|reload nlp)$",
+    "slot_names": ["verb"],
+    "score_boost": 0.25,
+    "case_insensitive": true
+  },
+
+  {
+  "intent": "open_app",
+  "description": "Open a local application by name",
+  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+|can you\\s+|could you\\s+)?(?:please\\s+|can you\\s+|could you\\s+)?(open|launch|start|run)\\s+(?:up\\s+)?(.+)$",
+  "slot_names": ["verb","app"],
+  "score_boost": 0.35,
+  "case_insensitive": true
+},
+
+  {
+    "intent": "remember",
+    "description": "Store a fact in GRIM's long-term memory",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?remember\\s+(.+?)\\s+is\\s+(.+)$",
+    "slot_names": ["key", "value"],
+    "case_insensitive": true
+  },
+
+  {
+    "intent": "recall",
+    "description": "Recall memory",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:what(?:'s|s| is)?|recall)\\s+(.+)$",
+    "slot_names": ["key"],
+    "score_boost": 0.3,
+    "case_insensitive": true
+  },
+
+  {
+    "intent": "forget",
+    "description": "Forget a stored memory",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:forget|remove|delete)\\s+(.+)$",
+    "slot_names": ["key"],
+    "score_boost": 0.3,
+    "case_insensitive": true
+  },
+  
+{
+  "intent": "system_info",
+  "description": "Show system hardware and usage information",
+  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(system info|system status|show system|system)$",
+  "slot_names": ["verb"],
+  "score_boost": 0.3,
+  "case_insensitive": true
+}
+
+]
