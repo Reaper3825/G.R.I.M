@@ -33,7 +33,7 @@ set(GRIM_SOURCES
     ui_helpers.cpp
     ui_draw.cpp
     ui_events.cpp
-    resource.cpp
+    resources.cpp
 )
 
 set(GRIM_HEADERS
@@ -49,7 +49,7 @@ set(GRIM_HEADERS
     ui_draw.hpp
     ui_events.hpp
     timer.hpp
-    resource.hpp
+    resources.hpp
 )
 
 add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
