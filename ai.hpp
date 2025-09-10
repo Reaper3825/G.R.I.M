@@ -8,6 +8,7 @@ extern nlohmann::json longTermMemory;
 // Persistence functions
 void loadMemory();
 void saveMemory();
+void loadAIConfig();
 
 // Core AI call
 std::string callAI(const std::string& prompt);

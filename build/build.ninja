@@ -39,7 +39,7 @@ include CMakeFiles/rules.ninja
 #############################################
 # Logical path to working directory; prefix for absolute paths.
 
-cmake_ninja_workdir = D$:/GRIM/G.R.I.M/build/
+cmake_ninja_workdir = D$:/G.R.I.M/build/
 # =============================================================================
 # Object build statements for EXECUTABLE target GRIM
 
@@ -49,113 +49,137 @@ cmake_ninja_workdir = D$:/GRIM/G.R.I.M/build/
 
 build cmake_object_order_depends_target_GRIM: phony || copy_resources
 
-build CMakeFiles/GRIM.dir/main.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/GRIM/G.R.I.M/main.cpp || cmake_object_order_depends_target_GRIM
+build CMakeFiles/GRIM.dir/main.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/G.R.I.M/main.cpp || cmake_object_order_depends_target_GRIM
   CONFIG = Release
   DEFINES = -DGRIM_PORTABLE_ONLY=1
   DEP_FILE = CMakeFiles\GRIM.dir\main.cpp.obj.d
   FLAGS = -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wpedantic
-  INCLUDES = -ID:/GRIM/G.R.I.M
+  INCLUDES = -IC:/msys64/mingw64/include/freetype2 -IC:/msys64/mingw64/include/libpng16 -IC:/msys64/mingw64/include/harfbuzz -IC:/msys64/mingw64/include/glib-2.0 -IC:/msys64/mingw64/lib/glib-2.0/include -I/usr/local/include -ID:/G.R.I.M
   OBJECT_DIR = CMakeFiles\GRIM.dir
   OBJECT_FILE_DIR = CMakeFiles\GRIM.dir
+  TARGET_COMPILE_PDB = CMakeFiles\GRIM.dir\
+  TARGET_PDB = GRIM.pdb
 
-build CMakeFiles/GRIM.dir/commands.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/GRIM/G.R.I.M/commands.cpp || cmake_object_order_depends_target_GRIM
+build CMakeFiles/GRIM.dir/commands.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/G.R.I.M/commands.cpp || cmake_object_order_depends_target_GRIM
   CONFIG = Release
   DEFINES = -DGRIM_PORTABLE_ONLY=1
   DEP_FILE = CMakeFiles\GRIM.dir\commands.cpp.obj.d
   FLAGS = -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wpedantic
-  INCLUDES = -ID:/GRIM/G.R.I.M
+  INCLUDES = -IC:/msys64/mingw64/include/freetype2 -IC:/msys64/mingw64/include/libpng16 -IC:/msys64/mingw64/include/harfbuzz -IC:/msys64/mingw64/include/glib-2.0 -IC:/msys64/mingw64/lib/glib-2.0/include -I/usr/local/include -ID:/G.R.I.M
   OBJECT_DIR = CMakeFiles\GRIM.dir
   OBJECT_FILE_DIR = CMakeFiles\GRIM.dir
+  TARGET_COMPILE_PDB = CMakeFiles\GRIM.dir\
+  TARGET_PDB = GRIM.pdb
 
-build CMakeFiles/GRIM.dir/nlp.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/GRIM/G.R.I.M/nlp.cpp || cmake_object_order_depends_target_GRIM
+build CMakeFiles/GRIM.dir/nlp.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/G.R.I.M/nlp.cpp || cmake_object_order_depends_target_GRIM
   CONFIG = Release
   DEFINES = -DGRIM_PORTABLE_ONLY=1
   DEP_FILE = CMakeFiles\GRIM.dir\nlp.cpp.obj.d
   FLAGS = -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wpedantic
-  INCLUDES = -ID:/GRIM/G.R.I.M
+  INCLUDES = -IC:/msys64/mingw64/include/freetype2 -IC:/msys64/mingw64/include/libpng16 -IC:/msys64/mingw64/include/harfbuzz -IC:/msys64/mingw64/include/glib-2.0 -IC:/msys64/mingw64/lib/glib-2.0/include -I/usr/local/include -ID:/G.R.I.M
   OBJECT_DIR = CMakeFiles\GRIM.dir
   OBJECT_FILE_DIR = CMakeFiles\GRIM.dir
+  TARGET_COMPILE_PDB = CMakeFiles\GRIM.dir\
+  TARGET_PDB = GRIM.pdb
 
-build CMakeFiles/GRIM.dir/nlp_rules.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/GRIM/G.R.I.M/nlp_rules.cpp || cmake_object_order_depends_target_GRIM
+build CMakeFiles/GRIM.dir/nlp_rules.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/G.R.I.M/nlp_rules.cpp || cmake_object_order_depends_target_GRIM
   CONFIG = Release
   DEFINES = -DGRIM_PORTABLE_ONLY=1
   DEP_FILE = CMakeFiles\GRIM.dir\nlp_rules.cpp.obj.d
   FLAGS = -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wpedantic
-  INCLUDES = -ID:/GRIM/G.R.I.M
+  INCLUDES = -IC:/msys64/mingw64/include/freetype2 -IC:/msys64/mingw64/include/libpng16 -IC:/msys64/mingw64/include/harfbuzz -IC:/msys64/mingw64/include/glib-2.0 -IC:/msys64/mingw64/lib/glib-2.0/include -I/usr/local/include -ID:/G.R.I.M
   OBJECT_DIR = CMakeFiles\GRIM.dir
   OBJECT_FILE_DIR = CMakeFiles\GRIM.dir
+  TARGET_COMPILE_PDB = CMakeFiles\GRIM.dir\
+  TARGET_PDB = GRIM.pdb
 
-build CMakeFiles/GRIM.dir/ai.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/GRIM/G.R.I.M/ai.cpp || cmake_object_order_depends_target_GRIM
+build CMakeFiles/GRIM.dir/ai.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/G.R.I.M/ai.cpp || cmake_object_order_depends_target_GRIM
   CONFIG = Release
   DEFINES = -DGRIM_PORTABLE_ONLY=1
   DEP_FILE = CMakeFiles\GRIM.dir\ai.cpp.obj.d
   FLAGS = -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wpedantic
-  INCLUDES = -ID:/GRIM/G.R.I.M
+  INCLUDES = -IC:/msys64/mingw64/include/freetype2 -IC:/msys64/mingw64/include/libpng16 -IC:/msys64/mingw64/include/harfbuzz -IC:/msys64/mingw64/include/glib-2.0 -IC:/msys64/mingw64/lib/glib-2.0/include -I/usr/local/include -ID:/G.R.I.M
   OBJECT_DIR = CMakeFiles\GRIM.dir
   OBJECT_FILE_DIR = CMakeFiles\GRIM.dir
+  TARGET_COMPILE_PDB = CMakeFiles\GRIM.dir\
+  TARGET_PDB = GRIM.pdb
 
-build CMakeFiles/GRIM.dir/synonyms.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/GRIM/G.R.I.M/synonyms.cpp || cmake_object_order_depends_target_GRIM
+build CMakeFiles/GRIM.dir/synonyms.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/G.R.I.M/synonyms.cpp || cmake_object_order_depends_target_GRIM
   CONFIG = Release
   DEFINES = -DGRIM_PORTABLE_ONLY=1
   DEP_FILE = CMakeFiles\GRIM.dir\synonyms.cpp.obj.d
   FLAGS = -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wpedantic
-  INCLUDES = -ID:/GRIM/G.R.I.M
+  INCLUDES = -IC:/msys64/mingw64/include/freetype2 -IC:/msys64/mingw64/include/libpng16 -IC:/msys64/mingw64/include/harfbuzz -IC:/msys64/mingw64/include/glib-2.0 -IC:/msys64/mingw64/lib/glib-2.0/include -I/usr/local/include -ID:/G.R.I.M
   OBJECT_DIR = CMakeFiles\GRIM.dir
   OBJECT_FILE_DIR = CMakeFiles\GRIM.dir
+  TARGET_COMPILE_PDB = CMakeFiles\GRIM.dir\
+  TARGET_PDB = GRIM.pdb
 
-build CMakeFiles/GRIM.dir/aliases.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/GRIM/G.R.I.M/aliases.cpp || cmake_object_order_depends_target_GRIM
+build CMakeFiles/GRIM.dir/aliases.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/G.R.I.M/aliases.cpp || cmake_object_order_depends_target_GRIM
   CONFIG = Release
   DEFINES = -DGRIM_PORTABLE_ONLY=1
   DEP_FILE = CMakeFiles\GRIM.dir\aliases.cpp.obj.d
   FLAGS = -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wpedantic
-  INCLUDES = -ID:/GRIM/G.R.I.M
+  INCLUDES = -IC:/msys64/mingw64/include/freetype2 -IC:/msys64/mingw64/include/libpng16 -IC:/msys64/mingw64/include/harfbuzz -IC:/msys64/mingw64/include/glib-2.0 -IC:/msys64/mingw64/lib/glib-2.0/include -I/usr/local/include -ID:/G.R.I.M
   OBJECT_DIR = CMakeFiles\GRIM.dir
   OBJECT_FILE_DIR = CMakeFiles\GRIM.dir
+  TARGET_COMPILE_PDB = CMakeFiles\GRIM.dir\
+  TARGET_PDB = GRIM.pdb
 
-build CMakeFiles/GRIM.dir/console_history.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/GRIM/G.R.I.M/console_history.cpp || cmake_object_order_depends_target_GRIM
+build CMakeFiles/GRIM.dir/console_history.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/G.R.I.M/console_history.cpp || cmake_object_order_depends_target_GRIM
   CONFIG = Release
   DEFINES = -DGRIM_PORTABLE_ONLY=1
   DEP_FILE = CMakeFiles\GRIM.dir\console_history.cpp.obj.d
   FLAGS = -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wpedantic
-  INCLUDES = -ID:/GRIM/G.R.I.M
+  INCLUDES = -IC:/msys64/mingw64/include/freetype2 -IC:/msys64/mingw64/include/libpng16 -IC:/msys64/mingw64/include/harfbuzz -IC:/msys64/mingw64/include/glib-2.0 -IC:/msys64/mingw64/lib/glib-2.0/include -I/usr/local/include -ID:/G.R.I.M
   OBJECT_DIR = CMakeFiles\GRIM.dir
   OBJECT_FILE_DIR = CMakeFiles\GRIM.dir
+  TARGET_COMPILE_PDB = CMakeFiles\GRIM.dir\
+  TARGET_PDB = GRIM.pdb
 
-build CMakeFiles/GRIM.dir/resources.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/GRIM/G.R.I.M/resources.cpp || cmake_object_order_depends_target_GRIM
+build CMakeFiles/GRIM.dir/resources.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/G.R.I.M/resources.cpp || cmake_object_order_depends_target_GRIM
   CONFIG = Release
   DEFINES = -DGRIM_PORTABLE_ONLY=1
   DEP_FILE = CMakeFiles\GRIM.dir\resources.cpp.obj.d
   FLAGS = -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wpedantic
-  INCLUDES = -ID:/GRIM/G.R.I.M
+  INCLUDES = -IC:/msys64/mingw64/include/freetype2 -IC:/msys64/mingw64/include/libpng16 -IC:/msys64/mingw64/include/harfbuzz -IC:/msys64/mingw64/include/glib-2.0 -IC:/msys64/mingw64/lib/glib-2.0/include -I/usr/local/include -ID:/G.R.I.M
   OBJECT_DIR = CMakeFiles\GRIM.dir
   OBJECT_FILE_DIR = CMakeFiles\GRIM.dir
+  TARGET_COMPILE_PDB = CMakeFiles\GRIM.dir\
+  TARGET_PDB = GRIM.pdb
 
-build CMakeFiles/GRIM.dir/ui_helpers.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/GRIM/G.R.I.M/ui_helpers.cpp || cmake_object_order_depends_target_GRIM
+build CMakeFiles/GRIM.dir/ui_helpers.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/G.R.I.M/ui_helpers.cpp || cmake_object_order_depends_target_GRIM
   CONFIG = Release
   DEFINES = -DGRIM_PORTABLE_ONLY=1
   DEP_FILE = CMakeFiles\GRIM.dir\ui_helpers.cpp.obj.d
   FLAGS = -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wpedantic
-  INCLUDES = -ID:/GRIM/G.R.I.M
+  INCLUDES = -IC:/msys64/mingw64/include/freetype2 -IC:/msys64/mingw64/include/libpng16 -IC:/msys64/mingw64/include/harfbuzz -IC:/msys64/mingw64/include/glib-2.0 -IC:/msys64/mingw64/lib/glib-2.0/include -I/usr/local/include -ID:/G.R.I.M
   OBJECT_DIR = CMakeFiles\GRIM.dir
   OBJECT_FILE_DIR = CMakeFiles\GRIM.dir
+  TARGET_COMPILE_PDB = CMakeFiles\GRIM.dir\
+  TARGET_PDB = GRIM.pdb
 
-build CMakeFiles/GRIM.dir/ui_draw.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/GRIM/G.R.I.M/ui_draw.cpp || cmake_object_order_depends_target_GRIM
+build CMakeFiles/GRIM.dir/ui_draw.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/G.R.I.M/ui_draw.cpp || cmake_object_order_depends_target_GRIM
   CONFIG = Release
   DEFINES = -DGRIM_PORTABLE_ONLY=1
   DEP_FILE = CMakeFiles\GRIM.dir\ui_draw.cpp.obj.d
   FLAGS = -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wpedantic
-  INCLUDES = -ID:/GRIM/G.R.I.M
+  INCLUDES = -IC:/msys64/mingw64/include/freetype2 -IC:/msys64/mingw64/include/libpng16 -IC:/msys64/mingw64/include/harfbuzz -IC:/msys64/mingw64/include/glib-2.0 -IC:/msys64/mingw64/lib/glib-2.0/include -I/usr/local/include -ID:/G.R.I.M
   OBJECT_DIR = CMakeFiles\GRIM.dir
   OBJECT_FILE_DIR = CMakeFiles\GRIM.dir
+  TARGET_COMPILE_PDB = CMakeFiles\GRIM.dir\
+  TARGET_PDB = GRIM.pdb
 
-build CMakeFiles/GRIM.dir/ui_events.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/GRIM/G.R.I.M/ui_events.cpp || cmake_object_order_depends_target_GRIM
+build CMakeFiles/GRIM.dir/ui_events.cpp.obj: CXX_COMPILER__GRIM_unscanned_Release D$:/G.R.I.M/ui_events.cpp || cmake_object_order_depends_target_GRIM
   CONFIG = Release
   DEFINES = -DGRIM_PORTABLE_ONLY=1
   DEP_FILE = CMakeFiles\GRIM.dir\ui_events.cpp.obj.d
   FLAGS = -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wpedantic
-  INCLUDES = -ID:/GRIM/G.R.I.M
+  INCLUDES = -IC:/msys64/mingw64/include/freetype2 -IC:/msys64/mingw64/include/libpng16 -IC:/msys64/mingw64/include/harfbuzz -IC:/msys64/mingw64/include/glib-2.0 -IC:/msys64/mingw64/lib/glib-2.0/include -I/usr/local/include -ID:/G.R.I.M
   OBJECT_DIR = CMakeFiles\GRIM.dir
   OBJECT_FILE_DIR = CMakeFiles\GRIM.dir
+  TARGET_COMPILE_PDB = CMakeFiles\GRIM.dir\
+  TARGET_PDB = GRIM.pdb
 
 
 # =============================================================================
@@ -165,16 +189,17 @@ build CMakeFiles/GRIM.dir/ui_events.cpp.obj: CXX_COMPILER__GRIM_unscanned_Releas
 #############################################
 # Link the executable GRIM.exe
 
-build GRIM.exe: CXX_EXECUTABLE_LINKER__GRIM_Release CMakeFiles/GRIM.dir/main.cpp.obj CMakeFiles/GRIM.dir/commands.cpp.obj CMakeFiles/GRIM.dir/nlp.cpp.obj CMakeFiles/GRIM.dir/nlp_rules.cpp.obj CMakeFiles/GRIM.dir/ai.cpp.obj CMakeFiles/GRIM.dir/synonyms.cpp.obj CMakeFiles/GRIM.dir/aliases.cpp.obj CMakeFiles/GRIM.dir/console_history.cpp.obj CMakeFiles/GRIM.dir/resources.cpp.obj CMakeFiles/GRIM.dir/ui_helpers.cpp.obj CMakeFiles/GRIM.dir/ui_draw.cpp.obj CMakeFiles/GRIM.dir/ui_events.cpp.obj | C$:/msys64/mingw64/lib/libsfml-graphics.dll.a C$:/msys64/mingw64/lib/libsfml-window.dll.a C$:/msys64/mingw64/lib/libsfml-system.dll.a C$:/msys64/mingw64/lib/libcpr.dll.a C$:/msys64/mingw64/lib/libcurl.dll.a || copy_resources
+build GRIM.exe: CXX_EXECUTABLE_LINKER__GRIM_Release CMakeFiles/GRIM.dir/main.cpp.obj CMakeFiles/GRIM.dir/commands.cpp.obj CMakeFiles/GRIM.dir/nlp.cpp.obj CMakeFiles/GRIM.dir/nlp_rules.cpp.obj CMakeFiles/GRIM.dir/ai.cpp.obj CMakeFiles/GRIM.dir/synonyms.cpp.obj CMakeFiles/GRIM.dir/aliases.cpp.obj CMakeFiles/GRIM.dir/console_history.cpp.obj CMakeFiles/GRIM.dir/resources.cpp.obj CMakeFiles/GRIM.dir/ui_helpers.cpp.obj CMakeFiles/GRIM.dir/ui_draw.cpp.obj CMakeFiles/GRIM.dir/ui_events.cpp.obj || copy_resources
   CONFIG = Release
   FLAGS = -O3 -DNDEBUG
-  LINK_LIBRARIES = C:/msys64/mingw64/lib/libsfml-graphics.dll.a  C:/msys64/mingw64/lib/libsfml-window.dll.a  C:/msys64/mingw64/lib/libsfml-system.dll.a  C:/msys64/mingw64/lib/libcpr.dll.a  C:/msys64/mingw64/lib/libcurl.dll.a  -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32
+  LINK_LIBRARIES = -lsfml-graphics  -lsfml-window  -lsfml-system  -lcpr  -lssl  -lcrypto  -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32
   OBJECT_DIR = CMakeFiles\GRIM.dir
-  POST_BUILD = C:\WINDOWS\system32\cmd.exe /C "cd /D D:\GRIM\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -E copy_if_different D:/GRIM/G.R.I.M/nlp_rules.json D:/GRIM/G.R.I.M/build/nlp_rules.json && cd /D D:\GRIM\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -E copy_if_different D:/GRIM/G.R.I.M/synonyms.json D:/GRIM/G.R.I.M/build/synonyms.json && cd /D D:\GRIM\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -E copy_if_different D:/GRIM/G.R.I.M/app_aliases.json D:/GRIM/G.R.I.M/build/app_aliases.json && cd /D D:\GRIM\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -E copy_if_different C:/Windows/Fonts/arial.ttf D:/GRIM/G.R.I.M/build/DejaVuSans.ttf"
+  POST_BUILD = C:\WINDOWS\system32\cmd.exe /C "cd /D D:\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -E copy_if_different D:/G.R.I.M/nlp_rules.json D:/G.R.I.M/build/nlp_rules.json && cd /D D:\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -E copy_if_different D:/G.R.I.M/synonyms.json D:/G.R.I.M/build/synonyms.json && cd /D D:\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -E copy_if_different D:/G.R.I.M/app_aliases.json D:/G.R.I.M/build/app_aliases.json && cd /D D:\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -E copy_if_different C:/Windows/Fonts/arial.ttf D:/G.R.I.M/build/DejaVuSans.ttf"
   PRE_LINK = cd .
+  TARGET_COMPILE_PDB = CMakeFiles\GRIM.dir\
   TARGET_FILE = GRIM.exe
   TARGET_IMPLIB = libGRIM.dll.a
-  TARGET_PDB = GRIM.exe.dbg
+  TARGET_PDB = GRIM.pdb
 
 
 #############################################
@@ -187,7 +212,7 @@ build copy_resources: phony CMakeFiles/copy_resources
 # Utility command for edit_cache
 
 build CMakeFiles/edit_cache.util: CUSTOM_COMMAND
-  COMMAND = C:\WINDOWS\system32\cmd.exe /C "cd /D D:\GRIM\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -E echo "No interactive CMake dialog available.""
+  COMMAND = C:\WINDOWS\system32\cmd.exe /C "cd /D D:\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -E echo "No interactive CMake dialog available.""
   DESC = No interactive CMake dialog available...
   restat = 1
 
@@ -198,7 +223,7 @@ build edit_cache: phony CMakeFiles/edit_cache.util
 # Utility command for rebuild_cache
 
 build CMakeFiles/rebuild_cache.util: CUSTOM_COMMAND
-  COMMAND = C:\WINDOWS\system32\cmd.exe /C "cd /D D:\GRIM\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe --regenerate-during-build -SD:\GRIM\G.R.I.M -BD:\GRIM\G.R.I.M\build"
+  COMMAND = C:\WINDOWS\system32\cmd.exe /C "cd /D D:\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe --regenerate-during-build -SD:\G.R.I.M -BD:\G.R.I.M\build"
   DESC = Running CMake to regenerate build system...
   pool = console
   restat = 1
@@ -216,7 +241,7 @@ build list_install_components: phony
 # Utility command for install
 
 build CMakeFiles/install.util: CUSTOM_COMMAND all
-  COMMAND = C:\WINDOWS\system32\cmd.exe /C "cd /D D:\GRIM\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -P cmake_install.cmake"
+  COMMAND = C:\WINDOWS\system32\cmd.exe /C "cd /D D:\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -P cmake_install.cmake"
   DESC = Install the project...
   pool = console
   restat = 1
@@ -228,7 +253,7 @@ build install: phony CMakeFiles/install.util
 # Utility command for install/local
 
 build CMakeFiles/install/local.util: CUSTOM_COMMAND all
-  COMMAND = C:\WINDOWS\system32\cmd.exe /C "cd /D D:\GRIM\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -DCMAKE_INSTALL_LOCAL_ONLY=1 -P cmake_install.cmake"
+  COMMAND = C:\WINDOWS\system32\cmd.exe /C "cd /D D:\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -DCMAKE_INSTALL_LOCAL_ONLY=1 -P cmake_install.cmake"
   DESC = Installing only the local directory...
   pool = console
   restat = 1
@@ -240,7 +265,7 @@ build install/local: phony CMakeFiles/install/local.util
 # Utility command for install/strip
 
 build CMakeFiles/install/strip.util: CUSTOM_COMMAND all
-  COMMAND = C:\WINDOWS\system32\cmd.exe /C "cd /D D:\GRIM\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -DCMAKE_INSTALL_DO_STRIP=1 -P cmake_install.cmake"
+  COMMAND = C:\WINDOWS\system32\cmd.exe /C "cd /D D:\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -DCMAKE_INSTALL_DO_STRIP=1 -P cmake_install.cmake"
   DESC = Installing the project stripped...
   pool = console
   restat = 1
@@ -252,7 +277,7 @@ build install/strip: phony CMakeFiles/install/strip.util
 # Custom command for CMakeFiles\copy_resources
 
 build CMakeFiles/copy_resources | ${cmake_ninja_workdir}CMakeFiles/copy_resources: CUSTOM_COMMAND
-  COMMAND = C:\WINDOWS\system32\cmd.exe /C "cd /D D:\GRIM\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -E copy_directory D:/GRIM/G.R.I.M/resources D:/GRIM/G.R.I.M/build/resources"
+  COMMAND = C:\WINDOWS\system32\cmd.exe /C "cd /D D:\G.R.I.M\build && C:\msys64\mingw64\bin\cmake.exe -E copy_directory D:/G.R.I.M/resources D:/G.R.I.M/build/resources"
 
 # =============================================================================
 # Target aliases.
@@ -265,7 +290,7 @@ build GRIM: phony GRIM.exe
 # =============================================================================
 
 #############################################
-# Folder: D:/GRIM/G.R.I.M/build
+# Folder: D:/G.R.I.M/build
 
 build all: phony GRIM.exe copy_resources
 
@@ -276,14 +301,14 @@ build all: phony GRIM.exe copy_resources
 #############################################
 # Re-run CMake if any of its inputs changed.
 
-build build.ninja D$:/GRIM/G.R.I.M/build/cmake_install.cmake: RERUN_CMAKE | C$:/msys64/mingw64/lib/cmake/CURL/CURLConfig.cmake C$:/msys64/mingw64/lib/cmake/CURL/CURLConfigVersion.cmake C$:/msys64/mingw64/lib/cmake/CURL/CURLTargets-release.cmake C$:/msys64/mingw64/lib/cmake/CURL/CURLTargets.cmake C$:/msys64/mingw64/lib/cmake/SFML/SFMLConfig.cmake C$:/msys64/mingw64/lib/cmake/SFML/SFMLConfigDependencies.cmake C$:/msys64/mingw64/lib/cmake/SFML/SFMLConfigVersion.cmake C$:/msys64/mingw64/lib/cmake/SFML/SFMLSharedTargets-release.cmake C$:/msys64/mingw64/lib/cmake/SFML/SFMLSharedTargets.cmake C$:/msys64/mingw64/lib/cmake/cpr/cprConfig.cmake C$:/msys64/mingw64/lib/cmake/cpr/cprConfigVersion.cmake C$:/msys64/mingw64/lib/cmake/cpr/cprTargets-release.cmake C$:/msys64/mingw64/lib/cmake/cpr/cprTargets.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeCXXInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeCommonLanguageInclude.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeFindDependencyMacro.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeGenericSystem.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeInitializeConfigs.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeLanguageInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeRCInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeSystemSpecificInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeSystemSpecificInitialize.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/CMakeCommonCompilerMacros.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/GNU-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/FindCURL.cmake C$:/msys64/mingw64/share/cmake/Modules/FindOpenSSL.cmake C$:/msys64/mingw64/share/cmake/Modules/FindPackageHandleStandardArgs.cmake C$:/msys64/mingw64/share/cmake/Modules/FindPackageMessage.cmake C$:/msys64/mingw64/share/cmake/Modules/FindZLIB.cmake C$:/msys64/mingw64/share/cmake/Modules/GNUInstallDirs.cmake C$:/msys64/mingw64/share/cmake/Modules/Internal/CMakeCXXLinkerInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/Internal/CMakeCommonLinkerInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/Linker/GNU-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Linker/GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Linker/GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Linker/Windows-GNU-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Linker/Windows-GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-GNU-CXX-ABI.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-GNU-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-Initialize.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-windres.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/WindowsPaths.cmake C$:/msys64/mingw64/share/cmake/Modules/SelectLibraryConfigurations.cmake CMakeCache.txt CMakeFiles/4.1.0/CMakeCXXCompiler.cmake CMakeFiles/4.1.0/CMakeRCCompiler.cmake CMakeFiles/4.1.0/CMakeSystem.cmake D$:/GRIM/G.R.I.M/CMakeLists.txt
+build build.ninja D$:/G.R.I.M/build/cmake_install.cmake: RERUN_CMAKE | C$:/msys64/mingw64/share/cmake/Modules/CMakeCXXCompiler.cmake.in C$:/msys64/mingw64/share/cmake/Modules/CMakeCXXCompilerABI.cpp C$:/msys64/mingw64/share/cmake/Modules/CMakeCXXInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeCommonLanguageInclude.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeCompilerIdDetection.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeDetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeDetermineCompilerABI.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeDetermineCompilerId.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeDetermineCompilerSupport.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeDetermineRCCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeDetermineSystem.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeFindBinUtils.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeGenericSystem.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeInitializeConfigs.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeLanguageInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeNinjaFindMake.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeParseImplicitIncludeInfo.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeParseImplicitLinkInfo.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeParseLibraryArchitecture.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeRCCompiler.cmake.in C$:/msys64/mingw64/share/cmake/Modules/CMakeRCInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeSystem.cmake.in C$:/msys64/mingw64/share/cmake/Modules/CMakeSystemSpecificInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeSystemSpecificInitialize.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeTestCXXCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeTestCompilerCommon.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeTestRCCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/ADSP-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/ARMCC-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/ARMClang-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/AppleClang-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Borland-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/CMakeCommonCompilerMacros.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Clang-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Clang-DetermineCompilerInternal.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Compaq-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Cray-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/CrayClang-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Diab-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Embarcadero-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Fujitsu-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/FujitsuClang-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/GHS-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/GNU-CXX-CXXImportStd.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/GNU-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/GNU-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/GNU-FindBinUtils.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/HP-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/IAR-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/IBMCPP-CXX-DetermineVersionInternal.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/IBMClang-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Intel-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/IntelLLVM-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/LCC-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/MSVC-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/NVHPC-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/NVIDIA-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/OpenWatcom-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/OrangeC-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/PGI-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/PathScale-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Renesas-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/SCO-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/SunPro-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/TI-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/TIClang-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Tasking-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/VisualAge-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Watcom-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/XL-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/XLClang-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/zOS-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/FindPackageHandleStandardArgs.cmake C$:/msys64/mingw64/share/cmake/Modules/FindPackageMessage.cmake C$:/msys64/mingw64/share/cmake/Modules/FindPkgConfig.cmake C$:/msys64/mingw64/share/cmake/Modules/GNUInstallDirs.cmake C$:/msys64/mingw64/share/cmake/Modules/Internal/CMakeCXXLinkerInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/Internal/CMakeCommonLinkerInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/Internal/CMakeDetermineLinkerId.cmake C$:/msys64/mingw64/share/cmake/Modules/Internal/CMakeInspectCXXLinker.cmake C$:/msys64/mingw64/share/cmake/Modules/Internal/FeatureTesting.cmake C$:/msys64/mingw64/share/cmake/Modules/Linker/GNU-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Linker/GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Linker/GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Linker/Windows-GNU-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Linker/Windows-GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-Determine-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-GNU-CXX-ABI.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-GNU-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-Initialize.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-windres.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/WindowsPaths.cmake CMakeCache.txt CMakeFiles/4.1.0/CMakeCXXCompiler.cmake CMakeFiles/4.1.0/CMakeRCCompiler.cmake CMakeFiles/4.1.0/CMakeSystem.cmake D$:/G.R.I.M/CMakeLists.txt
   pool = console
 
 
 #############################################
 # A missing CMake input file is not an error.
 
-build C$:/msys64/mingw64/lib/cmake/CURL/CURLConfig.cmake C$:/msys64/mingw64/lib/cmake/CURL/CURLConfigVersion.cmake C$:/msys64/mingw64/lib/cmake/CURL/CURLTargets-release.cmake C$:/msys64/mingw64/lib/cmake/CURL/CURLTargets.cmake C$:/msys64/mingw64/lib/cmake/SFML/SFMLConfig.cmake C$:/msys64/mingw64/lib/cmake/SFML/SFMLConfigDependencies.cmake C$:/msys64/mingw64/lib/cmake/SFML/SFMLConfigVersion.cmake C$:/msys64/mingw64/lib/cmake/SFML/SFMLSharedTargets-release.cmake C$:/msys64/mingw64/lib/cmake/SFML/SFMLSharedTargets.cmake C$:/msys64/mingw64/lib/cmake/cpr/cprConfig.cmake C$:/msys64/mingw64/lib/cmake/cpr/cprConfigVersion.cmake C$:/msys64/mingw64/lib/cmake/cpr/cprTargets-release.cmake C$:/msys64/mingw64/lib/cmake/cpr/cprTargets.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeCXXInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeCommonLanguageInclude.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeFindDependencyMacro.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeGenericSystem.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeInitializeConfigs.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeLanguageInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeRCInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeSystemSpecificInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeSystemSpecificInitialize.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/CMakeCommonCompilerMacros.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/GNU-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/FindCURL.cmake C$:/msys64/mingw64/share/cmake/Modules/FindOpenSSL.cmake C$:/msys64/mingw64/share/cmake/Modules/FindPackageHandleStandardArgs.cmake C$:/msys64/mingw64/share/cmake/Modules/FindPackageMessage.cmake C$:/msys64/mingw64/share/cmake/Modules/FindZLIB.cmake C$:/msys64/mingw64/share/cmake/Modules/GNUInstallDirs.cmake C$:/msys64/mingw64/share/cmake/Modules/Internal/CMakeCXXLinkerInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/Internal/CMakeCommonLinkerInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/Linker/GNU-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Linker/GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Linker/GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Linker/Windows-GNU-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Linker/Windows-GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-GNU-CXX-ABI.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-GNU-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-Initialize.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-windres.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/WindowsPaths.cmake C$:/msys64/mingw64/share/cmake/Modules/SelectLibraryConfigurations.cmake CMakeCache.txt CMakeFiles/4.1.0/CMakeCXXCompiler.cmake CMakeFiles/4.1.0/CMakeRCCompiler.cmake CMakeFiles/4.1.0/CMakeSystem.cmake D$:/GRIM/G.R.I.M/CMakeLists.txt: phony
+build C$:/msys64/mingw64/share/cmake/Modules/CMakeCXXCompiler.cmake.in C$:/msys64/mingw64/share/cmake/Modules/CMakeCXXCompilerABI.cpp C$:/msys64/mingw64/share/cmake/Modules/CMakeCXXInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeCommonLanguageInclude.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeCompilerIdDetection.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeDetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeDetermineCompilerABI.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeDetermineCompilerId.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeDetermineCompilerSupport.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeDetermineRCCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeDetermineSystem.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeFindBinUtils.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeGenericSystem.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeInitializeConfigs.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeLanguageInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeNinjaFindMake.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeParseImplicitIncludeInfo.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeParseImplicitLinkInfo.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeParseLibraryArchitecture.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeRCCompiler.cmake.in C$:/msys64/mingw64/share/cmake/Modules/CMakeRCInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeSystem.cmake.in C$:/msys64/mingw64/share/cmake/Modules/CMakeSystemSpecificInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeSystemSpecificInitialize.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeTestCXXCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeTestCompilerCommon.cmake C$:/msys64/mingw64/share/cmake/Modules/CMakeTestRCCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/ADSP-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/ARMCC-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/ARMClang-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/AppleClang-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Borland-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/CMakeCommonCompilerMacros.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Clang-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Clang-DetermineCompilerInternal.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Compaq-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Cray-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/CrayClang-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Diab-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Embarcadero-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Fujitsu-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/FujitsuClang-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/GHS-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/GNU-CXX-CXXImportStd.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/GNU-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/GNU-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/GNU-FindBinUtils.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/HP-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/IAR-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/IBMCPP-CXX-DetermineVersionInternal.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/IBMClang-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Intel-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/IntelLLVM-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/LCC-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/MSVC-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/NVHPC-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/NVIDIA-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/OpenWatcom-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/OrangeC-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/PGI-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/PathScale-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Renesas-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/SCO-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/SunPro-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/TI-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/TIClang-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Tasking-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/VisualAge-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/Watcom-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/XL-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/XLClang-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/Compiler/zOS-CXX-DetermineCompiler.cmake C$:/msys64/mingw64/share/cmake/Modules/FindPackageHandleStandardArgs.cmake C$:/msys64/mingw64/share/cmake/Modules/FindPackageMessage.cmake C$:/msys64/mingw64/share/cmake/Modules/FindPkgConfig.cmake C$:/msys64/mingw64/share/cmake/Modules/GNUInstallDirs.cmake C$:/msys64/mingw64/share/cmake/Modules/Internal/CMakeCXXLinkerInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/Internal/CMakeCommonLinkerInformation.cmake C$:/msys64/mingw64/share/cmake/Modules/Internal/CMakeDetermineLinkerId.cmake C$:/msys64/mingw64/share/cmake/Modules/Internal/CMakeInspectCXXLinker.cmake C$:/msys64/mingw64/share/cmake/Modules/Internal/FeatureTesting.cmake C$:/msys64/mingw64/share/cmake/Modules/Linker/GNU-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Linker/GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Linker/GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Linker/Windows-GNU-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Linker/Windows-GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-Determine-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-GNU-CXX-ABI.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-GNU-CXX.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-GNU.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-Initialize.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows-windres.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/Windows.cmake C$:/msys64/mingw64/share/cmake/Modules/Platform/WindowsPaths.cmake CMakeCache.txt CMakeFiles/4.1.0/CMakeCXXCompiler.cmake CMakeFiles/4.1.0/CMakeRCCompiler.cmake CMakeFiles/4.1.0/CMakeSystem.cmake D$:/G.R.I.M/CMakeLists.txt: phony
 
 
 #############################################
