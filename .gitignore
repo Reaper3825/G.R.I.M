@@ -56,4 +56,7 @@ memory.json
 resources/*.hpp
 resources/*.cpp
 
+#Ignore Cmake build outputs
+build/
+
 
