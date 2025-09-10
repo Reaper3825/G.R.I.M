@@ -17,14 +17,14 @@ else()
 endif()
 
 # ---- Portable mode option ----
-option(GRIM_PORTABLE "Enable portable mode (resources next to exe)" ON)
+option(GRIM_PORTABLE_ONLY "Force resources to live next to executable" OFF)
 
 # ---- Sources ----
 set(GRIM_SOURCES
     main.cpp
     ai.cpp
     bootstrap.cpp
-    resources.cpp 
+    resources.cpp
     commands.cpp
     nlp.cpp
     nlp_rules.cpp
@@ -60,8 +60,8 @@ add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SFML REQUIRED sfml-graphics sfml-window sfml-system)
 
-include_directories(${SFML_INCLUDE_DIRS})
-link_directories(${SFML_LIBRARY_DIRS})
+target_include_directories(GRIM PRIVATE ${SFML_INCLUDE_DIRS})
+target_link_directories(GRIM PRIVATE ${SFML_LIBRARY_DIRS})
 target_link_libraries(GRIM PRIVATE ${SFML_LIBRARIES})
 
 # CPR (try find_package first, fallback to /usr/local)
@@ -70,8 +70,8 @@ if(cpr_FOUND)
   target_link_libraries(GRIM PRIVATE cpr::cpr)
 else()
   message(WARNING "cpr not found via find_package, falling back to /usr/local")
-  include_directories(/usr/local/include)
-  link_directories(/usr/local/lib)
+  target_include_directories(GRIM PRIVATE /usr/local/include)
+  target_link_directories(GRIM PRIVATE /usr/local/lib)
   target_link_libraries(GRIM PRIVATE cpr ssl crypto)
 endif()
 
@@ -80,7 +80,7 @@ target_include_directories(GRIM PRIVATE ${CMAKE_SOURCE_DIR})
 # ---- Compile-time resource paths ----
 include(GNUInstallDirs)
 
-if(GRIM_PORTABLE)
+if(GRIM_PORTABLE_ONLY)
   target_compile_definitions(GRIM PRIVATE GRIM_PORTABLE_ONLY=1)
 else()
   set(GRIM_DATADIR "${CMAKE_INSTALL_FULL_DATADIR}/grim")
@@ -96,7 +96,7 @@ set(GRIM_RESOURCES
     memory.json
 )
 
-# Default JSON contents (fallbacks written into build dir if missing)
+# Default JSONs if missing
 if(NOT EXISTS "${CMAKE_SOURCE_DIR}/nlp_rules.json")
   file(WRITE "${CMAKE_BINARY_DIR}/nlp_rules.json"
     "[\n"
@@ -125,6 +125,7 @@ if(NOT EXISTS "${CMAKE_SOURCE_DIR}/memory.json")
   file(WRITE "${CMAKE_BINARY_DIR}/memory.json" "{}\n")
 endif()
 
+# Copy resources into build dir
 foreach(FILE ${GRIM_RESOURCES})
   if(EXISTS "${CMAKE_SOURCE_DIR}/${FILE}")
     set(SRC_FILE "${CMAKE_SOURCE_DIR}/${FILE}")
