@@ -38,19 +38,19 @@ void saveMemory() {
 }
 
 // ---------------- AI configuration ----------------
-void loadAIConfig() {
-    std::ifstream f("ai_config.json");
+void loadAIConfig(const std::string& filename) {
+    std::ifstream f(filename);
     if (!f.is_open()) {
-        std::cerr << "[Config] No ai_config.json found, using defaults.\n";
+        std::cerr << "[Config] No " << filename << " found, using defaults.\n";
         aiConfig = nlohmann::json::object();
         return;
     }
 
     try {
         f >> aiConfig;
-        std::cout << "[Config] AI config loaded successfully\n";
+        std::cout << "[Config] AI config loaded successfully from " << filename << "\n";
     } catch (const std::exception& e) {
-        std::cerr << "[Config] Error parsing ai_config.json: " << e.what() << std::endl;
+        std::cerr << "[Config] Error parsing " << filename << ": " << e.what() << std::endl;
         aiConfig = nlohmann::json::object();
     }
 }
