@@ -5,6 +5,12 @@
 #include <iostream>
 #include <SFML/Graphics/Color.hpp>
 
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+
 namespace fs = std::filesystem;
 
 std::string getResourcePath() {
@@ -26,10 +32,8 @@ std::string getResourcePath() {
 #endif
     return (exePath / "resources").string();
 #else
-    // Default: look in executable’s parent folder/resources
-    fs::path exePath = fs::canonical("/proc/self/exe").parent_path();
-    fs::path resPath = exePath.parent_path() / "resources";
-    return resPath.string();
+    // Installed mode: use system data directory set by CMake
+    return std::string(GRIM_DATA_DIR) + "/resources";
 #endif
 }
 
