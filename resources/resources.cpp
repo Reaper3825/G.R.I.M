@@ -19,12 +19,14 @@ std::string loadTextResource(const std::string& filename, int argc, char** argv)
     fs::path fullPath = fs::path(getResourcePath()) / filename;
     std::ifstream file(fullPath);
     if (!file.is_open()) {
-        std::cerr << "[GRIM] Resource not found: " << filename << "\n";
+        std::cerr << "[GRIM] Resource not found: " << filename 
+                  << " (looked in " << fullPath << ")\n";
         return {};
     }
     return std::string((std::istreambuf_iterator<char>(file)),
                        std::istreambuf_iterator<char>());
 }
+
 
 std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* history) {
     fs::path resDir = getResourcePath();
