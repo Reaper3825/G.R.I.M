@@ -95,9 +95,6 @@ static void ensureWhisperModel(const fs::path& modelPath) {
     }
 }
 
-// forward declare, in case resources.hpp is not being picked up correctly
-std::string getResourcePath();
-
 
 // --- Main bootstrap sequence ---
 void runBootstrapChecks(int argc, char** argv) {
