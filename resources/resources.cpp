@@ -1,8 +1,10 @@
 #include "resources.hpp"
 #include "console_history.hpp"
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <SFML/Graphics/Color.hpp>
 
 #if defined(_WIN32)
@@ -35,6 +37,26 @@ std::string getResourcePath() {
     // Installed mode: use system data directory set by CMake
     return std::string(GRIM_DATA_DIR) + "/resources";
 #endif
+}
+
+std::string loadTextResource(const std::string& filename, int argc, char** argv) {
+    fs::path resDir = getResourcePath();
+    fs::path filePath = resDir / filename;
+
+    if (!fs::exists(filePath)) {
+        std::cerr << "[ERROR] Resource file not found: " << filePath << "\n";
+        return {};
+    }
+
+    std::ifstream in(filePath);
+    if (!in) {
+        std::cerr << "[ERROR] Failed to open resource file: " << filePath << "\n";
+        return {};
+    }
+
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
 }
 
 std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* history) {
@@ -74,6 +96,10 @@ std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* histor
     }
 #endif
 
-    history->push("[ERROR] No font found in resources/ or system fonts.", sf::Color::Red);
+    if (history) {
+        history->push("[ERROR] No font found in resources/ or system fonts.", sf::Color::Red);
+    } else {
+        std::cerr << "[ERROR] No font found in resources/ or system fonts.\n";
+    }
     return {};
 }
