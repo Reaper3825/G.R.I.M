@@ -1,3 +1,4 @@
+#pragma message("Using resources.hpp from project root")7
 #pragma once
 #include <string>
 #include <SFML/Graphics.hpp>
