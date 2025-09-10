@@ -1,11 +1,13 @@
 #pragma once
 #include <string>
+#include <SFML/Graphics.hpp>
 #include "console_history.hpp"
 
-// Load a text-based resource (e.g. JSON config) from exe dir, ./resources,
-// or system install dir (depending on build mode).
-std::string loadTextResource(const std::string& name, int argc, char** argv);
+// Returns the base resource path (portable or system-specific)
+std::string getResourcePath();
 
-// Find a usable font (first .ttf in resources/, else fallback system fonts).
-// Logs an error message to history if provided.
-std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* history = nullptr);
+// Loads the contents of a text resource (e.g., config, JSON) as a string
+std::string loadTextResource(const std::string& filename, int argc, char** argv);
+
+// Attempts to find any usable font in resources or system fonts
+std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* history);
