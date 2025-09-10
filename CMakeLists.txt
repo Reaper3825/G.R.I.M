@@ -38,6 +38,7 @@ set(GRIM_SOURCES
     ui_helpers.cpp
     ui_draw.cpp
     ui_events.cpp
+    voice.cpp
 )
 
 set(GRIM_HEADERS
@@ -59,6 +60,10 @@ set(GRIM_HEADERS
 add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
 
 # ---- Dependencies ----
+
+add_executable(voice voice.cpp)
+target_link_libraries(voice PRIVATE whisper cpr::cpr portaudio)
+
 
 # SFML via pkg-config
 find_package(PkgConfig REQUIRED)
