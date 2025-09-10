@@ -60,3 +60,6 @@ resources/*.cpp
 build/
 
 
+# Whisper models
+models/*.bin
+external/whisper.cpp/models/*.bin
