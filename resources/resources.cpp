@@ -1,25 +1,41 @@
 #include "resources.hpp"
+#include "console_history.hpp"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <SFML/Graphics/Color.hpp>
 
 namespace fs = std::filesystem;
 
 std::string getResourcePath() {
-    // Directory of the running binary
-    fs::path exePath = fs::canonical("/proc/self/exe").parent_path();
-
-    // resources is one level up from build/
-    fs::path resPath = exePath.parent_path() / "resources";
-
-    return resPath.string();
+#if defined(GRIM_PORTABLE_ONLY)
+    // Portable mode: resources live next to executable
+    fs::path exePath;
+#if defined(_WIN32)
+    char buffer[MAX_PATH];
+    GetModuleFileNameA(nullptr, buffer, MAX_PATH);
+    exePath = fs::path(buffer).parent_path();
+#elif defined(__APPLE__)
+    char buffer[1024];
+    uint32_t size = sizeof(buffer);
+    if (_NSGetExecutablePath(buffer, &size) == 0) {
+        exePath = fs::path(buffer).parent_path();
+    }
+#else
+    exePath = fs::canonical("/proc/self/exe").parent_path();
+#endif
+    return (exePath / "resources").string();
+#else
+    // Installed mode: use system data directory set by CMake
+    return std::string(GRIM_DATA_DIR) + "/resources";
+#endif
 }
 
 std::string loadTextResource(const std::string& filename, int argc, char** argv) {
     fs::path fullPath = fs::path(getResourcePath()) / filename;
     std::ifstream file(fullPath);
     if (!file.is_open()) {
-        std::cerr << "[GRIM] Resource not found: " << filename 
+        std::cerr << "[GRIM] Resource not found: " << filename
                   << " (looked in " << fullPath << ")\n";
         return {};
     }
@@ -27,14 +43,43 @@ std::string loadTextResource(const std::string& filename, int argc, char** argv)
                        std::istreambuf_iterator<char>());
 }
 
-
 std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* history) {
     fs::path resDir = getResourcePath();
-    for (auto& p : fs::directory_iterator(resDir)) {
+
+    if (fs::exists(resDir)) {
+        for (auto& p : fs::directory_iterator(resDir)) {
+            if (p.path().extension() == ".ttf") {
+                return p.path().string();
+            }
+        }
+    }
+
+    // Fallback: try common system fonts
+#if defined(_WIN32)
+    fs::path winFonts = "C:/Windows/Fonts";
+    for (auto& p : fs::directory_iterator(winFonts)) {
         if (p.path().extension() == ".ttf") {
             return p.path().string();
         }
     }
+#elif defined(__APPLE__)
+    fs::path macFonts = "/System/Library/Fonts/Supplemental";
+    for (auto& p : fs::directory_iterator(macFonts)) {
+        if (p.path().extension() == ".ttf") {
+            return p.path().string();
+        }
+    }
+#else
+    fs::path linuxFonts = "/usr/share/fonts";
+    if (fs::exists(linuxFonts)) {
+        for (auto& p : fs::recursive_directory_iterator(linuxFonts)) {
+            if (p.path().extension() == ".ttf") {
+                return p.path().string();
+            }
+        }
+    }
+#endif
+
     history->push("[ERROR] No font found in resources/ or system fonts.", sf::Color::Red);
     return {};
 }
