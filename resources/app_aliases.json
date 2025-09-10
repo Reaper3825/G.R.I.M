@@ -1,0 +1,11 @@
+{
+  "blender": "C:/Program Files/Blender Foundation/Blender 4.5/blender.exe",
+  "notepad": "C:/Windows/System32/notepad.exe",
+  "calc": "C:/Windows/System32/calc.exe",
+  "explorer": "C:/Windows/explorer.exe",
+  "cmd": "C:/Windows/System32/cmd.exe",
+  "powershell": "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+  "vscode": "C:/Users/YOUR_USERNAME/AppData/Local/Programs/Microsoft VS Code/Code.exe",
+  "paint": "C:/Windows/System32/mspaint.exe",
+  "wordpad": "C:/Program Files/Windows NT/Accessories/wordpad.exe"
+}
