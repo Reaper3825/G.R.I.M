@@ -30,3 +30,25 @@
 *.exe
 *.out
 *.app
+# Build directories
+/build/
+/whisper.cpp/build/
+/cpr/build/
+
+# CMake and Ninja
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.ninja
+*.ninja_deps
+*.ninja_log
+
+# Logs and temporary files
+*.log
+*.tmp
+
+# Test outputs
+*.wav
+memory.json
+

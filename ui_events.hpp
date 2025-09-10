@@ -3,7 +3,7 @@
 #include <string>
 #include <filesystem>
 #include <vector>
-#include "NLP.hpp"
+#include "nlp.hpp"
 #include "console_history.hpp"
 #include "timer.hpp"
 #include <nlohmann/json.hpp>
