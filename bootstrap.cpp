@@ -1,12 +1,12 @@
 #include "bootstrap.hpp"
-#include "resources.hpp"
+#include "resources.hpp"       // declares getResourcePath()
 #include "console_history.hpp"
 #include "ai.hpp"
 
 #include <iostream>
 #include <filesystem>
 #include <fstream>
-#include <cstdlib>   // for system()
+#include <cstdlib>             // for system()
 #include <nlohmann/json.hpp>
 
 namespace fs = std::filesystem;
