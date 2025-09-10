@@ -1,6 +1,7 @@
 {
     "cmake.sourceDirectory": "D:/G.R.I.M",
     "files.associations": {
-        "xstring": "cpp"
+        "xstring": "cpp",
+        "filesystem": "cpp"
     }
 }
