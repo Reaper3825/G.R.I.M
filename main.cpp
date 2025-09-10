@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
     loadMemory();
 
     // --- Load AI config ---
-    loadAIConfig();
+    nlohmann::json aiConfig = loadAIConfig("ai_config.json");
 
     // --- NLP setup ---
     NLP nlp;
