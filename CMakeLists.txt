@@ -1,10 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(GRIM CXX)
 
-# Always include project root for headers
-include_directories(${CMAKE_SOURCE_DIR})
-
-
 # ---- Language / build settings ----
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -13,7 +9,10 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose Debug or Release" FORCE)
 endif()
 
-# Enable warnings
+# Output all executables to build/bin
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
+# ---- Warnings ----
 if(MSVC)
   add_compile_options(/W4 /permissive-)
 else()
@@ -61,19 +60,14 @@ add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
 
 # ---- Dependencies ----
 
-add_executable(voice voice.cpp)
-target_link_libraries(voice PRIVATE whisper cpr::cpr portaudio)
-
-
 # SFML via pkg-config
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SFML REQUIRED sfml-graphics sfml-window sfml-system)
-
 target_include_directories(GRIM PRIVATE ${SFML_INCLUDE_DIRS})
 target_link_directories(GRIM PRIVATE ${SFML_LIBRARY_DIRS})
 target_link_libraries(GRIM PRIVATE ${SFML_LIBRARIES})
 
-# CPR (try find_package first, fallback to /usr/local)
+# CPR
 find_package(cpr QUIET)
 if(cpr_FOUND)
   target_link_libraries(GRIM PRIVATE cpr::cpr)
@@ -84,7 +78,27 @@ else()
   target_link_libraries(GRIM PRIVATE cpr ssl crypto)
 endif()
 
-target_include_directories(GRIM PRIVATE ${CMAKE_SOURCE_DIR})
+# Whisper.cpp
+add_subdirectory(external/whisper.cpp EXCLUDE_FROM_ALL)
+target_link_libraries(GRIM PRIVATE whisper)
+
+# PortAudio
+find_path(PORTAUDIO_INCLUDE_DIR portaudio.h)
+find_library(PORTAUDIO_LIBRARY portaudio)
+if(PORTAUDIO_INCLUDE_DIR AND PORTAUDIO_LIBRARY)
+  target_include_directories(GRIM PRIVATE ${PORTAUDIO_INCLUDE_DIR})
+  target_link_libraries(GRIM PRIVATE ${PORTAUDIO_LIBRARY})
+else()
+  message(FATAL_ERROR "PortAudio not found. Please install it.")
+endif()
+
+# ---- Voice demo ----
+add_executable(voice voice.cpp)
+target_include_directories(voice PRIVATE
+    ${CMAKE_SOURCE_DIR}/external/whisper.cpp
+    ${PORTAUDIO_INCLUDE_DIR}
+)
+target_link_libraries(voice PRIVATE whisper cpr::cpr ${PORTAUDIO_LIBRARY})
 
 # ---- Compile-time resource paths ----
 include(GNUInstallDirs)
@@ -96,7 +110,7 @@ else()
   target_compile_definitions(GRIM PRIVATE GRIM_DATA_DIR="${GRIM_DATADIR}")
 endif()
 
-# ---- Resource defaults ----
+# ---- Default JSONs ----
 set(GRIM_RESOURCES
     nlp_rules.json
     synonyms.json
@@ -105,34 +119,11 @@ set(GRIM_RESOURCES
     memory.json
 )
 
-# Default JSONs if missing
-if(NOT EXISTS "${CMAKE_SOURCE_DIR}/nlp_rules.json")
-  file(WRITE "${CMAKE_BINARY_DIR}/nlp_rules.json"
-    "[\n"
-    "  {\"intent\":\"open_app\",\"pattern\":\"^\\\\s*(open|launch|start)\\\\s+([\\\\w\\\\.\\\\-]+)\\\\s*$\",\"slot_names\":[\"verb\",\"app\"],\"score_boost\":0.3,\"case_insensitive\":true},\n"
-    "  {\"intent\":\"search_web\",\"pattern\":\"^(google|search|look up)\\\\s+(.+)$\",\"slot_names\":[\"verb\",\"query\"],\"score_boost\":0.2,\"case_insensitive\":true},\n"
-    "  {\"intent\":\"set_timer\",\"pattern\":\"^(set\\\\s+)?timer\\\\s+for\\\\s+(\\\\d+)\\\\s*(seconds|s|minutes|min|m|hours|h)\\\\b\",\"slot_names\":[\"_opt\",\"value\",\"unit\"],\"score_boost\":0.25,\"case_insensitive\":true}\n"
-    "]\n"
-  )
-endif()
-
-if(NOT EXISTS "${CMAKE_SOURCE_DIR}/synonyms.json")
-  file(WRITE "${CMAKE_BINARY_DIR}/synonyms.json" "{}\n")
-endif()
-
-if(NOT EXISTS "${CMAKE_SOURCE_DIR}/app_aliases.json")
-  file(WRITE "${CMAKE_BINARY_DIR}/app_aliases.json" "{}\n")
-endif()
-
-if(NOT EXISTS "${CMAKE_SOURCE_DIR}/ai_config.json")
-  file(WRITE "${CMAKE_BINARY_DIR}/ai_config.json"
-    "{\n  \"backend\": \"auto\",\n  \"ollama_url\": \"http://127.0.0.1:11434\",\n  \"localai_url\": \"http://127.0.0.1:8080/v1\"\n}\n"
-  )
-endif()
-
-if(NOT EXISTS "${CMAKE_SOURCE_DIR}/memory.json")
-  file(WRITE "${CMAKE_BINARY_DIR}/memory.json" "{}\n")
-endif()
+foreach(FILE ${GRIM_RESOURCES})
+  if(NOT EXISTS "${CMAKE_SOURCE_DIR}/${FILE}")
+    file(WRITE "${CMAKE_BINARY_DIR}/${FILE}" "{}\n")
+  endif()
+endforeach()
 
 # Copy resources into build dir
 foreach(FILE ${GRIM_RESOURCES})
@@ -166,15 +157,12 @@ if(GRIM_FONT_SRC)
   )
 endif()
 
-# ---- Whisper model (pre-download) ----
-set(WHISPER_MODEL_DIR "${CMAKE_SOURCE_DIR}/whisper.cpp/models")
+# ---- Whisper model (auto-download) ----
+set(WHISPER_MODEL_DIR "${CMAKE_SOURCE_DIR}/external/whisper.cpp/models")
 set(WHISPER_MODEL_FILE "${WHISPER_MODEL_DIR}/ggml-small.bin")
 
 if(NOT EXISTS "${WHISPER_MODEL_FILE}")
-  message(STATUS "Whisper model not found, will attempt to download at build time.")
-
   file(MAKE_DIRECTORY "${WHISPER_MODEL_DIR}")
-
   add_custom_command(
     OUTPUT "${WHISPER_MODEL_FILE}"
     COMMAND ${CMAKE_COMMAND} -E echo "Downloading Whisper model (ggml-small.bin)..."
@@ -183,14 +171,8 @@ if(NOT EXISTS "${WHISPER_MODEL_FILE}")
     COMMENT "Fetching Whisper model"
     VERBATIM
   )
-
-  add_custom_target(fetch_whisper_model ALL
-    DEPENDS "${WHISPER_MODEL_FILE}"
-  )
-
+  add_custom_target(fetch_whisper_model ALL DEPENDS "${WHISPER_MODEL_FILE}")
   add_dependencies(GRIM fetch_whisper_model)
-else()
-  message(STATUS "Whisper model already exists: ${WHISPER_MODEL_FILE}")
 endif()
 
 # ---- Resources folder ----
@@ -204,9 +186,8 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/resources")
 endif()
 
 # ---- Install rules ----
-install(TARGETS GRIM
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
+install(TARGETS GRIM RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS voice RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 foreach(FILE ${GRIM_RESOURCES})
   if(EXISTS "${CMAKE_SOURCE_DIR}/${FILE}")
