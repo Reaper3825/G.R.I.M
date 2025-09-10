@@ -31,8 +31,9 @@ int main(int argc, char** argv) {
     // --- Load persistent memory ---
     loadMemory();
 
-    // --- Load AI config ---
-    nlohmann::json aiConfig = loadAIConfig("ai_config.json");
+// --- Load AI config ---
+loadAIConfig("ai_config.json");
+
 
     // --- NLP setup ---
     NLP nlp;
