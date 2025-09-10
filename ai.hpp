@@ -2,6 +2,8 @@
 #include <string>
 #include <nlohmann/json.hpp>
 
+
+nlohmann::json loadAIConfig(const std::string& path);
 // Global long-term memory object
 extern nlohmann::json longTermMemory;
 

@@ -1,4 +1,4 @@
-#include "NLP.hpp"
+#include "nlp.hpp"
 #include <nlohmann/json.hpp>
 #include <regex>
 #include <fstream>
