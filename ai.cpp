@@ -4,10 +4,11 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
-// Global JSON object for long-term memory
+// Global JSON objects
 nlohmann::json longTermMemory;
-nlohmann::json aiConfig; // for backend + tone/style
+nlohmann::json aiConfig; // backend + tone/style
 
+// ---------------- Memory persistence ----------------
 void loadMemory() {
     std::ifstream f("memory.json");
     if (f) {
@@ -36,29 +37,25 @@ void saveMemory() {
     }
 }
 
-nlohmann::json loadAIConfig(const std::string& path) {
-    std::ifstream f(path);
+// ---------------- AI configuration ----------------
+void loadAIConfig() {
+    std::ifstream f("ai_config.json");
     if (!f.is_open()) {
-    std::cerr << "[Config] No " << path << "found, using defaults.\n";
-    aiConfig = nlohmann::json::object();
-    return aiConfig;
+        std::cerr << "[Config] No ai_config.json found, using defaults.\n";
+        aiConfig = nlohmann::json::object();
+        return;
+    }
+
+    try {
+        f >> aiConfig;
+        std::cout << "[Config] AI config loaded successfully\n";
+    } catch (const std::exception& e) {
+        std::cerr << "[Config] Error parsing ai_config.json: " << e.what() << std::endl;
+        aiConfig = nlohmann::json::object();
+    }
 }
 
-try {
-    nlohmann::json config;
-    f >> config;
-    std::cout << "AI config loaded successfully\n";
-    aiConfig = config;
-    return aiConfig;
-} catch (const std::exception& e) {
-    std::cerr << "Error parsing AI config: " << e.what() << std::endl;
-    aiConfig = nlohmann::json::object();
-    return aiConfig;
-}
-
-     
-}
-
+// ---------------- Backend resolver ----------------
 std::string resolveBackendURL() {
     std::string backend = "auto";
     if (aiConfig.contains("backend")) {
@@ -85,11 +82,12 @@ std::string resolveBackendURL() {
     }
 }
 
+// ---------------- Core AI call ----------------
 std::string callAI(const std::string& prompt) {
     std::string url = resolveBackendURL();
 
     nlohmann::json body = {
-        {"model", "mistral"},   // TODO: could also be configurable
+        {"model", "mistral"},   // TODO: configurable
         {"prompt", prompt},
         {"stream", false}
     };
@@ -97,7 +95,7 @@ std::string callAI(const std::string& prompt) {
     // Build correct endpoint depending on backend type
     std::string endpoint;
     if (url.find("8080") != std::string::npos) {
-        // LocalAI expects /chat/completions or /generate depending on mode
+        // LocalAI expects /chat/completions
         endpoint = url + "/chat/completions";
         body = {
             {"model", "gemma:2b"},

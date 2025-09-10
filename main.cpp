@@ -6,7 +6,7 @@
 #include <filesystem>
 #include <system_error>
 
-#include "NLP.hpp"
+#include "nlp.hpp"
 #include "ai.hpp"
 #include "aliases.hpp"
 #include "synonyms.hpp"
