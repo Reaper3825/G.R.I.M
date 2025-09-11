@@ -139,6 +139,15 @@
   "slot_names": ["verb"],
   "score_boost": 0.3,
   "case_insensitive": true
+},
+{
+  "intent": "voice",
+  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*)?(?:voice|start voice|record voice)$",
+  "slots": {}
 }
+
+
+
+
 
 ]
