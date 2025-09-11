@@ -3,6 +3,8 @@
 #include <iostream>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <thread>
+#include <future>
 
 // ---------------- Globals ----------------
 nlohmann::json longTermMemory;
@@ -107,56 +109,70 @@ std::string resolveBackendURL() {
 }
 
 // =========================================================
-// Core AI call
+// Core AI call (async)
 // =========================================================
-std::string callAI(const std::string& prompt) {
-    std::string url = resolveBackendURL();
-    std::string model = aiConfig.value("default_model", "mistral");
+std::future<std::string> callAIAsync(const std::string& prompt) {
+    return std::async(std::launch::async, [prompt]() {
+        std::string url = resolveBackendURL();
+        std::string model = aiConfig.value("default_model", "mistral");
 
-    nlohmann::json body = {
-        {"model", model},
-        {"prompt", prompt},
-        {"stream", false}
-    };
-
-    // Choose endpoint format depending on backend
-    std::string endpoint;
-    if (url.find("8080") != std::string::npos) {
-        // LocalAI → OpenAI-compatible
-        endpoint = url + "/chat/completions";
-        body = {
+        // Default request body
+        nlohmann::json body = {
             {"model", model},
-            {"messages", {{{"role", "user"}, {"content", prompt}}}}
+            {"prompt", prompt},
+            {"stream", false},
+            {"keep_alive", "5m"} // <-- keep model hot
         };
-    } else {
-        // Ollama
-        endpoint = url + "/api/generate";
-    }
 
-    std::cout << "[AI] Sending prompt to " << endpoint << " using model " << model << "\n";
-
-    cpr::Response r = cpr::Post(
-        cpr::Url{endpoint},
-        cpr::Header{{"Content-Type", "application/json"}},
-        cpr::Body{body.dump()}
-    );
-
-    if (r.error) {
-        return std::string("Error calling AI: ") + r.error.message;
-    }
-    if (r.status_code != 200) {
-        return "AI HTTP " + std::to_string(r.status_code) + ": " + r.text;
-    }
-
-    try {
-        auto j = nlohmann::json::parse(r.text);
-        if (j.contains("response")) {
-            return j["response"].get<std::string>(); // Ollama
-        } else if (j.contains("choices")) {
-            return j["choices"][0]["message"]["content"].get<std::string>(); // LocalAI
+        // Choose endpoint format depending on backend
+        std::string endpoint;
+        if (url.find("8080") != std::string::npos) {
+            // LocalAI → OpenAI-compatible
+            endpoint = url + "/chat/completions";
+            body = {
+                {"model", model},
+                {"messages", {{{"role", "user"}, {"content", prompt}}}}
+            };
+        } else {
+            // Ollama
+            endpoint = url + "/api/generate";
         }
-        return "[AI] No valid field in response.";
-    } catch (const std::exception& e) {
-        return std::string("Error parsing AI JSON: ") + e.what();
+
+        std::cout << "[AI] Sending prompt to " << endpoint << " using model " << model << "\n";
+
+        cpr::Response r = cpr::Post(
+            cpr::Url{endpoint},
+            cpr::Header{{"Content-Type", "application/json"}},
+            cpr::Body{body.dump()}
+        );
+
+        if (r.error) {
+            return std::string("Error calling AI: ") + r.error.message;
+        }
+        if (r.status_code != 200) {
+            return "AI HTTP " + std::to_string(r.status_code) + ": " + r.text;
+        }
+
+        try {
+    auto j = nlohmann::json::parse(r.text);
+    if (j.contains("response")) {
+        return j["response"].get<std::string>(); // Ollama
+    } else if (j.contains("choices")) {
+        return j["choices"][0]["message"]["content"].get<std::string>(); // LocalAI
     }
+    return std::string("[AI] No valid field in response."); // 🔹 fixed
+} catch (const std::exception& e) {
+    return std::string("Error parsing AI JSON: ") + e.what();
+}
+    });
+}
+
+// =========================================================
+// Warm-up on launch
+// =========================================================
+void warmupAI() {
+    std::cout << "[AI] Warming up model...\n";
+    // Send a pseudo hidden command
+    auto warmupFuture = callAIAsync("Hello");
+    // Don’t block – let it run in background
 }
