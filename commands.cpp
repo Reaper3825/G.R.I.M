@@ -323,17 +323,19 @@ bool handleCommand(const Intent& intent,
     else if (intent.slots.contains("slot2")) q = intent.slots.at("slot2");
 
     if (!q.empty()) {
-        std::string reply = callAI(q);
-        if (!reply.empty()) {
-            history.push("AI: " + reply, sf::Color(160,200,255));
-        } else {
-            history.push("[AI] No response generated.", sf::Color::Red);
-        }
+    auto future = callAIAsync(q);
+    std::string reply = future.get();   // blocks until finished
+
+    if (!reply.empty()) {
+        history.push("AI: " + reply, sf::Color(160,200,255));
     } else {
-        history.push("[AI] No query provided.", sf::Color::Red);
+        history.push("[AI] No response generated.", sf::Color::Red);
     }
-    return true;
+} else {
+    history.push("[AI] No query provided.", sf::Color::Red);
 }
+return true;
+    }
 
 
 

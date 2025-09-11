@@ -8,6 +8,7 @@
 #include "console_history.hpp"
 #include "timer.hpp"
 
+
 /// Dispatches a parsed NLP intent into the correct action.
 /// Updates console history, modifies timers, filesystem state, or memory.
 /// Returns true if the command was handled (even if with an error message).
