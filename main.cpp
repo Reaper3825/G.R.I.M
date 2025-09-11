@@ -19,7 +19,7 @@
 #include "ui_draw.hpp"
 #include "ui_events.hpp"
 #include "bootstrap.hpp"
-
+#include "voice.hpp"   // <-- Added for runVoiceDemo
 
 #ifdef _WIN32
 #include <windows.h>
@@ -33,12 +33,11 @@ int main(int argc, char** argv) {
     // --- Load persistent memory ---
     loadMemory();
 
-// --- Load AI config ---
-loadAIConfig("ai_config.json");
+    // --- Load AI config ---
+    loadAIConfig("ai_config.json");
 
-// --- Bootstrap check ---
-runBootstrapChecks(argc, argv);
-
+    // --- Bootstrap check ---
+    runBootstrapChecks(argc, argv);
 
     // --- NLP setup ---
     NLP nlp;
@@ -100,6 +99,18 @@ runBootstrapChecks(argc, argv);
         // --- Process events ---
         if (!processEvents(window, buffer, currentDir, timers, longTermMemory, nlp, history))
             break;
+
+        // --- Handle commands ---
+        if (!buffer.empty() && buffer.back() == '\n') {
+            std::string cmd = buffer;
+            buffer.clear();
+
+            if (cmd == "voice\n" || cmd == "voice") {
+                addHistory("[Voice] Starting 5-second recording...", sf::Color(0, 255, 128));
+                runVoiceDemo("external/whisper.cpp/models/ggml-small.bin");
+                addHistory("[Voice] Finished transcription.", sf::Color(0, 255, 128));
+            }
+        }
 
         // --- Timers ---
         for (auto& t : timers) {
