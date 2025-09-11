@@ -54,6 +54,7 @@ set(GRIM_HEADERS
     ui_draw.hpp
     ui_events.hpp
     timer.hpp
+    voice.hpp
 )
 
 add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
