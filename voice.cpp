@@ -1,4 +1,5 @@
 #include "voice.hpp"
+#include "resources.hpp"
 #include <iostream>
 #include <vector>
 #include <filesystem>
