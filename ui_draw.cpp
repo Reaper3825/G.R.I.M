@@ -1,12 +1,16 @@
 #include "ui_draw.hpp"
+#include "ui_helpers.hpp"   // for g_ui_textbox
 #include <algorithm>
 #include <cmath>
+
+// g_ui_textbox is declared in main.cpp, extern in ui_helpers.hpp
+extern std::string g_ui_textbox;
 
 void drawUI(
     sf::RenderWindow& window,
     sf::Font& font,
     ConsoleHistory& history,
-    const std::string& buffer,
+    const std::string& /*unused*/,   // buffer param unused now
     bool caretVisible,
     float& scrollOffsetLines
 ) {
@@ -56,7 +60,7 @@ void drawUI(
         window.draw(titleText);
 
         // --- Input text ---
-        inputText.setString(buffer);
+        inputText.setString(g_ui_textbox);
         inputText.setPosition(
             kSidePad,
             winH - kInputBarH + (kInputBarH - (float)kFontSize) * 0.5f

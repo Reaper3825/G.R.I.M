@@ -1,7 +1,11 @@
+// commands.cpp
 #include "commands.hpp"
 #include "aliases.hpp"
 #include "synonyms.hpp"
 #include "ai.hpp"
+#include "voice.hpp"
+#include "resources.hpp"
+
 
 #include <iostream>
 #include <filesystem>
@@ -12,7 +16,27 @@
 #include <shellapi.h>
 #include <psapi.h>     // GlobalMemoryStatusEx, MEMORYSTATUSEX
 #include <winternl.h>  // ULONGLONG, ULARGE_INTEGER
+#endif
 
+namespace fs = std::filesystem;
+
+// ---------------- Voice Helpers ----------------
+static void parseAndDispatch(const std::string& text,
+                             std::string& buffer,
+                             fs::path& currentDir,
+                             std::vector<Timer>& timers,
+                             nlohmann::json& longTermMemory,
+                             NLP& nlp,
+                             ConsoleHistory& history) {
+    Intent intent = nlp.parse(text);
+    if (intent.matched) {
+        handleCommand(intent, buffer, currentDir, timers, longTermMemory, nlp, history);
+    } else {
+        history.push("[Voice] Sorry, I didn’t understand: " + text, sf::Color::Red);
+    }
+}
+
+#ifdef _WIN32
 // ---------------- Windows Helpers ----------------
 
 // --- CPU usage helper ---
@@ -71,19 +95,15 @@ static std::string findOnPath(const std::string& app) {
 }
 #endif // _WIN32
 
-
-namespace fs = std::filesystem;
-
 // ---------------- Command Dispatcher ----------------
 bool handleCommand(const Intent& intent,
-                   std::string& /*buffer*/,
-                   fs::path& /*currentDir*/,
+                   std::string& buffer,
+                   fs::path& currentDir,
                    std::vector<Timer>& timers,
                    nlohmann::json& longTermMemory,
                    NLP& nlp,
-                   ConsoleHistory& history)
-{
-    if (!intent.matched) {  
+                   ConsoleHistory& history) {
+    if (!intent.matched) {
         history.push("[WARN] No command matched.", sf::Color(200,200,200));
         return true;
     }
@@ -183,7 +203,7 @@ bool handleCommand(const Intent& intent,
 
     // ---- show_help ----
     if (intent.name == "show_help") {
-        history.push("Commands: help, open <app>, search <q>, timer, pwd, cd <path>, ls, mkdir <path>, rm <path>, reloadnlp, grim <msg>, remember <k> is <v>, recall <k>, forget <k>, quit", sf::Color::Cyan);
+        history.push("Commands: help, open <app>, search <q>, timer, pwd, cd <path>, ls, mkdir <path>, rm <path>, reloadnlp, grim <msg>, remember <k> is <v>, recall <k>, forget <k>, system, voice, quit", sf::Color::Cyan);
         return true;
     }
 
@@ -304,7 +324,8 @@ bool handleCommand(const Intent& intent,
         }
         return true;
     }
-            // ---- system_info ----
+
+    // ---- system_info ----
     if (intent.name == "system_info") {
 #ifdef _WIN32
         // --- CPU usage ---
@@ -343,6 +364,27 @@ bool handleCommand(const Intent& intent,
         history.push("[System Info]", sf::Color::Cyan);
         history.push("System info not implemented on this platform yet.", sf::Color::Red);
 #endif
+        return true;
+    }
+
+        // ---- voice ----
+    if (intent.name == "voice") {
+        history.push("[Voice] Starting 5-second recording...", sf::Color::Cyan);
+
+        // Build path to Whisper model from resources
+        fs::path modelPath = fs::path(getResourcePath()).parent_path() / "ggml-small.bin";
+
+        std::string transcript = runVoiceDemo(modelPath.string());
+
+        if (!transcript.empty()) {
+            history.push("[Voice] Heard: " + transcript, sf::Color::Yellow);
+
+            // Reuse normal NLP + command dispatcher
+            parseAndDispatch(transcript, buffer, currentDir, timers, longTermMemory, nlp, history);
+        } else {
+            history.push("[Voice] No speech detected.", sf::Color::Red);
+        }
+
         return true;
     }
 

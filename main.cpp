@@ -19,7 +19,8 @@
 #include "ui_draw.hpp"
 #include "ui_events.hpp"
 #include "bootstrap.hpp"
-#include "voice.hpp"   // <-- Added for runVoiceDemo
+#include "voice.hpp"
+#include "voice_stream.hpp"   // <-- new include
 
 #ifdef _WIN32
 #include <windows.h>
@@ -28,6 +29,9 @@
 #endif
 
 namespace fs = std::filesystem;
+
+// Global textbox buffer (used by keyboard + voice stream)
+std::string g_ui_textbox;
 
 int main(int argc, char** argv) {
     // --- Load persistent memory ---
@@ -62,6 +66,13 @@ int main(int argc, char** argv) {
         if (!aliasText.empty()) loadAliasesFromString(aliasText);
     }
 
+    // --- Whisper context (shared for voice) ---
+    whisper_context *whisperCtx = whisper_init_from_file("external/whisper.cpp/models/ggml-small.bin");
+    if (!whisperCtx) {
+        std::cerr << "[ERROR] Failed to load Whisper model.\n";
+        return 1;
+    }
+
     // --- Create window ---
     sf::RenderWindow window(sf::VideoMode(600, 900), "GRIM", sf::Style::Default);
     window.setVerticalSyncEnabled(true);
@@ -85,7 +96,6 @@ int main(int argc, char** argv) {
     }
 
     // --- Initial state ---
-    std::string buffer;
     fs::path currentDir = fs::current_path();
     addHistory("GRIM is ready. Type 'help' for commands. Type 'quit' to exit.", sf::Color(160,200,255));
 
@@ -97,18 +107,38 @@ int main(int argc, char** argv) {
     // ----------------- Main loop -----------------
     while (window.isOpen()) {
         // --- Process events ---
-        if (!processEvents(window, buffer, currentDir, timers, longTermMemory, nlp, history))
+        if (!processEvents(window, g_ui_textbox, currentDir, timers, longTermMemory, nlp, history))
             break;
 
         // --- Handle commands ---
-        if (!buffer.empty() && buffer.back() == '\n') {
-            std::string cmd = buffer;
-            buffer.clear();
+        if (!g_ui_textbox.empty() && g_ui_textbox.back() == '\n') {
+            std::string cmd = g_ui_textbox;
+            g_ui_textbox.clear();
 
+            // Legacy demo: 5-second recording
             if (cmd == "voice\n" || cmd == "voice") {
                 addHistory("[Voice] Starting 5-second recording...", sf::Color(0, 255, 128));
-                runVoiceDemo("external/whisper.cpp/models/ggml-small.bin");
-                addHistory("[Voice] Finished transcription.", sf::Color(0, 255, 128));
+
+                std::string transcript = runVoiceDemo("external/whisper.cpp/models/ggml-small.bin");
+                if (!transcript.empty()) {
+                    addHistory("[Voice] Heard: " + transcript, sf::Color::Yellow);
+
+                    Intent spokenIntent = nlp.parse(transcript);
+                    if (spokenIntent.matched) {
+                        handleCommand(spokenIntent, g_ui_textbox, currentDir, timers, longTermMemory, nlp, history);
+                    } else {
+                        addHistory("[Voice] Sorry, I didn’t understand that.", sf::Color::Red);
+                    }
+                } else {
+                    addHistory("[Voice] No speech detected.", sf::Color::Red);
+                }
+            }
+
+            // New: continuous streaming
+            else if (cmd == "voice_stream\n" || cmd == "voice_stream") {
+                addHistory("[VoiceStream] Starting live microphone stream...", sf::Color(0, 200, 255));
+                runVoiceStream(whisperCtx, &history);
+                addHistory("[VoiceStream] Stopped.", sf::Color(0, 200, 255));
             }
         }
 
@@ -133,8 +163,9 @@ int main(int argc, char** argv) {
         );
 
         // --- Draw UI ---
-        drawUI(window, font, history, buffer, caretVisible, scrollOffsetLines);
+        drawUI(window, font, history, g_ui_textbox, caretVisible, scrollOffsetLines);
     }
 
+    whisper_free(whisperCtx);
     return 0;
 }
