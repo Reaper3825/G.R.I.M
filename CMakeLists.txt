@@ -5,12 +5,12 @@ project(GRIM CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Default to Release build
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose Debug or Release" FORCE)
 endif()
 
-# Output all executables to build/bin
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
 
 # ---- Warnings ----
 if(MSVC)
@@ -19,7 +19,14 @@ else()
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# ---- Portable mode option ----
+# ---- Speed up rebuilds with ccache ----
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+  message(STATUS "Using ccache: ${CCACHE_PROGRAM}")
+  set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
+endif()
+
+# ---- Portable mode ----
 option(GRIM_PORTABLE_ONLY "Force resources to live next to executable" OFF)
 
 # ---- Sources ----
@@ -61,7 +68,7 @@ add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
 
 # ---- Dependencies ----
 
-# SFML via pkg-config
+# SFML
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SFML REQUIRED sfml-graphics sfml-window sfml-system)
 target_include_directories(GRIM PRIVATE ${SFML_INCLUDE_DIRS})
@@ -79,9 +86,10 @@ else()
   target_link_libraries(GRIM PRIVATE cpr ssl crypto)
 endif()
 
-# Whisper.cpp
+# Whisper.cpp (build only if needed, not every time)
 add_subdirectory(external/whisper.cpp EXCLUDE_FROM_ALL)
 target_link_libraries(GRIM PRIVATE whisper)
+
 
 # PortAudio
 find_path(PORTAUDIO_INCLUDE_DIR portaudio.h)
@@ -94,7 +102,6 @@ else()
 endif()
 
 # ---- Voice integration ----
-# voice.cpp is part of GRIM_SOURCES, no standalone exe
 target_include_directories(GRIM PRIVATE
     ${CMAKE_SOURCE_DIR}/external/whisper.cpp
     ${PORTAUDIO_INCLUDE_DIR}
@@ -126,7 +133,6 @@ foreach(FILE ${GRIM_RESOURCES})
   endif()
 endforeach()
 
-# Copy resources into build dir
 foreach(FILE ${GRIM_RESOURCES})
   if(EXISTS "${CMAKE_SOURCE_DIR}/${FILE}")
     set(SRC_FILE "${CMAKE_SOURCE_DIR}/${FILE}")
@@ -140,17 +146,17 @@ foreach(FILE ${GRIM_RESOURCES})
   )
 endforeach()
 
-# ---- Fonts ----
+# ---- Fonts (auto-detect) ----
 set(GRIM_FONT_SRC "")
 
-# Allow manual override
 if(GRIM_FONT_PATH)
   set(GRIM_FONT_SRC "${GRIM_FONT_PATH}")
+  message(STATUS "GRIM: Using user-specified font path: ${GRIM_FONT_SRC}")
 
 elseif(EXISTS "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")
   set(GRIM_FONT_SRC "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")
+  message(STATUS "GRIM: Found bundled font at ${GRIM_FONT_SRC}")
 
-# Windows native paths
 elseif(EXISTS "C:/Windows/Fonts/arial.ttf")
   set(GRIM_FONT_SRC "C:/Windows/Fonts/arial.ttf")
 elseif(EXISTS "C:/Windows/Fonts/ARIAL.TTF")
@@ -158,21 +164,15 @@ elseif(EXISTS "C:/Windows/Fonts/ARIAL.TTF")
 elseif(EXISTS "C:/Windows/Fonts/segoeui.ttf")
   set(GRIM_FONT_SRC "C:/Windows/Fonts/segoeui.ttf")
 
-# MSYS2/MinGW paths
 elseif(EXISTS "/c/Windows/Fonts/arial.ttf")
   set(GRIM_FONT_SRC "/c/Windows/Fonts/arial.ttf")
 elseif(EXISTS "/c/Windows/Fonts/ARIAL.TTF")
   set(GRIM_FONT_SRC "/c/Windows/Fonts/ARIAL.TTF")
 elseif(EXISTS "/c/Windows/Fonts/segoeui.ttf")
   set(GRIM_FONT_SRC "/c/Windows/Fonts/segoeui.ttf")
-endif()
 
-if(GRIM_FONT_SRC)
-  add_custom_command(TARGET GRIM POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${GRIM_FONT_SRC}"
-            "$<TARGET_FILE_DIR:GRIM>/DejaVuSans.ttf"
-  )
+else()
+  message(WARNING "GRIM: No font found during CMake configure. UI may fail unless you provide -DGRIM_FONT_PATH=...")
 endif()
 
 # ---- Whisper model (auto-download) ----

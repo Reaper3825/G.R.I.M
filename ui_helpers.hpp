@@ -1,8 +1,12 @@
 #pragma once
-#include <SFML/System.hpp>
+#include <SFML/System/Clock.hpp>
+#include <string>
 
-// Toggle caret visibility every 0.5s
 bool updateCaretBlink(sf::Clock& caretClock, bool caretVisible);
-
-// Clamp scroll offset to [0, maxScroll]
 void clampScroll(float& scrollOffsetLines, float maxScroll);
+
+// Allow external modules (like voice_stream) to set the active textbox text
+void ui_set_textbox(const std::string& text);
+
+// Global textbox buffer (declared in main.cpp, extern here)
+extern std::string g_ui_textbox;

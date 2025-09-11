@@ -33,19 +33,21 @@ static int recordCallback(const void *input,
     return paContinue;
 }
 
-int runVoiceDemo(const std::string &modelPath) {
+std::string runVoiceDemo(const std::string &modelPath) {
+    std::string transcript;
+
     // Initialize Whisper
     struct whisper_context *ctx = whisper_init_from_file(modelPath.c_str());
     if (!ctx) {
         std::cerr << "Failed to initialize Whisper model: " << modelPath << std::endl;
-        return 1;
+        return "[ERROR] Failed to load model";
     }
 
     // Initialize PortAudio
     if (Pa_Initialize() != paNoError) {
         std::cerr << "Failed to initialize PortAudio" << std::endl;
         whisper_free(ctx);
-        return 1;
+        return "[ERROR] Failed to init PortAudio";
     }
 
     AudioData data;
@@ -62,7 +64,7 @@ int runVoiceDemo(const std::string &modelPath) {
         std::cerr << "Failed to open audio stream" << std::endl;
         Pa_Terminate();
         whisper_free(ctx);
-        return 1;
+        return "[ERROR] Failed to open audio stream";
     }
 
     std::cout << "Recording... speak into your mic (5 sec window)" << std::endl;
@@ -82,14 +84,21 @@ int runVoiceDemo(const std::string &modelPath) {
     if (whisper_full(ctx, params, data.buffer.data(), data.buffer.size()) != 0) {
         std::cerr << "Whisper transcription failed" << std::endl;
         whisper_free(ctx);
-        return 1;
+        return "[ERROR] Transcription failed";
     }
 
     int n_segments = whisper_full_n_segments(ctx);
     for (int i = 0; i < n_segments; ++i) {
-        std::cout << whisper_full_get_segment_text(ctx, i) << std::endl;
+        transcript += whisper_full_get_segment_text(ctx, i);
+        transcript += " ";
     }
 
     whisper_free(ctx);
-    return 0;
+
+    // Trim trailing space
+    if (!transcript.empty() && transcript.back() == ' ') {
+        transcript.pop_back();
+    }
+
+    return transcript;
 }

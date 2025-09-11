@@ -3,6 +3,7 @@
 #include <unordered_map>
 #include <vector>
 #include <filesystem>
+#include <regex>   // <-- needed for std::regex
 
 struct Slot {
     std::string name;
@@ -34,7 +35,10 @@ private:
     struct Rule {
         std::string intent;
         std::string description; // optional doc string
-        std::string pattern;     // regex
+
+        std::string pattern_str; // keep raw regex string (good for debugging/logging)
+        std::regex pattern;      // compiled regex used at runtime
+
         std::vector<std::string> slot_names; // capture-group names
         float score_boost = 0.0f;
         bool case_insensitive = true;
@@ -42,6 +46,6 @@ private:
 
     std::vector<Rule> rules_;
 
-    // 🔑 new private helper to unify parsing logic
+    //private helper to unify parsing logic
     bool parse_rules(const std::string& txt, std::string* error_out);
 };
