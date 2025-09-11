@@ -1,108 +1,95 @@
-// Voice integration entry point
+#include "voice.hpp"
 #include <iostream>
 #include <vector>
-#include <string>
 #include <portaudio.h>
 #include "whisper.h"
 
-// Sample rate for Whisper
-#define SAMPLE_RATE 16000
+#define SAMPLE_RATE   16000
 #define FRAMES_PER_BUFFER 512
 
-// Struct for holding audio data
 struct AudioData {
     std::vector<float> buffer;
     bool ready = false;
 };
 
-// PortAudio callback
 static int recordCallback(const void *input,
-                          void *output,
+                          void * /*output*/,
                           unsigned long frameCount,
-                          const PaStreamCallbackTimeInfo* timeInfo,
-                          PaStreamCallbackFlags statusFlags,
+                          const PaStreamCallbackTimeInfo* /*timeInfo*/,
+                          PaStreamCallbackFlags /*statusFlags*/,
                           void *userData) {
-    AudioData *data = (AudioData*) userData;
-    const float *in = (const float*) input;
+    AudioData *data = reinterpret_cast<AudioData*>(userData);
+    const float *in = reinterpret_cast<const float*>(input);
 
-    if (in) {
+    if (input != nullptr) {
         data->buffer.insert(data->buffer.end(), in, in + frameCount);
+    }
+
+    if (data->buffer.size() >= SAMPLE_RATE * 5) { // 5 seconds
+        data->ready = true;
+        return paComplete;
     }
 
     return paContinue;
 }
 
 int runVoiceDemo(const std::string &modelPath) {
-    // Load Whisper model
+    // Initialize Whisper
     struct whisper_context *ctx = whisper_init_from_file(modelPath.c_str());
     if (!ctx) {
-        std::cerr << "[ERROR] Failed to load Whisper model: " << modelPath << std::endl;
+        std::cerr << "Failed to initialize Whisper model: " << modelPath << std::endl;
         return 1;
     }
 
-    // Init PortAudio
+    // Initialize PortAudio
     if (Pa_Initialize() != paNoError) {
-        std::cerr << "[ERROR] Failed to initialize PortAudio" << std::endl;
+        std::cerr << "Failed to initialize PortAudio" << std::endl;
         whisper_free(ctx);
         return 1;
     }
 
-    AudioData audio;
+    AudioData data;
     PaStream *stream;
 
     if (Pa_OpenDefaultStream(&stream,
-                             1, // input channels
-                             0, // output channels
+                             1, // mono input
+                             0, // no output
                              paFloat32,
                              SAMPLE_RATE,
                              FRAMES_PER_BUFFER,
                              recordCallback,
-                             &audio) != paNoError) {
-        std::cerr << "[ERROR] Failed to open audio stream" << std::endl;
+                             &data) != paNoError) {
+        std::cerr << "Failed to open audio stream" << std::endl;
         Pa_Terminate();
         whisper_free(ctx);
         return 1;
     }
 
-    std::cout << "[INFO] Recording for 5 seconds... speak now!" << std::endl;
+    std::cout << "Recording... speak into your mic (5 sec window)" << std::endl;
     Pa_StartStream(stream);
-    Pa_Sleep(5000); // record for 5 seconds
+
+    while (!data.ready) {
+        Pa_Sleep(100);
+    }
+
     Pa_StopStream(stream);
     Pa_CloseStream(stream);
     Pa_Terminate();
 
-    if (audio.buffer.empty()) {
-        std::cerr << "[ERROR] No audio captured" << std::endl;
-        whisper_free(ctx);
-        return 1;
-    }
+    std::cout << "Transcribing..." << std::endl;
 
-    std::cout << "[INFO] Transcribing..." << std::endl;
-
-    // Set Whisper params
     whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    params.print_progress = true;
-    params.print_realtime = true;
-
-    if (whisper_full(ctx, params, audio.buffer.data(), audio.buffer.size()) != 0) {
-        std::cerr << "[ERROR] Whisper failed during transcription" << std::endl;
+    if (whisper_full(ctx, params, data.buffer.data(), data.buffer.size()) != 0) {
+        std::cerr << "Whisper transcription failed" << std::endl;
         whisper_free(ctx);
         return 1;
     }
 
-    // Print result
     int n_segments = whisper_full_n_segments(ctx);
-    std::cout << "[RESULT] Transcription:" << std::endl;
-    for (int i = 0; i < n_segments; i++) {
+    for (int i = 0; i < n_segments; ++i) {
         std::cout << whisper_full_get_segment_text(ctx, i) << std::endl;
     }
 
     whisper_free(ctx);
     return 0;
-}
-
-// Entry point for GRIM integration (for now standalone)
-int main() {
-    std::string modelPath = "external/whisper.cpp/models/ggml-small.bin";
-    return runVoiceDemo(modelPath);
 }
