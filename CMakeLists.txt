@@ -92,14 +92,13 @@ else()
   message(FATAL_ERROR "PortAudio not found. Please install it.")
 endif()
 
-# ---- Voice demo ----
-add_executable(voice voice.cpp)
-target_include_directories(voice PRIVATE
+# ---- Voice integration ----
+# voice.cpp is part of GRIM_SOURCES, no standalone exe
+target_include_directories(GRIM PRIVATE
     ${CMAKE_SOURCE_DIR}/external/whisper.cpp
     ${PORTAUDIO_INCLUDE_DIR}
 )
-target_link_libraries(voice PRIVATE whisper ${PORTAUDIO_LIBRARY})
-
+target_link_libraries(GRIM PRIVATE whisper ${PORTAUDIO_LIBRARY})
 
 # ---- Compile-time resource paths ----
 include(GNUInstallDirs)
@@ -188,7 +187,6 @@ endif()
 
 # ---- Install rules ----
 install(TARGETS GRIM RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(TARGETS voice RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 foreach(FILE ${GRIM_RESOURCES})
   if(EXISTS "${CMAKE_SOURCE_DIR}/${FILE}")
