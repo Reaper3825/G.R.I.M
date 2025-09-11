@@ -46,6 +46,9 @@ int main(int argc, char** argv) {
     runBootstrapChecks(argc, argv);
     std::cout << "[DEBUG] Bootstrap checks complete\n";
 
+    // --- Warm up AI model ---
+warmupAI();
+
     // --- NLP setup ---
     NLP nlp;  // <-- declare once here, survives for whole main()
 
