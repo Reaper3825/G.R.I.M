@@ -2,32 +2,35 @@
 #include <SFML/Graphics.hpp>
 #include <deque>
 #include <string>
-#include <sstream>
 #include <vector>
 
-// A single wrapped line with text + color
-struct WrappedLine {
-    std::string text;
-    sf::Color color{ sf::Color::White };
-};
-
+// Forward-declare SFML class
 class ConsoleHistory {
 public:
-    // Add a new line to history
+    struct WrappedLine {
+        std::string text;
+        sf::Color color{ sf::Color::White };
+    };
+
+    // Add a new line to history (default white color)
     void push(const std::string& line, sf::Color c = sf::Color::White);
 
-    // Wrap text for drawing into window width
+    // Re-wrap text for drawing into given width
     void ensureWrapped(float maxWidth, sf::Text& meas);
-
-    // Access wrapped lines
-    const std::vector<WrappedLine>& wrapped() const { return wrapped_; }
-    size_t wrappedCount() const { return wrapped_.size(); }
 
     // Clear all history
     void clear();
 
+    // Accessors
+    size_t rawCount() const;
+    size_t wrappedCount() const;
+    const std::vector<WrappedLine>& wrapped() const;
+
 private:
-    static void wrapLine(const WrappedLine& ln, float maxW, sf::Text& meas, std::vector<WrappedLine>& out);
+    void wrapLine(const WrappedLine& ln,
+                  float maxW,
+                  sf::Text& meas,
+                  std::vector<WrappedLine>& out);
 
     bool dirty_ = true;
     float lastWrapWidth_ = -1.f;

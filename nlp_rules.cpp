@@ -11,7 +11,7 @@ struct Rule { std::string match, command; bool prefix = false; };
 static std::vector<Rule> g_rules;
 static std::mutex g_m;
 
-bool loadNlpRules(const std::string& path) {
+bool loadNlpRules([[maybe_unused]] const std::string& path) {
     // Minimal stub so you can link; replace with your JSON loader later.
     // Example hardcoded rules so you can test immediately:
     std::lock_guard<std::mutex> lock(g_m);

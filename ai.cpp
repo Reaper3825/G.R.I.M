@@ -4,11 +4,13 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
-// Global JSON objects
+// ---------------- Globals ----------------
 nlohmann::json longTermMemory;
-nlohmann::json aiConfig; // backend + tone/style
+nlohmann::json aiConfig; // backend, endpoints, style
 
-// ---------------- Memory persistence ----------------
+// =========================================================
+// Memory persistence
+// =========================================================
 void loadMemory() {
     std::ifstream f("memory.json");
     if (f) {
@@ -39,7 +41,9 @@ void saveMemory() {
     }
 }
 
-// ---------------- AI configuration ----------------
+// =========================================================
+// AI configuration
+// =========================================================
 void loadAIConfig(const std::string& filename) {
     std::ifstream f(filename);
     if (!f.is_open()) {
@@ -47,7 +51,8 @@ void loadAIConfig(const std::string& filename) {
         aiConfig = {
             {"backend", "auto"},
             {"ollama_url", "http://127.0.0.1:11434"},
-            {"localai_url", "http://127.0.0.1:8080/v1"}
+            {"localai_url", "http://127.0.0.1:8080/v1"},
+            {"default_model", "mistral"} // fallback model
         };
         std::ofstream out(filename);
         if (out) {
@@ -65,29 +70,29 @@ void loadAIConfig(const std::string& filename) {
         aiConfig = {
             {"backend", "auto"},
             {"ollama_url", "http://127.0.0.1:11434"},
-            {"localai_url", "http://127.0.0.1:8080/v1"}
+            {"localai_url", "http://127.0.0.1:8080/v1"},
+            {"default_model", "mistral"}
         };
     }
 }
 
-// ---------------- Backend resolver ----------------
+// =========================================================
+// Backend resolver
+// =========================================================
 std::string resolveBackendURL() {
-    std::string backend = "auto";
-    if (aiConfig.contains("backend")) {
-        backend = aiConfig["backend"].get<std::string>();
-    }
+    std::string backend = aiConfig.value("backend", "auto");
 
     if (backend == "auto") {
-        // Detect OS
-#if defined(_WIN32) || defined(_WIN64)
+        // Pick defaults by platform
+    #if defined(_WIN32) || defined(_WIN64)
         backend = "ollama";
-#elif defined(__linux__)
+    #elif defined(__linux__)
         backend = "localai";
-#elif defined(__APPLE__)
+    #elif defined(__APPLE__)
         backend = "ollama";
-#else
+    #else
         backend = "localai";
-#endif
+    #endif
     }
 
     std::string url;
@@ -101,23 +106,26 @@ std::string resolveBackendURL() {
     return url;
 }
 
-// ---------------- Core AI call ----------------
+// =========================================================
+// Core AI call
+// =========================================================
 std::string callAI(const std::string& prompt) {
     std::string url = resolveBackendURL();
+    std::string model = aiConfig.value("default_model", "mistral");
 
     nlohmann::json body = {
-        {"model", "mistral"},   // TODO: configurable
+        {"model", model},
         {"prompt", prompt},
         {"stream", false}
     };
 
-    // Build correct endpoint depending on backend type
+    // Choose endpoint format depending on backend
     std::string endpoint;
     if (url.find("8080") != std::string::npos) {
-        // LocalAI expects /chat/completions
+        // LocalAI → OpenAI-compatible
         endpoint = url + "/chat/completions";
         body = {
-            {"model", "gemma:2b"},
+            {"model", model},
             {"messages", {{{"role", "user"}, {"content", prompt}}}}
         };
     } else {
@@ -125,8 +133,7 @@ std::string callAI(const std::string& prompt) {
         endpoint = url + "/api/generate";
     }
 
-    std::cout << "[AI] Sending prompt to " << endpoint << " using model "
-              << body["model"] << "\n";
+    std::cout << "[AI] Sending prompt to " << endpoint << " using model " << model << "\n";
 
     cpr::Response r = cpr::Post(
         cpr::Url{endpoint},
@@ -148,7 +155,7 @@ std::string callAI(const std::string& prompt) {
         } else if (j.contains("choices")) {
             return j["choices"][0]["message"]["content"].get<std::string>(); // LocalAI
         }
-        return "[No valid field in AI reply]";
+        return "[AI] No valid field in response.";
     } catch (const std::exception& e) {
         return std::string("Error parsing AI JSON: ") + e.what();
     }

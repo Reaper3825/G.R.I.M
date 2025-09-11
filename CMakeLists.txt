@@ -10,8 +10,6 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose Debug or Release" FORCE)
 endif()
 
-
-
 # ---- Warnings ----
 if(MSVC)
   add_compile_options(/W4 /permissive-)
@@ -45,6 +43,7 @@ set(GRIM_SOURCES
     ui_draw.cpp
     ui_events.cpp
     voice.cpp
+    voice_stream.cpp        
 )
 
 set(GRIM_HEADERS
@@ -53,6 +52,7 @@ set(GRIM_HEADERS
     commands.hpp
     console_history.hpp
     nlp.hpp
+    intent.hpp
     aliases.hpp
     synonyms.hpp
     resources.hpp
@@ -62,6 +62,7 @@ set(GRIM_HEADERS
     ui_events.hpp
     timer.hpp
     voice.hpp
+    voice_stream.hpp         
 )
 
 add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
@@ -86,10 +87,9 @@ else()
   target_link_libraries(GRIM PRIVATE cpr ssl crypto)
 endif()
 
-# Whisper.cpp (build only if needed, not every time)
+# Whisper.cpp
 add_subdirectory(external/whisper.cpp EXCLUDE_FROM_ALL)
 target_link_libraries(GRIM PRIVATE whisper)
-
 
 # PortAudio
 find_path(PORTAUDIO_INCLUDE_DIR portaudio.h)
@@ -106,7 +106,6 @@ target_include_directories(GRIM PRIVATE
     ${CMAKE_SOURCE_DIR}/external/whisper.cpp
     ${PORTAUDIO_INCLUDE_DIR}
 )
-target_link_libraries(GRIM PRIVATE whisper ${PORTAUDIO_LIBRARY})
 
 # ---- Compile-time resource paths ----
 include(GNUInstallDirs)

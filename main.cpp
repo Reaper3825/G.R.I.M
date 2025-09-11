@@ -1,4 +1,4 @@
-#include <SFML/Graphics.hpp>
+#include <SFML/Graphics.hpp> 
 #include <nlohmann/json.hpp>
 #include <iostream>
 #include <string>
@@ -36,15 +36,19 @@ std::string g_ui_textbox;
 int main(int argc, char** argv) {
     // --- Load persistent memory ---
     loadMemory();
+    std::cout << "[DEBUG] Memory loaded successfully\n";
 
     // --- Load AI config ---
     loadAIConfig("ai_config.json");
+    std::cout << "[DEBUG] AI config loaded from ai_config.json\n";
 
     // --- Bootstrap check ---
     runBootstrapChecks(argc, argv);
+    std::cout << "[DEBUG] Bootstrap checks complete\n";
 
     // --- NLP setup ---
-    NLP nlp;
+    NLP nlp;  // <-- declare once here, survives for whole main()
+
     {
         std::string rulesText = loadTextResource("nlp_rules.json", argc, argv);
         if (!rulesText.empty()) {
@@ -56,26 +60,34 @@ int main(int argc, char** argv) {
             std::cerr << "[NLP] Could not load nlp_rules.json\n";
         }
     }
+    std::cout << "[DEBUG] NLP rules loaded at startup\n";
 
     // --- Load synonyms & aliases ---
     {
         std::string synText = loadTextResource("synonyms.json", argc, argv);
-        if (!synText.empty()) loadSynonymsFromString(synText);
+        if (!synText.empty()) {
+            loadSynonymsFromString(synText);
+            std::cout << "[DEBUG] Synonyms loaded\n";
+        }
 
         std::string aliasText = loadTextResource("app_aliases.json", argc, argv);
-        if (!aliasText.empty()) loadAliasesFromString(aliasText);
+        if (!aliasText.empty()) {
+            loadAliasesFromString(aliasText);
+            std::cout << "[DEBUG] Aliases loaded\n";
+        }
     }
 
     // --- Whisper context (shared for voice) ---
-    whisper_context *whisperCtx = whisper_init_from_file("external/whisper.cpp/models/ggml-small.bin");
-    if (!whisperCtx) {
-        std::cerr << "[ERROR] Failed to load Whisper model.\n";
-        return 1;
+    if (!initWhisper()) {
+        std::cerr << "[ERROR] Failed to initialize Whisper. Voice features will be disabled." << std::endl;
+    } else {
+        std::cout << "[DEBUG] Whisper context initialized\n";
     }
 
     // --- Create window ---
     sf::RenderWindow window(sf::VideoMode(600, 900), "GRIM", sf::Style::Default);
     window.setVerticalSyncEnabled(true);
+    std::cout << "[DEBUG] Window created (600x900)\n";
 
     // --- History ---
     ConsoleHistory history;
@@ -91,18 +103,24 @@ int main(int argc, char** argv) {
         if (!font.loadFromFile(fontPath)) {
             addHistory("[ERROR] Failed to load font from " + fontPath, sf::Color::Red);
         } else {
-            std::cout << "[INFO] Font loaded: " << fontPath << "\n";
+            std::cout << "[DEBUG] Font loaded: " << fontPath << "\n";
         }
+    } else {
+        std::cerr << "[ERROR] No font found!\n";
     }
 
     // --- Initial state ---
     fs::path currentDir = fs::current_path();
     addHistory("GRIM is ready. Type 'help' for commands. Type 'quit' to exit.", sf::Color(160,200,255));
+    std::cout << "[DEBUG] GRIM startup complete, entering main loop\n";
 
     sf::Clock caretClock;
     bool caretVisible = true;
     float scrollOffsetLines = 0.f;
     std::vector<Timer> timers;
+
+    // --- Load LongTerm memory ---
+    nlohmann::json longTermMemory;
 
     // ----------------- Main loop -----------------
     while (window.isOpen()) {
@@ -115,8 +133,16 @@ int main(int argc, char** argv) {
             std::string cmd = g_ui_textbox;
             g_ui_textbox.clear();
 
-            // Legacy demo: 5-second recording
-            if (cmd == "voice\n" || cmd == "voice") {
+            // trim newline
+            if (!cmd.empty() && cmd.back() == '\n') cmd.pop_back();
+
+            if (cmd == "quit") {
+                addHistory("[INFO] Quitting...", sf::Color::Yellow);
+                break;
+            }
+
+            // Voice demo special case
+            if (cmd == "voice") {
                 addHistory("[Voice] Starting 5-second recording...", sf::Color(0, 255, 128));
 
                 std::string transcript = runVoiceDemo("external/whisper.cpp/models/ggml-small.bin");
@@ -134,11 +160,23 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // New: continuous streaming
-            else if (cmd == "voice_stream\n" || cmd == "voice_stream") {
+            // Voice stream special case
+            else if (cmd == "voice_stream") {
                 addHistory("[VoiceStream] Starting live microphone stream...", sf::Color(0, 200, 255));
-                runVoiceStream(whisperCtx, &history);
+                runVoiceStream(g_whisperCtx, &history, timers, longTermMemory, nlp);
                 addHistory("[VoiceStream] Stopped.", sf::Color(0, 200, 255));
+            }
+
+            // Normal text commands
+            else {
+                Intent intent = nlp.parse(cmd);
+                if (intent.matched) {
+                    handleCommand(intent, g_ui_textbox, currentDir, timers, longTermMemory, nlp, history);
+                } else {
+                    addHistory("[WARN] No intent matched for: " + cmd, sf::Color::Red);
+                    std::cout << "[DEBUG][Command] No intent matched for input: '" 
+                              << cmd << "' (rules loaded=" << nlp.rule_count() << ")\n";
+                }
             }
         }
 
@@ -166,6 +204,9 @@ int main(int argc, char** argv) {
         drawUI(window, font, history, g_ui_textbox, caretVisible, scrollOffsetLines);
     }
 
-    whisper_free(whisperCtx);
+    if (g_whisperCtx) {
+        whisper_free(g_whisperCtx);
+    }
+
     return 0;
 }
