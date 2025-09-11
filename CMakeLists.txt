@@ -144,10 +144,18 @@ endforeach()
 set(GRIM_FONT_SRC "")
 if(EXISTS "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")
   set(GRIM_FONT_SRC "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")
+
+# Windows native paths
 elseif(EXISTS "C:/Windows/Fonts/arial.ttf")
   set(GRIM_FONT_SRC "C:/Windows/Fonts/arial.ttf")
 elseif(EXISTS "C:/Windows/Fonts/segoeui.ttf")
   set(GRIM_FONT_SRC "C:/Windows/Fonts/segoeui.ttf")
+
+# MSYS2/MinGW paths
+elseif(EXISTS "/c/Windows/Fonts/arial.ttf")
+  set(GRIM_FONT_SRC "/c/Windows/Fonts/arial.ttf")
+elseif(EXISTS "/c/Windows/Fonts/segoeui.ttf")
+  set(GRIM_FONT_SRC "/c/Windows/Fonts/segoeui.ttf")
 endif()
 
 if(GRIM_FONT_SRC)
@@ -157,6 +165,7 @@ if(GRIM_FONT_SRC)
             "$<TARGET_FILE_DIR:GRIM>/DejaVuSans.ttf"
   )
 endif()
+
 
 # ---- Whisper model (auto-download) ----
 set(WHISPER_MODEL_DIR "${CMAKE_SOURCE_DIR}/external/whisper.cpp/models")
