@@ -1,4 +1,5 @@
 #include "resources.hpp"
+#include "console_history.hpp"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -11,14 +12,20 @@
 
 namespace fs = std::filesystem;
 
+// -------------------------------------------------------------
+// Locate resource root
+// -------------------------------------------------------------
 std::string getResourcePath() {
 #if defined(GRIM_PORTABLE_ONLY)
-    // Portable mode: resources live next to the executable
+    // Portable mode: look next to executable
     fs::path exePath;
   #if defined(_WIN32)
     char buffer[MAX_PATH];
-    GetModuleFileNameA(nullptr, buffer, MAX_PATH);
-    exePath = fs::path(buffer).parent_path();
+    if (GetModuleFileNameA(nullptr, buffer, MAX_PATH)) {
+        exePath = fs::path(buffer).parent_path();
+    } else {
+        exePath = fs::current_path();
+    }
   #elif defined(__APPLE__)
     char buffer[1024];
     uint32_t size = sizeof(buffer);
@@ -32,11 +39,15 @@ std::string getResourcePath() {
   #endif
     return (exePath / "resources").string();
 #else
-    // System mode: resources folder inside project root
+    // System mode: use current working directory
+    // (could be changed to an install prefix in the future)
     return (fs::current_path() / "resources").string();
 #endif
 }
 
+// -------------------------------------------------------------
+// Load text resource from resources/ folder
+// -------------------------------------------------------------
 std::string loadTextResource(const std::string& filename, int argc, char** argv) {
     (void)argc;
     (void)argv;
@@ -44,27 +55,46 @@ std::string loadTextResource(const std::string& filename, int argc, char** argv)
     fs::path filePath = fs::path(getResourcePath()) / filename;
     std::ifstream file(filePath);
     if (!file.is_open()) {
-        std::cerr << "[GRIM] Resource not found: " << filename << std::endl;
+        std::cerr << "[GRIM] Resource not found: " << filename
+                  << " (looked in " << filePath.string() << ")\n";
         return {};
     }
+
     return { std::istreambuf_iterator<char>(file),
              std::istreambuf_iterator<char>() };
 }
 
+// -------------------------------------------------------------
+// Find any usable font in resources/ (first .ttf or .otf)
+// -------------------------------------------------------------
 std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* history) {
     (void)argc;
     (void)argv;
-    (void)history;
 
     fs::path resDir = fs::path(getResourcePath());
 
-    // Look for common font files in the resources directory
+    if (!fs::exists(resDir)) {
+        if (history) {
+            history->push("[ERROR] Resource directory missing: " + resDir.string(), sf::Color::Red);
+        } else {
+            std::cerr << "[ERROR] Resource directory missing: " << resDir << std::endl;
+        }
+        return {};
+    }
+
     for (auto& p : fs::directory_iterator(resDir)) {
-        if (p.path().extension() == ".ttf" || p.path().extension() == ".otf") {
-            return p.path().string();
+        if (p.is_regular_file()) {
+            auto ext = p.path().extension().string();
+            if (ext == ".ttf" || ext == ".otf") {
+                return p.path().string();
+            }
         }
     }
 
-    std::cerr << "[ERROR] No font found in resources/ or system fonts." << std::endl;
+    if (history) {
+        history->push("[ERROR] No font found in resources/ or system fonts.", sf::Color::Red);
+    } else {
+        std::cerr << "[ERROR] No font found in resources/ or system fonts." << std::endl;
+    }
     return {};
 }

@@ -139,6 +139,18 @@
   "slot_names": ["verb"],
   "score_boost": 0.3,
   "case_insensitive": true
+},
+{
+  "intent": "grim_ai",
+  "description": "Send a query to GRIM's AI",
+  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?grim\\s+(.+)$",
+  "slot_names": ["query"],
+  "score_boost": 0.3,
+  "case_insensitive": true
 }
+
+
+
+
 
 ]
