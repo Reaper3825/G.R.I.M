@@ -51,8 +51,8 @@ static bool isSilence(const std::vector<float> &pcm) {
 // ---------------- Whisper Init ----------------
 bool initWhisper() {
     namespace fs = std::filesystem;
-    fs::path baseModel = fs::current_path() / "whisper.cpp" / "models" / "ggml-base.en.bin";
-    fs::path smallModel = fs::current_path() / "whisper.cpp" / "models" / "ggml-small.bin";
+    fs::path baseModel = fs::path(getResourcePath()) / "models" / "whisper" / "ggml-base.en.bin";
+    fs::path smallModel = fs::path(getResourcePath()) / "models" / "whisper" / "ggml-small.bin";
 
     fs::path modelPathFS;
     if (fs::exists(baseModel)) {
@@ -77,6 +77,7 @@ bool initWhisper() {
     std::cout << "[Voice] Whisper initialized successfully." << std::endl;
     return true;
 }
+
 
 // ---------------- Voice Demo ----------------
 std::string runVoiceDemo(const std::string & /*modelPath*/) {
