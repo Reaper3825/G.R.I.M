@@ -1,7 +1,6 @@
 {
     "dog_name": "artemis",
-    "facts": [
-    ],
+    "facts": [],
     "favorite color": "green",
     "my best friend's name": "josh",
     "my dog": "a Golden Retriever",
@@ -10,5 +9,6 @@
         "Scepterfall",
         "GRIM"
     ],
-    "user name": "Austin"
+    "user name": "Austin",
+    "voice_baseline": 0.000045
 }

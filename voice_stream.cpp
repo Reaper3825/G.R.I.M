@@ -16,6 +16,8 @@
 #include <mutex>
 #include <csignal>
 #include <chrono>
+#include <cmath>   // for sqrt, log10
+#include <sstream> // for last word parsing
 
 namespace fs = std::filesystem;
 
@@ -33,14 +35,16 @@ static AudioData g_audio;
 static std::atomic<bool> g_running{false};
 static std::string g_partial; // evolving transcript for textbox
 
-// ---------------- Signal Handling ----------------
+// ---------------- Globals ----------------
+extern double g_silenceThreshold;        // set via ai_config.json
+extern float g_lastSegmentConfidence;    // from voice.cpp
 
+// ---------------- Signal Handling ----------------
 static void handleSigint(int) {
     g_running = false;
 }
 
 // ---------------- PortAudio Callback ----------------
-
 static int recordCallback(const void *input,
                           void * /*output*/,
                           unsigned long frameCount,
@@ -52,25 +56,53 @@ static int recordCallback(const void *input,
         std::lock_guard<std::mutex> lock(g_audio.mutex);
         g_audio.buffer.insert(g_audio.buffer.end(), in, in + frameCount);
         g_audio.ready = true;
-
-        std::cout << "[DEBUG][VoiceStream] Captured " << frameCount
-                  << " frames (" << g_audio.buffer.size() << " total)\n";
     }
     return paContinue;
 }
 
 // ---------------- Silence Detection ----------------
-
 static bool isSilence(const std::vector<float> &pcm) {
     if (pcm.empty()) return true;
     double energy = 0.0;
     for (float s : pcm) energy += s * s;
     energy /= pcm.size();
-    return energy < 1e-4; // threshold can be tuned
+    return energy < g_silenceThreshold;
+}
+
+// ---------------- Completion Heuristics ----------------
+static bool looksComplete(const std::string& text) {
+    if (text.empty()) return false;
+
+    // trim trailing spaces
+    std::string trimmed = text;
+    while (!trimmed.empty() && isspace(trimmed.back())) {
+        trimmed.pop_back();
+    }
+    if (trimmed.empty()) return false;
+
+    // punctuation check
+    char last = trimmed.back();
+    if (last == '.' || last == '?' || last == '!') return true;
+
+    // last word check
+    std::istringstream iss(trimmed);
+    std::string word, lastWord;
+    while (iss >> word) lastWord = word;
+
+    static const std::vector<std::string> endWords = {
+        "minutes", "minute", "hours", "hour",
+        "seconds", "second", "open", "close",
+        "stop", "start", "play", "pause"
+    };
+
+    for (auto& w : endWords) {
+        if (lastWord == w) return true;
+    }
+
+    return false;
 }
 
 // ---------------- Main Voice Stream ----------------
-
 void runVoiceStream(whisper_context *ctx,
                     ConsoleHistory* history,
                     std::vector<Timer>& timers,
@@ -144,15 +176,21 @@ void runVoiceStream(whisper_context *ctx,
                 g_audio.ready = false;
             }
 
-            std::cout << "[DEBUG][VoiceStream] Processing " << pcm.size() << " samples\n";
-
             // Process audio in slices
             while (pcm.size() >= CHUNK_SIZE) {
                 std::vector<float> slice(pcm.begin(), pcm.begin() + CHUNK_SIZE);
                 pcm.erase(pcm.begin(), pcm.begin() + CHUNK_SIZE);
 
-                std::cout << "[DEBUG][VoiceStream] Sending slice of " << slice.size() << " samples to Whisper\n";
+                // 🔊 Loudness Debug
+                double energy = 0.0;
+                for (float s : slice) energy += s * s;
+                energy /= slice.size();
+                double rms = sqrt(energy);
+                double dB = 20.0 * log10(rms + 1e-6);
+                std::cout << "[DEBUG][VoiceStream] Slice loudness: RMS=" << rms
+                          << " dB=" << dB << "\n";
 
+                // Send slice to Whisper
                 if (whisper_full(ctx, params, slice.data(), slice.size()) == 0) {
                     const int n_segments = whisper_full_n_segments(ctx);
                     std::string transcript;
@@ -161,42 +199,55 @@ void runVoiceStream(whisper_context *ctx,
                     }
 
                     if (!transcript.empty()) {
-                        g_partial = transcript;
-                        ui_set_textbox(g_partial); // update UI input field
+                        g_partial += transcript + " ";
+                        ui_set_textbox(g_partial);
                         std::cout << "[VoiceStream] Transcript: " << g_partial << std::endl;
-                        lastSpeechTime = std::chrono::steady_clock::now();
+
+                        if (!isSilence(slice)) {
+                            lastSpeechTime = std::chrono::steady_clock::now();
+                        }
                     }
                 }
             }
 
-            // Silence timeout check
+            // --- Silence + cutoff logic ---
             auto now = std::chrono::steady_clock::now();
             auto silenceMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSpeechTime).count();
-            if (!g_partial.empty() && silenceMs > 1200) {
-                std::cout << "[DEBUG][VoiceStream] Silence detected (" << silenceMs << " ms), finalizing command.\n";
 
-                // Finalize transcript
-                history->push("[VoiceStream Heard] " + g_partial, sf::Color::Yellow);
+            if (!g_partial.empty()) {
+                bool complete  = looksComplete(g_partial);
+                bool confident = (g_lastSegmentConfidence > -0.3f);
 
-                // Parse transcript and dispatch as command
-                Intent intent = nlp.parse(g_partial);
-                std::cout << "[DEBUG][VoiceStream] Intent parsed: name='" << intent.name
-                          << "', matched=" << intent.matched
-                          << ", slots=" << intent.slots.size()
-                          << ", score=" << intent.score << "\n";
+                double shortCutoff = 2000; // 2s
+                double longCutoff  = 6000; // 6s
+                double timeout     = (complete && confident) ? shortCutoff : longCutoff;
 
-                if (intent.matched) {
-                    auto currentDir = fs::current_path();
-                    handleCommand(intent, g_partial, currentDir,
-                                  timers, longTermMemory, nlp, *history);
-                } else {
-                    history->push("[VoiceStream] Sorry, I didn’t understand: " + g_partial,
-                                  sf::Color::Red);
+                if (silenceMs > timeout) {
+                    std::cout << "[DEBUG][VoiceStream] Silence detected (" << silenceMs
+                              << " ms), finalizing command (timeout=" << timeout << ").\n";
+
+                    history->push("[VoiceStream Heard] " + g_partial, sf::Color::Yellow);
+
+                    // Parse transcript and dispatch as command
+                    Intent intent = nlp.parse(g_partial);
+                    std::cout << "[DEBUG][VoiceStream] Intent parsed: name='" << intent.name
+                              << "', matched=" << intent.matched
+                              << ", slots=" << intent.slots.size()
+                              << ", score=" << intent.score << "\n";
+
+                    if (intent.matched) {
+                        auto currentDir = fs::current_path();
+                        handleCommand(intent, g_partial, currentDir,
+                                      timers, longTermMemory, nlp, *history);
+                    } else {
+                        history->push("[VoiceStream] Sorry, I didn’t understand: " + g_partial,
+                                      sf::Color::Red);
+                    }
+
+                    g_partial.clear();
+                    ui_set_textbox("");
+                    std::cout << "[VoiceStream] Command committed.\n";
                 }
-
-                g_partial.clear();
-                ui_set_textbox(""); // clear input box
-                std::cout << "[VoiceStream] Command committed.\n";
             }
         }
     });
