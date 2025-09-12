@@ -436,7 +436,7 @@ return true;
         std::cout << "[DEBUG][Command] Dispatch: voice\n";
         history.push("[Voice] Starting 5-second recording...", sf::Color::Cyan);
         fs::path modelPath = fs::path(getResourcePath()).parent_path() / "ggml-small.bin";
-        std::string transcript = runVoiceDemo(modelPath.string());
+        std::string transcript = runVoiceDemo(modelPath.string(), longTermMemory);
 
         if (!transcript.empty()) {
             history.push("[Voice] Heard: " + transcript, sf::Color::Yellow);

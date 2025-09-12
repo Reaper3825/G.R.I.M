@@ -6,5 +6,7 @@
 
   "backend": "auto",
   "ollama_url": "http://127.0.0.1:11434",
-  "localai_url": "http://127.0.0.1:8080/v1"
+  "localai_url": "http://127.0.0.1:8080/v1",
+  "silence_threshold": 0.000
 }
+

@@ -9,6 +9,9 @@
 // ---------------- Globals ----------------
 nlohmann::json longTermMemory;
 nlohmann::json aiConfig; // backend, endpoints, style
+// global silence threshold, configurable via ai_config.json
+double g_silenceThreshold = 1e-6; // default
+
 
 // =========================================================
 // Memory persistence

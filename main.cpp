@@ -148,7 +148,7 @@ warmupAI();
             if (cmd == "voice") {
                 addHistory("[Voice] Starting 5-second recording...", sf::Color(0, 255, 128));
 
-                std::string transcript = runVoiceDemo("external/whisper.cpp/models/ggml-small.bin");
+                std::string transcript = runVoiceDemo("external/whisper.cpp/models/ggml-small.bin", longTermMemory);
                 if (!transcript.empty()) {
                     addHistory("[Voice] Heard: " + transcript, sf::Color::Yellow);
 
