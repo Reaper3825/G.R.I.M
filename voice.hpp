@@ -1,6 +1,8 @@
 #pragma once
 #include <string>
 #include "whisper.h"
+#include <nlohmann/json.hpp>
+
 
 // Global Whisper context (shared across GRIM)
 extern struct whisper_context *g_whisperCtx;
@@ -9,4 +11,5 @@ extern struct whisper_context *g_whisperCtx;
 bool initWhisper();
 
 // Legacy demo: short recording and transcription
-std::string runVoiceDemo(const std::string &modelPath);
+std::string runVoiceDemo(const std::string &modelPath,
+                         nlohmann::json& longTermMemory);
