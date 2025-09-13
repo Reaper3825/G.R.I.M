@@ -1,7 +1,12 @@
 #pragma once
 #include <string>
 #include <SFML/Graphics.hpp>
+#include <nlohmann/json.hpp>
 #include "console_history.hpp"
+
+// ------------------------------------------------------------
+// Resource loading
+// ------------------------------------------------------------
 
 /// Locate the base resource path.
 /// - In portable mode, resolves relative to the executable.
@@ -21,3 +26,31 @@ std::string loadTextResource(const std::string& filename, int argc, char** argv)
 /// @param history Optional history object for logging errors. If null, logs to stderr.  
 /// @return Full path to the first font found, or empty string if none.
 std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* history = nullptr);
+
+// ------------------------------------------------------------
+// Global memory + AI config
+// ------------------------------------------------------------
+
+/// Persistent long-term memory (loaded from memory.json).
+extern nlohmann::json longTermMemory;
+
+/// AI configuration (loaded from ai_config.json).
+extern nlohmann::json aiConfig;
+
+/// Load memory.json into longTermMemory (creates default if missing).
+void loadMemory();
+
+/// Save longTermMemory back to memory.json.
+void saveMemory();
+
+/// Remember a correction (e.g. "nopath" -> "notepad").
+void rememberCorrection(const std::string& wrong, const std::string& right);
+
+/// Remember a shortcut (e.g. "bring up notes" -> "open_notepad").
+void rememberShortcut(const std::string& phrase, const std::string& command);
+
+/// Increment the usage count for a command (for preference learning).
+void incrementUsageCount(const std::string& command);
+
+/// Record the last successfully executed command.
+void setLastCommand(const std::string& command);

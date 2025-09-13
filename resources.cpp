@@ -1,8 +1,10 @@
 #include "resources.hpp"
 #include "console_history.hpp"
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <nlohmann/json.hpp>
 
 #if defined(_WIN32)
     #include <windows.h>
