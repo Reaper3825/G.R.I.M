@@ -5,6 +5,8 @@
 #include "voice.hpp"
 #include "voice_stream.hpp"
 #include "resources.hpp"
+#include "system_detect.hpp"
+
 
 #include <iostream>
 #include <filesystem>
@@ -305,15 +307,24 @@ bool handleCommand(const Intent& intent,
 
     // ---- NLP / AI ----
     if (name == "reload_nlp") {
-        std::cout << "[DEBUG][Command] Dispatch: reload_nlp\n";
-        std::string err;
-        if (!nlp.load_rules("nlp_rules.json", &err)) {
-            history.push("[ERROR] Reload failed: " + err, sf::Color::Red);
-        } else {
-            history.push("[INFO] NLP rules reloaded.", sf::Color::Green);
-        }
-        return true;
+    std::cout << "[DEBUG][Command] Dispatch: reload_nlp\n";
+
+    std::string path = getResourcePath() + "/nlp_rules.json";
+    std::cout << "[NLP] Reload requested. Looking for rules at: " << path << std::endl;
+
+    std::string err;
+    if (!nlp.load_rules(path, &err)) {
+        history.push("[ERROR] Reload failed: " + err, sf::Color::Red);
+        std::cerr << "[NLP] Failed to reload rules from: " << path
+                  << " (" << err << ")" << std::endl;
+    } else {
+        history.push("[INFO] NLP rules reloaded.", sf::Color::Green);
+        std::cout << "[NLP] Rules successfully reloaded from: " << path << std::endl;
     }
+    return true;
+}
+
+
 
     if (name == "grim_ai") {
     std::cout << "[DEBUG][Command] Dispatch: grim_ai\n";
@@ -401,35 +412,31 @@ return true;
 
 
     // ---- System ----
-    if (name == "system_info") {
-        std::cout << "[DEBUG][Command] Dispatch: system_info\n";
-#ifdef _WIN32
-        double cpuLoad = getCPUUsage();
-        DWORDLONG totalMB = 0, usedMB = 0;
-        double memPercent = getMemoryUsagePercent(usedMB, totalMB);
+    else if (name == "system_info") {
+    std::cout << "[DEBUG][Command] Dispatch: system_info\n";
 
-        SYSTEM_INFO sysInfo;
-        GetSystemInfo(&sysInfo);
-        int cpuCount = sysInfo.dwNumberOfProcessors;
+    SystemInfo sys = detectSystem();
 
-        std::string gpuName = "[Unavailable]";
-        DISPLAY_DEVICEA dd;
-        dd.cb = sizeof(dd);
-        if (EnumDisplayDevicesA(NULL, 0, &dd, 0)) {
-            gpuName = dd.DeviceString;
-        }
+    history.push("[System Info]", sf::Color::Cyan);
+    history.push("OS         : " + sys.osName + " (" + sys.arch + ")", sf::Color::Yellow);
+    history.push("CPU Cores  : " + std::to_string(sys.cpuCores), sf::Color::Yellow);
+    history.push("RAM        : " + std::to_string(sys.ramMB) + " MB", sf::Color::Green);
 
-        history.push("[System Info]", sf::Color::Cyan);
-        history.push("CPU Cores : " + std::to_string(cpuCount), sf::Color::Yellow);
-        history.push("CPU Usage : " + (cpuLoad >= 0.0 ? std::to_string((int)cpuLoad) + "%" : "[Unavailable]"), sf::Color::Yellow);
-        history.push("Memory    : " + std::to_string(usedMB) + " MB / " + std::to_string(totalMB) + " MB (" + std::to_string((int)memPercent) + "%)", sf::Color::Green);
-        history.push("GPU       : " + gpuName, sf::Color(180, 255, 180));
-#else
-        history.push("[System Info]", sf::Color::Cyan);
-        history.push("System info not implemented on this platform yet.", sf::Color::Red);
-#endif
-        return true;
+    if (sys.hasGPU) {
+        std::string gpuLine = sys.gpuName + " (" + std::to_string(sys.gpuCount) + " device(s))";
+        history.push("GPU        : " + gpuLine, sf::Color(180, 255, 180));
+
+        if (sys.hasCUDA)  history.push("CUDA       : Supported", sf::Color::Green);
+        if (sys.hasMetal) history.push("Metal      : Supported", sf::Color::Green);
+        if (sys.hasROCm)  history.push("ROCm       : Supported", sf::Color::Green);
+    } else {
+        history.push("GPU        : None detected", sf::Color::Red);
     }
+
+    history.push("Suggested Whisper model: " + sys.suggestedModel, sf::Color::Cyan);
+    return true;
+}
+
 
     // ---- Voice ----
     if (name == "voice") {

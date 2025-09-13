@@ -43,7 +43,8 @@ set(GRIM_SOURCES
     ui_draw.cpp
     ui_events.cpp
     voice.cpp
-    voice_stream.cpp        
+    voice_stream.cpp 
+    system_detect.cpp
 )
 
 set(GRIM_HEADERS
@@ -62,7 +63,7 @@ set(GRIM_HEADERS
     ui_events.hpp
     timer.hpp
     voice.hpp
-    voice_stream.hpp         
+    voice_stream.hpp
 )
 
 add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
@@ -117,7 +118,8 @@ else()
   target_compile_definitions(GRIM PRIVATE GRIM_DATA_DIR="${GRIM_DATADIR}")
 endif()
 
-# ---- Default JSONs ----
+# ---- JSON Resources ----
+# Static configs live in resources/, memory.json is runtime
 set(GRIM_RESOURCES
     nlp_rules.json
     synonyms.json
@@ -126,15 +128,17 @@ set(GRIM_RESOURCES
     memory.json
 )
 
+# Ensure default files exist (write {} if missing)
 foreach(FILE ${GRIM_RESOURCES})
-  if(NOT EXISTS "${CMAKE_SOURCE_DIR}/${FILE}")
+  if(NOT EXISTS "${CMAKE_SOURCE_DIR}/resources/${FILE}" AND NOT EXISTS "${CMAKE_BINARY_DIR}/${FILE}")
     file(WRITE "${CMAKE_BINARY_DIR}/${FILE}" "{}\n")
   endif()
 endforeach()
 
+# Copy static JSONs from resources/ if present, otherwise from binary dir
 foreach(FILE ${GRIM_RESOURCES})
-  if(EXISTS "${CMAKE_SOURCE_DIR}/${FILE}")
-    set(SRC_FILE "${CMAKE_SOURCE_DIR}/${FILE}")
+  if(EXISTS "${CMAKE_SOURCE_DIR}/resources/${FILE}")
+    set(SRC_FILE "${CMAKE_SOURCE_DIR}/resources/${FILE}")
   else()
     set(SRC_FILE "${CMAKE_BINARY_DIR}/${FILE}")
   endif()
@@ -206,8 +210,8 @@ endif()
 install(TARGETS GRIM RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 foreach(FILE ${GRIM_RESOURCES})
-  if(EXISTS "${CMAKE_SOURCE_DIR}/${FILE}")
-    install(FILES "${CMAKE_SOURCE_DIR}/${FILE}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim)
+  if(EXISTS "${CMAKE_SOURCE_DIR}/resources/${FILE}")
+    install(FILES "${CMAKE_SOURCE_DIR}/resources/${FILE}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim)
   else()
     install(FILES "${CMAKE_BINARY_DIR}/${FILE}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim)
   endif()

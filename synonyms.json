@@ -24,5 +24,7 @@
     "time",
     "settimer",
     "clock"
-  ]
+  ],
+  "completion_triggers": ["minutes", "minute", "hours", "hour", "seconds", "second", "open", "close", "stop", "start", "play", "pause"]
+
 }

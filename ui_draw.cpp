@@ -1,10 +1,11 @@
 #include "ui_draw.hpp"
-#include "ui_helpers.hpp"   // for g_ui_textbox
+#include "ui_helpers.hpp"   // g_ui_textbox + g_inputBuffer
 #include <algorithm>
 #include <cmath>
 
-// g_ui_textbox is declared in main.cpp, extern in ui_helpers.hpp
-extern std::string g_ui_textbox;
+// Globals defined in main.cpp, declared extern in ui_helpers.hpp
+extern sf::Text g_ui_textbox;       // renderable text object
+extern std::string g_inputBuffer;   // raw editable buffer
 
 void drawUI(
     sf::RenderWindow& window,
@@ -17,17 +18,13 @@ void drawUI(
     // UI elements
     sf::RectangleShape titleBar; titleBar.setFillColor(sf::Color(26,26,30));
     sf::RectangleShape inputBar; inputBar.setFillColor(sf::Color(30,30,35));
-    sf::Text titleText, inputText, lineText;
+    sf::Text titleText, lineText;
 
     if (font.getInfo().family != "") {
         titleText.setFont(font);
         titleText.setCharacterSize(kTitleFontSize);
         titleText.setFillColor(sf::Color(220,220,235));
         titleText.setString("G R I M");
-
-        inputText.setFont(font);
-        inputText.setCharacterSize(kFontSize);
-        inputText.setFillColor(sf::Color::White);
 
         lineText.setFont(font);
         lineText.setCharacterSize(kFontSize);
@@ -45,10 +42,7 @@ void drawUI(
     inputBar.setSize({winW, kInputBarH});
     inputBar.setPosition(0.f, winH - kInputBarH);
 
-    // --- Clear background ---
-    window.clear(sf::Color(18,18,22));
-
-    // --- Draw bars first ---
+    // --- Draw bars ---
     window.draw(titleBar);
     window.draw(inputBar);
 
@@ -60,19 +54,18 @@ void drawUI(
         window.draw(titleText);
 
         // --- Input text ---
-        inputText.setString(g_ui_textbox);
-        inputText.setPosition(
+        g_ui_textbox.setPosition(
             kSidePad,
             winH - kInputBarH + (kInputBarH - (float)kFontSize) * 0.5f
         );
-        window.draw(inputText);
+        window.draw(g_ui_textbox);
 
         // --- Caret ---
         if (caretVisible) {
-            sf::FloatRect bounds = inputText.getGlobalBounds();
+            sf::FloatRect bounds = g_ui_textbox.getGlobalBounds();
             sf::RectangleShape caret({2.f, (float)kFontSize});
             caret.setFillColor(sf::Color::White);
-            caret.setPosition(bounds.left + bounds.width + 2.f, inputText.getPosition().y);
+            caret.setPosition(bounds.left + bounds.width + 2.f, g_ui_textbox.getPosition().y);
             window.draw(caret);
         }
 
@@ -125,7 +118,4 @@ void drawUI(
             window.draw(thumb);
         }
     }
-
-    // --- Final display ---
-    window.display();
 }

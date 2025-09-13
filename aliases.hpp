@@ -1,7 +1,12 @@
 #pragma once
 #include <string>
 
-// Resolve an alias → returns mapped value, or empty if none
+// ------------------------------------------------------------
+// Aliases API
+// ------------------------------------------------------------
+
+// Resolve an alias → returns mapped value (e.g., executable path),
+// or empty string if none found. Includes fuzzy fallback.
 std::string resolveAlias(const std::string& name);
 
 // Load aliases from a JSON file

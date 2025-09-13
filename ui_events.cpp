@@ -1,75 +1,63 @@
-#include "ui_events.hpp"
+#pragma once
+#include <SFML/Graphics.hpp>
+#include <string>
+#include <vector>
+#include <filesystem>
+#include <nlohmann/json.hpp>
+#include "console_history.hpp"
 #include "commands.hpp"
-#include "ui_helpers.hpp"   // for g_ui_textbox + ui_set_textbox
-#include <iostream>
+#include "nlp.hpp"
 
-// g_ui_textbox is declared in main.cpp, extern in ui_helpers.hpp
-extern std::string g_ui_textbox;
-
-bool processEvents(
-    sf::RenderWindow& window,
-    std::string& /*unused*/,  // buffer is global now
-    std::filesystem::path& currentDir,
-    std::vector<Timer>& timers,
-    nlohmann::json& longTermMemory,
-    NLP& nlp,
-    ConsoleHistory& history
-) {
-    sf::Event e;
-    while (window.pollEvent(e)) {
-        // --- Window close ---
-        if (e.type == sf::Event::Closed) {
+// -------------------------------------------------------------
+// Handle UI events (keyboard input, dispatch commands, etc.)
+// -------------------------------------------------------------
+bool processEvents(sf::RenderWindow& window,
+                   std::string& buffer,
+                   std::filesystem::path& currentDir,
+                   std::vector<Timer>& timers,
+                   nlohmann::json& longTermMemory,
+                   ConsoleHistory& history)
+{
+    sf::Event event;
+    while (window.pollEvent(event)) {
+        // Handle quit
+        if (event.type == sf::Event::Closed) {
             window.close();
             return false;
         }
 
-        // --- Escape key closes window ---
-        if (e.type == sf::Event::KeyPressed && e.key.code == sf::Keyboard::Escape) {
-            window.close();
-            return false;
-        }
+        // Handle text input
+        if (event.type == sf::Event::TextEntered) {
+            if (event.text.unicode == '\r' || event.text.unicode == '\n') {
+                std::string input = buffer;
+                buffer.clear();
 
-        // --- Window resize ---
-        if (e.type == sf::Event::Resized) {
-            sf::FloatRect visibleArea(0, 0, e.size.width, e.size.height);
-            window.setView(sf::View(visibleArea));
-        }
+                if (!input.empty()) {
+                    history.push("> " + input, sf::Color::Green);
 
-        // --- Text entry ---
-        if (e.type == sf::Event::TextEntered) {
-            if (e.text.unicode == 8) { // backspace
-                if (!g_ui_textbox.empty()) {
-                    g_ui_textbox.pop_back();
-                }
-            }
-            else if (e.text.unicode == 13 || e.text.unicode == 10) { // enter pressed
-                std::string line = g_ui_textbox; // copy current buffer
-                g_ui_textbox.clear();            // clear for new input
-
-                if (line == "quit" || line == "exit") {
-                    history.push("> " + line, sf::Color(150,255,150));
-                    window.close();
-                    return false;
-                }
-
-                if (!line.empty()) {
-                    history.push("> " + line, sf::Color(150,255,150));
-                    Intent intent = nlp.parse(line);
+                    Intent intent = g_nlp.parse(input);
                     if (intent.matched) {
-                        handleCommand(intent, g_ui_textbox, currentDir, timers, longTermMemory, nlp, history);
+                        handleCommand(intent, buffer, currentDir, timers, longTermMemory, g_nlp, history);
                     } else {
-                        history.push("[WARN] No intent matched for: " + line, sf::Color::Red);
-                        std::cout << "[DEBUG][Command] No intent matched for input: '"
-                                  << line << "' (rules loaded=" << nlp.rule_count() << ")\n";
+                        history.push("[NLP] No intent matched for input: '" + input +
+                                     "' (rules loaded=" + std::to_string(g_nlp.rule_count()) + ")",
+                                     sf::Color::Red);
                     }
-                } else {
-                    history.push("> ");
                 }
+            } else if (event.text.unicode == 8) { // Backspace
+                if (!buffer.empty()) buffer.pop_back();
+            } else if (event.text.unicode < 128) { // ASCII
+                buffer.push_back(static_cast<char>(event.text.unicode));
             }
-            else if (e.text.unicode >= 32 && e.text.unicode < 127) { // printable ASCII
-                g_ui_textbox.push_back(static_cast<char>(e.text.unicode));
+        }
+
+        if (event.type == sf::Event::KeyPressed) {
+            if (event.key.code == sf::Keyboard::Escape) {
+                window.close();
+                return false;
             }
         }
     }
+
     return true;
 }

@@ -13,7 +13,7 @@
 namespace fs = std::filesystem;
 
 // -------------------------------------------------------------
-// Locate resource root
+// Locate resource root (hybrid: build/resources OR ../resources)
 // -------------------------------------------------------------
 std::string getResourcePath() {
 #if defined(GRIM_PORTABLE_ONLY)
@@ -37,11 +37,25 @@ std::string getResourcePath() {
   #else
     exePath = fs::current_path();
   #endif
-    return (exePath / "resources").string();
+    fs::path portablePath = exePath / "resources";
+    std::cout << "[GRIM] Using portable resource path: " << portablePath << "\n";
+    return portablePath.string();
 #else
-    // System mode: use current working directory
-    // (could be changed to an install prefix in the future)
-    return (fs::current_path() / "resources").string();
+    // System mode: prefer build/resources, fallback to ../resources
+    fs::path buildPath   = fs::current_path() / "resources";                // e.g. D:/G.R.I.M/build/resources
+    fs::path projectPath = fs::current_path().parent_path() / "resources";  // e.g. D:/G.R.I.M/resources
+
+    if (fs::exists(buildPath)) {
+        std::cout << "[GRIM] Using resource path: " << buildPath << "\n";
+        return buildPath.string();
+    }
+    if (fs::exists(projectPath)) {
+        std::cout << "[GRIM] Using fallback resource path: " << projectPath << "\n";
+        return projectPath.string();
+    }
+
+    std::cerr << "[GRIM] WARNING: No resources directory found. Defaulting to: " << buildPath << "\n";
+    return buildPath.string();
 #endif
 }
 

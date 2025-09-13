@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 #include <regex>
-#include "intent.hpp"   // <-- add this
+#include "intent.hpp"   // defines the Intent struct
 
 class NLP {
 public:
@@ -13,7 +13,7 @@ public:
         double boost = 0.0;  // optional confidence boost
     };
 
-        // --- Methods ---
+    // --- Methods ---
     Intent parse(const std::string& text) const;
     bool load_rules(const std::string& path, std::string* err = nullptr);
     bool load_rules_from_string(const std::string& rulesText, std::string* err = nullptr);
@@ -24,3 +24,6 @@ public:
 private:
     std::vector<Rule> rules;
 };
+
+// 🔹 Global NLP object declaration (defined in nlp.cpp)
+extern NLP g_nlp;
