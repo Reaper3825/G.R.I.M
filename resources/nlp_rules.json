@@ -1,12 +1,12 @@
 [
   {
-    "intent": "open_app",
-    "description": "Open a local application by name",
-    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+|can you\\s+)?(open|launch|start|run)\\s+(?:up\\s+)?(.+)$",
-    "slot_names": ["verb","app"],
-    "score_boost": 0.3,
-    "case_insensitive": true
-  },
+  "intent": "open_app",
+  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+|can you\\s+|could you\\s+)?(?:please\\s+|can you\\s+|could you\\s+)?(open|launch|start|run)\\s+([a-zA-Z0-9_]+)$",
+  "slot_names": ["verb", "app"],
+  "score_boost": 0.5,
+  "case_insensitive": true
+}
+,
 
   {
     "intent": "search_web",
@@ -141,12 +141,9 @@
   "case_insensitive": true
 },
 {
-  "intent": "grim_ai",
-  "description": "Send a query to GRIM's AI",
-  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?grim\\s+(.+)$",
-  "slot_names": ["query"],
-  "score_boost": 0.3,
-  "case_insensitive": true
+  "intent": "voice",
+  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*)?(?:voice|start voice|record voice)$",
+  "slots": {}
 }
 
 

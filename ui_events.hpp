@@ -17,6 +17,5 @@ bool processEvents(
     std::filesystem::path& currentDir,
     std::vector<Timer>& timers,
     nlohmann::json& longTermMemory, 
-    NLP& nlp,
     ConsoleHistory& history
 );

@@ -1,12 +1,15 @@
 #pragma once
-#include <SFML/System/Clock.hpp>
+#include <SFML/Graphics.hpp>
 #include <string>
+
+// Global textbox object (rendered)
+extern sf::Text g_ui_textbox;
+
+// Global raw input buffer (editable)
+extern std::string g_inputBuffer;
 
 bool updateCaretBlink(sf::Clock& caretClock, bool caretVisible);
 void clampScroll(float& scrollOffsetLines, float maxScroll);
 
-// Allow external modules (like voice_stream) to set the active textbox text
+// --- Voice stream helper ---
 void ui_set_textbox(const std::string& text);
-
-// Global textbox buffer (declared in main.cpp, extern here)
-extern std::string g_ui_textbox;

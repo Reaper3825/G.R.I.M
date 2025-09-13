@@ -7,10 +7,11 @@
 #include <future>
 
 // ---------------- Globals ----------------
-nlohmann::json longTermMemory;
-nlohmann::json aiConfig; // backend, endpoints, style
-// global silence threshold, configurable via ai_config.json
-double g_silenceThreshold = 1e-6; // default
+extern nlohmann::json aiConfig;
+extern nlohmann::json longTermMemory;
+double g_silenceThreshold = 1e-6; // default, can be overridden in ai_config.json
+int g_silenceTimeoutMs = 7000; // default 7 seconds
+
 
 
 // =========================================================
@@ -46,6 +47,7 @@ void saveMemory() {
     }
 }
 
+
 // =========================================================
 // AI configuration
 // =========================================================
@@ -57,7 +59,9 @@ void loadAIConfig(const std::string& filename) {
             {"backend", "auto"},
             {"ollama_url", "http://127.0.0.1:11434"},
             {"localai_url", "http://127.0.0.1:8080/v1"},
-            {"default_model", "mistral"} // fallback model
+            {"default_model", "mistral"},
+            {"silence_threshold", g_silenceThreshold},
+            {"silence_timeout_ms", g_silenceTimeoutMs}
         };
         std::ofstream out(filename);
         if (out) {
@@ -70,16 +74,34 @@ void loadAIConfig(const std::string& filename) {
     try {
         f >> aiConfig;
         std::cout << "[Config] AI config loaded successfully from " << filename << "\n";
+
+        // ✅ Load silence threshold if present
+        if (aiConfig.contains("silence_threshold")) {
+            g_silenceThreshold = aiConfig["silence_threshold"].get<double>();
+            std::cout << "[Voice] Silence threshold set to " << g_silenceThreshold << "\n";
+        }
+
+        // ✅ Load silence timeout if present
+        if (aiConfig.contains("silence_timeout_ms")) {
+            g_silenceTimeoutMs = aiConfig["silence_timeout_ms"].get<int>();
+            std::cout << "[Voice] Silence timeout set to " 
+                      << g_silenceTimeoutMs << " ms\n";
+        }
+
     } catch (const std::exception& e) {
         std::cerr << "[Config] Error parsing " << filename << ": " << e.what() << std::endl;
         aiConfig = {
             {"backend", "auto"},
             {"ollama_url", "http://127.0.0.1:11434"},
             {"localai_url", "http://127.0.0.1:8080/v1"},
-            {"default_model", "mistral"}
+            {"default_model", "mistral"},
+            {"silence_threshold", g_silenceThreshold},
+            {"silence_timeout_ms", g_silenceTimeoutMs}
         };
     }
 }
+
+
 
 // =========================================================
 // Backend resolver
@@ -111,6 +133,7 @@ std::string resolveBackendURL() {
     return url;
 }
 
+
 // =========================================================
 // Core AI call (async)
 // =========================================================
@@ -119,18 +142,16 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
         std::string url = resolveBackendURL();
         std::string model = aiConfig.value("default_model", "mistral");
 
-        // Default request body
         nlohmann::json body = {
             {"model", model},
             {"prompt", prompt},
             {"stream", false},
-            {"keep_alive", "5m"} // <-- keep model hot
+            {"keep_alive", "5m"}
         };
 
-        // Choose endpoint format depending on backend
         std::string endpoint;
         if (url.find("8080") != std::string::npos) {
-            // LocalAI → OpenAI-compatible
+            // LocalAI (OpenAI-compatible)
             endpoint = url + "/chat/completions";
             body = {
                 {"model", model},
@@ -157,25 +178,76 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
         }
 
         try {
-    auto j = nlohmann::json::parse(r.text);
-    if (j.contains("response")) {
-        return j["response"].get<std::string>(); // Ollama
-    } else if (j.contains("choices")) {
-        return j["choices"][0]["message"]["content"].get<std::string>(); // LocalAI
-    }
-    return std::string("[AI] No valid field in response."); // 🔹 fixed
-} catch (const std::exception& e) {
-    return std::string("Error parsing AI JSON: ") + e.what();
-}
+            auto j = nlohmann::json::parse(r.text);
+            if (j.contains("response")) {
+                return j["response"].get<std::string>(); // Ollama
+            } else if (j.contains("choices")) {
+                return j["choices"][0]["message"]["content"].get<std::string>(); // LocalAI
+            }
+            return std::string("[AI] No valid field in response.");
+        } catch (const std::exception& e) {
+            return std::string("Error parsing AI JSON: ") + e.what();
+        }
     });
 }
+
+
+// =========================================================
+// Streaming AI call
+// =========================================================
+void ai_process_stream(const std::string& input, nlohmann::json& memory,
+                       const std::function<void(const std::string&)>& onChunk) {
+    try {
+        std::string url = resolveBackendURL();
+        std::string model = aiConfig.value("default_model", "mistral");
+
+        // NOTE: streaming via CPR is limited — this example simulates chunking
+        auto future = callAIAsync(input);
+        std::string reply = future.get();
+
+        // Simulate stream by chunking reply into words
+        std::istringstream iss(reply);
+        std::string word;
+        while (iss >> word) {
+            onChunk(word + " ");
+            std::this_thread::sleep_for(std::chrono::milliseconds(50)); // pacing
+        }
+
+        // Save to memory
+        memory["last_input"] = input;
+        memory["last_reply"] = reply;
+        saveMemory();
+
+    } catch (const std::exception& e) {
+        onChunk(std::string("[AI Stream Error] ") + e.what());
+    }
+}
+
+
+// =========================================================
+// Blocking AI call (simple wrapper)
+// =========================================================
+std::string ai_process(const std::string& input, nlohmann::json& memory) {
+    try {
+        auto future = callAIAsync(input);
+        std::string reply = future.get();
+
+        memory["last_input"] = input;
+        memory["last_reply"] = reply;
+        saveMemory();
+
+        return reply;
+    } catch (const std::exception& e) {
+        return std::string("[AI Error] ") + e.what();
+    }
+}
+
 
 // =========================================================
 // Warm-up on launch
 // =========================================================
 void warmupAI() {
     std::cout << "[AI] Warming up model...\n";
-    // Send a pseudo hidden command
     auto warmupFuture = callAIAsync("Hello");
-    // Don’t block – let it run in background
+    // Let it run in background
 }

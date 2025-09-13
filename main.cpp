@@ -1,215 +1,154 @@
-#include <SFML/Graphics.hpp> 
-#include <nlohmann/json.hpp>
-#include <iostream>
-#include <string>
-#include <vector>
-#include <filesystem>
-#include <system_error>
-
-#include "nlp.hpp"
-#include "ai.hpp"
+#include "commands.hpp"
 #include "aliases.hpp"
 #include "synonyms.hpp"
-#include "commands.hpp"
-#include "console_history.hpp"
-#include "timer.hpp"
+#include "ai.hpp"
+#include "voice.hpp"
+#include "voice_stream.hpp"
 #include "resources.hpp"
-#include "ui_config.hpp"
+#include "nlp.hpp"
+#include "nlp_rules.hpp"
+#include "console_history.hpp"
 #include "ui_helpers.hpp"
 #include "ui_draw.hpp"
 #include "ui_events.hpp"
-#include "bootstrap.hpp"
-#include "voice.hpp"
-#include "voice_stream.hpp"   // <-- new include
+
+#include <iostream>
+#include <filesystem>
+#include <string>
+#include <SFML/Graphics.hpp>
+#include <nlohmann/json.hpp>
 
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
 #include <psapi.h>
+#include <winternl.h>
 #endif
 
 namespace fs = std::filesystem;
 
-// Global textbox buffer (used by keyboard + voice stream)
-std::string g_ui_textbox;
+// 🔹 Global UI textbox (for rendering only)
+sf::Text g_ui_textbox;
+
+// 🔹 Global raw input buffer (for editing)
+std::string g_inputBuffer;
+
+// 🔹 Global AI state
+nlohmann::json longTermMemory;
+nlohmann::json aiConfig;
+
+// ------------------------------------------------------------
+// Utility: lowercase + strip punctuation for NLP normalization
+// ------------------------------------------------------------
+static std::string normalizeInput(const std::string& input) {
+    std::string out;
+    out.reserve(input.size());
+
+    for (char c : input) {
+        if (!std::ispunct(static_cast<unsigned char>(c))) {
+            out.push_back(std::tolower(static_cast<unsigned char>(c)));
+        }
+    }
+
+    return out;
+}
+
+// ---------------- Helpers ----------------
+static void parseAndDispatch(const std::string& text,
+                             std::string& buffer,
+                             fs::path& currentDir,
+                             std::vector<Timer>& timers,
+                             nlohmann::json& longTermMemory,
+                             ConsoleHistory& history) {
+    // ✅ Normalize text before NLP
+    std::string cleaned = normalizeInput(text);
+
+    Intent intent = g_nlp.parse(cleaned);   // use global g_nlp
+    if (intent.matched) {
+        handleCommand(intent, buffer, currentDir, timers, longTermMemory, g_nlp, history);
+    } else {
+        history.push("[NLP] No intent matched for input: '" + cleaned +
+                     "' (rules loaded=" + std::to_string(g_nlp.rule_count()) + ")",
+                     sf::Color::Red);
+    }
+}
 
 int main(int argc, char** argv) {
-    // --- Load persistent memory ---
+    (void)argc; // silence unused warnings
+    (void)argv;
+
+    std::cout << "[DEBUG] GRIM startup begin\n";
+
+    // ---------------- Bootstrap ----------------
     loadMemory();
-    std::cout << "[DEBUG] Memory loaded successfully\n";
-
-    // --- Load AI config ---
     loadAIConfig("ai_config.json");
-    std::cout << "[DEBUG] AI config loaded from ai_config.json\n";
 
-    // --- Bootstrap check ---
-    runBootstrapChecks(argc, argv);
-    std::cout << "[DEBUG] Bootstrap checks complete\n";
-
-    // --- Warm up AI model ---
-warmupAI();
-
-    // --- NLP setup ---
-    NLP nlp;  // <-- declare once here, survives for whole main()
-
-    {
-        std::string rulesText = loadTextResource("nlp_rules.json", argc, argv);
-        if (!rulesText.empty()) {
-            std::string err;
-            if (!nlp.load_rules_from_string(rulesText, &err)) {
-                std::cerr << "[NLP] Failed to parse rules: " << err << "\n";
-            }
-        } else {
-            std::cerr << "[NLP] Could not load nlp_rules.json\n";
-        }
-    }
-    std::cout << "[DEBUG] NLP rules loaded at startup\n";
-
-    // --- Load synonyms & aliases ---
-    {
-        std::string synText = loadTextResource("synonyms.json", argc, argv);
-        if (!synText.empty()) {
-            loadSynonymsFromString(synText);
-            std::cout << "[DEBUG] Synonyms loaded\n";
-        }
-
-        std::string aliasText = loadTextResource("app_aliases.json", argc, argv);
-        if (!aliasText.empty()) {
-            loadAliasesFromString(aliasText);
-            std::cout << "[DEBUG] Aliases loaded\n";
-        }
-    }
-
-    // --- Whisper context (shared for voice) ---
-    if (!initWhisper()) {
-        std::cerr << "[ERROR] Failed to initialize Whisper. Voice features will be disabled." << std::endl;
-    } else {
-        std::cout << "[DEBUG] Whisper context initialized\n";
-    }
-
-    // --- Create window ---
-    sf::RenderWindow window(sf::VideoMode(600, 900), "GRIM", sf::Style::Default);
-    window.setVerticalSyncEnabled(true);
-    std::cout << "[DEBUG] Window created (600x900)\n";
-
-    // --- History ---
     ConsoleHistory history;
-    auto addHistory = [&](const std::string& s, sf::Color c = sf::Color::White) { 
-        history.push(s, c); 
-        std::cout << s << "\n"; 
-    };
 
-    // --- Font ---
-    sf::Font font;
-    std::string fontPath = findAnyFontInResources(argc, argv, &history);
-    if (!fontPath.empty()) {
-        if (!font.loadFromFile(fontPath)) {
-            addHistory("[ERROR] Failed to load font from " + fontPath, sf::Color::Red);
-        } else {
-            std::cout << "[DEBUG] Font loaded: " << fontPath << "\n";
-        }
+    if (!loadNlpRules("nlp_rules.json")) {
+        std::cerr << "[ERROR] Failed to load NLP rules\n";
     } else {
-        std::cerr << "[ERROR] No font found!\n";
+        std::cout << "[NLP] Rules loaded\n";
     }
 
-    // --- Initial state ---
+    if (!loadSynonyms("synonyms.json")) {
+        std::cerr << "[ERROR] Failed to load synonyms\n";
+    }
+
+    loadAliases("app_aliases.json");
+
+    // ---------------- SFML Setup ----------------
+    sf::RenderWindow window(sf::VideoMode(1280, 720), "GRIM Console");
+    window.setFramerateLimit(60);
+
+    sf::Font font;
+    if (!font.loadFromFile(getResourcePath() + "/DejaVuMathTeXGyre.ttf")) {
+        std::cerr << "[ERROR] Could not load font\n";
+        return 1;
+    }
+
+    g_ui_textbox.setFont(font);
+    g_ui_textbox.setCharacterSize(20);
+    g_ui_textbox.setFillColor(sf::Color::White);
+
+    // ---------------- Voice Init ----------------
+    if (!initWhisper()) {
+        std::cerr << "[Voice] Failed to initialize Whisper\n";
+    }
+
+    // ---------------- Main Loop ----------------
     fs::path currentDir = fs::current_path();
-    addHistory("GRIM is ready. Type 'help' for commands. Type 'quit' to exit.", sf::Color(160,200,255));
+    std::vector<Timer> timers;
+    float scrollOffset = 0.0f; // required for drawUI()
+
     std::cout << "[DEBUG] GRIM startup complete, entering main loop\n";
 
-    sf::Clock caretClock;
-    bool caretVisible = true;
-    float scrollOffsetLines = 0.f;
-    std::vector<Timer> timers;
-
-    // --- Load LongTerm memory ---
-    nlohmann::json longTermMemory;
-
-    // ----------------- Main loop -----------------
     while (window.isOpen()) {
-        // --- Process events ---
-        if (!processEvents(window, g_ui_textbox, currentDir, timers, longTermMemory, nlp, history))
-            break;
+        // ✅ processEvents uses g_nlp internally
+        processEvents(window, g_inputBuffer, currentDir, timers, longTermMemory, history);
 
-        // --- Handle commands ---
-        if (!g_ui_textbox.empty() && g_ui_textbox.back() == '\n') {
-            std::string cmd = g_ui_textbox;
-            g_ui_textbox.clear();
+        // Sync buffer → render text
+        g_ui_textbox.setString(g_inputBuffer);
 
-            // trim newline
-            if (!cmd.empty() && cmd.back() == '\n') cmd.pop_back();
+        // Draw UI
+        window.clear(sf::Color::Black);
+        drawUI(window, font, history, g_inputBuffer, true, scrollOffset);
+        window.display();
 
-            if (cmd == "quit") {
-                addHistory("[INFO] Quitting...", sf::Color::Yellow);
-                break;
-            }
+        // Example voice demo trigger (replace with hotkey/command)
+        if (false) { // placeholder condition
+            std::string transcript = runVoiceDemo("unused", longTermMemory);
 
-            // Voice demo special case
-            if (cmd == "voice") {
-                addHistory("[Voice] Starting 5-second recording...", sf::Color(0, 255, 128));
+            // ✅ Log both raw and normalized versions
+            std::string cleaned = normalizeInput(transcript);
+            history.push("[Voice Transcript RAW] " + transcript, sf::Color::Yellow);
+            history.push("[Voice Transcript CLEAN] " + cleaned, sf::Color::Green);
 
-                std::string transcript = runVoiceDemo("external/whisper.cpp/models/ggml-small.bin", longTermMemory);
-                if (!transcript.empty()) {
-                    addHistory("[Voice] Heard: " + transcript, sf::Color::Yellow);
-
-                    Intent spokenIntent = nlp.parse(transcript);
-                    if (spokenIntent.matched) {
-                        handleCommand(spokenIntent, g_ui_textbox, currentDir, timers, longTermMemory, nlp, history);
-                    } else {
-                        addHistory("[Voice] Sorry, I didn’t understand that.", sf::Color::Red);
-                    }
-                } else {
-                    addHistory("[Voice] No speech detected.", sf::Color::Red);
-                }
-            }
-
-            // Voice stream special case
-            else if (cmd == "voice_stream") {
-                addHistory("[VoiceStream] Starting live microphone stream...", sf::Color(0, 200, 255));
-                runVoiceStream(g_whisperCtx, &history, timers, longTermMemory, nlp);
-                addHistory("[VoiceStream] Stopped.", sf::Color(0, 200, 255));
-            }
-
-            // Normal text commands
-            else {
-                Intent intent = nlp.parse(cmd);
-                if (intent.matched) {
-                    handleCommand(intent, g_ui_textbox, currentDir, timers, longTermMemory, nlp, history);
-                } else {
-                    addHistory("[WARN] No intent matched for: " + cmd, sf::Color::Red);
-                    std::cout << "[DEBUG][Command] No intent matched for input: '" 
-                              << cmd << "' (rules loaded=" << nlp.rule_count() << ")\n";
-                }
-            }
+            // ✅ Dispatch cleaned transcript to NLP
+            parseAndDispatch(cleaned, g_inputBuffer, currentDir, timers, longTermMemory, history);
         }
-
-        // --- Timers ---
-        for (auto& t : timers) {
-            if (!t.done && t.clock.getElapsedTime().asSeconds() >= t.seconds) {
-                addHistory("[Timer] Timer finished!", sf::Color(255,200,0));
-                t.done = true;
-            }
-        }
-
-        // --- Caret blink ---
-        caretVisible = updateCaretBlink(caretClock, caretVisible);
-
-        // --- Wrap history for current window width ---
-        sf::Text meas;
-        meas.setFont(font);
-        meas.setCharacterSize(kFontSize); // from ui_config.hpp
-        history.ensureWrapped(
-            static_cast<float>(window.getSize().x) - (2 * kSidePad), 
-            meas
-        );
-
-        // --- Draw UI ---
-        drawUI(window, font, history, g_ui_textbox, caretVisible, scrollOffsetLines);
     }
 
-    if (g_whisperCtx) {
-        whisper_free(g_whisperCtx);
-    }
-
+    saveMemory();
     return 0;
 }

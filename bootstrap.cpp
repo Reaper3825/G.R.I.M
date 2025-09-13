@@ -1,12 +1,14 @@
 #include "bootstrap.hpp"
-#include "resources.hpp"       // declares getResourcePath()
+#include "resources.hpp"     
 #include "console_history.hpp"
 #include "ai.hpp"
+#include "system_detect.hpp"
+#include "nlp.hpp"
 
 #include <iostream>
 #include <filesystem>
 #include <fstream>
-#include <cstdlib>             // for system()
+#include <cstdlib>           
 #include <nlohmann/json.hpp>
 
 namespace fs = std::filesystem;
@@ -31,7 +33,9 @@ static void validateAIConfig(const fs::path& path) {
     nlohmann::json defaults = {
         {"backend", "auto"},
         {"ollama_url", "http://127.0.0.1:11434"},
-        {"localai_url", "http://127.0.0.1:8080/v1"}
+        {"localai_url", "http://127.0.0.1:8080/v1"},
+        {"use_gpu", "auto"},
+        {"whisper_model", "auto"}
     };
 
     nlohmann::json cfg;
@@ -70,18 +74,18 @@ static void validateAIConfig(const fs::path& path) {
     }
 }
 
-// --- Whisper model check ---
-static void ensureWhisperModel(const fs::path& modelPath) {
+// --- Whisper model check/download ---
+static void ensureWhisperModel(const fs::path& modelPath, const std::string& modelName) {
     if (fs::exists(modelPath)) {
         std::cout << "[OK] Whisper model found: " << modelPath << " ("
                   << fs::file_size(modelPath) / (1024*1024) << " MB)\n";
         return;
     }
 
-    std::cout << "[NEW] Whisper model missing, attempting download...\n";
+    std::cout << "[NEW] Whisper model \"" << modelName << "\" missing, attempting download...\n";
     fs::create_directories(modelPath.parent_path());
 
-    std::string url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin";
+    std::string url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-" + modelName + ".bin";
     std::string cmd = "curl -L " + url + " -o " + modelPath.string();
 
     int result = system(cmd.c_str());
@@ -94,7 +98,6 @@ static void ensureWhisperModel(const fs::path& modelPath) {
                   << "        and place it at " << modelPath << "\n";
     }
 }
-
 
 // --- Main bootstrap sequence ---
 void runBootstrapChecks(int argc, char** argv) {
@@ -113,8 +116,9 @@ void runBootstrapChecks(int argc, char** argv) {
         fs::create_directories(resDir);
     }
 
-    // NLP rules
-    ensureFileExists(resDir / "nlp_rules.json",
+    // NLP rules (ensure file exists first)
+    fs::path nlpPath = resDir / "nlp_rules.json";
+    ensureFileExists(nlpPath,
         "[\n"
         "  {\"intent\":\"open_app\",\"pattern\":\"^\\\\s*(open|launch|start)\\\\s+([\\\\w\\\\.\\\\-]+)\\\\s*$\",\"slot_names\":[\"verb\",\"app\"],\"score_boost\":0.3,\"case_insensitive\":true},\n"
         "  {\"intent\":\"search_web\",\"pattern\":\"^(google|search|look up)\\\\s+(.+)$\",\"slot_names\":[\"verb\",\"query\"],\"score_boost\":0.2,\"case_insensitive\":true},\n"
@@ -122,6 +126,15 @@ void runBootstrapChecks(int argc, char** argv) {
         "]\n",
         "nlp_rules.json"
     );
+
+    // 🔹 Try loading rules right here, with explicit path logging
+    std::string err;
+    if (!g_nlp.load_rules(nlpPath.string(), &err)) {
+        std::cerr << "[NLP] Failed to load rules from: " << nlpPath
+                  << " (" << err << ")\n";
+    } else {
+        std::cout << "[NLP] Loaded rules successfully from: " << nlpPath << "\n";
+    }
 
     // Synonyms
     ensureFileExists(resDir / "synonyms.json", "{}\n", "synonyms.json");
@@ -137,9 +150,20 @@ void runBootstrapChecks(int argc, char** argv) {
         std::cout << "[ERROR] No usable font found! UI may fail.\n";
     }
 
-    // Whisper model
-    fs::path whisperModel = fs::path("whisper.cpp/models/ggml-small.bin");
-    ensureWhisperModel(whisperModel);
+    // --- System detection for whisper model selection ---
+    SystemInfo sys = detectSystem();
+    std::string modelName;
+
+    if (aiConfig.contains("whisper_model") &&
+        aiConfig["whisper_model"].is_string() &&
+        aiConfig["whisper_model"] != "auto") {
+        modelName = aiConfig["whisper_model"];
+    } else {
+        modelName = sys.suggestedModel;
+    }
+
+    fs::path whisperModel = fs::path("whisper.cpp/models/ggml-" + modelName + ".bin");
+    ensureWhisperModel(whisperModel, modelName);
 
     std::cout << "-------------------------------\n";
 }

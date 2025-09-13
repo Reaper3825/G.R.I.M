@@ -1,18 +1,50 @@
 #include "nlp.hpp"
+#include "resources.hpp"   // 👈 for getResourcePath()
 #include <regex>
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <nlohmann/json.hpp>
+#include <filesystem>
+#include <algorithm>
+#include <cctype>
 
 using json = nlohmann::json;
+namespace fs = std::filesystem;
 
-// 🔹 Global NLP object definition (only needed if you want global usage)
+// 🔹 Global NLP object definition
 NLP g_nlp;
+
+// ------------------------------------------------------------
+// Utility: normalize input (lowercase + strip punctuation + trim)
+// ------------------------------------------------------------
+static std::string normalizeInput(const std::string& input) {
+    std::string out;
+    out.reserve(input.size());
+
+    for (char c : input) {
+        if (!std::ispunct(static_cast<unsigned char>(c))) {
+            out.push_back(std::tolower(static_cast<unsigned char>(c)));
+        }
+    }
+
+    // 🔹 Trim leading/trailing spaces
+    auto start = out.find_first_not_of(' ');
+    auto end   = out.find_last_not_of(' ');
+    if (start == std::string::npos) {
+        return ""; // all spaces
+    }
+    return out.substr(start, end - start + 1);
+}
 
 // ---------------------- Intent Parsing ----------------------
 
-Intent NLP::parse(const std::string& text) const {
+Intent NLP::parse(const std::string& rawText) const {
+    // ✅ Normalize input before applying regex
+    std::string text = normalizeInput(rawText);
+    std::cout << "[DEBUG][NLP] Raw: \"" << rawText
+              << "\" → Normalized: \"" << text << "\"\n";
+
     Intent best;
     double bestScore = 0.0;
 
@@ -36,6 +68,11 @@ Intent NLP::parse(const std::string& text) const {
                 intent.slots["slot" + std::to_string(i)] = match[i].str();
             }
 
+            // 🔹 Debug: show which rule matched
+            std::cout << "[DEBUG][NLP] Matched intent: " << intent.name
+                      << " (pattern: \"" << rule.pattern_str << "\")"
+                      << " score=" << intent.score << "\n";
+
             // track best match
             if (intent.score > bestScore) {
                 best = intent;
@@ -58,7 +95,7 @@ bool NLP::load_rules_from_string(const std::string& rulesText, std::string* err)
             Rule rule;
             rule.intent           = r.value("intent", "");
             rule.pattern_str      = r.value("pattern", "");
-            rule.boost            = r.value("boost", 0.0);
+            rule.boost            = r.value("score_boost", 0.0);
             bool caseInsensitive  = r.value("case_insensitive", false);
 
             try {
@@ -71,10 +108,10 @@ bool NLP::load_rules_from_string(const std::string& rulesText, std::string* err)
                 return false;
             }
 
-            rules.push_back(rule);  // ✅ fixed
+            rules.push_back(rule);
         }
 
-        std::cout << "[NLP] Loaded " << rules.size() << " rules\n";  // ✅ fixed
+        std::cout << "[NLP] Loaded " << rules.size() << " rules\n";
         return true;
     } catch (const std::exception& e) {
         if (err) *err = e.what();
@@ -82,13 +119,32 @@ bool NLP::load_rules_from_string(const std::string& rulesText, std::string* err)
     }
 }
 
-bool NLP::load_rules(const std::string& json_path, std::string* error_out) {
-    std::ifstream file(json_path);
+bool NLP::load_rules(const std::string& filename, std::string* error_out) {
+    // Build primary + fallback paths
+    fs::path primary   = fs::path(getResourcePath()) / filename;                    // build/resources
+    fs::path secondary = fs::current_path().parent_path() / "resources" / filename; // ../resources
+
+    std::ifstream file(primary);
     if (!file.is_open()) {
-        if (error_out) *error_out = "Could not open rules file: " + json_path;
-        return false;
+        // try fallback
+        file.open(secondary);
+        if (!file.is_open()) {
+            if (error_out) {
+                *error_out = "Could not open rules file. Tried: " +
+                             primary.string() + " and " + secondary.string();
+            }
+            std::cerr << "[NLP] Failed to load rules. Tried: "
+                      << primary << " and " << secondary << std::endl;
+            return false;
+        } else {
+            std::cout << "[NLP] Loaded rules from fallback path: " 
+                      << secondary << std::endl;
+        }
+    } else {
+        std::cout << "[NLP] Loaded rules from: " << primary << std::endl;
     }
 
+    // Read entire file into buffer
     std::stringstream buffer;
     buffer << file.rdbuf();
     return this->load_rules_from_string(buffer.str(), error_out);

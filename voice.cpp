@@ -1,41 +1,57 @@
 #include "voice.hpp"
 #include "resources.hpp"
+#include "whisper.h"
+
 #include <iostream>
 #include <vector>
 #include <filesystem>
 #include <portaudio.h>
 #include <chrono>
 #include <cmath>
-#include "whisper.h"
 #include <nlohmann/json.hpp>
 
+// ------------------------------------------------------------
+// Constants
+// ------------------------------------------------------------
 #define SAMPLE_RATE        16000
 #define FRAMES_PER_BUFFER   512
 #define CHUNK_SIZE         (SAMPLE_RATE / 2) // 0.5 seconds
 
-// 🔹 Global Whisper context (definition for extern in voice.hpp)
-struct whisper_context *g_whisperCtx = nullptr;
+// ------------------------------------------------------------
+// Global Whisper state
+// ------------------------------------------------------------
 
-// 🔹 Silence threshold from ai_config.json
+// 🔹 Whisper context (extern declared in voice.hpp)
+struct whisper_context* g_whisperCtx = nullptr;
+
+// 🔹 Confidence of last segment
+float g_lastSegmentConfidence = -1.0f;
+
+// 🔹 Silence threshold from ai_config.json (declared extern elsewhere)
 extern double g_silenceThreshold;
+
+// 🔹 Silence timeout (ms) from ai_config.json (declared extern elsewhere)
+extern int g_silenceTimeoutMs;
 
 // 🔹 Environment baseline (auto-calibrated and cached in memory)
 static double g_envLevel = 0.0;
 
-// ---------------- Audio Recording ----------------
+// ------------------------------------------------------------
+// Audio Recording
+// ------------------------------------------------------------
 struct AudioData {
     std::vector<float> buffer;
     bool ready = false;
 };
 
-static int recordCallback(const void *input,
-                          void * /*output*/,
+static int recordCallback(const void* input,
+                          void* /*output*/,
                           unsigned long frameCount,
                           const PaStreamCallbackTimeInfo* /*timeInfo*/,
                           PaStreamCallbackFlags /*statusFlags*/,
-                          void *userData) {
-    AudioData *data = reinterpret_cast<AudioData*>(userData);
-    const float *in = reinterpret_cast<const float*>(input);
+                          void* userData) {
+    AudioData* data = reinterpret_cast<AudioData*>(userData);
+    const float* in = reinterpret_cast<const float*>(input);
 
     if (in) {
         data->buffer.insert(data->buffer.end(), in, in + frameCount);
@@ -44,8 +60,10 @@ static int recordCallback(const void *input,
     return paContinue; // keep streaming
 }
 
-// ---------------- Silence Detection ----------------
-static bool isSilence(const std::vector<float> &pcm) {
+// ------------------------------------------------------------
+// Silence Detection
+// ------------------------------------------------------------
+static bool isSilence(const std::vector<float>& pcm) {
     if (pcm.empty()) return true;
 
     // Calculate RMS of the chunk
@@ -54,7 +72,7 @@ static bool isSilence(const std::vector<float> &pcm) {
     energy /= pcm.size();
     double rms = std::sqrt(energy);
 
-    // subtract baseline (like zeroing a scale)
+    // Subtract baseline (like zeroing a scale)
     double adjusted = std::max(0.0, rms - g_envLevel);
 
     std::cout << "[DEBUG][Voice] RMS=" << rms
@@ -65,21 +83,20 @@ static bool isSilence(const std::vector<float> &pcm) {
     return adjusted < g_silenceThreshold;
 }
 
-// ---------------- Whisper Init ----------------
-bool initWhisper() {
+// ------------------------------------------------------------
+// Whisper Initialization
+// ------------------------------------------------------------
+bool initWhisper(const std::string& modelName) {
     namespace fs = std::filesystem;
-    fs::path baseModel = fs::path(getResourcePath()) / "models" / "whisper" / "ggml-base.en.bin";
-    fs::path smallModel = fs::path(getResourcePath()) / "models" / "whisper" / "ggml-small.bin";
 
-    fs::path modelPathFS;
-    if (fs::exists(baseModel)) {
-        modelPathFS = baseModel;
-        std::cout << "[Voice] Using base.en model: " << modelPathFS << std::endl;
-    } else if (fs::exists(smallModel)) {
-        modelPathFS = smallModel;
-        std::cout << "[Voice] Base.en not found, using small model: " << modelPathFS << std::endl;
-    } else {
-        std::cerr << "[Voice] No Whisper model found in models/ !" << std::endl;
+    // Build model path: resources/models/whisper/ggml-<modelName>.bin
+    fs::path modelPathFS =
+        fs::path(getResourcePath()) / "models" / "whisper" / ("ggml-" + modelName + ".bin");
+
+    std::cout << "[Voice] Attempting to load Whisper model: " << modelPathFS << "\n";
+
+    if (!fs::exists(modelPathFS)) {
+        std::cerr << "[Voice] ERROR: Model not found at " << modelPathFS << "\n";
         return false;
     }
 
@@ -87,19 +104,27 @@ bool initWhisper() {
     g_whisperCtx = whisper_init_from_file_with_params(modelPathFS.string().c_str(), wparams);
 
     if (!g_whisperCtx) {
-        std::cerr << "[Voice] Failed to load Whisper model: " << modelPathFS << std::endl;
+        std::cerr << "[Voice] ERROR: Failed to load Whisper model\n";
         return false;
     }
 
-    std::cout << "[Voice] Whisper initialized successfully." << std::endl;
+    std::cout << "[Voice] Whisper initialized successfully with model: "
+              << modelPathFS << "\n";
     return true;
 }
 
-// ---------------- Voice Demo ----------------
-std::string runVoiceDemo(const std::string & /*modelPath*/,
-                         nlohmann::json& longTermMemory) {  // ⬅ pass memory reference
+// Default wrapper (so startup code can just call initWhisper())
+bool initWhisper() {
+    return initWhisper("small"); // default to ggml-small.bin
+}
+
+// ------------------------------------------------------------
+// Voice Demo
+// ------------------------------------------------------------
+std::string runVoiceDemo(const std::string& /*modelPath*/,
+                         nlohmann::json& longTermMemory) {
     if (!g_whisperCtx) {
-        std::cerr << "[Voice] Whisper not initialized! Call initWhisper() first." << std::endl;
+        std::cerr << "[Voice] Whisper not initialized! Call initWhisper() first.\n";
         return "";
     }
 
@@ -113,13 +138,13 @@ std::string runVoiceDemo(const std::string & /*modelPath*/,
 
     // Initialize PortAudio
     if (Pa_Initialize() != paNoError) {
-        std::cerr << "[Voice] Failed to initialize PortAudio" << std::endl;
+        std::cerr << "[Voice] Failed to initialize PortAudio\n";
         return "[ERROR] Failed to init PortAudio";
     }
     std::cout << "[DEBUG][Voice] PortAudio initialized\n";
 
     AudioData data;
-    PaStream *stream;
+    PaStream* stream;
 
     if (Pa_OpenDefaultStream(&stream,
                              1, // mono input
@@ -129,12 +154,12 @@ std::string runVoiceDemo(const std::string & /*modelPath*/,
                              FRAMES_PER_BUFFER,
                              recordCallback,
                              &data) != paNoError) {
-        std::cerr << "[Voice] Failed to open audio stream" << std::endl;
+        std::cerr << "[Voice] Failed to open audio stream\n";
         Pa_Terminate();
         return "[ERROR] Failed to open audio stream";
     }
 
-    std::cout << "[Voice] Listening... speak into the mic." << std::endl;
+    std::cout << "[Voice] Listening... speak into the mic.\n";
     Pa_StartStream(stream);
     std::cout << "[DEBUG][Voice] Stream started (sampleRate=" << SAMPLE_RATE
               << ", buffer=" << FRAMES_PER_BUFFER << ")\n";
@@ -166,7 +191,8 @@ std::string runVoiceDemo(const std::string & /*modelPath*/,
             if (g_envLevel == 0.0 && rollingBuffer.size() < SAMPLE_RATE) {
                 g_envLevel = rms;
                 longTermMemory["voice_baseline"] = g_envLevel;
-                std::cout << "[Voice] Environment baseline calibrated: " << g_envLevel << "\n";
+                std::cout << "[Voice] Environment baseline calibrated: "
+                          << g_envLevel << "\n";
             }
 
             if (!isSilence(chunk)) {
@@ -187,10 +213,11 @@ std::string runVoiceDemo(const std::string & /*modelPath*/,
                 float maxVal = 0.0f;
                 for (float s : rollingBuffer) maxVal = std::max(maxVal, std::fabs(s));
                 if (maxVal > 0.0f) {
-                    for (float &s : rollingBuffer) s /= maxVal;
+                    for (float& s : rollingBuffer) s /= maxVal;
                 }
 
-                whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+                whisper_full_params params =
+                    whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
                 params.language = "en";          // force English
                 params.no_context = false;       // keep context
                 params.single_segment = false;   // allow multiple segments
@@ -204,35 +231,31 @@ std::string runVoiceDemo(const std::string & /*modelPath*/,
                     int n_segments = whisper_full_n_segments(g_whisperCtx);
 
                     for (int i = lastPrintedSegment; i < n_segments; i++) {
-    const char *text = whisper_full_get_segment_text(g_whisperCtx, i);
-    float conf = whisper_full_get_segment_avg_logprob(g_whisperCtx, i);
+                        const char* text = whisper_full_get_segment_text(g_whisperCtx, i);
+                        float conf = 1.0f -
+                            whisper_full_get_segment_no_speech_prob(g_whisperCtx, i);
 
-    std::cout << "[Partial] " << text 
-              << " [conf=" << conf << "]" << std::endl;
+                        std::cout << "[Partial] " << text << " [conf=" << conf << "]\n";
 
-    transcript += text;
-    transcript += " ";
-
-    // Optional: mark this segment as "complete" if confidence is strong
-    if (conf > -0.3) {
-        // You could trigger early cutoff logic here
-        // e.g., finalize faster in voice_stream.cpp
-    }
-}
+                        g_lastSegmentConfidence = conf;
+                        transcript += text;
+                        transcript += " ";
+                    }
 
                     lastPrintedSegment = n_segments;
                 } else {
-                    std::cerr << "[Voice] Whisper inference failed" << std::endl;
+                    std::cerr << "[Voice] Whisper inference failed\n";
                 }
             }
         }
 
-        // Stop if silence for >4s after speech
+        // 🔹 Stop if silence for > g_silenceTimeoutMs after speech
         auto now = std::chrono::steady_clock::now();
-        auto msSilent = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSpeech).count();
-        if (msSilent > 4000 && !transcript.empty()) {
-            std::cout << "[DEBUG][Voice] Silence timeout reached (" << msSilent
-                      << " ms), finalizing transcript.\n";
+        auto msSilent =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSpeech).count();
+        if (msSilent > g_silenceTimeoutMs && !transcript.empty()) {
+            std::cout << "[DEBUG][Voice] Silence timeout reached ("
+                      << msSilent << " ms, limit=" << g_silenceTimeoutMs << "), finalizing transcript.\n";
             break;
         }
 
@@ -247,6 +270,6 @@ std::string runVoiceDemo(const std::string & /*modelPath*/,
     if (!transcript.empty() && transcript.back() == ' ')
         transcript.pop_back();
 
-    std::cout << "[Voice] Final transcript: " << transcript << std::endl;
+    std::cout << "[Voice] Final transcript: " << transcript << "\n";
     return transcript;
 }
