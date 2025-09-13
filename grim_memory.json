@@ -10,5 +10,20 @@
         "GRIM"
     ],
     "user name": "Austin",
-    "voice_baseline": 0.000045
+    "voice_baseline": 0.000045,
+
+    "voice": {
+        "corrections": {
+            "nopath": "notepad"
+        },
+        "shortcuts": {
+            "bring up notes": "open_notepad",
+            "yo grim": "wake_word"
+        },
+        "usage_counts": {
+            "open_notepad": 12,
+            "open_calculator": 3
+        },
+        "last_command": "open_notepad"
+    }
 }

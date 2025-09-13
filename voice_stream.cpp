@@ -19,27 +19,7 @@
 #include <chrono>
 #include <cmath> 
 #include <sstream> 
-
-
-static std::string sanitizeTranscript(const std::string& input) {
-    std::string out = input;
-
-    // lowercase
-    std::transform(out.begin(), out.end(), out.begin(),
-                   [](unsigned char c){ return std::tolower(c); });
-
-    // strip trailing punctuation (.,!?)
-    while (!out.empty() && ispunct(out.back())) {
-        out.pop_back();
-    }
-
-    // trim spaces
-    while (!out.empty() && isspace(out.front())) out.erase(out.begin());
-    while (!out.empty() && isspace(out.back())) out.pop_back();
-
-    return out;
-}
-
+#include <algorithm>
 
 namespace fs = std::filesystem;
 
@@ -47,6 +27,7 @@ namespace fs = std::filesystem;
 #define FRAMES_PER_BUFFER 512
 #define CHUNK_SIZE        (SAMPLE_RATE / 2) // 0.5 seconds of audio
 
+// ---------------- Audio Data ----------------
 struct AudioData {
     std::vector<float> buffer;
     std::mutex mutex;
@@ -56,12 +37,15 @@ struct AudioData {
 static AudioData g_audio;
 static std::atomic<bool> g_running{false};
 static std::string g_partial; // evolving transcript for textbox
+static size_t g_processedSamples = 0; // track processed audio
 
 // ---------------- Globals ----------------
-extern double g_silenceThreshold;        // set via ai_config.json
+extern double g_silenceThreshold;        // from ai.cpp / ai_config.json
 extern float g_lastSegmentConfidence;    // from voice.cpp
-extern int g_silenceTimeoutMs;           // from ai_config.json
-
+extern int g_silenceTimeoutMs;           // from ai.cpp / ai_config.json
+extern std::string g_whisperLanguage;    // from ai.cpp / ai_config.json
+extern int g_whisperMaxTokens;           // from ai.cpp / ai_config.json
+extern nlohmann::json longTermMemory;    // from ai.cpp
 
 // ---------------- Signal Handling ----------------
 static void handleSigint(int) {
@@ -93,8 +77,23 @@ static bool isSilence(const std::vector<float> &pcm) {
     return energy < g_silenceThreshold;
 }
 
+// ---------------- Transcript Sanitizer ----------------
+static std::string sanitizeTranscript(const std::string& input) {
+    std::string out = input;
+
+    std::transform(out.begin(), out.end(), out.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+
+    while (!out.empty() && ispunct(out.back())) out.pop_back();
+
+    while (!out.empty() && isspace(out.front())) out.erase(out.begin());
+    while (!out.empty() && isspace(out.back())) out.pop_back();
+
+    return out;
+}
+
 // ---------------- Completion Heuristics ----------------
-#include "synonyms.hpp"  // to get g_completionTriggers
+#include "synonyms.hpp"  // g_completionTriggers, g_synonyms
 
 static bool looksComplete(const std::string& text) {
     if (text.empty()) return false;
@@ -112,7 +111,6 @@ static bool looksComplete(const std::string& text) {
 
     for (auto& w : g_completionTriggers) {
         if (lastWord == w) return true;
-        // check synonyms too
         auto it = g_synonyms.find(w);
         if (it != g_synonyms.end()) {
             for (auto& syn : it->second) {
@@ -123,6 +121,37 @@ static bool looksComplete(const std::string& text) {
     return false;
 }
 
+// ---------------- Whisper Incremental Processing ----------------
+static void processPCM(whisper_context* ctx, const std::vector<float>& buffer) {
+    if (buffer.size() <= g_processedSamples) return;
+
+    std::vector<float> newAudio(buffer.begin() + g_processedSamples, buffer.end());
+    g_processedSamples = buffer.size();
+
+    whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    params.print_realtime    = false;
+    params.print_progress    = false;
+    params.translate         = false;
+    params.no_context        = false;
+    params.single_segment    = false;
+    params.no_timestamps     = true;
+    params.token_timestamps  = false;
+
+    params.max_tokens = g_whisperMaxTokens;
+    params.language   = g_whisperLanguage.c_str();
+
+    if (whisper_full(ctx, params, newAudio.data(), newAudio.size()) == 0) {
+        int n = whisper_full_n_segments(ctx);
+        if (n > 0) {
+            std::string latest = whisper_full_get_segment_text(ctx, n - 1);
+            if (!latest.empty()) {
+                g_partial += latest + " ";
+                ui_set_textbox(g_partial);
+                std::cout << "[VoiceStream] Partial: " << latest << "\n";
+            }
+        }
+    }
+}
 
 // ---------------- Main Voice Stream ----------------
 void runVoiceStream(whisper_context *ctx,
@@ -133,11 +162,10 @@ void runVoiceStream(whisper_context *ctx,
 
     g_running = true;
     g_partial.clear();
+    g_processedSamples = 0;
 
-    // Setup Ctrl+C handler
     signal(SIGINT, handleSigint);
 
-    // Init PortAudio
     PaError err = Pa_Initialize();
     if (err != paNoError) {
         history->push("[VoiceStream] ERROR: Failed to initialize PortAudio", sf::Color::Red);
@@ -146,8 +174,7 @@ void runVoiceStream(whisper_context *ctx,
 
     PaStream *stream = nullptr;
     err = Pa_OpenDefaultStream(&stream,
-                               1, // input channels
-                               0, // output channels
+                               1, 0,
                                paFloat32,
                                SAMPLE_RATE,
                                FRAMES_PER_BUFFER,
@@ -170,20 +197,8 @@ void runVoiceStream(whisper_context *ctx,
     history->push("[VoiceStream] Listening... (Ctrl+C to stop)", sf::Color(0, 200, 255));
     std::cout << "[VoiceStream] Listening... speak into your mic (Ctrl+C to stop)\n";
 
-    // Whisper params
-    whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    params.print_realtime    = false;
-    params.print_progress    = false;
-    params.translate         = false;
-    params.no_context        = true;
-    params.single_segment    = true;
-    params.no_timestamps     = true;
-    params.token_timestamps  = false;
-    params.max_tokens        = 64;
-
     auto lastSpeechTime = std::chrono::steady_clock::now();
 
-    // Worker thread for Whisper decoding
     std::thread worker([&]() {
         while (g_running) {
             std::vector<float> pcm;
@@ -194,117 +209,129 @@ void runVoiceStream(whisper_context *ctx,
                     std::this_thread::sleep_for(std::chrono::milliseconds(50));
                     continue;
                 }
-                pcm.swap(g_audio.buffer);
+                pcm = g_audio.buffer;
                 g_audio.ready = false;
             }
 
-            // Process audio in slices
-            while (pcm.size() >= CHUNK_SIZE) {
-                std::vector<float> slice(pcm.begin(), pcm.begin() + CHUNK_SIZE);
-                pcm.erase(pcm.begin(), pcm.begin() + CHUNK_SIZE);
+            processPCM(ctx, pcm);
 
-                // 🔊 Loudness Debug
-                double energy = 0.0;
-                for (float s : slice) energy += s * s;
-                energy /= slice.size();
-                double rms = sqrt(energy);
-                double dB = 20.0 * log10(rms + 1e-6);
-                std::cout << "[DEBUG][VoiceStream] Slice loudness: RMS=" << rms
-                          << " dB=" << dB << "\n";
-
-                // Send slice to Whisper
-                if (whisper_full(ctx, params, slice.data(), slice.size()) == 0) {
-                    const int n_segments = whisper_full_n_segments(ctx);
-                    std::string transcript;
-                    for (int i = 0; i < n_segments; i++) {
-                        transcript += whisper_full_get_segment_text(ctx, i);
-                    }
-
-                    if (!transcript.empty()) {
-                        g_partial += transcript + " ";
-                        ui_set_textbox(g_partial);
-                        std::cout << "[VoiceStream] Transcript: " << g_partial << std::endl;
-
-                        if (!isSilence(slice)) {
-                            lastSpeechTime = std::chrono::steady_clock::now();
-                        }
-                    }
-                }
+            if (!isSilence(pcm)) {
+                lastSpeechTime = std::chrono::steady_clock::now();
             }
 
-                // --- Silence + cutoff logic ---
-                auto now = std::chrono::steady_clock::now();
-                auto silenceMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSpeechTime).count();
+            auto now = std::chrono::steady_clock::now();
+            auto silenceMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSpeechTime).count();
 
-                if (!g_partial.empty()) {
-                    bool complete  = looksComplete(g_partial);
-                    bool confident = (g_lastSegmentConfidence > -0.3f);
-
-                    // ✅ configurable cutoff
-                    int timeout = g_silenceTimeoutMs;
-                    if (complete && confident && g_silenceTimeoutMs > 2000) {
-                        // if confident, allow shorter cutoff but not below 2s
-                        timeout = std::min(timeout, 2000);
-                    }
-
-                    if (silenceMs > timeout) {
-                    std::cout << "[DEBUG][VoiceStream] Silence detected (" << silenceMs
-                  << " ms), finalizing command (timeout=" << timeout << ").\n";
-
+            if (!g_partial.empty() && silenceMs > g_silenceTimeoutMs) {
+                std::cout << "[DEBUG][VoiceStream] Silence detected (" << silenceMs
+                          << " ms), finalizing command.\n";
 
                 history->push("[VoiceStream Heard] " + g_partial, sf::Color::Yellow);
 
-                // 🔹 Sanitize transcript for NLP
                 std::string clean = sanitizeTranscript(g_partial);
 
-                // Parse transcript and dispatch as command
                 Intent intent = nlp.parse(clean);
                 std::cout << "[DEBUG][VoiceStream] Intent parsed: name='" << intent.name
-                        << "', matched=" << intent.matched
-                        << ", slots=" << intent.slots.size()
-                        << ", score=" << intent.score << "\n";
+                          << "', matched=" << intent.matched
+                          << ", slots=" << intent.slots.size()
+                          << ", score=" << intent.score << "\n";
 
                 if (intent.matched) {
                     auto currentDir = fs::current_path();
                     handleCommand(intent, g_partial, currentDir,
-                                timers, longTermMemory, nlp, *history);
+                                  timers, longTermMemory, nlp, *history);
                 } else {
-                // 🔹 Fallback: let AI handle it with streaming
-                std::string fullReply;
-                ai_process_stream(g_partial, longTermMemory,
-                    [&](const std::string& chunk) {
-                        fullReply += chunk;
-                        ui_set_textbox(fullReply); // update live in textbox
-                        std::cout << chunk << std::flush;
-                    }
-                );
+                    std::string fullReply;
+                    ai_process_stream(g_partial, longTermMemory,
+                        [&](const std::string& chunk) {
+                            fullReply += chunk;
+                            ui_set_textbox(fullReply);
+                            std::cout << chunk << std::flush;
+                        }
+                    );
 
-                    // When streaming completes, push final result into history
                     history->push("[AI] " + fullReply, sf::Color::Green);
                     std::cout << "\n[VoiceStream] AI response complete.\n";
                 }
-
 
                 g_partial.clear();
                 ui_set_textbox("");
                 std::cout << "[VoiceStream] Command committed.\n";
             }
         }
+    });
 
-                }
-            });
+    while (g_running) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
 
-            // Block until stopped
-            while (g_running) {
-                std::this_thread::sleep_for(std::chrono::seconds(1));
+    worker.join();
+    Pa_StopStream(stream);
+    Pa_CloseStream(stream);
+    Pa_Terminate();
+
+    history->push("[VoiceStream] Stopped.", sf::Color(0, 200, 255));
+    std::cout << "[VoiceStream] Stopped.\n";
+}
+
+// ---------------- Calibration ----------------
+void calibrateSilence() {
+    std::cout << "[Calibration] Starting 2s silence calibration...\n";
+
+    PaError err = Pa_Initialize();
+    if (err != paNoError) {
+        std::cerr << "[Calibration] PortAudio init failed\n";
+        return;
+    }
+
+    PaStream *stream = nullptr;
+    std::vector<float> buffer;
+
+    err = Pa_OpenDefaultStream(&stream,
+                               1, 0,
+                               paFloat32,
+                               SAMPLE_RATE,
+                               FRAMES_PER_BUFFER,
+                               recordCallback,
+                               nullptr);
+    if (err != paNoError || !stream) {
+        std::cerr << "[Calibration] Could not open mic stream\n";
+        Pa_Terminate();
+        return;
+    }
+
+    Pa_StartStream(stream);
+    auto start = std::chrono::steady_clock::now();
+
+    while (true) {
+        {
+            std::lock_guard<std::mutex> lock(g_audio.mutex);
+            if (!g_audio.buffer.empty()) {
+                buffer.insert(buffer.end(), g_audio.buffer.begin(), g_audio.buffer.end());
+                g_audio.buffer.clear();
             }
+        }
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - start).count() >= 2) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
 
-            // Shutdown
-            worker.join();
-            Pa_StopStream(stream);
-            Pa_CloseStream(stream);
-            Pa_Terminate();
+    Pa_StopStream(stream);
+    Pa_CloseStream(stream);
+    Pa_Terminate();
 
-            history->push("[VoiceStream] Stopped.", sf::Color(0, 200, 255));
-            std::cout << "[VoiceStream] Stopped.\n";
+    if (buffer.empty()) {
+        std::cerr << "[Calibration] No mic input captured\n";
+        return;
+    }
+
+    double energy = 0.0;
+    for (float s : buffer) energy += s * s;
+    energy /= buffer.size();
+
+    g_silenceThreshold = energy * 3.0; // margin
+    longTermMemory["voice_baseline"] = g_silenceThreshold;
+
+    std::cout << "[Calibration] New silence threshold: " << g_silenceThreshold << "\n";
+    saveMemory();
 }

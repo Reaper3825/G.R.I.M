@@ -33,9 +33,10 @@ sf::Text g_ui_textbox;
 // 🔹 Global raw input buffer (for editing)
 std::string g_inputBuffer;
 
-// 🔹 Global AI state
-nlohmann::json longTermMemory;
-nlohmann::json aiConfig;
+// 🔹 Global AI state (defined in ai.cpp, declared extern in resources.hpp)
+extern nlohmann::json longTermMemory;
+extern nlohmann::json aiConfig;
+
 
 // ------------------------------------------------------------
 // Utility: lowercase + strip punctuation for NLP normalization
@@ -49,7 +50,6 @@ static std::string normalizeInput(const std::string& input) {
             out.push_back(std::tolower(static_cast<unsigned char>(c)));
         }
     }
-
     return out;
 }
 
@@ -74,14 +74,16 @@ static void parseAndDispatch(const std::string& text,
 }
 
 int main(int argc, char** argv) {
-    (void)argc; // silence unused warnings
+    (void)argc;
     (void)argv;
 
     std::cout << "[DEBUG] GRIM startup begin\n";
 
     // ---------------- Bootstrap ----------------
-    loadMemory();
-    loadAIConfig("ai_config.json");
+    loadMemory(); 
+    loadAIConfig("ai_config.json"); 
+    calibrateSilence();
+
 
     ConsoleHistory history;
 
@@ -149,6 +151,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ✅ Persist learned memory on exit
     saveMemory();
     return 0;
 }

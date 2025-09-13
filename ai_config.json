@@ -7,6 +7,19 @@
   "backend": "auto",
   "ollama_url": "http://127.0.0.1:11434",
   "localai_url": "http://127.0.0.1:8080/v1",
-  "silence_threshold": 0.0005,
-  "silence_timeout_ms": 2000
+  "default_model": "mistral",
+
+  "silence_threshold": 0.000045,
+  "silence_timeout_ms": 2500,
+
+  "whisper_language": "en",
+  "whisper_max_tokens": 32,
+
+  "whisper": {
+  "sampling_strategy": "beam",
+  "temperature": 0.2,
+  "min_speech_ms": 200,
+  "min_silence_ms": 400
+}
+
 }
