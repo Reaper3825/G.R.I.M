@@ -8,7 +8,6 @@
 #include "console_history.hpp"
 #include "timer.hpp"
 
-
 /// Dispatches a parsed NLP intent into the correct action.
 /// Updates console history, modifies timers, filesystem state, or memory.
 /// Returns true if the command was handled (even if with an error message).
@@ -19,7 +18,7 @@
 /// @param timers          Active timers vector (for alarms).
 /// @param longTermMemory  Persistent key/value memory (saved to JSON).
 /// @param nlp             NLP engine (may reload rules).
-/// @param history         Console history log for output.
+/// @param history         Console history log for output (also triggers speech).
 bool handleCommand(const Intent& intent,
                    std::string& buffer,
                    std::filesystem::path& currentDir,

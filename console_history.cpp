@@ -1,5 +1,6 @@
 #include "console_history.hpp"
 #include "ui_config.hpp"   // for kMaxHistory
+#include "voice_speak.hpp" // 🔹 Use real TTS
 #include <sstream>
 
 // Push a new line into history (with optional color)
@@ -9,6 +10,16 @@ void ConsoleHistory::push(const std::string& line, sf::Color c) {
     }
     raw_.push_back({ line, c });
     dirty_ = true;
+
+    // 🔹 Speak aloud automatically (skip empty lines)
+    if (!line.empty()) {
+        // Filter out debug/system messages if too noisy
+        if (line.rfind("[DEBUG]", 0) == std::string::npos &&
+            line.rfind("[WARN]", 0)  == std::string::npos) {
+            // Call new voice_speak.cpp TTS
+            speak(line, "summary");
+        }
+    }
 }
 
 // Re-wrap lines if font/width changed or marked dirty

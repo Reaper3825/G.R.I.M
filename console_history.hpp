@@ -4,7 +4,9 @@
 #include <string>
 #include <vector>
 
-// Forward-declare SFML class
+/// ConsoleHistory
+/// Stores raw and wrapped console lines for display,
+/// and automatically triggers audible speech on push().
 class ConsoleHistory {
 public:
     struct WrappedLine {
@@ -12,16 +14,17 @@ public:
         sf::Color color{ sf::Color::White };
     };
 
-    // Add a new line to history (default white color)
+    /// Add a new line to history (default white color).
+    /// Also triggers audible speech via speak() in voice_speak.cpp.
     void push(const std::string& line, sf::Color c = sf::Color::White);
 
-    // Re-wrap text for drawing into given width
+    /// Re-wrap text for drawing into given width.
     void ensureWrapped(float maxWidth, sf::Text& meas);
 
-    // Clear all history
+    /// Clear all history lines.
     void clear();
 
-    // Accessors
+    /// Accessors
     size_t rawCount() const;
     size_t wrappedCount() const;
     const std::vector<WrappedLine>& wrapped() const;

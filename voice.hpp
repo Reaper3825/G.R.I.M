@@ -1,28 +1,35 @@
 #pragma once
 #include <string>
-#include "whisper.h"
+#include <vector>
 #include <nlohmann/json.hpp>
 
-// ------------------------------------------------------------
-// Global Whisper context (declared here, defined in voice.cpp)
-// ------------------------------------------------------------
-extern struct whisper_context* g_whisperCtx;
-extern float g_lastSegmentConfidence;
+// ✅ Forward declare at global scope
+struct whisper_context;
 
-// Silence / timing config values (loaded from ai_config.json)
-extern double g_silenceThreshold;   // energy threshold
-extern int g_silenceTimeoutMs;      // ms before final cutoff
-extern int g_minSpeechMs;           // minimum speech duration
-extern int g_minSilenceMs;          // minimum silence duration
+namespace Voice {
 
-// ------------------------------------------------------------
-// Function declarations (implemented in voice.cpp)
-// ------------------------------------------------------------
+// ---------------- State ----------------
+struct State {
+    ::whisper_context* ctx = nullptr;   // ✅ Whisper model context
+    float lastSegmentConfidence = -1.0f;
+    int minSpeechMs = 500;
+    int minSilenceMs = 1200;
+    int inputDeviceIndex = -1;
+    double envLevel = 0.0;
+};
 
-// Initialize Whisper globally (auto-fallback base.en → small)
-bool initWhisper();
-bool initWhisper(const std::string& modelName);
+// Extern instance (defined in voice.cpp)
+extern State g_state;
 
-// Voice demo: recording and transcription
-std::string runVoiceDemo(const std::string& modelPath,
-                         nlohmann::json& longTermMemory);
+// ---------------- API ----------------
+
+// Initialize Whisper model
+bool initWhisper(const std::string& modelName = "small", std::string* err = nullptr);
+
+// Record microphone, transcribe with Whisper, return text
+std::string runVoiceDemo(nlohmann::json& longTermMemory);
+
+// Speak text aloud (tries online TTS first, then offline fallback)
+bool speakText(const std::string& text, bool preferOnline = true);
+
+} // namespace Voice

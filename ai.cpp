@@ -1,4 +1,6 @@
 #include "ai.hpp"
+#include "voice.hpp"
+
 #include <cpr/cpr.h>
 #include <iostream>
 #include <fstream>
@@ -89,12 +91,26 @@ void setLastCommand(const std::string& command) {
 }
 
 // =========================================================
-// AI configuration
+// AI + Voice configuration persistence
 // =========================================================
+void saveAIConfig(const std::string& filename) {
+    try {
+        std::ofstream f(filename);
+        if (f) {
+            f << aiConfig.dump(2);
+            std::cerr << "[Config] Saved ai_config.json with "
+                      << aiConfig.size() << " top-level keys\n";
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[Config] Failed to save ai_config.json: " << e.what() << "\n";
+    }
+}
+
 void loadAIConfig(const std::string& filename) {
     std::ifstream f(filename);
     if (!f.is_open()) {
         std::cerr << "[Config] No " << filename << " found, creating defaults.\n";
+
         aiConfig = {
             {"backend", "auto"},
             {"ollama_url", "http://127.0.0.1:11434"},
@@ -103,10 +119,30 @@ void loadAIConfig(const std::string& filename) {
             {"silence_threshold", g_silenceThreshold},
             {"silence_timeout_ms", g_silenceTimeoutMs},
             {"whisper_language", g_whisperLanguage},
-            {"whisper_max_tokens", g_whisperMaxTokens}
+            {"whisper_max_tokens", g_whisperMaxTokens},
+            {"voice", {
+                {"mode", "hybrid"},
+                {"local_engine", "en_US-amy-medium.onnx"},
+                {"cloud_engine", "openai"},
+                {"rules", {
+                    {"startup", "local"},
+                    {"reminder", "local"},
+                    {"summary", "cloud"},
+                    {"banter", "cloud"}
+                }},
+                {"silence_threshold", g_silenceThreshold},
+                {"silence_timeout_ms", g_silenceTimeoutMs},
+                {"input_device_index", 0},
+                {"tts_url", "http://127.0.0.1:8080/tts"}
+            }},
+            {"api_keys", {
+                {"openai", "sk-your-openai-key-here"},
+                {"elevenlabs", ""},
+                {"azure", ""}
+            }}
         };
-        std::ofstream out(filename);
-        if (out) out << aiConfig.dump(2);
+
+        saveAIConfig(filename);
         return;
     }
 
@@ -114,17 +150,27 @@ void loadAIConfig(const std::string& filename) {
         f >> aiConfig;
         std::cout << "[Config] AI config loaded successfully from " << filename << "\n";
 
-        if (aiConfig.contains("silence_threshold"))
-            g_silenceThreshold = aiConfig["silence_threshold"].get<double>();
+        // ---- Global AI tuning ----
+        g_silenceThreshold = aiConfig.value("silence_threshold", g_silenceThreshold);
+        g_silenceTimeoutMs = aiConfig.value("silence_timeout_ms", g_silenceTimeoutMs);
+        g_whisperLanguage  = aiConfig.value("whisper_language", g_whisperLanguage);
+        g_whisperMaxTokens = aiConfig.value("whisper_max_tokens", g_whisperMaxTokens);
 
-        if (aiConfig.contains("silence_timeout_ms"))
-            g_silenceTimeoutMs = aiConfig["silence_timeout_ms"].get<int>();
+        // ---- Voice block ----
+        if (aiConfig.contains("voice") && aiConfig["voice"].is_object()) {
+            auto v = aiConfig["voice"];
+            std::cout << "[Voice] Config loaded: mode="
+                      << v.value("mode", "hybrid")
+                      << " local=" << v.value("local_engine", "none")
+                      << " cloud=" << v.value("cloud_engine", "none")
+                      << " inputDevice=" << v.value("input_device_index", -1)
+                      << "\n";
 
-        if (aiConfig.contains("whisper_language"))
-            g_whisperLanguage = aiConfig["whisper_language"].get<std::string>();
+            g_silenceThreshold = v.value("silence_threshold", g_silenceThreshold);
+            g_silenceTimeoutMs = v.value("silence_timeout_ms", g_silenceTimeoutMs);
+        }
 
-        if (aiConfig.contains("whisper_max_tokens"))
-            g_whisperMaxTokens = aiConfig["whisper_max_tokens"].get<int>();
+        saveAIConfig(filename);
 
     } catch (const std::exception& e) {
         std::cerr << "[Config] Error parsing " << filename << ": " << e.what() << std::endl;
@@ -134,25 +180,29 @@ void loadAIConfig(const std::string& filename) {
 // =========================================================
 // Backend resolver
 // =========================================================
-std::string resolveBackendURL() {
+std::string resolveBackend() {
     std::string backend = aiConfig.value("backend", "auto");
 
     if (backend == "auto") {
-    #if defined(_WIN32) || defined(_WIN64)
-        backend = "ollama";
-    #elif defined(__linux__)
-        backend = "localai";
-    #elif defined(__APPLE__)
-        backend = "ollama";
-    #else
-        backend = "localai";
-    #endif
+        // Try Ollama first
+        try {
+            auto r = cpr::Get(cpr::Url{aiConfig.value("ollama_url","http://127.0.0.1:11434") + "/api/tags"},
+                              cpr::Timeout{1000});
+            if (r.status_code == 200) return "ollama";
+        } catch (...) {}
+
+        // Try LocalAI
+        try {
+            auto r = cpr::Get(cpr::Url{aiConfig.value("localai_url","http://127.0.0.1:8080/v1") + "/models"},
+                              cpr::Timeout{1000});
+            if (r.status_code == 200) return "localai";
+        } catch (...) {}
+
+        // Fallback
+        return "openai";
     }
 
-    if (backend == "ollama")
-        return aiConfig.value("ollama_url", "http://127.0.0.1:11434");
-    else
-        return aiConfig.value("localai_url", "http://127.0.0.1:8080/v1");
+    return backend;
 }
 
 // =========================================================
@@ -160,44 +210,81 @@ std::string resolveBackendURL() {
 // =========================================================
 std::future<std::string> callAIAsync(const std::string& prompt) {
     return std::async(std::launch::async, [prompt]() {
-        std::string url   = resolveBackendURL();
-        std::string model = aiConfig.value("default_model", "mistral");
+        std::string backend = resolveBackend();
+        std::string model   = aiConfig.value("default_model", "mistral");
 
-        nlohmann::json body = {
-            {"model", model},
-            {"prompt", prompt},
-            {"stream", false},
-            {"keep_alive", "5m"}
-        };
+        std::cerr << "[AI] callAIAsync backend=" << backend << " model=" << model << "\n";
 
-        std::string endpoint;
-        if (url.find("8080") != std::string::npos) {
-            endpoint = url + "/chat/completions";
-            body = {
+        if (backend == "ollama") {
+            nlohmann::json body = {
                 {"model", model},
-                {"messages", {{{"role", "user"}, {"content", prompt}}}}
+                {"prompt", prompt},
+                {"stream", false},
+                {"keep_alive", "5m"}
             };
-        } else {
-            endpoint = url + "/api/generate";
+
+            std::string endpoint = aiConfig.value("ollama_url","http://127.0.0.1:11434") + "/api/generate";
+
+            auto r = cpr::Post(cpr::Url{endpoint},
+                               cpr::Header{{"Content-Type","application/json"}},
+                               cpr::Body{body.dump()});
+            if (r.status_code == 200) {
+                try {
+                    auto j = nlohmann::json::parse(r.text);
+                    if (j.contains("response")) return j["response"].get<std::string>();
+                    return r.text;
+                } catch (...) { return r.text; }
+            }
+            return "Ollama error: " + r.text;
         }
 
-        cpr::Response r = cpr::Post(
-            cpr::Url{endpoint},
-            cpr::Header{{"Content-Type", "application/json"}},
-            cpr::Body{body.dump()}
-        );
+        if (backend == "localai") {
+            nlohmann::json body = {
+                {"model", model},
+                {"messages", {{{"role","user"},{"content",prompt}}}}
+            };
 
-        if (r.error) return std::string("Error calling AI: ") + r.error.message;
-        if (r.status_code != 200) return "AI HTTP " + std::to_string(r.status_code) + ": " + r.text;
+            std::string endpoint = aiConfig.value("localai_url","http://127.0.0.1:8080/v1") + "/chat/completions";
 
-        try {
-            auto j = nlohmann::json::parse(r.text);
-            if (j.contains("response")) return j["response"].get<std::string>();
-            if (j.contains("choices")) return j["choices"][0]["message"]["content"].get<std::string>();
-            return std::string("[AI] No valid field in response.");
-        } catch (const std::exception& e) {
-            return std::string("Error parsing AI JSON: ") + e.what();
+            auto r = cpr::Post(cpr::Url{endpoint},
+                               cpr::Header{{"Content-Type","application/json"}},
+                               cpr::Body{body.dump()});
+            if (r.status_code == 200) {
+                try {
+                    auto j = nlohmann::json::parse(r.text);
+                    if (j.contains("choices"))
+                        return j["choices"][0]["message"]["content"].get<std::string>();
+                    return r.text;
+                } catch (...) { return r.text; }
+            }
+            return "LocalAI error: " + r.text;
         }
+
+        if (backend == "openai") {
+            nlohmann::json body = {
+                {"model", model},
+                {"messages", {{{"role","user"},{"content",prompt}}}}
+            };
+
+            auto r = cpr::Post(
+                cpr::Url{"https://api.openai.com/v1/chat/completions"},
+                cpr::Header{{"Content-Type","application/json"},
+                            {"Authorization","Bearer " + aiConfig["api_keys"].value("openai","")}},
+                cpr::Body{body.dump()}
+            );
+            if (r.status_code == 200) {
+                try {
+                    auto j = nlohmann::json::parse(r.text);
+                    if (j.contains("choices"))
+                        return j["choices"][0]["message"]["content"].get<std::string>();
+                    return r.text;
+                } catch (...) { return r.text; }
+            }
+            return "OpenAI error: " + r.text;
+        }
+
+        return std::string("[AI] No valid backend.");
+
     });
 }
 
@@ -213,7 +300,12 @@ void ai_process_stream(const std::string& input, nlohmann::json& memory,
         std::istringstream iss(reply);
         std::string word;
         while (iss >> word) {
-            onChunk(word + " ");
+            std::string chunk = word + " ";
+            onChunk(chunk);
+
+            // 🔹 Speak each chunk
+            Voice::speakText(chunk, true);
+
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
 
@@ -232,12 +324,20 @@ std::string ai_process(const std::string& input, nlohmann::json& memory) {
     try {
         auto future = callAIAsync(input);
         std::string reply = future.get();
+
         memory["last_input"] = input;
         memory["last_reply"] = reply;
         saveMemory();
+
+        if (!reply.empty()) {
+            Voice::speakText(reply, true);
+        }
+
         return reply;
     } catch (const std::exception& e) {
-        return std::string("[AI Error] ") + e.what();
+        std::string err = std::string("[AI Error] ") + e.what();
+        Voice::speakText(err, true);
+        return err;
     }
 }
 

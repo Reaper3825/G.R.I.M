@@ -144,7 +144,19 @@
   "intent": "voice",
   "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*)?(?:voice|start voice|record voice)$",
   "slots": {}
+},
+{
+  "intent": "grim_ai",
+  "description": "Catch-all for general AI queries",
+  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*)(.+)$",
+  "slot_names": ["query"],
+  "score_boost": 0.05,
+  "case_insensitive": true
 }
+
+
+
+
 
 
 

@@ -144,7 +144,23 @@
   "intent": "voice",
   "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*)?(?:voice|start voice|record voice)$",
   "slots": {}
+},
+{
+  "intent": "voice_stream",
+  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*)?(?:voice stream|start voice stream|live voice)$",
+  "slots": {}
+},
+{
+  "intent": "ai_backend",
+  "description": "Handles freeform AI chat or backend switching. Any text after 'grim' is sent to AI for response. If the text matches a valid backend, it switches instead.",
+  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*)(.*)$",
+  "slot_names": ["prompt"],
+  "score_boost": 0.5,
+  "case_insensitive": true
 }
+
+
+
 
 
 
