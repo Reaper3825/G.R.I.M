@@ -1,25 +1,32 @@
 {
+  // ---------------- Personality / Style ----------------
   "tone": "optimistic",
   "optimism_level": 0.8,
   "encouragement_phrases": ["Yay!", "You can do it!", "Keep going!"],
   "formality": "casual",
 
-  "backend": "auto",
-  "ollama_url": "http://127.0.0.1:11434",
-  "localai_url": "http://127.0.0.1:8080/v1",
-  "default_model": "mistral",
+  // ---------------- AI Backends ----------------
+  "backend": "auto",                        // "auto", "ollama", or "localai"
+  "ollama_url": "http://127.0.0.1:11434",   // Ollama endpoint
+  "localai_url": "http://127.0.0.1:8080/v1",// LocalAI endpoint
+  "default_model": "mistral",               // default text model
 
-  "silence_threshold": 0.000045,
-  "silence_timeout_ms": 2500,
+  // ---------------- Voice / Silence Detection ----------------
+  "silence_threshold": 0.02,   // RMS cutoff for silence; start around 0.01–0.05
+  "silence_timeout_ms": 4000,  // force finalize after this much silence (ms)
 
-  "whisper_language": "en",
-  "whisper_max_tokens": 32,
+  // ---------------- Whisper Defaults ----------------
+  "whisper_language": "en",   // language for transcription
+  "whisper_max_tokens": 32,   // maximum tokens per segment
 
   "whisper": {
-  "sampling_strategy": "beam",
-  "temperature": 0.2,
-  "min_speech_ms": 200,
-  "min_silence_ms": 400
-}
+    "sampling_strategy": "beam", // "beam" = higher accuracy, "greedy" = faster
+    "temperature": 0.2,          // decoding randomness (0.1–0.3 = stable)
+    
+    // --- Silence detection tuning ---
+    "min_speech_ms": 500,        // minimum length of valid speech (ms)
+    "min_silence_ms": 1200,       // required silence before cutoff (ms)
+    "input_device_index": 1   // use Device #1 (Razer BlackShark V2 mic)
 
+  }
 }

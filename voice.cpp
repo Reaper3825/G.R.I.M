@@ -1,6 +1,7 @@
 #include "voice.hpp"
 #include "resources.hpp"
 #include "whisper.h"
+#include "ai.hpp"   // ✅ brings in extern globals (silenceThreshold, silenceTimeoutMs)
 
 #include <iostream>
 #include <vector>
@@ -8,6 +9,7 @@
 #include <portaudio.h>
 #include <chrono>
 #include <cmath>
+#include <fstream>
 #include <nlohmann/json.hpp>
 
 // ------------------------------------------------------------
@@ -23,12 +25,13 @@
 struct whisper_context* g_whisperCtx = nullptr;
 float g_lastSegmentConfidence = -1.0f;
 
-// Config values (defined in ai.cpp, except min speech/silence)
+// Config values (set from ai_config.json)
 extern nlohmann::json aiConfig;
-extern double g_silenceThreshold;
-extern int g_silenceTimeoutMs;
-int g_minSpeechMs  = 500;  // Step 5: smarter silence detection
-int g_minSilenceMs = 800;
+extern nlohmann::json longTermMemory;
+
+int g_minSpeechMs  = 500;
+int g_minSilenceMs = 1200;
+int g_inputDeviceIndex = -1; // -1 = use default
 
 // Environment baseline
 static double g_envLevel = 0.0;
@@ -54,11 +57,11 @@ static int recordCallback(const void* input,
         data->buffer.insert(data->buffer.end(), in, in + frameCount);
     }
 
-    return paContinue; // keep streaming
+    return paContinue;
 }
 
 // ------------------------------------------------------------
-// Smarter Silence Detection
+// Silence Detection (RMS)
 // ------------------------------------------------------------
 static bool isSilence(const std::vector<float>& pcm) {
     if (pcm.empty()) return true;
@@ -68,14 +71,56 @@ static bool isSilence(const std::vector<float>& pcm) {
     energy /= pcm.size();
     double rms = std::sqrt(energy);
 
-    double adjusted = std::max(0.0, rms - g_envLevel);
+    bool silent = rms < g_silenceThreshold;
 
     std::cout << "[DEBUG][Voice] RMS=" << rms
               << " baseline=" << g_envLevel
-              << " adjusted=" << adjusted
-              << " threshold=" << g_silenceThreshold << "\n";
+              << " threshold=" << g_silenceThreshold
+              << " -> " << (silent ? "SILENCE" : "VOICE") << "\n";
 
-    return adjusted < g_silenceThreshold;
+    return silent;
+}
+
+// ------------------------------------------------------------
+// Save WAV (debugging)
+// ------------------------------------------------------------
+void saveWav(const std::string& path, const std::vector<float>& pcm, int sampleRate = SAMPLE_RATE) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return;
+
+    int dataSize = pcm.size() * sizeof(int16_t);
+    int fileSize = 36 + dataSize;
+
+    // RIFF header
+    f.write("RIFF", 4);
+    f.write((char*)&fileSize, 4);
+    f.write("WAVE", 4);
+
+    // fmt chunk
+    int fmtSize = 16;
+    short audioFormat = 1;
+    short numChannels = 1;
+    int byteRate = sampleRate * numChannels * 2;
+    short blockAlign = numChannels * 2;
+    short bitsPerSample = 16;
+
+    f.write("fmt ", 4);
+    f.write((char*)&fmtSize, 4);
+    f.write((char*)&audioFormat, 2);
+    f.write((char*)&numChannels, 2);
+    f.write((char*)&sampleRate, 4);
+    f.write((char*)&byteRate, 4);
+    f.write((char*)&blockAlign, 2);
+    f.write((char*)&bitsPerSample, 2);
+
+    // data chunk
+    f.write("data", 4);
+    f.write((char*)&dataSize, 4);
+
+    for (float s : pcm) {
+        int16_t v = (int16_t)(std::max(-1.0f, std::min(1.0f, s)) * 32767);
+        f.write((char*)&v, 2);
+    }
 }
 
 // ------------------------------------------------------------
@@ -102,24 +147,39 @@ bool initWhisper(const std::string& modelName) {
         return false;
     }
 
-    // 🔹 Safe config loading
-    g_silenceThreshold = aiConfig.value("silence_threshold", 0.00005);
-    g_silenceTimeoutMs = aiConfig.value("silence_timeout_ms", 2500);
+    // --- Load config ---
+    g_inputDeviceIndex = aiConfig.value("input_device_index", -1);
+    g_silenceTimeoutMs = aiConfig.value("silence_timeout_ms", 4000);
 
     if (aiConfig.contains("whisper") && aiConfig["whisper"].is_object()) {
         auto& w = aiConfig["whisper"];
         g_minSpeechMs  = w.value("min_speech_ms", 500);
-        g_minSilenceMs = w.value("min_silence_ms", 800);
-    } else {
-        g_minSpeechMs  = 500;
-        g_minSilenceMs = 800;
+        g_minSilenceMs = w.value("min_silence_ms", 1200);
+    }
+
+    if (aiConfig.contains("silence_detection") &&
+        aiConfig["silence_detection"].is_object()) {
+        auto& sd = aiConfig["silence_detection"];
+        std::string mode = sd.value("mode", "fixed");
+        if (mode == "auto") {
+            if (longTermMemory.contains("voice_baseline")) {
+                g_envLevel = longTermMemory["voice_baseline"].get<double>();
+            }
+            double mult = sd.value("auto_multiplier", 3.0);
+            g_silenceThreshold = std::max(0.00001, g_envLevel * mult);
+            std::cout << "[Voice] Auto silence threshold set: "
+                      << g_silenceThreshold << " (baseline=" << g_envLevel << ")\n";
+        } else {
+            g_silenceThreshold = sd.value("silence_threshold", 0.02);
+            std::cout << "[Voice] Fixed silence threshold: " << g_silenceThreshold << "\n";
+        }
     }
 
     std::cout << "[Voice] Whisper initialized. "
-              << "silence_threshold=" << g_silenceThreshold
-              << ", silence_timeout=" << g_silenceTimeoutMs
+              << "silence_timeout=" << g_silenceTimeoutMs
               << ", min_speech_ms=" << g_minSpeechMs
-              << ", min_silence_ms=" << g_minSilenceMs << "\n";
+              << ", min_silence_ms=" << g_minSilenceMs
+              << ", input_device_index=" << g_inputDeviceIndex << "\n";
 
     return true;
 }
@@ -138,25 +198,37 @@ std::string runVoiceDemo(const std::string& /*modelPath*/,
         return "";
     }
 
-    // Cached baseline
-    if (longTermMemory.contains("voice_baseline")) {
-        g_envLevel = longTermMemory["voice_baseline"].get<double>();
-        std::cout << "[Voice] Loaded cached environment baseline: " << g_envLevel << "\n";
-    }
-
     if (Pa_Initialize() != paNoError) {
         return "[ERROR] Failed to init PortAudio";
     }
 
     AudioData data;
     PaStream* stream;
-    if (Pa_OpenDefaultStream(&stream,
-                             1, 0,
-                             paFloat32,
-                             SAMPLE_RATE,
-                             FRAMES_PER_BUFFER,
-                             recordCallback,
-                             &data) != paNoError) {
+
+    int deviceIndex = (g_inputDeviceIndex >= 0) ? g_inputDeviceIndex : Pa_GetDefaultInputDevice();
+    if (deviceIndex == paNoDevice) {
+        Pa_Terminate();
+        return "[ERROR] No input device found";
+    }
+
+    const PaDeviceInfo* devInfo = Pa_GetDeviceInfo(deviceIndex);
+    std::cout << "[Voice] Using input device #" << deviceIndex
+              << " (" << devInfo->name << ")\n";
+
+    PaStreamParameters inputParams;
+    inputParams.device = deviceIndex;
+    inputParams.channelCount = 1;
+    inputParams.sampleFormat = paFloat32;
+    inputParams.suggestedLatency = devInfo->defaultLowInputLatency;
+    inputParams.hostApiSpecificStreamInfo = nullptr;
+
+    if (Pa_OpenStream(&stream,
+                      &inputParams, nullptr,
+                      SAMPLE_RATE,
+                      FRAMES_PER_BUFFER,
+                      paNoFlag,
+                      recordCallback,
+                      &data) != paNoError) {
         Pa_Terminate();
         return "[ERROR] Failed to open audio stream";
     }
@@ -166,11 +238,11 @@ std::string runVoiceDemo(const std::string& /*modelPath*/,
 
     std::vector<float> rollingBuffer;
     std::string transcript;
-    int lastPrintedSegment = 0;
 
     auto lastSpeech = std::chrono::steady_clock::now();
     auto speechStart = std::chrono::steady_clock::now();
     bool inSpeech = false;
+    int silentChunks = 0;
 
     while (true) {
         if (data.buffer.size() >= CHUNK_SIZE) {
@@ -181,89 +253,37 @@ std::string runVoiceDemo(const std::string& /*modelPath*/,
                 if (!inSpeech) {
                     speechStart = std::chrono::steady_clock::now();
                     inSpeech = true;
+                    std::cout << "[DEBUG][Voice] Speech started\n";
                 }
                 lastSpeech = std::chrono::steady_clock::now();
                 rollingBuffer.insert(rollingBuffer.end(), chunk.begin(), chunk.end());
-            } else {
-                if (inSpeech) {
-                    auto msSinceSpeech =
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::steady_clock::now() - lastSpeech).count();
-                    if (msSinceSpeech > g_minSilenceMs) {
-                        std::cout << "[DEBUG][Voice] End of speech detected after "
-                                  << msSinceSpeech << " ms silence\n";
-                        break;
-                    }
+                silentChunks = 0;
+            } else if (inSpeech) {
+                silentChunks++;
+                auto msSinceSpeech =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - lastSpeech).count();
+                auto msSpeech =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        lastSpeech - speechStart).count();
+
+                std::cout << "[DEBUG][Voice] Checking finalize -> "
+                          << "msSinceSpeech=" << msSinceSpeech
+                          << ", msSpeech=" << msSpeech
+                          << ", silentChunks=" << silentChunks << "\n";
+
+                if (msSinceSpeech >= g_minSilenceMs &&
+                    msSpeech >= g_minSpeechMs &&
+                    rollingBuffer.size() > SAMPLE_RATE * 1) {
+                    std::cout << "[DEBUG][Voice] Finalize condition met!\n";
+                    break;
                 }
-            }
 
-            if (rollingBuffer.size() > SAMPLE_RATE * 10) {
-                rollingBuffer.erase(rollingBuffer.begin(),
-                                    rollingBuffer.begin() + (rollingBuffer.size() - SAMPLE_RATE * 10));
-                lastPrintedSegment = 0;
-            }
-
-            if (rollingBuffer.size() >= SAMPLE_RATE * 2) {
-                // Normalize audio
-                float maxVal = 0.0f;
-                for (float s : rollingBuffer) maxVal = std::max(maxVal, std::fabs(s));
-                if (maxVal > 0.0f) for (float& s : rollingBuffer) s /= maxVal;
-
-                // 🔹 Safe Whisper params loading
-                std::string strategy = "greedy";
-                float temp = 0.2f;
-                std::string lang = "en";
-
-                if (aiConfig.contains("whisper") && aiConfig["whisper"].is_object()) {
-                    auto& w = aiConfig["whisper"];
-                    strategy = w.value("sampling_strategy", "greedy");
-                    temp     = w.value("temperature", 0.2f);
+                if (msSinceSpeech >= g_silenceTimeoutMs) {
+                    std::cout << "[DEBUG][Voice] Force finalizing after silence timeout (" 
+                              << msSinceSpeech << " ms)\n";
+                    break;
                 }
-                lang = aiConfig.value("whisper_language", "en");
-
-                whisper_full_params params =
-                    whisper_full_default_params(
-                        strategy == "beam" ? WHISPER_SAMPLING_BEAM_SEARCH
-                                           : WHISPER_SAMPLING_GREEDY);
-
-                params.language       = lang.empty() ? nullptr : lang.c_str();
-                params.no_context     = false;
-                params.single_segment = false;
-                params.print_realtime = false;
-                params.print_progress = false;
-                params.translate      = false;
-                params.temperature    = temp;
-
-                if (whisper_full(g_whisperCtx, params,
-                                 rollingBuffer.data(), rollingBuffer.size()) == 0) {
-                    int n_segments = whisper_full_n_segments(g_whisperCtx);
-                    for (int i = lastPrintedSegment; i < n_segments; i++) {
-                        const char* text = whisper_full_get_segment_text(g_whisperCtx, i);
-                        float conf = 1.0f -
-                            whisper_full_get_segment_no_speech_prob(g_whisperCtx, i);
-                        std::cout << "[Partial] " << text << " [conf=" << conf << "]\n";
-                        g_lastSegmentConfidence = conf;
-                        transcript += text;
-                        transcript += " ";
-                    }
-                    lastPrintedSegment = n_segments;
-                }
-            }
-        }
-
-        auto now = std::chrono::steady_clock::now();
-        auto msSilent =
-            std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSpeech).count();
-
-        if (inSpeech) {
-            auto msSpeech =
-                std::chrono::duration_cast<std::chrono::milliseconds>(lastSpeech - speechStart).count();
-
-            // 🔹 Softer cutoff: finalize if EITHER condition is met
-            if (msSilent > g_silenceTimeoutMs || msSpeech > g_minSpeechMs) {
-                std::cout << "[DEBUG][Voice] Finalizing (msSilent=" << msSilent
-                          << ", msSpeech=" << msSpeech << ")\n";
-                break;
             }
         }
 
@@ -273,6 +293,32 @@ std::string runVoiceDemo(const std::string& /*modelPath*/,
     Pa_StopStream(stream);
     Pa_CloseStream(stream);
     Pa_Terminate();
+
+    // --- Run Whisper ---
+    if (!rollingBuffer.empty()) {
+        std::cout << "[DEBUG] Sending " << rollingBuffer.size() << " samples to Whisper\n";
+
+        saveWav("captured.wav", rollingBuffer);
+
+        whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+        wparams.print_progress   = false;
+        wparams.print_realtime   = false;
+        wparams.print_timestamps = true;
+
+        int ret = whisper_full(g_whisperCtx, wparams, rollingBuffer.data(), rollingBuffer.size());
+        if (ret != 0) {
+            std::cerr << "[Voice] ERROR: Whisper processing failed (code " << ret << ")\n";
+        } else {
+            int n = whisper_full_n_segments(g_whisperCtx);
+            std::cout << "[DEBUG] Whisper returned " << n << " segments\n";
+            for (int i = 0; i < n; i++) {
+                const char* txt = whisper_full_get_segment_text(g_whisperCtx, i);
+                std::cout << "[DEBUG] Segment " << i << ": " << txt << "\n";
+                transcript += txt;
+                transcript += " ";
+            }
+        }
+    }
 
     if (!transcript.empty() && transcript.back() == ' ')
         transcript.pop_back();
