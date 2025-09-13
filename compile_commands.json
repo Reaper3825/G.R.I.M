@@ -1,0 +1,146 @@
+[
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\cc.exe -DGGML_COMMIT=\\\"edea8a9c\\\" -DGGML_SCHED_MAX_COPIES=4 -DGGML_VERSION=\\\"0.0.3069\\\" -D_CRT_SECURE_NO_WARNINGS -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wcast-qual -Wno-unused-function -Wdouble-promotion -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-base.dir\\ggml.c.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml.c",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml.c",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml.c.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_COMMIT=\\\"edea8a9c\\\" -DGGML_SCHED_MAX_COPIES=4 -DGGML_VERSION=\\\"0.0.3069\\\" -D_CRT_SECURE_NO_WARNINGS -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-base.dir\\ggml.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\cc.exe -DGGML_COMMIT=\\\"edea8a9c\\\" -DGGML_SCHED_MAX_COPIES=4 -DGGML_VERSION=\\\"0.0.3069\\\" -D_CRT_SECURE_NO_WARNINGS -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wcast-qual -Wno-unused-function -Wdouble-promotion -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-base.dir\\ggml-alloc.c.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-alloc.c",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-alloc.c",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-alloc.c.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_COMMIT=\\\"edea8a9c\\\" -DGGML_SCHED_MAX_COPIES=4 -DGGML_VERSION=\\\"0.0.3069\\\" -D_CRT_SECURE_NO_WARNINGS -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-base.dir\\ggml-backend.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-backend.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-backend.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_COMMIT=\\\"edea8a9c\\\" -DGGML_SCHED_MAX_COPIES=4 -DGGML_VERSION=\\\"0.0.3069\\\" -D_CRT_SECURE_NO_WARNINGS -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-base.dir\\ggml-opt.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-opt.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-opt.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-opt.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_COMMIT=\\\"edea8a9c\\\" -DGGML_SCHED_MAX_COPIES=4 -DGGML_VERSION=\\\"0.0.3069\\\" -D_CRT_SECURE_NO_WARNINGS -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-base.dir\\ggml-threading.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-threading.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-threading.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-threading.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\cc.exe -DGGML_COMMIT=\\\"edea8a9c\\\" -DGGML_SCHED_MAX_COPIES=4 -DGGML_VERSION=\\\"0.0.3069\\\" -D_CRT_SECURE_NO_WARNINGS -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wcast-qual -Wno-unused-function -Wdouble-promotion -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-base.dir\\ggml-quants.c.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-quants.c",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-quants.c",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-quants.c.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_COMMIT=\\\"edea8a9c\\\" -DGGML_SCHED_MAX_COPIES=4 -DGGML_VERSION=\\\"0.0.3069\\\" -D_CRT_SECURE_NO_WARNINGS -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-base.dir\\gguf.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\gguf.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/gguf.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/gguf.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml.dir\\ggml-backend-reg.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-backend-reg.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-backend-reg.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml.dir/ggml-backend-reg.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\cc.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wcast-qual -Wno-unused-function -Wdouble-promotion -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\ggml-cpu.c.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\ggml-cpu.c",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/ggml-cpu.c",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.c.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\ggml-cpu.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\ggml-cpu.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/ggml-cpu.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\repack.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\repack.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/repack.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/repack.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\hbm.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\hbm.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/hbm.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/hbm.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\cc.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wcast-qual -Wno-unused-function -Wdouble-promotion -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\quants.c.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\quants.c",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/quants.c",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/quants.c.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\traits.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\traits.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/traits.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/traits.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\amx\\amx.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\amx\\amx.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/amx/amx.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/amx.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\amx\\mmq.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\amx\\mmq.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/amx/mmq.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/mmq.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\binary-ops.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\binary-ops.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/binary-ops.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/binary-ops.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\unary-ops.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\unary-ops.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/unary-ops.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/unary-ops.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\vec.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\vec.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/vec.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/vec.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\ops.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\ops.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/ops.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ops.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\cc.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wcast-qual -Wno-unused-function -Wdouble-promotion -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\arch\\x86\\quants.c.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\arch\\x86\\quants.c",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/arch/x86/quants.c",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/x86/quants.c.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\arch\\x86\\repack.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\arch\\x86\\repack.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/arch/x86/repack.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/x86/repack.cpp.obj"
+},
+{
+  "directory": "D:/G.R.I.M",
+  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_USE_CPU -DWHISPER_VERSION=\\\"1.7.6\\\" -D_CRT_SECURE_NO_WARNINGS -ID:/G.R.I.M/external/whisper.cpp/src/. -ID:/G.R.I.M/external/whisper.cpp/src/../include -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -o external\\whisper.cpp\\src\\CMakeFiles\\whisper.dir\\whisper.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\src\\whisper.cpp",
+  "file": "D:/G.R.I.M/external/whisper.cpp/src/whisper.cpp",
+  "output": "D:/G.R.I.M/external/whisper.cpp/src/CMakeFiles/whisper.dir/whisper.cpp.obj"
+}
+]

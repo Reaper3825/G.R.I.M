@@ -1,14 +1,15 @@
 #include "voice_stream.hpp"
 #include "nlp.hpp"
 #include "console_history.hpp"
-#include "ui_helpers.hpp"   // for ui_set_textbox()
+#include "ui_helpers.hpp" 
 #include <whisper.h>
 #include <portaudio.h>
 #include "commands.hpp"
 #include "timer.hpp"
 #include "ai.hpp"
-#include <filesystem>
+#include "synonyms.hpp"
 
+#include <filesystem>
 #include <iostream>
 #include <vector>
 #include <atomic>
@@ -16,8 +17,29 @@
 #include <mutex>
 #include <csignal>
 #include <chrono>
-#include <cmath>   // for sqrt, log10
-#include <sstream> // for last word parsing
+#include <cmath> 
+#include <sstream> 
+
+
+static std::string sanitizeTranscript(const std::string& input) {
+    std::string out = input;
+
+    // lowercase
+    std::transform(out.begin(), out.end(), out.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+
+    // strip trailing punctuation (.,!?)
+    while (!out.empty() && ispunct(out.back())) {
+        out.pop_back();
+    }
+
+    // trim spaces
+    while (!out.empty() && isspace(out.front())) out.erase(out.begin());
+    while (!out.empty() && isspace(out.back())) out.pop_back();
+
+    return out;
+}
+
 
 namespace fs = std::filesystem;
 
@@ -38,6 +60,8 @@ static std::string g_partial; // evolving transcript for textbox
 // ---------------- Globals ----------------
 extern double g_silenceThreshold;        // set via ai_config.json
 extern float g_lastSegmentConfidence;    // from voice.cpp
+extern int g_silenceTimeoutMs;           // from ai_config.json
+
 
 // ---------------- Signal Handling ----------------
 static void handleSigint(int) {
@@ -70,37 +94,35 @@ static bool isSilence(const std::vector<float> &pcm) {
 }
 
 // ---------------- Completion Heuristics ----------------
+#include "synonyms.hpp"  // to get g_completionTriggers
+
 static bool looksComplete(const std::string& text) {
     if (text.empty()) return false;
 
-    // trim trailing spaces
     std::string trimmed = text;
-    while (!trimmed.empty() && isspace(trimmed.back())) {
-        trimmed.pop_back();
-    }
+    while (!trimmed.empty() && isspace(trimmed.back())) trimmed.pop_back();
     if (trimmed.empty()) return false;
 
-    // punctuation check
     char last = trimmed.back();
     if (last == '.' || last == '?' || last == '!') return true;
 
-    // last word check
     std::istringstream iss(trimmed);
     std::string word, lastWord;
     while (iss >> word) lastWord = word;
 
-    static const std::vector<std::string> endWords = {
-        "minutes", "minute", "hours", "hour",
-        "seconds", "second", "open", "close",
-        "stop", "start", "play", "pause"
-    };
-
-    for (auto& w : endWords) {
+    for (auto& w : g_completionTriggers) {
         if (lastWord == w) return true;
+        // check synonyms too
+        auto it = g_synonyms.find(w);
+        if (it != g_synonyms.end()) {
+            for (auto& syn : it->second) {
+                if (lastWord == syn) return true;
+            }
+        }
     }
-
     return false;
 }
+
 
 // ---------------- Main Voice Stream ----------------
 void runVoiceStream(whisper_context *ctx,
@@ -210,59 +232,79 @@ void runVoiceStream(whisper_context *ctx,
                 }
             }
 
-            // --- Silence + cutoff logic ---
-            auto now = std::chrono::steady_clock::now();
-            auto silenceMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSpeechTime).count();
+                // --- Silence + cutoff logic ---
+                auto now = std::chrono::steady_clock::now();
+                auto silenceMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSpeechTime).count();
 
-            if (!g_partial.empty()) {
-                bool complete  = looksComplete(g_partial);
-                bool confident = (g_lastSegmentConfidence > -0.3f);
+                if (!g_partial.empty()) {
+                    bool complete  = looksComplete(g_partial);
+                    bool confident = (g_lastSegmentConfidence > -0.3f);
 
-                double shortCutoff = 2000; // 2s
-                double longCutoff  = 6000; // 6s
-                double timeout     = (complete && confident) ? shortCutoff : longCutoff;
-
-                if (silenceMs > timeout) {
-                    std::cout << "[DEBUG][VoiceStream] Silence detected (" << silenceMs
-                              << " ms), finalizing command (timeout=" << timeout << ").\n";
-
-                    history->push("[VoiceStream Heard] " + g_partial, sf::Color::Yellow);
-
-                    // Parse transcript and dispatch as command
-                    Intent intent = nlp.parse(g_partial);
-                    std::cout << "[DEBUG][VoiceStream] Intent parsed: name='" << intent.name
-                              << "', matched=" << intent.matched
-                              << ", slots=" << intent.slots.size()
-                              << ", score=" << intent.score << "\n";
-
-                    if (intent.matched) {
-                        auto currentDir = fs::current_path();
-                        handleCommand(intent, g_partial, currentDir,
-                                      timers, longTermMemory, nlp, *history);
-                    } else {
-                        history->push("[VoiceStream] Sorry, I didn’t understand: " + g_partial,
-                                      sf::Color::Red);
+                    // ✅ configurable cutoff
+                    int timeout = g_silenceTimeoutMs;
+                    if (complete && confident && g_silenceTimeoutMs > 2000) {
+                        // if confident, allow shorter cutoff but not below 2s
+                        timeout = std::min(timeout, 2000);
                     }
 
-                    g_partial.clear();
-                    ui_set_textbox("");
-                    std::cout << "[VoiceStream] Command committed.\n";
+                    if (silenceMs > timeout) {
+                    std::cout << "[DEBUG][VoiceStream] Silence detected (" << silenceMs
+                  << " ms), finalizing command (timeout=" << timeout << ").\n";
+
+
+                history->push("[VoiceStream Heard] " + g_partial, sf::Color::Yellow);
+
+                // 🔹 Sanitize transcript for NLP
+                std::string clean = sanitizeTranscript(g_partial);
+
+                // Parse transcript and dispatch as command
+                Intent intent = nlp.parse(clean);
+                std::cout << "[DEBUG][VoiceStream] Intent parsed: name='" << intent.name
+                        << "', matched=" << intent.matched
+                        << ", slots=" << intent.slots.size()
+                        << ", score=" << intent.score << "\n";
+
+                if (intent.matched) {
+                    auto currentDir = fs::current_path();
+                    handleCommand(intent, g_partial, currentDir,
+                                timers, longTermMemory, nlp, *history);
+                } else {
+                // 🔹 Fallback: let AI handle it with streaming
+                std::string fullReply;
+                ai_process_stream(g_partial, longTermMemory,
+                    [&](const std::string& chunk) {
+                        fullReply += chunk;
+                        ui_set_textbox(fullReply); // update live in textbox
+                        std::cout << chunk << std::flush;
+                    }
+                );
+
+                    // When streaming completes, push final result into history
+                    history->push("[AI] " + fullReply, sf::Color::Green);
+                    std::cout << "\n[VoiceStream] AI response complete.\n";
                 }
+
+
+                g_partial.clear();
+                ui_set_textbox("");
+                std::cout << "[VoiceStream] Command committed.\n";
             }
         }
-    });
 
-    // Block until stopped
-    while (g_running) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
+                }
+            });
 
-    // Shutdown
-    worker.join();
-    Pa_StopStream(stream);
-    Pa_CloseStream(stream);
-    Pa_Terminate();
+            // Block until stopped
+            while (g_running) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
 
-    history->push("[VoiceStream] Stopped.", sf::Color(0, 200, 255));
-    std::cout << "[VoiceStream] Stopped.\n";
+            // Shutdown
+            worker.join();
+            Pa_StopStream(stream);
+            Pa_CloseStream(stream);
+            Pa_Terminate();
+
+            history->push("[VoiceStream] Stopped.", sf::Color(0, 200, 255));
+            std::cout << "[VoiceStream] Stopped.\n";
 }

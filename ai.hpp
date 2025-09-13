@@ -48,3 +48,22 @@ std::future<std::string> callAIAsync(const std::string& prompt);
 
 /// Warm up the AI backend at launch to avoid first-call delays.
 void warmupAI();
+// ------------------------------------------------------------
+// Synchronous + streaming AI wrappers
+// ------------------------------------------------------------
+
+/// Blocking call to process text through AI and update memory.
+/// @param input  The user input string.
+/// @param memory Reference to the long-term memory JSON.
+/// @return The AI-generated reply.
+std::string ai_process(const std::string& input, nlohmann::json& memory);
+
+/// Streaming call: feeds back partial chunks via callback.
+/// Useful for real-time UI or TTS.
+/// @param input   The user input string.
+/// @param memory  Reference to the long-term memory JSON.
+/// @param onChunk Callback function called with each partial string.
+void ai_process_stream(const std::string& input,
+                       nlohmann::json& memory,
+                       const std::function<void(const std::string&)>& onChunk);
+
