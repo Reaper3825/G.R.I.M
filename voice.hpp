@@ -9,11 +9,11 @@
 extern struct whisper_context* g_whisperCtx;
 extern float g_lastSegmentConfidence;
 
-// Silence config values (from ai_config.json)
+// Silence / timing config values (loaded from ai_config.json)
 extern double g_silenceThreshold;   // energy threshold
 extern int g_silenceTimeoutMs;      // ms before final cutoff
-extern int g_minSpeechMs;           // minimum ms of speech before valid
-extern int g_minSilenceMs;          // minimum ms of silence to trigger cutoff
+extern int g_minSpeechMs;           // minimum speech duration
+extern int g_minSilenceMs;          // minimum silence duration
 
 // ------------------------------------------------------------
 // Function declarations (implemented in voice.cpp)

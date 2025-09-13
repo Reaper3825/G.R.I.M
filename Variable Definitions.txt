@@ -1,0 +1,11 @@
+min_speech_ms: Minimum speech duration (in milliseconds) before the system will consider the captured audio a valid utterance.
+Typical Working Range:500-1000ms(milliseconds)
+
+
+
+
+min_silence_ms: Minimum silence duration (in milliseconds) before the system says “end of speech".
+Typical Working Range:800-1500ms(milliseconds)
+
+silence_threshold: RMS cutoff for silence
+Typical Working Range: 0.01-0.05
