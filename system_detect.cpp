@@ -13,6 +13,7 @@
 #elif __linux__
 #include <sys/utsname.h>
 #include <sys/sysinfo.h>
+#include <unistd.h>
 #endif
 
 // CUDA headers (only if compiled with cuBLAS)
@@ -20,16 +21,55 @@
 #include <cuda_runtime.h>
 #endif
 
+// =========================================================
+// Dependency helpers (Linux Piper detection)
+// =========================================================
+#ifdef __linux__
+static bool commandExists(const char* cmd) {
+    std::string check = "which " + std::string(cmd) + " > /dev/null 2>&1";
+    return (system(check.c_str()) == 0);
+}
+
+bool ensurePiperInstalled() {
+    if (commandExists("piper")) {
+        return true; // already installed
+    }
+
+    std::cerr << "[SystemDetect] Piper not found. Attempting to install...\n";
+
+    if (commandExists("apt-get")) {
+        return system("sudo apt-get update && sudo apt-get install -y piper-tts") == 0;
+    }
+    if (commandExists("dnf")) {
+        return system("sudo dnf install -y piper-tts") == 0;
+    }
+    if (commandExists("pacman")) {
+        return system("sudo pacman -S --noconfirm piper-tts") == 0;
+    }
+
+    std::cerr << "[SystemDetect] Could not auto-install Piper.\n"
+              << "Please install manually: https://github.com/rhasspy/piper\n";
+    return false;
+}
+#endif
+
+// =========================================================
+// System detection
+// =========================================================
 SystemInfo detectSystem() {
     SystemInfo info;
 
     // --- OS Detection ---
     #ifdef _WIN32
     info.osName = "Windows";
+    info.hasSAPI = true; // Always available
     #elif __APPLE__
     info.osName = "macOS";
+    info.hasSay = true; // say command always available
     #elif __linux__
     info.osName = "Linux";
+    // Piper check
+    info.hasPiper = ensurePiperInstalled();
     #else
     info.osName = "Unknown";
     #endif
@@ -82,20 +122,20 @@ SystemInfo detectSystem() {
 
     // --- Metal (macOS) ---
     #ifdef __APPLE__
-    // whisper.cpp automatically uses Metal if available,
-    // so we can just mark it here
     info.hasGPU = true;
     info.hasMetal = true;
     #endif
 
-    // TODO: ROCm detection for AMD
-
-    // --- Suggested Model ---
+    // --- Suggested Whisper Model ---
     info.suggestedModel = chooseWhisperModel(info);
 
     return info;
 }
 
+
+// =========================================================
+// Logging
+// =========================================================
 void logSystemInfo(const SystemInfo& info) {
     std::cout << "---- GRIM System Detection ----\n";
     std::cout << "OS: " << info.osName << " (" << info.arch << ")\n";
@@ -112,14 +152,23 @@ void logSystemInfo(const SystemInfo& info) {
         std::cout << "No GPU detected, running CPU-only mode.\n";
     }
 
+    // Voice engines
+    std::cout << "Voice backends:\n";
+    std::cout << "  Windows SAPI: " << (info.hasSAPI ? "Yes" : "No") << "\n";
+    std::cout << "  macOS say:   " << (info.hasSay ? "Yes" : "No") << "\n";
+    std::cout << "  Linux Piper: " << (info.hasPiper ? "Yes" : "No") << "\n";
+
     std::cout << "Suggested Whisper model: " << info.suggestedModel << "\n";
     std::cout << "-------------------------------\n";
 }
 
+
+// =========================================================
+// Whisper model chooser
+// =========================================================
 std::string chooseWhisperModel(const SystemInfo& info) {
-    // Decide based on RAM and GPU presence
     if (info.hasGPU && info.ramMB > 16000) {
-        return "large-v3";   // Big systems with GPU + lots of RAM
+        return "large-v3";
     }
     if (info.hasGPU && info.ramMB > 8000) {
         return "medium";
@@ -127,5 +176,5 @@ std::string chooseWhisperModel(const SystemInfo& info) {
     if (info.ramMB > 4000) {
         return "small";
     }
-    return "base.en"; // Fallback for low-power systems
+    return "base.en";
 }

@@ -37,7 +37,6 @@ std::string g_inputBuffer;
 extern nlohmann::json longTermMemory;
 extern nlohmann::json aiConfig;
 
-
 // ------------------------------------------------------------
 // Utility: lowercase + strip punctuation for NLP normalization
 // ------------------------------------------------------------
@@ -73,6 +72,9 @@ static void parseAndDispatch(const std::string& text,
     }
 }
 
+// ============================================================
+// Entry Point
+// ============================================================
 int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
@@ -80,10 +82,9 @@ int main(int argc, char** argv) {
     std::cout << "[DEBUG] GRIM startup begin\n";
 
     // ---------------- Bootstrap ----------------
-    loadMemory(); 
-    loadAIConfig("ai_config.json"); 
-    calibrateSilence();
-
+    loadMemory();
+    loadAIConfig("ai_config.json");
+    VoiceStream::calibrateSilence();
 
     ConsoleHistory history;
 
@@ -114,9 +115,14 @@ int main(int argc, char** argv) {
     g_ui_textbox.setFillColor(sf::Color::White);
 
     // ---------------- Voice Init ----------------
-    if (!initWhisper()) {
-        std::cerr << "[Voice] Failed to initialize Whisper\n";
+    std::string voiceErr;
+    if (!Voice::initWhisper("small", &voiceErr)) {
+        std::cerr << "[Voice] Failed to initialize Whisper: " << voiceErr << "\n";
     }
+
+    // ---------------- Audible Greeting ----------------
+    history.push("[GRIM] Startup complete. Hello, Austin — I am online.", sf::Color::Cyan);
+    Voice::speakText("Startup complete. Hello Austin, I am online and ready.", true);
 
     // ---------------- Main Loop ----------------
     fs::path currentDir = fs::current_path();
@@ -139,7 +145,7 @@ int main(int argc, char** argv) {
 
         // Example voice demo trigger (replace with hotkey/command)
         if (false) { // placeholder condition
-            std::string transcript = runVoiceDemo("unused", longTermMemory);
+            std::string transcript = Voice::runVoiceDemo(longTermMemory);
 
             // ✅ Log both raw and normalized versions
             std::string cleaned = normalizeInput(transcript);
@@ -148,6 +154,15 @@ int main(int argc, char** argv) {
 
             // ✅ Dispatch cleaned transcript to NLP
             parseAndDispatch(cleaned, g_inputBuffer, currentDir, timers, longTermMemory, history);
+        }
+
+        // Example continuous stream trigger (placeholder)
+        if (false) {
+            if (!VoiceStream::isRunning()) {
+                VoiceStream::start(Voice::g_state.ctx, &history, timers, longTermMemory, g_nlp);
+            } else {
+                VoiceStream::stop();
+            }
         }
     }
 

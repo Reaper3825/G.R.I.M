@@ -23,9 +23,14 @@ struct SystemInfo {
 
     // AI model suggestion
     std::string suggestedModel;
+
+    // Voice backends
+    bool hasSAPI  = false;  // Windows Speech API
+    bool hasSay   = false;  // macOS "say" command
+    bool hasPiper = false;  // Linux Piper TTS
 };
 
-/// Detects hardware/system capabilities (CPU, GPU, RAM, OS).
+/// Detects hardware/system capabilities (CPU, GPU, RAM, OS, voice backends).
 SystemInfo detectSystem();
 
 /// Prints the system info to logs/console.

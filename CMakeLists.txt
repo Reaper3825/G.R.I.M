@@ -45,6 +45,8 @@ set(GRIM_SOURCES
     voice.cpp
     voice_stream.cpp 
     system_detect.cpp
+    voice_speak.cpp     
+    response_manager.cpp      # 🔊 make sure this new file is compiled
 )
 
 set(GRIM_HEADERS
@@ -64,6 +66,8 @@ set(GRIM_HEADERS
     timer.hpp
     voice.hpp
     voice_stream.hpp
+    voice_speak.hpp 
+    response_manager.hpp          # 🔊 header for speak()
 )
 
 add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
@@ -72,7 +76,7 @@ add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
 
 # SFML
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(SFML REQUIRED sfml-graphics sfml-window sfml-system)
+pkg_check_modules(SFML REQUIRED sfml-graphics sfml-window sfml-system sfml-audio)  # 🔊 added sfml-audio
 target_include_directories(GRIM PRIVATE ${SFML_INCLUDE_DIRS})
 target_link_directories(GRIM PRIVATE ${SFML_LIBRARY_DIRS})
 target_link_libraries(GRIM PRIVATE ${SFML_LIBRARIES})
@@ -86,6 +90,38 @@ else()
   target_include_directories(GRIM PRIVATE /usr/local/include)
   target_link_directories(GRIM PRIVATE /usr/local/lib)
   target_link_libraries(GRIM PRIVATE cpr ssl crypto)
+endif()
+
+# ---- Whisper GPU backend auto-detection ----
+if (WIN32)
+    # Prefer CUDA on Windows
+    find_package(CUDAToolkit QUIET)
+    if (CUDAToolkit_FOUND)
+        message(STATUS "CUDA detected: enabling GPU support for Whisper")
+        set(GGML_CUDA ON CACHE BOOL "Enable CUDA support" FORCE)
+    else()
+        message(WARNING "CUDA not found, Whisper will run on CPU")
+    endif()
+elseif(APPLE)
+    # Apple Silicon: use Metal
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+        message(STATUS "Apple Silicon detected: enabling Metal backend")
+        set(GGML_METAL ON CACHE BOOL "Enable Metal support" FORCE)
+    endif()
+else() # Linux / other
+    find_package(CUDAToolkit QUIET)
+    if (CUDAToolkit_FOUND)
+        message(STATUS "CUDA detected: enabling GPU support for Whisper")
+        set(GGML_CUDA ON CACHE BOOL "Enable CUDA support" FORCE)
+    elseif (EXISTS "/usr/include/vulkan/vulkan.h")
+        message(STATUS "Vulkan headers found: enabling Vulkan support for Whisper")
+        set(GGML_VULKAN ON CACHE BOOL "Enable Vulkan support" FORCE)
+    elseif (EXISTS "/usr/include/CL/cl.h")
+        message(STATUS "OpenCL headers found: enabling OpenCL support for Whisper")
+        set(GGML_OPENCL ON CACHE BOOL "Enable OpenCL support" FORCE)
+    else()
+        message(WARNING "No GPU backend found, Whisper will run on CPU")
+    endif()
 endif()
 
 # Whisper.cpp
@@ -119,7 +155,6 @@ else()
 endif()
 
 # ---- JSON Resources ----
-# Static configs live in resources/, memory.json is runtime
 set(GRIM_RESOURCES
     nlp_rules.json
     synonyms.json
@@ -227,4 +262,8 @@ endif()
 
 if(EXISTS "${WHISPER_MODEL_FILE}")
   install(FILES "${WHISPER_MODEL_FILE}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim/models)
+endif()
+
+if (WIN32)
+    target_link_libraries(GRIM PRIVATE sapi ole32)
 endif()
