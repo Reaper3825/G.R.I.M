@@ -8,9 +8,12 @@
 // ------------------------------------------------------------
 extern struct whisper_context* g_whisperCtx;
 extern float g_lastSegmentConfidence;
-// Silence timeout in milliseconds (configurable from ai_config.json)
-extern int g_silenceTimeoutMs;
 
+// Silence config values (from ai_config.json)
+extern double g_silenceThreshold;   // energy threshold
+extern int g_silenceTimeoutMs;      // ms before final cutoff
+extern int g_minSpeechMs;           // minimum ms of speech before valid
+extern int g_minSilenceMs;          // minimum ms of silence to trigger cutoff
 
 // ------------------------------------------------------------
 // Function declarations (implemented in voice.cpp)
@@ -18,10 +21,8 @@ extern int g_silenceTimeoutMs;
 
 // Initialize Whisper globally (auto-fallback base.en → small)
 bool initWhisper();
+bool initWhisper(const std::string& modelName);
 
-// Legacy demo: short recording and transcription
+// Voice demo: recording and transcription
 std::string runVoiceDemo(const std::string& modelPath,
                          nlohmann::json& longTermMemory);
-
-// Optional simple demo version (no args)
-void runVoiceDemo();
