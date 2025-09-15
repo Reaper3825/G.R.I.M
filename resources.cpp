@@ -15,11 +15,20 @@
 namespace fs = std::filesystem;
 
 // -------------------------------------------------------------
+// Global state definitions
+// -------------------------------------------------------------
+nlohmann::json longTermMemory;
+nlohmann::json aiConfig;
+
+ConsoleHistory history;
+std::vector<Timer> timers;
+std::filesystem::path g_currentDir;
+
+// -------------------------------------------------------------
 // Locate resource root (hybrid: build/resources OR ../resources)
 // -------------------------------------------------------------
 std::string getResourcePath() {
 #if defined(GRIM_PORTABLE_ONLY)
-    // Portable mode: look next to executable
     fs::path exePath;
   #if defined(_WIN32)
     char buffer[MAX_PATH];
@@ -43,9 +52,8 @@ std::string getResourcePath() {
     std::cout << "[GRIM] Using portable resource path: " << portablePath << "\n";
     return portablePath.string();
 #else
-    // System mode: prefer build/resources, fallback to ../resources
-    fs::path buildPath   = fs::current_path() / "resources";                // e.g. D:/G.R.I.M/build/resources
-    fs::path projectPath = fs::current_path().parent_path() / "resources";  // e.g. D:/G.R.I.M/resources
+    fs::path buildPath   = fs::current_path() / "resources";
+    fs::path projectPath = fs::current_path().parent_path() / "resources";
 
     if (fs::exists(buildPath)) {
         std::cout << "[GRIM] Using resource path: " << buildPath << "\n";
@@ -83,15 +91,15 @@ std::string loadTextResource(const std::string& filename, int argc, char** argv)
 // -------------------------------------------------------------
 // Find any usable font in resources/ (first .ttf or .otf)
 // -------------------------------------------------------------
-std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* history) {
+std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* historyPtr) {
     (void)argc;
     (void)argv;
 
     fs::path resDir = fs::path(getResourcePath());
 
     if (!fs::exists(resDir)) {
-        if (history) {
-            history->push("[ERROR] Resource directory missing: " + resDir.string(), sf::Color::Red);
+        if (historyPtr) {
+            historyPtr->push("[ERROR] Resource directory missing: " + resDir.string(), sf::Color::Red);
         } else {
             std::cerr << "[ERROR] Resource directory missing: " << resDir << std::endl;
         }
@@ -107,8 +115,8 @@ std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* histor
         }
     }
 
-    if (history) {
-        history->push("[ERROR] No font found in resources/ or system fonts.", sf::Color::Red);
+    if (historyPtr) {
+        historyPtr->push("[ERROR] No font found in resources/ or system fonts.", sf::Color::Red);
     } else {
         std::cerr << "[ERROR] No font found in resources/ or system fonts." << std::endl;
     }

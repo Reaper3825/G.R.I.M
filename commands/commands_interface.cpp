@@ -1,40 +1,26 @@
-#include "commands_utils.hpp"
-#include "console_history.hpp"
+#include "commands_interface.hpp"
 #include "response_manager.hpp"
-#include "voice_speak.hpp"
+#include "error_manager.hpp"
+
 #include <SFML/Graphics.hpp>
-#include <iostream>
 #include <sstream>
+#include <string>
 
-// Externals
-extern ConsoleHistory history;
-
-CommandResult cmdSystemInfo([[maybe_unused]] const std::string& arg) {
-    std::ostringstream oss;
-    oss << "[System] OS: ";
-
-#if defined(_WIN32)
-    oss << "Windows";
-#elif defined(__APPLE__)
-    oss << "macOS";
-#elif defined(__linux__)
-    oss << "Linux";
-#else
-    oss << "Unknown";
-#endif
-
-    oss << "\n[System] User: " << getenv("USERNAME");
-    return { oss.str(), true, sf::Color::Cyan };
-}
-
+// ------------------------------------------------------------
+// [Utility] Clear console
+// ------------------------------------------------------------
 CommandResult cmdClean([[maybe_unused]] const std::string& arg) {
-    history.clear();
-
-    history.push("[Utility] Console cleared.", sf::Color::Green);
-    speak("[Utility] Console cleared.", "routine");
-    return { "[Utility] Console cleared.", true, sf::Color::Green };
+    return {
+        "[Utility] Console cleared.",
+        true,
+        sf::Color::Green,
+        ""   // no errorCode
+    };
 }
 
+// ------------------------------------------------------------
+// [Utility] Show help text
+// ------------------------------------------------------------
 CommandResult cmdShowHelp([[maybe_unused]] const std::string& arg) {
     std::string helpText =
         "[Help] Available commands:\n"
@@ -55,8 +41,10 @@ CommandResult cmdShowHelp([[maybe_unused]] const std::string& arg) {
         "- voice\n"
         "- voice_stream\n";
 
-    history.push(helpText, sf::Color::Cyan);
-    speak("Listing available commands.", "routine");
-
-    return { helpText, true, sf::Color::Cyan };
+    return {
+        helpText,
+        true,
+        sf::Color::Cyan,
+        ""   // no errorCode
+    };
 }

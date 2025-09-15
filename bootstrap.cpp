@@ -1,169 +1,189 @@
 #include "bootstrap.hpp"
-#include "resources.hpp"     
+#include "resources.hpp"
 #include "console_history.hpp"
-#include "ai.hpp"
+#include "ai.hpp"              // 🔹 Needed for g_silenceThreshold / g_silenceTimeoutMs
 #include "system_detect.hpp"
 #include "nlp.hpp"
+#include "error_manager.hpp"
 
 #include <iostream>
 #include <filesystem>
 #include <fstream>
-#include <cstdlib>           
+#include <cstdlib>
 #include <nlohmann/json.hpp>
 
 namespace fs = std::filesystem;
 
-// --- Utility: create file if missing ---
-static void ensureFileExists(const fs::path& path, const std::string& contents, const std::string& tag) {
-    if (fs::exists(path)) {
-        std::cout << "[OK] " << tag << " found (" << fs::file_size(path) << " bytes)\n";
-    } else {
-        std::ofstream out(path);
-        if (out) {
-            out << contents;
-            std::cout << "[NEW] " << tag << " created at " << path << "\n";
-        } else {
-            std::cerr << "[ERROR] Failed to create " << tag << " at " << path << "\n";
-        }
-    }
+// Global system info
+SystemInfo g_systemInfo;
+
+// ----------------------------
+// Simple GRIM-style logger
+// ----------------------------
+static void grimLog(const std::string& msg) {
+    std::cout << msg << std::endl;
 }
 
-// --- Utility: patch ai_config.json with missing defaults ---
-static void validateAIConfig(const fs::path& path) {
-    nlohmann::json defaults = {
+// -------------------------------------------------------------
+// Default config JSON (uses AI globals for initial values)
+// -------------------------------------------------------------
+static nlohmann::json defaultConfig() {
+    return {
         {"backend", "auto"},
         {"ollama_url", "http://127.0.0.1:11434"},
         {"localai_url", "http://127.0.0.1:8080/v1"},
-        {"use_gpu", "auto"},
-        {"whisper_model", "auto"}
+        {"default_model", "mistral"},
+        {"whisper_language", "en"},
+        {"whisper_max_tokens", 32},
+        {"silence_threshold", g_silenceThreshold},
+        {"silence_timeout_ms", g_silenceTimeoutMs},
+        {"voice", {
+            {"mode", "hybrid"},
+            {"local_engine", "en_US-amy-medium.onnx"},
+            {"cloud_engine", "openai"},
+            {"rules", {
+                {"startup", "local"},
+                {"reminder", "local"},
+                {"summary", "cloud"},
+                {"banter", "cloud"}
+            }},
+            {"silence_threshold", 0.02},
+            {"silence_timeout_ms", 4000},
+            {"input_device_index", -1},
+            {"tts_url", "http://127.0.0.1:8080/tts"}
+        }},
+        {"api_keys", {
+            {"openai", ""},
+            {"elevenlabs", ""},
+            {"azure", ""}
+        }},
+        {"whisper", {
+            {"sampling_strategy", "beam"},
+            {"temperature", 0.2},
+            {"min_speech_ms", 500},
+            {"min_silence_ms", 1200}
+        }}
     };
-
-    nlohmann::json cfg;
-    bool changed = false;
-
-    if (fs::exists(path)) {
-        try {
-            std::ifstream f(path);
-            f >> cfg;
-        } catch (...) {
-            std::cerr << "[WARN] ai_config.json invalid, resetting to defaults.\n";
-            cfg = defaults;
-            changed = true;
-        }
-    } else {
-        cfg = defaults;
-        changed = true;
-    }
-
-    for (auto& [k, v] : defaults.items()) {
-        if (!cfg.contains(k)) {
-            cfg[k] = v;
-            changed = true;
-            std::cout << "[PATCH] ai_config.json missing key \"" << k << "\" → added default.\n";
-        }
-    }
-
-    if (changed) {
-        std::ofstream out(path);
-        if (out) {
-            out << cfg.dump(2);
-            std::cout << "[OK] ai_config.json updated with defaults.\n";
-        }
-    } else {
-        std::cout << "[OK] ai_config.json valid.\n";
-    }
 }
 
-// --- Whisper model check/download ---
-static void ensureWhisperModel(const fs::path& modelPath, const std::string& modelName) {
-    if (fs::exists(modelPath)) {
-        std::cout << "[OK] Whisper model found: " << modelPath << " ("
-                  << fs::file_size(modelPath) / (1024*1024) << " MB)\n";
-        return;
+// -------------------------------------------------------------
+// Validate and patch ai_config.json
+// -------------------------------------------------------------
+static bool validateAndPatch(nlohmann::json& cfg) {
+    bool patched = false;
+    nlohmann::json defs = defaultConfig();
+
+    for (auto& [key, val] : defs.items()) {
+        if (!cfg.contains(key) || cfg[key].is_null() || cfg[key].type() != val.type()) {
+            cfg[key] = val;
+            grimLog("[Config] " + std::string(AI_CONFIG_FILE) +
+                    " patched (missing key: " + key + ")");
+            patched = true;
+        } else if (val.is_object()) {
+            for (auto& [subKey, subVal] : val.items()) {
+                if (!cfg[key].contains(subKey) || cfg[key][subKey].is_null()) {
+                    cfg[key][subKey] = subVal;
+                    grimLog("[Config] " + std::string(AI_CONFIG_FILE) +
+                            " patched (missing key: " + key + "." + subKey + ")");
+                    patched = true;
+                }
+            }
+        }
     }
 
-    std::cout << "[NEW] Whisper model \"" << modelName << "\" missing, attempting download...\n";
-    fs::create_directories(modelPath.parent_path());
-
-    std::string url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-" + modelName + ".bin";
-    std::string cmd = "curl -L " + url + " -o " + modelPath.string();
-
-    int result = system(cmd.c_str());
-    if (result == 0 && fs::exists(modelPath)) {
-        std::cout << "[OK] Whisper model downloaded successfully.\n";
-    } else {
-        std::cerr << "[ERROR] Failed to download Whisper model.\n"
-                  << "        Please download manually from:\n"
-                  << "        " << url << "\n"
-                  << "        and place it at " << modelPath << "\n";
-    }
+    return patched;
 }
 
-// --- Main bootstrap sequence ---
+// -------------------------------------------------------------
+// Bootstrap main entry
+// -------------------------------------------------------------
 void runBootstrapChecks(int argc, char** argv) {
-    std::cout << "---- GRIM Bootstrap Check ----\n";
+    grimLog("[GRIM] Startup begin");
 
-    // Memory
-    ensureFileExists("memory.json", "{}\n", "memory.json");
+    // memory.json
+    fs::path memPath = "memory.json";
+    if (!fs::exists(memPath)) {
+        std::ofstream(memPath) << "{}\n";
+        grimLog("[Config] memory.json created");
+    } else {
+        grimLog("[Config] memory.json found (" +
+                std::to_string(fs::file_size(memPath)) + " bytes)");
+    }
 
-    // AI config
-    validateAIConfig("ai_config.json");
+    // ai_config.json
+    fs::path cfgPath = fs::current_path() / AI_CONFIG_FILE;
+    nlohmann::json cfg;
 
-    // Resources directory
+    if (!fs::exists(cfgPath)) {
+        cfg = defaultConfig();
+        std::ofstream(cfgPath) << cfg.dump(2);
+        grimLog("[Config] " + std::string(AI_CONFIG_FILE) + " created");
+    } else {
+        try {
+            std::ifstream f(cfgPath);
+            f >> cfg;
+            std::cout << "[DEBUG][Bootstrap] Parsed JSON from "
+                      << cfgPath << ":\n" << cfg.dump(2) << "\n";
+
+            if (validateAndPatch(cfg)) {
+                std::ofstream(cfgPath) << cfg.dump(2);
+                grimLog("[Config] " + std::string(AI_CONFIG_FILE) +
+                        " patched and saved");
+            } else {
+                grimLog("[Config] " + std::string(AI_CONFIG_FILE) + " loaded");
+            }
+        } catch (const std::exception& e) {
+            grimLog("[Config] " + std::string(AI_CONFIG_FILE) +
+                    " invalid → reset to defaults");
+            ErrorManager::report("ERR_AI_CONFIG_INVALID");
+            cfg = defaultConfig();
+            std::ofstream(cfgPath) << cfg.dump(2);
+        }
+    }
+
+    aiConfig = cfg;
+
+    // Debug: final config
+    std::cout << "[DEBUG][Bootstrap] Final aiConfig:\n"
+              << aiConfig.dump(2) << "\n";
+
+    // Resources
     fs::path resDir = getResourcePath();
     if (!fs::exists(resDir)) {
-        std::cout << "[INFO] Creating resources directory at " << resDir << "\n";
+        grimLog("[Config] creating resources directory at " + resDir.string());
         fs::create_directories(resDir);
     }
 
-    // NLP rules (ensure file exists first)
+    // NLP rules
     fs::path nlpPath = resDir / "nlp_rules.json";
-    ensureFileExists(nlpPath,
-        "[\n"
-        "  {\"intent\":\"open_app\",\"pattern\":\"^\\\\s*(open|launch|start)\\\\s+([\\\\w\\\\.\\\\-]+)\\\\s*$\",\"slot_names\":[\"verb\",\"app\"],\"score_boost\":0.3,\"case_insensitive\":true},\n"
-        "  {\"intent\":\"search_web\",\"pattern\":\"^(google|search|look up)\\\\s+(.+)$\",\"slot_names\":[\"verb\",\"query\"],\"score_boost\":0.2,\"case_insensitive\":true},\n"
-        "  {\"intent\":\"set_timer\",\"pattern\":\"^(set\\\\s+)?timer\\\\s+for\\\\s+(\\\\d+)\\\\s*(seconds|s|minutes|min|m|hours|h)\\\\b\",\"slot_names\":[\"_opt\",\"value\",\"unit\"],\"score_boost\":0.25,\"case_insensitive\":true}\n"
-        "]\n",
-        "nlp_rules.json"
-    );
+    if (!fs::exists(nlpPath)) {
+        std::ofstream(nlpPath) << "[]\n";
+        grimLog("[Config] nlp_rules.json created");
+    }
 
-    // 🔹 Try loading rules right here, with explicit path logging
     std::string err;
     if (!g_nlp.load_rules(nlpPath.string(), &err)) {
-        std::cerr << "[NLP] Failed to load rules from: " << nlpPath
-                  << " (" << err << ")\n";
+        grimLog("[Config] Failed to load NLP rules: " + err);
     } else {
-        std::cout << "[NLP] Loaded rules successfully from: " << nlpPath << "\n";
+        grimLog("[Config] NLP rules loaded");
     }
 
-    // Synonyms
-    ensureFileExists(resDir / "synonyms.json", "{}\n", "synonyms.json");
-
-    // Aliases
-    ensureFileExists(resDir / "app_aliases.json", "{}\n", "app_aliases.json");
+    // Synonyms and aliases
+    if (!fs::exists(resDir / "synonyms.json")) {
+        std::ofstream(resDir / "synonyms.json") << "{}\n";
+        grimLog("[Config] synonyms.json created");
+    }
+    if (!fs::exists(resDir / "app_aliases.json")) {
+        std::ofstream(resDir / "app_aliases.json") << "{}\n";
+        grimLog("[Config] app_aliases.json created");
+    }
 
     // Fonts
-    std::string fontPath = findAnyFontInResources(argc, argv, nullptr);
-    if (!fontPath.empty()) {
-        std::cout << "[OK] Font available: " << fontPath << "\n";
-    } else {
-        std::cout << "[ERROR] No usable font found! UI may fail.\n";
-    }
+    std::string fontPath = findAnyFontInResources(argc, argv, &history);
+    if (!fontPath.empty())
+        grimLog("[Config] Font found: " + fontPath);
+    else
+        grimLog("[Config] No system font found, UI may render incorrectly");
 
-    // --- System detection for whisper model selection ---
-    SystemInfo sys = detectSystem();
-    std::string modelName;
-
-    if (aiConfig.contains("whisper_model") &&
-        aiConfig["whisper_model"].is_string() &&
-        aiConfig["whisper_model"] != "auto") {
-        modelName = aiConfig["whisper_model"];
-    } else {
-        modelName = sys.suggestedModel;
-    }
-
-    fs::path whisperModel = fs::path("whisper.cpp/models/ggml-" + modelName + ".bin");
-    ensureWhisperModel(whisperModel, modelName);
-
-    std::cout << "-------------------------------\n";
+    grimLog("[GRIM] ---- Bootstrap Complete ----");
 }

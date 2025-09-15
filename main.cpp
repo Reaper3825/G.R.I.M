@@ -1,17 +1,14 @@
 #include "commands/commands_core.hpp"
 #include "commands/commands_helpers.hpp"
-#include "aliases.hpp"
-#include "synonyms.hpp"
-#include "ai.hpp"
 #include "voice.hpp"
 #include "voice_stream.hpp"
 #include "resources.hpp"
-#include "nlp.hpp"
-#include "nlp_rules.hpp"
 #include "console_history.hpp"
 #include "ui_helpers.hpp"
 #include "ui_draw.hpp"
 #include "ui_events.hpp"
+#include "error_manager.hpp"
+#include "bootstrap.hpp"
 
 #include <iostream>
 #include <filesystem>
@@ -21,6 +18,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#undef ERROR   // ⚡ fix Logger::Level::ERROR conflict
 #include <shellapi.h>
 #include <psapi.h>
 #include <winternl.h>
@@ -38,22 +36,6 @@ std::string g_inputBuffer;
 extern nlohmann::json longTermMemory;
 extern nlohmann::json aiConfig;
 
-// ------------------------------------------------------------
-// Utility: lowercase + strip punctuation for NLP normalization
-// ------------------------------------------------------------
-static std::string normalizeInput(const std::string& input) {
-    std::string out;
-    out.reserve(input.size());
-
-    for (char c : input) {
-        if (!std::ispunct(static_cast<unsigned char>(c))) {
-            out.push_back(std::tolower(static_cast<unsigned char>(c)));
-        }
-    }
-    return out;
-}
-
-
 // ============================================================
 // Entry Point
 // ============================================================
@@ -61,26 +43,13 @@ int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
 
-    std::cout << "[DEBUG] GRIM startup begin\n";
+    std::cout << "[GRIM] Startup begin\n";
 
     // ---------------- Bootstrap ----------------
-    loadMemory();
-    loadAIConfig("ai_config.json");
-    VoiceStream::calibrateSilence();
+    ErrorManager::load("errors.json");   // ✅ corrected
+    Logger::init("grim.log");
 
-    ConsoleHistory history;
-
-    if (!loadNlpRules("nlp_rules.json")) {
-        std::cerr << "[ERROR] Failed to load NLP rules\n";
-    } else {
-        std::cout << "[NLP] Rules loaded\n";
-    }
-
-    if (!loadSynonyms("synonyms.json")) {
-        std::cerr << "[ERROR] Failed to load synonyms\n";
-    }
-
-    loadAliases("app_aliases.json");
+    runBootstrapChecks(argc, argv);
 
     // ---------------- SFML Setup ----------------
     sf::RenderWindow window(sf::VideoMode(1280, 720), "GRIM Console");
@@ -88,7 +57,7 @@ int main(int argc, char** argv) {
 
     sf::Font font;
     if (!font.loadFromFile(getResourcePath() + "/DejaVuMathTeXGyre.ttf")) {
-        std::cerr << "[ERROR] Could not load font\n";
+        Logger::log(Logger::Level::ERROR, "Could not load font");
         return 1;
     }
 
@@ -99,7 +68,7 @@ int main(int argc, char** argv) {
     // ---------------- Voice Init ----------------
     std::string voiceErr;
     if (!Voice::initWhisper("small", &voiceErr)) {
-        std::cerr << "[Voice] Failed to initialize Whisper: " << voiceErr << "\n";
+        Logger::log(Logger::Level::ERROR, "Failed to initialize Whisper: " + voiceErr);
     }
 
     // ---------------- Audible Greeting ----------------
@@ -111,10 +80,10 @@ int main(int argc, char** argv) {
     std::vector<Timer> timers;
     float scrollOffset = 0.0f; // required for drawUI()
 
-    std::cout << "[DEBUG] GRIM startup complete, entering main loop\n";
+    Logger::log(Logger::Level::INFO, "GRIM startup complete, entering main loop");
 
     while (window.isOpen()) {
-        // ✅ processEvents uses g_nlp internally
+        // ✅ Process UI + events
         processEvents(window, g_inputBuffer, currentDir, timers, longTermMemory, history);
 
         // Sync buffer → render text
@@ -125,19 +94,13 @@ int main(int argc, char** argv) {
         drawUI(window, font, history, g_inputBuffer, true, scrollOffset);
         window.display();
 
-        // Example voice demo trigger (replace with hotkey/command)
-        if (false) { // placeholder condition
-    std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
+        // ✅ Voice demo hotkey (V)
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::V)) {
+            std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
+            handleCommand(transcript); // unified flow
+        }
 
-    std::string cleaned = normalizeInput(transcript);
-    history.push("[Voice Transcript RAW] " + transcript, sf::Color::Yellow);
-    history.push("[Voice Transcript CLEAN] " + cleaned, sf::Color::Green);
-
-    parseAndDispatch(cleaned, g_inputBuffer, currentDir, timers, longTermMemory, history);
-            }
-
-
-        // Example continuous stream trigger (placeholder)
+        // Example continuous stream trigger (placeholder for future)
         if (false) {
             if (!VoiceStream::isRunning()) {
                 VoiceStream::start(Voice::g_state.ctx, &history, timers, longTermMemory, g_nlp);

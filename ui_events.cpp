@@ -1,4 +1,4 @@
-#pragma once
+
 #include <SFML/Graphics.hpp>
 #include <string>
 #include <vector>
@@ -38,7 +38,7 @@ bool processEvents(sf::RenderWindow& window,
 
                     Intent intent = g_nlp.parse(input);
                     if (intent.matched) {
-                        handleCommand(intent, buffer, currentDir, timers, longTermMemory, g_nlp, history);
+                        handleCommand(intent.name);
                     } else {
                         history.push("[NLP] No intent matched for input: '" + input +
                                      "' (rules loaded=" + std::to_string(g_nlp.rule_count()) + ")",

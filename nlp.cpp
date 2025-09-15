@@ -149,3 +149,33 @@ bool NLP::load_rules(const std::string& filename, std::string* error_out) {
     buffer << file.rdbuf();
     return this->load_rules_from_string(buffer.str(), error_out);
 }
+
+// ---------------------- Reload Wrapper ----------------------
+
+#include "console_history.hpp"
+#include "error_manager.hpp"
+#include <SFML/Graphics.hpp>
+
+// Externals
+extern ConsoleHistory history;
+
+CommandResult reloadNlpRules() {
+    std::string error;
+    if (g_nlp.load_rules("nlp_rules.json", &error)) {
+        std::cout << "[NLP] Rules reloaded successfully.\n";
+        return {
+            "[NLP] Rules reloaded successfully.",
+            true,
+            sf::Color::Green,
+            "" // no error code
+        };
+    } else {
+        std::cerr << "[NLP] Reload failed: " << error << "\n";
+        return {
+            ErrorManager::getUserMessage("ERR_NLP_RELOAD_FAIL") + ": " + error,
+            false,
+            sf::Color::Red,
+            "ERR_NLP_RELOAD_FAIL"
+        };
+    }
+}

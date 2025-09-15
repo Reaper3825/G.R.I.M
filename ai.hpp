@@ -1,18 +1,30 @@
 #pragma once
 #include <string>
 #include <future>
-#include <functional>       // 🔹 Added for std::function
+#include <functional>
 #include <nlohmann/json.hpp>
 
 // ------------------------------------------------------------
-// Global AI state
+// Global AI state (persistent JSON containers)
 // ------------------------------------------------------------
 
-// Persistent long-term memory (key/value store, saved to memory.json).
+// Persistent long-term memory (saved to memory.json).
 extern nlohmann::json longTermMemory;
 
 // AI configuration (backend, model, URLs, etc., loaded from ai_config.json).
 extern nlohmann::json aiConfig;
+
+// ------------------------------------------------------------
+// Runtime tunables (synced from aiConfig by loadAIConfig)
+// ------------------------------------------------------------
+
+// 🔹 Silence detection thresholds
+extern double g_silenceThreshold;   // Minimum amplitude for speech detection
+extern int    g_silenceTimeoutMs;   // Silence duration before timeout (ms)
+
+// 🔹 Whisper tuning
+extern std::string g_whisperLanguage; // Language code (e.g., "en")
+extern int         g_whisperMaxTokens; // Max tokens Whisper will transcribe
 
 // ------------------------------------------------------------
 // Persistence functions
@@ -34,7 +46,7 @@ void saveMemory();
 void loadAIConfig(const std::string& path);
 
 /// Resolve the backend URL depending on platform and config.
-/// @return Full backend URL (e.g., Ollama or LocalAI endpoint).
+/// @return "ollama", "localai", or "openai".
 std::string resolveBackendURL();
 
 // ------------------------------------------------------------
@@ -43,8 +55,6 @@ std::string resolveBackendURL();
 
 /// Send a prompt to the configured AI backend asynchronously.
 /// Returns a future so the caller can decide whether to block or poll.
-/// @param prompt The user input to send.
-/// @return Future string containing the AI-generated reply or error message.
 std::future<std::string> callAIAsync(const std::string& prompt);
 
 /// Warm up the AI backend at launch to avoid first-call delays.
@@ -56,16 +66,10 @@ void warmupAI();
 
 /// Blocking call to process text through AI and update memory.
 /// Automatically speaks the reply aloud.
-/// @param input  The user input string.
-/// @param memory Reference to the long-term memory JSON.
-/// @return The AI-generated reply.
 std::string ai_process(const std::string& input, nlohmann::json& memory);
 
 /// Streaming call: feeds back partial chunks via callback.
 /// Also streams chunks to audible output in real time.
-/// @param input   The user input string.
-/// @param memory  Reference to the long-term memory JSON.
-/// @param onChunk Callback function called with each partial string.
 void ai_process_stream(const std::string& input,
                        nlohmann::json& memory,
                        const std::function<void(const std::string&)>& onChunk);

@@ -49,6 +49,7 @@ set(GRIM_SOURCES
     system_detect.cpp
     voice_speak.cpp     
     response_manager.cpp
+    error_manager.cpp
     ${COMMAND_SOURCES}
 )
 
@@ -70,8 +71,10 @@ set(GRIM_HEADERS
     voice_stream.hpp
     voice_speak.hpp 
     response_manager.hpp
+    error_manager.hpp
     ${COMMAND_HEADERS}
 )
+
 
 # ---- Define target early ----
 add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
@@ -94,6 +97,15 @@ else()
   target_include_directories(GRIM PRIVATE /usr/local/include)
   target_link_directories(GRIM PRIVATE /usr/local/lib)
   target_link_libraries(GRIM PRIVATE cpr ssl crypto)
+endif()
+
+# nlohmann_json with fallback
+find_package(nlohmann_json QUIET)
+if(nlohmann_json_FOUND)
+  target_link_libraries(GRIM PRIVATE nlohmann_json::nlohmann_json)
+else()
+  message(WARNING "nlohmann_json not found, falling back to header-only include")
+  target_include_directories(GRIM PRIVATE ${CMAKE_SOURCE_DIR}/external/nlohmann_json)
 endif()
 
 # ---- Whisper GPU backend auto-detection ----
@@ -143,11 +155,10 @@ endif()
 
 # ---- Voice integration ----
 target_include_directories(GRIM PRIVATE
-    ${CMAKE_SOURCE_DIR}                # 👈 add this line
+    ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/external/whisper.cpp
     ${PORTAUDIO_INCLUDE_DIR}
 )
-
 
 # ---- Compile-time resource paths ----
 include(GNUInstallDirs)

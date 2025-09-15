@@ -2,10 +2,10 @@
 #include "console_history.hpp"
 #include "ui_helpers.hpp"
 #include "commands/commands_core.hpp"
-#include "timer.hpp"
 #include "ai.hpp"
 #include "nlp.hpp"
 #include "synonyms.hpp"
+#include "resources.hpp"   // globals: history, longTermMemory, timers
 
 #include <whisper.h>
 #include <portaudio.h>
@@ -20,15 +20,18 @@
 
 namespace fs = std::filesystem;
 
+
+// ---------------- State ----------------
+// 🔹 Config values (defined in ai.cpp, set from ai_config.json)
+extern double g_silenceThreshold;
+extern int g_silenceTimeoutMs;
+extern std::string g_whisperLanguage;
+extern int g_whisperMaxTokens;
+
 namespace VoiceStream {
 
 // ---------------- State ----------------
 State g_state;
-
-static double g_silenceThreshold = 0.02;
-static int g_silenceTimeoutMs = 4000;
-static std::string g_whisperLanguage = "en";
-static int g_whisperMaxTokens = 32;
 
 // Minimum buffer before calling Whisper (~100ms at 16kHz)
 constexpr size_t MIN_SAMPLES = 1600;
@@ -196,11 +199,13 @@ static void run(whisper_context* ctx,
                 Intent intent = nlp.parse(clean);
 
                 if (intent.matched) {
-                    auto currentDir = fs::current_path();
-                    handleCommand(intent, g_state.partial, currentDir, timers, longTermMemory, nlp, *history);
+                    std::cout << "[VoiceStream] Dispatching command: " << intent.name << "\n";
+                    handleCommand(intent.name); // Commands handled via query system
                 } else {
                     std::string fullReply;
-                    ai_process_stream(g_state.partial, longTermMemory,
+                    ai_process_stream(
+                        g_state.partial,
+                        longTermMemory,
                         [&](const std::string& chunk) {
                             fullReply += chunk;
                             ui_set_textbox(fullReply);

@@ -1,111 +1,163 @@
-#include "commands_core.hpp"
+#include "commands_ai.hpp"
 #include "commands_memory.hpp"
+#include "commands_interface.hpp"
 #include "commands_filesystem.hpp"
 #include "commands_timers.hpp"
-#include "commands_interface.hpp"
+#include "commands_voice.hpp"
+#include "commands_system.hpp"
+
 #include "response_manager.hpp"
 #include "console_history.hpp"
 #include "voice_speak.hpp"
+#include "error_manager.hpp"
+#include "resources.hpp"
+#include "nlp.hpp"          // 🔹 for g_nlp (regex-based rules)
+#include "synonyms.hpp"     // 🔹 applySynonyms()
+#include "commands_core.hpp"
+
 #include <nlohmann/json.hpp>
-#include <sstream>
+#include <unordered_map>
+#include <filesystem>
+#include <algorithm>
+#include <cctype>
 #include <iostream>
 
-// ---------------- Globals ----------------
+// ------------------------------------------------------------
+// Globals
+// ------------------------------------------------------------
 std::unordered_map<std::string, CommandFunc> commandMap;
-ConsoleHistory history;
-std::vector<Timer> timers;
-std::filesystem::path g_currentDir;
 
 // Externals
 extern nlohmann::json longTermMemory;
+extern nlohmann::json aiConfig;
+extern NLP g_nlp;   // loaded in nlp.cpp
 
-// ---------------- Forward declarations ----------------
-CommandResult cmdRemember(const std::string&);
-CommandResult cmdRecall(const std::string&);
-CommandResult cmdForget(const std::string&);
-CommandResult cmdAiBackend(const std::string&);
-CommandResult cmdReloadNlp(const std::string&);
-CommandResult cmdShowPwd(const std::string&);
-CommandResult cmdChangeDir(const std::string&);
-CommandResult cmdListDir(const std::string&);
-CommandResult cmdMakeDir(const std::string&);
-CommandResult cmdRemoveFile(const std::string&);
-CommandResult cmdSetTimer(const std::string&);
-CommandResult cmdSystemInfo(const std::string&);
-CommandResult cmdClean(const std::string&);
-CommandResult cmdShowHelp(const std::string&);
-CommandResult cmdVoice(const std::string&);
-CommandResult cmdVoiceStream(const std::string&);
+// ------------------------------------------------------------
+// Helpers
+// ------------------------------------------------------------
 
-// ---------------- Command Map ----------------
-std::unordered_map<std::string, std::function<CommandResult(const std::string&)>> commands = {
-    {"remember", cmdRemember},
-    {"recall",   cmdRecall},
-    {"forget",   cmdForget},
-    {"ai_backend", cmdAiBackend},
-    {"reload_nlp", cmdReloadNlp},
-    {"pwd", cmdShowPwd},
-    {"cd", cmdChangeDir},
-    {"ls", cmdListDir},
-    {"mkdir", cmdMakeDir},
-    {"rm", cmdRemoveFile},
-    {"timer", cmdSetTimer},
-    {"sysinfo", cmdSystemInfo},
-    {"clean", cmdClean},
-    {"help", cmdShowHelp},
-    {"voice", cmdVoice},
-    {"voice_stream", cmdVoiceStream}
-};
+// fuzzy match helper (simple Levenshtein-like distance)
+static int levenshteinDistance(const std::string& s1, const std::string& s2) {
+    const size_t m = s1.size(), n = s2.size();
+    std::vector<int> prev(n + 1), curr(n + 1);
 
-// Initialize commandMap at startup
-struct CommandMapInitializer {
-    CommandMapInitializer() {
-        for (auto& kv : commands) {
-            commandMap[kv.first] = kv.second;
+    for (size_t j = 0; j <= n; j++) prev[j] = static_cast<int>(j);
+
+    for (size_t i = 1; i <= m; i++) {
+        curr[0] = static_cast<int>(i);
+        for (size_t j = 1; j <= n; j++) {
+            int cost = (s1[i - 1] == s2[j - 1]) ? 0 : 1;
+            curr[j] = std::min({ prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost });
         }
+        prev.swap(curr);
     }
-} commandMapInitializer;
-
-// ---------------- Dispatcher implementations ----------------
-
-// Main dispatcher: calls the correct command function based on intent
-bool handleCommand(const Intent& intent,
-                   std::string& arg,
-                   std::filesystem::path& currentDir,
-                   std::vector<Timer>& timersRef,
-                   nlohmann::json& longTermMemory,
-                   NLP& nlp,
-                   ConsoleHistory& console)
-{
-    auto it = commandMap.find(intent.name);
-    if (it != commandMap.end()) {
-        CommandFunc func = it->second;
-        CommandResult result = func(arg); // logic lives in the individual command file
-        return result;
-    } else {
-        console.push("Unknown command: " + intent.name, sf::Color::Red);
-        return false;
-    }
+    return prev[n];
 }
 
-// Parses raw input and dispatches it
-bool parseAndDispatch(const std::string& input,
-                      std::string& arg,
-                      std::filesystem::path& currentDir,
-                      std::vector<Timer>& timersRef,
-                      nlohmann::json& longTermMemory,
-                      ConsoleHistory& console)
-{
-    std::istringstream iss(input);
-    std::string cmd;
-    iss >> cmd;
-    std::getline(iss, arg);
-    if (!arg.empty() && arg[0] == ' ') arg.erase(0, 1);
+static std::string fuzzyMatch(const std::string& input) {
+    std::string best = input;
+    int bestDist = 2; // only allow corrections within distance ≤ 2
 
-    Intent intent;
-    intent.name = cmd;
+    for (const auto& [key, _] : commandMap) {
+        int dist = levenshteinDistance(input, key);
+        if (dist < bestDist) {
+            bestDist = dist;
+            best = key;
+        }
+    }
+    return best;
+}
 
-    NLP dummyNLP; // placeholder in case NLP parsing needed
+static std::string normalizeCommand(const std::string& input) {
+    // 1. Lowercase
+    std::string out = input;
+    std::transform(out.begin(), out.end(), out.begin(),
+                   [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
 
-    return handleCommand(intent, arg, currentDir, timersRef, longTermMemory, dummyNLP, console);
+    // 2. Synonym substitution (phrases/words → canonical command)
+    out = applySynonyms(out);
+
+    // 3. Fuzzy match (typos → canonical command)
+    out = fuzzyMatch(out);
+
+    // 4. NLP regex parse (maps flexible phrasing → canonical command)
+    auto intent = g_nlp.parse(out);
+    if (!intent.intent.empty()) {
+        out = intent.intent;  // must equal a commandMap key
+    }
+
+    return out;
+}
+
+// ------------------------------------------------------------
+// Command Registration
+// ------------------------------------------------------------
+static void initCommands() {
+    if (!commandMap.empty()) return; // already initialized
+
+    commandMap = {
+        {"remember",     cmdRemember},
+        {"recall",       cmdRecall},
+        {"forget",       cmdForget},
+        {"ai_backend",   cmdAiBackend},
+        {"reload_nlp",   cmdReloadNlp},
+        {"pwd",          cmdShowPwd},
+        {"cd",           cmdChangeDir},
+        {"ls",           cmdListDir},
+        {"mkdir",        cmdMakeDir},
+        {"rm",           cmdRemoveFile},
+        {"timer",        cmdSetTimer},
+        {"sysinfo",      cmdSystemInfo},
+        {"clean",        cmdClean},
+        {"help",         cmdShowHelp},
+        {"voice",        cmdVoice},
+        {"voice_stream", cmdVoiceStream}
+    };
+}
+
+// ------------------------------------------------------------
+// Core Dispatch
+// ------------------------------------------------------------
+std::pair<std::string, std::string> parseInput(const std::string& input) {
+    auto pos = input.find(' ');
+    if (pos == std::string::npos) {
+        return {input, ""};
+    }
+    return {input.substr(0, pos), input.substr(pos + 1)};
+}
+
+CommandResult dispatchCommand(const std::string& cmd, const std::string& arg) {
+    initCommands();
+
+    auto it = commandMap.find(cmd);
+    if (it != commandMap.end()) {
+        return it->second(arg);
+    }
+
+    // Unknown command
+    return {
+        ErrorManager::getUserMessage("ERR_CORE_UNKNOWN_COMMAND") + ": " + cmd,
+        false,
+        sf::Color::Red,
+        "ERR_CORE_UNKNOWN_COMMAND"
+    };
+}
+
+void handleCommand(const std::string& line) {
+    auto [cmdRaw, arg] = parseInput(line);
+
+    // 🔹 Full NLP pipeline normalization
+    std::string cmd = normalizeCommand(cmdRaw);
+
+    // 🔹 Dispatch
+    CommandResult result = dispatchCommand(cmd, arg);
+
+    // 🔹 Log result
+    Logger::logResult(result);
+
+    // 🔹 Push to history and speak
+    history.push(ResponseManager::get(result.message), result.color);
+    if (result.success) {
+        speak(result.message, "routine");
+    }
 }

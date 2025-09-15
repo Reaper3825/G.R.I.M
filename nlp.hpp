@@ -2,7 +2,8 @@
 #include <string>
 #include <vector>
 #include <regex>
-#include "intent.hpp"   // defines the Intent struct
+#include "intent.hpp"           // defines the Intent struct
+#include "commands/commands_core.hpp"  // 🔹 for CommandResult
 
 class NLP {
 public:
@@ -27,3 +28,6 @@ private:
 
 // 🔹 Global NLP object declaration (defined in nlp.cpp)
 extern NLP g_nlp;
+
+// 🔹 Reload NLP rules from resources/nlp_rules.json
+CommandResult reloadNlpRules();
