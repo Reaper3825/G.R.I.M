@@ -16,13 +16,101 @@
     "query",
     "browse"
   ],
-  "set_timer": [
-    "timer",
+  "remember": [
+    "store",
+    "save",
+    "memorize",
+    "note",
+    "record"
+  ],
+  "recall": [
+    "fetch",
+    "retrieve",
+    "show memory",
+    "what do you remember",
+    "load"
+  ],
+  "forget": [
+    "delete memory",
+    "clear memory",
+    "remove",
+    "erase"
+  ],
+  "ai_backend": [
+    "switch ai",
+    "change ai",
+    "backend",
+    "engine"
+  ],
+  "reload_nlp": [
+    "reload rules",
+    "reset nlp",
+    "refresh parser"
+  ],
+  "pwd": [
+    "where am i",
+    "print directory",
+    "working dir",
+    "location"
+  ],
+  "cd": [
+    "change dir",
+    "goto",
+    "navigate",
+    "move to"
+  ],
+  "ls": [
+    "list",
+    "show files",
+    "dir",
+    "list directory"
+  ],
+  "mkdir": [
+    "create folder",
+    "make folder",
+    "new dir"
+  ],
+  "rm": [
+    "delete file",
+    "remove file",
+    "erase file"
+  ],
+  "timer": [
     "reminder",
     "alarm",
     "countdown",
     "time",
     "settimer",
     "clock"
+  ],
+  "sysinfo": [
+    "system info",
+    "about system",
+    "hardware",
+    "device info"
+  ],
+  "clean": [
+    "clear",
+    "reset console",
+    "cls",
+    "wipe"
+  ],
+  "help": [
+    "assist",
+    "support",
+    "commands",
+    "manual",
+    "show help"
+  ],
+  "voice": [
+    "speech",
+    "talk",
+    "say",
+    "speak"
+  ],
+  "voice_stream": [
+    "stream voice",
+    "live voice",
+    "continuous voice"
   ]
 }

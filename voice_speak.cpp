@@ -27,21 +27,8 @@ namespace fs = std::filesystem;
 // Helpers
 // =========================================================
 static nlohmann::json getVoiceConfig() {
-    if (aiConfig.contains("voice") && aiConfig["voice"].is_object()) {
-        return aiConfig["voice"];
-    }
-    std::cerr << "[Voice] No valid voice config in ai_config.json, using defaults.\n";
-    return {
-        {"mode", "local"},
-        {"local_engine", "en_US-amy-medium.onnx"},
-        {"cloud_engine", "openai"},
-        {"rules", {
-            {"startup", "local"},
-            {"reminder", "local"},
-            {"summary", "local"},
-            {"banter", "local"}
-        }}
-    };
+    // Bootstrap guarantees aiConfig["voice"] exists and is valid
+    return aiConfig["voice"];
 }
 
 // =========================================================
@@ -132,8 +119,9 @@ bool speakCloud(const std::string& text, const std::string& engine) {
 // =========================================================
 void speak(const std::string& text, const std::string& category) {
     auto cfg = getVoiceConfig();
-    std::string rule = cfg["rules"].value(category, "local");
-    std::string mode = cfg.value("mode", "local");
+
+    std::string rule        = cfg["rules"].value(category, "local");
+    std::string mode        = cfg.value("mode", "local");
     std::string localEngine = cfg.value("local_engine", "en_US-amy-medium.onnx");
     std::string cloudEngine = cfg.value("cloud_engine", "openai");
 

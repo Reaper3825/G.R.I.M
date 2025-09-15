@@ -1,0 +1,97 @@
+{
+  // ---------------- Filesystem ----------------
+  "ERR_FS_MISSING_DIR": {
+    "user": "[FS] Usage: cd/mkdir <directory>",
+    "debug": "Filesystem command called without directory argument."
+  },
+  "ERR_FS_DIR_NOT_FOUND": {
+    "user": "[FS] Directory does not exist.",
+    "debug": "Target directory not found in cmdChangeDir."
+  },
+  "ERR_FS_CREATE_FAIL": {
+    "user": "[FS] Failed to create directory.",
+    "debug": "std::filesystem::create_directory returned false."
+  },
+  "ERR_FS_MISSING_FILE": {
+    "user": "[FS] Usage: rm <file>",
+    "debug": "cmdRemoveFile called without filename."
+  },
+  "ERR_FS_FILE_NOT_FOUND": {
+    "user": "[FS] File not found.",
+    "debug": "File path did not exist in cmdRemoveFile."
+  },
+  "ERR_FS_REMOVE_FAIL": {
+    "user": "[FS] Failed to remove file.",
+    "debug": "std::filesystem::remove returned false."
+  },
+
+  // ---------------- Memory ----------------
+  "ERR_MEMORY_MISSING_INPUT": {
+    "user": "[Memory] Nothing to remember.",
+    "debug": "cmdRemember called without arguments."
+  },
+  "ERR_MEMORY_BAD_FORMAT": {
+    "user": "[Memory] Usage: remember <key> <value>",
+    "debug": "cmdRemember argument missing key/value format."
+  },
+  "ERR_MEMORY_MISSING_KEY": {
+    "user": "[Memory] Usage: recall/forget <key>",
+    "debug": "Memory command called without key argument."
+  },
+  "ERR_MEMORY_KEY_NOT_FOUND": {
+    "user": "[Memory] Key not found.",
+    "debug": "Requested key does not exist in longTermMemory."
+  },
+
+  // ---------------- Voice ----------------
+  "ERR_VOICE_NO_SPEECH": {
+    "user": "[Voice] No speech detected.",
+    "debug": "Voice::runVoiceDemo returned empty transcript."
+  },
+  "ERR_VOICE_NO_CONTEXT": {
+    "user": "[Voice] No Whisper context available.",
+    "debug": "Voice::g_state.ctx was null when starting stream."
+  },
+  "ERR_VOICE_STREAM_FAIL": {
+    "user": "[Voice] Failed to start streaming.",
+    "debug": "VoiceStream::start returned false."
+  },
+
+  // ---------------- Timers ----------------
+  "ERR_TIMER_MISSING_VALUE": {
+    "user": "[Timer] Usage: set_timer <duration> (e.g. 30s, 5m, 2h30m)",
+    "debug": "cmdSetTimer called without duration argument."
+  },
+  "ERR_TIMER_INVALID_VALUE": {
+    "user": "[Timer] Invalid duration.",
+    "debug": "cmdSetTimer could not parse duration string or value <= 0."
+  },
+
+  // ---------------- Core / Dispatch ----------------
+  "ERR_UNKNOWN_COMMAND": {
+    "user": "[Core] Unknown command.",
+    "debug": "Command not found in commandMap during dispatch."
+  },
+
+  // ---------------- NLP ----------------
+  "ERR_NLP_RELOAD_FAIL": {
+    "user": "[NLP] Failed to reload rules.",
+    "debug": "reloadNlpRules() returned false."
+  },
+
+  // ---------------- AI Backend ----------------
+  "ERR_AI_INVALID_BACKEND": {
+    "user": "[AI] Invalid backend specified.",
+    "debug": "cmdAiBackend received unrecognized argument."
+  },
+
+  // ---------------- Config / Bootstrap ----------------
+  "ERR_CONFIG_MALFORMED": {
+    "user": "[Config] Invalid or missing ai_config.json — using defaults.",
+    "debug": "ai_config.json contained null/invalid types and was patched by validateAIConfig()."
+  },
+  "ERR_CONFIG_SAVE_FAIL": {
+    "user": "[Config] Failed to update ai_config.json.",
+    "debug": "validateAIConfig() could not write patched configuration to disk."
+  }
+}
