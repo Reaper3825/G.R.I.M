@@ -1,4 +1,5 @@
-#include "commands.hpp"
+#include "commands/commands_core.hpp"
+#include "commands/commands_helpers.hpp"
 #include "aliases.hpp"
 #include "synonyms.hpp"
 #include "ai.hpp"
@@ -52,25 +53,6 @@ static std::string normalizeInput(const std::string& input) {
     return out;
 }
 
-// ---------------- Helpers ----------------
-static void parseAndDispatch(const std::string& text,
-                             std::string& buffer,
-                             fs::path& currentDir,
-                             std::vector<Timer>& timers,
-                             nlohmann::json& longTermMemory,
-                             ConsoleHistory& history) {
-    // ✅ Normalize text before NLP
-    std::string cleaned = normalizeInput(text);
-
-    Intent intent = g_nlp.parse(cleaned);   // use global g_nlp
-    if (intent.matched) {
-        handleCommand(intent, buffer, currentDir, timers, longTermMemory, g_nlp, history);
-    } else {
-        history.push("[NLP] No intent matched for input: '" + cleaned +
-                     "' (rules loaded=" + std::to_string(g_nlp.rule_count()) + ")",
-                     sf::Color::Red);
-    }
-}
 
 // ============================================================
 // Entry Point
@@ -145,16 +127,15 @@ int main(int argc, char** argv) {
 
         // Example voice demo trigger (replace with hotkey/command)
         if (false) { // placeholder condition
-            std::string transcript = Voice::runVoiceDemo(longTermMemory);
+    std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
 
-            // ✅ Log both raw and normalized versions
-            std::string cleaned = normalizeInput(transcript);
-            history.push("[Voice Transcript RAW] " + transcript, sf::Color::Yellow);
-            history.push("[Voice Transcript CLEAN] " + cleaned, sf::Color::Green);
+    std::string cleaned = normalizeInput(transcript);
+    history.push("[Voice Transcript RAW] " + transcript, sf::Color::Yellow);
+    history.push("[Voice Transcript CLEAN] " + cleaned, sf::Color::Green);
 
-            // ✅ Dispatch cleaned transcript to NLP
-            parseAndDispatch(cleaned, g_inputBuffer, currentDir, timers, longTermMemory, history);
-        }
+    parseAndDispatch(cleaned, g_inputBuffer, currentDir, timers, longTermMemory, history);
+            }
+
 
         // Example continuous stream trigger (placeholder)
         if (false) {

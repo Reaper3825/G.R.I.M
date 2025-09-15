@@ -1,7 +1,7 @@
 #include "voice_stream.hpp"
 #include "console_history.hpp"
 #include "ui_helpers.hpp"
-#include "commands.hpp"
+#include "commands/commands_core.hpp"
 #include "timer.hpp"
 #include "ai.hpp"
 #include "nlp.hpp"

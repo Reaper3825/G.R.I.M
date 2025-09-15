@@ -1,35 +1,26 @@
 #pragma once
 #include <string>
-#include <vector>
 #include <nlohmann/json.hpp>
-
-// ✅ Forward declare at global scope
-struct whisper_context;
+#include "whisper.h"  // pull in the real whisper_context
 
 namespace Voice {
 
-// ---------------- State ----------------
-struct State {
-    ::whisper_context* ctx = nullptr;   // ✅ Whisper model context
-    float lastSegmentConfidence = -1.0f;
-    int minSpeechMs = 500;
-    int minSilenceMs = 1200;
-    int inputDeviceIndex = -1;
-    double envLevel = 0.0;
-};
+    struct State {
+        ::whisper_context* ctx = nullptr;  // use global scope type
+        int inputDeviceIndex = -1;
+        int minSpeechMs = 500;
+        int minSilenceMs = 1200;
+    };
 
-// Extern instance (defined in voice.cpp)
-extern State g_state;
+    extern State g_state;
 
-// ---------------- API ----------------
+    // Whisper setup
+    bool initWhisper(const std::string& modelName, std::string* err = nullptr);
 
-// Initialize Whisper model
-bool initWhisper(const std::string& modelName = "small", std::string* err = nullptr);
+    // Voice input (speech → text), pulls thresholds directly from aiConfig
+    std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemory);
 
-// Record microphone, transcribe with Whisper, return text
-std::string runVoiceDemo(nlohmann::json& longTermMemory);
-
-// Speak text aloud (tries online TTS first, then offline fallback)
-bool speakText(const std::string& text, bool preferOnline = true);
+    // Voice output (text → speech)
+    bool speakText(const std::string& text, bool preferOnline = true);
 
 } // namespace Voice
