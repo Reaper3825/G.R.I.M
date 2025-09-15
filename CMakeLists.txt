@@ -28,12 +28,14 @@ endif()
 option(GRIM_PORTABLE_ONLY "Force resources to live next to executable" OFF)
 
 # ---- Sources ----
+file(GLOB COMMAND_SOURCES "commands/*.cpp")
+file(GLOB COMMAND_HEADERS "commands/*.hpp")
+
 set(GRIM_SOURCES
     main.cpp
     ai.cpp
     bootstrap.cpp
     resources.cpp
-    commands.cpp
     nlp.cpp
     nlp_rules.cpp
     synonyms.cpp
@@ -46,13 +48,13 @@ set(GRIM_SOURCES
     voice_stream.cpp 
     system_detect.cpp
     voice_speak.cpp     
-    response_manager.cpp      # 🔊 make sure this new file is compiled
+    response_manager.cpp
+    ${COMMAND_SOURCES}
 )
 
 set(GRIM_HEADERS
     ai.hpp
     bootstrap.hpp
-    commands.hpp
     console_history.hpp
     nlp.hpp
     intent.hpp
@@ -67,16 +69,18 @@ set(GRIM_HEADERS
     voice.hpp
     voice_stream.hpp
     voice_speak.hpp 
-    response_manager.hpp          # 🔊 header for speak()
+    response_manager.hpp
+    ${COMMAND_HEADERS}
 )
 
+# ---- Define target early ----
 add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
 
 # ---- Dependencies ----
 
 # SFML
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(SFML REQUIRED sfml-graphics sfml-window sfml-system sfml-audio)  # 🔊 added sfml-audio
+pkg_check_modules(SFML REQUIRED sfml-graphics sfml-window sfml-system sfml-audio)
 target_include_directories(GRIM PRIVATE ${SFML_INCLUDE_DIRS})
 target_link_directories(GRIM PRIVATE ${SFML_LIBRARY_DIRS})
 target_link_libraries(GRIM PRIVATE ${SFML_LIBRARIES})
@@ -103,7 +107,6 @@ if (WIN32)
         message(WARNING "CUDA not found, Whisper will run on CPU")
     endif()
 elseif(APPLE)
-    # Apple Silicon: use Metal
     if (CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
         message(STATUS "Apple Silicon detected: enabling Metal backend")
         set(GGML_METAL ON CACHE BOOL "Enable Metal support" FORCE)
@@ -140,9 +143,11 @@ endif()
 
 # ---- Voice integration ----
 target_include_directories(GRIM PRIVATE
+    ${CMAKE_SOURCE_DIR}                # 👈 add this line
     ${CMAKE_SOURCE_DIR}/external/whisper.cpp
     ${PORTAUDIO_INCLUDE_DIR}
 )
+
 
 # ---- Compile-time resource paths ----
 include(GNUInstallDirs)
@@ -163,14 +168,12 @@ set(GRIM_RESOURCES
     memory.json
 )
 
-# Ensure default files exist (write {} if missing)
 foreach(FILE ${GRIM_RESOURCES})
   if(NOT EXISTS "${CMAKE_SOURCE_DIR}/resources/${FILE}" AND NOT EXISTS "${CMAKE_BINARY_DIR}/${FILE}")
     file(WRITE "${CMAKE_BINARY_DIR}/${FILE}" "{}\n")
   endif()
 endforeach()
 
-# Copy static JSONs from resources/ if present, otherwise from binary dir
 foreach(FILE ${GRIM_RESOURCES})
   if(EXISTS "${CMAKE_SOURCE_DIR}/resources/${FILE}")
     set(SRC_FILE "${CMAKE_SOURCE_DIR}/resources/${FILE}")

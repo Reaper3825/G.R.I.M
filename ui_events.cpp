@@ -5,8 +5,9 @@
 #include <filesystem>
 #include <nlohmann/json.hpp>
 #include "console_history.hpp"
-#include "commands.hpp"
+#include "commands/commands_core.hpp"   // 👈 FIXED
 #include "nlp.hpp"
+
 
 // -------------------------------------------------------------
 // Handle UI events (keyboard input, dispatch commands, etc.)
