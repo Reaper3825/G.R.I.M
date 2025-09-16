@@ -2,8 +2,10 @@
 #include <string>
 #include <vector>
 #include <regex>
-#include "intent.hpp"           // defines the Intent struct
-#include "commands/commands_core.hpp"  // 🔹 for CommandResult
+#include "intent.hpp"   // defines the Intent struct
+
+// Forward declare to avoid heavy include
+struct CommandResult;
 
 class NLP {
 public:
@@ -11,7 +13,10 @@ public:
         std::string intent;
         std::string pattern_str;
         std::regex pattern;
-        double boost = 0.0;  // optional confidence boost
+        double boost = 0.0;
+
+        // 🔹 Needed for slot extraction
+        std::vector<std::string> slot_names;
     };
 
     // --- Methods ---
@@ -29,5 +34,5 @@ private:
 // 🔹 Global NLP object declaration (defined in nlp.cpp)
 extern NLP g_nlp;
 
-// 🔹 Reload NLP rules from resources/nlp_rules.json
+// ---------------------- Reload Wrapper ----------------------
 CommandResult reloadNlpRules();

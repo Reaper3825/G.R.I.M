@@ -67,25 +67,57 @@
     "debug": "cmdSetTimer could not parse duration string or value <= 0."
   },
 
-  // ---------------- Core / Dispatch ----------------
-  "ERR_UNKNOWN_COMMAND": {
-    "user": "[Core] Unknown command.",
-    "debug": "Command not found in commandMap during dispatch."
+  // ---------------- Core ----------------
+  "ERR_CORE_UNKNOWN_COMMAND": {
+    "user": "[Core] I don’t recognize that command. Try \"help\".",
+    "debug": "User entered an unrecognized command. Check NLP rules or commandMap."
   },
 
   // ---------------- NLP ----------------
   "ERR_NLP_RELOAD_FAIL": {
-    "user": "[NLP] Failed to reload rules.",
-    "debug": "reloadNlpRules() returned false."
+    "user": "[NLP] Could not reload rules. Please check nlp_rules.json.",
+    "debug": "g_nlp.load_rules failed due to missing or invalid JSON."
   },
 
-  // ---------------- AI Backend ----------------
+  // ---------------- AI ----------------
+  "ERR_AI_NO_QUERY": {
+    "user": "[AI] You need to give me a query. Example: grim what is the weather?",
+    "debug": "cmdGrimAi called with empty arg and no NLP slot value."
+  },
   "ERR_AI_INVALID_BACKEND": {
-    "user": "[AI] Invalid backend specified.",
-    "debug": "cmdAiBackend received unrecognized argument."
+    "user": "[AI] That backend is not supported. Try: openai, ollama, localai, or auto.",
+    "debug": "cmdAiBackend or cmdGrimAi received unsupported backend argument."
+  },
+  "ERR_AI_QUERY_FAILED": {
+    "user": "[AI] Something went wrong while processing your request.",
+    "debug": "cmdGrimAi threw an exception while contacting backend."
   },
 
-  // ---------------- Config / Bootstrap ----------------
+  // ---------------- Apps ----------------
+  "ERR_APP_NO_ARGUMENT": {
+    "user": "[App] Please specify an application to open. Example: open_app notepad",
+    "debug": "cmdOpenApp called without argument."
+  },
+  "ERR_APP_UNKNOWN_ALIAS": {
+    "user": "[App] I don’t recognize that application name.",
+    "debug": "resolveAlias returned empty for requested application."
+  },
+  "ERR_APP_LAUNCH_FAILED": {
+    "user": "[App] I couldn’t launch that application.",
+    "debug": "ShellExecute (or platform equivalent) failed to open the app."
+  },
+
+  // ---------------- Web ----------------
+  "ERR_WEB_NO_ARGUMENT": {
+    "user": "[Web] Please provide a search query. Example: search_web grim project",
+    "debug": "cmdSearchWeb called with empty argument."
+  },
+  "ERR_WEB_OPEN_FAILED": {
+    "user": "[Web] I couldn’t open the browser to perform the search.",
+    "debug": "ShellExecute (or platform equivalent) failed when opening URL."
+  },
+
+  // ---------------- Config ----------------
   "ERR_CONFIG_MALFORMED": {
     "user": "[Config] Invalid or missing ai_config.json — using defaults.",
     "debug": "ai_config.json contained null/invalid types and was patched by validateAIConfig()."

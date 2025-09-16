@@ -1,4 +1,5 @@
 #include "response_manager.hpp"
+#include "error_manager.hpp"
 #include <unordered_map>
 #include <random>
 
@@ -47,7 +48,7 @@ static std::unordered_map<std::string, std::vector<std::string>> responses = {
     }},
 
     // --- Timers ---
-    { "set_timer", {
+    { "timer", {
         "Timer set for ",
         "Alright, I’ll count down ",
         "Got it — timer started for "
@@ -59,14 +60,14 @@ static std::unordered_map<std::string, std::vector<std::string>> responses = {
         "Console wiped clean.",
         "All previous entries removed."
     }},
-    { "show_help", {
+    { "help", {
         "Here are the available commands.",
         "These are the commands you can use.",
         "Listing all supported commands now."
     }},
 
     // --- Filesystem ---
-    { "show_pwd", {
+    { "pwd", {
         "Current directory is ",
         "You’re currently in ",
         "Working directory: "
@@ -81,29 +82,29 @@ static std::unordered_map<std::string, std::vector<std::string>> responses = {
         "Couldn’t move into that folder: ",
         "Unable to switch directory: "
     }},
-    { "make_dir_success", {
+    { "mkdir", {
         "Created directory ",
         "New folder created: ",
         "Made a directory at "
     }},
-    { "make_dir_fail", {
+    { "mkdir_fail", {
         "Failed to create directory ",
         "Couldn’t make folder: ",
         "Unable to create directory: "
     }},
-    { "remove_file_success", {
+    { "rm", {
         "Removed ",
         "Deleted ",
         "Successfully removed "
     }},
-    { "remove_file_fail", {
+    { "rm_fail", {
         "Failed to remove ",
         "Couldn’t delete ",
         "Unable to remove "
     }},
 
     // --- NLP / AI ---
-    { "reload_nlp_success", {
+    { "reload_nlp", {
         "NLP rules reloaded.",
         "Language rules refreshed.",
         "Rule set reloaded successfully."
@@ -167,7 +168,7 @@ static std::unordered_map<std::string, std::vector<std::string>> responses = {
     }},
 
     // --- Voice ---
-    { "voice_start", {
+    { "voice", {
         "Starting a 5-second recording…",
         "Listening now… go ahead.",
         "I’m ready, start speaking."
@@ -184,7 +185,7 @@ static std::unordered_map<std::string, std::vector<std::string>> responses = {
     }},
 
     // --- Voice Stream ---
-    { "voice_stream_start", {
+    { "voice_stream", {
         "Starting live microphone stream…",
         "Live voice stream active now.",
         "Okay, streaming microphone input."
@@ -203,11 +204,17 @@ static std::unordered_map<std::string, std::vector<std::string>> responses = {
     }},
 };
 
-std::string ResponseManager::get(const std::string& intent) {
-    auto it = responses.find(intent);
+std::string ResponseManager::get(const std::string& keyOrMessage) {
+    auto it = responses.find(keyOrMessage);
     if (it != responses.end() && !it->second.empty()) {
         return pickRandom(it->second);
     }
-    // fallback default
-    return "[no response configured]";
+
+    // If it already looks like a full message (starts with [ or has newlines), return it as-is
+    if (!keyOrMessage.empty() && (keyOrMessage[0] == '[' || keyOrMessage.find('\n') != std::string::npos)) {
+        return keyOrMessage;
+    }
+
+    // Otherwise, treat as an unknown intent and fallback gracefully
+    return ErrorManager::getUserMessage("ERR_CORE_UNKNOWN_COMMAND") + " (" + keyOrMessage + ")";
 }
