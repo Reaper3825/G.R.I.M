@@ -1,15 +1,10 @@
 #pragma once
 #include <string>
 #include <nlohmann/json.hpp>
-#include <SFML/Graphics.hpp>
 
-// Forward declaration to avoid circular include
+// Forward declare CommandResult to avoid circular include hell
 struct CommandResult;
-class ConsoleHistory;
 
-// -------------------------
-// Logger
-// -------------------------
 namespace Logger {
     enum class Level { DEBUG, INFO, WARN, ERROR };
 
@@ -18,15 +13,14 @@ namespace Logger {
     void logResult(const CommandResult& result);
 }
 
-// -------------------------
-// ErrorManager
-// -------------------------
 class ErrorManager {
 public:
-    static nlohmann::json errors;
-
     static void load(const std::string& path);
     static std::string getUserMessage(const std::string& code);
     static std::string getDebugMessage(const std::string& code);
     static void report(const std::string& code);
+
+private:
+    static nlohmann::json errors; // raw loaded JSON
+    static nlohmann::json root;   // flattened view (either errors["errors"] or errors)
 };

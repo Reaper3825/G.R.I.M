@@ -1,17 +1,16 @@
 #include "error_manager.hpp"
-#include "commands/commands_core.hpp" // ✅ Needed for CommandResult definition
+#include "commands/commands_core.hpp" // ✅ For CommandResult
 #include "console_history.hpp"
+
 #include <fstream>
 #include <iostream>
 #include <ctime>
+#include <filesystem>
 
 static std::ofstream logStream;
 
 namespace Logger {
 
-    // -------------------------
-    // Initialize log file
-    // -------------------------
     void init(const std::string& logFile) {
         logStream.open(logFile, std::ios::app);
         if (!logStream.is_open()) {
@@ -19,9 +18,6 @@ namespace Logger {
         }
     }
 
-    // -------------------------
-    // Timestamp utility
-    // -------------------------
     static std::string timestamp() {
         std::time_t t = std::time(nullptr);
         char buf[32];
@@ -29,9 +25,6 @@ namespace Logger {
         return std::string(buf);
     }
 
-    // -------------------------
-    // Convert Level -> string
-    // -------------------------
     static std::string levelToString(Level lvl) {
         switch (lvl) {
             case Level::DEBUG: return "DEBUG";
@@ -42,27 +35,19 @@ namespace Logger {
         return "UNKNOWN";
     }
 
-    // -------------------------
-    // Log a message
-    // -------------------------
     void log(Level level, const std::string& message) {
         std::string line = "[" + timestamp() + "][" + levelToString(level) + "] " + message;
 
-        // Console output
         if (level == Level::WARN || level == Level::ERROR)
             std::cerr << line << std::endl;
         else
             std::cout << line << std::endl;
 
-        // File output
         if (logStream.is_open()) {
             logStream << line << std::endl;
         }
     }
 
-    // -------------------------
-    // Log CommandResult
-    // -------------------------
     void logResult(const CommandResult& result) {
         if (result.success) {
             log(Level::INFO, result.message);
@@ -82,26 +67,52 @@ namespace Logger {
 // ErrorManager Implementation
 // -------------------------
 nlohmann::json ErrorManager::errors;
+nlohmann::json ErrorManager::root;
 
 void ErrorManager::load(const std::string& path) {
+    namespace fs = std::filesystem;
+
     std::ifstream in(path);
-    if (in) {
-        in >> errors;
-    } else {
+    if (!in) {
         std::cerr << "[ErrorManager] Could not open " << path << std::endl;
+        return;
+    }
+
+    try {
+        in >> errors;
+        std::cout << "[ErrorManager] Loaded errors.json from: " 
+                  << fs::absolute(path).string() << std::endl;
+
+        // Handle nested "errors" key if present
+        if (errors.contains("errors") && errors["errors"].is_object()) {
+            root = errors["errors"];
+        } else {
+            root = errors;
+        }
+
+        // Dump loaded keys
+        std::cout << "[ErrorManager] Available error codes: ";
+        for (auto& [key, val] : root.items()) {
+            std::cout << key << " ";
+        }
+        std::cout << std::endl;
+
+    } catch (const std::exception& e) {
+        std::cerr << "[ErrorManager] Failed to parse " << path 
+                  << " -> " << e.what() << std::endl;
     }
 }
 
 std::string ErrorManager::getUserMessage(const std::string& code) {
-    if (errors.contains(code) && errors[code].contains("user")) {
-        return errors[code]["user"];
+    if (root.contains(code) && root[code].contains("user")) {
+        return root[code]["user"];
     }
     return "[Error] Unknown error code: " + code;
 }
 
 std::string ErrorManager::getDebugMessage(const std::string& code) {
-    if (errors.contains(code) && errors[code].contains("debug")) {
-        return errors[code]["debug"];
+    if (root.contains(code) && root[code].contains("debug")) {
+        return root[code]["debug"];
     }
     return "[Debug] No debug message for code: " + code;
 }
