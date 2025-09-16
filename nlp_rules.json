@@ -145,5 +145,30 @@
     "slot_names": ["query"],
     "score_boost": 0.05,
     "case_insensitive": true
-  }
+  },
+  {
+  "intent": "alias_list",
+  "description": "List all known aliases (user, auto, fallback)",
+  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*)?(?:alias\\s+)?list$",
+  "slot_names": [],
+  "score_boost": 0.1,
+  "case_insensitive": true
+},
+{
+  "intent": "alias_info",
+  "description": "Show detailed info for a specific alias",
+  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*)?(?:alias\\s+)?info\\s+(.+)$",
+  "slot_names": ["target"],
+  "score_boost": 0.1,
+  "case_insensitive": true
+},
+{
+  "intent": "alias_refresh",
+  "description": "Manually refresh the alias database",
+  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*)?(?:alias\\s+)?refresh$",
+  "slot_names": [],
+  "score_boost": 0.1,
+  "case_insensitive": true
+}
+
 ]

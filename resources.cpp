@@ -122,3 +122,10 @@ std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* histor
     }
     return {};
 }
+
+// -------------------------------------------------------------
+// Global logging function (system log only, never history)
+// -------------------------------------------------------------
+void grimLog(const std::string& msg) {
+    std::cout << msg << std::endl;
+}

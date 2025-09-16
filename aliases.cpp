@@ -12,6 +12,10 @@
 #include <thread>
 #include <filesystem>
 #include <mutex>
+#include <sstream>
+#include <algorithm>
+#include <ctime>
+#include <chrono>
 
 namespace fs = std::filesystem;
 
@@ -84,47 +88,86 @@ void aliases::load() {
 // ------------------------------------------------------------
 // Scan Helpers
 // ------------------------------------------------------------
+// ------------------------------------------------------------
+// Scan Helpers
+// ------------------------------------------------------------
 static void scanPath(std::unordered_map<std::string, std::string>& results) {
+    grimLog("[aliases] Starting PATH scan…");
+
     const char* pathEnv = std::getenv("PATH");
     if (!pathEnv) return;
 
     std::stringstream ss(pathEnv);
     std::string dir;
+    size_t counter = 0;
+    auto lastBeat = std::chrono::steady_clock::now();
+
     while (std::getline(ss, dir, ';')) {
         if (!fs::exists(dir)) continue;
-        for (auto& p : fs::directory_iterator(dir)) {
+
+        for (auto& p : fs::directory_iterator(dir, fs::directory_options::skip_permission_denied)) {
             if (!p.is_regular_file()) continue;
             if (p.path().extension() == ".exe") {
                 std::string name = p.path().stem().string();
                 std::string full = p.path().string();
-                // Basic filters
+
                 std::string lower = name;
                 std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
                 if (lower.find("uninstall") != std::string::npos ||
-                    lower.find("setup") != std::string::npos ||
-                    lower.find("helper") != std::string::npos ||
-                    lower.find("update") != std::string::npos) {
+                    lower.find("setup")     != std::string::npos ||
+                    lower.find("helper")    != std::string::npos ||
+                    lower.find("update")    != std::string::npos) {
                     continue; // skip junk
                 }
                 results[name] = full;
             }
+
+            if (++counter % 500 == 0) {
+                grimLog("[aliases] PATH scan → " + std::to_string(counter) + " files checked");
+            }
+
+            auto now = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - lastBeat).count() >= 3) {
+                grimLog("[aliases] PATH scan still running… (" + std::to_string(counter) + " checked)");
+                lastBeat = now;
+            }
         }
     }
+
+    grimLog("[aliases] Finished PATH scan — " + std::to_string(results.size()) + " executables found");
 }
 
 static void scanStartMenu(std::unordered_map<std::string, std::string>& results) {
 #ifdef _WIN32
+    grimLog("[aliases] Starting Start Menu scan…");
+
     char* appData = std::getenv("APPDATA");
     if (!appData) return;
     fs::path startMenu = fs::path(appData) / "Microsoft/Windows/Start Menu/Programs";
     if (!fs::exists(startMenu)) return;
 
-    for (auto& p : fs::recursive_directory_iterator(startMenu)) {
+    size_t counter = 0;
+    auto lastBeat = std::chrono::steady_clock::now();
+
+    for (auto& p : fs::recursive_directory_iterator(startMenu,
+            fs::directory_options::skip_permission_denied)) {
         if (p.path().extension() == ".lnk") {
             std::string name = p.path().stem().string();
             results[name] = p.path().string();
         }
+
+        if (++counter % 500 == 0) {
+            grimLog("[aliases] Start Menu scan → " + std::to_string(counter) + " entries checked");
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - lastBeat).count() >= 3) {
+            grimLog("[aliases] Start Menu scan still running… (" + std::to_string(counter) + " checked)");
+            lastBeat = now;
+        }
     }
+
+    grimLog("[aliases] Finished Start Menu scan — " + std::to_string(results.size()) + " shortcuts found");
 #endif
 }
 
@@ -134,10 +177,10 @@ static void scanStartMenu(std::unordered_map<std::string, std::string>& results)
 static void refreshCore(bool userTriggered) {
     std::unordered_map<std::string, std::string> autoResults;
 
+    grimLog("[aliases] Auto refresh started…");
     scanPath(autoResults);
     scanStartMenu(autoResults);
 
-    // Merge into g_aliases["auto"]
     {
         std::lock_guard<std::mutex> lock(g_aliasMutex);
         g_aliases["auto"] = nlohmann::json::object();
@@ -166,7 +209,6 @@ static void refreshCore(bool userTriggered) {
 // ------------------------------------------------------------
 void aliases::init() {
     load();
-    // Spawn background thread for auto refresh
     std::thread([]() {
         refreshCore(false);
     }).detach();
@@ -185,17 +227,14 @@ void aliases::refreshNow() {
 std::string aliases::resolve(const std::string& key) {
     std::lock_guard<std::mutex> lock(g_aliasMutex);
 
-    // 1. User alias
     if (g_aliases["user"].contains(key)) {
         return g_aliases["user"][key].value("path", "");
     }
 
-    // 2. Auto alias
     if (g_aliases["auto"].contains(key)) {
         return g_aliases["auto"][key].value("path", "");
     }
 
-    // 3. Fuzzy match
     int bestDistance = 999;
     std::string bestMatch;
     for (auto& [k, v] : g_aliases["auto"].items()) {
@@ -209,7 +248,6 @@ std::string aliases::resolve(const std::string& key) {
         return bestMatch;
     }
 
-    // Not found
     return {};
 }
 

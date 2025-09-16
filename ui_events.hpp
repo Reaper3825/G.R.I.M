@@ -6,7 +6,8 @@
 #include "nlp.hpp"
 #include "console_history.hpp"
 #include "timer.hpp"
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
+
 
 
 // Process all SFML events, update buffer/history, and handle commands.

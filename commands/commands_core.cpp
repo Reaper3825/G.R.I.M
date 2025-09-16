@@ -5,15 +5,17 @@
 #include "commands_timers.hpp"
 #include "commands_voice.hpp"
 #include "commands_system.hpp"
+#include "commands_aliases.hpp"   // 🔹 new: alias commands
 
 #include "response_manager.hpp"
 #include "console_history.hpp"
 #include "voice_speak.hpp"
 #include "error_manager.hpp"
 #include "resources.hpp"
-#include "nlp.hpp"          // 🔹 for g_nlp (regex-based rules)
-#include "synonyms.hpp"     // 🔹 normalizeWord()
+#include "nlp.hpp"
+#include "synonyms.hpp"
 #include "commands_core.hpp"
+#include "aliases.hpp"            // 🔹 new: alias resolution
 
 #include <nlohmann/json.hpp>
 #include <unordered_map>
@@ -38,8 +40,6 @@ Intent g_lastIntent; // last matched intent
 // ------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------
-
-// simple Levenshtein distance for fuzzy matching
 static int levenshteinDistance(const std::string& s1, const std::string& s2) {
     const size_t m = s1.size(), n = s2.size();
     std::vector<int> prev(n + 1), curr(n + 1);
@@ -72,15 +72,11 @@ static std::string fuzzyMatch(const std::string& input) {
 }
 
 static std::string normalizeCommand(const std::string& input) {
-    // 1. Lowercase
     std::string out = input;
     std::transform(out.begin(), out.end(), out.begin(),
                    [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
 
-    // 2. Synonym substitution
     out = normalizeWord(out);
-
-    // 3. Fuzzy match
     out = fuzzyMatch(out);
 
     return out;
@@ -124,7 +120,12 @@ static void initCommands() {
 
         // --- Apps / Web ---
         {"open_app",     cmdOpenApp},
-        {"search_web",   cmdSearchWeb}
+        {"search_web",   cmdSearchWeb},
+
+        // --- Aliases ---
+        {"alias list",    cmdAliasList},
+        {"alias info",    cmdAliasInfo},
+        {"alias refresh", cmdAliasRefresh}
     };
 }
 
@@ -173,23 +174,19 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg) {
 // handleCommand: central hub for command + NLP execution
 // ------------------------------------------------------------
 void handleCommand(const std::string& line) {
-    // Step 1: raw input
     std::cout << "[TRACE][handleCommand] START line=\"" << line << "\"\n";
 
-    // Step 2: parse raw into cmdRaw + arg
     auto [cmdRaw, arg] = parseInput(line);
     std::cout << "[TRACE][handleCommand] parseInput → cmdRaw=\"" << cmdRaw
               << "\" arg=\"" << arg << "\"\n";
 
-    // Echo user input to history
     history.push("> " + line, sf::Color::White);
 
-    // 🔹 Case 1: direct command match (skip NLP entirely)
+    // Case 1: direct command
     if (commandMap.find(cmdRaw) != commandMap.end()) {
         std::cout << "[TRACE][handleCommand] Direct command match: \"" << cmdRaw << "\"\n";
         CommandResult result = dispatchCommand(cmdRaw, arg);
 
-        // Naturalize response
         std::string response = result.message;
         if (!result.success && result.errorCode != "ERR_NONE") {
             response = ResponseManager::get(result.message);
@@ -200,16 +197,14 @@ void handleCommand(const std::string& line) {
 
         Logger::logResult(result);
         history.push(response, result.color);
-        if (!response.empty()) {
-            speak(response, "routine");
-        }
+        if (!response.empty()) speak(response, "routine");
         return;
     }
 
-    // 🔹 Case 2: NLP intent match
+    // Case 2: NLP intent
     std::cout << "[TRACE][handleCommand] No direct match, running NLP parse...\n";
     Intent intent = g_nlp.parse(line);
-    g_lastIntent = intent;  // cache globally
+    g_lastIntent = intent;
 
     std::cout << "[TRACE][handleCommand] NLP parse returned: "
               << "name=\"" << intent.name << "\" "
@@ -219,31 +214,16 @@ void handleCommand(const std::string& line) {
         std::cout << "   slot[" << k << "]=\"" << v << "\"\n";
     }
 
-    // Step 3: choose command
     std::string cmd = intent.matched ? intent.name : normalizeCommand(cmdRaw);
-    std::cout << "[TRACE][handleCommand] selected cmd=\"" << cmd << "\"\n";
-
-    // Step 4: extract argument from slots if matched
     if (intent.matched) {
         std::string slotArg;
         if (intent.slots.count("app") && !intent.slots.at("app").empty()) {
             slotArg = intent.slots.at("app");
-        }
-        else if (intent.slots.count("target") && !intent.slots.at("target").empty()) {
+        } else if (intent.slots.count("target") && !intent.slots.at("target").empty()) {
             slotArg = intent.slots.at("target");
-        }
-        else if (intent.slots.count("slot1") && !intent.slots.at("slot1").empty()) {
-            slotArg = intent.slots.at("slot1");
-        }
-        else if (intent.slots.count("slot2") && !intent.slots.at("slot2").empty()) {
-            slotArg = intent.slots.at("slot2");
-        }
-        else {
+        } else {
             for (const auto& [k, v] : intent.slots) {
-                if (!v.empty()) {
-                    slotArg = v;
-                    break;
-                }
+                if (!v.empty()) { slotArg = v; break; }
             }
         }
         if (!slotArg.empty()) {
@@ -254,10 +234,33 @@ void handleCommand(const std::string& line) {
     std::cout << "[TRACE][handleCommand] Final dispatch values → cmd=\"" << cmd
               << "\" arg=\"" << arg << "\"\n";
 
-    // Step 5: dispatch
+    // Special case: open_app uses aliases
+    if (cmd == "open_app") {
+        std::string resolved = aliases::resolve(arg);
+        if (resolved.empty()) {
+            CommandResult fail {
+                ErrorManager::getUserMessage("ERR_ALIAS_NOT_FOUND") + ": " + arg,
+                false,
+                sf::Color::Red,
+                "ERR_ALIAS_NOT_FOUND"
+            };
+            Logger::logResult(fail);
+            history.push(fail.message, fail.color);
+            speak(fail.message, "routine");
+            return;
+        }
+        // overwrite arg with resolved path
+        std::cout << "[DEBUG][open_app] alias \"" << arg << "\" → " << resolved << "\n";
+        CommandResult result = dispatchCommand("open_app", resolved);
+
+        Logger::logResult(result);
+        history.push(result.message, result.color);
+        if (!result.message.empty()) speak(result.message, "routine");
+        return;
+    }
+
     CommandResult result = dispatchCommand(cmd, arg);
 
-    // Step 6: naturalize response
     std::string response = result.message;
     if (!result.success && result.errorCode != "ERR_NONE") {
         response = ResponseManager::get(result.message);
@@ -268,9 +271,7 @@ void handleCommand(const std::string& line) {
 
     Logger::logResult(result);
     history.push(response, result.color);
-    if (!response.empty()) {
-        speak(response, "routine");
-    }
+    if (!response.empty()) speak(response, "routine");
 
     std::cout << "[TRACE][handleCommand] END\n";
 }

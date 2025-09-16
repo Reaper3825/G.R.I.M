@@ -4,7 +4,7 @@
 #include <filesystem>
 #include <vector>
 #include <SFML/Graphics.hpp>
-#include"intent.hpp"
+#include "intent.hpp"
 
 // Forward declarations
 struct CommandResult;
@@ -35,12 +35,9 @@ extern std::vector<Timer> timers;
 extern std::filesystem::path g_currentDir;
 extern Intent g_lastIntent;
 
-
-
 // ------------------------------------------------------------
 // Public API
 // ------------------------------------------------------------
 std::pair<std::string, std::string> parseInput(const std::string& input);
 CommandResult dispatchCommand(const std::string& cmd, const std::string& arg);
 void handleCommand(const std::string& line);
-

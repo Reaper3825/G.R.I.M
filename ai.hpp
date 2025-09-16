@@ -2,7 +2,8 @@
 #include <string>
 #include <future>
 #include <functional>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
+
 
 // ------------------------------------------------------------
 // Global AI state (persistent JSON containers)

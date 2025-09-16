@@ -1,66 +1,107 @@
 #include "commands_aliases.hpp"
 #include "aliases.hpp"
 #include "console_history.hpp"
-#include "response_manager.hpp"
+#include "error_manager.hpp"
 
+#include <nlohmann/json.hpp>
 #include <sstream>
+#include <SFML/Graphics.hpp>
+#include <iostream>
 
 // ------------------------------------------------------------
-// alias list → display user + auto keys
+// alias list → dump aliases by section
 // ------------------------------------------------------------
-CommandResult cmdAliasList(const std::string& args) {
-    std::ostringstream out;
-    const auto& all = aliases::getAll();
+CommandResult cmdAliasList(const std::string& /*arg*/) {
+    const nlohmann::json& all = aliases::getAll();
 
-    out << "[Alias] Listing aliases\n";
+    if (all.empty()) {
+        return {
+            "[Alias] No aliases loaded.",
+            true,
+            sf::Color::Yellow,
+            "ERR_NONE"
+        };
+    }
 
-    if (all.contains("user") && !all["user"].empty()) {
-        out << " [USER]\n";
+    std::ostringstream oss;
+    oss << "[Alias] Listing loaded aliases:\n";
+
+    if (all.contains("user")) {
+        oss << " [USER]\n";
         for (auto& [k, v] : all["user"].items()) {
-            out << "   " << k << " → " << v.value("path", "") << "\n";
+            oss << "   " << k << " → " << v << "\n";
         }
-    } else {
-        out << " [USER] (none)\n";
     }
-
-    if (all.contains("auto") && !all["auto"].empty()) {
-        out << " [AUTO]\n";
+    if (all.contains("auto")) {
+        oss << " [AUTO]\n";
         for (auto& [k, v] : all["auto"].items()) {
-            out << "   " << k << " → " << v.value("path", "") << "\n";
+            oss << "   " << k << " → " << v << "\n";
         }
-    } else {
-        out << " [AUTO] (none)\n";
+    }
+    if (all.contains("fallback")) {
+        oss << " [FALLBACK]\n";
+        for (auto& [k, v] : all["fallback"].items()) {
+            oss << "   " << k << " → " << v << "\n";
+        }
     }
 
-    out << " [FALLBACK]\n";
-    out << "   Uses fuzzy matching when no direct alias is found.\n";
-
-    return {true, out.str()};
+    return {
+        oss.str(),
+        true,
+        sf::Color::Cyan,
+        "ERR_NONE"
+    };
 }
 
 // ------------------------------------------------------------
-// alias info <name>
+// alias info <name> → metadata about a specific alias
 // ------------------------------------------------------------
-CommandResult cmdAliasInfo(const std::string& args) {
-    if (args.empty()) {
-        return {false, "[Alias] Usage: alias info <name>"};
+CommandResult cmdAliasInfo(const std::string& arg) {
+    if (arg.empty()) {
+        return {
+            "[Alias] Usage: alias info <name>",
+            false,
+            sf::Color::Red,
+            "ERR_ALIAS_NOT_FOUND"
+        };
     }
-    return {true, aliases::info(args)};
+
+    std::string meta = aliases::info(arg);
+    if (meta.empty()) {
+        return {
+            ErrorManager::getUserMessage("ERR_ALIAS_NOT_FOUND") + ": " + arg,
+            false,
+            sf::Color::Red,
+            "ERR_ALIAS_NOT_FOUND"
+        };
+    }
+
+    return {
+        "[Alias] " + meta,
+        true,
+        sf::Color::Green,
+        "ERR_NONE"
+    };
 }
 
 // ------------------------------------------------------------
-// alias refresh → blocking refreshNow()
+// alias refresh → run blocking refresh, push into history
 // ------------------------------------------------------------
-CommandResult cmdAliasRefresh(const std::string& args) {
-    aliases::refreshNow();
-    return {true, "[Alias] Manual refresh triggered."};
-}
-
-// ------------------------------------------------------------
-// Register alias commands
-// ------------------------------------------------------------
-void registerAliasCommands() {
-    commandMap["alias list"]    = cmdAliasList;
-    commandMap["alias info"]    = cmdAliasInfo;
-    commandMap["alias refresh"] = cmdAliasRefresh;
+CommandResult cmdAliasRefresh(const std::string& /*arg*/) {
+    try {
+        aliases::refreshNow();
+        return {
+            "[Alias] Manual refresh complete.",
+            true,
+            sf::Color::Green,
+            "ERR_NONE"
+        };
+    } catch (const std::exception& e) {
+        return {
+            std::string("[Alias] Refresh failed: ") + e.what(),
+            false,
+            sf::Color::Red,
+            "ERR_ALIAS_NOT_FOUND"
+        };
+    }
 }
