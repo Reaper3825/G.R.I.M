@@ -93,7 +93,7 @@
     "debug": "cmdGrimAi threw an exception while contacting backend."
   },
 
-  // ---------------- Apps ----------------
+  // ---------------- Apps / Aliases ----------------
   "ERR_APP_NO_ARGUMENT": {
     "user": "[App] Please specify an application to open. Example: open_app notepad",
     "debug": "cmdOpenApp called without argument."
@@ -105,6 +105,10 @@
   "ERR_APP_LAUNCH_FAILED": {
     "user": "[App] I couldn’t launch that application.",
     "debug": "ShellExecute (or platform equivalent) failed to open the app."
+  },
+  "ERR_ALIAS_NOT_FOUND": {
+    "user": "[Alias] Application not found.",
+    "debug": "Alias lookup failed in user, auto, and fallback."
   },
 
   // ---------------- Web ----------------

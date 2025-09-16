@@ -1,7 +1,8 @@
 #pragma once
 #include <vector>
 #include <string>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
+
 
 class ConsoleHistory;
 class Timer;

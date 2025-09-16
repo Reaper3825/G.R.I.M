@@ -1,6 +1,6 @@
 #pragma once
 #include <string>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 #include "whisper.h"  // pull in the real whisper_context
 
 namespace Voice {

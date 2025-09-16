@@ -18,12 +18,6 @@ namespace fs = std::filesystem;
 // Global system info
 SystemInfo g_systemInfo;
 
-// ----------------------------
-// Simple GRIM-style logger
-// ----------------------------
-void grimLog(const std::string& msg) {
-    std::cout << msg << std::endl;
-}
 
 // -------------------------------------------------------------
 // Default ai_config.json

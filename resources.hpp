@@ -3,7 +3,7 @@
 #include <vector>
 #include <filesystem>
 #include <SFML/Graphics.hpp>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 #include "console_history.hpp"
 #include "timer.hpp"
 
@@ -41,3 +41,9 @@ void rememberCorrection(const std::string& wrong, const std::string& right);
 void rememberShortcut(const std::string& phrase, const std::string& command);
 void incrementUsageCount(const std::string& command);
 void setLastCommand(const std::string& command);
+
+// ------------------------------------------------------------
+// Global logging helper (system-level, not user history)
+// ------------------------------------------------------------
+void grimLog(const std::string& msg);
+

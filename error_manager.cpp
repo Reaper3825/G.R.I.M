@@ -1,5 +1,5 @@
 #include "error_manager.hpp"
-#include "commands/commands_core.hpp" // ✅ For CommandResult
+#include "commands/commands_core.hpp" // For CommandResult
 #include "console_history.hpp"
 
 #include <fstream>

@@ -1,7 +1,8 @@
 #pragma once
 #include <string>
 #include <unordered_map>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
+
 
 // ------------------------------------------------------------
 // Aliases API (User + Auto + Fallback)
