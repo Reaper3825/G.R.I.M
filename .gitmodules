@@ -1,6 +1,7 @@
 [submodule "external/whisper.cpp"]
-	path = external/whisper.cpp
-	url = https://github.com/ggerganov/whisper.cpp.git
+    path = external/whisper.cpp
+    url = https://github.com/ggerganov/whisper.cpp.git
+
 [submodule "external/cpr"]
-	path = external/cpr
-	url = https://github.com/libcpr/cpr.git
+    path = external/cpr
+    url = https://github.com/libcpr/cpr.git
