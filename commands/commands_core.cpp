@@ -12,7 +12,7 @@
 #include "error_manager.hpp"
 #include "resources.hpp"
 #include "nlp.hpp"          // 🔹 for g_nlp (regex-based rules)
-#include "synonyms.hpp"     // 🔹 applySynonyms()
+#include "synonyms.hpp"     // 🔹 normalizeWord()
 #include "commands_core.hpp"
 
 #include <nlohmann/json.hpp>
@@ -30,13 +30,14 @@ std::unordered_map<std::string, CommandFunc> commandMap;
 // Externals
 extern nlohmann::json longTermMemory;
 extern nlohmann::json aiConfig;
-extern NLP g_nlp;   // loaded in nlp.cpp
+extern NLP g_nlp;   // defined in nlp.cpp
+extern ConsoleHistory history;
 
 // ------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------
 
-// fuzzy match helper (simple Levenshtein-like distance)
+// simple Levenshtein distance for fuzzy matching
 static int levenshteinDistance(const std::string& s1, const std::string& s2) {
     const size_t m = s1.size(), n = s2.size();
     std::vector<int> prev(n + 1), curr(n + 1);
@@ -74,17 +75,11 @@ static std::string normalizeCommand(const std::string& input) {
     std::transform(out.begin(), out.end(), out.begin(),
                    [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
 
-    // 2. Synonym substitution (phrases/words → canonical command)
-    out = applySynonyms(out);
+    // 2. Synonym substitution
+    out = normalizeWord(out);
 
-    // 3. Fuzzy match (typos → canonical command)
+    // 3. Fuzzy match
     out = fuzzyMatch(out);
-
-    // 4. NLP regex parse (maps flexible phrasing → canonical command)
-    auto intent = g_nlp.parse(out);
-    if (!intent.intent.empty()) {
-        out = intent.intent;  // must equal a commandMap key
-    }
 
     return out;
 }
@@ -96,22 +91,38 @@ static void initCommands() {
     if (!commandMap.empty()) return; // already initialized
 
     commandMap = {
+        // --- Memory ---
         {"remember",     cmdRemember},
         {"recall",       cmdRecall},
         {"forget",       cmdForget},
+
+        // --- AI / NLP ---
         {"ai_backend",   cmdAiBackend},
         {"reload_nlp",   cmdReloadNlp},
+        {"grim_ai",      cmdGrimAi},   // ✅ catch-all AI queries
+
+        // --- Filesystem ---
         {"pwd",          cmdShowPwd},
         {"cd",           cmdChangeDir},
         {"ls",           cmdListDir},
         {"mkdir",        cmdMakeDir},
         {"rm",           cmdRemoveFile},
+
+        // --- Timers ---
         {"timer",        cmdSetTimer},
+
+        // --- System ---
         {"sysinfo",      cmdSystemInfo},
         {"clean",        cmdClean},
         {"help",         cmdShowHelp},
+
+        // --- Voice ---
         {"voice",        cmdVoice},
-        {"voice_stream", cmdVoiceStream}
+        {"voice_stream", cmdVoiceStream},
+
+        // --- Apps / Web ---
+        {"open_app",     cmdOpenApp},
+        {"search_web",   cmdSearchWeb}
     };
 }
 
@@ -146,18 +157,39 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg) {
 void handleCommand(const std::string& line) {
     auto [cmdRaw, arg] = parseInput(line);
 
-    // 🔹 Full NLP pipeline normalization
-    std::string cmd = normalizeCommand(cmdRaw);
+    // 🔹 Run NLP on the full input (not just the first word)
+    auto intent = g_nlp.parse(line);
+
+    std::string cmd = intent.matched ? intent.name : normalizeCommand(cmdRaw);
+
+    // 🔹 If arg is empty, prefer NLP slot values
+    if (arg.empty() && intent.matched && !intent.slots.empty()) {
+        arg = intent.slots.begin()->second;
+    }
 
     // 🔹 Dispatch
     CommandResult result = dispatchCommand(cmd, arg);
+
+    // 🔹 Decide how to build response
+    std::string response = result.message;
+
+    // If it's an error, run through ResponseManager
+    if (!result.success && result.errorCode != "ERR_NONE") {
+    response = ResponseManager::get(result.message);
+    }
+
+    // If it looks like a short intent key, also naturalize
+    else if (!(response.size() > 0 && (response[0] == '[' || response.find('\n') != std::string::npos))) {
+        response = ResponseManager::get(result.message);
+    }
+    // Otherwise: full formatted/system message → leave it alone
 
     // 🔹 Log result
     Logger::logResult(result);
 
     // 🔹 Push to history and speak
-    history.push(ResponseManager::get(result.message), result.color);
+    history.push(response, result.color);
     if (result.success) {
-        speak(result.message, "routine");
+        speak(response, "routine");
     }
 }

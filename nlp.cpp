@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
+#include "commands/commands_core.hpp"
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
@@ -23,9 +24,13 @@ static std::string normalizeInput(const std::string& input) {
     out.reserve(input.size());
 
     for (char c : input) {
-        if (!std::ispunct(static_cast<unsigned char>(c))) {
-            out.push_back(std::tolower(static_cast<unsigned char>(c)));
+        unsigned char uc = static_cast<unsigned char>(c);
+
+        // Keep letters, numbers, spaces, and underscores
+        if (std::isalnum(uc) || c == '_' || std::isspace(uc)) {
+            out.push_back(std::tolower(uc));
         }
+        // drop everything else
     }
 
     // 🔹 Trim leading/trailing spaces
@@ -63,9 +68,16 @@ Intent NLP::parse(const std::string& rawText) const {
                 intent.score += rule.boost;
             }
 
-            // slot extraction if regex groups exist
-            for (size_t i = 1; i < match.size(); i++) {
-                intent.slots["slot" + std::to_string(i)] = match[i].str();
+            // slot extraction with names if provided
+            if (!rule.slot_names.empty()) {
+                for (size_t i = 0; i < rule.slot_names.size() && (i + 1) < match.size(); i++) {
+                    intent.slots[rule.slot_names[i]] = match[i + 1].str();
+                }
+            } else {
+                // fallback: generic slot1, slot2...
+                for (size_t i = 1; i < match.size(); i++) {
+                    intent.slots["slot" + std::to_string(i)] = match[i].str();
+                }
             }
 
             // 🔹 Debug: show which rule matched
@@ -97,6 +109,13 @@ bool NLP::load_rules_from_string(const std::string& rulesText, std::string* err)
             rule.pattern_str      = r.value("pattern", "");
             rule.boost            = r.value("score_boost", 0.0);
             bool caseInsensitive  = r.value("case_insensitive", false);
+
+            // slot_names support
+            if (r.contains("slot_names") && r["slot_names"].is_array()) {
+                for (auto& sn : r["slot_names"]) {
+                    rule.slot_names.push_back(sn.get<std::string>());
+                }
+            }
 
             try {
                 rule.pattern = std::regex(
@@ -167,7 +186,7 @@ CommandResult reloadNlpRules() {
             "[NLP] Rules reloaded successfully.",
             true,
             sf::Color::Green,
-            "" // no error code
+            "ERR_NONE"
         };
     } else {
         std::cerr << "[NLP] Reload failed: " << error << "\n";
@@ -179,3 +198,5 @@ CommandResult reloadNlpRules() {
         };
     }
 }
+
+
