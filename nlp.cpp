@@ -51,7 +51,8 @@ Intent NLP::parse(const std::string& rawText) const {
               << "\" → Normalized: \"" << text << "\"\n";
 
     Intent best;
-    double bestScore = 0.0;
+    best.matched = false;
+    double bestScore = -1.0;
 
     for (const auto& rule : rules) {
         std::smatch match;
@@ -60,21 +61,16 @@ Intent NLP::parse(const std::string& rawText) const {
             intent.name = rule.intent;
             intent.matched = true;
 
-            // base confidence
-            intent.score = 0.5;
+            // Base confidence
+            intent.score = 0.5 + rule.boost;
 
-            // optional boost from rule
-            if (rule.boost > 0.0) {
-                intent.score += rule.boost;
-            }
-
-            // 🔹 Always capture raw groups
+            // Capture raw groups
             intent.groups.clear();
             for (size_t i = 1; i < match.size(); i++) {
                 intent.groups.push_back(match[i].str());
             }
 
-            // slot extraction with names if provided
+            // Map captures to slots
             if (!rule.slot_names.empty()) {
                 for (size_t i = 0; i < rule.slot_names.size() && (i + 1) < match.size(); i++) {
                     intent.slots[rule.slot_names[i]] = match[i + 1].str();
@@ -84,14 +80,24 @@ Intent NLP::parse(const std::string& rawText) const {
                 for (size_t i = 1; i < match.size(); i++) {
                     intent.slots["slot" + std::to_string(i)] = match[i].str();
                 }
+                // heuristic: common two-slot patterns → verb/app
+                if (match.size() == 3) {
+                    intent.slots["verb"] = match[1].str();
+                    intent.slots["app"]  = match[2].str();
+                }
             }
 
-            // 🔹 Debug: show which rule matched
+            // 🔹 Debug
             std::cout << "[DEBUG][NLP] Matched intent: " << intent.name
                       << " (pattern: \"" << rule.pattern_str << "\")"
                       << " score=" << intent.score << "\n";
+            if (!intent.slots.empty()) {
+                for (auto& kv : intent.slots) {
+                    std::cout << "   slot[" << kv.first << "]=\"" << kv.second << "\"\n";
+                }
+            }
 
-            // track best match
+            // Select best-scoring intent
             if (intent.score > bestScore) {
                 best = intent;
                 bestScore = intent.score;

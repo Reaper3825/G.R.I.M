@@ -199,11 +199,12 @@ static void run(whisper_context* ctx,
                 Intent intent = nlp.parse(clean);
 
                 if (intent.matched) {
-                    std::cout << "[VoiceStream] Dispatching command: " << intent.name << "\n";
-                    handleCommand(intent.name); // Commands handled via query system
+                std::cout << "[VoiceStream] Dispatching command: " << intent.name << "\n";
+                handleCommand(clean);  // ✅ FIXED: pass full transcript, not intent.name
                 } else {
-                    std::string fullReply;
-                    ai_process_stream(
+                std::string fullReply;
+                ai_process_stream(
+
                         g_state.partial,
                         longTermMemory,
                         [&](const std::string& chunk) {

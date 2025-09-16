@@ -1,10 +1,11 @@
 #include "bootstrap.hpp"
 #include "resources.hpp"
 #include "console_history.hpp"
-#include "ai.hpp"              // 🔹 Needed for g_silenceThreshold / g_silenceTimeoutMs
+#include "ai.hpp"              // g_silenceThreshold / g_silenceTimeoutMs
 #include "system_detect.hpp"
 #include "nlp.hpp"
 #include "error_manager.hpp"
+#include "aliases.hpp"         // 🔹 Auto-alias system
 
 #include <iostream>
 #include <filesystem>
@@ -20,7 +21,7 @@ SystemInfo g_systemInfo;
 // ----------------------------
 // Simple GRIM-style logger
 // ----------------------------
-static void grimLog(const std::string& msg) {
+void grimLog(const std::string& msg) {
     std::cout << msg << std::endl;
 }
 
@@ -88,8 +89,11 @@ static nlohmann::json defaultErrors() {
         {"ERR_AI_CONFIG_INVALID", {
             {"user", "[AI] Config file invalid → reset to defaults."},
             {"debug", "ai_config.json failed parsing or validation."}
+        }},
+        {"ERR_ALIAS_NOT_FOUND", {
+            {"user", "[Alias] Application not found."},
+            {"debug", "Alias lookup failed in user, auto, and fallback."}
         }}
-        // 🔹 Extend this list with more defaults as needed
     };
 }
 
@@ -235,15 +239,16 @@ void runBootstrapChecks(int argc, char** argv) {
         grimLog("[Config] NLP rules loaded");
     }
 
-    // Synonyms and aliases
+    // Synonyms (still needed)
     if (!fs::exists(resDir / "synonyms.json")) {
         std::ofstream(resDir / "synonyms.json") << "{}\n";
         grimLog("[Config] synonyms.json created");
     }
-    if (!fs::exists(resDir / "app_aliases.json")) {
-        std::ofstream(resDir / "app_aliases.json") << "{}\n";
-        grimLog("[Config] app_aliases.json created");
-    }
+
+    // ---------------------------------------------------------
+    // Aliases system (NEW)
+    // ---------------------------------------------------------
+    aliases::init(); // 🔹 loads cached aliases.json, spawns silent refresh
 
     // Fonts
     std::string fontPath = findAnyFontInResources(argc, argv, &history);

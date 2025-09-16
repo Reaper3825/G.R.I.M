@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cctype>
 #include <iostream>
+#include <vector>
 
 // ------------------------------------------------------------
 // Globals
@@ -32,6 +33,7 @@ extern nlohmann::json longTermMemory;
 extern nlohmann::json aiConfig;
 extern NLP g_nlp;   // defined in nlp.cpp
 extern ConsoleHistory history;
+Intent g_lastIntent; // last matched intent
 
 // ------------------------------------------------------------
 // Helpers
@@ -142,10 +144,23 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg) {
 
     auto it = commandMap.find(cmd);
     if (it != commandMap.end()) {
-        return it->second(arg);
+        std::cout << "[DEBUG][dispatchCommand] Found handler for cmd=\""
+                  << cmd << "\" arg=\"" << arg << "\"\n";
+        try {
+            return it->second(arg);
+        } catch (const std::exception& e) {
+            std::cerr << "[ERROR][dispatchCommand] Exception in command \""
+                      << cmd << "\": " << e.what() << "\n";
+            return {
+                "[Error] Exception while running command: " + cmd,
+                false,
+                sf::Color::Red,
+                "ERR_CMD_EXCEPTION"
+            };
+        }
     }
 
-    // Unknown command
+    std::cout << "[DEBUG][dispatchCommand] Unknown command: \"" << cmd << "\"\n";
     return {
         ErrorManager::getUserMessage("ERR_CORE_UNKNOWN_COMMAND") + ": " + cmd,
         false,
@@ -154,14 +169,24 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg) {
     };
 }
 
+// ------------------------------------------------------------
+// handleCommand: central hub for command + NLP execution
+// ------------------------------------------------------------
 void handleCommand(const std::string& line) {
-    auto [cmdRaw, arg] = parseInput(line);
+    // Step 1: raw input
+    std::cout << "[TRACE][handleCommand] START line=\"" << line << "\"\n";
 
-    // Echo user input
+    // Step 2: parse raw into cmdRaw + arg
+    auto [cmdRaw, arg] = parseInput(line);
+    std::cout << "[TRACE][handleCommand] parseInput → cmdRaw=\"" << cmdRaw
+              << "\" arg=\"" << arg << "\"\n";
+
+    // Echo user input to history
     history.push("> " + line, sf::Color::White);
 
-    // 🔹 If input is already a known command, skip NLP
+    // 🔹 Case 1: direct command match (skip NLP entirely)
     if (commandMap.find(cmdRaw) != commandMap.end()) {
+        std::cout << "[TRACE][handleCommand] Direct command match: \"" << cmdRaw << "\"\n";
         CommandResult result = dispatchCommand(cmdRaw, arg);
 
         // Naturalize response
@@ -181,24 +206,58 @@ void handleCommand(const std::string& line) {
         return;
     }
 
-    // 🔹 Run NLP on raw input
-    auto intent = g_nlp.parse(line);
-    std::string cmd = intent.matched ? intent.name : normalizeCommand(cmdRaw);
+    // 🔹 Case 2: NLP intent match
+    std::cout << "[TRACE][handleCommand] No direct match, running NLP parse...\n";
+    Intent intent = g_nlp.parse(line);
+    g_lastIntent = intent;  // cache globally
 
-    // 🔹 Extract argument from slots
-    if (arg.empty() && intent.matched) {
-        auto it = intent.slots.find("slot2");
-        if (it != intent.slots.end()) {
-            arg = it->second;
-        } else if (!intent.slots.empty()) {
-            arg = intent.slots.rbegin()->second;
+    std::cout << "[TRACE][handleCommand] NLP parse returned: "
+              << "name=\"" << intent.name << "\" "
+              << "matched=" << (intent.matched ? "true" : "false") 
+              << " slots=" << intent.slots.size() << "\n";
+    for (const auto& [k, v] : intent.slots) {
+        std::cout << "   slot[" << k << "]=\"" << v << "\"\n";
+    }
+
+    // Step 3: choose command
+    std::string cmd = intent.matched ? intent.name : normalizeCommand(cmdRaw);
+    std::cout << "[TRACE][handleCommand] selected cmd=\"" << cmd << "\"\n";
+
+    // Step 4: extract argument from slots if matched
+    if (intent.matched) {
+        std::string slotArg;
+        if (intent.slots.count("app") && !intent.slots.at("app").empty()) {
+            slotArg = intent.slots.at("app");
+        }
+        else if (intent.slots.count("target") && !intent.slots.at("target").empty()) {
+            slotArg = intent.slots.at("target");
+        }
+        else if (intent.slots.count("slot1") && !intent.slots.at("slot1").empty()) {
+            slotArg = intent.slots.at("slot1");
+        }
+        else if (intent.slots.count("slot2") && !intent.slots.at("slot2").empty()) {
+            slotArg = intent.slots.at("slot2");
+        }
+        else {
+            for (const auto& [k, v] : intent.slots) {
+                if (!v.empty()) {
+                    slotArg = v;
+                    break;
+                }
+            }
+        }
+        if (!slotArg.empty()) {
+            arg = slotArg;
         }
     }
 
-    // 🔹 Dispatch
+    std::cout << "[TRACE][handleCommand] Final dispatch values → cmd=\"" << cmd
+              << "\" arg=\"" << arg << "\"\n";
+
+    // Step 5: dispatch
     CommandResult result = dispatchCommand(cmd, arg);
 
-    // 🔹 Naturalize response
+    // Step 6: naturalize response
     std::string response = result.message;
     if (!result.success && result.errorCode != "ERR_NONE") {
         response = ResponseManager::get(result.message);
@@ -212,4 +271,6 @@ void handleCommand(const std::string& line) {
     if (!response.empty()) {
         speak(response, "routine");
     }
+
+    std::cout << "[TRACE][handleCommand] END\n";
 }
