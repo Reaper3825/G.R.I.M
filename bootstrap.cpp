@@ -25,7 +25,7 @@ static void grimLog(const std::string& msg) {
 }
 
 // -------------------------------------------------------------
-// Default config JSON (uses AI globals for initial values)
+// Default ai_config.json
 // -------------------------------------------------------------
 static nlohmann::json defaultConfig() {
     return {
@@ -53,9 +53,7 @@ static nlohmann::json defaultConfig() {
             {"tts_url", "http://127.0.0.1:8080/tts"}
         }},
         {"api_keys", {
-            {"openai", ""},
-            {"elevenlabs", ""},
-            {"azure", ""}
+            {"openai", ""}, {"elevenlabs", ""}, {"azure", ""}
         }},
         {"whisper", {
             {"sampling_strategy", "beam"},
@@ -63,6 +61,35 @@ static nlohmann::json defaultConfig() {
             {"min_speech_ms", 500},
             {"min_silence_ms", 1200}
         }}
+    };
+}
+
+// -------------------------------------------------------------
+// Default errors.json
+// -------------------------------------------------------------
+static nlohmann::json defaultErrors() {
+    return {
+        {"ERR_FS_MISSING_DIR", {
+            {"user", "[FS] Usage: cd/mkdir <directory>"},
+            {"debug", "Filesystem command called without directory argument."}
+        }},
+        {"ERR_FS_DIR_NOT_FOUND", {
+            {"user", "[FS] Directory does not exist."},
+            {"debug", "Target directory not found in cmdChangeDir."}
+        }},
+        {"ERR_FS_CREATE_FAIL", {
+            {"user", "[FS] Failed to create directory."},
+            {"debug", "std::filesystem::create_directory returned false."}
+        }},
+        {"ERR_APP_NO_ARGUMENT", {
+            {"user", "[App] Usage: open <application>"},
+            {"debug", "Application command called without argument."}
+        }},
+        {"ERR_AI_CONFIG_INVALID", {
+            {"user", "[AI] Config file invalid → reset to defaults."},
+            {"debug", "ai_config.json failed parsing or validation."}
+        }}
+        // 🔹 Extend this list with more defaults as needed
     };
 }
 
@@ -95,6 +122,31 @@ static bool validateAndPatch(nlohmann::json& cfg) {
 }
 
 // -------------------------------------------------------------
+// Validate and patch errors.json
+// -------------------------------------------------------------
+static bool validateAndPatchErrors(nlohmann::json& cfg) {
+    bool patched = false;
+    nlohmann::json defs = defaultErrors();
+
+    for (auto& [code, entry] : defs.items()) {
+        if (!cfg.contains(code) || !cfg[code].is_object()) {
+            cfg[code] = entry;
+            grimLog("[Config] errors.json patched (missing code: " + code + ")");
+            patched = true;
+        } else {
+            for (auto& [field, val] : entry.items()) {
+                if (!cfg[code].contains(field) || cfg[code][field].is_null()) {
+                    cfg[code][field] = val;
+                    grimLog("[Config] errors.json patched (missing field: " + code + "." + field + ")");
+                    patched = true;
+                }
+            }
+        }
+    }
+    return patched;
+}
+
+// -------------------------------------------------------------
 // Bootstrap main entry
 // -------------------------------------------------------------
 void runBootstrapChecks(int argc, char** argv) {
@@ -122,13 +174,9 @@ void runBootstrapChecks(int argc, char** argv) {
         try {
             std::ifstream f(cfgPath);
             f >> cfg;
-            std::cout << "[DEBUG][Bootstrap] Parsed JSON from "
-                      << cfgPath << ":\n" << cfg.dump(2) << "\n";
-
             if (validateAndPatch(cfg)) {
                 std::ofstream(cfgPath) << cfg.dump(2);
-                grimLog("[Config] " + std::string(AI_CONFIG_FILE) +
-                        " patched and saved");
+                grimLog("[Config] " + std::string(AI_CONFIG_FILE) + " patched and saved");
             } else {
                 grimLog("[Config] " + std::string(AI_CONFIG_FILE) + " loaded");
             }
@@ -140,18 +188,37 @@ void runBootstrapChecks(int argc, char** argv) {
             std::ofstream(cfgPath) << cfg.dump(2);
         }
     }
-
     aiConfig = cfg;
 
-    // Debug: final config
-    std::cout << "[DEBUG][Bootstrap] Final aiConfig:\n"
-              << aiConfig.dump(2) << "\n";
-
-    // Resources
+    // errors.json
     fs::path resDir = getResourcePath();
     if (!fs::exists(resDir)) {
         grimLog("[Config] creating resources directory at " + resDir.string());
         fs::create_directories(resDir);
+    }
+
+    fs::path errPath = resDir / "errors.json";
+    nlohmann::json errorsCfg;
+
+    if (!fs::exists(errPath)) {
+        errorsCfg = defaultErrors();
+        std::ofstream(errPath) << errorsCfg.dump(2);
+        grimLog("[Config] errors.json created");
+    } else {
+        try {
+            std::ifstream f(errPath);
+            f >> errorsCfg;
+            if (validateAndPatchErrors(errorsCfg)) {
+                std::ofstream(errPath) << errorsCfg.dump(2);
+                grimLog("[Config] errors.json patched and saved");
+            } else {
+                grimLog("[Config] errors.json loaded");
+            }
+        } catch (const std::exception& e) {
+            grimLog("[Config] errors.json invalid → reset to defaults");
+            errorsCfg = defaultErrors();
+            std::ofstream(errPath) << errorsCfg.dump(2);
+        }
     }
 
     // NLP rules

@@ -68,6 +68,12 @@ Intent NLP::parse(const std::string& rawText) const {
                 intent.score += rule.boost;
             }
 
+            // 🔹 Always capture raw groups
+            intent.groups.clear();
+            for (size_t i = 1; i < match.size(); i++) {
+                intent.groups.push_back(match[i].str());
+            }
+
             // slot extraction with names if provided
             if (!rule.slot_names.empty()) {
                 for (size_t i = 0; i < rule.slot_names.size() && (i + 1) < match.size(); i++) {
@@ -198,5 +204,3 @@ CommandResult reloadNlpRules() {
         };
     }
 }
-
-

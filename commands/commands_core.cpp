@@ -157,39 +157,59 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg) {
 void handleCommand(const std::string& line) {
     auto [cmdRaw, arg] = parseInput(line);
 
-    // 🔹 Run NLP on the full input (not just the first word)
-    auto intent = g_nlp.parse(line);
+    // Echo user input
+    history.push("> " + line, sf::Color::White);
 
+    // 🔹 If input is already a known command, skip NLP
+    if (commandMap.find(cmdRaw) != commandMap.end()) {
+        CommandResult result = dispatchCommand(cmdRaw, arg);
+
+        // Naturalize response
+        std::string response = result.message;
+        if (!result.success && result.errorCode != "ERR_NONE") {
+            response = ResponseManager::get(result.message);
+        } else if (!(response.size() > 0 &&
+                     (response[0] == '[' || response.find('\n') != std::string::npos))) {
+            response = ResponseManager::get(result.message);
+        }
+
+        Logger::logResult(result);
+        history.push(response, result.color);
+        if (!response.empty()) {
+            speak(response, "routine");
+        }
+        return;
+    }
+
+    // 🔹 Run NLP on raw input
+    auto intent = g_nlp.parse(line);
     std::string cmd = intent.matched ? intent.name : normalizeCommand(cmdRaw);
 
-    // 🔹 If arg is empty, prefer NLP slot values
-    if (arg.empty() && intent.matched && !intent.slots.empty()) {
-        arg = intent.slots.begin()->second;
+    // 🔹 Extract argument from slots
+    if (arg.empty() && intent.matched) {
+        auto it = intent.slots.find("slot2");
+        if (it != intent.slots.end()) {
+            arg = it->second;
+        } else if (!intent.slots.empty()) {
+            arg = intent.slots.rbegin()->second;
+        }
     }
 
     // 🔹 Dispatch
     CommandResult result = dispatchCommand(cmd, arg);
 
-    // 🔹 Decide how to build response
+    // 🔹 Naturalize response
     std::string response = result.message;
-
-    // If it's an error, run through ResponseManager
     if (!result.success && result.errorCode != "ERR_NONE") {
-    response = ResponseManager::get(result.message);
-    }
-
-    // If it looks like a short intent key, also naturalize
-    else if (!(response.size() > 0 && (response[0] == '[' || response.find('\n') != std::string::npos))) {
+        response = ResponseManager::get(result.message);
+    } else if (!(response.size() > 0 &&
+                 (response[0] == '[' || response.find('\n') != std::string::npos))) {
         response = ResponseManager::get(result.message);
     }
-    // Otherwise: full formatted/system message → leave it alone
 
-    // 🔹 Log result
     Logger::logResult(result);
-
-    // 🔹 Push to history and speak
     history.push(response, result.color);
-    if (result.success) {
+    if (!response.empty()) {
         speak(response, "routine");
     }
 }
