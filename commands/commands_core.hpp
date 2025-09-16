@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <vector>
 #include <SFML/Graphics.hpp>
+#include"intent.hpp"
 
 // Forward declarations
 struct CommandResult;
@@ -32,6 +33,9 @@ extern std::unordered_map<std::string, CommandFunc> commandMap;
 extern ConsoleHistory history;
 extern std::vector<Timer> timers;
 extern std::filesystem::path g_currentDir;
+extern Intent g_lastIntent;
+
+
 
 // ------------------------------------------------------------
 // Public API

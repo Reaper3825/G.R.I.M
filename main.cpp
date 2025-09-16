@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
     runBootstrapChecks(argc, argv);
 
     // ---------------- SFML Setup ----------------
-    sf::RenderWindow window(sf::VideoMode(1280, 720), "GRIM Console");
+    sf::RenderWindow window(sf::VideoMode(512, 768), "GRIM Console");
     window.setFramerateLimit(60);
 
     sf::Font font;

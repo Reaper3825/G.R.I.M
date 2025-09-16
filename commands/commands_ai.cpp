@@ -143,10 +143,27 @@ CommandResult cmdGrimAi(const std::string& arg) {
 // ------------------------------------------------------------
 // [Apps] Open local application by alias
 // ------------------------------------------------------------
+// ------------------------------------------------------------
+// [Apps] Open local application by alias
+// ------------------------------------------------------------
+// ------------------------------------------------------------
+// [Apps] Open local application by alias
+// ------------------------------------------------------------
 CommandResult cmdOpenApp(const std::string& arg) {
-    std::string appName = trim(arg);
+    std::cout << "[DEBUG][cmdOpenApp] Received arg=\"" << arg << "\"\n";
+
+    std::string appName = arg;
+    // Trim leading/trailing whitespace
+    auto start = appName.find_first_not_of(" \t\n\r");
+    auto end   = appName.find_last_not_of(" \t\n\r");
+    if (start == std::string::npos) {
+        appName.clear();
+    } else {
+        appName = appName.substr(start, end - start + 1);
+    }
 
     if (appName.empty()) {
+        std::cout << "[DEBUG][cmdOpenApp] appName is EMPTY after trim\n";
         return {
             ErrorManager::getUserMessage("ERR_APP_NO_ARGUMENT"),
             false,
@@ -155,8 +172,11 @@ CommandResult cmdOpenApp(const std::string& arg) {
         };
     }
 
+    std::cout << "[DEBUG][cmdOpenApp] After trim, appName=\"" << appName << "\"\n";
+
     std::string resolved = resolveAlias(appName);
     if (resolved.empty()) {
+        std::cout << "[DEBUG][cmdOpenApp] Alias not found for \"" << appName << "\"\n";
         return {
             ErrorManager::getUserMessage("ERR_APP_UNKNOWN_ALIAS") + ": " + appName,
             false,
@@ -194,6 +214,8 @@ CommandResult cmdOpenApp(const std::string& arg) {
     };
 #endif
 }
+
+
 
 // ------------------------------------------------------------
 // [Web] Search the web with default browser

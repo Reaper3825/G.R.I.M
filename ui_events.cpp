@@ -38,12 +38,13 @@ bool processEvents(sf::RenderWindow& window,
 
                     Intent intent = g_nlp.parse(input);
                     if (intent.matched) {
-                        handleCommand(intent.name);
+                        handleCommand(input);  // ✅ FIXED: pass full raw input
                     } else {
                         history.push("[NLP] No intent matched for input: '" + input +
-                                     "' (rules loaded=" + std::to_string(g_nlp.rule_count()) + ")",
-                                     sf::Color::Red);
+                                    "' (rules loaded=" + std::to_string(g_nlp.rule_count()) + ")",
+                                    sf::Color::Red);
                     }
+
                 }
             } else if (event.text.unicode == 8) { // Backspace
                 if (!buffer.empty()) buffer.pop_back();
