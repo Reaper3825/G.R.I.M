@@ -26,18 +26,19 @@
   },
 
   "api_keys": {
-    "openai": "sk-your-openai-key-here",
-    "elevenlabs": "",
-    "azure": ""
-  },
+  "openai": "sk-your-openai-key-here",
+  "elevenlabs": "",
+  "azure": ""
+},
 
-  "whisper_language": "en",
-  "whisper_max_tokens": 32,
+"whisper": {
+  "whisper_model": "ggml-base.en.bin",
+  "language": "en",
+  "max_tokens": 32,
+  "sampling_strategy": "beam",
+  "temperature": 0.2,
+  "min_speech_ms": 500,
+  "min_silence_ms": 1200
+}
 
-  "whisper": {
-    "sampling_strategy": "beam",
-    "temperature": 0.2,
-    "min_speech_ms": 500,
-    "min_silence_ms": 1200
-  }
 }
