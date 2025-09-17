@@ -80,9 +80,10 @@ int main(int argc, char** argv) {
         std::cout << "[DEBUG] Whisper initialized OK\n";
     }
 
+  
     // ---------------- Audible Greeting ----------------
-    history.push("[GRIM] Startup complete. Hello, Austin — I am online.", sf::Color::Cyan);
-    Voice::speakText("Startup complete. Hello Austin, I am online and ready.", true);
+    handleCommand("[GRIM] Startup complete. Hello, Austin — I am online.");
+
 
     Logger::log(Logger::Level::INFO, "GRIM startup complete, entering main loop");
     std::cout << "[DEBUG] Entering main loop\n";

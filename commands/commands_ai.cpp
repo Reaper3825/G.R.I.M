@@ -53,33 +53,37 @@ CommandResult cmdAiBackend(const std::string& arg) {
             "[AI] Current backend: " + aiConfig.value("backend", "openai"),
             true,
             sf::Color::Cyan,
-            "ERR_NONE"
+            "ERR_NONE",
+            "Current AI backend",   // voice
+            "summary"               // category
         };
     }
 
     std::string selected = (input == "auto") ? autoSelectBackend() : input;
 
     if (selected == "ollama" || selected == "localai" || selected == "openai") {
-        aiConfig["backend"] = selected;
+    aiConfig["backend"] = selected;
 
-        std::ofstream f("ai_config.json");
-        if (f.is_open()) {
-            f << aiConfig.dump(4);
-        }
+    // Config persistence is centralized — just mark in-memory change.
+    // bootstrap_config handles saving on next boot or via a dedicated save function.
+    return {
+        "[AI] Backend set to: " + selected,
+        true,
+        sf::Color::Green,
+        "ERR_NONE",
+        "Backend set to " + selected,
+        "routine"
+    };
+}
 
-        return {
-            "[AI] Backend set to: " + selected,
-            true,
-            sf::Color::Green,
-            "ERR_NONE"
-        };
-    }
 
     return {
         ErrorManager::getUserMessage("ERR_AI_INVALID_BACKEND") + ": " + input,
         false,
         sf::Color::Red,
-        "ERR_AI_INVALID_BACKEND"
+        "ERR_AI_INVALID_BACKEND",
+        "Invalid backend",
+        "error"
     };
 }
 
@@ -87,7 +91,15 @@ CommandResult cmdAiBackend(const std::string& arg) {
 // [NLP] Reload rules
 // ------------------------------------------------------------
 CommandResult cmdReloadNlp(const std::string& /*arg*/) {
-    return reloadNlpRules();
+    CommandResult r = reloadNlpRules();
+    if (r.success) {
+        r.voice = "NLP rules reloaded";
+        r.category = "routine";
+    } else {
+        r.voice = "Failed to reload NLP rules";
+        r.category = "error";
+    }
+    return r;
 }
 
 // ------------------------------------------------------------
@@ -101,7 +113,9 @@ CommandResult cmdGrimAi(const std::string& arg) {
             ErrorManager::getUserMessage("ERR_AI_NO_QUERY"),
             false,
             sf::Color::Red,
-            "ERR_AI_NO_QUERY"
+            "ERR_AI_NO_QUERY",
+            "No query provided",
+            "error"
         };
     }
 
@@ -120,7 +134,9 @@ CommandResult cmdGrimAi(const std::string& arg) {
                 ErrorManager::getUserMessage("ERR_AI_INVALID_BACKEND") + ": " + backend,
                 false,
                 sf::Color::Red,
-                "ERR_AI_INVALID_BACKEND"
+                "ERR_AI_INVALID_BACKEND",
+                "Invalid backend",
+                "error"
             };
         }
     } catch (const std::exception& ex) {
@@ -128,7 +144,9 @@ CommandResult cmdGrimAi(const std::string& arg) {
             ErrorManager::getUserMessage("ERR_AI_QUERY_FAILED") + " (" + ex.what() + ")",
             false,
             sf::Color::Red,
-            "ERR_AI_QUERY_FAILED"
+            "ERR_AI_QUERY_FAILED",
+            "AI query failed",
+            "error"
         };
     }
 
@@ -136,7 +154,9 @@ CommandResult cmdGrimAi(const std::string& arg) {
         "[AI] " + response,
         true,
         sf::Color::Cyan,
-        "ERR_NONE"
+        "ERR_NONE",
+        response,   // voice: read the actual answer
+        "summary"
     };
 }
 
@@ -154,7 +174,9 @@ CommandResult cmdOpenApp(const std::string& arg) {
             ErrorManager::getUserMessage("ERR_APP_NO_ARGUMENT"),
             false,
             sf::Color::Red,
-            "ERR_APP_NO_ARGUMENT"
+            "ERR_APP_NO_ARGUMENT",
+            "No app specified",
+            "error"
         };
     }
 
@@ -168,7 +190,9 @@ CommandResult cmdOpenApp(const std::string& arg) {
             ErrorManager::getUserMessage("ERR_ALIAS_NOT_FOUND") + ": " + appName,
             false,
             sf::Color::Red,
-            "ERR_ALIAS_NOT_FOUND"
+            "ERR_ALIAS_NOT_FOUND",
+            "App not found",
+            "error"
         };
     }
 
@@ -182,14 +206,18 @@ CommandResult cmdOpenApp(const std::string& arg) {
             ErrorManager::getUserMessage("ERR_APP_LAUNCH_FAILED") + ": " + resolved,
             false,
             sf::Color::Red,
-            "ERR_APP_LAUNCH_FAILED"
+            "ERR_APP_LAUNCH_FAILED",
+            "App launch failed",
+            "error"
         };
     }
     return {
         "[App] Launched: " + resolved,
         true,
         sf::Color::Green,
-        "ERR_NONE"
+        "ERR_NONE",
+        "Launching " + appName,
+        "routine"
     };
 #else
     // Linux/macOS stub
@@ -197,7 +225,9 @@ CommandResult cmdOpenApp(const std::string& arg) {
         "[App] (Stub) Would open: " + resolved,
         true,
         sf::Color::Green,
-        "ERR_NONE"
+        "ERR_NONE",
+        "Launching " + appName,
+        "routine"
     };
 #endif
 }
@@ -213,7 +243,9 @@ CommandResult cmdSearchWeb(const std::string& arg) {
             ErrorManager::getUserMessage("ERR_WEB_NO_ARGUMENT"),
             false,
             sf::Color::Red,
-            "ERR_WEB_NO_ARGUMENT"
+            "ERR_WEB_NO_ARGUMENT",
+            "No search query",
+            "error"
         };
     }
 
@@ -229,14 +261,18 @@ CommandResult cmdSearchWeb(const std::string& arg) {
             ErrorManager::getUserMessage("ERR_WEB_OPEN_FAILED") + ": " + query,
             false,
             sf::Color::Red,
-            "ERR_WEB_OPEN_FAILED"
+            "ERR_WEB_OPEN_FAILED",
+            "Web search failed",
+            "error"
         };
     }
     return {
         "[Web] Searching: " + query,
         true,
         sf::Color::Cyan,
-        "ERR_NONE"
+        "ERR_NONE",
+        "Searching web for " + query,
+        "routine"
     };
 #else
     // Linux/macOS stub
@@ -244,7 +280,10 @@ CommandResult cmdSearchWeb(const std::string& arg) {
         "[Web] (Stub) Would search for: " + query,
         true,
         sf::Color::Cyan,
-        "ERR_NONE"
+        "ERR_NONE",
+        "Searching web for " + query,
+        "routine"
     };
 #endif
 }
+7

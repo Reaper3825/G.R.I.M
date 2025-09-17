@@ -2,6 +2,7 @@
 #include <string>
 #include <unordered_map>
 #include <nlohmann/json_fwd.hpp>
+#include "commands/commands_core.hpp"   // 🔹 For CommandResult
 
 // ------------------------------------------------------------
 // Aliases API (User + Auto + Fallback)
@@ -11,8 +12,8 @@
 // - Fallback: fuzzy matching + heuristics.
 //
 // Background refresh runs silently → grimLog() only.
-// User-triggered refresh → console_history.push().
-//
+// User-triggered refresh → returns CommandResult.
+// 
 // 🔹 Thread-safety:
 //   - All public APIs are thread-safe.
 //   - refreshAsync/refreshNow are guarded by an internal
@@ -21,32 +22,19 @@
 
 namespace aliases {
 
-    // Initialize system (called once at bootstrap).
-    // Loads cached aliases.json immediately,
-    // then spawns a background refresh (guarded).
-    void init();
+    void init();        // Initialize system (bootstrap)
+    void load();        // Load aliases (user + auto) from JSON
+    void refreshAsync();// Run async refresh (silent/log-only)
 
-    // Load aliases (user + auto) from JSON.
-    // This does not trigger a refresh.
-    void load();
-
-    // Run async refresh (detached thread).
-    // Silent → logs only with grimLog().
-    // Will be skipped if a refresh is already running.
-    void refreshAsync();
-
-    // Run blocking refresh (user command).
-    // Prints results into history.
-    // Will be skipped if a refresh is already running.
-    void refreshNow();
+    // 🔹 Now returns CommandResult for unified response flow
+    CommandResult refreshNow();
 
     // Resolve alias key into executable path.
     // Lookup order: [USER] → [AUTO] → [FALLBACK fuzzy].
-    // Returns empty string if not found.
     std::string resolve(const std::string& key);
 
     // Debug/Introspection API
-    const nlohmann::json& getAll();       // returns current aliases.json in-memory
-    std::string info(const std::string& key); // pretty metadata string
+    const nlohmann::json& getAll();
+    std::string info(const std::string& key);
 
 } // namespace aliases

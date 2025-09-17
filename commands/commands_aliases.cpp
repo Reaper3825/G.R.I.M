@@ -19,7 +19,9 @@ CommandResult cmdAliasList(const std::string& /*arg*/) {
             "[Alias] No aliases loaded.",
             true,
             sf::Color::Yellow,
-            "ERR_NONE"
+            "ERR_NONE",
+            "No aliases loaded",   // voice
+            "summary"
         };
     }
 
@@ -49,7 +51,9 @@ CommandResult cmdAliasList(const std::string& /*arg*/) {
         oss.str(),
         true,
         sf::Color::Cyan,
-        "ERR_NONE"
+        "ERR_NONE",
+        "Aliases listed",   // short voice-friendly message
+        "summary"
     };
 }
 
@@ -62,7 +66,9 @@ CommandResult cmdAliasInfo(const std::string& arg) {
             "[Alias] Usage: alias info <name>",
             false,
             sf::Color::Red,
-            "ERR_ALIAS_NOT_FOUND"
+            "ERR_ALIAS_NOT_FOUND",
+            "Alias name required",
+            "error"
         };
     }
 
@@ -72,7 +78,9 @@ CommandResult cmdAliasInfo(const std::string& arg) {
             ErrorManager::getUserMessage("ERR_ALIAS_NOT_FOUND") + ": " + arg,
             false,
             sf::Color::Red,
-            "ERR_ALIAS_NOT_FOUND"
+            "ERR_ALIAS_NOT_FOUND",
+            "Alias not found",
+            "error"
         };
     }
 
@@ -80,7 +88,9 @@ CommandResult cmdAliasInfo(const std::string& arg) {
         "[Alias] " + meta,
         true,
         sf::Color::Green,
-        "ERR_NONE"
+        "ERR_NONE",
+        "Alias info for " + arg,
+        "summary"
     };
 }
 
@@ -94,14 +104,18 @@ CommandResult cmdAliasRefresh(const std::string& /*arg*/) {
             "[Alias] Manual refresh complete.",
             true,
             sf::Color::Green,
-            "ERR_NONE"
+            "ERR_NONE",
+            "Alias refresh complete",
+            "routine"
         };
     } catch (const std::exception& e) {
         return {
             std::string("[Alias] Refresh failed: ") + e.what(),
             false,
             sf::Color::Red,
-            "ERR_ALIAS_NOT_FOUND"
+            "ERR_ALIAS_NOT_FOUND",
+            "Alias refresh failed",
+            "error"
         };
     }
 }

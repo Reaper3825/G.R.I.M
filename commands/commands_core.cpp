@@ -24,6 +24,7 @@
 #include <cctype>
 #include <iostream>
 #include <vector>
+#include <sstream>
 
 using Voice::speak;
 
@@ -79,7 +80,10 @@ static std::string normalizeCommand(const std::string& input) {
     std::transform(out.begin(), out.end(), out.begin(),
                    [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
 
+    // 🔹 Synonym normalization (maps e.g. "launch" -> "open_app")
     out = normalizeWord(out);
+
+    // 🔹 Fuzzy match against known command keys
     out = fuzzyMatch(out);
 
     return out;
@@ -183,98 +187,99 @@ void handleCommand(const std::string& line) {
     std::cout << "[TRACE][handleCommand] parseInput → cmdRaw=\"" << cmdRaw
               << "\" arg=\"" << arg << "\"\n";
 
+    // Always echo user input in history (white)
     history.push("> " + line, sf::Color::White);
+
+    // Initialize result
+    CommandResult result;
 
     // Case 1: direct command
     if (commandMap.find(cmdRaw) != commandMap.end()) {
         std::cout << "[TRACE][handleCommand] Direct command match: \"" << cmdRaw << "\"\n";
-        CommandResult result = dispatchCommand(cmdRaw, arg);
+        result = dispatchCommand(cmdRaw, arg);
+    }
+    else {
+        // Case 2: NLP intent
+        std::cout << "[TRACE][handleCommand] No direct match, running NLP parse...\n";
 
-        std::string response = result.message;
-        if (!result.success && result.errorCode != "ERR_NONE") {
-            response = ResponseManager::get(result.message);
-        } else if (!(response.size() > 0 &&
-                     (response[0] == '[' || response.find('\n') != std::string::npos))) {
-            response = ResponseManager::get(result.message);
+        // 🔹 Synonyms preprocessing
+        std::istringstream iss(line);
+        std::ostringstream oss;
+        std::string token;
+        while (iss >> token) {
+            oss << normalizeWord(token) << " ";
+        }
+        std::string normalizedLine = oss.str();
+
+        std::cout << "[TRACE][handleCommand] Normalized line=\"" << normalizedLine << "\"\n";
+        Intent intent = g_nlp.parse(normalizedLine);
+        g_lastIntent = intent;
+
+        std::cout << "[TRACE][handleCommand] NLP parse returned: "
+                  << "name=\"" << intent.name << "\" "
+                  << "matched=" << (intent.matched ? "true" : "false")
+                  << " slots=" << intent.slots.size() << "\n";
+        for (const auto& [k, v] : intent.slots) {
+            std::cout << "   slot[" << k << "]=\"" << v << "\"\n";
         }
 
-        Logger::logResult(result);
-        history.push(response, result.color);
-        if (!response.empty()) speak(response, "routine");
-        return;
-    }
+        std::string cmd = intent.matched ? intent.name : normalizeCommand(cmdRaw);
 
-    // Case 2: NLP intent
-    std::cout << "[TRACE][handleCommand] No direct match, running NLP parse...\n";
-    Intent intent = g_nlp.parse(line);
-    g_lastIntent = intent;
-
-    std::cout << "[TRACE][handleCommand] NLP parse returned: "
-              << "name=\"" << intent.name << "\" "
-              << "matched=" << (intent.matched ? "true" : "false") 
-              << " slots=" << intent.slots.size() << "\n";
-    for (const auto& [k, v] : intent.slots) {
-        std::cout << "   slot[" << k << "]=\"" << v << "\"\n";
-    }
-
-    std::string cmd = intent.matched ? intent.name : normalizeCommand(cmdRaw);
-    if (intent.matched) {
-        std::string slotArg;
-        if (intent.slots.count("app") && !intent.slots.at("app").empty()) {
-            slotArg = intent.slots.at("app");
-        } else if (intent.slots.count("target") && !intent.slots.at("target").empty()) {
-            slotArg = intent.slots.at("target");
-        } else {
-            for (const auto& [k, v] : intent.slots) {
-                if (!v.empty()) { slotArg = v; break; }
+        // Fill arg from slots if present
+        if (intent.matched) {
+            std::string slotArg;
+            if (intent.slots.count("app") && !intent.slots.at("app").empty()) {
+                slotArg = intent.slots.at("app");
+            } else if (intent.slots.count("target") && !intent.slots.at("target").empty()) {
+                slotArg = intent.slots.at("target");
+            } else {
+                for (const auto& [k, v] : intent.slots) {
+                    if (!v.empty()) { slotArg = v; break; }
+                }
+            }
+            if (!slotArg.empty()) {
+                arg = slotArg;
             }
         }
-        if (!slotArg.empty()) {
-            arg = slotArg;
+
+        std::cout << "[TRACE][handleCommand] Final dispatch values → cmd=\"" << cmd
+                  << "\" arg=\"" << arg << "\"\n";
+
+        // Special case: open_app → resolve alias before dispatch
+        if (cmd == "open_app") {
+            std::string resolved = aliases::resolve(arg);
+            if (resolved.empty()) {
+                result = {
+                    ErrorManager::getUserMessage("ERR_ALIAS_NOT_FOUND") + ": " + arg,
+                    false,
+                    sf::Color::Red,
+                    "ERR_ALIAS_NOT_FOUND"
+                };
+            } else {
+                std::cout << "[DEBUG][open_app] alias \"" << arg << "\" → " << resolved << "\n";
+                arg = resolved;
+                result = dispatchCommand("open_app", arg);
+            }
+        } else {
+            result = dispatchCommand(cmd, arg);
         }
     }
 
-    std::cout << "[TRACE][handleCommand] Final dispatch values → cmd=\"" << cmd
-              << "\" arg=\"" << arg << "\"\n";
-
-    // Special case: open_app uses aliases
-    if (cmd == "open_app") {
-        std::string resolved = aliases::resolve(arg);
-        if (resolved.empty()) {
-            CommandResult fail {
-                ErrorManager::getUserMessage("ERR_ALIAS_NOT_FOUND") + ": " + arg,
-                false,
-                sf::Color::Red,
-                "ERR_ALIAS_NOT_FOUND"
-            };
-            Logger::logResult(fail);
-            history.push(fail.message, fail.color);
-            speak(fail.message, "routine");
-            return;
-        }
-        // overwrite arg with resolved path
-        std::cout << "[DEBUG][open_app] alias \"" << arg << "\" → " << resolved << "\n";
-        CommandResult result = dispatchCommand("open_app", resolved);
-
-        Logger::logResult(result);
-        history.push(result.message, result.color);
-        if (!result.message.empty()) speak(result.message, "routine");
-        return;
+    // 🔹 Unified output block
+    if (result.message.empty()) {
+        result.message = "[no response configured]";
+        result.success = false;
+        if (result.errorCode.empty()) result.errorCode = "ERR_NONE";
     }
 
-    CommandResult result = dispatchCommand(cmd, arg);
-
-    std::string response = result.message;
-    if (!result.success && result.errorCode != "ERR_NONE") {
-        response = ResponseManager::get(result.message);
-    } else if (!(response.size() > 0 &&
-                 (response[0] == '[' || response.find('\n') != std::string::npos))) {
-        response = ResponseManager::get(result.message);
-    }
+    std::string finalText = ResponseManager::get(result.message);
 
     Logger::logResult(result);
-    history.push(response, result.color);
-    if (!response.empty()) speak(response, "routine");
+    history.push(finalText, result.color);
+
+    if (!result.voice.empty()) {
+        speak(result.voice, result.category.empty() ? "routine" : result.category);
+    }
 
     std::cout << "[TRACE][handleCommand] END\n";
 }

@@ -53,6 +53,7 @@ set(GRIM_SOURCES
     voice_speak.cpp     
     response_manager.cpp
     error_manager.cpp
+    bootstrap_config.cpp
     ${COMMAND_SOURCES}
 )
 
@@ -75,6 +76,7 @@ set(GRIM_HEADERS
     voice_speak.hpp 
     response_manager.hpp
     error_manager.hpp
+    bootstrap_config.hpp
     ${COMMAND_HEADERS}
 )
 

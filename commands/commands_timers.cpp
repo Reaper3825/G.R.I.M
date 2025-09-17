@@ -55,7 +55,9 @@ CommandResult cmdSetTimer(const std::string& arg) {
             ErrorManager::getUserMessage("ERR_TIMER_MISSING_VALUE"),
             false,
             sf::Color::Red,
-            "ERR_TIMER_MISSING_VALUE"
+            "ERR_TIMER_MISSING_VALUE",
+            "Timer value required",
+            "error"
         };
     }
 
@@ -66,7 +68,9 @@ CommandResult cmdSetTimer(const std::string& arg) {
                 ErrorManager::getUserMessage("ERR_TIMER_INVALID_VALUE") + ": " + arg,
                 false,
                 sf::Color::Red,
-                "ERR_TIMER_INVALID_VALUE"
+                "ERR_TIMER_INVALID_VALUE",
+                "Invalid timer value",
+                "error"
             };
         }
 
@@ -77,14 +81,19 @@ CommandResult cmdSetTimer(const std::string& arg) {
         return {
             "[Timer] Timer set for " + std::to_string(seconds) + " seconds.",
             true,
-            sf::Color::Green
+            sf::Color::Green,
+            "ERR_NONE",
+            "Timer set for " + std::to_string(seconds) + " seconds",
+            "routine"
         };
     } catch (const std::exception&) {
         return {
             ErrorManager::getUserMessage("ERR_TIMER_INVALID_VALUE") + ": " + arg,
             false,
             sf::Color::Red,
-            "ERR_TIMER_INVALID_VALUE"
+            "ERR_TIMER_INVALID_VALUE",
+            "Invalid timer value",
+            "error"
         };
     }
 }
@@ -102,7 +111,10 @@ std::vector<CommandResult> checkExpiredTimers() {
             results.push_back({
                 "[Timer] Time's up! (" + std::to_string(t.seconds) + "s)",
                 true,
-                sf::Color::Yellow
+                sf::Color::Yellow,
+                "ERR_NONE",
+                "Time's up",
+                "routine"
             });
         }
     }

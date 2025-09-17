@@ -1,11 +1,7 @@
 #pragma once
 #include <string>
 #include <nlohmann/json.hpp>
-
-
-
-// Forward declare CommandResult to avoid circular include hell
-struct CommandResult;
+#include "commands/commands_core.hpp"   // 🔹 For CommandResult
 
 namespace Logger {
     enum class Level { DEBUG, INFO, WARN, ERROR };
@@ -20,7 +16,9 @@ public:
     static void load(const std::string& path);
     static std::string getUserMessage(const std::string& code);
     static std::string getDebugMessage(const std::string& code);
-    static void report(const std::string& code);
+
+    // 🔹 Now returns a CommandResult instead of void
+    static CommandResult report(const std::string& code);
 
 private:
     static nlohmann::json errors; // raw loaded JSON

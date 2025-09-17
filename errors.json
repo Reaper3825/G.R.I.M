@@ -126,8 +126,22 @@
     "user": "[Config] Invalid or missing ai_config.json — using defaults.",
     "debug": "ai_config.json contained null/invalid types and was patched by validateAIConfig()."
   },
-  "ERR_CONFIG_SAVE_FAIL": {
-    "user": "[Config] Failed to update ai_config.json.",
-    "debug": "validateAIConfig() could not write patched configuration to disk."
-  }
+   // ---------------- Filesystem ----------------
+  "ERR_FS_NO_ARGUMENT": {
+    "user": "[FS] No file or directory specified.",
+    "debug": "Filesystem command missing required argument."
+  },
+  "ERR_FS_NOT_FOUND": {
+    "user": "[FS] File or directory not found.",
+    "debug": "std::filesystem::exists() returned false for target path."
+  },
+  "ERR_FS_CREATE_FAILED": {
+    "user": "[FS] Failed to create directory.",
+    "debug": "std::filesystem::create_directory() returned false."
+  },
+  "ERR_FS_REMOVE_FAILED": {
+    "user": "[FS] Failed to remove file.",
+    "debug": "std::filesystem::remove() returned false."
+  },
+
 }

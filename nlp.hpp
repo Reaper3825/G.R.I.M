@@ -10,13 +10,15 @@ struct CommandResult;
 class NLP {
 public:
     struct Rule {
-        std::string intent;
-        std::string pattern_str;
-        std::regex pattern;
-        double boost = 0.0;
+        std::string intent;        // e.g. "open_app"
+        std::string description;   // human-readable ("Open a local application")
+        std::string pattern_str;   // raw regex string
+        std::regex pattern;        // compiled regex
+        double score_boost = 0.0;  // weight to improve ranking
+        bool case_insensitive = true; // regex flag
 
-        // 🔹 Needed for slot extraction
-        std::vector<std::string> slot_names;
+        std::vector<std::string> slot_names; // slot names for regex groups
+        std::string category;                // optional grouping (system, app, alias)
     };
 
     // --- Methods ---

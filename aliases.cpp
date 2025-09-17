@@ -1,8 +1,8 @@
 #include "aliases.hpp"
-#include "console_history.hpp"
 #include "error_manager.hpp"
 #include "resources.hpp"
 #include "ui_helpers.hpp"
+#include "commands/commands_core.hpp"   // 🔹 CommandResult
 
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -120,9 +120,9 @@ void aliases::load() {
 }
 
 // ------------------------------------------------------------
-// Refresh Core (placeholder – scanning disabled for now)
+// Refresh Core
 // ------------------------------------------------------------
-static void refreshCore(bool userTriggered) {
+static CommandResult refreshCore(bool userTriggered) {
     grimLog(userTriggered ? "[aliases] Manual refresh started"
                           : "[aliases] Background refresh started");
 
@@ -142,12 +142,22 @@ static void refreshCore(bool userTriggered) {
     }
     save();
 
+    CommandResult result;
+    result.success = true;
+    result.color   = sf::Color::Green;
+    result.errorCode = "ERR_NONE";
+
     if (userTriggered) {
-        history.push("[aliases] Manual refresh complete (0 apps found)",
-                     sf::Color::Green);
+        result.message  = "[aliases] Manual refresh complete (0 apps found)";
+        result.voice    = "";          // silent
+        result.category = "routine";
     } else {
         grimLog("[aliases] Background refresh complete (0 apps)");
+        result.message  = "[aliases] Background refresh complete (0 apps)";
+        result.voice    = "";
+        result.category = "routine";
     }
+    return result;
 }
 
 // ------------------------------------------------------------
@@ -166,23 +176,30 @@ void aliases::refreshAsync() {
     }
     grimLog("[aliases] refreshAsync launched");
     std::thread([]() {
-        refreshCore(false);
+        CommandResult res = refreshCore(false);
+        (void)res; // background mode → ignored
         isRefreshing = false;
         grimLog("[aliases] refreshAsync thread finished, flag released");
     }).detach();
 }
 
-void aliases::refreshNow() {
+CommandResult aliases::refreshNow() {
     if (isRefreshing.exchange(true)) {
-        history.push("[aliases] Refresh already running, skipping manual",
-                     sf::Color::Yellow);
         grimLog("[aliases] refreshNow skipped (already running)");
-        return;
+        CommandResult result;
+        result.success   = false;
+        result.message   = "[aliases] Refresh already running, skipping manual";
+        result.color     = sf::Color::Yellow;
+        result.errorCode = "ERR_ALIAS_BUSY";
+        result.voice     = "";
+        result.category  = "routine";
+        return result;
     }
     grimLog("[aliases] refreshNow started");
-    refreshCore(true);
+    CommandResult res = refreshCore(true);
     isRefreshing = false;
     grimLog("[aliases] refreshNow finished, flag released");
+    return res;
 }
 
 std::string aliases::resolve(const std::string& key) {

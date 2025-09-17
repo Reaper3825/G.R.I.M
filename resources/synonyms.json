@@ -1,4 +1,104 @@
 {
+  "remember": [
+    "store",
+    "save",
+    "note",
+    "keep"
+  ],
+  "recall": [
+    "retrieve",
+    "rememberthis",
+    "showmemory",
+    "lookupmemory"
+  ],
+  "forget": [
+    "erase",
+    "delete",
+    "remove",
+    "clear"
+  ],
+
+  "ai_backend": [
+    "switchai",
+    "setai",
+    "chooseai"
+  ],
+  "reload_nlp": [
+    "reloadrules",
+    "nlpreload",
+    "refreshrules"
+  ],
+  "grim_ai": [
+    "ask",
+    "query",
+    "chat",
+    "talk",
+    "ai"
+  ],
+
+  "pwd": [
+    "whereami",
+    "printdir",
+    "curdir"
+  ],
+  "cd": [
+    "changedir",
+    "chdir",
+    "goto"
+  ],
+  "ls": [
+    "dir",
+    "list",
+    "showfiles"
+  ],
+  "mkdir": [
+    "makedir",
+    "createdir",
+    "newfolder"
+  ],
+  "rm": [
+    "removefile",
+    "deletefile",
+    "del"
+  ],
+
+  "timer": [
+    "settimer",
+    "reminder",
+    "alarm",
+    "countdown",
+    "clock"
+  ],
+
+  "sysinfo": [
+    "system",
+    "status",
+    "machineinfo"
+  ],
+  "clean": [
+    "clear",
+    "reset",
+    "purge"
+  ],
+  "help": [
+    "commands",
+    "manual",
+    "usage",
+    "info"
+  ],
+
+  "voice": [
+    "speak",
+    "talk",
+    "say",
+    "vocal"
+  ],
+  "voice_stream": [
+    "voicestream",
+    "mic",
+    "listen"
+  ],
+
   "open_app": [
     "open",
     "launch",
@@ -16,13 +116,27 @@
     "query",
     "browse"
   ],
-  "set_timer": [
-    "timer",
-    "reminder",
-    "alarm",
-    "countdown",
-    "time",
-    "settimer",
-    "clock"
+
+  "alias list": [
+    "listaliases",
+    "showaliases"
+  ],
+  "alias info": [
+    "aliasdetails",
+    "showalias",
+    "aliaslookup"
+  ],
+  "alias refresh": [
+    "refreshaliases",
+    "updatealiases",
+    "scanapps"
+  ],
+
+  "completion_triggers": [
+    "done",
+    "finished",
+    "that’s it",
+    "ok",
+    "alright"
   ]
 }
