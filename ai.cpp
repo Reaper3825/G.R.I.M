@@ -1,6 +1,7 @@
 #include "ai.hpp"
 #include "voice.hpp"
-#include "resources.hpp"   // 🔹 Provides aiConfig + longTermMemory
+#include "resources.hpp"
+#include "voice_speak.hpp"   // 🔹 Provides aiConfig + longTermMemory
 
 #include <cpr/cpr.h>
 #include <iostream>

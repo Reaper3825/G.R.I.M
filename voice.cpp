@@ -14,7 +14,6 @@
 #include <cmath>
 #include <chrono>
 #include <nlohmann/json.hpp>
-#include <cpr/cpr.h>
 
 namespace fs = std::filesystem;
 
@@ -25,7 +24,6 @@ State g_state;
 
 static double g_silenceThreshold = 0.02;
 static int g_silenceTimeoutMs = 4000;
-static std::string g_ttsUrl = "http://127.0.0.1:8080/tts";
 
 // ---------------- Audio Data ----------------
 struct AudioData {
@@ -39,33 +37,13 @@ struct AudioData {
 static int recordCallback(const void* input,
                           void* /*output*/,
                           unsigned long frameCount,
-                          const PaStreamCallbackTimeInfo* /*timeInfo*/,
-                          PaStreamCallbackFlags /*statusFlags*/,
+                          const PaStreamCallbackTimeInfo*,
+                          PaStreamCallbackFlags,
                           void* userData) {
     AudioData* data = reinterpret_cast<AudioData*>(userData);
     const float* in = reinterpret_cast<const float*>(input);
     if (in) data->buffer.insert(data->buffer.end(), in, in + frameCount);
     return paContinue;
-}
-
-static int playbackCallback(const void* /*input*/,
-                            void* output,
-                            unsigned long frameCount,
-                            const PaStreamCallbackTimeInfo* /*timeInfo*/,
-                            PaStreamCallbackFlags /*statusFlags*/,
-                            void* userData) {
-    AudioData* data = reinterpret_cast<AudioData*>(userData);
-    float* out = reinterpret_cast<float*>(output);
-
-    for (unsigned long i = 0; i < frameCount; i++) {
-        if (!data->buffer.empty()) {
-            *out++ = data->buffer.front();
-            data->buffer.erase(data->buffer.begin());
-        } else {
-            *out++ = 0.0f;
-        }
-    }
-    return data->buffer.empty() ? paComplete : paContinue;
 }
 
 // ============================================================
@@ -107,22 +85,15 @@ bool initWhisper(const std::string& modelName, std::string* err) {
 // Voice Input (Speech → Text)
 // ============================================================
 std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemory) {
-    (void) longTermMemory; // silence unused parameter warning
+    (void) longTermMemory;
     std::cerr << "[DEBUG][Voice] Entering runVoiceDemo()\n";
 
-    // --- Load thresholds from aiConfig ---
+    // Load thresholds from config
     g_silenceThreshold = aiConfig["voice"].value("silence_threshold", 0.02f);
     g_silenceTimeoutMs = aiConfig["voice"].value("silence_timeout_ms", 4000);
     g_state.minSpeechMs  = aiConfig["whisper"].value("min_speech_ms", 500);
     g_state.minSilenceMs = aiConfig["whisper"].value("min_silence_ms", 1200);
     g_state.inputDeviceIndex = aiConfig["voice"].value("input_device_index", -1);
-    g_ttsUrl = aiConfig["voice"].value("tts_url", g_ttsUrl);
-
-    std::cerr << "[DEBUG][Voice] Using config: threshold=" << g_silenceThreshold
-              << " timeout=" << g_silenceTimeoutMs
-              << " minSpeech=" << g_state.minSpeechMs
-              << " minSilence=" << g_state.minSilenceMs
-              << " inputDevice=" << g_state.inputDeviceIndex << "\n";
 
     if (!g_state.ctx) {
         std::cerr << "[ERROR][Voice] Whisper not initialized!\n";
@@ -135,7 +106,6 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
 
     AudioData data;
     PaStream* stream;
-
     int deviceIndex = (g_state.inputDeviceIndex >= 0) ? g_state.inputDeviceIndex : Pa_GetDefaultInputDevice();
     if (deviceIndex == paNoDevice) {
         Pa_Terminate();
@@ -183,11 +153,9 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
                 rollingBuffer.insert(rollingBuffer.end(), chunk.begin(), chunk.end());
             } else if (inSpeech) {
                 auto msSinceSpeech = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                         std::chrono::steady_clock::now() - lastSpeech)
-                                         .count();
+                                         std::chrono::steady_clock::now() - lastSpeech).count();
                 auto msSpeech = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    lastSpeech - speechStart)
-                                    .count();
+                                    lastSpeech - speechStart).count();
 
                 if (msSinceSpeech >= g_state.minSilenceMs && msSpeech >= g_state.minSpeechMs) {
                     std::cerr << "[DEBUG][Voice] End of speech detected\n";
@@ -234,75 +202,11 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
 }
 
 // ============================================================
-// Voice Output (Text → Speech)
+// Shutdown
 // ============================================================
-static bool playPCM(const std::vector<float>& pcm, int sampleRate = 22050) {
-    if (Pa_Initialize() != paNoError) {
-        std::cerr << "[ERROR][Voice] PortAudio init failed for playback\n";
-        return false;
-    }
-
-    AudioData data;
-    data.buffer = pcm;
-
-    PaStream* stream;
-    PaStreamParameters outputParams;
-    outputParams.device = Pa_GetDefaultOutputDevice();
-    outputParams.channelCount = 1;
-    outputParams.sampleFormat = paFloat32;
-    outputParams.suggestedLatency = Pa_GetDeviceInfo(outputParams.device)->defaultLowOutputLatency;
-    outputParams.hostApiSpecificStreamInfo = nullptr;
-
-    if (Pa_OpenStream(&stream, nullptr, &outputParams, sampleRate, 512, paNoFlag, playbackCallback, &data) != paNoError) {
-        Pa_Terminate();
-        std::cerr << "[ERROR][Voice] Failed to open playback stream\n";
-        return false;
-    }
-
-    Pa_StartStream(stream);
-    while (Pa_IsStreamActive(stream)) Pa_Sleep(50);
-
-    Pa_StopStream(stream);
-    Pa_CloseStream(stream);
-    Pa_Terminate();
-    return true;
-}
-
-static std::vector<float> fetchOnlineTTS(const std::string& text) {
-    std::vector<float> pcm;
-    auto response = cpr::Post(cpr::Url{g_ttsUrl},
-                              cpr::Body{text},
-                              cpr::Header{{"Content-Type", "text/plain"}});
-    if (response.status_code == 200) {
-        std::string body = response.text;
-        const float* samples = reinterpret_cast<const float*>(body.data());
-        pcm.assign(samples, samples + (body.size() / sizeof(float)));
-    }
-    return pcm;
-}
-
-static std::vector<float> generateOfflineTTS(const std::string& text) {
-    auto sysInfo = detectSystem();
-    std::string localEngine = aiConfig["voice"].value("local_engine", "en_US-amy-medium.onnx");
-    speakLocal(text, localEngine);
-    return {};
-}
-
-bool speakText(const std::string& text, bool preferOnline) {
-    auto sysInfo = detectSystem();
-    std::string mode = aiConfig["voice"].value("mode", "hybrid");
-
-    std::vector<float> pcm;
-    if (preferOnline) {
-        pcm = fetchOnlineTTS(text);
-    }
-    if (pcm.empty()) {
-        pcm = generateOfflineTTS(text);
-    }
-    if (!pcm.empty()) {
-        return playPCM(pcm);
-    }
-    return true;
+void shutdown() {
+    std::cerr << "[DEBUG][Voice] Shutdown called\n";
+    // cleanup if whisper context is freed elsewhere
 }
 
 } // namespace Voice

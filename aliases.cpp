@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <ctime>
 #include <chrono>
+#include <atomic>
 
 namespace fs = std::filesystem;
 
@@ -24,8 +25,10 @@ namespace fs = std::filesystem;
 // ------------------------------------------------------------
 static nlohmann::json g_aliases;          // { "user": {}, "auto": {} }
 static std::mutex g_aliasMutex;
-static const std::string ALIAS_FILE = "aliases.json";
-static const std::string JUNK_FILE  = "auto_junk.json";
+static const std::string ALIAS_FILE = "app_aliases.json";
+
+// 🔹 Reentrancy guard
+static std::atomic<bool> isRefreshing{false};
 
 // ------------------------------------------------------------
 // Simple Levenshtein distance (for fuzzy fallback)
@@ -58,128 +61,73 @@ static int levenshtein(const std::string& s1, const std::string& s2) {
 static void save() {
     std::lock_guard<std::mutex> lock(g_aliasMutex);
     std::ofstream out(ALIAS_FILE);
-    if (out) out << g_aliases.dump(2);
+    if (out) {
+        out << g_aliases.dump(2);
+        grimLog("[aliases] aliases.json saved");
+    } else {
+        grimLog("[aliases] ERROR: could not save aliases.json");
+    }
 }
 
 void aliases::load() {
     std::lock_guard<std::mutex> lock(g_aliasMutex);
+    grimLog("[aliases] load() starting");
 
-    std::ifstream in(ALIAS_FILE);
-    if (!in.is_open()) {
+    // Sanity check file before parsing
+    std::error_code ec;
+    auto fileSize = fs::file_size(ALIAS_FILE, ec);
+    if (ec) {
+        grimLog("[aliases] aliases.json not found or stat failed → resetting to defaults");
         g_aliases = { {"user", nlohmann::json::object()},
                       {"auto", nlohmann::json::object()} };
         save();
-        grimLog("[aliases] Created new aliases.json");
+        return;
+    }
+
+    if (fileSize > 5 * 1024 * 1024) { // 5 MB limit
+        grimLog("[aliases] aliases.json too large (" + std::to_string(fileSize) + " bytes) → resetting");
+        g_aliases = { {"user", nlohmann::json::object()},
+                      {"auto", nlohmann::json::object()} };
+        save();
+        return;
+    }
+
+    grimLog("[aliases] Opening aliases.json (" + std::to_string(fileSize) + " bytes)");
+    std::ifstream in(ALIAS_FILE);
+    if (!in.is_open()) {
+        grimLog("[aliases] Failed to open aliases.json → resetting");
+        g_aliases = { {"user", nlohmann::json::object()},
+                      {"auto", nlohmann::json::object()} };
+        save();
         return;
     }
 
     try {
+        grimLog("[aliases] Parsing aliases.json...");
         in >> g_aliases;
+        grimLog("[aliases] Parsing finished OK");
         if (!g_aliases.contains("user")) g_aliases["user"] = nlohmann::json::object();
         if (!g_aliases.contains("auto")) g_aliases["auto"] = nlohmann::json::object();
-        grimLog("[aliases] Loaded aliases.json");
+        grimLog("[aliases] Loaded aliases.json successfully");
     } catch (const std::exception& e) {
         grimLog(std::string("[aliases] Failed to parse aliases.json: ") + e.what());
         g_aliases = { {"user", nlohmann::json::object()},
                       {"auto", nlohmann::json::object()} };
+        save();
     }
+
+    grimLog("[aliases] load() finished");
 }
 
 // ------------------------------------------------------------
-// Scan Helpers
-// ------------------------------------------------------------
-// ------------------------------------------------------------
-// Scan Helpers
-// ------------------------------------------------------------
-static void scanPath(std::unordered_map<std::string, std::string>& results) {
-    grimLog("[aliases] Starting PATH scan…");
-
-    const char* pathEnv = std::getenv("PATH");
-    if (!pathEnv) return;
-
-    std::stringstream ss(pathEnv);
-    std::string dir;
-    size_t counter = 0;
-    auto lastBeat = std::chrono::steady_clock::now();
-
-    while (std::getline(ss, dir, ';')) {
-        if (!fs::exists(dir)) continue;
-
-        for (auto& p : fs::directory_iterator(dir, fs::directory_options::skip_permission_denied)) {
-            if (!p.is_regular_file()) continue;
-            if (p.path().extension() == ".exe") {
-                std::string name = p.path().stem().string();
-                std::string full = p.path().string();
-
-                std::string lower = name;
-                std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-                if (lower.find("uninstall") != std::string::npos ||
-                    lower.find("setup")     != std::string::npos ||
-                    lower.find("helper")    != std::string::npos ||
-                    lower.find("update")    != std::string::npos) {
-                    continue; // skip junk
-                }
-                results[name] = full;
-            }
-
-            if (++counter % 500 == 0) {
-                grimLog("[aliases] PATH scan → " + std::to_string(counter) + " files checked");
-            }
-
-            auto now = std::chrono::steady_clock::now();
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - lastBeat).count() >= 3) {
-                grimLog("[aliases] PATH scan still running… (" + std::to_string(counter) + " checked)");
-                lastBeat = now;
-            }
-        }
-    }
-
-    grimLog("[aliases] Finished PATH scan — " + std::to_string(results.size()) + " executables found");
-}
-
-static void scanStartMenu(std::unordered_map<std::string, std::string>& results) {
-#ifdef _WIN32
-    grimLog("[aliases] Starting Start Menu scan…");
-
-    char* appData = std::getenv("APPDATA");
-    if (!appData) return;
-    fs::path startMenu = fs::path(appData) / "Microsoft/Windows/Start Menu/Programs";
-    if (!fs::exists(startMenu)) return;
-
-    size_t counter = 0;
-    auto lastBeat = std::chrono::steady_clock::now();
-
-    for (auto& p : fs::recursive_directory_iterator(startMenu,
-            fs::directory_options::skip_permission_denied)) {
-        if (p.path().extension() == ".lnk") {
-            std::string name = p.path().stem().string();
-            results[name] = p.path().string();
-        }
-
-        if (++counter % 500 == 0) {
-            grimLog("[aliases] Start Menu scan → " + std::to_string(counter) + " entries checked");
-        }
-
-        auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::seconds>(now - lastBeat).count() >= 3) {
-            grimLog("[aliases] Start Menu scan still running… (" + std::to_string(counter) + " checked)");
-            lastBeat = now;
-        }
-    }
-
-    grimLog("[aliases] Finished Start Menu scan — " + std::to_string(results.size()) + " shortcuts found");
-#endif
-}
-
-// ------------------------------------------------------------
-// Refresh Core
+// Refresh Core (placeholder – scanning disabled for now)
 // ------------------------------------------------------------
 static void refreshCore(bool userTriggered) {
-    std::unordered_map<std::string, std::string> autoResults;
+    grimLog(userTriggered ? "[aliases] Manual refresh started"
+                          : "[aliases] Background refresh started");
 
-    grimLog("[aliases] Auto refresh started…");
-    scanPath(autoResults);
-    scanStartMenu(autoResults);
+    // 🚨 Temporarily stubbed scanning out for debugging
+    std::unordered_map<std::string, std::string> autoResults;
 
     {
         std::lock_guard<std::mutex> lock(g_aliasMutex);
@@ -195,12 +143,10 @@ static void refreshCore(bool userTriggered) {
     save();
 
     if (userTriggered) {
-        history.push("[aliases] Manual refresh complete (" +
-                     std::to_string(autoResults.size()) + " apps found)",
+        history.push("[aliases] Manual refresh complete (0 apps found)",
                      sf::Color::Green);
     } else {
-        grimLog("[aliases] Background auto refresh complete (" +
-                std::to_string(autoResults.size()) + " apps)");
+        grimLog("[aliases] Background refresh complete (0 apps)");
     }
 }
 
@@ -208,20 +154,35 @@ static void refreshCore(bool userTriggered) {
 // Public API
 // ------------------------------------------------------------
 void aliases::init() {
-    load();
-    std::thread([]() {
-        refreshCore(false);
-    }).detach();
+    grimLog("[aliases] init() called");
+    load();   // only load JSON here
+    grimLog("[aliases] init() finished (no scan triggered)");
 }
 
 void aliases::refreshAsync() {
+    if (isRefreshing.exchange(true)) {
+        grimLog("[aliases] refreshAsync skipped (already running)");
+        return;
+    }
+    grimLog("[aliases] refreshAsync launched");
     std::thread([]() {
         refreshCore(false);
+        isRefreshing = false;
+        grimLog("[aliases] refreshAsync thread finished, flag released");
     }).detach();
 }
 
 void aliases::refreshNow() {
+    if (isRefreshing.exchange(true)) {
+        history.push("[aliases] Refresh already running, skipping manual",
+                     sf::Color::Yellow);
+        grimLog("[aliases] refreshNow skipped (already running)");
+        return;
+    }
+    grimLog("[aliases] refreshNow started");
     refreshCore(true);
+    isRefreshing = false;
+    grimLog("[aliases] refreshNow finished, flag released");
 }
 
 std::string aliases::resolve(const std::string& key) {

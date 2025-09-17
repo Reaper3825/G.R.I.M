@@ -1,5 +1,19 @@
 {
     "cmake.sourceDirectory": "D:/G.R.I.M",
+
+    // MS C/C++ extension (ms-vscode.cpptools) — use compile_commands.json
+    "C_Cpp.default.compileCommands": "D:/G.R.I.M/build/compile_commands.json",
+
+    // clangd extension — point to the same database
+    "clangd.arguments": [
+        "--compile-commands-dir=D:/G.R.I.M/build",
+        "--header-insertion=never",
+        "--cross-file-rename"
+    ],
+
+    // Optional: disable cpptools IntelliSense squiggles if you prefer clangd
+    // "C_Cpp.intelliSenseEngine": "Disabled",
+
     "files.associations": {
         "xstring": "cpp",
         "filesystem": "cpp",
