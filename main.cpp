@@ -1,9 +1,10 @@
-#include "commands/commands_core.hpp"
+#include "commands/commands_core.hpp" 
 #include "commands/commands_helpers.hpp"
 
-#include "voice.hpp"        // Whisper / STT
-#include "voice_speak.hpp"  // TTS
+#include "voice.hpp" 
+#include "voice_speak.hpp" 
 #include "voice_stream.hpp"
+#include "response_manager.hpp"
 
 #include "resources.hpp"
 #include "console_history.hpp"
@@ -12,7 +13,7 @@
 #include "ui_events.hpp"
 #include "error_manager.hpp"
 #include "bootstrap.hpp"
-#include "aliases.hpp"      // 🔹 added here
+#include "aliases.hpp" 
 
 #include <iostream>
 #include <filesystem>
@@ -22,7 +23,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#undef ERROR   // ⚡ fix Logger::Level::ERROR conflict
+#undef ERROR
 #include <shellapi.h>
 #include <psapi.h>
 #include <winternl.h>
@@ -39,6 +40,29 @@ std::string g_inputBuffer;
 // 🔹 Global AI state (defined in ai.cpp, declared extern in resources.hpp)
 extern nlohmann::json longTermMemory;
 extern nlohmann::json aiConfig;
+
+// 🔹 Global voice hotkey
+sf::Keyboard::Key g_voiceHotkey = sf::Keyboard::Num0;
+
+// ------------------------------------------------------------
+// Helper: initialize hotkey from config
+// ------------------------------------------------------------
+static void initHotkey() {
+    std::string hotkeyStr = aiConfig["voice"].value("hotkey", "0");
+
+    if (hotkeyStr == "F1") {
+        g_voiceHotkey = sf::Keyboard::F1;
+    } else if (hotkeyStr == "0") {
+        g_voiceHotkey = sf::Keyboard::Num0;
+    } else if (hotkeyStr == "L") {
+        g_voiceHotkey = sf::Keyboard::L;
+    } else {
+        // default fallback
+        g_voiceHotkey = sf::Keyboard::Num0;
+    }
+
+    std::cout << "[DEBUG] Voice hotkey set to: " << hotkeyStr << "\n";
+}
 
 // ============================================================
 // Entry Point
@@ -72,21 +96,16 @@ int main(int argc, char** argv) {
     g_ui_textbox.setCharacterSize(20);
     g_ui_textbox.setFillColor(sf::Color::White);
 
-    // ---------------- Voice Init ----------------
-    std::string voiceErr;
-    if (!Voice::initWhisper("small", &voiceErr)) {
-        Logger::log(Logger::Level::ERROR, "Failed to initialize Whisper: " + voiceErr);
-    } else {
-        std::cout << "[DEBUG] Whisper initialized OK\n";
-    }
-
-  
-    // ---------------- Audible Greeting ----------------
-    handleCommand("[GRIM] Startup complete. Hello, Austin — I am online.");
-
+    ResponseManager::systemMessage(
+        "[GRIM] Startup complete. Hello, Austin — I am online.",
+        sf::Color::Green
+    );
 
     Logger::log(Logger::Level::INFO, "GRIM startup complete, entering main loop");
     std::cout << "[DEBUG] Entering main loop\n";
+
+    // 🔹 Initialize hotkey from config
+    initHotkey();
 
     // 🔹 Kick off background app scan *after* greeting
     aliases::refreshAsync();
@@ -97,8 +116,24 @@ int main(int argc, char** argv) {
     float scrollOffset = 0.0f;
 
     while (window.isOpen()) {
-        // Process UI + events
-        processEvents(window, g_inputBuffer, currentDir, timers, longTermMemory, history);
+        sf::Event event;
+        while (window.pollEvent(event)) {
+            // Handle UI + keyboard events
+            if (!processEvents(window, g_inputBuffer, currentDir, timers, longTermMemory, history)) {
+                break; // window closed
+            }
+
+            // ✅ Voice hotkey (configurable, variable-driven)
+            if (event.type == sf::Event::KeyPressed &&
+                event.key.code == g_voiceHotkey) 
+            {
+                std::cout << "[Voice] Hotkey pressed → capturing voice\n";
+                std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
+                if (!transcript.empty()) {
+                    handleCommand(transcript); // 🔹 same flow as typed input
+                }
+            }
+        }
 
         // Sync buffer → render text
         g_ui_textbox.setString(g_inputBuffer);
@@ -107,14 +142,6 @@ int main(int argc, char** argv) {
         window.clear(sf::Color::Black);
         drawUI(window, font, history, g_inputBuffer, true, scrollOffset);
         window.display();
-
-        // ✅ Voice demo hotkey (V)
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::V)) {
-            std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
-            if (!transcript.empty()) {
-                handleCommand(transcript);
-            }
-        }
 
         // ✅ Example continuous stream trigger (placeholder)
         if (false) {

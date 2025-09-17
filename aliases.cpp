@@ -229,8 +229,19 @@ std::string aliases::resolve(const std::string& key) {
     return {};
 }
 
-const nlohmann::json& aliases::getAll() {
-    return g_aliases;
+// 🔹 New: returns a flattened map of all aliases
+std::unordered_map<std::string, std::string> aliases::getAll() {
+    std::lock_guard<std::mutex> lock(g_aliasMutex);
+    std::unordered_map<std::string, std::string> result;
+
+    for (auto& [k, v] : g_aliases["user"].items()) {
+        result[k] = v.value("path", "");
+    }
+    for (auto& [k, v] : g_aliases["auto"].items()) {
+        result[k] = v.value("path", "");
+    }
+
+    return result;
 }
 
 std::string aliases::info(const std::string& key) {

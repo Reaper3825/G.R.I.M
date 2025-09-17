@@ -1,6 +1,8 @@
 #include "commands_interface.hpp"
 #include "response_manager.hpp"
 #include "error_manager.hpp"
+#include "nlp.hpp"
+#include "resources.hpp"
 
 #include <SFML/Graphics.hpp>
 #include <sstream>
@@ -30,7 +32,7 @@ CommandResult cmdShowHelp([[maybe_unused]] const std::string& arg) {
         "- recall <key>\n"
         "- forget <key>\n"
         "- ai_backend <name>\n"
-        "- reload_nlp\n"
+        "- reloadnlp\n"
         "- pwd\n"
         "- cd <dir>\n"
         "- ls\n"
@@ -50,5 +52,31 @@ CommandResult cmdShowHelp([[maybe_unused]] const std::string& arg) {
         "ERR_NONE",
         "Help shown",        // voice
         "summary"            // category
+    };
+}
+
+// ------------------------------------------------------------
+// [Utility] Reload NLP rules
+// ------------------------------------------------------------
+CommandResult cmd_reloadNLP([[maybe_unused]] const std::string& arg) {
+    std::string err;
+    if (!g_nlp.load_rules(getResourcePath() + "/nlp_rules.json", &err)) {
+        return {
+            "[NLP] Failed to reload rules: " + err,
+            false,
+            sf::Color::Red,
+            "ERR_NLP_LOAD_FAILED",
+            "NLP reload failed",  // voice
+            "error"               // category
+        };
+    }
+
+    return {
+        "[NLP] Rules reloaded.",
+        true,
+        sf::Color::Yellow,
+        "ERR_NONE",
+        "NLP rules reloaded",    // voice
+        "routine"                // category
     };
 }

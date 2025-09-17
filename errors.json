@@ -44,18 +44,27 @@
   },
 
   // ---------------- Voice ----------------
-  "ERR_VOICE_NO_SPEECH": {
-    "user": "[Voice] No speech detected.",
-    "debug": "Voice::runVoiceDemo returned empty transcript."
-  },
-  "ERR_VOICE_NO_CONTEXT": {
-    "user": "[Voice] No Whisper context available.",
-    "debug": "Voice::g_state.ctx was null when starting stream."
-  },
-  "ERR_VOICE_STREAM_FAIL": {
-    "user": "[Voice] Failed to start streaming.",
-    "debug": "VoiceStream::start returned false."
-  },
+  
+    "ERR_VOICE_NOT_INITIALIZED": {
+      "user": "[Voice] Speech recognition not available — missing or invalid model",
+      "debug": "Whisper context failed to initialize. Check that resources/models/<whisper_model>.bin exists and is valid."
+    },
+    "ERR_VOICE_NO_CONTEXT": {
+      "user": "[Voice] No input device or audio context available",
+      "debug": "PortAudio failed to initialize or no input device was found."
+    },
+    "ERR_VOICE_TRANSCRIBE_FAIL": {
+      "user": "[Voice] Could not process your speech",
+      "debug": "Whisper transcription failed inside whisper_full()."
+    },
+    "ERR_VOICE_NO_SPEECH": {
+      "user": "[Voice] I didn’t hear anything",
+      "debug": "Silence detected or audio buffer was empty — nothing to transcribe."
+    },
+    "ERR_VOICE_STREAM_FAIL": {
+      "user": "[Voice] Streaming mode could not start",
+      "debug": "VoiceStream::start() returned false."
+    },
 
   // ---------------- Timers ----------------
   "ERR_TIMER_MISSING_VALUE": {

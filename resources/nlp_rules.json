@@ -146,5 +146,12 @@
     "slot_names": ["prompt"],
     "score_boost": 0.1,
     "case_insensitive": true
-  }
+  },{
+  "intent": "reload_nlp",
+  "description": "Reload NLP rules from disk",
+  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?reload\\s*nlp\\s*$",
+  "slot_names": [],
+  "case_insensitive": true
+}
+
 ]

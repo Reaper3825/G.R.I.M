@@ -1,7 +1,28 @@
-#include "response_manager.hpp"
-#include "error_manager.hpp"
 #include <unordered_map>
 #include <random>
+#include "response_manager.hpp"
+#include "error_manager.hpp"
+#include "voice_speak.hpp"
+#include "console_history.hpp"
+
+CommandResult ResponseManager::systemMessage(const std::string& msg,
+                                             const sf::Color& color) {
+    history.push(msg, color);
+    Voice::speak(msg, "system");
+
+    return {
+        msg,
+        true,
+        color,
+        "ERR_NONE",
+        "System message",
+        "system"
+    };
+}
+
+
+
+
 
 // Simple random picker
 static std::string pickRandom(const std::vector<std::string>& options) {
@@ -218,3 +239,4 @@ std::string ResponseManager::get(const std::string& keyOrMessage) {
     // Otherwise, treat as an unknown intent and fallback gracefully
     return ErrorManager::getUserMessage("ERR_CORE_UNKNOWN_COMMAND") + " (" + keyOrMessage + ")";
 }
+
