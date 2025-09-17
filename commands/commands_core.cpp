@@ -28,7 +28,6 @@
 
 using Voice::speak;
 
-
 // ------------------------------------------------------------
 // Globals
 // ------------------------------------------------------------
@@ -116,10 +115,15 @@ static void initCommands() {
         // --- Timers ---
         {"timer",        cmdSetTimer},
 
-        // --- System ---
+        // --- Interface ---
         {"sysinfo",      cmdSystemInfo},
         {"clean",        cmdClean},
         {"help",         cmdShowHelp},
+        {"reload_nlp", cmd_reloadNLP},
+
+        
+        
+        
 
         // --- Voice ---
         {"voice",        cmdVoice},
@@ -248,6 +252,31 @@ void handleCommand(const std::string& line) {
         // Special case: open_app → resolve alias before dispatch
         if (cmd == "open_app") {
             std::string resolved = aliases::resolve(arg);
+
+            // If no exact match, try fuzzy alias matching
+            if (resolved.empty()) {
+                int bestDist = 3; // allow edit distance up to 2–3
+                std::string bestAlias;
+
+                for (const auto& [alias, target] : aliases::getAll()) {
+                    int dist = levenshteinDistance(
+                        normalizeWord(arg),
+                        normalizeWord(alias)
+                    );
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        bestAlias = alias;
+                        resolved = target;
+                    }
+                }
+
+                if (!resolved.empty()) {
+                    std::cout << "[DEBUG][open_app] fuzzy matched \"" << arg
+                              << "\" → alias \"" << bestAlias
+                              << "\" → " << resolved << "\n";
+                }
+            }
+
             if (resolved.empty()) {
                 result = {
                     ErrorManager::getUserMessage("ERR_ALIAS_NOT_FOUND") + ": " + arg,
@@ -256,7 +285,6 @@ void handleCommand(const std::string& line) {
                     "ERR_ALIAS_NOT_FOUND"
                 };
             } else {
-                std::cout << "[DEBUG][open_app] alias \"" << arg << "\" → " << resolved << "\n";
                 arg = resolved;
                 result = dispatchCommand("open_app", arg);
             }

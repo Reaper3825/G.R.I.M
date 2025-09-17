@@ -1,0 +1,22 @@
+{
+  "ERR_AI_CONFIG_INVALID": {
+    "debug": "ai_config.json failed parsing or validation.",
+    "user": "[AI] Config file invalid → reset to defaults."
+  },
+  "ERR_ALIAS_NOT_FOUND": {
+    "debug": "Alias lookup failed in user, auto, and fallback.",
+    "user": "[Alias] Application not found."
+  },
+  "ERR_APP_NO_ARGUMENT": {
+    "debug": "Application command called without argument.",
+    "user": "[App] Usage: open <application>"
+  },
+  "ERR_FS_DIR_NOT_FOUND": {
+    "debug": "Target directory not found in cmdChangeDir.",
+    "user": "[FS] Directory does not exist."
+  },
+  "ERR_FS_MISSING_DIR": {
+    "debug": "Filesystem command called without directory argument.",
+    "user": "[FS] Usage: cd/mkdir <directory>"
+  }
+}

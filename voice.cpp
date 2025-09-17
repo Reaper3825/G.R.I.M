@@ -4,6 +4,7 @@
 #include "voice_speak.hpp"
 #include "system_detect.hpp"
 #include "response_manager.hpp"
+#include "error_manager.hpp"
 
 #include <whisper.h>
 #include <portaudio.h>
@@ -59,25 +60,39 @@ static bool isSilence(const std::vector<float>& pcm) {
 }
 
 // ============================================================
-// Whisper Initialization
+// Lazy Whisper Initialization
 // ============================================================
-bool initWhisper(const std::string& modelName, std::string* err) {
-    fs::path modelPathFS = fs::path(getResourcePath()) / "models" / "whisper" / ("ggml-" + modelName + ".bin");
+static bool ensureWhisperLoaded(const nlohmann::json& aiConfig) {
+    if (g_state.ctx) return true;
 
-    std::cerr << "[DEBUG][Voice] Looking for Whisper model at " << modelPathFS << "\n";
-    if (!fs::exists(modelPathFS)) {
-        if (err) *err = "Model not found at " + modelPathFS.string();
+    // Pick model name from config, default to base English
+    std::string modelName = "ggml-base.en.bin";
+    if (aiConfig.contains("whisper") && aiConfig["whisper"].contains("whisper_model")) {
+        modelName = aiConfig["whisper"].value("whisper_model", modelName);
+    }
+
+    // Resolve model path against resource root
+    fs::path modelPath = fs::path(getResourcePath()) / "models" / modelName;
+
+    std::cerr << "[DEBUG][Voice] Looking for Whisper model at: " << modelPath << "\n";
+
+    if (!fs::exists(modelPath)) {
+        std::cerr << "[ERROR][Voice] Whisper model missing: " << modelPath << "\n";
+        ErrorManager::report("ERR_VOICE_NOT_INITIALIZED");
         return false;
     }
 
-    struct whisper_context_params wparams = whisper_context_default_params();
-    g_state.ctx = whisper_init_from_file_with_params(modelPathFS.string().c_str(), wparams);
+    // Use default whisper context parameters (can tweak later if needed)
+    whisper_context_params wparams = whisper_context_default_params();
+
+    g_state.ctx = whisper_init_from_file_with_params(modelPath.string().c_str(), wparams);
     if (!g_state.ctx) {
-        if (err) *err = "Failed to load Whisper model";
+        std::cerr << "[ERROR][Voice] Failed to load Whisper model: " << modelPath << "\n";
+        ErrorManager::report("ERR_VOICE_TRANSCRIBE_FAIL");
         return false;
     }
 
-    std::cerr << "[DEBUG][Voice] Whisper model loaded OK\n";
+    std::cout << "[Voice] Whisper model loaded: " << modelPath.filename().string() << "\n";
     return true;
 }
 
@@ -95,12 +110,13 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
     g_state.minSilenceMs = aiConfig["whisper"].value("min_silence_ms", 1200);
     g_state.inputDeviceIndex = aiConfig["voice"].value("input_device_index", -1);
 
-    if (!g_state.ctx) {
-        std::cerr << "[ERROR][Voice] Whisper not initialized!\n";
+    // 🔹 Ensure Whisper model is loaded
+    if (!ensureWhisperLoaded(aiConfig)) {
         return "";
     }
+
     if (Pa_Initialize() != paNoError) {
-        std::cerr << "[ERROR][Voice] Failed to init PortAudio\n";
+        ErrorManager::report("ERR_VOICE_NO_CONTEXT");
         return "";
     }
 
@@ -109,7 +125,7 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
     int deviceIndex = (g_state.inputDeviceIndex >= 0) ? g_state.inputDeviceIndex : Pa_GetDefaultInputDevice();
     if (deviceIndex == paNoDevice) {
         Pa_Terminate();
-        std::cerr << "[ERROR][Voice] No input device found\n";
+        ErrorManager::report("ERR_VOICE_NO_CONTEXT");
         return "";
     }
 
@@ -125,7 +141,7 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
 
     if (Pa_OpenStream(&stream, &inputParams, nullptr, 16000, 512, paNoFlag, recordCallback, &data) != paNoError) {
         Pa_Terminate();
-        std::cerr << "[ERROR][Voice] Failed to open audio stream\n";
+        ErrorManager::report("ERR_VOICE_NO_CONTEXT");
         return "";
     }
 
@@ -195,7 +211,7 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
         std::cerr << "[DEBUG][Voice] " << ResponseManager::get("voice_heard")
                   << " \"" << transcript << "\"\n";
     } else {
-        std::cerr << "[DEBUG][Voice] " << ResponseManager::get("voice_none") << "\n";
+        ErrorManager::report("ERR_VOICE_NO_SPEECH");
     }
 
     return transcript;

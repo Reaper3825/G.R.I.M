@@ -1,8 +1,12 @@
 #pragma once
 #include <string>
-#include <vector>
+#include <SFML/Graphics/Color.hpp>
+#include "commands/commands_core.hpp"
 
 namespace ResponseManager {
-    // Get a randomized natural-sounding response for a given intent key
-    std::string get(const std::string& intent);
+    std::string get(const std::string& keyOrMessage);
+
+    // System/log messages (bypass NLP/commands)
+    CommandResult systemMessage(const std::string& msg,
+                                const sf::Color& color = sf::Color::Green);
 }

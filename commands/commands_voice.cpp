@@ -22,6 +22,7 @@ extern std::filesystem::path g_currentDir;
 // [Voice] One-shot voice command
 // ------------------------------------------------------------
 CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
+    // 🔹 Run Whisper transcription
     std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
 
     if (transcript.empty()) {
@@ -35,16 +36,16 @@ CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
         };
     }
 
-    // Log transcript into history, but do not speak it back
-    // Then process it as if typed by the user
+    // 🔹 Inject transcript back into GRIM as if user typed it
     handleCommand(transcript);
 
+    // 🔹 Show transcript in history (cyan) without re-speaking
     return {
-        transcript,               // Show transcript in history
+        "> " + transcript,         // mimic console input style
         true,
         sf::Color::Cyan,
         "ERR_NONE",
-        "Voice command processed", // short acknowledgment
+        "Voice command processed",
         "routine"
     };
 }

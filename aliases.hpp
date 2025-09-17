@@ -1,7 +1,6 @@
 #pragma once
 #include <string>
 #include <unordered_map>
-#include <nlohmann/json_fwd.hpp>
 #include "commands/commands_core.hpp"   // 🔹 For CommandResult
 
 // ------------------------------------------------------------
@@ -22,9 +21,9 @@
 
 namespace aliases {
 
-    void init();        // Initialize system (bootstrap)
-    void load();        // Load aliases (user + auto) from JSON
-    void refreshAsync();// Run async refresh (silent/log-only)
+    void init();         // Initialize system (bootstrap)
+    void load();         // Load aliases (user + auto) from JSON
+    void refreshAsync(); // Run async refresh (silent/log-only)
 
     // 🔹 Now returns CommandResult for unified response flow
     CommandResult refreshNow();
@@ -34,7 +33,7 @@ namespace aliases {
     std::string resolve(const std::string& key);
 
     // Debug/Introspection API
-    const nlohmann::json& getAll();
+    std::unordered_map<std::string, std::string> getAll();
     std::string info(const std::string& key);
 
 } // namespace aliases

@@ -25,7 +25,7 @@ std::vector<Timer> timers;
 std::filesystem::path g_currentDir;
 
 // -------------------------------------------------------------
-// Locate resource root (hybrid: build/resources OR ../resources)
+// Locate resource root (prefer repo/resources over build/resources)
 // -------------------------------------------------------------
 std::string getResourcePath() {
 #if defined(GRIM_PORTABLE_ONLY)
@@ -48,26 +48,32 @@ std::string getResourcePath() {
   #else
     exePath = fs::current_path();
   #endif
+
     fs::path portablePath = exePath / "resources";
-    std::cout << "[GRIM] Using portable resource path: " << portablePath << "\n";
-    return portablePath.string();
+    if (fs::exists(portablePath)) {
+        std::cout << "[GRIM] Using portable resource path: " << portablePath << "\n";
+        return portablePath.string();
+    }
+    return exePath.string();
 #else
     fs::path buildPath   = fs::current_path() / "resources";
     fs::path projectPath = fs::current_path().parent_path() / "resources";
 
-    if (fs::exists(buildPath)) {
-        std::cout << "[GRIM] Using resource path: " << buildPath << "\n";
-        return buildPath.string();
-    }
+    // 🔹 Prefer project resources first
     if (fs::exists(projectPath)) {
-        std::cout << "[GRIM] Using fallback resource path: " << projectPath << "\n";
+        std::cout << "[GRIM] Using resource path: " << projectPath << "\n";
         return projectPath.string();
     }
+    if (fs::exists(buildPath)) {
+        std::cout << "[GRIM] Using fallback resource path: " << buildPath << "\n";
+        return buildPath.string();
+    }
 
-    std::cerr << "[GRIM] WARNING: No resources directory found. Defaulting to: " << buildPath << "\n";
-    return buildPath.string();
+    // Last resort: current working directory
+    return fs::current_path().string();
 #endif
 }
+
 
 // -------------------------------------------------------------
 // Load text resource from resources/ folder
