@@ -67,3 +67,4 @@ external/whisper.cpp/models/*.bin
 # Ignore Whisper models
 /resources/models/whisper/*
 
+resources/models/*.bin
