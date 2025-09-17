@@ -4,7 +4,6 @@
 
 #include <nlohmann/json.hpp>
 #include <SFML/Graphics.hpp>
-#include <fstream>
 #include <string>
 
 // Externals
@@ -19,7 +18,9 @@ CommandResult cmdRemember(const std::string& arg) {
             ErrorManager::getUserMessage("ERR_MEMORY_MISSING_INPUT"),
             false,
             sf::Color::Red,
-            "ERR_MEMORY_MISSING_INPUT"
+            "ERR_MEMORY_MISSING_INPUT",
+            "Missing memory input",
+            "error"
         };
     }
 
@@ -30,7 +31,9 @@ CommandResult cmdRemember(const std::string& arg) {
             ErrorManager::getUserMessage("ERR_MEMORY_BAD_FORMAT"),
             false,
             sf::Color::Red,
-            "ERR_MEMORY_BAD_FORMAT"
+            "ERR_MEMORY_BAD_FORMAT",
+            "Bad memory format",
+            "error"
         };
     }
 
@@ -39,17 +42,13 @@ CommandResult cmdRemember(const std::string& arg) {
 
     longTermMemory[key] = value;
 
-    // persist memory
-    std::ofstream f("memory.json");
-    if (f.is_open()) {
-        f << longTermMemory.dump(4);
-        f.close();
-    }
-
     return {
         "[Memory] Remembered: " + key,
         true,
-        sf::Color::Green
+        sf::Color::Green,
+        "ERR_NONE",
+        "Remembered " + key,
+        "routine"
     };
 }
 
@@ -62,22 +61,30 @@ CommandResult cmdRecall(const std::string& arg) {
             ErrorManager::getUserMessage("ERR_MEMORY_MISSING_KEY"),
             false,
             sf::Color::Red,
-            "ERR_MEMORY_MISSING_KEY"
+            "ERR_MEMORY_MISSING_KEY",
+            "Missing memory key",
+            "error"
         };
     }
 
     if (longTermMemory.contains(arg)) {
+        std::string value = longTermMemory[arg].get<std::string>();
         return {
-            "[Memory] " + arg + " = " + longTermMemory[arg].get<std::string>(),
+            "[Memory] " + arg + " = " + value,
             true,
-            sf::Color::Cyan
+            sf::Color::Cyan,
+            "ERR_NONE",
+            arg + " is " + value,
+            "summary"
         };
     } else {
         return {
             ErrorManager::getUserMessage("ERR_MEMORY_KEY_NOT_FOUND") + ": " + arg,
             false,
             sf::Color::Red,
-            "ERR_MEMORY_KEY_NOT_FOUND"
+            "ERR_MEMORY_KEY_NOT_FOUND",
+            "Memory key not found",
+            "error"
         };
     }
 }
@@ -91,31 +98,31 @@ CommandResult cmdForget(const std::string& arg) {
             ErrorManager::getUserMessage("ERR_MEMORY_MISSING_KEY"),
             false,
             sf::Color::Red,
-            "ERR_MEMORY_MISSING_KEY"
+            "ERR_MEMORY_MISSING_KEY",
+            "Missing memory key",
+            "error"
         };
     }
 
     if (longTermMemory.contains(arg)) {
         longTermMemory.erase(arg);
 
-        // persist memory
-        std::ofstream f("memory.json");
-        if (f.is_open()) {
-            f << longTermMemory.dump(4);
-            f.close();
-        }
-
         return {
             "[Memory] Forgotten: " + arg,
             true,
-            sf::Color::Green
+            sf::Color::Green,
+            "ERR_NONE",
+            "Forgotten " + arg,
+            "routine"
         };
     } else {
         return {
             ErrorManager::getUserMessage("ERR_MEMORY_KEY_NOT_FOUND") + ": " + arg,
             false,
             sf::Color::Red,
-            "ERR_MEMORY_KEY_NOT_FOUND"
+            "ERR_MEMORY_KEY_NOT_FOUND",
+            "Memory key not found",
+            "error"
         };
     }
 }

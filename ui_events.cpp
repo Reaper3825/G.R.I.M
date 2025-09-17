@@ -1,13 +1,11 @@
-
 #include <SFML/Graphics.hpp>
 #include <string>
 #include <vector>
 #include <filesystem>
 #include <nlohmann/json.hpp>
 #include "console_history.hpp"
-#include "commands/commands_core.hpp"   // 👈 FIXED
+#include "commands/commands_core.hpp"   // 👈 CommandResult + handleCommand
 #include "nlp.hpp"
-
 
 // -------------------------------------------------------------
 // Handle UI events (keyboard input, dispatch commands, etc.)
@@ -34,17 +32,8 @@ bool processEvents(sf::RenderWindow& window,
                 buffer.clear();
 
                 if (!input.empty()) {
-                    history.push("> " + input, sf::Color::Green);
-
-                    Intent intent = g_nlp.parse(input);
-                    if (intent.matched) {
-                        handleCommand(input);  // ✅ FIXED: pass full raw input
-                    } else {
-                        history.push("[NLP] No intent matched for input: '" + input +
-                                    "' (rules loaded=" + std::to_string(g_nlp.rule_count()) + ")",
-                                    sf::Color::Red);
-                    }
-
+                    // 🔹 Always funnel through handleCommand
+                    handleCommand(input);
                 }
             } else if (event.text.unicode == 8) { // Backspace
                 if (!buffer.empty()) buffer.pop_back();

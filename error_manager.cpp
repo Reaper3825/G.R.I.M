@@ -1,6 +1,5 @@
 #include "error_manager.hpp"
 #include "commands/commands_core.hpp" // For CommandResult
-#include "console_history.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -52,7 +51,7 @@ namespace Logger {
         if (result.success) {
             log(Level::INFO, result.message);
         } else {
-            if (!result.errorCode.empty()) {
+            if (!result.errorCode.empty() && result.errorCode != "ERR_NONE") {
                 std::string debugMsg = ErrorManager::getDebugMessage(result.errorCode);
                 log(Level::ERROR, result.errorCode + " -> " + debugMsg);
             } else {
@@ -117,12 +116,20 @@ std::string ErrorManager::getDebugMessage(const std::string& code) {
     return "[Debug] No debug message for code: " + code;
 }
 
-void ErrorManager::report(const std::string& code) {
+CommandResult ErrorManager::report(const std::string& code) {
     std::string userMsg  = getUserMessage(code);
     std::string debugMsg = getDebugMessage(code);
 
-    extern ConsoleHistory history;
-    history.push(userMsg, sf::Color::Red);
+    CommandResult result;
+    result.success   = false;
+    result.message   = userMsg;
+    result.color     = sf::Color::Red;
+    result.errorCode = code;
+
+    // By default, don’t auto-speak errors unless explicitly requested
+    result.voice     = "";
+    result.category  = "error";
 
     Logger::log(Logger::Level::ERROR, code + " -> " + debugMsg);
+    return result;
 }

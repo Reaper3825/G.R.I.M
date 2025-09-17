@@ -15,10 +15,14 @@ class ConsoleHistory;
 // CommandResult: unified return type for all commands
 // ------------------------------------------------------------
 struct CommandResult {
-    std::string message;    // user-facing text
-    bool success;           // true if command succeeded
-    sf::Color color;        // console display color
-    std::string errorCode;  // optional error code for ErrorManager/Logger
+    std::string message;    // user-facing text (console)
+    bool success = true;    // true if command succeeded
+    sf::Color color = sf::Color::White;  // console display color
+    std::string errorCode = "ERR_NONE";  // optional error code
+
+    // 🔹 New fields for voice + categorization
+    std::string voice;      // what to speak (optional, leave empty to mute)
+    std::string category;   // voice category (routine, summary, error, etc.)
 };
 
 // ------------------------------------------------------------

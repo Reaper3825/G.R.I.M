@@ -29,7 +29,9 @@ CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
             ErrorManager::getUserMessage("ERR_VOICE_NO_SPEECH"),
             false,
             sf::Color::Red,
-            "ERR_VOICE_NO_SPEECH"
+            "ERR_VOICE_NO_SPEECH",
+            "No speech detected",
+            "error"
         };
     }
 
@@ -38,9 +40,12 @@ CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
     handleCommand(transcript);
 
     return {
-        transcript,   // Only transcript goes into history
+        transcript,               // Show transcript in history
         true,
-        sf::Color::Cyan
+        sf::Color::Cyan,
+        "ERR_NONE",
+        "Voice command processed", // short acknowledgment
+        "routine"
     };
 }
 
@@ -53,7 +58,9 @@ CommandResult cmdVoiceStream([[maybe_unused]] const std::string& arg) {
             ErrorManager::getUserMessage("ERR_VOICE_NO_CONTEXT"),
             false,
             sf::Color::Red,
-            "ERR_VOICE_NO_CONTEXT"
+            "ERR_VOICE_NO_CONTEXT",
+            "Voice context missing",
+            "error"
         };
     }
 
@@ -61,14 +68,19 @@ CommandResult cmdVoiceStream([[maybe_unused]] const std::string& arg) {
         return {
             "[Voice] Streaming started.",
             true,
-            sf::Color::Green
+            sf::Color::Green,
+            "ERR_NONE",
+            "Voice streaming started",
+            "routine"
         };
     } else {
         return {
             ErrorManager::getUserMessage("ERR_VOICE_STREAM_FAIL"),
             false,
             sf::Color::Red,
-            "ERR_VOICE_STREAM_FAIL"
+            "ERR_VOICE_STREAM_FAIL",
+            "Voice streaming failed",
+            "error"
         };
     }
 }

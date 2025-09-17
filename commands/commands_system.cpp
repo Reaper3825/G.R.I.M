@@ -37,6 +37,8 @@ CommandResult cmdSystemInfo([[maybe_unused]] const std::string& arg) {
         output.str(),     // message (multi-line string)
         true,             // success flag
         sf::Color::Cyan,  // display color
-        ""                // errorCode (empty = no error)
+        "ERR_NONE",       // no error
+        "System information shown", // voice
+        "summary"                  // category
     };
 }

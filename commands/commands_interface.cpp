@@ -14,7 +14,9 @@ CommandResult cmdClean([[maybe_unused]] const std::string& arg) {
         "[Utility] Console cleared.",
         true,
         sf::Color::Green,
-        ""   // no errorCode
+        "ERR_NONE",
+        "Console cleared",   // voice
+        "routine"            // category
     };
 }
 
@@ -45,6 +47,8 @@ CommandResult cmdShowHelp([[maybe_unused]] const std::string& arg) {
         helpText,
         true,
         sf::Color::Cyan,
-        ""   // no errorCode
+        "ERR_NONE",
+        "Help shown",        // voice
+        "summary"            // category
     };
 }

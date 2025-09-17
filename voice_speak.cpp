@@ -83,6 +83,13 @@ bool speakLocal(const std::string& text, const std::string& voiceModel) {
         return false;
     }
 
+    // 🔹 Force output to default audio device
+    hr = pVoice->SetOutput(NULL, TRUE);
+    if (FAILED(hr)) {
+        std::cerr << "[Voice] Failed to bind voice to default audio device, HRESULT=0x"
+                  << std::hex << hr << std::dec << "\n";
+    }
+
     // 🔹 Enumerate installed voices
     IEnumSpObjectTokens* cpEnum = nullptr;
     hr = SpEnumTokens(SPCAT_VOICES, NULL, NULL, &cpEnum);
@@ -117,8 +124,8 @@ bool speakLocal(const std::string& text, const std::string& voiceModel) {
         std::cerr << "[Voice] No voices found or SpEnumTokens failed.\n";
     }
 
-    // 🔹 Speak (async) but wait until done before cleanup
-    hr = pVoice->Speak(wtext.c_str(), SPF_ASYNC, NULL);
+    // 🔹 Speak synchronously
+    hr = pVoice->Speak(wtext.c_str(), SPF_DEFAULT, NULL);
     if (FAILED(hr)) {
         std::cerr << "[Voice] SAPI Speak() failed, HRESULT=0x"
                   << std::hex << hr << std::dec << "\n";
@@ -126,8 +133,6 @@ bool speakLocal(const std::string& text, const std::string& voiceModel) {
         ::CoUninitialize();
         return false;
     }
-
-    pVoice->WaitUntilDone(10000);
 
     pVoice->Release();
     ::CoUninitialize();
@@ -215,10 +220,9 @@ bool speakText(const std::string& text, bool preferOnline) {
 
 // =========================================================
 // Unified Entry Point: speak (category-based)
-// Just forwards into speakText()
 // =========================================================
 void speak(const std::string& text, const std::string& category) {
-    (void)category; // category currently not used for anything beyond config rules
+    (void)category; // category currently not used
     speakText(text, false);
 }
 
