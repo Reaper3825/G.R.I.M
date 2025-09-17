@@ -4,12 +4,14 @@
 #include "system_detect.hpp"
 #include "aliases.hpp"     // 🔹 for app alias resolution
 #include "nlp.hpp"
+#include "ai.hpp"
 
 #include <nlohmann/json.hpp>
 #include <SFML/Graphics.hpp>
 #include <fstream>
 #include <iostream>
 #include <algorithm>
+#include <cpr/cpr.h>       // 🔹 Needed for Ollama HTTP
 
 #ifdef _WIN32
 #include <windows.h>
@@ -50,32 +52,30 @@ CommandResult cmdAiBackend(const std::string& arg) {
 
     if (input.empty()) {
         return {
-            "[AI] Current backend: " + aiConfig.value("backend", "openai"),
+            "[AI] Current backend: " + resolveBackendURL(),
             true,
             sf::Color::Cyan,
             "ERR_NONE",
-            "Current AI backend",   // voice
-            "summary"               // category
+            "Current AI backend",
+            "summary"
         };
     }
 
     std::string selected = (input == "auto") ? autoSelectBackend() : input;
 
     if (selected == "ollama" || selected == "localai" || selected == "openai") {
-    aiConfig["backend"] = selected;
+        aiConfig["backend"] = selected;
 
-    // Config persistence is centralized — just mark in-memory change.
-    // bootstrap_config handles saving on next boot or via a dedicated save function.
-    return {
-        "[AI] Backend set to: " + selected,
-        true,
-        sf::Color::Green,
-        "ERR_NONE",
-        "Backend set to " + selected,
-        "routine"
-    };
-}
-
+        // Config persistence is centralized — just mark in-memory change.
+        return {
+            "[AI] Backend set to: " + selected,
+            true,
+            sf::Color::Green,
+            "ERR_NONE",
+            "Backend set to " + selected,
+            "routine"
+        };
+    }
 
     return {
         ErrorManager::getUserMessage("ERR_AI_INVALID_BACKEND") + ": " + input,
@@ -106,58 +106,72 @@ CommandResult cmdReloadNlp(const std::string& /*arg*/) {
 // [AI] General query (catch-all) → grim_ai
 // ------------------------------------------------------------
 CommandResult cmdGrimAi(const std::string& arg) {
-    std::string query = trim(arg);
+    std::cerr << "[AI] cmdGrimAi called with arg=\"" << arg << "\"\n";
 
-    if (query.empty()) {
-        return {
-            ErrorManager::getUserMessage("ERR_AI_NO_QUERY"),
-            false,
-            sf::Color::Red,
-            "ERR_AI_NO_QUERY",
-            "No query provided",
-            "error"
-        };
-    }
+    // Resolve backend so logs are clear
+    std::string backend = resolveBackendURL();
+    std::cerr << "[AI] Current backend resolved: " << backend << "\n";
 
-    std::string backend = aiConfig.value("backend", "openai");
-    std::string response;
+    // Special handling for Ollama backend
+    if (backend == "ollama") {
+        std::string model  = aiConfig.value("default_model", "mistral");
+        std::string prompt = arg;
 
-    try {
-        if (backend == "openai") {
-            response = "[Stub: OpenAI would answer here]";
-        } else if (backend == "ollama") {
-            response = "[Stub: Ollama would answer here]";
-        } else if (backend == "localai") {
-            response = "[Stub: LocalAI would answer here]";
-        } else {
-            return {
-                ErrorManager::getUserMessage("ERR_AI_INVALID_BACKEND") + ": " + backend,
-                false,
-                sf::Color::Red,
-                "ERR_AI_INVALID_BACKEND",
-                "Invalid backend",
-                "error"
-            };
+        std::string modelCopy = model;
+        if (modelCopy.find(':') == std::string::npos) {
+            modelCopy += ":latest"; // default tag
         }
-    } catch (const std::exception& ex) {
+
+        auto resp = cpr::Post(
+            cpr::Url{ aiConfig.value("ollama_url", "http://127.0.0.1:11434") + "/api/generate" },
+            cpr::Header{{"Content-Type","application/json"}},
+            cpr::Body{ nlohmann::json{
+                {"model", modelCopy},
+                {"prompt", prompt},
+                {"stream", false}   // 🔹 non-streaming mode
+            }.dump() }
+        );
+
+        if (resp.status_code == 200) {
+            auto j = nlohmann::json::parse(resp.text, nullptr, false);
+            if (!j.is_discarded() && j.contains("response")) {
+                std::string reply = j["response"].get<std::string>();
+
+                return {
+                    reply,
+                    true,
+                    sf::Color::Cyan,
+                    "ERR_NONE",
+                    reply,   // voice
+                    "routine"
+                };
+            }
+        }
+
         return {
-            ErrorManager::getUserMessage("ERR_AI_QUERY_FAILED") + " (" + ex.what() + ")",
+            "[AI] Ollama backend error",
             false,
             sf::Color::Red,
-            "ERR_AI_QUERY_FAILED",
-            "AI query failed",
+            "ERR_AI_BACKEND_FAILED",
+            "Ollama backend error",
             "error"
         };
     }
 
-    return {
-        "[AI] " + response,
-        true,
-        sf::Color::Cyan,
-        "ERR_NONE",
-        response,   // voice: read the actual answer
-        "summary"
-    };
+    // 🔹 Run the default AI pipeline (localai / openai)
+    CommandResult result = ai_process(arg);
+
+    // Make sure category + color are consistent
+    if (result.category.empty()) result.category = "routine";
+    if (result.color == sf::Color()) result.color = sf::Color::Cyan;
+
+    // If the AI failed, report error through ErrorManager
+    if (!result.success) {
+        std::cerr << "[AI] grim_ai failed with code=" << result.errorCode << "\n";
+        return ErrorManager::report(result.errorCode);
+    }
+
+    return result;
 }
 
 // ------------------------------------------------------------
@@ -286,4 +300,3 @@ CommandResult cmdSearchWeb(const std::string& arg) {
     };
 #endif
 }
-7

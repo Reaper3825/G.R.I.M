@@ -189,7 +189,6 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
 // =========================================================
 CommandResult ai_process(const std::string& input) {
     CommandResult result;
-    result.command   = "grim_ai";
     result.category  = "routine";
     result.color     = sf::Color::Cyan;
     result.success   = false;
