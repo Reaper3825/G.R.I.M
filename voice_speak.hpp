@@ -1,18 +1,25 @@
 #pragma once
 #include <string>
 
-// =========================================================
-// Voice interface (public API)
-// =========================================================
+namespace Voice {
 
-// 🔹 Play back an audio file (async, non-blocking)
-void playAudio(const std::string& path);
+    // =========================================================
+    // Voice interface (public API)
+    // =========================================================
 
-// 🔹 Local speech synthesis (SAPI on Windows, say on macOS, Piper on Linux)
-bool speakLocal(const std::string& text, const std::string& voiceModel);
+    // 🔹 Play back an audio file (async, non-blocking)
+    void playAudio(const std::string& path);
 
-// 🔹 Cloud speech synthesis (stub for now)
-bool speakCloud(const std::string& text, const std::string& engine);
+    // 🔹 Local speech synthesis (SAPI on Windows, say on macOS, Piper on Linux)
+    bool speakLocal(const std::string& text, const std::string& voiceModel);
 
-// 🔹 Unified entry point (decides local/cloud/hybrid based on ai_config.json)
-void speak(const std::string& text, const std::string& category);
+    // 🔹 Cloud speech synthesis (stub for now)
+    bool speakCloud(const std::string& text, const std::string& engine);
+
+    // 🔹 Unified entry point (decides local/cloud/hybrid based on ai_config.json)
+    void speak(const std::string& text, const std::string& category);
+
+    // 🔹 Simplified helper (used in main.cpp for greetings, system messages, etc.)
+    bool speakText(const std::string& text, bool preferOnline = true);
+
+} // namespace Voice

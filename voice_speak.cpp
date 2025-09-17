@@ -31,6 +31,8 @@ static nlohmann::json getVoiceConfig() {
     return aiConfig["voice"];
 }
 
+namespace Voice {
+
 // =========================================================
 // Audio Playback (SFML, async)
 // =========================================================
@@ -125,7 +127,6 @@ bool speakLocal(const std::string& text, const std::string& voiceModel) {
         return false;
     }
 
-    // Wait up to 10 seconds for speech to finish
     pVoice->WaitUntilDone(10000);
 
     pVoice->Release();
@@ -181,37 +182,44 @@ bool speakCloud(const std::string& text, const std::string& engine) {
 }
 
 // =========================================================
-// Public Entry
+// Unified Helper: speakText
 // =========================================================
-void speak(const std::string& text, const std::string& category) {
+bool speakText(const std::string& text, bool preferOnline) {
     auto cfg = getVoiceConfig();
 
-    std::string rule        = cfg["rules"].value(category, "local");
-    std::string mode        = cfg.value("mode", "local");
+    std::string mode        = cfg.value("mode", "hybrid");
     std::string localEngine = cfg.value("local_engine", "en_US-amy-medium.onnx");
     std::string cloudEngine = cfg.value("cloud_engine", "openai");
 
-    std::cout << "[DEBUG][Voice] speak(\"" << text << "\", category=" << category
-              << ") → mode=" << mode << " rule=" << rule
-              << " local=" << localEngine << " cloud=" << cloudEngine << "\n";
+    std::cout << "[DEBUG][Voice] speakText(\"" << text
+              << "\", preferOnline=" << (preferOnline ? "true" : "false")
+              << ") → mode=" << mode
+              << " local=" << localEngine
+              << " cloud=" << cloudEngine << "\n";
 
     bool success = false;
 
-    if (mode == "local") {
+    if (preferOnline && mode != "local") {
+        success = speakCloud(text, cloudEngine);
+    }
+    if (!success) {
         success = speakLocal(text, localEngine);
-    }
-    else if (mode == "cloud") {
-        success = speakCloud(text, cloudEngine);
-    }
-    else if (mode == "hybrid") {
-        success = speakCloud(text, cloudEngine);
-        if (!success) {
-            std::cerr << "[Voice] Cloud failed, falling back to local.\n";
-            success = speakLocal(text, localEngine);
-        }
     }
 
     if (!success) {
         std::cerr << "[Voice] Speech failed for text: \"" << text << "\"\n";
+        return false;
     }
+    return true;
 }
+
+// =========================================================
+// Unified Entry Point: speak (category-based)
+// Just forwards into speakText()
+// =========================================================
+void speak(const std::string& text, const std::string& category) {
+    (void)category; // category currently not used for anything beyond config rules
+    speakText(text, false);
+}
+
+} // namespace Voice

@@ -27,6 +27,9 @@ endif()
 # ---- Portable mode ----
 option(GRIM_PORTABLE_ONLY "Force resources to live next to executable" OFF)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+
 # ---- Sources ----
 file(GLOB COMMAND_SOURCES "commands/*.cpp")
 file(GLOB COMMAND_HEADERS "commands/*.hpp")

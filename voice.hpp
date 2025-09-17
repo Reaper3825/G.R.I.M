@@ -6,7 +6,7 @@
 namespace Voice {
 
     struct State {
-        ::whisper_context* ctx = nullptr;  // use global scope type
+        ::whisper_context* ctx = nullptr;  // global whisper context
         int inputDeviceIndex = -1;
         int minSpeechMs = 500;
         int minSilenceMs = 1200;
@@ -14,13 +14,20 @@ namespace Voice {
 
     extern State g_state;
 
+    // =========================================================
     // Whisper setup
+    // =========================================================
     bool initWhisper(const std::string& modelName, std::string* err = nullptr);
 
-    // Voice input (speech → text), pulls thresholds directly from aiConfig
+    // =========================================================
+    // Voice input (speech → text)
+    // Loads thresholds from aiConfig directly
+    // =========================================================
     std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemory);
 
-    // Voice output (text → speech)
-    bool speakText(const std::string& text, bool preferOnline = true);
+    // =========================================================
+    // Cleanup
+    // =========================================================
+    void shutdown();
 
 } // namespace Voice

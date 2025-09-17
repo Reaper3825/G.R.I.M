@@ -233,16 +233,18 @@ void runBootstrapChecks(int argc, char** argv) {
         grimLog("[Config] NLP rules loaded");
     }
 
-    // Synonyms (still needed)
+    // Synonyms
     if (!fs::exists(resDir / "synonyms.json")) {
         std::ofstream(resDir / "synonyms.json") << "{}\n";
         grimLog("[Config] synonyms.json created");
     }
 
     // ---------------------------------------------------------
-    // Aliases system (NEW)
+    // Aliases system (cache only at bootstrap)
     // ---------------------------------------------------------
-    aliases::init(); // 🔹 loads cached aliases.json, spawns silent refresh
+    grimLog("[aliases] Bootstrap: initializing (cache only, no scan)");
+    aliases::init(); // load cached JSON only
+    grimLog("[aliases] Bootstrap: init finished");
 
     // Fonts
     std::string fontPath = findAnyFontInResources(argc, argv, &history);
