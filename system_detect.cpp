@@ -1,25 +1,24 @@
 #include "system_detect.hpp"
-#include <iostream>
-#include <thread>
 #include <cstdlib>
 
 // Platform headers
 #ifdef _WIN32
-#include <windows.h>
+    #include <windows.h>
 #elif __APPLE__
-#include <sys/types.h>
-#include <sys/sysctl.h>
-#include <sys/utsname.h>
+    #include <sys/types.h>
+    #include <sys/sysctl.h>
+    #include <sys/utsname.h>
 #elif __linux__
-#include <sys/utsname.h>
-#include <sys/sysinfo.h>
-#include <unistd.h>
+    #include <sys/utsname.h>
+    #include <sys/sysinfo.h>
+    #include <unistd.h>
 #endif
 
 // CUDA headers (only if compiled with cuBLAS)
 #ifdef GGML_USE_CUBLAS
-#include <cuda_runtime.h>
+    #include <cuda_runtime.h>
 #endif
+
 
 // =========================================================
 // Dependency helpers (Linux Piper detection)

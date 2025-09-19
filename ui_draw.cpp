@@ -1,7 +1,7 @@
 #include "ui_draw.hpp"
 #include "ui_helpers.hpp"   // g_ui_textbox + g_inputBuffer
-#include <algorithm>
-#include <cmath>
+
+
 
 // Globals defined in main.cpp, declared extern in ui_helpers.hpp
 extern sf::Text g_ui_textbox;       // renderable text object

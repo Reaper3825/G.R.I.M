@@ -1,10 +1,7 @@
 #include "error_manager.hpp"
-#include "commands/commands_core.hpp" // For CommandResult
-
-#include <fstream>
-#include <iostream>
+#include "commands/commands_core.hpp"
 #include <ctime>
-#include <filesystem>
+
 
 static std::ofstream logStream;
 

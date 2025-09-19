@@ -4,9 +4,6 @@
 #include "resources.hpp"
 #include "console_history.hpp"
 
-#include <nlohmann/json.hpp>
-#include <fstream>
-#include <iostream>
 
 NLP g_nlp;
 

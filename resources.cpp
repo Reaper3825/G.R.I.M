@@ -1,16 +1,10 @@
 #include "resources.hpp"
 #include "console_history.hpp"
 
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <nlohmann/json.hpp>
-
-#if defined(_WIN32)
-    #include <windows.h>
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
     #include <mach-o/dyld.h>
 #endif
+
 
 namespace fs = std::filesystem;
 

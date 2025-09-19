@@ -5,13 +5,6 @@
 #include "error_manager.hpp"
 
 #include <cpr/cpr.h>
-#include <nlohmann/json.hpp>
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <thread>
-#include <future>
-#include <functional>
 
 // ---------------- Globals ----------------
 double g_silenceThreshold = 1e-6; // default, overridden in aiConfig

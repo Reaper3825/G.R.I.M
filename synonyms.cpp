@@ -1,9 +1,5 @@
 #include "synonyms.hpp"
-#include <nlohmann/json.hpp>
-#include <fstream>
-#include <iostream>
-#include <unordered_map>
-#include <algorithm>
+
 
 // ---------------- Globals ----------------
 

@@ -1,8 +1,4 @@
-#include <nlohmann/json.hpp>
-#include <fstream>
-#include <string>
-#include <iostream>
-
+// ai_style.cpp
 struct AIStyle {
     std::string tone;
     double optimism_level;
