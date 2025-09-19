@@ -1,8 +1,8 @@
-#include "commands/commands_core.hpp" 
+#include "commands/commands_core.hpp"
 #include "commands/commands_helpers.hpp"
 
-#include "voice.hpp" 
-#include "voice_speak.hpp" 
+#include "voice.hpp"
+#include "voice_speak.hpp"
 #include "voice_stream.hpp"
 #include "response_manager.hpp"
 
@@ -13,7 +13,7 @@
 #include "ui_events.hpp"
 #include "error_manager.hpp"
 #include "bootstrap.hpp"
-#include "aliases.hpp" 
+#include "aliases.hpp"
 
 #include <iostream>
 #include <filesystem>
@@ -96,6 +96,18 @@ int main(int argc, char** argv) {
     g_ui_textbox.setCharacterSize(20);
     g_ui_textbox.setFillColor(sf::Color::White);
 
+    // ---------------- Voice (Coqui / Local TTS) ----------------
+    if (aiConfig.contains("voice") &&
+        aiConfig["voice"].value("engine", "sapi") == "coqui")
+    {
+        if (Voice::initTTS()) {
+            std::cout << "[Voice] Coqui TTS bridge initialized\n";
+        } else {
+            std::cerr << "[Voice] Failed to initialize Coqui TTS bridge\n";
+        }
+    }
+
+    // ---------------- Greeting ----------------
     ResponseManager::systemMessage(
         "[GRIM] Startup complete. Hello, Austin — I am online.",
         sf::Color::Green
@@ -125,7 +137,7 @@ int main(int argc, char** argv) {
 
             // ✅ Voice hotkey (configurable, variable-driven)
             if (event.type == sf::Event::KeyPressed &&
-                event.key.code == g_voiceHotkey) 
+                event.key.code == g_voiceHotkey)
             {
                 std::cout << "[Voice] Hotkey pressed → capturing voice\n";
                 std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
@@ -153,8 +165,10 @@ int main(int argc, char** argv) {
         }
     }
 
-    // ✅ Persist learned memory on exit
-    saveMemory();
+    // ---------------- Shutdown ----------------
+    Voice::shutdownTTS();   // 🔹 Clean up Coqui bridge
+    saveMemory();           // 🔹 Persist learned memory
+
     std::cout << "[DEBUG] Main exited cleanly\n";
     return 0;
 }
