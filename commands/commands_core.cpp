@@ -17,15 +17,6 @@
 #include "commands_core.hpp"
 #include "aliases.hpp"            // 🔹 new: alias resolution
 
-#include <nlohmann/json.hpp>
-#include <unordered_map>
-#include <filesystem>
-#include <algorithm>
-#include <cctype>
-#include <iostream>
-#include <vector>
-#include <sstream>
-
 using Voice::speak;
 
 // ------------------------------------------------------------

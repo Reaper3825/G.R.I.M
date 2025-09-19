@@ -5,10 +5,8 @@
     #define NOMINMAX              // prevent min/max macros
     #define WIN32_LEAN_AND_MEAN   // strip rarely-used APIs from windows.h
 
-    #include <windows.h>
     #include <sapi.h>             // ISpVoice, ISpStream
     #include <sphelper.h>    
-    #include <SFML/Audio.hpp>     // SpConvertStreamFormatEnum, SPBindToFile
 
     // Link against required libs
     #pragma comment(lib, "sapi.lib")
@@ -33,18 +31,32 @@
 #include "commands_core.hpp"
 #include "voice_speak.hpp"
 
-// ---------------------------------------------------------
-// External library includes
-// ---------------------------------------------------------
-#include <SFML/Graphics.hpp>
-#include <nlohmann/json.hpp>
 
-// ---------------------------------------------------------
-// Standard library includes
-// ---------------------------------------------------------
-#include <filesystem>
-#include <string>
-#include <iostream>   // useful for debug logging
+
+
+namespace {
+    bool playWavFile(const std::string& wavPath) {
+        static std::vector<sf::Sound> sounds; // keep sounds alive until finished
+        sf::SoundBuffer* buffer = new sf::SoundBuffer();
+
+        if (!buffer->loadFromFile(wavPath)) {
+            std::cerr << "[Voice][Error] Failed to load audio: " << wavPath << std::endl;
+            delete buffer;
+            return false;
+        }
+
+        sf::Sound sound;
+        sound.setBuffer(*buffer);
+        sound.play();
+
+        // push_back moves + copies the sf::Sound (but still needs buffer lifetime)
+        sounds.push_back(sound);
+
+        std::cout << "[Voice] Playing audio file: " << wavPath << std::endl;
+        return true;
+    }
+}
+// useful for debug logging
 
 // Externals
 extern nlohmann::json aiConfig;

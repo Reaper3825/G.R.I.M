@@ -3,11 +3,6 @@
 #include "console_history.hpp"
 #include "error_manager.hpp"
 
-#include <nlohmann/json.hpp>
-#include <sstream>
-#include <SFML/Graphics.hpp>
-#include <iostream>
-
 // ------------------------------------------------------------
 // alias list → dump aliases by section
 // ------------------------------------------------------------

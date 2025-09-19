@@ -15,19 +15,14 @@
 #include "bootstrap.hpp"
 #include "aliases.hpp"
 
-#include <iostream>
-#include <filesystem>
-#include <string>
-#include <SFML/Graphics.hpp>
-#include <nlohmann/json.hpp>
-
+// These are NOT in pch.hpp and must stay
 #ifdef _WIN32
-#include <windows.h>
-#undef ERROR
-#include <shellapi.h>
-#include <psapi.h>
-#include <winternl.h>
+  #include <shellapi.h>
+  #include <psapi.h>
+  #include <winternl.h>
+  #undef ERROR
 #endif
+
 
 namespace fs = std::filesystem;
 

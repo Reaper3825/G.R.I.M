@@ -1,4 +1,4 @@
-#include "commands_ai.hpp" 
+#include "commands_ai.hpp"
 #include "response_manager.hpp"
 #include "error_manager.hpp"
 #include "system_detect.hpp"
@@ -6,16 +6,11 @@
 #include "nlp.hpp"
 #include "ai.hpp"
 
-#include <nlohmann/json.hpp>
-#include <SFML/Graphics.hpp>
-#include <fstream>
-#include <iostream>
-#include <algorithm>
+// External libs not in pch.hpp
 #include <cpr/cpr.h>       // 🔹 Needed for Ollama HTTP
 
 #ifdef _WIN32
-#include <windows.h>
-#include <shellapi.h>
+  #include <shellapi.h>
 #endif
 
 // ------------------------------------------------------------

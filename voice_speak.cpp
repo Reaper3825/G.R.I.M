@@ -1,15 +1,6 @@
 #include "voice_speak.hpp"
 #include "resources.hpp"
-#include "ai.hpp"   // extern aiConfig
-
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <filesystem>
-#include <cstdlib>
-#include <thread>
-#include <nlohmann/json.hpp>
-#include <SFML/Audio.hpp>
+#include "ai.hpp"
 
 namespace fs = std::filesystem;
 
@@ -22,6 +13,7 @@ namespace fs = std::filesystem;
 #include <objbase.h>
 #include <sapi.h>
 #include <sphelper.h>
+#include <atlbase.h>
 #endif
 
 // =========================================================
@@ -44,7 +36,7 @@ static nlohmann::json getVoiceConfig() {
 namespace Voice {
 
 // =========================================================
-// Audio Playback (SFML, async)
+// Audio Playback (SFML, async) – used for Coqui WAVs
 // =========================================================
 void playAudio(const std::string& path) {
     std::thread([path]() {
@@ -65,7 +57,7 @@ void playAudio(const std::string& path) {
 
         sf::Clock clock;
         while (sound.getStatus() == sf::Sound::Playing) {
-            sf::sleep(sf::milliseconds(100));
+            sf::sleep(sf::milliseconds(1000));
             std::cout << "[Voice][DEBUG] elapsed: "
                       << clock.getElapsedTime().asSeconds()
                       << "s" << std::endl;
@@ -77,23 +69,90 @@ void playAudio(const std::string& path) {
     }).detach();
 }
 
+// =========================================================
+// Local Speech (Windows SAPI)
+// =========================================================
+bool speakLocal(const std::string& text, const std::string& /*voiceModel*/) {
+#ifdef _WIN32
+    HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    if (FAILED(hr)) {
+        std::cerr << "[Voice][SAPI] CoInitializeEx failed: 0x" << std::hex << hr << "\n";
+        return false;
+    }
 
-// =========================================================
-// Local Speech (SAPI/Piper fallback, unchanged)
-// =========================================================
-bool speakLocal(const std::string& text, const std::string& voiceModel) {
-    // ... keep your existing SAPI / macOS / Linux Piper implementation ...
-    // (unchanged for brevity)
+    ISpVoice* pVoice = nullptr;
+    hr = CoCreateInstance(CLSID_SpVoice, NULL, CLSCTX_ALL, IID_ISpVoice, (void**)&pVoice);
+    if (FAILED(hr) || !pVoice) {
+        std::cerr << "[Voice][SAPI] Failed to create ISpVoice: 0x" << std::hex << hr << "\n";
+        CoUninitialize();
+        return false;
+    }
+
+    // Convert UTF-8 string to wide string
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, NULL, 0);
+    std::wstring wtext(wlen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, &wtext[0], wlen);
+
+    // Debug start time
+    auto start = std::chrono::high_resolution_clock::now();
+    std::time_t now_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::cout << "[Voice][SAPI] Speak() started at "
+              << std::put_time(std::localtime(&now_time), "%Y-%m-%d %H:%M:%S")
+              << " with text: " << text << "\n";
+
+    // Enable event notifications
+    CSpEvent event;
+    CComPtr<ISpEventSource> cpEventSource;
+    pVoice->QueryInterface(&cpEventSource);
+    if (cpEventSource) {
+        cpEventSource->SetInterest(SPFEI(SPEI_END_INPUT_STREAM), SPFEI(SPEI_END_INPUT_STREAM));
+    }
+
+    // Speak async
+    hr = pVoice->Speak(wtext.c_str(), SPF_ASYNC, NULL);
+    if (FAILED(hr)) {
+        std::cerr << "[Voice][SAPI] Speak() failed: 0x" << std::hex << hr << "\n";
+        pVoice->Release();
+        CoUninitialize();
+        return false;
+    }
+
+    // Monitor speech progress
+    auto lastLog = std::chrono::high_resolution_clock::now();
+    if (cpEventSource) {
+        while (true) {
+            hr = event.GetFrom(cpEventSource);
+            if (SUCCEEDED(hr) && event.eEventId == SPEI_END_INPUT_STREAM) {
+                break;
+            }
+
+            auto now = std::chrono::high_resolution_clock::now();
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - lastLog).count() >= 1) {
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
+                std::cout << "[Voice][SAPI][DEBUG] elapsed: " << elapsed << "s\n";
+                lastLog = now;
+            }
+
+            Sleep(50);
+        }
+    } else {
+        std::cerr << "[Voice][SAPI] Warning: No event source available, falling back to WaitUntilDone.\n";
+        pVoice->WaitUntilDone(INFINITE);
+    }
+
+    auto end = std::chrono::high_resolution_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    std::cout << "[Voice][SAPI] Finished speaking in "
+              << elapsed << " ms (" << (elapsed / 1000.0) << "s)\n";
+
+    pVoice->Release();
+    CoUninitialize();
     return true;
-}
-
-// =========================================================
-// Cloud Speech (stub)
-// =========================================================
-bool speakCloud(const std::string& text, const std::string& engine) {
-    std::cerr << "[Voice] Cloud TTS (" << engine << ") not implemented yet.\n";
-    (void)text; (void)engine;
+#else
+    (void)text;
+    (void)voiceModel;
     return false;
+#endif
 }
 
 // =========================================================
@@ -157,7 +216,6 @@ bool initTTS() {
     g_ttsReady = true;
     return true;
 #else
-    // TODO: POSIX version using fork/exec + pipe
     std::cerr << "[Voice] initTTS not implemented on this platform yet.\n";
     return false;
 #endif
@@ -234,26 +292,6 @@ std::string coquiSpeak(const std::string& text,
 }
 
 // =========================================================
-// Unified Helper
-// =========================================================
-bool speakText(const std::string& text, bool preferOnline) {
-    auto cfg = getVoiceConfig();
-
-    std::string mode        = cfg.value("mode", "hybrid");
-    std::string localEngine = cfg.value("local_engine", "en_US-amy-medium.onnx");
-    std::string cloudEngine = cfg.value("cloud_engine", "openai");
-
-    bool success = false;
-    if (preferOnline && mode != "local") {
-        success = speakCloud(text, cloudEngine);
-    }
-    if (!success) {
-        success = speakLocal(text, localEngine);
-    }
-    return success;
-}
-
-// =========================================================
 // Unified Entry Point
 // =========================================================
 void speak(const std::string& text, const std::string& category) {
@@ -272,8 +310,6 @@ void speak(const std::string& text, const std::string& category) {
         if (!wav.empty()) playAudio(wav);
     } else if (engine == "sapi") {
         speakLocal(text, cfg.value("local_engine", ""));
-    } else {
-        speakCloud(text, engine);
     }
 }
 
