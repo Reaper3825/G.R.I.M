@@ -8,13 +8,6 @@
 
 #include <whisper.h>
 #include <portaudio.h>
-#include <iostream>
-#include <vector>
-#include <filesystem>
-#include <fstream>
-#include <cmath>
-#include <chrono>
-#include <nlohmann/json.hpp>
 
 namespace fs = std::filesystem;
 

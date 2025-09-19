@@ -4,19 +4,8 @@
 #include "ui_helpers.hpp"
 #include "commands/commands_core.hpp"   // 🔹 CommandResult
 
-#include <nlohmann/json.hpp>
-#include <fstream>
-#include <unordered_map>
-#include <iostream>
-#include <vector>
-#include <thread>
-#include <filesystem>
-#include <mutex>
-#include <sstream>
-#include <algorithm>
 #include <ctime>
-#include <chrono>
-#include <atomic>
+
 
 namespace fs = std::filesystem;
 

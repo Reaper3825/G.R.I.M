@@ -1,7 +1,4 @@
 #include "nlp.hpp"
-#include <fstream>
-#include <iostream>
-#include <nlohmann/json.hpp>
 
 // ------------------------------------------------------------
 // Load NLP rules from a JSON file into the global g_nlp object

@@ -9,14 +9,6 @@
 
 #include <whisper.h>
 #include <portaudio.h>
-#include <filesystem>
-#include <iostream>
-#include <thread>
-#include <mutex>
-#include <chrono>
-#include <cmath>
-#include <sstream>
-#include <algorithm>
 
 namespace fs = std::filesystem;
 

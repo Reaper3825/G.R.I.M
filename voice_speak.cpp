@@ -4,17 +4,10 @@
 
 namespace fs = std::filesystem;
 
-// =========================================================
-// Windows SAPI headers
-// =========================================================
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <objbase.h>
-#include <sapi.h>
-#include <sphelper.h>
-#include <atlbase.h>
+    #include <objbase.h>
 #endif
+
 
 // =========================================================
 // Persistent Coqui bridge state

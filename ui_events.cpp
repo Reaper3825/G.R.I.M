@@ -1,8 +1,3 @@
-#include <SFML/Graphics.hpp>
-#include <string>
-#include <vector>
-#include <filesystem>
-#include <nlohmann/json.hpp>
 #include "console_history.hpp"
 #include "commands/commands_core.hpp"   // 👈 CommandResult + handleCommand
 #include "nlp.hpp"
