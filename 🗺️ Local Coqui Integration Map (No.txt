@@ -1,0 +1,187 @@
+🗺️ Local Coqui Integration Map (No Server, No Cloud)
+Stage 1 – Environment Setup
+
+Install Coqui TTS runtime:
+
+pip install TTS
+
+
+Verify it works offline:
+
+tts --text "Hello Austin, GRIM is online." \
+    --model_name tts_models/en/vctk/vits \
+    --out_path test.wav
+
+
+✅ Confirms models can be pulled and used entirely local.
+
+Stage 2 – Persistent Bridge Process
+
+Instead of calling Coqui fresh every time → launch Python bridge once at GRIM startup.
+
+Python bridge loads model into RAM and stays alive.
+
+GRIM ↔ Bridge communication via stdin/stdout JSON.
+
+Reason: eliminates 3–5s reload penalty → reduces latency to ~0.5–1s.
+
+Stage 3 – Python Bridge (tts_bridge.py)
+
+Responsibilities:
+
+Load Coqui TTS model once.
+
+Listen for JSON commands from GRIM ({"text":"...", "speaker":"p225", "speed":1.0}).
+
+Generate .wav file into a temp dir.
+
+Return JSON with file path.
+
+Can later be extended with emotion, language, etc.
+
+Stage 4 – GRIM Integration
+
+In voice_speak.cpp:
+
+Add initTTS() to spawn Python bridge (popen/_popen).
+
+Add coquiSpeak() to:
+
+Write JSON request → stdin.
+
+Read JSON response ← stdout.
+
+Return path to .wav.
+
+Pipe .wav into existing Voice::playAudio() (already SFML-based).
+
+No duplication: GRIM doesn’t care if it’s Coqui, SAPI, or cloud — it just gets back a file to play.
+
+Stage 5 – Config Integration
+
+Extend ai_config.json:
+
+"voice": {
+  "mode": "local",         // local = SAPI, coqui = new bridge
+  "engine": "coqui",
+  "speaker": "p225",
+  "speed": 1.05,
+  "rules": {
+    "routine": "sapi",
+    "banter": "coqui",
+    "summary": "coqui"
+  }
+}
+
+
+✅ Lets you phase in Coqui gradually (e.g. only “banter” uses it at first).
+
+Stage 6 – Optimization (Optional)
+
+GPU: Install PyTorch with CUDA → inference ~3–6× faster.
+
+Model choice:
+
+VITS (natural, heavier).
+
+FastPitch (lighter, faster).
+
+Quantization: Export to ONNX INT8 → further ~30% speedup.
+
+Streaming (future): Stream audio as it generates for zero-delay playback.
+
+🔹 Flow Once Integrated
+GRIM command → ResponseManager
+   ↓
+ decides category → voice mode = coqui
+   ↓
+coquiSpeak() → sends JSON to Python bridge
+   ↓
+Python bridge (warm model) → generates temp .wav
+   ↓
+returns {"file":"grim_tts.wav"}
+   ↓
+Voice::playAudio("grim_tts.wav") via SFML
+   ↓
+Audio plays instantly
+
+
+⚡ End result: offline, human-like, <1s voice response, no servers, no cloud, no breakage of existing system.
+
+Do you want me to sketch out the actual directory/boot changes (where tts_bridge.py lives, how GRIM spawns it, where temp WAVs get written), so you’ve got a plug-and-play layout?
+
+You said:
+list the files that will need changes
+ChatGPT said:
+
+Alright — if we’re doing local-only Coqui integration (Python bridge + GRIM piping into it), here’s the exact file impact inside your repo:
+
+📂 Files That Will Need Changes
+1. voice_speak.cpp
+
+Add:
+
+initTTS() → spawns the Python bridge (tts_bridge.py) once at startup.
+
+coquiSpeak(text) → send JSON to Python, get .wav back.
+
+Branch in Voice::speak() to call Coqui when "engine":"coqui".
+
+Minor: still use existing Voice::playAudio() for playback.
+
+2. voice_speak.hpp
+
+Add declarations for initTTS() and coquiSpeak().
+
+Possibly extend Voice::speak() signature if we pass params like speaker, speed.
+
+3. ai_config.json (resources)
+
+Extend voice config to support Coqui:
+
+"voice": {
+  "engine": "sapi",   // default
+  "speaker": "p225",
+  "speed": 1.0,
+  "rules": {
+    "routine": "sapi",
+    "banter": "coqui",
+    "summary": "coqui"
+  }
+}
+
+4. response_manager.cpp
+
+Already routes categories → voice modes.
+
+Needs to recognize "coqui" as a valid mode and forward to Voice::speak() with the right engine.
+
+5. resources/
+
+New file: tts_bridge.py
+
+Lives in resources/python/ or similar.
+
+Loads Coqui once, listens on stdin, returns JSON with file path.
+
+6. (Optional) bootstrap_config.cpp
+
+If you want defaults auto-merged, extend bootstrap logic to inject voice.engine = "sapi" if missing → backwards compatible.
+
+🔹 Summary of Changed / New Files
+
+✅ Changed:
+
+voice_speak.cpp
+
+voice_speak.hpp
+
+response_manager.cpp
+
+ai_config.json
+
+(optional) bootstrap_config.cpp
+
+🆕 New:
+
+resources/python/tts_bridge.py

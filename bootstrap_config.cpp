@@ -46,26 +46,34 @@ nlohmann::json defaultAI() {
         {"ollama_url", "http://127.0.0.1:11434"},
         {"localai_url", "http://127.0.0.1:8080/v1"},
         {"default_model", "mistral"},
+
+        // 🔹 top-level silence detection keys (for backward compat)
         {"whisper_language", "en"},
         {"whisper_max_tokens", 32},
         {"silence_threshold", 0.02},
         {"silence_timeout_ms", 4000},
+
         {"voice", {
-            {"mode", "hybrid"},
+            {"mode", "local"},  
+            {"engine", "sapi"},       
             {"local_engine", "en_US-amy-medium.onnx"},
-            {"cloud_engine", "openai"},
+            {"speaker", "p225"},                      
+            {"speed", 1.0},                          
+
             {"rules", {
-                {"startup", "local"},
-                {"reminder", "local"},
-                {"summary", "cloud"},
-                {"banter", "cloud"}
+                {"startup", "sapi"},
+                {"reminder", "sapi"},
+                {"summary", "coqui"},
+                {"banter", "coqui"}
             }},
-            {"input_device_index", -1},
-            {"tts_url", "http://127.0.0.1:8080/tts"}
+
+            {"input_device_index", -1}
         }},
+
         {"api_keys", {
             {"openai", ""}, {"elevenlabs", ""}, {"azure", ""}
         }},
+
         {"whisper", {
             {"sampling_strategy", "beam"},
             {"temperature", 0.2},
@@ -74,6 +82,7 @@ nlohmann::json defaultAI() {
         }}
     };
 }
+
 
 nlohmann::json defaultErrors() {
     return {

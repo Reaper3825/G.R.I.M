@@ -2,7 +2,6 @@
 #include <string>
 
 namespace Voice {
-
     // =========================================================
     // Voice interface (public API)
     // =========================================================
@@ -16,10 +15,24 @@ namespace Voice {
     // 🔹 Cloud speech synthesis (stub for now)
     bool speakCloud(const std::string& text, const std::string& engine);
 
-    // 🔹 Unified entry point (decides local/cloud/hybrid based on ai_config.json)
+    // 🔹 Unified entry point (routes by category → engine)
     void speak(const std::string& text, const std::string& category);
 
-    // 🔹 Simplified helper (used in main.cpp for greetings, system messages, etc.)
+    // 🔹 Simplified helper (legacy mode: pick local/cloud)
     bool speakText(const std::string& text, bool preferOnline = true);
 
-} // namespace Voice
+    // =========================================================
+    // Coqui TTS Persistent Bridge
+    // =========================================================
+
+    // 🔹 Start the Python bridge (load model once into memory)
+    bool initTTS();
+
+    // 🔹 Stop the Python bridge (terminate process, close pipes)
+    void shutdownTTS();
+
+    // 🔹 Send text → receive .wav file path from bridge
+    std::string coquiSpeak(const std::string& text,
+                           const std::string& speaker,
+                           double speed);
+}

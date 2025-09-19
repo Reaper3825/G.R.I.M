@@ -152,5 +152,30 @@
     "user": "[FS] Failed to remove file.",
     "debug": "std::filesystem::remove() returned false."
   },
+  "ERR_VOICE_COQUI_INIT": {
+  "user": "[Voice] Could not initialize Coqui TTS.",
+  "debug": "initTTS() failed to launch Python bridge or create pipes."
+},
+
+"ERR_VOICE_COQUI_WRITE": {
+  "user": "[Voice] Could not send request to Coqui.",
+  "debug": "WriteFile() to Coqui bridge stdin failed."
+},
+
+"ERR_VOICE_COQUI_READ": {
+  "user": "[Voice] No response from Coqui TTS.",
+  "debug": "ReadFile() from Coqui bridge stdout returned nothing."
+},
+
+"ERR_VOICE_COQUI_PARSE": {
+  "user": "[Voice] Received invalid response from Coqui.",
+  "debug": "Failed to parse JSON returned by Coqui bridge."
+},
+"ERR_TTS_PLAYBACK": {
+  "user": "[Voice] Playback failed. Check audio device or TTS pipeline.",
+  "debug": "voice_speak() returned false. No audio device or backend error."
+}
+
+
 
 }

@@ -152,6 +152,15 @@
   "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?reload\\s*nlp\\s*$",
   "slot_names": [],
   "case_insensitive": true
+},
+{
+  "intent": "tts_device",
+  "description": "Query the current text-to-speech output device",
+  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:show|list|what\\s+is|current)\\s*(?:tts|speech|voice)\\s*(?:device|output)(?:\\s*device)?\\s*$",
+  "slot_names": [],
+  "case_insensitive": true
 }
+
+
 
 ]
