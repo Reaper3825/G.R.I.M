@@ -23,7 +23,6 @@
   #undef ERROR
 #endif
 
-
 namespace fs = std::filesystem;
 
 // 🔹 Global UI textbox (for rendering only)
@@ -80,11 +79,24 @@ int main(int argc, char** argv) {
     window.setFramerateLimit(60);
 
     sf::Font font;
+#ifdef GRIM_FONT_PATH
+    std::string fontPath = GRIM_FONT_PATH;
+    if (!font.loadFromFile(fontPath)) {
+        std::cerr << "[ERROR] Could not load font at " << fontPath << "\n";
+        // fallback to bundled resource
+        std::string fallback = getResourcePath() + "/DejaVuMathTeXGyre.ttf";
+        if (!font.loadFromFile(fallback)) {
+            std::cerr << "[ERROR] Could not load fallback font: " << fallback << "\n";
+            return 1;
+        }
+    }
+#else
     std::string fontPath = getResourcePath() + "/DejaVuMathTeXGyre.ttf";
     if (!font.loadFromFile(fontPath)) {
         std::cerr << "[ERROR] Could not load font: " << fontPath << "\n";
         return 1;
     }
+#endif
     std::cout << "[DEBUG] Font loaded OK\n";
 
     g_ui_textbox.setFont(font);

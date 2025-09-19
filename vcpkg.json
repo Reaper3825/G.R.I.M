@@ -1,0 +1,7 @@
+{
+  "name": "grim",
+  "version": "1.0.0",
+  "dependencies": [
+    "sfml"
+  ]
+}
