@@ -5,8 +5,6 @@
 #include "aliases.hpp"
 #include "system_detect.hpp"
 
-#include <string>
-
 // Define global system info
 SystemInfo g_systemInfo;
 

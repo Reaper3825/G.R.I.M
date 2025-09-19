@@ -4,10 +4,7 @@
 #include "aliases.hpp"
 #include "nlp.hpp"
 #include "console_history.hpp"
-#include "ai.hpp" // for aiConfig global
-
-#include <fstream>
-#include <iostream>
+#include "ai.hpp"
 
 namespace fs = std::filesystem;
 

@@ -1,8 +1,5 @@
 #include "commands_filesystem.hpp"
 #include "console_history.hpp"
-#include <filesystem>
-#include <iostream>
-#include <SFML/Graphics.hpp>
 
 extern ConsoleHistory history;
 extern std::filesystem::path g_currentDir;

@@ -83,6 +83,7 @@ set(GRIM_HEADERS
 
 # ---- Define target early ----
 add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
+target_precompile_headers(GRIM PRIVATE pch.hpp)
 
 # ---- Dependencies ----
 
@@ -284,5 +285,5 @@ if(EXISTS "${WHISPER_MODEL_FILE}")
 endif()
 
 if (WIN32)
-    target_link_libraries(GRIM PRIVATE sapi ole32)
+    target_link_libraries(GRIM PRIVATE sapi ole32 oleaut32 shlwapi)
 endif()

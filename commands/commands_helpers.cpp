@@ -1,8 +1,5 @@
 #include "commands_helpers.hpp"
 
-#include <algorithm>
-#include <cctype>
-
 // ------------------------------------------------------------
 // Trim whitespace from both ends
 // ------------------------------------------------------------
