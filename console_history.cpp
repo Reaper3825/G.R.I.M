@@ -57,7 +57,8 @@ void ConsoleHistory::wrapLine(const WrappedLine& ln,
         std::string test = current.empty() ? word : current + " " + word;
         meas.setString(test);
 
-        if (meas.getLocalBounds().width <= maxW) {
+        // ✅ SFML 3: use .size.x instead of .width
+        if (meas.getLocalBounds().size.x <= maxW) {
             current = test;
         } else {
             if (current.empty()) {
@@ -65,7 +66,7 @@ void ConsoleHistory::wrapLine(const WrappedLine& ln,
                 std::string accum;
                 for (char c : word) {
                     meas.setString(accum + c);
-                    if (meas.getLocalBounds().width <= maxW) {
+                    if (meas.getLocalBounds().size.x <= maxW) {
                         accum += c;
                     } else {
                         if (!accum.empty()) {

@@ -30,6 +30,7 @@
 #include "voice_stream.hpp"
 #include "commands_core.hpp"
 #include "voice_speak.hpp"
+#include "resources.hpp"   // globals: history, timers, longTermMemory, g_nlp
 
 // ---------------------------------------------------------
 // SFML
@@ -85,7 +86,6 @@ extern std::filesystem::path g_currentDir;
 // [Voice] One-shot voice command
 // ------------------------------------------------------------
 CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
-    // 🔹 Run Whisper transcription
     std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
 
     if (transcript.empty()) {
@@ -99,10 +99,8 @@ CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
         };
     }
 
-    // 🔹 Inject transcript back into GRIM as if user typed it
     handleCommand(transcript);
 
-    // 🔹 Show transcript in history (cyan) without re-speaking
     return {
         "> " + transcript,
         true,
@@ -128,7 +126,7 @@ CommandResult cmdVoiceStream([[maybe_unused]] const std::string& arg) {
         };
     }
 
-    if (VoiceStream::start(Voice::g_state.ctx, nullptr, timers, longTermMemory, g_nlp)) {
+    if (VoiceStream::start(Voice::g_state.ctx, &history, timers, longTermMemory, g_nlp)) {
         return {
             "[Voice] Streaming started.",
             true,
@@ -149,6 +147,9 @@ CommandResult cmdVoiceStream([[maybe_unused]] const std::string& arg) {
     }
 }
 
+// ------------------------------------------------------------
+// [Voice] Local TTS test (Microsoft David)
+// ------------------------------------------------------------
 CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
     std::string testLine = "This is GRIM testing with Microsoft David Desktop voice.";
 
@@ -175,6 +176,9 @@ CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
     }
 }
 
+// ------------------------------------------------------------
+// [Voice] List installed SAPI voices
+// ------------------------------------------------------------
 CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
 #if defined(_WIN32)
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
@@ -246,7 +250,6 @@ CommandResult cmd_testSAPI([[maybe_unused]] const std::string& arg) {
 
     std::cout << "[Audio] Playing test.wav..." << std::endl;
 
-    // Block until finished (simple test loop)
     while (sound.getStatus() == sf::Sound::Status::Playing) {
         sf::sleep(sf::milliseconds(100));
     }
@@ -261,6 +264,9 @@ CommandResult cmd_testSAPI([[maybe_unused]] const std::string& arg) {
     };
 }
 
+// ------------------------------------------------------------
+// [Voice] Get current SAPI output device
+// ------------------------------------------------------------
 CommandResult cmd_ttsDevice([[maybe_unused]] const std::string& arg) {
 #if defined(_WIN32)
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
@@ -279,7 +285,6 @@ CommandResult cmd_ttsDevice([[maybe_unused]] const std::string& arg) {
                  sf::Color::Red, "ERR_TTS_INIT", "SAPI init failed", "debug" };
     }
 
-    // Get current audio output object token
     ISpObjectToken* pAudioOut = nullptr;
     hr = pVoice->GetOutputObjectToken(&pAudioOut);
 

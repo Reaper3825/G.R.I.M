@@ -1,7 +1,6 @@
 #pragma once
 #include "commands_core.hpp"
 #include "timer.hpp"
-
 #include <vector>
 
 // Timer commands
