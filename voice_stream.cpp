@@ -246,31 +246,22 @@ bool isRunning() {
 }
 
 bool start(whisper_context* ctx,
-           ConsoleHistory* uiHistory,
-           std::vector<Timer>& uiTimers,
-           nlohmann::json& uiLongTermMemory,
+           ConsoleHistory* history,
+           std::vector<Timer>& timers,
+           nlohmann::json& longTermMemory,
            NLP& nlp) {
     if (g_state.running) {
-        uiHistory->push("[VoiceStream] Already running", sf::Color::Yellow);
+        history->push("[VoiceStream] Already running", sf::Color::Yellow);
         return false;
     }
 
     g_state.running = true;
 
-    std::thread([=, &uiTimers, &uiLongTermMemory, &nlp]() mutable {
-        run(ctx, uiHistory, uiTimers, uiLongTermMemory, nlp);
+    std::thread([=, &timers, &longTermMemory, &nlp]() mutable {
+        run(ctx, history, timers, longTermMemory, nlp);
     }).detach();
 
     return true;
-}
-
-void stop() {
-    g_state.running = false;
-}
-
-// ---------------- Calibration ----------------
-void calibrateSilence() {
-    std::cout << "[Calibration] (stub) Silence calibration not yet implemented.\n";
 }
 
 } // namespace VoiceStream
