@@ -50,7 +50,7 @@ static void initHotkey() {
     if (hotkeyStr == "F1") {
         g_voiceHotkey = sf::Keyboard::Key::F1;
     } else if (hotkeyStr == "0") {
-        g_voiceHotkey = sf::Keyboard::Key::Num0;  // use Digit0 if Num0 errors
+        g_voiceHotkey = sf::Keyboard::Key::Num0;
     } else if (hotkeyStr == "L") {
         g_voiceHotkey = sf::Keyboard::Key::L;
     } else {
@@ -109,15 +109,38 @@ int main(int argc, char** argv) {
     g_ui_textbox.setFillColor(sf::Color::White);
 
     // ---------------- Voice (Coqui / Local TTS) ----------------
-    if (aiConfig.contains("voice") &&
-        aiConfig["voice"].value("engine", "sapi") == "coqui")
-    {
+    if (aiConfig.contains("voice")) {
+    auto voiceCfg = aiConfig["voice"];
+    std::string engine = voiceCfg.value("engine", std::string("sapi"));
+    std::cout << "[DEBUG] Voice engine in config: " << engine << std::endl;
+
+    bool needsCoqui = (engine == "coqui");
+
+    // Check rules — if *any* rule requires Coqui, we also need to init
+    if (voiceCfg.contains("rules")) {
+        for (auto& [k, v] : voiceCfg["rules"].items()) {
+            if (v.get<std::string>() == "coqui") {
+                needsCoqui = true;
+                break;
+            }
+        }
+    }
+
+    if (needsCoqui) {
         if (Voice::initTTS()) {
-            std::cout << "[Voice] Coqui TTS bridge initialized\n";
+            std::cout << "[Voice] Coqui TTS bridge initialized (speaker="
+                      << voiceCfg.value("speaker", "p225")
+                      << ", model="
+                      << voiceCfg.value("local_engine", "unknown")
+                      << ")\n";
         } else {
             std::cerr << "[Voice] Failed to initialize Coqui TTS bridge\n";
         }
+    } else {
+        std::cout << "[Voice] Skipping Coqui init (engine=" << engine << ")\n";
     }
+}
+
 
     // ---------------- Greeting ----------------
     ResponseManager::systemMessage(

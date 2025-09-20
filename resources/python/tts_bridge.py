@@ -2,62 +2,101 @@
 import sys
 import os
 import json
-import tempfile
-import time
+import uuid
 from pathlib import Path
-from TTS.api import TTS
 
-MODEL_NAME = "tts_models/en/vctk/vits"
-tts = TTS(MODEL_NAME, progress_bar=False, gpu=False)
+# ------------------------------
+# Portable model path (fix Resources double nesting)
+# ------------------------------
+os.environ["TTS_HOME"] = str(Path(__file__).resolve().parent.parent.parent / "Resources" / "models")
 
-temp_dir = Path(tempfile.gettempdir()) / "grim_tts"
-temp_dir.mkdir(parents=True, exist_ok=True)
-
+# ------------------------------
+# JSON-safe output helpers
+# ------------------------------
 def send(obj):
-    sys.stdout.write(json.dumps(obj) + "\n")
-    sys.stdout.flush()
+    real_out = sys.__stdout__
+    real_out.write(json.dumps(obj) + "\n")
+    real_out.flush()
 
 def debug(msg):
     sys.stderr.write(msg + "\n")
     sys.stderr.flush()
 
+# ------------------------------
+# Startup signal
+# ------------------------------
+send({"status": "LOADING"})
+
+# ------------------------------
+# Heavy imports
+# ------------------------------
+from TTS.api import TTS
+
+MODEL_NAME = "tts_models/en/vctk/vits"
+USE_GPU = False  # force CPU
+
+debug(f"[bridge] Initializing model {MODEL_NAME} (gpu={USE_GPU})")
+tts = TTS(MODEL_NAME, progress_bar=False, gpu=USE_GPU)
+debug(f"[bridge] Loaded {MODEL_NAME}")
+
+# Fetch available speakers
+speakers = []
+try:
+    speakers = tts.speakers if hasattr(tts, "speakers") else []
+except Exception as e:
+    debug(f"[bridge-warning] Could not fetch speakers: {e}")
+
+# Pick default
+DEFAULT_SPEAKER = "p225" if "p225" in speakers else (speakers[0] if speakers else None)
+
+# Output dir
+out_dir = Path(__file__).resolve().parent.parent / "tts_out"
+out_dir.mkdir(parents=True, exist_ok=True)
+
+# Confirm ready
+send({
+    "status": "READY",
+    "model": MODEL_NAME,
+    "speakers": speakers,
+    "default_speaker": DEFAULT_SPEAKER
+})
+
+# ------------------------------
+# Helpers
+# ------------------------------
 def synthesize(text, speaker=None, speed=1.0):
-    ts = int(time.time() * 1000)
-    out_path = temp_dir / f"grim_tts_{ts}.wav"
+    out_file = out_dir / f"{uuid.uuid4().hex}.wav"
     try:
-        if speaker:
-            tts.tts_to_file(text=text, speaker=speaker, speed=speed, file_path=str(out_path))
-        else:
-            tts.tts_to_file(text=text, speed=speed, file_path=str(out_path))
-        send({"file": str(out_path)})
+        # Guarantee a speaker
+        if not speaker:
+            speaker = DEFAULT_SPEAKER or (speakers[0] if speakers else None)
+        if not speaker:
+            raise RuntimeError("No available speaker in model")
+
+        debug(f"[bridge] Synthesizing text='{text}' speaker={speaker} speed={speed}")
+        tts.tts_to_file(text=text, speaker=speaker, speed=speed, file_path=str(out_file))
+        send({"file": str(out_file), "speaker": speaker})
     except Exception as e:
+        debug(f"[bridge-error] {repr(e)}")
         send({"error": str(e)})
 
-# -------------------------------------------------
-# Input handling
-# -------------------------------------------------
-if len(sys.argv) > 1:
-    debug("Mode: CLI args")
-    text = " ".join(sys.argv[1:])
-    synthesize(text)
-else:
-    debug("Mode: stdin")
-    raw_input = sys.stdin.read().strip()
-    if raw_input:
-        for line in raw_input.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                req = json.loads(line)
-                text = req.get("text", "")
-                speaker = req.get("speaker", None)
-                speed = req.get("speed", 1.0)
-                if not text:
-                    send({"error": "empty_text"})
-                    continue
-                synthesize(text, speaker, speed)
-            except Exception as e:
-                send({"error": str(e)})
-    else:
-        send({"error": "No input provided"})
+# ------------------------------
+# Main loop
+# ------------------------------
+debug("[bridge] Mode: persistent stdin")
+for raw_input in sys.stdin:
+    line = raw_input.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+        text = req.get("text", "")
+        speaker = req.get("speaker", None)
+        speed = req.get("speed", 1.0)
+        if not text:
+            send({"error": "empty_text"})
+            continue
+        synthesize(text, speaker, speed)
+    except Exception as e:
+        debug(f"[bridge-error] {repr(e)}")
+        send({"error": str(e)})

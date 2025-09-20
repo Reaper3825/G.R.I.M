@@ -122,6 +122,7 @@ static void initCommands() {
         { "test_tts", cmd_testTTS },
         { "test_sapi", cmd_testSAPI },
         { "tts_device", cmd_ttsDevice },
+        { "list_voice", cmd_listVoices },
         
 
 
