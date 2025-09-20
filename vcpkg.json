@@ -1,7 +1,10 @@
 {
   "name": "grim",
-  "version": "1.0.0",
+  "version-string": "0.1.0",
   "dependencies": [
-    "sfml"
+    "sfml",
+    "cpr",
+    "nlohmann-json",
+    "portaudio"
   ]
 }
