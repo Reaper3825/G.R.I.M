@@ -68,3 +68,6 @@ external/whisper.cpp/models/*.bin
 /resources/models/whisper/*
 
 resources/models/*.bin
+
+.venv/
+
