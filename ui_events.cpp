@@ -1,44 +1,47 @@
+#include <SFML/Config.hpp>
 #include "console_history.hpp"
-#include "commands/commands_core.hpp"   // 👈 CommandResult + handleCommand
+#include "commands/commands_core.hpp"   // CommandResult + handleCommand
 #include "nlp.hpp"
 
 // -------------------------------------------------------------
-// Handle UI events (keyboard input, dispatch commands, etc.)
+// Handle UI events (SFML 3 style: is<T>() + getIf<T>())
 // -------------------------------------------------------------
 bool processEvents(sf::RenderWindow& window,
                    std::string& buffer,
                    std::filesystem::path& currentDir,
-                   std::vector<Timer>& timers,
+                   std::vector<Timer>& uiTimers,
                    nlohmann::json& longTermMemory,
-                   ConsoleHistory& history)
+                   ConsoleHistory& uiHistory)
 {
-    sf::Event event;
-    while (window.pollEvent(event)) {
+    while (auto evOpt = window.pollEvent()) {
+        const sf::Event& ev = *evOpt;
+
         // Handle quit
-        if (event.type == sf::Event::Closed) {
+        if (ev.is<sf::Event::Closed>()) {
             window.close();
             return false;
         }
 
         // Handle text input
-        if (event.type == sf::Event::TextEntered) {
-            if (event.text.unicode == '\r' || event.text.unicode == '\n') {
+        if (const auto* text = ev.getIf<sf::Event::TextEntered>()) {
+            if (text->unicode == '\r' || text->unicode == '\n') {
                 std::string input = buffer;
                 buffer.clear();
 
                 if (!input.empty()) {
-                    // 🔹 Always funnel through handleCommand
                     handleCommand(input);
+                    uiHistory.push(input, sf::Color::Green);
                 }
-            } else if (event.text.unicode == 8) { // Backspace
+            } else if (text->unicode == 8) { // Backspace
                 if (!buffer.empty()) buffer.pop_back();
-            } else if (event.text.unicode < 128) { // ASCII
-                buffer.push_back(static_cast<char>(event.text.unicode));
+            } else if (text->unicode < 128) { // ASCII
+                buffer.push_back(static_cast<char>(text->unicode));
             }
         }
 
-        if (event.type == sf::Event::KeyPressed) {
-            if (event.key.code == sf::Keyboard::Escape) {
+        // Handle key presses
+        if (const auto* key = ev.getIf<sf::Event::KeyPressed>()) {
+            if (key->code == sf::Keyboard::Key::Escape) {
                 window.close();
                 return false;
             }
