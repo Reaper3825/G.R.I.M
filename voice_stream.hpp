@@ -4,13 +4,15 @@
 #include <mutex>
 #include <nlohmann/json_fwd.hpp>
 
+// Forward declarations
 class ConsoleHistory;
-class Timer;
+struct Timer;
 class NLP;
 struct whisper_context;
 
 namespace VoiceStream {
 
+// ---------------- State ----------------
 struct State {
     struct AudioData {
         std::mutex mtx;
@@ -25,8 +27,10 @@ struct State {
     int inputDeviceIndex = -1;
 };
 
+// Global state instance
 extern State g_state;
 
+// ---------------- Control API ----------------
 bool start(whisper_context* ctx,
            ConsoleHistory* history,
            std::vector<Timer>& timers,
@@ -34,7 +38,9 @@ bool start(whisper_context* ctx,
            NLP& nlp);
 
 void stop();
+
 bool isRunning();
+
 void calibrateSilence();
 
 } // namespace VoiceStream
