@@ -24,10 +24,8 @@ extern int g_silenceTimeoutMs;
 extern std::string g_whisperLanguage;
 extern int g_whisperMaxTokens;
 
-namespace VoiceStream {
-
 // ---------------- State ----------------
-State g_state;
+VoiceStream::State VoiceStream::g_state;
 
 // Minimum buffer before calling Whisper (~100ms at 16kHz)
 constexpr size_t MIN_SAMPLES = 1600;
@@ -42,7 +40,7 @@ static int recordCallback(const void* input,
                           const PaStreamCallbackTimeInfo* /*timeInfo*/,
                           PaStreamCallbackFlags /*statusFlags*/,
                           void* userData) {
-    auto* audio = reinterpret_cast<State::AudioData*>(userData);
+    auto* audio = reinterpret_cast<VoiceStream::State::AudioData*>(userData);
     const float* in = static_cast<const float*>(input);
 
     if (in) {
@@ -88,11 +86,11 @@ static std::string sanitizeTranscript(const std::string& input) {
 
 // ---------------- Whisper Incremental Processing ----------------
 static void processPCM(whisper_context* ctx, const std::vector<float>& buffer) {
-    if (buffer.size() <= g_state.processedSamples) return;
+    if (buffer.size() <= VoiceStream::g_state.processedSamples) return;
 
     // Add new samples
-    std::vector<float> newAudio(buffer.begin() + g_state.processedSamples, buffer.end());
-    g_state.processedSamples = buffer.size();
+    std::vector<float> newAudio(buffer.begin() + VoiceStream::g_state.processedSamples, buffer.end());
+    VoiceStream::g_state.processedSamples = buffer.size();
     pcmAccumulator.insert(pcmAccumulator.end(), newAudio.begin(), newAudio.end());
 
     if (pcmAccumulator.size() < MIN_SAMPLES) {
@@ -111,8 +109,8 @@ static void processPCM(whisper_context* ctx, const std::vector<float>& buffer) {
         if (n > 0) {
             std::string latest = whisper_full_get_segment_text(ctx, n - 1);
             if (!latest.empty()) {
-                g_state.partial += latest + " ";
-                ui_set_textbox(g_state.partial);
+                VoiceStream::g_state.partial += latest + " ";
+                ui_set_textbox(VoiceStream::g_state.partial);
                 std::cout << "[VoiceStream] Partial: " << latest << "\n";
             }
         }
@@ -129,22 +127,22 @@ static void run(whisper_context* ctx,
                 std::vector<Timer>& uiTimers,
                 nlohmann::json& uiLongTermMemory,
                 NLP& nlp) {
-    g_state.partial.clear();
-    g_state.processedSamples = 0;
+    VoiceStream::g_state.partial.clear();
+    VoiceStream::g_state.processedSamples = 0;
     pcmAccumulator.clear();
 
     if (Pa_Initialize() != paNoError) {
         uiHistory->push("[VoiceStream] ERROR: Failed to initialize PortAudio", sf::Color::Red);
-        g_state.running = false;
+        VoiceStream::g_state.running = false;
         return;
     }
 
-    int deviceIndex = (g_state.inputDeviceIndex >= 0) ? g_state.inputDeviceIndex
-                                                      : Pa_GetDefaultInputDevice();
+    int deviceIndex = (VoiceStream::g_state.inputDeviceIndex >= 0) ? VoiceStream::g_state.inputDeviceIndex
+                                                                   : Pa_GetDefaultInputDevice();
     if (deviceIndex == paNoDevice || deviceIndex < 0 || deviceIndex >= Pa_GetDeviceCount()) {
         uiHistory->push("[VoiceStream] ERROR: No valid input device found", sf::Color::Red);
         Pa_Terminate();
-        g_state.running = false;
+        VoiceStream::g_state.running = false;
         return;
     }
 
@@ -165,10 +163,10 @@ static void run(whisper_context* ctx,
                       512,
                       paNoFlag,
                       recordCallback,
-                      &g_state.audio) != paNoError || !stream) {
+                      &VoiceStream::g_state.audio) != paNoError || !stream) {
         uiHistory->push("[VoiceStream] ERROR: Could not open mic stream", sf::Color::Red);
         Pa_Terminate();
-        g_state.running = false;
+        VoiceStream::g_state.running = false;
         return;
     }
 
@@ -176,21 +174,21 @@ static void run(whisper_context* ctx,
         uiHistory->push("[VoiceStream] ERROR: Could not start mic stream", sf::Color::Red);
         Pa_CloseStream(stream);
         Pa_Terminate();
-        g_state.running = false;
+        VoiceStream::g_state.running = false;
         return;
     }
 
     uiHistory->push("[VoiceStream] Listening...", sf::Color(0, 200, 255));
     auto lastSpeechTime = std::chrono::steady_clock::now();
 
-    while (g_state.running) {
+    while (VoiceStream::g_state.running) {
         std::vector<float> pcm;
         {
-            std::lock_guard<std::mutex> lock(g_state.audio.mtx);
-            if (g_state.audio.ready) {
-                pcm = g_state.audio.buffer;
-                g_state.audio.ready = false;
-                g_state.audio.buffer.clear();
+            std::lock_guard<std::mutex> lock(VoiceStream::g_state.audio.mtx);
+            if (VoiceStream::g_state.audio.ready) {
+                pcm = VoiceStream::g_state.audio.buffer;
+                VoiceStream::g_state.audio.ready = false;
+                VoiceStream::g_state.audio.buffer.clear();
             }
         }
 
@@ -205,8 +203,8 @@ static void run(whisper_context* ctx,
             auto silenceMs =
                 std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSpeechTime).count();
 
-            if (!g_state.partial.empty() && silenceMs > g_silenceTimeoutMs) {
-                std::string clean = sanitizeTranscript(g_state.partial);
+            if (!VoiceStream::g_state.partial.empty() && silenceMs > g_silenceTimeoutMs) {
+                std::string clean = sanitizeTranscript(VoiceStream::g_state.partial);
                 Intent intent = nlp.parse(clean);
 
                 if (intent.matched) {
@@ -215,7 +213,7 @@ static void run(whisper_context* ctx,
                 } else {
                     std::string fullReply;
                     ai_process_stream(
-                        g_state.partial,
+                        VoiceStream::g_state.partial,
                         uiLongTermMemory,
                         [&](const std::string& chunk) {
                             fullReply += chunk;
@@ -225,7 +223,7 @@ static void run(whisper_context* ctx,
                     uiHistory->push("[AI] " + fullReply, sf::Color::Green);
                 }
 
-                g_state.partial.clear();
+                VoiceStream::g_state.partial.clear();
                 ui_set_textbox("");
             }
         }
@@ -241,15 +239,15 @@ static void run(whisper_context* ctx,
 }
 
 // ---------------- Control API ----------------
-bool isRunning() {
+bool VoiceStream::isRunning() {
     return g_state.running;
 }
 
-bool start(whisper_context* ctx,
-           ConsoleHistory* history,
-           std::vector<Timer>& timers,
-           nlohmann::json& longTermMemory,
-           NLP& nlp) {
+bool VoiceStream::start(whisper_context* ctx,
+                        ConsoleHistory* history,
+                        std::vector<Timer>& timers,
+                        nlohmann::json& longTermMemory,
+                        NLP& nlp) {
     if (g_state.running) {
         history->push("[VoiceStream] Already running", sf::Color::Yellow);
         return false;
@@ -264,4 +262,13 @@ bool start(whisper_context* ctx,
     return true;
 }
 
-} // namespace VoiceStream
+void VoiceStream::stop() {
+    if (g_state.running) {
+        g_state.running = false;
+    }
+}
+
+void VoiceStream::calibrateSilence() {
+    // TODO: implement real calibration
+    std::cout << "[VoiceStream] Calibrating silence threshold (stub)\n";
+}
