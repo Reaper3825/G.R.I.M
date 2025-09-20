@@ -8,6 +8,11 @@
 
 #include <whisper.h>
 #include <portaudio.h>
+#include <filesystem>
+#include <mutex>
+#include <iostream>
+#include <sstream>
+#include <cmath>
 
 namespace fs = std::filesystem;
 
@@ -22,6 +27,7 @@ static int g_silenceTimeoutMs = 4000;
 // ---------------- Audio Data ----------------
 struct AudioData {
     std::vector<float> buffer;
+    std::mutex mtx;
     bool ready = false;
 };
 
@@ -36,7 +42,10 @@ static int recordCallback(const void* input,
                           void* userData) {
     AudioData* data = reinterpret_cast<AudioData*>(userData);
     const float* in = reinterpret_cast<const float*>(input);
-    if (in) data->buffer.insert(data->buffer.end(), in, in + frameCount);
+    if (in) {
+        std::lock_guard<std::mutex> lock(data->mtx);
+        data->buffer.insert(data->buffer.end(), in, in + frameCount);
+    }
     return paContinue;
 }
 
@@ -75,7 +84,7 @@ static bool ensureWhisperLoaded(const nlohmann::json& aiConfig) {
         return false;
     }
 
-    // Use default whisper context parameters (can tweak later if needed)
+    // Use default whisper context parameters
     whisper_context_params wparams = whisper_context_default_params();
 
     g_state.ctx = whisper_init_from_file_with_params(modelPath.string().c_str(), wparams);
@@ -116,7 +125,8 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
     AudioData data;
     PaStream* stream;
     int deviceIndex = (g_state.inputDeviceIndex >= 0) ? g_state.inputDeviceIndex : Pa_GetDefaultInputDevice();
-    if (deviceIndex == paNoDevice) {
+
+    if (deviceIndex == paNoDevice || deviceIndex < 0 || deviceIndex >= Pa_GetDeviceCount()) {
         Pa_Terminate();
         ErrorManager::report("ERR_VOICE_NO_CONTEXT");
         return "";
@@ -147,32 +157,35 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
     bool inSpeech = false;
 
     while (true) {
-        if (data.buffer.size() >= 8000) {
-            std::vector<float> chunk(data.buffer.begin(), data.buffer.begin() + 8000);
-            data.buffer.erase(data.buffer.begin(), data.buffer.begin() + 8000);
+        {
+            std::lock_guard<std::mutex> lock(data.mtx);
+            if (data.buffer.size() >= 8000) {
+                std::vector<float> chunk(data.buffer.begin(), data.buffer.begin() + 8000);
+                data.buffer.erase(data.buffer.begin(), data.buffer.begin() + 8000);
 
-            bool silent = isSilence(chunk);
-            if (!silent) {
-                if (!inSpeech) {
-                    speechStart = std::chrono::steady_clock::now();
-                    inSpeech = true;
-                    std::cerr << "[DEBUG][Voice] Speech started\n";
-                }
-                lastSpeech = std::chrono::steady_clock::now();
-                rollingBuffer.insert(rollingBuffer.end(), chunk.begin(), chunk.end());
-            } else if (inSpeech) {
-                auto msSinceSpeech = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                         std::chrono::steady_clock::now() - lastSpeech).count();
-                auto msSpeech = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    lastSpeech - speechStart).count();
+                bool silent = isSilence(chunk);
+                if (!silent) {
+                    if (!inSpeech) {
+                        speechStart = std::chrono::steady_clock::now();
+                        inSpeech = true;
+                        std::cerr << "[DEBUG][Voice] Speech started\n";
+                    }
+                    lastSpeech = std::chrono::steady_clock::now();
+                    rollingBuffer.insert(rollingBuffer.end(), chunk.begin(), chunk.end());
+                } else if (inSpeech) {
+                    auto msSinceSpeech = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                             std::chrono::steady_clock::now() - lastSpeech).count();
+                    auto msSpeech = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        lastSpeech - speechStart).count();
 
-                if (msSinceSpeech >= g_state.minSilenceMs && msSpeech >= g_state.minSpeechMs) {
-                    std::cerr << "[DEBUG][Voice] End of speech detected\n";
-                    break;
-                }
-                if (msSinceSpeech >= g_silenceTimeoutMs) {
-                    std::cerr << "[DEBUG][Voice] Timeout reached\n";
-                    break;
+                    if (msSinceSpeech >= g_state.minSilenceMs && msSpeech >= g_state.minSpeechMs) {
+                        std::cerr << "[DEBUG][Voice] End of speech detected\n";
+                        break;
+                    }
+                    if (msSinceSpeech >= g_silenceTimeoutMs) {
+                        std::cerr << "[DEBUG][Voice] Timeout reached\n";
+                        break;
+                    }
                 }
             }
         }
@@ -215,7 +228,10 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
 // ============================================================
 void shutdown() {
     std::cerr << "[DEBUG][Voice] Shutdown called\n";
-    // cleanup if whisper context is freed elsewhere
+    if (g_state.ctx) {
+        whisper_free(g_state.ctx);
+        g_state.ctx = nullptr;
+    }
 }
 
 } // namespace Voice

@@ -31,34 +31,49 @@
 #include "commands_core.hpp"
 #include "voice_speak.hpp"
 
+// ---------------------------------------------------------
+// SFML
+// ---------------------------------------------------------
+#include <SFML/Audio.hpp>
 
+// ---------------------------------------------------------
+// Standard headers
+// ---------------------------------------------------------
+#include <iostream>
+#include <sstream>
+#include <memory>
+#include <vector>
 
-
+// ---------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------
 namespace {
     bool playWavFile(const std::string& wavPath) {
-        static std::vector<sf::Sound> sounds; // keep sounds alive until finished
-        sf::SoundBuffer* buffer = new sf::SoundBuffer();
+        // Keep both buffers and sounds alive until playback finishes
+        static std::vector<std::unique_ptr<sf::SoundBuffer>> buffers;
+        static std::vector<sf::Sound> sounds;
 
+        auto buffer = std::make_unique<sf::SoundBuffer>();
         if (!buffer->loadFromFile(wavPath)) {
             std::cerr << "[Voice][Error] Failed to load audio: " << wavPath << std::endl;
-            delete buffer;
             return false;
         }
 
-        sf::Sound sound;
-        sound.setBuffer(*buffer);
+        sf::Sound sound(*buffer);
         sound.play();
 
-        // push_back moves + copies the sf::Sound (but still needs buffer lifetime)
-        sounds.push_back(sound);
+        // Push into static storage
+        sounds.push_back(std::move(sound));
+        buffers.push_back(std::move(buffer));
 
         std::cout << "[Voice] Playing audio file: " << wavPath << std::endl;
         return true;
     }
 }
-// useful for debug logging
 
+// ---------------------------------------------------------
 // Externals
+// ---------------------------------------------------------
 extern nlohmann::json aiConfig;
 extern nlohmann::json longTermMemory;
 extern std::vector<Timer> timers;
@@ -89,7 +104,7 @@ CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
 
     // 🔹 Show transcript in history (cyan) without re-speaking
     return {
-        "> " + transcript,         // mimic console input style
+        "> " + transcript,
         true,
         sf::Color::Cyan,
         "ERR_NONE",
@@ -97,6 +112,7 @@ CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
         "routine"
     };
 }
+
 // ------------------------------------------------------------
 // [Voice] Continuous streaming mode
 // ------------------------------------------------------------
@@ -132,6 +148,7 @@ CommandResult cmdVoiceStream([[maybe_unused]] const std::string& arg) {
         };
     }
 }
+
 CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
     std::string testLine = "This is GRIM testing with Microsoft David Desktop voice.";
 
@@ -157,6 +174,7 @@ CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
         };
     }
 }
+
 CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
 #if defined(_WIN32)
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
@@ -181,7 +199,8 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
                 WCHAR* pszDesc = nullptr;
                 if (SUCCEEDED(SpGetDescription(pToken, &pszDesc)) && pszDesc) {
                     char buffer[512];
-                    wcstombs(buffer, pszDesc, sizeof(buffer));
+                    size_t converted = 0;
+                    wcstombs_s(&converted, buffer, sizeof(buffer), pszDesc, _TRUNCATE);
                     oss << " - " << buffer << "\n";
                     ::CoTaskMemFree(pszDesc);
                 }
@@ -222,14 +241,13 @@ CommandResult cmd_testSAPI([[maybe_unused]] const std::string& arg) {
         };
     }
 
-    sf::Sound sound;
-    sound.setBuffer(buffer);
+    sf::Sound sound(buffer);
     sound.play();
 
     std::cout << "[Audio] Playing test.wav..." << std::endl;
 
     // Block until finished (simple test loop)
-    while (sound.getStatus() == sf::Sound::Playing) {
+    while (sound.getStatus() == sf::Sound::Status::Playing) {
         sf::sleep(sf::milliseconds(100));
     }
 
@@ -261,7 +279,7 @@ CommandResult cmd_ttsDevice([[maybe_unused]] const std::string& arg) {
                  sf::Color::Red, "ERR_TTS_INIT", "SAPI init failed", "debug" };
     }
 
-    // Get current audio output object token (✅ correct API)
+    // Get current audio output object token
     ISpObjectToken* pAudioOut = nullptr;
     hr = pVoice->GetOutputObjectToken(&pAudioOut);
 
@@ -270,7 +288,8 @@ CommandResult cmd_ttsDevice([[maybe_unused]] const std::string& arg) {
         WCHAR* pszDesc = nullptr;
         if (SUCCEEDED(SpGetDescription(pAudioOut, &pszDesc)) && pszDesc) {
             char buffer[512];
-            wcstombs(buffer, pszDesc, sizeof(buffer));
+            size_t converted = 0;
+            wcstombs_s(&converted, buffer, sizeof(buffer), pszDesc, _TRUNCATE);
             oss << "[Voice] Current SAPI output device: " << buffer << "\n";
             ::CoTaskMemFree(pszDesc);
         }

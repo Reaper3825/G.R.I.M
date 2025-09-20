@@ -9,12 +9,16 @@
 
 #include <whisper.h>
 #include <portaudio.h>
+#include <filesystem>
+#include <mutex>
+#include <thread>
+#include <algorithm>
+#include <cctype>
+#include <iostream>
 
 namespace fs = std::filesystem;
 
-
-// ---------------- State ----------------
-// 🔹 Config values (defined in ai.cpp, set from ai_config.json)
+// ---------------- Config (from ai_config.json via ai.cpp) ----------------
 extern double g_silenceThreshold;
 extern int g_silenceTimeoutMs;
 extern std::string g_whisperLanguage;
@@ -28,7 +32,7 @@ State g_state;
 // Minimum buffer before calling Whisper (~100ms at 16kHz)
 constexpr size_t MIN_SAMPLES = 1600;
 
-// Accumulator for PCM samples
+// PCM accumulator
 static std::vector<float> pcmAccumulator;
 
 // ---------------- PortAudio Callback ----------------
@@ -40,19 +44,25 @@ static int recordCallback(const void* input,
                           void* userData) {
     auto* audio = reinterpret_cast<State::AudioData*>(userData);
     const float* in = static_cast<const float*>(input);
+
     if (in) {
+        // ✅ always pass a mutex reference here
+        std::lock_guard<std::mutex> lock(audio->mtx);
         audio->buffer.insert(audio->buffer.end(), in, in + frameCount);
         audio->ready = true;
     }
+
     return paContinue;
 }
 
 // ---------------- Silence Detection ----------------
 static bool isSilence(const std::vector<float>& pcm) {
     if (pcm.empty()) return true;
+
     double energy = 0.0;
     for (float s : pcm) energy += s * s;
     energy /= pcm.size();
+
     double rms = std::sqrt(energy);
     bool silent = rms < g_silenceThreshold;
 
@@ -66,11 +76,14 @@ static bool isSilence(const std::vector<float>& pcm) {
 // ---------------- Transcript Sanitizer ----------------
 static std::string sanitizeTranscript(const std::string& input) {
     std::string out = input;
+
     std::transform(out.begin(), out.end(), out.begin(),
                    [](unsigned char c){ return std::tolower(c); });
+
     while (!out.empty() && ispunct(out.back())) out.pop_back();
     while (!out.empty() && isspace(out.front())) out.erase(out.begin());
     while (!out.empty() && isspace(out.back())) out.pop_back();
+
     return out;
 }
 
@@ -78,7 +91,7 @@ static std::string sanitizeTranscript(const std::string& input) {
 static void processPCM(whisper_context* ctx, const std::vector<float>& buffer) {
     if (buffer.size() <= g_state.processedSamples) return;
 
-    // Append new samples to accumulator
+    // Add new samples
     std::vector<float> newAudio(buffer.begin() + g_state.processedSamples, buffer.end());
     g_state.processedSamples = buffer.size();
     pcmAccumulator.insert(pcmAccumulator.end(), newAudio.begin(), newAudio.end());
@@ -89,7 +102,7 @@ static void processPCM(whisper_context* ctx, const std::vector<float>& buffer) {
         return;
     }
 
-    // Pad if still short (safety net)
+    // Pad short buffers
     if (pcmAccumulator.size() < MIN_SAMPLES) {
         pcmAccumulator.resize(MIN_SAMPLES, 0.0f);
     }
@@ -113,7 +126,6 @@ static void processPCM(whisper_context* ctx, const std::vector<float>& buffer) {
         std::cerr << "[VoiceStream] ERROR: whisper_full() failed\n";
     }
 
-    // Reset accumulator after processing
     pcmAccumulator.clear();
 }
 
@@ -133,15 +145,17 @@ static void run(whisper_context* ctx,
         return;
     }
 
-    int deviceIndex = (g_state.inputDeviceIndex >= 0) ? g_state.inputDeviceIndex : Pa_GetDefaultInputDevice();
-    if (deviceIndex == paNoDevice) {
-        history->push("[VoiceStream] ERROR: No input device found", sf::Color::Red);
+    int deviceIndex = (g_state.inputDeviceIndex >= 0) ? g_state.inputDeviceIndex
+                                                      : Pa_GetDefaultInputDevice();
+    if (deviceIndex == paNoDevice || deviceIndex < 0 || deviceIndex >= Pa_GetDeviceCount()) {
+        history->push("[VoiceStream] ERROR: No valid input device found", sf::Color::Red);
         Pa_Terminate();
         g_state.running = false;
         return;
     }
 
     const PaDeviceInfo* devInfo = Pa_GetDeviceInfo(deviceIndex);
+
     PaStreamParameters inputParams;
     inputParams.device = deviceIndex;
     inputParams.channelCount = 1;
@@ -150,7 +164,14 @@ static void run(whisper_context* ctx,
     inputParams.hostApiSpecificStreamInfo = nullptr;
 
     PaStream* stream = nullptr;
-    if (Pa_OpenStream(&stream, &inputParams, nullptr, 16000, 512, paNoFlag, recordCallback, &g_state.audio) != paNoError || !stream) {
+    if (Pa_OpenStream(&stream,
+                      &inputParams,
+                      nullptr,
+                      16000,
+                      512,
+                      paNoFlag,
+                      recordCallback,
+                      &g_state.audio) != paNoError || !stream) {
         history->push("[VoiceStream] ERROR: Could not open mic stream", sf::Color::Red);
         Pa_Terminate();
         g_state.running = false;
@@ -170,10 +191,14 @@ static void run(whisper_context* ctx,
 
     while (g_state.running) {
         std::vector<float> pcm;
-        if (g_state.audio.ready) {
-            pcm = g_state.audio.buffer;
-            g_state.audio.ready = false;
-            g_state.audio.buffer.clear();
+        {
+            // ✅ Correct lock — no () form
+            std::lock_guard<std::mutex> lock(g_state.audio.mtx);
+            if (g_state.audio.ready) {
+                pcm = g_state.audio.buffer;
+                g_state.audio.ready = false;
+                g_state.audio.buffer.clear();
+            }
         }
 
         if (!pcm.empty()) {
@@ -184,27 +209,26 @@ static void run(whisper_context* ctx,
             }
 
             auto now = std::chrono::steady_clock::now();
-            auto silenceMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSpeechTime).count();
+            auto silenceMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSpeechTime).count();
 
             if (!g_state.partial.empty() && silenceMs > g_silenceTimeoutMs) {
                 std::string clean = sanitizeTranscript(g_state.partial);
                 Intent intent = nlp.parse(clean);
 
                 if (intent.matched) {
-                std::cout << "[VoiceStream] Dispatching command: " << intent.name << "\n";
-                handleCommand(clean);  // ✅ FIXED: pass full transcript, not intent.name
+                    std::cout << "[VoiceStream] Dispatching command: " << intent.name << "\n";
+                    handleCommand(clean);
                 } else {
-                std::string fullReply;
-                ai_process_stream(
-
+                    std::string fullReply;
+                    ai_process_stream(
                         g_state.partial,
                         longTermMemory,
                         [&](const std::string& chunk) {
                             fullReply += chunk;
                             ui_set_textbox(fullReply);
                             std::cout << chunk << std::flush;
-                        }
-                    );
+                        });
                     history->push("[AI] " + fullReply, sf::Color::Green);
                 }
 
