@@ -1,8 +1,8 @@
 #pragma once
 #include <vector>
 #include <string>
+#include <mutex>               // ✅ for std::mutex
 #include <nlohmann/json_fwd.hpp>
-
 
 class ConsoleHistory;
 class Timer;
@@ -13,9 +13,11 @@ namespace VoiceStream {
 
 struct State {
     struct AudioData {
+        std::mutex mtx;              // ✅ added so lock_guard works
         std::vector<float> buffer;
         bool ready = false;
     };
+
     AudioData audio;
     bool running = false;
     std::string partial;

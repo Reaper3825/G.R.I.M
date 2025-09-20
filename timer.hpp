@@ -1,9 +1,9 @@
 #pragma once
-#include <SFML/System.hpp>
+#include <string>
+#include <chrono>
 
-// Simple timer struct
+// Expanded timer struct (more flexible than simple SFML clock)
 struct Timer {
-    int seconds;         // duration in seconds
-    sf::Clock clock;     // SFML clock to measure time
-    bool done = false;   // has the timer finished?
+    std::chrono::steady_clock::time_point expiry;  // when the timer expires
+    std::string message;                           // message to display when expired
 };

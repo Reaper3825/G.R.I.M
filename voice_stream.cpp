@@ -46,7 +46,6 @@ static int recordCallback(const void* input,
     const float* in = static_cast<const float*>(input);
 
     if (in) {
-        // ✅ always pass a mutex reference here
         std::lock_guard<std::mutex> lock(audio->mtx);
         audio->buffer.insert(audio->buffer.end(), in, in + frameCount);
         audio->ready = true;
@@ -102,17 +101,12 @@ static void processPCM(whisper_context* ctx, const std::vector<float>& buffer) {
         return;
     }
 
-    // Pad short buffers
-    if (pcmAccumulator.size() < MIN_SAMPLES) {
-        pcmAccumulator.resize(MIN_SAMPLES, 0.0f);
-    }
-
     whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     params.no_timestamps = true;
     params.max_tokens = g_whisperMaxTokens;
     params.language = g_whisperLanguage.c_str();
 
-    if (whisper_full(ctx, params, pcmAccumulator.data(), pcmAccumulator.size()) == 0) {
+    if (whisper_full(ctx, params, pcmAccumulator.data(), (int)pcmAccumulator.size()) == 0) {
         int n = whisper_full_n_segments(ctx);
         if (n > 0) {
             std::string latest = whisper_full_get_segment_text(ctx, n - 1);
@@ -131,16 +125,16 @@ static void processPCM(whisper_context* ctx, const std::vector<float>& buffer) {
 
 // ---------------- Core Loop ----------------
 static void run(whisper_context* ctx,
-                ConsoleHistory* history,
-                std::vector<Timer>& timers,
-                nlohmann::json& longTermMemory,
+                ConsoleHistory* uiHistory,
+                std::vector<Timer>& uiTimers,
+                nlohmann::json& uiLongTermMemory,
                 NLP& nlp) {
     g_state.partial.clear();
     g_state.processedSamples = 0;
     pcmAccumulator.clear();
 
     if (Pa_Initialize() != paNoError) {
-        history->push("[VoiceStream] ERROR: Failed to initialize PortAudio", sf::Color::Red);
+        uiHistory->push("[VoiceStream] ERROR: Failed to initialize PortAudio", sf::Color::Red);
         g_state.running = false;
         return;
     }
@@ -148,7 +142,7 @@ static void run(whisper_context* ctx,
     int deviceIndex = (g_state.inputDeviceIndex >= 0) ? g_state.inputDeviceIndex
                                                       : Pa_GetDefaultInputDevice();
     if (deviceIndex == paNoDevice || deviceIndex < 0 || deviceIndex >= Pa_GetDeviceCount()) {
-        history->push("[VoiceStream] ERROR: No valid input device found", sf::Color::Red);
+        uiHistory->push("[VoiceStream] ERROR: No valid input device found", sf::Color::Red);
         Pa_Terminate();
         g_state.running = false;
         return;
@@ -172,27 +166,26 @@ static void run(whisper_context* ctx,
                       paNoFlag,
                       recordCallback,
                       &g_state.audio) != paNoError || !stream) {
-        history->push("[VoiceStream] ERROR: Could not open mic stream", sf::Color::Red);
+        uiHistory->push("[VoiceStream] ERROR: Could not open mic stream", sf::Color::Red);
         Pa_Terminate();
         g_state.running = false;
         return;
     }
 
     if (Pa_StartStream(stream) != paNoError) {
-        history->push("[VoiceStream] ERROR: Could not start mic stream", sf::Color::Red);
+        uiHistory->push("[VoiceStream] ERROR: Could not start mic stream", sf::Color::Red);
         Pa_CloseStream(stream);
         Pa_Terminate();
         g_state.running = false;
         return;
     }
 
-    history->push("[VoiceStream] Listening...", sf::Color(0, 200, 255));
+    uiHistory->push("[VoiceStream] Listening...", sf::Color(0, 200, 255));
     auto lastSpeechTime = std::chrono::steady_clock::now();
 
     while (g_state.running) {
         std::vector<float> pcm;
         {
-            // ✅ Correct lock — no () form
             std::lock_guard<std::mutex> lock(g_state.audio.mtx);
             if (g_state.audio.ready) {
                 pcm = g_state.audio.buffer;
@@ -223,13 +216,13 @@ static void run(whisper_context* ctx,
                     std::string fullReply;
                     ai_process_stream(
                         g_state.partial,
-                        longTermMemory,
+                        uiLongTermMemory,
                         [&](const std::string& chunk) {
                             fullReply += chunk;
                             ui_set_textbox(fullReply);
                             std::cout << chunk << std::flush;
                         });
-                    history->push("[AI] " + fullReply, sf::Color::Green);
+                    uiHistory->push("[AI] " + fullReply, sf::Color::Green);
                 }
 
                 g_state.partial.clear();
@@ -244,7 +237,7 @@ static void run(whisper_context* ctx,
     Pa_CloseStream(stream);
     Pa_Terminate();
 
-    history->push("[VoiceStream] Stopped.", sf::Color(0, 200, 255));
+    uiHistory->push("[VoiceStream] Stopped.", sf::Color(0, 200, 255));
 }
 
 // ---------------- Control API ----------------
@@ -253,19 +246,19 @@ bool isRunning() {
 }
 
 bool start(whisper_context* ctx,
-           ConsoleHistory* history,
-           std::vector<Timer>& timers,
-           nlohmann::json& longTermMemory,
+           ConsoleHistory* uiHistory,
+           std::vector<Timer>& uiTimers,
+           nlohmann::json& uiLongTermMemory,
            NLP& nlp) {
     if (g_state.running) {
-        history->push("[VoiceStream] Already running", sf::Color::Yellow);
+        uiHistory->push("[VoiceStream] Already running", sf::Color::Yellow);
         return false;
     }
 
     g_state.running = true;
 
-    std::thread([=, &timers, &longTermMemory, &nlp]() mutable {
-        run(ctx, history, timers, longTermMemory, nlp);
+    std::thread([=, &uiTimers, &uiLongTermMemory, &nlp]() mutable {
+        run(ctx, uiHistory, uiTimers, uiLongTermMemory, nlp);
     }).detach();
 
     return true;
