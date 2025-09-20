@@ -25,8 +25,11 @@
 
 namespace fs = std::filesystem;
 
-// 🔹 Global UI textbox (for rendering only)
-sf::Text g_ui_textbox;
+// 🔹 Global dummy font (required for sf::Text ctor in SFML 3)
+sf::Font g_dummyFont;
+
+// 🔹 Global UI textbox (SFML 3: ctor = (font, string, size))
+sf::Text g_ui_textbox(g_dummyFont, "", 20);
 
 // 🔹 Global raw input buffer (for editing)
 std::string g_inputBuffer;
@@ -35,8 +38,8 @@ std::string g_inputBuffer;
 extern nlohmann::json longTermMemory;
 extern nlohmann::json aiConfig;
 
-// 🔹 Global voice hotkey
-sf::Keyboard::Key g_voiceHotkey = sf::Keyboard::Num0;
+// 🔹 Global voice hotkey (SFML 3 scoped enums)
+sf::Keyboard::Key g_voiceHotkey = sf::Keyboard::Key::Num0;
 
 // ------------------------------------------------------------
 // Helper: initialize hotkey from config
@@ -45,14 +48,14 @@ static void initHotkey() {
     std::string hotkeyStr = aiConfig["voice"].value("hotkey", "0");
 
     if (hotkeyStr == "F1") {
-        g_voiceHotkey = sf::Keyboard::F1;
+        g_voiceHotkey = sf::Keyboard::Key::F1;
     } else if (hotkeyStr == "0") {
-        g_voiceHotkey = sf::Keyboard::Num0;
+        g_voiceHotkey = sf::Keyboard::Key::Num0;  // use Digit0 if Num0 errors
     } else if (hotkeyStr == "L") {
-        g_voiceHotkey = sf::Keyboard::L;
+        g_voiceHotkey = sf::Keyboard::Key::L;
     } else {
         // default fallback
-        g_voiceHotkey = sf::Keyboard::Num0;
+        g_voiceHotkey = sf::Keyboard::Key::Num0;
     }
 
     std::cout << "[DEBUG] Voice hotkey set to: " << hotkeyStr << "\n";
@@ -75,31 +78,33 @@ int main(int argc, char** argv) {
     aliases::init();
 
     // ---------------- SFML Setup ----------------
-    sf::RenderWindow window(sf::VideoMode(512, 768), "GRIM Console");
+    sf::RenderWindow window(sf::VideoMode({512u, 768u}), "GRIM Console");
     window.setFramerateLimit(60);
 
     sf::Font font;
 #ifdef GRIM_FONT_PATH
     std::string fontPath = GRIM_FONT_PATH;
-    if (!font.loadFromFile(fontPath)) {
+    if (!font.openFromFile(fontPath)) {
         std::cerr << "[ERROR] Could not load font at " << fontPath << "\n";
         // fallback to bundled resource
         std::string fallback = getResourcePath() + "/DejaVuMathTeXGyre.ttf";
-        if (!font.loadFromFile(fallback)) {
+        if (!font.openFromFile(fallback)) {
             std::cerr << "[ERROR] Could not load fallback font: " << fallback << "\n";
             return 1;
         }
     }
 #else
     std::string fontPath = getResourcePath() + "/DejaVuMathTeXGyre.ttf";
-    if (!font.loadFromFile(fontPath)) {
+    if (!font.openFromFile(fontPath)) {
         std::cerr << "[ERROR] Could not load font: " << fontPath << "\n";
         return 1;
     }
 #endif
     std::cout << "[DEBUG] Font loaded OK\n";
 
+    // 🔹 Apply the real font now that it’s loaded
     g_ui_textbox.setFont(font);
+    g_ui_textbox.setString("");
     g_ui_textbox.setCharacterSize(20);
     g_ui_textbox.setFillColor(sf::Color::White);
 
@@ -131,25 +136,27 @@ int main(int argc, char** argv) {
 
     // ---------------- Main Loop ----------------
     fs::path currentDir = fs::current_path();
-    std::vector<Timer> timers;
+    std::vector<Timer> localTimers;
     float scrollOffset = 0.0f;
 
     while (window.isOpen()) {
-        sf::Event event;
-        while (window.pollEvent(event)) {
+        // 🔹 SFML 3 style: pollEvent() returns optional
+        while (auto evOpt = window.pollEvent()) {
+            const sf::Event& ev = *evOpt;
+
             // Handle UI + keyboard events
-            if (!processEvents(window, g_inputBuffer, currentDir, timers, longTermMemory, history)) {
+            if (!processEvents(window, g_inputBuffer, currentDir, localTimers, longTermMemory, history)) {
                 break; // window closed
             }
 
             // ✅ Voice hotkey (configurable, variable-driven)
-            if (event.type == sf::Event::KeyPressed &&
-                event.key.code == g_voiceHotkey)
-            {
-                std::cout << "[Voice] Hotkey pressed → capturing voice\n";
-                std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
-                if (!transcript.empty()) {
-                    handleCommand(transcript); // 🔹 same flow as typed input
+            if (const auto* key = ev.getIf<sf::Event::KeyPressed>()) {
+                if (key->code == g_voiceHotkey) {
+                    std::cout << "[Voice] Hotkey pressed → capturing voice\n";
+                    std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
+                    if (!transcript.empty()) {
+                        handleCommand(transcript); // 🔹 same flow as typed input
+                    }
                 }
             }
         }
@@ -165,7 +172,7 @@ int main(int argc, char** argv) {
         // ✅ Example continuous stream trigger (placeholder)
         if (false) {
             if (!VoiceStream::isRunning()) {
-                VoiceStream::start(Voice::g_state.ctx, &history, timers, longTermMemory, g_nlp);
+                VoiceStream::start(Voice::g_state.ctx, &history, localTimers, longTermMemory, g_nlp);
             } else {
                 VoiceStream::stop();
             }
