@@ -1,8 +1,22 @@
 #pragma once
-#include <string>
-#include <nlohmann/json.hpp>
-#include "commands/commands_core.hpp"   // 🔹 For CommandResult
 
+#include <string>
+#include <fstream>
+#include <iostream>
+#include <filesystem>
+#include <nlohmann/json.hpp>
+#include <SFML/Graphics/Color.hpp>
+
+// Undefine Windows ERROR macro if it leaks in
+#ifdef ERROR
+#undef ERROR
+#endif
+
+#include "commands/commands_core.hpp"
+
+// ------------------------------------------------------------
+// Logger
+// ------------------------------------------------------------
 namespace Logger {
     enum class Level { DEBUG, INFO, WARN, ERROR };
 
@@ -11,16 +25,21 @@ namespace Logger {
     void logResult(const CommandResult& result);
 }
 
-class ErrorManager {
-public:
-    static void load(const std::string& path);
-    static std::string getUserMessage(const std::string& code);
-    static std::string getDebugMessage(const std::string& code);
+// ------------------------------------------------------------
+// ErrorManager
+// ------------------------------------------------------------
+namespace ErrorManager {
+    // Load error codes from JSON (errors.json)
+    void load(const std::string& path);
 
-    // 🔹 Now returns a CommandResult instead of void
-    static CommandResult report(const std::string& code);
+    // Get messages
+    std::string getUserMessage(const std::string& code);
+    std::string getDebugMessage(const std::string& code);
 
-private:
-    static nlohmann::json errors; // raw loaded JSON
-    static nlohmann::json root;   // flattened view (either errors["errors"] or errors)
-};
+    // Report an error (returns CommandResult)
+    CommandResult report(const std::string& code);
+
+    // Internal storage
+    extern nlohmann::json errors;
+    extern nlohmann::json root;
+}

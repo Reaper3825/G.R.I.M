@@ -2,12 +2,21 @@
 #include "resources.hpp"
 #include "ai.hpp"
 
+#include <SFML/Audio.hpp>
+#include <iostream>
+#include <thread>
+#include <chrono>
+#include <filesystem>
+#include <nlohmann/json.hpp>
+
 namespace fs = std::filesystem;
 
 #ifdef _WIN32
     #include <objbase.h>
+    #include <windows.h>
+    #include <sapi.h>
+    #include <sphelper.h>
 #endif
-
 
 // =========================================================
 // Persistent Coqui bridge state
@@ -33,27 +42,22 @@ namespace Voice {
 // =========================================================
 void playAudio(const std::string& path) {
     std::thread([path]() {
-        static sf::Sound sound;
-        static sf::SoundBuffer buffer;
-
+        sf::SoundBuffer buffer;
         if (!buffer.loadFromFile(path)) {
             std::cerr << "[Voice] Failed to load audio: " << path << "\n";
             return;
         }
 
-        sound.setBuffer(buffer);
+        sf::Sound sound(buffer); // ✅ construct with buffer
         sound.play();
 
         std::cout << "[Voice] Playing audio: " << path
-                  << " (duration " << buffer.getDuration().asSeconds() << "s)" 
+                  << " (duration " << buffer.getDuration().asSeconds() << "s)"
                   << std::endl;
 
         sf::Clock clock;
-        while (sound.getStatus() == sf::Sound::Playing) {
-            sf::sleep(sf::milliseconds(1000));
-            std::cout << "[Voice][DEBUG] elapsed: "
-                      << clock.getElapsedTime().asSeconds()
-                      << "s" << std::endl;
+        while (sound.getStatus() == sf::Sound::Status::Playing) {
+            sf::sleep(sf::milliseconds(100));
         }
 
         std::cout << "[Voice] Finished playback at "
@@ -86,21 +90,6 @@ bool speakLocal(const std::string& text, const std::string& /*voiceModel*/) {
     std::wstring wtext(wlen, L'\0');
     MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, &wtext[0], wlen);
 
-    // Debug start time
-    auto start = std::chrono::high_resolution_clock::now();
-    std::time_t now_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    std::cout << "[Voice][SAPI] Speak() started at "
-              << std::put_time(std::localtime(&now_time), "%Y-%m-%d %H:%M:%S")
-              << " with text: " << text << "\n";
-
-    // Enable event notifications
-    CSpEvent event;
-    CComPtr<ISpEventSource> cpEventSource;
-    pVoice->QueryInterface(&cpEventSource);
-    if (cpEventSource) {
-        cpEventSource->SetInterest(SPFEI(SPEI_END_INPUT_STREAM), SPFEI(SPEI_END_INPUT_STREAM));
-    }
-
     // Speak async
     hr = pVoice->Speak(wtext.c_str(), SPF_ASYNC, NULL);
     if (FAILED(hr)) {
@@ -110,33 +99,8 @@ bool speakLocal(const std::string& text, const std::string& /*voiceModel*/) {
         return false;
     }
 
-    // Monitor speech progress
-    auto lastLog = std::chrono::high_resolution_clock::now();
-    if (cpEventSource) {
-        while (true) {
-            hr = event.GetFrom(cpEventSource);
-            if (SUCCEEDED(hr) && event.eEventId == SPEI_END_INPUT_STREAM) {
-                break;
-            }
-
-            auto now = std::chrono::high_resolution_clock::now();
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - lastLog).count() >= 1) {
-                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
-                std::cout << "[Voice][SAPI][DEBUG] elapsed: " << elapsed << "s\n";
-                lastLog = now;
-            }
-
-            Sleep(50);
-        }
-    } else {
-        std::cerr << "[Voice][SAPI] Warning: No event source available, falling back to WaitUntilDone.\n";
-        pVoice->WaitUntilDone(INFINITE);
-    }
-
-    auto end = std::chrono::high_resolution_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    std::cout << "[Voice][SAPI] Finished speaking in "
-              << elapsed << " ms (" << (elapsed / 1000.0) << "s)\n";
+    // Wait until finished
+    pVoice->WaitUntilDone(INFINITE);
 
     pVoice->Release();
     CoUninitialize();

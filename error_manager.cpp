@@ -2,9 +2,11 @@
 #include "commands/commands_core.hpp"
 #include <ctime>
 
-
 static std::ofstream logStream;
 
+// ------------------------------------------------------------
+// Logger implementation
+// ------------------------------------------------------------
 namespace Logger {
 
     void init(const std::string& logFile) {
@@ -59,9 +61,9 @@ namespace Logger {
 
 } // namespace Logger
 
-// -------------------------
-// ErrorManager Implementation
-// -------------------------
+// ------------------------------------------------------------
+// ErrorManager implementation
+// ------------------------------------------------------------
 nlohmann::json ErrorManager::errors;
 nlohmann::json ErrorManager::root;
 
@@ -79,14 +81,12 @@ void ErrorManager::load(const std::string& path) {
         std::cout << "[ErrorManager] Loaded errors.json from: " 
                   << fs::absolute(path).string() << std::endl;
 
-        // Handle nested "errors" key if present
         if (errors.contains("errors") && errors["errors"].is_object()) {
             root = errors["errors"];
         } else {
             root = errors;
         }
 
-        // Dump loaded keys
         std::cout << "[ErrorManager] Available error codes: ";
         for (auto& [key, val] : root.items()) {
             std::cout << key << " ";
@@ -122,9 +122,7 @@ CommandResult ErrorManager::report(const std::string& code) {
     result.message   = userMsg;
     result.color     = sf::Color::Red;
     result.errorCode = code;
-
-    // By default, don’t auto-speak errors unless explicitly requested
-    result.voice     = "";
+    result.voice     = "";          // don’t auto-speak
     result.category  = "error";
 
     Logger::log(Logger::Level::ERROR, code + " -> " + debugMsg);

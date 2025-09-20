@@ -35,6 +35,21 @@ if(GRIM_USE_CUDA)
     endif()
 endif()
 
+# ---------------------------------------------------------
+# Workaround: remove broken quoted CMAKE_INTDIR define for NVCC on MSVC
+# ---------------------------------------------------------
+if(MSVC AND GRIM_USE_CUDA)
+    foreach(flag_var
+        CMAKE_CUDA_FLAGS
+        CMAKE_CUDA_FLAGS_RELEASE
+        CMAKE_CUDA_FLAGS_DEBUG
+        CMAKE_CUDA_FLAGS_RELWITHDEBINFO
+        CMAKE_CUDA_FLAGS_MINSIZEREL)
+        string(REPLACE "-D\"CMAKE_INTDIR=\\\"Release\\\"\"" "" ${flag_var} "${${flag_var}}")
+        set(${flag_var} "${${flag_var}}" CACHE STRING "Overridden" FORCE)
+    endforeach()
+endif()
+
 # =========================================================
 # UI font path option
 # =========================================================
@@ -87,9 +102,14 @@ endif()
 # Compiler warnings
 # =========================================================
 if(MSVC)
-  add_compile_options(/W4 /permissive-)
+  # Only apply MSVC flags to C++ sources, not CUDA
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/W4>
+                      $<$<COMPILE_LANGUAGE:CXX>:/permissive->)
 else()
-  add_compile_options(-Wall -Wextra -Wpedantic)
+  # Only apply GCC/Clang warnings to C++ sources
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wall>
+                      $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
+                      $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>)
 endif()
 
 # =========================================================
@@ -259,7 +279,7 @@ endforeach()
 # Font auto-detection
 # =========================================================
 set(GRIM_FONT_SRC "")
-if(GRIM_FONT_PATH)
+if(GedaadsasaaaaaaaaaaaaaaaRIM_FONT_PATH)
   set(GRIM_FONT_SRC "${GRIM_FONT_PATH}")
   message(STATUS "Using user-specified font: ${GRIM_FONT_SRC}")
 elseif(EXISTS "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")
