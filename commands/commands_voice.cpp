@@ -151,36 +151,57 @@ CommandResult cmdVoiceStream([[maybe_unused]] const std::string& arg) {
 // [Voice] Local TTS test (Microsoft David)
 // ------------------------------------------------------------
 CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
-    std::string testLine = "This is GRIM testing with Microsoft David Desktop voice.";
+    CommandResult result;
+    result.success = false;
 
-    bool ok = Voice::speakLocal(testLine, "Microsoft David Desktop");
+    std::string text = "This is a direct Coqui test. If you hear me now, Coqui is working.";
+    std::string speaker = "p225";   // matches your config
+    double speed = 1.0;
 
-    if (ok) {
-        return {
-            "[Voice] Local TTS (David) spoken successfully.",
-            true,
-            sf::Color::Green,
-            "ERR_NONE",
-            "Local TTS test line spoken",
-            "debug"
-        };
+    std::cout << "[Voice][Test] Forcing Coqui..." << std::endl;
+
+    std::string wav = Voice::coquiSpeak(text, speaker, speed);
+    if (!wav.empty()) {
+        std::cout << "[Voice][Test] Got wav: " << wav << std::endl;
+        Voice::playAudio(wav);
+
+        result.message = "[Voice][Test] Played Coqui TTS successfully.";
+        result.color   = sf::Color::Green;
+        result.success = true;
     } else {
-        return {
-            "[Voice][Error] Local TTS playback failed.",
-            false,
-            sf::Color::Red,
-            "ERR_TTS_PLAYBACK",
-            "Local TTS playback failed",
-            "debug"
-        };
+        result.message = "[Voice][Test] Failed to get Coqui output.";
+        result.color   = sf::Color::Red;
     }
-}
 
+    return result;
+}
 // ------------------------------------------------------------
 // [Voice] List installed SAPI voices
 // ------------------------------------------------------------
 CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
+    auto cfg = aiConfig["voice"];
+    std::ostringstream oss;
+
+    std::string engine = cfg.value("engine", "sapi");
+
+    if (engine == "coqui") {
+        oss << "[Voice] Current Coqui TTS configuration:\n";
+        oss << " - Model: " << "tts_models/en/ljspeech/vits" << "\n"; // must match your tts_bridge.py
+        oss << " - Speaker: " << cfg.value("speaker", "default") << "\n";
+        oss << " - Speed: " << cfg.value("speed", 1.0) << "\n";
+
+        return {
+            oss.str(),
+            true,
+            sf::Color::Yellow,
+            "ERR_NONE",
+            "Coqui voices listed",
+            "debug"
+        };
+    }
+
 #if defined(_WIN32)
+    // Fallback: list SAPI voices
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     if (FAILED(hr)) {
         return { "[Voice][Error] Failed to initialize COM.", false,
@@ -188,17 +209,15 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
     }
 
     IEnumSpObjectTokens* pEnum = nullptr;
-    ISpObjectToken* pToken = nullptr;
     ULONG ulCount = 0;
 
     hr = SpEnumTokens(SPCAT_VOICES, NULL, NULL, &pEnum);
     if (SUCCEEDED(hr) && pEnum) {
         pEnum->GetCount(&ulCount);
-        std::ostringstream oss;
-        oss << "[Voice] Found " << ulCount << " installed voices:\n";
+        oss << "[Voice] Found " << ulCount << " installed SAPI voices:\n";
 
         for (ULONG i = 0; i < ulCount; i++) {
-            pToken = nullptr;
+            ISpObjectToken* pToken = nullptr;
             if (SUCCEEDED(pEnum->Next(1, &pToken, NULL)) && pToken) {
                 WCHAR* pszDesc = nullptr;
                 if (SUCCEEDED(SpGetDescription(pToken, &pszDesc)) && pszDesc) {
@@ -215,19 +234,38 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
         pEnum->Release();
         CoUninitialize();
 
-        return { oss.str(), true, sf::Color::Yellow,
-                 "ERR_NONE", "Voices listed", "debug" };
+        return {
+            oss.str(),
+            true,
+            sf::Color::Yellow,
+            "ERR_NONE",
+            "SAPI voices listed",
+            "debug"
+        };
     }
 
     if (pEnum) pEnum->Release();
     CoUninitialize();
-    return { "[Voice][Error] Failed to enumerate voices.", false,
-             sf::Color::Red, "ERR_TTS_ENUM", "Failed to list voices", "debug" };
+    return {
+        "[Voice][Error] Failed to enumerate SAPI voices.",
+        false,
+        sf::Color::Red,
+        "ERR_TTS_ENUM",
+        "Failed to list SAPI voices",
+        "debug"
+    };
 #else
-    return { "[Voice][Error] Voice listing is only supported on Windows.", false,
-             sf::Color::Red, "ERR_UNSUPPORTED_PLATFORM", "Voice listing unsupported", "debug" };
+    return {
+        "[Voice][Error] Voice listing is only supported on Windows (for SAPI).",
+        false,
+        sf::Color::Red,
+        "ERR_UNSUPPORTED_PLATFORM",
+        "Voice listing unsupported",
+        "debug"
+    };
 #endif
 }
+
 
 // ------------------------------------------------------------
 // [Debug] Speak a test line directly through SAPI

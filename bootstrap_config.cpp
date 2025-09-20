@@ -52,23 +52,32 @@ nlohmann::json defaultAI() {
 
         {"voice", {
             {"mode", "local"},  
-            {"engine", "sapi"},       
+            {"engine", "coqui"},       
+            // local_engine kept for SAPI/Piper fallback
             {"local_engine", "en_US-amy-medium.onnx"},
+
+            // 🔹 Default speaker (valid for VCTK)
             {"speaker", "p225"},                      
+
+            // 🔹 Default speed multiplier
             {"speed", 1.0},                          
 
+            // 🔹 Per-category routing rules
             {"rules", {
                 {"startup", "sapi"},
-                {"reminder", "sapi"},
+                {"reminder", "coqui"},
                 {"summary", "coqui"},
                 {"banter", "coqui"}
             }},
 
+            // 🔹 Device index for input (mic)
             {"input_device_index", -1}
         }},
 
         {"api_keys", {
-            {"openai", ""}, {"elevenlabs", ""}, {"azure", ""}
+            {"openai", ""}, 
+            {"elevenlabs", ""}, 
+            {"azure", ""}
         }},
 
         {"whisper", {
@@ -79,6 +88,7 @@ nlohmann::json defaultAI() {
         }}
     };
 }
+
 
 
 nlohmann::json defaultErrors() {

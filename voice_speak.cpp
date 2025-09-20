@@ -22,8 +22,8 @@ namespace fs = std::filesystem;
 // Persistent Coqui bridge state
 // =========================================================
 #ifdef _WIN32
-static HANDLE g_hChildStdinRd = NULL;
-static HANDLE g_hChildStdinWr = NULL;
+static HANDLE g_hChildStdinRd  = NULL;
+static HANDLE g_hChildStdinWr  = NULL;
 static HANDLE g_hChildStdoutRd = NULL;
 static HANDLE g_hChildStdoutWr = NULL;
 static PROCESS_INFORMATION g_piProcInfo;
@@ -38,7 +38,7 @@ static nlohmann::json getVoiceConfig() {
 namespace Voice {
 
 // =========================================================
-// Audio Playback (SFML, async) – used for Coqui WAVs
+// Audio Playback (SFML, async)
 // =========================================================
 void playAudio(const std::string& path) {
     std::thread([path]() {
@@ -48,21 +48,18 @@ void playAudio(const std::string& path) {
             return;
         }
 
-        sf::Sound sound(buffer); // ✅ construct with buffer
+        sf::Sound sound(buffer);
         sound.play();
 
         std::cout << "[Voice] Playing audio: " << path
-                  << " (duration " << buffer.getDuration().asSeconds() << "s)"
-                  << std::endl;
+                  << " (duration " << buffer.getDuration().asSeconds() << "s)\n";
 
-        sf::Clock clock;
-        while (sound.getStatus() == sf::Sound::Status::Playing) {
-            sf::sleep(sf::milliseconds(100));
+       while (sound.getStatus() == sf::Sound::Status::Playing) {
+        sf::sleep(sf::milliseconds(100));
         }
 
-        std::cout << "[Voice] Finished playback at "
-                  << clock.getElapsedTime().asSeconds()
-                  << "s" << std::endl;
+
+        std::cout << "[Voice] Finished playback\n";
     }).detach();
 }
 
@@ -80,40 +77,44 @@ bool speakLocal(const std::string& text, const std::string& /*voiceModel*/) {
     ISpVoice* pVoice = nullptr;
     hr = CoCreateInstance(CLSID_SpVoice, NULL, CLSCTX_ALL, IID_ISpVoice, (void**)&pVoice);
     if (FAILED(hr) || !pVoice) {
-        std::cerr << "[Voice][SAPI] Failed to create ISpVoice: 0x" << std::hex << hr << "\n";
+        std::cerr << "[Voice][SAPI] Failed to create ISpVoice\n";
         CoUninitialize();
         return false;
     }
 
-    // Convert UTF-8 string to wide string
     int wlen = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, NULL, 0);
     std::wstring wtext(wlen, L'\0');
     MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, &wtext[0], wlen);
 
-    // Speak async
     hr = pVoice->Speak(wtext.c_str(), SPF_ASYNC, NULL);
     if (FAILED(hr)) {
-        std::cerr << "[Voice][SAPI] Speak() failed: 0x" << std::hex << hr << "\n";
+        std::cerr << "[Voice][SAPI] Speak() failed\n";
         pVoice->Release();
         CoUninitialize();
         return false;
     }
 
-    // Wait until finished
     pVoice->WaitUntilDone(INFINITE);
-
     pVoice->Release();
     CoUninitialize();
     return true;
 #else
     (void)text;
-    (void)voiceModel;
     return false;
 #endif
 }
 
 // =========================================================
-// Init Coqui Bridge (persistent subprocess)
+// Cloud speech (stub)
+// =========================================================
+bool speakCloud(const std::string& text, const std::string& engine) {
+    std::cerr << "[Voice] speakCloud not implemented (engine=" << engine << ")\n";
+    (void)text;
+    return false;
+}
+
+// =========================================================
+// Init Coqui Bridge (persistent subprocess) with READY handshake
 // =========================================================
 bool initTTS() {
 #ifdef _WIN32
@@ -122,129 +123,131 @@ bool initTTS() {
     saAttr.bInheritHandle = TRUE;
     saAttr.lpSecurityDescriptor = NULL;
 
-    // Create pipes for STDOUT
+    // Create stdout pipe
     if (!CreatePipe(&g_hChildStdoutRd, &g_hChildStdoutWr, &saAttr, 0)) {
         std::cerr << "[Voice] Stdout pipe failed\n";
         return false;
     }
-    if (!SetHandleInformation(g_hChildStdoutRd, HANDLE_FLAG_INHERIT, 0)) {
-        std::cerr << "[Voice] Stdout SetHandleInformation failed\n";
-        return false;
-    }
+    SetHandleInformation(g_hChildStdoutRd, HANDLE_FLAG_INHERIT, 0);
 
-    // Create pipes for STDIN
+    // Create stdin pipe
     if (!CreatePipe(&g_hChildStdinRd, &g_hChildStdinWr, &saAttr, 0)) {
         std::cerr << "[Voice] Stdin pipe failed\n";
         return false;
     }
-    if (!SetHandleInformation(g_hChildStdinWr, HANDLE_FLAG_INHERIT, 0)) {
-        std::cerr << "[Voice] Stdin SetHandleInformation failed\n";
+    SetHandleInformation(g_hChildStdinWr, HANDLE_FLAG_INHERIT, 0);
+
+    // Paths
+    fs::path resourcesPath = getResourcePath();
+    fs::path rootPath = resourcesPath.parent_path().parent_path().parent_path();
+    fs::path pythonExe = rootPath / ".venv" / "Scripts" / "python.exe";
+
+    // Prefer source Resources/python/tts_bridge.py, fallback to build/resources/python/tts_bridge.py
+    fs::path script = "D:/G.R.I.M/Resources/python/tts_bridge.py";
+    if (fs::exists(script)) {
+        std::cout << "[Voice] Using source bridge: " << script.string() << "\n";
+    } else {
+        script = resourcesPath / "python" / "tts_bridge.py";
+        std::cout << "[Voice] Using fallback bridge: " << script.string() << "\n";
+    }
+
+    if (!fs::exists(pythonExe) || !fs::exists(script)) {
+        std::cerr << "[Voice] ERROR: Missing python.exe or tts_bridge.py\n";
         return false;
     }
 
-    // Build command
-    std::string cmd = "resources/.venv/Scripts/python.exe resources/python/tts_bridge.py";
+    std::string cmd = "\"" + pythonExe.string() + "\" \"" + script.string() + "\"";
+    std::replace(cmd.begin(), cmd.end(), '/', '\\');
 
-    STARTUPINFOA siStartInfo;
-    ZeroMemory(&siStartInfo, sizeof(STARTUPINFOA));
-    siStartInfo.cb = sizeof(STARTUPINFOA);
-    siStartInfo.hStdError = g_hChildStdoutWr;
-    siStartInfo.hStdOutput = g_hChildStdoutWr;
-    siStartInfo.hStdInput = g_hChildStdinRd;
-    siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
+    STARTUPINFOA si;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.hStdError = g_hChildStdoutWr;
+    si.hStdOutput = g_hChildStdoutWr;
+    si.hStdInput  = g_hChildStdinRd;
+    si.dwFlags |= STARTF_USESTDHANDLES;
 
-    ZeroMemory(&g_piProcInfo, sizeof(PROCESS_INFORMATION));
+    ZeroMemory(&g_piProcInfo, sizeof(g_piProcInfo));
+    std::vector<char> cmdVec(cmd.begin(), cmd.end());
+    cmdVec.push_back('\0');
 
-    if (!CreateProcessA(
-            NULL,
-            cmd.data(),
-            NULL,
-            NULL,
-            TRUE,
-            CREATE_NO_WINDOW,
-            NULL,
-            NULL,
-            &siStartInfo,
-            &g_piProcInfo)) {
+    if (!CreateProcessA(NULL, cmdVec.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW,
+                        NULL, NULL, &si, &g_piProcInfo)) {
         std::cerr << "[Voice] CreateProcess failed (" << GetLastError() << ")\n";
         return false;
     }
 
-    g_ttsReady = true;
-    return true;
-#else
-    std::cerr << "[Voice] initTTS not implemented on this platform yet.\n";
-    return false;
-#endif
-}
-
-// =========================================================
-// Shutdown Coqui Bridge
-// =========================================================
-void shutdownTTS() {
-#ifdef _WIN32
-    if (g_piProcInfo.hProcess) {
-        TerminateProcess(g_piProcInfo.hProcess, 0);
-        CloseHandle(g_piProcInfo.hProcess);
-        CloseHandle(g_piProcInfo.hThread);
-    }
-    if (g_hChildStdinRd) CloseHandle(g_hChildStdinRd);
-    if (g_hChildStdinWr) CloseHandle(g_hChildStdinWr);
-    if (g_hChildStdoutRd) CloseHandle(g_hChildStdoutRd);
-    if (g_hChildStdoutWr) CloseHandle(g_hChildStdoutWr);
-
-    g_hChildStdinRd = g_hChildStdinWr = NULL;
-    g_hChildStdoutRd = g_hChildStdoutWr = NULL;
-#endif
-    g_ttsReady = false;
-}
-
-// =========================================================
-// Coqui Speak (send JSON → receive JSON)
-// =========================================================
-std::string coquiSpeak(const std::string& text,
-                       const std::string& speaker,
-                       double speed) {
-    if (!g_ttsReady) {
-        std::cerr << "[Voice] Coqui not initialized\n";
-        return "";
-    }
-
-#ifdef _WIN32
-    // Build JSON
-    nlohmann::json req = {{"text", text}, {"speaker", speaker}, {"speed", speed}};
-    std::string reqStr = req.dump() + "\n";
-
-    DWORD written;
-    if (!WriteFile(g_hChildStdinWr, reqStr.c_str(),
-                   (DWORD)reqStr.size(), &written, NULL)) {
-        std::cerr << "[Voice] Failed to write to bridge\n";
-        return "";
-    }
-
-    // Read response line
+    // Wait for READY
     std::string respLine;
     char buffer[1];
     DWORD bytesRead;
     while (true) {
-        if (!ReadFile(g_hChildStdoutRd, buffer, 1, &bytesRead, NULL) || bytesRead == 0) {
+        if (!ReadFile(g_hChildStdoutRd, buffer, 1, &bytesRead, NULL) || bytesRead == 0)
             break;
-        }
-        if (buffer[0] == '\n') break;
-        respLine.push_back(buffer[0]);
+        if (buffer[0] == '\n') {
+            try {
+                auto resp = nlohmann::json::parse(respLine);
+                if (resp.contains("status") && resp["status"] == "READY") {
+                    std::cout << "[Voice] Bridge READY (model="
+                              << resp.value("model", "?") << ")\n";
+                    g_ttsReady = true;
+                    return true;
+                }
+            } catch (...) {}
+            respLine.clear();
+        } else respLine.push_back(buffer[0]);
     }
 
-    try {
-        auto resp = nlohmann::json::parse(respLine);
-        if (resp.contains("file")) return resp["file"].get<std::string>();
-        if (resp.contains("error")) {
-            std::cerr << "[Voice] Bridge error: " << resp["error"] << "\n";
-        }
-    } catch (std::exception& e) {
-        std::cerr << "[Voice] Parse error: " << e.what() << "\n";
+    std::cerr << "[Voice] Bridge failed to send READY\n";
+    return false;
+#else
+    return false;
+#endif
+}
+
+
+// =========================================================
+// Send text → receive .wav file path
+// =========================================================
+std::string coquiSpeak(const std::string& text,
+                       const std::string& speaker,
+                       double speed) {
+#ifdef _WIN32
+    if (!g_ttsReady) {
+        std::cerr << "[Voice] coquiSpeak called before initTTS\n";
+        return "";
+    }
+
+    nlohmann::json req = {{"text", text}, {"speaker", speaker}, {"speed", speed}};
+    std::string line = req.dump() + "\n";
+
+    DWORD written;
+    if (!WriteFile(g_hChildStdinWr, line.c_str(), (DWORD)line.size(), &written, NULL)) {
+        std::cerr << "[Voice] WriteFile failed\n";
+        return "";
+    }
+
+    // Read one JSON response
+    std::string respLine;
+    char buffer[1];
+    DWORD bytesRead;
+    while (true) {
+        if (!ReadFile(g_hChildStdoutRd, buffer, 1, &bytesRead, NULL) || bytesRead == 0)
+            break;
+        if (buffer[0] == '\n') {
+            try {
+                auto resp = nlohmann::json::parse(respLine);
+                if (resp.contains("file")) return resp["file"];
+                if (resp.contains("error")) {
+                    std::cerr << "[Voice][Bridge] " << resp["error"] << "\n";
+                    return "";
+                }
+            } catch (...) {}
+            respLine.clear();
+            break;
+        } else respLine.push_back(buffer[0]);
     }
 #endif
-
     return "";
 }
 
@@ -253,11 +256,9 @@ std::string coquiSpeak(const std::string& text,
 // =========================================================
 void speak(const std::string& text, const std::string& category) {
     auto cfg = getVoiceConfig();
-
     std::string engine = cfg.value("engine", "sapi");
-    if (cfg.contains("rules") && cfg["rules"].contains(category)) {
-        engine = cfg["rules"][category].get<std::string>();
-    }
+    if (cfg.contains("rules") && cfg["rules"].contains(category))
+        engine = cfg["rules"][category];
 
     std::string speaker = cfg.value("speaker", "p225");
     double speed = cfg.value("speed", 1.0);
@@ -268,6 +269,23 @@ void speak(const std::string& text, const std::string& category) {
     } else if (engine == "sapi") {
         speakLocal(text, cfg.value("local_engine", ""));
     }
+}
+
+// =========================================================
+// Simplified Helper
+// =========================================================
+bool speakText(const std::string& text, bool preferOnline) {
+    auto cfg = getVoiceConfig();
+    std::string engine = preferOnline ? cfg.value("engine","sapi") : "sapi";
+    if (engine == "coqui") {
+        std::string wav = coquiSpeak(text, cfg.value("speaker","p225"),
+                                     cfg.value("speed",1.0));
+        if (!wav.empty()) { playAudio(wav); return true; }
+        return false;
+    } else if (engine == "sapi") {
+        return speakLocal(text, cfg.value("local_engine",""));
+    }
+    return false;
 }
 
 } // namespace Voice
