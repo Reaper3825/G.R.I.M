@@ -223,3 +223,72 @@ Multi-Arch: same
 Description: Use sfml-window library
 Status: install ok installed
 
+Package: curl
+Version: 8.16.0
+Depends: vcpkg-cmake, vcpkg-cmake-config, zlib
+Architecture: x64-windows
+Multi-Arch: same
+Abi: 375914000fb74311dda35725b03bcb21f9ee5a6c651edb41bae6027c9d89dddc
+Description: A library for transferring data with URLs
+Default-Features: non-http, ssl
+Status: install ok installed
+
+Package: curl
+Feature: non-http
+Architecture: x64-windows
+Multi-Arch: same
+Description: Enables protocols beyond HTTP/HTTPS/HTTP2/HTTP3
+Status: install ok installed
+
+Package: curl
+Feature: ssl
+Architecture: x64-windows
+Multi-Arch: same
+Description: Default SSL / TLS implementation.
+Status: install ok installed
+
+Package: curl
+Feature: sspi
+Architecture: x64-windows
+Multi-Arch: same
+Description: SSPI support
+Status: install ok installed
+
+Package: cpr
+Version: 1.12.0
+Depends: curl, vcpkg-cmake, vcpkg-cmake-config
+Architecture: x64-windows
+Multi-Arch: same
+Abi: 9e1759aabd7c6bbc9d71a95c8e6bd8d08426782dcd675e9d0bbabb62ae04e903
+Description: C++ Requests is a simple wrapper around libcurl inspired by the excellent Python Requests project.
+Default-Features: ssl
+Status: install ok installed
+
+Package: cpr
+Feature: ssl
+Depends: curl
+Architecture: x64-windows
+Multi-Arch: same
+Description: Enable SSL support
+Status: install ok installed
+
+Package: nlohmann-json
+Version: 3.12.0
+Port-Version: 1
+Depends: vcpkg-cmake, vcpkg-cmake-config
+Architecture: x64-windows
+Multi-Arch: same
+Abi: 21bf1906e3b9d2116de399c412b627f8ff759d1d6fb85db40c78c151b8f06d56
+Description: JSON for Modern C++
+Status: install ok installed
+
+Package: portaudio
+Version: 19.7
+Port-Version: 7
+Depends: vcpkg-cmake, vcpkg-cmake-config
+Architecture: x64-windows
+Multi-Arch: same
+Abi: ec317c1d53cddfcf02ea9a2b25c86265e4d7ee0f01ea1c3565be9fd6918f1b22
+Description: PortAudio Portable Cross-platform Audio I/O API PortAudio is a free, cross-platform, open-source, audio I/O library.  It lets you write simple audio programs in 'C' or C++ that will compile and run on many platforms including Windows, Macintosh OS X, and Unix (OSS/ALSA). It is intended to promote the exchange of audio software between developers on different platforms. Many applications use PortAudio for Audio I/O.
+Status: install ok installed
+
