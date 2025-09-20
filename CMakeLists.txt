@@ -13,12 +13,27 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # =========================================================
-# GPU acceleration options (default ON, but auto-detected)
+# GPU acceleration options
 # =========================================================
-option(GRIM_USE_CUDA   "Enable CUDA acceleration for Whisper/AI" ON)
-option(GRIM_USE_METAL  "Enable Metal acceleration for Whisper/AI" ON)
-option(GRIM_USE_VULKAN "Enable Vulkan acceleration for Whisper/AI" ON)
-option(GRIM_USE_OPENCL "Enable OpenCL acceleration for Whisper/AI" ON)
+option(GRIM_USE_CUDA "Enable CUDA acceleration for Whisper/AI" ON)
+option(GRIM_USE_METAL "Enable Metal acceleration for Whisper/AI" OFF)
+option(GRIM_USE_VULKAN "Enable Vulkan acceleration for Whisper/AI" OFF)
+option(GRIM_USE_OPENCL "Enable OpenCL acceleration for Whisper/AI" OFF)
+
+# ---- CUDA arch for RTX 3080 Ti (Ampere, sm_86) ----
+if(GRIM_USE_CUDA)
+    add_definitions(-DWHISPER_USE_CUDA)
+    set(GGML_CUDA ON CACHE BOOL "Enable CUDA in ggml")
+
+    # Force architecture to sm_86 only
+    set(CMAKE_CUDA_ARCHITECTURES 86)
+    add_definitions(-DGGML_CUDA_ARCH=86)
+
+    # Fix bad quoting of CMAKE_INTDIR passed to nvcc
+    if(MSVC)
+        add_compile_definitions(CMAKE_INTDIR=Release)
+    endif()
+endif()
 
 # =========================================================
 # UI font path option
@@ -40,7 +55,6 @@ if(GRIM_USE_CUDA)
         if(CMAKE_CUDA_COMPILER)
             enable_language(CUDA)
             message(STATUS "✅ CUDA detected: ${CUDAToolkit_VERSION} at ${CUDAToolkit_LIBRARY_ROOT}")
-            add_definitions(-DWHISPER_USE_CUDA)
             set(GGML_CUDA ON CACHE BOOL "Enable CUDA in ggml" FORCE)
         else()
             message(WARNING "⚠️ CUDA Toolkit installed, but no working GPU compiler found. Falling back to CPU.")
@@ -144,9 +158,6 @@ set(GRIM_HEADERS
     bootstrap_config.hpp
     ${COMMAND_HEADERS}
 )
-
-enable_language(CUDA)
-
 
 # =========================================================
 # Target
