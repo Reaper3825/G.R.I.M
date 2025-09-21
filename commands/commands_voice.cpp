@@ -155,26 +155,36 @@ CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
     result.success = false;
 
     std::string text = "This is a direct Coqui test. If you hear me now, Coqui is working.";
-    std::string speaker = "p225";   // matches your config
-    double speed = 1.0;
 
-    std::cout << "[Voice][Test] Forcing Coqui..." << std::endl;
+    std::cout << "[Voice][Test] ===== BEGIN Coqui TTS TEST =====" << std::endl;
+    std::cout << "[Voice][Test] Text   : \"" << text << "\"" << std::endl;
 
-    std::string wav = Voice::coquiSpeak(text, speaker, speed);
-    if (!wav.empty()) {
-        std::cout << "[Voice][Test] Got wav: " << wav << std::endl;
-        Voice::playAudio(wav);
-
-        result.message = "[Voice][Test] Played Coqui TTS successfully.";
-        result.color   = sf::Color::Green;
-        result.success = true;
-    } else {
-        result.message = "[Voice][Test] Failed to get Coqui output.";
+    // 🔹 Ask Coqui to synthesize → get path
+    std::string wavPath = Voice::coquiSpeak(text, "p225", 1.0);
+    if (wavPath.empty()) {
+        result.message = "[Voice][Test] Coqui TTS failed.";
         result.color   = sf::Color::Red;
+        std::cout << "[Voice][Test] ERROR: coquiSpeak returned empty path\n";
+        return result;
     }
 
+    std::cout << "[Voice][Test] Coqui returned file: " << wavPath << std::endl;
+
+    // 🔹 Play the generated file
+    Voice::playAudio(wavPath);
+
+    result.message = "[Voice][Test] Requested Coqui TTS playback (check audio).";
+    result.color   = sf::Color::Green;
+    result.success = true;
+
+    std::cout << "[Voice][Test] ===== END Coqui TTS TEST =====" << std::endl;
     return result;
 }
+
+
+
+
+
 // ------------------------------------------------------------
 // [Voice] List installed SAPI voices
 // ------------------------------------------------------------
