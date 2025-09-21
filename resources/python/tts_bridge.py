@@ -6,21 +6,33 @@ import uuid
 from pathlib import Path
 
 # ------------------------------
-# Portable model path (fix Resources double nesting)
+# Environment / Model Path
 # ------------------------------
 os.environ["TTS_HOME"] = str(Path(__file__).resolve().parent.parent.parent / "Resources" / "models")
 
-# ------------------------------
-# JSON-safe output helpers
-# ------------------------------
-def send(obj):
-    real_out = sys.__stdout__
-    real_out.write(json.dumps(obj) + "\n")
-    real_out.flush()
+# Ensure UTF-8 for stdout/stderr
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 
-def debug(msg):
-    sys.stderr.write(msg + "\n")
-    sys.stderr.flush()
+# ------------------------------
+# Helpers
+# ------------------------------
+def send(obj: dict):
+    """Send JSON object to stdout (for C++ to parse)."""
+    try:
+        real_out = sys.__stdout__
+        real_out.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        real_out.flush()
+    except Exception as e:
+        debug(f"[bridge-error] Failed to send JSON: {e}")
+
+def debug(msg: str):
+    """Send debug/info messages to stderr (not parsed by C++)."""
+    try:
+        sys.stderr.write(msg + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
 
 # ------------------------------
 # Startup signal
@@ -30,14 +42,27 @@ send({"status": "LOADING"})
 # ------------------------------
 # Heavy imports
 # ------------------------------
-from TTS.api import TTS
+try:
+    from TTS.api import TTS
+except Exception as e:
+    debug(f"[bridge-error] Failed to import Coqui TTS: {e}")
+    send({"error": f"import_failed: {e}"})
+    sys.exit(1)
 
+# ------------------------------
+# Model Init
+# ------------------------------
 MODEL_NAME = "tts_models/en/vctk/vits"
-USE_GPU = False  # force CPU
+USE_GPU = False  # force CPU for compatibility
 
-debug(f"[bridge] Initializing model {MODEL_NAME} (gpu={USE_GPU})")
-tts = TTS(MODEL_NAME, progress_bar=False, gpu=USE_GPU)
-debug(f"[bridge] Loaded {MODEL_NAME}")
+try:
+    debug(f"[bridge] Initializing model {MODEL_NAME} (gpu={USE_GPU})")
+    tts = TTS(MODEL_NAME, progress_bar=False, gpu=USE_GPU)
+    debug(f"[bridge] Loaded {MODEL_NAME}")
+except Exception as e:
+    debug(f"[bridge-error] Model load failed: {e}")
+    send({"error": f"model_load_failed: {e}"})
+    sys.exit(1)
 
 # Fetch available speakers
 speakers = []
@@ -62,9 +87,9 @@ send({
 })
 
 # ------------------------------
-# Helpers
+# Synthesis
 # ------------------------------
-def synthesize(text, speaker=None, speed=1.0):
+def synthesize(text: str, speaker: str = None, speed: float = 1.0):
     out_file = out_dir / f"{uuid.uuid4().hex}.wav"
     try:
         # Guarantee a speaker
@@ -75,10 +100,15 @@ def synthesize(text, speaker=None, speed=1.0):
 
         debug(f"[bridge] Synthesizing text='{text}' speaker={speaker} speed={speed}")
         tts.tts_to_file(text=text, speaker=speaker, speed=speed, file_path=str(out_file))
-        send({"file": str(out_file), "speaker": speaker})
+
+        if not out_file.exists():
+            raise RuntimeError(f"TTS synthesis failed, file not created: {out_file}")
+
+        send({"file": str(out_file), "speaker": speaker, "speed": speed, "done": True})
+        debug(f"[bridge] Successfully wrote file {out_file}")
     except Exception as e:
         debug(f"[bridge-error] {repr(e)}")
-        send({"error": str(e)})
+        send({"error": str(e), "done": False})
 
 # ------------------------------
 # Main loop
@@ -94,9 +124,9 @@ for raw_input in sys.stdin:
         speaker = req.get("speaker", None)
         speed = req.get("speed", 1.0)
         if not text:
-            send({"error": "empty_text"})
+            send({"error": "empty_text", "done": False})
             continue
         synthesize(text, speaker, speed)
     except Exception as e:
         debug(f"[bridge-error] {repr(e)}")
-        send({"error": str(e)})
+        send({"error": str(e), "done": False})

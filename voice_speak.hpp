@@ -1,6 +1,8 @@
 #pragma once
 #include <string>
 
+class ConsoleHistory; // forward declare so we don’t drag full header here
+
 namespace Voice {
     // =========================================================
     // Voice interface (public API)
@@ -12,11 +14,11 @@ namespace Voice {
     // 🔹 Local speech synthesis (SAPI on Windows, say on macOS, Piper on Linux)
     bool speakLocal(const std::string& text, const std::string& voiceModel);
 
-    // 🔹 Cloud speech synthesis (stub for now)
+    // 🔹 Cloud speech synthesis (stub for now, Coqui later)
     bool speakCloud(const std::string& text, const std::string& engine);
 
-    // 🔹 Unified entry point (routes by category → engine)
-    void speak(const std::string& text, const std::string& category);
+    // 🔹 Unified entry point (routes by engine → local/coqui/etc.)
+    void speak(const std::string& engine, const std::string& text);
 
     // 🔹 Simplified helper (legacy mode: pick local/cloud)
     bool speakText(const std::string& text, bool preferOnline = true);
@@ -35,4 +37,7 @@ namespace Voice {
     std::string coquiSpeak(const std::string& text,
                            const std::string& speaker,
                            double speed);
+
+    // 🔹 Redirect bridge logs (stderr) into ConsoleHistory
+    void setLogHistory(ConsoleHistory* history);
 }

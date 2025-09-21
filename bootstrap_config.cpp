@@ -36,7 +36,6 @@ static bool mergeDefaults(nlohmann::json& cfg,
 
 // ----------------- defaults -----------------
 namespace bootstrap_config {
-
 nlohmann::json defaultAI() {
     return {
         {"backend", "auto"},
@@ -51,16 +50,15 @@ nlohmann::json defaultAI() {
         {"silence_timeout_ms", 4000},
 
         {"voice", {
-            {"mode", "local"},  
-            {"engine", "coqui"},       
-            // local_engine kept for SAPI/Piper fallback
+            {"mode", "local"},
+            {"engine", "coqui"},
+
+            // 🔒 Legacy key (kept only for backward compatibility, used by SAPI/Piper)
             {"local_engine", "en_US-amy-medium.onnx"},
 
-            // 🔹 Default speaker (valid for VCTK)
-            {"speaker", "p225"},                      
-
-            // 🔹 Default speed multiplier
-            {"speed", 1.0},                          
+            // 🔹 Default speaker + speed
+            {"speaker", "p225"},
+            {"speed", 1.0},
 
             // 🔹 Per-category routing rules
             {"rules", {
@@ -71,12 +69,21 @@ nlohmann::json defaultAI() {
             }},
 
             // 🔹 Device index for input (mic)
-            {"input_device_index", -1}
+            {"input_device_index", -1},
+
+            // ✅ New structured blocks for specific engines
+            {"coqui", {
+                {"model", "tts_models/en/vctk/vits"},
+                {"speaker", "p225"}
+            }},
+            {"sapi", {
+                {"voice", "en_US-amy-medium.onnx"}
+            }}
         }},
 
         {"api_keys", {
-            {"openai", ""}, 
-            {"elevenlabs", ""}, 
+            {"openai", ""},
+            {"elevenlabs", ""},
             {"azure", ""}
         }},
 

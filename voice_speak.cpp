@@ -8,6 +8,9 @@
 #include <chrono>
 #include <filesystem>
 #include <nlohmann/json.hpp>
+#include <mutex>
+#include <iomanip>
+#include <sstream>
 
 namespace fs = std::filesystem;
 
@@ -18,56 +21,110 @@ namespace fs = std::filesystem;
     #include <sphelper.h>
 #endif
 
-// =========================================================
-// Persistent Coqui bridge state
-// =========================================================
-#ifdef _WIN32
-static HANDLE g_hChildStdinRd  = NULL;
-static HANDLE g_hChildStdinWr  = NULL;
-static HANDLE g_hChildStdoutRd = NULL;
-static HANDLE g_hChildStdoutWr = NULL;
-static PROCESS_INFORMATION g_piProcInfo;
-#endif
+namespace Voice {
 
+// =========================================================
+// Persistent state
+// =========================================================
 static bool g_ttsReady = false;
+
+namespace {
+    std::mutex g_audioMutex;
+
+    // Short sound effects (if you ever need them)
+    std::vector<std::unique_ptr<sf::SoundBuffer>> g_buffers;
+    std::vector<std::unique_ptr<sf::Sound>> g_sounds;
+
+    // Long audio streams (TTS / music / Coqui)
+    std::vector<std::unique_ptr<sf::Music>> g_music;
+
+    std::string timestampNow() {
+        auto now = std::chrono::system_clock::now();
+        std::time_t t = std::chrono::system_clock::to_time_t(now);
+        std::tm tm;
+    #ifdef _WIN32
+        localtime_s(&tm, &t);
+    #else
+        localtime_r(&t, &tm);
+    #endif
+        std::ostringstream oss;
+        oss << std::put_time(&tm, "%H:%M:%S");
+        return oss.str();
+    }
+}
 
 static nlohmann::json getVoiceConfig() {
     return aiConfig["voice"];
 }
 
-namespace Voice {
 
 // =========================================================
-// Audio Playback (SFML, async)
+// Audio Playback (SFML async)
 // =========================================================
 void playAudio(const std::string& path) {
     std::thread([path]() {
-        sf::SoundBuffer buffer;
-        if (!buffer.loadFromFile(path)) {
-            std::cerr << "[Voice] Failed to load audio: " << path << "\n";
+        // Probe duration
+        sf::SoundBuffer probe;
+        if (!probe.loadFromFile(path)) {
+            std::cerr << "[Voice] Failed to open audio: " << path << "\n";
             return;
         }
 
-        sf::Sound sound(buffer);
-        sound.play();
+        float duration = probe.getDuration().asSeconds();
+        std::cout << "[Voice][" << timestampNow() << "] Preparing to play "
+                  << path << " (duration " << duration << "s)\n";
 
-        std::cout << "[Voice] Playing audio: " << path
-                  << " (duration " << buffer.getDuration().asSeconds() << "s)\n";
+        if (duration < 10.0f) {
+            // 🔹 Short clip → Sound
+            auto buffer = std::make_unique<sf::SoundBuffer>(probe);
+            auto sound  = std::make_unique<sf::Sound>(*buffer);
 
-       while (sound.getStatus() == sf::Sound::Status::Playing) {
-        sf::sleep(sf::milliseconds(100));
+            {
+                std::lock_guard<std::mutex> lock(g_audioMutex);
+                g_buffers.push_back(std::move(buffer));
+                g_sounds.push_back(std::move(sound));
+            }
+
+            sf::Sound* s = g_sounds.back().get();
+            s->play();
+
+            while (s->getStatus() == sf::Sound::Playing) {
+                sf::sleep(sf::milliseconds(100));
+            }
+        } else {
+            // 🔹 Long clip → Music
+            auto music = std::make_unique<sf::Music>();
+            if (!music->openFromFile(path)) {
+                std::cerr << "[Voice] Failed to stream audio: " << path << "\n";
+                return;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(g_audioMutex);
+                g_music.push_back(std::move(music));
+            }
+
+            sf::Music* m = g_music.back().get();
+            m->play();
+
+            while (m->getStatus() == sf::Music::Playing) {
+                sf::sleep(sf::milliseconds(100));
+            }
         }
 
-
-        std::cout << "[Voice] Finished playback\n";
+        std::cout << "[Voice][" << timestampNow() << "] Finished playback\n";
     }).detach();
 }
 
+
+
 // =========================================================
-// Local Speech (Windows SAPI)
+// Windows SAPI Local Speech
 // =========================================================
-bool speakLocal(const std::string& text, const std::string& /*voiceModel*/) {
+bool speakLocal(const std::string& text, const std::string& voiceName) {
 #ifdef _WIN32
+    std::cout << "[Voice][SAPI] SpeakLocal called (voice=" << voiceName << ")\n";
+
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     if (FAILED(hr)) {
         std::cerr << "[Voice][SAPI] CoInitializeEx failed: 0x" << std::hex << hr << "\n";
@@ -82,9 +139,34 @@ bool speakLocal(const std::string& text, const std::string& /*voiceModel*/) {
         return false;
     }
 
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, NULL, 0);
-    std::wstring wtext(wlen, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, &wtext[0], wlen);
+    // Select specific voice if requested
+    if (!voiceName.empty()) {
+        ISpObjectToken* pToken = nullptr;
+        IEnumSpObjectTokens* pEnum = nullptr;
+        ULONG count = 0;
+        if (SUCCEEDED(SpEnumTokens(SPCAT_VOICES, NULL, NULL, &pEnum)) && pEnum) {
+            while (pEnum->Next(1, &pToken, &count) == S_OK) {
+                WCHAR* desc = nullptr;
+                SpGetDescription(pToken, &desc);
+                if (desc) {
+                    std::wstring wdesc(desc);
+                    CoTaskMemFree(desc);
+                    if (wdesc.find(std::wstring(voiceName.begin(), voiceName.end())) != std::wstring::npos) {
+                        std::wcout << L"[Voice][SAPI] Selecting voice: " << wdesc << L"\n";
+                        pVoice->SetVoice(pToken);
+                        break;
+                    }
+                }
+                pToken->Release();
+            }
+            pEnum->Release();
+        }
+    }
+
+    // Proper UTF-8 → UTF-16 conversion (no truncation)
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), NULL, 0);
+    std::wstring wtext(wlen, 0);
+    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), &wtext[0], wlen);
 
     hr = pVoice->Speak(wtext.c_str(), SPF_ASYNC, NULL);
     if (FAILED(hr)) {
@@ -99,13 +181,13 @@ bool speakLocal(const std::string& text, const std::string& /*voiceModel*/) {
     CoUninitialize();
     return true;
 #else
-    (void)text;
+    (void)text; (void)voiceName;
     return false;
 #endif
 }
 
 // =========================================================
-// Cloud speech (stub)
+// Cloud/Coqui speech (stub for now)
 // =========================================================
 bool speakCloud(const std::string& text, const std::string& engine) {
     std::cerr << "[Voice] speakCloud not implemented (engine=" << engine << ")\n";
@@ -114,178 +196,39 @@ bool speakCloud(const std::string& text, const std::string& engine) {
 }
 
 // =========================================================
-// Init Coqui Bridge (persistent subprocess) with READY handshake
+// Unified API
 // =========================================================
 bool initTTS() {
-#ifdef _WIN32
-    SECURITY_ATTRIBUTES saAttr;
-    saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
-    saAttr.bInheritHandle = TRUE;
-    saAttr.lpSecurityDescriptor = NULL;
-
-    // Create stdout pipe
-    if (!CreatePipe(&g_hChildStdoutRd, &g_hChildStdoutWr, &saAttr, 0)) {
-        std::cerr << "[Voice] Stdout pipe failed\n";
-        return false;
-    }
-    SetHandleInformation(g_hChildStdoutRd, HANDLE_FLAG_INHERIT, 0);
-
-    // Create stdin pipe
-    if (!CreatePipe(&g_hChildStdinRd, &g_hChildStdinWr, &saAttr, 0)) {
-        std::cerr << "[Voice] Stdin pipe failed\n";
-        return false;
-    }
-    SetHandleInformation(g_hChildStdinWr, HANDLE_FLAG_INHERIT, 0);
-
-    // Paths
-    fs::path resourcesPath = getResourcePath();
-    fs::path rootPath = resourcesPath.parent_path().parent_path().parent_path();
-    fs::path pythonExe = rootPath / ".venv" / "Scripts" / "python.exe";
-
-    // Prefer source Resources/python/tts_bridge.py, fallback to build/resources/python/tts_bridge.py
-    fs::path script = "D:/G.R.I.M/Resources/python/tts_bridge.py";
-    if (fs::exists(script)) {
-        std::cout << "[Voice] Using source bridge: " << script.string() << "\n";
-    } else {
-        script = resourcesPath / "python" / "tts_bridge.py";
-        std::cout << "[Voice] Using fallback bridge: " << script.string() << "\n";
-    }
-
-    if (!fs::exists(pythonExe) || !fs::exists(script)) {
-        std::cerr << "[Voice] ERROR: Missing python.exe or tts_bridge.py\n";
-        return false;
-    }
-
-    std::string cmd = "\"" + pythonExe.string() + "\" \"" + script.string() + "\"";
-    std::replace(cmd.begin(), cmd.end(), '/', '\\');
-
-    STARTUPINFOA si;
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    si.hStdError = g_hChildStdoutWr;
-    si.hStdOutput = g_hChildStdoutWr;
-    si.hStdInput  = g_hChildStdinRd;
-    si.dwFlags |= STARTF_USESTDHANDLES;
-
-    ZeroMemory(&g_piProcInfo, sizeof(g_piProcInfo));
-    std::vector<char> cmdVec(cmd.begin(), cmd.end());
-    cmdVec.push_back('\0');
-
-    if (!CreateProcessA(NULL, cmdVec.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW,
-                        NULL, NULL, &si, &g_piProcInfo)) {
-        std::cerr << "[Voice] CreateProcess failed (" << GetLastError() << ")\n";
-        return false;
-    }
-
-    // Wait for READY
-    std::string respLine;
-    char buffer[1];
-    DWORD bytesRead;
-    while (true) {
-        if (!ReadFile(g_hChildStdoutRd, buffer, 1, &bytesRead, NULL) || bytesRead == 0)
-            break;
-        if (buffer[0] == '\n') {
-            try {
-                auto resp = nlohmann::json::parse(respLine);
-                if (resp.contains("status") && resp["status"] == "READY") {
-                    std::cout << "[Voice] Bridge READY (model="
-                              << resp.value("model", "?") << ")\n";
-                    g_ttsReady = true;
-                    return true;
-                }
-            } catch (...) {}
-            respLine.clear();
-        } else respLine.push_back(buffer[0]);
-    }
-
-    std::cerr << "[Voice] Bridge failed to send READY\n";
-    return false;
-#else
-    return false;
-#endif
+    std::cout << "[Voice] initTTS() initializing...\n";
+    g_ttsReady = true;
+    return true;
 }
 
+void shutdownTTS() {
+    std::cout << "[Voice] shutdownTTS() cleaning up...\n";
+    g_ttsReady = false;
+}
 
-// =========================================================
-// Send text → receive .wav file path
-// =========================================================
-std::string coquiSpeak(const std::string& text,
-                       const std::string& speaker,
-                       double speed) {
-#ifdef _WIN32
+void speak(const std::string& engine, const std::string& text) {
     if (!g_ttsReady) {
-        std::cerr << "[Voice] coquiSpeak called before initTTS\n";
-        return "";
+        std::cerr << "[Voice] TTS not initialized!\n";
+        return;
     }
 
-    nlohmann::json req = {{"text", text}, {"speaker", speaker}, {"speed", speed}};
-    std::string line = req.dump() + "\n";
-
-    DWORD written;
-    if (!WriteFile(g_hChildStdinWr, line.c_str(), (DWORD)line.size(), &written, NULL)) {
-        std::cerr << "[Voice] WriteFile failed\n";
-        return "";
-    }
-
-    // Read one JSON response
-    std::string respLine;
-    char buffer[1];
-    DWORD bytesRead;
-    while (true) {
-        if (!ReadFile(g_hChildStdoutRd, buffer, 1, &bytesRead, NULL) || bytesRead == 0)
-            break;
-        if (buffer[0] == '\n') {
-            try {
-                auto resp = nlohmann::json::parse(respLine);
-                if (resp.contains("file")) return resp["file"];
-                if (resp.contains("error")) {
-                    std::cerr << "[Voice][Bridge] " << resp["error"] << "\n";
-                    return "";
-                }
-            } catch (...) {}
-            respLine.clear();
-            break;
-        } else respLine.push_back(buffer[0]);
-    }
-#endif
-    return "";
-}
-
-// =========================================================
-// Unified Entry Point
-// =========================================================
-void speak(const std::string& text, const std::string& category) {
     auto cfg = getVoiceConfig();
-    std::string engine = cfg.value("engine", "sapi");
-    if (cfg.contains("rules") && cfg["rules"].contains(category))
-        engine = cfg["rules"][category];
+    std::string voiceName = cfg.value("voice", "");
 
-    std::string speaker = cfg.value("speaker", "p225");
-    double speed = cfg.value("speed", 1.0);
-
-    if (engine == "coqui") {
-        std::string wav = coquiSpeak(text, speaker, speed);
-        if (!wav.empty()) playAudio(wav);
-    } else if (engine == "sapi") {
-        speakLocal(text, cfg.value("local_engine", ""));
+    if (engine == "sapi") {
+        speakLocal(text, voiceName);
+    } else if (engine == "coqui") {
+        if (!speakCloud(text, engine)) {
+            std::cerr << "[Voice] Coqui fallback failed → using local SAPI.\n";
+            speakLocal(text, voiceName);
+        }
+    } else {
+        std::cerr << "[Voice] Unknown engine=" << engine << " → defaulting to SAPI.\n";
+        speakLocal(text, voiceName);
     }
-}
-
-// =========================================================
-// Simplified Helper
-// =========================================================
-bool speakText(const std::string& text, bool preferOnline) {
-    auto cfg = getVoiceConfig();
-    std::string engine = preferOnline ? cfg.value("engine","sapi") : "sapi";
-    if (engine == "coqui") {
-        std::string wav = coquiSpeak(text, cfg.value("speaker","p225"),
-                                     cfg.value("speed",1.0));
-        if (!wav.empty()) { playAudio(wav); return true; }
-        return false;
-    } else if (engine == "sapi") {
-        return speakLocal(text, cfg.value("local_engine",""));
-    }
-    return false;
 }
 
 } // namespace Voice
