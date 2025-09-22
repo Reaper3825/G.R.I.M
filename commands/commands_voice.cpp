@@ -154,7 +154,7 @@ CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
     CommandResult result;
     result.success = false;
 
-    std::string text = "This is a direct Coqui test. If you hear me now, Coqui is working.";
+    std::string text = "Voice Test ";
 
     std::cout << "[Voice][Test] ===== BEGIN Coqui TTS TEST =====" << std::endl;
     std::cout << "[Voice][Test] Text   : \"" << text << "\"" << std::endl;

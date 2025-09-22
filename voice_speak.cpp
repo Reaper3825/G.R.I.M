@@ -146,10 +146,9 @@ namespace Voice {
         }).detach();
     }
 
-} // namespace Voice
-
-namespace Voice {
-
+    // =====================================================
+    // 🔹 TTS lifecycle (stubs for now)
+    // =====================================================
     bool initTTS() {
         std::cout << "[Voice] initTTS() stub called" << std::endl;
         return true; // ✅ success by default
@@ -162,49 +161,51 @@ namespace Voice {
     void speak(const std::string& text, const std::string& category) {
         std::cout << "[Voice] speak() stub called: text=\"" << text
                   << "\", category=\"" << category << "\"" << std::endl;
-        // You can call playAudio() here if you want actual audio
-        // playAudio("some_file.wav");
+        // Hook into playAudio() if desired
     }
 
+    // =====================================================
+    // 🔹 Coqui Bridge (one-shot mode)
+    // =====================================================
     std::string coquiSpeak(const std::string& text,
-                       const std::string& speaker,
-                       double speed) {
-    namespace fs = std::filesystem;
+                           const std::string& speaker,
+                           double speed) {
+        namespace fs = std::filesystem;
 
-    // 🔹 Pick output file
-    std::string outDir = "D:/G.R.I.M/resources/tts_out";
-    fs::create_directories(outDir);
+        // 🔹 Ensure output directory exists
+        std::string outDir = "D:/G.R.I.M/resources/tts_out";
+        fs::create_directories(outDir);
 
-    std::string outFile = outDir + "/" + std::to_string(std::time(nullptr)) + ".wav";
+        // unique filename
+        std::string outFile = outDir + "/" + std::to_string(std::time(nullptr)) + ".wav";
 
-    // 🔹 Build python command
-    std::string cmd =
-        "python D:/G.R.I.M/resources/python/coqui_bridge.py "
-        "\"" + text + "\" "
-        "--speaker " + speaker +
-        " --speed " + std::to_string(speed) +
-        " --out \"" + outFile + "\"";
+        // 🔹 Build Python command (using --oneshot mode!)
+        std::string cmd =
+            "python D:/G.R.I.M/resources/python/coqui_bridge.py --oneshot "
+            "--text \"" + text + "\" "
+            "--speaker " + speaker +
+            " --speed " + std::to_string(speed) +
+            " --out \"" + outFile + "\"";
 
-    std::cout << "[Voice][Coqui] Running: " << cmd << std::endl;
+        std::cout << "[Voice][Coqui] Running: " << cmd << std::endl;
 
-    int rc = std::system(cmd.c_str());
-    if (rc != 0) {
-        std::cerr << "[Voice][Coqui] ERROR: Bridge failed with code " << rc << std::endl;
+        int rc = std::system(cmd.c_str());
+        if (rc != 0) {
+            std::cerr << "[Voice][Coqui] ERROR: Bridge failed with code " << rc << std::endl;
+            return {};
+        }
+
+        // 🔹 Wait for output file to appear
+        for (int i = 0; i < 50; i++) {
+            if (fs::exists(outFile) && fs::file_size(outFile) > 44) {
+                std::cout << "[Voice][Coqui] File ready: " << outFile << std::endl;
+                return outFile;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        std::cerr << "[Voice][Coqui] ERROR: No valid audio file created" << std::endl;
         return {};
     }
-
-    // 🔹 Wait for output file
-    for (int i = 0; i < 50; i++) {
-        if (fs::exists(outFile) && fs::file_size(outFile) > 44) {
-            std::cout << "[Voice][Coqui] File ready: " << outFile << std::endl;
-            return outFile;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    std::cerr << "[Voice][Coqui] ERROR: No valid audio file created" << std::endl;
-    return {};
-}
-
 
 } // namespace Voice
