@@ -3,7 +3,6 @@ import sys
 import os
 import json
 import uuid
-import argparse
 from pathlib import Path
 
 # ------------------------------
@@ -34,17 +33,6 @@ def debug(msg: str):
         sys.stderr.flush()
     except Exception:
         pass
-
-# ------------------------------
-# CLI Args
-# ------------------------------
-parser = argparse.ArgumentParser()
-parser.add_argument("--oneshot", action="store_true", help="Run once then exit")
-parser.add_argument("--text", type=str, help="Text to synthesize")
-parser.add_argument("--speaker", type=str, default=None, help="Speaker ID")
-parser.add_argument("--speed", type=float, default=1.0, help="Speech speed")
-parser.add_argument("--out", type=str, default=None, help="Output wav path")
-args, unknown = parser.parse_known_args()
 
 # ------------------------------
 # Startup signal
@@ -99,11 +87,10 @@ send({
 })
 
 # ------------------------------
-# Synthesis function
+# Synthesis
 # ------------------------------
-def synthesize(text: str, speaker: str = None, speed: float = 1.0, out_file: Path = None):
-    if out_file is None:
-        out_file = out_dir / f"{uuid.uuid4().hex}.wav"
+def synthesize(text: str, speaker: str = None, speed: float = 1.0):
+    out_file = out_dir / f"{uuid.uuid4().hex}.wav"
     try:
         # Guarantee a speaker
         if not speaker:
@@ -124,21 +111,7 @@ def synthesize(text: str, speaker: str = None, speed: float = 1.0, out_file: Pat
         send({"error": str(e), "done": False})
 
 # ------------------------------
-# One-Shot Mode
-# ------------------------------
-if args.oneshot:
-    debug("ONE-Shot mode Begin")
-    if not args.text:
-        send({"error": "no_text", "done": False})
-        sys.exit(1)
-
-    out_file = Path(args.out) if args.out else (out_dir / f"{uuid.uuid4().hex}.wav")
-    synthesize(args.text, args.speaker, args.speed, out_file)
-    sys.exit(0)   # <-- make sure we quit after one-shot
-
-
-# ------------------------------
-# Persistent stdin Mode (default)
+# Main loop
 # ------------------------------
 debug("[bridge] Mode: persistent stdin")
 for raw_input in sys.stdin:
