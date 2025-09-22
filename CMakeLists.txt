@@ -251,7 +251,6 @@ endif()
 set(GRIM_RESOURCES
     nlp_rules.json
     synonyms.json
-    app_aliases.json
     ai_config.json
     memory.json
 )

@@ -74,32 +74,42 @@ int main(int argc, char** argv) {
     runBootstrapChecks(argc, argv);
     std::cout << "[DEBUG] Bootstrap complete\n";
 
-    // 🔹 Aliases init (just loads JSON, no scan yet)
-    aliases::init();
-
     // ---------------- SFML Setup ----------------
     sf::RenderWindow window(sf::VideoMode({512u, 768u}), "GRIM Console");
     window.setFramerateLimit(60);
 
     sf::Font font;
+    fs::path fontPath;
+
 #ifdef GRIM_FONT_PATH
-    std::string fontPath = GRIM_FONT_PATH;
-    if (!font.openFromFile(fontPath)) {
-        std::cerr << "[ERROR] Could not load font at " << fontPath << "\n";
-        // fallback to bundled resource
-        std::string fallback = getResourcePath() + "/DejaVuMathTeXGyre.ttf";
-        if (!font.openFromFile(fallback)) {
-            std::cerr << "[ERROR] Could not load fallback font: " << fallback << "\n";
-            return 1;
+    fontPath = fs::path(GRIM_FONT_PATH);
+    std::cout << "[DEBUG] Trying font path (GRIM_FONT_PATH): " << fontPath.string() << "\n";
+#else
+    fontPath = fs::path(getResourcePath()) / "DejaVuMathTeXGyre.ttf";
+    std::cout << "[DEBUG] Trying font path (resource): " << fontPath.string() << "\n";
+#endif
+
+    if (!font.openFromFile(fontPath.string())) {
+        std::cerr << "[ERROR] Could not load font at " << fontPath.string() << "\n";
+
+        // Fallback to bundled resource
+        fs::path fallback = fs::path(getResourcePath()) / "DejaVuMathTeXGyre.ttf";
+        std::cout << "[DEBUG] Trying fallback font: " << fallback.string() << "\n";
+
+        if (!font.openFromFile(fallback.string())) {
+            std::cerr << "[ERROR] Could not load fallback font: " << fallback.string() << "\n";
+
+            // Final fallback → system Arial
+            fs::path sysFont = "C:/Windows/Fonts/arial.ttf";
+            std::cout << "[DEBUG] Trying system font: " << sysFont.string() << "\n";
+
+            if (!font.openFromFile(sysFont.string())) {
+                std::cerr << "[FATAL] Could not load any font (last attempt: " << sysFont.string() << ")\n";
+                return 1;
+            }
         }
     }
-#else
-    std::string fontPath = getResourcePath() + "/DejaVuMathTeXGyre.ttf";
-    if (!font.openFromFile(fontPath)) {
-        std::cerr << "[ERROR] Could not load font: " << fontPath << "\n";
-        return 1;
-    }
-#endif
+
     std::cout << "[DEBUG] Font loaded OK\n";
 
     // 🔹 Apply the real font now that it’s loaded
@@ -110,37 +120,36 @@ int main(int argc, char** argv) {
 
     // ---------------- Voice (Coqui / Local TTS) ----------------
     if (aiConfig.contains("voice")) {
-    auto voiceCfg = aiConfig["voice"];
-    std::string engine = voiceCfg.value("engine", std::string("sapi"));
-    std::cout << "[DEBUG] Voice engine in config: " << engine << std::endl;
+        auto voiceCfg = aiConfig["voice"];
+        std::string engine = voiceCfg.value("engine", std::string("sapi"));
+        std::cout << "[DEBUG] Voice engine in config: " << engine << std::endl;
 
-    bool needsCoqui = (engine == "coqui");
+        bool needsCoqui = (engine == "coqui");
 
-    // Check rules — if *any* rule requires Coqui, we also need to init
-    if (voiceCfg.contains("rules")) {
-        for (auto& [k, v] : voiceCfg["rules"].items()) {
-            if (v.get<std::string>() == "coqui") {
-                needsCoqui = true;
-                break;
+        // Check rules — if *any* rule requires Coqui, we also need to init
+        if (voiceCfg.contains("rules")) {
+            for (auto& [k, v] : voiceCfg["rules"].items()) {
+                if (v.get<std::string>() == "coqui") {
+                    needsCoqui = true;
+                    break;
+                }
             }
         }
-    }
 
-    if (needsCoqui) {
-        if (Voice::initTTS()) {
-            std::cout << "[Voice] Coqui TTS bridge initialized (speaker="
-                      << voiceCfg.value("speaker", "p225")
-                      << ", model="
-                      << voiceCfg.value("local_engine", "unknown")
-                      << ")\n";
+        if (needsCoqui) {
+            if (Voice::initTTS()) {
+                std::cout << "[Voice] Coqui TTS bridge initialized (speaker="
+                          << voiceCfg.value("speaker", "p225")
+                          << ", model="
+                          << voiceCfg.value("local_engine", "unknown")
+                          << ")\n";
+            } else {
+                std::cerr << "[Voice] Failed to initialize Coqui TTS bridge\n";
+            }
         } else {
-            std::cerr << "[Voice] Failed to initialize Coqui TTS bridge\n";
+            std::cout << "[Voice] Skipping Coqui init (engine=" << engine << ")\n";
         }
-    } else {
-        std::cout << "[Voice] Skipping Coqui init (engine=" << engine << ")\n";
     }
-}
-
 
     // ---------------- Greeting ----------------
     ResponseManager::systemMessage(

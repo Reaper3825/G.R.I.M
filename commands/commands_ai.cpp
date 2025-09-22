@@ -175,68 +175,53 @@ CommandResult cmdGrimAi(const std::string& arg) {
 CommandResult cmdOpenApp(const std::string& arg) {
     std::cout << "[DEBUG][cmdOpenApp] Received arg=\"" << arg << "\"\n";
 
-    std::string appName = trim(arg);
-
-    if (appName.empty()) {
-        std::cout << "[DEBUG][cmdOpenApp] appName is EMPTY after trim\n";
+    std::string appPath = arg;
+    if (appPath.empty()) {
+        std::cout << "[DEBUG][cmdOpenApp] ERROR: empty arg\n";
         return {
             ErrorManager::getUserMessage("ERR_APP_NO_ARGUMENT"),
             false,
             sf::Color::Red,
-            "ERR_APP_NO_ARGUMENT",
-            "No app specified",
-            "error"
-        };
-    }
-
-    std::cout << "[DEBUG][cmdOpenApp] After trim, appName=\"" << appName << "\"\n";
-
-    // 🔹 Use new alias system
-    std::string resolved = aliases::resolve(appName);
-    if (resolved.empty()) {
-        std::cout << "[DEBUG][cmdOpenApp] Alias not found for \"" << appName << "\"\n";
-        return {
-            ErrorManager::getUserMessage("ERR_ALIAS_NOT_FOUND") + ": " + appName,
-            false,
-            sf::Color::Red,
-            "ERR_ALIAS_NOT_FOUND",
-            "App not found",
-            "error"
+            "ERR_APP_NO_ARGUMENT"
         };
     }
 
 #ifdef _WIN32
     HINSTANCE result = ShellExecuteA(
-        nullptr, "open", resolved.c_str(),
-        nullptr, nullptr, SW_SHOWNORMAL
+        nullptr,
+        "open",
+        appPath.c_str(),
+        nullptr,
+        nullptr,
+        SW_SHOWNORMAL
     );
+
     if ((intptr_t)result <= 32) {
+        std::cout << "[DEBUG][cmdOpenApp] ShellExecuteA failed (" 
+                  << (intptr_t)result << ") for: " << appPath << "\n";
         return {
-            ErrorManager::getUserMessage("ERR_APP_LAUNCH_FAILED") + ": " + resolved,
+            ErrorManager::getUserMessage("ERR_APP_LAUNCH_FAILED") + ": " + appPath,
             false,
             sf::Color::Red,
-            "ERR_APP_LAUNCH_FAILED",
-            "App launch failed",
-            "error"
+            "ERR_APP_LAUNCH_FAILED"
         };
     }
+
+    std::cout << "[DEBUG][cmdOpenApp] Successfully launched: " << appPath << "\n";
     return {
-        "[App] Launched: " + resolved,
+        "[App] Launched: " + appPath,
         true,
         sf::Color::Green,
-        "ERR_NONE",
-        "Launching " + appName,
-        "routine"
+        "ERR_NONE"
     };
 #else
-    // Linux/macOS stub
+    // Linux / macOS stub
+    std::cout << "[DEBUG][cmdOpenApp] (Stub) Would open: " << appPath << "\n";
     return {
-        "[App] (Stub) Would open: " + resolved,
+        "[App] (Stub) Would open: " + appPath,
         true,
         sf::Color::Green,
-        "ERR_NONE",
-        "Launching " + appName,
-        "routine"
+        "ERR_NONE"
     };
 #endif
 }

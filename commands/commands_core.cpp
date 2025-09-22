@@ -5,7 +5,7 @@
 #include "commands_timers.hpp"
 #include "commands_voice.hpp"
 #include "commands_system.hpp"
-#include "commands_aliases.hpp"   // 🔹 new: alias commands
+#include "commands_aliases.hpp"   // 🔹 alias commands
 
 #include "response_manager.hpp"
 #include "console_history.hpp"
@@ -15,7 +15,7 @@
 #include "nlp.hpp"
 #include "synonyms.hpp"
 #include "commands_core.hpp"
-#include "aliases.hpp"            // 🔹 new: alias resolution
+#include "aliases.hpp"            // 🔹 alias resolution
 
 using Voice::speak;
 
@@ -79,6 +79,21 @@ static std::string normalizeCommand(const std::string& input) {
     return out;
 }
 
+static std::string cleanArg(const std::string& arg) {
+    std::string out;
+    for (char c : arg) {
+        if (std::isalnum(static_cast<unsigned char>(c)) || std::isspace(static_cast<unsigned char>(c))) {
+            out.push_back(static_cast<char>(std::tolower(c)));
+        }
+    }
+    // trim whitespace
+    if (!out.empty()) {
+        out.erase(0, out.find_first_not_of(" \n\r\t"));
+        out.erase(out.find_last_not_of(" \n\r\t") + 1);
+    }
+    return out;
+}
+
 // ------------------------------------------------------------
 // Command Registration
 // ------------------------------------------------------------
@@ -110,21 +125,15 @@ static void initCommands() {
         {"sysinfo",      cmdSystemInfo},
         {"clean",        cmdClean},
         {"help",         cmdShowHelp},
-        {"reload_nlp", cmd_reloadNLP},
-
-        
-        
-        
+        {"reload_nlp",   cmd_reloadNLP},
 
         // --- Voice ---
         {"voice",        cmdVoice},
         {"voice_stream", cmdVoiceStream},
-        { "test_tts", cmd_testTTS },
-        { "test_sapi", cmd_testSAPI },
-        { "tts_device", cmd_ttsDevice },
-        { "list_voice", cmd_listVoices },
-        
-
+        {"test_tts",     cmd_testTTS},
+        {"test_sapi",    cmd_testSAPI},
+        {"tts_device",   cmd_ttsDevice},
+        {"list_voice",   cmd_listVoices},
 
         // --- Apps / Web ---
         {"open_app",     cmdOpenApp},
@@ -239,55 +248,64 @@ void handleCommand(const std::string& line) {
                 }
             }
             if (!slotArg.empty()) {
-                arg = slotArg;
+            arg = cleanArg(slotArg);   // 🔹 normalize punctuation, lowercase, trim
             }
+
         }
 
         std::cout << "[TRACE][handleCommand] Final dispatch values → cmd=\"" << cmd
                   << "\" arg=\"" << arg << "\"\n";
 
         // Special case: open_app → resolve alias before dispatch
-        if (cmd == "open_app") {
-            std::string resolved = aliases::resolve(arg);
+        // Special case: open_app → resolve alias before dispatch
+if (cmd == "open_app") {
+    arg = cleanArg(arg);   // 🔹 normalize punctuation/spacing
+    std::cout << "[DEBUG][open_app] Cleaned arg=\"" << arg << "\"\n";
 
-            // If no exact match, try fuzzy alias matching
-            if (resolved.empty()) {
-                int bestDist = 3; // allow edit distance up to 2–3
-                std::string bestAlias;
+    std::string resolved;
 
-                for (const auto& [alias, target] : aliases::getAll()) {
-                    int dist = levenshteinDistance(
-                        normalizeWord(arg),
-                        normalizeWord(alias)
-                    );
-                    if (dist < bestDist) {
-                        bestDist = dist;
-                        bestAlias = alias;
-                        resolved = target;
-                    }
-                }
+    // Try exact alias lookup first
+    try {
+        resolved = aliases::resolve(arg);  // uses app_aliases.json
+    } catch (const std::exception& e) {
+        std::cout << "[ERROR][open_app] Exception during alias resolve: " << e.what() << "\n";
+        resolved.clear();
+    }
 
-                if (!resolved.empty()) {
-                    std::cout << "[DEBUG][open_app] fuzzy matched \"" << arg
-                              << "\" → alias \"" << bestAlias
-                              << "\" → " << resolved << "\n";
-                }
+    // Fallback: fuzzy alias matching
+    if (resolved.empty()) {
+        int bestDist = 3; // allow edit distance up to 2–3
+        std::string bestAlias;
+
+        for (const auto& [alias, target] : aliases::getAll()) {
+            int dist = levenshteinDistance(
+                normalizeWord(arg),
+                normalizeWord(alias)
+            );
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestAlias = alias;
+                resolved = target;
             }
-
-            if (resolved.empty()) {
-                result = {
-                    ErrorManager::getUserMessage("ERR_ALIAS_NOT_FOUND") + ": " + arg,
-                    false,
-                    sf::Color::Red,
-                    "ERR_ALIAS_NOT_FOUND"
-                };
-            } else {
-                arg = resolved;
-                result = dispatchCommand("open_app", arg);
-            }
-        } else {
-            result = dispatchCommand(cmd, arg);
         }
+
+        if (!resolved.empty()) {
+            std::cout << "[DEBUG][open_app] Fuzzy matched \"" << arg
+                      << "\" → alias \"" << bestAlias
+                      << "\" → " << resolved << "\n";
+        }
+    }
+
+    // If still empty, fallback to raw system command (e.g., "notepad")
+    if (resolved.empty()) {
+        std::cout << "[DEBUG][open_app] No alias found, using raw name: " << arg << "\n";
+        resolved = arg;
+    }
+
+    // Now safely dispatch with a clean, resolved string
+    result = dispatchCommand("open_app", resolved);
+}
+
     }
 
     // 🔹 Unified output block
@@ -303,7 +321,8 @@ void handleCommand(const std::string& line) {
     history.push(finalText, result.color);
 
     if (!result.voice.empty()) {
-        speak(result.voice, result.category.empty() ? "routine" : result.category);
+        Voice::speak(result.voice,
+                     result.category.empty() ? "routine" : result.category);
     }
 
     std::cout << "[TRACE][handleCommand] END\n";
