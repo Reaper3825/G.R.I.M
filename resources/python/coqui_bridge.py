@@ -1,132 +1,96 @@
-#!/usr/bin/env python3
 import sys
-import os
 import json
-import uuid
-from pathlib import Path
+import argparse
+from TTS.api import TTS
+import os
 
-# ------------------------------
-# Environment / Model Path
-# ------------------------------
-os.environ["TTS_HOME"] = str(Path(__file__).resolve().parent.parent.parent / "Resources" / "models")
+# ---------- Helpers ----------
+def log(msg):
+    """Log messages to stderr (never stdout)."""
+    print(msg, file=sys.stderr, flush=True)
 
-# Ensure UTF-8 for stdout/stderr
-sys.stdout.reconfigure(encoding="utf-8")
-sys.stderr.reconfigure(encoding="utf-8")
+def send(obj):
+    """Send JSON protocol messages to stdout."""
+    print(json.dumps(obj), flush=True)
 
-# ------------------------------
-# Helpers
-# ------------------------------
-def send(obj: dict):
-    """Send JSON object to stdout (for C++ to parse)."""
+# ---------- Persistent Mode ----------
+def persistent_loop(model_name, speaker):
     try:
-        real_out = sys.__stdout__
-        real_out.write(json.dumps(obj, ensure_ascii=False) + "\n")
-        real_out.flush()
+        tts = TTS(model_name)
+        log(f"Model loaded: {model_name}")
     except Exception as e:
-        debug(f"[bridge-error] Failed to send JSON: {e}")
+        send({"status": "error", "message": str(e)})
+        return
 
-def debug(msg: str):
-    """Send debug/info messages to stderr (not parsed by C++)."""
-    try:
-        sys.stderr.write(msg + "\n")
-        sys.stderr.flush()
-    except Exception:
-        pass
+    send({"status": "ready"})
 
-# ------------------------------
-# Startup signal
-# ------------------------------
-send({"status": "LOADING"})
-
-# ------------------------------
-# Heavy imports
-# ------------------------------
-try:
-    from TTS.api import TTS
-except Exception as e:
-    debug(f"[bridge-error] Failed to import Coqui TTS: {e}")
-    send({"error": f"import_failed: {e}"})
-    sys.exit(1)
-
-# ------------------------------
-# Model Init
-# ------------------------------
-MODEL_NAME = "tts_models/en/vctk/vits"
-USE_GPU = False  # force CPU for compatibility
-
-try:
-    debug(f"[bridge] Initializing model {MODEL_NAME} (gpu={USE_GPU})")
-    tts = TTS(MODEL_NAME, progress_bar=False, gpu=USE_GPU)
-    debug(f"[bridge] Loaded {MODEL_NAME}")
-except Exception as e:
-    debug(f"[bridge-error] Model load failed: {e}")
-    send({"error": f"model_load_failed: {e}"})
-    sys.exit(1)
-
-# Fetch available speakers
-speakers = []
-try:
-    speakers = tts.speakers if hasattr(tts, "speakers") else []
-except Exception as e:
-    debug(f"[bridge-warning] Could not fetch speakers: {e}")
-
-# Pick default
-DEFAULT_SPEAKER = "p225" if "p225" in speakers else (speakers[0] if speakers else None)
-
-# Output dir
-out_dir = Path(__file__).resolve().parent.parent / "tts_out"
-out_dir.mkdir(parents=True, exist_ok=True)
-
-# Confirm ready
-send({
-    "status": "READY",
-    "model": MODEL_NAME,
-    "speakers": speakers,
-    "default_speaker": DEFAULT_SPEAKER
-})
-
-# ------------------------------
-# Synthesis
-# ------------------------------
-def synthesize(text: str, speaker: str = None, speed: float = 1.0):
-    out_file = out_dir / f"{uuid.uuid4().hex}.wav"
-    try:
-        # Guarantee a speaker
-        if not speaker:
-            speaker = DEFAULT_SPEAKER or (speakers[0] if speakers else None)
-        if not speaker:
-            raise RuntimeError("No available speaker in model")
-
-        debug(f"[bridge] Synthesizing text='{text}' speaker={speaker} speed={speed}")
-        tts.tts_to_file(text=text, speaker=speaker, speed=speed, file_path=str(out_file))
-
-        if not out_file.exists():
-            raise RuntimeError(f"TTS synthesis failed, file not created: {out_file}")
-
-        send({"file": str(out_file), "speaker": speaker, "speed": speed, "done": True})
-        debug(f"[bridge] Successfully wrote file {out_file}")
-    except Exception as e:
-        debug(f"[bridge-error] {repr(e)}")
-        send({"error": str(e), "done": False})
-
-# ------------------------------
-# Main loop
-# ------------------------------
-debug("[bridge] Mode: persistent stdin")
-for raw_input in sys.stdin:
-    line = raw_input.strip()
-    if not line:
-        continue
-    try:
-        req = json.loads(line)
-        text = req.get("text", "")
-        speaker = req.get("speaker", None)
-        speed = req.get("speed", 1.0)
-        if not text:
-            send({"error": "empty_text", "done": False})
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
             continue
-        synthesize(text, speaker, speed)
+        try:
+            req = json.loads(line)
+        except json.JSONDecodeError as e:
+            log(f"Invalid JSON from GRIM: {line} ({e})")
+            continue
+
+        cmd = req.get("command")
+        if cmd == "exit":
+            send({"status": "bye"})
+            break
+        elif cmd == "speak":
+            text = req.get("text", "")
+            spk = req.get("speaker", speaker)
+            speed = float(req.get("speed", 1.0))
+            out_path = req.get("out", "output.wav")
+
+            try:
+                tts.tts_to_file(text=text, file_path=out_path, speaker=spk, speed=speed)
+                send({"status": "ok", "file": out_path})
+            except Exception as e:
+                send({"status": "error", "message": str(e)})
+        else:
+            send({"status": "error", "message": f"Unknown command {cmd}"})
+
+
+# ---------- One-shot Mode ----------
+def oneshot_mode(args):
+    try:
+        tts = TTS(args.model)
+        log(f"Model loaded (oneshot): {args.model}")
+        tts.tts_to_file(
+            text=args.text,
+            file_path=args.out,
+            speaker=args.speaker,
+            speed=args.speed
+        )
+        send({"status": "ok", "file": args.out})
     except Exception as e:
-        debug(f"[bridge-error] {repr(e)}")
-        send({"error": str(e), "done": False})
+        send({"status": "error", "message": str(e)})
+
+
+# ---------- Entry ----------
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--persistent", action="store_true",
+                        help="Run in persistent stdin/stdout mode")
+
+    # 🔹 Use a multi-speaker model so p225, p226, etc. work
+    parser.add_argument("--model",
+                        default="tts_models/en/vctk/vits",
+                        help="TTS model name or local path")
+
+    parser.add_argument("--speaker", default="p225", help="Speaker ID")
+    parser.add_argument("--speed", type=float, default=1.0, help="Speech speed")
+    parser.add_argument("--out", help="Output file path (oneshot only)")
+    parser.add_argument("text", nargs="?", help="Text to speak (oneshot only)")
+    args = parser.parse_args()
+
+
+    if args.persistent:
+        persistent_loop(args.model, args.speaker)
+    else:
+        if not args.text or not args.out:
+            send({"status": "error", "message": "Oneshot mode requires text and --out"})
+        else:
+            oneshot_mode(args)

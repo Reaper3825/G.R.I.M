@@ -11,17 +11,21 @@
 
   "voice": {
     "mode": "local",
-    "engine": "coqui",                  // 🔹 Default engine
-    "speaker": "p225",                  // 🔹 Default VCTK speaker
-    "speed": 1.0,                       // 🔹 Playback speed multiplier
-    "local_engine": "en_US-amy-medium.onnx",
-    "cloud_engine": "openai",
+    "engine": "coqui",                        // 🔹 Default engine
+    "speaker": "p225",                        // 🔹 Default VCTK speaker
+    "speed": 1.0,                             // 🔹 Playback speed multiplier
+    "output_dir": "resources/tts_out",        // 🔹 Where to save generated wav files
+
+    "local_engine": "en_US-amy-medium.onnx",  // Optional fallback (Piper/SAPI/etc.)
+    "cloud_engine": "openai",                 // Optional cloud fallback
+
     "rules": {
-      "startup": "sapi",                // Use Windows SAPI for boot messages
-      "reminder": "coqui",              // Coqui for reminders
-      "summary": "coqui",               // Coqui for summaries
-      "banter": "coqui"                 // Coqui for casual chatter
+      "startup": "sapi",                      // Use Windows SAPI for boot messages
+      "reminder": "coqui",                    // Coqui for reminders
+      "summary": "coqui",                     // Coqui for summaries
+      "banter": "coqui"                       // Coqui for casual chatter
     },
+
     "silence_threshold": 0.02,
     "silence_timeout_ms": 4000,
     "input_device_index": 1,
