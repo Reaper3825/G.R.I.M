@@ -128,10 +128,18 @@ option(GRIM_PORTABLE_ONLY "Force resources to live next to executable" OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # =========================================================
-# Sources
+# command Sources
 # =========================================================
 file(GLOB COMMAND_SOURCES "commands/*.cpp")
 file(GLOB COMMAND_HEADERS "commands/*.hpp")
+
+
+# =========================================================
+# ui Sources
+# =========================================================
+file(GLOB POPUP_UI_SOURCES "popup_ui/*.cpp")
+file(GLOB POPUP_UI_HEADERS "popup_ui/*.hpp")
+
 
 set(GRIM_SOURCES
     main.cpp
@@ -154,6 +162,7 @@ set(GRIM_SOURCES
     error_manager.cpp
     bootstrap_config.cpp
     ${COMMAND_SOURCES}
+    ${POPUP_UI_SOURCES}
 )
 
 set(GRIM_HEADERS
@@ -177,6 +186,7 @@ set(GRIM_HEADERS
     error_manager.hpp
     bootstrap_config.hpp
     ${COMMAND_HEADERS}
+    ${POPUP_UI_SOURCES}
 )
 
 # =========================================================

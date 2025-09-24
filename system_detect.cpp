@@ -1,9 +1,14 @@
 #include "system_detect.hpp"
 #include <cstdlib>
+#include <iostream>
+#include <thread>
 
 // Platform headers
 #ifdef _WIN32
     #include <windows.h>
+    #include <mmdeviceapi.h>
+    #include <functiondiscoverykeys_devpkey.h>
+    #pragma comment(lib, "ole32.lib")
 #elif __APPLE__
     #include <sys/types.h>
     #include <sys/sysctl.h>
@@ -18,7 +23,6 @@
 #ifdef GGML_USE_CUBLAS
     #include <cuda_runtime.h>
 #endif
-
 
 // =========================================================
 // Dependency helpers (Linux Piper detection)
@@ -53,60 +57,130 @@ bool ensurePiperInstalled() {
 #endif
 
 // =========================================================
+// Windows playback device enumeration
+// =========================================================
+#ifdef _WIN32
+static void listOutputDevices() {
+    HRESULT hr = CoInitialize(nullptr);
+    if (FAILED(hr)) {
+        std::cerr << "[Audio] CoInitialize failed\n";
+        return;
+    }
+
+    IMMDeviceEnumerator* pEnum = nullptr;
+    IMMDeviceCollection* pDevices = nullptr;
+
+    hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                          __uuidof(IMMDeviceEnumerator), (void**)&pEnum);
+    if (FAILED(hr) || !pEnum) {
+        std::cerr << "[Audio] Could not create IMMDeviceEnumerator\n";
+        CoUninitialize();
+        return;
+    }
+
+    // --- List all active playback devices ---
+    hr = pEnum->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &pDevices);
+    if (SUCCEEDED(hr) && pDevices) {
+        UINT count = 0;
+        pDevices->GetCount(&count);
+        std::cout << "Playback devices:\n";
+        for (UINT i = 0; i < count; i++) {
+            IMMDevice* pDevice = nullptr;
+            IPropertyStore* pStore = nullptr;
+
+            if (SUCCEEDED(pDevices->Item(i, &pDevice))) {
+                if (SUCCEEDED(pDevice->OpenPropertyStore(STGM_READ, &pStore))) {
+                    PROPVARIANT varName;
+                    PropVariantInit(&varName);
+                    if (SUCCEEDED(pStore->GetValue(PKEY_Device_FriendlyName, &varName))) {
+                        std::wcout << L"  [" << i << L"] " << varName.pwszVal << std::endl;
+                        PropVariantClear(&varName);
+                    }
+                    pStore->Release();
+                }
+                pDevice->Release();
+            }
+        }
+        pDevices->Release();
+    }
+
+    // --- Get the default playback device ---
+    IMMDevice* pDefaultDevice = nullptr;
+    hr = pEnum->GetDefaultAudioEndpoint(eRender, eConsole, &pDefaultDevice);
+    if (SUCCEEDED(hr) && pDefaultDevice) {
+        IPropertyStore* pStore = nullptr;
+        if (SUCCEEDED(pDefaultDevice->OpenPropertyStore(STGM_READ, &pStore))) {
+            PROPVARIANT varName;
+            PropVariantInit(&varName);
+            if (SUCCEEDED(pStore->GetValue(PKEY_Device_FriendlyName, &varName))) {
+                std::wcout << L"Default (output): " << varName.pwszVal << std::endl;
+                PropVariantClear(&varName);
+            }
+            pStore->Release();
+        }
+        pDefaultDevice->Release();
+    }
+
+    pEnum->Release();
+    CoUninitialize();
+}
+#endif
+
+// =========================================================
 // System detection
 // =========================================================
 SystemInfo detectSystem() {
     SystemInfo info;
 
     // --- OS Detection ---
-    #ifdef _WIN32
+#ifdef _WIN32
     info.osName = "Windows";
     info.hasSAPI = true; // Always available
-    #elif __APPLE__
+#elif __APPLE__
     info.osName = "macOS";
     info.hasSay = true; // say command always available
-    #elif __linux__
+#elif __linux__
     info.osName = "Linux";
     // Piper check
     info.hasPiper = ensurePiperInstalled();
-    #else
+#else
     info.osName = "Unknown";
-    #endif
+#endif
 
     // --- Architecture ---
-    #if defined(__x86_64__) || defined(_M_X64)
+#if defined(__x86_64__) || defined(_M_X64)
     info.arch = "x86_64";
-    #elif defined(__aarch64__)
+#elif defined(__aarch64__)
     info.arch = "ARM64";
-    #elif defined(__arm__)
+#elif defined(__arm__)
     info.arch = "ARM";
-    #else
+#else
     info.arch = "Unknown";
-    #endif
+#endif
 
     // --- CPU ---
     info.cpuCores = std::thread::hardware_concurrency();
 
     // --- RAM ---
-    #ifdef _WIN32
+#ifdef _WIN32
     MEMORYSTATUSEX status;
     status.dwLength = sizeof(status);
     GlobalMemoryStatusEx(&status);
     info.ramMB = status.ullTotalPhys / (1024 * 1024);
-    #elif __APPLE__
+#elif __APPLE__
     int64_t mem;
     size_t len = sizeof(mem);
     sysctlbyname("hw.memsize", &mem, &len, NULL, 0);
     info.ramMB = mem / (1024 * 1024);
-    #elif __linux__
+#elif __linux__
     struct sysinfo sys;
     if (sysinfo(&sys) == 0) {
         info.ramMB = sys.totalram / (1024 * 1024);
     }
-    #endif
+#endif
 
     // --- GPU (CUDA) ---
-    #ifdef GGML_USE_CUBLAS
+#ifdef GGML_USE_CUBLAS
     int deviceCount = 0;
     if (cudaGetDeviceCount(&deviceCount) == cudaSuccess && deviceCount > 0) {
         info.hasGPU = true;
@@ -117,13 +191,13 @@ SystemInfo detectSystem() {
         cudaGetDeviceProperties(&prop, 0);
         info.gpuName = prop.name;
     }
-    #endif
+#endif
 
     // --- Metal (macOS) ---
-    #ifdef __APPLE__
+#ifdef __APPLE__
     info.hasGPU = true;
     info.hasMetal = true;
-    #endif
+#endif
 
     // --- Suggested Whisper Model ---
     info.suggestedModel = chooseWhisperModel(info);
@@ -131,10 +205,11 @@ SystemInfo detectSystem() {
     return info;
 }
 
-
 // =========================================================
 // Logging
 // =========================================================
+#include <SFML/Audio.hpp>
+
 void logSystemInfo(const SystemInfo& info) {
     std::cout << "---- GRIM System Detection ----\n";
     std::cout << "OS: " << info.osName << " (" << info.arch << ")\n";
@@ -157,10 +232,26 @@ void logSystemInfo(const SystemInfo& info) {
     std::cout << "  macOS say:   " << (info.hasSay ? "Yes" : "No") << "\n";
     std::cout << "  Linux Piper: " << (info.hasPiper ? "Yes" : "No") << "\n";
 
+    // 🔊 Input devices via SFML
+    auto devices = sf::SoundBufferRecorder::getAvailableDevices();
+    if (!devices.empty()) {
+        std::cout << "Audio devices (input):\n";
+        for (size_t i = 0; i < devices.size(); ++i) {
+            std::cout << "  [" << i << "] " << devices[i] << "\n";
+        }
+        std::cout << "Default (input): " << sf::SoundBufferRecorder::getDefaultDevice() << "\n";
+    } else {
+        std::cout << "No input devices detected.\n";
+    }
+
+    // 🔊 Playback devices (Windows only, includes default)
+#ifdef _WIN32
+    listOutputDevices();
+#endif
+
     std::cout << "Suggested Whisper model: " << info.suggestedModel << "\n";
     std::cout << "-------------------------------\n";
 }
-
 
 // =========================================================
 // Whisper model chooser
