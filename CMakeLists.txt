@@ -141,6 +141,18 @@ file(GLOB POPUP_UI_SOURCES "popup_ui/*.cpp")
 file(GLOB POPUP_UI_HEADERS "popup_ui/*.hpp")
 
 
+# =========================================================
+# device Sources
+# =========================================================
+file(GLOB DEVICE_SETUPS_SOURCES "device_setups/*.cpp")
+file(GLOB DEVICE_SETUPS_HEADERS "device_setups/*.hpp")
+
+
+
+
+
+
+
 set(GRIM_SOURCES
     main.cpp
     ai.cpp
@@ -163,6 +175,7 @@ set(GRIM_SOURCES
     bootstrap_config.cpp
     ${COMMAND_SOURCES}
     ${POPUP_UI_SOURCES}
+    ${DEVICE_SETUPS_SOURCES}
 )
 
 set(GRIM_HEADERS
@@ -186,7 +199,8 @@ set(GRIM_HEADERS
     error_manager.hpp
     bootstrap_config.hpp
     ${COMMAND_HEADERS}
-    ${POPUP_UI_SOURCES}
+    ${POPUP_UI_HEADERS}
+    ${DEVICE_SETUPS_HEADERS}
 )
 
 # =========================================================

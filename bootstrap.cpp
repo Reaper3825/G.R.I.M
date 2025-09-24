@@ -4,12 +4,17 @@
 #include "console_history.hpp"
 #include "aliases.hpp"
 #include "system_detect.hpp"
-#include "voice_speak.hpp"   // ✅ add this for Voice::initTTS
+#include "voice_speak.hpp"
+#include "device_setups/audio_devices.hpp"
+  // ✅ add this for Voice::initTTS
 
 // Define global system info
 SystemInfo g_systemInfo;
 
 void runBootstrapChecks(int argc, char** argv) {
+
+    promptForAudioDevice();
+
     grimLog("[GRIM] Startup begin");
 
     // Centralized config/memory bootstrap
