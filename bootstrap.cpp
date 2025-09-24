@@ -28,6 +28,12 @@ void runBootstrapChecks(int argc, char** argv) {
         grimLog("[Config] No system font found, UI may render incorrectly");
 
     // ==============================
+    // System Detection
+    // ==============================
+    g_systemInfo = detectSystem();
+    logSystemInfo(g_systemInfo);
+
+    // ==============================
     // Voice system (Coqui bridge)
     // ==============================
     auto voiceCfg = aiConfig["voice"];

@@ -18,9 +18,6 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 namespace Voice {
-    // =========================================================
-    // Globals
-    // =========================================================
     static std::vector<std::unique_ptr<sf::SoundBuffer>> activeBuffers;
     static std::vector<std::unique_ptr<sf::Sound>> activeSounds;
 
@@ -69,26 +66,43 @@ namespace Voice {
     static std::string readLineFromBridge() {
         std::string result;
         char ch;
-        DWORD read;
+        DWORD read = 0, avail = 0;
+
         while (true) {
+            if (!PeekNamedPipe(hChildStdoutRd, nullptr, 0, nullptr, &avail, nullptr)) {
+                std::cerr << "[Voice][Bridge] ERROR: PeekNamedPipe failed" << std::endl;
+                break;
+            }
+            if (avail == 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
             if (!ReadFile(hChildStdoutRd, &ch, 1, &read, nullptr) || read == 0) {
                 break; // EOF or error
             }
+            if (ch == '\r') continue;
             if (ch == '\n') break;
             result.push_back(ch);
         }
         return result;
     }
 
-    static std::string readJsonLineFromBridge() {
+    static std::string readJsonLineFromBridge(int timeoutMs = 15000) {
+        auto start = std::chrono::steady_clock::now();
+
         while (true) {
             std::string line = readLineFromBridge();
-            if (line.empty()) return "";
-            if (line[0] != '{') {
-                std::cerr << "[Voice][Bridge][LOG] " << line << std::endl;
-                continue; // skip non-JSON
+            if (!line.empty()) {
+                if (line[0] == '{')
+                    return line;
+                std::cerr << "[Voice][Bridge][LOG] skipped (not JSON): " << line << std::endl;
             }
-            return line;
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start).count() > timeoutMs) {
+                std::cerr << "[Voice][Bridge] ERROR: Handshake timeout" << std::endl;
+                return "";
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     }
 #endif
@@ -103,32 +117,16 @@ namespace Voice {
                 std::ifstream in(cfgPath);
                 json cfg;
                 in >> cfg;
-
                 if (cfg.contains("voice")) {
                     auto& v = cfg["voice"];
                     if (v.contains("engine"))      g_engine    = v["engine"].get<std::string>();
                     if (v.contains("speaker"))     g_speaker   = v["speaker"].get<std::string>();
                     if (v.contains("speed"))       g_speed     = v["speed"].get<double>();
                     if (v.contains("output_dir"))  g_outputDir = v["output_dir"].get<std::string>();
-
-                    if (v.contains("rules") && v["rules"].is_object()) {
-                        g_rules.clear();
-                        for (auto& [k, val] : v["rules"].items()) {
-                            g_rules[k] = val.get<std::string>();
-                        }
-                    }
                 }
-                std::cout << "[Voice][Init] Loaded config: engine=" << g_engine
-                          << ", speaker=" << g_speaker
-                          << ", speed=" << g_speed
-                          << ", output_dir=" << g_outputDir
-                          << ", rules=" << g_rules.size() << std::endl;
-            } else {
-                std::cerr << "[Voice][Init] WARNING: ai_config.json not found, using defaults." << std::endl;
             }
         } catch (const std::exception& e) {
-            std::cerr << "[Voice][Init] ERROR reading ai_config.json: " << e.what()
-                      << " (using defaults)" << std::endl;
+            std::cerr << "[Voice][Init] ERROR reading ai_config.json: " << e.what() << std::endl;
         }
 
 #ifdef _WIN32
@@ -136,40 +134,41 @@ namespace Voice {
             SECURITY_ATTRIBUTES saAttr{};
             saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
             saAttr.bInheritHandle = TRUE;
+            saAttr.lpSecurityDescriptor = nullptr;
 
-            HANDLE hChildStdinRd, hChildStdoutWr;
-            CreatePipe(&hChildStdinRd, &hChildStdinWr, &saAttr, 0);
-            CreatePipe(&hChildStdoutRd, &hChildStdoutWr, &saAttr, 0);
+            HANDLE hChildStdinRdTmp = nullptr, hChildStdoutWrTmp = nullptr;
+            CreatePipe(&hChildStdinRdTmp, &hChildStdinWr, &saAttr, 0);
+            SetHandleInformation(hChildStdinWr, HANDLE_FLAG_INHERIT, 0);
+            CreatePipe(&hChildStdoutRd, &hChildStdoutWrTmp, &saAttr, 0);
+            SetHandleInformation(hChildStdoutRd, HANDLE_FLAG_INHERIT, 0);
 
-            STARTUPINFOA siStartInfo{};
-            siStartInfo.cb = sizeof(STARTUPINFOA);
-            siStartInfo.hStdError = hChildStdoutWr;
-            siStartInfo.hStdOutput = hChildStdoutWr;
-            siStartInfo.hStdInput = hChildStdinRd;
-            siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
+            STARTUPINFOA si{};
+            ZeroMemory(&si, sizeof(si));
+            si.cb = sizeof(STARTUPINFOA);
+            si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+            si.hStdOutput = hChildStdoutWrTmp;
+            si.hStdInput  = hChildStdinRdTmp;
+            si.dwFlags |= STARTF_USESTDHANDLES;
 
-            std::string cmd = "python D:/G.R.I.M/resources/python/coqui_bridge.py --persistent";
+            std::string cmd = "\"C:/Program Files/Python310/python.exe\" -u D:/G.R.I.M/resources/python/coqui_bridge.py --persistent";
+            std::vector<char> mutableCmd(cmd.begin(), cmd.end());
+            mutableCmd.push_back('\0');
 
-            if (!CreateProcessA(
-                nullptr,
-                cmd.data(),
-                nullptr, nullptr, TRUE, 0,
-                nullptr, nullptr,
-                &siStartInfo, &piProcInfo))
-            {
-                std::cerr << "[Voice][Init] ERROR: Failed to start Coqui bridge" << std::endl;
-                return false;
-            }
+            ZeroMemory(&piProcInfo, sizeof(piProcInfo));
+            CreateProcessA(nullptr, mutableCmd.data(), nullptr, nullptr, TRUE, 0,
+                           nullptr, "D:/G.R.I.M/resources/python", &si, &piProcInfo);
 
-            // Wait for {"status":"ready"}
+            CloseHandle(hChildStdoutWrTmp);
+            CloseHandle(hChildStdinRdTmp);
+
             std::string response = readJsonLineFromBridge();
             try {
                 auto resp = json::parse(response);
                 if (resp.value("status", "") == "ready") {
                     std::cout << "[Voice] Bridge ready." << std::endl;
                 }
-            } catch (...) {
-                std::cerr << "[Voice] ERROR: Bridge did not return valid JSON startup" << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "[Voice] ERROR parsing handshake: " << e.what() << " raw=" << response << std::endl;
             }
         }
 #endif
@@ -182,9 +181,6 @@ namespace Voice {
             std::string exitCmd = R"({"command":"exit"})" "\n";
             DWORD written;
             WriteFile(hChildStdinWr, exitCmd.c_str(), (DWORD)exitCmd.size(), &written, nullptr);
-
-            std::string response = readJsonLineFromBridge();
-            std::cout << "[Voice] Bridge shutdown response: " << response << std::endl;
         }
         if (piProcInfo.hProcess) {
             WaitForSingleObject(piProcInfo.hProcess, 2000);
@@ -199,26 +195,31 @@ namespace Voice {
     // Playback
     // =========================================================
     void playAudio(const std::string& path) {
-        try {
-            auto buffer = std::make_unique<sf::SoundBuffer>();
-            if (!buffer->loadFromFile(path)) {
-                std::cerr << "[Voice][Audio] ERROR: Could not load file: " << path << std::endl;
-                return;
-            }
-
-            auto sound = std::make_unique<sf::Sound>(*buffer);
-            sound->play();
-
-            activeBuffers.push_back(std::move(buffer));
-            activeSounds.push_back(std::move(sound));
-
-            std::cout << "[Voice][Audio] Playing: " << path << std::endl;
-
-            cleanupSounds();
-        } catch (const std::exception& e) {
-            std::cerr << "[Voice][Audio] Exception: " << e.what() << std::endl;
+    try {
+        auto buffer = std::make_unique<sf::SoundBuffer>();
+        if (!buffer->loadFromFile(path)) {
+            std::cerr << "[Voice][Audio] ERROR: Could not load file: " << path << std::endl;
+            return;
         }
+
+        // Construct sound with the buffer (SFML 3.x requires this)
+        auto sound = std::make_unique<sf::Sound>(*buffer);
+        sound->setVolume(100.f);
+        sound->play();
+
+        std::cout << "[Voice][Audio] Playing: " << path
+                  << " (duration=" << buffer->getDuration().asSeconds() << "s)" << std::endl;
+
+        // Store buffer before sound so memory stays valid
+        activeBuffers.push_back(std::move(buffer));
+        activeSounds.push_back(std::move(sound));
+
+        cleanupSounds(); // prune stopped sounds
+    } catch (const std::exception& e) {
+        std::cerr << "[Voice][Audio] Exception: " << e.what() << std::endl;
     }
+}
+
 
     // =========================================================
     // Coqui Speak
@@ -244,19 +245,25 @@ namespace Voice {
         };
         std::string line = req.dump() + "\n";
 
-        DWORD written;
-        WriteFile(hChildStdinWr, line.c_str(), (DWORD)line.size(), &written, nullptr);
+        DWORD written = 0;
+        BOOL ok = WriteFile(hChildStdinWr, line.c_str(), (DWORD)line.size(), &written, nullptr);
+        std::cout << "[Voice][Coqui] Sent request (" << written << " bytes): " << line << std::endl;
+        if (!ok) {
+            std::cerr << "[Voice][Coqui] ERROR: WriteFile failed" << std::endl;
+        }
 
         std::string response = readJsonLineFromBridge();
+        std::cout << "[Voice][Coqui] Got response: " << response << std::endl;
 
         try {
             auto resp = json::parse(response);
-            if (resp.contains("file"))
+            if (resp.contains("file")) {
+                std::cout << "[Voice][Coqui] Bridge returned file: " << resp["file"] << std::endl;
                 return resp["file"].get<std::string>();
-            std::cerr << "[Voice][Coqui] ERROR: " << resp.dump() << std::endl;
+            }
         } catch (const std::exception& e) {
             std::cerr << "[Voice][Coqui] Parse error: " << e.what()
-                      << " (raw=" << response << ")" << std::endl;
+                      << " raw=" << response << std::endl;
         }
 #endif
         return "";
@@ -280,6 +287,8 @@ namespace Voice {
                 std::string wavPath = coquiSpeak(text, g_speaker, g_speed);
                 if (!wavPath.empty()) {
                     playAudio(wavPath);
+                } else {
+                    std::cerr << "[Voice] ERROR: coquiSpeak returned empty path" << std::endl;
                 }
                 return;
             }

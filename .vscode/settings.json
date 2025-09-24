@@ -113,6 +113,9 @@
         "string_view": "cpp",
         "text_encoding": "cpp",
         "complex": "cpp",
-        "typeindex": "cpp"
+        "typeindex": "cpp",
+        "expected": "cpp",
+        "shared_mutex": "cpp",
+        "source_location": "cpp"
     }
 }
