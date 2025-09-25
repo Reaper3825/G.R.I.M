@@ -1,9 +1,12 @@
 #version 330 core
-layout (location = 0) in vec2 aPos;
-layout (location = 1) in vec2 aTexCoord;
+layout (location = 0) in vec2 position;
+layout (location = 1) in vec2 texCoord;
+
 out vec2 vTexCoord;
-uniform mat4 sf_ModelViewProjection;
+
+uniform mat4 transform;
+
 void main() {
-    vTexCoord = aTexCoord;
-    gl_Position = sf_ModelViewProjection * vec4(aPos, 0.0, 1.0);
+    vTexCoord = texCoord;
+    gl_Position = transform * vec4(position, 0.0, 1.0);
 }
