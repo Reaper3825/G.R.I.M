@@ -66,9 +66,14 @@ int main(int argc, char* argv[]) {
     // ============================================================
     // Launch popup UI in background thread
     // ============================================================
-    std::thread([]() {
-        runPopupUI(128, 128); // ✅ 2-argument version only
-    }).detach();
+sf::VideoMode desktop = sf::VideoMode::getDesktopMode();
+unsigned monWidth  = desktop.size.x;
+unsigned monHeight = desktop.size.y;
+
+std::thread([monWidth, monHeight]() {
+    runPopupUI(monWidth, monHeight);
+}).detach();
+
 
     // ============================================================
     // Console input loop

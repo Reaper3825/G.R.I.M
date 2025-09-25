@@ -1,215 +1,169 @@
-#include "popup_ui.hpp"
+#include <SFML/Graphics/RenderTexture.hpp>
+#include <SFML/Graphics/Sprite.hpp>
+#include <SFML/Graphics/Texture.hpp>
+#include <SFML/Graphics/Image.hpp>
+#include <SFML/Window/VideoMode.hpp>
+
+#include <windows.h>
 #include <iostream>
-#include <SFML/Graphics.hpp>
+#include <string>
 #include <cstdint>
-#include <vector>
-#include <chrono>
-#include <thread>
 
-#ifdef _WIN32
-    #include <windows.h>
-    #include <dwmapi.h>
-    #pragma comment(lib, "Dwmapi.lib")
-#endif
-
-// ============================================================
-// Helper: get bottom-right position for window
-// ============================================================
-static sf::Vector2i getBottomRightPosition(const sf::VideoMode& mode, int frameW, int frameH) {
-    int screenW = static_cast<int>(mode.size.x);
-    int screenH = static_cast<int>(mode.size.y);
-    int x = screenW - frameW;
-    int y = screenH - frameH;
-    return {x, y};
+// ---------------- Win32 Overlay ----------------
+LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_DESTROY:
+            PostQuitMessage(0);
+            return 0;
+        default:
+            return DefWindowProc(hwnd, msg, wParam, lParam);
+    }
 }
 
-#ifdef _WIN32
-static const wchar_t* POPUP_CLASS_NAME = L"GRIM_POPUP_CLASS";
-
-// ============================================================
-// Helper: apply per-pixel alpha (UpdateLayeredWindow)
-// ============================================================
-static void applyAlphaToWindow(HWND hwnd, const sf::Sprite& sprite, sf::Shader& shader, float timeSec, int alpha = 255) {
-    sf::IntRect rect = sprite.getTextureRect();
-    unsigned w = rect.size.x;
-    unsigned h = rect.size.y;
-
-    HDC screenDC = GetDC(nullptr);
-    HDC memDC    = CreateCompatibleDC(screenDC);
-
-    sf::RenderTexture rtex({w, h});
-    rtex.clear(sf::Color::Transparent);
-
-    sf::Sprite copy(sprite);
-    copy.setOrigin(sf::Vector2f(0.f, 0.f));
-    copy.setPosition(sf::Vector2f(0.f, 0.f));
-
-    shader.setUniform("time", timeSec);
-    rtex.draw(copy, &shader);
-    rtex.display();
-
-    sf::Image img = rtex.getTexture().copyToImage();
-    const std::uint8_t* pixels = img.getPixelsPtr();
-
-    std::vector<std::uint8_t> bgra(w * h * 4);
-    for (size_t i = 0; i < w * h; i++) {
-        std::uint8_t r = pixels[i * 4 + 0];
-        std::uint8_t g = pixels[i * 4 + 1];
-        std::uint8_t b = pixels[i * 4 + 2];
-        std::uint8_t a = pixels[i * 4 + 3];
-
-        bgra[i * 4 + 0] = (b * a) / 255;
-        bgra[i * 4 + 1] = (g * a) / 255;
-        bgra[i * 4 + 2] = (r * a) / 255;
-        bgra[i * 4 + 3] = a;
-    }
-
-    BITMAPINFO bi = {};
-    bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-    bi.bmiHeader.biWidth       = w;
-    bi.bmiHeader.biHeight      = -static_cast<int>(h);
-    bi.bmiHeader.biPlanes      = 1;
-    bi.bmiHeader.biBitCount    = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-
-    void* bits = nullptr;
-    HBITMAP dib = CreateDIBSection(memDC, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (dib && bits) {
-        memcpy(bits, bgra.data(), bgra.size());
-        HGDIOBJ oldBitmap = SelectObject(memDC, dib);
-
-        RECT wndRect{};
-        GetWindowRect(hwnd, &wndRect);
-        POINT ptDest = {wndRect.left, wndRect.top};
-        POINT ptSrc  = {0, 0};
-        SIZE wndSize = {static_cast<LONG>(w), static_cast<LONG>(h)};
-        BLENDFUNCTION bf = {AC_SRC_OVER, 0, (BYTE)alpha, AC_SRC_ALPHA};
-
-        UpdateLayeredWindow(hwnd, screenDC, &ptDest, &wndSize, memDC, &ptSrc, 0, &bf, ULW_ALPHA);
-
-        SelectObject(memDC, oldBitmap);
-    }
-
-    if (dib) DeleteObject(dib);
-    DeleteDC(memDC);
-    ReleaseDC(nullptr, screenDC);
-}
-#endif
-
-// ============================================================
-// Main popup routine with animated shader
-// ============================================================
-void runPopupUI(int frameW, int frameH) {
-    std::cout << "[PopupUI] Starting popup with PBR maps\n";
-
-    sf::ContextSettings settings;
-    settings.majorVersion = 3;
-    settings.minorVersion = 0;
-
-    sf::Vector2u size(32, 32);
-    std::cout << "[PopupUI] Creating dummy context...\n";
-    sf::Context ctx(settings, size);
-    std::cout << "[PopupUI] Dummy context created\n";
-
-    auto contextSettings = ctx.getSettings();
-    std::cout << "[PopupUI] OpenGL context: "
-              << contextSettings.majorVersion << "."
-              << contextSettings.minorVersion << "\n";
-
-    sf::VideoMode desktop = sf::VideoMode::getDesktopMode();
-    std::cout << "[PopupUI] Desktop mode: "
-              << desktop.size.x << "x" << desktop.size.y << "\n";
-
-#ifdef _WIN32
-    HINSTANCE hInstance = GetModuleHandle(nullptr);
-    WNDCLASSW wc = {};
-    wc.lpfnWndProc   = DefWindowProcW;
-    wc.hInstance     = hInstance;
-    wc.lpszClassName = POPUP_CLASS_NAME;
+HWND createOverlayWindow(int width, int height) {
+    WNDCLASSW wc{};
+    wc.lpfnWndProc   = OverlayProc;
+    wc.hInstance     = GetModuleHandle(nullptr);
+    wc.lpszClassName = L"SFML3_Overlay";
     RegisterClassW(&wc);
 
-    auto pos = getBottomRightPosition(desktop, frameW, frameH);
-    std::cout << "[PopupUI] Window position: (" << pos.x << "," << pos.y << ")\n";
-
     HWND hwnd = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_TOPMOST,
-        POPUP_CLASS_NAME, L"GRIM Popup",
+        WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+        wc.lpszClassName,
+        L"Overlay",
         WS_POPUP,
-        pos.x, pos.y, frameW, frameH,
-        nullptr, nullptr, hInstance, nullptr
+        100, 100, width, height,
+        nullptr, nullptr, wc.hInstance, nullptr
     );
 
-    if (!hwnd) {
-        std::cerr << "[PopupUI] ERROR: Failed to create Win32 window\n";
-        return;
-    }
-
     ShowWindow(hwnd, SW_SHOW);
-    UpdateWindow(hwnd);
-    std::cout << "[PopupUI] Window created and shown\n";
+    return hwnd;
+}
 
-    // --- Load maps ---
-    std::cout << "[PopupUI] Loading textures...\n";
-    sf::Texture texDiffuse, texNormal, texHeight, texEmissive, texOpacity, texAO;
-    if (!texDiffuse.loadFromFile("D:/G.R.I.M/resources/GRIM_Listener_ss_diffuse.png") ||
-        !texNormal.loadFromFile("D:/G.R.I.M/resources/GRIM_Listener_ss_normal.png") ||
-        !texHeight.loadFromFile("D:/G.R.I.M/resources/GRIM_Listener_ss_height.png") ||
-        !texEmissive.loadFromFile("D:/G.R.I.M/resources/GRIM_Listener_ss_emissive.png") ||
-        !texOpacity.loadFromFile("D:/G.R.I.M/resources/GRIM_Listener_ss_opacity.png") ||
-        !texAO.loadFromFile("D:/G.R.I.M/resources/GRIM_Listener_ss_AO.png"))
-    {
-        std::cerr << "[PopupUI] ERROR: Failed to load one or more textures\n";
+// ---------------- Main Overlay Logic ----------------
+void runPopupUI(int width, int height) {
+    HWND hwnd = createOverlayWindow(width, height);
+
+    // Offscreen buffer (SFML 3.x style)
+    sf::RenderTexture rtex({static_cast<unsigned>(width),
+                            static_cast<unsigned>(height)});
+
+    // Get monitor size
+    sf::VideoMode desktop = sf::VideoMode::getDesktopMode();
+    unsigned monWidth  = desktop.size.x;
+    unsigned monHeight = desktop.size.y;
+
+    std::cout << "[PopupUI] Monitor size = "
+              << monWidth << "x" << monHeight << std::endl;
+
+    // ---- Load maps ----
+    const std::string opacityPath = "D:/G.R.I.M/resources/GRIM_Listener_ss_opacity.png";
+    const std::string diffusePath = "D:/G.R.I.M/resources/GRIM_Listener_ss_diffuse.png";
+
+    sf::Image opacityImg;
+    if (!opacityImg.loadFromFile(opacityPath)) {
+        std::cerr << "[PopupUI] ERROR: could not load opacity map\n";
         return;
     }
-    std::cout << "[PopupUI] Textures loaded\n";
 
-    sf::Sprite sprite(texDiffuse);
-
-    // --- Load shader ---
-    std::cout << "[PopupUI] Loading shader...\n";
-    sf::Shader shader;
-    if (!shader.loadFromFile("D:/G.R.I.M/resources/popup.vert",
-                             "D:/G.R.I.M/resources/popup.frag"))
-    {
-        std::cerr << "[PopupUI] ERROR: Failed to load shader pair\n";
+    sf::Image diffuseImg;
+    if (!diffuseImg.loadFromFile(diffusePath)) {
+        std::cerr << "[PopupUI] ERROR: could not load diffuse map\n";
         return;
     }
-    std::cout << "[PopupUI] Shader loaded\n";
 
-    shader.setUniform("diffuseMap",  texDiffuse);
-    shader.setUniform("normalMap",   texNormal);
-    shader.setUniform("heightMap",   texHeight);
-    shader.setUniform("emissiveMap", texEmissive);
-    shader.setUniform("opacityMap",  texOpacity);
-    shader.setUniform("aoMap",       texAO);
+    // ---- Apply opacity alpha to diffuse (untouched) ----
+    sf::Vector2u size = opacityImg.getSize();
+    if (diffuseImg.getSize() != size) {
+        std::cerr << "[PopupUI] ERROR: diffuse/opacity size mismatch\n";
+        return;
+    }
 
-    auto start = std::chrono::high_resolution_clock::now();
-    std::cout << "[PopupUI] Entering animation loop\n";
+    for (unsigned y = 0; y < size.y; ++y) {
+        for (unsigned x = 0; x < size.x; ++x) {
+            sf::Color d = diffuseImg.getPixel({x, y});
+            sf::Color o = opacityImg.getPixel({x, y});
+            diffuseImg.setPixel({x, y}, sf::Color(d.r, d.g, d.b, o.r)); // red→alpha
+        }
+    }
 
-    // Animation loop
-    MSG msg = {};
-    int frameCounter = 0;
+    sf::Texture texture(diffuseImg);
+    texture.setSmooth(true);
+
+    // ---- Sprite scaling + centering ----
+    sf::Vector2u texSize = texture.getSize();
+    sf::Sprite sprite(texture);
+
+    float scaleX = static_cast<float>(monWidth)  / static_cast<float>(texSize.x);
+    float scaleY = static_cast<float>(monHeight) / static_cast<float>(texSize.y);
+
+    sprite.setScale(sf::Vector2f{scaleX, scaleY});
+    sprite.setPosition(sf::Vector2f{
+        (monWidth  - (texSize.x * scaleX)) / 2.f,
+        (monHeight - (texSize.y * scaleY)) / 2.f
+    });
+
+    // ---- Message loop ----
+    MSG msg{};
     while (true) {
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) break;
+            if (msg.message == WM_QUIT) return;
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
-        if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) break;
 
-        auto now = std::chrono::high_resolution_clock::now();
-        float timeSec = std::chrono::duration<float>(now - start).count();
+        // Draw into render texture
+        rtex.clear(sf::Color(0,0,0,0));
+        rtex.draw(sprite);
+        rtex.display();
 
-        std::cout << "[PopupUI] Frame " << frameCounter++ 
-                  << " time=" << timeSec << "s\n";
+        // Grab pixels
+        sf::Image frame = rtex.getTexture().copyToImage();
+        const unsigned char* src = frame.getPixelsPtr();  // <-- FIXED TYPE
 
-        applyAlphaToWindow(hwnd, sprite, shader, timeSec, 255);
+        HDC screenDC = GetDC(nullptr);
+        HDC memDC    = CreateCompatibleDC(screenDC);
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(33));
+        BITMAPINFO bi{};
+        bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+        bi.bmiHeader.biWidth       = width;
+        bi.bmiHeader.biHeight      = -height; // top-down DIB
+        bi.bmiHeader.biPlanes      = 1;
+        bi.bmiHeader.biBitCount    = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+
+        void* bits = nullptr;
+        HBITMAP hBitmap = CreateDIBSection(memDC, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+
+        // --- RGBA -> BGRA swizzle (fix yellow tint) ---
+        std::uint8_t* dst = static_cast<std::uint8_t*>(bits);
+        for (int i = 0; i < width * height; ++i) {
+            dst[0] = src[2]; // B
+            dst[1] = src[1]; // G
+            dst[2] = src[0]; // R
+            dst[3] = src[3]; // A
+            dst += 4;
+            src += 4;
+        }
+
+        HBITMAP oldBmp = (HBITMAP)SelectObject(memDC, hBitmap);
+
+        SIZE winSize{width, height};
+        POINT srcPos{0,0};
+        POINT winPos{100,100};
+
+        BLENDFUNCTION blend{};
+        blend.BlendOp             = AC_SRC_OVER;
+        blend.SourceConstantAlpha = 255;
+        blend.AlphaFormat         = AC_SRC_ALPHA;
+
+        UpdateLayeredWindow(hwnd, screenDC, &winPos, &winSize, memDC, &srcPos, 0, &blend, ULW_ALPHA);
+
+        SelectObject(memDC, oldBmp);
+        DeleteObject(hBitmap);
+        DeleteDC(memDC);
+        ReleaseDC(nullptr, screenDC);
+
+        Sleep(16);
     }
-
-    std::cout << "[PopupUI] Exiting loop, cleaning up\n";
-    DestroyWindow(hwnd);
-    UnregisterClassW(POPUP_CLASS_NAME, hInstance);
-#endif
 }
