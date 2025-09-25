@@ -8,7 +8,12 @@
     #include <windows.h>
     #include <mmdeviceapi.h>
     #include <functiondiscoverykeys_devpkey.h>
+    #include <comdef.h>
+    #include <Wbemidl.h>
+    #include <dxgi.h>
     #pragma comment(lib, "ole32.lib")
+    #pragma comment(lib, "wbemuuid.lib")
+    #pragma comment(lib, "dxgi.lib")
 #elif __APPLE__
     #include <sys/types.h>
     #include <sys/sysctl.h>
@@ -22,6 +27,20 @@
 // CUDA headers (only if compiled with cuBLAS)
 #ifdef GGML_USE_CUBLAS
     #include <cuda_runtime.h>
+#endif
+
+// =========================================================
+// Wide string conversion helper (Windows WMI)
+// =========================================================
+#ifdef _WIN32
+static std::string wideToUtf8(const BSTR& wstr) {
+    if (!wstr) return "";
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, NULL, 0, NULL, NULL);
+    if (size_needed <= 0) return "";
+    std::string str(size_needed - 1, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wstr, -1, &str[0], size_needed, NULL, NULL);
+    return str;
+}
 #endif
 
 // =========================================================
@@ -127,6 +146,98 @@ static void listOutputDevices() {
 #endif
 
 // =========================================================
+// Windows GPU detection (DXGI + WMI)
+// =========================================================
+#ifdef _WIN32
+static bool detectWindowsGPU(SystemInfo& info) {
+    IDXGIFactory* pFactory = nullptr;
+    if (FAILED(CreateDXGIFactory(__uuidof(IDXGIFactory), (void**)&pFactory))) {
+        return false;
+    }
+
+    IDXGIAdapter* pAdapter = nullptr;
+    int index = 0;
+    int gpuCount = 0;
+    long gpuVRAM = 0;
+    std::string gpuName;
+
+    while (pFactory->EnumAdapters(index, &pAdapter) != DXGI_ERROR_NOT_FOUND) {
+        DXGI_ADAPTER_DESC desc;
+        if (SUCCEEDED(pAdapter->GetDesc(&desc))) {
+            std::wstring ws(desc.Description);
+            std::string name(ws.begin(), ws.end());
+
+            // Filter: only NVIDIA adapters
+            if (name.find("NVIDIA") != std::string::npos) {
+                gpuCount++;
+                gpuName = name;
+                gpuVRAM = static_cast<long>(desc.DedicatedVideoMemory / (1024 * 1024));
+            }
+        }
+        pAdapter->Release();
+        index++;
+    }
+    pFactory->Release();
+
+    if (gpuCount == 0) return false;
+
+    // Use WMI just for driver version
+    HRESULT hres = CoInitializeEx(0, COINIT_MULTITHREADED);
+    if (SUCCEEDED(hres) || hres == RPC_E_CHANGED_MODE) {
+        IWbemLocator* pLoc = nullptr;
+        if (SUCCEEDED(CoCreateInstance(CLSID_WbemLocator, 0, CLSCTX_INPROC_SERVER,
+                                       IID_IWbemLocator, (LPVOID*)&pLoc))) {
+            IWbemServices* pSvc = nullptr;
+            if (SUCCEEDED(pLoc->ConnectServer(_bstr_t(L"ROOT\\CIMV2"),
+                                              NULL, NULL, 0, NULL, 0, 0, &pSvc))) {
+                CoSetProxyBlanket(pSvc, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, NULL,
+                                  RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE,
+                                  NULL, EOAC_NONE);
+
+                IEnumWbemClassObject* pEnumerator = nullptr;
+                if (SUCCEEDED(pSvc->ExecQuery(bstr_t("WQL"),
+                                              bstr_t("SELECT Name, DriverVersion FROM Win32_VideoController"),
+                                              WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
+                                              NULL, &pEnumerator))) {
+                    IWbemClassObject* pclsObj = nullptr;
+                    ULONG uReturn = 0;
+                    while (pEnumerator && pEnumerator->Next(WBEM_INFINITE, 1, &pclsObj, &uReturn) == S_OK) {
+                        VARIANT vtProp;
+                        if (SUCCEEDED(pclsObj->Get(L"Name", 0, &vtProp, 0, 0))) {
+                            if (vtProp.vt == VT_BSTR) {
+                                std::string name = wideToUtf8(vtProp.bstrVal);
+                                if (name.find("NVIDIA") != std::string::npos) {
+                                    VARIANT vtDriver;
+                                    if (SUCCEEDED(pclsObj->Get(L"DriverVersion", 0, &vtDriver, 0, 0))) {
+                                        if (vtDriver.vt == VT_BSTR) {
+                                            info.gpuDriver = wideToUtf8(vtDriver.bstrVal);
+                                        }
+                                        VariantClear(&vtDriver);
+                                    }
+                                }
+                            }
+                            VariantClear(&vtProp);
+                        }
+                        pclsObj->Release();
+                    }
+                    if (pEnumerator) pEnumerator->Release();
+                }
+                pSvc->Release();
+            }
+            pLoc->Release();
+        }
+        CoUninitialize();
+    }
+
+    info.hasGPU = true;
+    info.gpuCount = gpuCount;
+    info.gpuName = gpuName;
+    info.gpuVRAM_MB = gpuVRAM;
+    return true;
+}
+#endif
+
+// =========================================================
 // System detection
 // =========================================================
 SystemInfo detectSystem() {
@@ -190,6 +301,7 @@ SystemInfo detectSystem() {
         cudaDeviceProp prop;
         cudaGetDeviceProperties(&prop, 0);
         info.gpuName = prop.name;
+        info.gpuVRAM_MB = prop.totalGlobalMem / (1024 * 1024);
     }
 #endif
 
@@ -197,6 +309,13 @@ SystemInfo detectSystem() {
 #ifdef __APPLE__
     info.hasGPU = true;
     info.hasMetal = true;
+#endif
+
+    // --- Windows DXGI/WMI fallback ---
+#ifdef _WIN32
+    if (!info.hasGPU) {
+        detectWindowsGPU(info);
+    }
 #endif
 
     // --- Suggested Whisper Model ---
@@ -217,8 +336,12 @@ void logSystemInfo(const SystemInfo& info) {
     std::cout << "RAM: " << info.ramMB << " MB\n";
 
     if (info.hasGPU) {
-        std::cout << "GPU detected: " << info.gpuName 
+        std::cout << "GPU detected: " << info.gpuName
                   << " (" << info.gpuCount << " device(s))\n";
+        if (info.gpuVRAM_MB > 0)
+            std::cout << "VRAM: " << info.gpuVRAM_MB << " MB\n";
+        if (!info.gpuDriver.empty())
+            std::cout << "Driver: " << info.gpuDriver << "\n";
         if (info.hasCUDA) std::cout << "CUDA supported.\n";
         if (info.hasMetal) std::cout << "Metal supported.\n";
         if (info.hasROCm) std::cout << "ROCm supported.\n";
