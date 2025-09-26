@@ -40,13 +40,15 @@ std::string g_inputBuffer;
 // Main entry point
 // ============================================================
 int main(int argc, char* argv[]) {
+    //Initialize logger (writes to grim.log + console if available)
+    initLogger("grim.log");
     LOG_PHASE("Startup begin", true);
 
-    // 🔹 Bootstrap configuration and resources (includes TTS init)
+    //Bootstrap configuration and resources (includes TTS init)
     runBootstrapChecks(argc, argv);
     LOG_PHASE("Bootstrap checks complete", true);
 
-    // 🔹 Load dummy font (needed for sf::Text even if unused)
+    //Load dummy font (needed for sf::Text even if unused)
     fs::path fontPath = fs::path(getResourcePath()) / "DejaVuMathTeXGyre.ttf";
     if (!g_dummyFont.openFromFile(fontPath.string())) {
         LOG_ERROR("Config", "Could not load dummy font: " + fontPath.string());
@@ -56,7 +58,7 @@ int main(int argc, char* argv[]) {
         LOG_PHASE("Font load", true);
     }
 
-    // 🔹 Aliases
+    //Aliases
     aliases::init();
     LOG_PHASE("Aliases initialized", true);
 
@@ -120,5 +122,8 @@ int main(int argc, char* argv[]) {
     // ============================================================
     Voice::shutdownTTS();
     LOG_PHASE("Shutdown complete", true);
+
+    // 🔹 Close logger
+    shutdownLogger();
     return 0;
 }

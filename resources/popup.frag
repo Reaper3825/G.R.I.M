@@ -1,4 +1,5 @@
 #version 330 core
+
 in vec2 vTexCoord;
 out vec4 fragColor;
 
@@ -19,8 +20,9 @@ void main()
         fragColor = diffuse; // show diffuse only
         return;
     }
+
     if (debugMode == 2) {
-        fragColor = vec4(opacity.rrr, 1.0); // show opacity mask in grayscale
+        fragColor = vec4(opacity.r, opacity.r, opacity.r, 1.0); // grayscale mask
         return;
     }
 

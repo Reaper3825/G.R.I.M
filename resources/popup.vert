@@ -1,11 +1,13 @@
 #version 330 core
-layout (location = 0) in vec2 aPos;       // fullscreen quad positions
-layout (location = 1) in vec2 aTexCoord;  // UVs
+
+in vec2 position;   // provided by SFML
+in vec2 texCoords;  // provided by SFML
+in vec4 color;      // provided by SFML (unused but available)
 
 out vec2 vTexCoord;
 
 void main()
 {
-    gl_Position = vec4(aPos, 0.0, 1.0);
-    vTexCoord   = aTexCoord;
+    gl_Position = vec4(position, 0.0, 1.0);
+    vTexCoord   = texCoords;
 }
