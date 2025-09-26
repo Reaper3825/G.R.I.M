@@ -116,46 +116,35 @@ void runPopupUI(int width, int height) {
 
     // Load textures
     sf::Texture texDiffuse, texOpacity;
-    if (!texDiffuse.loadFromFile("D:/G.R.I.M/resources/GRIM_Listener_ss_diffuse.png")) {
-        LOG_ERROR("PopupUI", "Failed to load diffuse map");
-        LOG_PHASE("Diffuse map load", false);
-    } else {
-        LOG_DEBUG("PopupUI", "Loaded diffuse map");
-        LOG_PHASE("Diffuse map load", true);
-    }
+    texDiffuse.loadFromFile("D:/G.R.I.M/resources/GRIM_Listener_ss_diffuse.png");
+    texOpacity.loadFromFile("D:/G.R.I.M/resources/GRIM_Listener_ss_opacity.png");
 
-    if (!texOpacity.loadFromFile("D:/G.R.I.M/resources/GRIM_Listener_ss_opacity.png")) {
-        LOG_ERROR("PopupUI", "Failed to load opacity map");
-        LOG_PHASE("Opacity map load", false);
-    } else {
-        LOG_DEBUG("PopupUI", "Loaded opacity map");
-        LOG_PHASE("Opacity map load", true);
-    }
-
-    // Shader (diffuse + opacity only)
+    // Shader
     sf::Shader shader;
-    if (!shader.loadFromFile(
+    bool shaderOk = shader.loadFromFile(
         "D:/G.R.I.M/resources/popup.vert",
-        "D:/G.R.I.M/resources/popup.frag"))
-    {
-        LOG_ERROR("PopupUI", "Failed to load shader");
+        "D:/G.R.I.M/resources/popup.frag"
+    );
+    if (shaderOk) {
+        shader.setUniform("diffuseMap", texDiffuse);
+        shader.setUniform("opacityMap", texOpacity);
+        shader.setUniform("debugMode", 1); // start with diffuse-only
+        LOG_PHASE("Shader load", true);
+    } else {
         LOG_PHASE("Shader load", false);
-        return;
     }
-    LOG_DEBUG("PopupUI", "Shaders loaded");
-    LOG_PHASE("Shader load", true);
 
-    shader.setUniform("diffuseMap", texDiffuse);
-    shader.setUniform("opacityMap", texOpacity);
-    shader.setUniform("debugMode", 0); // 0=final, 1=diffuse, 2=mask
-
-    // Sprite to draw
+    // Sprite
     sf::Sprite sprite(texDiffuse);
     sprite.setPosition({ 0.f, 0.f });
     sprite.setScale(sf::Vector2f(
         static_cast<float>(width) / texDiffuse.getSize().x,
         static_cast<float>(height) / texDiffuse.getSize().y
     ));
+
+    // --- toggles ---
+    bool useShader = true; // flip to false to bypass shader
+    bool useApply  = true; // flip to false to skip applyAlphaToWindow
 
     // Main loop
     MSG msg{};
@@ -169,10 +158,24 @@ void runPopupUI(int width, int height) {
 
         // Render pass
         rtex.clear(sf::Color::Transparent);
-        rtex.draw(sprite, &shader);
+
+        LOG_DEBUG("PopupUI", "Before draw");
+        if (useShader && shaderOk) {
+            rtex.draw(sprite, &shader);
+        } else {
+            rtex.draw(sprite);
+        }
+        LOG_DEBUG("PopupUI", "After draw");
+
         rtex.display();
 
-        // Apply to overlay
-        applyAlphaToWindow(g_hWnd, rtex.getTexture());
+        if (useApply) {
+            LOG_DEBUG("PopupUI", "Before applyAlphaToWindow");
+            applyAlphaToWindow(g_hWnd, rtex.getTexture());
+            LOG_DEBUG("PopupUI", "After applyAlphaToWindow");
+        }
+
+        Sleep(16); // ~60 FPS
     }
 }
+

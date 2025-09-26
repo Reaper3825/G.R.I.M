@@ -18,10 +18,10 @@
 // Logger
 // ------------------------------------------------------------
 namespace Logger {
-    enum class Level { DEBUG, INFO, WARN, ERROR };
+    enum class Level { Debug, Info, Warn, Error };
 
     void init(const std::string& logFile);
-    void log(Level level, const std::string& message);
+    void logMessage(Level level, const std::string& message);
     void logResult(const CommandResult& result);
 }
 

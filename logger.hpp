@@ -10,20 +10,19 @@ enum class BuildMode {
     Release
 };
 
-// Global build mode (auto-detect from compiler flags)
+// Global build mode
 extern BuildMode g_buildMode;
 
 // =====================================================
 // Phase Info Struct (Release mode)
 // =====================================================
 struct PhaseInfo {
-    std::chrono::system_clock::time_point timestamp; // when entered
-    std::string fileName;    // file containing this phase
-    std::string phaseName;   // descriptive phase string
-    bool success;            // true = success, false = failure
+    std::chrono::system_clock::time_point timestamp;
+    std::string fileName;
+    std::string phaseName;
+    bool success;
 };
 
-// Global storage for most recent phase
 extern PhaseInfo g_phaseInfo;
 
 // =====================================================
@@ -38,13 +37,19 @@ void logTrace(const std::string& tag, const std::string& msg);
 void logError(const std::string& tag, const std::string& msg);
 
 // =====================================================
-// Phase Group Controls (buffered block logging)
+// Phase Group Controls
 // =====================================================
 void beginPhaseGroup();
 void endPhaseGroup();
 
 // =====================================================
-// Macros for convenience
+// Logger lifecycle
+// =====================================================
+void initLogger(const std::string& filename = "grim.log");
+void shutdownLogger();
+
+// =====================================================
+// Macros
 // =====================================================
 #define LOG_PHASE(phase, success) logPhaseInternal(__FILE__, phase, success)
 #define LOG_DEBUG(tag, msg) logDebug(tag, msg)

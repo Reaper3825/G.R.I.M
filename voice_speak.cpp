@@ -90,7 +90,7 @@ namespace Voice {
         return result;
     }
 
-    static std::string readJsonLineFromBridge(int timeoutMs = 15000) {
+    static std::string readJsonLineFromBridge(int timeoutMs = 30000) {
         auto start = std::chrono::steady_clock::now();
 
         while (true) {

@@ -214,6 +214,16 @@ add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
 target_precompile_headers(GRIM PRIVATE pch.hpp)
 
 # =========================================================
+# Subsystem: console in Debug, windows in Release
+# =========================================================
+if(MSVC)
+    target_link_options(GRIM PRIVATE /SUBSYSTEM:CONSOLE)
+endif()
+
+
+
+
+# =========================================================
 # Dependencies
 # =========================================================
 
@@ -242,8 +252,11 @@ else()
 endif()
 
 # ---- Whisper.cpp ----
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libs" FORCE)
+
 add_subdirectory(external/whisper.cpp EXCLUDE_FROM_ALL)
 target_link_libraries(GRIM PRIVATE whisper)
+
 
 # ---- PortAudio ----
 find_path(PORTAUDIO_INCLUDE_DIR portaudio.h)
@@ -306,7 +319,7 @@ endforeach()
 # Font auto-detection
 # =========================================================
 set(GRIM_FONT_SRC "")
-if(GedaadsasaaaaaaaaaaaaaaaRIM_FONT_PATH)
+if(GRIM_FONT_PATH)
   set(GRIM_FONT_SRC "${GRIM_FONT_PATH}")
   message(STATUS "Using user-specified font: ${GRIM_FONT_SRC}")
 elseif(EXISTS "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")

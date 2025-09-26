@@ -25,15 +25,15 @@ namespace Logger {
 
     static std::string levelToString(Level lvl) {
         switch (lvl) {
-            case Level::DEBUG: return "DEBUG";
-            case Level::INFO:  return "INFO";
-            case Level::WARN:  return "WARN";
-            case Level::ERROR: return "ERROR";
+            case Level::Debug: return "DEBUG";
+            case Level::Info:  return "INFO";
+            case Level::Warn:  return "WARN";
+            case Level::Error: return "ERROR";
         }
         return "UNKNOWN";
     }
 
-    void log(Level level, const std::string& message) {
+    void logMessage(Level level, const std::string& message) {
         std::string line = "[" + timestamp() + "][" + levelToString(level) + "] " + message;
 
         // 🔹 All log levels now go to cerr (to avoid contaminating cout/voice)
@@ -46,13 +46,13 @@ namespace Logger {
 
     void logResult(const CommandResult& result) {
         if (result.success) {
-            log(Level::INFO, result.message);
+            logMessage(Level::Info, result.message);
         } else {
             if (!result.errorCode.empty() && result.errorCode != "ERR_NONE") {
                 std::string debugMsg = ErrorManager::getDebugMessage(result.errorCode);
-                log(Level::ERROR, result.errorCode + " -> " + debugMsg);
+                logMessage(Level::Error, result.errorCode + " -> " + debugMsg);
             } else {
-                log(Level::ERROR, result.message);
+                logMessage(Level::Error, result.message);
             }
         }
     }
@@ -123,6 +123,6 @@ CommandResult ErrorManager::report(const std::string& code) {
     result.voice     = "";          // don’t auto-speak
     result.category  = "error";
 
-    Logger::log(Logger::Level::ERROR, code + " -> " + debugMsg);
+    Logger::logMessage(Logger::Level::Error, code + " -> " + debugMsg);
     return result;
 }
