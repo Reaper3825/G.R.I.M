@@ -3,8 +3,12 @@
 #include "resources.hpp"
 #include "commands/commands_core.hpp"
 #include "error_manager.hpp"
+#include "logger.hpp"
 
 #include <cpr/cpr.h>
+#include <fstream>
+#include <sstream>
+#include <future>
 
 // ---------------- Globals ----------------
 double g_silenceThreshold = 1e-6; // default, overridden in aiConfig
@@ -35,10 +39,11 @@ void saveMemory() {
         std::ofstream f("memory.json");
         if (f) {
             f << longTermMemory.dump(2);
-            std::cerr << "[Memory] Saved " << longTermMemory.size() << " entries\n";
+            LOG_PHASE("Memory saved", true);
         }
     } catch (const std::exception& e) {
-        std::cerr << "[Memory] Failed to save memory.json: " << e.what() << "\n";
+        LOG_ERROR("Memory", std::string("Failed to save memory.json: ") + e.what());
+        LOG_PHASE("Memory save", false);
     }
 }
 
@@ -47,13 +52,14 @@ void loadMemory() {
     if (f) {
         try {
             f >> longTermMemory;
-            std::cerr << "[Memory] Loaded " << longTermMemory.size() << " entries\n";
+            LOG_PHASE("Memory loaded", true);
         } catch (const std::exception& e) {
-            std::cerr << "[Memory] Failed to parse memory.json: " << e.what() << "\n";
+            LOG_ERROR("Memory", std::string("Failed to parse memory.json: ") + e.what());
             longTermMemory = nlohmann::json::object();
+            LOG_PHASE("Memory load", false);
         }
     } else {
-        std::cerr << "[Memory] No memory.json found. Creating new file.\n";
+        LOG_DEBUG("Memory", "No memory.json found. Creating new file.");
         longTermMemory = nlohmann::json::object();
     }
 
@@ -124,8 +130,7 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
         std::string backend = resolveBackendURL();
         std::string model   = aiConfig.value("default_model", "mistral");
 
-        std::cerr << "[AI] callAIAsync backend=" << backend
-                  << " model=" << model << "\n";
+        LOG_DEBUG("AI", "callAIAsync backend=" + backend + " model=" + model);
 
         try {
             if (backend == "ollama") {
@@ -170,7 +175,7 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
             }
         }
         catch (const std::exception& e) {
-            std::cerr << "[AI] Exception: " << e.what() << "\n";
+            LOG_ERROR("AI", std::string("Exception: ") + e.what());
         }
 
         return "[AI] Backend call failed";
@@ -201,10 +206,10 @@ CommandResult ai_process(const std::string& input) {
                 break;
             }
 
-            std::cerr << "[AI] Attempt " << attempt << " failed: " << reply << "\n";
+            LOG_DEBUG("AI", "Attempt " + std::to_string(attempt) + " failed: " + reply);
         }
         catch (const std::exception& e) {
-            std::cerr << "[AI] Exception on attempt " << attempt << ": " << e.what() << "\n";
+            LOG_ERROR("AI", std::string("Exception on attempt ") + std::to_string(attempt) + ": " + e.what());
         }
     }
 
@@ -229,8 +234,7 @@ void ai_process_stream(
     std::string backend = resolveBackendURL();
     std::string model   = aiConfig.value("default_model", "mistral");
 
-    std::cerr << "[AI] ai_process_stream backend=" << backend
-              << " model=" << model << "\n";
+    LOG_DEBUG("AI", "ai_process_stream backend=" + backend + " model=" + model);
 
     bool success = false;
 
@@ -262,6 +266,7 @@ void ai_process_stream(
                 auto apiKey = aiConfig["api_keys"].value("openai", "");
                 if (apiKey.empty()) {
                     if (callback) callback("[AI] Missing OpenAI API key\n");
+                    LOG_ERROR("AI", "Missing OpenAI API key");
                     return;
                 }
                 headers["Authorization"] = "Bearer " + apiKey;
@@ -301,7 +306,7 @@ void ai_process_stream(
         }
     }
     catch (const std::exception& e) {
-        std::cerr << "[AI] Exception in ai_process_stream: " << e.what() << "\n";
+        LOG_ERROR("AI", std::string("Exception in ai_process_stream: ") + e.what());
     }
 
     // Memory update
@@ -313,8 +318,8 @@ void ai_process_stream(
 // Warmup
 // =========================================================
 void warmupAI() {
-    std::cout << "[AI] Warming up...\n";
+    LOG_DEBUG("AI", "Warming up...");
     auto f = callAIAsync("Hello");
     f.wait();
-    std::cout << "[AI] Warmup complete\n";
+    LOG_PHASE("AI warmup complete", true);
 }

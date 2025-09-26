@@ -10,7 +10,7 @@
 extern ConsoleHistory history;
 
 CommandResult cmdSystemInfo([[maybe_unused]] const std::string& arg) {
-    std::cout << "[DEBUG][Command] Dispatch: system_info\n";
+    std::cerr << "[DEBUG][Command] Dispatch: system_info\n";
 
     SystemInfo sys = detectSystem();
 

@@ -1,169 +1,178 @@
+#include "popup_ui.hpp"
+#include "logger.hpp"
+
+#include <string>
+#include <vector>
+#include <cstdint>
+
+// --- SFML minimal includes ---
 #include <SFML/Graphics/RenderTexture.hpp>
 #include <SFML/Graphics/Sprite.hpp>
 #include <SFML/Graphics/Texture.hpp>
 #include <SFML/Graphics/Image.hpp>
+#include <SFML/Graphics/Shader.hpp>
 #include <SFML/Window/VideoMode.hpp>
 
+// --- Windows includes ---
 #include <windows.h>
-#include <iostream>
-#include <string>
-#include <cstdint>
+#include <dwmapi.h>
+#pragma comment(lib, "Dwmapi.lib")
 
-// ---------------- Win32 Overlay ----------------
-LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+// Globals for HWND + HINSTANCE
+HINSTANCE g_hInstance = GetModuleHandle(nullptr);
+HWND g_hWnd = nullptr;
+
+// Simple Win32 window procedure
+LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
-        case WM_DESTROY:
-            PostQuitMessage(0);
-            return 0;
-        default:
-            return DefWindowProc(hwnd, msg, wParam, lParam);
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    default:
+        return DefWindowProc(hwnd, msg, wParam, lParam);
     }
 }
 
-HWND createOverlayWindow(int width, int height) {
+// Helper: create a layered transparent window
+HWND createPopupWindow(int width, int height) {
     WNDCLASSW wc{};
-    wc.lpfnWndProc   = OverlayProc;
-    wc.hInstance     = GetModuleHandle(nullptr);
-    wc.lpszClassName = L"SFML3_Overlay";
+    wc.lpfnWndProc   = PopupWndProc;
+    wc.hInstance     = g_hInstance;
+    wc.lpszClassName = L"GRIM_Popup";
     RegisterClassW(&wc);
 
-    HWND hwnd = CreateWindowExW(
+    return CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
         wc.lpszClassName,
-        L"Overlay",
+        L"Popup",
         WS_POPUP,
         100, 100, width, height,
-        nullptr, nullptr, wc.hInstance, nullptr
+        nullptr, nullptr, g_hInstance, nullptr
     );
-
-    ShowWindow(hwnd, SW_SHOW);
-    return hwnd;
 }
 
-// ---------------- Main Overlay Logic ----------------
+// Apply alpha-blended SFML sprite to Win32 layered window
+static void applyAlphaToWindow(HWND hwnd, const sf::Texture& texture) {
+    sf::Image img = texture.copyToImage();
+    const std::uint8_t* pixels = img.getPixelsPtr();
+    if (!pixels) return;
+
+    int w = static_cast<int>(img.getSize().x);
+    int h = static_cast<int>(img.getSize().y);
+
+    HDC hdcScreen = GetDC(nullptr);
+    HDC hdcMem    = CreateCompatibleDC(hdcScreen);
+
+    BITMAPINFO bmi{};
+    bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth       = w;
+    bmi.bmiHeader.biHeight      = -h; // top-down
+    bmi.bmiHeader.biPlanes      = 1;
+    bmi.bmiHeader.biBitCount    = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void* bits = nullptr;
+    HBITMAP hBitmap = CreateDIBSection(hdcMem, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    memcpy(bits, pixels, w * h * 4);
+
+    HGDIOBJ oldBmp = SelectObject(hdcMem, hBitmap);
+
+    SIZE sizeWnd = { w, h };
+    POINT ptSrc  = { 0, 0 };
+    POINT ptDst  = { 100, 100 };
+
+    BLENDFUNCTION blend{};
+    blend.BlendOp             = AC_SRC_OVER;
+    blend.SourceConstantAlpha = 255;
+    blend.AlphaFormat         = AC_SRC_ALPHA;
+
+    UpdateLayeredWindow(hwnd, hdcScreen, &ptDst, &sizeWnd,
+                        hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
+
+    SelectObject(hdcMem, oldBmp);
+    DeleteObject(hBitmap);
+    DeleteDC(hdcMem);
+    ReleaseDC(nullptr, hdcScreen);
+}
+
 void runPopupUI(int width, int height) {
-    HWND hwnd = createOverlayWindow(width, height);
-
-    // Offscreen buffer (SFML 3.x style)
-    sf::RenderTexture rtex({static_cast<unsigned>(width),
-                            static_cast<unsigned>(height)});
-
-    // Get monitor size
+    // Monitor info
     sf::VideoMode desktop = sf::VideoMode::getDesktopMode();
-    unsigned monWidth  = desktop.size.x;
-    unsigned monHeight = desktop.size.y;
+    LOG_DEBUG("PopupUI", "Monitor size = " +
+                         std::to_string(desktop.size.x) + "x" +
+                         std::to_string(desktop.size.y));
 
-    std::cout << "[PopupUI] Monitor size = "
-              << monWidth << "x" << monHeight << std::endl;
-
-    // ---- Load maps ----
-    const std::string opacityPath = "D:/G.R.I.M/resources/GRIM_Listener_ss_opacity.png";
-    const std::string diffusePath = "D:/G.R.I.M/resources/GRIM_Listener_ss_diffuse.png";
-
-    sf::Image opacityImg;
-    if (!opacityImg.loadFromFile(opacityPath)) {
-        std::cerr << "[PopupUI] ERROR: could not load opacity map\n";
+    // Create Win32 window
+    g_hWnd = createPopupWindow(width, height);
+    if (!g_hWnd) {
+        LOG_ERROR("PopupUI", "Failed to create HWND");
+        LOG_PHASE("Popup UI launched", false);
         return;
     }
+    LOG_PHASE("Popup UI launched", true);
 
-    sf::Image diffuseImg;
-    if (!diffuseImg.loadFromFile(diffusePath)) {
-        std::cerr << "[PopupUI] ERROR: could not load diffuse map\n";
+    // SFML render texture
+    sf::RenderTexture rtex({ (unsigned)width, (unsigned)height });
+
+    // Load textures
+    sf::Texture texDiffuse, texOpacity;
+    if (!texDiffuse.loadFromFile("D:/G.R.I.M/resources/GRIM_Listener_ss_diffuse.png")) {
+        LOG_ERROR("PopupUI", "Failed to load diffuse map");
+        LOG_PHASE("Diffuse map load", false);
+    } else {
+        LOG_DEBUG("PopupUI", "Loaded diffuse map");
+        LOG_PHASE("Diffuse map load", true);
+    }
+
+    if (!texOpacity.loadFromFile("D:/G.R.I.M/resources/GRIM_Listener_ss_opacity.png")) {
+        LOG_ERROR("PopupUI", "Failed to load opacity map");
+        LOG_PHASE("Opacity map load", false);
+    } else {
+        LOG_DEBUG("PopupUI", "Loaded opacity map");
+        LOG_PHASE("Opacity map load", true);
+    }
+
+    // Shader (diffuse + opacity only)
+    sf::Shader shader;
+    if (!shader.loadFromFile(
+        "D:/G.R.I.M/resources/popup.vert",
+        "D:/G.R.I.M/resources/popup.frag"))
+    {
+        LOG_ERROR("PopupUI", "Failed to load shader");
+        LOG_PHASE("Shader load", false);
         return;
     }
+    LOG_DEBUG("PopupUI", "Shaders loaded");
+    LOG_PHASE("Shader load", true);
 
-    // ---- Apply opacity alpha to diffuse (untouched) ----
-    sf::Vector2u size = opacityImg.getSize();
-    if (diffuseImg.getSize() != size) {
-        std::cerr << "[PopupUI] ERROR: diffuse/opacity size mismatch\n";
-        return;
-    }
+    shader.setUniform("diffuseMap", texDiffuse);
+    shader.setUniform("opacityMap", texOpacity);
+    shader.setUniform("debugMode", 0); // 0=final, 1=diffuse, 2=mask
 
-    for (unsigned y = 0; y < size.y; ++y) {
-        for (unsigned x = 0; x < size.x; ++x) {
-            sf::Color d = diffuseImg.getPixel({x, y});
-            sf::Color o = opacityImg.getPixel({x, y});
-            diffuseImg.setPixel({x, y}, sf::Color(d.r, d.g, d.b, o.r)); // red→alpha
-        }
-    }
+    // Sprite to draw
+    sf::Sprite sprite(texDiffuse);
+    sprite.setPosition({ 0.f, 0.f });
+    sprite.setScale(sf::Vector2f(
+        static_cast<float>(width) / texDiffuse.getSize().x,
+        static_cast<float>(height) / texDiffuse.getSize().y
+    ));
 
-    sf::Texture texture(diffuseImg);
-    texture.setSmooth(true);
-
-    // ---- Sprite scaling + centering ----
-    sf::Vector2u texSize = texture.getSize();
-    sf::Sprite sprite(texture);
-
-    float scaleX = static_cast<float>(monWidth)  / static_cast<float>(texSize.x);
-    float scaleY = static_cast<float>(monHeight) / static_cast<float>(texSize.y);
-
-    sprite.setScale(sf::Vector2f{scaleX, scaleY});
-    sprite.setPosition(sf::Vector2f{
-        (monWidth  - (texSize.x * scaleX)) / 2.f,
-        (monHeight - (texSize.y * scaleY)) / 2.f
-    });
-
-    // ---- Message loop ----
+    // Main loop
     MSG msg{};
     while (true) {
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) return;
+            if (msg.message == WM_QUIT)
+                return;
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
 
-        // Draw into render texture
-        rtex.clear(sf::Color(0,0,0,0));
-        rtex.draw(sprite);
+        // Render pass
+        rtex.clear(sf::Color::Transparent);
+        rtex.draw(sprite, &shader);
         rtex.display();
 
-        // Grab pixels
-        sf::Image frame = rtex.getTexture().copyToImage();
-        const unsigned char* src = frame.getPixelsPtr();  // <-- FIXED TYPE
-
-        HDC screenDC = GetDC(nullptr);
-        HDC memDC    = CreateCompatibleDC(screenDC);
-
-        BITMAPINFO bi{};
-        bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-        bi.bmiHeader.biWidth       = width;
-        bi.bmiHeader.biHeight      = -height; // top-down DIB
-        bi.bmiHeader.biPlanes      = 1;
-        bi.bmiHeader.biBitCount    = 32;
-        bi.bmiHeader.biCompression = BI_RGB;
-
-        void* bits = nullptr;
-        HBITMAP hBitmap = CreateDIBSection(memDC, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
-
-        // --- RGBA -> BGRA swizzle (fix yellow tint) ---
-        std::uint8_t* dst = static_cast<std::uint8_t*>(bits);
-        for (int i = 0; i < width * height; ++i) {
-            dst[0] = src[2]; // B
-            dst[1] = src[1]; // G
-            dst[2] = src[0]; // R
-            dst[3] = src[3]; // A
-            dst += 4;
-            src += 4;
-        }
-
-        HBITMAP oldBmp = (HBITMAP)SelectObject(memDC, hBitmap);
-
-        SIZE winSize{width, height};
-        POINT srcPos{0,0};
-        POINT winPos{100,100};
-
-        BLENDFUNCTION blend{};
-        blend.BlendOp             = AC_SRC_OVER;
-        blend.SourceConstantAlpha = 255;
-        blend.AlphaFormat         = AC_SRC_ALPHA;
-
-        UpdateLayeredWindow(hwnd, screenDC, &winPos, &winSize, memDC, &srcPos, 0, &blend, ULW_ALPHA);
-
-        SelectObject(memDC, oldBmp);
-        DeleteObject(hBitmap);
-        DeleteDC(memDC);
-        ReleaseDC(nullptr, screenDC);
-
-        Sleep(16);
+        // Apply to overlay
+        applyAlphaToWindow(g_hWnd, rtex.getTexture());
     }
 }

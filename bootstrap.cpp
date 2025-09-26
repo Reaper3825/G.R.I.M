@@ -6,41 +6,56 @@
 #include "system_detect.hpp"
 #include "voice_speak.hpp"
 #include "device_setups/audio_devices.hpp"
-  // ✅ add this for Voice::initTTS
+#include "logger.hpp"
 
 // Define global system info
 SystemInfo g_systemInfo;
 
 void runBootstrapChecks(int argc, char** argv) {
-
+    // ============================================================
+    // Bootstrap start
+    // ============================================================
     promptForAudioDevice();
+    LOG_PHASE("Bootstrap begin", true);
 
-    grimLog("[GRIM] Startup begin");
-
+    // ============================================================
     // Centralized config/memory bootstrap
+    // ============================================================
+    beginPhaseGroup();
     bootstrap_config::initAll();
+    endPhaseGroup();
+    LOG_PHASE("Configs initialized", true);
 
+    // ============================================================
     // Aliases system (cache only at bootstrap)
-    grimLog("[aliases] Bootstrap: initializing (cache only, no scan)");
+    // ============================================================
+    beginPhaseGroup();
     aliases::init();
-    grimLog("[aliases] Bootstrap: init finished");
+    endPhaseGroup();
+    LOG_PHASE("Aliases bootstrap finished", true);
 
+    // ============================================================
     // Fonts
+    // ============================================================
     std::string fontPath = findAnyFontInResources(argc, argv, &history);
-    if (!fontPath.empty())
-        grimLog("[Config] Font found: " + fontPath);
-    else
-        grimLog("[Config] No system font found, UI may render incorrectly");
+    if (!fontPath.empty()) {
+        LOG_PHASE("Font search", true);
+        LOG_DEBUG("Config", "Font found: " + fontPath);
+    } else {
+        LOG_ERROR("Config", "No system font found, UI may render incorrectly");
+        LOG_PHASE("Font search", false);
+    }
 
-    // ==============================
+    // ============================================================
     // System Detection
-    // ==============================
+    // ============================================================
     g_systemInfo = detectSystem();
     logSystemInfo(g_systemInfo);
+    LOG_PHASE("System detection", true);
 
-    // ==============================
+    // ============================================================
     // Voice system (Coqui bridge)
-    // ==============================
+    // ============================================================
     auto voiceCfg = aiConfig["voice"];
     bool needsCoqui = (voiceCfg.value("engine", "sapi") == "coqui");
 
@@ -55,18 +70,26 @@ void runBootstrapChecks(int argc, char** argv) {
     }
 
     if (needsCoqui) {
-        grimLog("[Voice] Initializing Coqui TTS bridge...");
+        LOG_PHASE("Coqui TTS init", true);
+        LOG_DEBUG("Voice", "Initializing Coqui TTS bridge...");
         if (!Voice::initTTS()) {
-            grimLog("[Voice] ERROR: Failed to initialize Coqui bridge");
+            LOG_ERROR("Voice", "Failed to initialize Coqui bridge");
+            LOG_PHASE("Coqui TTS init", false);
         } else {
-            grimLog("[Voice] Coqui TTS initialized (speaker=" +
-                    voiceCfg.value("speaker", "p225") +
-                    ", model=" +
-                    voiceCfg.value("local_engine", "unknown") + ")");
+            LOG_PHASE("Coqui TTS init", true);
+            LOG_DEBUG("Voice",
+                "Coqui TTS initialized (speaker=" +
+                voiceCfg.value("speaker", "p225") +
+                ", model=" +
+                voiceCfg.value("local_engine", "unknown") + ")");
         }
     } else {
-        grimLog("[Voice] Skipping Coqui init (engine=sapi only)");
+        LOG_PHASE("Coqui TTS skipped", true);
+        LOG_DEBUG("Voice", "Skipping Coqui init (engine=sapi only)");
     }
 
-    grimLog("[GRIM] ---- Bootstrap Complete ----");
+    // ============================================================
+    // Bootstrap complete
+    // ============================================================
+    LOG_PHASE("Bootstrap complete", true);
 }

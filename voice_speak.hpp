@@ -12,6 +12,9 @@ namespace Voice {
     // 🔹 Shutdown TTS (send exit to bridge, cleanup)
     void shutdownTTS();
 
+    // 🔹 Query if TTS bridge is ready (handshake + model loaded)
+    bool isReady();
+
     // =========================================================
     // Audio
     // =========================================================

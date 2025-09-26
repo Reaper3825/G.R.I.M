@@ -5,11 +5,9 @@
 #include "nlp.hpp"
 #include "console_history.hpp"
 #include "ai.hpp"
+#include "logger.hpp"
 
 namespace fs = std::filesystem;
-
-// Forward declare grimLog
-extern void grimLog(const std::string& msg);
 
 // ----------------- helpers -----------------
 static bool mergeDefaults(nlohmann::json& cfg,
@@ -23,7 +21,9 @@ static bool mergeDefaults(nlohmann::json& cfg,
             patched = true;
             if (patchedCount) (*patchedCount)++;
         } else if (defVal.is_object() && cfg[key].is_object()) {
-            if (mergeDefaults(cfg[key], defVal, prefix.empty() ? key : prefix + "." + key, patchedCount))
+            if (mergeDefaults(cfg[key], defVal,
+                              prefix.empty() ? key : prefix + "." + key,
+                              patchedCount))
                 patched = true;
         } else if (cfg[key].type() != defVal.type()) {
             cfg[key] = defVal;
@@ -36,6 +36,7 @@ static bool mergeDefaults(nlohmann::json& cfg,
 
 // ----------------- defaults -----------------
 namespace bootstrap_config {
+
 nlohmann::json defaultAI() {
     return {
         {"backend", "auto"},
@@ -43,7 +44,6 @@ nlohmann::json defaultAI() {
         {"localai_url", "http://127.0.0.1:8080/v1"},
         {"default_model", "mistral"},
 
-        // 🔹 top-level silence detection keys (for backward compat)
         {"whisper_language", "en"},
         {"whisper_max_tokens", 32},
         {"silence_threshold", 0.02},
@@ -52,26 +52,16 @@ nlohmann::json defaultAI() {
         {"voice", {
             {"mode", "local"},
             {"engine", "coqui"},
-
-            // 🔒 Legacy key (kept only for backward compatibility, used by SAPI/Piper)
             {"local_engine", "en_US-amy-medium.onnx"},
-
-            // 🔹 Default speaker + speed
             {"speaker", "p225"},
             {"speed", 1.0},
-
-            // 🔹 Per-category routing rules
             {"rules", {
                 {"startup", "sapi"},
                 {"reminder", "coqui"},
                 {"summary", "coqui"},
                 {"banter", "coqui"}
             }},
-
-            // 🔹 Device index for input (mic)
             {"input_device_index", -1},
-
-            // ✅ New structured blocks for specific engines
             {"coqui", {
                 {"model", "tts_models/en/vctk/vits"},
                 {"speaker", "p225"}
@@ -95,8 +85,6 @@ nlohmann::json defaultAI() {
         }}
     };
 }
-
-
 
 nlohmann::json defaultErrors() {
     return {
@@ -124,11 +112,11 @@ nlohmann::json defaultErrors() {
 }
 
 nlohmann::json defaultMemory() {
-    return nlohmann::json::object(); // {}
+    return nlohmann::json::object();
 }
 
 nlohmann::json defaultAliases() {
-    return nlohmann::json::object(); // {}
+    return nlohmann::json::object();
 }
 
 // ----------------- loader -----------------
@@ -140,7 +128,8 @@ bool loadConfig(const fs::path& path,
     if (!fs::exists(path)) {
         outConfig = defaults;
         std::ofstream(path) << outConfig.dump(2);
-        grimLog("[Config] " + name + " created");
+
+        LOG_PHASE(name + " created", true);
         return true;
     }
 
@@ -151,14 +140,16 @@ bool loadConfig(const fs::path& path,
         int patchedCount = 0;
         if (mergeDefaults(outConfig, defaults, "", &patchedCount)) {
             std::ofstream(path) << outConfig.dump(2);
-            grimLog("[Config] " + name + " patched (" +
-                    std::to_string(patchedCount) + " keys) and saved");
+            LOG_PHASE(name + " patched", true);
+            LOG_DEBUG("Config", name + " patched (" + std::to_string(patchedCount) + " keys)");
         } else {
-            grimLog("[Config] " + name + " loaded");
+            LOG_PHASE(name + " load", true);
         }
         return true;
     } catch (...) {
-        grimLog("[Config] " + name + " invalid → reset to defaults");
+        LOG_ERROR("Config", name + " invalid → reset to defaults");
+        LOG_PHASE(name + " load", false);
+
         if (!errorCode.empty())
             ErrorManager::report(errorCode);
 
@@ -172,34 +163,38 @@ bool loadConfig(const fs::path& path,
 void initAll() {
     // memory.json
     nlohmann::json memoryCfg;
-    loadConfig("memory.json", defaultMemory(), memoryCfg, "memory.json");
+    loadConfig("memory.json", defaultMemory(), memoryCfg, "Memory config", "");
 
     // ai_config.json
     fs::path cfgPath = fs::current_path() / AI_CONFIG_FILE;
-    loadConfig(cfgPath, defaultAI(), aiConfig, AI_CONFIG_FILE, "ERR_AI_CONFIG_INVALID");
+    loadConfig(cfgPath, defaultAI(), aiConfig, "AI config", "ERR_AI_CONFIG_INVALID");
 
     // errors.json
     fs::path errPath = fs::path(getResourcePath()) / "errors.json";
     nlohmann::json errorsCfg;
-    loadConfig(errPath, defaultErrors(), errorsCfg, "errors.json");
+    loadConfig(errPath, defaultErrors(), errorsCfg, "Errors config", "");
 
     // NLP rules
     fs::path nlpPath = fs::path(getResourcePath()) / "nlp_rules.json";
     if (!fs::exists(nlpPath)) {
         std::ofstream(nlpPath) << "[]\n";
-        grimLog("[Config] nlp_rules.json created");
+        LOG_PHASE("NLP rules created", true);
     }
     std::string err;
-    if (!g_nlp.load_rules(nlpPath.string(), &err))
-        grimLog("[Config] Failed to load NLP rules: " + err);
-    else
-        grimLog("[Config] NLP rules loaded");
+    if (!g_nlp.load_rules(nlpPath.string(), &err)) {
+        LOG_ERROR("Config", "Failed to load NLP rules: " + err);
+        LOG_PHASE("NLP rules load", false);
+    } else {
+        LOG_PHASE("NLP rules load", true);
+    }
 
     // synonyms.json
     fs::path synPath = fs::path(getResourcePath()) / "synonyms.json";
     if (!fs::exists(synPath)) {
         std::ofstream(synPath) << "{}\n";
-        grimLog("[Config] synonyms.json created");
+        LOG_PHASE("Synonyms config created", true);
+    } else {
+        LOG_PHASE("Synonyms config load", true);
     }
 }
 

@@ -30,7 +30,8 @@
 #include "voice_stream.hpp"
 #include "commands_core.hpp"
 #include "voice_speak.hpp"
-#include "resources.hpp"   // globals: history, timers, longTermMemory, g_nlp
+#include "resources.hpp" 
+#include "nlp.hpp"   // globals: history, timers, longTermMemory, g_nlp
 
 // ---------------------------------------------------------
 // SFML
@@ -67,20 +68,10 @@ namespace {
         sounds.push_back(std::move(sound));
         buffers.push_back(std::move(buffer));
 
-        std::cout << "[Voice] Playing audio file: " << wavPath << std::endl;
+        std::cerr << "[Voice] Playing audio file: " << wavPath << std::endl;
         return true;
     }
 }
-
-// ---------------------------------------------------------
-// Externals
-// ---------------------------------------------------------
-extern nlohmann::json aiConfig;
-extern nlohmann::json longTermMemory;
-extern std::vector<Timer> timers;
-extern NLP g_nlp;
-extern std::string g_inputBuffer;
-extern std::filesystem::path g_currentDir;
 
 // ------------------------------------------------------------
 // [Voice] One-shot voice command
@@ -156,19 +147,19 @@ CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
 
     std::string text = arg.empty() ? "This is a Coqui voice test." : arg;
 
-    std::cout << "[Voice][Test] ===== BEGIN Coqui TTS TEST =====" << std::endl;
-    std::cout << "[Voice][Test] Text   : \"" << text << "\"" << std::endl;
+    std::cerr << "[Voice][Test] ===== BEGIN Coqui TTS TEST =====" << std::endl;
+    std::cerr << "[Voice][Test] Text   : \"" << text << "\"" << std::endl;
 
     // 🔹 Ask Coqui to synthesize → get output path
     std::string wavPath = Voice::coquiSpeak(text, "p225", 1.0);
     if (wavPath.empty()) {
         result.message = "[Voice][Test] ERROR: Coqui TTS failed.";
         result.color   = sf::Color::Red;
-        std::cout << "[Voice][Test] ERROR: coquiSpeak returned empty path\n";
+        std::cerr << "[Voice][Test] ERROR: coquiSpeak returned empty path\n";
         return result;
     }
 
-    std::cout << "[Voice][Test] File   : " << wavPath << std::endl;
+    std::cerr << "[Voice][Test] File   : " << wavPath << std::endl;
 
     // 🔹 Play the generated file
     Voice::playAudio(wavPath);
@@ -178,10 +169,6 @@ CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
     result.color   = sf::Color::Green;
     return result;
 }
-
-
-
-
 
 // ------------------------------------------------------------
 // [Voice] List installed SAPI voices
@@ -274,7 +261,6 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
 #endif
 }
 
-
 // ------------------------------------------------------------
 // [Debug] Speak a test line directly through SAPI
 // ------------------------------------------------------------
@@ -294,7 +280,7 @@ CommandResult cmd_testSAPI([[maybe_unused]] const std::string& arg) {
     sf::Sound sound(buffer);
     sound.play();
 
-    std::cout << "[Audio] Playing test.wav..." << std::endl;
+    std::cerr << "[Audio] Playing test.wav..." << std::endl;
 
     while (sound.getStatus() == sf::Sound::Status::Playing) {
         sf::sleep(sf::milliseconds(100));

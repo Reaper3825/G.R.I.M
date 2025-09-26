@@ -1,4 +1,4 @@
-#include "commands_ai.hpp"
+#include "commands_ai.hpp" 
 #include "response_manager.hpp"
 #include "error_manager.hpp"
 #include "system_detect.hpp"
@@ -173,11 +173,11 @@ CommandResult cmdGrimAi(const std::string& arg) {
 // [Apps] Open local application by alias
 // ------------------------------------------------------------
 CommandResult cmdOpenApp(const std::string& arg) {
-    std::cout << "[DEBUG][cmdOpenApp] Received arg=\"" << arg << "\"\n";
+    std::cerr << "[DEBUG][cmdOpenApp] Received arg=\"" << arg << "\"\n";
 
     std::string appPath = arg;
     if (appPath.empty()) {
-        std::cout << "[DEBUG][cmdOpenApp] ERROR: empty arg\n";
+        std::cerr << "[DEBUG][cmdOpenApp] ERROR: empty arg\n";
         return {
             ErrorManager::getUserMessage("ERR_APP_NO_ARGUMENT"),
             false,
@@ -197,7 +197,7 @@ CommandResult cmdOpenApp(const std::string& arg) {
     );
 
     if ((intptr_t)result <= 32) {
-        std::cout << "[DEBUG][cmdOpenApp] ShellExecuteA failed (" 
+        std::cerr << "[DEBUG][cmdOpenApp] ShellExecuteA failed (" 
                   << (intptr_t)result << ") for: " << appPath << "\n";
         return {
             ErrorManager::getUserMessage("ERR_APP_LAUNCH_FAILED") + ": " + appPath,
@@ -207,7 +207,7 @@ CommandResult cmdOpenApp(const std::string& arg) {
         };
     }
 
-    std::cout << "[DEBUG][cmdOpenApp] Successfully launched: " << appPath << "\n";
+    std::cerr << "[DEBUG][cmdOpenApp] Successfully launched: " << appPath << "\n";
     return {
         "[App] Launched: " + appPath,
         true,
@@ -216,7 +216,7 @@ CommandResult cmdOpenApp(const std::string& arg) {
     };
 #else
     // Linux / macOS stub
-    std::cout << "[DEBUG][cmdOpenApp] (Stub) Would open: " << appPath << "\n";
+    std::cerr << "[DEBUG][cmdOpenApp] (Stub) Would open: " << appPath << "\n";
     return {
         "[App] (Stub) Would open: " + appPath,
         true,

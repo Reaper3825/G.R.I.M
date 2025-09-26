@@ -36,10 +36,8 @@ namespace Logger {
     void log(Level level, const std::string& message) {
         std::string line = "[" + timestamp() + "][" + levelToString(level) + "] " + message;
 
-        if (level == Level::WARN || level == Level::ERROR)
-            std::cerr << line << std::endl;
-        else
-            std::cout << line << std::endl;
+        // 🔹 All log levels now go to cerr (to avoid contaminating cout/voice)
+        std::cerr << line << std::endl;
 
         if (logStream.is_open()) {
             logStream << line << std::endl;
@@ -78,7 +76,7 @@ void ErrorManager::load(const std::string& path) {
 
     try {
         in >> errors;
-        std::cout << "[ErrorManager] Loaded errors.json from: " 
+        std::cerr << "[ErrorManager] Loaded errors.json from: " 
                   << fs::absolute(path).string() << std::endl;
 
         if (errors.contains("errors") && errors["errors"].is_object()) {
@@ -87,11 +85,11 @@ void ErrorManager::load(const std::string& path) {
             root = errors;
         }
 
-        std::cout << "[ErrorManager] Available error codes: ";
+        std::cerr << "[ErrorManager] Available error codes: ";
         for (auto& [key, val] : root.items()) {
-            std::cout << key << " ";
+            std::cerr << key << " ";
         }
-        std::cout << std::endl;
+        std::cerr << std::endl;
 
     } catch (const std::exception& e) {
         std::cerr << "[ErrorManager] Failed to parse " << path 

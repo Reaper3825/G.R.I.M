@@ -17,47 +17,52 @@ def send(obj):
 def persistent_loop(model_name, speaker):
     try:
         tts = TTS(model_name)
-        log(f"Model loaded: {model_name}")
+        log(f"[Coqui Bridge] Model loaded: {model_name}")
     except Exception as e:
         send({"status": "error", "message": str(e)})
         return
 
     send({"status": "ready"})
 
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            req = json.loads(line)
-        except json.JSONDecodeError as e:
-            log(f"Invalid JSON from GRIM: {line} ({e})")
-            continue
-
-        cmd = req.get("command")
-        if cmd == "exit":
-            send({"status": "bye"})
-            break
-        elif cmd == "speak":
-            text = req.get("text", "")
-            spk = req.get("speaker", speaker)
-            speed = float(req.get("speed", 1.0))
-            out_path = req.get("out", "output.wav")
-
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
             try:
-                tts.tts_to_file(text=text, file_path=out_path, speaker=spk, speed=speed)
-                send({"status": "ok", "file": out_path})
-            except Exception as e:
-                send({"status": "error", "message": str(e)})
-        else:
-            send({"status": "error", "message": f"Unknown command {cmd}"})
+                req = json.loads(line)
+            except json.JSONDecodeError as e:
+                log(f"[Coqui Bridge] Invalid JSON from GRIM: {line} ({e})")
+                continue
 
+            cmd = req.get("command")
+            if cmd == "exit":
+                send({"status": "bye"})
+                break
+            elif cmd == "speak":
+                text = req.get("text", "")
+                spk = req.get("speaker", speaker)
+                speed = float(req.get("speed", 1.0))
+                out_path = req.get("out", "output.wav")
+
+                try:
+                    tts.tts_to_file(text=text, file_path=out_path,
+                                    speaker=spk, speed=speed)
+                    send({"status": "ok", "file": out_path})
+                except Exception as e:
+                    send({"status": "error", "message": str(e)})
+            else:
+                send({"status": "error", "message": f"Unknown command {cmd}"})
+
+    except (KeyboardInterrupt, EOFError):
+        log("[Coqui Bridge] Graceful shutdown (CTRL+C or pipe closed).")
+        send({"status": "bye"})
 
 # ---------- One-shot Mode ----------
 def oneshot_mode(args):
     try:
         tts = TTS(args.model)
-        log(f"Model loaded (oneshot): {args.model}")
+        log(f"[Coqui Bridge] Model loaded (oneshot): {args.model}")
         tts.tts_to_file(
             text=args.text,
             file_path=args.out,
@@ -67,7 +72,6 @@ def oneshot_mode(args):
         send({"status": "ok", "file": args.out})
     except Exception as e:
         send({"status": "error", "message": str(e)})
-
 
 # ---------- Entry ----------
 if __name__ == "__main__":
@@ -85,7 +89,6 @@ if __name__ == "__main__":
     parser.add_argument("--out", help="Output file path (oneshot only)")
     parser.add_argument("text", nargs="?", help="Text to speak (oneshot only)")
     args = parser.parse_args()
-
 
     if args.persistent:
         persistent_loop(args.model, args.speaker)
