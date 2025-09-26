@@ -51,10 +51,11 @@ void promptForAudioDevice() {
 #ifdef _WIN32
     auto devices = getPlaybackDevices();
     if (devices.empty()) {
-        std::cout << "[Audio] No playback devices found\n";
+        std::cerr << "[Audio] No playback devices found\n";
         return;
     }
 
+    // ✅ User-facing output stays on wcout
     std::wcout << L"Available playback devices:\n";
     for (size_t i = 0; i < devices.size(); i++) {
         std::wcout << L"  [" << i << L"] " << devices[i] << std::endl;
@@ -68,7 +69,7 @@ void promptForAudioDevice() {
         std::wcout << L"[Audio] You selected: " << devices[choice] << std::endl;
         // 🔹 TODO: implement actual default device switching via IPolicyConfig
     } else {
-        std::cout << "[Audio] Invalid selection, keeping current default.\n";
+        std::cerr << "[Audio] Invalid selection, keeping current default.\n";
     }
 #endif
 }

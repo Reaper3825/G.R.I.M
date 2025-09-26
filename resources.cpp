@@ -1,10 +1,10 @@
 #include "resources.hpp"
 #include "console_history.hpp"
+#include "logger.hpp"
 
 #if defined(__APPLE__)
     #include <mach-o/dyld.h>
 #endif
-
 
 namespace fs = std::filesystem;
 
@@ -45,7 +45,8 @@ std::string getResourcePath() {
 
     fs::path portablePath = exePath / "resources";
     if (fs::exists(portablePath)) {
-        std::cout << "[GRIM] Using portable resource path: " << portablePath << "\n";
+        LOG_PHASE("Resource path set", true);
+        LOG_DEBUG("Resources", "Using portable resource path: " + portablePath.string());
         return portablePath.string();
     }
     return exePath.string();
@@ -55,19 +56,22 @@ std::string getResourcePath() {
 
     // 🔹 Prefer project resources first
     if (fs::exists(projectPath)) {
-        std::cout << "[GRIM] Using resource path: " << projectPath << "\n";
+        LOG_PHASE("Resource path set", true);
+        LOG_DEBUG("Resources", "Using resource path: " + projectPath.string());
         return projectPath.string();
     }
     if (fs::exists(buildPath)) {
-        std::cout << "[GRIM] Using fallback resource path: " << buildPath << "\n";
+        LOG_PHASE("Resource path set", true);
+        LOG_DEBUG("Resources", "Using fallback resource path: " + buildPath.string());
         return buildPath.string();
     }
 
     // Last resort: current working directory
+    LOG_PHASE("Resource path set", true);
+    LOG_DEBUG("Resources", "Falling back to cwd: " + fs::current_path().string());
     return fs::current_path().string();
 #endif
 }
-
 
 // -------------------------------------------------------------
 // Load text resource from resources/ folder
@@ -79,11 +83,14 @@ std::string loadTextResource(const std::string& filename, int argc, char** argv)
     fs::path filePath = fs::path(getResourcePath()) / filename;
     std::ifstream file(filePath);
     if (!file.is_open()) {
-        std::cerr << "[GRIM] Resource not found: " << filename
-                  << " (looked in " << filePath.string() << ")\n";
+        LOG_ERROR("Resources", "Resource not found: " + filename +
+                               " (looked in " + filePath.string() + ")");
+        LOG_PHASE("Resource load", false);
         return {};
     }
 
+    LOG_PHASE("Resource load", true);
+    LOG_DEBUG("Resources", "Loaded text resource: " + filename);
     return { std::istreambuf_iterator<char>(file),
              std::istreambuf_iterator<char>() };
 }
@@ -98,11 +105,12 @@ std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* histor
     fs::path resDir = fs::path(getResourcePath());
 
     if (!fs::exists(resDir)) {
+        std::string msg = "Resource directory missing: " + resDir.string();
         if (historyPtr) {
-            historyPtr->push("[ERROR] Resource directory missing: " + resDir.string(), sf::Color::Red);
-        } else {
-            std::cerr << "[ERROR] Resource directory missing: " << resDir << std::endl;
+            historyPtr->push("[ERROR] " + msg, sf::Color::Red);
         }
+        LOG_ERROR("Resources", msg);
+        LOG_PHASE("Font search", false);
         return {};
     }
 
@@ -110,22 +118,18 @@ std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* histor
         if (p.is_regular_file()) {
             auto ext = p.path().extension().string();
             if (ext == ".ttf" || ext == ".otf") {
+                LOG_PHASE("Font search", true);
+                LOG_DEBUG("Resources", "Found font: " + p.path().string());
                 return p.path().string();
             }
         }
     }
 
+    std::string errMsg = "No font found in resources/ or system fonts.";
     if (historyPtr) {
-        historyPtr->push("[ERROR] No font found in resources/ or system fonts.", sf::Color::Red);
-    } else {
-        std::cerr << "[ERROR] No font found in resources/ or system fonts." << std::endl;
+        historyPtr->push("[ERROR] " + errMsg, sf::Color::Red);
     }
+    LOG_ERROR("Resources", errMsg);
+    LOG_PHASE("Font search", false);
     return {};
-}
-
-// -------------------------------------------------------------
-// Global logging function (system log only, never history)
-// -------------------------------------------------------------
-void grimLog(const std::string& msg) {
-    std::cout << msg << std::endl;
 }

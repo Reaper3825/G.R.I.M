@@ -28,7 +28,7 @@ bool loadNlpRules(const std::string& path) {
             return false;
         }
 
-        std::cout << "[NLP] Loaded " << g_nlp.rule_count()
+        std::cerr << "[NLP] Loaded " << g_nlp.rule_count()
                   << " rules from " << path << "\n";
         return true;
     }

@@ -12,12 +12,13 @@
 #include "bootstrap.hpp"
 #include "aliases.hpp"
 #include "popup_ui/popup_ui.hpp"
+#include "logger.hpp"
 
 #include <SFML/Graphics.hpp>
-#include <iostream>
 #include <thread>
 #include <atomic>
 #include <filesystem>
+#include <chrono>
 
 #ifdef _WIN32
   #include <shellapi.h>
@@ -39,58 +40,78 @@ std::string g_inputBuffer;
 // Main entry point
 // ============================================================
 int main(int argc, char* argv[]) {
-    std::cout << "[GRIM] Startup begin\n";
+    LOG_PHASE("Startup begin", true);
 
-    // 🔹 Bootstrap configuration and resources
+    // 🔹 Bootstrap configuration and resources (includes TTS init)
     runBootstrapChecks(argc, argv);
+    LOG_PHASE("Bootstrap checks complete", true);
 
     // 🔹 Load dummy font (needed for sf::Text even if unused)
     fs::path fontPath = fs::path(getResourcePath()) / "DejaVuMathTeXGyre.ttf";
     if (!g_dummyFont.openFromFile(fontPath.string())) {
-        std::cerr << "[Config] ERROR: Could not load dummy font\n";
+        LOG_ERROR("Config", "Could not load dummy font: " + fontPath.string());
+        LOG_PHASE("Font load", false);
     } else {
-        std::cout << "[Config] Font loaded OK\n";
+        LOG_DEBUG("Config", "Loaded dummy font: " + fontPath.string());
+        LOG_PHASE("Font load", true);
     }
 
-    // 🔹 Initialize subsystems
-    if (!Voice::initTTS()) {
-        std::cerr << "[Voice] ERROR: Failed to initialize TTS\n";
-    }
+    // 🔹 Aliases
     aliases::init();
+    LOG_PHASE("Aliases initialized", true);
+
+    // ============================================================
+    // Wait for TTS bridge to be ready before greeting
+    // ============================================================
+    if (!Voice::isReady()) {
+        LOG_DEBUG("Voice", "Waiting for TTS bridge to be ready...");
+        while (!Voice::isReady()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
 
     // 🔹 Startup greeting
     Voice::speak("Welcome back, Austin. Grim is online.", "system");
+    LOG_PHASE("Startup greeting spoken", true);
 
-    std::cout << "[GRIM] Startup complete, entering main loop\n";
+    LOG_PHASE("Startup complete, entering main loop", true);
 
     // ============================================================
     // Launch popup UI in background thread
     // ============================================================
-sf::VideoMode desktop = sf::VideoMode::getDesktopMode();
-unsigned monWidth  = desktop.size.x;
-unsigned monHeight = desktop.size.y;
+    sf::VideoMode desktop = sf::VideoMode::getDesktopMode();
+    unsigned monWidth  = desktop.size.x;
+    unsigned monHeight = desktop.size.y;
 
-std::thread([monWidth, monHeight]() {
-    runPopupUI(monWidth, monHeight);
-}).detach();
-
+    std::thread([monWidth, monHeight]() {
+        LOG_DEBUG("PopupUI", "Launching with size = " +
+                             std::to_string(monWidth) + "x" +
+                             std::to_string(monHeight));
+        runPopupUI(monWidth, monHeight);
+    }).detach();
+    LOG_PHASE("Popup UI launched", true);
 
     // ============================================================
     // Console input loop
     // ============================================================
     std::string line;
     while (true) {
-        std::cout << "> ";
+        std::cout << "> "; // REPL prompt stays visible
         if (!std::getline(std::cin, line)) {
             break; // EOF / Ctrl+D
         }
 
+        // 🔹 Skip empty input (avoid NLP spam)
+        if (line.empty()) {
+            continue;
+        }
+
         if (line == "quit" || line == "exit") {
-            std::cout << "[GRIM] Shutdown requested\n";
+            LOG_PHASE("Shutdown requested", true);
             break;
         }
 
-        // Handle command via unified command system
+        LOG_TRACE("Console", "Dispatching command: " + line);
         handleCommand(line);
     }
 
@@ -98,6 +119,6 @@ std::thread([monWidth, monHeight]() {
     // Shutdown cleanup
     // ============================================================
     Voice::shutdownTTS();
-    std::cout << "[GRIM] Shutdown complete\n";
+    LOG_PHASE("Shutdown complete", true);
     return 0;
 }

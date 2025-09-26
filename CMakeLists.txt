@@ -173,6 +173,7 @@ set(GRIM_SOURCES
     response_manager.cpp
     error_manager.cpp
     bootstrap_config.cpp
+    logger.cpp
     ${COMMAND_SOURCES}
     ${POPUP_UI_SOURCES}
     ${DEVICE_SETUPS_SOURCES}
@@ -198,6 +199,9 @@ set(GRIM_HEADERS
     response_manager.hpp
     error_manager.hpp
     bootstrap_config.hpp
+    logger.hpp
+    system_detect.hpp
+  
     ${COMMAND_HEADERS}
     ${POPUP_UI_HEADERS}
     ${DEVICE_SETUPS_HEADERS}

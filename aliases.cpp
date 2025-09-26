@@ -3,10 +3,10 @@
 #include "resources.hpp"
 #include "ui_helpers.hpp"
 #include "commands/commands_core.hpp"
+#include "logger.hpp"
 
 #include <nlohmann/json.hpp>
 #include <fstream>
-#include <iostream>
 #include <sstream>
 #include <mutex>
 #include <thread>
@@ -47,9 +47,12 @@ static void saveLocked() {
         std::ofstream out(filePath, std::ios::trunc);
         out << g_aliases.dump(4);
         out.close();
-        std::cout << "[aliases] Saved aliases → " << filePath.string() << "\n";
+
+        LOG_PHASE("Aliases saved", true);
+        LOG_DEBUG("Aliases", "Saved aliases → " + filePath.string());
     } catch (const std::exception& e) {
-        std::cerr << "[aliases] ERROR: Could not save aliases: " << e.what() << "\n";
+        LOG_ERROR("Aliases", std::string("Could not save aliases: ") + e.what());
+        LOG_PHASE("Aliases save", false);
     }
 }
 
@@ -59,14 +62,17 @@ static void saveLocked() {
 namespace aliases {
 
 void init() {
-    std::cout << "[aliases] Bootstrap: initializing (cache only, no scan)\n";
+    LOG_PHASE("Aliases init", true);
+    LOG_DEBUG("Aliases", "Bootstrap: initializing (cache only, no scan)");
 
     try {
         // Always start with clean structure
         g_aliases = { {"user", nlohmann::json::object()}, {"auto", nlohmann::json::object()} };
         load(); // load() locks internally
     } catch (const std::exception& e) {
-        std::cerr << "[aliases] ERROR during init: " << e.what() << "\n";
+        LOG_ERROR("Aliases", std::string("Exception during init: ") + e.what());
+        LOG_PHASE("Aliases init", false);
+
         g_aliases = { {"user", nlohmann::json::object()}, {"auto", nlohmann::json::object()} };
         saveLocked();
     }
@@ -79,7 +85,8 @@ void load() {
 
     fs::path filePath = getAliasFilePath();
     if (!fs::exists(filePath)) {
-        std::cerr << "[aliases] " << ALIAS_FILE << " not found ─ creating defaults\n";
+        LOG_ERROR("Aliases", ALIAS_FILE + " not found — creating defaults");
+        LOG_PHASE("Aliases load", false);
         saveLocked();
         return;
     }
@@ -91,10 +98,12 @@ void load() {
         g_aliases = loaded;
         ensureStructure();
 
-        std::cout << "[aliases] Loaded " << ALIAS_FILE << " successfully\n";
+        LOG_PHASE("Aliases load", true);
+        LOG_DEBUG("Aliases", "Loaded " + ALIAS_FILE + " successfully");
     } catch (const std::exception& e) {
-        std::cerr << "[aliases] Failed to parse " << ALIAS_FILE
-                  << " ─ resetting to defaults (" << e.what() << ")\n";
+        LOG_ERROR("Aliases", std::string("Failed to parse ") + ALIAS_FILE + ": " + e.what());
+        LOG_PHASE("Aliases load", false);
+
         g_aliases = { {"user", nlohmann::json::object()}, {"auto", nlohmann::json::object()} };
         saveLocked();
     }
@@ -102,12 +111,12 @@ void load() {
 
 void refreshAsync() {
     if (isRefreshing.exchange(true)) {
-        std::cout << "[aliases] refreshAsync skipped (already running)\n";
+        LOG_DEBUG("Aliases", "refreshAsync skipped (already running)");
         return;
     }
 
     std::thread([] {
-        std::cout << "[aliases] refreshAsync launched\n";
+        LOG_DEBUG("Aliases", "refreshAsync launched");
 
         {
             std::scoped_lock lock(g_aliasMutex);
@@ -115,7 +124,7 @@ void refreshAsync() {
         }
 
         saveLocked();
-        std::cout << "[aliases] Background refresh complete\n";
+        LOG_DEBUG("Aliases", "Background refresh complete");
         isRefreshing.store(false);
     }).detach();
 }
@@ -123,7 +132,7 @@ void refreshAsync() {
 CommandResult refreshNow() {
     CommandResult result;
     result.success = true;
-    result.color = sf::Color::Green;
+    result.color   = sf::Color::Green;
 
     {
         std::scoped_lock lock(g_aliasMutex);
@@ -131,7 +140,7 @@ CommandResult refreshNow() {
     }
 
     saveLocked();
-    result.message = "[aliases] Refresh complete (manual trigger).";
+    result.message = "Aliases refresh complete (manual trigger).";
     return result;
 }
 

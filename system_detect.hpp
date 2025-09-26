@@ -20,8 +20,8 @@ struct SystemInfo {
     bool hasMetal = false;
     int  gpuCount = 0;
     std::string gpuName;
-    long gpuVRAM_MB = 0;       // new: VRAM in MB
-    std::string gpuDriver;     // new: driver version or provider
+    long gpuVRAM_MB = 0;       // VRAM in MB
+    std::string gpuDriver;     // driver version or provider
 
     // AI model suggestion
     std::string suggestedModel;
@@ -30,8 +30,10 @@ struct SystemInfo {
     bool hasSAPI  = false;  // Windows Speech API
     bool hasSay   = false;  // macOS "say" command
     bool hasPiper = false;  // Linux Piper TTS
-};
 
+    // Audio devices
+    std::string outputDevice;  // selected playback device
+};
 
 /// Detects hardware/system capabilities (CPU, GPU, RAM, OS, voice backends).
 SystemInfo detectSystem();

@@ -1,7 +1,7 @@
 #include "voice_speak.hpp"
+#include "logger.hpp"
 
 #include <SFML/Audio.hpp>
-#include <iostream>
 #include <thread>
 #include <chrono>
 #include <filesystem>
@@ -26,6 +26,9 @@ namespace Voice {
     static double      g_speed      = 1.0;
     static fs::path    g_outputDir  = "D:/G.R.I.M/resources/tts_out";
     static std::unordered_map<std::string, std::string> g_rules;
+
+    // 🔹 Flag that tracks if TTS bridge is ready
+    static bool g_ttsReady = false;
 
 #ifdef _WIN32
     static HANDLE hChildStdinWr = nullptr;
@@ -70,7 +73,7 @@ namespace Voice {
 
         while (true) {
             if (!PeekNamedPipe(hChildStdoutRd, nullptr, 0, nullptr, &avail, nullptr)) {
-                std::cerr << "[Voice][Bridge] ERROR: PeekNamedPipe failed" << std::endl;
+                LOG_ERROR("Voice/Bridge", "PeekNamedPipe failed");
                 break;
             }
             if (avail == 0) {
@@ -95,11 +98,12 @@ namespace Voice {
             if (!line.empty()) {
                 if (line[0] == '{')
                     return line;
-                std::cerr << "[Voice][Bridge][LOG] skipped (not JSON): " << line << std::endl;
+
+                LOG_DEBUG("Voice/Bridge", "Skipped non-JSON: " + line);
             }
             if (std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - start).count() > timeoutMs) {
-                std::cerr << "[Voice][Bridge] ERROR: Handshake timeout" << std::endl;
+                LOG_ERROR("Voice/Bridge", "Handshake timeout");
                 return "";
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -126,7 +130,7 @@ namespace Voice {
                 }
             }
         } catch (const std::exception& e) {
-            std::cerr << "[Voice][Init] ERROR reading ai_config.json: " << e.what() << std::endl;
+            LOG_ERROR("Voice/Init", std::string("Error reading ai_config.json: ") + e.what());
         }
 
 #ifdef _WIN32
@@ -165,10 +169,12 @@ namespace Voice {
             try {
                 auto resp = json::parse(response);
                 if (resp.value("status", "") == "ready") {
-                    std::cout << "[Voice] Bridge ready." << std::endl;
+                    g_ttsReady = true; // 🔹 set ready flag
+                    LOG_PHASE("Voice bridge ready", true);
                 }
             } catch (const std::exception& e) {
-                std::cerr << "[Voice] ERROR parsing handshake: " << e.what() << " raw=" << response << std::endl;
+                LOG_ERROR("Voice/Init", std::string("Parsing handshake failed: ") + e.what() +
+                                         " raw=" + response);
             }
         }
 #endif
@@ -188,38 +194,43 @@ namespace Voice {
             CloseHandle(piProcInfo.hThread);
         }
 #endif
-        std::cout << "[Voice] shutdownTTS complete" << std::endl;
+        LOG_PHASE("Voice shutdownTTS complete", true);
+        g_ttsReady = false; // 🔹 reset flag
+    }
+
+    // =========================================================
+    // Query ready state
+    // =========================================================
+    bool isReady() {
+        return g_ttsReady;
     }
 
     // =========================================================
     // Playback
     // =========================================================
     void playAudio(const std::string& path) {
-    try {
-        auto buffer = std::make_unique<sf::SoundBuffer>();
-        if (!buffer->loadFromFile(path)) {
-            std::cerr << "[Voice][Audio] ERROR: Could not load file: " << path << std::endl;
-            return;
+        try {
+            auto buffer = std::make_unique<sf::SoundBuffer>();
+            if (!buffer->loadFromFile(path)) {
+                LOG_ERROR("Voice/Audio", "Could not load file: " + path);
+                return;
+            }
+
+            auto sound = std::make_unique<sf::Sound>(*buffer);
+            sound->setVolume(100.f);
+            sound->play();
+
+            LOG_DEBUG("Voice/Audio", "Playing: " + path +
+                " (duration=" + std::to_string(buffer->getDuration().asSeconds()) + "s)");
+
+            activeBuffers.push_back(std::move(buffer));
+            activeSounds.push_back(std::move(sound));
+
+            cleanupSounds();
+        } catch (const std::exception& e) {
+            LOG_ERROR("Voice/Audio", std::string("Exception: ") + e.what());
         }
-
-        // Construct sound with the buffer (SFML 3.x requires this)
-        auto sound = std::make_unique<sf::Sound>(*buffer);
-        sound->setVolume(100.f);
-        sound->play();
-
-        std::cout << "[Voice][Audio] Playing: " << path
-                  << " (duration=" << buffer->getDuration().asSeconds() << "s)" << std::endl;
-
-        // Store buffer before sound so memory stays valid
-        activeBuffers.push_back(std::move(buffer));
-        activeSounds.push_back(std::move(sound));
-
-        cleanupSounds(); // prune stopped sounds
-    } catch (const std::exception& e) {
-        std::cerr << "[Voice][Audio] Exception: " << e.what() << std::endl;
     }
-}
-
 
     // =========================================================
     // Coqui Speak
@@ -229,7 +240,7 @@ namespace Voice {
                            double speed) {
 #ifdef _WIN32
         if (!hChildStdinWr || !hChildStdoutRd) {
-            std::cerr << "[Voice][Coqui] Bridge not running" << std::endl;
+            LOG_ERROR("Voice/Coqui", "Bridge not running");
             return "";
         }
 
@@ -247,23 +258,23 @@ namespace Voice {
 
         DWORD written = 0;
         BOOL ok = WriteFile(hChildStdinWr, line.c_str(), (DWORD)line.size(), &written, nullptr);
-        std::cout << "[Voice][Coqui] Sent request (" << written << " bytes): " << line << std::endl;
+        LOG_DEBUG("Voice/Coqui", "Sent request (" + std::to_string(written) + " bytes): " + line);
         if (!ok) {
-            std::cerr << "[Voice][Coqui] ERROR: WriteFile failed" << std::endl;
+            LOG_ERROR("Voice/Coqui", "WriteFile failed");
         }
 
         std::string response = readJsonLineFromBridge();
-        std::cout << "[Voice][Coqui] Got response: " << response << std::endl;
+        LOG_DEBUG("Voice/Coqui", "Got response: " + response);
 
         try {
             auto resp = json::parse(response);
             if (resp.contains("file")) {
-                std::cout << "[Voice][Coqui] Bridge returned file: " << resp["file"] << std::endl;
+                LOG_DEBUG("Voice/Coqui", "Bridge returned file: " + resp["file"].get<std::string>());
                 return resp["file"].get<std::string>();
             }
         } catch (const std::exception& e) {
-            std::cerr << "[Voice][Coqui] Parse error: " << e.what()
-                      << " raw=" << response << std::endl;
+            LOG_ERROR("Voice/Coqui", std::string("Parse error: ") + e.what() +
+                                    " raw=" + response);
         }
 #endif
         return "";
@@ -274,27 +285,36 @@ namespace Voice {
     // =========================================================
     void speak(const std::string& text, const std::string& category) {
         std::thread([text, category]() {
-            std::cout << "[Voice] speak(text=\"" << text
-                      << "\", category=\"" << category << "\")" << std::endl;
+            LOG_DEBUG("Voice", "speak(text=\"" + text + "\", category=\"" + category + "\")");
 
-            std::string engine = g_engine;
+            // 🔹 Default to Coqui
+            std::string engine = "coqui";
+
+            // 🔹 Only override if the rule explicitly exists AND is valid
             auto it = g_rules.find(category);
             if (it != g_rules.end()) {
-                engine = it->second;
+                if (it->second == "coqui" || it->second == "sapi") {
+                    engine = it->second;
+                } else {
+                    LOG_ERROR("Voice", "Invalid engine override: " + it->second + " (falling back to Coqui)");
+                }
             }
+
+            LOG_DEBUG("Voice", "Engine selected: " + engine);
 
             if (engine == "coqui") {
                 std::string wavPath = coquiSpeak(text, g_speaker, g_speed);
                 if (!wavPath.empty()) {
                     playAudio(wavPath);
                 } else {
-                    std::cerr << "[Voice] ERROR: coquiSpeak returned empty path" << std::endl;
+                    LOG_ERROR("Voice", "coquiSpeak returned empty path");
                 }
                 return;
             }
 
 #ifdef _WIN32
             if (engine == "sapi") {
+                LOG_DEBUG("Voice", "Routing speech to Windows SAPI");
                 std::string command = "powershell -Command "
                                       "\"Add-Type -AssemblyName System.Speech; "
                                       "(New-Object System.Speech.Synthesis.SpeechSynthesizer)"

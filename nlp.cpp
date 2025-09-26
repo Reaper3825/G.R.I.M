@@ -4,7 +4,6 @@
 #include "resources.hpp"
 #include "console_history.hpp"
 
-
 NLP g_nlp;
 
 // ------------------------------------------------------------
@@ -76,7 +75,7 @@ bool NLP::load_rules(const std::string& path, std::string* err) {
             rules.push_back(rule);
         }
 
-        std::cout << "[NLP] Loaded " << rules.size() << " rules from " << path << "\n";
+        std::cerr << "[NLP] Loaded " << rules.size() << " rules from " << path << "\n";
         return true;
     } catch (std::exception& e) {
         if (err) *err = e.what();
@@ -118,7 +117,7 @@ bool NLP::load_rules_from_string(const std::string& rulesText, std::string* err)
             rules.push_back(rule);
         }
 
-        std::cout << "[NLP] Loaded " << rules.size() << " rules from string\n";
+        std::cerr << "[NLP] Loaded " << rules.size() << " rules from string\n";
         return true;
     } catch (std::exception& e) {
         if (err) *err = e.what();
