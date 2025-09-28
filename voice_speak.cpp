@@ -1,5 +1,6 @@
 #include "voice_speak.hpp"
 #include "logger.hpp"
+#include "popup_ui/popup_ui.hpp" 
 
 #include <SFML/Audio.hpp>
 #include <thread>
@@ -63,6 +64,14 @@ namespace Voice {
                 }),
             activeSounds.end()
         );
+    }
+
+    // Return true if any active sound is currently playing
+    bool isPlaying() {
+        for (const auto& s : activeSounds) {
+            if (s && s->getStatus() == sf::SoundSource::Status::Playing) return true;
+        }
+        return false;
     }
 
 #ifdef _WIN32
@@ -209,28 +218,34 @@ namespace Voice {
     // Playback
     // =========================================================
     void playAudio(const std::string& path) {
-        try {
-            auto buffer = std::make_unique<sf::SoundBuffer>();
-            if (!buffer->loadFromFile(path)) {
-                LOG_ERROR("Voice/Audio", "Could not load file: " + path);
-                return;
-            }
-
-            auto sound = std::make_unique<sf::Sound>(*buffer);
-            sound->setVolume(100.f);
-            sound->play();
-
-            LOG_DEBUG("Voice/Audio", "Playing: " + path +
-                " (duration=" + std::to_string(buffer->getDuration().asSeconds()) + "s)");
-
-            activeBuffers.push_back(std::move(buffer));
-            activeSounds.push_back(std::move(sound));
-
-            cleanupSounds();
-        } catch (const std::exception& e) {
-            LOG_ERROR("Voice/Audio", std::string("Exception: ") + e.what());
+    try {
+        auto buffer = std::make_unique<sf::SoundBuffer>();
+        if (!buffer->loadFromFile(path)) {
+            LOG_ERROR("Voice/Audio", "Could not load file: " + path);
+            return;
         }
+
+        auto sound = std::make_unique<sf::Sound>(*buffer);
+        sound->setVolume(100.f);
+
+    // 🔹 Trigger popup before playing and ensure activity is refreshed
+    // after we actually start playback.
+    notifyPopupActivity();
+
+    sound->play();
+
+        LOG_DEBUG("Voice/Audio", "Playing: " + path +
+            " (duration=" + std::to_string(buffer->getDuration().asSeconds()) + "s)");
+
+        activeBuffers.push_back(std::move(buffer));
+        activeSounds.push_back(std::move(sound));
+
+    cleanupSounds();
+
+    } catch (const std::exception& e) {
+        LOG_ERROR("Voice/Audio", std::string("Exception: ") + e.what());
     }
+}
 
     // =========================================================
     // Coqui Speak
