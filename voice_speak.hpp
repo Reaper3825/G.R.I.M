@@ -1,40 +1,37 @@
 #pragma once
+
 #include <string>
 
-namespace Voice {
-    // =========================================================
-    // Lifecycle
-    // =========================================================
+// 🔹 Add popup control API so Voice can notify activity
+#include "popup_ui/popup_ui.hpp"
 
-    // 🔹 Initialize TTS (load config, start persistent Coqui bridge)
+namespace Voice {
+    // Initialize the TTS system (Coqui / SAPI bridge)
     bool initTTS();
 
-    // 🔹 Shutdown TTS (send exit to bridge, cleanup)
+
+    // Shut down the TTS system
     void shutdownTTS();
 
-    // 🔹 Query if TTS bridge is ready (handshake + model loaded)
+
+    // Query if TTS is ready
     bool isReady();
 
-    // =========================================================
-    // Audio
-    // =========================================================
 
-    // 🔹 Play back an audio file (async, non-blocking)
+    // Play an audio file directly
     void playAudio(const std::string& path);
 
-    // =========================================================
-    // Coqui TTS Bridge (persistent mode)
-    // =========================================================
-
-    // 🔹 Send text → receive generated .wav file path from bridge
+    
+    // Send text to Coqui TTS (returns wav path if successful)
     std::string coquiSpeak(const std::string& text,
                            const std::string& speaker,
                            double speed);
 
-    // =========================================================
-    // High-level
-    // =========================================================
 
-    // 🔹 Unified entry point (routes by category → engine)
-    void speak(const std::string& text, const std::string& category);
+    // High-level speak function (routes to engine)
+    void speak(const std::string& text,
+               const std::string& category);
+
+    // Returns true if any voice audio is currently playing
+    bool isPlaying();
 }

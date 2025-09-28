@@ -46,8 +46,8 @@ static std::string wideToUtf8(const BSTR& wstr) {
     return str;
 }
 
-// 🔹 Forward declaration so detectSystem() can see it
 static bool detectWindowsGPU(SystemInfo& info);
+static void detectMonitors(SystemInfo& info);
 #endif
 
 // =========================================================
@@ -67,7 +67,7 @@ bool ensurePiperInstalled() {
 #endif
 
 // =========================================================
-// Windows GPU detection (DXGI + WMI)
+// Windows GPU detection (DXGI + WMI, NVIDIA-only)
 // =========================================================
 #ifdef _WIN32
 static bool detectWindowsGPU(SystemInfo& info) {
@@ -88,7 +88,6 @@ static bool detectWindowsGPU(SystemInfo& info) {
             std::wstring ws(desc.Description);
             std::string name(ws.begin(), ws.end());
 
-            // Filter NVIDIA adapters
             if (name.find("NVIDIA") != std::string::npos) {
                 gpuCount++;
                 gpuName = name;
@@ -102,7 +101,7 @@ static bool detectWindowsGPU(SystemInfo& info) {
 
     if (gpuCount == 0) return false;
 
-    // Use WMI for driver version
+    // WMI driver version
     HRESULT hres = CoInitializeEx(0, COINIT_MULTITHREADED);
     if (SUCCEEDED(hres) || hres == RPC_E_CHANGED_MODE) {
         IWbemLocator* pLoc = nullptr;
@@ -159,36 +158,56 @@ static bool detectWindowsGPU(SystemInfo& info) {
 #endif
 
 // =========================================================
-// Output device selection
+// Windows Monitor detection
+// =========================================================
+#ifdef _WIN32
+BOOL CALLBACK MonitorEnumProc(HMONITOR hMon, HDC, LPRECT lprcMonitor, LPARAM dwData) {
+    auto* info = reinterpret_cast<SystemInfo*>(dwData);
+
+    MONITORINFOEX mi;
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfo(hMon, &mi)) {
+        MonitorInfo m;
+        m.x = mi.rcMonitor.left;
+        m.y = mi.rcMonitor.top;
+        m.width  = mi.rcMonitor.right  - mi.rcMonitor.left;
+        m.height = mi.rcMonitor.bottom - mi.rcMonitor.top;
+        m.isPrimary = (mi.dwFlags & MONITORINFOF_PRIMARY);
+
+        info->monitors.push_back(m);
+        info->monitorCount++;
+        info->hasMonitor = true;
+
+        // expand full virtual desktop bounds
+        info->totalScreenWidth  = std::max<int>(info->totalScreenWidth,  mi.rcMonitor.right);
+        info->totalScreenHeight = std::max<int>(info->totalScreenHeight, mi.rcMonitor.bottom);
+    }
+
+    return TRUE;
+}
+
+static void detectMonitors(SystemInfo& info) {
+    info.monitors.clear();
+    info.monitorCount = 0;
+    info.totalScreenWidth = 0;
+    info.totalScreenHeight = 0;
+    info.hasMonitor = false;
+
+    EnumDisplayMonitors(nullptr, nullptr, MonitorEnumProc, reinterpret_cast<LPARAM>(&info));
+}
+#endif
+
+// =========================================================
+// Output device selection (default only)
 // =========================================================
 static void selectOutputDevice(SystemInfo& info) {
-    auto devices = sf::SoundBufferRecorder::getAvailableDevices();
+    // Just pick the default device to avoid blocking cin
+    info.outputDevice = sf::SoundBufferRecorder::getDefaultDevice();
 
-    if (devices.empty()) {
-        LOG_ERROR("SystemDetect", "No output devices detected");
-        return;
-    }
-
-    std::cout << "Available playback devices:\n";
-    for (size_t i = 0; i < devices.size(); ++i) {
-        std::cout << "  [" << i << "] " << devices[i] << "\n";
-    }
-
-    int choice = -1;
-    std::cout << "Select output device by number: ";
-    std::cin >> choice;
-
-    if (choice >= 0 && choice < (int)devices.size()) {
-        info.outputDevice = devices[choice];
-        LOG_PHASE("Output device chosen", true);
-        LOG_DEBUG("SystemDetect", "User selected: " + info.outputDevice);
-    } else {
-        info.outputDevice = sf::SoundBufferRecorder::getDefaultDevice();
-        LOG_PHASE("Output device defaulted", true);
-    }
-
-    std::cout << "[Audio] You selected: " << info.outputDevice << "\n";
+    LOG_PHASE("Output device defaulted", true);
+    LOG_DEBUG("SystemDetect", "Using default output device: " + info.outputDevice);
 }
+
 
 // =========================================================
 // Main detection entry
@@ -262,6 +281,7 @@ SystemInfo detectSystem() {
     if (!info.hasGPU) {
         detectWindowsGPU(info);
     }
+    detectMonitors(info);
 #endif
 
     // macOS Metal
@@ -273,44 +293,67 @@ SystemInfo detectSystem() {
     // Pick Whisper model
     info.suggestedModel = chooseWhisperModel(info);
 
-    // Choose audio output
+    // Choose audio output (interactive)
     selectOutputDevice(info);
 
     return info;
 }
+
 // =========================================================
 // Logging
 // =========================================================
 void logSystemInfo(const SystemInfo& info) {
-    std::cout << "---- GRIM System Detection ----\n";
-    std::cout << "OS: " << info.osName << " (" << info.arch << ")\n";
-    std::cout << "CPU cores: " << info.cpuCores << "\n";
-    std::cout << "RAM: " << info.ramMB << " MB\n";
+    LOG_PHASE("---- GRIM System Detection ----", true);
+
+    LOG_DEBUG("SystemDetect", "OS: " + info.osName + " (" + info.arch + ")");
+    LOG_DEBUG("SystemDetect", "CPU cores: " + std::to_string(info.cpuCores));
+    LOG_DEBUG("SystemDetect", "RAM: " + std::to_string(info.ramMB) + " MB");
 
     if (info.hasGPU) {
-        std::cout << "GPU detected: " << info.gpuName
-                  << " (" << info.gpuCount << " device(s))\n";
+        LOG_DEBUG("SystemDetect", "GPU detected: " + info.gpuName +
+                 " (" + std::to_string(info.gpuCount) + " device(s))");
+
         if (info.gpuVRAM_MB > 0)
-            std::cout << "VRAM: " << info.gpuVRAM_MB << " MB\n";
+            LOG_DEBUG("SystemDetect", "VRAM: " + std::to_string(info.gpuVRAM_MB) + " MB");
+
         if (!info.gpuDriver.empty())
-            std::cout << "Driver: " << info.gpuDriver << "\n";
-        if (info.hasCUDA)  std::cout << "CUDA supported.\n";
-        if (info.hasMetal) std::cout << "Metal supported.\n";
-        if (info.hasROCm)  std::cout << "ROCm supported.\n";
+            LOG_DEBUG("SystemDetect", "Driver: " + info.gpuDriver);
+
+        if (info.hasCUDA)  LOG_DEBUG("SystemDetect", "CUDA supported.");
+        if (info.hasMetal) LOG_DEBUG("SystemDetect", "Metal supported.");
+        if (info.hasROCm)  LOG_DEBUG("SystemDetect", "ROCm supported.");
     } else {
-        std::cout << "No GPU detected.\n";
+        LOG_DEBUG("SystemDetect", "No GPU detected.");
     }
 
-    std::cout << "Voice backends:\n";
-    std::cout << "  Windows SAPI: " << (info.hasSAPI ? "Yes" : "No") << "\n";
-    std::cout << "  macOS say:   " << (info.hasSay ? "Yes" : "No") << "\n";
-    std::cout << "  Linux Piper: " << (info.hasPiper ? "Yes" : "No") << "\n";
+    LOG_DEBUG("SystemDetect", "Voice backends:");
+    LOG_DEBUG("SystemDetect", "  Windows SAPI: " + std::string(info.hasSAPI ? "Yes" : "No"));
+    LOG_DEBUG("SystemDetect", "  macOS say:   " + std::string(info.hasSay ? "Yes" : "No"));
+    LOG_DEBUG("SystemDetect", "  Linux Piper: " + std::string(info.hasPiper ? "Yes" : "No"));
 
-    std::cout << "Default (input): " << sf::SoundBufferRecorder::getDefaultDevice() << "\n";
-    std::cout << "Selected (output): " << info.outputDevice << "\n";
+    LOG_DEBUG("SystemDetect", "Default (input): " + sf::SoundBufferRecorder::getDefaultDevice());
+    LOG_DEBUG("SystemDetect", "Selected (output): " + info.outputDevice);
 
-    std::cout << "Suggested Whisper model: " << info.suggestedModel << "\n";
-    std::cout << "-------------------------------\n";
+    if (info.hasMonitor) {
+        LOG_DEBUG("SystemDetect", "Monitors detected: " + std::to_string(info.monitorCount));
+        for (size_t i = 0; i < info.monitors.size(); ++i) {
+            const auto& m = info.monitors[i];
+            LOG_DEBUG("SystemDetect",
+                "  Monitor " + std::to_string(i) +
+                " [" + std::to_string(m.width) + "x" + std::to_string(m.height) +
+                " @(" + std::to_string(m.x) + "," + std::to_string(m.y) + ")]" +
+                (m.isPrimary ? " [PRIMARY]" : "")
+            );
+        }
+        LOG_DEBUG("SystemDetect", "Virtual desktop bounds: " +
+                  std::to_string(info.totalScreenWidth) + "x" +
+                  std::to_string(info.totalScreenHeight));
+    } else {
+        LOG_DEBUG("SystemDetect", "No monitors detected.");
+    }
+
+    LOG_DEBUG("SystemDetect", "Suggested Whisper model: " + info.suggestedModel);
+    LOG_PHASE("-------------------------------", true);
 }
 
 // =========================================================

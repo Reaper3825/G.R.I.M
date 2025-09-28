@@ -1,31 +1,23 @@
-#version 330 core
+// opacity and diffuse working pair
 
+#version 330 core
 in vec2 vTexCoord;
 out vec4 fragColor;
 
 uniform sampler2D diffuseMap;
 uniform sampler2D opacityMap;
+uniform float animAlpha; // animated global alpha (0..1)
 
-// 0 = final (diffuse + opacity.r as alpha)
-// 1 = diffuse only
-// 2 = opacity red channel debug
-uniform int debugMode;
-
-void main()
-{
+void main() {
     vec4 diffuse = texture(diffuseMap, vTexCoord);
-    vec4 opacity = texture(opacityMap, vTexCoord);
+    // opacityMap has no alpha channel; use red channel as opacity
+    float op = texture(opacityMap, vTexCoord).r;
 
-    if (debugMode == 1) {
-        fragColor = diffuse; // show diffuse only
-        return;
-    }
+    // Combine per-pixel opacity with animation alpha
+    float outA = clamp(op * animAlpha, 0.0, 1.0);
 
-    if (debugMode == 2) {
-        fragColor = vec4(opacity.r, opacity.r, opacity.r, 1.0); // grayscale mask
-        return;
-    }
-
-    // Normal render: diffuse RGB, opacity red as alpha
-    fragColor = vec4(diffuse.rgb, opacity.r);
+    // Fix yellow tint: swap R/B. Leave RGB unpremultiplied here;
+    // premultiplication is performed later when creating the DIB for
+    // UpdateLayeredWindow.
+    fragColor = vec4(diffuse.b, diffuse.g, diffuse.r, outA);
 }
