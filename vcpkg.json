@@ -5,6 +5,7 @@
     "sfml",
     "cpr",
     "nlohmann-json",
-    "portaudio"
+    "portaudio",
+    "glfw3"
   ]
 }

@@ -5,7 +5,9 @@
 #include "ai.hpp"
 #include "nlp.hpp"
 #include "synonyms.hpp"
-#include "resources.hpp"   // globals: history, longTermMemory, timers
+#include "resources.hpp"
+#include "voice.hpp"
+#include "logger.hpp"
 
 #include <whisper.h>
 #include <portaudio.h>
@@ -15,6 +17,7 @@
 #include <algorithm>
 #include <cctype>
 #include <iostream>
+#include <cmath>
 
 namespace fs = std::filesystem;
 
@@ -30,27 +33,8 @@ VoiceStream::State VoiceStream::g_state;
 // Minimum buffer before calling Whisper (~100ms at 16kHz)
 constexpr size_t MIN_SAMPLES = 1600;
 
-// PCM accumulator
+// PCM accumulator for incremental mode
 static std::vector<float> pcmAccumulator;
-
-// ---------------- PortAudio Callback ----------------
-static int recordCallback(const void* input,
-                          void* /*output*/,
-                          unsigned long frameCount,
-                          const PaStreamCallbackTimeInfo* /*timeInfo*/,
-                          PaStreamCallbackFlags /*statusFlags*/,
-                          void* userData) {
-    auto* audio = reinterpret_cast<VoiceStream::State::AudioData*>(userData);
-    const float* in = static_cast<const float*>(input);
-
-    if (in) {
-        std::lock_guard<std::mutex> lock(audio->mtx);
-        audio->buffer.insert(audio->buffer.end(), in, in + frameCount);
-        audio->ready = true;
-    }
-
-    return paContinue;
-}
 
 // ---------------- Silence Detection ----------------
 static bool isSilence(const std::vector<float>& pcm) {
@@ -162,7 +146,17 @@ static void run(whisper_context* ctx,
                       16000,
                       512,
                       paNoFlag,
-                      recordCallback,
+                      [](const void* input, void*, unsigned long frameCount,
+                         const PaStreamCallbackTimeInfo*, PaStreamCallbackFlags, void* userData) -> int {
+                          auto* audio = reinterpret_cast<VoiceStream::State::AudioData*>(userData);
+                          const float* in = static_cast<const float*>(input);
+                          if (in) {
+                              std::lock_guard<std::mutex> lock(audio->mtx);
+                              audio->buffer.insert(audio->buffer.end(), in, in + frameCount);
+                              audio->ready = true;
+                          }
+                          return paContinue;
+                      },
                       &VoiceStream::g_state.audio) != paNoError || !stream) {
         uiHistory->push("[VoiceStream] ERROR: Could not open mic stream", sf::Color::Red);
         Pa_Terminate();
@@ -271,4 +265,108 @@ void VoiceStream::stop() {
 void VoiceStream::calibrateSilence() {
     // TODO: implement real calibration
     std::cout << "[VoiceStream] Calibrating silence threshold (stub)\n";
+}
+
+// ---------------- One-shot listenOnce ----------------
+std::string Voice::listenOnce() {
+    LOG_DEBUG("Voice", "listenOnce() starting…");
+
+    if (Pa_Initialize() != paNoError) {
+        LOG_ERROR("Voice", "PortAudio init failed in listenOnce()");
+        return "";
+    }
+
+    int deviceIndex = Pa_GetDefaultInputDevice();
+    if (deviceIndex == paNoDevice) {
+        LOG_ERROR("Voice", "No valid input device for listenOnce()");
+        Pa_Terminate();
+        return "";
+    }
+
+    const PaDeviceInfo* devInfo = Pa_GetDeviceInfo(deviceIndex);
+
+    PaStreamParameters inputParams;
+    inputParams.device = deviceIndex;
+    inputParams.channelCount = 1;
+    inputParams.sampleFormat = paFloat32;
+    inputParams.suggestedLatency = devInfo->defaultLowInputLatency;
+    inputParams.hostApiSpecificStreamInfo = nullptr;
+
+    struct TempAudio { std::vector<float> buffer; bool ready=false; std::mutex mtx; } audio;
+
+    auto cb = [](const void* input, void*, unsigned long frameCount,
+                 const PaStreamCallbackTimeInfo*, PaStreamCallbackFlags, void* userData) -> int {
+        auto* ad = reinterpret_cast<TempAudio*>(userData);
+        const float* in = static_cast<const float*>(input);
+        if (in) {
+            std::lock_guard<std::mutex> lock(ad->mtx);
+            ad->buffer.insert(ad->buffer.end(), in, in + frameCount);
+            ad->ready = true;
+        }
+        return paContinue;
+    };
+
+    PaStream* stream = nullptr;
+    if (Pa_OpenStream(&stream, &inputParams, nullptr,
+                      16000, 512, paNoFlag, cb, &audio) != paNoError || !stream) {
+        LOG_ERROR("Voice", "Could not open mic stream in listenOnce()");
+        Pa_Terminate();
+        return "";
+    }
+
+    Pa_StartStream(stream);
+
+    auto lastSpeechTime = std::chrono::steady_clock::now();
+    std::vector<float> pcmBuffer;
+    std::string transcript;
+
+    while (true) {
+        std::vector<float> pcm;
+        {
+            std::lock_guard<std::mutex> lock(audio.mtx);
+            if (audio.ready) {
+                pcm = audio.buffer;
+                audio.buffer.clear();
+                audio.ready = false;
+            }
+        }
+
+        if (!pcm.empty()) {
+            pcmBuffer.insert(pcmBuffer.end(), pcm.begin(), pcm.end());
+
+            if (!isSilence(pcm)) {
+                lastSpeechTime = std::chrono::steady_clock::now();
+            }
+
+            auto now = std::chrono::steady_clock::now();
+            auto silenceMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSpeechTime).count();
+
+            if (silenceMs > g_silenceTimeoutMs && !pcmBuffer.empty()) {
+                whisper_context* ctx = Voice::getWhisperContext();
+                whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+                params.no_timestamps = true;
+                params.max_tokens = g_whisperMaxTokens;
+                params.language = g_whisperLanguage.c_str();
+
+                if (whisper_full(ctx, params, pcmBuffer.data(), (int)pcmBuffer.size()) == 0) {
+                    int n = whisper_full_n_segments(ctx);
+                    for (int i = 0; i < n; i++) {
+                        transcript += whisper_full_get_segment_text(ctx, i);
+                    }
+                }
+                break;
+            }
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    Pa_StopStream(stream);
+    Pa_CloseStream(stream);
+    Pa_Terminate();
+
+    transcript = sanitizeTranscript(transcript);
+    LOG_DEBUG("Voice", "listenOnce() finished: " + transcript);
+    return transcript;
 }

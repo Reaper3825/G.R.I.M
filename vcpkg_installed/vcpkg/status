@@ -2,7 +2,7 @@ Package: egl-registry
 Version: 2024-01-25
 Architecture: x64-windows
 Multi-Arch: same
-Abi: f422e0850609f29b24fe275d55ef58d05de4c8e00a5ab901a22fdbdea46738bd
+Abi: 34c9a856c3212db35c6b82fca8d370210fd7b0ccb84d85e79581f98287c949f7
 Description: EGL API and Extension Registry
 Status: install ok installed
 
@@ -12,7 +12,7 @@ Port-Version: 1
 Depends: egl-registry
 Architecture: x64-windows
 Multi-Arch: same
-Abi: e7604fd71c8f4c923fddd77caa47955e7ac6242e09317fe2524c53d9256beaa4
+Abi: 9ab01b3a4cb4a466145a9699ecdcc65c623107913c754a5c04697b865cc048a4
 Description: OpenGL, OpenGL ES, and OpenGL ES-SC API and Extension Registry
 Status: install ok installed
 
@@ -22,7 +22,7 @@ Port-Version: 3
 Depends: opengl-registry
 Architecture: x64-windows
 Multi-Arch: same
-Abi: ad4a0d8fd0c174bb8b1dbd5e120441d53e497fed56d1cf29b81fce0ec01d899e
+Abi: da7a9ac21687f7aad97d5e8a64161b8ec80cdcac8cb5351b28a354c53aa2e819
 Description: Open Graphics Library (OpenGL)[3][4][5] is a cross-language, cross-platform application programming interface (API) for rendering 2D and 3D vector graphics.
 Status: install ok installed
 
@@ -31,7 +31,7 @@ Version: 2024-07-29
 Port-Version: 1
 Architecture: x64-windows
 Multi-Arch: same
-Abi: 2069fecb7012633539013cbc52ce2e5e3245520e319bbd0bac51aa027392e561
+Abi: d90e4bcb6b994ff515beb187bc82d330d695a5110e56aa493f2888221bbe48a0
 Description: public domain header-only libraries
 Status: install ok installed
 
@@ -39,7 +39,7 @@ Package: vcpkg-cmake
 Version: 2024-04-23
 Architecture: x64-windows
 Multi-Arch: same
-Abi: e8fcc1e8d4c12cf418bd90e468fe731c9c55b6ebe723d862f45424f4d986ee66
+Abi: f5688bf8494648149eb9697098b2b2c713098b10156f3161f6048a9d85a83497
 Status: install ok installed
 
 Package: zlib
@@ -47,7 +47,7 @@ Version: 1.3.1
 Depends: vcpkg-cmake
 Architecture: x64-windows
 Multi-Arch: same
-Abi: 852a07162ca7042d67d88abe24e03689ed709cb036bc6a3421fcdd7b9a2d94c3
+Abi: 100d937695cecc99ab97bd9f5ba9eb00c98ab205fc8ef7d376060f25eac1056a
 Description: A compression library
 Status: install ok installed
 
@@ -55,7 +55,7 @@ Package: vcpkg-cmake-config
 Version: 2024-05-23
 Architecture: x64-windows
 Multi-Arch: same
-Abi: 96b8349a51429bf236d802f8c55e6c0da13fd640ac5cdf290b16710ce1b00992
+Abi: 89cbb12da4b0c4e933fb0c86f80748517199899cb9f8df434e23d76664b2e4ea
 Status: install ok installed
 
 Package: libpng
@@ -63,7 +63,7 @@ Version: 1.6.50
 Depends: vcpkg-cmake, vcpkg-cmake-config, zlib
 Architecture: x64-windows
 Multi-Arch: same
-Abi: 7194be4788df38810ae29f1dffb351f5b6e4dc8dcac29b51e5551213bd463de7
+Abi: 63cd47d07e808935cc1505a07ad23106051bf5152fcc5485af92f51020aa7d92
 Description: libpng is a library implementing an interface for reading and writing PNG (Portable Network Graphics) format files
 Status: install ok installed
 
@@ -73,7 +73,7 @@ Port-Version: 6
 Depends: vcpkg-cmake
 Architecture: x64-windows
 Multi-Arch: same
-Abi: bd42938cdda0786901f1ee62640ecf2abbe691eab55524d32beee4fcfcca0dc5
+Abi: c82cb74b1963011e4f079c3d6e871fdb93436355d8651e415583199612b47fb5
 Description: bzip2 is a freely available, patent free, high-quality data compressor. It typically compresses files to within 10% to 15% of the best available techniques (the PPM family of statistical compressors), whilst being around twice as fast at compression and six times faster at decompression.
 Default-Features: tool
 Status: install ok installed
@@ -91,7 +91,7 @@ Port-Version: 1
 Depends: vcpkg-cmake, vcpkg-cmake-config
 Architecture: x64-windows
 Multi-Arch: same
-Abi: 886153f18b198da702ac7525ff6657c949ee8755a08e66b82e1fc1b8c33d536d
+Abi: eecbe882960bedfb51cc973bd1a472c7853c608da139aad3915eeda553eed992
 Description: a generic-purpose lossless compression algorithm that compresses data using a combination of a modern variant of the LZ77 algorithm, Huffman coding and 2nd order context modeling.
 Status: install ok installed
 
@@ -100,7 +100,7 @@ Version: 2.13.3
 Depends: vcpkg-cmake, vcpkg-cmake-config
 Architecture: x64-windows
 Multi-Arch: same
-Abi: 7493a2c1bd37514424775e9033afd0aa5864ec31054bc02b364dbbecd6f5572f
+Abi: 7b936e1bc4e2bacbda80216a7b25fb61758a4ea7549ea9c1bd57c5835ed85429
 Description: A library to render fonts.
 Default-Features: brotli, bzip2, png, zlib
 Status: install ok installed
@@ -141,7 +141,7 @@ Package: miniaudio
 Version: 0.11.23
 Architecture: x64-windows
 Multi-Arch: same
-Abi: 69abc52f9ce40e5a093a2c2017a00cea9381ffe51dfddc0546a3d6fc64a64149
+Abi: fc52e4d0d4516d42c9d8f3b05db1f7da4934967e3e7d93f4b610a806bbb410ef
 Description: Audio playback and capture library written in C, in a single source file
 Status: install ok installed
 
@@ -151,7 +151,7 @@ Port-Version: 1
 Depends: vcpkg-cmake, vcpkg-cmake-config
 Architecture: x64-windows
 Multi-Arch: same
-Abi: e6fcf3663a576bf6e9d7d1fe84915c54960136266b163383b2dc3e148ab966f7
+Abi: 3c0fe12c9f9e6ff1ad03097f139c0c14f97bec794a5dbd3da8cdbab46b06c66d
 Description: Ogg is a multimedia container format, and the native file and stream format for the Xiph.org multimedia codecs.
 Status: install ok installed
 
@@ -161,7 +161,7 @@ Port-Version: 4
 Depends: libogg, vcpkg-cmake, vcpkg-cmake-config
 Architecture: x64-windows
 Multi-Arch: same
-Abi: 29a16084171e783ab136a700cb4a96fabf5eeb04940113c012a43aff3c616b63
+Abi: 5243eeb6b04c65725659578c86017adf098fbad470501e1cdca1b1c02e1adaf8
 Description: Ogg Vorbis is a fully open, non-proprietary, patent-and-royalty-free, general-purpose compressed audio format
 Status: install ok installed
 
@@ -170,7 +170,7 @@ Version: 1.5.0
 Depends: libogg, vcpkg-cmake, vcpkg-cmake-config
 Architecture: x64-windows
 Multi-Arch: same
-Abi: 61a76c60691a09cdc9e6a421d8b860e98436b2b952594c352b16b56c7544a877
+Abi: 0d373bce242e7192c92bfa22181e170e5f0b53a9faa3d0c0877b703b318cdafb
 Description: Library for manipulating FLAC files
 Default-Features: stack-protector
 Status: install ok installed
@@ -187,7 +187,7 @@ Version: 3.0.1
 Depends: vcpkg-cmake, vcpkg-cmake-config
 Architecture: x64-windows
 Multi-Arch: same
-Abi: d0630fc6630257149a123dcaa1fc8ecd26559810129603ebfbd52127bf99fcdf
+Abi: b93fd2ee0aca0a3dcff6ba188fb3e69445431536a73943fd666a5d40c5ee2249
 Description: Simple and fast multimedia library
 Default-Features: audio, graphics, network, window
 Status: install ok installed
@@ -202,7 +202,7 @@ Status: install ok installed
 
 Package: sfml
 Feature: graphics
-Depends: freetype, sfml, stb
+Depends: freetype, stb
 Architecture: x64-windows
 Multi-Arch: same
 Description: Use sfml-graphics library
@@ -228,7 +228,7 @@ Version: 8.16.0
 Depends: vcpkg-cmake, vcpkg-cmake-config, zlib
 Architecture: x64-windows
 Multi-Arch: same
-Abi: 375914000fb74311dda35725b03bcb21f9ee5a6c651edb41bae6027c9d89dddc
+Abi: 4b09fdac9fefac291f0e156097c584998c710d550aaf526e00121de35713a0be
 Description: A library for transferring data with URLs
 Default-Features: non-http, ssl
 Status: install ok installed
@@ -259,7 +259,7 @@ Version: 1.12.0
 Depends: curl, vcpkg-cmake, vcpkg-cmake-config
 Architecture: x64-windows
 Multi-Arch: same
-Abi: 9e1759aabd7c6bbc9d71a95c8e6bd8d08426782dcd675e9d0bbabb62ae04e903
+Abi: de7ce3bae3ef01160a0e50ac1e46ab9e4cacc56e16e4c3f215121449a2a5a9f0
 Description: C++ Requests is a simple wrapper around libcurl inspired by the excellent Python Requests project.
 Default-Features: ssl
 Status: install ok installed
@@ -278,7 +278,7 @@ Port-Version: 1
 Depends: vcpkg-cmake, vcpkg-cmake-config
 Architecture: x64-windows
 Multi-Arch: same
-Abi: 21bf1906e3b9d2116de399c412b627f8ff759d1d6fb85db40c78c151b8f06d56
+Abi: 9f141274864202c20765c04df9c5c6afba8356c847ec52341a719887e22b0d81
 Description: JSON for Modern C++
 Status: install ok installed
 
@@ -288,7 +288,17 @@ Port-Version: 7
 Depends: vcpkg-cmake, vcpkg-cmake-config
 Architecture: x64-windows
 Multi-Arch: same
-Abi: ec317c1d53cddfcf02ea9a2b25c86265e4d7ee0f01ea1c3565be9fd6918f1b22
+Abi: 01adf0e05618a88bc8dc190ede9bf9a31aa98cf0c17b69c8e45ba5edd8ef5577
 Description: PortAudio Portable Cross-platform Audio I/O API PortAudio is a free, cross-platform, open-source, audio I/O library.  It lets you write simple audio programs in 'C' or C++ that will compile and run on many platforms including Windows, Macintosh OS X, and Unix (OSS/ALSA). It is intended to promote the exchange of audio software between developers on different platforms. Many applications use PortAudio for Audio I/O.
+Status: install ok installed
+
+Package: glfw3
+Version: 3.4
+Port-Version: 1
+Depends: vcpkg-cmake, vcpkg-cmake-config
+Architecture: x64-windows
+Multi-Arch: same
+Abi: 0547955aa2e4f9a5ed81c9a54bef9d269f5eb0a4032d04b826937d850f1c6b97
+Description: GLFW is a free, Open Source, multi-platform library for OpenGL, OpenGL ES and Vulkan application development. It provides a simple, platform-independent API for creating windows, contexts and surfaces, reading input, handling events, etc.
 Status: install ok installed
 

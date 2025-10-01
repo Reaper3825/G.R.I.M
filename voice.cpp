@@ -236,4 +236,11 @@ void shutdown() {
     }
 }
 
+// ============================================================
+// Accessor
+// ============================================================
+whisper_context* getWhisperContext() {
+    return g_state.ctx;
+}
+
 } // namespace Voice

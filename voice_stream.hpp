@@ -1,46 +1,47 @@
 #pragma once
-#include <vector>
 #include <string>
+#include <vector>
 #include <mutex>
-#include <nlohmann/json_fwd.hpp>
+#include <nlohmann/json.hpp>
+#include <SFML/Graphics/Color.hpp>
+#include "nlp.hpp"
+#include "timer.hpp"
+#include "console_history.hpp"
 
-// Forward declarations
-class ConsoleHistory;
-struct Timer;
-class NLP;
 struct whisper_context;
 
 namespace VoiceStream {
+    struct State {
+        struct AudioData {
+            std::vector<float> buffer;
+            bool ready = false;
+            std::mutex mtx;
+        };
 
-// ---------------- State ----------------
-struct State {
-    struct AudioData {
-        std::mutex mtx;
-        std::vector<float> buffer;
-        bool ready = false;
+        bool running = false;
+        int inputDeviceIndex = -1;
+        size_t processedSamples = 0;
+        std::string partial;
+        AudioData audio;
     };
 
-    AudioData audio;
-    bool running = false;
-    std::string partial;
-    size_t processedSamples = 0;
-    int inputDeviceIndex = -1;
-};
+    extern State g_state;
 
-// Global state instance
-extern State g_state;
+    bool isRunning();
+    bool start(whisper_context* ctx,
+               ConsoleHistory* history,
+               std::vector<Timer>& timers,
+               nlohmann::json& longTermMemory,
+               NLP& nlp);
+    void stop();
+    void calibrateSilence();
+}
 
-// ---------------- Control API ----------------
-bool start(whisper_context* ctx,
-           ConsoleHistory* history,
-           std::vector<Timer>& timers,
-           nlohmann::json& longTermMemory,
-           NLP& nlp);
+namespace Voice {
+    // One-shot speech capture after a wake event.
+    // Blocks until user finishes speaking or silence timeout.
+    std::string listenOnce();
 
-void stop();
-
-bool isRunning();
-
-void calibrateSilence();
-
-} // namespace VoiceStream
+    // Access whisper context (implemented in voice.cpp / ai.cpp)
+    whisper_context* getWhisperContext();
+}

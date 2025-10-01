@@ -7,6 +7,7 @@
 #include <mutex>
 #include <vector>
 #include <filesystem>
+#include <chrono>
 
 // =====================================================
 // Globals
@@ -41,6 +42,10 @@ static std::string formatTimestamp(const std::chrono::system_clock::time_point& 
     std::ostringstream oss;
     oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
     return oss.str();
+}
+
+static std::string nowTimestamp() {
+    return formatTimestamp(std::chrono::system_clock::now());
 }
 
 static std::string basename(const std::string& path) {
@@ -92,17 +97,11 @@ void logPhaseInternal(const std::string& file,
     g_phaseInfo.success   = success;
 
     std::ostringstream oss;
-    if (g_buildMode == BuildMode::Release) {
-        oss << "| " << formatTimestamp(g_phaseInfo.timestamp)
-            << " | " << g_phaseInfo.fileName
-            << " | " << g_phaseInfo.phaseName
-            << " | " << (g_phaseInfo.success ? "true" : "false")
-            << " |";
-    } else {
-        oss << "[DEBUG][PHASE] (" << g_phaseInfo.fileName << ") "
-            << g_phaseInfo.phaseName << " -> "
-            << (g_phaseInfo.success ? "OK" : "FAIL");
-    }
+    oss << "| " << formatTimestamp(g_phaseInfo.timestamp)
+        << " | " << g_phaseInfo.fileName
+        << " | " << g_phaseInfo.phaseName
+        << " | " << (g_phaseInfo.success ? "true" : "false")
+        << " |";
 
     std::string entry = oss.str();
 
@@ -117,29 +116,23 @@ void logPhaseInternal(const std::string& file,
 // Debug / Trace / Error Logging
 // =====================================================
 void logDebug(const std::string& tag, const std::string& msg) {
-    if (g_buildMode == BuildMode::Debug) {
-        std::lock_guard<std::mutex> lock(g_logMutex);
-        writeLine("[DEBUG][" + tag + "] " + msg);
-    }
+    std::lock_guard<std::mutex> lock(g_logMutex);
+    writeLine("[" + nowTimestamp() + "][DEBUG][" + tag + "] " + msg);
 }
 
 void logTrace(const std::string& tag, const std::string& msg) {
-    if (g_buildMode == BuildMode::Debug) {
-        std::lock_guard<std::mutex> lock(g_logMutex);
-        writeLine("[TRACE][" + tag + "] " + msg);
-    }
+    std::lock_guard<std::mutex> lock(g_logMutex);
+    writeLine("[" + nowTimestamp() + "][TRACE][" + tag + "] " + msg);
 }
 
 void logError(const std::string& tag, const std::string& msg) {
     std::lock_guard<std::mutex> lock(g_logMutex);
-    writeLine("[ERROR][" + tag + "] " + msg);
+    writeLine("[" + nowTimestamp() + "][ERROR][" + tag + "] " + msg);
 }
 
 // =====================================================
 // Lifecycle
 // =====================================================
-
-// ...
 namespace fs = std::filesystem;
 
 void initLogger(const std::string& filename) {
@@ -153,7 +146,7 @@ void initLogger(const std::string& filename) {
         g_logFile << header << std::endl;
 
         // Always print the log path so devs/users know where to look
-        std::string msg = "[Logger] Writing logs to: " + logPath.string();
+        std::string msg = "[" + nowTimestamp() + "][Logger] Writing logs to: " + logPath.string();
         std::cerr << msg << std::endl;    // Debug build console
         g_logFile << msg << std::endl;    // Always file
     } else {
@@ -161,7 +154,6 @@ void initLogger(const std::string& filename) {
                   << logPath.string() << std::endl;
     }
 }
-
 
 void shutdownLogger() {
     std::lock_guard<std::mutex> lock(g_logMutex);
