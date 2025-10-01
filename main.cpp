@@ -1,3 +1,4 @@
+#include "pch.hpp"                 // ✅ Precompiled header with all core includes
 #include "commands/commands_core.hpp"
 #include "voice.hpp"
 #include "voice_speak.hpp"
@@ -13,19 +14,9 @@
 #include "aliases.hpp"
 #include "popup_ui/popup_ui.hpp"
 #include "logger.hpp"
-
-#include <SFML/Graphics.hpp>
-#include <thread>
-#include <atomic>
-#include <filesystem>
-#include <chrono>
-
-#ifdef _WIN32
-  #include <shellapi.h>
-  #include <psapi.h>
-  #include <winternl.h>
-  #undef ERROR
-#endif
+#include "wake/wake.hpp"
+#include "wake/wake_key.hpp"
+#include "wake/wake_voice.hpp"
 
 namespace fs = std::filesystem;
 
@@ -94,10 +85,37 @@ int main(int argc, char* argv[]) {
     LOG_PHASE("Popup UI launched", true);
 
     // ============================================================
-    // Console input loop
+    // Initialize wake systems
+    // ============================================================
+    Wake::init();
+
+    // ============================================================
+    // Console + wake loop
     // ============================================================
     std::string line;
     while (true) {
+        // 🔹 Update wake modules each tick
+        WakeKey::update();
+        WakeVoice::update();
+
+        // 🔹 If wake event fired, capture speech and route through commands
+        if (Wake::g_awake.load()) {
+            Wake::g_awake = false; // reset immediately for one-shot behavior
+
+            Voice::speak("Yes?", "system");
+            LOG_DEBUG("Wake", "Listening for post-wake speech...");
+
+            // 🎤 Capture one utterance via STT
+            std::string spoken = Voice::listenOnce(); // 🔹 implement in voice_stream/voice
+
+            if (!spoken.empty()) {
+                LOG_DEBUG("Wake", "Heard: " + spoken);
+                handleCommand(spoken); // Pass into unified pipeline
+            } else {
+                LOG_DEBUG("Wake", "No speech detected after wake.");
+            }
+        }
+
         std::cout << "> "; // REPL prompt stays visible
         if (!std::getline(std::cin, line)) {
             break; // EOF / Ctrl+D
@@ -120,6 +138,7 @@ int main(int argc, char* argv[]) {
     // ============================================================
     // Shutdown cleanup
     // ============================================================
+    Wake::shutdown();
     Voice::shutdownTTS();
     LOG_PHASE("Shutdown complete", true);
 

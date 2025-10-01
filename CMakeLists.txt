@@ -149,6 +149,15 @@ file(GLOB DEVICE_SETUPS_HEADERS "device_setups/*.hpp")
 
 
 
+# =========================================================
+# device Sources
+# =========================================================
+file(GLOB WAKE_SOURCES "wake/*.cpp")
+file(GLOB WAKE_HEADERS "wake/*.hpp")
+
+
+
+
 
 
 
@@ -177,6 +186,7 @@ set(GRIM_SOURCES
     ${COMMAND_SOURCES}
     ${POPUP_UI_SOURCES}
     ${DEVICE_SETUPS_SOURCES}
+    ${WAKE_SOURCES}
 )
 
 set(GRIM_HEADERS
@@ -205,6 +215,7 @@ set(GRIM_HEADERS
     ${COMMAND_HEADERS}
     ${POPUP_UI_HEADERS}
     ${DEVICE_SETUPS_HEADERS}
+    ${WAKE_HEADERS}
 )
 
 # =========================================================
@@ -226,6 +237,34 @@ endif()
 # =========================================================
 # Dependencies
 # =========================================================
+
+# ---- bgfx ----
+include_directories(
+    ${CMAKE_SOURCE_DIR}/external/bgfx.cmake/bgfx/include
+    ${CMAKE_SOURCE_DIR}/external/bgfx.cmake/bx/include
+    ${CMAKE_SOURCE_DIR}/external/bgfx.cmake/bimg/include
+)
+
+# Link to the bgfx libs (Debug/Release directories)
+link_directories(${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/bin/Debug)
+link_directories(${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/bin/Release)
+
+target_link_libraries(GRIM
+    bgfx
+    bx
+    bimg
+)
+
+find_package(glfw3 CONFIG REQUIRED)
+target_link_libraries(GRIM PRIVATE glfw)
+
+
+
+
+
+
+
+
 
 # ---- SFML ----
 find_package(SFML CONFIG REQUIRED COMPONENTS System Window Graphics Audio Network)

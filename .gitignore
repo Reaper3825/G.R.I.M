@@ -101,3 +101,6 @@ resources/.venv/
 *.onnx
 *.dic
 *.db
+
+
+vcpkg_installed/** -text
