@@ -1,3 +1,15 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 *.gitattributes text eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.exe binary
+*.dll binary
+*.lib binary
+*.pdb binary
+
+# Ignore generated folders
+vcpkg_installed/ -text
+build/ -text
+external/build-*/ -text
