@@ -104,3 +104,5 @@ resources/.venv/
 
 
 vcpkg_installed/** -text
+external/bgfx.cmake/
+vcpkg_installed/
