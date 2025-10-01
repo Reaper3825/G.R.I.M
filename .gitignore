@@ -117,3 +117,12 @@ external/build-*/
 *.vcxproj.user
 *.vcxproj.filters
 
+# Windows ghost file
+nul
+
+# Runtime / temp files
+pid.txt
+
+# Generated resources
+resources/sprite/
+
