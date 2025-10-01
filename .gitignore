@@ -106,3 +106,14 @@ resources/.venv/
 vcpkg_installed/** -text
 external/bgfx.cmake/
 vcpkg_installed/
+external/
+
+build-*/
+external/build-*/
+
+
+*.user
+*.suo
+*.vcxproj.user
+*.vcxproj.filters
+
