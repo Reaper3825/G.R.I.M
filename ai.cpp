@@ -1,5 +1,5 @@
 #include "ai.hpp"
-#include "voice.hpp"
+#include "voice/voice.hpp"
 #include "resources.hpp"
 #include "commands/commands_core.hpp"
 #include "error_manager.hpp"

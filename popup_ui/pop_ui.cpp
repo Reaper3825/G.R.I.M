@@ -4,7 +4,7 @@
 #include "popup_anim.hpp"
 #include "logger.hpp"
 
-#include "../voice_speak.hpp"
+#include "voice/voice_speak.hpp"
 
 #include <thread>
 #include <atomic>

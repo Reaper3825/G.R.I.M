@@ -26,11 +26,11 @@
 #include "commands_voice.hpp"
 #include "response_manager.hpp"
 #include "error_manager.hpp"
-#include "voice.hpp"
-#include "voice_stream.hpp"
+#include "voice/voice.hpp"
+#include "voice/voice_stream.hpp"
 #include "commands_core.hpp"
-#include "voice_speak.hpp"
-#include "resources.hpp" 
+#include "voice/voice_speak.hpp"
+#include "resources.hpp"
 #include "nlp.hpp"   // globals: history, timers, longTermMemory, g_nlp
 
 // ---------------------------------------------------------

@@ -9,7 +9,7 @@
 
 #include "response_manager.hpp"
 #include "console_history.hpp"
-#include "voice_speak.hpp"
+#include "voice/voice_speak.hpp"
 #include "error_manager.hpp"
 #include "resources.hpp"
 #include "nlp.hpp"
