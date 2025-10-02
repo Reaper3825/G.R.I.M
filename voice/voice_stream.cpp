@@ -3,7 +3,7 @@
 #include "ui_helpers.hpp"
 #include "commands/commands_core.hpp"
 #include "ai/ai.hpp"
-#include "nlp.hpp"
+#include "nlp/nlp.hpp"
 #include "synonyms.hpp"
 #include "resources.hpp"
 #include "voice.hpp"

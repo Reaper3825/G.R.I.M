@@ -1,7 +1,7 @@
 #include <SFML/Config.hpp>
 #include "console_history.hpp"
 #include "commands/commands_core.hpp"   // CommandResult + handleCommand
-#include "nlp.hpp"
+#include "nlp/nlp.hpp"
 
 // -------------------------------------------------------------
 // Handle UI events (SFML 3 style: is<T>() + getIf<T>())

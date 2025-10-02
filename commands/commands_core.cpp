@@ -12,7 +12,7 @@
 #include "voice/voice_speak.hpp"
 #include "error_manager.hpp"
 #include "resources.hpp"
-#include "nlp.hpp"
+#include "nlp/nlp.hpp"
 #include "synonyms.hpp"
 #include "commands_core.hpp"
 #include "aliases.hpp"            // 🔹 alias resolution

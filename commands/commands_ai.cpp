@@ -3,7 +3,7 @@
 #include "error_manager.hpp"
 #include "system_detect.hpp"
 #include "aliases.hpp"     // 🔹 for app alias resolution
-#include "nlp.hpp"
+#include "nlp/nlp.hpp"
 #include "ai/ai.hpp"
 
 // External libs not in pch.hpp

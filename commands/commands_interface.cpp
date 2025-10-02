@@ -1,7 +1,7 @@
 #include "commands_interface.hpp"
 #include "response_manager.hpp"
 #include "error_manager.hpp"
-#include "nlp.hpp"
+#include "nlp/nlp.hpp"
 #include "resources.hpp"
 
 #include <SFML/Graphics.hpp>

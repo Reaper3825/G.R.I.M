@@ -186,8 +186,6 @@ set(GRIM_SOURCES
     main.cpp
     bootstrap.cpp
     resources.cpp
-    nlp.cpp
-    nlp_rules.cpp
     synonyms.cpp
     aliases.cpp
     console_history.cpp
@@ -212,7 +210,6 @@ set(GRIM_HEADERS
 
     bootstrap.hpp
     console_history.hpp
-    nlp.hpp
     intent.hpp
     aliases.hpp
     synonyms.hpp
