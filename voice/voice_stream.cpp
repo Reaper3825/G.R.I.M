@@ -2,7 +2,7 @@
 #include "console_history.hpp"
 #include "ui_helpers.hpp"
 #include "commands/commands_core.hpp"
-#include "ai.hpp"
+#include "ai/ai.hpp"
 #include "nlp.hpp"
 #include "synonyms.hpp"
 #include "resources.hpp"

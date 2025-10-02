@@ -1,6 +1,6 @@
 #include "voice.hpp"
 #include "resources.hpp"
-#include "ai.hpp"
+#include "ai/ai.hpp"
 #include "voice_speak.hpp"
 #include "system_detect.hpp"
 #include "response_manager.hpp"

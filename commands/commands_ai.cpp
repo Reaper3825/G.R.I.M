@@ -4,7 +4,7 @@
 #include "system_detect.hpp"
 #include "aliases.hpp"     // 🔹 for app alias resolution
 #include "nlp.hpp"
-#include "ai.hpp"
+#include "ai/ai.hpp"
 
 // External libs not in pch.hpp
 #include <cpr/cpr.h>       // 🔹 Needed for Ollama HTTP

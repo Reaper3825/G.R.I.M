@@ -157,11 +157,24 @@ file(GLOB WAKE_HEADERS "wake/*.hpp")
 
 
 # =========================================================
-# wake Sources
+# voice Sources
 # =========================================================
 file(GLOB WAKE_SOURCES "voice/*.cpp")
 file(GLOB WAKE_HEADERS "voice/*.hpp")
 
+
+# =========================================================
+# ai Sources
+# =========================================================
+file(GLOB ai_SOURCES "ai/*.cpp")
+file(GLOB ai_HEADERS "ai/*.hpp")
+
+
+# =========================================================
+# nlp Sources
+# =========================================================
+file(GLOB nlp_SOURCES "nlp/*.cpp")
+file(GLOB nlp_HEADERS "nlp/*.hpp")
 
 
 
@@ -171,7 +184,6 @@ file(GLOB WAKE_HEADERS "voice/*.hpp")
 
 set(GRIM_SOURCES
     main.cpp
-    ai.cpp
     bootstrap.cpp
     resources.cpp
     nlp.cpp
@@ -182,9 +194,7 @@ set(GRIM_SOURCES
     ui_helpers.cpp
     ui_draw.cpp
     ui_events.cpp
-
     system_detect.cpp
-
     response_manager.cpp
     error_manager.cpp
     bootstrap_config.cpp
@@ -192,12 +202,14 @@ set(GRIM_SOURCES
     ${COMMAND_SOURCES}
     ${POPUP_UI_SOURCES}
     ${DEVICE_SETUPS_SOURCES}
-    ${WAKE_SOURCES}
     ${VOICE_SOURCES}
+    ${ai_SOURCES}
+    ${WAKE_SOURCES}
+    ${nlp_SOURCES}
 )
 
 set(GRIM_HEADERS
-    ai.hpp
+
     bootstrap.hpp
     console_history.hpp
     nlp.hpp
@@ -210,19 +222,18 @@ set(GRIM_HEADERS
     ui_draw.hpp
     ui_events.hpp
     timer.hpp
-
-
     response_manager.hpp
     error_manager.hpp
     bootstrap_config.hpp
     logger.hpp
     system_detect.hpp
-  
     ${COMMAND_HEADERS}
     ${POPUP_UI_HEADERS}
     ${DEVICE_SETUPS_HEADERS}
-    ${WAKE_HEADERS}
     ${VOICE_HEADERS}
+    ${ai_HEADERS}
+    ${WAKE_HEADERS}
+    ${nlp_HEADERS}
 )
 
 # =========================================================

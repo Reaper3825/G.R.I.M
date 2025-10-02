@@ -31,18 +31,18 @@ std::string g_inputBuffer;
 // Main entry point
 // ============================================================
 int main(int argc, char* argv[]) {
-    //Initialize logger (writes to grim.log + console if available)
+    // Initialize logger (writes to grim.log + console if available)
     initLogger("grim.log");
     LOG_PHASE("Startup begin", true);
 
-    //Bootstrap configuration and resources (includes TTS init)
+    // Bootstrap configuration and resources (includes TTS init)
     runBootstrapChecks(argc, argv);
     LOG_PHASE("Bootstrap checks complete", true);
 
     // Start speech queue system
     Voice::initQueue();
 
-    //Load dummy font (needed for sf::Text even if unused)
+    // Load dummy font (needed for sf::Text even if unused)
     fs::path fontPath = fs::path(getResourcePath()) / "DejaVuMathTeXGyre.ttf";
     if (!g_dummyFont.openFromFile(fontPath.string())) {
         LOG_ERROR("Config", "Could not load dummy font: " + fontPath.string());
@@ -52,7 +52,7 @@ int main(int argc, char* argv[]) {
         LOG_PHASE("Font load", true);
     }
 
-    //Aliases
+    // Aliases
     aliases::init();
     LOG_PHASE("Aliases initialized", true);
 
@@ -88,43 +88,15 @@ int main(int argc, char* argv[]) {
     LOG_PHASE("Popup UI launched", true);
 
     // ============================================================
-    // Initialize wake systems
-    // ============================================================
-    Wake::init();
-
-    // ============================================================
-    // Console + wake loop
+    // Console REPL loop (no wake integration for now)
     // ============================================================
     std::string line;
     while (true) {
-        // 🔹 Update wake modules each tick
-        WakeKey::update();
-        WakeVoice::update();
-
-        // 🔹 If wake event fired, capture speech and route through commands
-        if (Wake::g_awake.load()) {
-            Wake::g_awake = false; // reset immediately for one-shot behavior
-
-            Voice::speak("Yes?", "system");
-            LOG_DEBUG("Wake", "Listening for post-wake speech...");
-
-            // 🎤 Capture one utterance via STT
-            std::string spoken = Voice::listenOnce(); // 🔹 implement in voice_stream/voice
-
-            if (!spoken.empty()) {
-                LOG_DEBUG("Wake", "Heard: " + spoken);
-                handleCommand(spoken); // Pass into unified pipeline
-            } else {
-                LOG_DEBUG("Wake", "No speech detected after wake.");
-            }
-        }
-
-        std::cout << "> "; // REPL prompt stays visible
+        std::cout << "> "; // REPL prompt
         if (!std::getline(std::cin, line)) {
             break; // EOF / Ctrl+D
         }
 
-        // 🔹 Skip empty input (avoid NLP spam)
         if (line.empty()) {
             continue;
         }
@@ -141,7 +113,6 @@ int main(int argc, char* argv[]) {
     // ============================================================
     // Shutdown cleanup
     // ============================================================
-    Wake::shutdown();
     Voice::shutdownQueue();
     Voice::shutdownTTS();
     LOG_PHASE("Shutdown complete", true);
