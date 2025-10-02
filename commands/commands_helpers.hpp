@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 #include <utility>
-#include "nlp.hpp"   // for Intent struct
+#include "nlp/nlp.hpp"   // for Intent struct
 
 // Trim whitespace from both ends
 std::string trim(const std::string& s);

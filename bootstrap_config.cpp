@@ -2,7 +2,7 @@
 #include "error_manager.hpp"
 #include "resources.hpp"
 #include "aliases.hpp"
-#include "nlp.hpp"
+#include "nlp/nlp.hpp"
 #include "console_history.hpp"
 #include "ai/ai.hpp"
 #include "logger.hpp"

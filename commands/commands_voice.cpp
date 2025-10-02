@@ -31,7 +31,7 @@
 #include "commands_core.hpp"
 #include "voice/voice_speak.hpp"
 #include "resources.hpp"
-#include "nlp.hpp"   // globals: history, timers, longTermMemory, g_nlp
+#include "nlp/nlp.hpp"   // globals: history, timers, longTermMemory, g_nlp
 
 // ---------------------------------------------------------
 // SFML
