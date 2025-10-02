@@ -150,10 +150,17 @@ file(GLOB DEVICE_SETUPS_HEADERS "device_setups/*.hpp")
 
 
 # =========================================================
-# device Sources
+# wake Sources
 # =========================================================
 file(GLOB WAKE_SOURCES "wake/*.cpp")
 file(GLOB WAKE_HEADERS "wake/*.hpp")
+
+
+# =========================================================
+# wake Sources
+# =========================================================
+file(GLOB WAKE_SOURCES "voice/*.cpp")
+file(GLOB WAKE_HEADERS "voice/*.hpp")
 
 
 
@@ -175,10 +182,9 @@ set(GRIM_SOURCES
     ui_helpers.cpp
     ui_draw.cpp
     ui_events.cpp
-    voice.cpp
-    voice_stream.cpp 
+
     system_detect.cpp
-    voice_speak.cpp     
+
     response_manager.cpp
     error_manager.cpp
     bootstrap_config.cpp
@@ -187,6 +193,7 @@ set(GRIM_SOURCES
     ${POPUP_UI_SOURCES}
     ${DEVICE_SETUPS_SOURCES}
     ${WAKE_SOURCES}
+    ${VOICE_SOURCES}
 )
 
 set(GRIM_HEADERS
@@ -203,9 +210,8 @@ set(GRIM_HEADERS
     ui_draw.hpp
     ui_events.hpp
     timer.hpp
-    voice.hpp
-    voice_stream.hpp
-    voice_speak.hpp 
+
+
     response_manager.hpp
     error_manager.hpp
     bootstrap_config.hpp
@@ -216,6 +222,7 @@ set(GRIM_HEADERS
     ${POPUP_UI_HEADERS}
     ${DEVICE_SETUPS_HEADERS}
     ${WAKE_HEADERS}
+    ${VOICE_HEADERS}
 )
 
 # =========================================================

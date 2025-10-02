@@ -4,7 +4,7 @@
 #include "console_history.hpp"
 #include "aliases.hpp"
 #include "system_detect.hpp"
-#include "voice_speak.hpp"
+#include "voice/voice_speak.hpp"
 #include "device_setups/audio_devices.hpp"
 #include "logger.hpp"
 
