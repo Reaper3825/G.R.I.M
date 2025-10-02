@@ -238,27 +238,23 @@ endif()
 # Dependencies
 # =========================================================
 
-# ---- bgfx ----
-include_directories(
-    ${CMAKE_SOURCE_DIR}/external/bgfx.cmake/bgfx/include
-    ${CMAKE_SOURCE_DIR}/external/bgfx.cmake/bx/include
-    ${CMAKE_SOURCE_DIR}/external/bgfx.cmake/bimg/include
-)
-
-# Link directories
-link_directories(
-    ${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/bin/Debug
-    ${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/bin/Release
-)
-
+# ---- GLFW ----
 find_package(glfw3 CONFIG REQUIRED)
+target_link_libraries(GRIM PRIVATE glfw)
 
-target_link_libraries(GRIM
-    PRIVATE
-        bgfx
-        bx
-        bimg
-        glfw
+# ---- bgfx ---- (build from submodule instead of fake imports)
+add_subdirectory(external/bgfx.cmake)
+
+target_link_libraries(GRIM PRIVATE
+    SFML::Graphics
+    SFML::Audio
+    SFML::Window
+    SFML::System
+    SFML::Network
+    glfw
+    bgfx
+    bx
+    bimg
 )
 
 

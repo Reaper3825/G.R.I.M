@@ -1,4 +1,4 @@
-#include "pch.hpp"                 // ✅ Precompiled header with all core includes
+#include "pch.hpp"
 #include "commands/commands_core.hpp"
 #include "voice.hpp"
 #include "voice_speak.hpp"
@@ -38,6 +38,9 @@ int main(int argc, char* argv[]) {
     //Bootstrap configuration and resources (includes TTS init)
     runBootstrapChecks(argc, argv);
     LOG_PHASE("Bootstrap checks complete", true);
+
+    // Start speech queue system
+    Voice::initQueue();
 
     //Load dummy font (needed for sf::Text even if unused)
     fs::path fontPath = fs::path(getResourcePath()) / "DejaVuMathTeXGyre.ttf";
@@ -139,6 +142,7 @@ int main(int argc, char* argv[]) {
     // Shutdown cleanup
     // ============================================================
     Wake::shutdown();
+    Voice::shutdownQueue();
     Voice::shutdownTTS();
     LOG_PHASE("Shutdown complete", true);
 
