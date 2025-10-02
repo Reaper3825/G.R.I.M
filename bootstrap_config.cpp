@@ -4,7 +4,7 @@
 #include "aliases.hpp"
 #include "nlp.hpp"
 #include "console_history.hpp"
-#include "ai.hpp"
+#include "ai/ai.hpp"
 #include "logger.hpp"
 
 namespace fs = std::filesystem;
