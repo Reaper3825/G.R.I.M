@@ -245,24 +245,21 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/external/bgfx.cmake/bimg/include
 )
 
-# Link to the bgfx libs (Debug/Release directories)
-link_directories(${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/bin/Debug)
-link_directories(${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/bin/Release)
-
-target_link_libraries(GRIM
-    bgfx
-    bx
-    bimg
+# Link directories
+link_directories(
+    ${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/bin/Debug
+    ${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/bin/Release
 )
 
 find_package(glfw3 CONFIG REQUIRED)
-target_link_libraries(GRIM PRIVATE glfw)
 
-
-
-
-
-
+target_link_libraries(GRIM
+    PRIVATE
+        bgfx
+        bx
+        bimg
+        glfw
+)
 
 
 
