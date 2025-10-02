@@ -9,6 +9,9 @@
 #include <random>
 #include <fstream>
 #include <unordered_map>
+#include <queue>
+#include <mutex>
+#include <condition_variable>
 #include <nlohmann/json.hpp>
 
 #ifdef _WIN32
@@ -19,6 +22,9 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 namespace Voice {
+    // =========================================================
+    // Audio state
+    // =========================================================
     static std::vector<std::unique_ptr<sf::SoundBuffer>> activeBuffers;
     static std::vector<std::unique_ptr<sf::Sound>> activeSounds;
 
@@ -28,7 +34,9 @@ namespace Voice {
     static fs::path    g_outputDir  = "D:/G.R.I.M/resources/tts_out";
     static std::unordered_map<std::string, std::string> g_rules;
 
-    // 🔹 Flag that tracks if TTS bridge is ready
+    // =========================================================
+    // Bridge state
+    // =========================================================
     static bool g_ttsReady = false;
 
 #ifdef _WIN32
@@ -36,6 +44,15 @@ namespace Voice {
     static HANDLE hChildStdoutRd = nullptr;
     static PROCESS_INFORMATION piProcInfo{};
 #endif
+
+    // =========================================================
+    // Queue state
+    // =========================================================
+    static std::queue<std::pair<std::string,std::string>> speakQueue;
+    static std::mutex queueMutex;
+    static std::condition_variable queueCV;
+    static bool workerRunning = false;
+    static std::thread workerThread;
 
     // =========================================================
     // Helpers
@@ -66,7 +83,6 @@ namespace Voice {
         );
     }
 
-    // Return true if any active sound is currently playing
     bool isPlaying() {
         for (const auto& s : activeSounds) {
             if (s && s->getStatus() == sf::SoundSource::Status::Playing) return true;
@@ -90,7 +106,7 @@ namespace Voice {
                 continue;
             }
             if (!ReadFile(hChildStdoutRd, &ch, 1, &read, nullptr) || read == 0) {
-                break; // EOF or error
+                break;
             }
             if (ch == '\r') continue;
             if (ch == '\n') break;
@@ -178,7 +194,7 @@ namespace Voice {
             try {
                 auto resp = json::parse(response);
                 if (resp.value("status", "") == "ready") {
-                    g_ttsReady = true; // 🔹 set ready flag
+                    g_ttsReady = true;
                     LOG_PHASE("Voice bridge ready", true);
                 }
             } catch (const std::exception& e) {
@@ -204,7 +220,68 @@ namespace Voice {
         }
 #endif
         LOG_PHASE("Voice shutdownTTS complete", true);
-        g_ttsReady = false; // 🔹 reset flag
+        g_ttsReady = false;
+    }
+
+    // =========================================================
+    // Queue worker
+    // =========================================================
+    static void speakWorker() {
+        while (true) {
+            std::unique_lock<std::mutex> lock(queueMutex);
+            queueCV.wait(lock, [] { return !speakQueue.empty() || !workerRunning; });
+            if (!workerRunning) break;
+
+            auto [text, category] = speakQueue.front();
+            speakQueue.pop();
+            lock.unlock();
+
+            LOG_DEBUG("Voice/Worker", "Processing: " + text);
+
+            std::string engine = "coqui";
+            auto it = g_rules.find(category);
+            if (it != g_rules.end()) {
+                if (it->second == "coqui" || it->second == "sapi")
+                    engine = it->second;
+            }
+
+            if (engine == "coqui") {
+                std::string wavPath = coquiSpeak(text, g_speaker, g_speed);
+                if (!wavPath.empty()) {
+                    playAudio(wavPath);
+                    while (isPlaying()) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                    }
+                }
+            }
+#ifdef _WIN32
+            else if (engine == "sapi") {
+                std::string command = "powershell -Command "
+                    "\"Add-Type -AssemblyName System.Speech; "
+                    "(New-Object System.Speech.Synthesis.SpeechSynthesizer)"
+                    ".Speak([Console]::In.ReadToEnd())\"";
+                FILE* pipe = _popen(command.c_str(), "w");
+                if (pipe) {
+                    fwrite(text.c_str(), 1, text.size(), pipe);
+                    _pclose(pipe);
+                }
+            }
+#endif
+        }
+    }
+
+    void initQueue() {
+        workerRunning = true;
+        workerThread = std::thread(speakWorker);
+    }
+
+    void shutdownQueue() {
+        {
+            std::lock_guard<std::mutex> lock(queueMutex);
+            workerRunning = false;
+        }
+        queueCV.notify_all();
+        if (workerThread.joinable()) workerThread.join();
     }
 
     // =========================================================
@@ -218,34 +295,29 @@ namespace Voice {
     // Playback
     // =========================================================
     void playAudio(const std::string& path) {
-    try {
-        auto buffer = std::make_unique<sf::SoundBuffer>();
-        if (!buffer->loadFromFile(path)) {
-            LOG_ERROR("Voice/Audio", "Could not load file: " + path);
-            return;
+        try {
+            auto buffer = std::make_unique<sf::SoundBuffer>();
+            if (!buffer->loadFromFile(path)) {
+                LOG_ERROR("Voice/Audio", "Could not load file: " + path);
+                return;
+            }
+
+            auto sound = std::make_unique<sf::Sound>(*buffer);
+            sound->setVolume(100.f);
+
+            notifyPopupActivity();
+            sound->play();
+
+            LOG_DEBUG("Voice/Audio", "Playing: " + path +
+                " (duration=" + std::to_string(buffer->getDuration().asSeconds()) + "s)");
+
+            activeBuffers.push_back(std::move(buffer));
+            activeSounds.push_back(std::move(sound));
+            cleanupSounds();
+        } catch (const std::exception& e) {
+            LOG_ERROR("Voice/Audio", std::string("Exception: ") + e.what());
         }
-
-        auto sound = std::make_unique<sf::Sound>(*buffer);
-        sound->setVolume(100.f);
-
-    // 🔹 Trigger popup before playing and ensure activity is refreshed
-    // after we actually start playback.
-    notifyPopupActivity();
-
-    sound->play();
-
-        LOG_DEBUG("Voice/Audio", "Playing: " + path +
-            " (duration=" + std::to_string(buffer->getDuration().asSeconds()) + "s)");
-
-        activeBuffers.push_back(std::move(buffer));
-        activeSounds.push_back(std::move(sound));
-
-    cleanupSounds();
-
-    } catch (const std::exception& e) {
-        LOG_ERROR("Voice/Audio", std::string("Exception: ") + e.what());
     }
-}
 
     // =========================================================
     // Coqui Speak
@@ -296,51 +368,13 @@ namespace Voice {
     }
 
     // =========================================================
-    // High-level Speak
+    // High-level Speak (enqueue)
     // =========================================================
     void speak(const std::string& text, const std::string& category) {
-        std::thread([text, category]() {
-            LOG_DEBUG("Voice", "speak(text=\"" + text + "\", category=\"" + category + "\")");
-
-            // 🔹 Default to Coqui
-            std::string engine = "coqui";
-
-            // 🔹 Only override if the rule explicitly exists AND is valid
-            auto it = g_rules.find(category);
-            if (it != g_rules.end()) {
-                if (it->second == "coqui" || it->second == "sapi") {
-                    engine = it->second;
-                } else {
-                    LOG_ERROR("Voice", "Invalid engine override: " + it->second + " (falling back to Coqui)");
-                }
-            }
-
-            LOG_DEBUG("Voice", "Engine selected: " + engine);
-
-            if (engine == "coqui") {
-                std::string wavPath = coquiSpeak(text, g_speaker, g_speed);
-                if (!wavPath.empty()) {
-                    playAudio(wavPath);
-                } else {
-                    LOG_ERROR("Voice", "coquiSpeak returned empty path");
-                }
-                return;
-            }
-
-#ifdef _WIN32
-            if (engine == "sapi") {
-                LOG_DEBUG("Voice", "Routing speech to Windows SAPI");
-                std::string command = "powershell -Command "
-                                      "\"Add-Type -AssemblyName System.Speech; "
-                                      "(New-Object System.Speech.Synthesis.SpeechSynthesizer)"
-                                      ".Speak([Console]::In.ReadToEnd())\"";
-                FILE* pipe = _popen(command.c_str(), "w");
-                if (pipe) {
-                    fwrite(text.c_str(), 1, text.size(), pipe);
-                    _pclose(pipe);
-                }
-            }
-#endif
-        }).detach();
+        {
+            std::lock_guard<std::mutex> lock(queueMutex);
+            speakQueue.emplace(text, category);
+        }
+        queueCV.notify_one();
     }
 }
