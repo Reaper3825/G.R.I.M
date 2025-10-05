@@ -1,5 +1,12 @@
 #pragma once
 #include <bgfx/bgfx.h>
 
-// Loads the bgfx shader program for the popup quad
+// Returns the compiled shader program
 bgfx::ProgramHandle loadPopupProgram();
+
+// Loads diffuse PNG + sampler uniform
+void loadPopupTexture();
+
+// Accessors for the sampler and texture handles
+bgfx::UniformHandle getPopupSampler();
+bgfx::TextureHandle getPopupTexture();

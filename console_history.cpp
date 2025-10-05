@@ -1,5 +1,5 @@
 #include "console_history.hpp"
-#include "ui_config.hpp" 
+#include "ui/ui_config.hpp" 
 
 // Push a new line into history (with optional color)
 void ConsoleHistory::push(const std::string& line, sf::Color c) {
