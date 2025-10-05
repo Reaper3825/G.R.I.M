@@ -1,13 +1,12 @@
-$input v_texcoord0
+$input v_color0
 
-#include "common.sh"
-#include "bgfx_shader.sh"
-#include "shaderlib.sh"
+#include "common_sprite.sh"
 
-SAMPLER2D(s_texColor, 0);
+uniform vec4 u_alpha;
 
 void main()
 {
-    vec4 color = texture2D(s_texColor, v_texcoord0);
+    vec4 color = v_color0;       // take vertex color
+    color.a *= u_alpha.x;        // apply animated fade alpha
     gl_FragColor = color;
 }

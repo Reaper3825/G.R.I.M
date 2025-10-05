@@ -176,26 +176,31 @@ file(GLOB ai_HEADERS "ai/*.hpp")
 file(GLOB nlp_SOURCES "nlp/*.cpp")
 file(GLOB nlp_HEADERS "nlp/*.hpp")
 
+# =========================================================
+# ui Sources
+# =========================================================
+file(GLOB ui_SOURCES "ui/*.cpp")
+file(GLOB ui_HEADERS "ui/*.hpp")
 
 
 
 
+# =========================================================
+# bootstrap Sources
+# =========================================================
 
+file(GLOB bootstrap_SOURCES "bootstrap/*.cpp")
+file(GLOB bootstrap_HEADERS "bootstrap/*.hpp")
 
 set(GRIM_SOURCES
     main.cpp
-    bootstrap.cpp
     resources.cpp
     synonyms.cpp
     aliases.cpp
     console_history.cpp
-    ui_helpers.cpp
-    ui_draw.cpp
-    ui_events.cpp
     system_detect.cpp
     response_manager.cpp
     error_manager.cpp
-    bootstrap_config.cpp
     logger.cpp
     ${COMMAND_SOURCES}
     ${POPUP_UI_SOURCES}
@@ -204,24 +209,20 @@ set(GRIM_SOURCES
     ${ai_SOURCES}
     ${WAKE_SOURCES}
     ${nlp_SOURCES}
+    ${ui_SOURCES}
+    ${bootstrap_SOURCES}
 )
 
 set(GRIM_HEADERS
 
-    bootstrap.hpp
     console_history.hpp
     intent.hpp
     aliases.hpp
     synonyms.hpp
     resources.hpp
-    ui_config.hpp
-    ui_helpers.hpp
-    ui_draw.hpp
-    ui_events.hpp
     timer.hpp
     response_manager.hpp
     error_manager.hpp
-    bootstrap_config.hpp
     logger.hpp
     system_detect.hpp
     ${COMMAND_HEADERS}
@@ -231,6 +232,8 @@ set(GRIM_HEADERS
     ${ai_HEADERS}
     ${WAKE_HEADERS}
     ${nlp_HEADERS}
+    ${ui_HEADERS}
+    ${bootstrap_HEADERS}
 )
 
 # =========================================================

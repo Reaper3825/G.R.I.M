@@ -1,6 +1,6 @@
 #include "voice_stream.hpp"
 #include "console_history.hpp"
-#include "ui_helpers.hpp"
+#include "ui/ui_helpers.hpp"
 #include "commands/commands_core.hpp"
 #include "ai/ai.hpp"
 #include "nlp/nlp.hpp"

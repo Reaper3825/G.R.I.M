@@ -3,6 +3,8 @@
 #include "popup_renderer.hpp"
 #include "popup_anim.hpp"
 #include "logger.hpp"
+#include <SFML/System/Clock.hpp>
+
 
 #include "voice/voice_speak.hpp"
 
@@ -29,30 +31,30 @@ static PopupAnimState g_anim;
 static sf::Clock g_idleClock; // still used for idle timing
 
 // ===========================================================
-// Vertex format for simple colored quad
+// Vertex format for simple textured quad
 // ===========================================================
-struct PosColorVertex {
+struct PosTexcoordVertex {
     float x, y, z;
-    uint32_t abgr;
+    float u, v;
     static void init()
     {
         ms_decl.begin()
             .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
-            .add(bgfx::Attrib::Color0,   4, bgfx::AttribType::Uint8, true)
+            .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
             .end();
     }
     static bgfx::VertexLayout ms_decl;
 };
 
-bgfx::VertexLayout PosColorVertex::ms_decl;
+bgfx::VertexLayout PosTexcoordVertex::ms_decl;
 
-// A simple fullscreen quad (two triangles) with semi-transparent red
-static PosColorVertex s_quadVertices[] =
+// A fullscreen quad (two triangles) with texcoords
+static PosTexcoordVertex s_quadVertices[] =
 {
-    { -1.0f, -1.0f, 0.0f, 0x7FFF0000 }, // ABGR: 0xAABBGGRR -> 0x7F alpha, FF red
-    {  1.0f, -1.0f, 0.0f, 0x7FFF0000 },
-    { -1.0f,  1.0f, 0.0f, 0x7FFF0000 },
-    {  1.0f,  1.0f, 0.0f, 0x7FFF0000 },
+    { -1.0f, -1.0f, 0.0f, 0.0f, 1.0f },
+    {  1.0f, -1.0f, 0.0f, 1.0f, 1.0f },
+    { -1.0f,  1.0f, 0.0f, 0.0f, 0.0f },
+    {  1.0f,  1.0f, 0.0f, 1.0f, 0.0f },
 };
 
 static const uint16_t s_quadIndices[] = { 0, 1, 2, 1, 3, 2 };
@@ -94,20 +96,21 @@ void runPopupUI(int width, int height) {
         return;
     }
 
-    PosColorVertex::init();
+    PosTexcoordVertex::init();
 
     // Create buffers
     bgfx::VertexBufferHandle vbh = bgfx::createVertexBuffer(
         bgfx::makeRef(s_quadVertices, sizeof(s_quadVertices)),
-        PosColorVertex::ms_decl
+        PosTexcoordVertex::ms_decl
     );
 
     bgfx::IndexBufferHandle ibh = bgfx::createIndexBuffer(
         bgfx::makeRef(s_quadIndices, sizeof(s_quadIndices))
     );
 
-    // Load your already-working shader program (popup_renderer can expose helper)
-    bgfx::ProgramHandle program = loadPopupProgram(); // defined in popup_renderer
+    // Load shaders + texture
+    bgfx::ProgramHandle program = loadPopupProgram();
+    loadPopupTexture(); // loads PNG + sampler
 
     MSG msg{};
     sf::Clock frameClock;
@@ -144,12 +147,14 @@ void runPopupUI(int width, int height) {
         bgfx::setVertexBuffer(0, vbh);
         bgfx::setIndexBuffer(ibh);
 
-        // Use default state + blending for transparency
+        // Bind diffuse texture (from popup_renderer)
+        bgfx::setTexture(0, getPopupSampler(), getPopupTexture());
+
+        // Enable blending (for PNG alpha)
         uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA;
         bgfx::setState(state);
 
         bgfx::submit(0, program);
-
         bgfx::frame();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
