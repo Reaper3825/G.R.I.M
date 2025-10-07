@@ -91,7 +91,7 @@ void runPopupUI(int width, int height)
     ShowWindow(g_hwnd, SW_SHOW);
     LOG_DEBUG("PopupUI", "ShowWindow called at " + std::to_string(GetTickCount()));
 
-    // Load alpha data from disk and apply immediately
+    // Load combined diffuse + oreo alpha data from disk
     queueWindowAlphaReadback(POPUP_SIZE, POPUP_SIZE);
     
     // Apply alpha data immediately since it's loaded synchronously
