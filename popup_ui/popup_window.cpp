@@ -112,9 +112,9 @@ void queueWindowAlphaReadback(int width, int height)
             int dstIdx = (y * width + x) * 4;
 
             // Combine: RGB from diffuse, A from oreo
-            combinedData[dstIdx + 0] = diffuseData[diffuseIdx + 2]; // B (R/B swap for Windows)
+            combinedData[dstIdx + 0] = diffuseData[diffuseIdx + 0]; // R
             combinedData[dstIdx + 1] = diffuseData[diffuseIdx + 1]; // G
-            combinedData[dstIdx + 2] = diffuseData[diffuseIdx + 0]; // R (R/B swap for Windows)
+            combinedData[dstIdx + 2] = diffuseData[diffuseIdx + 2]; // B
             combinedData[dstIdx + 3] = oreoData[oreoIdx + 3];       // A from oreo
         }
     }
