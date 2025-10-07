@@ -8,9 +8,9 @@
 #include <sstream>
 #include <string>
 
-// ------------------------------------------------------------
+// ====================================================
 // [Utility] Clear console
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdClean([[maybe_unused]] const std::string& arg) {
     return {
         "[Utility] Console cleared.",
@@ -22,9 +22,9 @@ CommandResult cmdClean([[maybe_unused]] const std::string& arg) {
     };
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // [Utility] Show help text
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdShowHelp([[maybe_unused]] const std::string& arg) {
     std::string helpText =
         "[Help] Available commands:\n"
@@ -55,9 +55,9 @@ CommandResult cmdShowHelp([[maybe_unused]] const std::string& arg) {
     };
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // [Utility] Reload NLP rules
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmd_reloadNLP([[maybe_unused]] const std::string& arg) {
     std::string err;
     if (!g_nlp.load_rules(getResourcePath() + "/nlp_rules.json", &err)) {

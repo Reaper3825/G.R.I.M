@@ -6,9 +6,9 @@
 
 NLP g_nlp;
 
-// ------------------------------------------------------------
+// ====================================================
 // Parse text against loaded NLP rules
-// ------------------------------------------------------------
+// ====================================================
 Intent NLP::parse(const std::string& text) const {
     Intent intent;
     intent.matched = false;
@@ -34,9 +34,9 @@ Intent NLP::parse(const std::string& text) const {
     return intent;
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // Load rules from file
-// ------------------------------------------------------------
+// ====================================================
 bool NLP::load_rules(const std::string& path, std::string* err) {
     try {
         std::ifstream f(path);
@@ -83,9 +83,9 @@ bool NLP::load_rules(const std::string& path, std::string* err) {
     }
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // Load rules from a JSON string
-// ------------------------------------------------------------
+// ====================================================
 bool NLP::load_rules_from_string(const std::string& rulesText, std::string* err) {
     try {
         nlohmann::json j = nlohmann::json::parse(rulesText);
@@ -125,9 +125,9 @@ bool NLP::load_rules_from_string(const std::string& rulesText, std::string* err)
     }
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // Reload wrapper
-// ------------------------------------------------------------
+// ====================================================
 CommandResult reloadNlpRules() {
     std::string err;
     if (!g_nlp.load_rules(getResourcePath() + "/nlp_rules.json", &err)) {

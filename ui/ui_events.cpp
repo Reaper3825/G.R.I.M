@@ -3,9 +3,9 @@
 #include "commands/commands_core.hpp"   // CommandResult + handleCommand
 #include "nlp/nlp.hpp"
 
-// -------------------------------------------------------------
+// ====================================================-
 // Handle UI events (SFML 3 style: is<T>() + getIf<T>())
-// -------------------------------------------------------------
+// ====================================================-
 bool processEvents(sf::RenderWindow& window,
                    std::string& buffer,
                    std::filesystem::path& currentDir,

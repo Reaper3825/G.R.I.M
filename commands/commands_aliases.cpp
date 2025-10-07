@@ -3,9 +3,9 @@
 #include "console_history.hpp"
 #include "error_manager.hpp"
 
-// ------------------------------------------------------------
+// ====================================================
 // alias list → dump aliases by section
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdAliasList(const std::string& /*arg*/) {
     const nlohmann::json& all = aliases::getAll();
 
@@ -52,9 +52,9 @@ CommandResult cmdAliasList(const std::string& /*arg*/) {
     };
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // alias info <name> → metadata about a specific alias
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdAliasInfo(const std::string& arg) {
     if (arg.empty()) {
         return {
@@ -89,9 +89,9 @@ CommandResult cmdAliasInfo(const std::string& arg) {
     };
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // alias refresh → run blocking refresh, push into history
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdAliasRefresh(const std::string& /*arg*/) {
     try {
         aliases::refreshNow();

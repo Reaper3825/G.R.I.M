@@ -13,15 +13,15 @@
   #include <shellapi.h>
 #endif
 
-// ------------------------------------------------------------
+// ====================================================
 // Externals
-// ------------------------------------------------------------
+// ====================================================
 extern nlohmann::json aiConfig;
 extern SystemInfo g_systemInfo; // populated at bootstrap
 
-// ------------------------------------------------------------
+// ====================================================
 // Helpers
-// ------------------------------------------------------------
+// ====================================================
 static std::string trim(const std::string& s) {
     auto start = s.find_first_not_of(" \t\n\r");
     auto end   = s.find_last_not_of(" \t\n\r");
@@ -39,9 +39,9 @@ static std::string autoSelectBackend() {
     return "openai";
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // [AI] Select / show current backend
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdAiBackend(const std::string& arg) {
     std::string input = trim(arg);
 
@@ -82,9 +82,9 @@ CommandResult cmdAiBackend(const std::string& arg) {
     };
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // [NLP] Reload rules
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdReloadNlp(const std::string& /*arg*/) {
     CommandResult r = reloadNlpRules();
     if (r.success) {
@@ -97,9 +97,9 @@ CommandResult cmdReloadNlp(const std::string& /*arg*/) {
     return r;
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // [AI] General query (catch-all) → grim_ai
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdGrimAi(const std::string& arg) {
     std::cerr << "[AI] cmdGrimAi called with arg=\"" << arg << "\"\n";
 
@@ -169,9 +169,9 @@ CommandResult cmdGrimAi(const std::string& arg) {
     return result;
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // [Apps] Open local application by alias
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdOpenApp(const std::string& arg) {
     std::cerr << "[DEBUG][cmdOpenApp] Received arg=\"" << arg << "\"\n";
 
@@ -226,9 +226,9 @@ CommandResult cmdOpenApp(const std::string& arg) {
 #endif
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // [Web] Search the web with default browser
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdSearchWeb(const std::string& arg) {
     std::string query = trim(arg);
 
