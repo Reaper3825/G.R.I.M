@@ -1,5 +1,7 @@
 #pragma once
 
-namespace WakeKey {
-    void update();
+namespace WakeKey
+{
+    void start();
+    void stop();
 }
