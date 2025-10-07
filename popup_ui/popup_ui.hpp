@@ -20,3 +20,11 @@ void hidePopup();
 // Notify the popup of user or system activity.
 // Resets idle timers and triggers display.
 void notifyPopupActivity();
+namespace bx {
+    void mtxSRT(
+        float* result,
+        float sx, float sy, float sz,
+        float rx, float ry, float rz,
+        float tx, float ty, float tz
+    );
+}

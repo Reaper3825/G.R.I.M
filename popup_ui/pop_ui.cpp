@@ -199,129 +199,55 @@ void runPopupUI(int width, int height)
         updateAnim(g_anim, g_popupVisible, dt, 0.08f);
 
         // === Render pass ===
-        bgfx::setViewFrameBuffer(0, g_fb);
-        bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0xFFFF00FF, 1.0f, 0); // Magenta background for visibility
-        bgfx::setViewRect(0, 0, 0, POPUP_SIZE, POPUP_SIZE);
-        bgfx::touch(0);
+bgfx::setViewFrameBuffer(0, g_fb);
+bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x00000000, 1.0f, 0);
+bgfx::setViewRect(0, 0, 0, POPUP_SIZE, POPUP_SIZE);
+bgfx::touch(0);
 
-        float mtx[16];
-        bx::mtxIdentity(mtx);
-        bgfx::setTransform(mtx);
+// ===========================================
+// Apply animated scale + fade
+// ===========================================
+float mtx[16];
+bx::mtxSRT(
+    mtx,                              // destination matrix
+    g_anim.scale, g_anim.scale, 1.0f, // scale
+    0.0f, 0.0f, 0.0f,                 // rotation
+    0.0f, 0.0f, 0.0f                  // translation
+);
 
-        bgfx::setVertexBuffer(0, vbh);
-        bgfx::setIndexBuffer(ibh);
 
-        bgfx::setTexture(0, getPopupSamplerColor(),   getPopupTextureColor());
-        bgfx::setTexture(1, getPopupSamplerOpacity(), getPopupTextureOpacity());
+// --- Create / Update fade uniform ---
+static bgfx::UniformHandle u_alpha = BGFX_INVALID_HANDLE;
+if (!bgfx::isValid(u_alpha))
+    u_alpha = bgfx::createUniform("u_alpha", bgfx::UniformType::Vec4);
 
-        uint64_t state =
-            BGFX_STATE_WRITE_RGB |
-            BGFX_STATE_WRITE_A |
-            BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA);
+// Pack alpha in .w for shader use
+float alphaVec[4] = { 1.0f, 1.0f, 1.0f, g_anim.alpha };
+bgfx::setUniform(u_alpha, alphaVec);
 
-        bgfx::setState(state);
-        bgfx::submit(0, program);
-        uint32_t frameIdx = bgfx::frame();
+// ===========================================
+// Submit geometry + textures
+// ===========================================
+bgfx::setVertexBuffer(0, vbh);
+bgfx::setIndexBuffer(ibh);
 
-        frameCounter++;
+bgfx::setTexture(0, getPopupSamplerColor(),   getPopupTextureColor());
+bgfx::setTexture(1, getPopupSamplerOpacity(), getPopupTextureOpacity());
 
-        // =====================================================
-        // GPU → CPU Readback for window transparency (DISABLED - using disk loading instead)
-        // =====================================================
-        /*
-        if (frameCounter > 30 && (frameCounter % 5 == 0) && !g_pendingReadback)  // More frequent readback
-        {
-            LOG_DEBUG("PopupUI", "Initiating framebuffer readback for window transparency at frame " + std::to_string(frameIdx));
-            
-            // Create a staging texture for readback if needed
-            if (!bgfx::isValid(g_stagingTex))
-            {
-                g_stagingTex = bgfx::createTexture2D(
-                    POPUP_SIZE, POPUP_SIZE, false, 1, bgfx::TextureFormat::RGBA8,
-                    BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST
-                );
-                LOG_DEBUG("PopupUI", "Created staging texture: " + std::to_string(bgfx::isValid(g_stagingTex)));
-            }
-            
-            // Blit from framebuffer texture to staging texture
-            if (!bgfx::isValid(g_colorTex)) {
-                LOG_ERROR("PopupUI", "Color texture is invalid!");
-                g_pendingReadback = false;
-                return;
-            }
-            bgfx::blit(0, g_stagingTex, 0, 0, g_colorTex, 0, 0, POPUP_SIZE, POPUP_SIZE);
-            
-            // Mark that we initiated readback
-            g_pendingReadback = true;
-            g_readbackFrame = frameIdx;
-            static int readbackAttempts = 0;  // Reset attempts counter
-            readbackAttempts = 0;
-        }
-        
-        // Check if readback is complete (with some frame delay)
-        if (g_pendingReadback && (frameIdx > g_readbackFrame + 3))  // Increased delay
-        {
-            LOG_DEBUG("PopupUI", "Checking readback completion at frame " + std::to_string(frameIdx) + " (initiated at " + std::to_string(g_readbackFrame) + ")");
-            
-            if (!bgfx::isValid(g_stagingTex)) {
-                LOG_ERROR("PopupUI", "Staging texture is invalid!");
-                g_pendingReadback = false;
-                return;
-            }
-            
-            // Ensure the blit operation is complete by waiting a few more frames
-            if (frameIdx < g_readbackFrame + 3) {  // Reduced wait time
-                LOG_DEBUG("PopupUI", "Waiting for blit to complete (frame " + std::to_string(frameIdx) + ")");
-                return;
-            }
-            
-            // Timeout after too many failed attempts
-            static int readbackAttempts = 0;
-            readbackAttempts++;
+uint64_t state =
+    BGFX_STATE_WRITE_RGB |
+    BGFX_STATE_WRITE_A |
+    BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA);
 
-            if (readbackAttempts > 10) {
-                LOG_ERROR("PopupUI", "Readback timeout after 10 attempts, giving up");
-                g_pendingReadback = false;
-                readbackAttempts = 0;
-                return;
-            }
+bgfx::setState(state);
+bgfx::submit(0, program);
 
-            // Try to read the texture data
-            uint32_t result = bgfx::readTexture(g_stagingTex, g_readbackData.data(), 0);
-            LOG_DEBUG("PopupUI", "bgfx::readTexture returned: " + std::to_string(result) + " (attempt " + std::to_string(readbackAttempts) + ")");
+// Present
+uint32_t frameIdx = bgfx::frame();
+frameCounter++;
 
-            if (result == 0)
-            {
-                LOG_DEBUG("PopupUI", "bgfx::readTexture succeeded, processing data");
-                readbackAttempts = 0;  // Reset on success
-                
-                // Check if data is valid (not all zeros)
-                bool hasNonZeroData = false;
-                uint8_t maxValue = 0;
-                for (size_t i = 0; i < g_readbackData.size(); ++i) {
-                    if (g_readbackData[i] > maxValue) maxValue = g_readbackData[i];
-                    if (g_readbackData[i] != 0) hasNonZeroData = true;
-                }
-                
-                LOG_DEBUG("PopupUI", "Max value in readback data: " + std::to_string(maxValue));
-                
-                if (!hasNonZeroData) {
-                    LOG_ERROR("PopupUI", "Readback data is all zeros!");
-                } else {
-                    LOG_DEBUG("PopupUI", "Readback data contains non-zero values, applying to window");
-                }
-                
-                std::lock_guard<std::mutex> lock(g_alphaMutex);
-                g_alphaPixels = g_readbackData;
-                g_alphaReady = true;
-                
-                applyWindowAlphaIfReady(g_hwnd, POPUP_SIZE, POPUP_SIZE, frameIdx);
-                g_pendingReadback = false; // Done
-            } else {
-                LOG_ERROR("PopupUI", "bgfx::readTexture failed!");
-            }
-        }
-        */        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+
+       std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 
     // Cleanup
