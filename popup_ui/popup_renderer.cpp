@@ -1,9 +1,7 @@
 #include "popup_renderer.hpp"
-#include "logger.hpp"
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
-#include <fstream>
-#include <vector>
+#include "pch.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>

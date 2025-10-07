@@ -4,14 +4,12 @@
 #include "ui/ui_helpers.hpp"
 #include "commands/commands_core.hpp"
 #include "logger.hpp"
-
+#include "pch.hpp"
 #include <nlohmann/json.hpp>
-#include <fstream>
-#include <sstream>
-#include <mutex>
-#include <thread>
-#include <atomic>
-#include <filesystem>
+
+
+
+
 #include <ctime>
 
 namespace fs = std::filesystem;

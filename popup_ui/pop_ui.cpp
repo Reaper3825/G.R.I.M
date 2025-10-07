@@ -3,20 +3,16 @@
 #include "popup_renderer.hpp"
 #include "popup_anim.hpp"
 #include "logger.hpp"
+#include "pch.hpp"
 #include <SFML/System/Clock.hpp>
 #include <SFML/System/Time.hpp>
 #include "voice/voice_speak.hpp"
-
-#include <thread>
-#include <atomic>
-#include <chrono>
 #include <windows.h>
 #include <cstdint>
-#include <cmath>
-#include <algorithm>
 #include <bx/math.h>
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
+
 
 // ===========================================================
 // Constants

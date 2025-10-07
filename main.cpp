@@ -17,10 +17,6 @@
 #include "wake/wake.hpp"
 #include "wake/wake_key.hpp"
 #include "wake/wake_voice.hpp"
-
-#include <thread>
-#include <filesystem>
-#include <iostream>
 #include <SFML/Graphics/Font.hpp>
 #include <SFML/Graphics/Text.hpp>
 
