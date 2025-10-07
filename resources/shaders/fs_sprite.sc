@@ -4,14 +4,19 @@ $input v_texcoord0
 SAMPLER2D(s_texColor, 0);
 SAMPLER2D(s_texOpacity, 1);
 
+// Add fade uniform
+uniform vec4 u_alpha; // we’ll use .w as the alpha multiplier
+
 void main()
 {
-    // Diffuse and opacity RGBA
+    // Sample diffuse + opacity
     vec4 color = texture2D(s_texColor, v_texcoord0);
     vec4 opacity = texture2D(s_texOpacity, v_texcoord0);
 
-    // Use the Oreo texture's actual alpha channel
-    color.a *= opacity.a;
+    // Combine baked alpha with runtime fade multiplier
+    float finalAlpha = opacity.a * u_alpha.w;
+    color.a *= finalAlpha;
 
-    gl_FragColor = color;
+    // Apply fade to entire color output
+    gl_FragColor = vec4(color.rgb, color.a);
 }
