@@ -155,12 +155,12 @@ file(GLOB DEVICE_SETUPS_HEADERS "device_setups/*.hpp")
 file(GLOB WAKE_SOURCES "wake/*.cpp")
 file(GLOB WAKE_HEADERS "wake/*.hpp")
 
-
 # =========================================================
 # voice Sources
 # =========================================================
-file(GLOB WAKE_SOURCES "voice/*.cpp")
-file(GLOB WAKE_HEADERS "voice/*.hpp")
+file(GLOB VOICE_SOURCES "voice/*.cpp")
+file(GLOB VOICE_HEADERS "voice/*.hpp")
+
 
 
 # =========================================================
@@ -192,6 +192,16 @@ file(GLOB ui_HEADERS "ui/*.hpp")
 file(GLOB bootstrap_SOURCES "bootstrap/*.cpp")
 file(GLOB bootstrap_HEADERS "bootstrap/*.hpp")
 
+
+
+
+# =========================================================
+# bootstrap Sources
+# =========================================================
+
+file(GLOB helpers_SOURCES "helpers/*.cpp")
+file(GLOB helpers_HEADERS "helpers/*.hpp")
+
 set(GRIM_SOURCES
     main.cpp
     resources.cpp
@@ -211,6 +221,7 @@ set(GRIM_SOURCES
     ${nlp_SOURCES}
     ${ui_SOURCES}
     ${bootstrap_SOURCES}
+    ${helpers_SOURCES}
 )
 
 set(GRIM_HEADERS
@@ -234,6 +245,7 @@ set(GRIM_HEADERS
     ${nlp_HEADERS}
     ${ui_HEADERS}
     ${bootstrap_HEADERS}
+    ${helpers_HEADERS}
 )
 
 # =========================================================
@@ -257,8 +269,19 @@ endif()
 # =========================================================
 
 # ---- GLFW ----
+# ---- GLFW ----
 find_package(glfw3 CONFIG REQUIRED)
-target_link_libraries(GRIM PRIVATE glfw)
+
+# Try both possible targets (depends on vcpkg version)
+if(TARGET glfw)
+    target_link_libraries(GRIM PRIVATE glfw)
+elseif(TARGET glfw3::glfw)
+    target_link_libraries(GRIM PRIVATE glfw3::glfw)
+else()
+    message(FATAL_ERROR "Could not find GLFW target in glfw3Config.cmake")
+endif()
+
+
 
 # ---- bgfx ---- (build from submodule instead of fake imports)
 add_subdirectory(external/bgfx.cmake)

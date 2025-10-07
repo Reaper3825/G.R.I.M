@@ -1,12 +1,20 @@
 #pragma once
+
 #include <bgfx/bgfx.h>
 
-// Returns the compiled shader program
+// ===========================================================
+// Popup Renderer — Texture + Shader Interface
+// ===========================================================
+
+// Loads and links the BGFX shader program for popup rendering.
 bgfx::ProgramHandle loadPopupProgram();
 
-// Loads diffuse PNG + sampler uniform
-void loadPopupTexture();
 
-// Accessors for the sampler and texture handles
-bgfx::UniformHandle getPopupSampler();
-bgfx::TextureHandle getPopupTexture();
+// Loads both diffuse and opacity textures (and their sampler uniforms).
+void loadPopupTextures();
+
+// Sampler and texture accessors
+bgfx::UniformHandle getPopupSamplerColor();
+bgfx::UniformHandle getPopupSamplerOpacity();
+bgfx::TextureHandle getPopupTextureColor();
+bgfx::TextureHandle getPopupTextureOpacity();

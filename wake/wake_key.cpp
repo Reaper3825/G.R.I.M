@@ -1,25 +1,63 @@
 #include "wake_key.hpp"
-#include "wake.hpp"     // so we can access Wake::g_awake
+#include "helpers/key.hpp"
+#include "popup_ui/popup_ui.hpp"
 #include "logger.hpp"
+#include <thread>
+#include <atomic>
+#include <windows.h>
 
-#include <SFML/Window/Keyboard.hpp>
+namespace WakeKey
+{
+    static std::thread keyThread;
+    static std::atomic<bool> running{ false };
 
-namespace WakeKey {
-    void update() {
-        // Example hotkey: F9 wakes GRIM
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::F9)) {
-            if (!Wake::g_awake.load()) {
-                Wake::g_awake.store(true);
-                logTrace("WakeKey", "F9 pressed - waking GRIM");
+    static void onActivationKey(KeyCode)
+    {
+        LOG_DEBUG("WakeKey", "Wake key pressed — activating popup");
+        notifyPopupActivity();
+    }
+
+    static void keyLoop()
+    {
+        Key::initialize();
+        Key::onPress(KeyCode::F9, onActivationKey);
+        LOG_PHASE("WakeKey system active", true);
+
+        MSG msg{};
+        while (running)
+        {
+            while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
+            {
+                if (msg.message == WM_QUIT)
+                {
+                    running = false;
+                    break;
+                }
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
             }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
 
-        // Example hotkey: F10 puts GRIM back to sleep
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::F10)) {
-            if (Wake::g_awake.load()) {
-                Wake::g_awake.store(false);
-                logTrace("WakeKey", "F10 pressed - putting GRIM to sleep");
-            }
-        }
+        Key::shutdown();
+        LOG_PHASE("WakeKey system stopped", true);
+    }
+
+    void start()
+    {
+        if (running)
+            return;
+        running = true;
+        keyThread = std::thread(keyLoop);
+    }
+
+    void stop()
+    {
+        if (!running)
+            return;
+        running = false;
+        PostQuitMessage(0);
+        if (keyThread.joinable())
+            keyThread.join();
     }
 }

@@ -1,12 +1,17 @@
-$input v_color0
-
+$input v_texcoord0
 #include "common_sprite.sh"
 
-uniform vec4 u_alpha;
+SAMPLER2D(s_texColor, 0);
+SAMPLER2D(s_texOpacity, 1);
 
 void main()
 {
-    vec4 color = v_color0;       // take vertex color
-    color.a *= u_alpha.x;        // apply animated fade alpha
+    // Diffuse and opacity RGBA
+    vec4 color = texture2D(s_texColor, v_texcoord0);
+    vec4 opacity = texture2D(s_texOpacity, v_texcoord0);
+
+    // Use the Oreo texture's actual alpha channel
+    color.a *= opacity.a;
+
     gl_FragColor = color;
 }

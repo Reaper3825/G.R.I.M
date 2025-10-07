@@ -1,19 +1,22 @@
 #pragma once
+#include <windows.h>
 
 // ===========================================================
-// Popup UI control (public API)
+// GRIM Popup UI Control Header
+// ===========================================================
+//
+// Exports the top-level popup UI control loop and helper functions
+// to show/hide/notify overlay activity.
+//
 // ===========================================================
 
-// Launch the popup UI loop in its own thread
+// Main popup UI loop. Launches and manages bgfx rendering + alpha.
 void runPopupUI(int width, int height);
 
-// Show the popup immediately
+// Control visibility of the popup window.
 void showPopup();
-
-// Hide the popup immediately
 void hidePopup();
 
-// Notify that GRIM activity occurred (voice speaking, command, etc.)
-// - Ensures the popup is visible
-// - Resets idle timer so it stays open a few seconds after activity
+// Notify the popup of user or system activity.
+// Resets idle timers and triggers display.
 void notifyPopupActivity();

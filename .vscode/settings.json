@@ -116,6 +116,22 @@
         "typeindex": "cpp",
         "expected": "cpp",
         "shared_mutex": "cpp",
-        "source_location": "cpp"
-    }
+        "source_location": "cpp",
+        "cfenv": "cpp"
+    },
+
+    // ──────────────────────────────────────────────────────────────
+    // 🧩 GRIM-only extras — hide external git repos from Source Control
+    // ──────────────────────────────────────────────────────────────
+    "git.ignoredRepositories": [
+        "D:/G.R.I.M/external"
+    ],
+
+    // Hide all .git folders inside external/
+    "files.exclude": {
+        "**/external/**/.git": true
+    },
+
+    // Stop VS Code from auto-detecting nested repos
+    "git.autoRepositoryDetection": false
 }

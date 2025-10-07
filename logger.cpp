@@ -139,7 +139,8 @@ void initLogger(const std::string& filename) {
     std::lock_guard<std::mutex> lock(g_logMutex);
 
     fs::path logPath = fs::absolute(filename);
-    g_logFile.open(logPath, std::ios::out | std::ios::app);
+    g_logFile.open(logPath, std::ios::out | std::ios::trunc);
+
 
     if (g_logFile.is_open()) {
         std::string header = "==== GRIM Log Started ====";
