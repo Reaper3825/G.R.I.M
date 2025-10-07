@@ -1,10 +1,7 @@
 #include "wake_key.hpp"
 #include "helpers/key.hpp"
 #include "popup_ui/popup_ui.hpp"
-#include "logger.hpp"
-#include <thread>
-#include <atomic>
-#include <windows.h>
+#include "pch.hpp"
 
 namespace WakeKey
 {
