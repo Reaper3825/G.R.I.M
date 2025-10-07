@@ -73,9 +73,9 @@ namespace {
     }
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // [Voice] One-shot voice command
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
     std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
 
@@ -102,9 +102,9 @@ CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
     };
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // [Voice] Continuous streaming mode
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdVoiceStream([[maybe_unused]] const std::string& arg) {
     if (!Voice::g_state.ctx) {
         return {
@@ -138,9 +138,9 @@ CommandResult cmdVoiceStream([[maybe_unused]] const std::string& arg) {
     }
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // [Voice] Local TTS test (Microsoft David)
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
     CommandResult result;
     result.success = false;
@@ -170,9 +170,9 @@ CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
     return result;
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // [Voice] List installed SAPI voices
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
     auto cfg = aiConfig["voice"];
     std::ostringstream oss;
@@ -261,9 +261,9 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
 #endif
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // [Debug] Speak a test line directly through SAPI
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmd_testSAPI([[maybe_unused]] const std::string& arg) {
     sf::SoundBuffer buffer;
     if (!buffer.loadFromFile("resources/test.wav")) {
@@ -296,9 +296,9 @@ CommandResult cmd_testSAPI([[maybe_unused]] const std::string& arg) {
     };
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // [Voice] Get current SAPI output device
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmd_ttsDevice([[maybe_unused]] const std::string& arg) {
 #if defined(_WIN32)
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);

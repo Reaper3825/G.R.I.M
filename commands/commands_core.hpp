@@ -11,9 +11,9 @@ struct CommandResult;
 struct Timer;
 class ConsoleHistory;
 
-// ------------------------------------------------------------
+// ====================================================
 // CommandResult: unified return type for all commands
-// ------------------------------------------------------------
+// ====================================================
 struct CommandResult {
     std::string message;    // user-facing text (console)
     bool success = true;    // true if command succeeded
@@ -25,23 +25,23 @@ struct CommandResult {
     std::string category;   // voice category (routine, summary, error, etc.)
 };
 
-// ------------------------------------------------------------
+// ====================================================
 // Function pointer type for commands
-// ------------------------------------------------------------
+// ====================================================
 using CommandFunc = CommandResult(*)(const std::string& arg);
 
-// ------------------------------------------------------------
+// ====================================================
 // Globals (declared here, defined in commands_core.cpp)
-// ------------------------------------------------------------
+// ====================================================
 extern std::unordered_map<std::string, CommandFunc> commandMap;
 extern ConsoleHistory history;
 extern std::vector<Timer> timers;
 extern std::filesystem::path g_currentDir;
 extern Intent g_lastIntent;
 
-// ------------------------------------------------------------
+// ====================================================
 // Public API
-// ------------------------------------------------------------
+// ====================================================
 std::pair<std::string, std::string> parseInput(const std::string& input);
 CommandResult dispatchCommand(const std::string& cmd, const std::string& arg);
 void handleCommand(const std::string& line);

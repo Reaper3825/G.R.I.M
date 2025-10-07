@@ -19,9 +19,9 @@
 
 using Voice::speak;
 
-// ------------------------------------------------------------
+// ====================================================
 // Globals
-// ------------------------------------------------------------
+// ====================================================
 std::unordered_map<std::string, CommandFunc> commandMap;
 
 // Externals
@@ -31,9 +31,9 @@ extern NLP g_nlp;   // defined in nlp.cpp
 extern ConsoleHistory history;
 Intent g_lastIntent; // last matched intent
 
-// ------------------------------------------------------------
+// ====================================================
 // Helpers
-// ------------------------------------------------------------
+// ====================================================
 static int levenshteinDistance(const std::string& s1, const std::string& s2) {
     const size_t m = s1.size(), n = s2.size();
     std::vector<int> prev(n + 1), curr(n + 1);
@@ -94,9 +94,9 @@ static std::string cleanArg(const std::string& arg) {
     return out;
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // Command Registration
-// ------------------------------------------------------------
+// ====================================================
 static void initCommands() {
     if (!commandMap.empty()) return; // already initialized
 
@@ -146,9 +146,9 @@ static void initCommands() {
     };
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // Core Dispatch
-// ------------------------------------------------------------
+// ====================================================
 std::pair<std::string, std::string> parseInput(const std::string& input) {
     auto pos = input.find(' ');
     if (pos == std::string::npos) {
@@ -187,9 +187,9 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg) {
     };
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // handleCommand: central hub for command + NLP execution
-// ------------------------------------------------------------
+// ====================================================
 void handleCommand(const std::string& line) {
     std::cerr << "[TRACE][handleCommand] START line=\"" << line << "\"\n";
 

@@ -34,9 +34,9 @@ std::string g_inputBuffer;
 // ============================================================
 int main(int argc, char* argv[])
 {
-    // ------------------------------------------------------------
+    // ====================================================
     // Logger + startup phase
-    // ------------------------------------------------------------
+    // ====================================================
     initLogger("grim.log");
     LOG_PHASE("Startup begin", true);
 
@@ -47,9 +47,9 @@ int main(int argc, char* argv[])
     // Start speech queue system
     Voice::initQueue();
 
-    // ------------------------------------------------------------
+    // ====================================================
     // Load dummy font (needed for sf::Text even if unused)
-    // ------------------------------------------------------------
+    // ====================================================
     fs::path fontPath = fs::path(getResourcePath()) / "DejaVuMathTeXGyre.ttf";
     if (!g_dummyFont.openFromFile(fontPath.string()))
     {
@@ -62,15 +62,15 @@ int main(int argc, char* argv[])
         LOG_PHASE("Font load", true);
     }
 
-    // ------------------------------------------------------------
+    // ====================================================
     // Aliases + system initialization
-    // ------------------------------------------------------------
+    // ====================================================
     aliases::init();
     LOG_PHASE("Aliases initialized", true);
 
-    // ------------------------------------------------------------
+    // ====================================================
     // Wait for Coqui bridge to be ready
-    // ------------------------------------------------------------
+    // ====================================================
     if (!Voice::isReady())
     {
         LOG_DEBUG("Voice", "Waiting for TTS bridge to be ready...");
@@ -78,17 +78,17 @@ int main(int argc, char* argv[])
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    // ------------------------------------------------------------
+    // ====================================================
     // Startup greeting
-    // ------------------------------------------------------------
+    // ====================================================
     Voice::speak("Welcome back, Austin. Grim is online.", "system");
     LOG_PHASE("Startup greeting spoken", true);
 
     LOG_PHASE("Startup complete, entering main loop", true);
 
-    // ------------------------------------------------------------
+    // ====================================================
     // Launch popup UI in background thread
-    // ------------------------------------------------------------
+    // ====================================================
     sf::VideoMode desktop = sf::VideoMode::getDesktopMode();
     unsigned monWidth  = desktop.size.x;
     unsigned monHeight = desktop.size.y;
@@ -101,21 +101,24 @@ int main(int argc, char* argv[])
     }).detach();
     LOG_PHASE("Popup UI launched", true);
 
-    // ------------------------------------------------------------
+    // ====================================================
     // Start Wake Key listener (activates popup on F9)
-    // ------------------------------------------------------------
+    // ====================================================
     WakeKey::start();
     LOG_PHASE("WakeKey listener started", true);
 
-    // ------------------------------------------------------------
+    // ====================================================
     // Console REPL loop
-    // ------------------------------------------------------------
+    // ====================================================
     std::string line;
     while (true)
     {
         std::cout << "> ";
         if (!std::getline(std::cin, line))
+        {
+            LOG_DEBUG("Main", "std::getline failed - exiting main loop");
             break; // EOF / Ctrl+D
+        }
 
         if (line.empty())
             continue;
@@ -130,18 +133,18 @@ int main(int argc, char* argv[])
         handleCommand(line);
     }
 
-    // ------------------------------------------------------------
+    // ====================================================
     // Shutdown cleanup
-    // ------------------------------------------------------------
-    WakeKey::stop();                // 🧠 stop listener thread
+    // ====================================================
+    WakeKey::stop();        
     Voice::shutdownQueue();
     Voice::shutdownTTS();
 
     LOG_PHASE("Shutdown complete", true);
 
-    // ------------------------------------------------------------
+    // ====================================================
     // Close logger
-    // ------------------------------------------------------------
+    // ====================================================
     shutdownLogger();
     return 0;
 }

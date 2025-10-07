@@ -10,30 +10,105 @@ static KeyCode fromVK(WPARAM vk)
 {
     switch (vk)
     {
-        case VK_SHIFT: return KeyCode::SHIFT;
-        case VK_CONTROL: return KeyCode::CTRL;
-        case VK_MENU: return KeyCode::ALT;
-        case VK_SPACE: return KeyCode::SPACE;
-        case VK_RETURN: return KeyCode::ENTER;
-        case VK_ESCAPE: return KeyCode::ESCAPE;
-        case VK_F1: return KeyCode::F1;
-        case VK_F2: return KeyCode::F2;
-        case VK_F3: return KeyCode::F3;
-        case VK_F4: return KeyCode::F4;
-        case VK_F5: return KeyCode::F5;
-        case VK_F6: return KeyCode::F6;
-        case VK_F7: return KeyCode::F7;
-        case VK_F8: return KeyCode::F8;
-        case VK_F9: return KeyCode::F9;
-        case VK_F10: return KeyCode::F10;
-        case VK_F11: return KeyCode::F11;
-        case VK_F12: return KeyCode::F12;
+        // --- Letters ---
+        case 'A': return KeyCode::A; case 'B': return KeyCode::B; case 'C': return KeyCode::C;
+        case 'D': return KeyCode::D; case 'E': return KeyCode::E; case 'F': return KeyCode::F;
+        case 'G': return KeyCode::G; case 'H': return KeyCode::H; case 'I': return KeyCode::I;
+        case 'J': return KeyCode::J; case 'K': return KeyCode::K; case 'L': return KeyCode::L;
+        case 'M': return KeyCode::M; case 'N': return KeyCode::N; case 'O': return KeyCode::O;
+        case 'P': return KeyCode::P; case 'Q': return KeyCode::Q; case 'R': return KeyCode::R;
+        case 'S': return KeyCode::S; case 'T': return KeyCode::T; case 'U': return KeyCode::U;
+        case 'V': return KeyCode::V; case 'W': return KeyCode::W; case 'X': return KeyCode::X;
+        case 'Y': return KeyCode::Y; case 'Z': return KeyCode::Z;
+
+        // --- Numbers (top row) ---
+        case '0': return KeyCode::Num0; case '1': return KeyCode::Num1; case '2': return KeyCode::Num2;
+        case '3': return KeyCode::Num3; case '4': return KeyCode::Num4; case '5': return KeyCode::Num5;
+        case '6': return KeyCode::Num6; case '7': return KeyCode::Num7; case '8': return KeyCode::Num8;
+        case '9': return KeyCode::Num9;
+
+        // --- Function Keys ---
+        case VK_F1:  return KeyCode::F1;  case VK_F2:  return KeyCode::F2;
+        case VK_F3:  return KeyCode::F3;  case VK_F4:  return KeyCode::F4;
+        case VK_F5:  return KeyCode::F5;  case VK_F6:  return KeyCode::F6;
+        case VK_F7:  return KeyCode::F7;  case VK_F8:  return KeyCode::F8;
+        case VK_F9:  return KeyCode::F9;  case VK_F10: return KeyCode::F10;
+        case VK_F11: return KeyCode::F11; case VK_F12: return KeyCode::F12;
+
+        // --- Modifiers ---
+        case VK_LSHIFT:   return KeyCode::LShift;
+        case VK_RSHIFT:   return KeyCode::RShift;
+        case VK_LCONTROL: return KeyCode::LCtrl;
+        case VK_RCONTROL: return KeyCode::RCtrl;
+        case VK_LMENU:    return KeyCode::LAlt;
+        case VK_RMENU:    return KeyCode::RAlt;
+        case VK_LWIN:     return KeyCode::LSystem;
+        case VK_RWIN:     return KeyCode::RSystem;
+        case VK_CAPITAL:  return KeyCode::CapsLock;
+        case VK_NUMLOCK:  return KeyCode::NumLock;
+        case VK_SCROLL:   return KeyCode::ScrollLock;
+
+        // --- Navigation / Editing ---
+        case VK_RETURN:   return KeyCode::Enter;
+        case VK_ESCAPE:   return KeyCode::Escape;
+        case VK_SPACE:    return KeyCode::Space;
+        case VK_BACK:     return KeyCode::Backspace;
+        case VK_TAB:      return KeyCode::Tab;
+        case VK_INSERT:   return KeyCode::Insert;
+        case VK_DELETE:   return KeyCode::Delete;
+        case VK_HOME:     return KeyCode::Home;
+        case VK_END:      return KeyCode::End;
+        case VK_PRIOR:    return KeyCode::PageUp;
+        case VK_NEXT:     return KeyCode::PageDown;
+
+        // --- Arrows ---
+        case VK_LEFT:     return KeyCode::Left;
+        case VK_RIGHT:    return KeyCode::Right;
+        case VK_UP:       return KeyCode::Up;
+        case VK_DOWN:     return KeyCode::Down;
+
+        // --- Symbols / Punctuation ---
+        case VK_OEM_MINUS:      return KeyCode::Dash;        // -
+        case VK_OEM_PLUS:       return KeyCode::Equal;       // =
+        case VK_OEM_4:          return KeyCode::LBracket;    // [
+        case VK_OEM_6:          return KeyCode::RBracket;    // ]
+        case VK_OEM_5:          return KeyCode::Backslash;   // \
+        case VK_OEM_1:          return KeyCode::Semicolon;   // ;
+        case VK_OEM_7:          return KeyCode::Apostrophe;  // '
+        case VK_OEM_COMMA:      return KeyCode::Comma;       // ,
+        case VK_OEM_PERIOD:     return KeyCode::Period;      // .
+        case VK_OEM_2:          return KeyCode::Slash;       // /
+        case VK_OEM_3:          return KeyCode::Grave;       // `
+
+        // --- Numpad ---
+        case VK_NUMPAD0: return KeyCode::Numpad0;
+        case VK_NUMPAD1: return KeyCode::Numpad1;
+        case VK_NUMPAD2: return KeyCode::Numpad2;
+        case VK_NUMPAD3: return KeyCode::Numpad3;
+        case VK_NUMPAD4: return KeyCode::Numpad4;
+        case VK_NUMPAD5: return KeyCode::Numpad5;
+        case VK_NUMPAD6: return KeyCode::Numpad6;
+        case VK_NUMPAD7: return KeyCode::Numpad7;
+        case VK_NUMPAD8: return KeyCode::Numpad8;
+        case VK_NUMPAD9: return KeyCode::Numpad9;
+        case VK_ADD:     return KeyCode::NumpadAdd;
+        case VK_SUBTRACT:return KeyCode::NumpadSubtract;
+        case VK_MULTIPLY:return KeyCode::NumpadMultiply;
+        case VK_DIVIDE:  return KeyCode::NumpadDivide;
+        case VK_DECIMAL: return KeyCode::NumpadDecimal;
+        case VK_SEPARATOR: return KeyCode::NumpadEnter;
+
+        // --- Multimedia / System ---
+        case VK_SNAPSHOT: return KeyCode::PrintScreen;
+        case VK_PAUSE:    return KeyCode::Pause;
+        case VK_APPS:     return KeyCode::Menu;
+
+        // --- Fallback ---
         default:
-            if (vk >= 'A' && vk <= 'Z')
-                return static_cast<KeyCode>(vk - 'A' + static_cast<int>(KeyCode::A));
-            return KeyCode::UNKNOWN;
+            return KeyCode::Unknown;
     }
 }
+
 
 // Hook callback
 LRESULT CALLBACK Key::LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
@@ -42,7 +117,8 @@ LRESULT CALLBACK Key::LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lPar
     {
         auto* kb = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
         KeyCode code = fromVK(kb->vkCode);
-        if (code != KeyCode::UNKNOWN)
+        if (code != KeyCode::Unknown
+)
         {
             if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)
                 setDown(code);

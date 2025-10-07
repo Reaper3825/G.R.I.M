@@ -5,9 +5,9 @@
 #include <sstream>
 #include <chrono>
 
-// ------------------------------------------------------------
+// ====================================================
 // [Timer] Set a new timer (arg = number of seconds)
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdSetTimer(const std::string& arg) {
     int seconds = 0;
     try {
@@ -51,9 +51,9 @@ CommandResult cmdSetTimer(const std::string& arg) {
     };
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // [Timer] Check timers for expiration
-// ------------------------------------------------------------
+// ====================================================
 std::vector<CommandResult> checkExpiredTimers() {
     std::vector<CommandResult> results;
     auto now = std::chrono::steady_clock::now();

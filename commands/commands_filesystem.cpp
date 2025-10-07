@@ -4,9 +4,9 @@
 extern ConsoleHistory history;
 extern std::filesystem::path g_currentDir;
 
-// ------------------------------------------------------------
+// ====================================================
 // pwd → show current directory
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdShowPwd([[maybe_unused]] const std::string& arg) {
     return {
         "[FS] Current directory: " + g_currentDir.string(),
@@ -18,9 +18,9 @@ CommandResult cmdShowPwd([[maybe_unused]] const std::string& arg) {
     };
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // cd <dir> → change directory
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdChangeDir(const std::string& arg) {
     if (arg.empty()) {
         return {
@@ -56,9 +56,9 @@ CommandResult cmdChangeDir(const std::string& arg) {
     };
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // ls → list directory contents
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdListDir([[maybe_unused]] const std::string& arg) {
     std::string output = "[FS] Contents:\n";
     for (const auto& entry : std::filesystem::directory_iterator(g_currentDir)) {
@@ -75,9 +75,9 @@ CommandResult cmdListDir([[maybe_unused]] const std::string& arg) {
     };
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // mkdir <dir> → make directory
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdMakeDir(const std::string& arg) {
     if (arg.empty()) {
         return {
@@ -112,9 +112,9 @@ CommandResult cmdMakeDir(const std::string& arg) {
     }
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // rm <file> → remove file
-// ------------------------------------------------------------
+// ====================================================
 CommandResult cmdRemoveFile(const std::string& arg) {
     if (arg.empty()) {
         return {

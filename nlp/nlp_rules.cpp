@@ -1,9 +1,9 @@
 #include "nlp.hpp"
 #include "pch.hpp"
 
-// ------------------------------------------------------------
+// ====================================================
 // Load NLP rules from a JSON file into the global g_nlp object
-// ------------------------------------------------------------
+// ====================================================
 bool loadNlpRules(const std::string& path)
 {
     std::ifstream in(path);

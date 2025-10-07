@@ -14,9 +14,9 @@
 
 namespace fs = std::filesystem;
 
-// ------------------------------------------------------------
+// ====================================================
 // Globals
-// ------------------------------------------------------------
+// ====================================================
 static nlohmann::json g_aliases;          // { "user": {}, "auto": {} }
 static std::mutex g_aliasMutex;
 static const std::string ALIAS_FILE = "app_aliases.json";
@@ -24,9 +24,9 @@ static const std::string ALIAS_FILE = "app_aliases.json";
 // 🔹 Reentrancy guard for async refresh
 static std::atomic<bool> isRefreshing{false};
 
-// ------------------------------------------------------------
+// ====================================================
 // Internal helpers
-// ------------------------------------------------------------
+// ====================================================
 static fs::path getAliasFilePath() {
     return fs::path(getResourcePath()) / ALIAS_FILE;
 }
@@ -54,9 +54,9 @@ static void saveLocked() {
     }
 }
 
-// ------------------------------------------------------------
+// ====================================================
 // Public API
-// ------------------------------------------------------------
+// ====================================================
 namespace aliases {
 
 void init() {

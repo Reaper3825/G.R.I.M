@@ -174,7 +174,14 @@ void runPopupUI(int width, int height)
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
         {
             if (msg.message == WM_QUIT)
+            {
+                LOG_DEBUG("PopupUI", "WM_QUIT received - exiting popup thread");
                 g_running = false;
+            }
+            else
+            {
+                LOG_DEBUG("PopupUI", "Processing message: " + std::to_string(msg.message));
+            }
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
@@ -192,58 +199,146 @@ void runPopupUI(int width, int height)
                 g_idleClock.restart();
         }
 
-        updateAnim(g_anim, g_popupVisible, dt, 0.08f);
+        // Only render when popup is visible
+        if (g_popupVisible)
+        {
+            LOG_DEBUG("PopupUI", "Popup is visible, starting render pass");
+            
+            try
+            {
+                LOG_DEBUG("PopupUI", "Checking bgfx resources");
+                // Validate bgfx resources before using them
+                if (!bgfx::isValid(g_fb) || !bgfx::isValid(g_colorTex))
+                {
+                    LOG_ERROR("PopupUI", "Invalid framebuffer or texture - bgfx resources corrupted");
+                    // Don't exit, just skip this frame
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
+                
+                LOG_DEBUG("PopupUI", "Updating animation");
+                updateAnim(g_anim, g_popupVisible, dt, 0.08f);
 
-        // === Render pass ===
-bgfx::setViewFrameBuffer(0, g_fb);
-bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x00000000, 1.0f, 0);
-bgfx::setViewRect(0, 0, 0, POPUP_SIZE, POPUP_SIZE);
-bgfx::touch(0);
+                LOG_DEBUG("PopupUI", "Setting up render pass");
+                // === Render pass ===
+                bgfx::setViewFrameBuffer(0, g_fb);
+                bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x00000000, 1.0f, 0);
+                bgfx::setViewRect(0, 0, 0, POPUP_SIZE, POPUP_SIZE);
+                bgfx::touch(0);
 
-// ===========================================
-// Apply animated scale + fade
-// ===========================================
-float mtx[16];
-bx::mtxSRT(
-    mtx,                              // destination matrix
-    g_anim.scale, g_anim.scale, 1.0f, // scale
-    0.0f, 0.0f, 0.0f,                 // rotation
-    0.0f, 0.0f, 0.0f                  // translation
-);
+                LOG_DEBUG("PopupUI", "Setting up matrices");
+                // ===========================================
+                // Apply animated scale + fade
+                // ===========================================
+                float mtx[16];
+                bx::mtxSRT(
+                    mtx,                              // destination matrix
+                    g_anim.scale, g_anim.scale, 1.0f, // scale
+                    0.0f, 0.0f, 0.0f,                 // rotation
+                    0.0f, 0.0f, 0.0f                  // translation
+                );
 
+                LOG_DEBUG("PopupUI", "Setting up uniforms");
+                // --- Create / Update fade uniform ---
+                static bgfx::UniformHandle u_alpha = BGFX_INVALID_HANDLE;
+                if (!bgfx::isValid(u_alpha))
+                    u_alpha = bgfx::createUniform("u_alpha", bgfx::UniformType::Vec4);
 
-// --- Create / Update fade uniform ---
-static bgfx::UniformHandle u_alpha = BGFX_INVALID_HANDLE;
-if (!bgfx::isValid(u_alpha))
-    u_alpha = bgfx::createUniform("u_alpha", bgfx::UniformType::Vec4);
+                // Pack alpha in .w for shader use
+                float alphaVec[4] = { 1.0f, 1.0f, 1.0f, g_anim.alpha };
+                bgfx::setUniform(u_alpha, alphaVec);
 
-// Pack alpha in .w for shader use
-float alphaVec[4] = { 1.0f, 1.0f, 1.0f, g_anim.alpha };
-bgfx::setUniform(u_alpha, alphaVec);
+                LOG_DEBUG("PopupUI", "Setting up geometry");
+                // ===========================================
+                // Submit geometry + textures
+                // ===========================================
+                bgfx::setVertexBuffer(0, vbh);
+                bgfx::setIndexBuffer(ibh);
 
-// ===========================================
-// Submit geometry + textures
-// ===========================================
-bgfx::setVertexBuffer(0, vbh);
-bgfx::setIndexBuffer(ibh);
+                LOG_DEBUG("PopupUI", "Setting up textures");
+                bgfx::setTexture(0, getPopupSamplerColor(),   getPopupTextureColor());
+                bgfx::setTexture(1, getPopupSamplerOpacity(), getPopupTextureOpacity());
 
-bgfx::setTexture(0, getPopupSamplerColor(),   getPopupTextureColor());
-bgfx::setTexture(1, getPopupSamplerOpacity(), getPopupTextureOpacity());
+                if (!bgfx::isValid(getPopupTextureColor()) || !bgfx::isValid(getPopupTextureOpacity()))
+                {
+                    LOG_ERROR("PopupUI", "Invalid popup textures - skipping frame");
+                    // Don't exit, just skip this frame
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
 
-uint64_t state =
-    BGFX_STATE_WRITE_RGB |
-    BGFX_STATE_WRITE_A |
-    BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA);
+                LOG_DEBUG("PopupUI", "Setting render state");
+                uint64_t state =
+                    BGFX_STATE_WRITE_RGB |
+                    BGFX_STATE_WRITE_A |
+                    BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA);
 
-bgfx::setState(state);
-bgfx::submit(0, program);
+                bgfx::setState(state);
+                bgfx::submit(0, program);
 
-// Present
-uint32_t frameIdx = bgfx::frame();
-frameCounter++;
+                if (!bgfx::isValid(program))
+                {
+                    LOG_ERROR("PopupUI", "Invalid shader program - skipping frame");
+                    // Don't exit, just skip this frame
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
 
-
-       std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                LOG_DEBUG("PopupUI", "Calling bgfx::frame()");
+                // Present
+                uint32_t frameIdx = UINT32_MAX;
+                try
+                {
+                    frameIdx = bgfx::frame();
+                    LOG_DEBUG("PopupUI", "bgfx::frame() returned: " + std::to_string(frameIdx));
+                }
+                catch (const std::exception& e)
+                {
+                    LOG_ERROR("PopupUI", "Exception in bgfx::frame(): " + std::string(e.what()));
+                    // Don't exit, just skip this frame
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
+                catch (...)
+                {
+                    LOG_ERROR("PopupUI", "Unknown exception in bgfx::frame()");
+                    // Don't exit, just skip this frame
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
+                
+                if (frameIdx == UINT32_MAX)
+                {
+                    LOG_ERROR("PopupUI", "bgfx::frame() returned error - skipping frame");
+                    // Don't exit, just skip this frame
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
+                LOG_DEBUG("PopupUI", "Frame completed successfully");
+                frameCounter++;
+                
+                std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            }
+            catch (const std::exception& e)
+            {
+                LOG_ERROR("PopupUI", "Exception during rendering: " + std::string(e.what()));
+                // Don't exit the thread, just log and continue
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            catch (...)
+            {
+                LOG_ERROR("PopupUI", "Unknown exception during rendering");
+                // Don't exit the thread, just log and continue  
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        }
+        else
+        {
+            // When hidden, skip rendering entirely to prevent issues
+            // Still process messages and check timers, but sleep longer
+            LOG_DEBUG("PopupUI", "Popup is hidden, skipping render");
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
 
     // Cleanup
@@ -282,6 +377,8 @@ void hidePopup()
 
 void notifyPopupActivity()
 {
+    LOG_DEBUG("PopupUI", "notifyPopupActivity called - checking window state");
+
     if (!g_hwnd)
     {
         g_pendingPopup = true;
@@ -289,8 +386,11 @@ void notifyPopupActivity()
         return;
     }
 
-    showPopup();
-    g_idleTimerMs = 3000; // Back to normal 3 seconds
+    // Post a message to the popup thread instead of calling ShowWindow() directly
+    PostMessage(g_hwnd, WM_GRIM_SHOW_POPUP, 0, 0);
+
+    g_idleTimerMs = 3000;
     g_idleClock.restart();
-    LOG_DEBUG("PopupUI", "Activity notified, idle timer reset");
+    LOG_DEBUG("PopupUI", "Activity notified, idle timer reset to " + std::to_string(g_idleTimerMs) + "ms");
 }
+

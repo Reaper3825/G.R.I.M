@@ -16,9 +16,9 @@ int g_silenceTimeoutMs    = 7000; // default 7 seconds
 std::string g_whisperLanguage = "en";
 int g_whisperMaxTokens        = 32;
 
-// ------------------------------------------------------------
+// ====================================================
 // Helpers: ensure voice section exists in memory
-// ------------------------------------------------------------
+// ====================================================
 nlohmann::json& voiceMemory() {
     if (!longTermMemory.contains("voice") || !longTermMemory["voice"].is_object()) {
         longTermMemory["voice"] = {

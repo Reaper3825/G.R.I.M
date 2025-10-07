@@ -1,5 +1,7 @@
 #pragma once
 #include <windows.h>
+#define WM_GRIM_SHOW_POPUP (WM_APP + 1)
+
 
 // ===========================================================
 // GRIM Popup UI Control Header

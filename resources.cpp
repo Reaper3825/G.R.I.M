@@ -8,9 +8,9 @@
 
 namespace fs = std::filesystem;
 
-// -------------------------------------------------------------
+// ====================================================-
 // Global state definitions
-// -------------------------------------------------------------
+// ====================================================-
 nlohmann::json longTermMemory;
 nlohmann::json aiConfig;
 
@@ -18,9 +18,9 @@ ConsoleHistory history;
 std::vector<Timer> timers;
 std::filesystem::path g_currentDir;
 
-// -------------------------------------------------------------
+// ====================================================-
 // Locate resource root (prefer repo/resources over build/resources)
-// -------------------------------------------------------------
+// ====================================================-
 std::string getResourcePath() {
 #if defined(GRIM_PORTABLE_ONLY)
     fs::path exePath;
@@ -73,9 +73,9 @@ std::string getResourcePath() {
 #endif
 }
 
-// -------------------------------------------------------------
+// ====================================================-
 // Load text resource from resources/ folder
-// -------------------------------------------------------------
+// ====================================================-
 std::string loadTextResource(const std::string& filename, int argc, char** argv) {
     (void)argc;
     (void)argv;
@@ -95,9 +95,9 @@ std::string loadTextResource(const std::string& filename, int argc, char** argv)
              std::istreambuf_iterator<char>() };
 }
 
-// -------------------------------------------------------------
+// ====================================================-
 // Find any usable font in resources/ (first .ttf or .otf)
-// -------------------------------------------------------------
+// ====================================================-
 std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* historyPtr) {
     (void)argc;
     (void)argv;

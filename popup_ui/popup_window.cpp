@@ -2,6 +2,8 @@
 #include <windows.h>
 #include <stb_image.h>
 #include "pch.hpp"
+#define WM_GRIM_SHOW_POPUP (WM_APP + 1)
+
 
 // ===========================================================
 // Globals
@@ -28,10 +30,24 @@ static LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         LOG_DEBUG("PopupWindow", "WM_DESTROY received — ignoring PostQuitMessage to keep GRIM alive");
         return 0;
 
+    case WM_SHOWWINDOW:
+        LOG_DEBUG("PopupWindow", "WM_SHOWWINDOW received - wParam: " + std::to_string(wParam) + ", lParam: " + std::to_string(lParam));
+        break;
+
+    case WM_GRIM_SHOW_POPUP:
+        // Custom message posted from other threads (e.g., WakeKey) to safely show the popup
+        LOG_DEBUG("PopupWindow", "Received WM_GRIM_SHOW_POPUP — showing popup (thread-safe)");
+        ShowWindow(hwnd, SW_SHOW);
+        return 0;
+
     default:
+        LOG_DEBUG("PopupWindow", "Window message: " + std::to_string(msg));
         return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
+
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
+
 
 // ===========================================================
 // Window creation (Debug Visible Mode)

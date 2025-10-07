@@ -17,7 +17,7 @@ namespace WakeKey
     static void keyLoop()
     {
         Key::initialize();
-        Key::onPress(KeyCode::F9, onActivationKey);
+        Key::onPress(KeyCode::RCtrl, onActivationKey);
         LOG_PHASE("WakeKey system active", true);
 
         MSG msg{};
@@ -27,11 +27,16 @@ namespace WakeKey
             {
                 if (msg.message == WM_QUIT)
                 {
+                    LOG_DEBUG("WakeKey", "WM_QUIT received - stopping wake key thread");
                     running = false;
                     break;
                 }
-                TranslateMessage(&msg);
-                DispatchMessage(&msg);
+                // Only process keyboard-related messages, ignore others
+                if (msg.message >= WM_KEYFIRST && msg.message <= WM_KEYLAST)
+                {
+                    TranslateMessage(&msg);
+                    DispatchMessage(&msg);
+                }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -53,7 +58,8 @@ namespace WakeKey
         if (!running)
             return;
         running = false;
-        PostQuitMessage(0);
+        // Post WM_QUIT to the WakeKey thread, not the current thread
+        PostThreadMessage(GetThreadId(keyThread.native_handle()), WM_QUIT, 0, 0);
         if (keyThread.joinable())
             keyThread.join();
     }

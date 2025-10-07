@@ -3,9 +3,9 @@
 #include <unordered_map>
 #include "commands/commands_core.hpp"   // 🔹 For CommandResult
 
-// ------------------------------------------------------------
+// ====================================================
 // Aliases API (User + Auto + Fallback)
-// ------------------------------------------------------------
+// ====================================================
 // - User aliases: manually defined by the user.
 // - Auto aliases: discovered by GRIM (D: drive + Start Menu).
 // - Fallback: fuzzy matching + heuristics.
@@ -17,7 +17,7 @@
 //   - All public APIs are thread-safe.
 //   - refreshAsync/refreshNow are guarded by an internal
 //     reentrancy lock (atomic flag), so scans never overlap.
-// ------------------------------------------------------------
+// ====================================================
 
 namespace aliases {
 
