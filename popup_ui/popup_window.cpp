@@ -67,55 +67,63 @@ HWND createOverlayWindow(int width, int height)
 // ===========================================================
 void queueWindowAlphaReadback(int width, int height)
 {
-    int texW = 0, texH = 0, texC = 0;
-    unsigned char* data = stbi_load("D:/G.R.I.M/resources/shaders/g_sprite_oreo.png", &texW, &texH, &texC, 4);
-    if (!data)
+    // Load diffuse texture
+    int diffuseW = 0, diffuseH = 0, diffuseC = 0;
+    unsigned char* diffuseData = stbi_load("D:/G.R.I.M/resources/shaders/g_sprite_Diffuse.png", &diffuseW, &diffuseH, &diffuseC, 4);
+    if (!diffuseData)
     {
-        LOG_ERROR("PopupWindow", "Failed to load fallback alpha image g_sprite_oreo.png");
+        LOG_ERROR("PopupWindow", "Failed to load diffuse texture g_sprite_Diffuse.png");
         return;
     }
 
-    LOG_DEBUG("PopupWindow", "Loaded alpha map directly from disk " + std::to_string(texW) + "x" + std::to_string(texH));
-
-    // Resize to window size if necessary
-    std::vector<uint8_t> resizedData;
-    if (texW != width || texH != height)
+    // Load oreo alpha texture
+    int oreoW = 0, oreoH = 0, oreoC = 0;
+    unsigned char* oreoData = stbi_load("D:/G.R.I.M/resources/shaders/g_sprite_oreo.png", &oreoW, &oreoH, &oreoC, 4);
+    if (!oreoData)
     {
-        // Simple nearest-neighbor resize
-        resizedData.resize(width * height * 4);
-        float scaleX = (float)texW / width;
-        float scaleY = (float)texH / height;
+        LOG_ERROR("PopupWindow", "Failed to load oreo alpha texture g_sprite_oreo.png");
+        stbi_image_free(diffuseData);
+        return;
+    }
 
-        for (int y = 0; y < height; ++y)
+    LOG_DEBUG("PopupWindow", "Loaded diffuse " + std::to_string(diffuseW) + "x" + std::to_string(diffuseH) + " and oreo " + std::to_string(oreoW) + "x" + std::to_string(oreoH));
+
+    // Resize both to window size if necessary
+    std::vector<uint8_t> combinedData(width * height * 4);
+
+    for (int y = 0; y < height; ++y)
+    {
+        for (int x = 0; x < width; ++x)
         {
-            for (int x = 0; x < width; ++x)
-            {
-                int srcX = (int)(x * scaleX);
-                int srcY = (int)(y * scaleY);
-                if (srcX >= texW) srcX = texW - 1;
-                if (srcY >= texH) srcY = texH - 1;
+            // Sample from diffuse texture (with resize)
+            int srcX = (x * diffuseW) / width;
+            int srcY = (y * diffuseH) / height;
+            if (srcX >= diffuseW) srcX = diffuseW - 1;
+            if (srcY >= diffuseH) srcY = diffuseH - 1;
+            int diffuseIdx = (srcY * diffuseW + srcX) * 4;
 
-                int srcIdx = (srcY * texW + srcX) * 4;
-                int dstIdx = (y * width + x) * 4;
+            // Sample from oreo texture (with resize)
+            int oreoSrcX = (x * oreoW) / width;
+            int oreoSrcY = (y * oreoH) / height;
+            if (oreoSrcX >= oreoW) oreoSrcX = oreoW - 1;
+            if (oreoSrcY >= oreoH) oreoSrcY = oreoH - 1;
+            int oreoIdx = (oreoSrcY * oreoW + oreoSrcX) * 4;
 
-                resizedData[dstIdx + 0] = data[srcIdx + 0]; // R
-                resizedData[dstIdx + 1] = data[srcIdx + 1]; // G
-                resizedData[dstIdx + 2] = data[srcIdx + 2]; // B
-                resizedData[dstIdx + 3] = data[srcIdx + 3]; // A
-            }
+            int dstIdx = (y * width + x) * 4;
+
+            // Combine: RGB from diffuse, A from oreo
+            combinedData[dstIdx + 0] = diffuseData[diffuseIdx + 2]; // B (R/B swap for Windows)
+            combinedData[dstIdx + 1] = diffuseData[diffuseIdx + 1]; // G
+            combinedData[dstIdx + 2] = diffuseData[diffuseIdx + 0]; // R (R/B swap for Windows)
+            combinedData[dstIdx + 3] = oreoData[oreoIdx + 3];       // A from oreo
         }
-
-        LOG_DEBUG("PopupWindow", "Resized alpha map from " + std::to_string(texW) + "x" + std::to_string(texH) + " to " + std::to_string(width) + "x" + std::to_string(height));
-    }
-    else
-    {
-        resizedData.assign(data, data + (texW * texH * 4));
     }
 
-    stbi_image_free(data);
+    stbi_image_free(diffuseData);
+    stbi_image_free(oreoData);
 
     std::lock_guard<std::mutex> lock(g_alphaMutex);
-    g_alphaPixels = std::move(resizedData);
+    g_alphaPixels = std::move(combinedData);
     g_alphaReady = true;
 
     // Debug: Check alpha stats immediately
@@ -130,7 +138,7 @@ void queueWindowAlphaReadback(int width, int height)
         if (alpha > maxAlpha) maxAlpha = alpha;
     }
     uint64_t avgAlpha = pixelCount > 0 ? alphaSum / pixelCount : 0;
-    LOG_DEBUG("PopupWindow", "Loaded alpha stats: avg=" + std::to_string(avgAlpha) + ", min=" + std::to_string(minAlpha) + ", max=" + std::to_string(maxAlpha));
+    LOG_DEBUG("PopupWindow", "Combined diffuse+oreo stats: avg=" + std::to_string(avgAlpha) + ", min=" + std::to_string(minAlpha) + ", max=" + std::to_string(maxAlpha));
 }
 
 // ===========================================================
