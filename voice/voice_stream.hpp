@@ -1,7 +1,9 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <thread>
 #include <mutex>
+#include <atomic>
 #include <nlohmann/json.hpp>
 #include <SFML/Graphics/Color.hpp>
 #include "nlp/nlp.hpp"
@@ -11,18 +13,21 @@
 struct whisper_context;
 
 namespace VoiceStream {
-    struct State {
-        struct AudioData {
+
+    struct State
+    {
+        struct AudioData
+        {
             std::vector<float> buffer;
             bool ready = false;
             std::mutex mtx;
-        };
+        } audio;
 
-        bool running = false;
-        int inputDeviceIndex = -1;
-        size_t processedSamples = 0;
-        std::string partial;
-        AudioData audio;
+        std::atomic<bool> running{ false };   // Thread-safe running flag
+        std::thread thread;                   // Joinable thread for mic loop
+        int inputDeviceIndex = -1;            // Selected mic device index
+        size_t processedSamples = 0;          // Track processed sample count
+        std::string partial;                  // Incremental whisper text
     };
 
     extern State g_state;
@@ -37,7 +42,8 @@ namespace VoiceStream {
     void calibrateSilence();
 }
 
-namespace Voice {
+namespace Voice
+{
     // One-shot speech capture after a wake event.
     // Blocks until user finishes speaking or silence timeout.
     std::string listenOnce();

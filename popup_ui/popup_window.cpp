@@ -20,13 +20,11 @@ static LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     switch (msg)
     {
     case WM_CLOSE:
-        // Instead of quitting, just hide the window
         ShowWindow(hwnd, SW_HIDE);
         LOG_DEBUG("PopupWindow", "WM_CLOSE intercepted — hiding popup instead of closing");
         return 0;
 
     case WM_DESTROY:
-        // Do not post quit message, we keep the app running
         LOG_DEBUG("PopupWindow", "WM_DESTROY received — ignoring PostQuitMessage to keep GRIM alive");
         return 0;
 
@@ -35,18 +33,27 @@ static LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         break;
 
     case WM_GRIM_SHOW_POPUP:
-        // Custom message posted from other threads (e.g., WakeKey) to safely show the popup
         LOG_DEBUG("PopupWindow", "Received WM_GRIM_SHOW_POPUP — showing popup (thread-safe)");
         ShowWindow(hwnd, SW_SHOW);
         return 0;
 
+    // Optional: Log only important or unexpected messages
+    case WM_SIZE:
+    case WM_MOVE:
+    case WM_PAINT:
+    case WM_DISPLAYCHANGE:
+        // You can still log these if you want, but they’ll be rare enough
+        break;
+
     default:
-        LOG_DEBUG("PopupWindow", "Window message: " + std::to_string(msg));
+        // Remove the full spam logging here
+        // LOG_DEBUG("PopupWindow", "Window message: " + std::to_string(msg));  <-- deleted
         return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
 
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
+
 
 
 // ===========================================================

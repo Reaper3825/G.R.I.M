@@ -7,9 +7,14 @@
 #include "voice/voice_speak.hpp"
 #include "device_setups/audio_devices.hpp"
 #include "logger.hpp"
+#include "voice/voice.hpp"
+
+#include <filesystem>    // ✅ for fs::path
+#include <whisper.h>     // ✅ for whisper_context + init functions
 
 // Define global system info
 SystemInfo g_systemInfo;
+namespace fs = std::filesystem; // ✅ define filesystem alias
 
 void runBootstrapChecks(int argc, char** argv) {
     // ============================================================
@@ -86,6 +91,57 @@ void runBootstrapChecks(int argc, char** argv) {
     } else {
         LOG_PHASE("Coqui TTS skipped", true);
         LOG_DEBUG("Voice", "Skipping Coqui init (engine=sapi only)");
+    }
+
+    // ============================================================
+    // Preload Whisper STT model (warm-up only, no live capture)
+    // ============================================================
+    LOG_PHASE("Whisper preload begin", true);
+
+    try {
+        if (Voice::getWhisperContext() == nullptr)
+        {
+            // Resolve Whisper model from config
+            std::string modelName = "ggml-base.en.bin";
+            if (aiConfig.contains("whisper") && aiConfig["whisper"].contains("whisper_model"))
+                modelName = aiConfig["whisper"].value("whisper_model", modelName);
+
+            fs::path modelPath = fs::path(getResourcePath()) / "models" / modelName;
+            LOG_DEBUG("Voice", "Preloading Whisper model: " + modelPath.string());
+
+            if (!fs::exists(modelPath))
+            {
+                LOG_ERROR("Voice", "Whisper model missing: " + modelPath.string());
+                LOG_PHASE("Whisper preload", false);
+            }
+            else
+            {
+                whisper_context_params wparams = whisper_context_default_params();
+                whisper_context* ctx = whisper_init_from_file_with_params(modelPath.string().c_str(), wparams);
+
+                if (!ctx)
+                {
+                    LOG_ERROR("Voice", "Failed to initialize Whisper context from: " + modelPath.string());
+                    LOG_PHASE("Whisper preload", false);
+                }
+                else
+                {
+                    Voice::setWhisperContext(ctx);
+                    LOG_PHASE("Whisper preload complete", true);
+                    LOG_DEBUG("Voice", "Whisper model preloaded successfully (no listening loop)");
+                }
+            }
+        }
+        else
+        {
+            LOG_DEBUG("Voice", "Whisper already loaded, skipping preload");
+            LOG_PHASE("Whisper preload complete", true);
+        }
+    }
+    catch (const std::exception& e)
+    {
+        LOG_ERROR("Bootstrap", std::string("Whisper preload failed: ") + e.what());
+        LOG_PHASE("Whisper preload", false);
     }
 
     // ============================================================

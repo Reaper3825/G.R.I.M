@@ -11,6 +11,10 @@
 #include <filesystem>
 #include <mutex>
 #include <sstream>
+#include <iostream>
+#include <fstream>
+#include <cstdio>
+#include <io.h>
 #include <cmath>
 
 namespace fs = std::filesystem;
@@ -114,10 +118,22 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
         return "";
     }
 
+    // Temporarily redirect stderr to silence PortAudio debug output
+    int old_stderr = _dup(2); // dup stderr
+    FILE* nul_file = fopen("nul", "w");
+    _dup2(_fileno(nul_file), 2); // redirect stderr to nul
+
     if (Pa_Initialize() != paNoError) {
+        _dup2(old_stderr, 2); // restore
+        _close(old_stderr);
+        fclose(nul_file);
         ErrorManager::report("ERR_VOICE_NO_CONTEXT");
         return "";
     }
+
+    _dup2(old_stderr, 2); // restore
+    _close(old_stderr);
+    fclose(nul_file);
 
     AudioData data;
     PaStream* stream;
@@ -151,7 +167,7 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
     }
 
     Pa_StartStream(stream);
-    LOG_DEBUG("Voice", ResponseManager::get("voice_start"));
+    LOG_DEBUG("Voice", "Listening...");
 
     std::vector<float> rollingBuffer;
     auto lastSpeech  = std::chrono::steady_clock::now();
@@ -217,12 +233,15 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
         transcript.pop_back();
 
     if (!transcript.empty()) {
-        LOG_DEBUG("Voice", ResponseManager::get("voice_heard") + " \"" + transcript + "\"");
+        LOG_DEBUG("Voice", "Heard speech: \"" + transcript + "\"");
     } else {
         ErrorManager::report("ERR_VOICE_NO_SPEECH");
     }
 
     return transcript;
+}
+void setWhisperContext(whisper_context* ctx) {
+    g_state.ctx = ctx;
 }
 
 // ============================================================
