@@ -350,19 +350,57 @@ namespace Voice {
             LOG_ERROR("Voice/Coqui", "WriteFile failed");
         }
 
-        std::string response = readJsonLineFromBridge();
-        LOG_DEBUG("Voice/Coqui", "Got response: " + response);
+        // ======================================================
+// Persistent handshake retry loop (Option D)
+// ======================================================
+constexpr int MAX_ATTEMPTS = 5;      // try up to 5 times
+constexpr int RETRY_DELAY_MS = 5000; // wait 5s between tries
+int attempt = 0;
 
+while (attempt < MAX_ATTEMPTS)
+{
+    attempt++;
+    std::string response = readJsonLineFromBridge(30000); // 30s per attempt
+
+    if (!response.empty())
+    {
         try {
             auto resp = json::parse(response);
-            if (resp.contains("file")) {
-                LOG_DEBUG("Voice/Coqui", "Bridge returned file: " + resp["file"].get<std::string>());
-                return resp["file"].get<std::string>();
+            if (resp.value("status", "") == "ready")
+            {
+                g_ttsReady = true;
+                LOG_PHASE("Voice bridge ready", true);
+                break;
             }
-        } catch (const std::exception& e) {
-            LOG_ERROR("Voice/Coqui", std::string("Parse error: ") + e.what() +
-                                    " raw=" + response);
+            else
+            {
+                LOG_DEBUG("Voice/Bridge",
+                          "Handshake JSON received but status != ready: " + response);
+            }
         }
+        catch (const std::exception& e) {
+            LOG_ERROR("Voice/Init",
+                      std::string("Parsing handshake failed (attempt ") +
+                      std::to_string(attempt) + "): " + e.what());
+        }
+    }
+    else
+    {
+        LOG_DEBUG("Voice/Bridge",
+                  "No handshake received on attempt " + std::to_string(attempt) +
+                  " — retrying after delay...");
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_DELAY_MS));
+}
+
+if (!g_ttsReady)
+{
+    LOG_ERROR("Voice/Bridge",
+              "Failed to establish Coqui TTS handshake after " +
+              std::to_string(MAX_ATTEMPTS) + " attempts.");
+}
+
 #endif
         return "";
     }

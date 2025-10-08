@@ -15,10 +15,15 @@ namespace Voice {
 
     extern State g_state;
 
-    // Already present
+    // ============================================================
+    // Voice core
+    // ============================================================
     std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemory);
     void shutdown();
 
-    // 🔹 Add this:
+    // ============================================================
+    // Whisper context accessors
+    // ============================================================
     whisper_context* getWhisperContext();
+    void setWhisperContext(whisper_context* ctx); // ✅ added for preload warmup
 }

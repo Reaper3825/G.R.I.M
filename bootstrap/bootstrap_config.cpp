@@ -88,6 +88,7 @@ nlohmann::json defaultAI() {
 
 nlohmann::json defaultErrors() {
     return {
+
         {"ERR_FS_MISSING_DIR", {
             {"user", "[FS] Usage: cd/mkdir <directory>"},
             {"debug", "Filesystem command called without directory argument."}
@@ -96,20 +97,42 @@ nlohmann::json defaultErrors() {
             {"user", "[FS] Directory does not exist."},
             {"debug", "Target directory not found in cmdChangeDir."}
         }},
+
+
         {"ERR_APP_NO_ARGUMENT", {
             {"user", "[App] Usage: open <application>"},
             {"debug", "Application command called without argument."}
         }},
+
+
         {"ERR_AI_CONFIG_INVALID", {
             {"user", "[AI] Config file invalid → reset to defaults."},
             {"debug", "ai_config.json failed parsing or validation."}
         }},
+
+  
         {"ERR_ALIAS_NOT_FOUND", {
             {"user", "[Alias] Application not found."},
             {"debug", "Alias lookup failed in user, auto, and fallback."}
+        }},
+
+
+        {"ERR_VOICE_START", {
+            {"user", "Listening..."},
+            {"debug", "Voice recognition started successfully."}
+        }},
+        {"ERR_VOICE_HEARD", {
+            {"user", "Heard"},
+            {"debug", "Voice input captured successfully."}
+        }},
+        {"ERR_VOICE_STOP", {
+            {"user", "Stopped listening."},
+            {"debug", "Voice recognition stopped cleanly."}
         }}
     };
 }
+
+
 
 nlohmann::json defaultMemory() {
     return nlohmann::json::object();

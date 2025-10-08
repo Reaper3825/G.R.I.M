@@ -28,6 +28,10 @@ sf::Font g_dummyFont;
 // 🔹 Global UI textbox + raw buffer (declared extern in ui_helpers.hpp)
 sf::Text g_ui_textbox(g_dummyFont, "", 20);
 std::string g_inputBuffer;
+ConsoleHistory g_consoleHistory;
+std::vector<Timer> g_uiTimers;
+nlohmann::json g_longTermMemory;
+
 
 // ============================================================
 // Main entry point
@@ -102,9 +106,9 @@ int main(int argc, char* argv[])
     LOG_PHASE("Popup UI launched", true);
 
     // ====================================================
-    // Start Wake Key listener (activates popup on F9)
+    // Start Wake Key listener (activates popup on RCtrl)
     // ====================================================
-    WakeKey::start();
+    WakeKey::start(&g_consoleHistory, g_uiTimers, g_longTermMemory, g_nlp);
     LOG_PHASE("WakeKey listener started", true);
 
     // ====================================================

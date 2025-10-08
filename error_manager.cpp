@@ -1,7 +1,7 @@
 #include "error_manager.hpp"
 #include "commands/commands_core.hpp"
 #include <ctime>
-
+#include "logger.hpp"
 static std::ofstream logStream;
 
 // ====================================================
@@ -98,17 +98,33 @@ void ErrorManager::load(const std::string& path) {
 }
 
 std::string ErrorManager::getUserMessage(const std::string& code) {
+    // ✅ Found a matching user-facing string
     if (root.contains(code) && root[code].contains("user")) {
         return root[code]["user"];
     }
-    return "[Error] Unknown error code: " + code;
+
+    // ✅ Missing — decide severity by prefix
+    if (code.rfind("ERR_", 0) == 0) {
+        LOG_ERROR("ErrorManager", "Unknown critical error code: " + code);
+        return "[Error] Unknown error code: " + code;
+    } else {
+        LOG_DEBUG("ErrorManager", "Unknown status/info code: " + code);
+        return "[Debug] Unknown info code: " + code;
+    }
 }
 
 std::string ErrorManager::getDebugMessage(const std::string& code) {
     if (root.contains(code) && root[code].contains("debug")) {
         return root[code]["debug"];
     }
-    return "[Debug] No debug message for code: " + code;
+
+    if (code.rfind("ERR_", 0) == 0) {
+        LOG_ERROR("ErrorManager", "Missing debug info for error code: " + code);
+        return "[Error] No debug message for code: " + code;
+    } else {
+        LOG_DEBUG("ErrorManager", "Missing debug info for status code: " + code);
+        return "[Debug] No debug message for code: " + code;
+    }
 }
 
 CommandResult ErrorManager::report(const std::string& code) {
@@ -120,9 +136,14 @@ CommandResult ErrorManager::report(const std::string& code) {
     result.message   = userMsg;
     result.color     = sf::Color::Red;
     result.errorCode = code;
-    result.voice     = "";          // don’t auto-speak
+    result.voice     = "";
     result.category  = "error";
 
-    Logger::logMessage(Logger::Level::Error, code + " -> " + debugMsg);
+    if (code.rfind("ERR_", 0) == 0) {
+        Logger::logMessage(Logger::Level::Error, code + " -> " + debugMsg);
+    } else {
+        Logger::logMessage(Logger::Level::Debug, code + " -> " + debugMsg);
+    }
+
     return result;
 }

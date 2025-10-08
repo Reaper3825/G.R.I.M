@@ -334,11 +334,19 @@ void runPopupUI(int width, int height)
         }
         else
         {
-            // When hidden, skip rendering entirely to prevent issues
-            // Still process messages and check timers, but sleep longer
-            LOG_DEBUG("PopupUI", "Popup is hidden, skipping render");
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
+    static bool loggedHidden = false;
+
+    // When hidden, skip rendering entirely to prevent issues
+    // Still process messages and check timers, but sleep longer
+    if (!loggedHidden)
+    {
+        LOG_DEBUG("PopupUI", "Popup is hidden, skipping render");
+        loggedHidden = true;
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+}
+
     }
 
     // Cleanup

@@ -1,5 +1,5 @@
 {
-  // ---------------- Filesystem ----------------
+
   "ERR_FS_MISSING_DIR": {
     "user": "[FS] Usage: cd/mkdir <directory>",
     "debug": "Filesystem command called without directory argument."
@@ -25,7 +25,7 @@
     "debug": "std::filesystem::remove returned false."
   },
 
-  // ---------------- Memory ----------------
+
   "ERR_MEMORY_MISSING_INPUT": {
     "user": "[Memory] Nothing to remember.",
     "debug": "cmdRemember called without arguments."
@@ -43,7 +43,7 @@
     "debug": "Requested key does not exist in longTermMemory."
   },
 
-  // ---------------- Voice ----------------
+
   
     "ERR_VOICE_NOT_INITIALIZED": {
       "user": "[Voice] Speech recognition not available — missing or invalid model",
@@ -66,7 +66,7 @@
       "debug": "VoiceStream::start() returned false."
     },
 
-  // ---------------- Timers ----------------
+
   "ERR_TIMER_MISSING_VALUE": {
     "user": "[Timer] Usage: set_timer <duration> (e.g. 30s, 5m, 2h30m)",
     "debug": "cmdSetTimer called without duration argument."
@@ -76,19 +76,19 @@
     "debug": "cmdSetTimer could not parse duration string or value <= 0."
   },
 
-  // ---------------- Core ----------------
+
   "ERR_CORE_UNKNOWN_COMMAND": {
     "user": "[Core] I don’t recognize that command. Try \"help\".",
     "debug": "User entered an unrecognized command. Check NLP rules or commandMap."
   },
 
-  // ---------------- NLP ----------------
+
   "ERR_NLP_RELOAD_FAIL": {
     "user": "[NLP] Could not reload rules. Please check nlp_rules.json.",
     "debug": "g_nlp.load_rules failed due to missing or invalid JSON."
   },
 
-  // ---------------- AI ----------------
+
   "ERR_AI_NO_QUERY": {
     "user": "[AI] You need to give me a query. Example: grim what is the weather?",
     "debug": "cmdGrimAi called with empty arg and no NLP slot value."
@@ -102,7 +102,7 @@
     "debug": "cmdGrimAi threw an exception while contacting backend."
   },
 
-  // ---------------- Apps / Aliases ----------------
+ 
   "ERR_APP_NO_ARGUMENT": {
     "user": "[App] Please specify an application to open. Example: open_app notepad",
     "debug": "cmdOpenApp called without argument."
@@ -120,7 +120,7 @@
     "debug": "Alias lookup failed in user, auto, and fallback."
   },
 
-  // ---------------- Web ----------------
+
   "ERR_WEB_NO_ARGUMENT": {
     "user": "[Web] Please provide a search query. Example: search_web grim project",
     "debug": "cmdSearchWeb called with empty argument."
@@ -130,12 +130,12 @@
     "debug": "ShellExecute (or platform equivalent) failed when opening URL."
   },
 
-  // ---------------- Config ----------------
+
   "ERR_CONFIG_MALFORMED": {
     "user": "[Config] Invalid or missing ai_config.json — using defaults.",
     "debug": "ai_config.json contained null/invalid types and was patched by validateAIConfig()."
   },
-   // ---------------- Filesystem ----------------
+
   "ERR_FS_NO_ARGUMENT": {
     "user": "[FS] No file or directory specified.",
     "debug": "Filesystem command missing required argument."
@@ -174,6 +174,18 @@
 "ERR_TTS_PLAYBACK": {
   "user": "[Voice] Playback failed. Check audio device or TTS pipeline.",
   "debug": "voice_speak() returned false. No audio device or backend error."
+},
+"voice_start": {
+  "user": "Listening...",
+  "debug": "Voice recognition started successfully."
+},
+"voice_heard": {
+  "user": "Heard",
+  "debug": "Voice input captured successfully."
+},
+"voice_stop": {
+  "user": "Stopped listening.",
+  "debug": "Voice recognition stopped cleanly."
 }
 
 
