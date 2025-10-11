@@ -5,6 +5,25 @@ cmake_minimum_required(VERSION 3.22)
 project(GRIM LANGUAGES CXX CUDA)
 
 # =========================================================
+# MSVC Compiler Conformance Fixes
+# =========================================================
+if (MSVC)
+    # Ensure accurate __cplusplus macro and modern preprocessor
+    add_compile_options(/Zc:__cplusplus /Zc:preprocessor)
+endif()
+
+# =========================================================
+# BX Configuration Macro
+# =========================================================
+# BX expects one of these defines to be present; since we use prebuilt BX/BGFX
+# headers, we set it manually based on current configuration.
+add_compile_definitions(
+    $<$<CONFIG:Debug>:BX_CONFIG_DEBUG=1>
+    $<$<NOT:$<CONFIG:Debug>>:BX_CONFIG_DEBUG=0>
+)
+
+
+# =========================================================
 # Canonical GRIM Root Path (shared with runtime)
 # =========================================================
 set(GRIM_ROOT_DIR ${CMAKE_SOURCE_DIR} CACHE PATH "Root of GRIM project")
@@ -101,13 +120,7 @@ include(${CMAKE_SOURCE_DIR}/cmake/Dependencies.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/Resources.cmake)
 
 # Link all dependencies safely
-target_link_libraries(GRIM PRIVATE
-    sfml-system sfml-window sfml-graphics sfml-audio sfml-network
-    cpr
-    OpenAL32
-    bgfx
-    nlohmann_json::nlohmann_json
-)
+
 
 # =========================================================
 # Final Target Properties

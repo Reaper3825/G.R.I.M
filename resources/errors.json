@@ -18,5 +18,17 @@
   "ERR_FS_MISSING_DIR": {
     "debug": "Filesystem command called without directory argument.",
     "user": "[FS] Usage: cd/mkdir <directory>"
+  },
+  "ERR_VOICE_HEARD": {
+    "debug": "Voice input captured successfully.",
+    "user": "Heard"
+  },
+  "ERR_VOICE_START": {
+    "debug": "Voice recognition started successfully.",
+    "user": "Listening..."
+  },
+  "ERR_VOICE_STOP": {
+    "debug": "Voice recognition stopped cleanly.",
+    "user": "Stopped listening."
   }
 }
