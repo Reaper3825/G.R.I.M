@@ -1,4 +1,17 @@
 # =========================================================
+# GRIM CUDA pre-configuration fix
+# =========================================================
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    # Force Ampere / RTX 3000 GPU architecture to avoid CMake's invalid sm_52 default
+    set(CMAKE_CUDA_ARCHITECTURES 86 CACHE STRING "CUDA architectures" FORCE)
+endif()
+
+# Prevent nvcc debug build issues during compiler ID detection
+set(CMAKE_CUDA_FLAGS_INIT "-allow-unsupported-compiler -Xcompiler=/w")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS_INIT}" CACHE STRING "Initial CUDA flags" FORCE)
+
+
+# =========================================================
 # GRIM Compiler & Build Configuration
 # =========================================================
 set(CMAKE_CXX_STANDARD 20)

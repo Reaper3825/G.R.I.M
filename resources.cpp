@@ -22,56 +22,39 @@ std::filesystem::path g_currentDir;
 // Locate resource root (prefer repo/resources over build/resources)
 // ====================================================-
 std::string getResourcePath() {
-#if defined(GRIM_PORTABLE_ONLY)
-    fs::path exePath;
-  #if defined(_WIN32)
+    namespace fs = std::filesystem;
+    fs::path base = fs::path(GRIM_ROOT_DIR) / "resources";
+
+    if (fs::exists(base)) {
+        LOG_PHASE("Resource path set", true);
+        LOG_DEBUG("Resources", "Using canonical resource path: " + base.string());
+        return base.string();
+    }
+
+    // Fallback: try relative to exe or current dir
+    fs::path exeDir;
+#if defined(_WIN32)
     char buffer[MAX_PATH];
-    if (GetModuleFileNameA(nullptr, buffer, MAX_PATH)) {
-        exePath = fs::path(buffer).parent_path();
-    } else {
-        exePath = fs::current_path();
-    }
-  #elif defined(__APPLE__)
-    char buffer[1024];
-    uint32_t size = sizeof(buffer);
-    if (_NSGetExecutablePath(buffer, &size) == 0) {
-        exePath = fs::path(buffer).parent_path();
-    } else {
-        exePath = fs::current_path();
-    }
-  #else
-    exePath = fs::current_path();
-  #endif
-
-    fs::path portablePath = exePath / "resources";
-    if (fs::exists(portablePath)) {
-        LOG_PHASE("Resource path set", true);
-        LOG_DEBUG("Resources", "Using portable resource path: " + portablePath.string());
-        return portablePath.string();
-    }
-    return exePath.string();
-#else
-    fs::path buildPath   = fs::current_path() / "resources";
-    fs::path projectPath = fs::current_path().parent_path() / "resources";
-
-    // 🔹 Prefer project resources first
-    if (fs::exists(projectPath)) {
-        LOG_PHASE("Resource path set", true);
-        LOG_DEBUG("Resources", "Using resource path: " + projectPath.string());
-        return projectPath.string();
-    }
-    if (fs::exists(buildPath)) {
-        LOG_PHASE("Resource path set", true);
-        LOG_DEBUG("Resources", "Using fallback resource path: " + buildPath.string());
-        return buildPath.string();
-    }
-
-    // Last resort: current working directory
-    LOG_PHASE("Resource path set", true);
-    LOG_DEBUG("Resources", "Falling back to cwd: " + fs::current_path().string());
-    return fs::current_path().string();
+    if (GetModuleFileNameA(nullptr, buffer, MAX_PATH))
+        exeDir = fs::path(buffer).parent_path();
 #endif
+
+    for (auto& tryPath : {
+        exeDir / "resources",
+        fs::current_path() / "resources"
+    }) {
+        if (fs::exists(tryPath)) {
+            LOG_PHASE("Resource path set", true);
+            LOG_DEBUG("Resources", "Using fallback resource path: " + tryPath.string());
+            return tryPath.string();
+        }
+    }
+
+    LOG_PHASE("Resource path set", true);
+    LOG_ERROR("Resources", "No resource directory found (checked canonical, exe, cwd)");
+    return fs::current_path().string();
 }
+
 
 // ====================================================-
 // Load text resource from resources/ folder
