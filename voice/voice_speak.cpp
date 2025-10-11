@@ -318,101 +318,80 @@ namespace Voice {
             LOG_ERROR("Voice/Audio", std::string("Exception: ") + e.what());
         }
     }
-
-    // =========================================================
-    // Coqui Speak
-    // =========================================================
-    std::string coquiSpeak(const std::string& text,
-                           const std::string& speaker,
-                           double speed) {
+// =========================================================
+// Coqui Speak
+// =========================================================
+std::string coquiSpeak(const std::string& text,
+                       const std::string& speaker,
+                       double speed) {
 #ifdef _WIN32
-        if (!hChildStdinWr || !hChildStdoutRd) {
-            LOG_ERROR("Voice/Coqui", "Bridge not running");
-            return "";
-        }
-
-        fs::create_directories(g_outputDir);
-        std::string outFile = (g_outputDir / (randomString(32) + ".wav")).string();
-
-        json req = {
-            {"command", "speak"},
-            {"text", text},
-            {"speaker", speaker},
-            {"speed", speed},
-            {"out", outFile}
-        };
-        std::string line = req.dump() + "\n";
-
-        DWORD written = 0;
-        BOOL ok = WriteFile(hChildStdinWr, line.c_str(), (DWORD)line.size(), &written, nullptr);
-        LOG_DEBUG("Voice/Coqui", "Sent request (" + std::to_string(written) + " bytes): " + line);
-        if (!ok) {
-            LOG_ERROR("Voice/Coqui", "WriteFile failed");
-        }
-
-        // ======================================================
-// Persistent handshake retry loop (Option D)
-// ======================================================
-constexpr int MAX_ATTEMPTS = 5;      // try up to 5 times
-constexpr int RETRY_DELAY_MS = 5000; // wait 5s between tries
-int attempt = 0;
-
-while (attempt < MAX_ATTEMPTS)
-{
-    attempt++;
-    std::string response = readJsonLineFromBridge(30000); // 30s per attempt
-
-    if (!response.empty())
-    {
-        try {
-            auto resp = json::parse(response);
-            if (resp.value("status", "") == "ready")
-            {
-                g_ttsReady = true;
-                LOG_PHASE("Voice bridge ready", true);
-                break;
-            }
-            else
-            {
-                LOG_DEBUG("Voice/Bridge",
-                          "Handshake JSON received but status != ready: " + response);
-            }
-        }
-        catch (const std::exception& e) {
-            LOG_ERROR("Voice/Init",
-                      std::string("Parsing handshake failed (attempt ") +
-                      std::to_string(attempt) + "): " + e.what());
-        }
-    }
-    else
-    {
-        LOG_DEBUG("Voice/Bridge",
-                  "No handshake received on attempt " + std::to_string(attempt) +
-                  " — retrying after delay...");
-    }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_DELAY_MS));
-}
-
-if (!g_ttsReady)
-{
-    LOG_ERROR("Voice/Bridge",
-              "Failed to establish Coqui TTS handshake after " +
-              std::to_string(MAX_ATTEMPTS) + " attempts.");
-}
-
-#endif
+    // --- Validate bridge ---
+    if (!hChildStdinWr || !hChildStdoutRd) {
+        LOG_ERROR("Voice/Coqui", "Bridge not running");
         return "";
     }
 
-    // =========================================================
-    // High-level Speak (enqueue)
-    // =========================================================
-    void speak(const std::string& text, const std::string& category) {
-        {
-            std::lock_guard<std::mutex> lock(queueMutex);
-            speakQueue.emplace(text, category);
-        }
-        queueCV.notify_one();
+    // --- Prepare output file ---
+    fs::create_directories(g_outputDir);
+    std::string outFile = (g_outputDir / (randomString(32) + ".wav")).string();
+
+    // --- Build JSON request ---
+    json req = {
+        {"command", "speak"},
+        {"text", text},
+        {"speaker", speaker},
+        {"speed", speed},
+        {"out", outFile}
+    };
+    std::string line = req.dump() + "\n";
+
+    // --- Send request to Coqui bridge ---
+    DWORD written = 0;
+    BOOL ok = WriteFile(hChildStdinWr, line.c_str(), (DWORD)line.size(), &written, nullptr);
+    LOG_DEBUG("Voice/Coqui", "Sent request (" + std::to_string(written) + " bytes): " + line);
+    if (!ok) {
+        LOG_ERROR("Voice/Coqui", "WriteFile failed");
+        return "";
     }
+
+    // ======================================================
+    // Response wait loop (clean)
+    // ======================================================
+    constexpr int TIMEOUT_MS = 30000; // 30 seconds max
+    std::string response = readJsonLineFromBridge(TIMEOUT_MS);
+
+    if (response.empty()) {
+        LOG_ERROR("Voice/Bridge", "Timeout waiting for Coqui response (30s)");
+        return "";
+    }
+
+    try {
+        auto resp = json::parse(response);
+
+        if (resp.value("status", "") == "ok" && resp.contains("file")) {
+            LOG_DEBUG("Voice/Bridge", "Received response: " + response);
+            return resp["file"].get<std::string>();
+        } else {
+            LOG_DEBUG("Voice/Bridge", "Unexpected JSON from Coqui: " + response);
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("Voice/Bridge",
+                  std::string("Failed to parse Coqui JSON: ") + e.what() +
+                  " raw=" + response);
+    }
+#endif
+    return "";
 }
+
+// =========================================================
+// High-level Speak (enqueue)
+// =========================================================
+void speak(const std::string& text, const std::string& category) {
+    {
+        std::lock_guard<std::mutex> lock(queueMutex);
+        speakQueue.emplace(text, category);
+    }
+    queueCV.notify_one();
+}
+
+} // namespace Voice

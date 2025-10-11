@@ -1,91 +1,176 @@
 # =========================================================
-# GRIM - External Dependencies
+# G.R.I.M - Dependency Configuration
 # =========================================================
+
+message(STATUS "[GRIM] Configuring dependencies...")
+
+# =========================================================
+#  Dependency Directories
+# =========================================================
+set(GRIM_DEPS_DIR "${CMAKE_SOURCE_DIR}/deps")
+set(GRIM_DEPS_INCLUDE "${GRIM_DEPS_DIR}/include")
+set(GRIM_DEPS_LIB "${GRIM_DEPS_DIR}/lib")
+
+if (EXISTS "${GRIM_DEPS_DIR}")
+    message(STATUS "[GRIM] Using consolidated dependency directory: ${GRIM_DEPS_DIR}")
+else()
+    message(WARNING "[GRIM] Dependency directory not found: ${GRIM_DEPS_DIR}")
+endif()
+
+# =========================================================
+#  SFML (via vcpkg)
+# =========================================================
+find_package(SFML CONFIG REQUIRED COMPONENTS System Window Graphics Audio Network)
+
+# =========================================================
+# Link All Dependencies
+# =========================================================
+target_link_libraries(GRIM PRIVATE
+    # Core Libraries
+    SFML::System
+    SFML::Window
+    SFML::Graphics
+    SFML::Audio
+    SFML::Network
+    glfw
+    bgfx
+    bx
+    bimg
+    cpr::cpr
+    nlohmann_json::nlohmann_json
+
+    # Audio + Speech
+    portaudio
+    whisper
+)
 
 # ---- GLFW ----
 find_package(glfw3 CONFIG REQUIRED)
-if(TARGET glfw)
-    target_link_libraries(GRIM PRIVATE glfw)
-elseif(TARGET glfw3::glfw)
+if (TARGET glfw3::glfw)
     target_link_libraries(GRIM PRIVATE glfw3::glfw)
+elseif (TARGET glfw)
+    target_link_libraries(GRIM PRIVATE glfw)
 else()
-    message(FATAL_ERROR "[GRIM] Could not find GLFW target in glfw3Config.cmake")
+    message(FATAL_ERROR "[GRIM] GLFW target not found in vcpkg.")
 endif()
 
-# ---- SFML ----
-find_package(SFML CONFIG REQUIRED COMPONENTS System Window Graphics Audio Network)
-if(TARGET SFML::System)
-    target_link_libraries(GRIM PRIVATE
-        SFML::System
-        SFML::Window
-        SFML::Graphics
-        SFML::Audio
-        SFML::Network
-    )
+
+
+# =========================================================
+#  OpenAL
+# =========================================================
+find_path(OPENAL_INCLUDE_DIR AL/al.h)
+find_library(OPENAL_LIBRARY OpenAL32)
+if (OPENAL_INCLUDE_DIR AND OPENAL_LIBRARY)
+    target_include_directories(GRIM PRIVATE ${OPENAL_INCLUDE_DIR})
+    target_link_libraries(GRIM PRIVATE ${OPENAL_LIBRARY})
 else()
-    message(FATAL_ERROR "[GRIM] SFML components not found or improperly configured.")
+    message(WARNING "[GRIM] OpenAL not found — using fallback if available.")
 endif()
 
-# ---- bgfx / bx / bimg ----
-add_subdirectory(${CMAKE_SOURCE_DIR}/external/bgfx.cmake)
-if(TARGET bgfx)
-    target_link_libraries(GRIM PRIVATE bgfx bx bimg)
-else()
-    message(FATAL_ERROR "[GRIM] bgfx subproject not found.")
-endif()
+# =========================================================
+#  CPR (via vcpkg, manifest-safe)
+# =========================================================
+find_package(cpr CONFIG REQUIRED)
 
-# ---- OpenAL Soft ----
-find_package(OpenAL CONFIG QUIET)
-if(TARGET OpenAL::OpenAL)
-    target_link_libraries(GRIM PRIVATE OpenAL::OpenAL)
-elseif(EXISTS "${VCPKG_INSTALLED_DIR}/x64-windows/lib/OpenAL32.lib")
-    target_link_libraries(GRIM PRIVATE OpenAL32)
-else()
-    message(WARNING "[GRIM] OpenAL not found through CMake; linking fallback OpenAL32.")
-    target_link_libraries(GRIM PRIVATE OpenAL32)
-endif()
-
-# ---- cpr (HTTP) ----
-find_package(cpr CONFIG QUIET)
-if(cpr_FOUND)
+if (TARGET cpr::cpr)
+    message(STATUS "[GRIM] Found CPR target: cpr::cpr")
+    # Remove any accidental extra libraries from old config
     target_link_libraries(GRIM PRIVATE cpr::cpr)
 else()
-    message(WARNING "[GRIM] cpr not found; skipping HTTP support.")
+    message(FATAL_ERROR "[GRIM] CPR target not found — check vcpkg manifest and toolchain settings")
 endif()
 
-# ---- nlohmann_json ----
-find_package(nlohmann_json CONFIG REQUIRED)
-if(TARGET nlohmann_json::nlohmann_json)
+# Force correct library search path (MSVC sometimes misses it in manifest mode)
+target_link_directories(GRIM PRIVATE "C:/vcpkg/installed/x64-windows/debug/lib")
+target_link_directories(GRIM PRIVATE "C:/vcpkg/installed/x64-windows/lib")
+
+
+# =========================================================
+#  nlohmann-json
+# =========================================================
+find_package(nlohmann_json CONFIG QUIET)
+if (nlohmann_json_FOUND)
     target_link_libraries(GRIM PRIVATE nlohmann_json::nlohmann_json)
 else()
-    message(FATAL_ERROR "[GRIM] nlohmann_json target not found — ensure vcpkg installed nlohmann-json.")
+    message(WARNING "[GRIM] nlohmann-json not found — using fallback if available.")
 endif()
 
-# ---- PortAudio ----
-find_package(portaudio CONFIG QUIET)
-if(portaudio_FOUND)
-    if(TARGET PortAudio::PortAudio)
-        target_link_libraries(GRIM PRIVATE PortAudio::PortAudio)
-    else()
-        target_link_libraries(GRIM PRIVATE portaudio)
-    endif()
+
+
+target_link_directories(GRIM PRIVATE ${CMAKE_SOURCE_DIR}/deps/lib)
+# =========================================================
+# BGFX / BX / BIMG
+# =========================================================
+set(GRIM_DEPS_LIB "${CMAKE_SOURCE_DIR}/deps/lib")
+
+if (EXISTS "${GRIM_DEPS_LIB}/bgfx.lib")
+    message(STATUS "[GRIM] Linking prebuilt BGFX libraries from ${GRIM_DEPS_LIB}")
+
+    # Add the deps/lib directory to the linker search path
+    target_link_directories(GRIM PRIVATE "${GRIM_DEPS_LIB}")
+
+    # Link all required static libs explicitly
+    target_link_libraries(GRIM PRIVATE
+        bgfx
+        bx
+        bimg
+    )
 else()
-    message(WARNING "[GRIM] PortAudio not found; microphone input will be disabled.")
+    message(WARNING "[GRIM] BGFX libraries not found in ${GRIM_DEPS_LIB}")
 endif()
 
 # =========================================================
-# Optional: Whisper / GGML (if present in external folder)
+# Whisper (Prebuilt)
 # =========================================================
-if(EXISTS "${CMAKE_SOURCE_DIR}/external/whisper.cpp")
-    add_subdirectory(${CMAKE_SOURCE_DIR}/external/whisper.cpp)
-    if(TARGET whisper)
-        target_link_libraries(GRIM PRIVATE whisper)
-    else()
-        message(WARNING "[GRIM] Whisper build skipped (no target generated).")
-    endif()
+set(WHISPER_DIR "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build")
+set(WHISPER_LIB "${WHISPER_DIR}/src/Debug/whisper.lib")
+set(WHISPER_DLL "${WHISPER_DIR}/bin/Debug/whisper.dll")
+
+if (EXISTS "${WHISPER_LIB}")
+    message(STATUS "[GRIM] Linking prebuilt Whisper from ${WHISPER_DIR}")
+    target_link_libraries(GRIM PRIVATE "${WHISPER_LIB}")
+
+    # Copy whisper.dll next to GRIM.exe after build
+    add_custom_command(TARGET GRIM POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${WHISPER_DLL}"
+            "$<TARGET_FILE_DIR:GRIM>/whisper.dll"
+        COMMENT "[GRIM] Copied whisper.dll to output directory"
+    )
+else()
+    message(FATAL_ERROR "[GRIM] Prebuilt whisper.lib not found at ${WHISPER_LIB}")
+endif()
+
+
+# Copy all ggml runtime DLLs
+foreach(_dll IN ITEMS ggml.dll ggml-base.dll ggml-cpu.dll)
+    add_custom_command(TARGET GRIM POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${WHISPER_DIR}/bin/Debug/${_dll}"
+            "$<TARGET_FILE_DIR:GRIM>/${_dll}"
+        COMMENT "[GRIM] Copied ${_dll} to output directory"
+    )
+endforeach()
+
+# =========================================================
+#  Centralized Include Directory
+# =========================================================
+target_include_directories(GRIM PRIVATE
+    ${GRIM_DEPS_INCLUDE}
+)
+
+# =========================================================
+#  Library Directory
+# =========================================================
+if (EXISTS "${GRIM_DEPS_LIB}")
+    message(STATUS "[GRIM] Adding library search path: ${GRIM_DEPS_LIB}")
+    link_directories(${GRIM_DEPS_LIB})
+else()
+    message(WARNING "[GRIM] Library directory not found: ${GRIM_DEPS_LIB}")
 endif()
 
 # =========================================================
-# Dependency Summary
+#  Finalization
 # =========================================================
 message(STATUS "[GRIM] Dependency configuration complete.")
