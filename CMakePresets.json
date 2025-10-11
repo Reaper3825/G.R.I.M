@@ -1,0 +1,40 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20
+  },
+
+  "configurePresets": [
+    {
+      "name": "debug",
+      "displayName": "Debug (VS2022 x64)",
+      "description": "Build GRIM Debug configuration with vcpkg and CUDA 12.5",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/out/build",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "CMAKE_PREFIX_PATH": "C:/vcpkg/installed/x64-windows/share",
+        "glfw3_DIR": "C:/vcpkg/installed/x64-windows/share/glfw3",
+        "SFML_DIR": "C:/vcpkg/installed/x64-windows/share/sfml",
+        "CMAKE_CUDA_COMPILER": "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/bin/nvcc.exe",
+        "CMAKE_CUDA_ARCHITECTURES": "86",
+        "GGML_CUDA": "ON",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    }
+  ],
+
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "displayName": "Build GRIM (Debug)",
+      "description": "Builds GRIM with parallel jobs in Debug configuration",
+      "configuration": "Debug",
+      "jobs": 0,
+      "inheritConfigureEnvironment": true
+    }
+  ]
+}

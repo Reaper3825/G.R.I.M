@@ -1,6 +1,7 @@
 # =========================================================
-# GRIM Resource Handling & Install Rules
+# GRIM Resource Handling & Install Rules  (idempotent)
 # =========================================================
+include_guard(GLOBAL)
 
 set(GRIM_RESOURCES
     nlp_rules.json
@@ -9,78 +10,80 @@ set(GRIM_RESOURCES
     memory.json
 )
 
-# Copy JSON resources post-build
-foreach(FILE ${GRIM_RESOURCES})
-  if(EXISTS "${CMAKE_SOURCE_DIR}/resources/${FILE}")
-    set(SRC_FILE "${CMAKE_SOURCE_DIR}/resources/${FILE}")
-  else()
-    set(SRC_FILE "${CMAKE_BINARY_DIR}/${FILE}")
-  endif()
-  add_custom_command(TARGET GRIM POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${SRC_FILE}"
-            "$<TARGET_FILE_DIR:GRIM>/${FILE}"
-  )
-endforeach()
+# Optional assets (safe if missing)
+set(GRIM_FONT_SRC "${CMAKE_SOURCE_DIR}/resources/fonts/Inter/Inter-Regular.ttf" CACHE FILEPATH "Fallback UI font")
+set(WHISPER_MODEL_FILE "${CMAKE_SOURCE_DIR}/models/ggml-base.en.bin" CACHE FILEPATH "Default Whisper model path")
 
-# Font detection
-set(GRIM_FONT_SRC "")
-if(GRIM_FONT_PATH)
-  set(GRIM_FONT_SRC "${GRIM_FONT_PATH}")
-elseif(EXISTS "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")
-  set(GRIM_FONT_SRC "${CMAKE_SOURCE_DIR}/DejaVuSans.ttf")
-elseif(EXISTS "C:/Windows/Fonts/arial.ttf")
-  set(GRIM_FONT_SRC "C:/Windows/Fonts/arial.ttf")
-elseif(EXISTS "C:/Windows/Fonts/segoeui.ttf")
-  set(GRIM_FONT_SRC "C:/Windows/Fonts/segoeui.ttf")
-else()
-  message(WARNING "No font found. Provide -DGRIM_FONT_PATH=...")
+# ---------- helper: copy a single file ----------
+function(_grim_copy_one SRC DEST)
+    add_custom_command(
+        OUTPUT "${DEST}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<IF:$<BOOL:${DEST}>,${CMAKE_BINARY_DIR},${CMAKE_BINARY_DIR}>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SRC}" "${DEST}"
+        DEPENDS "${SRC}"
+        VERBATIM
+    )
+endfunction()
+
+# ---------- create a single, reusable copy target ----------
+if(NOT TARGET grim_copy_resources)
+    add_custom_target(grim_copy_resources ALL COMMENT "[GRIM] Copying runtime resources")
+
+    # JSON resources → build dir
+    foreach(FILE ${GRIM_RESOURCES})
+        if(EXISTS "${CMAKE_SOURCE_DIR}/resources/${FILE}")
+            set(SRC_FILE "${CMAKE_SOURCE_DIR}/resources/${FILE}")
+        else()
+            # allow user to place overrides next to the tree
+            set(SRC_FILE "${CMAKE_BINARY_DIR}/${FILE}")
+        endif()
+
+        set(DST_FILE "${CMAKE_BINARY_DIR}/${FILE}")
+
+        if(EXISTS "${SRC_FILE}")
+            _grim_copy_one("${SRC_FILE}" "${DST_FILE}")
+            add_custom_command(TARGET grim_copy_resources POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SRC_FILE}" "${DST_FILE}"
+                VERBATIM)
+        endif()
+    endforeach()
+
+    # font (optional)
+    if(EXISTS "${GRIM_FONT_SRC}")
+        add_custom_command(TARGET grim_copy_resources POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${GRIM_FONT_SRC}" "${CMAKE_BINARY_DIR}/ui_font.ttf"
+            VERBATIM)
+    endif()
+
+    # whisper model (optional)
+    if(EXISTS "${WHISPER_MODEL_FILE}")
+        add_custom_command(TARGET grim_copy_resources POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/models"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${WHISPER_MODEL_FILE}" "${CMAKE_BINARY_DIR}/models/"
+            VERBATIM)
+    endif()
 endif()
 
-# Whisper model auto-download
-set(WHISPER_MODEL_DIR "${CMAKE_SOURCE_DIR}/external/whisper.cpp/models")
-set(WHISPER_MODEL_FILE "${WHISPER_MODEL_DIR}/ggml-small.bin")
-
-if(NOT EXISTS "${WHISPER_MODEL_FILE}")
-  file(MAKE_DIRECTORY "${WHISPER_MODEL_DIR}")
-  add_custom_command(
-    OUTPUT "${WHISPER_MODEL_FILE}"
-    COMMAND ${CMAKE_COMMAND} -E echo "Downloading Whisper model (ggml-small.bin)..."
-    COMMAND curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
-            -o "${WHISPER_MODEL_FILE}"
-    COMMENT "Fetching Whisper model"
-    VERBATIM
-  )
-  add_custom_target(fetch_whisper_model ALL DEPENDS "${WHISPER_MODEL_FILE}")
-  add_dependencies(GRIM fetch_whisper_model)
+# ---------- attach to GRIM if present ----------
+if(TARGET GRIM)
+    add_dependencies(GRIM grim_copy_resources)
 endif()
 
-# Copy resources folder
-if(EXISTS "${CMAKE_SOURCE_DIR}/resources")
-  add_custom_target(copy_resources ALL
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_SOURCE_DIR}/resources"
-            "$<TARGET_FILE_DIR:GRIM>/resources"
-  )
-  add_dependencies(GRIM copy_resources)
-endif()
-
-# Install rules
+# ---------- install rules (safe if included multiple times) ----------
 include(GNUInstallDirs)
-install(TARGETS GRIM RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 foreach(FILE ${GRIM_RESOURCES})
-  if(EXISTS "${CMAKE_SOURCE_DIR}/resources/${FILE}")
-    install(FILES "${CMAKE_SOURCE_DIR}/resources/${FILE}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim)
-  else()
-    install(FILES "${CMAKE_BINARY_DIR}/${FILE}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim)
-  endif()
+    if(EXISTS "${CMAKE_SOURCE_DIR}/resources/${FILE}")
+        install(FILES "${CMAKE_SOURCE_DIR}/resources/${FILE}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim)
+    elseif(EXISTS "${CMAKE_BINARY_DIR}/${FILE}")
+        install(FILES "${CMAKE_BINARY_DIR}/${FILE}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim)
+    endif()
 endforeach()
 
-if(GRIM_FONT_SRC)
-  install(FILES "${GRIM_FONT_SRC}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim)
+if(EXISTS "${GRIM_FONT_SRC}")
+    install(FILES "${GRIM_FONT_SRC}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim)
 endif()
 
 if(EXISTS "${WHISPER_MODEL_FILE}")
-  install(FILES "${WHISPER_MODEL_FILE}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim/models)
+    install(FILES "${WHISPER_MODEL_FILE}" DESTINATION ${CMAKE_INSTALL_DATADIR}/grim/models)
 endif()
