@@ -182,7 +182,9 @@ CommandResult cmdOpenApp(const std::string& arg) {
             ErrorManager::getUserMessage("ERR_APP_NO_ARGUMENT"),
             false,
             sf::Color::Red,
-            "ERR_APP_NO_ARGUMENT"
+            "ERR_APP_NO_ARGUMENT",
+            "Missing application name",
+            "error"
         };
     }
 
@@ -203,7 +205,9 @@ CommandResult cmdOpenApp(const std::string& arg) {
             ErrorManager::getUserMessage("ERR_APP_LAUNCH_FAILED") + ": " + appPath,
             false,
             sf::Color::Red,
-            "ERR_APP_LAUNCH_FAILED"
+            "ERR_APP_LAUNCH_FAILED",
+            "Failed to open " + appPath,
+            "error"
         };
     }
 
@@ -212,16 +216,19 @@ CommandResult cmdOpenApp(const std::string& arg) {
         "[App] Launched: " + appPath,
         true,
         sf::Color::Green,
-        "ERR_NONE"
+        "ERR_NONE",
+        "Opening " + appPath,
+        "routine"
     };
 #else
-    // Linux / macOS stub
     std::cerr << "[DEBUG][cmdOpenApp] (Stub) Would open: " << appPath << "\n";
     return {
         "[App] (Stub) Would open: " + appPath,
         true,
         sf::Color::Green,
-        "ERR_NONE"
+        "ERR_NONE",
+        "Opening " + appPath,
+        "routine"
     };
 #endif
 }

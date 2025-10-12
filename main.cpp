@@ -19,6 +19,12 @@
 #include "wake/wake_voice.hpp"
 #include <SFML/Graphics/Font.hpp>
 #include <SFML/Graphics/Text.hpp>
+#include "memory/memory_storage.hpp"
+#include "memory/context_manager.hpp"
+
+
+GRIM::MemoryStorage g_memoryStorage;   
+
 
 namespace fs = std::filesystem;
 
@@ -89,6 +95,14 @@ int main(int argc, char* argv[])
     LOG_PHASE("Startup greeting spoken", true);
 
     LOG_PHASE("Startup complete, entering main loop", true);
+
+
+    // Initialize memory storage
+    g_memoryStorage.initialize("D:/G.R.I.M/data/memories.json");
+    GRIM::ContextManager::setMemoryStorage(&g_memoryStorage);
+
+
+
 
     // ====================================================
     // Launch popup UI in background thread

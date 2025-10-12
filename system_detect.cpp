@@ -1,6 +1,7 @@
 #include "system_detect.hpp"
 #include "logger.hpp"
-
+#include <cpr/cpr.h>
+#include <nlohmann/json.hpp>
 #include <cstdlib>
 #include <thread>
 #include <SFML/Audio.hpp>
@@ -31,6 +32,76 @@
 
 #ifdef GGML_USE_CUBLAS
     #include <cuda_runtime.h>
+#endif
+
+#ifdef _WIN32
+#include <Wlanapi.h>
+#pragma comment(lib, "wlanapi.lib")
+
+
+LocationInfo g_location;
+// =========================================================
+//GeoIP location fetch
+// =========================================================
+static bool fetchLocationByIP(LocationInfo& loc) {
+    try {
+        // ip-api.com — simple, no key, JSON response.
+        // NOTE: rate limits apply for heavy usage; swap for a paid provider if needed.
+        auto r = cpr::Get(cpr::Url{"http://ip-api.com/json/"}, cpr::Timeout{5000});
+        if (r.error || r.status_code != 200) {
+            return false;
+        }
+
+        auto j = nlohmann::json::parse(r.text);
+        if (j.contains("status") && j["status"] == "success") {
+            loc.ip      = j.value("query", "");
+            loc.country = j.value("country", "");
+            loc.region  = j.value("regionName", "");
+            loc.city    = j.value("city", "");
+            loc.postal  = j.value("zip", "");
+            loc.lat     = j.value("lat", 0.0);
+            loc.lon     = j.value("lon", 0.0);
+            loc.isp     = j.value("isp", "");
+            return true;
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("SystemDetect", std::string("Location fetch exception: ") + e.what());
+    }
+    return false;
+}
+
+
+
+
+
+bool g_wifiConnected = false;
+static bool detectWifiConnected() {
+    HANDLE hClient = nullptr;
+    DWORD dwMaxClient = 2;
+    DWORD dwCurVersion = 0;
+    DWORD dwResult = WlanOpenHandle(dwMaxClient, NULL, &dwCurVersion, &hClient);
+    if (dwResult != ERROR_SUCCESS) return false;
+
+    PWLAN_INTERFACE_INFO_LIST pIfList = nullptr;
+    dwResult = WlanEnumInterfaces(hClient, NULL, &pIfList);
+    if (dwResult != ERROR_SUCCESS) {
+        WlanCloseHandle(hClient, NULL);
+        return false;
+    }
+
+    bool connected = false;
+    for (int i = 0; i < (int)pIfList->dwNumberOfItems; i++) {
+        WLAN_INTERFACE_INFO info = pIfList->InterfaceInfo[i];
+        if (info.isState == wlan_interface_state_connected) {
+            connected = true;
+            break;
+        }
+    }
+
+    if (pIfList != nullptr) WlanFreeMemory(pIfList);
+    WlanCloseHandle(hClient, NULL);
+    return connected;
+}
 #endif
 
 // =========================================================
@@ -215,19 +286,19 @@ static void selectOutputDevice(SystemInfo& info) {
 SystemInfo detectSystem() {
     SystemInfo info;
 
-    // OS + voice backends
 #ifdef _WIN32
     info.osName = "Windows";
     info.hasSAPI = true;
+    g_wifiConnected = detectWifiConnected();
 #elif __APPLE__
     info.osName = "macOS";
     info.hasSay = true;
 #elif __linux__
     info.osName = "Linux";
     info.hasPiper = ensurePiperInstalled();
-#else
-    info.osName = "Unknown";
 #endif
+LOG_DEBUG("SystemDetect", "Wi-Fi connected: " + std::string(g_wifiConnected ? "Yes" : "No"));
+
 
     // Architecture
 #if defined(__x86_64__) || defined(_M_X64)
@@ -292,10 +363,20 @@ SystemInfo detectSystem() {
 
     // Pick Whisper model
     info.suggestedModel = chooseWhisperModel(info);
-
+    
+    
+    if (g_wifiConnected) {
+        if (!fetchLocationByIP(g_location)) {
+            LOG_DEBUG("SystemDetect", "IP geolocation failed or timed out.");
+        } else {
+            LOG_DEBUG("SystemDetect", "Location: " + g_location.fullAddress());
+        }
+    } else {
+        LOG_DEBUG("SystemDetect", "Skipping location fetch — Wi-Fi not connected.");
+    }
     // Choose audio output (interactive)
     selectOutputDevice(info);
-
+    
     return info;
 }
 

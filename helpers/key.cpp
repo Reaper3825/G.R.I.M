@@ -1,10 +1,14 @@
 #include "key.hpp"
 #include <windows.h>
 #include <iostream>
+#include <thread>
+#include "logger.hpp"
 
 std::unordered_map<KeyCode, Key::KeyState> Key::keyStates;
 HHOOK Key::keyboardHook = nullptr;
 
+static DWORD g_hookThreadId = 0;
+static std::thread g_hookThread;
 // Translate Win32 virtual key to your enum
 static KeyCode fromVK(WPARAM vk)
 {
@@ -129,20 +133,43 @@ LRESULT CALLBACK Key::LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lPar
     return CallNextHookEx(nullptr, nCode, wParam, lParam);
 }
 
-// Initialize hook
+
+
+// Initialize hook: install + own the message loop on the SAME thread
 void Key::initialize()
 {
-    if (!keyboardHook)
-        keyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL, LowLevelKeyboardProc, nullptr, 0);
+    if (keyboardHook) return;
+
+    g_hookThread = std::thread([] {
+        g_hookThreadId = GetCurrentThreadId();
+
+        HINSTANCE hInst = GetModuleHandleW(nullptr);
+        keyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL, LowLevelKeyboardProc, hInst, 0);
+
+        // (optional) debug: if (!keyboardHook) OutputDebugStringA("SetWindowsHookExW failed\n");
+
+        MSG msg;
+        // Pump messages so the low-level hook receives keystrokes
+        while (GetMessageW(&msg, nullptr, 0, 0)) {
+            // no dispatch needed for LL hooks, just keep the loop alive
+        }
+
+        // Clean up the hook when the loop is told to quit
+        if (keyboardHook) {
+            UnhookWindowsHookEx(keyboardHook);
+            keyboardHook = nullptr;
+        }
+    });
+
+    g_hookThread.detach();
 }
 
-// Shutdown hook
+// Shutdown hook: tell the hook thread to exit its message loop
 void Key::shutdown()
 {
-    if (keyboardHook)
-    {
-        UnhookWindowsHookEx(keyboardHook);
-        keyboardHook = nullptr;
+    if (g_hookThreadId != 0) {
+        PostThreadMessageW(g_hookThreadId, WM_QUIT, 0, 0);
+        g_hookThreadId = 0;
     }
 }
 
@@ -187,6 +214,7 @@ void Key::endFrame()
 void Key::onPress(KeyCode code, Callback cb)
 {
     keyStates[code].pressCallbacks.push_back(std::move(cb));
+    
 }
 
 void Key::onRelease(KeyCode code, Callback cb)

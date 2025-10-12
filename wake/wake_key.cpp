@@ -34,36 +34,19 @@ static void handleVoiceCommand(ConsoleHistory* history,
     LOG_DEBUG("WakeKey", "Wake key pressed — capturing voice command.");
     notifyPopupActivity();
 
-
-    // Perform voice capture
+    // Capture speech → text
     std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
     LOG_DEBUG("WakeKey", "Captured voice transcript: " + transcript);
 
+    // Send transcript through the central pipeline
     if (!transcript.empty()) {
-        Intent intent = nlp.parse(transcript);
-
-        if (intent.matched) {
-            LOG_DEBUG("WakeKey", "Dispatching recognized command: " + intent.name);
-            handleCommand(transcript);
-        } else {
-            std::string fullReply;
-            ai_process_stream(
-                transcript,
-                longTermMemory,
-                [&](const std::string& chunk) {
-                    fullReply += chunk;
-                    ui_set_textbox(fullReply);
-                    LOG_DEBUG("WakeKey/AI", "Chunk: " + chunk);
-                });
-
-            history->push("[AI] " + fullReply, sf::Color::Green);
-        }
-    } else {
-        LOG_DEBUG("WakeKey", "No transcript captured (silence or timeout).");
+        handleCommand(transcript); // 🧠 All NLP + voice output handled here
     }
 
     g_listening = false;
 }
+
+
 
 // -----------------------------------------------------------
 // Start / Stop

@@ -4,7 +4,7 @@
 #include "commands/commands_core.hpp"
 #include "error_manager.hpp"
 #include "logger.hpp"
-
+#include "personality_manager.hpp"
 #include <cpr/cpr.h>
 #include <fstream>
 #include <sstream>
@@ -197,8 +197,10 @@ CommandResult ai_process(const std::string& input) {
 
     for (int attempt = 1; attempt <= maxRetries; ++attempt) {
         try {
-            auto future = callAIAsync(input);
+            std::string prefix = GRIM::PersonalityManager::generatePrefix();
+            auto future = callAIAsync(prefix + " " + input);
             reply = future.get();
+
 
             if (!reply.empty() && reply.rfind("[AI] Backend call failed", 0) != 0) {
                 result.success = true;

@@ -22,6 +22,7 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 namespace Voice {
+
     // =========================================================
     // Audio state
     // =========================================================
@@ -33,6 +34,13 @@ namespace Voice {
     static double      g_speed      = 1.0;
     static fs::path    g_outputDir  = "D:/G.R.I.M/resources/tts_out";
     static std::unordered_map<std::string, std::string> g_rules;
+    std::unique_ptr<sf::Sound> Voice::g_activeSound = nullptr;
+    std::shared_ptr<sf::SoundBuffer> Voice::g_activeBuffer = nullptr;
+
+    bool Voice::isSpeaking() {
+    return g_activeSound && 
+           g_activeSound->getStatus() == sf::SoundSource::Status::Playing;
+}
 
     // =========================================================
     // Bridge state
