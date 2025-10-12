@@ -1,0 +1,64 @@
+{
+  "memories": [
+    {
+      "confidence": 0.949999988079071,
+      "context": "conversation",
+      "id": "8765d0ca-c4cf-3025-a9b5-9a992f327f9d",
+      "intent": "inform",
+      "normalized": "memory storage test successful",
+      "raw": "This is a memory storage test.",
+      "source": "grim.internal",
+      "tags": [
+        "bootstrap",
+        "test"
+      ],
+      "timestamp": 1760305400,
+      "type": "fact"
+    },
+    {
+      "confidence": 0.949999988079071,
+      "context": "conversation",
+      "id": "64b9de82-b4d5-1c67-8433-35c91df70d82",
+      "intent": "inform",
+      "normalized": "memory storage test successful",
+      "raw": "This is a memory storage test.",
+      "source": "grim.internal",
+      "tags": [
+        "bootstrap",
+        "test"
+      ],
+      "timestamp": 1760304783,
+      "type": "fact"
+    },
+    {
+      "confidence": 0.949999988079071,
+      "context": "conversation",
+      "id": "5fee9a6e-3252-f6bd-86ad-d65af3086080",
+      "intent": "inform",
+      "normalized": "memory storage test successful",
+      "raw": "This is a memory storage test.",
+      "source": "grim.internal",
+      "tags": [
+        "bootstrap",
+        "test"
+      ],
+      "timestamp": 1760304930,
+      "type": "fact"
+    },
+    {
+      "confidence": 0.949999988079071,
+      "context": "conversation",
+      "id": "1a9feb7e-105a-add0-597f-5346a19e0afb",
+      "intent": "inform",
+      "normalized": "memory storage test successful",
+      "raw": "This is a memory storage test.",
+      "source": "grim.internal",
+      "tags": [
+        "bootstrap",
+        "test"
+      ],
+      "timestamp": 1760305077,
+      "type": "fact"
+    }
+  ]
+}

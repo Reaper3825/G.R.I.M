@@ -21,7 +21,8 @@ file(GLOB bootstrap_SOURCES "bootstrap/*.cpp")
 file(GLOB bootstrap_HEADERS "bootstrap/*.hpp")
 file(GLOB helpers_SOURCES "helpers/*.cpp")
 file(GLOB helpers_HEADERS "helpers/*.hpp")
-
+file(GLOB memory_SOURCES "memory/*.cpp")
+file(GLOB memory_HEADERS "memory/*.hpp")
 set(GRIM_SOURCES
     main.cpp
     resources.cpp
@@ -42,6 +43,7 @@ set(GRIM_SOURCES
     ${ui_SOURCES}
     ${bootstrap_SOURCES}
     ${helpers_SOURCES}
+    ${memory_SOURCES}
 )
 
 set(GRIM_HEADERS
@@ -65,4 +67,5 @@ set(GRIM_HEADERS
     ${ui_HEADERS}
     ${bootstrap_HEADERS}
     ${helpers_HEADERS}
+    ${memory_HEADERS}
 )

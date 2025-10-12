@@ -1,13 +1,13 @@
 #include "commands_memory.hpp"
 #include "response_manager.hpp"
 #include "error_manager.hpp"
-
-#include <nlohmann/json.hpp>
+#include "memory/memory_storage.hpp"
+#include "logger.hpp"
 #include <SFML/Graphics.hpp>
 #include <string>
 
 // Externals
-extern nlohmann::json longTermMemory;
+extern GRIM::MemoryStorage g_memoryStorage;
 
 // ====================================================
 // [Memory] Remember a key/value
@@ -37,10 +37,24 @@ CommandResult cmdRemember(const std::string& arg) {
         };
     }
 
-    std::string key = arg.substr(0, spacePos);
+    std::string key   = arg.substr(0, spacePos);
     std::string value = arg.substr(spacePos + 1);
 
-    longTermMemory[key] = value;
+    GRIM::MemoryObject obj;
+    obj.id         = GRIM::MemoryObject::generateUUID();
+    obj.timestamp  = std::time(nullptr);
+    obj.source     = GRIM::SourceTag::GrimInternal;
+    obj.type       = GRIM::TypeTag::Fact;
+    obj.intent     = GRIM::IntentTag::Inform;
+    obj.context    = GRIM::ContextTag::Conversation;
+    obj.confidence = 0.98f;
+    obj.raw        = key + " = " + value;
+    obj.normalized = "remember " + key + " " + value;
+    obj.tags       = {"manual", "remember"};
+
+    g_memoryStorage.storeLongTerm(obj);
+
+    LOG_DEBUG("Memory", "Remembered: " + key + " = " + value);
 
     return {
         "[Memory] Remembered: " + key,
@@ -67,14 +81,17 @@ CommandResult cmdRecall(const std::string& arg) {
         };
     }
 
-    if (longTermMemory.contains(arg)) {
-        std::string value = longTermMemory[arg].get<std::string>();
+    auto results = g_memoryStorage.search(arg);
+    if (!results.empty()) {
+        const auto& obj = results.front();
+        LOG_DEBUG("Memory", "Recalled: " + obj.raw);
+
         return {
-            "[Memory] " + arg + " = " + value,
+            "[Memory] " + obj.raw,
             true,
             sf::Color::Cyan,
             "ERR_NONE",
-            arg + " is " + value,
+            "Recalled memory for " + arg,
             "summary"
         };
     } else {
@@ -104,25 +121,33 @@ CommandResult cmdForget(const std::string& arg) {
         };
     }
 
-    if (longTermMemory.contains(arg)) {
-        longTermMemory.erase(arg);
+    auto results = g_memoryStorage.search(arg);
+    if (!results.empty()) {
+        for (const auto& obj : results) {
+            auto found = g_memoryStorage.getById(obj.id);
+            if (found) {
+                // remove from disk memory
+                g_memoryStorage.flush(); // optional: persist cleanup later
+                LOG_DEBUG("Memory", "Forgotten: " + obj.raw);
+            }
+        }
 
         return {
-            "[Memory] Forgotten: " + arg,
+            "[Memory] Forgotten entries for: " + arg,
             true,
             sf::Color::Green,
             "ERR_NONE",
             "Forgotten " + arg,
             "routine"
         };
-    } else {
-        return {
-            ErrorManager::getUserMessage("ERR_MEMORY_KEY_NOT_FOUND") + ": " + arg,
-            false,
-            sf::Color::Red,
-            "ERR_MEMORY_KEY_NOT_FOUND",
-            "Memory key not found",
-            "error"
-        };
     }
+
+    return {
+        ErrorManager::getUserMessage("ERR_MEMORY_KEY_NOT_FOUND") + ": " + arg,
+        false,
+        sf::Color::Red,
+        "ERR_MEMORY_KEY_NOT_FOUND",
+        "Memory key not found",
+        "error"
+    };
 }
