@@ -11,10 +11,13 @@
 #include "commands/commands_core.hpp"
 #include "voice/voice_speak.hpp"
 #include "popup_ui/popup_ui.hpp"
-#include "wake_voice.hpp"
+#include "ai/ai.hpp"
+#include "voice/voice.hpp"
+#include "bootstrap/bootstrap_config.hpp"
 
 // ==== PortAudio ====
 #include <portaudio.h>
+
 // -----------------------------------------------------------------------------
 // Fallback definitions for older Porcupine SDK versions
 // -----------------------------------------------------------------------------
@@ -109,6 +112,7 @@ void shutdownWakeWord() {
 namespace {
     std::atomic<bool> g_running{false};
     std::thread g_thread;
+    static bool g_listening = false;
 }
 
 namespace WakeVoice {
@@ -126,8 +130,8 @@ static bool startPortAudio(PaStream** outStream, double desiredRate, int channel
         LOG_ERROR("WakeVoice", "No default input device.");
         return false;
     }
-    in.channelCount = channels;            // 1
-    in.sampleFormat = paInt16;             // 16-bit PCM
+    in.channelCount = channels;
+    in.sampleFormat = paInt16;
     in.suggestedLatency = Pa_GetDeviceInfo(in.device)->defaultLowInputLatency;
     in.hostApiSpecificStreamInfo = nullptr;
 
@@ -135,8 +139,8 @@ static bool startPortAudio(PaStream** outStream, double desiredRate, int channel
         outStream,
         &in,
         nullptr,
-        desiredRate,                        // Porcupine sample rate
-        pv_porcupine_frame_length(),        // frames per buffer == Porcupine frame length
+        desiredRate,
+        pv_porcupine_frame_length(),
         paNoFlag,
         nullptr,
         nullptr
@@ -167,9 +171,9 @@ static void stopPortAudio(PaStream* stream) {
 }
 
 void start(ConsoleHistory* history,
-           std::vector<Timer>& /*timers*/,
-           nlohmann::json& /*longTermMemory*/,
-           NLP& /*nlp*/)
+           std::vector<Timer>& timers,
+           nlohmann::json& longTermMemory,
+           NLP& nlp)
 {
     if (g_running.load()) {
         LOG_DEBUG("WakeVoice", "Already running.");
@@ -178,7 +182,6 @@ void start(ConsoleHistory* history,
 
     LOG_DEBUG("WakeVoice", "Starting wake-word listener...");
 
-    // Configure Porcupine paths (adjust if your layout differs)
     const std::string accessKey  = "l24x+8ku2pUsbZKcEyICgbx3Aj/15JHoqGj1TQr+JHcyCXA2RSV2LA==";
     const std::string modelPath  = "D:/G.R.I.M/external/porcupine/lib/common/porcupine_params.pv";
     const std::string keywordPath= "D:/G.R.I.M/resources/wakeword/grim.ppn";
@@ -189,7 +192,7 @@ void start(ConsoleHistory* history,
     }
 
     g_running = true;
-    g_thread = std::thread([history]() {
+    g_thread = std::thread([history, &timers, &longTermMemory, &nlp]() {
         const int frameLen = pv_porcupine_frame_length();
         const int sampleRate = pv_porcupine_sample_rate();
         std::vector<int16_t> frame(frameLen);
@@ -204,7 +207,6 @@ void start(ConsoleHistory* history,
         LOG_PHASE("WakeVoice", "Listening for wake word...");
 
         while (g_running.load()) {
-            // Blocking read exactly one Porcupine frame
             PaError r = Pa_ReadStream(stream, frame.data(), frameLen);
             if (r != paNoError) {
                 LOG_ERROR("WakeVoice", std::string("Pa_ReadStream error: ") + Pa_GetErrorText(r));
@@ -215,12 +217,22 @@ void start(ConsoleHistory* history,
                 LOG_TRACE("WakeVoice", "Wake word detected!");
                 notifyPopupActivity();
 
-                // Optional: say hello or enqueue a prompt
-                Voice::speak("Yes?", "wake");
-                // Hand off to your command flow if desired:
-                // handleCommand("listen"); // or whatever your pipeline expects
+                if (g_listening) continue;
+                g_listening = true;
 
-                // If you want one-shot detection, break. Otherwise continue.
+                Voice::speak("Yes?", "wake");
+
+                // Capture and process the user's spoken command (same as WakeKey)
+                std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
+                LOG_DEBUG("WakeVoice", "Captured voice transcript: " + transcript);
+
+                if (!transcript.empty()) {
+                    handleCommand(transcript); // unified command pipeline
+                }
+
+                g_listening = false;
+
+                // Optional: break for one-shot mode
                 // break;
             }
         }
