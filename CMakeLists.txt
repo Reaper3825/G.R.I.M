@@ -37,6 +37,8 @@ if (MSVC)
     add_compile_options($<$<AND:$<CONFIG:Debug>,$<COMPILE_LANGUAGE:CXX>>:/FS>)
 endif()
 
+
+include_directories(${CMAKE_SOURCE_DIR}/external/porcupine/include)
 # =========================================================
 # CUDA Environment Sanity
 # =========================================================
@@ -131,5 +133,27 @@ set_target_properties(GRIM PROPERTIES
     CXX_EXTENSIONS OFF
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# =========================================================
+# Porcupine Wake Word SDK (manual integration)
+# =========================================================
+target_include_directories(GRIM PRIVATE
+    ${CMAKE_SOURCE_DIR}/external/porcupine/include
+)
+
+target_link_directories(GRIM PRIVATE
+    ${CMAKE_SOURCE_DIR}/external/porcupine/lib/windows/amd64
+)
+
+target_link_libraries(GRIM PRIVATE
+    pv_porcupine
+)
+
+# Copy runtime DLL to GRIM output folder
+add_custom_command(TARGET GRIM POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${CMAKE_SOURCE_DIR}/external/porcupine/lib/windows/amd64/libpv_porcupine.dll
+    $<TARGET_FILE_DIR:GRIM>
+)
+
 
 message(STATUS "[GRIM] Build configuration complete.")

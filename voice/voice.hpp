@@ -6,6 +6,7 @@
 struct whisper_context;
 
 namespace Voice {
+    std::string detectWakeWord();
     struct State {
         whisper_context* ctx = nullptr;
         int minSpeechMs = 0;

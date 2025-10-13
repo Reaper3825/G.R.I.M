@@ -120,11 +120,12 @@ int main(int argc, char* argv[])
     LOG_PHASE("Popup UI launched", true);
 
     // ====================================================
-    // Start Wake Key listener (activates popup on RCtrl)
+    // Start Wake listener
     // ====================================================
     WakeKey::start(&g_consoleHistory, g_uiTimers, g_longTermMemory, g_nlp);
     LOG_PHASE("WakeKey listener started", true);
 
+    WakeVoice::start(&history, timers, longTermMemory, g_nlp);
     // ====================================================
     // Console REPL loop
     // ====================================================

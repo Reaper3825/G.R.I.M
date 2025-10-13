@@ -54,6 +54,32 @@ else()
     message(FATAL_ERROR "[GRIM] GLFW target not found in vcpkg.")
 endif()
 
+# =========================================================
+# Picovoice Porcupine (Wake-word Engine)
+# =========================================================
+set(PORCUPINE_ROOT "${CMAKE_SOURCE_DIR}/external/porcupine")
+set(PORCUPINE_LIB_DIR "${PORCUPINE_ROOT}/lib/windows/amd64")
+set(PORCUPINE_LIB "${PORCUPINE_LIB_DIR}/pv_porcupine.lib")
+set(PORCUPINE_DLL "${PORCUPINE_LIB_DIR}/pv_porcupine.dll")
+set(PORCUPINE_INCLUDE "${PORCUPINE_ROOT}/include")
+
+if (EXISTS "${PORCUPINE_INCLUDE}/pv_porcupine.h" AND EXISTS "${PORCUPINE_LIB}")
+    message(STATUS "[GRIM] Linking Picovoice Porcupine from ${PORCUPINE_LIB_DIR}")
+
+    target_include_directories(GRIM PRIVATE "${PORCUPINE_INCLUDE}")
+    target_link_libraries(GRIM PRIVATE "${PORCUPINE_LIB}")
+
+add_custom_command(TARGET GRIM POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${CMAKE_SOURCE_DIR}/external/porcupine/lib/windows/amd64/libpv_porcupine.dll
+    $<TARGET_FILE_DIR:GRIM>
+)
+
+
+
+else()
+    message(WARNING "[GRIM] Porcupine SDK missing or incomplete at ${PORCUPINE_ROOT}")
+endif()
 
 
 # =========================================================

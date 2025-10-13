@@ -262,4 +262,10 @@ whisper_context* getWhisperContext() {
     return g_state.ctx;
 }
 
+std::string Voice::detectWakeWord() {
+    // In future: stream mic audio → run STT or keyword spotter
+    // For now: simulate by polling a file or console input
+    return ""; // Return "grim" when detected
+}
+
 } // namespace Voice

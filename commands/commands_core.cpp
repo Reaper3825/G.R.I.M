@@ -240,7 +240,11 @@ void handleCommand(const std::string& line) {
             }
 
             result = dispatchCommand("open_app", resolved);
+        } else {
+            // 🔹 Dispatch normal NLP intent (e.g., grim_ai, search_web, etc.)
+            result = dispatchCommand(cmd, arg);
         }
+
     }
 
     if (result.message.empty()) {
