@@ -2,12 +2,10 @@
 #include "response_manager.hpp"
 #include "error_manager.hpp"
 #include "system_detect.hpp"
-#include "aliases.hpp"     // 🔹 for app alias resolution
+#include "aliases.hpp" 
 #include "nlp/nlp.hpp"
 #include "ai/ai.hpp"
-
-// External libs not in pch.hpp
-#include <cpr/cpr.h>       // 🔹 Needed for Ollama HTTP
+#include <cpr/cpr.h>
 
 #ifdef _WIN32
   #include <shellapi.h>
@@ -61,7 +59,7 @@ CommandResult cmdAiBackend(const std::string& arg) {
     if (selected == "ollama" || selected == "localai" || selected == "openai") {
         aiConfig["backend"] = selected;
 
-        // Config persistence is centralized — just mark in-memory change.
+
         return {
             "[AI] Backend set to: " + selected,
             true,
@@ -114,7 +112,7 @@ CommandResult cmdGrimAi(const std::string& arg) {
 
         std::string modelCopy = model;
         if (modelCopy.find(':') == std::string::npos) {
-            modelCopy += ":latest"; // default tag
+            modelCopy += ":latest"; 
         }
 
         auto resp = cpr::Post(
@@ -137,7 +135,7 @@ CommandResult cmdGrimAi(const std::string& arg) {
                     true,
                     sf::Color::Cyan,
                     "ERR_NONE",
-                    reply,   // voice
+                    reply,
                     "routine"
                 };
             }
