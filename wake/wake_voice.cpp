@@ -1,5 +1,5 @@
 #include "pv_porcupine.h"
-#include "Logger.hpp"
+#include "logger.hpp"
 #include <vector>
 #include <mutex>
 #include <string>

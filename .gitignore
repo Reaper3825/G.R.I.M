@@ -84,6 +84,7 @@ resources/*.png        # Large PNGs (e.g., GRIM_Listener_ss_normal.png)
 resources/models/*.bin
 /resources/models/whisper/*
 resources/Resources/models/
+resources/wakeword/*
 
 # ==============================
 # Python / Virtual Environments
@@ -106,6 +107,7 @@ resources/.venv/
 vcpkg_installed/** -text
 external/bgfx.cmake/
 vcpkg_installed/
+external/*
 external/
 
 build-*/
@@ -126,3 +128,4 @@ pid.txt
 # Generated resources
 resources/sprite/
 
+venv_rl/*
