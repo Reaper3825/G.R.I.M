@@ -20,6 +20,8 @@
 #include "logger.hpp"
 #include <sstream>
 #include "memory/context_manager.hpp"
+#include "ai/ai_rl.hpp"
+
 
 using Voice::speak;
 
@@ -168,6 +170,27 @@ void handleCommand(const std::string& line) {
 
     history.push("> " + line, sf::Color::White);
     CommandResult result;
+    // ============================================================
+// RL pre-dispatch observation
+// ============================================================
+try {
+    nlohmann::json obs = {
+        {"input", line},
+        {"command_raw", cmdRaw},
+        {"argument", arg},
+        {"context", longTermMemory}
+    };
+    nlohmann::json rlRes = GRIM::RL::getAction(obs);
+
+    if (rlRes.contains("suggested_command")) {
+        std::string suggested = rlRes["suggested_command"].get<std::string>();
+        LOG_DEBUG("RL", "RL suggested override: " + suggested);
+        cmdRaw = suggested;
+    }
+} catch (const std::exception& e) {
+    LOG_ERROR("RL", std::string("Pre-dispatch RL error: ") + e.what());
+}
+
 
     if (commandMap.find(cmdRaw) != commandMap.end()) {
         LOG_TRACE("HandleCommand", "Direct command match: \"" + cmdRaw + "\"");
@@ -261,7 +284,21 @@ void handleCommand(const std::string& line) {
     std::cout << finalText << std::endl;
 
     if (!result.voice.empty() && result.voice.find("[TRACE]") == std::string::npos)
-        Voice::speak(result.voice, result.category.empty() ? "routine" : result.category);
+    Voice::speak(result.voice, result.category.empty() ? "routine" : result.category);
+
+// RL post-dispatch feedback
+try {
+    nlohmann::json feedback = {
+        {"command", cmdRaw},
+        {"argument", arg},
+        {"success", result.success},
+        {"output", result.message}
+    };
+    GRIM::RL::getAction(feedback);
+} catch (const std::exception& e) {
+    LOG_ERROR("RL", std::string("Post-dispatch RL error: ") + e.what());
+}
+
 
     // 🔹 Update GRIM's emotional state
     GRIM::ContextManager::recordUsage(cmdRaw);

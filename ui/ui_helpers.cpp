@@ -1,16 +1,18 @@
 #include "ui_helpers.hpp"
-
-// These are defined in main.cpp
-extern sf::Text g_ui_textbox;
-extern std::string g_inputBuffer;
+#include <windows.h>
+#include <chrono>
+#include <string>
 
 // ============================================================
-// Caret blink
+// Caret blink (500ms toggle using steady_clock)
 // ============================================================
-bool updateCaretBlink(sf::Clock& caretClock, bool caretVisible) {
-    if (caretClock.getElapsedTime().asSeconds() > 0.5f) {
+bool updateCaretBlink(uint64_t& lastToggleTime, bool caretVisible)
+{
+    uint64_t now = GetTickCount64();
+    if (now - lastToggleTime > 500)
+    {
         caretVisible = !caretVisible;
-        caretClock.restart();
+        lastToggleTime = now;
     }
     return caretVisible;
 }
@@ -18,15 +20,18 @@ bool updateCaretBlink(sf::Clock& caretClock, bool caretVisible) {
 // ============================================================
 // Scroll clamp
 // ============================================================
-void clampScroll(float& scrollOffsetLines, float maxScroll) {
-    if (scrollOffsetLines < 0) scrollOffsetLines = 0;
-    if (scrollOffsetLines > maxScroll) scrollOffsetLines = maxScroll;
+void clampScroll(float& scrollOffsetLines, float maxScroll)
+{
+    if (scrollOffsetLines < 0.0f)
+        scrollOffsetLines = 0.0f;
+    else if (scrollOffsetLines > maxScroll)
+        scrollOffsetLines = maxScroll;
 }
 
 // ============================================================
-// Voice stream helper
+// Textbox update (BGFX version)
 // ============================================================
-void ui_set_textbox(const std::string& text) {
-    g_inputBuffer = text;                 // update raw buffer
-    g_ui_textbox.setString(g_inputBuffer); // sync with render object
+void ui_set_textbox(std::string& buffer, const std::string& newText)
+{
+    buffer = newText;
 }

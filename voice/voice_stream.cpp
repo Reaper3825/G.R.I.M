@@ -8,7 +8,7 @@
 #include "resources.hpp"
 #include "voice.hpp"
 #include "logger.hpp"
-
+#include "ui/console_ui.hpp"
 #include <whisper.h>
 #include <portaudio.h>
 #include <filesystem>
@@ -93,7 +93,7 @@ static void processPCM(whisper_context* ctx, const std::vector<float>& buffer) {
             std::string latest = whisper_full_get_segment_text(ctx, n - 1);
             if (!latest.empty()) {
                 VoiceStream::g_state.partial += latest + " ";
-                ui_set_textbox(VoiceStream::g_state.partial);
+                ui_set_textbox(GRIMConsole::g_state.inputBuffer, VoiceStream::g_state.partial);
                 LOG_DEBUG("VoiceStream", "Partial recognized: " + latest);
             }
         }
@@ -229,7 +229,7 @@ static void run(whisper_context* ctx,
                     uiLongTermMemory,
                     [&](const std::string& chunk) {
                         fullReply += chunk;
-                        ui_set_textbox(fullReply);
+                        ui_set_textbox(GRIMConsole::g_state.inputBuffer, fullReply);
                         LOG_DEBUG("VoiceStream/AI", "Chunk: " + chunk);
                     });
 
@@ -237,7 +237,7 @@ static void run(whisper_context* ctx,
                 }
 
                 VoiceStream::g_state.partial.clear();
-                ui_set_textbox("");
+                ui_set_textbox(GRIMConsole::g_state.inputBuffer, "");
             }
         }
 

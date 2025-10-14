@@ -107,8 +107,26 @@ include(cmake/Sources.cmake)
 add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
 
 # Precompiled headers and includes
+# Precompiled headers and includes
 target_precompile_headers(GRIM PRIVATE pch.hpp)
-target_include_directories(GRIM PRIVATE ${CMAKE_SOURCE_DIR})
+
+# Add all internal include paths (for headers like bridge_manager.hpp)
+target_include_directories(GRIM PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/core
+    ${CMAKE_SOURCE_DIR}/ai
+    ${CMAKE_SOURCE_DIR}/commands
+    ${CMAKE_SOURCE_DIR}/voice
+    ${CMAKE_SOURCE_DIR}/wake
+    ${CMAKE_SOURCE_DIR}/memory
+    ${CMAKE_SOURCE_DIR}/nlp
+    ${CMAKE_SOURCE_DIR}/ui
+    ${CMAKE_SOURCE_DIR}/helpers
+    ${CMAKE_SOURCE_DIR}/bootstrap
+    ${CMAKE_SOURCE_DIR}/device_setups
+    ${CMAKE_SOURCE_DIR}/popup_ui
+)
+
 
 # Apply linker flags for MSVC
 if (MSVC)

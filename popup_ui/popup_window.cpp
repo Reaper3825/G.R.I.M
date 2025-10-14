@@ -13,6 +13,8 @@ std::vector<uint8_t> g_alphaPixels;
 std::mutex g_alphaMutex;
 
 // ===========================================================
+
+// ===========================================================
 // Custom Window Procedure
 // ===========================================================
 static LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -29,7 +31,8 @@ static LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         return 0;
 
     case WM_SHOWWINDOW:
-        LOG_DEBUG("PopupWindow", "WM_SHOWWINDOW received - wParam: " + std::to_string(wParam) + ", lParam: " + std::to_string(lParam));
+        LOG_DEBUG("PopupWindow", "WM_SHOWWINDOW received - wParam: " + std::to_string(wParam) +
+                  ", lParam: " + std::to_string(lParam));
         break;
 
     case WM_GRIM_SHOW_POPUP:
@@ -37,17 +40,41 @@ static LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         ShowWindow(hwnd, SW_SHOW);
         return 0;
 
-    // Optional: Log only important or unexpected messages
+    // =====================================================
+    // 🟢 Handle popup click (show or launch console)
+    // =====================================================
+    case WM_LBUTTONDOWN:
+    {
+        LOG_DEBUG("PopupWindow", "Popup clicked — showing GRIM console");
+
+        HWND grimConsole = GetConsoleWindow();
+        if (!grimConsole)
+            grimConsole = FindWindowW(nullptr, L"G.R.I.M Console");
+
+        if (grimConsole)
+        {
+            LOG_DEBUG("PopupWindow", "Found existing GRIM console window, bringing to front");
+            ShowWindow(grimConsole, SW_RESTORE);
+            SetForegroundWindow(grimConsole);
+        }
+        else
+        {
+            LOG_DEBUG("PopupWindow", "No existing console found — launching new one");
+            std::thread([]() {
+                system("start cmd /k \"D:\\G.R.I.M\\out\\build\\Debug\\GRIM.exe\"");
+            }).detach();
+        }
+        return 0;
+    }
+
+    // Optional: Log window adjustments
     case WM_SIZE:
     case WM_MOVE:
     case WM_PAINT:
     case WM_DISPLAYCHANGE:
-        // You can still log these if you want, but they’ll be rare enough
         break;
 
     default:
-        // Remove the full spam logging here
-        // LOG_DEBUG("PopupWindow", "Window message: " + std::to_string(msg));  <-- deleted
         return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
 
