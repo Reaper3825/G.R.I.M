@@ -1,168 +1,95 @@
 #include "popup_renderer.hpp"
-#include <bgfx/bgfx.h>
-#include <bgfx/platform.h>
+#include "logger.hpp"
 #include "pch.hpp"
-
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+#include <vector>
+#include <mutex>
+#include <string>
 
 // ===========================================================
-// Global texture/sampler handles
+// CPU-side image cache
 // ===========================================================
-static bgfx::UniformHandle s_texColor   = BGFX_INVALID_HANDLE;
-static bgfx::UniformHandle s_texOpacity = BGFX_INVALID_HANDLE;
-static bgfx::TextureHandle g_diffuseTex = BGFX_INVALID_HANDLE;
-static bgfx::TextureHandle g_opacityTex = BGFX_INVALID_HANDLE;
-
-// ===========================================================
-// Helper to load shader binary into bgfx::ShaderHandle
-// ===========================================================
-static bgfx::ShaderHandle loadShader(const char* path)
+struct PopupTextureCPU
 {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.is_open())
+    std::vector<uint8_t> pixels;
+    int width  = 0;
+    int height = 0;
+    bool loaded = false;
+};
+
+static std::mutex g_textureMutex;
+static PopupTextureCPU g_diffuseCPU;
+static PopupTextureCPU g_opacityCPU;
+
+// ===========================================================
+// Load image file to RGBA8 memory
+// ===========================================================
+static bool loadImageRGBA(const std::string& path, PopupTextureCPU& out)
+{
+    std::lock_guard<std::mutex> lock(g_textureMutex);
+
+    int w = 0, h = 0, c = 0;
+    unsigned char* data = stbi_load(path.c_str(), &w, &h, &c, 4);
+    if (!data)
     {
-        LOG_ERROR("PopupRenderer", std::string("Failed to open shader: ") + path);
-        return BGFX_INVALID_HANDLE;
+        LOG_ERROR("PopupRenderer", "Failed to load image: " + path);
+        return false;
     }
 
-    std::streamsize size = file.tellg();
-    file.seekg(0, std::ios::beg);
+    out.pixels.assign(data, data + (w * h * 4));
+    out.width  = w;
+    out.height = h;
+    out.loaded = true;
 
-    std::vector<char> buffer(size + 1);
-    if (!file.read(buffer.data(), size))
-    {
-        LOG_ERROR("PopupRenderer", std::string("Failed to read shader: ") + path);
-        return BGFX_INVALID_HANDLE;
-    }
+    stbi_image_free(data);
 
-    buffer[size] = '\0';
-    const bgfx::Memory* mem = bgfx::copy(buffer.data(), static_cast<uint32_t>(size + 1));
-    return bgfx::createShader(mem);
+    LOG_DEBUG("PopupRenderer", "Loaded image " + path + " (" +
+              std::to_string(w) + "x" + std::to_string(h) + ")");
+    return true;
 }
 
 // ===========================================================
-// Load popup shader program (vertex + fragment)
-// ===========================================================
-bgfx::ProgramHandle loadPopupProgram()
-{
-    bgfx::ShaderHandle vsh = loadShader("D:/G.R.I.M/resources/shaders/vs_sprite.bin");
-    bgfx::ShaderHandle fsh = loadShader("D:/G.R.I.M/resources/shaders/fs_sprite.bin");
-
-    if (!bgfx::isValid(vsh) || !bgfx::isValid(fsh))
-    {
-        LOG_ERROR("PopupRenderer", "Shader load failed");
-        return BGFX_INVALID_HANDLE;
-    }
-
-    bgfx::ProgramHandle prog = bgfx::createProgram(vsh, fsh, true);
-    if (bgfx::isValid(prog))
-    {
-        LOG_PHASE("Popup program loaded", true);
-    }
-    else
-    {
-        LOG_ERROR("PopupRenderer", "Failed to create bgfx program");
-    }
-
-    return prog;
-}
-
-// ===========================================================
-// Load diffuse + opacity textures and create samplers
+// Public API (CPU-only data preparation)
 // ===========================================================
 void loadPopupTextures()
 {
-    if (!bgfx::isValid(s_texColor))
-        s_texColor = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
+    LOG_PHASE( "Loading popup textures (CPU-side only)", true);
 
-    if (!bgfx::isValid(s_texOpacity))
-        s_texOpacity = bgfx::createUniform("s_texOpacity", bgfx::UniformType::Sampler);
+    if (!g_diffuseCPU.loaded)
+        loadImageRGBA("D:/G.R.I.M/resources/shaders/g_sprite_Diffuse.png", g_diffuseCPU);
 
-    // ---- Diffuse ----
-    if (!bgfx::isValid(g_diffuseTex))
-    {
-        int texW = 0, texH = 0, texC = 0;
-        unsigned char* data = stbi_load("D:/G.R.I.M/resources/shaders/g_sprite_Diffuse.png",
-                                        &texW, &texH, &texC, 4);
-
-        if (!data)
-        {
-            LOG_ERROR("PopupRenderer", "Failed to load g_sprite_Diffuse.png");
-            return;
-        }
-
-        const bgfx::Memory* mem = bgfx::copy(data, texW * texH * 4);
-        g_diffuseTex = bgfx::createTexture2D(
-            (uint16_t)texW,
-            (uint16_t)texH,
-            false,
-            1,
-            bgfx::TextureFormat::RGBA8,
-            0,
-            mem
-        );
-
-        stbi_image_free(data);
-
-        if (bgfx::isValid(g_diffuseTex))
-        {
-            LOG_PHASE("Popup diffuse texture loaded", true);
-            LOG_DEBUG("PopupRenderer", "Loaded diffuse " + std::to_string(texW) + "x" + std::to_string(texH));
-        }
-        else
-        {
-            LOG_ERROR("PopupRenderer", "Diffuse texture handle invalid after creation");
-        }
-    }
-
-    // ---- Opacity (Oreo RGBA alpha channel) ----
-    if (!bgfx::isValid(g_opacityTex))
-    {
-        int texW = 0, texH = 0, texC = 0;
-        unsigned char* data = stbi_load("D:/G.R.I.M/resources/shaders/g_sprite_Oreo.png",
-                                        &texW, &texH, &texC, 4);
-
-        if (!data)
-        {
-            LOG_ERROR("PopupRenderer", "Failed to load g_sprite_Oreo.png");
-            return;
-        }
-
-        // Keep the original RGBA data (use baked alpha directly)
-        std::vector<uint8_t> rgba(texW * texH * 4);
-        for (int i = 0; i < texW * texH * 4; ++i)
-            rgba[i] = data[i];
-
-        const bgfx::Memory* mem = bgfx::copy(rgba.data(), (uint32_t)rgba.size());
-        g_opacityTex = bgfx::createTexture2D(
-            (uint16_t)texW,
-            (uint16_t)texH,
-            false,
-            1,
-            bgfx::TextureFormat::RGBA8,
-            BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
-            mem
-        );
-
-        stbi_image_free(data);
-
-        if (bgfx::isValid(g_opacityTex))
-        {
-            LOG_PHASE("Popup opacity texture loaded (true alpha)", true);
-            LOG_DEBUG("PopupRenderer", "Loaded opacity RGBA " + std::to_string(texW) + "x" + std::to_string(texH));
-        }
-        else
-        {
-            LOG_ERROR("PopupRenderer", "Opacity texture handle invalid after creation");
-        }
-    }
+    if (!g_opacityCPU.loaded)
+        loadImageRGBA("D:/G.R.I.M/resources/shaders/g_sprite_Oreo.png", g_opacityCPU);
 }
 
 // ===========================================================
 // Accessors
 // ===========================================================
-bgfx::UniformHandle getPopupSamplerColor()   { return s_texColor; }
-bgfx::UniformHandle getPopupSamplerOpacity() { return s_texOpacity; }
-bgfx::TextureHandle getPopupTextureColor()   { return g_diffuseTex; }
-bgfx::TextureHandle getPopupTextureOpacity() { return g_opacityTex; }
+bool popupTexturesReady()
+{
+    std::lock_guard<std::mutex> lock(g_textureMutex);
+    return g_diffuseCPU.loaded && g_opacityCPU.loaded;
+}
+
+void getPopupTextureData(std::vector<uint8_t>& diffuse, std::vector<uint8_t>& opacity,
+                         int& w, int& h)
+{
+    std::lock_guard<std::mutex> lock(g_textureMutex);
+    if (g_diffuseCPU.loaded)
+    {
+        diffuse = g_diffuseCPU.pixels;
+        w = g_diffuseCPU.width;
+        h = g_diffuseCPU.height;
+    }
+    if (g_opacityCPU.loaded)
+        opacity = g_opacityCPU.pixels;
+}
+
+void unloadPopupTextures()
+{
+    std::lock_guard<std::mutex> lock(g_textureMutex);
+    g_diffuseCPU = {};
+    g_opacityCPU = {};
+    LOG_DEBUG("PopupRenderer", "Popup textures unloaded (CPU cache cleared)");
+}

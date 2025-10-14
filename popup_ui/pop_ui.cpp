@@ -8,10 +8,8 @@
 #include <SFML/System/Time.hpp>
 #include "voice/voice_speak.hpp"
 #include <windows.h>
-#include <cstdint>
-#include <bx/math.h>
-#include <bgfx/bgfx.h>
-#include <bgfx/platform.h>
+#include <atomic>
+#include <thread>
 #include "core/window_manager.hpp"
 
 // ===========================================================
@@ -35,7 +33,7 @@ static std::atomic<bool> g_pendingPopup{ false };
 static std::atomic<int> g_idleTimerMs{ 0 };
 
 // ===========================================================
-// Popup UI Thread
+// Popup UI main thread (logic only — no BGFX here)
 // ===========================================================
 void runPopupUI(int width, int height)
 {
@@ -48,7 +46,7 @@ void runPopupUI(int width, int height)
     ShowWindow(g_hwnd, SW_SHOW);
     LOG_DEBUG("PopupUI", "Overlay window created");
 
-    // Apply alpha data if preloaded
+    // Load alpha mask and apply to layered window
     queueWindowAlphaReadback(POPUP_SIZE, POPUP_SIZE);
     applyWindowAlphaIfReady(g_hwnd, POPUP_SIZE, POPUP_SIZE, 0);
 
@@ -67,6 +65,9 @@ void runPopupUI(int width, int height)
 
     while (g_running)
     {
+        // -------------------------------------------------------
+        // Win32 message loop
+        // -------------------------------------------------------
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
         {
             if (msg.message == WM_QUIT)
@@ -78,9 +79,13 @@ void runPopupUI(int width, int height)
             DispatchMessage(&msg);
         }
 
+        // -------------------------------------------------------
+        // Idle timer logic
+        // -------------------------------------------------------
         float dt = frameClock.restart().asSeconds();
 
-        if (g_idleTimerMs > 0 && g_idleClock.getElapsedTime().asMilliseconds() > g_idleTimerMs)
+        if (g_idleTimerMs > 0 &&
+            g_idleClock.getElapsedTime().asMilliseconds() > g_idleTimerMs)
         {
             if (!Voice::isPlaying())
             {
@@ -91,7 +96,9 @@ void runPopupUI(int width, int height)
                 g_idleClock.restart();
         }
 
-        // Smooth animation logic (no rendering here)
+        // -------------------------------------------------------
+        // Animation logic (no rendering)
+        // -------------------------------------------------------
         if (g_popupVisible)
             updateAnim(g_anim, g_popupVisible, dt, 0.08f);
 
@@ -112,7 +119,6 @@ void showPopup()
         g_popupVisible = true;
         LOG_PHASE("PopupUI shown", true);
 
-        // Notify the WindowManager that popup should be drawn
         GRIMWindow* popup = WindowManager::get("popup");
         if (popup)
             popup->visible = true;
@@ -147,5 +153,6 @@ void notifyPopupActivity()
     PostMessage(g_hwnd, WM_GRIM_SHOW_POPUP, 0, 0);
     g_idleTimerMs = 3000;
     g_idleClock.restart();
-    LOG_DEBUG("PopupUI", "Idle timer reset to " + std::to_string(g_idleTimerMs) + "ms");
+    LOG_DEBUG("PopupUI",
+        "Idle timer reset to " + std::to_string(g_idleTimerMs) + "ms");
 }

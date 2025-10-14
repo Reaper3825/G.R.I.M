@@ -1,8 +1,5 @@
 #include "console_ui.hpp"
 #include "logger.hpp"
-
-#include <bgfx/bgfx.h>
-#include <bx/math.h>
 #include <windows.h>
 #include <thread>
 #include <chrono>
@@ -26,90 +23,7 @@ static uint32_t g_width = 1280;
 static uint32_t g_height = 720;
 
 // ===========================================================
-// Simple inline flat-color shaders
-// ===========================================================
-static const char* vs_color_glsl = R"(
-    #version 330 core
-    layout(location = 0) in vec3 a_position;
-    layout(location = 1) in vec4 a_color0;
-    out vec4 v_color;
-    void main() {
-        gl_Position = vec4(a_position.xy, 0.0, 1.0);
-        v_color = a_color0;
-    }
-)";
-
-static const char* fs_color_glsl = R"(
-    #version 330 core
-    in vec4 v_color;
-    out vec4 fragColor;
-    void main() {
-        fragColor = v_color;
-    }
-)";
-
-// ===========================================================
-// Compile GLSL into bgfx::ProgramHandle
-// ===========================================================
-static bgfx::ProgramHandle createColorProgram()
-{
-    const bgfx::Memory* vsmem = bgfx::copy(vs_color_glsl, (uint32_t)strlen(vs_color_glsl) + 1);
-    const bgfx::Memory* fsmem = bgfx::copy(fs_color_glsl, (uint32_t)strlen(fs_color_glsl) + 1);
-
-    bgfx::ShaderHandle vsh = bgfx::createShader(vsmem);
-    bgfx::ShaderHandle fsh = bgfx::createShader(fsmem);
-
-    return bgfx::createProgram(vsh, fsh, true);
-}
-
-// ===========================================================
-// Helper: Draw solid color quad
-// ===========================================================
-static void drawQuad(float x, float y, float w, float h, uint32_t color, uint16_t viewId)
-{
-    struct PosColorVertex {
-        float x, y, z;
-        uint32_t abgr;
-    };
-
-    static const uint16_t indices[6] = { 0, 1, 2, 0, 2, 3 };
-    PosColorVertex verts[4] = {
-        { x,     y,     0.0f, color },
-        { x + w, y,     0.0f, color },
-        { x + w, y + h, 0.0f, color },
-        { x,     y + h, 0.0f, color },
-    };
-
-    bgfx::VertexLayout layout;
-    layout.begin()
-        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
-        .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
-        .end();
-
-    bgfx::TransientVertexBuffer tvb;
-    bgfx::TransientIndexBuffer tib;
-
-    bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
-    bgfx::allocTransientIndexBuffer(&tib, 6);
-
-    if (tvb.data == nullptr || tib.data == nullptr)
-        return;
-
-    memcpy(tvb.data, verts, sizeof(verts));
-    memcpy(tib.data, indices, sizeof(indices));
-
-    static bgfx::ProgramHandle colorProgram = BGFX_INVALID_HANDLE;
-    if (!bgfx::isValid(colorProgram))
-        colorProgram = createColorProgram();
-
-    bgfx::setVertexBuffer(0, &tvb);
-    bgfx::setIndexBuffer(&tib);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    bgfx::submit(viewId, colorProgram);
-}
-
-// ===========================================================
-// Caret blink timer (every 500ms)
+// Caret blink timer
 // ===========================================================
 static void updateCaretBlink(ConsoleState& s)
 {
@@ -209,7 +123,7 @@ static HWND createConsoleWindow(int width, int height)
 }
 
 // ===========================================================
-// Console render loop (shared BGFX instance)
+// Console logic loop (no BGFX calls)
 // ===========================================================
 void GRIMConsole::runConsoleUI(int width, int height)
 {
@@ -218,13 +132,17 @@ void GRIMConsole::runConsoleUI(int width, int height)
     g_hwnd = createConsoleWindow(width, height);
     if (!g_hwnd) return;
 
-    LOG_PHASE("Console UI initialized (shared BGFX)", true);
+    LOG_PHASE("Console UI initialized", true);
+
+    // Register console window in WindowManager
+    WindowManager::createOverlay("console", width, height, false);
 
     MSG msg{};
     g_state.running = true;
 
     while (g_state.running)
     {
+        // Process input events
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
         {
             if (msg.message == WM_QUIT)
@@ -235,35 +153,15 @@ void GRIMConsole::runConsoleUI(int width, int height)
 
         updateCaretBlink(g_state);
 
-        const uint16_t viewId = 0; // console view
-        bgfx::setViewClear(viewId, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0xFF121212, 1.0f, 0);
-        bgfx::setViewRect(viewId, 0, 0, g_width, g_height);
-        bgfx::touch(viewId);
+        // Queue console draw state for renderer thread
+        GRIMWindow* consoleWin = WindowManager::get("console");
+        if (consoleWin)
+        {
+            consoleWin->visible = true;
+            consoleWin->width = g_width;
+            consoleWin->height = g_height;
+        }
 
-        // Panels
-        float titleH = kTitleBarH;
-        float inputH = kInputBarH;
-        float bodyH = g_height - titleH - inputH;
-
-        drawQuad(0, 0, (float)g_width, titleH, 0xFF1E1A1A, viewId);
-        drawQuad(0, g_height - inputH, (float)g_width, inputH, 0xFF231E1E, viewId);
-        drawQuad(0, titleH, (float)g_width, bodyH, 0xFF141212, viewId);
-
-        bgfx::dbgTextClear();
-        bgfx::dbgTextPrintf(1, 1, 0x0F, "G R I M");
-
-        std::string input = g_state.inputBuffer;
-        if (g_state.caretVisible) input.push_back('|');
-        bgfx::dbgTextPrintf(1, (int)((g_height / 16) - 2), 0x0F, "> %s", input.c_str());
-
-        auto& lines = g_history.wrapped();
-        int maxLines = (int)((g_height / 16) - 6);
-        int start = std::max(0, (int)lines.size() - maxLines);
-        int y = 3;
-        for (int i = start; i < (int)lines.size(); ++i)
-            bgfx::dbgTextPrintf(1, y++, 0x07, "%s", lines[i].text.c_str());
-
-        WindowManager::endFrame();
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 
