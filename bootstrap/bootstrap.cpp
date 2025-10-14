@@ -8,6 +8,7 @@
 #include "device_setups/audio_devices.hpp"
 #include "logger.hpp"
 #include "voice/voice.hpp"
+#include "ai/ai_rl.hpp"
 
 #include <filesystem>    // ✅ for fs::path
 #include <whisper.h>     // ✅ for whisper_context + init functions
@@ -91,6 +92,18 @@ void runBootstrapChecks(int argc, char** argv) {
     } else {
         LOG_PHASE("Coqui TTS skipped", true);
         LOG_DEBUG("Voice", "Skipping Coqui init (engine=sapi only)");
+    }
+    // ============================================================
+    // Reinforcement Learning Bridge (RL)
+    // ============================================================
+    LOG_PHASE("RL Bridge init", true);
+    LOG_DEBUG("RL", "Starting rl_bridge.py via unified BridgeManager...");
+    if (!GRIM::RL::init()) {
+        LOG_ERROR("RL", "Failed to start rl_bridge.py");
+        LOG_PHASE("RL Bridge init", false);
+    } else {
+        LOG_PHASE("RL Bridge init", true);
+        LOG_DEBUG("RL", "rl_bridge.py initialized and ready");
     }
 
     // ============================================================

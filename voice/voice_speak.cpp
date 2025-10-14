@@ -38,9 +38,9 @@ namespace Voice {
     std::shared_ptr<sf::SoundBuffer> Voice::g_activeBuffer = nullptr;
 
     bool Voice::isSpeaking() {
-    return g_activeSound && 
-           g_activeSound->getStatus() == sf::SoundSource::Status::Playing;
-}
+        return g_activeSound && 
+               g_activeSound->getStatus() == sf::SoundSource::Status::Playing;
+    }
 
     // =========================================================
     // Bridge state
@@ -168,46 +168,93 @@ namespace Voice {
 
 #ifdef _WIN32
         if (g_engine == "coqui") {
+            // =========================================================
+            // Integrated pipe + process creation snippet
+            // =========================================================
             SECURITY_ATTRIBUTES saAttr{};
             saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
             saAttr.bInheritHandle = TRUE;
             saAttr.lpSecurityDescriptor = nullptr;
 
-            HANDLE hChildStdinRdTmp = nullptr, hChildStdoutWrTmp = nullptr;
-            CreatePipe(&hChildStdinRdTmp, &hChildStdinWr, &saAttr, 0);
-            SetHandleInformation(hChildStdinWr, HANDLE_FLAG_INHERIT, 0);
-            CreatePipe(&hChildStdoutRd, &hChildStdoutWrTmp, &saAttr, 0);
-            SetHandleInformation(hChildStdoutRd, HANDLE_FLAG_INHERIT, 0);
+            HANDLE hChildStdoutRdLocal = nullptr, hChildStdoutWr = nullptr;
+            HANDLE hChildStdinRd = nullptr, hChildStdinWrLocal = nullptr;
 
+            // Create pipe for child process's STDOUT
+            if (!CreatePipe(&hChildStdoutRdLocal, &hChildStdoutWr, &saAttr, 0))
+                LOG_ERROR("Voice/Init", "Failed to create stdout pipe");
+
+            SetHandleInformation(hChildStdoutRdLocal, HANDLE_FLAG_INHERIT, 0);
+
+            // Create pipe for child process's STDIN
+            if (!CreatePipe(&hChildStdinRd, &hChildStdinWrLocal, &saAttr, 0))
+                LOG_ERROR("Voice/Init", "Failed to create stdin pipe");
+
+            SetHandleInformation(hChildStdinWrLocal, HANDLE_FLAG_INHERIT, 0);
+
+            // Set up STARTUPINFOA
             STARTUPINFOA si{};
-            ZeroMemory(&si, sizeof(si));
+            ZeroMemory(&piProcInfo, sizeof(piProcInfo));
             si.cb = sizeof(STARTUPINFOA);
-            si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-            si.hStdOutput = hChildStdoutWrTmp;
-            si.hStdInput  = hChildStdinRdTmp;
+            si.hStdError  = hChildStdoutWr;
+            si.hStdOutput = hChildStdoutWr;
+            si.hStdInput  = hChildStdinRd;
             si.dwFlags |= STARTF_USESTDHANDLES;
 
-            std::string cmd = "\"C:/Program Files/Python310/python.exe\" -u D:/G.R.I.M/resources/python/coqui_bridge.py --persistent";
+            // Launch Python bridge
+            std::string cmd = "python D:/G.R.I.M/resources/python/coqui_bridge.py --persistent";
             std::vector<char> mutableCmd(cmd.begin(), cmd.end());
             mutableCmd.push_back('\0');
 
-            ZeroMemory(&piProcInfo, sizeof(piProcInfo));
-            CreateProcessA(nullptr, mutableCmd.data(), nullptr, nullptr, TRUE, 0,
-                           nullptr, "D:/G.R.I.M/resources/python", &si, &piProcInfo);
+            BOOL success = CreateProcessA(
+                nullptr,
+                mutableCmd.data(),
+                nullptr,
+                nullptr,
+                TRUE,
+                0,
+                nullptr,
+                "D:/G.R.I.M/resources/python",
+                &si,
+                &piProcInfo
+            );
 
-            CloseHandle(hChildStdoutWrTmp);
-            CloseHandle(hChildStdinRdTmp);
+            if (!success) {
+                LOG_ERROR("Voice/Init", "CreateProcessA failed: " + std::to_string(GetLastError()));
+                return false;
+            }
 
-            std::string response = readJsonLineFromBridge();
+            // Close the unneeded ends in parent
+            CloseHandle(hChildStdoutWr);
+            CloseHandle(hChildStdinRd);
+
+            // Store pipe ends we need
+            hChildStdoutRd = hChildStdoutRdLocal;
+            hChildStdinWr = hChildStdinWrLocal;
+
+            // =========================================================
+            // Extended handshake + ready logic
+            // =========================================================
+            LOG_DEBUG("Voice", "Launching Coqui TTS bridge and waiting up to 60s for handshake...");
+
+            std::string response = readJsonLineFromBridge(60000);
+
+            if (response.empty()) {
+                LOG_ERROR("Voice/Init", "No handshake received from Coqui after 60s. "
+                                        "Process kept alive but marked not ready.");
+                return false;
+            }
+
             try {
                 auto resp = json::parse(response);
                 if (resp.value("status", "") == "ready") {
                     g_ttsReady = true;
                     LOG_PHASE("Voice bridge ready", true);
+                } else {
+                    LOG_ERROR("Voice/Init", "Unexpected handshake payload: " + response);
                 }
             } catch (const std::exception& e) {
                 LOG_ERROR("Voice/Init", std::string("Parsing handshake failed: ") + e.what() +
-                                         " raw=" + response);
+                                            " raw=" + response);
             }
         }
 #endif
@@ -292,9 +339,6 @@ namespace Voice {
         if (workerThread.joinable()) workerThread.join();
     }
 
-    // =========================================================
-    // Query ready state
-    // =========================================================
     bool isReady() {
         return g_ttsReady;
     }
@@ -326,80 +370,73 @@ namespace Voice {
             LOG_ERROR("Voice/Audio", std::string("Exception: ") + e.what());
         }
     }
-// =========================================================
-// Coqui Speak
-// =========================================================
-std::string coquiSpeak(const std::string& text,
-                       const std::string& speaker,
-                       double speed) {
+
+    // =========================================================
+    // Coqui Speak
+    // =========================================================
+    std::string coquiSpeak(const std::string& text,
+                           const std::string& speaker,
+                           double speed) {
 #ifdef _WIN32
-    // --- Validate bridge ---
-    if (!hChildStdinWr || !hChildStdoutRd) {
-        LOG_ERROR("Voice/Coqui", "Bridge not running");
-        return "";
-    }
-
-    // --- Prepare output file ---
-    fs::create_directories(g_outputDir);
-    std::string outFile = (g_outputDir / (randomString(32) + ".wav")).string();
-
-    // --- Build JSON request ---
-    json req = {
-        {"command", "speak"},
-        {"text", text},
-        {"speaker", speaker},
-        {"speed", speed},
-        {"out", outFile}
-    };
-    std::string line = req.dump() + "\n";
-
-    // --- Send request to Coqui bridge ---
-    DWORD written = 0;
-    BOOL ok = WriteFile(hChildStdinWr, line.c_str(), (DWORD)line.size(), &written, nullptr);
-    LOG_DEBUG("Voice/Coqui", "Sent request (" + std::to_string(written) + " bytes): " + line);
-    if (!ok) {
-        LOG_ERROR("Voice/Coqui", "WriteFile failed");
-        return "";
-    }
-
-    // ======================================================
-    // Response wait loop (clean)
-    // ======================================================
-    constexpr int TIMEOUT_MS = 30000; // 30 seconds max
-    std::string response = readJsonLineFromBridge(TIMEOUT_MS);
-
-    if (response.empty()) {
-        LOG_ERROR("Voice/Bridge", "Timeout waiting for Coqui response (30s)");
-        return "";
-    }
-
-    try {
-        auto resp = json::parse(response);
-
-        if (resp.value("status", "") == "ok" && resp.contains("file")) {
-            LOG_DEBUG("Voice/Bridge", "Received response: " + response);
-            return resp["file"].get<std::string>();
-        } else {
-            LOG_DEBUG("Voice/Bridge", "Unexpected JSON from Coqui: " + response);
+        if (!hChildStdinWr || !hChildStdoutRd) {
+            LOG_ERROR("Voice/Coqui", "Bridge not running");
+            return "";
         }
-    } catch (const std::exception& e) {
-        LOG_ERROR("Voice/Bridge",
-                  std::string("Failed to parse Coqui JSON: ") + e.what() +
-                  " raw=" + response);
-    }
-#endif
-    return "";
-}
 
-// =========================================================
-// High-level Speak (enqueue)
-// =========================================================
-void speak(const std::string& text, const std::string& category) {
-    {
-        std::lock_guard<std::mutex> lock(queueMutex);
-        speakQueue.emplace(text, category);
+        fs::create_directories(g_outputDir);
+        std::string outFile = (g_outputDir / (randomString(32) + ".wav")).string();
+
+        json req = {
+            {"command", "speak"},
+            {"text", text},
+            {"speaker", speaker},
+            {"speed", speed},
+            {"out", outFile}
+        };
+        std::string line = req.dump() + "\n";
+
+        DWORD written = 0;
+        BOOL ok = WriteFile(hChildStdinWr, line.c_str(), (DWORD)line.size(), &written, nullptr);
+        LOG_DEBUG("Voice/Coqui", "Sent request (" + std::to_string(written) + " bytes): " + line);
+        if (!ok) {
+            LOG_ERROR("Voice/Coqui", "WriteFile failed");
+            return "";
+        }
+
+        std::string response = readJsonLineFromBridge();
+
+        if (response.empty()) {
+            LOG_ERROR("Voice/Bridge", "Timeout waiting for Coqui response (30s)");
+            return "";
+        }
+
+        try {
+            auto resp = json::parse(response);
+
+            if (resp.value("status", "") == "ok" && resp.contains("file")) {
+                LOG_DEBUG("Voice/Bridge", "Received response: " + response);
+                return resp["file"].get<std::string>();
+            } else {
+                LOG_DEBUG("Voice/Bridge", "Unexpected JSON from Coqui: " + response);
+            }
+        } catch (const std::exception& e) {
+            LOG_ERROR("Voice/Bridge",
+                      std::string("Failed to parse Coqui JSON: ") + e.what() +
+                      " raw=" + response);
+        }
+#endif
+        return "";
     }
-    queueCV.notify_one();
-}
+
+    // =========================================================
+    // High-level Speak (enqueue)
+    // =========================================================
+    void speak(const std::string& text, const std::string& category) {
+        {
+            std::lock_guard<std::mutex> lock(queueMutex);
+            speakQueue.emplace(text, category);
+        }
+        queueCV.notify_one();
+    }
 
 } // namespace Voice

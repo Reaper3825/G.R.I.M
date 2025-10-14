@@ -1,112 +1,99 @@
 #include "ui_draw.hpp"
-#include "ui_helpers.hpp"   // g_ui_textbox + g_inputBuffer
+#include "console_history.hpp"
+#include "commands/commands_core.hpp"
+#include "logger.hpp"
+#include <bgfx/bgfx.h>
+#include <bx/math.h>
+#include <algorithm>
+#include <thread>
+#include <chrono>
 
-// Globals defined in main.cpp, declared extern in ui_helpers.hpp
-extern sf::Text g_ui_textbox;       // renderable text object
-extern std::string g_inputBuffer;   // raw editable buffer
+// ============================================================
+// Helper: Draw a solid rectangle using BGFX transient buffers
+// ============================================================
+static void drawQuad(float x, float y, float w, float h, uint32_t color, uint16_t viewId)
+{
+    struct PosColorVertex { float x, y, z; uint32_t abgr; };
+    static const uint16_t indices[6] = { 0,1,2,0,2,3 };
+    PosColorVertex verts[4] = {
+        { x,     y,     0.0f, color },
+        { x + w, y,     0.0f, color },
+        { x + w, y + h, 0.0f, color },
+        { x,     y + h, 0.0f, color },
+    };
 
-void drawUI(
-    sf::RenderWindow& window,
-    sf::Font& font,
-    ConsoleHistory& history,
-    const std::string& /*unused*/,   // buffer param unused now
-    bool caretVisible,
-    float& scrollOffsetLines
-) {
-    // UI elements
-    sf::RectangleShape titleBar; titleBar.setFillColor(sf::Color(26,26,30));
-    sf::RectangleShape inputBar; inputBar.setFillColor(sf::Color(30,30,35));
+    bgfx::VertexLayout layout;
+    layout.begin()
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
+        .end();
 
-    // 🔹 SFML 3 requires ctor with (font, string, size)
-    sf::Text titleText(font, "G R I M", kTitleFontSize);
-    titleText.setFillColor(sf::Color(220,220,235));
+    bgfx::TransientVertexBuffer tvb;
+    bgfx::TransientIndexBuffer tib;
+    bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
+    bgfx::allocTransientIndexBuffer(&tib, 6);
 
-    sf::Text lineText(font, "", kFontSize);
-    lineText.setFillColor(sf::Color::White);
+    if (!tvb.data || !tib.data)
+        return;
 
-    // Window size
-    float winW = window.getSize().x;
-    float winH = window.getSize().y;
+    memcpy(tvb.data, verts, sizeof(verts));
+    memcpy(tib.data, indices, sizeof(indices));
 
-    // Bars
-    titleBar.setSize({winW, kTitleBarH});
-    titleBar.setPosition({0.f, 0.f});
-
-    inputBar.setSize({winW, kInputBarH});
-    inputBar.setPosition({0.f, winH - kInputBarH});
-
-    // --- Draw bars ---
-    window.draw(titleBar);
-    window.draw(inputBar);
-
-    // --- Title ---
-    sf::FloatRect tb = titleText.getLocalBounds();
-    titleText.setOrigin({tb.position.x + tb.size.x / 2.f, 0.f});
-    titleText.setPosition({winW / 2.f, (kTitleBarH - tb.size.y) / 2.f - tb.position.y});
-    window.draw(titleText);
-
-    // --- Input text ---
-    g_ui_textbox.setPosition({
-        kSidePad,
-        winH - kInputBarH + (kInputBarH - (float)kFontSize) * 0.5f
-    });
-    window.draw(g_ui_textbox);
-
-    // --- Caret ---
-    if (caretVisible) {
-        sf::FloatRect bounds = g_ui_textbox.getGlobalBounds();
-        sf::RectangleShape caret({2.f, (float)kFontSize});
-        caret.setFillColor(sf::Color::White);
-        caret.setPosition({bounds.position.x + bounds.size.x + 2.f, g_ui_textbox.getPosition().y});
-        window.draw(caret);
+    static bgfx::ProgramHandle colorProgram = BGFX_INVALID_HANDLE;
+    if (!bgfx::isValid(colorProgram))
+    {
+        const char* vs =
+            "#version 330 core\n"
+            "layout(location=0) in vec3 a_position;"
+            "layout(location=1) in vec4 a_color0;"
+            "out vec4 v_color;"
+            "void main(){gl_Position=vec4(a_position.xy,0.0,1.0);v_color=a_color0;}";
+        const char* fs =
+            "#version 330 core\n"
+            "in vec4 v_color;out vec4 fragColor;"
+            "void main(){fragColor=v_color;}";
+        const bgfx::Memory* vsmem = bgfx::copy(vs, (uint32_t)strlen(vs) + 1);
+        const bgfx::Memory* fsmem = bgfx::copy(fs, (uint32_t)strlen(fs) + 1);
+        bgfx::ShaderHandle vsh = bgfx::createShader(vsmem);
+        bgfx::ShaderHandle fsh = bgfx::createShader(fsmem);
+        colorProgram = bgfx::createProgram(vsh, fsh, true);
     }
 
-    // --- History ---
-    float lineH = kLineSpacing * (float)kFontSize;
-    float histTop = kTitleBarH + kTopPad;
-    float histBottom = winH - kInputBarH - kBottomPad;
-    float histH = std::max(0.f, histBottom - histTop);
-    float wrapW = std::max(10.f, winW - 2.f * kSidePad);
+    bgfx::setVertexBuffer(0, &tvb);
+    bgfx::setIndexBuffer(&tib);
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(viewId, colorProgram);
+}
 
-    history.ensureWrapped(wrapW, lineText);
-    float viewLines = std::max(1.f, histH / lineH);
-    size_t wrapCount = history.wrappedCount();
-    float maxScroll = (wrapCount > (size_t)viewLines) ? (wrapCount - (size_t)viewLines) : 0.f;
+// ============================================================
+// Draw UI (BGFX version)
+// ============================================================
+void drawUI(const GRIMConsole::ConsoleState& state,
+            ConsoleHistory& history,
+            uint32_t width,
+            uint32_t height)
+{
+    float titleH = kTitleBarH;
+    float inputH = kInputBarH;
+    float bodyH  = height - titleH - inputH;
 
-    if (scrollOffsetLines < 0) scrollOffsetLines = 0;
-    if (scrollOffsetLines > maxScroll) scrollOffsetLines = maxScroll;
+    // Panels
+    drawQuad(0, 0, (float)width, titleH, 0xFF202020, 0);
+    drawQuad(0, height - inputH, (float)width, inputH, 0xFF1E1E1E, 0);
+    drawQuad(0, titleH, (float)width, bodyH, 0xFF181818, 0);
 
-    long start = std::max(0L, (long)wrapCount - (long)std::ceil(viewLines) - (long)std::floor(scrollOffsetLines));
-    long end = std::min<long>(wrapCount, start + (long)std::ceil(viewLines) + 1);
-    float y = histTop;
+    // Text
+    bgfx::dbgTextClear();
+    bgfx::dbgTextPrintf(1, 1, 0x0F, "G R I M");
 
-    for (long i = start; i < end; ++i) {
-        if (i < 0 || i >= (long)history.wrapped().size()) continue;
-        auto& wl = history.wrapped()[i];
-        lineText.setString(wl.text);
-        lineText.setFillColor(wl.color);
-        lineText.setPosition({kSidePad, y});
-        window.draw(lineText);
-        y += lineH;
-        if (y > histBottom) break;
-    }
+    std::string input = state.inputBuffer;
+    if (state.caretVisible) input.push_back('|');
+    bgfx::dbgTextPrintf(1, (int)((height / 16) - 2), 0x0F, "> %s", input.c_str());
 
-    // --- Scrollbar ---
-    if (wrapCount > (size_t)viewLines) {
-        float trackTop = histTop, trackH = histH;
-        float thumbH = std::max(30.f, trackH * (viewLines / (float)wrapCount));
-        float t = (maxScroll <= 0.f) ? 0.f : (scrollOffsetLines / maxScroll);
-        float thumbTop = trackTop + (trackH - thumbH) * t;
-
-        sf::RectangleShape track({6.f, trackH});
-        track.setFillColor(sf::Color(50,50,58));
-        track.setPosition({winW - 8.f, trackTop});
-
-        sf::RectangleShape thumb({6.f, thumbH});
-        thumb.setFillColor(sf::Color(120,120,135));
-        thumb.setPosition({winW - 8.f, thumbTop});
-
-        window.draw(track);
-        window.draw(thumb);
-    }
+    auto& lines = history.wrapped();
+    int maxLines = (int)((height / 16) - 6);
+    int start = std::max(0, (int)lines.size() - maxLines);
+    int y = 3;
+    for (int i = start; i < (int)lines.size(); ++i)
+        bgfx::dbgTextPrintf(1, y++, 0x07, "%s", lines[i].text.c_str());
 }

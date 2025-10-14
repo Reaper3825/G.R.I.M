@@ -21,7 +21,7 @@ def persistent_loop(model_name, speaker):
     except Exception as e:
         send({"status": "error", "message": str(e)})
         return
-
+    log("[Coqui Bridge] Initialization complete, sending ready.")
     send({"status": "ready"})
 
     try:
