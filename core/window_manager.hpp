@@ -7,12 +7,18 @@
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
 
-struct GRIMWindow {
+struct GRIMWindow
+{
     HWND hwnd = nullptr;
     std::string name;
     bool visible = true;
     bool isOverlay = false;
+
+    // ✅ Add these:
+    int width = 0;
+    int height = 0;
 };
+
 
 class WindowManager {
 public:
