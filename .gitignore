@@ -106,6 +106,7 @@ resources/.venv/
 
 vcpkg_installed/** -text
 external/bgfx.cmake/
+vcpkg_installed/*
 vcpkg_installed/
 external/*
 external/
@@ -130,3 +131,8 @@ resources/sprite/
 
 venv_rl/*
 out/*
+osint/*
+osint/
+venv_rl/
+out/build/
+out/build/

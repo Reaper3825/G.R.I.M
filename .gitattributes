@@ -8,8 +8,8 @@
 *.dll binary
 *.lib binary
 *.pdb binary
-
 # Ignore generated folders
 vcpkg_installed/ -text
 build/ -text
 external/build-*/ -text
+*.bin filter=lfs diff=lfs merge=lfs -text

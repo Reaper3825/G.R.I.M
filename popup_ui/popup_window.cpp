@@ -85,19 +85,20 @@ static LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 
 
 
-// ===========================================================
-// Window creation (Debug Visible Mode)
-// ===========================================================
-HWND createOverlayWindow(int width, int height)
-{
-    std::unique_lock<std::mutex> guard(g_uiSafeZone, std::try_to_lock);
-    if (!guard.owns_lock()) {
-        LOG_DEBUG("PopupWindow", "Skipped window creation — BGFX or another UI op in progress");
-        return nullptr;  // must return HWND-compatible value
-    }
+    // ===========================================================
+    // Window creation (Debug Visible Mode)
+    // ===========================================================
+    HWND createOverlayWindow(int width, int height)
+    {
+        // ======================================================
+    // Wait for BGFX/UI lock before creating popup overlay
+    // ======================================================
+    auto start = std::chrono::steady_clock::now();
 
-    LOG_DEBUG("PopupWindow", "Creating debug overlay window...");
-
+    // ======================================================
+    // Non-blocking popup creation (no BGFX lock contention)
+    // ======================================================
+    LOG_DEBUG("PopupWindow", "Creating popup overlay (non-blocking mode)");
     HINSTANCE hInstance = GetModuleHandleW(nullptr);
 
     WNDCLASSW wc{};
@@ -112,8 +113,9 @@ HWND createOverlayWindow(int width, int height)
         LOG_ERROR("PopupWindow", "RegisterClassW failed: " + std::to_string(GetLastError()));
         return nullptr;
     }
-
+    LOG_TRACE("PW", "CreateWindowExW");
     HWND hwnd = CreateWindowExW(
+        
         WS_EX_LAYERED | WS_EX_TOPMOST,  // Layered for transparency
         L"GRIMPopupClass",
         L"GRIM Debug Popup",
@@ -220,19 +222,20 @@ void queueWindowAlphaReadback(int width, int height)
 // ===========================================================
 void applyWindowAlphaIfReady(HWND hwnd, int width, int height, uint32_t frameIdx)
 {
-    std::unique_lock<std::mutex> guard(g_uiSafeZone, std::try_to_lock);
-    if (!guard.owns_lock()) {
-        LOG_DEBUG("PopupWindow", "Skipped alpha update — BGFX or another UI op in progress");
-        return;
-    }
+    LOG_TRACE("PW", "applyWindowAlphaIfReady (non-blocking)");
 
-
+    // ------------------------------------------------------
+    // Skip if alpha data isn't ready yet
+    // ------------------------------------------------------
     if (!g_alphaReady.load())
     {
         LOG_DEBUG("PopupWindow", "No alpha data ready yet, will use when available");
         return;
     }
 
+    // ------------------------------------------------------
+    // Copy current alpha pixels safely
+    // ------------------------------------------------------
     std::vector<uint8_t> pixelsCopy;
     {
         std::lock_guard<std::mutex> lock(g_alphaMutex);
@@ -241,15 +244,21 @@ void applyWindowAlphaIfReady(HWND hwnd, int width, int height, uint32_t frameIdx
     }
 
     if (pixelsCopy.empty())
+    {
+        LOG_DEBUG("PopupWindow", "Alpha buffer empty — skipping update");
         return;
+    }
 
+    // ------------------------------------------------------
+    // Create device contexts for layered window drawing
+    // ------------------------------------------------------
     HDC hdcScreen = GetDC(nullptr);
     HDC hdcMem = CreateCompatibleDC(hdcScreen);
 
     BITMAPINFO bmi{};
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     bmi.bmiHeader.biWidth = width;
-    bmi.bmiHeader.biHeight = -height;
+    bmi.bmiHeader.biHeight = -height; // top-down
     bmi.bmiHeader.biPlanes = 1;
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
@@ -264,6 +273,9 @@ void applyWindowAlphaIfReady(HWND hwnd, int width, int height, uint32_t frameIdx
         return;
     }
 
+    // ------------------------------------------------------
+    // Copy pixels (RGBA → BGRA)
+    // ------------------------------------------------------
     uint8_t* dst = static_cast<uint8_t*>(bits);
     for (int i = 0; i < width * height; ++i)
     {
@@ -277,22 +289,32 @@ void applyWindowAlphaIfReady(HWND hwnd, int width, int height, uint32_t frameIdx
 
     SIZE wndSize{ width, height };
     POINT srcPos{ 0, 0 };
-    POINT winPos{ 50, 50 };
+    POINT winPos{ 50, 50 }; // popup screen position
 
     BLENDFUNCTION blend{};
     blend.BlendOp = AC_SRC_OVER;
     blend.SourceConstantAlpha = 255;
     blend.AlphaFormat = AC_SRC_ALPHA;
 
+    // ------------------------------------------------------
+    // Apply layered window transparency (no lock)
+    // ------------------------------------------------------
     BOOL result = UpdateLayeredWindow(
         hwnd, hdcScreen, &winPos, &wndSize, hdcMem,
         &srcPos, 0, &blend, ULW_ALPHA);
 
     if (!result)
+    {
         LOG_ERROR("PopupWindow", "UpdateLayeredWindow failed: " + std::to_string(GetLastError()));
+    }
     else
+    {
         LOG_DEBUG("PopupWindow", "Applied alpha to window successfully (frame " + std::to_string(frameIdx) + ")");
+    }
 
+    // ------------------------------------------------------
+    // Cleanup
+    // ------------------------------------------------------
     SelectObject(hdcMem, oldBmp);
     DeleteObject(hBmp);
     DeleteDC(hdcMem);

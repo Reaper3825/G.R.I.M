@@ -201,7 +201,7 @@ void WindowManager::setVisibility(const std::string& name, bool visible)
 // Rendering helpers
 // =====================================================
 void WindowManager::beginFrame(uint16_t viewId, uint32_t clearColor)
-{
+{LOG_TRACE("CU", "beginFrame");
     if (!s_bgfxInitialized)
         return;
 

@@ -102,8 +102,9 @@ int main(int argc, char* argv[])
     }
     LOG_PHASE("BGFX initialized successfully", true);
 
-    // Clean up temporary window
-    DestroyWindow(tempHwnd);
+// Keep temp window hidden instead of destroying it
+    ShowWindow(tempHwnd, SW_HIDE);
+
 
     // ======================================================
     // 7. Launch popup overlay once
@@ -130,9 +131,10 @@ int main(int argc, char* argv[])
     // 5. Launch popup overlay after BGFX context exists
     // ======================================================
     std::thread([]() {
-        LOG_DEBUG("PopupUI", "Launching overlay window (independent GDI layer)...");
-        runPopupUI(400, 400);
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    runPopupUI(400, 400);
     }).detach();
+
 
     LOG_PHASE("Popup UI launched", true);
 
