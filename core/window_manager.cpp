@@ -1,25 +1,41 @@
 #include "window_manager.hpp"
 #include "logger.hpp"
-#include "popup_ui/popup_ui.hpp"   // For runPopupUI(), showPopup(), etc.
-#include <thread>
 #include "popup_ui/popup_window.hpp"
+
+// =====================================================
+// Global GPU mutex (shared with popup_window.cpp)
+// =====================================================
+std::mutex g_gpuMutex;
+
+namespace
+{
+    constexpr uint32_t kDefaultClearColor = 0xFF121212;
+    constexpr uint32_t kFallbackWidth = 1920;
+    constexpr uint32_t kFallbackHeight = 1080;
+}
 
 // =====================================================
 // BGFX Init
 // =====================================================
 bool WindowManager::initGlobalBGFX(HWND mainHwnd)
 {
-    std::lock_guard<std::mutex> lock(s_mutex);
-    if (s_bgfxInitialized)
-        return true;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (s_bgfxInitialized)
+            return true;
+    }
 
     LOG_DEBUG("WindowManager", "Initializing global BGFX context");
 
     bgfx::Init init;
-    init.type = bgfx::RendererType::Count; // auto
-    init.resolution.width = 1920;
-    init.resolution.height = 1080;
+    init.type = bgfx::RendererType::Count;
+    init.resolution.width = kFallbackWidth;
+    init.resolution.height = kFallbackHeight;
     init.resolution.reset = BGFX_RESET_VSYNC;
+
+    s_backbufferWidth = init.resolution.width;
+    s_backbufferHeight = init.resolution.height;
+    s_resetFlags = init.resolution.reset;
 
     bgfx::PlatformData pd{};
     pd.nwh = mainHwnd;
@@ -31,9 +47,23 @@ bool WindowManager::initGlobalBGFX(HWND mainHwnd)
         return false;
     }
 
-    s_bgfxInitialized = true;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_bgfxInitialized = true;
+        s_mainLoopStop.store(false, std::memory_order_release);
+    }
+
     LOG_PHASE("Global BGFX initialized (WindowManager)", true);
     return true;
+}
+
+// =====================================================
+// Check if BGFX is initialized
+// =====================================================
+bool WindowManager::isInitialized()
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    return s_bgfxInitialized;
 }
 
 // =====================================================
@@ -41,21 +71,38 @@ bool WindowManager::initGlobalBGFX(HWND mainHwnd)
 // =====================================================
 void WindowManager::shutdown()
 {
-    std::lock_guard<std::mutex> lock(s_mutex);
-    if (!s_bgfxInitialized)
-        return;
+    std::vector<HWND> handles;
+
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (!s_bgfxInitialized)
+            return;
+
+        s_bgfxInitialized = false;
+        s_mainLoopStop.store(true, std::memory_order_release);
+        s_primaryWindow = nullptr;
+        s_platformUpdatePending.store(false, std::memory_order_release);
+        s_pendingPlatformWindow = nullptr;
+        s_pendingPlatformWidth = 0;
+        s_pendingPlatformHeight = 0;
+
+        for (auto& w : s_windows)
+        {
+            if (w->hwnd && IsWindow(w->hwnd))
+                handles.push_back(w->hwnd);
+        }
+        s_windows.clear();
+    }
 
     LOG_DEBUG("WindowManager", "Shutting down all windows and BGFX");
 
-    for (auto& w : s_windows)
+    for (HWND hwnd : handles)
     {
-        if (w->hwnd && IsWindow(w->hwnd))
-            DestroyWindow(w->hwnd);
+        if (hwnd && IsWindow(hwnd))
+            DestroyWindow(hwnd);
     }
-    s_windows.clear();
 
     bgfx::shutdown();
-    s_bgfxInitialized = false;
 
     LOG_PHASE("Global BGFX shutdown complete", true);
 }
@@ -65,11 +112,21 @@ void WindowManager::shutdown()
 // =====================================================
 GRIMWindow* WindowManager::createOverlay(const std::string& name, int w, int h, bool transparent)
 {
-    std::lock_guard<std::mutex> lock(s_mutex);
-
     LOG_DEBUG("WindowManager", "Creating overlay window: " + name);
 
-    HWND hwnd = createOverlayWindow(w, h); // uses your popup_window.cpp
+    HWND hwnd = nullptr;
+    if (transparent)
+    {
+        hwnd = createOverlayWindow(w, h);
+    }
+    else
+    {
+        hwnd = CreateWindowExW(
+            0, L"STATIC", std::wstring(name.begin(), name.end()).c_str(),
+            WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+            w, h, nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
+    }
+
     if (!hwnd)
     {
         LOG_ERROR("WindowManager", "Overlay creation failed for: " + name);
@@ -81,21 +138,21 @@ GRIMWindow* WindowManager::createOverlay(const std::string& name, int w, int h, 
     win->name = name;
     win->visible = true;
     win->isOverlay = transparent;
-    s_windows.push_back(std::move(win));
+    win->width = w;
+    win->height = h;
 
-    LOG_PHASE(("Overlay created: " + name).c_str(), true);
-    return s_windows.back().get();
+    registerWindow(std::move(win));
+    return get(name);
 }
 
-// =====================================================
-// Accessors + visibility
-// =====================================================
 GRIMWindow* WindowManager::get(const std::string& name)
 {
     std::lock_guard<std::mutex> lock(s_mutex);
     for (auto& w : s_windows)
+    {
         if (w->name == name)
             return w.get();
+    }
     return nullptr;
 }
 
@@ -127,12 +184,27 @@ void WindowManager::hide(const std::string& name)
     }
 }
 
+void WindowManager::setVisibility(const std::string& name, bool visible)
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    for (auto& w : s_windows)
+    {
+        if (w->name == name)
+        {
+            w->visible = visible;
+            break;
+        }
+    }
+}
+
 // =====================================================
 // Rendering helpers
 // =====================================================
 void WindowManager::beginFrame(uint16_t viewId, uint32_t clearColor)
 {
-    if (!s_bgfxInitialized) return;
+    if (!s_bgfxInitialized)
+        return;
+
     bgfx::setViewClear(viewId, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, clearColor, 1.0f, 0);
     bgfx::touch(viewId);
 }
@@ -143,123 +215,211 @@ void WindowManager::endFrame()
         bgfx::frame();
 }
 
-void WindowManager::drawAll()
+void WindowManager::registerWindow(std::unique_ptr<GRIMWindow> win)
+{
+    if (!win)
+        return;
+
+    const std::string name = win->name;
+    const uint32_t incomingWidth = win->width > 0 ? static_cast<uint32_t>(win->width) : 0;
+    const uint32_t incomingHeight = win->height > 0 ? static_cast<uint32_t>(win->height) : 0;
+    bool updated = false;
+
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+
+        for (auto& existing : s_windows)
+        {
+            if (existing->name == name)
+            {
+                existing->hwnd = win->hwnd;
+                existing->visible = win->visible;
+                existing->isOverlay = win->isOverlay;
+                existing->width = win->width;
+                existing->height = win->height;
+
+                if (!existing->isOverlay && existing->hwnd)
+                {
+                    s_primaryWindow = existing->hwnd;
+                    if (incomingWidth != 0 && incomingHeight != 0)
+                    {
+                        s_backbufferWidth = incomingWidth;
+                        s_backbufferHeight = incomingHeight;
+                    }
+                    s_pendingPlatformWindow = existing->hwnd;
+                    s_pendingPlatformWidth = incomingWidth;
+                    s_pendingPlatformHeight = incomingHeight;
+                    s_platformUpdatePending.store(true, std::memory_order_release);
+                }
+
+                updated = true;
+                break;
+            }
+        }
+
+        if (!updated)
+        {
+            if (!win->isOverlay && win->hwnd)
+            {
+                s_primaryWindow = win->hwnd;
+                if (incomingWidth != 0 && incomingHeight != 0)
+                {
+                    s_backbufferWidth = incomingWidth;
+                    s_backbufferHeight = incomingHeight;
+                }
+                s_pendingPlatformWindow = win->hwnd;
+                s_pendingPlatformWidth = incomingWidth;
+                s_pendingPlatformHeight = incomingHeight;
+                s_platformUpdatePending.store(true, std::memory_order_release);
+            }
+
+            s_windows.push_back(std::move(win));
+        }
+    }
+
+    LOG_DEBUG("WindowManager", (updated ? "Updated window: " : "Registered window: ") + name);
+}
+
+bool WindowManager::processMainThreadUpdates()
+{
+    HWND hwnd = nullptr;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    bool pending = false;
+
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (s_platformUpdatePending.load(std::memory_order_acquire))
+        {
+            hwnd = s_pendingPlatformWindow;
+            width = s_pendingPlatformWidth != 0 ? s_pendingPlatformWidth : s_backbufferWidth;
+            height = s_pendingPlatformHeight != 0 ? s_pendingPlatformHeight : s_backbufferHeight;
+            pending = hwnd != nullptr;
+            s_pendingPlatformWindow = nullptr;
+            s_pendingPlatformWidth = 0;
+            s_pendingPlatformHeight = 0;
+            s_platformUpdatePending.store(false, std::memory_order_release);
+        }
+    }
+
+    if (!pending)
+        return false;
+
+    bgfx::PlatformData pd{};
+    pd.nwh = hwnd;
+    bgfx::setPlatformData(pd);
+
+    if (width == 0) width = 1;
+    if (height == 0) height = 1;
+    bgfx::reset(width, height, s_resetFlags);
+
+    LOG_DEBUG("WindowManager", "Applied platform update on main thread");
+    return true;
+}
+
+bool WindowManager::hasPendingPlatformUpdate()
+{
+    return s_platformUpdatePending.load(std::memory_order_acquire);
+}
+
+void WindowManager::updateWindowDimensions(const std::string& name, uint32_t width, uint32_t height)
+{
+    bool found = false;
+    bool queuedPlatformUpdate = false;
+    bool sizeChanged = false;
+
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        for (auto& w : s_windows)
+        {
+            if (w->name != name)
+                continue;
+
+            found = true;
+            const uint32_t oldW = static_cast<uint32_t>(w->width);
+            const uint32_t oldH = static_cast<uint32_t>(w->height);
+            w->width = static_cast<int>(width);
+            w->height = static_cast<int>(height);
+            sizeChanged = (oldW != width || oldH != height);
+
+            if (!w->isOverlay && w->hwnd)
+            {
+                if (width > 0 && height > 0)
+                {
+                    s_backbufferWidth = width;
+                    s_backbufferHeight = height;
+                }
+                s_primaryWindow = w->hwnd;
+                s_pendingPlatformWindow = w->hwnd;
+                s_pendingPlatformWidth = width;
+                s_pendingPlatformHeight = height;
+                s_platformUpdatePending.store(true, std::memory_order_release);
+                queuedPlatformUpdate = true;
+            }
+            break;
+        }
+    }
+
+    if (!found)
+    {
+        LOG_TRACE("WindowManager", "updateWindowDimensions called for unknown window '" + name + "'");
+        return;
+    }
+
+    if (sizeChanged)
+    {
+        LOG_DEBUG("WindowManager", "Updated dimensions for window '" + name + "' to " +
+            std::to_string(width) + "x" + std::to_string(height));
+    }
+
+    if (queuedPlatformUpdate)
+    {
+        LOG_DEBUG("WindowManager", "Queued platform update for window '" + name + "'");
+    }
+}
+
+void WindowManager::renderFrame()
 {
     if (!s_bgfxInitialized)
         return;
 
-    std::thread([]()
+    HWND primary = nullptr;
+    uint32_t targetWidth = 0;
+    uint32_t targetHeight = 0;
+
     {
-        LOG_PHASE("BGFX Render Thread Started", true);
+        std::lock_guard<std::mutex> lock(s_mutex);
+        primary = s_primaryWindow;
+        targetWidth = s_backbufferWidth;
+        targetHeight = s_backbufferHeight;
+    }
 
-        constexpr int FRAME_TIME_MS = 16; // ~60 FPS
+    if (!primary)
+        return;
 
-        while (s_bgfxInitialized)
-        {
-            auto frameStart = std::chrono::high_resolution_clock::now();
+    std::lock_guard<std::mutex> gpuLock(g_gpuMutex);
 
-            {
-                std::lock_guard<std::mutex> lock(s_mutex);
+    const uint16_t viewId = 0;
+    bgfx::setViewClear(viewId, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, kDefaultClearColor, 1.0f, 0);
 
-                // ======================================================
-                // Base view setup (clear + viewport)
-                // ======================================================
-                const uint16_t viewId = 0;
-                bgfx::setViewClear(viewId, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
-                                   0xFF121212, 1.0f, 0);
-                bgfx::setViewRect(viewId, 0, 0, 1920, 1080);
-                bgfx::touch(viewId);
+    if (targetWidth == 0 || targetHeight == 0)
+    {
+        targetWidth = kFallbackWidth;
+        targetHeight = kFallbackHeight;
+    }
 
-                // ------------------------------------------------------
-                // Example: Popup overlay quad (centered red translucent)
-                // ------------------------------------------------------
-                GRIMWindow* popup = get("popup");
-                if (popup && popup->visible)
-                {
-                    struct PosColorVertex
-                    {
-                        float x, y, z;
-                        uint32_t abgr;
-                    };
+    bgfx::setViewRect(viewId, 0, 0, targetWidth, targetHeight);
+    bgfx::touch(viewId);
 
-                    constexpr float size = 0.25f;
-                    const PosColorVertex verts[4] = {
-                        { -size, -size, 0.0f, 0x88FF0000 },
-                        {  size, -size, 0.0f, 0x88FF0000 },
-                        { -size,  size, 0.0f, 0x88FF0000 },
-                        {  size,  size, 0.0f, 0x88FF0000 },
-                    };
-                    const uint16_t indices[6] = { 0, 1, 2, 1, 3, 2 };
+    bgfx::frame();
+}
 
-                    // --- Vertex layout ---
-                    bgfx::VertexLayout layout;
-                    layout.begin()
-                        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
-                        .add(bgfx::Attrib::Color0,   4, bgfx::AttribType::Uint8, true)
-                        .end();
+void WindowManager::requestMainLoopStop()
+{
+    s_mainLoopStop.store(true, std::memory_order_release);
+}
 
-                    // --- Allocate transient buffers (modern BGFX syntax) ---
-                    bgfx::TransientVertexBuffer tvb;
-                    bgfx::TransientIndexBuffer tib;
-                    bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
-                    bgfx::allocTransientIndexBuffer(&tib, 6);
-
-                    if (tvb.data && tib.data)
-                    {
-                        std::memcpy(tvb.data, verts, sizeof(verts));
-                        std::memcpy(tib.data, indices, sizeof(indices));
-
-                        static bgfx::ProgramHandle prog = BGFX_INVALID_HANDLE;
-                        if (!bgfx::isValid(prog))
-                        {
-                            const char* vsSrc =
-                                "#version 330 core\n"
-                                "layout(location=0) in vec3 a_pos;\n"
-                                "layout(location=1) in vec4 a_col;\n"
-                                "out vec4 v_col;\n"
-                                "void main(){ gl_Position=vec4(a_pos,1.0); v_col=a_col; }";
-
-                            const char* fsSrc =
-                                "#version 330 core\n"
-                                "in vec4 v_col;\n"
-                                "out vec4 fragColor;\n"
-                                "void main(){ fragColor=v_col; }";
-
-                            const bgfx::Memory* vsmem =
-                                bgfx::copy(vsSrc, (uint32_t)strlen(vsSrc) + 1);
-                            const bgfx::Memory* fsmem =
-                                bgfx::copy(fsSrc, (uint32_t)strlen(fsSrc) + 1);
-                            bgfx::ShaderHandle vsh = bgfx::createShader(vsmem);
-                            bgfx::ShaderHandle fsh = bgfx::createShader(fsmem);
-                            prog = bgfx::createProgram(vsh, fsh, true);
-                        }
-
-                        bgfx::setVertexBuffer(0, &tvb);
-                        bgfx::setIndexBuffer(&tib);
-                        bgfx::setState(
-                            BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                            BGFX_STATE_BLEND_FUNC(
-                                BGFX_STATE_BLEND_SRC_ALPHA,
-                                BGFX_STATE_BLEND_INV_SRC_ALPHA));
-                        bgfx::submit(viewId, prog);
-                    }
-                }
-            }
-
-            // ======================================================
-            // Finalize frame — single thread only
-            // ======================================================
-            bgfx::frame();
-
-            // Maintain ~60 FPS
-            auto frameEnd = std::chrono::high_resolution_clock::now();
-            auto elapsed =
-                std::chrono::duration_cast<std::chrono::milliseconds>(frameEnd - frameStart)
-                    .count();
-            if (elapsed < FRAME_TIME_MS)
-                std::this_thread::sleep_for(std::chrono::milliseconds(FRAME_TIME_MS - elapsed));
-        }
-
-        LOG_PHASE("BGFX Render Thread Exited", true);
-    }).detach();
+bool WindowManager::isMainLoopStopRequested()
+{
+    return s_mainLoopStop.load(std::memory_order_acquire);
 }

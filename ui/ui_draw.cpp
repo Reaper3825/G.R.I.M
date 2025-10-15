@@ -33,6 +33,7 @@ static void drawQuad(float x, float y, float w, float h, uint32_t color, uint16_
     bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
     bgfx::allocTransientIndexBuffer(&tib, 6);
 
+
     if (!tvb.data || !tib.data)
         return;
 

@@ -129,3 +129,4 @@ pid.txt
 resources/sprite/
 
 venv_rl/*
+out/*
