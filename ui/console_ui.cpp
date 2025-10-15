@@ -6,7 +6,9 @@
 #include <atomic>
 #include <filesystem>
 #include <algorithm>
+#include <memory>
 #include "core/window_manager.hpp"
+#include "core/ui_sync.hpp"
 
 using namespace GRIMConsole;
 
@@ -68,6 +70,7 @@ static LRESULT CALLBACK ConsoleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         else if (wParam == VK_ESCAPE)
         {
             g_state.running = false;
+            WindowManager::requestMainLoopStop();
             PostQuitMessage(0);
             return 0;
         }
@@ -80,6 +83,7 @@ static LRESULT CALLBACK ConsoleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 
     case WM_CLOSE:
         g_state.running = false;
+        WindowManager::requestMainLoopStop();
         PostQuitMessage(0);
         return 0;
     }
@@ -127,42 +131,80 @@ static HWND createConsoleWindow(int width, int height)
 // ===========================================================
 void GRIMConsole::runConsoleUI(int width, int height)
 {
-    g_width = width;
+    g_width  = width;
     g_height = height;
-    g_hwnd = createConsoleWindow(width, height);
-    if (!g_hwnd) return;
+    g_hwnd   = createConsoleWindow(width, height);
+    if (!g_hwnd)
+    {
+        LOG_ERROR("ConsoleUI", "Failed to create GRIM console window");
+        return;
+    }
 
-    LOG_PHASE("Console UI initialized", true);
+    // ======================================================
+    // Initialize or attach to BGFX renderer
+    // ======================================================
+    if (!WindowManager::isInitialized())
+    {
+        std::lock_guard<std::mutex> guard(g_uiSafeZone);  // ensure popup thread is paused
+        LOG_DEBUG("ConsoleUI", "Initializing BGFX for the first time...");
+        if (!WindowManager::initGlobalBGFX(g_hwnd))
+        {
+            LOG_ERROR("ConsoleUI", "Failed to initialize BGFX for console window");
+            return;
+        }
+        LOG_PHASE("BGFX initialized for console", true);
+    }
+    else
+    {
+        LOG_DEBUG("ConsoleUI", "Using existing BGFX context (already initialized on main thread)");
+    }
 
-    // Register console window in WindowManager
-    WindowManager::createOverlay("console", width, height, false);
+
+    // ======================================================
+    // Register this window with the WindowManager
+    // ======================================================
+    auto consoleWin = std::make_unique<GRIMWindow>();
+    consoleWin->hwnd = g_hwnd;
+    consoleWin->name = "console";
+    consoleWin->visible = true;
+    consoleWin->isOverlay = false;
+    consoleWin->width = width;
+    consoleWin->height = height;
+    WindowManager::registerWindow(std::move(consoleWin));
+    LOG_PHASE("Console UI registered with WindowManager", true);
 
     MSG msg{};
     g_state.running = true;
 
+    // ======================================================
+    // Main console event loop
+    // ======================================================
     while (g_state.running)
     {
-        // Process input events
+        // ------------------------------
+        // Handle input + window messages
+        // ------------------------------
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
         {
             if (msg.message == WM_QUIT)
+            {
                 g_state.running = false;
+                WindowManager::requestMainLoopStop();
+            }
+
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
 
         updateCaretBlink(g_state);
 
-        // Queue console draw state for renderer thread
-        GRIMWindow* consoleWin = WindowManager::get("console");
-        if (consoleWin)
-        {
-            consoleWin->visible = true;
-            consoleWin->width = g_width;
-            consoleWin->height = g_height;
-        }
+        // ------------------------------
+        // Update window state in manager
+        // ------------------------------
+        WindowManager::setVisibility("console", true);
+        WindowManager::updateWindowDimensions("console", g_width, g_height);
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        std::this_thread::sleep_for(std::chrono::milliseconds(16)); // ~60 FPS
     }
 
     LOG_PHASE("Console UI shutdown complete", true);

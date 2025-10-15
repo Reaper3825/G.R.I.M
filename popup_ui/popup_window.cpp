@@ -2,6 +2,8 @@
 #include <windows.h>
 #include <stb_image.h>
 #include "pch.hpp"
+#include "core/ui_sync.hpp"
+
 #define WM_GRIM_SHOW_POPUP (WM_APP + 1)
 
 
@@ -88,16 +90,22 @@ static LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 // ===========================================================
 HWND createOverlayWindow(int width, int height)
 {
+    std::unique_lock<std::mutex> guard(g_uiSafeZone, std::try_to_lock);
+    if (!guard.owns_lock()) {
+        LOG_DEBUG("PopupWindow", "Skipped window creation — BGFX or another UI op in progress");
+        return nullptr;  // must return HWND-compatible value
+    }
+
     LOG_DEBUG("PopupWindow", "Creating debug overlay window...");
 
     HINSTANCE hInstance = GetModuleHandleW(nullptr);
 
     WNDCLASSW wc{};
-    wc.lpfnWndProc = PopupWndProc;  // Custom procedure prevents unwanted quit
-    wc.hInstance = hInstance;
+    wc.lpfnWndProc   = PopupWndProc;  // Custom procedure prevents unwanted quit
+    wc.hInstance     = hInstance;
     wc.lpszClassName = L"GRIMPopupClass";
-    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = nullptr;  // No background for layered window
+    wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = nullptr;       // No background for layered window
 
     if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
     {
@@ -106,12 +114,13 @@ HWND createOverlayWindow(int width, int height)
     }
 
     HWND hwnd = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_TOPMOST,  // Keep layered for transparency
+        WS_EX_LAYERED | WS_EX_TOPMOST,  // Layered for transparency
         L"GRIMPopupClass",
         L"GRIM Debug Popup",
         WS_POPUP | WS_VISIBLE,
-        50, 50, width, height,  // Position on screen
-        nullptr, nullptr, hInstance, nullptr);
+        50, 50, width, height,          // Initial position and size
+        nullptr, nullptr, hInstance, nullptr
+    );
 
     if (!hwnd)
     {
@@ -127,6 +136,8 @@ HWND createOverlayWindow(int width, int height)
 
     return hwnd;
 }
+
+
 
 // ===========================================================
 // Load alpha directly from Oreo RGBA map
@@ -209,7 +220,12 @@ void queueWindowAlphaReadback(int width, int height)
 // ===========================================================
 void applyWindowAlphaIfReady(HWND hwnd, int width, int height, uint32_t frameIdx)
 {
-    LOG_DEBUG("PopupWindow", "applyWindowAlphaIfReady called at frame " + std::to_string(frameIdx));
+    std::unique_lock<std::mutex> guard(g_uiSafeZone, std::try_to_lock);
+    if (!guard.owns_lock()) {
+        LOG_DEBUG("PopupWindow", "Skipped alpha update — BGFX or another UI op in progress");
+        return;
+    }
+
 
     if (!g_alphaReady.load())
     {

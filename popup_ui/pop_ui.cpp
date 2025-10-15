@@ -11,6 +11,9 @@
 #include <atomic>
 #include <thread>
 #include "core/window_manager.hpp"
+#include "helpers/mouse.hpp"
+#include "core/ui_sync.hpp"
+
 
 // ===========================================================
 // Constants
@@ -37,19 +40,63 @@ static std::atomic<int> g_idleTimerMs{ 0 };
 // ===========================================================
 void runPopupUI(int width, int height)
 {
-    g_hwnd = createOverlayWindow(POPUP_SIZE, POPUP_SIZE);
-    if (!g_hwnd)
+    // Initialize COM for this thread
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (FAILED(hr)) {
+        LOG_ERROR("PopupUI", "CoInitializeEx failed: " + std::to_string(hr));
         return;
+    }
 
-    WindowManager::createOverlay("popup", POPUP_SIZE, POPUP_SIZE, true);
+    std::lock_guard<std::mutex> guard(g_uiSafeZone);  // existing mutex
+    g_hwnd = createOverlayWindow(width, height);
+    if (!g_hwnd)
+    {
+        CoUninitialize();
+        return;
+    }
+
+    LOG_DEBUG("PopupUI", "Popup thread ID = " + std::to_string(GetCurrentThreadId()));
+
+    // Register existing HWND with WindowManager manually
+    auto win = std::make_unique<GRIMWindow>();
+    win->hwnd = g_hwnd;
+    win->name = "popup";
+    win->visible = true;
+    win->isOverlay = true;
+    win->width = width;
+    win->height = height;
+    WindowManager::registerWindow(std::move(win));
 
     ShowWindow(g_hwnd, SW_SHOW);
     LOG_DEBUG("PopupUI", "Overlay window created");
 
-    // Load alpha mask and apply to layered window
+    // -------------------------------------------------------
+    // Prepare alpha mask (RGBA from Oreo maps)
+    // -------------------------------------------------------
     queueWindowAlphaReadback(POPUP_SIZE, POPUP_SIZE);
-    applyWindowAlphaIfReady(g_hwnd, POPUP_SIZE, POPUP_SIZE, 0);
 
+    // Wait until alpha data ready before applying transparency
+    LOG_DEBUG("PopupUI", "Waiting for alpha data to become ready...");
+    int safetyCounter = 0;
+    while (!g_alphaReady.load() && safetyCounter < 200) // up to 2 seconds
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        safetyCounter++;
+    }
+
+    if (g_alphaReady.load())
+    {
+        LOG_DEBUG("PopupUI", "Alpha data ready — applying transparency");
+        applyWindowAlphaIfReady(g_hwnd, POPUP_SIZE, POPUP_SIZE, 0);
+    }
+    else
+    {
+        LOG_ERROR("PopupUI", "Alpha data not ready in time — popup may not be transparent");
+    }
+
+    // -------------------------------------------------------
+    // Handle queued popup show requests
+    // -------------------------------------------------------
     if (g_pendingPopup)
     {
         showPopup();
@@ -63,11 +110,14 @@ void runPopupUI(int width, int height)
 
     LOG_PHASE("Popup UI Thread Started", true);
 
+    // ======================================================
+    // Main popup loop
+    // ======================================================
     while (g_running)
     {
-        // -------------------------------------------------------
+        // ---------------------------------------------------
         // Win32 message loop
-        // -------------------------------------------------------
+        // ---------------------------------------------------
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
         {
             if (msg.message == WM_QUIT)
@@ -79,9 +129,27 @@ void runPopupUI(int width, int height)
             DispatchMessage(&msg);
         }
 
-        // -------------------------------------------------------
+        // ---------------------------------------------------
+        // Mouse input handling (using Mouse class)
+        // ---------------------------------------------------
+        if (Mouse::wasPressed(MouseButton::Left))
+        {
+            LOG_DEBUG("PopupUI", "Popup clicked — showing GRIM console");
+
+            HWND grimConsole = FindWindowW(nullptr, L"G.R.I.M Console");
+            if (grimConsole)
+            {
+                LOG_DEBUG("PopupUI", "Found existing GRIM console window, bringing to front");
+                ShowWindow(grimConsole, SW_RESTORE);
+                SetForegroundWindow(grimConsole);
+            }
+            // else do nothing — console not yet created
+        }
+        Mouse::endFrame();
+
+        // ---------------------------------------------------
         // Idle timer logic
-        // -------------------------------------------------------
+        // ---------------------------------------------------
         float dt = frameClock.restart().asSeconds();
 
         if (g_idleTimerMs > 0 &&
@@ -93,12 +161,14 @@ void runPopupUI(int width, int height)
                 g_idleTimerMs = 0;
             }
             else
+            {
                 g_idleClock.restart();
+            }
         }
 
-        // -------------------------------------------------------
+        // ---------------------------------------------------
         // Animation logic (no rendering)
-        // -------------------------------------------------------
+        // ---------------------------------------------------
         if (g_popupVisible)
             updateAnim(g_anim, g_popupVisible, dt, 0.08f);
 
@@ -106,7 +176,9 @@ void runPopupUI(int width, int height)
     }
 
     LOG_PHASE("Popup UI Thread Exited", true);
+    CoUninitialize();
 }
+
 
 // ===========================================================
 // Popup Controls
@@ -118,10 +190,7 @@ void showPopup()
         ShowWindow(g_hwnd, SW_SHOW);
         g_popupVisible = true;
         LOG_PHASE("PopupUI shown", true);
-
-        GRIMWindow* popup = WindowManager::get("popup");
-        if (popup)
-            popup->visible = true;
+        WindowManager::setVisibility("popup", true);
     }
 }
 
@@ -132,17 +201,14 @@ void hidePopup()
         ShowWindow(g_hwnd, SW_HIDE);
         g_popupVisible = false;
         LOG_PHASE("PopupUI hidden", true);
-
-        GRIMWindow* popup = WindowManager::get("popup");
-        if (popup)
-            popup->visible = false;
+        WindowManager::setVisibility("popup", false);
     }
 }
-
+ 
 void notifyPopupActivity()
 {
     LOG_DEBUG("PopupUI", "notifyPopupActivity() called");
-
+  
     if (!g_hwnd)
     {
         g_pendingPopup = true;

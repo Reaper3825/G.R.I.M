@@ -21,13 +21,19 @@
 #include "ui/console_ui.hpp"
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
+#include <chrono>
+#include <thread>
 #include "core/window_manager.hpp"
+#include "helpers/mouse.hpp"
+#include "system_detect.hpp"
 
 GRIM::MemoryStorage g_memoryStorage;
 
 namespace fs = std::filesystem;
 
-// Global console-related data
+// ============================================================
+// Global state
+// ============================================================
 std::string g_inputBuffer;
 ConsoleHistory g_consoleHistory;
 std::vector<Timer> g_uiTimers;
@@ -38,96 +44,148 @@ nlohmann::json g_longTermMemory;
 // ============================================================
 int main(int argc, char* argv[])
 {
-    // ====================================================
-    // Logger + startup phase
-    // ====================================================
+    // ======================================================
+    // 1. Logger + mouse
+    // ======================================================
     initLogger("grim.log");
-    LOG_PHASE("Startup begin", true);
-    SetConsoleTitleW(L"G.R.I.M Console");
+    LOG_PHASE("Starting G.R.I.M", true);
 
-    // ====================================================
-    // Bootstrap and initialize subsystems
-    // ====================================================
+    Mouse::initialize();
+    LOG_PHASE("Mouse initialized", true);
+
+    // ======================================================
+    // 3. Bootstrap + aliases
+    // ======================================================
     runBootstrapChecks(argc, argv);
     LOG_PHASE("Bootstrap checks complete", true);
 
     aliases::init();
     LOG_PHASE("Aliases initialized", true);
 
-    // ====================================================
-    // Initialize TTS and queue
-    // ====================================================
+    // ======================================================
+    // 4. Voice TTS + queue
+    // ======================================================
     Voice::initQueue();
 
-    if (!Voice::isReady())
-    {
-        LOG_DEBUG("Voice", "Waiting for TTS bridge to be ready...");
-        while (!Voice::isReady())
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
+    while (!Voice::isReady())
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     Voice::speak("Welcome back, Austin. Grim is online.", "system");
     LOG_PHASE("Startup greeting spoken", true);
 
-    // ====================================================
-    // Initialize long-term memory system
-    // ====================================================
+    // ======================================================
+    // 5. Memory system
+    // ======================================================
     g_memoryStorage.initialize("D:/G.R.I.M/data/memories.json");
     GRIM::ContextManager::setMemoryStorage(&g_memoryStorage);
     LOG_PHASE("Memory system initialized", true);
 
-    
-    // ====================================================
-    // Initialize BGFX globally (via WindowManager)
-    // ====================================================
-    HWND hwndConsole = GetConsoleWindow();
-    if (!WindowManager::initGlobalBGFX(hwndConsole))
-        return -1;
-    LOG_PHASE("Global BGFX initialized (via WindowManager)", true);
+    // ======================================================
+    // 6. Initialize BGFX on main thread (required)
+    // ======================================================
+    LOG_PHASE("Initializing BGFX on main thread", true);
+    // Create a temporary window for BGFX initialization
+    HWND tempHwnd = CreateWindowExW(
+        0, L"STATIC", L"TempBGFXWindow",
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        1, 1, nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
+    if (!tempHwnd) {
+        LOG_ERROR("Main", "Failed to create temporary window for BGFX");
+        return 1;
+    }
 
+    if (!WindowManager::initGlobalBGFX(tempHwnd)) {
+        LOG_ERROR("Main", "Failed to initialize BGFX on main thread");
+        DestroyWindow(tempHwnd);
+        return 1;
+    }
+    LOG_PHASE("BGFX initialized successfully", true);
 
-    // Register popup window in WindowManager (track visibility, HWND)
-    WindowManager::createOverlay("popup", 400, 400, true);
+    // Clean up temporary window
+    DestroyWindow(tempHwnd);
 
+    // ======================================================
+    // 7. Launch popup overlay once
+    // ======================================================
+    LOG_PHASE("Launching GRIM Console (BGFX)", true);
+    std::thread consoleThread([]() {
+        GRIMConsole::runConsoleUI(1280, 720);
+    });
+    consoleThread.detach();
 
-    // ====================================================
-    // Launch popup overlay (uses shared BGFX view)
-    // ====================================================
-    std::thread([]()
+    // Allow the console thread to register its window and apply BGFX updates on this thread.
+    bool applied = false;
+    for (int i = 0; i < 200; ++i)
     {
-        LOG_DEBUG("PopupUI", "Launching overlay window (shared BGFX)...");
-        runPopupUI(400, 400); // now uses view 1
-    }).detach();
-    LOG_PHASE("Popup UI launched", true);
-    WindowManager::createOverlay("popup", 400, 400, true);
+        if (WindowManager::processMainThreadUpdates())
+            applied = true;
+        if (applied && !WindowManager::hasPendingPlatformUpdate())
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    WindowManager::processMainThreadUpdates();
 
-    // ====================================================
-    // Start wakeword systems
-    // ====================================================
+    // ======================================================
+    // 5. Launch popup overlay after BGFX context exists
+    // ======================================================
+    std::thread([]() {
+        LOG_DEBUG("PopupUI", "Launching overlay window (independent GDI layer)...");
+        runPopupUI(400, 400);
+    }).detach();
+
+    LOG_PHASE("Popup UI launched", true);
+
+    // Process any late BGFX updates (e.g., popup attaching overlays)
+    WindowManager::processMainThreadUpdates();
+
+    // ======================================================
+    // 8. Wake systems
+    // ======================================================
     WakeKey::start(&g_consoleHistory, g_uiTimers, g_longTermMemory, g_nlp);
     LOG_PHASE("WakeKey listener started", true);
 
     WakeVoice::start(&g_consoleHistory, g_uiTimers, g_longTermMemory, g_nlp);
     LOG_PHASE("WakeVoice listener started", true);
 
-    // ====================================================
-    // Start Console UI (main window + render loop)
-    // ====================================================
-    LOG_PHASE("Launching GRIM Console (BGFX)", true);
-    GRIMConsole::runConsoleUI(1280, 720);
+    // ======================================================
+    // 9. Main render loop (runs on main thread)
+    // ======================================================
+    LOG_PHASE("Entering main thread render loop", true);
 
-    // ====================================================
-    // Cleanup on shutdown
-    // ====================================================
+    constexpr auto kFrameDuration = std::chrono::milliseconds(16);
+    while (!WindowManager::isMainLoopStopRequested())
+    {
+        auto frameStart = std::chrono::steady_clock::now();
+
+        WindowManager::processMainThreadUpdates();
+        WindowManager::renderFrame();
+
+        auto frameEnd = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(frameEnd - frameStart);
+        if (elapsed < kFrameDuration)
+        {
+            std::this_thread::sleep_for(kFrameDuration - elapsed);
+        }
+    }
+
+    LOG_PHASE("Main thread render loop exited", true);
+
+    // ======================================================
+    // 10. Cleanup + shutdown
+    // ======================================================
     LOG_PHASE("Shutting down subsystems", true);
+
     WakeKey::stop();
+    WakeVoice::stop();
     Voice::shutdownQueue();
     Voice::shutdownTTS();
     GRIM::RL::shutdown();
-
+    Mouse::shutdown();
     WindowManager::shutdown();
-    LOG_PHASE("Shutdown complete", true);
 
+    LOG_PHASE("All subsystems shut down", true);
     shutdownLogger();
+    LOG_PHASE("G.R.I.M terminated successfully", true);
     return 0;
 }
