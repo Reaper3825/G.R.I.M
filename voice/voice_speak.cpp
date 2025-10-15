@@ -357,8 +357,8 @@ namespace Voice {
             auto sound = std::make_unique<sf::Sound>(*buffer);
             sound->setVolume(100.f);
 
-            notifyPopupActivity();
-            sound->play();
+           notifyPopupActivity();
+           sound->play();
 
             LOG_DEBUG("Voice/Audio", "Playing: " + path +
                 " (duration=" + std::to_string(buffer->getDuration().asSeconds()) + "s)");

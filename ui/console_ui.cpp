@@ -95,7 +95,7 @@ static LRESULT CALLBACK ConsoleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 // Create Win32 window
 // ===========================================================
 static HWND createConsoleWindow(int width, int height)
-{
+{LOG_TRACE("CU", "createConsoleWindow");
     HINSTANCE hInst = GetModuleHandle(nullptr);
     const wchar_t* className = L"GRIMConsoleClass";
 
@@ -107,7 +107,7 @@ static HWND createConsoleWindow(int width, int height)
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
 
     RegisterClassW(&wc);
-
+    LOG_TRACE("CU", "RegisterClassW");
     HWND hwnd = CreateWindowExW(
         0, className, L"G.R.I.M Console",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
@@ -127,10 +127,10 @@ static HWND createConsoleWindow(int width, int height)
 }
 
 // ===========================================================
-// Console logic loop (no BGFX calls)
+// Console logic loop (no BGFX initialization here anymore)
 // ===========================================================
 void GRIMConsole::runConsoleUI(int width, int height)
-{
+{LOG_TRACE("CU", "runConsoleUI");
     g_width  = width;
     g_height = height;
     g_hwnd   = createConsoleWindow(width, height);
@@ -141,22 +141,18 @@ void GRIMConsole::runConsoleUI(int width, int height)
     }
 
     // ======================================================
-    // Initialize or attach to BGFX renderer
+    // Attach to existing BGFX context and queue update
     // ======================================================
-    if (!WindowManager::isInitialized())
+    if (WindowManager::isInitialized())
     {
-        std::lock_guard<std::mutex> guard(g_uiSafeZone);  // ensure popup thread is paused
-        LOG_DEBUG("ConsoleUI", "Initializing BGFX for the first time...");
-        if (!WindowManager::initGlobalBGFX(g_hwnd))
-        {
-            LOG_ERROR("ConsoleUI", "Failed to initialize BGFX for console window");
-            return;
-        }
-        LOG_PHASE("BGFX initialized for console", true);
+        LOG_DEBUG("ConsoleUI", "Attaching to existing BGFX context (main thread already initialized)");
+        // Register this HWND as the new platform window
+        WindowManager::updateWindowDimensions("console", width, height);
     }
     else
     {
-        LOG_DEBUG("ConsoleUI", "Using existing BGFX context (already initialized on main thread)");
+        LOG_ERROR("ConsoleUI", "BGFX context not initialized — expected initGlobalBGFX() from main thread");
+        return;
     }
 
 
@@ -201,11 +197,20 @@ void GRIMConsole::runConsoleUI(int width, int height)
         // ------------------------------
         // Update window state in manager
         // ------------------------------
-        WindowManager::setVisibility("console", true);
-        WindowManager::updateWindowDimensions("console", g_width, g_height);
+        static uint32_t lastW = 0;
+        static uint32_t lastH = 0;
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(16)); // ~60 FPS
-    }
+        WindowManager::setVisibility("console", true);
+        if (g_width != lastW || g_height != lastH)
+        {
+            WindowManager::updateWindowDimensions("console", g_width, g_height);
+            lastW = g_width;
+            lastH = g_height;
+        }
+
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(16)); // ~60 FPS
+            }
 
     LOG_PHASE("Console UI shutdown complete", true);
 }

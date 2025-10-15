@@ -39,7 +39,12 @@ static std::atomic<int> g_idleTimerMs{ 0 };
 // Popup UI main thread (logic only — no BGFX here)
 // ===========================================================
 void runPopupUI(int width, int height)
-{
+{LOG_TRACE("PopupUI", "runPopupUI");
+    if (WindowManager::isInitialized()) {
+    LOG_DEBUG("PopupUI", "Deferring popup creation until BGFX idle");
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+}
+
     // Initialize COM for this thread
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(hr)) {
@@ -219,6 +224,5 @@ void notifyPopupActivity()
     PostMessage(g_hwnd, WM_GRIM_SHOW_POPUP, 0, 0);
     g_idleTimerMs = 3000;
     g_idleClock.restart();
-    LOG_DEBUG("PopupUI",
-        "Idle timer reset to " + std::to_string(g_idleTimerMs) + "ms");
+    LOG_DEBUG("PopupUI", "Idle timer reset to " + std::to_string(g_idleTimerMs) + "ms");
 }
