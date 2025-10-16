@@ -20,7 +20,11 @@ public:
 
     std::optional<MemoryObject> getById(const std::string& id);
     std::vector<MemoryObject> search(const std::string& query, int maxResults = 10);
-
+    std::optional<MemoryObject> findLearnedCommand(const std::string& phrase);
+    void storeLearnedCommand(const std::string& phrase,
+                             const std::string& action,
+                             float confidence = 1.0f);
+                             
     void decay(float rate);
     void flush();
 

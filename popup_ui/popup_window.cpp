@@ -3,6 +3,7 @@
 #include <stb_image.h>
 #include "pch.hpp"
 #include "core/ui_sync.hpp"
+#include <algorithm>
 
 #define WM_GRIM_SHOW_POPUP (WM_APP + 1)
 

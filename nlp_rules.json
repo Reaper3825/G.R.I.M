@@ -169,6 +169,14 @@
   "slot_names": [],
   "score_boost": 0.1,
   "case_insensitive": true
+},
+{
+  "intent": "nevermind",
+  "description": "Cancel or ignore the last command",
+  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(nevermind|never mind|cancel that|forget it|stop listening)$",
+  "slot_names": ["phrase"],
+  "score_boost": 0.5,
+  "case_insensitive": true
 }
 
 ]
