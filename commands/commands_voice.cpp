@@ -2,22 +2,22 @@
 // ---------------------------------------------------------
 // Windows + SAPI includes
 // ---------------------------------------------------------
-    #define NOMINMAX              // prevent min/max macros
-    #define WIN32_LEAN_AND_MEAN   // strip rarely-used APIs from windows.h
+#define NOMINMAX              // prevent min/max macros
+#define WIN32_LEAN_AND_MEAN   // strip rarely-used APIs from windows.h
 
-    #include <sapi.h>             // ISpVoice, ISpStream
-    #include <sphelper.h>    
+#include <sapi.h>             // ISpVoice, ISpStream
+#include <sphelper.h>    
 
-    // Link against required libs
-    #pragma comment(lib, "sapi.lib")
-    #pragma comment(lib, "ole32.lib")
-    #pragma comment(lib, "oleaut32.lib")
-    #pragma comment(lib, "shlwapi.lib")
+// Link against required libs
+#pragma comment(lib, "sapi.lib")
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "oleaut32.lib")
+#pragma comment(lib, "shlwapi.lib")
 
-    // Cleanup macro pollution from Windows headers
-    #undef ERROR
-    #undef min
-    #undef max
+// Cleanup macro pollution from Windows headers
+#undef ERROR
+#undef min
+#undef max
 #endif
 
 // ---------------------------------------------------------
@@ -31,7 +31,9 @@
 #include "commands_core.hpp"
 #include "voice/voice_speak.hpp"
 #include "resources.hpp"
-#include "nlp/nlp.hpp"   // globals: history, timers, longTermMemory, g_nlp
+#include "nlp/nlp.hpp"
+#include "logger.hpp"   // Added logger
+// globals: history, timers, longTermMemory, g_nlp
 
 // ---------------------------------------------------------
 // SFML
@@ -57,7 +59,7 @@ namespace {
 
         auto buffer = std::make_unique<sf::SoundBuffer>();
         if (!buffer->loadFromFile(wavPath)) {
-            std::cerr << "[Voice][Error] Failed to load audio: " << wavPath << std::endl;
+            LOG_ERROR("Voice", "Failed to load audio: " + wavPath);
             return false;
         }
 
@@ -68,7 +70,7 @@ namespace {
         sounds.push_back(std::move(sound));
         buffers.push_back(std::move(buffer));
 
-        std::cerr << "[Voice] Playing audio file: " << wavPath << std::endl;
+        LOG_DEBUG("Voice", "Playing audio file: " + wavPath);
         return true;
     }
 }
@@ -90,6 +92,7 @@ CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
         };
     }
 
+    LOG_DEBUG("Voice", "Received transcript: " + transcript);
     handleCommand(transcript);
 
     return {
@@ -107,6 +110,7 @@ CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
 // ====================================================
 CommandResult cmdVoiceStream([[maybe_unused]] const std::string& arg) {
     if (!Voice::g_state.ctx) {
+        LOG_ERROR("Voice", "No context available for streaming");
         return {
             ErrorManager::getUserMessage("ERR_VOICE_NO_CONTEXT"),
             false,
@@ -118,6 +122,7 @@ CommandResult cmdVoiceStream([[maybe_unused]] const std::string& arg) {
     }
 
     if (VoiceStream::start(Voice::g_state.ctx, &history, timers, longTermMemory, g_nlp)) {
+        LOG_DEBUG("Voice", "Voice streaming started");
         return {
             "[Voice] Streaming started.",
             true,
@@ -127,6 +132,7 @@ CommandResult cmdVoiceStream([[maybe_unused]] const std::string& arg) {
             "routine"
         };
     } else {
+        LOG_ERROR("Voice", "Voice streaming failed");
         return {
             ErrorManager::getUserMessage("ERR_VOICE_STREAM_FAIL"),
             false,
@@ -139,7 +145,7 @@ CommandResult cmdVoiceStream([[maybe_unused]] const std::string& arg) {
 }
 
 // ====================================================
-// [Voice] Local TTS test (Microsoft David)
+// [Voice] Local TTS test (Microsoft David / Coqui)
 // ====================================================
 CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
     CommandResult result;
@@ -147,19 +153,19 @@ CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
 
     std::string text = arg.empty() ? "This is a Coqui voice test." : arg;
 
-    std::cerr << "[Voice][Test] ===== BEGIN Coqui TTS TEST =====" << std::endl;
-    std::cerr << "[Voice][Test] Text   : \"" << text << "\"" << std::endl;
+    LOG_DEBUG("Voice", "===== BEGIN Coqui TTS TEST =====");
+    LOG_DEBUG("Voice", "Text: \"" + text + "\"");
 
     // 🔹 Ask Coqui to synthesize → get output path
     std::string wavPath = Voice::coquiSpeak(text, "p225", 1.0);
     if (wavPath.empty()) {
+        LOG_ERROR("Voice", "Coqui TTS failed (empty output path)");
         result.message = "[Voice][Test] ERROR: Coqui TTS failed.";
         result.color   = sf::Color::Red;
-        std::cerr << "[Voice][Test] ERROR: coquiSpeak returned empty path\n";
         return result;
     }
 
-    std::cerr << "[Voice][Test] File   : " << wavPath << std::endl;
+    LOG_DEBUG("Voice", "Generated WAV file: " + wavPath);
 
     // 🔹 Play the generated file
     Voice::playAudio(wavPath);
@@ -181,10 +187,11 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
 
     if (engine == "coqui") {
         oss << "[Voice] Current Coqui TTS configuration:\n";
-        oss << " - Model: " << "tts_models/en/ljspeech/vits" << "\n"; // must match your tts_bridge.py
+        oss << " - Model: " << "tts_models/en/ljspeech/vits" << "\n";
         oss << " - Speaker: " << cfg.value("speaker", "default") << "\n";
         oss << " - Speed: " << cfg.value("speed", 1.0) << "\n";
 
+        LOG_DEBUG("Voice", "Listing Coqui configuration");
         return {
             oss.str(),
             true,
@@ -196,9 +203,9 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
     }
 
 #if defined(_WIN32)
-    // Fallback: list SAPI voices
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     if (FAILED(hr)) {
+        LOG_ERROR("Voice", "Failed to initialize COM for SAPI voice listing");
         return { "[Voice][Error] Failed to initialize COM.", false,
                  sf::Color::Red, "ERR_TTS_COM", "COM init failed", "debug" };
     }
@@ -210,6 +217,7 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
     if (SUCCEEDED(hr) && pEnum) {
         pEnum->GetCount(&ulCount);
         oss << "[Voice] Found " << ulCount << " installed SAPI voices:\n";
+        LOG_DEBUG("Voice", "Enumerating " + std::to_string(ulCount) + " SAPI voices");
 
         for (ULONG i = 0; i < ulCount; i++) {
             ISpObjectToken* pToken = nullptr;
@@ -241,6 +249,7 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
 
     if (pEnum) pEnum->Release();
     CoUninitialize();
+    LOG_ERROR("Voice", "Failed to enumerate SAPI voices");
     return {
         "[Voice][Error] Failed to enumerate SAPI voices.",
         false,
@@ -250,6 +259,7 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
         "debug"
     };
 #else
+    LOG_ERROR("Voice", "Voice listing unsupported on non-Windows platforms");
     return {
         "[Voice][Error] Voice listing is only supported on Windows (for SAPI).",
         false,
@@ -267,6 +277,7 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
 CommandResult cmd_testSAPI([[maybe_unused]] const std::string& arg) {
     sf::SoundBuffer buffer;
     if (!buffer.loadFromFile("resources/test.wav")) {
+        LOG_ERROR("Audio", "Failed to load test.wav");
         return {
             "[Audio] Failed to load resources/test.wav",
             false,
@@ -280,11 +291,13 @@ CommandResult cmd_testSAPI([[maybe_unused]] const std::string& arg) {
     sf::Sound sound(buffer);
     sound.play();
 
-    std::cerr << "[Audio] Playing test.wav..." << std::endl;
+    LOG_DEBUG("Audio", "Playing test.wav...");
 
     while (sound.getStatus() == sf::Sound::Status::Playing) {
         sf::sleep(sf::milliseconds(100));
     }
+
+    LOG_DEBUG("Audio", "Test.wav playback finished");
 
     return {
         "[Audio] Test file played successfully.",
@@ -303,6 +316,7 @@ CommandResult cmd_ttsDevice([[maybe_unused]] const std::string& arg) {
 #if defined(_WIN32)
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     if (FAILED(hr)) {
+        LOG_ERROR("Voice", "Failed to initialize COM for device query");
         return { "[Voice][Error] Failed to initialize COM.", false,
                  sf::Color::Red, "ERR_TTS_COM", "COM init failed", "debug" };
     }
@@ -313,6 +327,7 @@ CommandResult cmd_ttsDevice([[maybe_unused]] const std::string& arg) {
 
     if (FAILED(hr) || !pVoice) {
         CoUninitialize();
+        LOG_ERROR("Voice", "Failed to create SAPI voice instance");
         return { "[Voice][Error] Failed to create SAPI voice instance.", false,
                  sf::Color::Red, "ERR_TTS_INIT", "SAPI init failed", "debug" };
     }
@@ -329,10 +344,12 @@ CommandResult cmd_ttsDevice([[maybe_unused]] const std::string& arg) {
             wcstombs_s(&converted, buffer, sizeof(buffer), pszDesc, _TRUNCATE);
             oss << "[Voice] Current SAPI output device: " << buffer << "\n";
             ::CoTaskMemFree(pszDesc);
+            LOG_DEBUG("Voice", std::string("Current output device: ") + buffer);
         }
         pAudioOut->Release();
     } else {
         oss << "[Voice] Could not retrieve current output device.\n";
+        LOG_ERROR("Voice", "Could not retrieve current output device");
     }
 
     pVoice->Release();
@@ -341,7 +358,33 @@ CommandResult cmd_ttsDevice([[maybe_unused]] const std::string& arg) {
     return { oss.str(), true, sf::Color::Yellow,
              "ERR_NONE", "Device info", "debug" };
 #else
+    LOG_ERROR("Voice", "Device query unsupported on this platform");
     return { "[Voice][Error] Device query only works on Windows.", false,
              sf::Color::Red, "ERR_UNSUPPORTED_PLATFORM", "Device query unsupported", "debug" };
 #endif
+}
+
+// ====================================================
+// Nevermind Command
+// ====================================================
+CommandResult cmdNevermind(const std::string& arg)
+{
+    (void)arg;
+    g_lastIntent = {}; // reset last NLP intent
+    LOG_DEBUG("Command", "User cancelled last command with 'nevermind'");
+
+    // Optionally stop active speech playback
+    if (Voice::isSpeaking()) {
+        LOG_DEBUG("Command", "Stopping active TTS playback");
+        Voice::g_activeSound->stop();
+    }
+
+    return {
+        "Alright, cancelled.",
+        true,
+        sf::Color(128, 128, 255),
+        "",
+        "routine",
+        "Alright, cancelled."
+    };
 }

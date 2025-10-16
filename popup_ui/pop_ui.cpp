@@ -135,22 +135,30 @@ void runPopupUI(int width, int height)
         }
 
         // ---------------------------------------------------
-        // Mouse input handling (using Mouse class)
-        // ---------------------------------------------------
-        if (Mouse::wasPressed(MouseButton::Left))
-        {
-            LOG_DEBUG("PopupUI", "Popup clicked — showing GRIM console");
+// Mouse input handling (using Mouse class)
+// ---------------------------------------------------
+if (Mouse::wasPressed(MouseButton::Left))
+{
+    POINT cursorPos = Mouse::getPosition();
+    HWND hwndUnderCursor = WindowFromPoint(cursorPos);
 
-            HWND grimConsole = FindWindowW(nullptr, L"G.R.I.M Console");
-            if (grimConsole)
-            {
-                LOG_DEBUG("PopupUI", "Found existing GRIM console window, bringing to front");
-                ShowWindow(grimConsole, SW_RESTORE);
-                SetForegroundWindow(grimConsole);
-            }
-            // else do nothing — console not yet created
+    // Only trigger if the popup window itself was clicked
+    if (hwndUnderCursor == g_hwnd)
+    {
+        LOG_DEBUG("PopupUI", "Popup clicked — showing GRIM console");
+
+        HWND grimConsole = FindWindowW(nullptr, L"G.R.I.M Console");
+        if (grimConsole)
+        {
+            LOG_DEBUG("PopupUI", "Found existing GRIM console window, bringing to front");
+            ShowWindow(grimConsole, SW_RESTORE);
+            SetForegroundWindow(grimConsole);
         }
-        Mouse::endFrame();
+        // else do nothing — console not yet created
+        }
+    }
+    Mouse::endFrame();
+
 
         // ---------------------------------------------------
         // Idle timer logic
@@ -209,7 +217,7 @@ void hidePopup()
         WindowManager::setVisibility("popup", false);
     }
 }
- 
+
 void notifyPopupActivity()
 {
     LOG_DEBUG("PopupUI", "notifyPopupActivity() called");

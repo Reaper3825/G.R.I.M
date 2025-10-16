@@ -88,6 +88,30 @@ std::vector<MemoryObject> MemoryStorage::search(const std::string& query, int ma
     return results;
 }
 
+
+std::optional<MemoryObject> MemoryStorage::findLearnedCommand(const std::string& phrase) {
+    std::scoped_lock lock(mtx);
+
+    auto match = [&](const MemoryObject& obj) {
+        if (obj.type != TypeTag::LearnedCommand)
+            return false;
+
+        return obj.raw == phrase ||
+               obj.normalized == phrase ||
+               obj.raw.find(phrase) != std::string::npos;
+    };
+
+    for (auto& [id, obj] : longTerm)
+        if (match(obj))
+            return obj;
+
+    for (auto it = shortTerm.rbegin(); it != shortTerm.rend(); ++it)
+        if (match(*it))
+            return *it;
+
+    return std::nullopt;
+}
+
 // =====================================
 // Maintenance
 // =====================================
@@ -143,6 +167,26 @@ void MemoryStorage::loadFromDisk() {
         longTerm[obj.id] = obj;
     }
 }
+
+
+void MemoryStorage::storeLearnedCommand(const std::string& phrase,
+                                        const std::string& action,
+                                        float confidence) {
+    MemoryObject obj;
+    obj.id = MemoryObject::generateUUID();
+    obj.timestamp = std::time(nullptr);
+    obj.source = SourceTag::UserText;   // if learned via typed or parsed text input
+    obj.type = TypeTag::LearnedCommand;
+    obj.intent = IntentTag::Inform;
+    obj.context = ContextTag::CommandLearning;
+    obj.raw = phrase;
+    obj.normalized = action;
+    obj.confidence = confidence;
+    obj.tags = {"learned", "command"};
+
+    storeLongTerm(obj); // existing persistent path
+}
+
 
 
 std::time_t GRIM::MemoryStorage::getLastModified(const std::string& key) {
