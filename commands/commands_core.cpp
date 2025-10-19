@@ -23,15 +23,18 @@
 #include "memory/memory_manager.hpp"
 #include "memory/memory_storage.hpp"
 #include "memory/memory_router.hpp"
-#include "input_parser.hpp"  // <--- NEW include
+#include "input_parser.hpp"
+#include "ai/ai.hpp"
+#include "core/plugin.hpp" // 🔹 Plugin system
 
 using Voice::speak;
 
 // ====================================================
 // Globals
 // ====================================================
-std::unordered_map<std::string, CommandFunc> commandMap;
+
 static std::optional<std::string> g_pendingClarifyCmd;
+static std::optional<std::string> g_pendingFeedbackCmd;
 
 // Externals
 extern nlohmann::json longTermMemory;
@@ -65,72 +68,19 @@ static CommandResult handleLearnedCommand(const std::string& arg)
 }
 
 // ====================================================
-// InitCommands
+// Core Plugin Loader — ensures built-in commands exist
 // ====================================================
-static void initCommands()
+void ensureCorePluginsRegistered()
 {
-    if (!commandMap.empty())
-        return;
+    static bool done = false;
+    if (done) return;
+    done = true;
 
-    // === 1. Built-in commands ===
-    commandMap = {
-        {"reload_nlp",   cmdReloadNlp},
-        {"grim_ai",      cmdGrimAi},
-        {"pwd",          cmdShowPwd},
-        {"cd",           cmdChangeDir},
-        {"ls",           cmdListDir},
-        {"mkdir",        cmdMakeDir},
-        {"rm",           cmdRemoveFile},
-        {"timer",        cmdSetTimer},
-        {"sysinfo",      cmdSystemInfo},
-        {"clean",        cmdClean},
-        {"help",         cmdShowHelp},
-        {"voice",        cmdVoice},
-        {"voice_stream", cmdVoiceStream},
-        {"test_tts",     cmd_testTTS},
-        {"test_sapi",    cmd_testSAPI},
-        {"tts_device",   cmd_ttsDevice},
-        {"list_voice",   cmd_listVoices},
-        {"open_app",     cmdOpenApp},
-        {"search_web",   cmdSearchWeb},
-        {"alias list",    cmdAliasList},
-        {"alias info",    cmdAliasInfo},
-        {"alias refresh", cmdAliasRefresh},
-        {"nevermind",     cmdNevermind}
-    };
+    LOG_DEBUG("Core", "Ensuring core plugins registered...");
 
-    // === 2. Merge persistent learned commands ===
-    try
-    {
-        g_learnedCommandMap.clear();
-        auto learnedList = g_memoryStorage.search("", 1000);
-        int count = 0;
-
-        for (const auto& obj : learnedList)
-        {
-            if (obj.type != GRIM::TypeTag::LearnedCommand)
-                continue;
-
-            const std::string& phrase = obj.raw;
-            const std::string& action = obj.normalized;
-
-            if (commandMap.find(phrase) != commandMap.end())
-                continue;
-
-            g_learnedCommandMap[phrase] = action;
-            commandMap[phrase] = handleLearnedCommand;
-            count++;
-        }
-
-        if (count > 0)
-            LOG_DEBUG("LearnedCmd", "Merged " + std::to_string(count) + " learned commands into registry.");
-        else
-            LOG_DEBUG("LearnedCmd", "No learned commands found to merge.");
-    }
-    catch (const std::exception& e)
-    {
-        LOG_ERROR("LearnedCmd", std::string("Failed merging learned commands: ") + e.what());
-    }
+    // Core built-in plugin (terminal-like commands)
+    extern void registerCorePlugin();
+    registerCorePlugin();
 }
 
 // ====================================================
@@ -138,9 +88,11 @@ static void initCommands()
 // ====================================================
 CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
 {
-    initCommands();
+    ensureCorePluginsRegistered();
 
-    // --- 1. Normal built-in / plugin command path ---
+    // ====================================================
+    // 1. Built-in / Plugin command path
+    // ====================================================
     auto it = commandMap.find(cmd);
     if (it != commandMap.end())
     {
@@ -154,7 +106,9 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
         }
     }
 
-    // --- 2. Attempt learned-command lookup (non-breaking) ---
+    // ====================================================
+    // 2. Learned-command lookup
+    // ====================================================
     try {
         auto learned = g_memoryStorage.findLearnedCommand(cmd);
         if (learned.has_value()) {
@@ -165,7 +119,9 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
         LOG_ERROR("Dispatch", std::string("Learned-command lookup failed: ") + e.what());
     }
 
-    // --- 2.5. Record unknown command for analysis ---
+    // ====================================================
+    // 3. Record unknown command
+    // ====================================================
     try {
         GRIM::MemoryObject unknown;
         unknown.id = GRIM::MemoryObject::generateUUID();
@@ -187,7 +143,61 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
         LOG_ERROR("Dispatch", std::string("Failed to record unknown command: ") + e.what());
     }
 
-    // --- 2.7. Clarify unknown ---
+    // ====================================================
+    // 4. Try RL bridge reasoning
+    // ====================================================
+    try {
+        nlohmann::json obs = {
+            {"type","unknown_command"},
+            {"input", cmd + " " + arg},
+            {"context", longTermMemory}
+        };
+
+        auto rlRes = GRIM::RL::getAction(obs);
+        if (rlRes.contains("suggested_command")) {
+            std::string inferred = rlRes["suggested_command"].get<std::string>();
+            LOG_DEBUG("RL", "RL suggested command: " + inferred);
+            return dispatchCommand(inferred, arg);
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("Dispatch", std::string("RL reasoning failed: ") + e.what());
+    }
+
+    // ====================================================
+    // 5. AI reasoning fallback — try to infer or converse
+    // ====================================================
+    try {
+        LOG_TRACE("Dispatch", "Calling ai_interpret() for unknown command...");
+        CommandResult aiRes = ai_interpret(cmd + " " + arg, true);
+
+        if (aiRes.success && aiRes.category == "command_infer")
+        {
+            std::string inferred = GRIMInput::normalizeCommand(aiRes.message);
+            LOG_DEBUG("AI", "AI inferred new command: " + inferred);
+
+            g_memoryStorage.storeLearnedCommand(cmd, inferred, 0.75f);
+            g_learnedCommandMap[cmd] = inferred;
+            commandMap[cmd] = handleLearnedCommand;
+
+            std::string resp = ResponseManager::get(
+                "Got it — I've learned that \"" + cmd + "\" means \"" + inferred + "\".");
+            history.push(resp, sf::Color::Green);
+            Voice::speak(resp, "learned");
+
+            return {"Learned new command: " + inferred, true, sf::Color::Green, "ERR_NONE"};
+        }
+        else if (aiRes.success && aiRes.category == "conversation")
+        {
+            LOG_DEBUG("AI", "AI interpret returned conversational intent.");
+            return aiRes;
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("Dispatch", std::string("AI fallback failed: ") + e.what());
+    }
+
+    // ====================================================
+    // 6. Clarification fallback
+    // ====================================================
     try {
         static std::string lastAsked;
         if (cmd != lastAsked && !cmd.empty()) {
@@ -225,6 +235,7 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
     return {"Unknown command: " + cmd, false, sf::Color::Red, "ERR_UNKNOWN_CMD"};
 }
 
+
 // ====================================================
 // handleCommand: central command + NLP hub
 // ====================================================
@@ -235,7 +246,7 @@ void handleCommand(const std::string& line)
     auto [cmdRaw, arg] = GRIMInput::parseInput(line);
     LOG_TRACE("HandleCommand", "Parsed → cmdRaw=\"" + cmdRaw + "\" arg=\"" + arg + "\"");
 
-    // Clarification handler
+    // === Clarification handler ===
     if (g_pendingClarifyCmd.has_value())
     {
         std::string phrase = g_pendingClarifyCmd.value();
@@ -260,10 +271,45 @@ void handleCommand(const std::string& line)
         return;
     }
 
+    // === Feedback handler ===
+    if (g_pendingFeedbackCmd.has_value())
+    {
+        std::string cmd = g_pendingFeedbackCmd.value();
+        std::string answer = GRIMInput::normalizeCommand(line);
+        answer.erase(std::remove_if(answer.begin(), answer.end(), ::ispunct), answer.end());
+        bool positive = (answer == "yes" || answer == "y" || answer == "yeah" || answer == "correct");
+        bool negative = (answer == "no" || answer == "n" || answer == "nope" || answer == "wrong");
+
+        if (positive || negative)
+        {
+            try {
+                nlohmann::json fb = {
+                    {"command", cmd},
+                    {"feedback", positive ? "positive" : "negative"},
+                    {"user_text", line}
+                };
+                GRIM::RL::getAction(fb);
+                LOG_DEBUG("Feedback", "User feedback recorded for \"" + cmd + "\": " + (positive ? "positive" : "negative"));
+            } catch (const std::exception& e) {
+                LOG_ERROR("Feedback", std::string("Error sending feedback to RL: ") + e.what());
+            }
+
+            std::string resp = ResponseManager::get(positive ? "Got it — I'll keep doing that."
+                                                             : "Understood — I’ll adjust next time.");
+            history.push(resp, positive ? sf::Color::Green : sf::Color::Yellow);
+            Voice::speak(resp, "feedback");
+            g_pendingFeedbackCmd.reset();
+            return;
+        }
+    }
+
+    // ====================================================
+    // Normal execution flow
+    // ====================================================
     history.push("> " + line, sf::Color::White);
     CommandResult result;
 
-    // RL pre-dispatch observation
+    // --- RL Pre-dispatch observation ---
     try {
         nlohmann::json obs = {
             {"input", line},
@@ -281,88 +327,32 @@ void handleCommand(const std::string& line)
         LOG_ERROR("RL", std::string("Pre-dispatch RL error: ") + e.what());
     }
 
+    // --- Dispatch ---
     if (commandMap.find(cmdRaw) != commandMap.end())
     {
-        LOG_TRACE("HandleCommand", "Direct command match: \"" + cmdRaw + "\"");
         result = dispatchCommand(cmdRaw, arg);
     }
     else
     {
-        LOG_TRACE("HandleCommand", "No direct match, running NLP parse...");
-
         std::string normalizedLine = GRIMInput::normalizeLine(line);
-        LOG_TRACE("HandleCommand", "Normalized line=\"" + normalizedLine + "\"");
-
         Intent intent = g_nlp.parse(normalizedLine);
         g_lastIntent = intent;
 
-        LOG_TRACE("NLP", "Intent name=\"" + intent.name + "\" matched=" +
-            (intent.matched ? "true" : "false") + " slots=" + std::to_string(intent.slots.size()));
-
-        for (const auto& [k, v] : intent.slots)
-            LOG_TRACE("NLP", "Slot[" + k + "]=\"" + v + "\"");
-
         std::string cmd = intent.matched ? intent.name : GRIMInput::normalizeCommand(cmdRaw);
 
-        if (intent.matched)
+        if (intent.matched && intent.slots.size())
         {
-            std::string slotArg;
-            if (intent.slots.count("app") && !intent.slots.at("app").empty())
-                slotArg = intent.slots.at("app");
-            else if (intent.slots.count("target") && !intent.slots.at("target").empty())
-                slotArg = intent.slots.at("target");
-            else
-                for (const auto& [k, v] : intent.slots)
-                    if (!v.empty()) { slotArg = v; break; }
-
-            if (!slotArg.empty())
-                arg = GRIMInput::cleanArg(slotArg);
+            for (const auto& [k, v] : intent.slots)
+                if (!v.empty()) { arg = GRIMInput::cleanArg(v); break; }
         }
 
-        LOG_TRACE("HandleCommand", "Final dispatch values → cmd=\"" + cmd + "\" arg=\"" + arg + "\"");
-
-        if (cmd == "open_app")
-        {
-            arg = GRIMInput::cleanArg(arg);
-            LOG_DEBUG("OpenApp", "Cleaned arg=\"" + arg + "\"");
-
-            std::string resolved;
-            try {
-                resolved = aliases::resolve(arg);
-            } catch (const std::exception& e) {
-                LOG_ERROR("OpenApp", "Alias resolution failed: " + std::string(e.what()));
-                resolved.clear();
-            }
-
-            if (resolved.empty())
-            {
-                int bestDist = 3;
-                std::string bestAlias;
-                for (const auto& [alias, target] : aliases::getAll()) {
-                    int dist = GRIMInput::normalizeCommand(arg) == alias ? 0 : 3;
-                    if (dist < bestDist) {
-                        bestDist = dist;
-                        bestAlias = alias;
-                        resolved = target;
-                    }
-                }
-                if (!resolved.empty())
-                    LOG_DEBUG("OpenApp", "Fuzzy matched \"" + arg + "\" → alias \"" + bestAlias + "\" → " + resolved);
-            }
-
-            if (resolved.empty())
-            {
-                LOG_DEBUG("OpenApp", "No alias found, using raw name: " + arg);
-                resolved = arg;
-            }
-
-            result = dispatchCommand("open_app", resolved);
-        }
-        else result = dispatchCommand(cmd, arg);
+        if (commandMap.find(cmd) != commandMap.end())
+            result = dispatchCommand(cmd, arg);
+        else
+            result = ai_interpret(line, true);
     }
 
-    if (result.message.empty())
-    {
+    if (result.message.empty()) {
         result.message = "[no response configured]";
         result.success = false;
         if (result.errorCode.empty()) result.errorCode = "ERR_NONE";
@@ -371,14 +361,20 @@ void handleCommand(const std::string& line)
     std::string finalText = ResponseManager::get(result.message);
     Logger::logResult(result);
     history.push(finalText, result.color);
-
-    LOG_DEBUG("HandleCommand", "Output → " + finalText);
     std::cout << finalText << std::endl;
 
     if (!result.voice.empty() && result.voice.find("[TRACE]") == std::string::npos)
         Voice::speak(result.voice, result.category.empty() ? "routine" : result.category);
 
-    // RL post-dispatch feedback
+    if (!g_pendingFeedbackCmd.has_value() && result.success && result.category != "conversation")
+    {
+        std::string ask = ResponseManager::get("Was that what you wanted?");
+        history.push(ask, sf::Color::Yellow);
+        Voice::speak(ask, "feedback");
+        g_pendingFeedbackCmd = cmdRaw;
+        LOG_DEBUG("Feedback", "Opened feedback prompt for command: " + cmdRaw);
+    }
+
     try {
         nlohmann::json feedback = {
             {"command", cmdRaw},

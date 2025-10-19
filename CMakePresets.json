@@ -12,17 +12,37 @@
       "description": "Build GRIM Debug configuration with vcpkg and CUDA 12.5",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/out/build",
+      "binaryDir": "${sourceDir}/out/build/",
       "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
-        "CMAKE_PREFIX_PATH": "C:/vcpkg/installed/x64-windows/share",
-        "glfw3_DIR": "C:/vcpkg/installed/x64-windows/share/glfw3",
-        "SFML_DIR": "C:/vcpkg/installed/x64-windows/share/sfml",
-        "CMAKE_CUDA_COMPILER": "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/bin/nvcc.exe",
-        "CMAKE_CUDA_ARCHITECTURES": "86",
-        "GGML_CUDA": "ON",
-        "CMAKE_BUILD_TYPE": "Debug"
-      }
+      "CMAKE_TOOLCHAIN_FILE": "D:/G.R.I.M/external/vcpkg/scripts/buildsystems/vcpkg.cmake",
+      "CMAKE_PREFIX_PATH": "D:/G.R.I.M/external/vcpkg/installed/x64-windows/share",
+      "glfw3_DIR": "D:/G.R.I.M/external/vcpkg/installed/x64-windows/share/glfw3",
+      "SFML_DIR": "D:/G.R.I.M/external/vcpkg/installed/x64-windows/share/sfml",
+      "CMAKE_CUDA_COMPILER": "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/bin/nvcc.exe",
+      "CMAKE_CUDA_ARCHITECTURES": "86",
+      "GGML_CUDA": "ON",
+      "CMAKE_BUILD_TYPE": "Debug"
+    }
+
+    },
+    {
+      "name": "release",
+      "displayName": "Release (VS2022 x64)",
+      "description": "Build GRIM Release configuration with vcpkg and CUDA 12.5",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/out/build/",
+      "cacheVariables": {
+      "CMAKE_TOOLCHAIN_FILE": "D:/G.R.I.M/external/vcpkg/scripts/buildsystems/vcpkg.cmake",
+      "CMAKE_PREFIX_PATH": "D:/G.R.I.M/external/vcpkg/installed/x64-windows/share",
+      "glfw3_DIR": "D:/G.R.I.M/external/vcpkg/installed/x64-windows/share/glfw3",
+      "SFML_DIR": "D:/G.R.I.M/external/vcpkg/installed/x64-windows/share/sfml",
+      "CMAKE_CUDA_COMPILER": "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/bin/nvcc.exe",
+      "CMAKE_CUDA_ARCHITECTURES": "86",
+      "GGML_CUDA": "ON",
+      "CMAKE_BUILD_TYPE": "Release"  
+    }
+
     }
   ],
 
@@ -33,6 +53,15 @@
       "displayName": "Build GRIM (Debug)",
       "description": "Builds GRIM with parallel jobs in Debug configuration",
       "configuration": "Debug",
+      "jobs": 0,
+      "inheritConfigureEnvironment": true
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "displayName": "Build GRIM (Release)",
+      "description": "Builds GRIM with parallel jobs in Release configuration",
+      "configuration": "Release",
       "jobs": 0,
       "inheritConfigureEnvironment": true
     }

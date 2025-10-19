@@ -9,7 +9,8 @@ endif()
 # Prevent nvcc debug build issues during compiler ID detection
 set(CMAKE_CUDA_FLAGS_INIT "-allow-unsupported-compiler -Xcompiler=/w")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS_INIT}" CACHE STRING "Initial CUDA flags" FORCE)
-
+set(GRIM_ROOT_DIR ${CMAKE_SOURCE_DIR} CACHE PATH "Root of GRIM project")
+add_compile_definitions(GRIM_ROOT_DIR="${GRIM_ROOT_DIR}")
 
 # =========================================================
 # GRIM Compiler & Build Configuration
@@ -80,3 +81,32 @@ set(GRIM_FONT_PATH "" CACHE STRING "Path to TTF font file for UI")
 if(NOT GRIM_FONT_PATH STREQUAL "")
     add_definitions(-DGRIM_FONT_PATH=\"${GRIM_FONT_PATH}\")
 endif()
+
+
+# =========================================================
+# Link Dependencies (static/import libraries)
+# =========================================================
+link_directories(
+    "${DEPS_LIB_DIR}"
+    "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/src/${CMAKE_CFG_INTDIR}"
+    "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bgfx/${CMAKE_CFG_INTDIR}"
+    "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bimg/${CMAKE_CFG_INTDIR}"
+    "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bx/${CMAKE_CFG_INTDIR}"
+)
+
+target_link_libraries(GRIM PRIVATE
+    # Core frameworks
+    sfml-system sfml-window sfml-graphics sfml-audio sfml-network
+
+    # Audio / Speech
+    portaudio
+    pv_porcupine
+    whisper
+
+    # HTTP / Networking
+    cpr
+
+    # Graphics backend
+    bgfx bimg bx
+)
+

@@ -1,83 +1,50 @@
 # =========================================================
-# G.R.I.M - Core Build Configuration (Safe Persistent Version)
+# G.R.I.M - Core Build Configuration (Unified Release)
 # =========================================================
 cmake_minimum_required(VERSION 3.22)
+
+set(VCPKG_FEATURE_FLAGS "manifests,versions" CACHE STRING "")
+set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/vcpkg_installed")
+include_directories("${VCPKG_INSTALLED_DIR}/x64-windows/include")
+link_directories("${VCPKG_INSTALLED_DIR}/x64-windows/lib")
+
 project(GRIM LANGUAGES CXX CUDA)
 
-# =========================================================
-# MSVC Compiler Conformance Fixes
-# =========================================================
 if (MSVC)
-    # Ensure accurate __cplusplus macro and modern preprocessor
     add_compile_options(/Zc:__cplusplus /Zc:preprocessor)
+    add_compile_options($<$<AND:$<CONFIG:Debug>,$<COMPILE_LANGUAGE:CXX>>:/FS>)
 endif()
 
-# =========================================================
-# BX Configuration Macro
-# =========================================================
-# BX expects one of these defines to be present; since we use prebuilt BX/BGFX
-# headers, we set it manually based on current configuration.
 add_compile_definitions(
     $<$<CONFIG:Debug>:BX_CONFIG_DEBUG=1>
     $<$<NOT:$<CONFIG:Debug>>:BX_CONFIG_DEBUG=0>
 )
 
-
-# =========================================================
-# Canonical GRIM Root Path (shared with runtime)
-# =========================================================
 set(GRIM_ROOT_DIR ${CMAKE_SOURCE_DIR} CACHE PATH "Root of GRIM project")
 add_compile_definitions(GRIM_ROOT_DIR="${GRIM_ROOT_DIR}")
 
-# =========================================================
-# MSVC Debug Fix → prevent PDB access conflicts in subprojects
-# =========================================================
-if (MSVC)
-    # Apply /FS only for normal C++ files, not CUDA ones
-    add_compile_options($<$<AND:$<CONFIG:Debug>,$<COMPILE_LANGUAGE:CXX>>:/FS>)
-endif()
-
-
-include_directories(${CMAKE_SOURCE_DIR}/external/porcupine/include)
-# =========================================================
-# CUDA Environment Sanity
-# =========================================================
 enable_language(CUDA OPTIONAL)
 
 if (CMAKE_CUDA_COMPILER)
     message(STATUS "[GRIM] Sanitizing CUDA environment...")
 
-    # Clean inherited flags that cause NVCC parse errors
     unset(CMAKE_CUDA_FLAGS CACHE)
     unset(CMAKE_CUDA_FLAGS_DEBUG CACHE)
     unset(CMAKE_CUDA_FLAGS_RELEASE CACHE)
 
-    # Apply clean CUDA defaults
     set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
     set(CMAKE_CUDA_ARCHITECTURES 86)
     set(CMAKE_CUDA_STANDARD 17)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
     set(CMAKE_CUDA_EXTENSIONS OFF)
 
-    # Disable CMAKE_INTDIR duplication
     add_compile_definitions($<$<COMPILE_LANGUAGE:CUDA>:_DISABLE_CMAKE_INTDIR_DEFS>)
 endif()
 
-# =========================================================
-# GRIM CUDA Compatibility Layer
-# =========================================================
 include(${CMAKE_SOURCE_DIR}/cmake/CudaFix.cmake)
 
-# =========================================================
-# CUDA Flag Sanitization
-# =========================================================
 if (CMAKE_CUDA_COMPILER)
-    string(REPLACE "-DCMAKE_INTDIR=Release" "" CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
-    string(REPLACE "-DCMAKE_INTDIR=\"Debug\"" "" CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
-    string(REPLACE "-D\"CMAKE_INTDIR=\\\"Debug\\\"\"" "" CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
-    string(REPLACE "-D\"CMAKE_INTDIR=\\\"Release\\\"\"" "" CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
-
-    foreach(var CMAKE_CUDA_FLAGS_DEBUG CMAKE_CUDA_FLAGS_RELEASE)
+    foreach(var CMAKE_CUDA_FLAGS CMAKE_CUDA_FLAGS_DEBUG CMAKE_CUDA_FLAGS_RELEASE)
         if(DEFINED ${var})
             string(REPLACE "-DCMAKE_INTDIR=Release" "" ${var} "${${var}}")
             string(REPLACE "-DCMAKE_INTDIR=\"Debug\"" "" ${var} "${${var}}")
@@ -87,30 +54,26 @@ if (CMAKE_CUDA_COMPILER)
     endforeach()
 endif()
 
-# =========================================================
-# Core Configuration & Sources
-# =========================================================
 include(cmake/Options.cmake)
-include(cmake/Config.cmake)
+
 include(cmake/Sources.cmake)
 
-# =========================================================
-# Core Configuration & Sources
-# =========================================================
-include(cmake/Options.cmake)
-include(cmake/Config.cmake)
-include(cmake/Sources.cmake)
-
-# =========================================================
-# Main GRIM Executable
-# =========================================================
 add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
+# Allow GRIM.exe to export symbols for possible plugin use
+set_target_properties(GRIM PROPERTIES ENABLE_EXPORTS ON)
 
-# Precompiled headers and includes
-# Precompiled headers and includes
+# Compile the core plugin directly into the host
+target_sources(GRIM PRIVATE ${CMAKE_SOURCE_DIR}/plugins/core_plugin.cpp)
+set_source_files_properties(
+    ${CMAKE_SOURCE_DIR}/plugins/core_plugin.cpp
+    PROPERTIES COMPILE_DEFINITIONS "GRIM_BUILD_HOST"
+)
+
+target_compile_definitions(GRIM PRIVATE GRIM_BUILD_HOST)
 target_precompile_headers(GRIM PRIVATE pch.hpp)
 
-# Add all internal include paths (for headers like bridge_manager.hpp)
+include(cmake/Config.cmake)
+
 target_include_directories(GRIM PRIVATE
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/core
@@ -125,53 +88,86 @@ target_include_directories(GRIM PRIVATE
     ${CMAKE_SOURCE_DIR}/bootstrap
     ${CMAKE_SOURCE_DIR}/device_setups
     ${CMAKE_SOURCE_DIR}/popup_ui
+    ${CMAKE_SOURCE_DIR}/deps/include
 )
 
-
-# Apply linker flags for MSVC
 if (MSVC)
     target_link_options(GRIM PRIVATE /SUBSYSTEM:CONSOLE)
 endif()
 
-# =========================================================
-# Dependencies & Resources (must come AFTER add_executable)
-# =========================================================
 include(${CMAKE_SOURCE_DIR}/cmake/Dependencies.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/Resources.cmake)
 
-# Link all dependencies safely
-
-
-# =========================================================
-# Final Target Properties
-# =========================================================
 set_target_properties(GRIM PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON
     CXX_EXTENSIONS OFF
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
-# =========================================================
-# Porcupine Wake Word SDK (manual integration)
-# =========================================================
+
 target_include_directories(GRIM PRIVATE
     ${CMAKE_SOURCE_DIR}/external/porcupine/include
 )
-
 target_link_directories(GRIM PRIVATE
     ${CMAKE_SOURCE_DIR}/external/porcupine/lib/windows/amd64
 )
+target_link_libraries(GRIM PRIVATE pv_porcupine)
 
-target_link_libraries(GRIM PRIVATE
-    pv_porcupine
-)
+# =========================================================
+# DLL Copy (Serialized / Unified)
+# =========================================================
+set(_runtime_dir "${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}")
 
-# Copy runtime DLL to GRIM output folder
+if (NOT DEFINED VCPKG_INSTALLED_DIR)
+    set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/external/vcpkg/installed")
+endif()
+set(_dll_dir_vcpkg "${VCPKG_INSTALLED_DIR}/x64-windows/bin")
+set(_dll_dir_whisper "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/bin")
+
 add_custom_command(TARGET GRIM POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E echo "[GRIM] Copying runtime DLLs..."
+
+    # Whisper / GGML (Debug + Release)
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${_dll_dir_whisper}/Debug"   "${_runtime_dir}"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${_dll_dir_whisper}/Release" "${_runtime_dir}"
+
+    # Vcpkg DLLs
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${_dll_dir_vcpkg}" "${_runtime_dir}"
+
+    # Porcupine
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    ${CMAKE_SOURCE_DIR}/external/porcupine/lib/windows/amd64/libpv_porcupine.dll
-    $<TARGET_FILE_DIR:GRIM>
+        "${CMAKE_SOURCE_DIR}/external/porcupine/lib/windows/amd64/libpv_porcupine.dll"
+        "${_runtime_dir}/libpv_porcupine.dll"
+
+    COMMAND ${CMAKE_COMMAND} -E echo "[GRIM] DLL copy complete."
 )
+
+# =========================================================
+#                   Whisper Linking
+# =========================================================
+set(WHISPER_LIB_DEBUG   "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/src/Debug")
+set(WHISPER_LIB_RELEASE "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/src/Release")
+
+target_link_directories(GRIM PRIVATE
+    $<$<CONFIG:Debug>:${WHISPER_LIB_DEBUG}>
+    $<$<CONFIG:Release>:${WHISPER_LIB_RELEASE}>
+)
+
+
+# =========================================================
+# BX / BIMG / BGFX Linking (Proper order + per-config paths)
+# =========================================================
+set(DEPS_LIB_DEBUG   "${CMAKE_SOURCE_DIR}/deps/lib/Debug")
+set(DEPS_LIB_RELEASE "${CMAKE_SOURCE_DIR}/deps/lib/Release")
+
+target_link_directories(GRIM PRIVATE
+    $<$<CONFIG:Debug>:${DEPS_LIB_DEBUG}>
+    $<$<CONFIG:Release>:${DEPS_LIB_RELEASE}>
+)
+
+# order: bx → bimg → bgfx
+target_link_libraries(GRIM PRIVATE bx bimg bgfx)
+target_link_libraries(GRIM PRIVATE whisper)
 
 
 message(STATUS "[GRIM] Build configuration complete.")

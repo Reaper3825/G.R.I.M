@@ -1,25 +1,21 @@
-#include "commands_ai.hpp" 
+#include "commands_ai.hpp"
 #include "response_manager.hpp"
 #include "error_manager.hpp"
 #include "system_detect.hpp"
-#include "aliases.hpp" 
+#include "aliases.hpp"
 #include "nlp/nlp.hpp"
 #include "ai/ai.hpp"
+#include "logger.hpp"  // ✅ Added
+
 #include <cpr/cpr.h>
 
 #ifdef _WIN32
   #include <shellapi.h>
 #endif
 
-// ====================================================
-// Externals
-// ====================================================
 extern nlohmann::json aiConfig;
-extern SystemInfo g_systemInfo; // populated at bootstrap
+extern SystemInfo g_systemInfo;
 
-// ====================================================
-// Helpers
-// ====================================================
 static std::string trim(const std::string& s) {
     auto start = s.find_first_not_of(" \t\n\r");
     auto end   = s.find_last_not_of(" \t\n\r");
@@ -37,9 +33,6 @@ static std::string autoSelectBackend() {
     return "openai";
 }
 
-// ====================================================
-// [AI] Select / show current backend
-// ====================================================
 CommandResult cmdAiBackend(const std::string& arg) {
     std::string input = trim(arg);
 
@@ -58,7 +51,7 @@ CommandResult cmdAiBackend(const std::string& arg) {
 
     if (selected == "ollama" || selected == "localai" || selected == "openai") {
         aiConfig["backend"] = selected;
-
+        LOG_TRACE("AI", "Backend set to: " + selected);
 
         return {
             "[AI] Backend set to: " + selected,
@@ -70,6 +63,7 @@ CommandResult cmdAiBackend(const std::string& arg) {
         };
     }
 
+    LOG_ERROR("AI", "Invalid backend: " + input);
     return {
         ErrorManager::getUserMessage("ERR_AI_INVALID_BACKEND") + ": " + input,
         false,
@@ -80,40 +74,31 @@ CommandResult cmdAiBackend(const std::string& arg) {
     };
 }
 
-// ====================================================
-// [NLP] Reload rules
-// ====================================================
 CommandResult cmdReloadNlp(const std::string& /*arg*/) {
+    LOG_PHASE("AI", "Reloading NLP rules");
     CommandResult r = reloadNlpRules();
     if (r.success) {
         r.voice = "NLP rules reloaded";
         r.category = "routine";
     } else {
+        LOG_ERROR("AI", "Failed to reload NLP rules");
         r.voice = "Failed to reload NLP rules";
         r.category = "error";
     }
     return r;
 }
 
-// ====================================================
-// [AI] General query (catch-all) → grim_ai
-// ====================================================
 CommandResult cmdGrimAi(const std::string& arg) {
-    std::cerr << "[AI] cmdGrimAi called with arg=\"" << arg << "\"\n";
+    LOG_TRACE("AI", "cmdGrimAi called with arg=\"" + arg + "\"");
 
-    // Resolve backend so logs are clear
     std::string backend = resolveBackendURL();
-    std::cerr << "[AI] Current backend resolved: " << backend << "\n";
+    LOG_DEBUG("AI", "Current backend resolved: " + backend);
 
-    // Special handling for Ollama backend
     if (backend == "ollama") {
         std::string model  = aiConfig.value("default_model", "mistral");
         std::string prompt = arg;
-
         std::string modelCopy = model;
-        if (modelCopy.find(':') == std::string::npos) {
-            modelCopy += ":latest"; 
-        }
+        if (modelCopy.find(':') == std::string::npos) modelCopy += ":latest";
 
         auto resp = cpr::Post(
             cpr::Url{ aiConfig.value("ollama_url", "http://127.0.0.1:11434") + "/api/generate" },
@@ -121,7 +106,7 @@ CommandResult cmdGrimAi(const std::string& arg) {
             cpr::Body{ nlohmann::json{
                 {"model", modelCopy},
                 {"prompt", prompt},
-                {"stream", false}   // 🔹 non-streaming mode
+                {"stream", false}
             }.dump() }
         );
 
@@ -129,18 +114,12 @@ CommandResult cmdGrimAi(const std::string& arg) {
             auto j = nlohmann::json::parse(resp.text, nullptr, false);
             if (!j.is_discarded() && j.contains("response")) {
                 std::string reply = j["response"].get<std::string>();
-
-                return {
-                    reply,
-                    true,
-                    sf::Color::Cyan,
-                    "ERR_NONE",
-                    reply,
-                    "routine"
-                };
+                LOG_TRACE("AI", "Ollama replied successfully");
+                return { reply, true, sf::Color::Cyan, "ERR_NONE", reply, "routine" };
             }
         }
 
+        LOG_ERROR("AI", "Ollama backend error");
         return {
             "[AI] Ollama backend error",
             false,
@@ -151,31 +130,25 @@ CommandResult cmdGrimAi(const std::string& arg) {
         };
     }
 
-    // 🔹 Run the default AI pipeline (localai / openai)
     CommandResult result = ai_process(arg);
 
-    // Make sure category + color are consistent
     if (result.category.empty()) result.category = "routine";
     if (result.color == sf::Color()) result.color = sf::Color::Cyan;
 
-    // If the AI failed, report error through ErrorManager
     if (!result.success) {
-        std::cerr << "[AI] grim_ai failed with code=" << result.errorCode << "\n";
+        LOG_ERROR("AI", "grim_ai failed with code=" + result.errorCode);
         return ErrorManager::report(result.errorCode);
     }
 
     return result;
 }
 
-// ====================================================
-// [Apps] Open local application by alias
-// ====================================================
 CommandResult cmdOpenApp(const std::string& arg) {
-    std::cerr << "[DEBUG][cmdOpenApp] Received arg=\"" << arg << "\"\n";
+    LOG_DEBUG("cmdOpenApp", "Received arg=\"" + arg + "\"");
 
     std::string appPath = arg;
     if (appPath.empty()) {
-        std::cerr << "[DEBUG][cmdOpenApp] ERROR: empty arg\n";
+        LOG_DEBUG("cmdOpenApp", "Empty argument");
         return {
             ErrorManager::getUserMessage("ERR_APP_NO_ARGUMENT"),
             false,
@@ -187,18 +160,10 @@ CommandResult cmdOpenApp(const std::string& arg) {
     }
 
 #ifdef _WIN32
-    HINSTANCE result = ShellExecuteA(
-        nullptr,
-        "open",
-        appPath.c_str(),
-        nullptr,
-        nullptr,
-        SW_SHOWNORMAL
-    );
+    HINSTANCE result = ShellExecuteA(nullptr, "open", appPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 
     if ((intptr_t)result <= 32) {
-        std::cerr << "[DEBUG][cmdOpenApp] ShellExecuteA failed (" 
-                  << (intptr_t)result << ") for: " << appPath << "\n";
+        LOG_ERROR("cmdOpenApp", "ShellExecuteA failed (" + std::to_string((intptr_t)result) + ") for: " + appPath);
         return {
             ErrorManager::getUserMessage("ERR_APP_LAUNCH_FAILED") + ": " + appPath,
             false,
@@ -209,35 +174,19 @@ CommandResult cmdOpenApp(const std::string& arg) {
         };
     }
 
-    std::cerr << "[DEBUG][cmdOpenApp] Successfully launched: " << appPath << "\n";
-    return {
-        "[App] Launched: " + appPath,
-        true,
-        sf::Color::Green,
-        "ERR_NONE",
-        "Opening " + appPath,
-        "routine"
-    };
+    LOG_DEBUG("cmdOpenApp", "Successfully launched: " + appPath);
+    return { "[App] Launched: " + appPath, true, sf::Color::Green, "ERR_NONE", "Opening " + appPath, "routine" };
 #else
-    std::cerr << "[DEBUG][cmdOpenApp] (Stub) Would open: " << appPath << "\n";
-    return {
-        "[App] (Stub) Would open: " + appPath,
-        true,
-        sf::Color::Green,
-        "ERR_NONE",
-        "Opening " + appPath,
-        "routine"
-    };
+    LOG_INFO("cmdOpenApp", "(Stub) Would open: " + appPath);
+    return { "[App] (Stub) Would open: " + appPath, true, sf::Color::Green, "ERR_NONE", "Opening " + appPath, "routine" };
 #endif
 }
 
-// ====================================================
-// [Web] Search the web with default browser
-// ====================================================
 CommandResult cmdSearchWeb(const std::string& arg) {
     std::string query = trim(arg);
 
     if (query.empty()) {
+        LOG_DEBUG("Web", "No search query provided");
         return {
             ErrorManager::getUserMessage("ERR_WEB_NO_ARGUMENT"),
             false,
@@ -249,13 +198,12 @@ CommandResult cmdSearchWeb(const std::string& arg) {
     }
 
     std::string url = "https://www.google.com/search?q=" + query;
+    LOG_DEBUG("Web", "Searching web for: " + query);
 
 #ifdef _WIN32
-    HINSTANCE result = ShellExecuteA(
-        nullptr, "open", url.c_str(),
-        nullptr, nullptr, SW_SHOWNORMAL
-    );
+    HINSTANCE result = ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     if ((intptr_t)result <= 32) {
+        LOG_ERROR("Web", "Failed to open browser for query: " + query);
         return {
             ErrorManager::getUserMessage("ERR_WEB_OPEN_FAILED") + ": " + query,
             false,
@@ -265,23 +213,8 @@ CommandResult cmdSearchWeb(const std::string& arg) {
             "error"
         };
     }
-    return {
-        "[Web] Searching: " + query,
-        true,
-        sf::Color::Cyan,
-        "ERR_NONE",
-        "Searching web for " + query,
-        "routine"
-    };
+    return { "[Web] Searching: " + query, true, sf::Color::Cyan, "ERR_NONE", "Searching web for " + query, "routine" };
 #else
-    // Linux/macOS stub
-    return {
-        "[Web] (Stub) Would search for: " + query,
-        true,
-        sf::Color::Cyan,
-        "ERR_NONE",
-        "Searching web for " + query,
-        "routine"
-    };
+    return { "[Web] (Stub) Would search for: " + query, true, sf::Color::Cyan, "ERR_NONE", "Searching web for " + query, "routine" };
 #endif
 }

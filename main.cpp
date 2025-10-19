@@ -26,6 +26,7 @@
 #include "core/window_manager.hpp"
 #include "helpers/mouse.hpp"
 #include "system_detect.hpp"
+#include "core/plugin_manager.hpp"
 
 GRIM::MemoryStorage g_memoryStorage;
 
@@ -44,11 +45,12 @@ nlohmann::json g_longTermMemory;
 // ============================================================
 int main(int argc, char* argv[])
 {
+
     // ======================================================
     // 1. Logger + mouse
     // ======================================================
     initLogger("grim.log");
-    LOG_PHASE("Starting G.R.I.M", true);
+    LOG_PHASE("Initializing G.R.I.M", true);
 
     Mouse::initialize();
     LOG_PHASE("Mouse initialized", true);
@@ -61,6 +63,9 @@ int main(int argc, char* argv[])
 
     aliases::init();
     LOG_PHASE("Aliases initialized", true);
+
+    PluginManager::initialize("D:/G.R.I.M/plugins");
+    LOG_PHASE("Plugin manager initialized", true);
 
     // ======================================================
     // 4. Voice TTS + queue
@@ -104,6 +109,8 @@ int main(int argc, char* argv[])
 
 // Keep temp window hidden instead of destroying it
     ShowWindow(tempHwnd, SW_HIDE);
+    
+ 
 
 
     // ======================================================
@@ -111,7 +118,7 @@ int main(int argc, char* argv[])
     // ======================================================
     LOG_PHASE("Launching GRIM Console (BGFX)", true);
     std::thread consoleThread([]() {
-        GRIMConsole::runConsoleUI(1280, 720);
+        GRIMConsole::runConsoleUI(512, 720);
     });
     consoleThread.detach();
 

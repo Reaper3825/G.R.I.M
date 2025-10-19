@@ -26,7 +26,7 @@ std::unordered_map<std::string, BridgeProcess> bridges;
 // Launch Python bridge
 // ===================================================
 bool BridgeManager::start(const std::string& id, const std::string& scriptPath) {
-    if (bridges.contains(id)) return true;
+    if (bridges.find(id) != bridges.end()) return true;
 
     SECURITY_ATTRIBUTES sa{ sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE };
     HANDLE stdinRead, stdoutWrite;
@@ -60,7 +60,7 @@ bool BridgeManager::start(const std::string& id, const std::string& scriptPath) 
 // Send JSON → Receive JSON
 // ===================================================
 nlohmann::json BridgeManager::send(const std::string& id, const nlohmann::json& msg) {
-    if (!bridges.contains(id)) return {{"error", "bridge not running"}};
+    if (bridges.find(id) == bridges.end()) return {{"error", "bridge not running"}};
 
     BridgeProcess& bp = bridges[id];
     std::lock_guard<std::mutex> lock(bp.ioMutex);
@@ -86,7 +86,7 @@ nlohmann::json BridgeManager::send(const std::string& id, const nlohmann::json& 
 // Stop a bridge
 // ===================================================
 void BridgeManager::stop(const std::string& id) {
-    if (!bridges.contains(id)) return;
+    if (bridges.find(id) == bridges.end()) return;
 
     BridgeProcess& bp = bridges[id];
     if (bp.procInfo.hProcess) {

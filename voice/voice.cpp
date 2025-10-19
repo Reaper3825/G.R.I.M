@@ -87,8 +87,17 @@ static bool ensureWhisperLoaded(const nlohmann::json& aiConfig) {
         return false;
     }
 
-    whisper_context_params wparams = whisper_context_default_params();
-    g_state.ctx = whisper_init_from_file_with_params(modelPath.string().c_str(), wparams);
+
+   whisper_context_params wparams = whisper_context_default_params();
+    wparams.use_gpu = true;  // enable GPU acceleration
+    LOG_DEBUG("Voice", std::string("Whisper GPU flag set: ") + (wparams.use_gpu ? "true" : "false"));
+
+    std::string modelPathUtf8(reinterpret_cast<const char*>(modelPath.u8string().c_str()));
+  // convert filesystem::path → UTF-8 
+    g_state.ctx = whisper_init_from_file_with_params(modelPathUtf8.c_str(), wparams);
+
+
+
     if (!g_state.ctx) {
         LOG_ERROR("Voice", "Failed to load Whisper model: " + modelPath.string());
         ErrorManager::report("ERR_VOICE_TRANSCRIBE_FAIL");
@@ -108,16 +117,18 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
 
     // Load thresholds from config
     g_silenceThreshold   = aiConfig["voice"].value("silence_threshold", 0.02f);
-    g_silenceTimeoutMs   = aiConfig["voice"].value("silence_timeout_ms", 4000);
-    g_state.minSpeechMs  = aiConfig["whisper"].value("min_speech_ms", 500);
-    g_state.minSilenceMs = aiConfig["whisper"].value("min_silence_ms", 1200);
+    g_silenceTimeoutMs   = aiConfig["voice"].value("silence_timeout_ms", 1200);
+    g_state.minSpeechMs  = aiConfig["whisper"].value("min_speech_ms", 400);
+    g_state.minSilenceMs = aiConfig["whisper"].value("min_silence_ms", 5000);
     g_state.inputDeviceIndex = aiConfig["voice"].value("input_device_index", -1);
 
     // 🔹 Ensure Whisper model is loaded
     if (!ensureWhisperLoaded(aiConfig)) {
+        
+
         return "";
     }
-
+    
     // Temporarily redirect stderr to silence PortAudio debug output
     int old_stderr = _dup(2); // dup stderr
     FILE* nul_file = fopen("nul", "w");
