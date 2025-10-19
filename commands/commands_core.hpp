@@ -5,6 +5,8 @@
 #include <vector>
 #include <SFML/Graphics.hpp>
 #include "intent.hpp"
+#include <functional>
+#include "core/plugin.hpp"
 
 // Forward declarations
 struct CommandResult;
@@ -28,7 +30,9 @@ struct CommandResult {
 // ====================================================
 // Function pointer type for commands
 // ====================================================
-using CommandFunc = CommandResult(*)(const std::string& arg);
+
+
+
 
 // ====================================================
 // Globals (declared here, defined in commands_core.cpp)

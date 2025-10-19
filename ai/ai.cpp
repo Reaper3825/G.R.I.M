@@ -224,6 +224,105 @@ CommandResult ai_process(const std::string& input) {
     result.voice   = result.message;
     return result;
 }
+// =========================================================
+// Unified AI interpreter — determines if input is a command or conversation
+// =========================================================
+CommandResult ai_interpret(const std::string& input, bool allowCommands)
+{
+    CommandResult result;
+    result.category = "ai_interpret";
+    result.color = sf::Color::Cyan;
+    result.success = false;
+    result.errorCode = "ERR_AI_INTERPRET_FAIL";
+
+    try {
+        // --- Build context prompt ---
+        std::string personalityPrefix = GRIM::PersonalityManager::generatePrefix();
+
+        std::string prompt =
+            personalityPrefix +
+            "You are GRIM, an AI companion and assistant. "
+            "Analyze the user's input and decide what type of response it requires.\n"
+            "Return JSON ONLY in the following format:\n"
+            "{ \"intent\": \"command\" | \"conversation\" | \"question\", "
+            "\"suggested_command\": string (if intent=command), "
+            "\"response\": string (if intent=conversation or question) }\n\n"
+            "Input: \"" + input + "\"\n"
+            "Context (memory excerpt): " +
+            longTermMemory.dump(1);
+
+        // --- Query backend (Mistral / LocalAI / OpenAI etc.) ---
+        std::string backend = resolveBackendURL();
+        std::string model   = aiConfig.value("default_model", "mistral");
+
+        LOG_DEBUG("AI", "ai_interpret backend=" + backend + " model=" + model);
+
+        std::string reply;
+
+        // Reuse the async infrastructure
+        auto future = callAIAsync(prompt);
+        reply = future.get();
+
+        // --- Parse model response as JSON ---
+        nlohmann::json j = nlohmann::json::parse(reply, nullptr, false);
+        if (j.is_discarded()) {
+            LOG_ERROR("AI", "Interpretation failed — non-JSON response: " + reply);
+            result.message = "[AI] Could not interpret input.";
+            result.voice = "Sorry, I couldn’t interpret that.";
+            return result;
+        }
+
+        // --- Route based on intent ---
+        std::string intent = j.value("intent", "conversation");
+
+        if (intent == "command" && allowCommands) {
+            std::string suggested = j.value("suggested_command", "");
+            if (!suggested.empty()) {
+                LOG_DEBUG("AI", "Interpreter inferred command: " + suggested);
+                result.message = suggested;
+                result.category = "command_infer";
+                result.success = true;
+                result.errorCode = "ERR_NONE";
+                return result;
+            }
+        }
+        else if (intent == "conversation" || intent == "question") {
+            std::string response = j.value("response", "");
+            if (!response.empty()) {
+                LOG_DEBUG("AI", "Interpreter conversational reply: " + response);
+                result.message = response;
+                result.voice = response;
+                result.category = "conversation";
+                result.success = true;
+                result.errorCode = "ERR_NONE";
+
+                // store context
+                longTermMemory["last_conversation"] = {
+                    {"input", input},
+                    {"reply", response},
+                    {"timestamp", std::time(nullptr)}
+                };
+                saveMemory();
+                return result;
+            }
+        }
+
+        // --- If all else fails ---
+        result.message = "[AI] I couldn’t determine your intent.";
+        result.voice = "I couldn’t determine your intent.";
+    }
+    catch (const std::exception& e) {
+        LOG_ERROR("AI", std::string("Exception in ai_interpret: ") + e.what());
+        result.message = "[AI] Interpretation error";
+        result.voice = "Something went wrong while interpreting.";
+    }
+
+    return result;
+}
+
+
+
+
 
 // =========================================================
 // Streaming / incremental AI call

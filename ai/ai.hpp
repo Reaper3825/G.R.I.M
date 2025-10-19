@@ -23,6 +23,7 @@ extern int    g_silenceTimeoutMs;  // Silence duration before timeout (ms)
 extern std::string g_whisperLanguage; 
 extern int         g_whisperMaxTokens;
 
+
 // ====================================================
 // Persistence functions
 // ====================================================
@@ -54,6 +55,8 @@ void warmupAI();
 // Synchronous + streaming AI wrappers
 // ====================================================
 CommandResult ai_process(const std::string& input);
+CommandResult ai_interpret(const std::string& input, bool allowCommands = true);
+
 
 void ai_process_stream(const std::string& input,
                        nlohmann::json& memory,

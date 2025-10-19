@@ -14,6 +14,7 @@
 #include "ai/ai.hpp"
 #include "voice/voice.hpp"
 #include "bootstrap/bootstrap_config.hpp"
+#include "core/input_parser.hpp"
 
 // ==== PortAudio ====
 #include <portaudio.h>
@@ -205,7 +206,7 @@ void start(ConsoleHistory* history,
         }
 
         LOG_PHASE("WakeVoice", "Listening for wake word...");
-
+        
         while (g_running.load()) {
             PaError r = Pa_ReadStream(stream, frame.data(), frameLen);
             if (r != paNoError) {
@@ -222,13 +223,42 @@ void start(ConsoleHistory* history,
 
                 Voice::speak("Yes?", "wake");
 
-                // Capture and process the user's spoken command (same as WakeKey)
-                std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
-                LOG_DEBUG("WakeVoice", "Captured voice transcript: " + transcript);
+            // Primary command capture
+            std::string transcript = Voice::runVoiceDemo(aiConfig, longTermMemory);
+            LOG_DEBUG("WakeVoice", "Captured voice transcript: " + transcript);
 
-                if (!transcript.empty()) {
-                    handleCommand(transcript); // unified command pipeline
+            // 🔍 diagnostic logging to locate latency
+            LOG_DEBUG("WakeVoice", "runVoiceDemo() finished — about to call handleCommand()");
+
+            if (!transcript.empty()) {
+                handleCommand(transcript);
+                LOG_DEBUG("WakeVoice", "handleCommand() returned successfully");
+            }
+
+
+            // --- 🔁 Stay open for short feedback replies ---
+            auto start = std::chrono::steady_clock::now();
+            while (std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::steady_clock::now() - start)
+                    .count() < 15) // wait up to 15 s
+            {
+                std::string follow = Voice::runVoiceDemo(aiConfig, longTermMemory);
+            if (!follow.empty()) {
+                std::string norm = GRIMInput::normalizeCommand(follow);
+                if (norm == "[blank_audio]" || norm == "blank" || norm == "audio")
+                {
+                    LOG_DEBUG("WakeVoice", "Ignoring blank or noise feedback: " + follow);
+                    continue; // keep listening
                 }
+
+                LOG_DEBUG("WakeVoice", "Follow-up speech: " + follow);
+                handleCommand(follow);
+                break; // process once valid feedback or new command arrives
+            }
+
+                Pa_Sleep(500);
+            }
+
 
                 g_listening = false;
 

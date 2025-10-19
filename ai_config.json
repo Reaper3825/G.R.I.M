@@ -12,7 +12,7 @@
   "silence_timeout_ms": 4000,
   "voice": {
     "coqui": {
-      "model": "tts_models/en/vctk/vits",
+      "model": "tts_models/en/ljspeech/tacotron2-DDC",
       "speaker": "p225"
     },
     "engine": "coqui",
@@ -29,13 +29,14 @@
       "voice": "en_US-amy-medium.onnx"
     },
     "speaker": "p225",
-    "speed": 1.0
+    "speed": 1.5
   },
   "whisper": {
     "min_silence_ms": 1200,
     "min_speech_ms": 500,
     "sampling_strategy": "beam",
-    "temperature": 0.2
+    "temperature": 0.2,
+    "whisper_model": "ggml-tiny.en.bin"
   },
   "whisper_language": "en",
   "whisper_max_tokens": 32

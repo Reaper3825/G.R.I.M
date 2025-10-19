@@ -1,16 +1,17 @@
 #include "commands/commands_system.hpp"
 #include "system_detect.hpp"
-#include "resources.hpp"       // 🔹 for history
+#include "resources.hpp"
 #include "error_manager.hpp"
+#include "logger.hpp"
 
 #include <SFML/Graphics.hpp>
-#include <iostream>
+#include <sstream>
 
 // Externals
 extern ConsoleHistory history;
 
 CommandResult cmdSystemInfo([[maybe_unused]] const std::string& arg) {
-    std::cerr << "[DEBUG][Command] Dispatch: system_info\n";
+    LOG_DEBUG("Command", "Dispatch: system_info");
 
     SystemInfo sys = detectSystem();
 
@@ -34,11 +35,11 @@ CommandResult cmdSystemInfo([[maybe_unused]] const std::string& arg) {
     output << "Suggested Whisper model: " << sys.suggestedModel << "\n";
 
     return {
-        output.str(),     // message (multi-line string)
-        true,             // success flag
-        sf::Color::Cyan,  // display color
-        "ERR_NONE",       // no error
-        "System information shown", // voice
-        "summary"                  // category
+        output.str(),
+        true,
+        sf::Color::Cyan,
+        "ERR_NONE",
+        "System information shown",
+        "summary"
     };
 }

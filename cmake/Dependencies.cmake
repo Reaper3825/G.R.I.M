@@ -1,202 +1,109 @@
 # =========================================================
-# G.R.I.M - Dependency Configuration
+# Dependencies.cmake — GRIM Runtime Library Management
 # =========================================================
-
-message(STATUS "[GRIM] Configuring dependencies...")
+# This file ensures all required runtime DLLs are copied into
+# the active build configuration directory after compilation.
+# Compatible with MSBuild, Ninja, and CLI cmake --build.
 
 # =========================================================
-#  Dependency Directories
+# Base runtime and dependency paths
 # =========================================================
-set(GRIM_DEPS_DIR "${CMAKE_SOURCE_DIR}/deps")
-set(GRIM_DEPS_INCLUDE "${GRIM_DEPS_DIR}/include")
-set(GRIM_DEPS_LIB "${GRIM_DEPS_DIR}/lib")
+set(_runtime_dir "${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}")
 
-if (EXISTS "${GRIM_DEPS_DIR}")
-    message(STATUS "[GRIM] Using consolidated dependency directory: ${GRIM_DEPS_DIR}")
-else()
-    message(WARNING "[GRIM] Dependency directory not found: ${GRIM_DEPS_DIR}")
+if (NOT DEFINED VCPKG_INSTALLED_DIR)
+    set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/external/vcpkg/installed")
 endif()
 
-# =========================================================
-#  SFML (via vcpkg)
-# =========================================================
-find_package(SFML CONFIG REQUIRED COMPONENTS System Window Graphics Audio Network)
+set(_dll_dir_vcpkg "${VCPKG_INSTALLED_DIR}/x64-windows/bin")
+set(_dll_dir_whisper "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/bin")
+set(_dll_dir_porcupine "${CMAKE_SOURCE_DIR}/external/porcupine/lib/windows/amd64")
 
 # =========================================================
-# Link All Dependencies
+# Helper macro for DLL copies
 # =========================================================
-target_link_libraries(GRIM PRIVATE
-    # Core Libraries
-    SFML::System
-    SFML::Window
-    SFML::Graphics
-    SFML::Audio
-    SFML::Network
-    glfw
-    bgfx
-    bx
-    bimg
-    cpr::cpr
-    nlohmann_json::nlohmann_json
-
-    # Audio + Speech
-    portaudio
-    whisper
-)
-
-# ---- GLFW ----
-find_package(glfw3 CONFIG REQUIRED)
-if (TARGET glfw3::glfw)
-    target_link_libraries(GRIM PRIVATE glfw3::glfw)
-elseif (TARGET glfw)
-    target_link_libraries(GRIM PRIVATE glfw)
-else()
-    message(FATAL_ERROR "[GRIM] GLFW target not found in vcpkg.")
-endif()
+function(grim_copy_dlls SRC_DIR)
+    foreach(_dll IN LISTS ARGN)
+        if (EXISTS "${SRC_DIR}/${_dll}")
+            add_custom_command(TARGET GRIM POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${SRC_DIR}/${_dll}"
+                    "${_runtime_dir}/${_dll}"
+                COMMENT "[GRIM] Copied ${_dll} → ${_runtime_dir}"
+            )
+        endif()
+    endforeach()
+endfunction()
 
 # =========================================================
-# Picovoice Porcupine (Wake-word Engine)
+# Whisper / GGML DLLs
 # =========================================================
-set(PORCUPINE_ROOT "${CMAKE_SOURCE_DIR}/external/porcupine")
-set(PORCUPINE_LIB_DIR "${PORCUPINE_ROOT}/lib/windows/amd64")
-set(PORCUPINE_LIB "${PORCUPINE_LIB_DIR}/pv_porcupine.lib")
-set(PORCUPINE_DLL "${PORCUPINE_LIB_DIR}/pv_porcupine.dll")
-set(PORCUPINE_INCLUDE "${PORCUPINE_ROOT}/include")
-
-if (EXISTS "${PORCUPINE_INCLUDE}/pv_porcupine.h" AND EXISTS "${PORCUPINE_LIB}")
-    message(STATUS "[GRIM] Linking Picovoice Porcupine from ${PORCUPINE_LIB_DIR}")
-
-    target_include_directories(GRIM PRIVATE "${PORCUPINE_INCLUDE}")
-    target_link_libraries(GRIM PRIVATE "${PORCUPINE_LIB}")
-
-add_custom_command(TARGET GRIM POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    ${CMAKE_SOURCE_DIR}/external/porcupine/lib/windows/amd64/libpv_porcupine.dll
-    $<TARGET_FILE_DIR:GRIM>
-)
-
-
-
-else()
-    message(WARNING "[GRIM] Porcupine SDK missing or incomplete at ${PORCUPINE_ROOT}")
-endif()
-
-
-# =========================================================
-#  OpenAL
-# =========================================================
-find_path(OPENAL_INCLUDE_DIR AL/al.h)
-find_library(OPENAL_LIBRARY OpenAL32)
-if (OPENAL_INCLUDE_DIR AND OPENAL_LIBRARY)
-    target_include_directories(GRIM PRIVATE ${OPENAL_INCLUDE_DIR})
-    target_link_libraries(GRIM PRIVATE ${OPENAL_LIBRARY})
-else()
-    message(WARNING "[GRIM] OpenAL not found — using fallback if available.")
-endif()
-
-# =========================================================
-#  CPR (via vcpkg, manifest-safe)
-# =========================================================
-find_package(cpr CONFIG REQUIRED)
-
-if (TARGET cpr::cpr)
-    message(STATUS "[GRIM] Found CPR target: cpr::cpr")
-    # Remove any accidental extra libraries from old config
-    target_link_libraries(GRIM PRIVATE cpr::cpr)
-else()
-    message(FATAL_ERROR "[GRIM] CPR target not found — check vcpkg manifest and toolchain settings")
-endif()
-
-# Force correct library search path (MSVC sometimes misses it in manifest mode)
-target_link_directories(GRIM PRIVATE "C:/vcpkg/installed/x64-windows/debug/lib")
-target_link_directories(GRIM PRIVATE "C:/vcpkg/installed/x64-windows/lib")
-
-
-# =========================================================
-#  nlohmann-json
-# =========================================================
-find_package(nlohmann_json CONFIG QUIET)
-if (nlohmann_json_FOUND)
-    target_link_libraries(GRIM PRIVATE nlohmann_json::nlohmann_json)
-else()
-    message(WARNING "[GRIM] nlohmann-json not found — using fallback if available.")
-endif()
-
-
-
-target_link_directories(GRIM PRIVATE ${CMAKE_SOURCE_DIR}/deps/lib)
-# =========================================================
-# BGFX / BX / BIMG
-# =========================================================
-set(GRIM_DEPS_LIB "${CMAKE_SOURCE_DIR}/deps/lib")
-
-if (EXISTS "${GRIM_DEPS_LIB}/bgfx.lib")
-    message(STATUS "[GRIM] Linking prebuilt BGFX libraries from ${GRIM_DEPS_LIB}")
-
-    # Add the deps/lib directory to the linker search path
-    target_link_directories(GRIM PRIVATE "${GRIM_DEPS_LIB}")
-
-    # Link all required static libs explicitly
-    target_link_libraries(GRIM PRIVATE
-        bgfx
-        bx
-        bimg
-    )
-else()
-    message(WARNING "[GRIM] BGFX libraries not found in ${GRIM_DEPS_LIB}")
-endif()
-
-# =========================================================
-# Whisper (Prebuilt)
-# =========================================================
-set(WHISPER_DIR "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build")
-set(WHISPER_LIB "${WHISPER_DIR}/src/Debug/whisper.lib")
-set(WHISPER_DLL "${WHISPER_DIR}/bin/Debug/whisper.dll")
-
-if (EXISTS "${WHISPER_LIB}")
-    message(STATUS "[GRIM] Linking prebuilt Whisper from ${WHISPER_DIR}")
-    target_link_libraries(GRIM PRIVATE "${WHISPER_LIB}")
-
-    # Copy whisper.dll next to GRIM.exe after build
-    add_custom_command(TARGET GRIM POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${WHISPER_DLL}"
-            "$<TARGET_FILE_DIR:GRIM>/whisper.dll"
-        COMMENT "[GRIM] Copied whisper.dll to output directory"
-    )
-else()
-    message(FATAL_ERROR "[GRIM] Prebuilt whisper.lib not found at ${WHISPER_LIB}")
-endif()
-
-
-# Copy all ggml runtime DLLs
-foreach(_dll IN ITEMS ggml.dll ggml-base.dll ggml-cpu.dll)
-    add_custom_command(TARGET GRIM POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${WHISPER_DIR}/bin/Debug/${_dll}"
-            "$<TARGET_FILE_DIR:GRIM>/${_dll}"
-        COMMENT "[GRIM] Copied ${_dll} to output directory"
+foreach(_cfg IN ITEMS Debug Release)
+    grim_copy_dlls("${_dll_dir_whisper}/${_cfg}"
+        ggml.dll
+        ggml-base.dll
+        ggml-cpu.dll
+        ggml-cuda.dll
+        whisper.dll
     )
 endforeach()
 
 # =========================================================
-#  Centralized Include Directory
+# Porcupine DLL
 # =========================================================
-target_include_directories(GRIM PRIVATE
-    ${GRIM_DEPS_INCLUDE}
+grim_copy_dlls("${_dll_dir_porcupine}"
+    libpv_porcupine.dll
 )
 
 # =========================================================
-#  Library Directory
+# SFML Core DLLs
 # =========================================================
-if (EXISTS "${GRIM_DEPS_LIB}")
-    message(STATUS "[GRIM] Adding library search path: ${GRIM_DEPS_LIB}")
-    link_directories(${GRIM_DEPS_LIB})
-else()
-    message(WARNING "[GRIM] Library directory not found: ${GRIM_DEPS_LIB}")
-endif()
+grim_copy_dlls("${_dll_dir_vcpkg}"
+    sfml-system.dll
+    sfml-window.dll
+    sfml-audio.dll
+    sfml-graphics.dll
+    sfml-network.dll
+)
 
 # =========================================================
-#  Finalization
+# PortAudio and CPR
 # =========================================================
-message(STATUS "[GRIM] Dependency configuration complete.")
+grim_copy_dlls("${_dll_dir_vcpkg}"
+    portaudio.dll
+    cpr.dll
+)
+
+# =========================================================
+# Audio codec libraries
+# =========================================================
+grim_copy_dlls("${_dll_dir_vcpkg}"
+    vorbis.dll
+    vorbisfile.dll
+    vorbisenc.dll
+    FLAC.dll
+    ogg.dll
+)
+
+# =========================================================
+# Graphics dependencies
+# =========================================================
+grim_copy_dlls("${_dll_dir_vcpkg}"
+    freetype.dll
+    libpng16.dll
+    zlib1.dll
+    libbz2.dll
+    jpeg62.dll
+)
+
+# =========================================================
+# OpenAL (Audio backend)
+# =========================================================
+grim_copy_dlls("${_dll_dir_vcpkg}"
+    OpenAL32.dll
+)
+
+
+# =========================================================
+# Final message
+# =========================================================
+message(STATUS "[GRIM] Dependencies.cmake runtime copy setup complete.")

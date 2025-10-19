@@ -133,5 +133,6 @@
     },
 
     // Stop VS Code from auto-detecting nested repos
-    "git.autoRepositoryDetection": false
+    "git.autoRepositoryDetection": false,
+    "makefile.makefilePath": "D:\\G.R.I.M\\CMakeLists.txt"
 }
