@@ -26,6 +26,9 @@
 #include "input_parser.hpp"
 #include "ai/ai.hpp"
 #include "core/plugin.hpp" // 🔹 Plugin system
+#include <crtdbg.h>
+
+#define CHECK_HEAP() _CrtCheckMemory()
 
 using Voice::speak;
 
@@ -40,7 +43,7 @@ static std::optional<std::string> g_pendingFeedbackCmd;
 extern nlohmann::json longTermMemory;
 extern nlohmann::json aiConfig;
 extern NLP g_nlp;
-extern ConsoleHistory history;
+#define history getConsoleHistory()
 extern GRIM::MemoryStorage g_memoryStorage;
 
 Intent g_lastIntent;
@@ -178,7 +181,7 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
             g_memoryStorage.storeLearnedCommand(cmd, inferred, 0.75f);
             g_learnedCommandMap[cmd] = inferred;
             commandMap[cmd] = handleLearnedCommand;
-
+            CHECK_HEAP();
             std::string resp = ResponseManager::get(
                 "Got it — I've learned that \"" + cmd + "\" means \"" + inferred + "\".");
             history.push(resp, sf::Color::Green);
