@@ -6,10 +6,11 @@
 #include <thread>
 #include <SFML/Audio.hpp>
 #include <iostream>
+#include <SFML/Audio/SoundBufferRecorder.hpp>
+#include <AL/al.h>
+#include <AL/alc.h>
+#include <cstring>
 
-// =========================================================
-// Platform headers
-// =========================================================
 #ifdef _WIN32
     #include <windows.h>
     #include <mmdeviceapi.h>
@@ -38,42 +39,84 @@
 #include <Wlanapi.h>
 #pragma comment(lib, "wlanapi.lib")
 
-
 LocationInfo g_location;
+
 // =========================================================
-//GeoIP location fetch
+// GeoIP location fetch (SAFE CPR version)
 // =========================================================
 static bool fetchLocationByIP(LocationInfo& loc) {
     try {
-        // ip-api.com — simple, no key, JSON response.
-        // NOTE: rate limits apply for heavy usage; swap for a paid provider if needed.
-        auto r = cpr::Get(cpr::Url{"http://ip-api.com/json/"}, cpr::Timeout{5000});
-        if (r.error || r.status_code != 200) {
+        LOG_DEBUG("SystemDetect", "Starting IP geolocation request...");
+
+        // --- Initialize CPR Session explicitly ---
+        cpr::Session session;
+        session.SetOption(cpr::Redirect{true});
+        session.SetUrl(cpr::Url{"http://ip-api.com/json/"}); 
+
+
+        session.SetTimeout(cpr::Timeout{5000});   // 5 s timeout
+
+        // --- Perform GET safely ---
+        cpr::Response r = session.Get();
+        
+
+        // --- Check for network or connection error ---
+        if (r.error) {
+            LOG_ERROR("SystemDetect",
+                std::string("CPR error: ") +
+                r.error.message + " (code " + std::to_string((int)r.error.code) + ")");
             return false;
         }
 
-        auto j = nlohmann::json::parse(r.text);
-        if (j.contains("status") && j["status"] == "success") {
-            loc.ip      = j.value("query", "");
-            loc.country = j.value("country", "");
-            loc.region  = j.value("regionName", "");
-            loc.city    = j.value("city", "");
-            loc.postal  = j.value("zip", "");
-            loc.lat     = j.value("lat", 0.0);
-            loc.lon     = j.value("lon", 0.0);
-            loc.isp     = j.value("isp", "");
-            return true;
+        // --- Validate HTTP status ---
+        if (r.status_code != 200) {
+            LOG_ERROR("SystemDetect",
+                "Location fetch failed: HTTP " + std::to_string(r.status_code));
+            return false;
         }
-    } catch (const std::exception& e) {
-        LOG_ERROR("SystemDetect", std::string("Location fetch exception: ") + e.what());
+
+        // --- Parse response safely ---
+        nlohmann::json j = nlohmann::json::parse(r.text, nullptr, false);
+        if (j.is_discarded()) {
+            LOG_ERROR("SystemDetect", "Invalid JSON in IP API response.");
+            return false;
+        }
+
+        if (!j.contains("status") || j["status"] != "success") {
+            std::string msg = j.contains("message") ? j["message"].get<std::string>() : "unknown";
+            LOG_ERROR("SystemDetect", "GeoIP lookup failed: " + msg);
+            return false;
+        }
+
+        // --- Populate LocationInfo ---
+        loc.ip      = j.value("query", "");
+        loc.country = j.value("country", "");
+        loc.region  = j.value("regionName", "");
+        loc.city    = j.value("city", "");
+        loc.postal  = j.value("zip", "");
+        loc.lat     = j.value("lat", 0.0);
+        loc.lon     = j.value("lon", 0.0);
+        loc.isp     = j.value("isp", "");
+
+        LOG_DEBUG("SystemDetect", "GeoIP success: " + loc.fullAddress());
+        return true;
     }
+    catch (const nlohmann::json::exception& e) {
+        LOG_ERROR("SystemDetect", std::string("JSON parse exception: ") + e.what());
+    }
+    catch (const std::exception& e) {
+        LOG_ERROR("SystemDetect", std::string("CPR/Network exception: ") + e.what());
+    }
+    catch (...) {
+        LOG_ERROR("SystemDetect", "Unknown fatal exception in fetchLocationByIP.");
+    }
+
     return false;
 }
 
-
-
-
-
+// =========================================================
+// Wi-Fi connection detection
+// =========================================================
 bool g_wifiConnected = false;
 static bool detectWifiConnected() {
     HANDLE hClient = nullptr;
@@ -121,9 +164,6 @@ static bool detectWindowsGPU(SystemInfo& info);
 static void detectMonitors(SystemInfo& info);
 #endif
 
-// =========================================================
-// Linux helpers
-// =========================================================
 #ifdef __linux__
 static bool commandExists(const char* cmd) {
     std::string check = "which " + std::string(cmd) + " > /dev/null 2>&1";
@@ -137,9 +177,6 @@ bool ensurePiperInstalled() {
 }
 #endif
 
-// =========================================================
-// Windows GPU detection (DXGI + WMI, NVIDIA-only)
-// =========================================================
 #ifdef _WIN32
 static bool detectWindowsGPU(SystemInfo& info) {
     IDXGIFactory* pFactory = nullptr;
@@ -172,7 +209,6 @@ static bool detectWindowsGPU(SystemInfo& info) {
 
     if (gpuCount == 0) return false;
 
-    // WMI driver version
     HRESULT hres = CoInitializeEx(0, COINIT_MULTITHREADED);
     if (SUCCEEDED(hres) || hres == RPC_E_CHANGED_MODE) {
         IWbemLocator* pLoc = nullptr;
@@ -200,9 +236,8 @@ static bool detectWindowsGPU(SystemInfo& info) {
                                 if (name.find("NVIDIA") != std::string::npos) {
                                     VARIANT vtDriver;
                                     if (SUCCEEDED(pclsObj->Get(L"DriverVersion", 0, &vtDriver, 0, 0))) {
-                                        if (vtDriver.vt == VT_BSTR) {
+                                        if (vtDriver.vt == VT_BSTR)
                                             info.gpuDriver = wideToUtf8(vtDriver.bstrVal);
-                                        }
                                         VariantClear(&vtDriver);
                                     }
                                 }
@@ -228,9 +263,6 @@ static bool detectWindowsGPU(SystemInfo& info) {
 }
 #endif
 
-// =========================================================
-// Windows Monitor detection
-// =========================================================
 #ifdef _WIN32
 BOOL CALLBACK MonitorEnumProc(HMONITOR hMon, HDC, LPRECT lprcMonitor, LPARAM dwData) {
     auto* info = reinterpret_cast<SystemInfo*>(dwData);
@@ -249,7 +281,6 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMon, HDC, LPRECT lprcMonitor, LPARAM dwD
         info->monitorCount++;
         info->hasMonitor = true;
 
-        // expand full virtual desktop bounds
         info->totalScreenWidth  = std::max<int>(info->totalScreenWidth,  mi.rcMonitor.right);
         info->totalScreenHeight = std::max<int>(info->totalScreenHeight, mi.rcMonitor.bottom);
     }
@@ -268,23 +299,51 @@ static void detectMonitors(SystemInfo& info) {
 }
 #endif
 
-// =========================================================
-// Output device selection (default only)
-// =========================================================
-static void selectOutputDevice(SystemInfo& info) {
-    // Just pick the default device to avoid blocking cin
-    info.outputDevice = sf::SoundBufferRecorder::getDefaultDevice();
+static void selectOutputDevice(SystemInfo& info)
+{
+    LOG_DEBUG("SystemDetect", "selectOutputDevice");
+    const ALCchar* raw = alcGetString(nullptr, ALC_DEFAULT_DEVICE_SPECIFIER);
+    std::string safeName = "Unknown";
 
+    if (raw)
+    {
+        // Copy up to first '\0' or 255 chars to prevent heap overwrite
+        char buffer[256];
+        std::memset(buffer, 0, sizeof(buffer));
+        std::strncpy(buffer, raw, sizeof(buffer) - 1);
+        safeName = buffer;
+    }
+
+    info.outputDevice = safeName;
     LOG_PHASE("Output device defaulted", true);
     LOG_DEBUG("SystemDetect", "Using default output device: " + info.outputDevice);
+    
+    // More robust handling of defaultDevice
+    std::string inputMessage = "Default (input): ";
+    
+    try {
+        std::string defaultDevice = sf::SoundBufferRecorder::getDefaultDevice();
+        
+        // Enhanced validation to check both that string is non-empty AND its buffer is valid
+        if (!defaultDevice.empty() && defaultDevice.c_str() != nullptr && defaultDevice.c_str()[0] != '\0') {
+            // Explicit string copy for safety instead of operator+=
+            inputMessage.append(defaultDevice.c_str());
+        } else {
+            inputMessage += "Not available";
+        }
+    } 
+    catch (...) {
+        inputMessage += "Not available (exception occurred)";
+    }
+    
+    LOG_DEBUG("SystemDetect", inputMessage);
 }
-
-
 // =========================================================
 // Main detection entry
 // =========================================================
 SystemInfo detectSystem() {
     SystemInfo info;
+
 
 #ifdef _WIN32
     info.osName = "Windows";
@@ -297,10 +356,9 @@ SystemInfo detectSystem() {
     info.osName = "Linux";
     info.hasPiper = ensurePiperInstalled();
 #endif
-LOG_DEBUG("SystemDetect", "Wi-Fi connected: " + std::string(g_wifiConnected ? "Yes" : "No"));
 
+    LOG_DEBUG("SystemDetect", "Wi-Fi connected: " + std::string(g_wifiConnected ? "Yes" : "No"));
 
-    // Architecture
 #if defined(__x86_64__) || defined(_M_X64)
     info.arch = "x86_64";
 #elif defined(__aarch64__)
@@ -311,10 +369,8 @@ LOG_DEBUG("SystemDetect", "Wi-Fi connected: " + std::string(g_wifiConnected ? "Y
     info.arch = "Unknown";
 #endif
 
-    // CPU
     info.cpuCores = std::thread::hardware_concurrency();
 
-    // RAM
 #ifdef _WIN32
     MEMORYSTATUSEX status;
     status.dwLength = sizeof(status);
@@ -327,19 +383,16 @@ LOG_DEBUG("SystemDetect", "Wi-Fi connected: " + std::string(g_wifiConnected ? "Y
     info.ramMB = mem / (1024 * 1024);
 #elif __linux__
     struct sysinfo sys;
-    if (sysinfo(&sys) == 0) {
+    if (sysinfo(&sys) == 0)
         info.ramMB = sys.totalram / (1024 * 1024);
-    }
 #endif
 
-    // GPU via CUDA
 #ifdef GGML_USE_CUBLAS
     int deviceCount = 0;
     if (cudaGetDeviceCount(&deviceCount) == cudaSuccess && deviceCount > 0) {
         info.hasGPU = true;
         info.hasCUDA = true;
         info.gpuCount = deviceCount;
-
         cudaDeviceProp prop;
         cudaGetDeviceProperties(&prop, 0);
         info.gpuName = prop.name;
@@ -347,39 +400,30 @@ LOG_DEBUG("SystemDetect", "Wi-Fi connected: " + std::string(g_wifiConnected ? "Y
     }
 #endif
 
-    // Windows fallback GPU detection
 #ifdef _WIN32
-    if (!info.hasGPU) {
-        detectWindowsGPU(info);
-    }
+    if (!info.hasGPU) detectWindowsGPU(info);
     detectMonitors(info);
 #endif
 
-    // macOS Metal
 #ifdef __APPLE__
     info.hasGPU = true;
     info.hasMetal = true;
 #endif
 
-    // Pick Whisper model
     info.suggestedModel = chooseWhisperModel(info);
-    
-    
+
     if (g_wifiConnected) {
-        if (!fetchLocationByIP(g_location)) {
+        if (!fetchLocationByIP(g_location))
             LOG_DEBUG("SystemDetect", "IP geolocation failed or timed out.");
-        } else {
+        else
             LOG_DEBUG("SystemDetect", "Location: " + g_location.fullAddress());
-        }
     } else {
         LOG_DEBUG("SystemDetect", "Skipping location fetch — Wi-Fi not connected.");
     }
-    // Choose audio output (interactive)
+
     selectOutputDevice(info);
-    
     return info;
 }
-
 // =========================================================
 // Logging
 // =========================================================
@@ -392,7 +436,7 @@ void logSystemInfo(const SystemInfo& info) {
 
     if (info.hasGPU) {
         LOG_DEBUG("SystemDetect", "GPU detected: " + info.gpuName +
-                 " (" + std::to_string(info.gpuCount) + " device(s))");
+            " (" + std::to_string(info.gpuCount) + " device(s))");
 
         if (info.gpuVRAM_MB > 0)
             LOG_DEBUG("SystemDetect", "VRAM: " + std::to_string(info.gpuVRAM_MB) + " MB");
@@ -427,8 +471,8 @@ void logSystemInfo(const SystemInfo& info) {
             );
         }
         LOG_DEBUG("SystemDetect", "Virtual desktop bounds: " +
-                  std::to_string(info.totalScreenWidth) + "x" +
-                  std::to_string(info.totalScreenHeight));
+            std::to_string(info.totalScreenWidth) + "x" +
+            std::to_string(info.totalScreenHeight));
     } else {
         LOG_DEBUG("SystemDetect", "No monitors detected.");
     }

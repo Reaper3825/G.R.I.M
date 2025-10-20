@@ -5,7 +5,12 @@
 #include <string>
 
 // Make this a true definition with external linkage (NO 'static')
-std::unordered_map<std::string, CommandFunc> commandMap;
+#if defined(GRIM_BUILD_PLUGIN)
+extern std::unordered_map<std::string, CommandFunc> commandMap; // plugin just references
+#else
+std::unordered_map<std::string, CommandFunc> commandMap;        // host owns it
+#endif
+
 static std::mutex regMutex;
 
 // ---------------- Host exports (stable ABI) ----------------

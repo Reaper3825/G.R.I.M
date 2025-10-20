@@ -21,8 +21,7 @@ void runBootstrapChecks(int argc, char** argv) {
     // ============================================================
     // Bootstrap start
     // ============================================================
-    promptForAudioDevice();
-    LOG_PHASE("Bootstrap begin", true);
+
 
     // ============================================================
     // Centralized config/memory bootstrap

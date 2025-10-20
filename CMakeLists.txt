@@ -105,6 +105,13 @@ set_target_properties(GRIM PROPERTIES
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 
+
+# =========================================================
+# Expose GRIM target to plugins
+# =========================================================
+add_library(GRIM_EXPORT INTERFACE)
+target_link_libraries(GRIM_EXPORT INTERFACE GRIM)
+
 target_include_directories(GRIM PRIVATE
     ${CMAKE_SOURCE_DIR}/external/porcupine/include
 )
@@ -114,15 +121,43 @@ target_link_directories(GRIM PRIVATE
 target_link_libraries(GRIM PRIVATE pv_porcupine)
 
 # =========================================================
-# DLL Copy (Serialized / Unified)
+# DLL Copy (Per-Configuration Safe)
 # =========================================================
 set(_runtime_dir "${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}")
 
 if (NOT DEFINED VCPKG_INSTALLED_DIR)
     set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/external/vcpkg/installed")
 endif()
-set(_dll_dir_vcpkg "${VCPKG_INSTALLED_DIR}/x64-windows/bin")
+
 set(_dll_dir_whisper "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/bin")
+set(_dll_dir_vcpkg_release "${VCPKG_INSTALLED_DIR}/x64-windows/bin")
+set(_dll_dir_vcpkg_debug   "${VCPKG_INSTALLED_DIR}/x64-windows/debug/bin")
+
+# =========================================================
+# DLL Copy (Per-Configuration Safe)
+# =========================================================
+set(_runtime_dir "${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}")
+
+if (NOT DEFINED VCPKG_INSTALLED_DIR)
+    set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/external/vcpkg/installed")
+endif()
+
+set(_dll_dir_whisper "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/bin")
+set(_dll_dir_vcpkg_release "${VCPKG_INSTALLED_DIR}/x64-windows/bin")
+set(_dll_dir_vcpkg_debug   "${VCPKG_INSTALLED_DIR}/x64-windows/debug/bin")
+
+# =========================================================
+# DLL Copy (Per-Configuration Safe)
+# =========================================================
+set(_runtime_dir "${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}")
+
+if (NOT DEFINED VCPKG_INSTALLED_DIR)
+    set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/external/vcpkg/installed")
+endif()
+
+set(_dll_dir_whisper "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/bin")
+set(_dll_dir_vcpkg_release "${VCPKG_INSTALLED_DIR}/x64-windows/bin")
+set(_dll_dir_vcpkg_debug   "${VCPKG_INSTALLED_DIR}/x64-windows/debug/bin")
 
 add_custom_command(TARGET GRIM POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E echo "[GRIM] Copying runtime DLLs..."
@@ -131,8 +166,11 @@ add_custom_command(TARGET GRIM POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${_dll_dir_whisper}/Debug"   "${_runtime_dir}"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${_dll_dir_whisper}/Release" "${_runtime_dir}"
 
-    # Vcpkg DLLs
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${_dll_dir_vcpkg}" "${_runtime_dir}"
+    # Vcpkg DLLs (Config-specific)
+    COMMAND ${CMAKE_COMMAND} -E echo "[GRIM] Copying $<CONFIG> vcpkg DLLs..."
+    COMMAND ${CMAKE_COMMAND} -E copy_directory 
+        "$<IF:$<CONFIG:Debug>,${_dll_dir_vcpkg_debug},${_dll_dir_vcpkg_release}>"
+        "${_runtime_dir}"
 
     # Porcupine
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -164,10 +202,23 @@ target_link_directories(GRIM PRIVATE
     $<$<CONFIG:Debug>:${DEPS_LIB_DEBUG}>
     $<$<CONFIG:Release>:${DEPS_LIB_RELEASE}>
 )
-
 # order: bx → bimg → bgfx
 target_link_libraries(GRIM PRIVATE bx bimg bgfx)
 target_link_libraries(GRIM PRIVATE whisper)
+
+
+# =========================================================
+# Force using release OpenAL for all configurations
+# =========================================================
+set(_openal_release_lib "${VCPKG_INSTALLED_DIR}/x64-windows/lib/OpenAL32.lib")
+set(_openal_release_dll "${VCPKG_INSTALLED_DIR}/x64-windows/bin/OpenAL32.dll")
+
+target_link_libraries(GRIM PRIVATE "${_openal_release_lib}")
+
+add_custom_command(TARGET GRIM POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${_openal_release_dll}" "${CMAKE_BINARY_DIR}/$<CONFIG>/OpenAL32.dll"
+)
 
 
 message(STATUS "[GRIM] Build configuration complete.")

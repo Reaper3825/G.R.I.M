@@ -2,9 +2,16 @@
   "name": "grim",
   "version-string": "0.1.0",
   "dependencies": [
-    "sfml",
+    {
+      "name": "sfml",
+      "default-features": true,
+      "features": [ "audio" ]
+    },
     "openal-soft",
-    "cpr",
+    {
+      "name": "cpr",
+      "features": [ "ssl" ]
+    },
     "nlohmann-json",
     "portaudio",
     "glfw3"

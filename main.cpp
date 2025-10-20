@@ -27,6 +27,9 @@
 #include "helpers/mouse.hpp"
 #include "system_detect.hpp"
 #include "core/plugin_manager.hpp"
+#include <crtdbg.h>
+
+#define CHECK_HEAP() _CrtCheckMemory()
 
 GRIM::MemoryStorage g_memoryStorage;
 
@@ -51,13 +54,14 @@ int main(int argc, char* argv[])
     // ======================================================
     initLogger("grim.log");
     LOG_PHASE("Initializing G.R.I.M", true);
-
+_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF | _CRTDBG_CHECK_ALWAYS_DF);
     Mouse::initialize();
     LOG_PHASE("Mouse initialized", true);
 
     // ======================================================
     // 3. Bootstrap + aliases
     // ======================================================
+    
     runBootstrapChecks(argc, argv);
     LOG_PHASE("Bootstrap checks complete", true);
 
@@ -196,5 +200,9 @@ int main(int argc, char* argv[])
     LOG_PHASE("All subsystems shut down", true);
     shutdownLogger();
     LOG_PHASE("G.R.I.M terminated successfully", true);
-    return 0;
+    std::_Exit(0);
+
+
+
+
 }

@@ -18,7 +18,9 @@ target_compile_definitions(core_plugin PRIVATE GRIM_BUILD_PLUGIN)
 
 # IMPORTANT: link the plugin against GRIM import lib so grim_register_command resolves
 # (GRIM must be an executable with ENABLE_EXPORTS ON)
-target_link_libraries(core_plugin PRIVATE GRIM)
+target_link_libraries(core_plugin PRIVATE GRIM_EXPORT)
+add_dependencies(core_plugin GRIM)
+
 
 set_target_properties(core_plugin PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/plugins"
