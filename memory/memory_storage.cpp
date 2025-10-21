@@ -112,6 +112,54 @@ std::optional<MemoryObject> MemoryStorage::findLearnedCommand(const std::string&
     return std::nullopt;
 }
 
+// ? Get all learned commands for prediction
+std::vector<MemoryObject> MemoryStorage::getAllLearnedCommands() {
+    std::scoped_lock lock(mtx);
+    std::vector<MemoryObject> results;
+
+    // Get from long-term memory
+    for (auto& [id, obj] : longTerm) {
+        if (obj.type == TypeTag::LearnedCommand) {
+            results.push_back(obj);
+        }
+    }
+
+    // Get from short-term memory
+    for (auto& obj : shortTerm) {
+        if (obj.type == TypeTag::LearnedCommand) {
+            results.push_back(obj);
+        }
+    }
+
+    return results;
+}
+
+// ? Get objects by tag
+std::vector<MemoryObject> MemoryStorage::getByTag(const std::string& tag) {
+    std::scoped_lock lock(mtx);
+    std::vector<MemoryObject> results;
+
+    auto hasTag = [&](const MemoryObject& obj) {
+        return std::find(obj.tags.begin(), obj.tags.end(), tag) != obj.tags.end();
+    };
+
+    // Search short-term first (more recent)
+    for (auto it = shortTerm.rbegin(); it != shortTerm.rend(); ++it) {
+        if (hasTag(*it)) {
+            results.push_back(*it);
+        }
+    }
+
+    // Then long-term
+    for (auto& [id, obj] : longTerm) {
+        if (hasTag(obj)) {
+            results.push_back(obj);
+        }
+    }
+
+    return results;
+}
+
 // =====================================
 // Maintenance
 // =====================================

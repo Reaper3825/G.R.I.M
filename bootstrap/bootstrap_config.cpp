@@ -55,7 +55,7 @@ nlohmann::json defaultAI() {
             {"local_engine", "en_US-amy-medium.onnx"},
             {"speaker", "p225"},
             {"speed", 1.0},
-            {"silence_threshold", 0.02},
+            {"silence_threshold", 0.015},  // ✅ Lowered from 0.02 to 0.015 for better sensitivity
             {"silence_timeout_ms", 1200},
             {"confidence_threshold", 0.6},
             {"filter_low_confidence", true},
@@ -130,7 +130,7 @@ nlohmann::json defaultErrors() {
             {"debug", "Alias lookup failed in user, auto, and fallback."}
         }},
 
-
+        // ✅ Voice-related errors
         {"ERR_VOICE_START", {
             {"user", "Listening..."},
             {"debug", "Voice recognition started successfully."}
@@ -142,6 +142,26 @@ nlohmann::json defaultErrors() {
         {"ERR_VOICE_STOP", {
             {"user", "Stopped listening."},
             {"debug", "Voice recognition stopped cleanly."}
+        }},
+        {"ERR_VOICE_NO_SPEECH", {
+            {"user", "No speech detected."},
+            {"debug", "Whisper listening timed out without detecting speech."}
+        }},
+        {"ERR_VOICE_NO_CONTEXT", {
+            {"user", "Voice system not initialized."},
+            {"debug", "Whisper context or audio device unavailable."}
+        }},
+        {"ERR_VOICE_NOT_INITIALIZED", {
+            {"user", "Voice recognition unavailable."},
+            {"debug", "Whisper model failed to load or is missing."}
+        }},
+        {"ERR_VOICE_TRANSCRIBE_FAIL", {
+            {"user", "Could not transcribe speech."},
+            {"debug", "Whisper transcription failed during processing."}
+        }},
+        {"ERR_VOICE_STREAM_FAIL", {
+            {"user", "Voice streaming failed."},
+            {"debug", "Could not start voice streaming session."}
         }}
     };
 }

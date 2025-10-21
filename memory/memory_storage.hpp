@@ -24,6 +24,10 @@ public:
     void storeLearnedCommand(const std::string& phrase,
                              const std::string& action,
                              float confidence = 1.0f);
+    
+    // ? New methods for smart prediction
+    std::vector<MemoryObject> getAllLearnedCommands();
+    std::vector<MemoryObject> getByTag(const std::string& tag);
                              
     void decay(float rate);
     void flush();

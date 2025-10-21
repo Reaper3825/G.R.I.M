@@ -56,3 +56,6 @@ void ensureCorePluginsRegistered();
 // ====================================================
 std::string normalizeWord(const std::string& word);
 std::string normalizeLine(const std::string& line);
+
+// ✅ Check if feedback is currently pending
+bool hasPendingFeedback();

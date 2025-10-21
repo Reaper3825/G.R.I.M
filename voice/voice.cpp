@@ -62,6 +62,13 @@ static bool isSilence(const std::vector<float>& pcm) {
     for (float s : pcm) energy += s * s;
     energy /= pcm.size();
     double rms = std::sqrt(energy);
+    
+    // ✅ Log RMS for debugging
+    static int logCounter = 0;
+    if (++logCounter % 100 == 0) { // Log every 100th check to avoid spam
+        LOG_TRACE("Voice", "RMS: " + std::to_string(rms) + " (threshold: " + std::to_string(g_silenceThreshold) + ")");
+    }
+    
     return rms < g_silenceThreshold;
 }
 
@@ -185,7 +192,11 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
     std::vector<float> rollingBuffer;
     auto lastSpeech  = std::chrono::steady_clock::now();
     auto speechStart = lastSpeech;
+    auto listeningStart = std::chrono::steady_clock::now(); // ✅ Track total listening time
     bool inSpeech = false;
+    
+    // ✅ Maximum listening time (prevents infinite listening)
+    const int maxListeningMs = aiConfig["whisper"].value("max_listening_ms", 10000); // 10 seconds default
 
     while (true) {
         {
@@ -221,6 +232,16 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
                 }
             }
         }
+        
+        // ✅ Check if we've been listening too long without any speech
+        auto totalListeningTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - listeningStart).count();
+        
+        if (!inSpeech && totalListeningTime > maxListeningMs) {
+            LOG_DEBUG("Voice", "Max listening timeout reached (" + std::to_string(maxListeningMs) + "ms) - no speech detected");
+            break;
+        }
+        
         Pa_Sleep(50);
     }
 
@@ -286,13 +307,16 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
             }
         }
     }
+    
+    // Trim trailing space
     if (!transcript.empty() && transcript.back() == ' ')
         transcript.pop_back();
 
     if (!transcript.empty()) {
         LOG_DEBUG("Voice", "Heard speech: \"" + transcript + "\"");
     } else {
-        ErrorManager::report("ERR_VOICE_NO_SPEECH");
+        LOG_DEBUG("Voice", "No speech detected or recognized");
+        // Don't report error - silence is a valid state
     }
 
     return transcript;
