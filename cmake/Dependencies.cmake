@@ -102,6 +102,17 @@ grim_copy_dlls("${_dll_dir_vcpkg}"
     OpenAL32.dll
 )
 
+# --- Ensure correct OpenAL linkage ---
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_link_libraries(GRIM PRIVATE "${DEPS_LIB_DIR}/openal32.lib")
+else()
+    target_link_libraries(GRIM PRIVATE "${DEPS_LIB_DIR}/openal32.lib")
+endif()
+
+# --- Ensure runtime finds our DLL first ---
+set_target_properties(GRIM PROPERTIES
+    VS_DEBUGGER_ENVIRONMENT "PATH=${DEPS_BIN_DIR};%PATH%"
+)
 
 # =========================================================
 # Final message

@@ -2,7 +2,7 @@
 #include "logger.hpp"
 #include "popup_ui/popup_ui.hpp" 
 
-#include <SFML/Audio.hpp>
+#include "core/audio_core.hpp"
 #include <thread>
 #include <chrono>
 #include <filesystem>
@@ -26,32 +26,24 @@ namespace Voice {
     // =========================================================
     // Audio state
     // =========================================================
-    static std::vector<std::unique_ptr<sf::SoundBuffer>> activeBuffers;
-    static std::vector<std::unique_ptr<sf::Sound>> activeSounds;
+
 
     static std::string g_engine     = "coqui";
     static std::string g_speaker    = "p225";
     static double      g_speed      = 1.0;
     static fs::path    g_outputDir  = "D:/G.R.I.M/resources/tts_out";
     static std::unordered_map<std::string, std::string> g_rules;
-    std::unique_ptr<sf::Sound> Voice::g_activeSound = nullptr;
-    std::shared_ptr<sf::SoundBuffer> Voice::g_activeBuffer = nullptr;
-
-    bool Voice::isSpeaking() {
-        return g_activeSound && 
-               g_activeSound->getStatus() == sf::SoundSource::Status::Playing;
-    }
 
     // =========================================================
     // Bridge state
     // =========================================================
     static bool g_ttsReady = false;
 
-#ifdef _WIN32
+    #ifdef _WIN32
     static HANDLE hChildStdinWr = nullptr;
     static HANDLE hChildStdoutRd = nullptr;
     static PROCESS_INFORMATION piProcInfo{};
-#endif
+    #endif
 
     // =========================================================
     // Queue state
@@ -81,22 +73,10 @@ namespace Voice {
         return result;
     }
 
-    static void cleanupSounds() {
-        activeSounds.erase(
-            std::remove_if(activeSounds.begin(), activeSounds.end(),
-                [](const std::unique_ptr<sf::Sound>& s) {
-                    return s->getStatus() == sf::SoundSource::Status::Stopped;
-                }),
-            activeSounds.end()
-        );
-    }
 
-    bool isPlaying() {
-        for (const auto& s : activeSounds) {
-            if (s && s->getStatus() == sf::SoundSource::Status::Playing) return true;
-        }
-        return false;
-    }
+
+
+
 
 #ifdef _WIN32
     static std::string readLineFromBridge() {
@@ -343,33 +323,61 @@ namespace Voice {
         return g_ttsReady;
     }
 
-    // =========================================================
-    // Playback
-    // =========================================================
-    void playAudio(const std::string& path) {
-        try {
-            auto buffer = std::make_unique<sf::SoundBuffer>();
-            if (!buffer->loadFromFile(path)) {
-                LOG_ERROR("Voice/Audio", "Could not load file: " + path);
-                return;
-            }
+// =========================================================
+// Audio state and playback integration (AudioCore-based)
+// =========================================================
+namespace {
+    // Tracks whether GRIM is currently speaking (via AudioCore)
+    static std::atomic<bool> g_isSpeaking{false};
+}
 
-            auto sound = std::make_unique<sf::Sound>(*buffer);
-            sound->setVolume(100.f);
+bool Voice::isSpeaking() {
+    // Query AudioCore playback status
+    return Audio::isPlaying() || g_isSpeaking.load();
+}
 
-           notifyPopupActivity();
-           sound->play();
+// Old cleanup / SFML stubs replaced entirely
+static void cleanupSounds() {
+    // No-op (handled by AudioCore tracking)
+}
 
-            LOG_DEBUG("Voice/Audio", "Playing: " + path +
-                " (duration=" + std::to_string(buffer->getDuration().asSeconds()) + "s)");
+bool isPlaying() {
+    // Mirror AudioCore’s tracking state
+    return Audio::isPlaying();
+}
 
-            activeBuffers.push_back(std::move(buffer));
-            activeSounds.push_back(std::move(sound));
-            cleanupSounds();
-        } catch (const std::exception& e) {
-            LOG_ERROR("Voice/Audio", std::string("Exception: ") + e.what());
-        }
+// =========================================================
+// Voice playback bridge
+// =========================================================
+void playAudio(const std::string& path) {
+    if (!Audio::init()) {
+        LOG_ERROR("Voice/Audio", "PortAudio init failed.");
+        return;
     }
+
+    if (!std::filesystem::exists(path)) {
+        LOG_ERROR("Voice/Audio", "File not found: " + path);
+        return;
+    }
+
+    notifyPopupActivity();
+    g_isSpeaking = true;
+
+    LOG_DEBUG("Voice/Audio", "Playing via AudioCore: " + path);
+    if (!Audio::playWav(path)) {
+        LOG_ERROR("Voice/Audio", "AudioCore playback failed for: " + path);
+    }
+
+    // Block until playback finishes (non-threaded mode)
+    while (Audio::isPlaying()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    g_isSpeaking = false;
+    LOG_DEBUG("Voice/Audio", "Playback complete for: " + path);
+}
+
+
 
     // =========================================================
     // Coqui Speak

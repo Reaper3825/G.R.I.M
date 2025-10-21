@@ -4,12 +4,9 @@
 #include <nlohmann/json.hpp>
 #include <cstdlib>
 #include <thread>
-#include <SFML/Audio.hpp>
 #include <iostream>
-#include <SFML/Audio/SoundBufferRecorder.hpp>
-#include <AL/al.h>
-#include <AL/alc.h>
-#include <cstring>
+#include "core/audio_core.hpp"
+
 
 #ifdef _WIN32
     #include <windows.h>
@@ -299,51 +296,19 @@ static void detectMonitors(SystemInfo& info) {
 }
 #endif
 
-static void selectOutputDevice(SystemInfo& info)
-{
-    LOG_DEBUG("SystemDetect", "selectOutputDevice");
-    const ALCchar* raw = alcGetString(nullptr, ALC_DEFAULT_DEVICE_SPECIFIER);
-    std::string safeName = "Unknown";
-
-    if (raw)
-    {
-        // Copy up to first '\0' or 255 chars to prevent heap overwrite
-        char buffer[256];
-        std::memset(buffer, 0, sizeof(buffer));
-        std::strncpy(buffer, raw, sizeof(buffer) - 1);
-        safeName = buffer;
-    }
-
-    info.outputDevice = safeName;
+static void selectOutputDevice(SystemInfo& info) {
+    info.outputDevice = Audio::getDefaultOutput();
     LOG_PHASE("Output device defaulted", true);
     LOG_DEBUG("SystemDetect", "Using default output device: " + info.outputDevice);
-    
-    // More robust handling of defaultDevice
-    std::string inputMessage = "Default (input): ";
-    
-    try {
-        std::string defaultDevice = sf::SoundBufferRecorder::getDefaultDevice();
-        
-        // Enhanced validation to check both that string is non-empty AND its buffer is valid
-        if (!defaultDevice.empty() && defaultDevice.c_str() != nullptr && defaultDevice.c_str()[0] != '\0') {
-            // Explicit string copy for safety instead of operator+=
-            inputMessage.append(defaultDevice.c_str());
-        } else {
-            inputMessage += "Not available";
-        }
-    } 
-    catch (...) {
-        inputMessage += "Not available (exception occurred)";
-    }
-    
-    LOG_DEBUG("SystemDetect", inputMessage);
 }
+
+
+
 // =========================================================
 // Main detection entry
 // =========================================================
 SystemInfo detectSystem() {
     SystemInfo info;
-
 
 #ifdef _WIN32
     info.osName = "Windows";
@@ -456,8 +421,9 @@ void logSystemInfo(const SystemInfo& info) {
     LOG_DEBUG("SystemDetect", "  macOS say:   " + std::string(info.hasSay ? "Yes" : "No"));
     LOG_DEBUG("SystemDetect", "  Linux Piper: " + std::string(info.hasPiper ? "Yes" : "No"));
 
-    LOG_DEBUG("SystemDetect", "Default (input): " + sf::SoundBufferRecorder::getDefaultDevice());
-    LOG_DEBUG("SystemDetect", "Selected (output): " + info.outputDevice);
+    LOG_DEBUG("SystemDetect", "Default input: " + Audio::getDefaultInput());
+    LOG_DEBUG("SystemDetect", "Default output: " + info.outputDevice);
+
 
     if (info.hasMonitor) {
         LOG_DEBUG("SystemDetect", "Monitors detected: " + std::to_string(info.monitorCount));

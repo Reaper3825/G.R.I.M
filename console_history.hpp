@@ -1,9 +1,12 @@
 #pragma once
-#include <SFML/Graphics.hpp>
 #include <mutex>
 #include <deque>
 #include <vector>
 #include <string>
+#include <SFML/Graphics.hpp>
+
+
+
 
 class ConsoleHistory {
 public:
