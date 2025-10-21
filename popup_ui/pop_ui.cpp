@@ -15,6 +15,12 @@
 #include "core/ui_sync.hpp"
 
 // ===========================================================
+// Forward declarations
+// ===========================================================
+void showPopup();
+void hidePopup();
+
+// ===========================================================
 // Constants
 // ===========================================================
 constexpr uint16_t POPUP_SIZE = 256;
@@ -180,10 +186,44 @@ void runPopupUI(int width, int height)
         }
 
         // ---------------------------------------------------
-        // Animation logic (no rendering)
+        // Animation logic - voice-reactive
         // ---------------------------------------------------
+        bool isSpeaking = Voice::isSpeaking();
+        
+        // Update visibility animation
         if (g_popupVisible)
             updateAnim(g_anim, g_popupVisible, dt, 0.08f);
+        
+        // Update voice-reactive animation (pulse, breathe, scale)
+        updateVoiceAnim(g_anim, isSpeaking, dt);
+        
+        // Apply animation to window visuals (scale, alpha)
+        if (g_popupVisible && g_hwnd)
+        {
+            applyAnimationToWindow(g_hwnd, POPUP_SIZE, POPUP_SIZE, 
+                                   g_anim.scale, g_anim.alpha);
+            
+            // Debug logging (every 60 frames = ~1 second)
+            static int frameCounter = 0;
+            if (++frameCounter >= 60)
+            {
+                LOG_DEBUG("PopupAnim", "scale=" + std::to_string(g_anim.scale) + 
+                          ", alpha=" + std::to_string(g_anim.alpha) +
+                          ", pulse=" + std::to_string(g_anim.pulse) +
+                          ", intensity=" + std::to_string(g_anim.voiceIntensity) +
+                          ", speaking=" + std::to_string(isSpeaking));
+                frameCounter = 0;
+            }
+        }
+        
+        // Show popup automatically when voice starts speaking
+        if (isSpeaking && !g_popupVisible)
+        {
+            LOG_DEBUG("PopupUI", "Voice started speaking - showing popup");
+            showPopup();
+            g_idleTimerMs = 5000; // Stay visible for 5s after speech
+            g_idleStart = std::chrono::steady_clock::now();
+        }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
@@ -232,4 +272,31 @@ void notifyPopupActivity()
     g_idleTimerMs = 3000;
     g_idleStart = std::chrono::steady_clock::now();
     LOG_DEBUG("PopupUI", "Idle timer reset to " + std::to_string(g_idleTimerMs) + "ms");
+}
+
+// Get current animation state (for rendering)
+PopupAnimState getPopupAnimState()
+{
+    return g_anim;
+}
+
+// Get animation values (convenience functions)
+float getPopupAlpha()
+{
+    return g_anim.alpha;
+}
+
+float getPopupScale()
+{
+    return g_anim.scale;
+}
+
+float getPopupPulse()
+{
+    return g_anim.pulse;
+}
+
+bool isPopupVisible()
+{
+    return g_popupVisible.load();
 }

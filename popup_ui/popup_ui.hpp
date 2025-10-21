@@ -1,7 +1,7 @@
 #pragma once
 #include <windows.h>
+#include "popup_anim.hpp"
 #define WM_GRIM_SHOW_POPUP (WM_APP + 1)
-
 
 // ===========================================================
 // GRIM Popup UI Control Header
@@ -22,6 +22,14 @@ void hidePopup();
 // Notify the popup of user or system activity.
 // Resets idle timers and triggers display.
 void notifyPopupActivity();
+
+// Get animation state (for rendering)
+PopupAnimState getPopupAnimState();
+float getPopupAlpha();
+float getPopupScale();
+float getPopupPulse();
+bool isPopupVisible();
+
 namespace bx {
     void mtxSRT(
         float* result,
