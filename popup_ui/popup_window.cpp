@@ -305,3 +305,119 @@ void applyWindowAlphaIfReady(HWND hwnd, int width, int height, uint32_t frameIdx
     DeleteDC(hdcMem);
     ReleaseDC(nullptr, hdcScreen);
 }
+
+// ===========================================================
+// Apply animation to window (scale and alpha)
+// ===========================================================
+void applyAnimationToWindow(HWND hwnd, int width, int height, float scale, float alpha)
+{
+    if (!hwnd || !IsWindow(hwnd))
+        return;
+
+    // ------------------------------------------------------
+    // Get current alpha pixels
+    // ------------------------------------------------------
+    std::vector<uint8_t> pixelsCopy;
+    {
+        std::lock_guard<std::mutex> lock(g_alphaMutex);
+        if (!g_alphaReady.load() && g_alphaPixels.empty())
+            return;
+        pixelsCopy = g_alphaPixels;
+    }
+
+    if (pixelsCopy.empty())
+        return;
+
+    // ------------------------------------------------------
+    // Calculate scaled dimensions
+    // ------------------------------------------------------
+    int scaledWidth = static_cast<int>(width * scale);
+    int scaledHeight = static_cast<int>(height * scale);
+    
+    // Clamp to reasonable bounds
+    scaledWidth = std::max(50, std::min(scaledWidth, 512));
+    scaledHeight = std::max(50, std::min(scaledHeight, 512));
+
+    // ------------------------------------------------------
+    // Create scaled image with animation alpha applied
+    // ------------------------------------------------------
+    HDC hdcScreen = GetDC(nullptr);
+    HDC hdcMem = CreateCompatibleDC(hdcScreen);
+
+    BITMAPINFO bmi{};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = scaledWidth;
+    bmi.bmiHeader.biHeight = -scaledHeight; // top-down
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void* bits = nullptr;
+    HBITMAP hBmp = CreateDIBSection(hdcMem, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!hBmp)
+    {
+        DeleteDC(hdcMem);
+        ReleaseDC(nullptr, hdcScreen);
+        return;
+    }
+
+    // ------------------------------------------------------
+    // Scale and copy pixels with alpha applied (RGBA → BGRA)
+    // ------------------------------------------------------
+    uint8_t* dst = static_cast<uint8_t*>(bits);
+    for (int y = 0; y < scaledHeight; ++y)
+    {
+        for (int x = 0; x < scaledWidth; ++x)
+        {
+            // Map back to original coordinates
+            int srcX = (x * width) / scaledWidth;
+            int srcY = (y * height) / scaledHeight;
+            srcX = std::clamp(srcX, 0, width - 1);
+            srcY = std::clamp(srcY, 0, height - 1);
+            
+            int srcIdx = (srcY * width + srcX) * 4;
+            int dstIdx = (y * scaledWidth + x) * 4;
+
+            // Apply animation alpha to pixel alpha
+            uint8_t originalAlpha = pixelsCopy[srcIdx + 3];
+            uint8_t finalAlpha = static_cast<uint8_t>(originalAlpha * alpha);
+
+            dst[dstIdx + 0] = pixelsCopy[srcIdx + 2]; // B
+            dst[dstIdx + 1] = pixelsCopy[srcIdx + 1]; // G
+            dst[dstIdx + 2] = pixelsCopy[srcIdx + 0]; // R
+            dst[dstIdx + 3] = finalAlpha;              // A (with animation)
+        }
+    }
+
+    HBITMAP oldBmp = (HBITMAP)SelectObject(hdcMem, hBmp);
+
+    // ------------------------------------------------------
+    // Center the scaled window on screen
+    // ------------------------------------------------------
+    POINT winPos;
+    winPos.x = 50 - (scaledWidth - width) / 2;  // Keep centered
+    winPos.y = 50 - (scaledHeight - height) / 2;
+
+    SIZE wndSize{ scaledWidth, scaledHeight };
+    POINT srcPos{ 0, 0 };
+
+    BLENDFUNCTION blend{};
+    blend.BlendOp = AC_SRC_OVER;
+    blend.SourceConstantAlpha = 255;
+    blend.AlphaFormat = AC_SRC_ALPHA;
+
+    // ------------------------------------------------------
+    // Apply layered window update
+    // ------------------------------------------------------
+    UpdateLayeredWindow(
+        hwnd, hdcScreen, &winPos, &wndSize, hdcMem,
+        &srcPos, 0, &blend, ULW_ALPHA);
+
+    // ------------------------------------------------------
+    // Cleanup
+    // ------------------------------------------------------
+    SelectObject(hdcMem, oldBmp);
+    DeleteObject(hBmp);
+    DeleteDC(hdcMem);
+    ReleaseDC(nullptr, hdcScreen);
+}
