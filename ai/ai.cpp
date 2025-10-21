@@ -263,13 +263,23 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
         auto future = callAIAsync(prompt);
         reply = future.get();
 
+        // --- Early validation of reply ---
+        if (reply.empty() || reply.rfind("[AI] Backend call failed", 0) == 0) {
+            LOG_ERROR("AI", "Backend returned error or empty response: " + reply);
+            result.message = "[AI] Could not interpret input.";
+            result.voice = "Sorry, I couldn't interpret that.";
+            return result;
+        }
+
         // --- Parse model response as JSON ---
         nlohmann::json j = nlohmann::json::parse(reply, nullptr, false);
-        if (j.is_discarded()) {
+        
+        // ← FIX: Validate JSON before accessing it
+        if (j.is_discarded() || !j.is_object()) {
             LOG_ERROR("AI", "Interpretation failed — non-JSON response: " + reply);
             result.message = "[AI] Could not interpret input.";
-            result.voice = "Sorry, I couldn’t interpret that.";
-            return result;
+            result.voice = "Sorry, I couldn't interpret that.";
+            return result;  // ← Early return to avoid accessing discarded JSON
         }
 
         // --- Route based on intent ---
@@ -308,8 +318,8 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
         }
 
         // --- If all else fails ---
-        result.message = "[AI] I couldn’t determine your intent.";
-        result.voice = "I couldn’t determine your intent.";
+        result.message = "[AI] I couldn't determine your intent.";
+        result.voice = "I couldn't determine your intent.";
     }
     catch (const std::exception& e) {
         LOG_ERROR("AI", std::string("Exception in ai_interpret: ") + e.what());
@@ -319,10 +329,6 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
 
     return result;
 }
-
-
-
-
 
 // =========================================================
 // Streaming / incremental AI call

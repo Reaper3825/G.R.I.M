@@ -5,9 +5,10 @@
 // ===========================================================
 
 struct PopupAnimState {
-    float alpha   = 0.5f;   // 0 = hidden, 1 = shown
-    float scale   = 0.9f;   // start slightly smaller
+    float alpha   = 0.0f;   // 0 = hidden, 1 = shown (start hidden)
+    float scale   = 0.8f;   // start smaller for scale-in effect
     bool  showing = false;  // whether animation is expanding
+    bool  wasShowing = false; // track previous visibility state
     
     // Voice-reactive animation
     float pulse   = 0.0f;   // pulsing effect (0-1) when speaking

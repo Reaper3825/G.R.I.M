@@ -38,6 +38,7 @@ using Voice::speak;
 // ====================================================
 static std::optional<std::string> g_pendingClarifyCmd;
 static std::optional<std::string> g_pendingFeedbackCmd;
+static bool g_isMultiCommandContext = false;  // Track if we're in multi-command mode
 
 extern nlohmann::json longTermMemory;
 extern nlohmann::json aiConfig;
@@ -257,6 +258,59 @@ void handleCommand(const std::string& line)
 {
     LOG_TRACE("HandleCommand", "START line=\"" + line + "\"");
 
+    // Ensure core plugins are registered BEFORE any command lookup
+    ensureCorePluginsRegistered();
+
+    // ====================================================
+    // Multi-command detection and processing
+    // ====================================================
+    auto commands = GRIMInput::splitCommands(line);
+    if (commands.size() > 1)
+    {
+        LOG_DEBUG("HandleCommand", "Detected " + std::to_string(commands.size()) + " commands in voice input");
+        for (size_t i = 0; i < commands.size(); ++i)
+        {
+            LOG_DEBUG("HandleCommand", "  [" + std::to_string(i + 1) + "] \"" + commands[i] + "\"");
+        }
+        
+        // Safety check: limit max commands per input
+        int maxCommands = aiConfig["voice"].value("max_commands_per_input", 3);
+        if (commands.size() > static_cast<size_t>(maxCommands)) {
+            std::string warning = "Detected " + std::to_string(commands.size()) + 
+                                 " commands, but maximum is " + std::to_string(maxCommands) + 
+                                 ". Only processing first " + std::to_string(maxCommands) + ".";
+            LOG_DEBUG("HandleCommand", warning);
+            history.push("[Warning] " + warning, Colors::Yellow.toUInt());
+            commands.resize(maxCommands);
+        }
+        
+        // Set multi-command context to suppress feedback during batch processing
+        bool wasMultiContext = g_isMultiCommandContext;
+        g_isMultiCommandContext = true;
+        
+        // Process each command sequentially
+        std::vector<CommandResult> results;
+        for (const auto& cmd : commands)
+        {
+            handleCommand(cmd); // Recursive call for each sub-command
+        }
+        
+        // Restore context flag
+        g_isMultiCommandContext = wasMultiContext;
+        
+        // Only ask for feedback once after ALL commands complete
+        if (!wasMultiContext && !g_pendingFeedbackCmd.has_value())
+        {
+            std::string ask = "I processed " + std::to_string(commands.size()) + " commands. Was that correct?";
+            history.push(ask, Colors::Cyan.toUInt());
+            Voice::speak(ask, "feedback");
+            g_pendingFeedbackCmd = line; // Store the full multi-command line
+            LOG_DEBUG("Feedback", "Opened feedback prompt for multi-command batch");
+        }
+        
+        return;
+    }
+
     auto [cmdRaw, arg] = GRIMInput::parseInput(line);
     LOG_TRACE("HandleCommand", "Parsed → cmdRaw=\"" + cmdRaw + "\" arg=\"" + arg + "\"");
 
@@ -272,12 +326,27 @@ void handleCommand(const std::string& line)
             g_memoryStorage.storeLearnedCommand(phrase, action, 0.9f);
             g_pendingClarifyCmd.reset();
 
-            std::string resp = ResponseManager::get("Got it — I'll remember that next time.");
+            // ✅ ADDED: Feed this learning event back to RL
+            try {
+                nlohmann::json rlFeedback = {
+                    {"type", "clarification_resolved"},
+                    {"original_input", phrase},
+                    {"corrected_command", action},
+                    {"confidence", 0.9},
+                    {"learning_source", "user_clarification"}
+                };
+                GRIM::RL::getAction(rlFeedback);
+                LOG_DEBUG("RL", "Clarification learning signal sent: " + phrase + " → " + action);
+            } catch (const std::exception& e) {
+                LOG_ERROR("RL", std::string("Failed to send clarification to RL: ") + e.what());
+            }
+
+            std::string resp = "Got it — I'll remember that next time.";
             history.push(resp, Colors::Green.toUInt());
             Voice::speak(resp, "learned");
         } catch (const std::exception& e) {
             LOG_ERROR("LearnedCmd", std::string("Failed to store learned command: ") + e.what());
-            std::string resp = ResponseManager::get("I couldn't save that one — try again later.");
+            std::string resp = "I couldn't save that one — try again later.";
             history.push(resp, Colors::Red.toUInt());
             Voice::speak(resp, "error");
         }
@@ -290,9 +359,19 @@ void handleCommand(const std::string& line)
     {
         std::string cmd = g_pendingFeedbackCmd.value();
         std::string answer = GRIMInput::normalizeCommand(line);
-        answer.erase(std::remove_if(answer.begin(), answer.end(), ::ispunct), answer.end());
-        bool positive = (answer == "yes" || answer == "y" || answer == "yeah" || answer == "correct");
-        bool negative = (answer == "no" || answer == "n" || answer == "nope" || answer == "wrong");
+        
+        // Remove ALL whitespace and punctuation for matching
+        answer.erase(std::remove_if(answer.begin(), answer.end(), 
+            [](unsigned char c) { return std::isspace(c) || std::ispunct(c); }), answer.end());
+        
+        // Convert to lowercase
+        std::transform(answer.begin(), answer.end(), answer.begin(), ::tolower);
+        
+        bool positive = (answer == "yes" || answer == "y" || answer == "yeah" || answer == "correct" || answer == "yep" || answer == "yup");
+        bool negative = (answer == "no" || answer == "n" || answer == "nope" || answer == "wrong" || answer == "nah");
+
+        LOG_DEBUG("Feedback", "Feedback answer normalized: \"" + answer + "\" (positive=" + 
+                  std::to_string(positive) + ", negative=" + std::to_string(negative) + ")");
 
         if (positive || negative)
         {
@@ -308,13 +387,16 @@ void handleCommand(const std::string& line)
                 LOG_ERROR("Feedback", std::string("Error sending feedback to RL: ") + e.what());
             }
 
-            std::string resp = ResponseManager::get(positive ? "Got it — I'll keep doing that."
-                                                             : "Understood — I’ll adjust next time.");
+            std::string resp = positive ? "Got it — I'll keep doing that." : "Understood — I'll adjust next time.";
             history.push(resp, positive ? Colors::Green.toUInt() : Colors::Cyan.toUInt());
             Voice::speak(resp, "feedback");
             g_pendingFeedbackCmd.reset();
-            return;
+            return;  // Early return - don't process as command!
         }
+        
+        // If not a feedback response, let it fall through as normal command
+        LOG_DEBUG("Feedback", "Input not recognized as feedback response, treating as normal command");
+        g_pendingFeedbackCmd.reset();  // Clear feedback state
     }
 
     // ====================================================
@@ -323,26 +405,25 @@ void handleCommand(const std::string& line)
     history.push("> " + line, Colors::Default.toUInt());
     CommandResult result;
 
-    // --- RL Pre-dispatch observation ---
     // --- RL Pre-dispatch observation (Dynamic PPO Integration) ---
-try {
-    nlohmann::json obs = {
-        {"input", line},
-        {"command_raw", cmdRaw},
-        {"argument", arg},
-        {"context", longTermMemory},
-        {"mood", GRIM::ContextManager::getCurrentMood()}
-    };
+    try {
+        nlohmann::json obs = {
+            {"input", line},
+            {"command_raw", cmdRaw},
+            {"argument", arg},
+            {"context", longTermMemory},
+            {"mood", GRIM::ContextManager::getCurrentMood()}
+        };
 
-    nlohmann::json rlRes = GRIM::RL::getAction(obs);
+        nlohmann::json rlRes = GRIM::RL::getAction(obs);
 
-    if (rlRes.contains("suggested_command")) {
-        std::string suggested = rlRes["suggested_command"].get<std::string>();
-        if (commandMap.find(suggested) != commandMap.end()) {
-            LOG_DEBUG("RL", "Dynamic PPO suggested: " + suggested);
-            cmdRaw = suggested;
+        if (rlRes.contains("suggested_command")) {
+            std::string suggested = rlRes["suggested_command"].get<std::string>();
+            if (commandMap.find(suggested) != commandMap.end()) {
+                LOG_DEBUG("RL", "Dynamic PPO suggested: " + suggested);
+                cmdRaw = suggested;
+            }
         }
-    }
     } catch (const std::exception& e) {
         LOG_ERROR("RL", std::string("Pre-dispatch RL error: ") + e.what());
     }
@@ -350,10 +431,13 @@ try {
     // --- Dispatch ---
     if (commandMap.find(cmdRaw) != commandMap.end())
     {
+        LOG_DEBUG("HandleCommand", "Found command in map: \"" + cmdRaw + "\"");
         result = dispatchCommand(cmdRaw, arg);
     }
     else
     {
+        LOG_DEBUG("HandleCommand", "Command \"" + cmdRaw + "\" NOT in map, trying NLP...");
+        
         std::string normalizedLine = GRIMInput::normalizeLine(line);
         Intent intent = g_nlp.parse(normalizedLine);
         g_lastIntent = intent;
@@ -366,10 +450,17 @@ try {
                 if (!v.empty()) { arg = GRIMInput::cleanArg(v); break; }
         }
 
+        LOG_DEBUG("HandleCommand", "After normalization: cmd=\"" + cmd + "\"");
         if (commandMap.find(cmd) != commandMap.end())
+        {
+            LOG_DEBUG("HandleCommand", "Found normalized command in map: \"" + cmd + "\"");
             result = dispatchCommand(cmd, arg);
+        }
         else
+        {
+            LOG_DEBUG("HandleCommand", "No match found, sending to AI interpret");
             result = ai_interpret(line, true);
+        }
     }
 
     if (result.message.empty()) {
@@ -386,26 +477,31 @@ try {
     if (!result.voice.empty() && result.voice.find("[TRACE]") == std::string::npos)
         Voice::speak(result.voice, result.category.empty() ? "routine" : result.category);
 
-    if (!g_pendingFeedbackCmd.has_value() && result.success && result.category != "conversation")
+    // Only ask for feedback if NOT in multi-command context AND command was successful
+    if (!g_isMultiCommandContext && !g_pendingFeedbackCmd.has_value() && result.success && result.category != "conversation")
     {
-        std::string ask = ResponseManager::get("Was that what you wanted?");
+        std::string ask = "Was that what you wanted?";  // Direct string, no ResponseManager
         history.push(ask, Colors::Cyan.toUInt());
         Voice::speak(ask, "feedback");
         g_pendingFeedbackCmd = cmdRaw;
         LOG_DEBUG("Feedback", "Opened feedback prompt for command: " + cmdRaw);
     }
+    else if (!result.success && result.errorCode != "ERR_UNKNOWN_CMD")
+    {
+        // Don't ask for feedback on errors - just log them
+        LOG_DEBUG("Feedback", "Skipping feedback for failed command: " + cmdRaw + " (" + result.errorCode + ")");
+    }
 
     try {
-    float execTime = 0.0f; // (optional: measure actual duration later)
-    float sentimentScore = (result.success ? 0.5f : -0.5f);
-    float diversityFactor = 0.2f; // placeholder — can evolve with context
-    std::string mood = GRIM::ContextManager::getCurrentMood();
+        float execTime = 0.0f; // (optional: measure actual duration later)
+        float sentimentScore = (result.success ? 0.5f : -0.5f);
+        float diversityFactor = 0.2f; // placeholder — can evolve with context
+        std::string mood = GRIM::ContextManager::getCurrentMood();
 
-    GRIM::RL::processCommandResult(result, cmdRaw, execTime, sentimentScore, diversityFactor, mood);
+        GRIM::RL::processCommandResult(result, cmdRaw, execTime, sentimentScore, diversityFactor, mood);
     } catch (const std::exception& e) {
         LOG_ERROR("RL", std::string("Post-dispatch RL feedback error: ") + e.what());
     }
-
 
     GRIM::ContextManager::recordUsage(cmdRaw);
     GRIM::PersonalityManager::updateAfterCommand(result.success);

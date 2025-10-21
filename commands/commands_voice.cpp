@@ -64,14 +64,15 @@ CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
     }
 
     LOG_DEBUG("Voice", "Received transcript: " + transcript);
-    handleCommand(transcript);
+    // NOTE: handleCommand() is called by the wake key system in wake_key.cpp
+    // We just return the transcript here without executing it again
 
     return {
         true,                          // success
         "> " + transcript,             // message
         "ERR_NONE",                    // errorCode
         "routine",                     // category
-        "Voice command processed",     // voice
+        "",                            // voice (empty to prevent speaking)
         Colors::Cyan                   // color
     };
 }

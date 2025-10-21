@@ -6,22 +6,54 @@
 #endif
 
 // ===========================================================
-// Update animation state (alpha + scale)
+// Easing functions for smoother animation
+// ===========================================================
+static float easeOutCubic(float t) {
+    float f = t - 1.0f;
+    return f * f * f + 1.0f;
+}
+
+static float easeInOutCubic(float t) {
+    if (t < 0.5f)
+        return 4.0f * t * t * t;
+    else {
+        float f = 2.0f * t - 2.0f;
+        return 0.5f * f * f * f + 1.0f;
+    }
+}
+
+// ===========================================================
+// Update animation state (alpha + scale) with SMOOTH EASING
 // ===========================================================
 void updateAnim(PopupAnimState& state, bool visible, float dtSeconds, float timeConstant) {
-    // Time-based exponential smoothing toward target values. This keeps the
-    // animation frame-rate independent and stable for small render targets.
+    // Detect visibility change
+    if (visible && !state.wasShowing) {
+        // Just became visible - start from scaled down and transparent
+        state.alpha = 0.0f;
+        state.scale = 0.8f;
+    }
+    state.wasShowing = visible;
+    
+    // Time-based exponential smoothing toward target values
     float targetAlpha = visible ? 1.f : 0.f;
-    float targetScale = visible ? 1.f : 0.9f;
+    float targetScale = visible ? 1.f : 0.8f; // Scale from 80% to 100% when showing
 
     // Avoid divide-by-zero and clamp dt
     if (dtSeconds <= 0.f) dtSeconds = 0.016f;
     if (timeConstant <= 0.f) timeConstant = 0.08f;
 
-    // Exponential approach: new = target + (current - target) * exp(-dt / tau)
+    // Smoother exponential approach with easing
     float k = std::exp(-dtSeconds / timeConstant);
-    state.alpha = targetAlpha + (state.alpha - targetAlpha) * k;
-    state.scale = targetScale + (state.scale - targetScale) * k;
+    
+    float newAlpha = targetAlpha + (state.alpha - targetAlpha) * k;
+    float newScale = targetScale + (state.scale - targetScale) * k;
+    
+    // Apply easing for smoother visual transition
+    float alphaDelta = newAlpha - state.alpha;
+    state.alpha = state.alpha + alphaDelta * easeOutCubic(1.0f - k);
+    
+    float scaleDelta = newScale - state.scale;
+    state.scale = state.scale + scaleDelta * easeOutCubic(1.0f - k);
 
     // Snap small deltas to target to avoid tiny residuals
     if (std::fabs(state.alpha - targetAlpha) < 0.001f) state.alpha = targetAlpha;
@@ -31,50 +63,60 @@ void updateAnim(PopupAnimState& state, bool visible, float dtSeconds, float time
 }
 
 // ===========================================================
-// Update voice-reactive animation (LESS CREEPY VERSION)
+// Update voice-reactive animation (SMOOTH, NOT CREEPY)
 // ===========================================================
 void updateVoiceAnim(PopupAnimState& state, bool isSpeaking, float dtSeconds) {
     if (dtSeconds <= 0.f) dtSeconds = 0.016f;
 
-    // Pulse animation when speaking (subtle bounce, not breathing)
+    // Pulse animation when speaking (subtle bounce with smooth decay)
+    static bool wasSpeaking = false;
+    
     if (isSpeaking) {
         static float pulseTime = 0.0f;
-        pulseTime += dtSeconds * 2.0f; // 2 Hz - less frantic
         
-        // Single bounce per speech burst (fade out naturally)
-        state.pulse = std::exp(-pulseTime * 0.5f) * 0.5f; // Quick decay, max 0.5
-        
-        // Increase voice intensity
-        float targetIntensity = 1.0f;
-        float k = std::exp(-dtSeconds / 0.15f); // Smooth approach
-        state.voiceIntensity = targetIntensity + (state.voiceIntensity - targetIntensity) * k;
-        
-        // Reset pulse time when starting speech
-        static bool wasSpeaking = false;
+        // Reset pulse on speech start
         if (!wasSpeaking) {
             pulseTime = 0.0f;
         }
+        
+        pulseTime += dtSeconds * 2.0f; // 2 Hz
+        
+        // Smooth decay with easing
+        float decayFactor = std::exp(-pulseTime * 0.6f);
+        state.pulse = easeOutCubic(decayFactor) * 0.5f;
+        
+        // Smooth intensity increase
+        float targetIntensity = 1.0f;
+        float k = std::exp(-dtSeconds / 0.15f);
+        float intensityDelta = targetIntensity - state.voiceIntensity;
+        state.voiceIntensity += intensityDelta * (1.0f - k) * easeInOutCubic(1.0f - k);
+        
         wasSpeaking = true;
     } else {
-        // Fade out pulse quickly
+        // Smooth fade out
         state.pulse *= std::exp(-dtSeconds / 0.3f);
         
-        // Decrease voice intensity
+        // Smooth intensity decrease with easing
         float targetIntensity = 0.0f;
-        float k = std::exp(-dtSeconds / 0.5f); // Slower fade
-        state.voiceIntensity = targetIntensity + (state.voiceIntensity - targetIntensity) * k;
+        float k = std::exp(-dtSeconds / 0.5f);
+        float intensityDelta = targetIntensity - state.voiceIntensity;
+        state.voiceIntensity += intensityDelta * (1.0f - k) * easeOutCubic(1.0f - k);
+        
+        wasSpeaking = false;
     }
 
-    // Subtle idle animation (very minimal, no breathing)
-    // Just a slight shimmer effect via alpha variation
+    // Subtle idle animation (very minimal shimmer)
     static float idleTime = 0.0f;
-    idleTime += dtSeconds * 0.3f; // Very slow
-    state.breathe = (std::sin(idleTime * 2.0f * M_PI) + 1.0f) * 0.5f; // 0-1 range
+    idleTime += dtSeconds * 0.3f;
+    state.breathe = (std::sin(idleTime * 2.0f * M_PI) + 1.0f) * 0.5f;
 
-    // Apply combined scale effect
-    // Only scale when speaking - single bounce, no idle breathing
-    float bounceScale = state.pulse * 0.08f * state.voiceIntensity; // Single bounce ±8%
-    state.scale = 1.0f + bounceScale;
+    // Apply smooth scale with easing
+    float bounceScale = state.pulse * 0.08f * state.voiceIntensity;
+    float targetScale = 1.0f + bounceScale;
+    
+    // Smooth interpolation to target scale
+    float scaleDiff = targetScale - state.scale;
+    state.scale += scaleDiff * 0.15f; // Smooth follow
 
     // Clamp scale to reasonable bounds
     if (state.scale < 0.95f) state.scale = 0.95f;

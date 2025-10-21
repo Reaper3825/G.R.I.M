@@ -21,11 +21,6 @@ void showPopup();
 void hidePopup();
 
 // ===========================================================
-// Constants
-// ===========================================================
-constexpr uint16_t POPUP_SIZE = 256;
-
-// ===========================================================
 // Globals
 // ===========================================================
 extern std::mutex g_alphaMutex;
@@ -48,7 +43,7 @@ static std::chrono::steady_clock::time_point g_frameStart = std::chrono::steady_
 // ===========================================================
 void runPopupUI(int width, int height)
 {
-    LOG_TRACE("PopupUI", "runPopupUI");
+    LOG_TRACE("PopupUI", "runPopupUI with size " + std::to_string(width) + "x" + std::to_string(height));
     if (WindowManager::isInitialized()) {
         LOG_DEBUG("PopupUI", "Deferring popup creation until BGFX idle");
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -81,15 +76,14 @@ void runPopupUI(int width, int height)
     win->height = height;
     WindowManager::registerWindow(std::move(win));
 
-    ShowWindow(g_hwnd, SW_SHOW);
-    LOG_DEBUG("PopupUI", "Overlay window created");
-
     // -------------------------------------------------------
-    // Prepare alpha mask (RGBA from Oreo maps)
+    // Prepare alpha mask (RGBA from Oreo maps) BEFORE showing
+    // Use the actual window size, not POPUP_SIZE constant!
     // -------------------------------------------------------
-    queueWindowAlphaReadback(POPUP_SIZE, POPUP_SIZE);
+    LOG_DEBUG("PopupUI", "Loading alpha textures for " + std::to_string(width) + "x" + std::to_string(height));
+    queueWindowAlphaReadback(width, height);
 
-    // Wait until alpha data ready before applying transparency
+    // Wait until alpha data ready before showing window
     LOG_DEBUG("PopupUI", "Waiting for alpha data to become ready...");
     int safetyCounter = 0;
     while (!g_alphaReady.load() && safetyCounter < 200) // up to 2 seconds
@@ -100,12 +94,26 @@ void runPopupUI(int width, int height)
 
     if (g_alphaReady.load())
     {
-        LOG_DEBUG("PopupUI", "Alpha data ready — applying transparency");
-        applyWindowAlphaIfReady(g_hwnd, POPUP_SIZE, POPUP_SIZE, 0);
+        LOG_DEBUG("PopupUI", "Alpha data ready — applying initial transparency");
+        applyWindowAlphaIfReady(g_hwnd, width, height, 0);
+        
+        ShowWindow(g_hwnd, SW_SHOW);
+        UpdateWindow(g_hwnd);
+        
+        g_popupVisible = true;
+        g_idleTimerMs = 10000;
+        g_idleStart = std::chrono::steady_clock::now();
+        
+        LOG_PHASE("PopupUI shown with alpha", true);
+        
+        // Apply initial animation frame
+        applyAnimationToWindow(g_hwnd, width, height, 1.0f, 1.0f);
     }
     else
     {
-        LOG_ERROR("PopupUI", "Alpha data not ready in time — popup may not be transparent");
+        LOG_ERROR("PopupUI", "Alpha data not ready in time — showing without transparency");
+        ShowWindow(g_hwnd, SW_SHOW);
+        g_popupVisible = true;
     }
 
     // -------------------------------------------------------
@@ -125,7 +133,7 @@ void runPopupUI(int width, int height)
     LOG_PHASE("Popup UI Thread Started", true);
 
     // ======================================================
-    // Main popup loop
+    // Main popup loop - use the actual window dimensions!
     // ======================================================
     while (g_running)
     {
@@ -173,20 +181,28 @@ void runPopupUI(int width, int height)
             auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_idleStart).count();
             if (elapsedMs > g_idleTimerMs)
             {
-                if (!Voice::isPlaying())
+                // Don't hide if currently speaking OR if voice intensity is high
+                bool isSpeaking = Voice::isSpeaking();
+                bool voiceActive = g_anim.voiceIntensity > 0.1f; // Still animating from recent speech
+                
+                if (!Voice::isPlaying() && !isSpeaking && !voiceActive)
                 {
+                    LOG_DEBUG("PopupUI", "Idle timeout reached - hiding popup");
                     hidePopup();
                     g_idleTimerMs = 0;
                 }
                 else
                 {
+                    // Keep resetting timer while voice is active
                     g_idleStart = std::chrono::steady_clock::now();
+                    LOG_DEBUG("PopupUI", "Voice still active - delaying hide");
                 }
             }
         }
 
         // ---------------------------------------------------
-        // Animation logic - voice-reactive
+        // Animation logic - voice-reactive (OPTIMIZED)
+        // Use actual window dimensions!
         // ---------------------------------------------------
         bool isSpeaking = Voice::isSpeaking();
         
@@ -197,25 +213,13 @@ void runPopupUI(int width, int height)
         // Update voice-reactive animation (pulse, breathe, scale)
         updateVoiceAnim(g_anim, isSpeaking, dt);
         
-        // Apply animation to window visuals (scale, alpha)
+        // Apply animation to window visuals at 60 FPS
         if (g_popupVisible && g_hwnd)
         {
-            applyAnimationToWindow(g_hwnd, POPUP_SIZE, POPUP_SIZE, 
+            applyAnimationToWindow(g_hwnd, width, height,
                                    g_anim.scale, g_anim.alpha);
-            
-            // Debug logging (every 60 frames = ~1 second)
-            static int frameCounter = 0;
-            if (++frameCounter >= 60)
-            {
-                LOG_DEBUG("PopupAnim", "scale=" + std::to_string(g_anim.scale) + 
-                          ", alpha=" + std::to_string(g_anim.alpha) +
-                          ", pulse=" + std::to_string(g_anim.pulse) +
-                          ", intensity=" + std::to_string(g_anim.voiceIntensity) +
-                          ", speaking=" + std::to_string(isSpeaking));
-                frameCounter = 0;
-            }
-        }
-        
+         }
+
         // Show popup automatically when voice starts speaking
         if (isSpeaking && !g_popupVisible)
         {
@@ -240,6 +244,7 @@ void showPopup()
     if (g_hwnd)
     {
         ShowWindow(g_hwnd, SW_SHOW);
+        SetForegroundWindow(g_hwnd);
         g_popupVisible = true;
         LOG_PHASE("PopupUI shown", true);
         WindowManager::setVisibility("popup", true);
@@ -268,10 +273,10 @@ void notifyPopupActivity()
         return;
     }
 
-    PostMessage(g_hwnd, WM_GRIM_SHOW_POPUP, 0, 0);
-    g_idleTimerMs = 3000;
+    showPopup();
+    
+    g_idleTimerMs = 10000;
     g_idleStart = std::chrono::steady_clock::now();
-    LOG_DEBUG("PopupUI", "Idle timer reset to " + std::to_string(g_idleTimerMs) + "ms");
 }
 
 // Get current animation state (for rendering)
