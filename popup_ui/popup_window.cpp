@@ -1,5 +1,6 @@
 #include "pch.hpp"
 #include "popup_window.hpp"
+#include "ui/console_ui.hpp"
 #include <windows.h>
 #include <stb/stb_image.h>
 #include "core/ui_sync.hpp"
@@ -49,24 +50,7 @@ static LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     case WM_LBUTTONDOWN:
     {
         LOG_DEBUG("PopupWindow", "Popup clicked — showing GRIM console");
-
-        HWND grimConsole = GetConsoleWindow();
-        if (!grimConsole)
-            grimConsole = FindWindowW(nullptr, L"G.R.I.M Console");
-
-        if (grimConsole)
-        {
-            LOG_DEBUG("PopupWindow", "Found existing GRIM console window, bringing to front");
-            ShowWindow(grimConsole, SW_RESTORE);
-            SetForegroundWindow(grimConsole);
-        }
-        else
-        {
-            LOG_DEBUG("PopupWindow", "No existing console found — launching new one");
-            std::thread([]() {
-                system("start cmd /k \"D:\\G.R.I.M\\out\\build\\Debug\\GRIM.exe\"");
-            }).detach();
-        }
+        GRIMConsole::showConsole();
         return 0;
     }
 
