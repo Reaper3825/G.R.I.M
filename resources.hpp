@@ -2,7 +2,6 @@
 #include <string>
 #include <vector>
 #include <filesystem>
-#include <SFML/Graphics.hpp>
 #include <nlohmann/json_fwd.hpp>
 #include "console_history.hpp"
 #include "timer.hpp"

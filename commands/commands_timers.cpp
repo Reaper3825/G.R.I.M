@@ -14,23 +14,23 @@ CommandResult cmdSetTimer(const std::string& arg) {
         seconds = std::stoi(arg);
     } catch (...) {
         return {
-            "[Timer][Error] Invalid number of seconds.",
-            false,
-            sf::Color::Red,
-            "ERR_TIMER_INVALID",
-            "Invalid timer duration",
-            "error"
+            false,                                          // success
+            "[Timer][Error] Invalid number of seconds.",   // message
+            "ERR_TIMER_INVALID",                            // errorCode
+            "error",                                        // category
+            "Invalid timer duration",                       // voice
+            Colors::Red                                     // color
         };
     }
 
     if (seconds <= 0) {
         return {
-            "[Timer][Error] Duration must be positive.",
-            false,
-            sf::Color::Red,
-            "ERR_TIMER_NONPOSITIVE",
-            "Non-positive timer duration",
-            "error"
+            false,                                              // success
+            "[Timer][Error] Duration must be positive.",        // message
+            "ERR_TIMER_NONPOSITIVE",                            // errorCode
+            "error",                                            // category
+            "Non-positive timer duration",                      // voice
+            Colors::Red                                         // color
         };
     }
 
@@ -42,12 +42,12 @@ CommandResult cmdSetTimer(const std::string& arg) {
     timers.push_back(t);
 
     return {
-        "[Timer] Set for " + std::to_string(seconds) + " seconds.",
-        true,
-        sf::Color::Green,
-        "ERR_NONE",
-        "Timer set",
-        "routine"
+        true,                                                   // success
+        "[Timer] Set for " + std::to_string(seconds) + " seconds.", // message
+        "ERR_NONE",                                             // errorCode
+        "routine",                                              // category
+        "Timer set",                                            // voice
+        Colors::Green                                           // color
     };
 }
 
@@ -62,12 +62,12 @@ std::vector<CommandResult> checkExpiredTimers() {
     while (it != timers.end()) {
         if (now >= it->expiry) {
             results.push_back({
-                "[Timer] " + it->message,
-                true,
-                sf::Color::Yellow,
-                "ERR_NONE",
-                "Timer expired",
-                "routine"
+                true,                           // success
+                "[Timer] " + it->message,       // message
+                "ERR_NONE",                     // errorCode
+                "routine",                      // category
+                "Timer expired",                // voice
+                Colors::Yellow                  // color
             });
             it = timers.erase(it);
         } else {

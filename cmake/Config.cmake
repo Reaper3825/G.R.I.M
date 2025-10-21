@@ -95,8 +95,7 @@ link_directories(
 )
 
 target_link_libraries(GRIM PRIVATE
-    # Core frameworks
-    sfml-system sfml-window sfml-graphics sfml-audio sfml-network
+
 
     # Audio / Speech
     portaudio

@@ -2,7 +2,7 @@
 #include <string>
 #include <functional>
 #include <memory>
-// or define your Vec2 struct { float x, y; }
+
 struct Vec2 {
     float x;
     float y;

@@ -1,51 +1,58 @@
 #pragma once
 #include <string>
 #include <unordered_map>
-#include <filesystem>
-#include <vector>
-#include <SFML/Graphics.hpp>
-#include "intent.hpp"
 #include <functional>
-#include "core/plugin.hpp"
-
-// Forward declarations
-struct CommandResult;
-struct Timer;
-class ConsoleHistory;
+#include <optional>
+#include <filesystem>
+#include "helpers/color.hpp"
+#include "intent.hpp"
 
 // ====================================================
-// CommandResult: unified return type for all commands
+// Command result structure
 // ====================================================
 struct CommandResult {
-    std::string message;    // user-facing text (console)
-    bool success = true;    // true if command succeeded
-    sf::Color color = sf::Color::White;  // console display color
-    std::string errorCode = "ERR_NONE";  // optional error code
-
-    // 🔹 New fields for voice + categorization
-    std::string voice;      // what to speak (optional, leave empty to mute)
-    std::string category;   // voice category (routine, summary, error, etc.)
+    bool success = true;
+    std::string message;
+    std::string errorCode;
+    std::string category;
+    std::string voice;
+    Color color = Colors::Default;
 };
 
 // ====================================================
-// Function pointer type for commands
+// Command function type
 // ====================================================
-
-
-
+using CommandFunc = std::function<CommandResult(const std::string&)>;
 
 // ====================================================
-// Globals (declared here, defined in commands_core.cpp)
+// Globals
 // ====================================================
 extern std::unordered_map<std::string, CommandFunc> commandMap;
-extern ConsoleHistory history;
-extern std::vector<Timer> timers;
+
+// Correct type restored — matches old GRIM core
 extern std::filesystem::path g_currentDir;
+
+// Last NLP intent (for "nevermind" command)
 extern Intent g_lastIntent;
 
 // ====================================================
-// Public API
+// Core functions
 // ====================================================
+
+// Parse user input into (command, argument)
 std::pair<std::string, std::string> parseInput(const std::string& input);
+
+// Dispatch a specific command by name
 CommandResult dispatchCommand(const std::string& cmd, const std::string& arg);
+
+// Handle command from raw input line (main entry point)
 void handleCommand(const std::string& line);
+
+// Ensure that built-in / core plugins are registered
+void ensureCorePluginsRegistered();
+
+// ====================================================
+// NLP normalization helpers
+// ====================================================
+std::string normalizeWord(const std::string& word);
+std::string normalizeLine(const std::string& line);

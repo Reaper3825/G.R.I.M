@@ -5,7 +5,7 @@
 #include <mutex>
 #include <atomic>
 #include <nlohmann/json.hpp>
-#include <SFML/Graphics/Color.hpp>
+
 #include "nlp/nlp.hpp"
 #include "timer.hpp"
 #include "console_history.hpp"

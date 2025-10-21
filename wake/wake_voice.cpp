@@ -1,5 +1,7 @@
 #include "pv_porcupine.h"
 #include "logger.hpp"
+#include "console_history.hpp"
+#include "timer.hpp"
 #include <vector>
 #include <mutex>
 #include <string>

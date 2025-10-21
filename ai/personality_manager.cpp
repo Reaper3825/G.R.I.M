@@ -1,3 +1,4 @@
+#include "pch.hpp"
 #include "personality_manager.hpp"
 #include "logger.hpp"
 #include <algorithm>
@@ -38,11 +39,11 @@ void PersonalityManager::updateAfterCommand(bool success) {
     extern nlohmann::json longTermMemory;  // ✅ access global memory safely
 
     if (success) {
-        state.confidence = std::min(1.0f, state.confidence + 0.05f);
-        state.energy     = std::min(1.0f, state.energy + 0.02f);
+        state.confidence = (std::min)(1.0f, state.confidence + 0.05f);
+        state.energy     = (std::min)(1.0f, state.energy + 0.02f);
     } else {
-        state.confidence = std::max(0.0f, state.confidence - 0.05f);
-        state.energy     = std::max(0.0f, state.energy - 0.05f);
+        state.confidence = (std::max)(0.0f, state.confidence - 0.05f);
+        state.energy     = (std::max)(0.0f, state.energy - 0.05f);
     }
 
     // Mood logic
@@ -62,8 +63,8 @@ void PersonalityManager::updateAfterCommand(bool success) {
 void PersonalityManager::decayOverTime() {
     std::time_t now = std::time(nullptr);
     if (difftime(now, state.lastUpdate) > 60) {
-        state.energy = std::max(0.0f, state.energy - 0.01f);
-        state.confidence = std::max(0.0f, state.confidence - 0.005f);
+        state.energy = (std::max)(0.0f, state.energy - 0.01f);
+        state.confidence = (std::max)(0.0f, state.confidence - 0.005f);
         state.lastUpdate = now;
     }
 }

@@ -11,12 +11,12 @@ CommandResult cmdAliasList(const std::string& /*arg*/) {
 
     if (all.empty()) {
         return {
-            "[Alias] No aliases loaded.",
-            true,
-            sf::Color::Yellow,
-            "ERR_NONE",
-            "No aliases loaded",   // voice
-            "summary"
+            true,                               // success
+            "[Alias] No aliases loaded.",       // message
+            "ERR_NONE",                         // errorCode
+            "summary",                          // category
+            "No aliases loaded",                // voice
+            Colors::Yellow                      // color
         };
     }
 
@@ -43,12 +43,12 @@ CommandResult cmdAliasList(const std::string& /*arg*/) {
     }
 
     return {
-        oss.str(),
-        true,
-        sf::Color::Cyan,
-        "ERR_NONE",
-        "Aliases listed",   // short voice-friendly message
-        "summary"
+        true,                   // success
+        oss.str(),              // message
+        "ERR_NONE",             // errorCode
+        "summary",              // category
+        "Aliases listed",       // voice
+        Colors::Cyan            // color
     };
 }
 
@@ -58,34 +58,34 @@ CommandResult cmdAliasList(const std::string& /*arg*/) {
 CommandResult cmdAliasInfo(const std::string& arg) {
     if (arg.empty()) {
         return {
-            "[Alias] Usage: alias info <name>",
-            false,
-            sf::Color::Red,
-            "ERR_ALIAS_NOT_FOUND",
-            "Alias name required",
-            "error"
+            false,                                      // success
+            "[Alias] Usage: alias info <name>",         // message
+            "ERR_ALIAS_NOT_FOUND",                      // errorCode
+            "error",                                    // category
+            "Alias name required",                      // voice
+            Colors::Red                                 // color
         };
     }
 
     std::string meta = aliases::info(arg);
     if (meta.empty()) {
         return {
-            ErrorManager::getUserMessage("ERR_ALIAS_NOT_FOUND") + ": " + arg,
-            false,
-            sf::Color::Red,
-            "ERR_ALIAS_NOT_FOUND",
-            "Alias not found",
-            "error"
+            false,                                                                  // success
+            ErrorManager::getUserMessage("ERR_ALIAS_NOT_FOUND") + ": " + arg,      // message
+            "ERR_ALIAS_NOT_FOUND",                                                  // errorCode
+            "error",                                                                // category
+            "Alias not found",                                                      // voice
+            Colors::Red                                                             // color
         };
     }
 
     return {
-        "[Alias] " + meta,
-        true,
-        sf::Color::Green,
-        "ERR_NONE",
-        "Alias info for " + arg,
-        "summary"
+        true,                               // success
+        "[Alias] " + meta,                  // message
+        "ERR_NONE",                         // errorCode
+        "summary",                          // category
+        "Alias info for " + arg,            // voice
+        Colors::Green                       // color
     };
 }
 
@@ -96,21 +96,21 @@ CommandResult cmdAliasRefresh(const std::string& /*arg*/) {
     try {
         aliases::refreshNow();
         return {
-            "[Alias] Manual refresh complete.",
-            true,
-            sf::Color::Green,
-            "ERR_NONE",
-            "Alias refresh complete",
-            "routine"
+            true,                                       // success
+            "[Alias] Manual refresh complete.",         // message
+            "ERR_NONE",                                 // errorCode
+            "routine",                                  // category
+            "Alias refresh complete",                   // voice
+            Colors::Green                               // color
         };
     } catch (const std::exception& e) {
         return {
-            std::string("[Alias] Refresh failed: ") + e.what(),
-            false,
-            sf::Color::Red,
-            "ERR_ALIAS_NOT_FOUND",
-            "Alias refresh failed",
-            "error"
+            false,                                                  // success
+            std::string("[Alias] Refresh failed: ") + e.what(),    // message
+            "ERR_ALIAS_NOT_FOUND",                                  // errorCode
+            "error",                                                // category
+            "Alias refresh failed",                                 // voice
+            Colors::Red                                             // color
         };
     }
 }

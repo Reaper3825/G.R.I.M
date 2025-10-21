@@ -25,7 +25,8 @@
 #include "memory/memory_router.hpp"
 #include "input_parser.hpp"
 #include "ai/ai.hpp"
-#include "core/plugin.hpp" // 🔹 Plugin system
+#include "core/plugin.hpp"
+#include "helpers/color.hpp"
 #include <crtdbg.h>
 
 #define CHECK_HEAP() _CrtCheckMemory()
@@ -35,11 +36,9 @@ using Voice::speak;
 // ====================================================
 // Globals
 // ====================================================
-
 static std::optional<std::string> g_pendingClarifyCmd;
 static std::optional<std::string> g_pendingFeedbackCmd;
 
-// Externals
 extern nlohmann::json longTermMemory;
 extern nlohmann::json aiConfig;
 extern NLP g_nlp;
@@ -49,7 +48,7 @@ extern GRIM::MemoryStorage g_memoryStorage;
 Intent g_lastIntent;
 
 // ====================================================
-// Global learned command map + handler
+// Global learned command map
 // ====================================================
 static std::unordered_map<std::string, std::string> g_learnedCommandMap;
 
@@ -67,11 +66,18 @@ static CommandResult handleLearnedCommand(const std::string& arg)
         }
     }
 
-    return {"[Error] Unknown learned command route.", false, sf::Color::Red};
+    return CommandResult{
+        false,                                            // success
+        "[Error] Unknown learned command route.",         // message
+        "ERR_NONE",                                       // errorCode
+        "",                                               // category
+        "",                                               // voice
+        Colors::Red                                       // color
+    };
 }
 
 // ====================================================
-// Core Plugin Loader — ensures built-in commands exist
+// Core Plugin Loader
 // ====================================================
 void ensureCorePluginsRegistered()
 {
@@ -80,8 +86,6 @@ void ensureCorePluginsRegistered()
     done = true;
 
     LOG_DEBUG("Core", "Ensuring core plugins registered...");
-
-    // Core built-in plugin (terminal-like commands)
     extern void registerCorePlugin();
     registerCorePlugin();
 }
@@ -93,9 +97,7 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
 {
     ensureCorePluginsRegistered();
 
-    // ====================================================
     // 1. Built-in / Plugin command path
-    // ====================================================
     auto it = commandMap.find(cmd);
     if (it != commandMap.end())
     {
@@ -104,14 +106,18 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
             return it->second(arg);
         } catch (const std::exception& e) {
             LOG_ERROR("Dispatch", "Exception in command \"" + cmd + "\": " + e.what());
-            return {"[Error] Exception while running command: " + cmd,
-                    false, sf::Color::Red, "ERR_CMD_EXCEPTION"};
+            return CommandResult{
+                false,                                                  // success
+                "[Error] Exception while running command: " + cmd,      // message
+                "ERR_CMD_EXCEPTION",                                    // errorCode
+                "",                                                     // category
+                "",                                                     // voice
+                Colors::Red                                             // color
+            };
         }
     }
 
-    // ====================================================
     // 2. Learned-command lookup
-    // ====================================================
     try {
         auto learned = g_memoryStorage.findLearnedCommand(cmd);
         if (learned.has_value()) {
@@ -122,9 +128,7 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
         LOG_ERROR("Dispatch", std::string("Learned-command lookup failed: ") + e.what());
     }
 
-    // ====================================================
     // 3. Record unknown command
-    // ====================================================
     try {
         GRIM::MemoryObject unknown;
         unknown.id = GRIM::MemoryObject::generateUUID();
@@ -146,9 +150,7 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
         LOG_ERROR("Dispatch", std::string("Failed to record unknown command: ") + e.what());
     }
 
-    // ====================================================
     // 4. Try RL bridge reasoning
-    // ====================================================
     try {
         nlohmann::json obs = {
             {"type","unknown_command"},
@@ -166,9 +168,7 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
         LOG_ERROR("Dispatch", std::string("RL reasoning failed: ") + e.what());
     }
 
-    // ====================================================
-    // 5. AI reasoning fallback — try to infer or converse
-    // ====================================================
+    // 5. AI reasoning fallback
     try {
         LOG_TRACE("Dispatch", "Calling ai_interpret() for unknown command...");
         CommandResult aiRes = ai_interpret(cmd + " " + arg, true);
@@ -184,10 +184,17 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
             CHECK_HEAP();
             std::string resp = ResponseManager::get(
                 "Got it — I've learned that \"" + cmd + "\" means \"" + inferred + "\".");
-            history.push(resp, sf::Color::Green);
+            history.push(resp, (Colors::Green.a << 24) | (Colors::Green.b << 16) | (Colors::Green.g << 8) | Colors::Green.r);
             Voice::speak(resp, "learned");
 
-            return {"Learned new command: " + inferred, true, sf::Color::Green, "ERR_NONE"};
+            return CommandResult{
+                true,                                       // success
+                "Learned new command: " + inferred,         // message
+                "ERR_NONE",                                 // errorCode
+                "",                                         // category
+                "",                                         // voice
+                Colors::Green                               // color
+            };
         }
         else if (aiRes.success && aiRes.category == "conversation")
         {
@@ -198,9 +205,7 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
         LOG_ERROR("Dispatch", std::string("AI fallback failed: ") + e.what());
     }
 
-    // ====================================================
     // 6. Clarification fallback
-    // ====================================================
     try {
         static std::string lastAsked;
         if (cmd != lastAsked && !cmd.empty()) {
@@ -211,7 +216,7 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
                 clarification = "I didn’t quite catch that. Can you rephrase?";
 
             std::string resp = ResponseManager::get(clarification);
-            history.push(resp, sf::Color::Yellow);
+            history.push(resp, Colors::Cyan.toUInt());
             Voice::speak(resp, "clarify");
 
             GRIM::MemoryObject clarify;
@@ -235,9 +240,15 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
         LOG_ERROR("Dispatch", std::string("Clarification prompt failed: ") + e.what());
     }
 
-    return {"Unknown command: " + cmd, false, sf::Color::Red, "ERR_UNKNOWN_CMD"};
+    return CommandResult{
+        false,                              // success
+        "Unknown command: " + cmd,          // message
+        "ERR_UNKNOWN_CMD",                  // errorCode
+        "",                                 // category
+        "",                                 // voice
+        Colors::Red                         // color
+    };
 }
-
 
 // ====================================================
 // handleCommand: central command + NLP hub
@@ -262,12 +273,12 @@ void handleCommand(const std::string& line)
             g_pendingClarifyCmd.reset();
 
             std::string resp = ResponseManager::get("Got it — I'll remember that next time.");
-            history.push(resp, sf::Color::Green);
+            history.push(resp, Colors::Green.toUInt());
             Voice::speak(resp, "learned");
         } catch (const std::exception& e) {
             LOG_ERROR("LearnedCmd", std::string("Failed to store learned command: ") + e.what());
             std::string resp = ResponseManager::get("I couldn't save that one — try again later.");
-            history.push(resp, sf::Color::Red);
+            history.push(resp, Colors::Red.toUInt());
             Voice::speak(resp, "error");
         }
 
@@ -299,7 +310,7 @@ void handleCommand(const std::string& line)
 
             std::string resp = ResponseManager::get(positive ? "Got it — I'll keep doing that."
                                                              : "Understood — I’ll adjust next time.");
-            history.push(resp, positive ? sf::Color::Green : sf::Color::Yellow);
+            history.push(resp, positive ? Colors::Green.toUInt() : Colors::Cyan.toUInt());
             Voice::speak(resp, "feedback");
             g_pendingFeedbackCmd.reset();
             return;
@@ -309,7 +320,7 @@ void handleCommand(const std::string& line)
     // ====================================================
     // Normal execution flow
     // ====================================================
-    history.push("> " + line, sf::Color::White);
+    history.push("> " + line, Colors::Default.toUInt());
     CommandResult result;
 
     // --- RL Pre-dispatch observation ---
@@ -363,7 +374,7 @@ void handleCommand(const std::string& line)
 
     std::string finalText = ResponseManager::get(result.message);
     Logger::logResult(result);
-    history.push(finalText, result.color);
+    history.push(finalText, (result.color.a << 24) | (result.color.b << 16) | (result.color.g << 8) | result.color.r);
     std::cout << finalText << std::endl;
 
     if (!result.voice.empty() && result.voice.find("[TRACE]") == std::string::npos)
@@ -372,7 +383,7 @@ void handleCommand(const std::string& line)
     if (!g_pendingFeedbackCmd.has_value() && result.success && result.category != "conversation")
     {
         std::string ask = ResponseManager::get("Was that what you wanted?");
-        history.push(ask, sf::Color::Yellow);
+        history.push(ask, Colors::Cyan.toUInt());
         Voice::speak(ask, "feedback");
         g_pendingFeedbackCmd = cmdRaw;
         LOG_DEBUG("Feedback", "Opened feedback prompt for command: " + cmdRaw);

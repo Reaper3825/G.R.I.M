@@ -200,7 +200,7 @@ _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF | _CRTDBG_CHECK_ALWA
     LOG_PHASE("All subsystems shut down", true);
     shutdownLogger();
     LOG_PHASE("G.R.I.M terminated successfully", true);
-    std::_Exit(0);
+    return 0;
 
 
 

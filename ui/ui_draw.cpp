@@ -1,3 +1,4 @@
+#include "pch.hpp"
 #include "ui_draw.hpp"
 #include "console_history.hpp"
 #include "commands/commands_core.hpp"

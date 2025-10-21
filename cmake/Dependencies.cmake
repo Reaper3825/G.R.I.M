@@ -54,16 +54,6 @@ grim_copy_dlls("${_dll_dir_porcupine}"
     libpv_porcupine.dll
 )
 
-# =========================================================
-# SFML Core DLLs
-# =========================================================
-grim_copy_dlls("${_dll_dir_vcpkg}"
-    sfml-system.dll
-    sfml-window.dll
-    sfml-audio.dll
-    sfml-graphics.dll
-    sfml-network.dll
-)
 
 # =========================================================
 # PortAudio and CPR

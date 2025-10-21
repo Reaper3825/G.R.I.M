@@ -3,8 +3,6 @@
 #include "error_manager.hpp"
 #include "nlp/nlp.hpp"
 #include "resources.hpp"
-
-#include <SFML/Graphics.hpp>
 #include <sstream>
 #include <string>
 
@@ -13,12 +11,12 @@
 // ====================================================
 CommandResult cmdClean([[maybe_unused]] const std::string& arg) {
     return {
-        "[Utility] Console cleared.",
-        true,
-        sf::Color::Green,
-        "ERR_NONE",
-        "Console cleared",   // voice
-        "routine"            // category
+        true,                           // success
+        "[Utility] Console cleared.",   // message
+        "ERR_NONE",                     // errorCode
+        "routine",                      // category
+        "Console cleared",              // voice
+        Colors::Green                   // color
     };
 }
 
@@ -46,12 +44,12 @@ CommandResult cmdShowHelp([[maybe_unused]] const std::string& arg) {
         "- voice_stream\n";
 
     return {
-        helpText,
-        true,
-        sf::Color::Cyan,
-        "ERR_NONE",
-        "Help shown",        // voice
-        "summary"            // category
+        true,               // success
+        helpText,           // message
+        "ERR_NONE",         // errorCode
+        "summary",          // category
+        "Help shown",       // voice
+        Colors::Cyan        // color
     };
 }
 
@@ -62,21 +60,21 @@ CommandResult cmd_reloadNLP([[maybe_unused]] const std::string& arg) {
     std::string err;
     if (!g_nlp.load_rules(getResourcePath() + "/nlp_rules.json", &err)) {
         return {
-            "[NLP] Failed to reload rules: " + err,
-            false,
-            sf::Color::Red,
-            "ERR_NLP_LOAD_FAILED",
-            "NLP reload failed",  // voice
-            "error"               // category
+            false,                                      // success
+            "[NLP] Failed to reload rules: " + err,     // message
+            "ERR_NLP_LOAD_FAILED",                      // errorCode
+            "error",                                    // category
+            "NLP reload failed",                        // voice
+            Colors::Red                                 // color
         };
     }
 
     return {
-        "[NLP] Rules reloaded.",
-        true,
-        sf::Color::Yellow,
-        "ERR_NONE",
-        "NLP rules reloaded",    // voice
-        "routine"                // category
+        true,                               // success
+        "[NLP] Rules reloaded.",            // message
+        "ERR_NONE",                         // errorCode
+        "routine",                          // category
+        "NLP rules reloaded",               // voice
+        Colors::Yellow                      // color
     };
 }

@@ -1,3 +1,4 @@
+#include "pch.hpp"
 #include "input_parser.hpp"
 #include "commands_core.hpp"     // for CommandResult / CommandFunc / commandMap
 #include "synonyms.hpp"
@@ -27,7 +28,7 @@ namespace GRIMInput
             for (size_t j = 1; j <= n; ++j)
             {
                 int cost = (s1[i - 1] == s2[j - 1]) ? 0 : 1;
-                curr[j] = std::min({ prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost });
+                curr[j] = (std::min)({ prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost });
             }
             prev.swap(curr);
         }

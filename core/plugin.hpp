@@ -4,11 +4,11 @@
 
 // ---------- Stable ABI types ----------
 struct CommandResult;
-using CommandFunc = CommandResult(*)(const std::string&);
+using PluginCommandFunc = CommandResult(*)(const std::string&);
 
 struct PluginCommand {
     std::string name;
-    CommandFunc func;
+    PluginCommandFunc func;
 };
 
 // ---------- Export macros ----------
@@ -30,7 +30,7 @@ struct PluginCommand {
 
 extern "C" {
 // Host API (plugins call these)
-GRIM_HOST_API void grim_register_command(const char* name, CommandFunc func);
+GRIM_HOST_API void grim_register_command(const char* name, PluginCommandFunc func);
 GRIM_HOST_API void grim_unregister_command(const char* name);
 }
 

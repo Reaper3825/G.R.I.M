@@ -90,7 +90,7 @@ std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* histor
     if (!fs::exists(resDir)) {
         std::string msg = "Resource directory missing: " + resDir.string();
         if (historyPtr) {
-            historyPtr->push("[ERROR] " + msg, sf::Color::Red);
+            historyPtr->push("[ERROR] " + msg, 0xFF0000FF);
         }
         LOG_ERROR("Resources", msg);
         LOG_PHASE("Font search", false);
@@ -110,7 +110,7 @@ std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* histor
 
     std::string errMsg = "No font found in resources/ or system fonts.";
     if (historyPtr) {
-        historyPtr->push("[ERROR] " + errMsg, sf::Color::Red);
+        historyPtr->push("[ERROR] " + errMsg, 0xFF0000FF);
     }
     LOG_ERROR("Resources", errMsg);
     LOG_PHASE("Font search", false);

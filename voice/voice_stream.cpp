@@ -121,7 +121,7 @@ static void run(whisper_context* ctx,
     LOG_DEBUG("VoiceStream", "Initializing PortAudio...");
     if (Pa_Initialize() != paNoError) {
         LOG_ERROR("VoiceStream", "Failed to initialize PortAudio!");
-        uiHistory->push("[VoiceStream] ERROR: Failed to initialize PortAudio", sf::Color::Red);
+        uiHistory->push("[VoiceStream] ERROR: Failed to initialize PortAudio", 0xFF0000FF);
         VoiceStream::g_state.running = false;
         return;
     }
@@ -132,7 +132,7 @@ static void run(whisper_context* ctx,
 
     if (deviceIndex == paNoDevice || deviceIndex < 0 || deviceIndex >= Pa_GetDeviceCount()) {
         LOG_ERROR("VoiceStream", "No valid input device found!");
-        uiHistory->push("[VoiceStream] ERROR: No valid input device found", sf::Color::Red);
+        uiHistory->push("[VoiceStream] ERROR: No valid input device found", 0xFF0000FF);
         Pa_Terminate();
         VoiceStream::g_state.running = false;
         return;
@@ -171,7 +171,7 @@ static void run(whisper_context* ctx,
 
     if (openErr != paNoError || !stream) {
         LOG_ERROR("VoiceStream", std::string("Could not open mic stream: ") + Pa_GetErrorText(openErr));
-        uiHistory->push("[VoiceStream] ERROR: Could not open mic stream", sf::Color::Red);
+        uiHistory->push("[VoiceStream] ERROR: Could not open mic stream", 0xFF0000FF);
         Pa_Terminate();
         VoiceStream::g_state.running = false;
         return;
@@ -181,7 +181,7 @@ static void run(whisper_context* ctx,
     PaError startErr = Pa_StartStream(stream);
     if (startErr != paNoError) {
         LOG_ERROR("VoiceStream", std::string("Failed to start PortAudio stream: ") + Pa_GetErrorText(startErr));
-        uiHistory->push("[VoiceStream] ERROR: Could not start mic stream", sf::Color::Red);
+        uiHistory->push("[VoiceStream] ERROR: Could not start mic stream", 0xFF0000FF);
         Pa_CloseStream(stream);
         Pa_Terminate();
         VoiceStream::g_state.running = false;
@@ -189,7 +189,7 @@ static void run(whisper_context* ctx,
     }
 
     LOG_DEBUG("VoiceStream", "PortAudio stream started successfully.");
-    uiHistory->push("[VoiceStream] Listening...", sf::Color(0, 200, 255));
+    uiHistory->push("[VoiceStream] Listening...", 0xFFFFC800);
     auto lastSpeechTime = std::chrono::steady_clock::now();
 
     while (VoiceStream::g_state.running) {
@@ -233,7 +233,7 @@ static void run(whisper_context* ctx,
                         LOG_DEBUG("VoiceStream/AI", "Chunk: " + chunk);
                     });
 
-                    uiHistory->push("[AI] " + fullReply, sf::Color::Green);
+                    uiHistory->push("[AI] " + fullReply, 0xFF00FF00);
                 }
 
                 VoiceStream::g_state.partial.clear();
@@ -250,7 +250,7 @@ static void run(whisper_context* ctx,
     Pa_Terminate();
 
     LOG_PHASE("VoiceStream stopped cleanly", true);
-    uiHistory->push("[VoiceStream] Stopped.", sf::Color(0, 200, 255));
+    uiHistory->push("[VoiceStream] Stopped.", 0xFFFFC800);
 }
 
 
@@ -267,7 +267,7 @@ bool VoiceStream::start(whisper_context* ctx,
     // Prevent duplicate sessions
     // ------------------------------------------------------------
     if (g_state.running) {
-        history->push("[VoiceStream] Already running", sf::Color::Yellow);
+        history->push("[VoiceStream] Already running", 0xFF00FFFF);
         LOG_DEBUG("VoiceStream", "Start request ignored — already running.");
         return false;
     }

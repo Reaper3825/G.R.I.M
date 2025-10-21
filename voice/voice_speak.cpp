@@ -323,33 +323,26 @@ namespace Voice {
         return g_ttsReady;
     }
 
-// =========================================================
-// Audio state and playback integration (AudioCore-based)
-// =========================================================
-namespace {
+    // =========================================================
+    // Audio state and playback integration (AudioCore-based)
+    // =========================================================
     // Tracks whether GRIM is currently speaking (via AudioCore)
-    static std::atomic<bool> g_isSpeaking{false};
-}
+    std::atomic<bool> g_isSpeaking{false};
 
-bool Voice::isSpeaking() {
-    // Query AudioCore playback status
-    return Audio::isPlaying() || g_isSpeaking.load();
-}
+    bool isSpeaking() {
+        // Query AudioCore playback status
+        return Audio::isPlaying() || g_isSpeaking.load();
+    }
 
-// Old cleanup / SFML stubs replaced entirely
-static void cleanupSounds() {
-    // No-op (handled by AudioCore tracking)
-}
+    bool isPlaying() {
+        // Mirror AudioCore's tracking state
+        return Audio::isPlaying();
+    }
 
-bool isPlaying() {
-    // Mirror AudioCore’s tracking state
-    return Audio::isPlaying();
-}
-
-// =========================================================
-// Voice playback bridge
-// =========================================================
-void playAudio(const std::string& path) {
+    // =========================================================
+    // Voice playback bridge
+    // =========================================================
+    void playAudio(const std::string& path) {
     if (!Audio::init()) {
         LOG_ERROR("Voice/Audio", "PortAudio init failed.");
         return;

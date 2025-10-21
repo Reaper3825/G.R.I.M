@@ -1,4 +1,5 @@
 #include "plugin.hpp"
+#include "commands/commands_core.hpp"
 #include "logger.hpp"
 #include <unordered_map>
 #include <mutex>
@@ -15,7 +16,7 @@ static std::mutex regMutex;
 
 // ---------------- Host exports (stable ABI) ----------------
 extern "C" __declspec(dllexport)
-void grim_register_command(const char* name, CommandFunc func) {
+void grim_register_command(const char* name, PluginCommandFunc func) {
     std::lock_guard<std::mutex> lock(regMutex);
     commandMap[std::string(name)] = func;
     LOG_DEBUG("PluginSystem", std::string("Registered command: ") + name);

@@ -1,7 +1,9 @@
 #include "error_manager.hpp"
 #include "commands/commands_core.hpp"
-#include <ctime>
 #include "logger.hpp"
+#include <ctime>
+#include <filesystem>
+#include "helpers/color.hpp"
 static std::ofstream logStream;
 
 // ====================================================
@@ -36,7 +38,7 @@ namespace Logger {
     void logMessage(Level level, const std::string& message) {
         std::string line = "[" + timestamp() + "][" + levelToString(level) + "] " + message;
 
-        // 🔹 All log levels now go to cerr (to avoid contaminating cout/voice)
+        // Output to stderr (keeps stdout clean for voice / UI)
         std::cerr << line << std::endl;
 
         if (logStream.is_open()) {
@@ -67,8 +69,8 @@ nlohmann::json ErrorManager::root;
 
 void ErrorManager::load(const std::string& path) {
     namespace fs = std::filesystem;
-
     std::ifstream in(path);
+
     if (!in) {
         std::cerr << "[ErrorManager] Could not open " << path << std::endl;
         return;
@@ -76,7 +78,7 @@ void ErrorManager::load(const std::string& path) {
 
     try {
         in >> errors;
-        std::cerr << "[ErrorManager] Loaded errors.json from: " 
+        std::cerr << "[ErrorManager] Loaded errors.json from: "
                   << fs::absolute(path).string() << std::endl;
 
         if (errors.contains("errors") && errors["errors"].is_object()) {
@@ -86,24 +88,22 @@ void ErrorManager::load(const std::string& path) {
         }
 
         std::cerr << "[ErrorManager] Available error codes: ";
-        for (auto& [key, val] : root.items()) {
+        for (auto& [key, _] : root.items()) {
             std::cerr << key << " ";
         }
         std::cerr << std::endl;
 
     } catch (const std::exception& e) {
-        std::cerr << "[ErrorManager] Failed to parse " << path 
+        std::cerr << "[ErrorManager] Failed to parse " << path
                   << " -> " << e.what() << std::endl;
     }
 }
 
 std::string ErrorManager::getUserMessage(const std::string& code) {
-    // ✅ Found a matching user-facing string
     if (root.contains(code) && root[code].contains("user")) {
         return root[code]["user"];
     }
 
-    // ✅ Missing — decide severity by prefix
     if (code.rfind("ERR_", 0) == 0) {
         LOG_ERROR("ErrorManager", "Unknown critical error code: " + code);
         return "[Error] Unknown error code: " + code;
@@ -134,16 +134,14 @@ CommandResult ErrorManager::report(const std::string& code) {
     CommandResult result;
     result.success   = false;
     result.message   = userMsg;
-    result.color     = sf::Color::Red;
     result.errorCode = code;
     result.voice     = "";
     result.category  = "error";
+    result.color     = Colors::Red.toUInt();
 
-    if (code.rfind("ERR_", 0) == 0) {
-        Logger::logMessage(Logger::Level::Error, code + " -> " + debugMsg);
-    } else {
-        Logger::logMessage(Logger::Level::Debug, code + " -> " + debugMsg);
-    }
+    setConsoleColor(Colors::Red);
+    Logger::logMessage(Logger::Level::Error, code + " -> " + debugMsg);
+    resetConsoleColor();
 
     return result;
 }

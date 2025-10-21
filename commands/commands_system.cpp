@@ -3,8 +3,6 @@
 #include "resources.hpp"
 #include "error_manager.hpp"
 #include "logger.hpp"
-
-#include <SFML/Graphics.hpp>
 #include <sstream>
 
 // Externals
@@ -35,11 +33,11 @@ CommandResult cmdSystemInfo([[maybe_unused]] const std::string& arg) {
     output << "Suggested Whisper model: " << sys.suggestedModel << "\n";
 
     return {
-        output.str(),
-        true,
-        sf::Color::Cyan,
-        "ERR_NONE",
-        "System information shown",
-        "summary"
+        true,                               // success
+        output.str(),                       // message
+        "ERR_NONE",                         // errorCode
+        "summary",                          // category
+        "System information shown",         // voice
+        Colors::Cyan                        // color
     };
 }
