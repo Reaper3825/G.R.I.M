@@ -1,4 +1,5 @@
 #include "voice_speak.hpp"
+#include "tts_cache.hpp"  // ? Added
 #include "logger.hpp"
 #include "popup_ui/popup_ui.hpp" 
 
@@ -128,6 +129,9 @@ namespace Voice {
     // Init / Shutdown
     // =========================================================
     bool initTTS() {
+        // ? Initialize TTS cache first
+        TTSCache::init();
+        
         try {
             fs::path cfgPath = fs::path("D:/G.R.I.M/resources/ai_config.json");
             if (fs::exists(cfgPath)) {
@@ -254,6 +258,9 @@ namespace Voice {
             CloseHandle(piProcInfo.hThread);
         }
 #endif
+        // ? Shutdown cache (saves index + cleanup)
+        TTSCache::shutdown();
+        
         LOG_PHASE("Voice shutdownTTS complete", true);
         g_ttsReady = false;
     }
@@ -379,13 +386,22 @@ namespace Voice {
                            const std::string& speaker,
                            double speed) {
 #ifdef _WIN32
+        // ? Check cache first
+        std::string cached = TTSCache::getCached(text, speaker, speed);
+        if (!cached.empty() && fs::exists(cached)) {
+            LOG_DEBUG("Voice/Coqui", "Using cached audio: " + cached);
+            return cached;
+        }
+
         if (!hChildStdinWr || !hChildStdoutRd) {
             LOG_ERROR("Voice/Coqui", "Bridge not running");
             return "";
         }
 
-        fs::create_directories(g_outputDir);
-        std::string outFile = (g_outputDir / (randomString(32) + ".wav")).string();
+        // Generate to temp directory
+        fs::path tempDir = fs::path("D:/G.R.I.M/resources/tts_out/temp");
+        fs::create_directories(tempDir);
+        std::string outFile = (tempDir / (randomString(32) + ".wav")).string();
 
         json req = {
             {"command", "speak"},
@@ -415,8 +431,13 @@ namespace Voice {
             auto resp = json::parse(response);
 
             if (resp.value("status", "") == "ok" && resp.contains("file")) {
+                std::string generatedFile = resp["file"].get<std::string>();
                 LOG_DEBUG("Voice/Bridge", "Received response: " + response);
-                return resp["file"].get<std::string>();
+                
+                // ? Store in cache
+                TTSCache::store(text, speaker, speed, generatedFile);
+                
+                return generatedFile;
             } else {
                 LOG_DEBUG("Voice/Bridge", "Unexpected JSON from Coqui: " + response);
             }

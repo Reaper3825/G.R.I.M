@@ -23,6 +23,18 @@
     "debug": "Voice input captured successfully.",
     "user": "Heard"
   },
+  "ERR_VOICE_NOT_INITIALIZED": {
+    "debug": "Whisper model failed to load or is missing.",
+    "user": "Voice recognition unavailable."
+  },
+  "ERR_VOICE_NO_CONTEXT": {
+    "debug": "Whisper context or audio device unavailable.",
+    "user": "Voice system not initialized."
+  },
+  "ERR_VOICE_NO_SPEECH": {
+    "debug": "Whisper listening timed out without detecting speech.",
+    "user": "No speech detected."
+  },
   "ERR_VOICE_START": {
     "debug": "Voice recognition started successfully.",
     "user": "Listening..."
@@ -30,5 +42,13 @@
   "ERR_VOICE_STOP": {
     "debug": "Voice recognition stopped cleanly.",
     "user": "Stopped listening."
+  },
+  "ERR_VOICE_STREAM_FAIL": {
+    "debug": "Could not start voice streaming session.",
+    "user": "Voice streaming failed."
+  },
+  "ERR_VOICE_TRANSCRIBE_FAIL": {
+    "debug": "Whisper transcription failed during processing.",
+    "user": "Could not transcribe speech."
   }
 }

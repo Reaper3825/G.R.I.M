@@ -43,6 +43,7 @@
     "initial_prompt": "Voice commands: open notepad, close window, show time, list directory",
     "language": "en",
     "max_len": 1,
+    "max_listening_ms": 10000,
     "min_silence_ms": 1200,
     "min_speech_ms": 500,
     "no_speech_threshold": 0.6,
