@@ -5,8 +5,7 @@
 // External libraries
 // ---------------------------------------------------------
 #include <nlohmann/json.hpp>
-#include <SFML/Graphics.hpp>
-#include <SFML/Audio.hpp>
+
 
 // ---------------------------------------------------------
 // Windows / SAPI (only compiled on Windows)
@@ -14,6 +13,7 @@
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
   #include <windows.h>
+  #define NOMINMAX
   #include <sapi.h>
   #include <sphelper.h>
   #include <atlbase.h>

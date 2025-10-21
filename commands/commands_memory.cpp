@@ -3,7 +3,6 @@
 #include "error_manager.hpp"
 #include "memory/memory_storage.hpp"
 #include "logger.hpp"
-#include <SFML/Graphics.hpp>
 #include <string>
 
 // Externals
@@ -15,12 +14,12 @@ extern GRIM::MemoryStorage g_memoryStorage;
 CommandResult cmdRemember(const std::string& arg) {
     if (arg.empty()) {
         return {
-            ErrorManager::getUserMessage("ERR_MEMORY_MISSING_INPUT"),
-            false,
-            sf::Color::Red,
-            "ERR_MEMORY_MISSING_INPUT",
-            "Missing memory input",
-            "error"
+            false,                                                    // success
+            ErrorManager::getUserMessage("ERR_MEMORY_MISSING_INPUT"), // message
+            "ERR_MEMORY_MISSING_INPUT",                               // errorCode
+            "error",                                                  // category
+            "Missing memory input",                                   // voice
+            Colors::Red                                               // color
         };
     }
 
@@ -28,12 +27,12 @@ CommandResult cmdRemember(const std::string& arg) {
     size_t spacePos = arg.find(' ');
     if (spacePos == std::string::npos) {
         return {
-            ErrorManager::getUserMessage("ERR_MEMORY_BAD_FORMAT"),
-            false,
-            sf::Color::Red,
-            "ERR_MEMORY_BAD_FORMAT",
-            "Bad memory format",
-            "error"
+            false,                                                  // success
+            ErrorManager::getUserMessage("ERR_MEMORY_BAD_FORMAT"),  // message
+            "ERR_MEMORY_BAD_FORMAT",                                // errorCode
+            "error",                                                // category
+            "Bad memory format",                                    // voice
+            Colors::Red                                             // color
         };
     }
 
@@ -57,12 +56,12 @@ CommandResult cmdRemember(const std::string& arg) {
     LOG_DEBUG("Memory", "Remembered: " + key + " = " + value);
 
     return {
-        "[Memory] Remembered: " + key,
-        true,
-        sf::Color::Green,
-        "ERR_NONE",
-        "Remembered " + key,
-        "routine"
+        true,                           // success
+        "[Memory] Remembered: " + key,  // message
+        "ERR_NONE",                     // errorCode
+        "routine",                      // category
+        "Remembered " + key,            // voice
+        Colors::Green                   // color
     };
 }
 
@@ -72,12 +71,12 @@ CommandResult cmdRemember(const std::string& arg) {
 CommandResult cmdRecall(const std::string& arg) {
     if (arg.empty()) {
         return {
-            ErrorManager::getUserMessage("ERR_MEMORY_MISSING_KEY"),
-            false,
-            sf::Color::Red,
-            "ERR_MEMORY_MISSING_KEY",
-            "Missing memory key",
-            "error"
+            false,                                                  // success
+            ErrorManager::getUserMessage("ERR_MEMORY_MISSING_KEY"), // message
+            "ERR_MEMORY_MISSING_KEY",                               // errorCode
+            "error",                                                // category
+            "Missing memory key",                                   // voice
+            Colors::Red                                             // color
         };
     }
 
@@ -87,21 +86,21 @@ CommandResult cmdRecall(const std::string& arg) {
         LOG_DEBUG("Memory", "Recalled: " + obj.raw);
 
         return {
-            "[Memory] " + obj.raw,
-            true,
-            sf::Color::Cyan,
-            "ERR_NONE",
-            "Recalled memory for " + arg,
-            "summary"
+            true,                               // success
+            "[Memory] " + obj.raw,              // message
+            "ERR_NONE",                         // errorCode
+            "summary",                          // category
+            "Recalled memory for " + arg,       // voice
+            Colors::Cyan                        // color
         };
     } else {
         return {
-            ErrorManager::getUserMessage("ERR_MEMORY_KEY_NOT_FOUND") + ": " + arg,
-            false,
-            sf::Color::Red,
-            "ERR_MEMORY_KEY_NOT_FOUND",
-            "Memory key not found",
-            "error"
+            false,                                                                     // success
+            ErrorManager::getUserMessage("ERR_MEMORY_KEY_NOT_FOUND") + ": " + arg,    // message
+            "ERR_MEMORY_KEY_NOT_FOUND",                                                // errorCode
+            "error",                                                                   // category
+            "Memory key not found",                                                    // voice
+            Colors::Red                                                                // color
         };
     }
 }
@@ -112,12 +111,12 @@ CommandResult cmdRecall(const std::string& arg) {
 CommandResult cmdForget(const std::string& arg) {
     if (arg.empty()) {
         return {
-            ErrorManager::getUserMessage("ERR_MEMORY_MISSING_KEY"),
-            false,
-            sf::Color::Red,
-            "ERR_MEMORY_MISSING_KEY",
-            "Missing memory key",
-            "error"
+            false,                                                  // success
+            ErrorManager::getUserMessage("ERR_MEMORY_MISSING_KEY"), // message
+            "ERR_MEMORY_MISSING_KEY",                               // errorCode
+            "error",                                                // category
+            "Missing memory key",                                   // voice
+            Colors::Red                                             // color
         };
     }
 
@@ -133,21 +132,21 @@ CommandResult cmdForget(const std::string& arg) {
         }
 
         return {
-            "[Memory] Forgotten entries for: " + arg,
-            true,
-            sf::Color::Green,
-            "ERR_NONE",
-            "Forgotten " + arg,
-            "routine"
+            true,                                           // success
+            "[Memory] Forgotten entries for: " + arg,       // message
+            "ERR_NONE",                                     // errorCode
+            "routine",                                      // category
+            "Forgotten " + arg,                             // voice
+            Colors::Green                                   // color
         };
     }
 
     return {
-        ErrorManager::getUserMessage("ERR_MEMORY_KEY_NOT_FOUND") + ": " + arg,
-        false,
-        sf::Color::Red,
-        "ERR_MEMORY_KEY_NOT_FOUND",
-        "Memory key not found",
-        "error"
+        false,                                                                     // success
+        ErrorManager::getUserMessage("ERR_MEMORY_KEY_NOT_FOUND") + ": " + arg,    // message
+        "ERR_MEMORY_KEY_NOT_FOUND",                                                // errorCode
+        "error",                                                                   // category
+        "Memory key not found",                                                    // voice
+        Colors::Red                                                                // color
     };
 }

@@ -3,20 +3,20 @@
 #include "response_manager.hpp"
 #include "error_manager.hpp"
 #include "voice/voice_speak.hpp"
-#include "console_history.hpp"
+#include "resources.hpp"
 
 CommandResult ResponseManager::systemMessage(const std::string& msg,
-                                             const sf::Color& color) {
-    history.push(msg, color);
+                                             const Color& color) {
+    history.push(msg, (color.a << 24) | (color.b << 16) | (color.g << 8) | color.r);
     Voice::speak(msg, "system");
 
     return {
-        msg,
-        true,
-        color,
-        "ERR_NONE",
-        "System message",
-        "system"
+        true,             // success
+        msg,              // message
+        "ERR_NONE",       // errorCode
+        "system",         // category
+        "System message", // voice
+        color             // color
     };
 }
 

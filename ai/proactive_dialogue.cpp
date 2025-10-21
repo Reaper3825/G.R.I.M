@@ -49,7 +49,7 @@ void checkAfterCommand(const std::string& input, const CommandResult& result) {
     if (!proactiveText.empty()) {
         LOG_DEBUG("Dialogue", "Triggered proactive follow-up: " + proactiveText);
         std::string resp = ResponseManager::get(proactiveText);
-        history.push(resp, sf::Color::Cyan);
+        history.push(resp, 0xFFFFFF00);
         Voice::speak(resp, "proactive");
     }
 }

@@ -38,12 +38,12 @@ CommandResult cmdAiBackend(const std::string& arg) {
 
     if (input.empty()) {
         return {
-            "[AI] Current backend: " + resolveBackendURL(),
-            true,
-            sf::Color::Cyan,
-            "ERR_NONE",
-            "Current AI backend",
-            "summary"
+            true,                                           // success
+            "[AI] Current backend: " + resolveBackendURL(), // message
+            "ERR_NONE",                                     // errorCode
+            "summary",                                      // category
+            "Current AI backend",                           // voice
+            Colors::Cyan                                    // color
         };
     }
 
@@ -54,23 +54,23 @@ CommandResult cmdAiBackend(const std::string& arg) {
         LOG_TRACE("AI", "Backend set to: " + selected);
 
         return {
-            "[AI] Backend set to: " + selected,
-            true,
-            sf::Color::Green,
-            "ERR_NONE",
-            "Backend set to " + selected,
-            "routine"
+            true,                                       // success
+            "[AI] Backend set to: " + selected,         // message
+            "ERR_NONE",                                 // errorCode
+            "routine",                                  // category
+            "Backend set to " + selected,               // voice
+            Colors::Green                               // color
         };
     }
 
     LOG_ERROR("AI", "Invalid backend: " + input);
     return {
-        ErrorManager::getUserMessage("ERR_AI_INVALID_BACKEND") + ": " + input,
-        false,
-        sf::Color::Red,
-        "ERR_AI_INVALID_BACKEND",
-        "Invalid backend",
-        "error"
+        false,                                                                     // success
+        ErrorManager::getUserMessage("ERR_AI_INVALID_BACKEND") + ": " + input,    // message
+        "ERR_AI_INVALID_BACKEND",                                                  // errorCode
+        "error",                                                                   // category
+        "Invalid backend",                                                         // voice
+        Colors::Red                                                                // color
     };
 }
 
@@ -115,25 +115,35 @@ CommandResult cmdGrimAi(const std::string& arg) {
             if (!j.is_discarded() && j.contains("response")) {
                 std::string reply = j["response"].get<std::string>();
                 LOG_TRACE("AI", "Ollama replied successfully");
-                return { reply, true, sf::Color::Cyan, "ERR_NONE", reply, "routine" };
+                return {
+                    true,               // success
+                    reply,              // message
+                    "ERR_NONE",         // errorCode
+                    "routine",          // category
+                    reply,              // voice
+                    Colors::Cyan        // color
+                };
             }
         }
 
         LOG_ERROR("AI", "Ollama backend error");
         return {
-            "[AI] Ollama backend error",
-            false,
-            sf::Color::Red,
-            "ERR_AI_BACKEND_FAILED",
-            "Ollama backend error",
-            "error"
+            false,                              // success
+            "[AI] Ollama backend error",        // message
+            "ERR_AI_BACKEND_FAILED",            // errorCode
+            "error",                            // category
+            "Ollama backend error",             // voice
+            Colors::Red                         // color
         };
     }
 
     CommandResult result = ai_process(arg);
 
     if (result.category.empty()) result.category = "routine";
-    if (result.color == sf::Color()) result.color = sf::Color::Cyan;
+    if (result.color.r == 255 && result.color.g == 255 && 
+        result.color.b == 255 && result.color.a == 255) {
+        result.color = Colors::Cyan;
+    }
 
     if (!result.success) {
         LOG_ERROR("AI", "grim_ai failed with code=" + result.errorCode);
@@ -150,12 +160,12 @@ CommandResult cmdOpenApp(const std::string& arg) {
     if (appPath.empty()) {
         LOG_DEBUG("cmdOpenApp", "Empty argument");
         return {
-            ErrorManager::getUserMessage("ERR_APP_NO_ARGUMENT"),
-            false,
-            sf::Color::Red,
-            "ERR_APP_NO_ARGUMENT",
-            "Missing application name",
-            "error"
+            false,                                                  // success
+            ErrorManager::getUserMessage("ERR_APP_NO_ARGUMENT"),    // message
+            "ERR_APP_NO_ARGUMENT",                                  // errorCode
+            "error",                                                // category
+            "Missing application name",                             // voice
+            Colors::Red                                             // color
         };
     }
 
@@ -165,20 +175,34 @@ CommandResult cmdOpenApp(const std::string& arg) {
     if ((intptr_t)result <= 32) {
         LOG_ERROR("cmdOpenApp", "ShellExecuteA failed (" + std::to_string((intptr_t)result) + ") for: " + appPath);
         return {
-            ErrorManager::getUserMessage("ERR_APP_LAUNCH_FAILED") + ": " + appPath,
-            false,
-            sf::Color::Red,
-            "ERR_APP_LAUNCH_FAILED",
-            "Failed to open " + appPath,
-            "error"
+            false,                                                                         // success
+            ErrorManager::getUserMessage("ERR_APP_LAUNCH_FAILED") + ": " + appPath,       // message
+            "ERR_APP_LAUNCH_FAILED",                                                       // errorCode
+            "error",                                                                       // category
+            "Failed to open " + appPath,                                                   // voice
+            Colors::Red                                                                    // color
         };
     }
 
     LOG_DEBUG("cmdOpenApp", "Successfully launched: " + appPath);
-    return { "[App] Launched: " + appPath, true, sf::Color::Green, "ERR_NONE", "Opening " + appPath, "routine" };
+    return {
+        true,                               // success
+        "[App] Launched: " + appPath,       // message
+        "ERR_NONE",                         // errorCode
+        "routine",                          // category
+        "Opening " + appPath,               // voice
+        Colors::Green                       // color
+    };
 #else
     LOG_INFO("cmdOpenApp", "(Stub) Would open: " + appPath);
-    return { "[App] (Stub) Would open: " + appPath, true, sf::Color::Green, "ERR_NONE", "Opening " + appPath, "routine" };
+    return {
+        true,                                           // success
+        "[App] (Stub) Would open: " + appPath,          // message
+        "ERR_NONE",                                     // errorCode
+        "routine",                                      // category
+        "Opening " + appPath,                           // voice
+        Colors::Green                                   // color
+    };
 #endif
 }
 
@@ -188,12 +212,12 @@ CommandResult cmdSearchWeb(const std::string& arg) {
     if (query.empty()) {
         LOG_DEBUG("Web", "No search query provided");
         return {
-            ErrorManager::getUserMessage("ERR_WEB_NO_ARGUMENT"),
-            false,
-            sf::Color::Red,
-            "ERR_WEB_NO_ARGUMENT",
-            "No search query",
-            "error"
+            false,                                                  // success
+            ErrorManager::getUserMessage("ERR_WEB_NO_ARGUMENT"),    // message
+            "ERR_WEB_NO_ARGUMENT",                                  // errorCode
+            "error",                                                // category
+            "No search query",                                      // voice
+            Colors::Red                                             // color
         };
     }
 
@@ -205,16 +229,30 @@ CommandResult cmdSearchWeb(const std::string& arg) {
     if ((intptr_t)result <= 32) {
         LOG_ERROR("Web", "Failed to open browser for query: " + query);
         return {
-            ErrorManager::getUserMessage("ERR_WEB_OPEN_FAILED") + ": " + query,
-            false,
-            sf::Color::Red,
-            "ERR_WEB_OPEN_FAILED",
-            "Web search failed",
-            "error"
+            false,                                                                     // success
+            ErrorManager::getUserMessage("ERR_WEB_OPEN_FAILED") + ": " + query,       // message
+            "ERR_WEB_OPEN_FAILED",                                                     // errorCode
+            "error",                                                                   // category
+            "Web search failed",                                                       // voice
+            Colors::Red                                                                // color
         };
     }
-    return { "[Web] Searching: " + query, true, sf::Color::Cyan, "ERR_NONE", "Searching web for " + query, "routine" };
+    return {
+        true,                                   // success
+        "[Web] Searching: " + query,            // message
+        "ERR_NONE",                             // errorCode
+        "routine",                              // category
+        "Searching web for " + query,           // voice
+        Colors::Cyan                            // color
+    };
 #else
-    return { "[Web] (Stub) Would search for: " + query, true, sf::Color::Cyan, "ERR_NONE", "Searching web for " + query, "routine" };
+    return {
+        true,                                           // success
+        "[Web] (Stub) Would search for: " + query,      // message
+        "ERR_NONE",                                     // errorCode
+        "routine",                                      // category
+        "Searching web for " + query,                   // voice
+        Colors::Cyan                                    // color
+    };
 #endif
 }

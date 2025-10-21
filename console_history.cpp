@@ -1,41 +1,47 @@
 #include "console_history.hpp"
-#include "ui/ui_config.hpp"
-#include <crtdbg.h>
 #include <sstream>
+#include <crtdbg.h>
 
 #define CHECK_HEAP() _CrtCheckMemory()
 
-// Push a new line into history (with optional color)
-void ConsoleHistory::push(const std::string& line, sf::Color c) {
+// -------------------------------------------------------------
+// Temporary text width approximation (fixed-width assumption)
+static float measureTextWidth(const std::string& text, float charWidth = 8.0f)
+{
+    return static_cast<float>(text.size()) * charWidth;
+}
+// -------------------------------------------------------------
+
+void ConsoleHistory::push(const std::string& line, uint32_t color)
+{
     std::lock_guard<std::mutex> lock(mtx_);
-    if (raw_.size() >= kMaxHistory) {
-        raw_.pop_front(); // cap history size
-    }
-    raw_.push_back({ line, c });
+    if (raw_.size() >= kMaxHistory)
+        raw_.pop_front();
+
+    raw_.push_back({ line, color });
     dirty_ = true;
     CHECK_HEAP();
 }
 
-// Re-wrap lines if font/width changed or marked dirty
-void ConsoleHistory::ensureWrapped(float maxWidth, sf::Text& meas) {
+void ConsoleHistory::ensureWrapped(float maxWidth)
+{
     std::lock_guard<std::mutex> lock(mtx_);
 
-    if (!dirty_ && lastWrapWidth_ == maxWidth && lastFontSize_ == meas.getCharacterSize())
-        return; // nothing to do
+    if (!dirty_ && lastWrapWidth_ == maxWidth)
+        return;
 
     wrapped_.clear();
     for (const auto& ln : raw_) {
-        wrapLine(ln, maxWidth, meas, wrapped_);
+        wrapLine(ln, maxWidth, wrapped_);
     }
 
     dirty_ = false;
     lastWrapWidth_ = maxWidth;
-    lastFontSize_  = meas.getCharacterSize();
     CHECK_HEAP();
 }
 
-// Clear history
-void ConsoleHistory::clear() {
+void ConsoleHistory::clear()
+{
     std::lock_guard<std::mutex> lock(mtx_);
     raw_.clear();
     wrapped_.clear();
@@ -43,11 +49,10 @@ void ConsoleHistory::clear() {
     CHECK_HEAP();
 }
 
-// Core wrapping routine
 void ConsoleHistory::wrapLine(const WrappedLine& ln,
                               float maxW,
-                              sf::Text& meas,
-                              std::vector<WrappedLine>& out) {
+                              std::vector<WrappedLine>& out)
+{
     if (ln.text.empty()) {
         out.push_back({ "", ln.color });
         return;
@@ -65,19 +70,17 @@ void ConsoleHistory::wrapLine(const WrappedLine& ln,
 
     while (iss >> word) {
         std::string test = current.empty() ? word : current + " " + word;
-        meas.setString(test);
 
-        // ✅ SFML 3: use .size.x instead of .width
-        if (meas.getLocalBounds().size.x <= maxW) {
+        if (measureTextWidth(test) <= maxW) {
             current = test;
         } else {
             if (current.empty()) {
-                // Word too long → split character by character
+                // Word too long: split character by character
                 std::string accum;
                 for (char c : word) {
-                    meas.setString(accum + c);
-                    if (meas.getLocalBounds().size.x <= maxW) {
-                        accum += c;
+                    std::string temp = accum + c;
+                    if (measureTextWidth(temp) <= maxW) {
+                        accum = temp;
                     } else {
                         if (!accum.empty())
                             out.push_back({ accum, ln.color });
@@ -97,23 +100,27 @@ void ConsoleHistory::wrapLine(const WrappedLine& ln,
 
 // ---------------- Convenience ----------------
 
-size_t ConsoleHistory::rawCount() const {
+size_t ConsoleHistory::rawCount() const
+{
     std::lock_guard<std::mutex> lock(mtx_);
     return raw_.size();
 }
 
-size_t ConsoleHistory::wrappedCount() const {
+size_t ConsoleHistory::wrappedCount() const
+{
     std::lock_guard<std::mutex> lock(mtx_);
     return wrapped_.size();
 }
 
-const std::vector<ConsoleHistory::WrappedLine> ConsoleHistory::wrapped() const {
+const std::vector<ConsoleHistory::WrappedLine> ConsoleHistory::wrapped() const
+{
     std::lock_guard<std::mutex> lock(mtx_);
     return wrapped_;
 }
 
 // Thread-safe singleton instance
-ConsoleHistory& getConsoleHistory() {
+ConsoleHistory& getConsoleHistory()
+{
     static ConsoleHistory instance;
     return instance;
 }

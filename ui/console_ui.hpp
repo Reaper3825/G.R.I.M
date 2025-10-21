@@ -10,11 +10,11 @@
 #include "timer.hpp"
 
 // ===========================================================
-// BGFX-Based GRIM Console (no SFML dependency)
+// BGFX-Based GRIM Console
 // ===========================================================
 namespace GRIMConsole
 {
-    // Main entry point — replaces SFML render loop
+    // Main entry point — render loop
     void runConsoleUI(int width, int height);
 
     // Internal helpers
@@ -22,7 +22,7 @@ namespace GRIMConsole
     void hideConsole();
     void notifyConsoleActivity();
 
-    // Layout constants (match previous SFML version)
+
     constexpr float kTitleBarH   = 40.f;
     constexpr float kInputBarH   = 48.f;
     constexpr float kLineSpacing = 1.2f;

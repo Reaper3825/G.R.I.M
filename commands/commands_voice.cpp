@@ -54,12 +54,12 @@ CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
 
     if (transcript.empty()) {
         return {
-            ErrorManager::getUserMessage("ERR_VOICE_NO_SPEECH"),
-            false,
-            sf::Color::Red,
-            "ERR_VOICE_NO_SPEECH",
-            "No speech detected",
-            "error"
+            false,                                             // success
+            ErrorManager::getUserMessage("ERR_VOICE_NO_SPEECH"), // message
+            "ERR_VOICE_NO_SPEECH",                             // errorCode
+            "error",                                           // category
+            "No speech detected",                              // voice
+            Colors::Red                                        // color
         };
     }
 
@@ -67,12 +67,12 @@ CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
     handleCommand(transcript);
 
     return {
-        "> " + transcript,
-        true,
-        sf::Color::Cyan,
-        "ERR_NONE",
-        "Voice command processed",
-        "routine"
+        true,                          // success
+        "> " + transcript,             // message
+        "ERR_NONE",                    // errorCode
+        "routine",                     // category
+        "Voice command processed",     // voice
+        Colors::Cyan                   // color
     };
 }
 
@@ -83,34 +83,34 @@ CommandResult cmdVoiceStream([[maybe_unused]] const std::string& arg) {
     if (!Voice::g_state.ctx) {
         LOG_ERROR("Voice", "No context available for streaming");
         return {
-            ErrorManager::getUserMessage("ERR_VOICE_NO_CONTEXT"),
-            false,
-            sf::Color::Red,
-            "ERR_VOICE_NO_CONTEXT",
-            "Voice context missing",
-            "error"
+            false,                                                 // success
+            ErrorManager::getUserMessage("ERR_VOICE_NO_CONTEXT"),  // message
+            "ERR_VOICE_NO_CONTEXT",                                // errorCode
+            "error",                                               // category
+            "Voice context missing",                               // voice
+            Colors::Red                                            // color
         };
     }
 
     if (VoiceStream::start(Voice::g_state.ctx, &history, timers, longTermMemory, g_nlp)) {
         LOG_DEBUG("Voice", "Voice streaming started");
         return {
-            "[Voice] Streaming started.",
-            true,
-            sf::Color::Green,
-            "ERR_NONE",
-            "Voice streaming started",
-            "routine"
+            true,                               // success
+            "[Voice] Streaming started.",       // message
+            "ERR_NONE",                         // errorCode
+            "routine",                          // category
+            "Voice streaming started",          // voice
+            Colors::Green                       // color
         };
     } else {
         LOG_ERROR("Voice", "Voice streaming failed");
         return {
-            ErrorManager::getUserMessage("ERR_VOICE_STREAM_FAIL"),
-            false,
-            sf::Color::Red,
-            "ERR_VOICE_STREAM_FAIL",
-            "Voice streaming failed",
-            "error"
+            false,                                                   // success
+            ErrorManager::getUserMessage("ERR_VOICE_STREAM_FAIL"),   // message
+            "ERR_VOICE_STREAM_FAIL",                                 // errorCode
+            "error",                                                 // category
+            "Voice streaming failed",                                // voice
+            Colors::Red                                              // color
         };
     }
 }
@@ -132,7 +132,7 @@ CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
     if (wavPath.empty()) {
         LOG_ERROR("Voice", "Coqui TTS failed (empty output path)");
         result.message = "[Voice][Test] ERROR: Coqui TTS failed.";
-        result.color   = sf::Color::Red;
+        result.color   = Colors::Red;
         return result;
     }
 
@@ -143,7 +143,7 @@ CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
 
     result.success = true;
     result.message = "[Voice][Test] Coqui TTS playback requested.";
-    result.color   = sf::Color::Green;
+    result.color   = Colors::Green;
     return result;
 }
 
@@ -164,12 +164,12 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
 
         LOG_DEBUG("Voice", "Listing Coqui configuration");
         return {
-            oss.str(),
-            true,
-            sf::Color::Yellow,
-            "ERR_NONE",
-            "Coqui voices listed",
-            "debug"
+            true,                           // success
+            oss.str(),                      // message
+            "ERR_NONE",                     // errorCode
+            "debug",                        // category
+            "Coqui voices listed",          // voice
+            Colors::Yellow                  // color
         };
     }
 
@@ -177,8 +177,14 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     if (FAILED(hr)) {
         LOG_ERROR("Voice", "Failed to initialize COM for SAPI voice listing");
-        return { "[Voice][Error] Failed to initialize COM.", false,
-                 sf::Color::Red, "ERR_TTS_COM", "COM init failed", "debug" };
+        return {
+            false,                                           // success
+            "[Voice][Error] Failed to initialize COM.",      // message
+            "ERR_TTS_COM",                                   // errorCode
+            "debug",                                         // category
+            "COM init failed",                               // voice
+            Colors::Red                                      // color
+        };
     }
 
     IEnumSpObjectTokens* pEnum = nullptr;
@@ -209,12 +215,12 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
         CoUninitialize();
 
         return {
-            oss.str(),
-            true,
-            sf::Color::Yellow,
-            "ERR_NONE",
-            "SAPI voices listed",
-            "debug"
+            true,                       // success
+            oss.str(),                  // message
+            "ERR_NONE",                 // errorCode
+            "debug",                    // category
+            "SAPI voices listed",       // voice
+            Colors::Yellow              // color
         };
     }
 
@@ -222,22 +228,22 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
     CoUninitialize();
     LOG_ERROR("Voice", "Failed to enumerate SAPI voices");
     return {
-        "[Voice][Error] Failed to enumerate SAPI voices.",
-        false,
-        sf::Color::Red,
-        "ERR_TTS_ENUM",
-        "Failed to list SAPI voices",
-        "debug"
+        false,                                                      // success
+        "[Voice][Error] Failed to enumerate SAPI voices.",         // message
+        "ERR_TTS_ENUM",                                             // errorCode
+        "debug",                                                    // category
+        "Failed to list SAPI voices",                              // voice
+        Colors::Red                                                 // color
     };
 #else
     LOG_ERROR("Voice", "Voice listing unsupported on non-Windows platforms");
     return {
-        "[Voice][Error] Voice listing is only supported on Windows (for SAPI).",
-        false,
-        sf::Color::Red,
-        "ERR_UNSUPPORTED_PLATFORM",
-        "Voice listing unsupported",
-        "debug"
+        false,                                                                            // success
+        "[Voice][Error] Voice listing is only supported on Windows (for SAPI).",         // message
+        "ERR_UNSUPPORTED_PLATFORM",                                                       // errorCode
+        "debug",                                                                          // category
+        "Voice listing unsupported",                                                      // voice
+        Colors::Red                                                                       // color
     };
 #endif
 }
@@ -252,34 +258,34 @@ CommandResult cmd_testSAPI([[maybe_unused]] const std::string& arg) {
     if (!std::filesystem::exists(path)) {
         LOG_ERROR("Audio", "File not found: " + path);
         return {
-            "[Audio] Test file not found.",
-            false,
-            sf::Color::Red,
-            "ERR_AUDIO_MISSING",
-            "Missing audio file",
-            "error"
+            false,                           // success
+            "[Audio] Test file not found.",  // message
+            "ERR_AUDIO_MISSING",             // errorCode
+            "error",                         // category
+            "Missing audio file",            // voice
+            Colors::Red                      // color
         };
     }
 
     if (!Audio::playWav(path)) {
         LOG_ERROR("Audio", "Playback failed via AudioCore.");
         return {
-            "[Audio] Playback failed.",
-            false,
-            sf::Color::Red,
-            "ERR_AUDIO_FAIL",
-            "Audio playback failed",
-            "error"
+            false,                           // success
+            "[Audio] Playback failed.",      // message
+            "ERR_AUDIO_FAIL",                // errorCode
+            "error",                         // category
+            "Audio playback failed",         // voice
+            Colors::Red                      // color
         };
     }
 
     return {
-        "[Audio] Test file played successfully.",
-        true,
-        sf::Color::Green,
-        "ERR_NONE",
-        "Audio playback succeeded",
-        "routine"
+        true,                                           // success
+        "[Audio] Test file played successfully.",       // message
+        "ERR_NONE",                                     // errorCode
+        "routine",                                      // category
+        "Audio playback succeeded",                     // voice
+        Colors::Green                                   // color
     };
 }
 
@@ -292,8 +298,14 @@ CommandResult cmd_ttsDevice([[maybe_unused]] const std::string& arg) {
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     if (FAILED(hr)) {
         LOG_ERROR("Voice", "Failed to initialize COM for device query");
-        return { "[Voice][Error] Failed to initialize COM.", false,
-                 sf::Color::Red, "ERR_TTS_COM", "COM init failed", "debug" };
+        return {
+            false,                                           // success
+            "[Voice][Error] Failed to initialize COM.",      // message
+            "ERR_TTS_COM",                                   // errorCode
+            "debug",                                         // category
+            "COM init failed",                               // voice
+            Colors::Red                                      // color
+        };
     }
 
     ISpVoice* pVoice = nullptr;
@@ -303,8 +315,14 @@ CommandResult cmd_ttsDevice([[maybe_unused]] const std::string& arg) {
     if (FAILED(hr) || !pVoice) {
         CoUninitialize();
         LOG_ERROR("Voice", "Failed to create SAPI voice instance");
-        return { "[Voice][Error] Failed to create SAPI voice instance.", false,
-                 sf::Color::Red, "ERR_TTS_INIT", "SAPI init failed", "debug" };
+        return {
+            false,                                                      // success
+            "[Voice][Error] Failed to create SAPI voice instance.",    // message
+            "ERR_TTS_INIT",                                             // errorCode
+            "debug",                                                    // category
+            "SAPI init failed",                                         // voice
+            Colors::Red                                                 // color
+        };
     }
 
     ISpObjectToken* pAudioOut = nullptr;
@@ -330,12 +348,24 @@ CommandResult cmd_ttsDevice([[maybe_unused]] const std::string& arg) {
     pVoice->Release();
     CoUninitialize();
 
-    return { oss.str(), true, sf::Color::Yellow,
-             "ERR_NONE", "Device info", "debug" };
+    return {
+        true,               // success
+        oss.str(),          // message
+        "ERR_NONE",         // errorCode
+        "debug",            // category
+        "Device info",      // voice
+        Colors::Yellow      // color
+    };
 #else
     LOG_ERROR("Voice", "Device query unsupported on this platform");
-    return { "[Voice][Error] Device query only works on Windows.", false,
-             sf::Color::Red, "ERR_UNSUPPORTED_PLATFORM", "Device query unsupported", "debug" };
+    return {
+        false,                                                      // success
+        "[Voice][Error] Device query only works on Windows.",      // message
+        "ERR_UNSUPPORTED_PLATFORM",                                 // errorCode
+        "debug",                                                    // category
+        "Device query unsupported",                                 // voice
+        Colors::Red                                                 // color
+    };
 #endif
 }
 
@@ -356,11 +386,11 @@ CommandResult cmdNevermind(const std::string& arg)
 
 
     return {
-        "Alright, cancelled.",
-        true,
-        sf::Color(128, 128, 255),
-        "",
-        "routine",
-        "Alright, cancelled."
+        true,                          // success
+        "Alright, cancelled.",         // message
+        "ERR_NONE",                    // errorCode
+        "routine",                     // category
+        "Alright, cancelled.",         // voice
+        Color(128, 128, 255)           // color
     };
 }

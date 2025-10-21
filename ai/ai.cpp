@@ -188,7 +188,7 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
 CommandResult ai_process(const std::string& input) {
     CommandResult result;
     result.category  = "routine";
-    result.color     = sf::Color::Cyan;
+    result.color     = Colors::Cyan;
     result.success   = false;
     result.errorCode = "ERR_AI_BACKEND_UNAVAILABLE";
 
@@ -231,7 +231,7 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
 {
     CommandResult result;
     result.category = "ai_interpret";
-    result.color = sf::Color::Cyan;
+    result.color = Colors::Cyan;
     result.success = false;
     result.errorCode = "ERR_AI_INTERPRET_FAIL";
 

@@ -57,7 +57,7 @@ static LRESULT CALLBACK ConsoleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             if (!input.empty())
             {
                 handleCommand(input);
-                g_history.push(input, sf::Color::Green);
+                g_history.push(input, 0xFF00FF00);
             }
             return 0;
         }

@@ -2,7 +2,7 @@
 #include "logger.hpp"
 #include "pch.hpp"
 #define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
+#include <stb/stb_image.h>
 #include <vector>
 #include <mutex>
 #include <string>

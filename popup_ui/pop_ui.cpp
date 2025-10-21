@@ -4,16 +4,14 @@
 #include "popup_anim.hpp"
 #include "logger.hpp"
 #include "pch.hpp"
-#include <SFML/System/Clock.hpp>
-#include <SFML/System/Time.hpp>
 #include "voice/voice_speak.hpp"
 #include <windows.h>
 #include <atomic>
 #include <thread>
+#include <chrono>
 #include "core/window_manager.hpp"
 #include "helpers/mouse.hpp"
 #include "core/ui_sync.hpp"
-
 
 // ===========================================================
 // Constants
@@ -29,21 +27,25 @@ extern std::atomic<bool> g_alphaReady;
 
 static HWND g_hwnd = nullptr;
 static PopupAnimState g_anim;
-static sf::Clock g_idleClock;
 static std::atomic<bool> g_running{ true };
 static std::atomic<bool> g_popupVisible{ false };
 static std::atomic<bool> g_pendingPopup{ false };
 static std::atomic<int> g_idleTimerMs{ 0 };
 
+
+static std::chrono::steady_clock::time_point g_idleStart = std::chrono::steady_clock::now();
+static std::chrono::steady_clock::time_point g_frameStart = std::chrono::steady_clock::now();
+
 // ===========================================================
 // Popup UI main thread (logic only — no BGFX here)
 // ===========================================================
 void runPopupUI(int width, int height)
-{LOG_TRACE("PopupUI", "runPopupUI");
+{
+    LOG_TRACE("PopupUI", "runPopupUI");
     if (WindowManager::isInitialized()) {
-    LOG_DEBUG("PopupUI", "Deferring popup creation until BGFX idle");
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-}
+        LOG_DEBUG("PopupUI", "Deferring popup creation until BGFX idle");
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
 
     // Initialize COM for this thread
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -106,12 +108,12 @@ void runPopupUI(int width, int height)
     {
         showPopup();
         g_idleTimerMs = 10000;
-        g_idleClock.restart();
+        g_idleStart = std::chrono::steady_clock::now();
         g_pendingPopup = false;
     }
 
     MSG msg{};
-    sf::Clock frameClock;
+    g_frameStart = std::chrono::steady_clock::now();
 
     LOG_PHASE("Popup UI Thread Started", true);
 
@@ -134,48 +136,53 @@ void runPopupUI(int width, int height)
             DispatchMessage(&msg);
         }
 
-// ---------------------------------------------------
-// Mouse input handling (using Mouse class)
-// ---------------------------------------------------
-if (Mouse::wasPressed(MouseButton::Left))
-{
-    POINT cursorPos = Mouse::getPosition();
-    HWND hwndUnderCursor = WindowFromPoint(cursorPos);
-
-    // Only trigger if the popup window itself was clicked
-    if (hwndUnderCursor == g_hwnd)
-    {
-        LOG_DEBUG("PopupUI", "Popup clicked — showing GRIM console");
-
-        HWND grimConsole = FindWindowW(nullptr, L"G.R.I.M Console");
-        if (grimConsole)
+        // ---------------------------------------------------
+        // Mouse input handling (using Mouse class)
+        // ---------------------------------------------------
+        if (Mouse::wasPressed(MouseButton::Left))
         {
-            LOG_DEBUG("PopupUI", "Found existing GRIM console window, bringing to front");
-            ShowWindow(grimConsole, SW_RESTORE);
-            SetForegroundWindow(grimConsole);
-        }
-        // else do nothing — console not yet created
-        }
-    }
-    Mouse::endFrame();
+            POINT cursorPos = Mouse::getPosition();
+            HWND hwndUnderCursor = WindowFromPoint(cursorPos);
 
+            // Only trigger if the popup window itself was clicked
+            if (hwndUnderCursor == g_hwnd)
+            {
+                LOG_DEBUG("PopupUI", "Popup clicked — showing GRIM console");
+
+                HWND grimConsole = FindWindowW(nullptr, L"G.R.I.M Console");
+                if (grimConsole)
+                {
+                    LOG_DEBUG("PopupUI", "Found existing GRIM console window, bringing to front");
+                    ShowWindow(grimConsole, SW_RESTORE);
+                    SetForegroundWindow(grimConsole);
+                }
+                // else do nothing — console not yet created
+            }
+        }
+        Mouse::endFrame();
 
         // ---------------------------------------------------
         // Idle timer logic
         // ---------------------------------------------------
-        float dt = frameClock.restart().asSeconds();
+        auto now = std::chrono::steady_clock::now();
+        std::chrono::duration<float> dtSec = now - g_frameStart;
+        float dt = dtSec.count();
+        g_frameStart = now;
 
-        if (g_idleTimerMs > 0 &&
-            g_idleClock.getElapsedTime().asMilliseconds() > g_idleTimerMs)
+        if (g_idleTimerMs > 0)
         {
-            if (!Voice::isPlaying())
+            auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_idleStart).count();
+            if (elapsedMs > g_idleTimerMs)
             {
-                hidePopup();
-                g_idleTimerMs = 0;
-            }
-            else
-            {
-                g_idleClock.restart();
+                if (!Voice::isPlaying())
+                {
+                    hidePopup();
+                    g_idleTimerMs = 0;
+                }
+                else
+                {
+                    g_idleStart = std::chrono::steady_clock::now();
+                }
             }
         }
 
@@ -191,7 +198,6 @@ if (Mouse::wasPressed(MouseButton::Left))
     LOG_PHASE("Popup UI Thread Exited", true);
     CoUninitialize();
 }
-
 
 // ===========================================================
 // Popup Controls
@@ -221,7 +227,7 @@ void hidePopup()
 void notifyPopupActivity()
 {
     LOG_DEBUG("PopupUI", "notifyPopupActivity() called");
-  
+
     if (!g_hwnd)
     {
         g_pendingPopup = true;
@@ -231,6 +237,6 @@ void notifyPopupActivity()
 
     PostMessage(g_hwnd, WM_GRIM_SHOW_POPUP, 0, 0);
     g_idleTimerMs = 3000;
-    g_idleClock.restart();
+    g_idleStart = std::chrono::steady_clock::now();
     LOG_DEBUG("PopupUI", "Idle timer reset to " + std::to_string(g_idleTimerMs) + "ms");
 }

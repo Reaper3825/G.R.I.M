@@ -10,7 +10,7 @@
 #include <nlohmann/json.hpp>
 
 // ============================================================
-// Process Win32 events (replaces SFML pollEvent loop)
+// Process Win32 events for GRIM UI
 // ============================================================
 bool processEvents(HWND hwnd,
                    std::string& buffer,
@@ -40,7 +40,7 @@ bool processEvents(HWND hwnd,
                 if (!input.empty())
                 {
                     handleCommand(input);
-                    uiHistory.push(input, sf::Color::Green);
+                    uiHistory.push(input, 0xFF00FF00);
                 }
                 return true;
             }

@@ -1,10 +1,10 @@
+#include "pch.hpp"
 #include "popup_window.hpp"
 #include <windows.h>
-#include <stb_image.h>
-#include "pch.hpp"
+#include <stb/stb_image.h>
 #include "core/ui_sync.hpp"
 #include <algorithm>
-
+#include <sstream>
 #define WM_GRIM_SHOW_POPUP (WM_APP + 1)
 
 
@@ -209,8 +209,8 @@ void queueWindowAlphaReadback(int width, int height)
     {
         uint8_t alpha = g_alphaPixels[i * 4 + 3];
         alphaSum += alpha;
-        minAlpha = std::min(minAlpha, alpha);
-        maxAlpha = std::max(maxAlpha, alpha);
+        minAlpha = (std::min)(minAlpha, alpha);
+        maxAlpha = (std::max)(maxAlpha, alpha);
     }
     uint64_t avgAlpha = pixelCount > 0 ? alphaSum / pixelCount : 0;
     LOG_DEBUG("PopupWindow", "Combined diffuse+oreo stats: avg=" + std::to_string(avgAlpha) +

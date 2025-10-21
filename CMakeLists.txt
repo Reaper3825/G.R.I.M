@@ -16,6 +16,8 @@ if (MSVC)
 endif()
 
 add_compile_definitions(
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
     $<$<CONFIG:Debug>:BX_CONFIG_DEBUG=1>
     $<$<NOT:$<CONFIG:Debug>>:BX_CONFIG_DEBUG=0>
 )
@@ -57,6 +59,20 @@ endif()
 include(cmake/Options.cmake)
 
 include(cmake/Sources.cmake)
+
+# =========================================================
+# Copy STB headers from bimg 3rdparty to deps/include
+# =========================================================
+file(MAKE_DIRECTORY "${CMAKE_SOURCE_DIR}/deps/include/stb")
+file(GLOB STB_HEADERS "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/bimg/3rdparty/stb/*.h")
+foreach(STB_HEADER ${STB_HEADERS})
+    get_filename_component(HEADER_NAME ${STB_HEADER} NAME)
+    configure_file(
+        ${STB_HEADER}
+        "${CMAKE_SOURCE_DIR}/deps/include/stb/${HEADER_NAME}"
+        COPYONLY
+    )
+endforeach()
 
 add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
 # Allow GRIM.exe to export symbols for possible plugin use

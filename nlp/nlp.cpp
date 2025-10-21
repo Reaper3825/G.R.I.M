@@ -132,16 +132,20 @@ CommandResult reloadNlpRules() {
     std::string err;
     if (!g_nlp.load_rules(getResourcePath() + "/nlp_rules.json", &err)) {
         return {
-            "[Error] Failed to reload NLP rules",
-            false,
-            sf::Color::Red,
-            "ERR_NLP_RELOAD_FAILED"
+            false,                                      // success
+            "[Error] Failed to reload NLP rules",       // message
+            "ERR_NLP_RELOAD_FAILED",                    // errorCode
+            "error",                                    // category
+            "NLP reload failed",                        // voice
+            Colors::Red                                 // color
         };
     }
     return {
-        "[NLP] Rules reloaded successfully",
-        true,
-        sf::Color::Green,
-        ""
+        true,                                       // success
+        "[NLP] Rules reloaded successfully",        // message
+        "ERR_NONE",                                 // errorCode
+        "routine",                                  // category
+        "NLP rules reloaded",                       // voice
+        Colors::Green                               // color
     };
 }

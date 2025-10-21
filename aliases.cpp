@@ -130,7 +130,7 @@ void refreshAsync() {
 CommandResult refreshNow() {
     CommandResult result;
     result.success = true;
-    result.color   = sf::Color::Green;
+    result.color   = Colors::Green;
 
     {
         std::scoped_lock lock(g_aliasMutex);
