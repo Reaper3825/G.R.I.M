@@ -134,7 +134,7 @@ void runPopupUI(int width, int height)
             DispatchMessage(&msg);
         }
 
-        // ---------------------------------------------------
+// ---------------------------------------------------
 // Mouse input handling (using Mouse class)
 // ---------------------------------------------------
 if (Mouse::wasPressed(MouseButton::Left))

@@ -32,13 +32,10 @@
 #include "voice/voice_speak.hpp"
 #include "resources.hpp"
 #include "nlp/nlp.hpp"
-#include "logger.hpp"   // Added logger
-// globals: history, timers, longTermMemory, g_nlp
+#include "logger.hpp"
+#include "core/audio_core.hpp"
 
-// ---------------------------------------------------------
-// SFML
-// ---------------------------------------------------------
-#include <SFML/Audio.hpp>
+
 
 // ---------------------------------------------------------
 // Standard headers
@@ -48,32 +45,6 @@
 #include <memory>
 #include <vector>
 
-// ---------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------
-namespace {
-    bool playWavFile(const std::string& wavPath) {
-        // Keep both buffers and sounds alive until playback finishes
-        static std::vector<std::unique_ptr<sf::SoundBuffer>> buffers;
-        static std::vector<sf::Sound> sounds;
-
-        auto buffer = std::make_unique<sf::SoundBuffer>();
-        if (!buffer->loadFromFile(wavPath)) {
-            LOG_ERROR("Voice", "Failed to load audio: " + wavPath);
-            return false;
-        }
-
-        sf::Sound sound(*buffer);
-        sound.play();
-
-        // Push into static storage
-        sounds.push_back(std::move(sound));
-        buffers.push_back(std::move(buffer));
-
-        LOG_DEBUG("Voice", "Playing audio file: " + wavPath);
-        return true;
-    }
-}
 
 // ====================================================
 // [Voice] One-shot voice command
@@ -275,29 +246,32 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
 // [Debug] Speak a test line directly through SAPI
 // ====================================================
 CommandResult cmd_testSAPI([[maybe_unused]] const std::string& arg) {
-    sf::SoundBuffer buffer;
-    if (!buffer.loadFromFile("resources/test.wav")) {
-        LOG_ERROR("Audio", "Failed to load test.wav");
+    std::string path = "resources/test.wav";
+    LOG_DEBUG("Audio", "Testing playback of: " + path);
+
+    if (!std::filesystem::exists(path)) {
+        LOG_ERROR("Audio", "File not found: " + path);
         return {
-            "[Audio] Failed to load resources/test.wav",
+            "[Audio] Test file not found.",
             false,
             sf::Color::Red,
-            "ERR_AUDIO_LOAD",
-            "Audio load failed",
+            "ERR_AUDIO_MISSING",
+            "Missing audio file",
             "error"
         };
     }
 
-    sf::Sound sound(buffer);
-    sound.play();
-
-    LOG_DEBUG("Audio", "Playing test.wav...");
-
-    while (sound.getStatus() == sf::Sound::Status::Playing) {
-        sf::sleep(sf::milliseconds(100));
+    if (!Audio::playWav(path)) {
+        LOG_ERROR("Audio", "Playback failed via AudioCore.");
+        return {
+            "[Audio] Playback failed.",
+            false,
+            sf::Color::Red,
+            "ERR_AUDIO_FAIL",
+            "Audio playback failed",
+            "error"
+        };
     }
-
-    LOG_DEBUG("Audio", "Test.wav playback finished");
 
     return {
         "[Audio] Test file played successfully.",
@@ -308,6 +282,7 @@ CommandResult cmd_testSAPI([[maybe_unused]] const std::string& arg) {
         "routine"
     };
 }
+
 
 // ====================================================
 // [Voice] Get current SAPI output device
@@ -375,9 +350,10 @@ CommandResult cmdNevermind(const std::string& arg)
 
     // Optionally stop active speech playback
     if (Voice::isSpeaking()) {
-        LOG_DEBUG("Command", "Stopping active TTS playback");
-        Voice::g_activeSound->stop();
+    LOG_DEBUG("Command", "Would stop active TTS playback — placeholder (AudioCore).");
+    // TODO: integrate mixer stop logic once audio_core supports it.
     }
+
 
     return {
         "Alright, cancelled.",
