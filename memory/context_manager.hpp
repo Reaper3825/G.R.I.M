@@ -44,6 +44,8 @@ public:
     static void purgeOldFrames(size_t keepLast = 15);
     static void saveToDisk(const std::string& path);
     static void loadFromDisk(const std::string& path);
+    // Returns current mood string for RL / personality feedback
+    static std::string getCurrentMood();
 
 private:
     static std::mutex mtx;

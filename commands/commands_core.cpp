@@ -324,19 +324,25 @@ void handleCommand(const std::string& line)
     CommandResult result;
 
     // --- RL Pre-dispatch observation ---
-    try {
-        nlohmann::json obs = {
-            {"input", line},
-            {"command_raw", cmdRaw},
-            {"argument", arg},
-            {"context", longTermMemory}
-        };
-        nlohmann::json rlRes = GRIM::RL::getAction(obs);
-        if (rlRes.contains("suggested_command")) {
-            std::string suggested = rlRes["suggested_command"].get<std::string>();
-            LOG_DEBUG("RL", "RL suggested override: " + suggested);
+    // --- RL Pre-dispatch observation (Dynamic PPO Integration) ---
+try {
+    nlohmann::json obs = {
+        {"input", line},
+        {"command_raw", cmdRaw},
+        {"argument", arg},
+        {"context", longTermMemory},
+        {"mood", GRIM::ContextManager::getCurrentMood()}
+    };
+
+    nlohmann::json rlRes = GRIM::RL::getAction(obs);
+
+    if (rlRes.contains("suggested_command")) {
+        std::string suggested = rlRes["suggested_command"].get<std::string>();
+        if (commandMap.find(suggested) != commandMap.end()) {
+            LOG_DEBUG("RL", "Dynamic PPO suggested: " + suggested);
             cmdRaw = suggested;
         }
+    }
     } catch (const std::exception& e) {
         LOG_ERROR("RL", std::string("Pre-dispatch RL error: ") + e.what());
     }
@@ -390,16 +396,16 @@ void handleCommand(const std::string& line)
     }
 
     try {
-        nlohmann::json feedback = {
-            {"command", cmdRaw},
-            {"argument", arg},
-            {"success", result.success},
-            {"output", result.message}
-        };
-        GRIM::RL::getAction(feedback);
+    float execTime = 0.0f; // (optional: measure actual duration later)
+    float sentimentScore = (result.success ? 0.5f : -0.5f);
+    float diversityFactor = 0.2f; // placeholder — can evolve with context
+    std::string mood = GRIM::ContextManager::getCurrentMood();
+
+    GRIM::RL::processCommandResult(result, cmdRaw, execTime, sentimentScore, diversityFactor, mood);
     } catch (const std::exception& e) {
-        LOG_ERROR("RL", std::string("Post-dispatch RL error: ") + e.what());
+        LOG_ERROR("RL", std::string("Post-dispatch RL feedback error: ") + e.what());
     }
+
 
     GRIM::ContextManager::recordUsage(cmdRaw);
     GRIM::PersonalityManager::updateAfterCommand(result.success);
