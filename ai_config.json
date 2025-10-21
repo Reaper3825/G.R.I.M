@@ -11,14 +11,18 @@
   "silence_threshold": 0.02,
   "silence_timeout_ms": 4000,
   "voice": {
+    "confidence_threshold": 0.6,
     "coqui": {
       "model": "tts_models/en/ljspeech/tacotron2-DDC",
       "speaker": "p225"
     },
     "engine": "coqui",
+    "filter_low_confidence": true,
     "input_device_index": -1,
     "local_engine": "en_US-amy-medium.onnx",
+    "max_commands_per_input": 3,
     "mode": "local",
+    "require_multi_command_confirmation": true,
     "rules": {
       "banter": "coqui",
       "reminder": "coqui",
@@ -28,13 +32,22 @@
     "sapi": {
       "voice": "en_US-amy-medium.onnx"
     },
+    "silence_threshold": 0.02,
+    "silence_timeout_ms": 1200,
     "speaker": "p225",
     "speed": 1.5
   },
   "whisper": {
+    "beam_size": 5,
+    "best_of": 5,
+    "initial_prompt": "Voice commands: open notepad, close window, show time, list directory",
+    "language": "en",
+    "max_len": 1,
     "min_silence_ms": 1200,
     "min_speech_ms": 500,
+    "no_speech_threshold": 0.6,
     "sampling_strategy": "beam",
+    "suppress_blank": true,
     "temperature": 0.2,
     "whisper_model": "ggml-tiny.en.bin"
   },

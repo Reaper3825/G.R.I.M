@@ -34,11 +34,6 @@ static LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         LOG_DEBUG("PopupWindow", "WM_DESTROY received — ignoring PostQuitMessage to keep GRIM alive");
         return 0;
 
-    case WM_SHOWWINDOW:
-        LOG_DEBUG("PopupWindow", "WM_SHOWWINDOW received - wParam: " + std::to_string(wParam) +
-                  ", lParam: " + std::to_string(lParam));
-        break;
-
     case WM_GRIM_SHOW_POPUP:
         LOG_DEBUG("PopupWindow", "Received WM_GRIM_SHOW_POPUP — showing popup (thread-safe)");
         ShowWindow(hwnd, SW_SHOW);
@@ -101,11 +96,11 @@ static LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     LOG_TRACE("PW", "CreateWindowExW");
     HWND hwnd = CreateWindowExW(
         
-        WS_EX_LAYERED | WS_EX_TOPMOST,  // Layered for transparency
+        WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE,  // Remove WS_EX_TRANSPARENT
         L"GRIMPopupClass",
         L"GRIM Debug Popup",
-        WS_POPUP | WS_VISIBLE,
-        50, 50, width, height,          // Initial position and size
+        WS_POPUP,  // Remove WS_VISIBLE - we'll show it later
+        100, 100, width, height,
         nullptr, nullptr, hInstance, nullptr
     );
 
@@ -203,7 +198,7 @@ void queueWindowAlphaReadback(int width, int height)
 }
 
 // ===========================================================
-// Apply alpha to window (per-pixel transparency)
+// Apply alpha to window (per-pixel transparency) - INITIAL SETUP ONLY
 // ===========================================================
 void applyWindowAlphaIfReady(HWND hwnd, int width, int height, uint32_t frameIdx)
 {
@@ -219,13 +214,13 @@ void applyWindowAlphaIfReady(HWND hwnd, int width, int height, uint32_t frameIdx
     }
 
     // ------------------------------------------------------
-    // Copy current alpha pixels safely
+    // Copy current alpha pixels safely (DON'T clear g_alphaReady!)
     // ------------------------------------------------------
     std::vector<uint8_t> pixelsCopy;
     {
         std::lock_guard<std::mutex> lock(g_alphaMutex);
         pixelsCopy = g_alphaPixels;
-        g_alphaReady = false;
+        // DON'T SET g_alphaReady = false; - Animation needs continuous access!
     }
 
     if (pixelsCopy.empty())
@@ -274,7 +269,7 @@ void applyWindowAlphaIfReady(HWND hwnd, int width, int height, uint32_t frameIdx
 
     SIZE wndSize{ width, height };
     POINT srcPos{ 0, 0 };
-    POINT winPos{ 50, 50 }; // popup screen position
+    POINT winPos{ 100, 100 }; // popup screen position
 
     BLENDFUNCTION blend{};
     blend.BlendOp = AC_SRC_OVER;
@@ -294,7 +289,7 @@ void applyWindowAlphaIfReady(HWND hwnd, int width, int height, uint32_t frameIdx
     }
     else
     {
-        LOG_DEBUG("PopupWindow", "Applied alpha to window successfully (frame " + std::to_string(frameIdx) + ")");
+        LOG_DEBUG("PopupWindow", "Applied initial alpha to window successfully (frame " + std::to_string(frameIdx) + ")");
     }
 
     // ------------------------------------------------------
@@ -307,69 +302,112 @@ void applyWindowAlphaIfReady(HWND hwnd, int width, int height, uint32_t frameIdx
 }
 
 // ===========================================================
-// Apply animation to window (scale and alpha)
+// Apply animation to window with SMOOTH BILINEAR INTERPOLATION
 // ===========================================================
 void applyAnimationToWindow(HWND hwnd, int width, int height, float scale, float alpha)
 {
     if (!hwnd || !IsWindow(hwnd))
         return;
 
-    // ------------------------------------------------------
     // Get current alpha pixels
-    // ------------------------------------------------------
     std::vector<uint8_t> pixelsCopy;
     {
         std::lock_guard<std::mutex> lock(g_alphaMutex);
-        if (!g_alphaReady.load() && g_alphaPixels.empty())
+        if (g_alphaPixels.empty())
+        {
+            static int emptyWarningCount = 0;
+            if (++emptyWarningCount <= 5) {
+                LOG_ERROR("PopupWindow", "applyAnimationToWindow: g_alphaPixels is EMPTY! Animation cannot render.");
+            }
             return;
+        }
         pixelsCopy = g_alphaPixels;
     }
 
     if (pixelsCopy.empty())
         return;
 
-    // ------------------------------------------------------
     // Calculate scaled dimensions
-    // ------------------------------------------------------
-    int scaledWidth = static_cast<int>(width * scale);
-    int scaledHeight = static_cast<int>(height * scale);
+    int scaledWidth = static_cast<int>(std::round(width * scale));
+    int scaledHeight = static_cast<int>(std::round(height * scale));
     
-    // Clamp to reasonable bounds
-    scaledWidth = std::max(50, std::min(scaledWidth, 512));
-    scaledHeight = std::max(50, std::min(scaledHeight, 512));
+    scaledWidth = std::clamp(scaledWidth, 50, 512);
+    scaledHeight = std::clamp(scaledHeight, 50, 512);
 
     // ------------------------------------------------------
-    // Create scaled image with animation alpha applied
+    // Use GDI HALFTONE mode for fast hardware-accelerated scaling
     // ------------------------------------------------------
     HDC hdcScreen = GetDC(nullptr);
-    HDC hdcMem = CreateCompatibleDC(hdcScreen);
+    HDC hdcSrc = CreateCompatibleDC(hdcScreen);
+    HDC hdcDst = CreateCompatibleDC(hdcScreen);
 
-    BITMAPINFO bmi{};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = scaledWidth;
-    bmi.bmiHeader.biHeight = -scaledHeight; // top-down
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
+    // Create source bitmap
+    BITMAPINFO bmiSrc{};
+    bmiSrc.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmiSrc.bmiHeader.biWidth = width;
+    bmiSrc.bmiHeader.biHeight = -height;
+    bmiSrc.bmiHeader.biPlanes = 1;
+    bmiSrc.bmiHeader.biBitCount = 32;
+    bmiSrc.bmiHeader.biCompression = BI_RGB;
 
-    void* bits = nullptr;
-    HBITMAP hBmp = CreateDIBSection(hdcMem, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (!hBmp)
+    void* bitsSrc = nullptr;
+    HBITMAP hBmpSrc = CreateDIBSection(hdcSrc, &bmiSrc, DIB_RGB_COLORS, &bitsSrc, nullptr, 0);
+    if (!hBmpSrc)
     {
-        DeleteDC(hdcMem);
+        DeleteDC(hdcSrc);
+        DeleteDC(hdcDst);
         ReleaseDC(nullptr, hdcScreen);
+        LOG_ERROR("PopupWindow", "Failed to create source bitmap");
         return;
     }
 
-    // ------------------------------------------------------
-    // Scale and copy pixels with alpha applied (RGBA → BGRA)
-    // ------------------------------------------------------
-    uint8_t* dst = static_cast<uint8_t*>(bits);
+    // Copy source pixels (RGBA → BGRA) with alpha
+    uint8_t* src = static_cast<uint8_t*>(bitsSrc);
+    for (int i = 0; i < width * height; ++i)
+    {
+        uint8_t originalAlpha = pixelsCopy[i * 4 + 3];
+        uint8_t finalAlpha = static_cast<uint8_t>(originalAlpha * alpha);
+        
+        src[i * 4 + 0] = pixelsCopy[i * 4 + 2]; // B
+        src[i * 4 + 1] = pixelsCopy[i * 4 + 1]; // G
+        src[i * 4 + 2] = pixelsCopy[i * 4 + 0]; // R
+        src[i * 4 + 3] = finalAlpha;             // A
+    }
+
+    // Create destination bitmap
+    BITMAPINFO bmiDst{};
+    bmiDst.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmiDst.bmiHeader.biWidth = scaledWidth;
+    bmiDst.bmiHeader.biHeight = -scaledHeight;
+    bmiDst.bmiHeader.biPlanes = 1;
+    bmiDst.bmiHeader.biBitCount = 32;
+    bmiDst.bmiHeader.biCompression = BI_RGB;
+
+    void* bitsDst = nullptr;
+    HBITMAP hBmpDst = CreateDIBSection(hdcDst, &bmiDst, DIB_RGB_COLORS, &bitsDst, nullptr, 0);
+    if (!hBmpDst)
+    {
+        DeleteObject(hBmpSrc);
+        DeleteDC(hdcSrc);
+        DeleteDC(hdcDst);
+        ReleaseDC(nullptr, hdcScreen);
+        LOG_ERROR("PopupWindow", "Failed to create destination bitmap");
+        return;
+    }
+
+    HBITMAP oldSrc = (HBITMAP)SelectObject(hdcSrc, hBmpSrc);
+    HBITMAP oldDst = (HBITMAP)SelectObject(hdcDst, hBmpDst);
+
+    // DON'T use StretchBlt - it breaks alpha on layered windows!
+    // Instead, manually copy with simple nearest-neighbor scaling
+    uint8_t* srcBits = static_cast<uint8_t*>(bitsSrc);
+    uint8_t* dstBits = static_cast<uint8_t*>(bitsDst);
+    
     for (int y = 0; y < scaledHeight; ++y)
     {
         for (int x = 0; x < scaledWidth; ++x)
         {
-            // Map back to original coordinates
+            // Nearest neighbor scaling
             int srcX = (x * width) / scaledWidth;
             int srcY = (y * height) / scaledHeight;
             srcX = std::clamp(srcX, 0, width - 1);
@@ -377,25 +415,19 @@ void applyAnimationToWindow(HWND hwnd, int width, int height, float scale, float
             
             int srcIdx = (srcY * width + srcX) * 4;
             int dstIdx = (y * scaledWidth + x) * 4;
-
-            // Apply animation alpha to pixel alpha
-            uint8_t originalAlpha = pixelsCopy[srcIdx + 3];
-            uint8_t finalAlpha = static_cast<uint8_t>(originalAlpha * alpha);
-
-            dst[dstIdx + 0] = pixelsCopy[srcIdx + 2]; // B
-            dst[dstIdx + 1] = pixelsCopy[srcIdx + 1]; // G
-            dst[dstIdx + 2] = pixelsCopy[srcIdx + 0]; // R
-            dst[dstIdx + 3] = finalAlpha;              // A (with animation)
+            
+            dstBits[dstIdx + 0] = srcBits[srcIdx + 0]; // B
+            dstBits[dstIdx + 1] = srcBits[srcIdx + 1]; // G
+            dstBits[dstIdx + 2] = srcBits[srcIdx + 2]; // R
+            dstBits[dstIdx + 3] = srcBits[srcIdx + 3]; // A
         }
     }
 
-    HBITMAP oldBmp = (HBITMAP)SelectObject(hdcMem, hBmp);
-
     // ------------------------------------------------------
-    // Center the scaled window on screen
+    // Update window
     // ------------------------------------------------------
     POINT winPos;
-    winPos.x = 50 - (scaledWidth - width) / 2;  // Keep centered
+    winPos.x = 50 - (scaledWidth - width) / 2;
     winPos.y = 50 - (scaledHeight - height) / 2;
 
     SIZE wndSize{ scaledWidth, scaledHeight };
@@ -406,18 +438,22 @@ void applyAnimationToWindow(HWND hwnd, int width, int height, float scale, float
     blend.SourceConstantAlpha = 255;
     blend.AlphaFormat = AC_SRC_ALPHA;
 
-    // ------------------------------------------------------
-    // Apply layered window update
-    // ------------------------------------------------------
-    UpdateLayeredWindow(
-        hwnd, hdcScreen, &winPos, &wndSize, hdcMem,
-        &srcPos, 0, &blend, ULW_ALPHA);
+    BOOL updateResult = UpdateLayeredWindow(hwnd, hdcScreen, &winPos, &wndSize, hdcDst,
+                                           &srcPos, 0, &blend, ULW_ALPHA);
+
+    if (!updateResult)
+    {
+        LOG_ERROR("PopupWindow", "UpdateLayeredWindow failed: " + std::to_string(GetLastError()));
+    }
 
     // ------------------------------------------------------
     // Cleanup
     // ------------------------------------------------------
-    SelectObject(hdcMem, oldBmp);
-    DeleteObject(hBmp);
-    DeleteDC(hdcMem);
+    SelectObject(hdcSrc, oldSrc);
+    SelectObject(hdcDst, oldDst);
+    DeleteObject(hBmpSrc);
+    DeleteObject(hBmpDst);
+    DeleteDC(hdcSrc);
+    DeleteDC(hdcDst);
     ReleaseDC(nullptr, hdcScreen);
 }

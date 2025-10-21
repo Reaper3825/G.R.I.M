@@ -75,6 +75,43 @@ namespace GRIMInput
     }
 
     // ====================================================
+    // Split input by commas for multi-command support
+    // ====================================================
+    std::vector<std::string> splitCommands(const std::string& input)
+    {
+        std::vector<std::string> commands;
+        std::string current;
+        
+        for (char c : input)
+        {
+            if (c == ',')
+            {
+                // Trim and add non-empty commands
+                current.erase(0, current.find_first_not_of(" \t\n\r"));
+                current.erase(current.find_last_not_of(" \t\n\r") + 1);
+                
+                if (!current.empty())
+                    commands.push_back(current);
+                
+                current.clear();
+            }
+            else
+            {
+                current.push_back(c);
+            }
+        }
+        
+        // Don't forget the last command
+        current.erase(0, current.find_first_not_of(" \t\n\r"));
+        current.erase(current.find_last_not_of(" \t\n\r") + 1);
+        
+        if (!current.empty())
+            commands.push_back(current);
+        
+        return commands;
+    }
+
+    // ====================================================
     // Normalize a command: lowercase → synonym → fuzzy
     // ====================================================
     std::string normalizeCommand(const std::string& input)

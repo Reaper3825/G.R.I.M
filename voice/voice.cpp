@@ -6,6 +6,7 @@
 #include "response_manager.hpp"
 #include "error_manager.hpp"
 #include "logger.hpp" 
+#include "popup_ui/popup_ui.hpp"  // ✅ Added
 #include <whisper.h>
 #include <portaudio.h>
 #include <filesystem>
@@ -118,14 +119,12 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
     // Load thresholds from config
     g_silenceThreshold   = aiConfig["voice"].value("silence_threshold", 0.02f);
     g_silenceTimeoutMs   = aiConfig["voice"].value("silence_timeout_ms", 1200);
-    g_state.minSpeechMs  = aiConfig["whisper"].value("min_speech_ms", 400);
-    g_state.minSilenceMs = aiConfig["whisper"].value("min_silence_ms", 5000);
+    g_state.minSpeechMs  = aiConfig["whisper"].value("min_speech_ms", 500);
+    g_state.minSilenceMs = aiConfig["whisper"].value("min_silence_ms", 1200);
     g_state.inputDeviceIndex = aiConfig["voice"].value("input_device_index", -1);
 
     // 🔹 Ensure Whisper model is loaded
     if (!ensureWhisperLoaded(aiConfig)) {
-        
-
         return "";
     }
     
@@ -179,6 +178,9 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
 
     Pa_StartStream(stream);
     LOG_DEBUG("Voice", "Listening...");
+    
+    // ✅ Show popup when listening starts
+    notifyPopupActivity();
 
     std::vector<float> rollingBuffer;
     auto lastSpeech  = std::chrono::steady_clock::now();
@@ -198,6 +200,7 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
                         speechStart = std::chrono::steady_clock::now();
                         inSpeech = true;
                         LOG_DEBUG("Voice", "Speech started");
+                        notifyPopupActivity();  // ✅ Keep popup alive during speech
                     }
                     lastSpeech = std::chrono::steady_clock::now();
                     rollingBuffer.insert(rollingBuffer.end(), chunk.begin(), chunk.end());
@@ -225,11 +228,54 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
     Pa_CloseStream(stream);
     Pa_Terminate();
     LOG_DEBUG("Voice", "Stream stopped");
+    
+    // ✅ Keep popup alive during transcription processing
+    notifyPopupActivity();
 
     std::string transcript;
     if (!rollingBuffer.empty()) {
         whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+        
+        // ═══════════════════════════════════════════════════════════
+        // Load optimized Whisper parameters from config to reduce hallucinations
+        // ═══════════════════════════════════════════════════════════
         wparams.no_timestamps = true;
+        
+        // CRITICAL: Force English language (check both new and legacy locations)
+        std::string lang = "en";  // Default fallback
+        if (aiConfig["whisper"].contains("language")) {
+            lang = aiConfig["whisper"]["language"].get<std::string>();
+        } else if (aiConfig.contains("whisper_language")) {
+            lang = aiConfig["whisper_language"].get<std::string>();  // Legacy location
+        }
+        wparams.language = lang.c_str();
+        LOG_DEBUG("Voice", "Forcing language: " + lang);
+        
+        // Temperature: 0.0 = more deterministic (reduces hallucinations)
+        wparams.temperature = aiConfig["whisper"].value("temperature", 0.0);
+        
+        // Max length: prefer shorter outputs
+        wparams.max_len = aiConfig["whisper"].value("max_len", 1);
+        
+        // Beam size: more careful decoding
+        wparams.beam_search.beam_size = aiConfig["whisper"].value("beam_size", 5);
+        
+        // Suppress blank outputs
+        wparams.suppress_blank = aiConfig["whisper"].value("suppress_blank", true);
+        wparams.token_timestamps = false;
+        
+        // No speech threshold: filter out noise
+        wparams.no_speech_thold = aiConfig["whisper"].value("no_speech_threshold", 0.6);
+        
+        // Initial prompt to guide the model toward command-style output
+        std::string prompt = aiConfig["whisper"].value("initial_prompt", 
+            "Voice commands: open notepad, close window, show time");
+        wparams.initial_prompt = prompt.c_str();
+
+        LOG_DEBUG("Voice", "Whisper params: temp=" + std::to_string(wparams.temperature) + 
+                  " beam=" + std::to_string(wparams.beam_search.beam_size) +
+                  " no_speech_thold=" + std::to_string(wparams.no_speech_thold) +
+                  " lang=" + lang);
 
         if (whisper_full(g_state.ctx, wparams, rollingBuffer.data(),
                          rollingBuffer.size()) == 0) {

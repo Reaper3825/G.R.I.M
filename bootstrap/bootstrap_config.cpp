@@ -55,6 +55,12 @@ nlohmann::json defaultAI() {
             {"local_engine", "en_US-amy-medium.onnx"},
             {"speaker", "p225"},
             {"speed", 1.0},
+            {"silence_threshold", 0.02},
+            {"silence_timeout_ms", 1200},
+            {"confidence_threshold", 0.6},
+            {"filter_low_confidence", true},
+            {"require_multi_command_confirmation", true},
+            {"max_commands_per_input", 3},
             {"rules", {
                 {"startup", "sapi"},
                 {"reminder", "coqui"},
@@ -78,10 +84,18 @@ nlohmann::json defaultAI() {
         }},
 
         {"whisper", {
+            {"whisper_model", "ggml-base.en.bin"},
+            {"language", "en"},                      // Force English (critical!)
             {"sampling_strategy", "beam"},
-            {"temperature", 0.2},
+            {"temperature", 0.0},
+            {"beam_size", 5},
+            {"best_of", 5},
+            {"no_speech_threshold", 0.6},
             {"min_speech_ms", 500},
-            {"min_silence_ms", 1200}
+            {"min_silence_ms", 1200},
+            {"max_len", 1},
+            {"suppress_blank", true},
+            {"initial_prompt", "Voice commands: open notepad, close window, show time, list directory"}
         }}
     };
 }
