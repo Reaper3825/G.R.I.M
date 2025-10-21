@@ -20,4 +20,20 @@ static MemoryStorage* g_memoryStoragePtr = nullptr;
 void ContextManager::setMemoryStorage(MemoryStorage* storage) {
     g_memoryStoragePtr = storage;
 }
+std::string ContextManager::getCurrentMood() {
+    // If you already track personality or affect elsewhere, hook it here.
+    // For now, use a simple heuristic from usage or a default.
+    if (usageMap.empty())
+        return "Neutral";
+
+    // Example: heavier command use implies more "Focused" mood
+    int totalUsage = 0;
+    for (const auto& [_, count] : usageMap)
+        totalUsage += count;
+
+    if (totalUsage < 10) return "Curious";
+    if (totalUsage < 50) return "Focused";
+    return "Tired";
+}
+
 } // namespace GRIM

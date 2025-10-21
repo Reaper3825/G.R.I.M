@@ -1,6 +1,8 @@
 #include "pch.hpp"
+#include "logger.hpp"
 #include <iomanip>
-
+#include <sstream>
+#include <iostream>
 
 // =====================================================
 // Globals
@@ -13,13 +15,11 @@ BuildMode g_buildMode = BuildMode::Release;
 
 PhaseInfo g_phaseInfo{};
 static std::mutex g_logMutex;
-
-// 🔹 Buffer for grouped phase logging
 static bool g_buffering = false;
 static std::vector<std::string> g_phaseBuffer;
-
-// 🔹 File output stream
 static std::ofstream g_logFile;
+static std::ofstream g_rewardFile; // separate reward log
+static RewardStats g_rewardStats{};
 
 // =====================================================
 // Helpers
@@ -46,14 +46,11 @@ static std::string basename(const std::string& path) {
     return (pos == std::string::npos) ? path : path.substr(pos + 1);
 }
 
-static void writeLine(const std::string& line) {
-    // Always write to file
-    if (g_logFile.is_open()) {
-        g_logFile << line << std::endl;
-        g_logFile.flush();
+static void writeLine(std::ofstream& stream, const std::string& line) {
+    if (stream.is_open()) {
+        stream << line << std::endl;
+        stream.flush();
     }
-
-    // Also write to console if it exists
     std::cerr << line << std::endl;
 }
 
@@ -69,7 +66,7 @@ void beginPhaseGroup() {
 void endPhaseGroup() {
     std::lock_guard<std::mutex> lock(g_logMutex);
     for (auto& line : g_phaseBuffer) {
-        writeLine(line);
+        writeLine(g_logFile, line);
     }
     g_phaseBuffer.clear();
     g_buffering = false;
@@ -101,7 +98,7 @@ void logPhaseInternal(const std::string& file,
     if (g_buffering) {
         g_phaseBuffer.push_back(entry);
     } else {
-        writeLine(entry);
+        writeLine(g_logFile, entry);
     }
 }
 
@@ -110,17 +107,43 @@ void logPhaseInternal(const std::string& file,
 // =====================================================
 void logDebug(const std::string& tag, const std::string& msg) {
     std::lock_guard<std::mutex> lock(g_logMutex);
-    writeLine("[" + nowTimestamp() + "][DEBUG][" + tag + "] " + msg);
+    writeLine(g_logFile, "[" + nowTimestamp() + "][DEBUG][" + tag + "] " + msg);
 }
 
 void logTrace(const std::string& tag, const std::string& msg) {
     std::lock_guard<std::mutex> lock(g_logMutex);
-    writeLine("[" + nowTimestamp() + "][TRACE][" + tag + "] " + msg);
+    writeLine(g_logFile, "[" + nowTimestamp() + "][TRACE][" + tag + "] " + msg);
 }
 
 void logError(const std::string& tag, const std::string& msg) {
     std::lock_guard<std::mutex> lock(g_logMutex);
-    writeLine("[" + nowTimestamp() + "][ERROR][" + tag + "] " + msg);
+    writeLine(g_logFile, "[" + nowTimestamp() + "][ERROR][" + tag + "] " + msg);
+}
+
+// =====================================================
+// Reward Logging
+// =====================================================
+void logReward(float base, float time, float sentiment, float category, float diversity, float total) {
+    std::lock_guard<std::mutex> lock(g_logMutex);
+
+    // Update rolling stats
+    g_rewardStats.count++;
+    g_rewardStats.lastReward = total;
+    g_rewardStats.rollingMean += (total - g_rewardStats.rollingMean) / static_cast<float>(g_rewardStats.count);
+
+    std::ostringstream oss;
+    oss << "[" << nowTimestamp() << "][REWARD] "
+        << "Base: " << std::fixed << std::setprecision(2) << base
+        << " | Time: " << time
+        << " | Sent: " << sentiment
+        << " | Cat: " << category
+        << " | Div: " << diversity
+        << " | Total: " << total
+        << " | Mean: " << g_rewardStats.rollingMean
+        << " (" << g_rewardStats.count << " samples)";
+
+    writeLine(g_logFile, oss.str());
+    writeLine(g_rewardFile, oss.str()); // separate file sink
 }
 
 // =====================================================
@@ -132,20 +155,26 @@ void initLogger(const std::string& filename) {
     std::lock_guard<std::mutex> lock(g_logMutex);
 
     fs::path logPath = fs::absolute(filename);
-    g_logFile.open(logPath, std::ios::out | std::ios::trunc);
+    fs::path rewardPath = logPath.parent_path() / "reward.log";
 
+    g_logFile.open(logPath, std::ios::out | std::ios::trunc);
+    g_rewardFile.open(rewardPath, std::ios::out | std::ios::trunc);
 
     if (g_logFile.is_open()) {
         std::string header = "==== GRIM Log Started ====";
         g_logFile << header << std::endl;
 
-        // Always print the log path so devs/users know where to look
         std::string msg = "[" + nowTimestamp() + "][Logger] Writing logs to: " + logPath.string();
-        std::cerr << msg << std::endl;    // Debug build console
-        g_logFile << msg << std::endl;    // Always file
+        std::cerr << msg << std::endl;
+        g_logFile << msg << std::endl;
     } else {
-        std::cerr << "[Logger] ERROR: Could not open log file: "
-                  << logPath.string() << std::endl;
+        std::cerr << "[Logger] ERROR: Could not open log file: " << logPath.string() << std::endl;
+    }
+
+    if (g_rewardFile.is_open()) {
+        g_rewardFile << "==== Reward Log Started ====" << std::endl;
+    } else {
+        std::cerr << "[Logger] ERROR: Could not open reward.log file." << std::endl;
     }
 }
 
@@ -154,5 +183,9 @@ void shutdownLogger() {
     if (g_logFile.is_open()) {
         g_logFile << "==== GRIM Log Ended ====" << std::endl;
         g_logFile.close();
+    }
+    if (g_rewardFile.is_open()) {
+        g_rewardFile << "==== Reward Log Ended ====" << std::endl;
+        g_rewardFile.close();
     }
 }
