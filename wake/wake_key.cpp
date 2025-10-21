@@ -2,6 +2,7 @@
 #include "logger.hpp"
 #include "voice/voice.hpp"
 #include "ui/ui_helpers.hpp"
+#include "ui/console_ui.hpp"
 #include "commands/commands_core.hpp"
 #include "ai/ai.hpp"
 #include "nlp/nlp.hpp"
@@ -19,6 +20,7 @@ namespace WakeKey {
 static bool g_running = false;
 static bool g_listening = false;
 static KeyCode g_hotkey = KeyCode::RCtrl; // Default: Right Ctrl
+static KeyCode g_consoleToggleKey = KeyCode::Grave; // Default: ~ / ` key
 
 // -----------------------------------------------------------
 // Voice command handler
@@ -64,14 +66,20 @@ void start(ConsoleHistory* history,
     LOG_DEBUG("WakeKey", "Initializing Key system hook...");
     Key::initialize();
 
-    // Register callback for wake key press
+    // Register callback for wake key press (voice command)
     Key::onPress(g_hotkey, [=, &timers, &longTermMemory, &nlp](KeyCode code) {
         LOG_DEBUG("WakeKey", "Wake key detected via Key system.");
         handleVoiceCommand(history, timers, longTermMemory, nlp);
     });
 
+    // Register callback for console toggle key (grave/tilde)
+    Key::onPress(g_consoleToggleKey, [](KeyCode code) {
+        LOG_DEBUG("WakeKey", "Console toggle key pressed (Grave/~)");
+        GRIMConsole::toggleConsole();
+    });
+
     g_running = true;
-    LOG_PHASE("WakeKey system active", true);
+    LOG_PHASE("WakeKey system active (with console toggle)", true);
 }
 
 void stop()

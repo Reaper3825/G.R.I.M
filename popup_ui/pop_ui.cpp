@@ -5,6 +5,7 @@
 #include "logger.hpp"
 #include "pch.hpp"
 #include "voice/voice_speak.hpp"
+#include "ui/console_ui.hpp"
 #include <windows.h>
 #include <atomic>
 #include <thread>
@@ -148,15 +149,7 @@ void runPopupUI(int width, int height)
             if (hwndUnderCursor == g_hwnd)
             {
                 LOG_DEBUG("PopupUI", "Popup clicked — showing GRIM console");
-
-                HWND grimConsole = FindWindowW(nullptr, L"G.R.I.M Console");
-                if (grimConsole)
-                {
-                    LOG_DEBUG("PopupUI", "Found existing GRIM console window, bringing to front");
-                    ShowWindow(grimConsole, SW_RESTORE);
-                    SetForegroundWindow(grimConsole);
-                }
-                // else do nothing — console not yet created
+                GRIMConsole::showConsole();
             }
         }
         Mouse::endFrame();

@@ -48,6 +48,71 @@ static LRESULT CALLBACK ConsoleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         g_width = LOWORD(lParam);
         g_height = HIWORD(lParam);
         return 0;
+    
+    case WM_ERASEBKGND:
+        return 1;
+    
+    case WM_PAINT:
+        {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            
+            // Fill background
+            HBRUSH brush = CreateSolidBrush(RGB(0x18, 0x18, 0x18));
+            FillRect(hdc, &ps.rcPaint, brush);
+            DeleteObject(brush);
+            
+            // Draw title bar
+            RECT titleRect = {0, 0, (LONG)g_width, 40};
+            HBRUSH titleBrush = CreateSolidBrush(RGB(0x20, 0x20, 0x20));
+            FillRect(hdc, &titleRect, titleBrush);
+            DeleteObject(titleBrush);
+            
+            // Draw title text
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, RGB(255, 255, 255));
+            HFONT hFont = CreateFontW(24, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                     DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Consolas");
+            HFONT oldFont = (HFONT)SelectObject(hdc, hFont);
+            TextOutW(hdc, 10, 8, L"G.R.I.M Console", 15);
+            SelectObject(hdc, oldFont);
+            DeleteObject(hFont);
+            
+            // Draw console history
+            hFont = CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                              DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Consolas");
+            oldFont = (HFONT)SelectObject(hdc, hFont);
+            
+            int y = 50;
+            auto& lines = g_history.wrapped();
+            int maxLines = ((int)g_height - 100) / 20;
+            int start = std::max(0, (int)lines.size() - maxLines);
+            for (int i = start; i < (int)lines.size(); ++i) {
+                std::wstring wtext(lines[i].text.begin(), lines[i].text.end());
+                TextOutW(hdc, 10, y, wtext.c_str(), (int)wtext.length());
+                y += 20;
+            }
+            
+            // Draw input bar background
+            RECT inputRect = {0, (LONG)g_height - 50, (LONG)g_width, (LONG)g_height};
+            HBRUSH inputBrush = CreateSolidBrush(RGB(0x1E, 0x1E, 0x1E));
+            FillRect(hdc, &inputRect, inputBrush);
+            DeleteObject(inputBrush);
+            
+            // Draw input text with caret
+            std::string displayInput = "> " + g_state.inputBuffer;
+            if (g_state.caretVisible) displayInput += "|";
+            std::wstring wInput(displayInput.begin(), displayInput.end());
+            SetTextColor(hdc, RGB(0, 255, 0));
+            TextOutW(hdc, 10, (int)g_height - 40, wInput.c_str(), (int)wInput.length());
+            
+            SelectObject(hdc, oldFont);
+            DeleteObject(hFont);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
 
     case WM_CHAR:
         if (wParam == VK_RETURN)
@@ -59,32 +124,35 @@ static LRESULT CALLBACK ConsoleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 handleCommand(input);
                 g_history.push(input, 0xFF00FF00);
             }
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
         else if (wParam == VK_BACK)
         {
             if (!g_state.inputBuffer.empty())
                 g_state.inputBuffer.pop_back();
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
         else if (wParam == VK_ESCAPE)
         {
-            g_state.running = false;
-            WindowManager::requestMainLoopStop();
-            PostQuitMessage(0);
+            // Hide console instead of exiting entire program
+            GRIMConsole::hideConsole();
+            LOG_DEBUG("ConsoleUI", "ESC pressed - hiding console");
             return 0;
         }
         else if (wParam >= 32 && wParam <= 126)
         {
             g_state.inputBuffer.push_back(static_cast<char>(wParam));
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
         break;
 
     case WM_CLOSE:
-        g_state.running = false;
-        WindowManager::requestMainLoopStop();
-        PostQuitMessage(0);
+        // Hide instead of destroying when user clicks X
+        GRIMConsole::hideConsole();
+        LOG_DEBUG("ConsoleUI", "WM_CLOSE - hiding console instead of closing");
         return 0;
     }
 
@@ -95,7 +163,8 @@ static LRESULT CALLBACK ConsoleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 // Create Win32 window
 // ===========================================================
 static HWND createConsoleWindow(int width, int height)
-{LOG_TRACE("CU", "createConsoleWindow");
+{
+    LOG_TRACE("CU", "createConsoleWindow");
     HINSTANCE hInst = GetModuleHandle(nullptr);
     const wchar_t* className = L"GRIMConsoleClass";
 
@@ -104,7 +173,7 @@ static HWND createConsoleWindow(int width, int height)
     wc.hInstance = hInst;
     wc.lpszClassName = className;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.hbrBackground = nullptr;
 
     RegisterClassW(&wc);
     LOG_TRACE("CU", "RegisterClassW");
@@ -127,10 +196,11 @@ static HWND createConsoleWindow(int width, int height)
 }
 
 // ===========================================================
-// Console logic loop (no BGFX initialization here anymore)
+// Console logic loop
 // ===========================================================
 void GRIMConsole::runConsoleUI(int width, int height)
-{LOG_TRACE("CU", "runConsoleUI");
+{
+    LOG_TRACE("CU", "runConsoleUI");
     g_width  = width;
     g_height = height;
     g_hwnd   = createConsoleWindow(width, height);
@@ -140,25 +210,7 @@ void GRIMConsole::runConsoleUI(int width, int height)
         return;
     }
 
-    // ======================================================
-    // Attach to existing BGFX context and queue update
-    // ======================================================
-    if (WindowManager::isInitialized())
-    {
-        LOG_DEBUG("ConsoleUI", "Attaching to existing BGFX context (main thread already initialized)");
-        // Register this HWND as the new platform window
-        WindowManager::updateWindowDimensions("console", width, height);
-    }
-    else
-    {
-        LOG_ERROR("ConsoleUI", "BGFX context not initialized — expected initGlobalBGFX() from main thread");
-        return;
-    }
-
-
-    // ======================================================
-    // Register this window with the WindowManager
-    // ======================================================
+    // Register window with WindowManager
     auto consoleWin = std::make_unique<GRIMWindow>();
     consoleWin->hwnd = g_hwnd;
     consoleWin->name = "console";
@@ -171,15 +223,12 @@ void GRIMConsole::runConsoleUI(int width, int height)
 
     MSG msg{};
     g_state.running = true;
+    auto lastRedraw = std::chrono::steady_clock::now();
 
-    // ======================================================
     // Main console event loop
-    // ======================================================
     while (g_state.running)
     {
-        // ------------------------------
         // Handle input + window messages
-        // ------------------------------
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
         {
             if (msg.message == WM_QUIT)
@@ -194,9 +243,7 @@ void GRIMConsole::runConsoleUI(int width, int height)
 
         updateCaretBlink(g_state);
 
-        // ------------------------------
         // Update window state in manager
-        // ------------------------------
         static uint32_t lastW = 0;
         static uint32_t lastH = 0;
 
@@ -208,9 +255,60 @@ void GRIMConsole::runConsoleUI(int width, int height)
             lastH = g_height;
         }
 
+        // Trigger redraw periodically for caret blink
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRedraw).count() > 100) {
+            InvalidateRect(g_hwnd, nullptr, FALSE);
+            lastRedraw = now;
+        }
 
-                std::this_thread::sleep_for(std::chrono::milliseconds(16)); // ~60 FPS
-            }
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
 
     LOG_PHASE("Console UI shutdown complete", true);
+}
+
+// ===========================================================
+// Console visibility controls
+// ===========================================================
+void GRIMConsole::showConsole()
+{
+    if (g_hwnd)
+    {
+        ShowWindow(g_hwnd, SW_RESTORE);
+        SetForegroundWindow(g_hwnd);
+        WindowManager::setVisibility("console", true);
+        LOG_DEBUG("ConsoleUI", "Console shown");
+    }
+}
+
+void GRIMConsole::hideConsole()
+{
+    if (g_hwnd)
+    {
+        ShowWindow(g_hwnd, SW_HIDE);
+        WindowManager::setVisibility("console", false);
+        LOG_DEBUG("ConsoleUI", "Console hidden");
+    }
+}
+
+void GRIMConsole::toggleConsole()
+{
+    if (g_hwnd)
+    {
+        if (IsWindowVisible(g_hwnd))
+        {
+            hideConsole();
+        }
+        else
+        {
+            showConsole();
+        }
+    }
+}
+
+void GRIMConsole::notifyConsoleActivity()
+{
+    // Placeholder for future activity notifications
+    LOG_DEBUG("ConsoleUI", "Console activity notified");
 }

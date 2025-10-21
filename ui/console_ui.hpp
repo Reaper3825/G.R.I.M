@@ -17,11 +17,13 @@ namespace GRIMConsole
     // Main entry point — render loop
     void runConsoleUI(int width, int height);
 
-    // Internal helpers
+    // Show/hide console window
     void showConsole();
     void hideConsole();
+    void toggleConsole();
+    
+    // Internal helpers
     void notifyConsoleActivity();
-
 
     constexpr float kTitleBarH   = 40.f;
     constexpr float kInputBarH   = 48.f;
