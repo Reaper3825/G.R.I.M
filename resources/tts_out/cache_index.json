@@ -5,6 +5,12 @@
     "permanent": false,
     "useCount": 1
   },
+  "failed to open chrome_p225_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\HFoLzaOULtQ01DSFmftQuLQPhGWHqKLp.wav",
+    "lastUsed": 1761091736,
+    "permanent": false,
+    "useCount": 1
+  },
   "failed to open newpad_p225_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\uYdAgIMgcdxDNGu72o6kPSzh04dS4X46.wav",
     "lastUsed": 1761082873,
@@ -43,7 +49,13 @@
   },
   "ready._p225_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\85biXKqiysCXolCUm9FWH9lcPMiQ4MwT.wav",
-    "lastUsed": 1761086216,
+    "lastUsed": 1761091738,
+    "permanent": false,
+    "useCount": 2
+  },
+  "rules saved successfully_p225_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\9b9kc6mnSPrVS55PEtGPveaNN9AFlWl7.wav",
+    "lastUsed": 1761091753,
     "permanent": false,
     "useCount": 1
   },
@@ -61,9 +73,9 @@
   },
   "welcome back, austin. grim is online._p225_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\pErBR1m8KLecaDu3yW5NypXJmJmMGVrD.wav",
-    "lastUsed": 1761086141,
+    "lastUsed": 1761091723,
     "permanent": false,
-    "useCount": 6
+    "useCount": 7
   },
   "yes?_p225_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\n4qFtNAT0YIa2wVWX2ov56L3KeauQFth.wav",

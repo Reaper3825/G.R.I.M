@@ -59,3 +59,6 @@ std::string normalizeLine(const std::string& line);
 
 // ✅ Check if feedback is currently pending
 bool hasPendingFeedback();
+
+// ✅ NEW: Set whether this command came from voice (for feedback control)
+void setVoiceCommand(bool isVoice);

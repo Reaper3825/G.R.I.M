@@ -38,6 +38,18 @@ static void register_all_commands() {
     grim_register_command("alias info",    cmdAliasInfo);
     grim_register_command("alias refresh", cmdAliasRefresh);
 
+    // ? Test commands (defined in commands_system.cpp)
+    LOG_DEBUG("Plugin", "Registering 'test_intent' command");
+    grim_register_command("test_intent",   cmdTestIntent);
+    LOG_DEBUG("Plugin", "Registering 'test_nlp' command");
+    grim_register_command("test_nlp",      cmdTestNlp);
+
+    // ? NEW: NLP management commands
+    LOG_DEBUG("Plugin", "Registering NLP management commands");
+    grim_register_command("nlp_stats",     cmdNlpStats);
+    grim_register_command("nlp_learn",     cmdNlpLearn);
+    grim_register_command("nlp_save",      cmdNlpSave);
+
     LOG_DEBUG("Plugin", "Core command registration complete");
     
     // (Add any additional core commands here; keep both paths in sync.)
