@@ -28,7 +28,7 @@
 #include "system_detect.hpp"
 #include "core/plugin_manager.hpp"
 #include <crtdbg.h>
-
+#include "net/websocket_server.hpp"
 #define CHECK_HEAP() _CrtCheckMemory()
 
 GRIM::MemoryStorage g_memoryStorage;
@@ -42,12 +42,15 @@ std::string g_inputBuffer;
 ConsoleHistory g_consoleHistory;
 std::vector<Timer> g_uiTimers;
 nlohmann::json g_longTermMemory;
+static GRIM::WebSocketServer wsServer;
 
 // ============================================================
 // Main entry point
 // ============================================================
 int main(int argc, char* argv[])
 {
+    
+    wsServer.start(8080);
 
     // ======================================================
     // 1. Logger + mouse
@@ -137,6 +140,13 @@ _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF | _CRTDBG_CHECK_ALWA
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     WindowManager::processMainThreadUpdates();
+
+    // ======================================================
+    // 7.5. Initialize Settings Menu (UI subsystem)
+    // ======================================================
+    // Settings menu will be initialized here once widget system is complete
+    // initSettingsMenu();
+    // LOG_PHASE("Settings menu initialized", true);
 
     // ======================================================
     // 5. Launch popup overlay after BGFX context exists

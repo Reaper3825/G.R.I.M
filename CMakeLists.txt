@@ -238,3 +238,8 @@ add_custom_command(TARGET GRIM POST_BUILD
 
 
 message(STATUS "[GRIM] Build configuration complete.")
+
+# Hot-Reloadable Plugins
+# Note: core_plugin is built directly into GRIM.exe, not as a hot-reloadable DLL
+# Only independent plugins with minimal dependencies should be hot-reloadable
+add_subdirectory(plugins/osint_plugin)
