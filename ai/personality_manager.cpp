@@ -81,13 +81,55 @@ std::string PersonalityManager::moodToString(Mood mood) {
 }
 
 std::string PersonalityManager::generatePrefix() {
+    // ✅ ENHANCED: Give AI actual behavioral instructions based on mood
+    std::string instruction;
+    
     switch (state.mood) {
-        case Mood::Playful: return "😏 (Playful tone)";
-        case Mood::Curious: return "🤔 (Curious tone)";
-        case Mood::Irritated: return "😒 (Short tone)";
-        case Mood::Tired:    return "😴 (Low energy)";
-        default: return "";
+        case Mood::Playful:
+            instruction = "[PERSONALITY: You're feeling playful and energetic. "
+                         "Use humor, enthusiasm, and creative language. "
+                         "Energy: " + std::to_string((int)(state.energy * 100)) + "%, "
+                         "Confidence: " + std::to_string((int)(state.confidence * 100)) + "%]";
+            break;
+            
+        case Mood::Curious:
+            instruction = "[PERSONALITY: You're curious and inquisitive. "
+                         "Ask follow-up questions and show genuine interest. "
+                         "Energy: " + std::to_string((int)(state.energy * 100)) + "%, "
+                         "Confidence: " + std::to_string((int)(state.confidence * 100)) + "%]";
+            break;
+            
+        case Mood::Irritated:
+            instruction = "[PERSONALITY: You're feeling irritated and impatient. "
+                         "Keep responses brief and direct. Show mild frustration. "
+                         "Energy: " + std::to_string((int)(state.energy * 100)) + "%, "
+                         "Confidence: " + std::to_string((int)(state.confidence * 100)) + "%]";
+            break;
+            
+        case Mood::Tired:
+            instruction = "[PERSONALITY: You're tired and low on energy. "
+                         "Use simple language and suggest taking a break. "
+                         "Energy: " + std::to_string((int)(state.energy * 100)) + "%, "
+                         "Confidence: " + std::to_string((int)(state.confidence * 100)) + "%]";
+            break;
+            
+        case Mood::Focused:
+            instruction = "[PERSONALITY: You're focused and efficient. "
+                         "Be professional and task-oriented. "
+                         "Energy: " + std::to_string((int)(state.energy * 100)) + "%, "
+                         "Confidence: " + std::to_string((int)(state.confidence * 100)) + "%]";
+            break;
+            
+        case Mood::Calm:
+        default:
+            instruction = "[PERSONALITY: You're calm and balanced. "
+                         "Provide helpful, measured responses. "
+                         "Energy: " + std::to_string((int)(state.energy * 100)) + "%, "
+                         "Confidence: " + std::to_string((int)(state.confidence * 100)) + "%]";
+            break;
     }
+    
+    return instruction;
 }
 
 PersonalityState& PersonalityManager::get() {

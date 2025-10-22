@@ -136,7 +136,7 @@ static LRESULT CALLBACK ConsoleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         }
         else if (wParam == VK_ESCAPE)
         {
-            // Hide console instead of exiting entire program
+            // Hide console
             GRIMConsole::hideConsole();
             LOG_DEBUG("ConsoleUI", "ESC pressed - hiding console");
             return 0;

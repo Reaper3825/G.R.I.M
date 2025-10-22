@@ -1,5 +1,6 @@
 // plugins/core_plugin.cpp
 #include "plugin.hpp"
+#include "logger.hpp"
 
 #include "commands_interface.hpp"
 #include "commands_filesystem.hpp"
@@ -44,11 +45,24 @@ static void register_all_commands() {
     LOG_DEBUG("Plugin", "Registering 'test_nlp' command");
     grim_register_command("test_nlp",      cmdTestNlp);
 
-    // ? NEW: NLP management commands
+    // ? NLP management commands
     LOG_DEBUG("Plugin", "Registering NLP management commands");
     grim_register_command("nlp_stats",     cmdNlpStats);
     grim_register_command("nlp_learn",     cmdNlpLearn);
     grim_register_command("nlp_save",      cmdNlpSave);
+
+    // ? Settings command (defined in commands_system.cpp)
+    LOG_DEBUG("Plugin", "Registering settings command");
+    grim_register_command("settings",      cmdSettings);
+
+    // ? OSINT self-audit commands (defensive only) - DISABLED until CMake picks up file
+    // LOG_DEBUG("Plugin", "Registering OSINT commands");
+    // extern CommandResult cmdProfileSelf(const std::string&);
+    // extern CommandResult cmdSherlockSweep(const std::string&);
+    // extern CommandResult cmdOsintReport(const std::string&);
+    // grim_register_command("profile_self",    cmdProfileSelf);
+    // grim_register_command("sherlock_sweep",  cmdSherlockSweep);
+    // grim_register_command("osint_report",    cmdOsintReport);
 
     LOG_DEBUG("Plugin", "Core command registration complete");
     

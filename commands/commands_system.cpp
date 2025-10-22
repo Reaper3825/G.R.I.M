@@ -419,3 +419,39 @@ CommandResult cmdTestNlp([[maybe_unused]] const std::string& arg) {
         failed == 0 ? Colors::Green : (passed > failed ? Colors::Yellow : Colors::Red) // color
     };
 }
+
+// ====================================================
+// ? NEW: Settings Command (Stub)
+// ====================================================
+CommandResult cmdSettings([[maybe_unused]] const std::string& arg) {
+    LOG_DEBUG("Settings", "Settings command called");
+    
+    std::ostringstream output;
+    output << "=== GRIM Settings ===\n\n";
+    output << "Configuration File: ai_config.json\n";
+    output << "Location: " << getResourcePath() << "/ai_config.json\n\n";
+    
+    output << "Available Configuration Commands:\n";
+    output << "  - ai_backend <backend>    Change AI backend (ollama/localai/openai)\n";
+    output << "  - reload_nlp             Reload NLP rules from file\n";
+    output << "  - nlp_stats              Show NLP system statistics\n";
+    output << "  - sysinfo                Show system information\n\n";
+    
+    output << "Settings Menu UI:\n";
+    output << "  Full settings menu with widgets is planned.\n";
+    output << "  For now, edit ai_config.json manually or use commands above.\n\n";
+    
+    output << "Quick Settings:\n";
+    output << "  - Voice Engine: " << "coqui" << " (edit ai_config.json)\n";
+    output << "  - AI Backend: " << "auto" << " (use: ai_backend <backend>)\n";
+    output << "  - Whisper Model: " << "ggml-base.en.bin" << "\n";
+    
+    return {
+        true,
+        output.str(),
+        "ERR_NONE",
+        "routine",
+        "Settings information displayed",
+        Colors::Cyan
+    };
+}

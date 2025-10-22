@@ -26,6 +26,12 @@ file(GLOB memory_SOURCES "memory/*.cpp")
 file(GLOB memory_HEADERS "memory/*.hpp")
 file(GLOB core_SOURCES "core/*.cpp")
 file(GLOB core_HEADERS "core/*.hpp")
+file(GLOB NET_SOURCES "net/*.cpp")
+file(GLOB NET_HEADERS "net/*.hpp")
+
+
+
+
 set(GRIM_SOURCES
     main.cpp
     resources.cpp
@@ -48,7 +54,7 @@ set(GRIM_SOURCES
     ${helpers_SOURCES}
     ${memory_SOURCES}
     ${core_SOURCES}
-
+    ${NET_SOURCES}
 )
 
 set(GRIM_HEADERS
@@ -74,4 +80,5 @@ set(GRIM_HEADERS
     ${helpers_HEADERS}
     ${memory_HEADERS}
     ${core_HEADERS}
+    ${NET_HEADERS}
 )

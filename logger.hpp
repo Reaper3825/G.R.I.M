@@ -6,6 +6,13 @@
 #include <fstream>
 #include <filesystem>
 
+// Export macros for logger functions
+#if defined(GRIM_BUILD_HOST)
+  #define GRIM_LOGGER_API __declspec(dllexport)
+#else
+  #define GRIM_LOGGER_API __declspec(dllimport)
+#endif
+
 // =====================================================
 // Build Info
 // =====================================================
@@ -54,10 +61,10 @@ struct RewardStats {
     size_t count      = 0;
 };
 
-void logDebug(const std::string& tag, const std::string& msg);
-void logTrace(const std::string& tag, const std::string& msg);
-void logError(const std::string& tag, const std::string& msg);
-void logReward(float base, float time, float sentiment, float category, float diversity, float total);
+GRIM_LOGGER_API void logDebug(const std::string& tag, const std::string& msg);
+GRIM_LOGGER_API void logTrace(const std::string& tag, const std::string& msg);
+GRIM_LOGGER_API void logError(const std::string& tag, const std::string& msg);
+GRIM_LOGGER_API void logReward(float base, float time, float sentiment, float category, float diversity, float total);
 
 // =====================================================
 // Macros for ease of use
