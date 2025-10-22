@@ -9,6 +9,7 @@
     },
     "nlohmann-json",
     "portaudio",
-    "glfw3"
+    "glfw3",
+    "uwebsockets"
   ]
 }

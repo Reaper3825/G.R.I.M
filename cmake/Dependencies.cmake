@@ -99,6 +99,17 @@ else()
     target_link_libraries(GRIM PRIVATE "${DEPS_LIB_DIR}/openal32.lib")
 endif()
 
+# =========================================================
+# uWebSockets (WebSocket server)
+# =========================================================
+find_package(unofficial-uwebsockets CONFIG REQUIRED)
+target_link_libraries(GRIM PRIVATE unofficial::uwebsockets::uwebsockets)
+
+# libuv DLL (required by uWebSockets)
+grim_copy_dlls("${_dll_dir_vcpkg}"
+    uv.dll
+)
+
 # --- Ensure runtime finds our DLL first ---
 set_target_properties(GRIM PROPERTIES
     VS_DEBUGGER_ENVIRONMENT "PATH=${DEPS_BIN_DIR};%PATH%"
