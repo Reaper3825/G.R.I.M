@@ -232,6 +232,7 @@ void start(ConsoleHistory* history,
                 LOG_DEBUG("WakeVoice", "runVoiceDemo() finished — about to call handleCommand()");
 
                 if (!transcript.empty()) {
+                    setVoiceCommand(true);  // ✅ Mark this as a voice command
                     handleCommand(transcript);
                     LOG_DEBUG("WakeVoice", "handleCommand() returned successfully");
                 }
@@ -269,6 +270,7 @@ void start(ConsoleHistory* history,
                             }
 
                             LOG_DEBUG("WakeVoice", "Follow-up speech: " + follow);
+                            setVoiceCommand(true);  // ✅ Mark follow-up as voice command too
                             handleCommand(follow);
                             feedbackReceived = true;
                             break; // Exit feedback loop after processing

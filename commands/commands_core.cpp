@@ -39,10 +39,16 @@ using Voice::speak;
 static std::optional<std::string> g_pendingClarifyCmd;
 static std::optional<std::string> g_pendingFeedbackCmd;
 static bool g_isMultiCommandContext = false;  // Track if we're in multi-command mode
+static bool g_isVoiceCommand = false;          // ✅ NEW: Track if command came from voice
 
 // ✅ Add getter function for external access
 bool hasPendingFeedback() {
     return g_pendingFeedbackCmd.has_value();
+}
+
+// ✅ NEW: Set voice command flag (called from wake_voice.cpp)
+void setVoiceCommand(bool isVoice) {
+    g_isVoiceCommand = isVoice;
 }
 
 extern nlohmann::json longTermMemory;
@@ -766,6 +772,14 @@ void handleCommand(const std::string& line)
     {
         LOG_DEBUG("HandleCommand", "Command \"" + cmdRaw + "\" NOT in map, trying NLP...");
         
+        // ✅ DEBUG: Log all registered commands to help diagnose
+        if (cmdRaw == "test_intent") {
+            LOG_DEBUG("HandleCommand", "test_intent NOT FOUND! Registered commands:");
+            for (const auto& [name, func] : commandMap) {
+                LOG_DEBUG("HandleCommand", "  - " + name);
+            }
+        }
+        
         std::string normalizedLine = GRIMInput::normalizeLine(line);
         Intent intent = g_nlp.parse(normalizedLine);
         g_lastIntent = intent;
@@ -805,8 +819,9 @@ void handleCommand(const std::string& line)
     if (!result.voice.empty() && result.voice.find("[TRACE]") == std::string::npos)
         Voice::speak(result.voice, result.category.empty() ? "routine" : result.category);
 
-    // Only ask for feedback if NOT in multi-command context AND command was successful
-    if (!g_isMultiCommandContext && !g_pendingFeedbackCmd.has_value() && result.success && result.category != "conversation")
+    // Only ask for feedback if NOT in multi-command context AND command was successful AND came from VOICE
+    if (!g_isMultiCommandContext && !g_pendingFeedbackCmd.has_value() && result.success && 
+        result.category != "conversation" && g_isVoiceCommand)  // ✅ Only for voice commands
     {
         std::string ask = "Was that what you wanted?";  // Direct string, no ResponseManager
         history.push(ask, Colors::Cyan.toUInt());
@@ -814,14 +829,22 @@ void handleCommand(const std::string& line)
         g_pendingFeedbackCmd = cmdRaw;
         LOG_DEBUG("Feedback", "Opened feedback prompt for command: " + cmdRaw);
     }
-    else if (!result.success && result.errorCode != "ERR_UNKNOWN_CMD")
+    else if (!result.success && result.errorCode != "ERR_UNKNOWN_CMD" && g_isVoiceCommand)  // ✅ Only for voice commands
     {
-        // ✅ On errors, give audible notification that we're returning to wake word detection
         LOG_DEBUG("Feedback", "Skipping feedback for failed command: " + cmdRaw + " (" + result.errorCode + ")");
         
-        // ✅ Tell user we're ready for the next command
-        Voice::speak("Ready.", "routine");
+        // ✅ Only give "Ready" notification for actual application/system errors, not AI failures
+        if (result.errorCode == "ERR_APP_NO_ARGUMENT" || 
+            result.errorCode == "ERR_APP_LAUNCH_FAILED" ||
+            result.errorCode == "ERR_FS_MISSING_DIR" ||
+            result.errorCode == "ERR_FS_DIR_NOT_FOUND") {
+            Voice::speak("Ready.", "routine");
+        }
+        // For AI/unknown failures, don't say "Ready" - the error message is enough
     }
+    
+    // ✅ Reset voice flag for next command
+    g_isVoiceCommand = false;
 
     try {
         float execTime = 0.0f; // (optional: measure actual duration later)
