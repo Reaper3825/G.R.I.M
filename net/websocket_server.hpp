@@ -1,16 +1,22 @@
 #pragma once
+#include <uwebsockets/App.h>
 #include <thread>
 #include <atomic>
+#include <string>
 
 namespace GRIM {
-    class WebSocketServer {
-    public:
-        void start(int port = 8080);
-        void stop();
-        bool isRunning() const { return running; }
 
-    private:
-        std::thread serverThread;
-        std::atomic<bool> running{false};
-    };
-}
+class WebSocketServer {
+public:
+    WebSocketServer() : running(false) {}
+    ~WebSocketServer() { stop(); }
+
+    bool start(uint16_t port = 8080);
+    void stop();
+
+private:
+    std::atomic<bool> running;
+    std::thread serverThread;
+};
+
+} // namespace GRIM
