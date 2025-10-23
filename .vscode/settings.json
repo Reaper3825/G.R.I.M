@@ -117,7 +117,8 @@
         "expected": "cpp",
         "shared_mutex": "cpp",
         "source_location": "cpp",
-        "cfenv": "cpp"
+        "cfenv": "cpp",
+        "pointers": "cpp"
     },
 
     // ──────────────────────────────────────────────────────────────

@@ -29,6 +29,8 @@
 #include "core/plugin_manager.hpp"
 #include <crtdbg.h>
 #include "net/websocket_server.hpp"
+#include "helpers/cerr_suppressor.hpp"
+#include <iostream>
 #define CHECK_HEAP() _CrtCheckMemory()
 
 GRIM::MemoryStorage g_memoryStorage;
@@ -48,15 +50,19 @@ static GRIM::WebSocketServer wsServer;
 // Main entry point
 // ============================================================
 int main(int argc, char* argv[])
-{
-    
-    wsServer.start(8080);
+{       initLogger("grim.log");
+    LOG_PHASE("Initializing G.R.I.M", true);
+    GRIM::CerrSuppressor suppressCerr;
+    std::cout.rdbuf(std::cerr.rdbuf()); // Apply same filter to std::cout
+
+    // Start WebSocket server immediately when main runs
+    wsServer.start();
+    LOG_PHASE("WebSocket server started", true);
 
     // ======================================================
     // 1. Logger + mouse
     // ======================================================
-    initLogger("grim.log");
-    LOG_PHASE("Initializing G.R.I.M", true);
+
 _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF | _CRTDBG_CHECK_ALWAYS_DF);
     Mouse::initialize();
     LOG_PHASE("Mouse initialized", true);
@@ -192,13 +198,13 @@ _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF | _CRTDBG_CHECK_ALWA
         }
     }
 
+
     LOG_PHASE("Main thread render loop exited", true);
 
     // ======================================================
     // 10. Cleanup + shutdown
     // ======================================================
     LOG_PHASE("Shutting down subsystems", true);
-
     WakeKey::stop();
     WakeVoice::stop();
     Voice::shutdownQueue();
@@ -206,10 +212,14 @@ _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF | _CRTDBG_CHECK_ALWA
     GRIM::RL::shutdown();
     Mouse::shutdown();
     WindowManager::shutdown();
+    
+    
+    // Stop WebSocket server
+    wsServer.stop();
 
     LOG_PHASE("All subsystems shut down", true);
-    shutdownLogger();
     LOG_PHASE("G.R.I.M terminated successfully", true);
+    shutdownLogger();
     return 0;
 
 

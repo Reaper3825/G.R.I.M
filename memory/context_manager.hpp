@@ -1,58 +1,56 @@
 #pragma once
+#include "memory/memory_storage.hpp"
+#include <unordered_map>
+#include <optional>
+#include <chrono>
+#include <mutex>
 #include <string>
 #include <vector>
-#include <deque>
-#include <mutex>
-#include <ctime>
-#include <nlohmann/json.hpp>
-#include "intent.hpp"
-#include "memory_storage.hpp"
-#include "logger.hpp"
 
 namespace GRIM {
 
-struct ContextFrame {
-    std::string userInput;
-    std::string aiReply;
-    std::vector<std::string> recentTags;
-    std::vector<std::string> activeIntents;
-    float avgConfidence = 1.0f;
-    std::time_t timestamp = std::time(nullptr);
-
-    nlohmann::json toJSON() const {
-        nlohmann::json j;
-        j["user_input"] = userInput;
-        j["ai_reply"] = aiReply;
-        j["recent_tags"] = recentTags;
-        j["active_intents"] = activeIntents;
-        j["avg_confidence"] = avgConfidence;
-        j["timestamp"] = static_cast<long long>(timestamp);
-        return j;
-    }
-};
-
+// ====================================================
+// ContextManager — unified short-term entity + intent context
+// ====================================================
 class ContextManager {
 public:
+    // --- Existing utilities ---
     static void recordUsage(const std::string& category);
-    static void setMemoryStorage(MemoryStorage* storage);
     static int usageCount(const std::string& category);
-    static void recordInteraction(const std::string& userInput,
-                                  const std::string& aiReply,
-                                  const Intent& lastIntent);
-    static ContextFrame buildFrame();
-    static std::string buildFrameJSON();
-    static void purgeOldFrames(size_t keepLast = 15);
-    static void saveToDisk(const std::string& path);
-    static void loadFromDisk(const std::string& path);
-    // Returns current mood string for RL / personality feedback
+    static void setMemoryStorage(MemoryStorage* storage);
     static std::string getCurrentMood();
 
-private:
-    static std::mutex mtx;
-    static std::deque<ContextFrame> frames;
-    static MemoryStorage* memory; // ✅ new
-    static inline std::unordered_map<std::string, int> usageMap{};
-};
+    // ====================================================
+    // New: Contextual Memory Integration
+    // ====================================================
+    static void rememberContextObject(const MemoryObject& obj);
+    static std::optional<MemoryObject> recallContextByType(const std::string& typeTag);
+    static std::optional<MemoryObject> recallContextByIntent(const std::string& intentTag);
+    static void decayOldContext(int seconds = 180);
+    static void clearContext();
 
+    // ====================================================
+    // New: Pending Intent for multi-turn command flow
+    // ====================================================
+    struct PendingIntent {
+        std::string command;      // e.g., "open_app"
+        std::string missingTag;   // e.g., "TypeTag:App"
+        std::chrono::steady_clock::time_point timestamp;
+    };
+
+    static void setPendingIntent(const PendingIntent& intent);
+    static std::optional<PendingIntent> getPendingIntent();
+    static void clearPendingIntent();
+
+    // ====================================================
+    // Accessors
+    // ====================================================
+    static std::vector<MemoryObject> getRecentContext();
+    static void attachFeedbackMetadata(const std::string& command);
+
+private:
+    static std::mutex contextMutex;
+    static std::mutex intentMutex;
+};
 
 } // namespace GRIM
