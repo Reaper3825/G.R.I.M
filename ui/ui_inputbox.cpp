@@ -1,7 +1,8 @@
 #include "ui_inputbox.hpp"
-#include "input_state.hpp"
 #include "ui_renderer.hpp"
+#include "input_parser.hpp"
 #include <Windows.h>
+
 
 UIInputBox::UIInputBox(std::string* bind)
     : externalBind(bind) {}
@@ -18,33 +19,39 @@ void UIInputBox::update(const InputState& input, float) {
         lastBlink = now;
     }
 
-    // Handle keyboard input (only if focused)
-    if (!focused) return;
+    // Check if we're focused (for now, assume always focused when visible)
+    bool isFocused = isVisible();
+    if (!isFocused) return;
 
-    for (auto& [code, down] : input.keysDown) {
-        if (!down) continue;
+    // Handle keyboard input from key map
+    for (const auto& [vk, isPressed] : input.keyPressed)
+    {
+        if (!isPressed)
+            continue;
 
-        switch (code) {
-        case KeyCode::Backspace:
+        switch (vk)
+        {
+        case VK_BACK: // Backspace
             if (!buffer.empty()) buffer.pop_back();
             break;
-        case KeyCode::Enter:
+        case VK_RETURN: // Enter
             if (externalBind) *externalBind = buffer;
             buffer.clear();
             break;
         default:
-            // ASCII input (rudimentary)
-            if ((int)code >= ' ' && (int)code <= '~')
-                buffer.push_back(static_cast<char>(code));
+            if (vk >= 32 && vk <= 126)
+                buffer.push_back(static_cast<char>(vk));
             break;
         }
     }
 }
 
 void UIInputBox::draw(UIRenderer& renderer) {
+    if (!isVisible()) return;
+    
     renderer.drawRect(position, size, 0xFF202020);
     std::string display = buffer.empty() ? placeholder : buffer;
-    if (caretVisible && focused)
+    if (caretVisible && isVisible())
         display.push_back('|');
     renderer.drawText({position.x + 6, position.y + 6}, display, 0xFFFFFFFF);
 }

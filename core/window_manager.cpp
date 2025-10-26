@@ -1,6 +1,8 @@
 #include "window_manager.hpp"
 #include "logger.hpp"
 #include "popup_ui/popup_window.hpp"
+#include "ui/ui_root.hpp"
+#include <windowsx.h>
 
 // =====================================================
 // Global GPU mutex (shared with popup_window.cpp)
@@ -108,28 +110,186 @@ void WindowManager::shutdown()
 }
 
 // =====================================================
+// Overlay window procedure with WM_NCHITTEST for selective input
+// =====================================================
+static LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_NCHITTEST:
+    {
+        // Get screen coordinates from lParam
+        POINT screenPt;
+        screenPt.x = GET_X_LPARAM(lParam);
+        screenPt.y = GET_Y_LPARAM(lParam);
+        
+        // Convert to client coordinates
+        POINT clientPt = screenPt;
+        ScreenToClient(hwnd, &clientPt);
+        
+        // Check with UIRoot if this position should receive input
+        if (UIRoot::get().shouldReceiveInputAt(static_cast<float>(clientPt.x), 
+                                                static_cast<float>(clientPt.y)))
+        {
+            return HTCLIENT; // Allow input
+        }
+        
+        // Default to transparent (pass-through)
+        return HTTRANSPARENT;
+    }
+    
+    case WM_LBUTTONDOWN:
+    {
+        // When clicking on the console, set keyboard focus to this window
+        SetFocus(hwnd);
+        return 0;
+    }
+    
+    case WM_CHAR:
+    {
+        // Forward text input to UIRoot for processing
+        if (wParam >= 32 && wParam < 127) // Printable ASCII
+        {
+            char ch = static_cast<char>(wParam);
+            UIRoot::get().injectTextInput(std::string(1, ch));
+        }
+        return 0;
+    }
+    
+    case WM_KEYDOWN:
+    {
+        // Forward special keys (Enter, Backspace, Escape, arrows)
+        // These are already captured by GetAsyncKeyState in InputState
+        break;
+    }
+    
+    case WM_ACTIVATE:
+        // Don't prevent activation when clicking on console
+        if (LOWORD(wParam) != WA_INACTIVE)
+        {
+            SetFocus(hwnd);
+        }
+        return 0;
+    
+    case WM_SETFOCUS:
+        return 0;
+    
+    case WM_MOUSEACTIVATE:
+        // Allow mouse input and activate when clicking
+        return MA_ACTIVATE;
+    
+    case WM_CLOSE:
+        ShowWindow(hwnd, SW_HIDE);
+        return 0;
+        
+    case WM_DESTROY:
+        return 0;
+        
+    default:
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+    
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+// =====================================================
 // Overlay creation
 // =====================================================
 GRIMWindow* WindowManager::createOverlay(const std::string& name, int w, int h, bool transparent)
 {
     LOG_DEBUG("WindowManager", "Creating overlay window: " + name);
 
-    HWND hwnd = nullptr;
+    // If this is a transparent overlay and one already exists, reuse it
     if (transparent)
     {
-        hwnd = createOverlayWindow(w, h);
+        for (auto& existing : s_windows)
+        {
+            if (existing->isOverlay)
+            {
+                LOG_DEBUG("WindowManager", "Reusing existing overlay window: " + existing->name);
+                existing->visible = true;
+                return existing.get();
+            }
+        }
+
+        // Get virtual screen dimensions for multi-monitor support
+        int virtualX = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        int virtualY = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        int virtualWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        int virtualHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        
+        // Use virtual dimensions if not specified
+        if (w <= 0 || h <= 0)
+        {
+            w = virtualWidth;
+            h = virtualHeight;
+        }
+
+        // Register window class for overlay
+        HINSTANCE hInstance = GetModuleHandleW(nullptr);
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(WNDCLASSEXW);
+        wc.lpfnWndProc = OverlayWndProc;
+        wc.hInstance = hInstance;
+        wc.lpszClassName = L"GRIMOverlayClass";
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.hbrBackground = nullptr;  // No background for layered window
+
+        if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+        {
+            LOG_ERROR("WindowManager", "Failed to register overlay class");
+            return nullptr;
+        }
+
+        // Create layered window for proper transparency
+        // Remove WS_EX_NOACTIVATE so the window can receive keyboard input
+        HWND hwnd = CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_TOPMOST,  // Removed WS_EX_NOACTIVATE
+            L"GRIMOverlayClass",
+            L"GRIM Overlay",
+            WS_POPUP,
+            virtualX, virtualY,
+            virtualWidth, virtualHeight,
+            nullptr, nullptr, hInstance, nullptr
+        );
+
+        if (!hwnd)
+        {
+            LOG_ERROR("WindowManager", "Failed to create transparent overlay window");
+            return nullptr;
+        }
+
+        // DON'T use SetLayeredWindowAttributes - we use UpdateLayeredWindow for per-pixel alpha!
+        // The OverlayRenderer will handle all transparency via UpdateLayeredWindow in endFrame()
+        // Calling SetLayeredWindowAttributes here would make the window 99.6% transparent and override
+        // the per-pixel alpha from UpdateLayeredWindow!
+        
+        // Don't show initially - UIRoot will show it when UI becomes visible
+        UpdateWindow(hwnd);
+
+        auto win = std::make_unique<GRIMWindow>();
+        win->hwnd = hwnd;
+        win->name = name;
+        win->visible = true;
+        win->isOverlay = false;  // Changed: Mark as non-overlay so BGFX renders to it
+        win->width = virtualWidth;
+        win->height = virtualHeight;
+
+        registerWindow(std::move(win));
+        LOG_PHASE("Transparent multi-monitor overlay created (" + 
+                 std::to_string(virtualWidth) + "x" + std::to_string(virtualHeight) + ")", true);
+        return get(name);
     }
-    else
-    {
-        hwnd = CreateWindowExW(
-            0, L"STATIC", std::wstring(name.begin(), name.end()).c_str(),
-            WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-            w, h, nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
-    }
+
+    // ----- Non-transparent standard window path -----
+    HWND hwnd = CreateWindowExW(
+        0, L"STATIC", std::wstring(name.begin(), name.end()).c_str(),
+        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+        w, h, nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
 
     if (!hwnd)
     {
-        LOG_ERROR("WindowManager", "Overlay creation failed for: " + name);
+        LOG_ERROR("WindowManager", "Standard overlay creation failed for: " + name);
         return nullptr;
     }
 
@@ -137,7 +297,7 @@ GRIMWindow* WindowManager::createOverlay(const std::string& name, int w, int h, 
     win->hwnd = hwnd;
     win->name = name;
     win->visible = true;
-    win->isOverlay = transparent;
+    win->isOverlay = false;
     win->width = w;
     win->height = h;
 

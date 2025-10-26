@@ -1,17 +1,22 @@
 #include "pch.hpp"
 #include "ui_consoleview.hpp"
 #include "ui_renderer.hpp"
-#include "input_state.hpp"
+#include "input_parser.hpp"
 #include <algorithm>
+#include <windows.h>
 
 
 UIConsoleView::UIConsoleView(ConsoleHistory* h)
     : history(h) {}
 
 void UIConsoleView::update(const InputState& input, float) {
-    // Scroll using mouse wheel or keys (optional)
-    if (input.keysDown.at(KeyCode::PageUp)) scroll(-3);
-    if (input.keysDown.at(KeyCode::PageDown)) scroll(3);
+    // Scroll using keys
+    if (input.keysDown.count(VK_PRIOR) && input.keysDown.at(VK_PRIOR)) {
+        scroll(-3); // Page Up
+    }
+    if (input.keysDown.count(VK_NEXT) && input.keysDown.at(VK_NEXT)) {
+        scroll(3); // Page Down
+    }
 }
 
 void UIConsoleView::scroll(float deltaLines) {

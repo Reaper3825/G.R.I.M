@@ -18,6 +18,7 @@
 #include "core/plugin.hpp"
 #include "helpers/color.hpp"
 #include <crtdbg.h>
+#include "helpers/grim_input.hpp"
 
 #define CHECK_HEAP() _CrtCheckMemory()
 

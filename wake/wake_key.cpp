@@ -3,6 +3,7 @@
 #include "voice/voice.hpp"
 #include "ui/ui_helpers.hpp"
 #include "ui/console_ui.hpp"
+#include "ui/ui_root.hpp"
 #include "commands/commands_core.hpp"
 #include "ai/ai.hpp"
 #include "nlp/nlp.hpp"
@@ -72,14 +73,29 @@ void start(ConsoleHistory* history,
         handleVoiceCommand(history, timers, longTermMemory, nlp);
     });
 
-    // Register callback for console toggle key (grave/tilde)
+    // Register callback for console toggle key (grave/tilde) - Toggle OVERLAY console
     Key::onPress(g_consoleToggleKey, [](KeyCode code) {
-        LOG_DEBUG("WakeKey", "Console toggle key pressed (Grave/~)");
-        GRIMConsole::toggleConsole();
+        LOG_DEBUG("WakeKey", "Console toggle key pressed (Grave/~) - Toggling overlay console");
+        
+        // Toggle the overlay console panel instead of Win32 console
+        auto consolePanel = UIRoot::get().getPanel("Console");
+        if (consolePanel) {
+            bool newState = !consolePanel->isVisible();
+            LOG_DEBUG("WakeKey", "Found Console panel, current state: " + std::string(consolePanel->isVisible() ? "visible" : "hidden"));
+            UIRoot::get().setVisible("Console", newState);
+            LOG_DEBUG("WakeKey", std::string("Overlay console set to ") + (newState ? "VISIBLE" : "HIDDEN"));
+        } else {
+            LOG_ERROR("WakeKey", "Console panel not found in UIRoot - checking all panels...");
+            // Debug: List all available panels
+            auto settingsPanel = UIRoot::get().getPanel("Settings");
+            auto grimSettings = UIRoot::get().getPanel("GRIM Settings");
+            LOG_DEBUG("WakeKey", "Settings panel exists: " + std::string(settingsPanel ? "YES" : "NO"));
+            LOG_DEBUG("WakeKey", "GRIM Settings panel exists: " + std::string(grimSettings ? "YES" : "NO"));
+        }
     });
 
     g_running = true;
-    LOG_PHASE("WakeKey system active (with console toggle)", true);
+    LOG_PHASE("WakeKey system active (overlay console toggle)", true);
 }
 
 void stop()

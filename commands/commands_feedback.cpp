@@ -5,6 +5,7 @@
 #include "memory/memory_storage.hpp"
 #include "memory/context_manager.hpp"
 #include "ai/ai_rl.hpp"
+#include "helpers/grim_input.hpp"
 #include "response_manager.hpp"
 #include "console_history.hpp"
 #include "voice/voice_speak.hpp"

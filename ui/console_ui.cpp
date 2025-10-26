@@ -114,7 +114,7 @@ static LRESULT CALLBACK ConsoleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             return 0;
         }
 
-    case WM_CHAR:
+        case WM_CHAR:
         if (wParam == VK_RETURN)
         {
             std::string input = g_state.inputBuffer;

@@ -1,32 +1,29 @@
 #pragma once
+#include <windows.h>
+#include <unordered_map>
 #include <string>
-#include <utility>
-#include <vector>
+#include <array>
+#include <cstdint>
+#include "helpers/vector2.hpp"
+#include "helpers/mouse.hpp"
 
-namespace GRIMInput
-{
-    // ====================================================
-    // Parse a line into command + argument
-    // ====================================================
-    std::pair<std::string, std::string> parseInput(const std::string& input);
+struct InputState {
+    Vec2 mousePos{};
+    Vec2 mouseDelta{};
+    bool mouseDown[3]{};
+    bool mousePressed[3]{};
+    bool mouseReleased[3]{};
 
-    // ====================================================
-    // Split input by commas for multi-command support
-    // ====================================================
-    std::vector<std::string> splitCommands(const std::string& input);
+    std::unordered_map<int, bool> keysDown;
+    std::unordered_map<int, bool> keyPressed;
+    std::unordered_map<int, bool> keyReleased;
 
-    // ====================================================
-    // Normalize a command (lowercase + synonym + fuzzy)
-    // ====================================================
-    std::string normalizeCommand(const std::string& input);
+    std::string textInput; // For typed characters (console input)
+    bool ctrl = false;
+    bool shift = false;
+    bool alt = false;
 
-    // ====================================================
-    // Clean argument text (strip symbols, lowercase)
-    // ====================================================
-    std::string cleanArg(const std::string& arg);
-
-    // ====================================================
-    // Normalize a full line (for NLP preprocessing)
-    // ====================================================
-    std::string normalizeLine(const std::string& line);
-}
+    static InputState capture();                // Existing static method
+    void captureFromHWND(HWND hwnd);            // New method for overlay
+    void resetFrameState();                     // Clears transient inputs
+};

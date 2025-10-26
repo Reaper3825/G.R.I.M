@@ -6,7 +6,8 @@
 
 // -------------------------------------------------------------
 // Temporary text width approximation (fixed-width assumption)
-static float measureTextWidth(const std::string& text, float charWidth = 8.0f)
+// Consolas 16pt is approximately 9 pixels per character
+static float measureTextWidth(const std::string& text, float charWidth = 9.0f)
 {
     return static_cast<float>(text.size()) * charWidth;
 }

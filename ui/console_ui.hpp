@@ -33,6 +33,7 @@ namespace GRIMConsole
     constexpr float kTopPad      = 8.f;
     constexpr float kBottomPad   = 8.f;
 
+
     // State
     struct ConsoleState
     {
@@ -43,6 +44,7 @@ namespace GRIMConsole
         uint64_t lastCaretToggle = 0;
     };
 
+    
     // Global console data
     extern ConsoleState g_state;
     extern ConsoleHistory g_history;
