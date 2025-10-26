@@ -2,8 +2,10 @@
 #include <vector>
 #include <memory>
 #include "widget.hpp"
-#include "input_state.hpp"
 #include "ui_renderer.hpp"
+#include "input_parser.hpp"
+
+struct InputState; // Forward declaration
 
 class UIManager {
 public:

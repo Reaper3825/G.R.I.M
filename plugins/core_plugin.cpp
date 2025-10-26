@@ -10,6 +10,7 @@
 #include "commands_system.hpp"
 #include "commands_timers.hpp"
 #include "commands_voice.hpp"
+#include "commands_ui.hpp"
 
 // One shared registration list used by both host and plugin builds.
 static void register_all_commands() {
@@ -39,30 +40,28 @@ static void register_all_commands() {
     grim_register_command("alias info",    cmdAliasInfo);
     grim_register_command("alias refresh", cmdAliasRefresh);
 
-    // ? Test commands (defined in commands_system.cpp)
+    // UI Controls
+    LOG_DEBUG("Plugin", "Registering UI commands");
+    grim_register_command("console",       cmdToggleOverlayConsole);
+    grim_register_command("ui_console",    cmdToggleOverlayConsole);
+    grim_register_command("toggle_console", cmdToggleOverlayConsole);
+    grim_register_command("settings_ui",   cmdToggleSettings);
+
+    // Test commands (defined in commands_system.cpp)
     LOG_DEBUG("Plugin", "Registering 'test_intent' command");
     grim_register_command("test_intent",   cmdTestIntent);
     LOG_DEBUG("Plugin", "Registering 'test_nlp' command");
     grim_register_command("test_nlp",      cmdTestNlp);
 
-    // ? NLP management commands
+    // NLP management commands
     LOG_DEBUG("Plugin", "Registering NLP management commands");
     grim_register_command("nlp_stats",     cmdNlpStats);
     grim_register_command("nlp_learn",     cmdNlpLearn);
     grim_register_command("nlp_save",      cmdNlpSave);
 
-    // ? Settings command (defined in commands_system.cpp)
+    // Settings command (defined in commands_system.cpp)
     LOG_DEBUG("Plugin", "Registering settings command");
     grim_register_command("settings",      cmdSettings);
-
-    // ? OSINT self-audit commands (defensive only) - DISABLED until CMake picks up file
-    // LOG_DEBUG("Plugin", "Registering OSINT commands");
-    // extern CommandResult cmdProfileSelf(const std::string&);
-    // extern CommandResult cmdSherlockSweep(const std::string&);
-    // extern CommandResult cmdOsintReport(const std::string&);
-    // grim_register_command("profile_self",    cmdProfileSelf);
-    // grim_register_command("sherlock_sweep",  cmdSherlockSweep);
-    // grim_register_command("osint_report",    cmdOsintReport);
 
     LOG_DEBUG("Plugin", "Core command registration complete");
     

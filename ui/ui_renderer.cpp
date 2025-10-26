@@ -1,74 +1,67 @@
 #include "ui_renderer.hpp"
+#include "logger.hpp"
 #include <bx/math.h>
-#include <bgfx/embedded_shader.h>
 
-
-// Embedded shader definitions (you’ll add these tiny precompiled blobs)
-extern const bgfx::EmbeddedShader* s_embeddedShaders;
 
 void UIRenderer::init()
 {
-    // Load the “vs_ui” and “fs_ui” shaders from embedded set
-    bgfx::RendererType::Enum type = bgfx::getRendererType();
-
-    bgfx::ShaderHandle vsh = bgfx::createEmbeddedShader(s_embeddedShaders, type, "vs_ui");
-    bgfx::ShaderHandle fsh = bgfx::createEmbeddedShader(s_embeddedShaders, type, "fs_ui");
-
-    if (bgfx::isValid(vsh) && bgfx::isValid(fsh))
-        m_colorProgram = bgfx::createProgram(vsh, fsh, true);
+    LOG_DEBUG("UIRenderer", "Initializing UI renderer (debug text mode)");
+    
+    // Enable debug text rendering in bgfx
+    bgfx::setDebug(BGFX_DEBUG_TEXT);
+    
+    // For now, we'll use debug text rendering only
+    // Shader-based rendering can be added later
+    m_initialized = true;
 }
 
 void UIRenderer::shutdown()
 {
     if (bgfx::isValid(m_colorProgram))
+    {
         bgfx::destroy(m_colorProgram);
+        m_colorProgram = BGFX_INVALID_HANDLE;
+    }
+    m_initialized = false;
 }
 
 void UIRenderer::drawRect(const Vec2& pos, const Vec2& size, uint32_t color, uint16_t viewId)
 {
-    if (!bgfx::isValid(m_colorProgram))
-        return;
-
-    struct PosColorVertex { float x, y, z; uint32_t abgr; };
-    static const uint16_t indices[6] = { 0, 1, 2, 0, 2, 3 };
-    PosColorVertex verts[4] = {
-        { pos.x,          pos.y,           0.0f, color },
-        { pos.x + size.x, pos.y,           0.0f, color },
-        { pos.x + size.x, pos.y + size.y,  0.0f, color },
-        { pos.x,          pos.y + size.y,  0.0f, color },
-    };
-
-    bgfx::VertexLayout layout;
-    layout.begin()
-        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
-        .add(bgfx::Attrib::Color0,   4, bgfx::AttribType::Uint8, true)
-        .end();
-
-    // Declare the transient buffers
-    bgfx::TransientVertexBuffer tvb;
-    bgfx::TransientIndexBuffer tib;
-
-    // Allocate transient buffers (API now returns void)
-    bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
-    bgfx::allocTransientIndexBuffer(&tib, 6);
-
-    // Validate that they were allocated
-    if (tvb.data == nullptr || tib.data == nullptr)
-        return;
-
-    // Copy vertex and index data into buffers
-    memcpy(tvb.data, verts, sizeof(verts));
-    memcpy(tib.data, indices, sizeof(indices));
-
-    // Submit the geometry
-    bgfx::setVertexBuffer(0, &tvb);
-    bgfx::setIndexBuffer(&tib);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    bgfx::submit(viewId, m_colorProgram);
+    // For now, draw a simple debug rectangle using bgfx debug primitives
+    // This is a temporary solution until proper shaders are set up
+    
+    // Draw border with debug text characters
+    int x1 = (int)(pos.x / 8.0f);
+    int y1 = (int)(pos.y / 16.0f);
+    int x2 = (int)((pos.x + size.x) / 8.0f);
+    int y2 = (int)((pos.y + size.y) / 16.0f);
+    
+    uint8_t attr = 0x1F; // White on blue background
+    
+    // Top border
+    for (int x = x1; x <= x2; ++x)
+        bgfx::dbgTextPrintf(x, y1, attr, "=");
+    
+    // Bottom border  
+    for (int x = x1; x <= x2; ++x)
+        bgfx::dbgTextPrintf(x, y2, attr, "=");
+    
+    // Left border
+    for (int y = y1; y <= y2; ++y)
+        bgfx::dbgTextPrintf(x1, y, attr, "|");
+    
+    // Right border
+    for (int y = y1; y <= y2; ++y)
+        bgfx::dbgTextPrintf(x2, y, attr, "|");
 }
-
 
 void UIRenderer::drawText(const Vec2& pos, const std::string& text, uint32_t color)
 {
-    bgfx::dbgTextPrintf((int)(pos.x / 8.0f), (int)(pos.y / 16.0f), color & 0x0F, "%s", text.c_str());
+    int x = (int)(pos.x / 8.0f);
+    int y = (int)(pos.y / 16.0f);
+    
+    // Convert RGBA color to bgfx attribute (simplified)
+    uint8_t attr = ((color >> 24) & 0xFF) > 128 ? 0x0F : 0x08;
+    
+    bgfx::dbgTextPrintf(x, y, attr, "%s", text.c_str());
 }

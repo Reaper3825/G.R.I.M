@@ -6,12 +6,7 @@
 #include <functional>
 #include <cstdint>
 #include <bgfx/bgfx.h>
-
-struct Vec2 {
-    float x = 0.0f;
-    float y = 0.0f;
-};
-
+#include "helpers/vector2.hpp"
 
 // ======================================================
 // Window Type Enumeration

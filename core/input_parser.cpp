@@ -9,6 +9,119 @@
 #include <vector>
 #include <sstream>
 #include <unordered_map>
+#include <windows.h>
+
+// ====================================================
+// InputState implementation
+// ====================================================
+InputState InputState::capture()
+{
+    InputState state{};
+    
+    // Capture mouse position
+    POINT p{};
+    GetCursorPos(&p);
+    state.mousePos.x = static_cast<float>(p.x);
+    state.mousePos.y = static_cast<float>(p.y);
+    
+    // Capture mouse buttons
+    state.mouseDown[0] = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    state.mouseDown[1] = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+    state.mouseDown[2] = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
+    
+    // Capture modifier keys
+    state.ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+    state.shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+    state.alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+    
+    // Capture all keyboard keys
+    for (int i = 0; i < 256; ++i)
+    {
+        bool isDown = (GetAsyncKeyState(i) & 0x8000) != 0;
+        state.keysDown[i] = isDown;
+    }
+    
+    return state;
+}
+
+void InputState::captureFromHWND(HWND hwnd)
+{
+    // Static variables to persist across frames
+    static bool prevMouseDown[3] = {false, false, false};
+    
+    // Reset per-frame data
+    textInput.clear();
+    for (int i = 0; i < 3; ++i)
+    {
+        mousePressed[i] = false;
+        mouseReleased[i] = false;
+    }
+    keyPressed.clear();
+    keyReleased.clear();
+    
+    // Mouse position relative to window
+    POINT p{};
+    GetCursorPos(&p);
+    ScreenToClient(hwnd, &p);
+    
+    static POINT lastPos{};
+    mouseDelta.x = static_cast<float>(p.x - lastPos.x);
+    mouseDelta.y = static_cast<float>(p.y - lastPos.y);
+    lastPos = p;
+    
+    mousePos.x = static_cast<float>(p.x);
+    mousePos.y = static_cast<float>(p.y);
+    
+    // Mouse buttons - use static prevMouseDown to track transitions
+    for (int i = 0; i < 3; ++i)
+    {
+        int vk = (i == 0) ? VK_LBUTTON : (i == 1) ? VK_RBUTTON : VK_MBUTTON;
+        bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
+        
+        // Debug logging for left button only
+        static int logCounter = 0;
+        if (i == 0 && (down || prevMouseDown[i]) && ++logCounter % 60 == 0) {
+            LOG_DEBUG("InputState", "LButton: down=" + std::to_string(down) + 
+                     " prev=" + std::to_string(prevMouseDown[i]) + 
+                     " pressed=" + std::to_string(down && !prevMouseDown[i]));
+        }
+        
+        if (down && !prevMouseDown[i]) mousePressed[i] = true;  // Transition: up -> down
+        if (!down && prevMouseDown[i]) mouseReleased[i] = true; // Transition: down -> up
+        
+        mouseDown[i] = down;      // Current state for this frame
+        prevMouseDown[i] = down;  // Save for next frame comparison
+    }
+    
+    // Keyboard
+    for (int i = 0; i < 256; ++i)
+    {
+        bool down = (GetAsyncKeyState(i) & 0x8000) != 0;
+        bool wasDown = keysDown.count(i) && keysDown[i];
+        
+        if (down && !wasDown) keyPressed[i] = true;
+        if (!down && wasDown) keyReleased[i] = true;
+        keysDown[i] = down;
+    }
+    
+    ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+    shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+    alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+}
+
+void InputState::resetFrameState()
+{
+    textInput.clear();
+    
+    for (int i = 0; i < 3; ++i)
+    {
+        mousePressed[i] = false;
+        mouseReleased[i] = false;
+    }
+    
+    keyPressed.clear();
+    keyReleased.clear();
+}
 
 namespace GRIMInput
 {

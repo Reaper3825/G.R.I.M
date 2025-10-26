@@ -1,4 +1,5 @@
 #include "ui_manager.hpp"
+#include "input_parser.hpp"
 
 void UIManager::add(std::shared_ptr<Widget> w) {
     widgets.push_back(std::move(w));

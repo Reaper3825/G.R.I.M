@@ -17,6 +17,7 @@
 #include "voice/voice.hpp"
 #include "bootstrap/bootstrap_config.hpp"
 #include "core/input_parser.hpp"
+#include "helpers/grim_input.hpp"
 
 // ==== PortAudio ====
 #include <portaudio.h>

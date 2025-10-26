@@ -40,7 +40,8 @@ public:
     static void renderFrame();
     static void requestMainLoopStop();
     static bool isMainLoopStopRequested();
-    
+    static HWND getOverlayHWND();
+    static GRIMWindow* ensureOverlay(int w, int h);
 
 private:
     static inline std::vector<std::unique_ptr<GRIMWindow>> s_windows;

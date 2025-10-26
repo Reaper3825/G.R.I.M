@@ -1,42 +1,30 @@
 #pragma once
 #include <string>
-#include <functional>
-#include <memory>
+#include "helpers/vector2.hpp"
 
-struct Vec2 {
-    float x;
-    float y;
-};
-class InputState;
 class UIRenderer;
+struct InputState; // Forward declaration
 
-class Widget {
+class Widget
+{
 public:
     Widget();
     virtual ~Widget() = default;
 
-    // Position & layout
-    void setPosition(float x, float y);
-    void setSize(float w, float h);
-    const Vec2& getPosition() const { return position; }
-    const Vec2& getSize() const { return size; }
-
-    // Visibility
-    void show(bool v) { visible = v; }
-    bool isVisible() const { return visible; }
-
-    // Focus & hover
-    bool isFocused() const { return focused; }
-    bool isHovered() const { return hovered; }
-
-    // Core virtuals
     virtual void update(const InputState& input, float dt);
     virtual void draw(UIRenderer& renderer);
 
+    void setPosition(float x, float y);
+    void setSize(float w, float h);
+
+    Vec2 getPosition() const { return position; }
+    Vec2 getSize() const { return size; }
+
+    bool isVisible() const { return visible; }
+    void setVisible(bool v) { visible = v; }
+
 protected:
-    Vec2 position{0, 0};
-    Vec2 size{0, 0};
+    Vec2 position{};
+    Vec2 size{};
     bool visible = true;
-    bool hovered = false;
-    bool focused = false;
 };
