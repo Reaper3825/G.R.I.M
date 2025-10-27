@@ -16,6 +16,6 @@ float surface_area;
 float gravity;
 float weight;
 
-void MassToWeight(float, float);
+float MassToWeight(float);
 //functions
 }
