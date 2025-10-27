@@ -19,5 +19,6 @@ float frequency;
 
 float MassToWeight(float);
 float CalculateFrequency(float);
+float CalculateForce(float, float);
 //functions
 }

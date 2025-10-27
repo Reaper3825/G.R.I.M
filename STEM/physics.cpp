@@ -7,6 +7,7 @@
 float weight = 0.0f;
 float gravity = 9.81f;
 float frequency = 0.0f;
+float force = 0.0f;
 
 float calc::MassToWeight(float mass)
 {
@@ -18,4 +19,10 @@ float calc::CalculateFrequency(float period)
 {
     calc::frequency = 1.0f / period;
     return calc::frequency;
+}
+
+float calc::CalculateForce(float mass, float acceleration)
+{
+    calc::force = mass * acceleration;
+    return calc::force;
 }
