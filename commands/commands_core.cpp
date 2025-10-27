@@ -10,8 +10,10 @@
 #include "logger.hpp"
 #include "error_manager.hpp"
 #include "ai/ai.hpp"
+#include "ai/intent_gate.hpp"
+#include "ai/fast_classifier.hpp"  // ✅ NEW: For updateWeights()
 #include "memory/context_manager.hpp"
-#include "memory/memory_manager.hpp"   // or memory/memory_object.hpp
+#include "memory/memory_manager.hpp"
 #include "ai/ai_rl.hpp"
 #include "ai/personality_manager.hpp"
 #include "ai/proactive_dialogue.hpp"
@@ -19,6 +21,7 @@
 #include "helpers/color.hpp"
 #include <crtdbg.h>
 #include "helpers/grim_input.hpp"
+#include <algorithm>  // ✅ NEW: For std::transform
 
 #define CHECK_HEAP() _CrtCheckMemory()
 
@@ -203,6 +206,74 @@ void handleCommand(const std::string& line)
     ensureCorePluginsRegistered();
 
     // ====================================================
+    // ✅ NEW: Intent Classification - Route to command or banter pipeline
+    // ====================================================
+    try {
+        GRIM::ContextSnapshot ctx = GRIM::ContextManager::getSnapshot();
+        GRIM::IntentResult intentResult = GRIM::IntentGate::decide(line, ctx);
+        
+        LOG_DEBUG("HandleCommand", "Intent classified as: " + GRIM::intentTypeToString(intentResult.type) + 
+                 " (confidence: " + std::to_string(intentResult.confidence) + ")");
+        
+        // Route based on intent
+        if (intentResult.type == GRIM::IntentType::Banter) {
+            // This is casual conversation - route to AI chat
+            LOG_DEBUG("HandleCommand", "Routing to banter pipeline");
+            
+            history.push("> " + line, Colors::Default.toUInt());
+            CommandResult result = ai_process(line); // AI handles casual conversation
+            
+            std::string finalText = ResponseManager::get(result.message);
+            history.push(finalText, (result.color.a << 24) | (result.color.b << 16) | 
+                        (result.color.g << 8) | result.color.r);
+            
+            if (!result.voice.empty()) {
+                Voice::speak(result.voice, "banter");
+            }
+            
+            LOG_TRACE("HandleCommand", "END (banter route)");
+            return; // Exit early - don't process as command
+        }
+        
+        // If classified as Command, clean up banter words before parsing
+        if (intentResult.type == GRIM::IntentType::Command) {
+            // Strip common banter prefixes/suffixes for cleaner parsing
+            std::string cleaned = line;
+            std::string lowerCleaned = line;
+            
+            // Convert to lowercase for comparison
+            std::transform(lowerCleaned.begin(), lowerCleaned.end(), lowerCleaned.begin(), ::tolower);
+            
+            // Remove common polite prefixes (case-insensitive)
+            const std::vector<std::string> banterPrefixes = {
+                "hey ", "hi ", "hello ", "yo ", "sup ",
+                "hey grim ", "hi grim ", "grim ",
+                "please ", "could you ", "can you ", "would you "
+            };
+            
+            for (const auto& prefix : banterPrefixes) {
+                if (lowerCleaned.find(prefix) == 0) {
+                    cleaned = cleaned.substr(prefix.length());
+                    LOG_DEBUG("HandleCommand", "Stripped banter prefix '" + prefix + "', cleaned: \"" + cleaned + "\"");
+                    break; // Only strip first match
+                }
+            }
+            
+            // If we stripped banter words, use the cleaned version
+            if (cleaned != line && !cleaned.empty()) {
+                LOG_DEBUG("HandleCommand", "Using cleaned command: \"" + cleaned + "\"");
+                // Recursively call with cleaned input
+                handleCommand(cleaned);
+                return;
+            }
+        }
+        
+    } catch (const std::exception& e) {
+        LOG_ERROR("HandleCommand", std::string("Intent classification failed: ") + e.what());
+        // Fall through to normal command processing on error
+    }
+
+    // ====================================================
     // Multi-command detection and processing
     // ====================================================
     auto commands = GRIMInput::splitCommands(line);
@@ -349,6 +420,37 @@ void handleCommand(const std::string& line)
         {
             for (const auto& [k, v] : intent.slots)
                 if (!v.empty()) { arg = GRIMInput::cleanArg(v); break; }
+        }
+        
+        // ✅ INTEGRATION #3: Feedback loop - teach classifier from NLP failures
+        if (!intent.matched) {
+            LOG_DEBUG("Feedback", "NLP failed to match - analyzing for classifier update");
+            
+            // Tokenize input to check for command indicators
+            std::string lowerLine = line;
+            std::transform(lowerLine.begin(), lowerLine.end(), lowerLine.begin(), ::tolower);
+            
+            bool hasCommandWords = false;
+            const std::vector<std::string> commandVerbs = {
+                "open", "close", "run", "launch", "show", "list", "set", 
+                "create", "delete", "search", "find", "play", "stop"
+            };
+            
+            for (const auto& verb : commandVerbs) {
+                if (lowerLine.find(verb) != std::string::npos) {
+                    hasCommandWords = true;
+                    break;
+                }
+            }
+            
+            if (!hasCommandWords) {
+                // Likely banter that slipped through - teach classifier
+                GRIM::FastClassifier::updateWeights(line, GRIM::IntentType::Banter);
+                LOG_DEBUG("Feedback", "Taught classifier: \"" + line + "\" → Banter (no command verbs)");
+            } else {
+                // Has command words but NLP didn't match - might be new pattern
+                LOG_DEBUG("Feedback", "\"" + line + "\" has command words but no NLP match - potential learning opportunity");
+            }
         }
 
         LOG_DEBUG("HandleCommand", "After normalization: cmd=\"" + cmd + "\"");

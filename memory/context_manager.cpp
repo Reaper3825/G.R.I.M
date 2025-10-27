@@ -128,6 +128,63 @@ std::vector<MemoryObject> ContextManager::getRecentContext() {
 }
 
 // ====================================================
+// ? NEW: Get snapshot for intent classification
+// ====================================================
+ContextSnapshot ContextManager::getSnapshot() {
+    std::lock_guard<std::mutex> lock(contextMutex);
+    
+    ContextSnapshot snapshot;
+    snapshot.currentMood = getCurrentMood();
+    snapshot.conversationDepth = static_cast<int>(recentContext.size());
+    
+    // ? INTEGRATION #4: Track NLP-specific context
+    int commandCount = 0;
+    std::time_t mostRecentCommandTime = 0;
+    
+    // Extract recent intents and NLP data
+    for (const auto& obj : recentContext) {
+        std::string intentStr = GRIM::toString(obj.intent, GRIM::IntentNames);
+        if (snapshot.recentIntents.size() < 5) {  // Keep last 5
+            snapshot.recentIntents.push_back(intentStr);
+        }
+        
+        // If it's a command, track it
+        if (obj.type == TypeTag::Command) {
+            if (snapshot.recentCommands.size() < 5) {
+                snapshot.recentCommands.push_back(obj.raw);
+            }
+            commandCount++;
+            if (obj.timestamp > mostRecentCommandTime) {
+                mostRecentCommandTime = obj.timestamp;
+            }
+            
+            // Extract NLP category from tags if available
+            for (const auto& tag : obj.tags) {
+                if (tag.find("nlp:") == 0) {
+                    snapshot.lastNlpCategory = tag.substr(4);  // Remove "nlp:" prefix
+                }
+            }
+        }
+    }
+    
+    // Calculate consecutive commands (recent items that are all commands)
+    for (auto it = recentContext.rbegin(); it != recentContext.rend(); ++it) {
+        if (it->type == TypeTag::Command) {
+            snapshot.consecutiveCommands++;
+        } else {
+            break;  // Stop at first non-command
+        }
+    }
+    
+    snapshot.lastCommandTime = mostRecentCommandTime;
+    
+    LOG_DEBUG("Context", "Snapshot: " + std::to_string(snapshot.consecutiveCommands) + 
+             " consecutive commands, last category: " + snapshot.lastNlpCategory);
+    
+    return snapshot;
+}
+
+// ====================================================
 // Pending Intent System
 // ====================================================
 void ContextManager::setPendingIntent(const PendingIntent& intent) {

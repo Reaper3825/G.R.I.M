@@ -1,7 +1,11 @@
 #include "ui_button.hpp"
 #include "ui_renderer.hpp"
 #include "input_parser.hpp"
+#include "logger.hpp"  // ? ADD for logging
 #include <algorithm>
+#ifdef _DEBUG
+#include <crtdbg.h>  // ? ADD for heap checking
+#endif
 
 UIButton::UIButton(const std::string& lbl, std::function<void()> cb)
     : label(lbl), callback(std::move(cb)) {}
@@ -15,8 +19,27 @@ void UIButton::update(const InputState& input, float) {
         pressed = true;
     } else if (pressed && input.mouseReleased[0]) {
         pressed = false;
-        if (inside && callback)
+        if (inside && callback) {
+            LOG_DEBUG("UIButton", "About to invoke callback for: " + label);
+            
+            // ? Check heap integrity before callback
+            #ifdef _DEBUG
+            if (!_CrtCheckMemory()) {
+                LOG_ERROR("UIButton", "HEAP CORRUPTED BEFORE CALLBACK!");
+            }
+            #endif
+            
             callback();
+            
+            LOG_DEBUG("UIButton", "Callback completed for: " + label);
+            
+            // ? Check heap integrity after callback
+            #ifdef _DEBUG
+            if (!_CrtCheckMemory()) {
+                LOG_ERROR("UIButton", "HEAP CORRUPTED AFTER CALLBACK!");
+            }
+            #endif
+        }
     }
 }
 
