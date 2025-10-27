@@ -15,7 +15,9 @@ float faces;
 float surface_area;
 float gravity;
 float weight;
+float frequency;
 
 float MassToWeight(float);
+float CalculateFrequency(float);
 //functions
 }
