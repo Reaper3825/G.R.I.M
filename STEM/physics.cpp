@@ -26,3 +26,15 @@ float calc::CalculateForce(float mass, float acceleration)
     calc::force = mass * acceleration;
     return calc::force;
 }
+
+float calc::CalculateAcceleration(float initialVelocity, float finalVelocity, float time)
+{
+
+    if (time == 0.0f) {
+        calc::acceleration = 0.0f;
+        return calc::acceleration;
+    }
+
+    calc::acceleration = (finalVelocity - initialVelocity) / time;
+    return calc::acceleration;
+}
