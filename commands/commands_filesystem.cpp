@@ -81,24 +81,24 @@ CommandResult cmdListDir([[maybe_unused]] const std::string& arg) {
 CommandResult cmdMakeDir(const std::string& arg) {
     if (arg.empty()) {
         return {
-            false,                              // success
-            "[FS] Usage: mkdir <directory>",    // message
-            "ERR_FS_NO_ARGUMENT",               // errorCode
-            "error",                            // category
-            "Directory name required",          // voice
-            Colors::Red                         // color
+            false,                             
+            "[FS] Usage: mkdir <directory>",    
+            "ERR_FS_NO_ARGUMENT",               
+            "error",                            
+            "Directory name required",          
+            Colors::Red                         
         };
     }
 
     std::filesystem::path newDir = g_currentDir / arg;
     if (std::filesystem::create_directory(newDir)) {
         return {
-            true,                                               // success
-            "[FS] Directory created: " + newDir.string(),       // message
-            "ERR_NONE",                                         // errorCode
-            "routine",                                          // category
-            "Directory created",                                // voice
-            Colors::Green                                       // color
+            true,                                              
+            "[FS] Directory created: " + newDir.string(),       
+            "ERR_NONE",                                         
+            "routine",                                          
+            "Directory created",                              
+            Colors::Green
         };
     } else {
         return {
@@ -130,32 +130,32 @@ CommandResult cmdRemoveFile(const std::string& arg) {
     std::filesystem::path file = g_currentDir / arg;
     if (!std::filesystem::exists(file)) {
         return {
-            false,                                  // success
-            "[FS] File not found: " + arg,          // message
-            "ERR_FS_NOT_FOUND",                     // errorCode
-            "error",                                // category
-            "File not found",                       // voice
-            Colors::Red                             // color
+            false,                                
+            "[FS] File not found: " + arg,        
+            "ERR_FS_NOT_FOUND",                   
+            "error",                             
+            "File not found",                   
+            Colors::Red                          
         };
     }
 
     if (std::filesystem::remove(file)) {
         return {
-            true,                                   // success
-            "[FS] Removed: " + file.string(),       // message
-            "ERR_NONE",                             // errorCode
-            "routine",                              // category
-            "File removed",                         // voice
-            Colors::Green                           // color
+            true,                                   
+            "[FS] Removed: " + file.string(),       
+            "ERR_NONE",                           
+            "routine",                             
+            "File removed",                      
+            Colors::Green                           
         };
     } else {
         return {
-            false,                                          // success
-            "[FS] Failed to remove: " + file.string(),     // message
-            "ERR_FS_REMOVE_FAILED",                         // errorCode
-            "error",                                        // category
-            "Failed to remove file",                        // voice
-            Colors::Red                                     // color
+            false,                                       
+            "[FS] Failed to remove: " + file.string(),    
+            "ERR_FS_REMOVE_FAILED",                         
+            "error",                                        
+            "Failed to remove file",                        
+            Colors::Red                                    
         };
     }
 }
