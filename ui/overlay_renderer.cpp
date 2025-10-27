@@ -4,6 +4,9 @@
 
 void OverlayRenderer::init(HWND hwnd, int width, int height)
 {
+    LOG_DEBUG("OverlayRenderer", "Initializing with thread safety");
+    std::lock_guard<std::mutex> lock(m_renderMutex);  // ? Lock during init
+    
     m_hwnd = hwnd;
     m_width = width;
     m_height = height;
@@ -40,6 +43,8 @@ void OverlayRenderer::init(HWND hwnd, int width, int height)
 
 void OverlayRenderer::shutdown()
 {
+    std::lock_guard<std::mutex> lock(m_renderMutex);  // ? Lock during shutdown
+    
     if (m_font)
     {
         DeleteObject(m_font);
@@ -76,6 +81,8 @@ void OverlayRenderer::shutdown()
 
 void OverlayRenderer::beginFrame()
 {
+    std::lock_guard<std::mutex> lock(m_renderMutex);  // ? ADD thread safety
+    
     if (!m_pixels)
         return;
     
@@ -90,6 +97,8 @@ void OverlayRenderer::beginFrame()
 
 void OverlayRenderer::endFrame()
 {
+    std::lock_guard<std::mutex> lock(m_renderMutex);  // ? ADD thread safety
+    
     if (!m_hwnd || !m_hdcMem || !m_hdcScreen)
         return;
     
@@ -113,6 +122,8 @@ void OverlayRenderer::endFrame()
 
 void OverlayRenderer::drawRect(const Vec2& pos, const Vec2& size, uint32_t color)
 {
+    std::lock_guard<std::mutex> lock(m_renderMutex);  // ? ADD thread safety
+    
     if (!m_pixels)
         return;
     
@@ -147,6 +158,8 @@ void OverlayRenderer::drawRect(const Vec2& pos, const Vec2& size, uint32_t color
 
 void OverlayRenderer::drawText(const Vec2& pos, const std::string& text, uint32_t color)
 {
+    std::lock_guard<std::mutex> lock(m_renderMutex);  // ? ADD thread safety
+    
     if (!m_hdcMem || !m_pixels)
         return;
     

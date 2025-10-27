@@ -45,7 +45,9 @@ static void register_all_commands() {
     grim_register_command("console",       cmdToggleOverlayConsole);
     grim_register_command("ui_console",    cmdToggleOverlayConsole);
     grim_register_command("toggle_console", cmdToggleOverlayConsole);
+    grim_register_command("settings",      cmdToggleSettings);      // ? Simple "settings" command
     grim_register_command("settings_ui",   cmdToggleSettings);
+    grim_register_command("toggle_settings", cmdToggleSettings);    // ? Alternative
 
     // Test commands (defined in commands_system.cpp)
     LOG_DEBUG("Plugin", "Registering 'test_intent' command");
@@ -59,9 +61,10 @@ static void register_all_commands() {
     grim_register_command("nlp_learn",     cmdNlpLearn);
     grim_register_command("nlp_save",      cmdNlpSave);
 
-    // Settings command (defined in commands_system.cpp)
-    LOG_DEBUG("Plugin", "Registering settings command");
-    grim_register_command("settings",      cmdSettings);
+    // Settings info command (renamed to avoid conflict)
+    LOG_DEBUG("Plugin", "Registering settings info command");
+    grim_register_command("settings_info", cmdSettings);  // ? Renamed from "settings"
+    grim_register_command("config_info",   cmdSettings);  // ? Alternative name
 
     LOG_DEBUG("Plugin", "Core command registration complete");
     

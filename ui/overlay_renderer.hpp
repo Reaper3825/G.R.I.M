@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <vector>
 #include <string>
+#include <mutex>
 #include "helpers/vector2.hpp"
 
 // Overlay renderer that uses GDI to draw to a layered window
@@ -34,4 +35,6 @@ private:
     void* m_pixels = nullptr;
     
     HFONT m_font = nullptr;
+
+    std::mutex m_renderMutex;
 };

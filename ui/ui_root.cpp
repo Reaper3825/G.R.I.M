@@ -52,6 +52,15 @@ void UIRoot::update(const InputState& input, float dt)
 
 void UIRoot::draw()
 {
+    // ? FIX: Lock to prevent re-entrant rendering
+    static bool isRendering = false;
+    if (isRendering) {
+        LOG_DEBUG("UIRoot", "Skipping draw() - already rendering (re-entrant call blocked)");
+        return;
+    }
+    
+    isRendering = true;
+    
     // Begin frame - clears to transparent
     m_renderer.beginFrame();
     
@@ -66,6 +75,8 @@ void UIRoot::draw()
     
     // End frame - updates layered window
     m_renderer.endFrame();
+    
+    isRendering = false;
 }
 
 void UIRoot::addPanel(const std::shared_ptr<UIPanel>& panel)

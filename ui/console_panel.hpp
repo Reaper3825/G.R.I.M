@@ -1,10 +1,11 @@
 #pragma once
 #include "ui_panel.hpp"
+#include "ui_button.hpp"  // ? NEW: For settings button
 #include "console_history.hpp"
 #include "commands/commands_core.hpp"
 #include <string>
 
-class OverlayRenderer;  // Forward declaration
+class OverlayRenderer;
 
 class ConsolePanel : public UIPanel {
 public:
@@ -23,7 +24,8 @@ private:
     std::string inputBuffer;
     bool caretVisible = true;
     uint64_t lastCaretToggle = 0;
-    // Don't store local history - use global getConsoleHistory() instead
+    
+    UIButton settingsButton;  // ? NEW: Settings button
     
     // Helper to get current time string
     std::string getCurrentTime() const;

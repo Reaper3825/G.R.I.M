@@ -5,10 +5,13 @@
 #include "error_manager.hpp"
 #include "logger.hpp"
 #include "personality_manager.hpp"
+#include "nlp/nlp.hpp"  // ✅ NEW: For NLP integration
+#include "fast_classifier.hpp"  // ✅ NEW: For teaching classifier
 #include <cpr/cpr.h>
 #include <fstream>
 #include <sstream>
 #include <future>
+#include <algorithm>
 
 // ---------------- Globals ----------------
 double g_silenceThreshold = 1e-6; // default, overridden in aiConfig
@@ -134,15 +137,39 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
 
         try {
             if (backend == "ollama") {
+                // ✅ FIX: Ollama returns NDJSON (newline-delimited JSON), need to combine responses
                 auto resp = cpr::Post(
                     cpr::Url{ aiConfig.value("ollama_url", "http://127.0.0.1:11434") + "/api/generate" },
                     cpr::Header{{"Content-Type","application/json"}},
-                    cpr::Body{ nlohmann::json{{"model", model}, {"prompt", prompt}}.dump() }
+                    cpr::Body{ nlohmann::json{
+                        {"model", model}, 
+                        {"prompt", prompt},
+                        {"stream", false}  // ✅ Disable streaming for simpler response
+                    }.dump() }
                 );
+                
                 if (resp.status_code == 200) {
+                    LOG_DEBUG("AI", "Ollama response (" + std::to_string(resp.text.size()) + " bytes): " + 
+                             resp.text.substr(0, 200) + "...");
+                    
                     auto j = nlohmann::json::parse(resp.text, nullptr, false);
-                    return j.value("response", "");
+                    
+                    if (j.is_discarded()) {
+                        LOG_ERROR("AI", "Failed to parse Ollama JSON: " + resp.text.substr(0, 500));
+                        return "[AI] Backend call failed";
+                    }
+                    
+                    std::string response = j.value("response", "");
+                    if (response.empty()) {
+                        LOG_ERROR("AI", "Ollama returned empty response field. Full JSON: " + resp.text.substr(0, 500));
+                        return "[AI] Backend call failed";
+                    }
+                    
+                    return response;
                 }
+                
+                LOG_ERROR("AI", "Ollama HTTP error: " + std::to_string(resp.status_code));
+                return "[AI] Backend call failed";
             }
             else if (backend == "localai" || backend == "openai") {
                 std::string url =
@@ -236,20 +263,22 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
     result.errorCode = "ERR_AI_INTERPRET_FAIL";
 
     try {
-        // --- Build context prompt ---
+        // --- Build context prompt with strict JSON formatting ---
         std::string personalityPrefix = GRIM::PersonalityManager::generatePrefix();
 
         std::string prompt =
-            personalityPrefix +
-            "You are GRIM, an AI companion and assistant. "
-            "Analyze the user's input and decide what type of response it requires.\n"
-            "Return JSON ONLY in the following format:\n"
-            "{ \"intent\": \"command\" | \"conversation\" | \"question\", "
-            "\"suggested_command\": string (if intent=command), "
-            "\"response\": string (if intent=conversation or question) }\n\n"
-            "Input: \"" + input + "\"\n"
-            "Context (memory excerpt): " +
-            longTermMemory.dump(1);
+            "You are GRIM. Respond with ONLY valid JSON, no markdown, no explanations.\n\n"
+            "Format:\n"
+            "{\"intent\":\"command\",\"suggested_command\":\"...\"}\n"
+            "OR\n"
+            "{\"intent\":\"conversation\",\"response\":\"...\"}\n\n"
+            "Rules:\n"
+            "- intent must be: \"command\", \"conversation\", or \"question\"\n"
+            "- If command: include \"suggested_command\"\n"
+            "- If conversation/question: include \"response\"\n"
+            "- Output MUST start with { and end with }\n\n"
+            "Input: \"" + input + "\"\n\n"
+            "JSON response:";
 
         // --- Query backend (Mistral / LocalAI / OpenAI etc.) ---
         std::string backend = resolveBackendURL();
@@ -271,15 +300,30 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
             return result;
         }
 
-        // --- Parse model response as JSON ---
-        nlohmann::json j = nlohmann::json::parse(reply, nullptr, false);
+        // --- Extract JSON from response (Mistral sometimes adds extra text) ---
+        std::string jsonStr = reply;
+        size_t jsonStart = reply.find('{');
+        size_t jsonEnd = reply.rfind('}');
         
-        // ← FIX: Validate JSON before accessing it
+        if (jsonStart != std::string::npos && jsonEnd != std::string::npos && jsonEnd > jsonStart) {
+            jsonStr = reply.substr(jsonStart, jsonEnd - jsonStart + 1);
+            LOG_DEBUG("AI", "Extracted JSON: " + jsonStr);
+        } else {
+            LOG_ERROR("AI", "No JSON found in response: " + reply);
+            result.message = "[AI] Invalid response format.";
+            result.voice = "Sorry, I got a malformed response.";
+            return result;
+        }
+
+        // --- Parse model response as JSON ---
+        nlohmann::json j = nlohmann::json::parse(jsonStr, nullptr, false);
+        
+        // Validate JSON before accessing it
         if (j.is_discarded() || !j.is_object()) {
             LOG_ERROR("AI", "Interpretation failed — non-JSON response: " + reply);
             result.message = "[AI] Could not interpret input.";
             result.voice = "Sorry, I couldn't interpret that.";
-            return result;  // ← Early return to avoid accessing discarded JSON
+            return result;
         }
 
         // --- Route based on intent ---
@@ -289,6 +333,48 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
             std::string suggested = j.value("suggested_command", "");
             if (!suggested.empty()) {
                 LOG_DEBUG("AI", "Interpreter inferred command: " + suggested);
+                
+                // ✅ INTEGRATION #5: Teach both NLP and Fast Classifier
+                try {
+                    extern NLP g_nlp;
+                    
+                    // Teach NLP to recognize this pattern
+                    if (g_nlp.learnPattern(input, suggested)) {
+                        LOG_DEBUG("AI", "✓ Taught NLP: \"" + input + "\" → " + suggested);
+                    }
+                    
+                    // Teach Fast Classifier the command words
+                    std::string lowerInput = input;
+                    std::transform(lowerInput.begin(), lowerInput.end(), 
+                                 lowerInput.begin(), ::tolower);
+                    std::string lowerSuggested = suggested;
+                    std::transform(lowerSuggested.begin(), lowerSuggested.end(),
+                                 lowerSuggested.begin(), ::tolower);
+                    
+                    // Extract verbs from the suggested command
+                    std::istringstream iss(lowerSuggested);
+                    std::string word;
+                    while (iss >> word) {
+                        // Check if this word appears in the input
+                        if (lowerInput.find(word) != std::string::npos) {
+                            // Common command verbs that should be boosted
+                            static const std::vector<std::string> commandVerbs = {
+                                "open", "close", "run", "launch", "show", "list",
+                                "set", "create", "delete", "search", "find", "play",
+                                "stop", "kill", "start", "restart", "shutdown"
+                            };
+                            
+                            if (std::find(commandVerbs.begin(), commandVerbs.end(), word) != commandVerbs.end()) {
+                                GRIM::FastClassifier::boostCommandWeight(word, 1.5f);
+                                LOG_DEBUG("AI", "✓ Boosted Fast Classifier weight for: " + word);
+                            }
+                        }
+                    }
+                    
+                } catch (const std::exception& e) {
+                    LOG_ERROR("AI", std::string("Failed to teach systems: ") + e.what());
+                }
+                
                 result.message = suggested;
                 result.category = "command_infer";
                 result.success = true;

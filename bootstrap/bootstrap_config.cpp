@@ -49,6 +49,11 @@ nlohmann::json defaultAI() {
         {"silence_threshold", 0.02},
         {"silence_timeout_ms", 4000},
 
+        {"personality", {
+            {"custom_prompt", "You are GRIM, a helpful AI assistant. Be concise and professional."},
+            {"use_custom_prompt", false}
+        }},
+
         {"voice", {
             {"mode", "local"},
             {"engine", "coqui"},

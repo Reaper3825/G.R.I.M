@@ -10,6 +10,21 @@
 namespace GRIM {
 
 // ====================================================
+// ✅ NEW: ContextSnapshot for intent classification
+// ====================================================
+struct ContextSnapshot {
+    std::vector<std::string> recentIntents;    // Last few intents (command, banter, etc.)
+    std::vector<std::string> recentCommands;   // Last few command names
+    std::string currentMood;                    // Personality mood state
+    int conversationDepth = 0;                  // How many turns in current conversation
+    
+    // ✅ INTEGRATION #4: NLP-specific context
+    std::string lastNlpCategory;               // Category of last NLP match (app, system, etc.)
+    int consecutiveCommands = 0;                // Count of consecutive commands
+    std::time_t lastCommandTime = 0;           // Timestamp of last command
+};
+
+// ====================================================
 // ContextManager — unified short-term entity + intent context
 // ====================================================
 class ContextManager {
@@ -19,6 +34,11 @@ public:
     static int usageCount(const std::string& category);
     static void setMemoryStorage(MemoryStorage* storage);
     static std::string getCurrentMood();
+
+    // ====================================================
+    // ✅ NEW: Get snapshot for intent classification
+    // ====================================================
+    static ContextSnapshot getSnapshot();
 
     // ====================================================
     // New: Contextual Memory Integration

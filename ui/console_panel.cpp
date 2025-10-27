@@ -2,6 +2,7 @@
 #include "logger.hpp"
 #include "input_parser.hpp"
 #include "overlay_renderer.hpp"
+#include "ui_root.hpp"  // ? NEW: For accessing settings panel
 #include "commands/commands_core.hpp"
 #include "helpers/key.hpp"
 #include <windows.h>
@@ -11,12 +12,26 @@
 #include <sstream>
 
 ConsolePanel::ConsolePanel()
-    : UIPanel("Console", true)  // Enable dragging!
+    : UIPanel("Console", true),  // Enable dragging
+      settingsButton("? Settings", []() {  // ? FIX: Safer lambda that doesn't capture 'this'
+          // Open settings panel directly without command system
+          auto settingsPanel = UIRoot::get().getPanel("Settings");
+          if (settingsPanel) {
+              settingsPanel->setVisible(true);
+              LOG_DEBUG("ConsolePanel", "Opened settings panel via button");
+          } else {
+              LOG_DEBUG("ConsolePanel", "Settings panel not found - may not be initialized yet");
+          }
+      })
 {
     position = { 100, 100 };
     size = { 900, 500 };
-    setBackground(0xE0101010); // Slightly more opaque dark background
-    setBorder(0xFF00FF00);     // Bright green border for GRIM aesthetic
+    setBackground(0xE0101010);
+    setBorder(0xFF00FF00);
+    
+    // ? Position settings button in top-right corner of console
+    settingsButton.setPosition(position.x + size.x - 110, position.y + 5);
+    settingsButton.setSize(100, 25);
     
     // Add stylized welcome message to GLOBAL history
     auto& history = getConsoleHistory();
@@ -39,12 +54,20 @@ void ConsolePanel::update(const InputState& input, float dt)
     // Call base panel update to handle drag/resize
     UIPanel::update(input, dt);
 
+    // ? Update settings button position to follow panel
+    settingsButton.setPosition(position.x + size.x - 110, position.y + 5);
+    
+    // ? Update settings button (handle clicks)
+    settingsButton.update(input, dt);
+
     // Update caret blink
     uint64_t now = GetTickCount64();
     if (now - lastCaretToggle > 500) {
         caretVisible = !caretVisible;
         lastCaretToggle = now;
     }
+
+    if (!isVisible()) return;
 
     // Use Key class for reliable key press detection
     // Handle Enter key - execute command
@@ -95,7 +118,6 @@ void ConsolePanel::update(const InputState& input, float dt)
     
     // Handle text input from WM_CHAR messages
     if (!input.textInput.empty()) {
-        LOG_DEBUG("ConsolePanel", "Received text: '" + input.textInput + "'");
         for (char ch : input.textInput) {
             // Filter out control characters except space
             if (ch >= 32 && ch < 127) {
@@ -111,6 +133,21 @@ void ConsolePanel::drawOverlay(OverlayRenderer& renderer)
     
     // First, let the base panel draw its background, border, and title
     UIPanel::drawOverlay(renderer);
+    
+    // ? Draw settings button
+    Vec2 btnPos = settingsButton.getPosition();
+    Vec2 btnSize = settingsButton.getSize();
+    
+    // Settings button styling (dark gray with cyan border)
+    renderer.drawRect(btnPos, btnSize, 0xFF202020);  // Dark background
+    renderer.drawRect(btnPos, {btnSize.x, 2}, 0xFF00FFFF);  // Top border (cyan)
+    renderer.drawRect(btnPos, {2, btnSize.y}, 0xFF00FFFF);  // Left border
+    renderer.drawRect({btnPos.x, btnPos.y + btnSize.y - 2}, {btnSize.x, 2}, 0xFF00FFFF);  // Bottom
+    renderer.drawRect({btnPos.x + btnSize.x - 2, btnPos.y}, {2, btnSize.y}, 0xFF00FFFF);  // Right
+    
+    // Draw button text (centered)
+    float textY = btnPos.y + (btnSize.y / 2.0f) - 8;
+    renderer.drawText({btnPos.x + 8, textY}, "? Settings", 0xFF00FFFF);  // Cyan text
     
     // Now draw console-specific content on top
     

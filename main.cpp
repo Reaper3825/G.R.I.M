@@ -18,6 +18,7 @@
 #include "memory/memory_storage.hpp"
 #include "memory/context_manager.hpp"
 #include "ai/ai_rl.hpp"
+#include "ai/intent_gate.hpp"  // ? NEW: Intent classification system
 #include "core/window_manager.hpp"
 #include "core/plugin_manager.hpp"
 #include "core/input_parser.hpp"
@@ -55,6 +56,7 @@ int main(int argc, char* argv[])
     initLogger("grim.log");
     LOG_PHASE("Initializing G.R.I.M", true);
     GRIM::CerrSuppressor suppressCerr;
+
     std::cout.rdbuf(std::cerr.rdbuf());
 
     // ======================================================
@@ -63,7 +65,9 @@ int main(int argc, char* argv[])
     wsServer.start();
     LOG_PHASE("WebSocket server started", true);
 
-    _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF | _CRTDBG_CHECK_ALWAYS_DF);
+    _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);  // ? REMOVE _CRTDBG_CHECK_ALWAYS_DF
+    
+    LOG_DEBUG("Main", "Heap check mode: Manual (removed CHECK_ALWAYS for debugging)");
 
     Mouse::initialize();
     LOG_PHASE("Mouse initialized", true);
@@ -98,6 +102,12 @@ int main(int argc, char* argv[])
     g_memoryStorage.initialize("D:/G.R.I.M/data/memories.json");
     GRIM::ContextManager::setMemoryStorage(&g_memoryStorage);
     LOG_PHASE("Memory system initialized", true);
+
+    // ======================================================
+    // ? NEW: Initialize Intent Classification System
+    // ======================================================
+    GRIM::IntentGate::init();
+    LOG_PHASE("Intent classification system initialized", true);
 
     // ======================================================
     // 5. Initialize BGFX global context
@@ -258,6 +268,7 @@ int main(int argc, char* argv[])
     Voice::shutdownQueue();
     Voice::shutdownTTS();
     GRIM::RL::shutdown();
+    GRIM::IntentGate::shutdown();  // ? NEW: Shutdown intent system
     Mouse::shutdown();
 
     UIRoot::get().shutdown();

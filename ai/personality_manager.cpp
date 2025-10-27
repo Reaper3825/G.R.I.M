@@ -81,7 +81,22 @@ std::string PersonalityManager::moodToString(Mood mood) {
 }
 
 std::string PersonalityManager::generatePrefix() {
-    // ✅ ENHANCED: Give AI actual behavioral instructions based on mood
+    extern nlohmann::json aiConfig;  // Access global config
+    
+    // Check if custom personality prompt is enabled
+    if (aiConfig.contains("personality") && aiConfig["personality"].is_object()) {
+        bool useCustom = aiConfig["personality"].value("use_custom_prompt", false);
+        
+        if (useCustom) {
+            std::string customPrompt = aiConfig["personality"].value("custom_prompt", "");
+            if (!customPrompt.empty()) {
+                LOG_DEBUG("Personality", "Using custom personality prompt");
+                return "[CUSTOM PERSONALITY: " + customPrompt + "]";
+            }
+        }
+    }
+    
+    // Fall back to mood-based personality
     std::string instruction;
     
     switch (state.mood) {
