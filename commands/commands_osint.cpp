@@ -19,10 +19,10 @@ CommandResult cmdProfileSelf(const std::string& args) {
         oss << "Usage: profile_self <username>\n";
         oss << "Example: profile_self john_doe\n\n";
         oss << "This command will search for your digital presence across:\n";
-        oss << "  • Social media platforms\n";
-        oss << "  • Professional networks\n";
-        oss << "  • Public databases\n";
-        oss << "  • Code repositories\n";
+        oss << "  ï¿½ Social media platforms\n";
+        oss << "  ï¿½ Professional networks\n";
+        oss << "  ï¿½ Public databases\n";
+        oss << "  ï¿½ Code repositories\n";
         
         return CommandResult{true, oss.str(), "", "osint", "", Colors::Cyan};
     }
@@ -101,11 +101,11 @@ CommandResult cmdOsintReport(const std::string& args) {
         oss << "Usage: osint_report <target>\n";
         oss << "Example: osint_report username@email.com\n\n";
         oss << "Generates a comprehensive OSINT report including:\n";
-        oss << "  • Username enumeration\n";
-        oss << "  • Email breach checks\n";
-        oss << "  • Social media presence\n";
-        oss << "  • Data leak exposure\n";
-        oss << "  • Public records\n";
+        oss << "  ï¿½ Username enumeration\n";
+        oss << "  ï¿½ Email breach checks\n";
+        oss << "  ï¿½ Social media presence\n";
+        oss << "  ï¿½ Data leak exposure\n";
+        oss << "  ï¿½ Public records\n";
         
         return CommandResult{true, oss.str(), "", "osint", "", Colors::Yellow};
     }
@@ -126,10 +126,10 @@ CommandResult cmdOsintReport(const std::string& args) {
     
     oss << "--- Section 3: Social Media Footprint ---\n";
     oss << "Active profiles detected:\n";
-    oss << "  • Professional networks: 2\n";
-    oss << "  • Social platforms: 5\n";
-    oss << "  • Developer platforms: 3\n";
-    oss << "  • Gaming platforms: 1\n\n";
+    oss << "  ï¿½ Professional networks: 2\n";
+    oss << "  ï¿½ Social platforms: 5\n";
+    oss << "  ï¿½ Developer platforms: 3\n";
+    oss << "  ï¿½ Gaming platforms: 1\n\n";
     
     oss << "--- Section 4: Privacy Recommendations ---\n";
     oss << "  [!] Enable 2FA on all accounts\n";
@@ -139,10 +139,10 @@ CommandResult cmdOsintReport(const std::string& args) {
     oss << "  [!] Consider using alias emails for services\n\n";
     
     oss << "--- Section 5: OSINT Tools Used ---\n";
-    oss << "  • Sherlock - Username enumeration\n";
-    oss << "  • HaveIBeenPwned - Breach detection\n";
-    oss << "  • Social-Analyzer - Social media OSINT\n";
-    oss << "  • Holehe - Email to account finder\n\n";
+    oss << "  ï¿½ Sherlock - Username enumeration\n";
+    oss << "  ï¿½ HaveIBeenPwned - Breach detection\n";
+    oss << "  ï¿½ Social-Analyzer - Social media OSINT\n";
+    oss << "  ï¿½ Holehe - Email to account finder\n\n";
     
     oss << "Report generation complete.\n";
     oss << "NOTE: This is a simulated report for demonstration purposes.\n";
