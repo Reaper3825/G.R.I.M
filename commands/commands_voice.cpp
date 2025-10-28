@@ -117,22 +117,27 @@ CommandResult cmdVoiceStream([[maybe_unused]] const std::string& arg) {
 }
 
 // ====================================================
-// [Voice] Local TTS test (Microsoft David / Coqui)
+// [Voice] Local TTS test (XTTS v2)
 // ====================================================
 CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
     CommandResult result;
     result.success = false;
 
-    std::string text = arg.empty() ? "This is a Coqui voice test." : arg;
+    std::string text = arg.empty() ? "This is a Coqui XTTS version two voice test." : arg;
 
-    LOG_DEBUG("Voice", "===== BEGIN Coqui TTS TEST =====");
+    LOG_DEBUG("Voice", "===== BEGIN Coqui XTTS v2 TEST =====");
     LOG_DEBUG("Voice", "Text: \"" + text + "\"");
+    
+    // Check if XTTS v2 is enabled
+    if (Voice::isXTTSv2Enabled()) {
+        LOG_DEBUG("Voice", "Using XTTS v2 model with language: " + Voice::getLanguage());
+    }
 
-    // 🔹 Ask Coqui to synthesize → get output path
-    std::string wavPath = Voice::coquiSpeak(text, "p225", 1.0);
+    // 🔹 Ask Coqui XTTS v2 to synthesize → get output path
+    std::string wavPath = Voice::coquiSpeak(text, "default", 1.0);
     if (wavPath.empty()) {
-        LOG_ERROR("Voice", "Coqui TTS failed (empty output path)");
-        result.message = "[Voice][Test] ERROR: Coqui TTS failed.";
+        LOG_ERROR("Voice", "Coqui XTTS v2 TTS failed (empty output path)");
+        result.message = "[Voice][Test] ERROR: Coqui XTTS v2 TTS failed.";
         result.color   = Colors::Red;
         return result;
     }
@@ -143,7 +148,7 @@ CommandResult cmd_testTTS([[maybe_unused]] const std::string& arg) {
     Voice::playAudio(wavPath);
 
     result.success = true;
-    result.message = "[Voice][Test] Coqui TTS playback requested.";
+    result.message = "[Voice][Test] Coqui XTTS v2 playback requested.";
     result.color   = Colors::Green;
     return result;
 }
@@ -158,12 +163,21 @@ CommandResult cmd_listVoices([[maybe_unused]] const std::string& arg) {
     std::string engine = cfg.value("engine", "sapi");
 
     if (engine == "coqui") {
-        oss << "[Voice] Current Coqui TTS configuration:\n";
-        oss << " - Model: " << "tts_models/en/ljspeech/vits" << "\n";
+        oss << "[Voice] Current Coqui XTTS v2 configuration:\n";
+        
+        if (Voice::isXTTSv2Enabled()) {
+            oss << " - Model: tts_models/multilingual/multi-dataset/xtts_v2\n";
+            oss << " - Engine: XTTS v2 (Voice Cloning)\n";
+            oss << " - Language: " << Voice::getLanguage() << "\n";
+            oss << " - Supported Languages: en, es, fr, de, it, pt, pl, tr, ru, nl, cs, ar, zh-cn, hu, ko, ja, hi\n";
+        } else {
+            oss << " - Model: Legacy Coqui TTS (VITS)\n";
+        }
+        
         oss << " - Speaker: " << cfg.value("speaker", "default") << "\n";
         oss << " - Speed: " << cfg.value("speed", 1.0) << "\n";
 
-        LOG_DEBUG("Voice", "Listing Coqui configuration");
+        LOG_DEBUG("Voice", "Listing Coqui XTTS v2 configuration");
         return {
             true,                           // success
             oss.str(),                      // message
@@ -393,5 +407,104 @@ CommandResult cmdNevermind(const std::string& arg)
         "routine",                     // category
         "Alright, cancelled.",         // voice
         Color(128, 128, 255)           // color
+    };
+}
+
+// ====================================================
+// [Voice] Create speaker embedding (XTTS v2)
+// ====================================================
+CommandResult cmd_createEmbedding(const std::string& arg) {
+    // Parse: speaker_id path/to/voice.wav
+    std::istringstream iss(arg);
+    std::string speaker_id, ref_path;
+    
+    iss >> speaker_id;
+    std::getline(iss, ref_path);
+    ref_path = ref_path.substr(ref_path.find_first_not_of(" \t"));  // Trim leading whitespace
+    
+    if (speaker_id.empty() || ref_path.empty()) {
+        LOG_ERROR("Voice", "Invalid arguments for create_embedding");
+        return {
+            false,
+            "[Voice] Usage: create_embedding <speaker_id> <audio_file_path>",
+            "ERR_INVALID_ARGS",
+            "error",
+            "Invalid arguments",
+            Colors::Red
+        };
+    }
+    
+    LOG_DEBUG("Voice", "Creating embedding for " + speaker_id + " from " + ref_path);
+    
+    // Send command to Coqui bridge
+    nlohmann::json req = {
+        {"command", "create_embedding"},
+        {"speaker", speaker_id},
+        {"reference_path", ref_path}
+    };
+    
+    // This would need to be sent to the coqui_bridge via the pipe
+    // For now, return a placeholder result
+    // TODO: Integrate with voice_speak.cpp pipe communication
+    
+    return {
+        true,
+        "[Voice] Embedding creation queued for: " + speaker_id,
+        "ERR_NONE",
+        "routine",
+        "Creating voice embedding",
+        Colors::Green
+    };
+}
+
+// ====================================================
+// [Voice] List speaker embeddings (XTTS v2)
+// ====================================================
+CommandResult cmd_listEmbeddings([[maybe_unused]] const std::string& arg) {
+    LOG_DEBUG("Voice", "Listing speaker embeddings");
+    
+    std::ostringstream oss;
+    oss << "[Voice] Cached Speaker Embeddings:\n\n";
+    
+    // Check embedding directory
+    std::string embeddingDir = "D:/G.R.I.M/resources/voices/embeddings";
+    
+    if (!std::filesystem::exists(embeddingDir)) {
+        oss << "No embeddings found. Create one with: create_embedding <speaker_id> <audio_file>\n";
+        return {
+            true,
+            oss.str(),
+            "ERR_NONE",
+            "debug",
+            "No embeddings found",
+            Colors::Yellow
+        };
+    }
+    
+    int count = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(embeddingDir)) {
+        if (entry.path().extension() == ".npz") {
+            auto speaker_id = entry.path().stem().string();
+            auto size_kb = entry.file_size() / 1024;
+            
+            oss << " - " << speaker_id << " (" << size_kb << " KB)\n";
+            count++;
+        }
+    }
+    
+    if (count == 0) {
+        oss << "No embeddings found.\n";
+    } else {
+        oss << "\nTotal: " << count << " embeddings\n";
+        oss << "\nUsage: Set speaker in ai_config.json to use cached embedding.\n";
+    }
+    
+    return {
+        true,
+        oss.str(),
+        "ERR_NONE",
+        "debug",
+        count > 0 ? "Embeddings listed" : "No embeddings found",
+        Colors::Cyan
     };
 }

@@ -160,8 +160,32 @@ void UIScrollBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     renderer.drawRect({position.x, position.y + size.y - 1}, {size.x, 1}, 0xFF333333);
     renderer.drawRect({position.x + size.x - 1, position.y}, {1, size.y}, 0xFF333333);
     
-    // Note: Children rendering is handled by parent (UISettingsMenu)
-    // because we need to apply scissor/clipping which is not available here
+    // Render children with scroll offset and culling
+    for (auto& child : children) {
+        if (!child->isVisible()) continue;
+        
+        Vec2 childPos = child->getPosition();
+        Vec2 childSize = child->getSize();
+        
+        // Apply scroll offset to child position
+        Vec2 scrolledPos = {childPos.x, childPos.y - scrollOffset};
+        
+        // Simple culling - only draw if visible in scrollbox
+        if (scrolledPos.y + childSize.y < position.y || 
+            scrolledPos.y > position.y + size.y) {
+            continue; // Child is outside visible area
+        }
+        
+        // Temporarily update child position for rendering
+        Vec2 originalPos = childPos;
+        child->setPosition(position.x + scrolledPos.x, position.y + scrolledPos.y);
+        
+        // Render the child
+        child->drawOverlay(renderer, panelPos);
+        
+        // Restore original position
+        child->setPosition(originalPos.x, originalPos.y);
+    }
     
     // Draw scrollbar if needed
     if (needsScrollbar()) {

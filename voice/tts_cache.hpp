@@ -30,8 +30,8 @@ namespace TTSCache {
     // Get cached audio file for text (or nullptr if not cached)
     std::string getCached(const std::string& text, const std::string& speaker, double speed);
 
-    // Store audio file in cache
-    void store(const std::string& text, const std::string& speaker, double speed, 
+    // Store audio file in cache (returns the final cached file path)
+    std::string store(const std::string& text, const std::string& speaker, double speed, 
                const std::string& filePath, bool isPermanent = false);
 
     // Mark system messages for permanent caching

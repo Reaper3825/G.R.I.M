@@ -30,8 +30,9 @@ namespace Voice {
 
 
     static std::string g_engine     = "coqui";
-    static std::string g_speaker    = "p225";
+    static std::string g_speaker    = "default";  // ? Changed from "p225" to "default"
     static double      g_speed      = 1.0;
+    static std::string g_language   = "en";  // ? Added language support for XTTS v2
     static fs::path    g_outputDir  = "D:/G.R.I.M/resources/tts_out";
     static std::unordered_map<std::string, std::string> g_rules;
 
@@ -39,6 +40,7 @@ namespace Voice {
     // Bridge state
     // =========================================================
     static bool g_ttsReady = false;
+    static bool g_xttsV2Enabled = false;  // ? Track if XTTS v2 is loaded
 
     #ifdef _WIN32
     static HANDLE hChildStdinWr = nullptr;
@@ -143,6 +145,7 @@ namespace Voice {
                     if (v.contains("engine"))      g_engine    = v["engine"].get<std::string>();
                     if (v.contains("speaker"))     g_speaker   = v["speaker"].get<std::string>();
                     if (v.contains("speed"))       g_speed     = v["speed"].get<double>();
+                    if (v.contains("language"))    g_language  = v["language"].get<std::string>();  // ? Load language
                     if (v.contains("output_dir"))  g_outputDir = v["output_dir"].get<std::string>();
                 }
             }
@@ -184,8 +187,8 @@ namespace Voice {
             si.hStdInput  = hChildStdinRd;
             si.dwFlags |= STARTF_USESTDHANDLES;
 
-            // Launch Python bridge
-            std::string cmd = "python D:/G.R.I.M/resources/python/coqui_bridge.py --persistent";
+            // ? Launch XTTS v2 bridge with GPU support
+            std::string cmd = "python D:/G.R.I.M/resources/python/coqui_bridge.py --persistent --model tts_models/multilingual/multi-dataset/xtts_v2 --gpu";
             std::vector<char> mutableCmd(cmd.begin(), cmd.end());
             mutableCmd.push_back('\0');
 
@@ -216,14 +219,14 @@ namespace Voice {
             hChildStdinWr = hChildStdinWrLocal;
 
             // =========================================================
-            // Extended handshake + ready logic
+            // Extended handshake + ready logic for XTTS v2
             // =========================================================
-            LOG_DEBUG("Voice", "Launching Coqui TTS bridge and waiting up to 60s for handshake...");
+            LOG_DEBUG("Voice", "Launching Coqui XTTS v2 bridge and waiting up to 120s for model load...");
 
-            std::string response = readJsonLineFromBridge(60000);
+            std::string response = readJsonLineFromBridge(120000);  // ? Increased timeout for XTTS v2 model load
 
             if (response.empty()) {
-                LOG_ERROR("Voice/Init", "No handshake received from Coqui after 60s. "
+                LOG_ERROR("Voice/Init", "No handshake received from Coqui XTTS v2 after 120s. "
                                         "Process kept alive but marked not ready.");
                 return false;
             }
@@ -232,7 +235,13 @@ namespace Voice {
                 auto resp = json::parse(response);
                 if (resp.value("status", "") == "ready") {
                     g_ttsReady = true;
-                    LOG_PHASE("Voice bridge ready", true);
+                    g_xttsV2Enabled = resp.value("xtts_v2", false);  // ? Check if XTTS v2
+                    std::string device = resp.value("device", "cpu");
+                    std::string model = resp.value("model", "unknown");
+                    
+                    LOG_PHASE("Coqui XTTS v2 bridge ready", true);
+                    LOG_DEBUG("Voice", "Model: " + model + " | Device: " + device + " | XTTS v2: " + 
+                             (g_xttsV2Enabled ? "Yes" : "No"));
                 } else {
                     LOG_ERROR("Voice/Init", "Unexpected handshake payload: " + response);
                 }
@@ -264,7 +273,20 @@ namespace Voice {
         LOG_PHASE("Voice shutdownTTS complete", true);
         g_ttsReady = false;
     }
-
+    
+    // =========================================================
+    // ? NEW: Initialize Pre-cache in Background
+    // =========================================================
+    void initPreCache() {
+        if (g_ttsReady) {
+            // Start pre-caching in background thread
+            std::thread([]() {
+                // Wait for model warmup to complete
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+                preCacheCommonPhrases();
+            }).detach();
+        }
+    }
     // =========================================================
     // Queue worker
     // =========================================================
@@ -326,6 +348,55 @@ namespace Voice {
         if (workerThread.joinable()) workerThread.join();
     }
 
+    // =========================================================
+    // ? NEW: Pre-cache Common Phrases for Instant Playback
+    // =========================================================
+    void preCacheCommonPhrases() {
+        std::vector<std::string> commonPhrases = {
+            "Yes",
+            "No",
+            "Okay",
+            "I'm listening",
+            "How can I help you?",
+            "Understood",
+            "Processing",
+            "Done",
+            "Ready",
+            "Error occurred",
+            "Please wait",
+            "Command executed",
+            "I'm here",
+            "Go ahead",
+            "Affirmative",
+            "Negative",
+            "Acknowledged"
+        };
+        
+        LOG_DEBUG("Voice", "Pre-caching common phrases...");
+        
+        int cached = 0;
+        int alreadyCached = 0;
+        
+        for (const auto& phrase : commonPhrases) {
+            // Check if already cached
+            std::string existing = TTSCache::getCached(phrase, "default", 1.0);
+            
+            if (existing.empty()) {
+                // Generate and cache
+                std::string wav = coquiSpeak(phrase, "default", 1.0);
+                if (!wav.empty()) {
+                    TTSCache::store(phrase, "default", 1.0, wav);
+                    cached++;
+                }
+            } else {
+                alreadyCached++;
+            }
+        }
+        
+        LOG_DEBUG("Voice", "Pre-cache complete: " + std::to_string(cached) + 
+                 " generated, " + std::to_string(alreadyCached) + " already cached");
+    }
+
     bool isReady() {
         return g_ttsReady;
     }
@@ -380,7 +451,7 @@ namespace Voice {
 
 
     // =========================================================
-    // Coqui Speak
+    // Coqui Speak (XTTS v2 Enhanced)
     // =========================================================
     std::string coquiSpeak(const std::string& text,
                            const std::string& speaker,
@@ -403,27 +474,36 @@ namespace Voice {
         fs::create_directories(tempDir);
         std::string outFile = (tempDir / (randomString(32) + ".wav")).string();
 
+        // ? Enhanced request with XTTS v2 parameters
         json req = {
             {"command", "speak"},
             {"text", text},
             {"speaker", speaker},
             {"speed", speed},
+            {"language", g_language},  // ? Include language for XTTS v2
             {"out", outFile}
         };
         std::string line = req.dump() + "\n";
 
         DWORD written = 0;
         BOOL ok = WriteFile(hChildStdinWr, line.c_str(), (DWORD)line.size(), &written, nullptr);
-        LOG_DEBUG("Voice/Coqui", "Sent request (" + std::to_string(written) + " bytes): " + line);
+        
+        if (g_xttsV2Enabled) {
+            LOG_DEBUG("Voice/Coqui", "XTTS v2 request (" + std::to_string(written) + " bytes) | Lang: " + g_language);
+        } else {
+            LOG_DEBUG("Voice/Coqui", "Sent request (" + std::to_string(written) + " bytes): " + line);
+        }
+        
         if (!ok) {
             LOG_ERROR("Voice/Coqui", "WriteFile failed");
             return "";
         }
 
-        std::string response = readJsonLineFromBridge();
+        // ? Increased timeout for XTTS v2 (can be slower but higher quality)
+        std::string response = readJsonLineFromBridge(60000);  // 60s timeout
 
         if (response.empty()) {
-            LOG_ERROR("Voice/Bridge", "Timeout waiting for Coqui response (30s)");
+            LOG_ERROR("Voice/Bridge", "Timeout waiting for Coqui response (60s)");
             return "";
         }
 
@@ -434,12 +514,21 @@ namespace Voice {
                 std::string generatedFile = resp["file"].get<std::string>();
                 LOG_DEBUG("Voice/Bridge", "Received response: " + response);
                 
-                // ? Store in cache
-                TTSCache::store(text, speaker, speed, generatedFile);
+                // ? FIX: Store in cache and get the FINAL path (might be moved)
+                std::string finalPath = TTSCache::store(text, speaker, speed, generatedFile);
                 
-                return generatedFile;
+                // ? Return the final path (from cache, not temp)
+                if (!finalPath.empty() && fs::exists(finalPath)) {
+                    LOG_DEBUG("Voice/Coqui", "Returning final cached path: " + finalPath);
+                    return finalPath;
+                } else {
+                    // Fallback: if cache failed, use original file
+                    LOG_DEBUG("Voice/Coqui", "Cache storage failed, using temp file: " + generatedFile);
+                    return generatedFile;
+                }
             } else {
-                LOG_DEBUG("Voice/Bridge", "Unexpected JSON from Coqui: " + response);
+                std::string errMsg = resp.value("message", "unknown error");
+                LOG_ERROR("Voice/Bridge", "Coqui TTS error: " + errMsg);
             }
         } catch (const std::exception& e) {
             LOG_ERROR("Voice/Bridge",
@@ -459,6 +548,22 @@ namespace Voice {
             speakQueue.emplace(text, category);
         }
         queueCV.notify_one();
+    }
+    
+    // =========================================================
+    // XTTS v2 Utility Functions
+    // =========================================================
+    bool isXTTSv2Enabled() {
+        return g_xttsV2Enabled;
+    }
+    
+    void setLanguage(const std::string& lang) {
+        g_language = lang;
+        LOG_DEBUG("Voice", "Language set to: " + lang);
+    }
+    
+    std::string getLanguage() {
+        return g_language;
     }
 
 } // namespace Voice

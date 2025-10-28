@@ -4,6 +4,7 @@
 #include "ui_slider.hpp"
 #include "ui_toggle.hpp"
 #include "ui_scrollbox.hpp"
+#include "ui_dropdown.hpp"  // ? NEW: Include dropdown
 #include <vector>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -30,6 +31,9 @@ private:
     void cyclePersonality();
     void doSaveAndClose();
     void doCancel();
+    
+    // ? NEW: Helper to scan for available speaker embeddings
+    std::vector<std::string> getSpeakerEmbeddings();
 
     nlohmann::json config;
     nlohmann::json pendingConfig;
@@ -39,6 +43,7 @@ private:
     std::vector<std::string> buttonLabels;
     std::vector<std::shared_ptr<UISlider>> sliders;
     std::vector<std::shared_ptr<UIToggle>> toggles;
+    std::vector<std::shared_ptr<UIDropdown>> dropdowns;  // ? NEW: Dropdown storage
     
     bool hasChanges = false;
     bool isRefreshing = false;

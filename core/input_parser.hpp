@@ -23,7 +23,13 @@ struct InputState {
     bool shift = false;
     bool alt = false;
 
+    // ? NEW: Mouse input filtering flag
+    bool mouseInputEnabled = true;  // If false, mouse events are suppressed
+
     static InputState capture();                // Existing static method
     void captureFromHWND(HWND hwnd);            // New method for overlay
     void resetFrameState();                     // Clears transient inputs
+
+    // ? NEW: Check if mouse input should be active
+    static bool shouldProcessMouseInput();
 };

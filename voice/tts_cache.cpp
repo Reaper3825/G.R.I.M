@@ -31,7 +31,14 @@ namespace TTSCache {
         "commands. Was that correct?",
         "Got it � I'll remember that next time.",
         "I couldn't save that one � try again later.",
-        "Sorry, I couldn't interpret that."
+        "Sorry, I couldn't interpret that.",
+        // ✅ XTTS v2 specific phrases
+        "Welcome back",
+        "Grim is online",
+        "Initializing",
+        "System ready",
+        "Voice recognition active",
+        "Processing request"
     };
 
     // =========================================================
@@ -139,84 +146,110 @@ namespace TTSCache {
         LOG_PHASE("TTS Cache shutdown", true);
     }
 
-    std::string getCached(const std::string& text, const std::string& speaker, double speed) {
+    // =========================================================
+    // Get cached audio file
+    // =========================================================
+    std::string getCached(const std::string& text, const std::string& speaker, double speed)
+    {
         std::lock_guard<std::mutex> lock(g_cacheMutex);
-        
+
         std::string key = getCacheKey(text, speaker, speed);
+
         auto it = g_cache.find(key);
-        
-        if (it != g_cache.end()) {
-            // Update usage stats
-            it->second.lastUsed = std::time(nullptr);
-            it->second.useCount++;
-            
-            LOG_DEBUG("TTSCache", "Cache HIT for: " + text.substr(0, 30) + "...");
-            return it->second.filePath;
+        if (it != g_cache.end())
+        {
+            // ✅ FIX: Verify file actually exists before returning path
+            if (fs::exists(it->second.filePath))
+            {
+                // Update last used time
+                it->second.lastUsed = std::time(nullptr);
+                it->second.useCount++;
+
+                std::string logText = text.length() > 30 ? text.substr(0, 30) + "..." : text;
+                LOG_DEBUG("TTSCache", "Cache HIT for: " + logText);
+                return it->second.filePath;
+            }
+            else
+            {
+                // ✅ File doesn't exist - remove from cache
+                std::string logText = text.length() > 30 ? text.substr(0, 30) + "..." : text;
+                LOG_DEBUG("TTSCache", "Cache entry invalid (file missing), removing: " + logText);
+                g_cache.erase(it);
+                saveIndex();
+                return "";
+            }
         }
-        
-        LOG_DEBUG("TTSCache", "Cache MISS for: " + text.substr(0, 30) + "...");
+
+        std::string logText = text.length() > 30 ? text.substr(0, 30) + "..." : text;
+        LOG_DEBUG("TTSCache", "Cache MISS for: " + logText);
         return "";
     }
 
-    void store(const std::string& text, const std::string& speaker, double speed,
-           const std::string& filePath, bool isPermanent) {
-    std::lock_guard<std::mutex> lock(g_cacheMutex);
-    
-    std::string key = getCacheKey(text, speaker, speed);
+    // =========================================================
+    // Store audio in cache
+    // =========================================================
+    std::string store(const std::string& text, const std::string& speaker, double speed,
+                      const std::string& filePath, bool isPermanent)
+    {
+        std::lock_guard<std::mutex> lock(g_cacheMutex);
 
-    // 🔹 Determine if this should be permanent
-    bool shouldBePermanent = isPermanent;
-    for (const auto& phrase : PERMANENT_PHRASES) {
-        if (text.find(phrase) != std::string::npos) {
-            shouldBePermanent = true;
-            break;
+        std::string key = getCacheKey(text, speaker, speed);
+
+        // Decide if this should be permanent
+        bool shouldBePermanent = isPermanent;
+
+        // Determine destination directory
+        fs::path destDir = shouldBePermanent ? g_cacheDir : g_tempDir;
+        fs::create_directories(destDir);
+
+        // Generate destination filename (keep the same random name)
+        fs::path srcPath(filePath);
+        fs::path destPath = destDir / srcPath.filename();
+
+        // Move file from temp to cache/temp
+        if (fs::exists(srcPath) && srcPath != destPath)
+        {
+            try
+            {
+                fs::rename(srcPath, destPath);
+                LOG_DEBUG("TTSCache", "Moved file: " + srcPath.string() + " → " + destPath.string());
+            }
+            catch (const std::exception& e)
+            {
+                LOG_ERROR("TTSCache", std::string("Failed to move file: ") + e.what());
+                // If move fails, just use the original path
+                destPath = srcPath;
+            }
         }
-    }
-
-    // 🔹 Always treat startup/system greetings as permanent cache
-    if (text.find("Welcome back, Austin.") != std::string::npos ||
-        text.find("Grim is online") != std::string::npos ||
-        text.find("Initializing G.R.I.M") != std::string::npos) {
-        shouldBePermanent = true;
-    }
-
-    fs::path sourceFile = fs::path(filePath);
-    fs::path targetDir  = shouldBePermanent ? g_cacheDir : g_tempDir;
-    fs::path targetPath = targetDir / sourceFile.filename();
-
-    try {
-        if (!fs::exists(sourceFile)) {
-            LOG_ERROR("TTSCache", "Source file doesn't exist: " + sourceFile.string());
-            return;
+        else if (fs::exists(destPath))
+        {
+            // File is already in the destination
+            LOG_DEBUG("TTSCache", "File already in destination: " + destPath.string());
+        }
+        else
+        {
+            LOG_ERROR("TTSCache", "Source file not found: " + srcPath.string());
+            return "";  // ✅ Return empty string on error
         }
 
-        // Copy + remove only if changing directory
-        if (sourceFile.parent_path() != targetDir) {
-            fs::copy_file(sourceFile, targetPath, fs::copy_options::overwrite_existing);
-            fs::remove(sourceFile);
-            LOG_DEBUG("TTSCache", "Moved file: " + sourceFile.string() + " → " + targetPath.string());
-        } else {
-            targetPath = sourceFile;
-        }
-
+        // Store in cache index
         CacheEntry entry;
-        entry.filePath   = targetPath.string();
-        entry.lastUsed   = std::time(nullptr);
+        entry.filePath = destPath.string();
+        entry.lastUsed = std::time(nullptr);
         entry.isPermanent = shouldBePermanent;
-        entry.useCount   = 1;
+        entry.useCount = 1;
 
         g_cache[key] = entry;
 
-        LOG_DEBUG("TTSCache", std::string("Stored ")
-                  + (shouldBePermanent ? "PERMANENT" : "TEMP")
-                  + " cache: " + text.substr(0, 30) + "...");
+        std::string cacheType = shouldBePermanent ? "PERMANENT" : "TEMP";
+        std::string logText = text.length() > 30 ? text.substr(0, 30) + "..." : text;
+        LOG_DEBUG("TTSCache", "Stored " + cacheType + " cache: " + logText);
 
+        // Save index to disk
         saveIndex();
+
+        return destPath.string();  // ✅ Return the final path
     }
-    catch (const std::exception& e) {
-        LOG_ERROR("TTSCache", std::string("Failed to store cache entry: ") + e.what());
-    }
-}
 
     void markPermanent(const std::string& text) {
         std::lock_guard<std::mutex> lock(g_cacheMutex);
