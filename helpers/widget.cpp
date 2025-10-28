@@ -6,6 +6,8 @@ Widget::Widget() = default;
 void Widget::update(const InputState&, float) {}
 void Widget::draw(UIRenderer&) {}
 
+void Widget::drawOverlay(OverlayRenderer&, const Vec2&) {}
+
 void Widget::setPosition(float x, float y)
 {
     position.x = x;

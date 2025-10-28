@@ -3,6 +3,8 @@
 #include "commands_core.hpp"     // for CommandResult / CommandFunc / commandMap
 #include "synonyms.hpp"
 #include "logger.hpp"
+#include "ui/ui_root.hpp"        // ✅ NEW: For checking UI visibility
+#include "popup_ui/popup_ui.hpp" // ✅ NEW: For checking popup visibility
 
 #include <algorithm>
 #include <cctype>
@@ -12,11 +14,36 @@
 #include <windows.h>
 
 // ====================================================
+// ✅ NEW: Check if mouse input should be processed
+// ====================================================
+bool InputState::shouldProcessMouseInput()
+{
+    // Mouse input is only active when UI panels or popup are visible
+    bool popupVisible = isPopupVisible();
+    bool uiPanelVisible = false;
+    
+    // Check if any UI panel is visible
+    auto& uiRoot = UIRoot::get();
+    POINT cursorPos;
+    GetCursorPos(&cursorPos);
+    uiPanelVisible = uiRoot.shouldReceiveInputAt(
+        static_cast<float>(cursorPos.x), 
+        static_cast<float>(cursorPos.y)
+    );
+    
+    // Allow mouse input only if popup or a UI panel is visible
+    return popupVisible || uiPanelVisible;
+}
+
+// ====================================================
 // InputState implementation
 // ====================================================
 InputState InputState::capture()
 {
     InputState state{};
+    
+    // ✅ NEW: Check if mouse input should be enabled
+    state.mouseInputEnabled = shouldProcessMouseInput();
     
     // Capture mouse position
     POINT p{};
@@ -24,12 +51,22 @@ InputState InputState::capture()
     state.mousePos.x = static_cast<float>(p.x);
     state.mousePos.y = static_cast<float>(p.y);
     
-    // Capture mouse buttons
-    state.mouseDown[0] = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-    state.mouseDown[1] = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
-    state.mouseDown[2] = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
+    // ✅ MODIFIED: Only capture mouse buttons if input is enabled
+    if (state.mouseInputEnabled)
+    {
+        state.mouseDown[0] = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        state.mouseDown[1] = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+        state.mouseDown[2] = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
+    }
+    else
+    {
+        // Mouse input disabled - report all buttons as up
+        state.mouseDown[0] = false;
+        state.mouseDown[1] = false;
+        state.mouseDown[2] = false;
+    }
     
-    // Capture modifier keys
+    // Capture modifier keys (always enabled for keyboard shortcuts)
     state.ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
     state.shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
     state.alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
@@ -48,6 +85,23 @@ void InputState::captureFromHWND(HWND hwnd)
 {
     // Static variables to persist across frames
     static bool prevMouseDown[3] = {false, false, false};
+    static bool prevMouseInputEnabled = true;
+    
+    // ✅ Check if mouse input should be enabled
+    mouseInputEnabled = shouldProcessMouseInput();
+    
+    // ✅ FIX: DON'T clear Mouse class state immediately when filtering changes
+    // Let it persist for one frame to allow button callbacks to complete
+    // Only log the state change
+    if (mouseInputEnabled != prevMouseInputEnabled) {
+        if (!mouseInputEnabled) {
+            LOG_DEBUG("InputState", "Mouse input disabled - will clear on next frame");
+        }
+        else {
+            LOG_DEBUG("InputState", "Mouse input enabled");
+        }
+        prevMouseInputEnabled = mouseInputEnabled;
+    }
     
     // Reset per-frame data
     textInput.clear();
@@ -72,28 +126,42 @@ void InputState::captureFromHWND(HWND hwnd)
     mousePos.x = static_cast<float>(p.x);
     mousePos.y = static_cast<float>(p.y);
     
-    // Mouse buttons - use static prevMouseDown to track transitions
-    for (int i = 0; i < 3; ++i)
+    // ✅ MODIFIED: Only process mouse buttons if input is enabled
+    if (mouseInputEnabled)
     {
-        int vk = (i == 0) ? VK_LBUTTON : (i == 1) ? VK_RBUTTON : VK_MBUTTON;
-        bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
-        
-        // Debug logging for left button only
-        static int logCounter = 0;
-        if (i == 0 && (down || prevMouseDown[i]) && ++logCounter % 60 == 0) {
-            LOG_DEBUG("InputState", "LButton: down=" + std::to_string(down) + 
-                     " prev=" + std::to_string(prevMouseDown[i]) + 
-                     " pressed=" + std::to_string(down && !prevMouseDown[i]));
+        // Mouse buttons - use static prevMouseDown to track transitions
+        for (int i = 0; i < 3; ++i)
+        {
+            int vk = (i == 0) ? VK_LBUTTON : (i == 1) ? VK_RBUTTON : VK_MBUTTON;
+            bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
+            
+            if (down && !prevMouseDown[i]) mousePressed[i] = true;  // Transition: up -> down
+            if (!down && prevMouseDown[i]) mouseReleased[i] = true; // Transition: down -> up
+            
+            mouseDown[i] = down;
+            prevMouseDown[i] = down;
         }
-        
-        if (down && !prevMouseDown[i]) mousePressed[i] = true;  // Transition: up -> down
-        if (!down && prevMouseDown[i]) mouseReleased[i] = true; // Transition: down -> up
-        
-        mouseDown[i] = down;      // Current state for this frame
-        prevMouseDown[i] = down;  // Save for next frame comparison
+    }
+    else
+    {
+        // ✅ FIX: When input disabled, just copy current mouse state
+        // Don't forcefully clear prevMouseDown - let it naturally transition
+        for (int i = 0; i < 3; ++i)
+        {
+            int vk = (i == 0) ? VK_LBUTTON : (i == 1) ? VK_RBUTTON : VK_MBUTTON;
+            bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
+            
+            // Report current state but don't generate press/release events
+            mouseDown[i] = down;
+            
+            // ✅ FIX: Update prevMouseDown to prevent false events when re-enabling
+            if (!down) {
+                prevMouseDown[i] = false;
+            }
+        }
     }
     
-    // Keyboard
+    // Keyboard (always enabled)
     for (int i = 0; i < 256; ++i)
     {
         bool down = (GetAsyncKeyState(i) & 0x8000) != 0;

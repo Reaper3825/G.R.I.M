@@ -55,6 +55,17 @@ static void register_all_commands() {
     LOG_DEBUG("Plugin", "Registering 'test_nlp' command");
     grim_register_command("test_nlp",      cmdTestNlp);
 
+    // Voice commands
+    LOG_DEBUG("Plugin", "Registering voice commands");
+    grim_register_command("test_tts",      cmd_testTTS);
+    grim_register_command("list_voices",   cmd_listVoices);
+    grim_register_command("nevermind",     cmdNevermind);
+    
+    // ? NEW: Speaker embedding commands (XTTS v2)
+    LOG_DEBUG("Plugin", "Registering speaker embedding commands");
+    grim_register_command("create_embedding", cmd_createEmbedding);
+    grim_register_command("list_embeddings",  cmd_listEmbeddings);
+
     // NLP management commands
     LOG_DEBUG("Plugin", "Registering NLP management commands");
     grim_register_command("nlp_stats",     cmdNlpStats);

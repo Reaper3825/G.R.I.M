@@ -4,6 +4,7 @@
 #include "input_parser.hpp"
 #include <fstream>
 #include <functional>  // ? ADD: For std::bind
+#include <filesystem>  // ? NEW: For directory scanning
 
 UISettingsMenu::UISettingsMenu()
     : UIPanel("Settings", true), hasChanges(false), isRefreshing(false), needsWidgetRefresh(false)
@@ -20,6 +21,38 @@ UISettingsMenu::UISettingsMenu()
     scrollBox->setChildSpacing(5.0f);
     
     loadConfig();
+}
+
+// ? NEW: Scan for available speaker embeddings
+std::vector<std::string> UISettingsMenu::getSpeakerEmbeddings() {
+    std::vector<std::string> embeddings;
+    embeddings.push_back("default");  // Always include default
+    
+    try {
+        std::string embeddingDir = "D:/G.R.I.M/resources/voices/embeddings";
+        
+        if (std::filesystem::exists(embeddingDir)) {
+            for (const auto& entry : std::filesystem::directory_iterator(embeddingDir)) {
+                if (entry.path().extension() == ".npz") {
+                    std::string speakerName = entry.path().stem().string();
+                    if (speakerName != "default") {  // Don't duplicate default
+                        embeddings.push_back(speakerName);
+                    }
+                }
+            }
+        }
+        
+        LOG_DEBUG("UISettingsMenu", "Found " + std::to_string(embeddings.size()) + " speaker embeddings");
+    } catch (const std::exception& e) {
+        LOG_ERROR("UISettingsMenu", std::string("Failed to scan embeddings: ") + e.what());
+    }
+    
+    // If only default found, add a helpful message option
+    if (embeddings.size() == 1) {
+        embeddings.push_back("(no custom voices)");
+    }
+    
+    return embeddings;
 }
 
 void UISettingsMenu::loadConfig() {
@@ -278,6 +311,7 @@ void UISettingsMenu::createWidgets() {
         buttonLabels.clear();
         sliders.clear();
         toggles.clear();
+        dropdowns.clear();  // ? NEW: Clear dropdowns
         LOG_DEBUG("UISettingsMenu", "Widgets cleared successfully");
 
         float yOffset = 10.0f;  // Start offset within scroll box
@@ -317,6 +351,51 @@ void UISettingsMenu::createWidgets() {
         buttonLabels.push_back(label2);
         yOffset += widgetHeight + 5;
         LOG_DEBUG("UISettingsMenu", "Button 2 created successfully");
+        
+        // ? NEW: Dropdown for Speaker Embedding Selection (only show if Coqui is selected)
+        if (voiceEngine == "coqui") {
+            LOG_DEBUG("UISettingsMenu", "Creating Dropdown: Speaker Embedding");
+            
+            // Get available embeddings
+            std::vector<std::string> embeddings = getSpeakerEmbeddings();
+            
+            // Get current speaker from config
+            std::string currentSpeaker = "default";
+            if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object() &&
+                pendingConfig["voice"].contains("speaker")) {
+                currentSpeaker = pendingConfig["voice"]["speaker"].get<std::string>();
+            }
+            
+            // Find index of current speaker
+            int selectedIndex = 0;
+            for (size_t i = 0; i < embeddings.size(); ++i) {
+                if (embeddings[i] == currentSpeaker) {
+                    selectedIndex = static_cast<int>(i);
+                    break;
+                }
+            }
+            
+            dropdowns.push_back(std::make_shared<UIDropdown>(
+                "Speaker:",
+                embeddings,
+                selectedIndex,
+                [this](int index, const std::string& selected) {
+                    if (selected == "(no custom voices)") return;  // Ignore helper text
+                    
+                    if (!pendingConfig.contains("voice") || !pendingConfig["voice"].is_object()) {
+                        pendingConfig["voice"] = nlohmann::json::object();
+                    }
+                    pendingConfig["voice"]["speaker"] = selected;
+                    hasChanges = true;
+                    LOG_DEBUG("UISettingsMenu", "Speaker changed to: " + selected);
+                }
+            ));
+            
+            dropdowns.back()->setPosition(contentX, yOffset);
+            dropdowns.back()->setSize(widgetWidth, widgetHeight);
+            yOffset += widgetHeight + 5;
+            LOG_DEBUG("UISettingsMenu", "Dropdown created successfully");
+        }
         
         // Button 3: Whisper Model (nested in whisper.whisper_model)
         LOG_DEBUG("UISettingsMenu", "Creating Button 3: Model");
@@ -520,6 +599,7 @@ void UISettingsMenu::update(const InputState& input, float dt) {
     auto buttonsCopy = buttons;
     auto slidersCopy = sliders;
     auto togglesCopy = toggles;
+    auto dropdownsCopy = dropdowns;  // ? NEW: Copy dropdowns too
     
     // ? Check refresh flag BEFORE updating widgets
     bool shouldRefresh = needsWidgetRefresh;
@@ -551,6 +631,21 @@ void UISettingsMenu::update(const InputState& input, float dt) {
         buttonsCopy[i]->setPosition(contentX, scrollBoxPos.y + yOffset - scrollOffset);
         buttonsCopy[i]->update(input, dt);
         yOffset += widgetHeight + 5;
+        
+        // ? NEW: If this is the voice button (index 1) and Coqui is selected, update dropdown
+        if (i == 1 && !dropdownsCopy.empty()) {
+            std::string voiceEngine = "coqui";
+            if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object() &&
+                pendingConfig["voice"].contains("engine")) {
+                voiceEngine = pendingConfig["voice"]["engine"].get<std::string>();
+            }
+            
+            if (voiceEngine == "coqui") {
+                dropdownsCopy[0]->setPosition(contentX, scrollBoxPos.y + yOffset - scrollOffset);
+                dropdownsCopy[0]->update(input, dt);
+                yOffset += widgetHeight + 5;
+            }
+        }
     }
     
     // Update sliders using COPY
@@ -597,6 +692,25 @@ void UISettingsMenu::drawOverlay(OverlayRenderer& renderer)
     // Note: In a full implementation, we would use scissor/clipping here
     // For now, we just draw everything and let things outside be visible
     // (A proper implementation would require OpenGL/DirectX scissor test)
+    
+    // ? NEW: Draw dropdowns (if voice engine is Coqui)
+    std::string voiceEngine = "coqui";
+    if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object() &&
+        pendingConfig["voice"].contains("engine")) {
+        voiceEngine = pendingConfig["voice"]["engine"].get<std::string>();
+    }
+    
+    if (voiceEngine == "coqui" && !dropdowns.empty()) {
+        for (auto& dropdown : dropdowns) {
+            Vec2 dropdownPos = dropdown->getPosition();
+            
+            // Only draw if within visible area
+            if (dropdownPos.y + dropdown->getSize().y >= scrollBoxPos.y &&
+                dropdownPos.y <= scrollBoxPos.y + scrollBoxSize.y) {
+                dropdown->drawOverlay(renderer, position);
+            }
+        }
+    }
     
     // Draw sliders
     for (auto& slider : sliders) {

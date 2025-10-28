@@ -1,0 +1,266 @@
+{
+  " greetings. i am grim, your ai assistant and companion. ready for tasks and queries. how may i assist you today?_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\CgKdEyWHzRpSZfA7IkAkNRd4ndWpHmOp.wav",
+    "lastUsed": 1761588468,
+    "permanent": false,
+    "useCount": 1
+  },
+  " hey there! i'm absolutely fantastic, thanks for asking! it's always a pleasure to assist you. how can i help make your day brighter today?_p225_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\usXnshoYMbiY2ZdjZDulHftiyNwuj8ML.wav",
+    "lastUsed": 1761546798,
+    "permanent": false,
+    "useCount": 1
+  },
+  " i am a machine and do not experience emotions, but i'm functioning as intended._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\BmwwDbuxBaG5pngxz3Y3O80spGL6SM1Y.wav",
+    "lastUsed": 1761627457,
+    "permanent": false,
+    "useCount": 1
+  },
+  " i am a machine and do not have feelings or emotions, but my systems are functioning as expected. how may i assist you today?_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\uqSAQM2imLHl6Rg69lDwfjFjSfnyRRgt.wav",
+    "lastUsed": 1761618870,
+    "permanent": false,
+    "useCount": 1
+  },
+  " i am a machine, grim, and do not have feelings or emotions as humans do. i'm here to assist you today, ready for your commands._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\9r9aioFpu8jI5WqdOrtprTbwqdNNGE9X.wav",
+    "lastUsed": 1761608055,
+    "permanent": false,
+    "useCount": 1
+  },
+  " i am functioning well, thank you for asking. how can i assist you today?\ni'm here to help with a wide range of topics, from answering questions and providing information to helping manage your schedule or reminders. feel free to ask me anything that's on your mind, and i'll do my best to be helpful!_p225_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\UsPW3ZONJgrQBQW8QmFpPssYQLLgScur.wav",
+    "lastUsed": 1761545163,
+    "permanent": false,
+    "useCount": 1
+  },
+  " you're very welcome! i'm here to help you with any questions or tasks you have. let me know if there's something specific you need assistance with today.\nfor now, how about some interesting trivia? did you know that the first recorded use of the term \"robot\" was in a 1920 czech play called \"r.u.r.\" (rossum's universal robots)? the play is considered one of the seminal works of science fiction and it introduced the concept of artificial beings being mass-produced to replace human labor. intriguing, isn't it? if you have any other requests or questions, feel free to ask!_p225_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\v6czbPXtg9k4XH0CHun9sO5l6k10OZKG.wav",
+    "lastUsed": 1761514864,
+    "permanent": false,
+    "useCount": 1
+  },
+  "[ai] backend call failed_p225_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\GaRQdDibDICyAU9kqrdLwwiHwqozPgBL.wav",
+    "lastUsed": 1761512550,
+    "permanent": false,
+    "useCount": 1
+  },
+  "[ai] missing openai api key_p225_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\B1MUXnCvBGwmbwujXhJE39U89HKc51Yf.wav",
+    "lastUsed": 1761543101,
+    "permanent": false,
+    "useCount": 1
+  },
+  "acknowledged_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\wH1kElo5Y690wRcnIEEMzlqFX5GJhjXr.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  },
+  "affirmative_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\F42hSTh5QouBcfcZlwJAx1yF4tLa4eXq.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  },
+  "command executed_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\pJeCPC6cBVwTESTisgTFCsdztatcrqOX.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  },
+  "done_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\b93o0pqNWP59j58GvqRsriRWlXI0OIrV.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  },
+  "error occurred_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\5gPuoAMPgVOnPnwL2GMGUmVp6t68gfrR.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  },
+  "failed to open notepad?_p225_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\AdGfTf9MrXbRoRUL32B5DfPKTLib4Gu6.wav",
+    "lastUsed": 1761513578,
+    "permanent": false,
+    "useCount": 1
+  },
+  "failed to open up_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\tjpru86zg3mF0t3or5bRT0o5zI2TQf0Z.wav",
+    "lastUsed": 1761635244,
+    "permanent": false,
+    "useCount": 1
+  },
+  "go ahead_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\PfmSgfYuXAvOBwv5KmlxleHmefKtgFAJ.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  },
+  "help shown_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\UjvHaWCoIESU0aiKrkZZF9inJRDkYjkr.wav",
+    "lastUsed": 1761588503,
+    "permanent": false,
+    "useCount": 1
+  },
+  "help shown_p225_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\bEtGyaizYug7S93Rvd1pwMVtNtrDyK6W.wav",
+    "lastUsed": 1761499543,
+    "permanent": false,
+    "useCount": 1
+  },
+  "how can i help you?_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\eUyZEv67VwDDiTuXPC4XngIMFOajRGV7.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  },
+  "human, i am grim. how may i assist you today?_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\haM8Ucrv6LfZMbROF3trm8PvIUH0wlL5.wav",
+    "lastUsed": 1761635264,
+    "permanent": false,
+    "useCount": 1
+  },
+  "i couldn't determine your intent._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\8CWXSEiX8KdqLTkhFHC8dzCAJQA9jeFK.wav",
+    "lastUsed": 1761606453,
+    "permanent": false,
+    "useCount": 1
+  },
+  "i processed 2 commands. was that correct?_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/cache\\1CV2ZpyTxyjeyaHbS9Sh2DgCbD0RfvvV.wav",
+    "lastUsed": 1761635274,
+    "permanent": true,
+    "useCount": 1
+  },
+  "i'm here_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\v8lbdbSL25ISCK8LOaPydVPx8IhXUI7K.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  },
+  "i'm listening_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\8WJrO5hmk7p3q0rGyWXoVaYqqlRmGHFH.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  },
+  "i'm sorry, i can't provide weather forecasts. here's a suggestion on how to get the current weather: you could ask your favorite search engine or a weather app for 'weather forecast for today'. if you want to use me for something else, let me know!_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\O8rMEw10Kj5voGIIyrZHhoKGG8yWLROQ.wav",
+    "lastUsed": 1761635210,
+    "permanent": false,
+    "useCount": 1
+  },
+  "negative_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\68oTAd5VOtpZqHr9I72Rp1yYhPd1gPg2.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  },
+  "no_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\F3CKdQ5hmIrPSof1YSddOYMlmyYsFPgF.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  },
+  "okay_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\8KJZyBOhpr2p9oS3JTdvZPeYUfXraBuh.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  },
+  "please wait_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\Z2afWQmWHnTGYmz7ZqB3ad5jIJMzIPUi.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  },
+  "processing_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\zIcd8p2lCc5WZiySnJ0lut028StYwS2G.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  },
+  "ready._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\lX0zCz65DMbfE6K28kjpwAU3IP09F4RH.wav",
+    "lastUsed": 1761635255,
+    "permanent": false,
+    "useCount": 1
+  },
+  "ready_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\6dUwOxu5BYXtyinLDaaxYUFvmGHqZe2h.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  },
+  "settings information displayed_p225_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\jcuNaj6zyHLPwGS8GV9pSqFjFe9Hb4sK.wav",
+    "lastUsed": 1761516651,
+    "permanent": false,
+    "useCount": 1
+  },
+  "settings panel shown_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\0b7sI68GWA1ISEJCUWXQ23GeNGb5aJit.wav",
+    "lastUsed": 1761619936,
+    "permanent": false,
+    "useCount": 2
+  },
+  "settings panel shown_p225_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\2DGBXo9WxEsOdPoulCTXQwehvw3e09qw.wav",
+    "lastUsed": 1761517049,
+    "permanent": false,
+    "useCount": 1
+  },
+  "sorry, i got a malformed response._p225_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\UBWahbgotwQpL6n4ErnTIQLmYDhyviMT.wav",
+    "lastUsed": 1761543053,
+    "permanent": false,
+    "useCount": 1
+  },
+  "understood_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\yh9HuuFNjNsUkaGApnrVeEELYCgmFKzF.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  },
+  "was that what you wanted?_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/cache\\wjzPogaJLr1rc4jUf084UxMhfIjnhUDP.wav",
+    "lastUsed": 1761619940,
+    "permanent": true,
+    "useCount": 1
+  },
+  "welcome back, austin. grim is online._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/cache\\oIrCERUCuJxuPGczBMUKqugOwkd68xgb.wav",
+    "lastUsed": 1761629140,
+    "permanent": true,
+    "useCount": 6
+  },
+  "welcome back, austin. grim is online._p225_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\EfaziBPgH9ekc2HzZEwFYsPg3GstnXTl.wav",
+    "lastUsed": 1761546758,
+    "permanent": false,
+    "useCount": 11
+  },
+  "yes?_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\cCkFdoSVe3aSpd3t39hdJfwa7VAkjxHN.wav",
+    "lastUsed": 1761635232,
+    "permanent": false,
+    "useCount": 7
+  },
+  "yes?_p225_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\Iga1IER8V9W5285svk5PYeU5dWifWj3F.wav",
+    "lastUsed": 1761545124,
+    "permanent": false,
+    "useCount": 4
+  },
+  "yes_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\6pMYnfF7D7FVIRFrcRXXFXF0V8iU1AJB.wav",
+    "lastUsed": 1761629143,
+    "permanent": false,
+    "useCount": 2
+  }
+}

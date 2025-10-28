@@ -102,6 +102,12 @@ int main(int argc, char* argv[])
     g_memoryStorage.initialize("D:/G.R.I.M/data/memories.json");
     GRIM::ContextManager::setMemoryStorage(&g_memoryStorage);
     LOG_PHASE("Memory system initialized", true);
+    
+    // ======================================================
+    // ? NEW: Initialize TTS pre-cache in background
+    // ======================================================
+    Voice::initPreCache();
+    LOG_PHASE("TTS pre-cache started (background)", true);
 
     // ======================================================
     // ? NEW: Initialize Intent Classification System

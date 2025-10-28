@@ -20,4 +20,14 @@ namespace Voice {
 
     void initQueue();
     void shutdownQueue();
+    
+    // ? NEW: Pre-cache management
+    void preCacheCommonPhrases();
+    void initPreCache();
+
+    // Audio state and playback integration
+    // XTTS v2 Utility Functions
+    bool isXTTSv2Enabled();
+    void setLanguage(const std::string& lang);
+    std::string getLanguage();
 }

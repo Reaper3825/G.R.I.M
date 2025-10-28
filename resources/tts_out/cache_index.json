@@ -1,92 +1,128 @@
 {
-  " hey there! i'm absolutely fantastic, thanks for asking! it's always a pleasure to assist you. how can i help make your day brighter today?_p225_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\usXnshoYMbiY2ZdjZDulHftiyNwuj8ML.wav",
-    "lastUsed": 1761546798,
+  "`[clapping]` i'm assuming you are expressing approval or enthusiasm._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\GSUtyMvU3SsZxcRiFNyIggpOYUKl3SMG.wav",
+    "lastUsed": 1761637222,
     "permanent": false,
     "useCount": 1
   },
-  " i am functioning well, thank you for asking. how can i assist you today?\ni'm here to help with a wide range of topics, from answering questions and providing information to helping manage your schedule or reminders. feel free to ask me anything that's on your mind, and i'll do my best to be helpful!_p225_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\UsPW3ZONJgrQBQW8QmFpPssYQLLgScur.wav",
-    "lastUsed": 1761545163,
+  "acknowledged_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\mXHD6dZffdbY6PVaKFHUJFTvHzQlLbZ6.wav",
+    "lastUsed": 1761637189,
     "permanent": false,
     "useCount": 1
   },
-  " you're very welcome! i'm here to help you with any questions or tasks you have. let me know if there's something specific you need assistance with today.\nfor now, how about some interesting trivia? did you know that the first recorded use of the term \"robot\" was in a 1920 czech play called \"r.u.r.\" (rossum's universal robots)? the play is considered one of the seminal works of science fiction and it introduced the concept of artificial beings being mass-produced to replace human labor. intriguing, isn't it? if you have any other requests or questions, feel free to ask!_p225_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\v6czbPXtg9k4XH0CHun9sO5l6k10OZKG.wav",
-    "lastUsed": 1761514864,
+  "affirmative_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\91faqOlCmRxET1GJJvtrA2mU3Qz90hfi.wav",
+    "lastUsed": 1761637187,
     "permanent": false,
     "useCount": 1
   },
-  "[ai] backend call failed_p225_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\GaRQdDibDICyAU9kqrdLwwiHwqozPgBL.wav",
-    "lastUsed": 1761512550,
+  "command executed_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\VqtxAcprLN1wgmLDQZg7ltDKGTQ6e4gs.wav",
+    "lastUsed": 1761637183,
     "permanent": false,
     "useCount": 1
   },
-  "[ai] missing openai api key_p225_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\B1MUXnCvBGwmbwujXhJE39U89HKc51Yf.wav",
-    "lastUsed": 1761543101,
+  "done_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\yOiELBbzv46zFINlwTtLrOddGZP70mIw.wav",
+    "lastUsed": 1761637175,
     "permanent": false,
     "useCount": 1
   },
-  "failed to open notepad?_p225_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\AdGfTf9MrXbRoRUL32B5DfPKTLib4Gu6.wav",
-    "lastUsed": 1761513578,
+  "error occurred_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\MbQttGhVjtFFpbhVOIFd3cAMNVl8dLXF.wav",
+    "lastUsed": 1761637180,
     "permanent": false,
     "useCount": 1
   },
-  "help shown_p225_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\bEtGyaizYug7S93Rvd1pwMVtNtrDyK6W.wav",
-    "lastUsed": 1761499543,
+  "go ahead_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\4O9ACCRV1maMrWVjMpvlYjfrAf5ChfQD.wav",
+    "lastUsed": 1761637186,
     "permanent": false,
     "useCount": 1
   },
-  "opening notepad_p225_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/cache\\NpUatRwmGMw9uo54c8w1P7hO4ZdKPEzi.wav",
-    "lastUsed": 1761543084,
-    "permanent": true,
-    "useCount": 6
-  },
-  "settings information displayed_p225_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\jcuNaj6zyHLPwGS8GV9pSqFjFe9Hb4sK.wav",
-    "lastUsed": 1761516651,
+  "how can i help you?_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\4uhsSxEvMitq1AkZqfmLF5T79U53ksua.wav",
+    "lastUsed": 1761637170,
     "permanent": false,
     "useCount": 1
   },
-  "settings panel shown_p225_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\2DGBXo9WxEsOdPoulCTXQwehvw3e09qw.wav",
-    "lastUsed": 1761517049,
+  "i can assist you with information related to mice. for example, i can help you find out about different species of mice, their habitats, behaviors, or perhaps guide you on how to handle a rodent infestation._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\QTOpe2XLu5KSkDMw3Pg7VVGyXUYAUkyF.wav",
+    "lastUsed": 1761637313,
     "permanent": false,
     "useCount": 1
   },
-  "sorry, i couldn't interpret that._p225_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/cache\\UiGYUuBRSbWUmt2bboyTWawDxmSBqBzB.wav",
-    "lastUsed": 1761178029,
-    "permanent": true,
-    "useCount": 14
-  },
-  "sorry, i got a malformed response._p225_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\UBWahbgotwQpL6n4ErnTIQLmYDhyviMT.wav",
-    "lastUsed": 1761543053,
+  "i'm here_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\qlGAHC1H2Q15phqJnPmlhIPKCHYyLRmd.wav",
+    "lastUsed": 1761637184,
     "permanent": false,
     "useCount": 1
   },
-  "was that what you wanted?_p225_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/cache\\ATuWdCyVrASyArzIT6N0N7HAItvJY63T.wav",
-    "lastUsed": 1761543088,
-    "permanent": true,
-    "useCount": 5
-  },
-  "welcome back, austin. grim is online._p225_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\EfaziBPgH9ekc2HzZEwFYsPg3GstnXTl.wav",
-    "lastUsed": 1761546758,
+  "i'm listening_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\38Vvok6kF5v8i9hxTpoHMbzmshHDsbk1.wav",
+    "lastUsed": 1761637169,
     "permanent": false,
-    "useCount": 11
+    "useCount": 1
   },
-  "yes?_p225_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\Iga1IER8V9W5285svk5PYeU5dWifWj3F.wav",
-    "lastUsed": 1761545124,
+  "negative_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\zLzl0wCZAqI5EQuWH0579rDmGMNvNDRX.wav",
+    "lastUsed": 1761637188,
     "permanent": false,
-    "useCount": 4
+    "useCount": 1
+  },
+  "no_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\nvzb2rf6K6KHWVhFbhrapyLKLoiBPbXi.wav",
+    "lastUsed": 1761637165,
+    "permanent": false,
+    "useCount": 1
+  },
+  "okay_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\ur3WsDGhEOsjusD6CuxwZyBjU6IUZgOf.wav",
+    "lastUsed": 1761637166,
+    "permanent": false,
+    "useCount": 1
+  },
+  "please wait_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\FRyH6NW9MhYa9DkXAVn4DYgDA7OWKTyl.wav",
+    "lastUsed": 1761637181,
+    "permanent": false,
+    "useCount": 1
+  },
+  "processing_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\oX9PXBpITGyBSfN9dutTSuxNDcBdcupL.wav",
+    "lastUsed": 1761637173,
+    "permanent": false,
+    "useCount": 1
+  },
+  "ready_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\iYYzDZ0bEjO5DypCj3idiVL9D3KIzKJl.wav",
+    "lastUsed": 1761637178,
+    "permanent": false,
+    "useCount": 1
+  },
+  "understood_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\rzSnYqvpQ4qCeOwUgYkFLTZj0ePITfCd.wav",
+    "lastUsed": 1761637172,
+    "permanent": false,
+    "useCount": 1
+  },
+  "welcome back, austin. grim is online._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\hwXFeZfR1tF3qyetKQgdjOKkiWaCQG5R.wav",
+    "lastUsed": 1761637162,
+    "permanent": false,
+    "useCount": 1
+  },
+  "yes?_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\zUgJidyf0hppKPlcMnK3mJj2lHDMtNJ4.wav",
+    "lastUsed": 1761637292,
+    "permanent": false,
+    "useCount": 2
+  },
+  "yes_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\b1mdE7PTV3tJaVu4vM0XFnAiq0gsndj6.wav",
+    "lastUsed": 1761637163,
+    "permanent": false,
+    "useCount": 1
   }
 }
