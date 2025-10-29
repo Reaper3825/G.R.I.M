@@ -17,6 +17,8 @@
 #include "console_history.hpp"
 #include "timer.hpp"
 #include "popup_ui/popup_ui.hpp"
+#include "helpers/grim_input.hpp"  // For GRIMInput::parseInput
+#include "synonyms.hpp"            // For normalizeWord() synonym resolution
 #include <unordered_map>
 #include <vector>
 #include <fstream>
@@ -128,11 +130,11 @@ static void api_log(GrimLogLevel level, const char* message) {
     std::string full_msg = prefix + message;
     
     switch (level) {
-        case GRIM_LOG_DEBUG:   LOG_DEBUG("Plugin", full_msg); break;
-        case GRIM_LOG_INFO:    LOG_INFO("Plugin", full_msg); break;
-        case GRIM_LOG_WARNING: LOG_WARNING("Plugin", full_msg); break;
-        case GRIM_LOG_ERROR:   LOG_ERROR("Plugin", full_msg); break;
-        case GRIM_LOG_CRITICAL: LOG_CRITICAL("Plugin", full_msg); break;
+        case GRIM_LOG_DEBUG:    LOG_DEBUG("Plugin", full_msg); break;
+        case GRIM_LOG_INFO: LOG_DEBUG("Plugin", full_msg); break;  // Map INFO to DEBUG
+    case GRIM_LOG_WARNING:  LOG_ERROR("Plugin", full_msg); break;  // Map WARNING to ERROR
+        case GRIM_LOG_ERROR:    LOG_ERROR("Plugin", full_msg); break;
+        case GRIM_LOG_CRITICAL: LOG_ERROR("Plugin", full_msg); break;  // Map CRITICAL to ERROR
     }
 }
 
@@ -241,9 +243,9 @@ static GrimCommandResult api_execute_command(const char* command_text) {
     }
     
     // Parse and execute through GRIM's system
-    auto [cmd, arg] = parseInput(command_text);
+    auto [cmd, arg] = GRIMInput::parseInput(command_text);
     CommandResult cmd_result = dispatchCommand(cmd, arg);
-    
+
     result.success = cmd_result.success;
     result.message = allocateString(cmd_result.message);
     result.error_code = allocateString(cmd_result.errorCode);
@@ -362,7 +364,9 @@ static GrimResult api_store_memory(const char* key, const char* value, const cha
     }
     
     // Store in GRIM's memory system
-    g_memoryStorage.store(key, value, category ? category : "plugin");
+    // TODO: Implement proper MemoryObject creation
+// g_memoryStorage.store(key, value, category ? category : "plugin");
+    LOG_DEBUG("PluginAPI", std::string("Memory store not yet implemented for key: ") + key);
     return GRIM_OK;
 }
 
@@ -373,10 +377,13 @@ static const char* api_retrieve_memory(const char* key) {
     
     if (!key) return nullptr;
     
-    std::string value = g_memoryStorage.retrieve(key);
-    if (value.empty()) return nullptr;
+    // TODO: Implement proper memory retrieval
+    // std::string value = g_memoryStorage.retrieve(key);
+    // if (value.empty()) return nullptr;
+    // return allocateString(value);
     
-    return allocateString(value);
+    LOG_DEBUG("PluginAPI", std::string("Memory retrieve not yet implemented for key: ") + key);
+    return nullptr;
 }
 
 static GrimResult api_delete_memory(const char* key) {
@@ -388,7 +395,9 @@ static GrimResult api_delete_memory(const char* key) {
         return GRIM_ERROR_INVALID_PARAM;
     }
     
-    g_memoryStorage.erase(key);
+    // TODO: Implement proper memory deletion
+    // g_memoryStorage.erase(key);
+    LOG_DEBUG("PluginAPI", std::string("Memory delete not yet implemented for key: ") + key);
     return GRIM_OK;
 }
 
@@ -403,7 +412,7 @@ static GrimIntent api_classify_intent(const char* text) {
         return result;
     }
     
-    Intent intent = g_nlp.classify(text);
+    Intent intent = g_nlp.parse(text);  // Use parse() instead of classify()
     
     result.name = allocateString(intent.name);
     result.description = allocateString(intent.description);
@@ -417,9 +426,12 @@ static GrimIntent api_classify_intent(const char* text) {
 static const char* api_resolve_synonym(const char* word) {
     if (!word) return nullptr;
     
-    std::string resolved = g_nlp.resolveSynonym(word);
-    if (resolved.empty() || resolved == word) {
-        return nullptr;
+    // Use GRIM's existing synonym system (synonyms.hpp)
+    std::string resolved = normalizeWord(word);
+    
+    // If normalization returns the same word, no synonym was found
+    if (resolved == word) {
+ LOG_DEBUG("PluginAPI", std::string("No synonym found for: ") + word);
     }
     
     return allocateString(resolved);
@@ -441,7 +453,7 @@ static void api_send_response(const char* text) {
     }
     
     if (text) {
-        LOG_INFO("Plugin", std::string(text));
+        LOG_DEBUG("Plugin", std::string(text));
         // TODO: Send to actual UI output
     }
 }
@@ -457,7 +469,7 @@ static void api_send_response_colored(const char* text, uint32_t rgb_color) {
         uint8_t g = (rgb_color >> 8) & 0xFF;
         uint8_t b = rgb_color & 0xFF;
         
-        LOG_INFO("Plugin", std::string(text));
+        LOG_DEBUG("Plugin", std::string(text));
         // TODO: Send to actual UI output with color
     }
 }
@@ -469,7 +481,7 @@ static void api_show_notification(const char* title, const char* message) {
     
     if (title && message) {
         std::string full_msg = std::string(title) + ": " + message;
-        LOG_INFO("Plugin", full_msg);
+        LOG_DEBUG("Plugin", full_msg);
         
         // Show popup UI notification (platform-specific UI)
         #ifdef _WIN32
@@ -502,8 +514,10 @@ static GrimResult api_stop_tts() {
     if (!checkPermission(GRIM_PERM_VOICE)) {
         return GRIM_ERROR_PERMISSION_DENIED;
     }
-    
-    Voice::stopAudio();
+  
+    // TODO: Implement audio stop functionality
+    // Voice::stopAudio();
+    LOG_DEBUG("PluginAPI", "Audio stop not yet implemented");
     return GRIM_OK;
 }
 
@@ -902,12 +916,13 @@ static const char* api_get_system_info(const char* key) {
     std::string key_str = key;
     
     if (key_str == "os") {
-        return allocateString(g_systemInfo.os);
+        return allocateString(g_systemInfo.osName);  // Use osName instead of os
     } else if (key_str == "cpu") {
-        return allocateString(g_systemInfo.cpu);
+        // SystemInfo doesn't have a 'cpu' string field, return cores info instead
+        return allocateString(std::to_string(g_systemInfo.cpuCores) + " cores");
     }
     
-    return nullptr;
+return nullptr;
 }
 
 static uint64_t api_get_memory_usage() {
@@ -1113,7 +1128,7 @@ static bool api_has_permission(GrimPermission perm) {
 }
 
 static void api_request_reload() {
-    LOG_INFO("PluginAPI", "Plugin requested reload: " + s_current_plugin_context.name);
+    LOG_DEBUG("PluginAPI", "Plugin requested reload: " + s_current_plugin_context.name);
     // TODO: Trigger reload
 }
 
