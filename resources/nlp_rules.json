@@ -120,21 +120,21 @@
   {
     "intent": "voice",
     "description": "Start voice recording",
-    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*)?(?:voice|start voice|record voice)$",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:voice|start voice|record voice)$",
     "slots": {},
     "case_insensitive": true
   },
   {
     "intent": "voice_stream",
     "description": "Start live voice streaming",
-    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*)?(?:voice stream|start voice stream|live voice)$",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:voice stream|start voice stream|live voice)$",
     "slots": {},
     "case_insensitive": true
   },
   {
     "intent": "ai_backend",
     "description": "Select or show the current AI backend",
-    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*)?(?:ai[_ ]?backend)(?:\\s+(.*))?$",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:ai[_ ]?backend)(?:\\s+(.*))?$",
     "slot_names": ["backend"],
     "score_boost": 0.5,
     "case_insensitive": true
@@ -249,6 +249,22 @@
     "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:run|do|perform)\\s+(?:a\\s+)?(?:privacy|security)\\s+audit(?:\\s+for)?(?:\\s+(.+))?$",
     "slot_names": ["username"],
     "score_boost": 0.35,
+    "case_insensitive": true
+  },
+  {
+    "intent": "osint_scan_secrets",
+    "description": "Scan for sensitive data exposure (PII, secrets, API keys)",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:scan|check|find|detect)\\s+(?:for\\s+)?(?:secrets|sensitive|leaked|exposed)\\s+(?:data|info|information)?(?:\\s+for)?(?:\\s+(.+))?$",
+    "slot_names": ["username"],
+    "score_boost": 0.45,
+    "case_insensitive": true
+  },
+  {
+    "intent": "osint_scan_secrets",
+    "description": "Scan secrets command (direct)",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?osint[_ ]scan[_ ]secrets(?:\\s+(.+))?$",
+    "slot_names": ["username"],
+    "score_boost": 0.5,
     "case_insensitive": true
   },
   {

@@ -8,9 +8,12 @@
 #include "logger.hpp"
 #include <windows.h>
 
+// Include plugin.hpp for GRIM_HOST_API macro
+#include "core/plugin.hpp"
+
 struct InputState; // Forward declaration
 
-class UIRoot {
+class GRIM_HOST_API UIRoot {
 public:
     static UIRoot& get() {
         static UIRoot instance;

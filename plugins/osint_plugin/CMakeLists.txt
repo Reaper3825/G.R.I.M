@@ -6,6 +6,7 @@ add_library(osint_plugin SHARED
     ${CMAKE_SOURCE_DIR}/commands/commands_osint.cpp
     ${CMAKE_SOURCE_DIR}/plugins/osint_plugin.cpp
     ${CMAKE_SOURCE_DIR}/external_collector/osit.cpp
+    ${CMAKE_SOURCE_DIR}/external_collector/osit_secrets.cpp
 )
 
 target_include_directories(osint_plugin PRIVATE

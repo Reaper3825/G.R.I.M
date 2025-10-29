@@ -62,13 +62,13 @@ G.R.I.M/
 
 ## Commands
 
-### 1. `profile_self` - Basic Digital Footprint Scan
+### 1. `profile_person` - Digital Footprint Scan
 
-Searches for your username across 300+ platforms.
+Searches for a username across 400+ platforms.
 
 **Usage:**
 ```
-profile_self <username> [options]
+profile_person <username> [options]
 ```
 
 **Options:**
@@ -77,9 +77,9 @@ profile_self <username> [options]
 
 **Examples:**
 ```
-profile_self john_doe
-profile_self alice_crypto --no-cache
-profile_self bob_smith --verbose
+profile_person john_doe
+profile_person alice_crypto --no-cache
+profile_person bob_smith --verbose
 ```
 
 **Output:**
@@ -354,7 +354,7 @@ pip install -r requirements.txt --upgrade
 ### Personal Security Audit
 ```
 # Quick check
-profile_self myusername
+profile_person myusername
 
 # Full audit with export
 osint_report myusername --export my_audit.json
@@ -368,7 +368,7 @@ osint_report myusername --export my_audit.json
 sherlock_sweep myusername
 
 # Monthly full refresh
-profile_self myusername --no-cache
+profile_person myusername --no-cache
 ```
 
 ### Background Operations
@@ -462,3 +462,48 @@ These tools are provided for **defensive security purposes only**:
 ---
 
 **Stay safe, stay private! ???**
+
+---
+
+## ?? **NEW: Visual UI Panel**
+
+For a better viewing experience, use the **OSINT UI Panel** to visualize findings in a sortable, filterable table:
+
+```sh
+osint_show_ui <username>
+```
+
+### Features:
+- ? **Color-coded severity** (Critical, High, Medium, Low)
+- ? **Interactive filters** (click buttons to filter by severity)
+- ? **Sortable table** with columns: Severity, Type, Match, Domain, Context
+- ? **Scrollable** for large datasets
+- ? **Resizable & draggable** panel
+- ? **Summary statistics** at the top
+
+### Example:
+```sh
+# 1. Scan for secrets
+osint_scan_secrets reaper3825
+
+# 2. Open visual UI
+osint_show_ui reaper3825
+
+# 3. Click "CRITICAL" button to filter
+# 4. Review findings in beautiful table
+```
+
+See [OSINT_UI_PANEL.md](OSINT_UI_PANEL.md) for detailed UI guide.
+
+### Complete Command List:
+
+| Command | Purpose |
+|---------|---------|
+| `profile_person <username>` | Profile digital footprint |
+| `sherlock_sweep <username>` | Comprehensive scan |
+| `osint_report <username>` | Full report with recommendations |
+| `osint_status <username>` | Check scan status |
+| `osint_clear_cache` | Clear cached results |
+| `osint_scan_secrets <username>` | Scan for sensitive data |
+| `osint_show_secrets <username>` | View findings (console) |
+| **`osint_show_ui <username>`** | **View findings (UI panel)** ? NEW! |

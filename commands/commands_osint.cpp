@@ -5,6 +5,9 @@
 #include "logger.hpp"
 #include "helpers/color.hpp"
 #include "../external_collector/osit.hpp"
+#include "../external_collector/osit_secrets.hpp"
+#include "../ui/ui_root.hpp"
+#include "../ui/ui_osint_results.hpp"
 #include <sstream>
 #include <vector>
 #include <string>
@@ -13,6 +16,13 @@
 #include <map>
 #include <mutex>
 #include <atomic>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <nlohmann/json.hpp>
+
+namespace fs = std::filesystem;
+using json = nlohmann::json;
 
 // Global cache for async operations
 struct AsyncScan {
@@ -25,17 +35,17 @@ struct AsyncScan {
 static std::map<std::string, std::shared_ptr<AsyncScan>> g_activeScans;
 static std::mutex g_scanMutex;
 
-// Profile Self - Searches for user's digital footprint
-CommandResult cmdProfileSelf(const std::string& args) {
-    LOG_DEBUG("OSINT", "Profile self command executed");
+// Profile Person - Search for someone's digital footprint
+CommandResult cmdProfilePerson(const std::string& args) {
+    LOG_DEBUG("OSINT", "Profile person command executed");
     
     std::ostringstream oss;
     oss << "=== Digital Footprint Analysis ===\n\n";
     
     if (args.empty()) {
-        oss << "Usage: profile_self <username> [--no-cache] [--verbose]\n";
-        oss << "Example: profile_self john_doe\n\n";
-        oss << "This command searches for your digital presence across 300+ platforms.\n";
+        oss << "Usage: profile_person <username> [--no-cache] [--verbose]\n";
+        oss << "Example: profile_person john_doe\n\n";
+        oss << "This command searches for digital presence across 400+ platforms.\n";
         oss << "Uses the Sherlock OSINT tool for real username enumeration.\n\n";
         oss << "Options:\n";
         oss << "  --no-cache    Skip cache and force fresh scan\n";
@@ -45,7 +55,7 @@ CommandResult cmdProfileSelf(const std::string& args) {
         oss << "  • Professional networks (LinkedIn, GitHub, GitLab)\n";
         oss << "  • Gaming platforms (Steam, Xbox, PlayStation)\n";
         oss << "  • Developer sites (Dev.to, Medium, HackerOne)\n";
-        oss << "  • And 300+ more platforms\n";
+        oss << "  • And 400+ more platforms\n";
         
         return CommandResult{true, oss.str(), "", "osint", "", Colors::Cyan};
     }
@@ -342,7 +352,7 @@ CommandResult cmdOsintStatus(const std::string& args) {
     
     if (it == g_activeScans.end()) {
         oss << "No scan found for: " << username << "\n";
-        oss << "Use 'profile_self " << username << "' to start a scan.\n";
+        oss << "Use 'profile_person " << username << "' to start a scan.\n";
         return CommandResult{true, oss.str(), "", "osint", "", Colors::Yellow};
     }
     
@@ -393,4 +403,265 @@ CommandResult cmdOsintClearCache(const std::string& args) {
         oss << "⚠ Failed to clear cache: " << e.what() << "\n";
         return CommandResult{false, oss.str(), e.what(), "osint", "", Colors::Red};
     }
+}
+
+// Scan discovered URLs for sensitive data exposure
+CommandResult cmdOsintScanSecrets(const std::string& args) {
+    LOG_DEBUG("OSINT", "Scan secrets command executed");
+    
+    std::ostringstream oss;
+    oss << "=== OSINT Sensitive Data Scanner ===\n\n";
+    
+    if (args.empty()) {
+        oss << "Usage: osint_scan_secrets <username>\n";
+        oss << "Example: osint_scan_secrets john_doe\n\n";
+        oss << "Scans discovered URLs for sensitive data exposure:\n";
+        oss << "  • Emails, phone numbers, dates of birth\n";
+        oss << "  • Social Security Numbers, national IDs\n";
+        oss << "  • Credit card patterns (detection only)\n";
+        oss << "  • API keys, tokens, secrets (AWS, Google, GitHub, JWT)\n";
+        oss << "  • Private keys (PEM blocks)\n";
+        oss << "  • High-entropy strings (likely secrets)\n\n";
+        oss << "Requires: pip install requests beautifulsoup4 tldextract\n";
+        
+        return CommandResult{true, oss.str(), "", "osint", "", Colors::Cyan};
+    }
+    
+    std::string username = args;
+    
+    // Check if we have a cached OSINT report for this username
+    auto cachedReport = getCachedReport(username);
+    
+    OSINTReport report;
+    if (cachedReport.has_value()) {
+        report = cachedReport.value();
+    } else {
+        oss << "No cached OSINT report found for: " << username << "\n";
+        oss << "Running Sherlock scan first...\n\n";
+        
+        OSINTConfig config;
+        report = runSelfAudit(username, config);
+        
+        if (!report.success) {
+            oss << "⚠ OSINT scan failed: " << report.error << "\n";
+            return CommandResult{false, oss.str(), report.error, "osint", "", Colors::Red};
+        }
+    }
+    
+    if (report.totalFound == 0) {
+        oss << "No accounts found for: " << username << "\n";
+        oss << "Nothing to scan for sensitive data.\n";
+        return CommandResult{true, oss.str(), "", "osint", "", Colors::Yellow};
+    }
+    
+    oss << "Found " << report.totalFound << " accounts for: " << username << "\n";
+    oss << "Scanning for sensitive data exposure...\n";
+    oss << "This may take 1-2 minutes...\n\n";
+    
+    // Run sensitive data scanner
+    OSINTConfig config;
+    std::string logPath = runSensitiveDataScan(report, config);
+    
+    if (logPath.empty()) {
+        oss << "⚠ Sensitive data scan failed\n";
+        oss << "Check that Python dependencies are installed:\n";
+        oss << "  pip install requests beautifulsoup4 tldextract\n";
+        return CommandResult{false, oss.str(), "scan_failed", "osint", "", Colors::Red};
+    }
+    
+    // Parse and display results
+    auto summary = parseSensitiveScanLog(logPath);
+    
+    oss << summary.detailedReport;
+    oss << "\nFull log: " << logPath << "\n";
+    
+    // Determine overall status
+    Color resultColor = Colors::Green;
+    if (summary.criticalFindings > 0) {
+        resultColor = Colors::Red;
+    } else if (summary.highFindings > 0) {
+        resultColor = Colors::Yellow;
+    }
+    
+    return CommandResult{true, oss.str(), "", "osint",
+                        "Scan complete: " + std::to_string(summary.totalFindings) + " sensitive findings",
+                        resultColor};
+}
+
+// Show detailed sensitive findings from log
+CommandResult cmdOsintShowSecrets(const std::string& args) {
+    LOG_DEBUG("OSINT", "Show secrets command executed");
+    
+    std::ostringstream oss;
+    oss << "=== Sensitive Data Findings ===\n\n";
+    
+    if (args.empty()) {
+        oss << "Usage: osint_show_secrets <username> [--severity <level>]\n";
+        oss << "Example: osint_show_secrets john_doe\n";
+        oss << "         osint_show_secrets john_doe --severity critical\n\n";
+        oss << "Displays detailed sensitive data findings from scan log.\n\n";
+        oss << "Severity levels: critical, high, medium, low, all (default)\n";
+        
+        return CommandResult{true, oss.str(), "", "osint", "", Colors::Cyan};
+    }
+    
+    std::istringstream iss(args);
+    std::string username;
+    iss >> username;
+    
+    std::string severityFilter = "all";
+    std::string token;
+    while (iss >> token) {
+        if (token == "--severity") {
+            iss >> severityFilter;
+        }
+    }
+    
+    // Find the log file
+    fs::path logPath = fs::current_path() / "cache" / "osint" / ("sensitive_" + username + ".jsonl");
+    
+    if (!fs::exists(logPath)) {
+        oss << "No sensitive scan results found for: " << username << "\n";
+        oss << "Run 'osint_scan_secrets " << username << "' first.\n";
+        return CommandResult{true, oss.str(), "", "osint", "", Colors::Yellow};
+    }
+    
+    try {
+        std::ifstream logFile(logPath);
+        std::string line;
+        int totalShown = 0;
+        int minSeverity = 0;
+        
+        // Set severity threshold
+        if (severityFilter == "critical") {
+            minSeverity = 9;
+        } else if (severityFilter == "high") {
+            minSeverity = 7;
+        } else if (severityFilter == "medium") {
+            minSeverity = 5;
+        } else if (severityFilter == "low") {
+            minSeverity = 0;
+        }
+        
+        oss << "Findings for: " << username << "\n";
+        oss << "Filter: " << severityFilter << " severity\n";
+        oss << "Log: " << logPath.string() << "\n\n";
+        
+        while (std::getline(logFile, line)) {
+            if (line.empty()) continue;
+            
+            try {
+                json entry = json::parse(line);
+                std::string url = entry.value("source_url", "");
+                std::string domain = entry.value("domain", "");
+                auto findings = entry.value("findings", json::array());
+                
+                if (findings.empty()) continue;
+                
+                bool hasRelevantFindings = false;
+                for (const auto& finding : findings) {
+                    int sev = finding.value("severity", 0);
+                    if (sev >= minSeverity) {
+                        hasRelevantFindings = true;
+                        break;
+                    }
+                }
+                
+                if (!hasRelevantFindings) continue;
+                
+                oss << "─────────────────────────────────────────\n";
+                oss << "Domain: " << domain << "\n";
+                oss << "URL: " << url << "\n\n";
+                
+                for (const auto& finding : findings) {
+                    int sev = finding.value("severity", 0);
+                    if (sev < minSeverity) continue;
+                    
+                    std::string tag = finding.value("tag", "unknown");
+                    std::string match = finding.value("match", "");
+                    std::string context = finding.value("context", "");
+                    double entropy = finding.value("entropy", 0.0);
+                    
+                    // Color code by severity
+                    std::string sevLabel;
+                    if (sev >= 9) sevLabel = "[CRITICAL]";
+                    else if (sev >= 7) sevLabel = "[HIGH    ]";
+                    else if (sev >= 5) sevLabel = "[MEDIUM  ]";
+                    else sevLabel = "[LOW     ]";
+                    
+                    oss << sevLabel << " " << tag << " (severity: " << sev << ")\n";
+                    oss << "  Match: " << match << "\n";
+                    if (entropy > 0) {
+                        oss << "  Entropy: " << std::fixed << std::setprecision(2) << entropy << "\n";
+                    }
+                    oss << "  Context: " << context << "\n\n";
+                    
+                    totalShown++;
+                }
+                
+            } catch (const json::exception&) {
+                continue;
+            }
+        }
+        
+        oss << "─────────────────────────────────────────\n";
+        oss << "\nShowing " << totalShown << " findings\n";
+        
+        if (totalShown == 0) {
+            oss << "No findings match the filter.\n";
+        }
+        
+        return CommandResult{true, oss.str(), "", "osint", 
+                            "Displayed " + std::to_string(totalShown) + " findings",
+                            totalShown > 0 ? Colors::Yellow : Colors::Green};
+                            
+    } catch (const std::exception& e) {
+        oss << "⚠ Failed to read log: " << e.what() << "\n";
+        return CommandResult{false, oss.str(), "read_failed", "osint", "", Colors::Red};
+    }
+}
+
+// Show findings in UI panel
+CommandResult cmdOsintShowUI(const std::string& args) {
+    LOG_DEBUG("OSINT", "Show UI command executed");
+    
+    std::ostringstream oss;
+    
+    if (args.empty()) {
+        oss << "Usage: osint_show_ui <username>\n";
+        oss << "Example: osint_show_ui john_doe\n\n";
+        oss << "Opens a UI panel displaying sensitive data findings in a table.\n";
+        
+        return CommandResult{true, oss.str(), "", "osint", "", Colors::Cyan};
+    }
+    
+    std::string username = args;
+    
+    // Create and show the OSINT results panel
+    auto panel = std::make_shared<UIOsintResults>();
+    
+    if (!panel->loadFindings(username)) {
+        oss << "Failed to load findings for: " << username << "\n";
+        oss << "Run 'osint_scan_secrets " << username << "' first.\n";
+        return CommandResult{false, oss.str(), "no_findings", "osint", "", Colors::Yellow};
+    }
+    
+    // Add panel to UI root
+    auto& uiRoot = UIRoot::get();
+    uiRoot.addPanel(panel);
+    
+    // *** FIX: Use UIRoot::setVisible which updates Z-order internally ***
+    uiRoot.setVisible("OSINT Sensitive Findings", true);
+    
+    oss << "Opened OSINT results panel for: " << username << "\n";
+    oss << "Total findings: " << panel->getSummary().totalFindings << "\n";
+    oss << "  CRITICAL: " << panel->getSummary().criticalFindings << "\n";
+    oss << "  HIGH: " << panel->getSummary().highFindings << "\n";
+    oss << "  MEDIUM: " << panel->getSummary().mediumFindings << "\n";
+    oss << "  LOW: " << panel->getSummary().lowFindings << "\n";
+    oss << "\nPanel can be dragged and resized. Use mouse wheel to scroll.\n";
+    
+    return CommandResult{true, oss.str(), "", "osint",
+                        "OSINT panel opened for " + username,
+                        Colors::Cyan};
 }
