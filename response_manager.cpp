@@ -231,12 +231,28 @@ std::string ResponseManager::get(const std::string& keyOrMessage) {
         return pickRandom(it->second);
     }
 
-    // If it already looks like a full message (starts with [ or has newlines), return it as-is
-    if (!keyOrMessage.empty() && (keyOrMessage[0] == '[' || keyOrMessage.find('\n') != std::string::npos)) {
-        return keyOrMessage;
+    // ✅ FIX: If it already looks like a full message, return it as-is
+    // Check for: starts with [, has newlines, contains spaces (likely a sentence), or doesn't start with lowercase
+    if (!keyOrMessage.empty()) {
+        // Already formatted messages
+        if (keyOrMessage[0] == '[' || keyOrMessage.find('\n') != std::string::npos) {
+            return keyOrMessage;
+        }
+        
+        // ✅ NEW: Check if it's a full sentence (contains multiple words or ends with punctuation)
+        bool hasSpaces = (keyOrMessage.find(' ') != std::string::npos);
+        bool endsWithPunct = (!keyOrMessage.empty() && 
+                             (keyOrMessage.back() == '.' || 
+                              keyOrMessage.back() == '!' || 
+                              keyOrMessage.back() == '?'));
+        
+        // If it has spaces or ends with punctuation, it's probably a complete message
+        if (hasSpaces || endsWithPunct) {
+            return keyOrMessage;
+        }
     }
 
-    // Otherwise, treat as an unknown intent and fallback gracefully
+    // Otherwise, treat as an unknown intent key and fallback gracefully
     return ErrorManager::getUserMessage("ERR_CORE_UNKNOWN_COMMAND") + " (" + keyOrMessage + ")";
 }
 

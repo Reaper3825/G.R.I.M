@@ -146,21 +146,35 @@
     "slot_names": ["prompt"],
     "score_boost": 0.1,
     "case_insensitive": true
-  },{
-  "intent": "reload_nlp",
-  "description": "Reload NLP rules from disk",
-  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?reload\\s*nlp\\s*$",
-  "slot_names": [],
-  "case_insensitive": true
-},
-{
-  "intent": "tts_device",
-  "description": "Query the current text-to-speech output device",
-  "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:show|list|what\\s+is|current)\\s*(?:tts|speech|voice)\\s*(?:device|output)(?:\\s*device)?\\s*$",
-  "slot_names": [],
-  "case_insensitive": true
-}
-
-
-
+  },
+  {
+    "intent": "reload_nlp",
+    "description": "Reload NLP rules from disk",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?reload\\s*nlp\\s*$",
+    "slot_names": [],
+    "case_insensitive": true
+  },
+  {
+    "intent": "tts_device",
+    "description": "Query the current text-to-speech output device",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:show|list|what\\s+is|current)\\s*(?:tts|speech|voice)\\s*(?:device|output)(?:\\s*device)?\\s*$",
+    "slot_names": [],
+    "case_insensitive": true
+  },
+  {
+    "intent": "clear_cache",
+    "description": "Clear TTS cache (wipe all cached audio files)",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:clear|clean|wipe|delete)\\s+(?:tts\\s+)?cache\\s*$",
+    "slot_names": [],
+    "score_boost": 0.4,
+    "case_insensitive": true
+  },
+  {
+    "intent": "reset_cache",
+    "description": "Reset TTS cache (wipe and regenerate common phrases)",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:reset|rebuild|regenerate|refresh)\\s+(?:tts\\s+)?cache\\s*$",
+    "slot_names": [],
+    "score_boost": 0.4,
+    "case_insensitive": true
+  }
 ]

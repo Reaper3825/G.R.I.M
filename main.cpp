@@ -1,24 +1,15 @@
-#include "pch.hpp"
-#include "commands/commands_core.hpp"
-#include "voice/voice.hpp"
 #include "voice/voice_speak.hpp"
-#include "voice/voice_stream.hpp"
-#include "response_manager.hpp"
-#include "resources.hpp"
-#include "console_history.hpp"
-#include "ui/ui_events.hpp"
-#include "error_manager.hpp"
+
 #include "bootstrap/bootstrap.hpp"
 #include "aliases.hpp"
 #include "popup_ui/popup_ui.hpp"
 #include "logger.hpp"
-#include "wake/wake.hpp"
 #include "wake/wake_key.hpp"
 #include "wake/wake_voice.hpp"
 #include "memory/memory_storage.hpp"
 #include "memory/context_manager.hpp"
 #include "ai/ai_rl.hpp"
-#include "ai/intent_gate.hpp"  // ? NEW: Intent classification system
+#include "ai/intent_gate.hpp" 
 #include "core/window_manager.hpp"
 #include "core/plugin_manager.hpp"
 #include "core/input_parser.hpp"
@@ -32,12 +23,10 @@
 #include "ui/ui_settings_menu.hpp"
 #include "nlp/nlp.hpp"
 #include "timer.hpp"
-#include <bgfx/bgfx.h>
-#include <bgfx/platform.h>
 #include <crtdbg.h>
 #include <chrono>
 #include <thread>
-#include <iostream>
+
 
 #define CHECK_HEAP() _CrtCheckMemory()
 
@@ -53,11 +42,10 @@ extern SystemInfo g_systemInfo;
 // ============================================================
 int main(int argc, char* argv[])
 {
+    GRIM::CerrSuppressor cerrFilter;
     initLogger("grim.log");
     LOG_PHASE("Initializing G.R.I.M", true);
-    GRIM::CerrSuppressor suppressCerr;
 
-    std::cout.rdbuf(std::cerr.rdbuf());
 
     // ======================================================
     // 1. Start WebSocket + logger
@@ -65,7 +53,7 @@ int main(int argc, char* argv[])
     wsServer.start();
     LOG_PHASE("WebSocket server started", true);
 
-    _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);  // ? REMOVE _CRTDBG_CHECK_ALWAYS_DF
+    
     
     LOG_DEBUG("Main", "Heap check mode: Manual (removed CHECK_ALWAYS for debugging)");
 
@@ -97,26 +85,26 @@ int main(int argc, char* argv[])
     LOG_PHASE("Startup greeting spoken", true);
 
     // ======================================================
-    // 4. Memory system
+    // 4.   Memory system
     // ======================================================
     g_memoryStorage.initialize("D:/G.R.I.M/data/memories.json");
     GRIM::ContextManager::setMemoryStorage(&g_memoryStorage);
     LOG_PHASE("Memory system initialized", true);
     
     // ======================================================
-    // ? NEW: Initialize TTS pre-cache in background
+    // 5.   Initialize TTS pre-cache in background
     // ======================================================
     Voice::initPreCache();
     LOG_PHASE("TTS pre-cache started (background)", true);
 
     // ======================================================
-    // ? NEW: Initialize Intent Classification System
+    // 6.   Initialize Intent Classification System
     // ======================================================
     GRIM::IntentGate::init();
     LOG_PHASE("Intent classification system initialized", true);
 
     // ======================================================
-    // 5. Initialize BGFX global context
+    // 7. Initialize BGFX global context
     // ======================================================
     LOG_PHASE("Initializing BGFX on main thread", true);
 
@@ -140,7 +128,7 @@ int main(int argc, char* argv[])
     LOG_PHASE("BGFX initialized successfully", true);
 
     // ======================================================
-    // 6. Create unified transparent overlay (multi-monitor)
+    // 8. Create unified transparent overlay (multi-monitor)
     // ======================================================
     LOG_PHASE("Creating GRIM unified overlay window", true);
     
@@ -169,7 +157,7 @@ int main(int argc, char* argv[])
     LOG_PHASE("Unified overlay initialized successfully (multi-monitor)", true);
 
     // ======================================================
-    // 7. Initialize unified UI system (UIRoot)
+    // 9. Initialize unified UI system (UIRoot)
     // ======================================================
     UIRoot::get().init(overlayWin->hwnd, overlayWin->width, overlayWin->height);
 
@@ -200,7 +188,7 @@ int main(int argc, char* argv[])
     LOG_PHASE("UIRoot and panels initialized (hidden)", true);
 
     // ======================================================
-    // 8. Launch popup UI (still separate layered window)
+    // 10. Launch popup UI (still separate layered window)
     // ======================================================
     std::thread([]() {
         std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -211,7 +199,7 @@ int main(int argc, char* argv[])
     WindowManager::processMainThreadUpdates();
 
     // ======================================================
-    // 9. Wake systems - Initialize with nullptr for unused parameters
+    // 11. Wake systems - Initialize with nullptr for unused parameters
     // ======================================================
     static std::vector<Timer> emptyTimers;
     static nlohmann::json emptyMemory;
@@ -224,7 +212,7 @@ int main(int argc, char* argv[])
     LOG_PHASE("WakeVoice listener started", true);
 
     // ======================================================
-    // 10. Main loop
+    // 12. Main loop
     // ======================================================
     LOG_PHASE("Entering main thread render loop", true);
     constexpr auto kFrameDuration = std::chrono::milliseconds(16);
@@ -265,7 +253,7 @@ int main(int argc, char* argv[])
     LOG_PHASE("Main thread render loop exited", true);
 
     // ======================================================
-    // 11. Shutdown
+    // 13. Shutdown
     // ======================================================
     LOG_PHASE("Shutting down subsystems", true);
 
@@ -274,7 +262,7 @@ int main(int argc, char* argv[])
     Voice::shutdownQueue();
     Voice::shutdownTTS();
     GRIM::RL::shutdown();
-    GRIM::IntentGate::shutdown();  // ? NEW: Shutdown intent system
+    GRIM::IntentGate::shutdown(); 
     Mouse::shutdown();
 
     UIRoot::get().shutdown();

@@ -120,6 +120,9 @@ external/build-*/
 *.vcxproj.user
 *.vcxproj.filters
 
+# Visual Studio IDE folders
+.vs/
+
 # Windows ghost file
 nul
 

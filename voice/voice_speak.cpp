@@ -56,6 +56,8 @@ namespace Voice {
     static std::condition_variable queueCV;
     static bool workerRunning = false;
     static std::thread workerThread;
+    static std::mutex ttsGenerationMutex;  // ? ADD: Prevent concurrent TTS generation
+    static std::mutex playbackMutex;  // ? NEW: Prevent concurrent playback
 
     // =========================================================
     // Helpers
@@ -421,6 +423,9 @@ namespace Voice {
     // Voice playback bridge
     // =========================================================
     void playAudio(const std::string& path) {
+    // ? LOCK: Only one audio playback at a time
+    std::lock_guard<std::mutex> playbackLock(playbackMutex);
+    
     if (!Audio::init()) {
         LOG_ERROR("Voice/Audio", "PortAudio init failed.");
         return;
@@ -437,6 +442,8 @@ namespace Voice {
     LOG_DEBUG("Voice/Audio", "Playing via AudioCore: " + path);
     if (!Audio::playWav(path)) {
         LOG_ERROR("Voice/Audio", "AudioCore playback failed for: " + path);
+        g_isSpeaking = false;
+        return;
     }
 
     // Block until playback finishes (non-threaded mode)
@@ -457,6 +464,9 @@ namespace Voice {
                            const std::string& speaker,
                            double speed) {
 #ifdef _WIN32
+        // ? LOCK: Prevent concurrent TTS generation
+        std::lock_guard<std::mutex> generationLock(ttsGenerationMutex);
+        
         // ? Check cache first
         std::string cached = TTSCache::getCached(text, speaker, speed);
         if (!cached.empty() && fs::exists(cached)) {
@@ -543,9 +553,31 @@ namespace Voice {
     // High-level Speak (enqueue)
     // =========================================================
     void speak(const std::string& text, const std::string& category) {
+        // ? FIX: Strip "GRIM:" or "GRIM :" prefix if present
+        std::string cleanedText = text;
+        
+        // Check for "GRIM:" or "GRIM :" at the start (case-insensitive)
+        std::string lowerText = text;
+        std::transform(lowerText.begin(), lowerText.end(), lowerText.begin(), ::tolower);
+        
+        if (lowerText.find("grim:") == 0) {
+            cleanedText = text.substr(5);  // Remove "grim:"
+        } else if (lowerText.find("grim :") == 0) {
+            cleanedText = text.substr(6);  // Remove "grim :"
+        }
+        
+        // Trim leading/trailing whitespace
+        cleanedText.erase(0, cleanedText.find_first_not_of(" \t\n\r"));
+        cleanedText.erase(cleanedText.find_last_not_of(" \t\n\r") + 1);
+        
+        // If cleaning resulted in empty text, use original
+        if (cleanedText.empty()) {
+            cleanedText = text;
+        }
+        
         {
             std::lock_guard<std::mutex> lock(queueMutex);
-            speakQueue.emplace(text, category);
+            speakQueue.emplace(cleanedText, category);
         }
         queueCV.notify_one();
     }

@@ -11,6 +11,7 @@
 #include "commands_timers.hpp"
 #include "commands_voice.hpp"
 #include "commands_ui.hpp"
+#include "commands_grim.hpp"  // ? NEW: GRIM system commands
 
 // One shared registration list used by both host and plugin builds.
 static void register_all_commands() {
@@ -45,9 +46,9 @@ static void register_all_commands() {
     grim_register_command("console",       cmdToggleOverlayConsole);
     grim_register_command("ui_console",    cmdToggleOverlayConsole);
     grim_register_command("toggle_console", cmdToggleOverlayConsole);
-    grim_register_command("settings",      cmdToggleSettings);      // ? Simple "settings" command
+    grim_register_command("settings",      cmdToggleSettings);
     grim_register_command("settings_ui",   cmdToggleSettings);
-    grim_register_command("toggle_settings", cmdToggleSettings);    // ? Alternative
+    grim_register_command("toggle_settings", cmdToggleSettings);
 
     // Test commands (defined in commands_system.cpp)
     LOG_DEBUG("Plugin", "Registering 'test_intent' command");
@@ -76,6 +77,11 @@ static void register_all_commands() {
     LOG_DEBUG("Plugin", "Registering settings info command");
     grim_register_command("settings_info", cmdSettings);  // ? Renamed from "settings"
     grim_register_command("config_info",   cmdSettings);  // ? Alternative name
+
+    // ? NEW: GRIM system management commands
+    LOG_DEBUG("Plugin", "Registering GRIM system commands");
+    grim_register_command("clear_cache",   cmdClearCache);
+    grim_register_command("reset_cache",   cmdResetCache);
 
     LOG_DEBUG("Plugin", "Core command registration complete");
     

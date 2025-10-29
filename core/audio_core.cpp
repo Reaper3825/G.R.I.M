@@ -165,6 +165,7 @@ bool playWav(const std::string& path) {
     auto active = std::make_unique<ActiveStream>();
     active->channels = channels;
     active->sampleRate = sampleRate;
+    active->playing = true;  // ? Set BEFORE opening stream
 
     PaError err = Pa_OpenDefaultStream(&active->stream,
                                        0, channels, paInt16,
@@ -175,25 +176,38 @@ bool playWav(const std::string& path) {
         return false;
     }
 
-    Pa_StartStream(active->stream);
+    // ? Add to active list BEFORE playing (so isPlaying() works)
+    {
+        std::lock_guard<std::mutex> lock(g_audioMutex);
+        g_active.push_back(std::move(active));
+    }
+
+    // ? Get the stream pointer (active was moved)
+    PaStream* stream = g_active.back()->stream;
+
+    Pa_StartStream(stream);
     size_t frames = pcm.size() / channels;
     const int16_t* data = pcm.data();
     size_t pos = 0;
 
     while (pos < frames) {
         size_t chunk = std::min<size_t>(1024, frames - pos);
-        Pa_WriteStream(active->stream, data + pos * channels, (unsigned long)chunk);
+        Pa_WriteStream(stream, data + pos * channels, (unsigned long)chunk);
         pos += chunk;
     }
 
-    Pa_StopStream(active->stream);
-    Pa_CloseStream(active->stream);
-    active->playing = false;
-
+    Pa_StopStream(stream);
+    Pa_CloseStream(stream);
+    
+    // ? Mark as finished AFTER playback completes
     {
         std::lock_guard<std::mutex> lock(g_audioMutex);
-        g_active.push_back(std::move(active));
+        if (!g_active.empty()) {
+            g_active.back()->playing = false;
+            g_active.back()->stream = nullptr;
+        }
     }
+
     cleanupFinished();
     return true;
 }

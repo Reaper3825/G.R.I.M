@@ -395,16 +395,15 @@ CommandResult cmdNevermind(const std::string& arg)
 
     // Optionally stop active speech playback
     if (Voice::isSpeaking()) {
-    LOG_DEBUG("Command", "Would stop active TTS playback — placeholder (AudioCore).");
-    // TODO: integrate mixer stop logic once audio_core supports it.
+        LOG_DEBUG("Command", "Would stop active TTS playback — placeholder (AudioCore).");
+        // TODO: integrate mixer stop logic once audio_core supports it.
     }
-
 
     return {
         true,                          // success
         "Alright, cancelled.",         // message
         "ERR_NONE",                    // errorCode
-        "routine",                     // category
+        "cancellation",                // category - CHANGED from "routine" to "cancellation"
         "Alright, cancelled.",         // voice
         Color(128, 128, 255)           // color
     };
