@@ -275,6 +275,9 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
         // Temperature: 0.0 = more deterministic (reduces hallucinations)
         wparams.temperature = aiConfig["whisper"].value("temperature", 0.0);
         
+        // ✅ CRITICAL: Enable temperature fallback to catch hallucinations
+        wparams.temperature_inc = 0.0;  // Don't increase temperature on retries
+        
         // Max length: prefer shorter outputs
         wparams.max_len = aiConfig["whisper"].value("max_len", 1);
         
@@ -288,6 +291,12 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
         // No speech threshold: filter out noise
         wparams.no_speech_thold = aiConfig["whisper"].value("no_speech_threshold", 0.6);
         
+        // ✅ NEW: Entropy threshold to detect gibberish/hallucinations
+        wparams.entropy_thold = 2.4f;  // Reject high-entropy (random) outputs
+        
+        // ✅ NEW: Logprob threshold to reject low-confidence transcriptions
+        wparams.logprob_thold = -1.0f;  // Reject outputs with low log probability
+        
         // Initial prompt to guide the model toward command-style output
         std::string prompt = aiConfig["whisper"].value("initial_prompt", 
             "Voice commands: open notepad, close window, show time");
@@ -296,6 +305,8 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
         LOG_DEBUG("Voice", "Whisper params: temp=" + std::to_string(wparams.temperature) + 
                   " beam=" + std::to_string(wparams.beam_search.beam_size) +
                   " no_speech_thold=" + std::to_string(wparams.no_speech_thold) +
+                  " entropy_thold=" + std::to_string(wparams.entropy_thold) +
+                  " logprob_thold=" + std::to_string(wparams.logprob_thold) +
                   " lang=" + lang);
 
         if (whisper_full(g_state.ctx, wparams, rollingBuffer.data(),
@@ -311,6 +322,69 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
     // Trim trailing space
     if (!transcript.empty() && transcript.back() == ' ')
         transcript.pop_back();
+
+    // ✅ NEW: Post-process to filter hallucinations
+    if (!transcript.empty()) {
+        // Common Whisper hallucination patterns to filter
+        const std::vector<std::string> hallucinationPatterns = {
+            "blank_audio",
+            "(blank audio)",
+            "(clicking)",
+            "(silence)",
+            "(no audio)",
+            "thank you for watching",
+            "thanks for watching",
+            "subscribe",
+            "like and subscribe",
+            "state 0-1",  // Specific hallucination from logs
+            "state zero one",
+            "state 01",
+            "[Music]",
+            "[Applause]",
+            "(music)",
+            "(applause)",
+            "♪",
+            "♫"
+        };
+        
+        std::string lowerTranscript = transcript;
+        std::transform(lowerTranscript.begin(), lowerTranscript.end(), 
+                      lowerTranscript.begin(), ::tolower);
+        
+        // Remove leading/trailing whitespace and punctuation
+        lowerTranscript.erase(0, lowerTranscript.find_first_not_of(" \t\n\r.,!?"));
+        lowerTranscript.erase(lowerTranscript.find_last_not_of(" \t\n\r.,!?") + 1);
+        
+        for (const auto& pattern : hallucinationPatterns) {
+            if (lowerTranscript.find(pattern) != std::string::npos) {
+                LOG_DEBUG("Voice", "Filtered hallucination pattern: \"" + pattern + "\" from: \"" + transcript + "\"");
+                transcript.clear();
+                break;
+            }
+        }
+        
+        // ✅ Additional check: reject very short gibberish (single letters/numbers)
+        if (transcript.length() <= 2 && !std::isalpha(transcript[0])) {
+            LOG_DEBUG("Voice", "Filtered short gibberish: \"" + transcript + "\"");
+            transcript.clear();
+        }
+        
+        // ✅ Check for repeated characters (another hallucination sign)
+        if (transcript.length() > 3) {
+            bool allSame = true;
+            char first = std::tolower(transcript[0]);
+            for (char c : transcript) {
+                if (std::tolower(c) != first && !std::isspace(c)) {
+                    allSame = false;
+                    break;
+                }
+            }
+            if (allSame) {
+                LOG_DEBUG("Voice", "Filtered repeated character hallucination: \"" + transcript + "\"");
+                transcript.clear();
+            }
+        }
+    }
 
     if (!transcript.empty()) {
         LOG_DEBUG("Voice", "Heard speech: \"" + transcript + "\"");

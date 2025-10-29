@@ -1,7 +1,15 @@
 {
+  "ERR_AI_BACKEND_UNAVAILABLE": {
+    "debug": "Could not connect to Ollama/LocalAI/OpenAI.",
+    "user": "[AI] Backend unavailable."
+  },
   "ERR_AI_CONFIG_INVALID": {
     "debug": "ai_config.json failed parsing or validation.",
     "user": "[AI] Config file invalid → reset to defaults."
+  },
+  "ERR_AI_INTERPRET_FAIL": {
+    "debug": "AI interpretation returned empty or invalid response.",
+    "user": "[AI] I couldn't determine your intent."
   },
   "ERR_ALIAS_NOT_FOUND": {
     "debug": "Alias lookup failed in user, auto, and fallback.",
@@ -10,6 +18,10 @@
   "ERR_APP_NO_ARGUMENT": {
     "debug": "Application command called without argument.",
     "user": "[App] Usage: open <application>"
+  },
+  "ERR_CORE_UNKNOWN_COMMAND": {
+    "debug": "Command not found in command map or NLP rules.",
+    "user": "[Error] Unknown command."
   },
   "ERR_FS_DIR_NOT_FOUND": {
     "debug": "Target directory not found in cmdChangeDir.",

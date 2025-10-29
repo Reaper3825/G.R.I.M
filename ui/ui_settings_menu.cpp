@@ -3,8 +3,11 @@
 #include "logger.hpp"
 #include "input_parser.hpp"
 #include <fstream>
-#include <functional>  // ? ADD: For std::bind
-#include <filesystem>  // ? NEW: For directory scanning
+#include <functional>
+#include <filesystem>
+
+// External global aiConfig that needs to be updated when settings change
+extern nlohmann::json aiConfig;
 
 UISettingsMenu::UISettingsMenu()
     : UIPanel("Settings", true), hasChanges(false), isRefreshing(false), needsWidgetRefresh(false)
@@ -99,10 +102,27 @@ void UISettingsMenu::loadConfig() {
 void UISettingsMenu::saveConfig() {
     try {
         std::ofstream f("ai_config.json");
+        if (!f.is_open()) {
+            LOG_ERROR("UISettingsMenu", "Failed to open ai_config.json for writing");
+            return;
+        }
+        
         f << config.dump(4);
-        LOG_DEBUG("UISettingsMenu", "Saved ai_config.json");
+        f.close();
+        
+        // Update the global aiConfig so changes take effect immediately
+        aiConfig = config;
+        
+        LOG_DEBUG("UISettingsMenu", "Saved ai_config.json and updated global aiConfig");
+        
+        // Log whisper settings for verification
+        if (config.contains("whisper")) {
+            LOG_DEBUG("UISettingsMenu", "Whisper settings in saved config: " + config["whisper"].dump());
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("UISettingsMenu", std::string("Failed to save ai_config.json: ") + e.what());
     } catch (...) {
-        LOG_ERROR("UISettingsMenu", "Failed to save ai_config.json");
+        LOG_ERROR("UISettingsMenu", "Failed to save ai_config.json (unknown error)");
     }
 }
 
@@ -112,11 +132,24 @@ void UISettingsMenu::applyChanges() {
         return;
     }
     
+    LOG_DEBUG("UISettingsMenu", "Applying changes to config");
+    
+    // Log whisper settings being applied for debugging
+    if (pendingConfig.contains("whisper")) {
+        LOG_DEBUG("UISettingsMenu", "Whisper settings being applied:");
+        LOG_DEBUG("UISettingsMenu", "  temperature: " + std::to_string(pendingConfig["whisper"].value("temperature", 0.0f)));
+        LOG_DEBUG("UISettingsMenu", "  beam_size: " + std::to_string(pendingConfig["whisper"].value("beam_size", 5)));
+        LOG_DEBUG("UISettingsMenu", "  suppress_blank: " + std::string(pendingConfig["whisper"].value("suppress_blank", true) ? "true" : "false"));
+        if (pendingConfig["whisper"].contains("whisper_model")) {
+            LOG_DEBUG("UISettingsMenu", "  whisper_model: " + pendingConfig["whisper"]["whisper_model"].get<std::string>());
+        }
+    }
+    
     config = pendingConfig;
     saveConfig();
     hasChanges = false;
     
-    LOG_DEBUG("UISettingsMenu", "Settings applied and saved");
+    LOG_DEBUG("UISettingsMenu", "Settings applied and saved successfully");
 }
 
 // ? Action handlers - these can safely be called from callbacks

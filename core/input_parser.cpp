@@ -249,6 +249,28 @@ namespace GRIMInput
         line.erase(0, line.find_first_not_of(" \t\n\r"));
         line.erase(line.find_last_not_of(" \t\n\r") + 1);
 
+        // ✅ NEW: Normalize common multi-word commands to single words
+        // This handles cases like "never mind" -> "nevermind"
+        std::string lowerLine = line;
+        std::transform(lowerLine.begin(), lowerLine.end(), lowerLine.begin(), ::tolower);
+        
+        const std::unordered_map<std::string, std::string> multiWordCommands = {
+            {"never mind", "nevermind"},
+            {"no problem", "okay"},
+            {"no worries", "okay"},
+            {"all right", "okay"},
+            {"all good", "okay"}
+        };
+        
+        for (const auto& [multiWord, singleWord] : multiWordCommands) {
+            // Check if the line starts with this multi-word command
+            if (lowerLine == multiWord || lowerLine.find(multiWord + " ") == 0) {
+                // Replace the multi-word command with the single-word version
+                line = singleWord + line.substr(multiWord.length());
+                break;
+            }
+        }
+
         auto pos = line.find(' ');
         if (pos == std::string::npos)
             return { line, "" };

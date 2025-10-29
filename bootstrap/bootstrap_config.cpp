@@ -98,8 +98,11 @@ nlohmann::json defaultAI() {
             {"no_speech_threshold", 0.6},
             {"min_speech_ms", 500},
             {"min_silence_ms", 1200},
+            {"max_listening_ms", 10000},  // ✅ Add max listening timeout
             {"max_len", 1},
             {"suppress_blank", true},
+            {"entropy_threshold", 2.4},  // ✅ ADD: Reject high-entropy (gibberish) outputs
+            {"logprob_threshold", -1.0},  // ✅ ADD: Reject low-confidence transcriptions
             {"initial_prompt", "Voice commands: open notepad, close window, show time, list directory"}
         }}
     };
@@ -134,6 +137,12 @@ nlohmann::json defaultErrors() {
             {"user", "[Alias] Application not found."},
             {"debug", "Alias lookup failed in user, auto, and fallback."}
         }},
+        
+        // ✅ NEW: Core command errors
+        {"ERR_CORE_UNKNOWN_COMMAND", {
+            {"user", "[Error] Unknown command."},
+            {"debug", "Command not found in command map or NLP rules."}
+        }},
 
         // ✅ Voice-related errors
         {"ERR_VOICE_START", {
@@ -167,6 +176,16 @@ nlohmann::json defaultErrors() {
         {"ERR_VOICE_STREAM_FAIL", {
             {"user", "Voice streaming failed."},
             {"debug", "Could not start voice streaming session."}
+        }},
+        
+        // ✅ AI interpretation errors
+        {"ERR_AI_INTERPRET_FAIL", {
+            {"user", "[AI] I couldn't determine your intent."},
+            {"debug", "AI interpretation returned empty or invalid response."}
+        }},
+        {"ERR_AI_BACKEND_UNAVAILABLE", {
+            {"user", "[AI] Backend unavailable."},
+            {"debug", "Could not connect to Ollama/LocalAI/OpenAI."}
         }}
     };
 }

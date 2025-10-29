@@ -1,127 +1,169 @@
 {
-  "`[clapping]` i'm assuming you are expressing approval or enthusiasm._default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\GSUtyMvU3SsZxcRiFNyIggpOYUKl3SMG.wav",
-    "lastUsed": 1761637222,
+  " grim: affirmative, human. how may i assist you today?_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\QumyNyyRujmdeYGZoBFGz4upaqmocz9C.wav",
+    "lastUsed": 1761695474,
+    "permanent": false,
+    "useCount": 1
+  },
+  " i am a machine and do not have feelings, but i am functioning at optimal capacity. how can i assist you today?_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\APISmtzA3VoueSi21IB8RlKk5khGnN0j.wav",
+    "lastUsed": 1761694492,
+    "permanent": false,
+    "useCount": 1
+  },
+  " i'm just a machine, so i don't have feelings, but i'm here to assist you. what can i help with today?_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\PMxfEy6ePJcBWsOwfbtEXcl9OhaAKcvs.wav",
+    "lastUsed": 1761695130,
     "permanent": false,
     "useCount": 1
   },
   "acknowledged_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\mXHD6dZffdbY6PVaKFHUJFTvHzQlLbZ6.wav",
-    "lastUsed": 1761637189,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\r7y3EmRQfFDfIBP2kThJSxxskcpX77ua.wav",
+    "lastUsed": 1761696041,
     "permanent": false,
-    "useCount": 1
+    "useCount": 3
   },
   "affirmative_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\91faqOlCmRxET1GJJvtrA2mU3Qz90hfi.wav",
-    "lastUsed": 1761637187,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\WNqYyZd5qdlbPgl6XlQheYfXv51friFi.wav",
+    "lastUsed": 1761696041,
+    "permanent": false,
+    "useCount": 3
+  },
+  "cache reset with fresh audio_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\KlD0avt1wayescGSTCKqDpMWfpb9xdf4.wav",
+    "lastUsed": 1761694458,
     "permanent": false,
     "useCount": 1
   },
   "command executed_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\VqtxAcprLN1wgmLDQZg7ltDKGTQ6e4gs.wav",
-    "lastUsed": 1761637183,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\kFB1AQlQJ6lZdmTDue3m3KbWmv1gfrnj.wav",
+    "lastUsed": 1761696041,
     "permanent": false,
-    "useCount": 1
+    "useCount": 3
   },
   "done_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\yOiELBbzv46zFINlwTtLrOddGZP70mIw.wav",
-    "lastUsed": 1761637175,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\zCaUFPjMHo5haUJAYD7ax3wrn2WXVi3Z.wav",
+    "lastUsed": 1761696041,
     "permanent": false,
-    "useCount": 1
+    "useCount": 3
   },
   "error occurred_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\MbQttGhVjtFFpbhVOIFd3cAMNVl8dLXF.wav",
-    "lastUsed": 1761637180,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\KFgc4i6DwtW5J9cjWg0WjgBGP4DkC1kY.wav",
+    "lastUsed": 1761696041,
     "permanent": false,
-    "useCount": 1
+    "useCount": 3
   },
   "go ahead_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\4O9ACCRV1maMrWVjMpvlYjfrAf5ChfQD.wav",
-    "lastUsed": 1761637186,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\kYtREj90GkdIFTtCPErPGZLy8V3LXpI7.wav",
+    "lastUsed": 1761696041,
     "permanent": false,
-    "useCount": 1
+    "useCount": 3
   },
   "how can i help you?_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\4uhsSxEvMitq1AkZqfmLF5T79U53ksua.wav",
-    "lastUsed": 1761637170,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\nkixnWWuOaWr7nnVXvvuxebGYY9AFTNy.wav",
+    "lastUsed": 1761696041,
     "permanent": false,
-    "useCount": 1
+    "useCount": 3
   },
-  "i can assist you with information related to mice. for example, i can help you find out about different species of mice, their habitats, behaviors, or perhaps guide you on how to handle a rodent infestation._default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\QTOpe2XLu5KSkDMw3Pg7VVGyXUYAUkyF.wav",
-    "lastUsed": 1761637313,
+  "i apologize for the confusion._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\WESIUUzZOEL1m4d3CdblbT0YgRDJpsZ6.wav",
+    "lastUsed": 1761695385,
     "permanent": false,
     "useCount": 1
   },
   "i'm here_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\qlGAHC1H2Q15phqJnPmlhIPKCHYyLRmd.wav",
-    "lastUsed": 1761637184,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\DHbVAtjRrjDe3sFBwYtlID8F5t02vFb3.wav",
+    "lastUsed": 1761696041,
     "permanent": false,
-    "useCount": 1
+    "useCount": 3
   },
   "i'm listening_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\38Vvok6kF5v8i9hxTpoHMbzmshHDsbk1.wav",
-    "lastUsed": 1761637169,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\0T1XBWwQfV4g9rtztEeVVe7fGDCNetHb.wav",
+    "lastUsed": 1761696041,
     "permanent": false,
-    "useCount": 1
+    "useCount": 3
   },
   "negative_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\zLzl0wCZAqI5EQuWH0579rDmGMNvNDRX.wav",
-    "lastUsed": 1761637188,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\RbREvfcKgtdrdGkxcq0LhvKx842Owvx1.wav",
+    "lastUsed": 1761696041,
     "permanent": false,
-    "useCount": 1
+    "useCount": 3
   },
   "no_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\nvzb2rf6K6KHWVhFbhrapyLKLoiBPbXi.wav",
-    "lastUsed": 1761637165,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\cPorXAttNyZ12NNH5qLmS9rYNPatFzIJ.wav",
+    "lastUsed": 1761696041,
     "permanent": false,
-    "useCount": 1
+    "useCount": 3
   },
   "okay_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\ur3WsDGhEOsjusD6CuxwZyBjU6IUZgOf.wav",
-    "lastUsed": 1761637166,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\OF4MjgiuGCQKk3BRmsk66Q4ujcGhPmWm.wav",
+    "lastUsed": 1761696041,
     "permanent": false,
-    "useCount": 1
+    "useCount": 3
+  },
+  "opening notepad_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\a8Vl9cKM7Qhib1O7aHN72lwfR4ZqiyrS.wav",
+    "lastUsed": 1761696857,
+    "permanent": false,
+    "useCount": 2
   },
   "please wait_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\FRyH6NW9MhYa9DkXAVn4DYgDA7OWKTyl.wav",
-    "lastUsed": 1761637181,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\dLHf0bprXh1YUetxftuF51Cf6MNVvQ1q.wav",
+    "lastUsed": 1761696041,
     "permanent": false,
-    "useCount": 1
+    "useCount": 3
   },
   "processing_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\oX9PXBpITGyBSfN9dutTSuxNDcBdcupL.wav",
-    "lastUsed": 1761637173,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\6m4TNpWWiplgqxRAo3wjVf1W5i9570RD.wav",
+    "lastUsed": 1761696041,
     "permanent": false,
-    "useCount": 1
+    "useCount": 3
   },
   "ready_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\iYYzDZ0bEjO5DypCj3idiVL9D3KIzKJl.wav",
-    "lastUsed": 1761637178,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\AlSoSTRrqtKk46AVlDKYprlqyWU1SGck.wav",
+    "lastUsed": 1761696041,
     "permanent": false,
-    "useCount": 1
+    "useCount": 3
   },
   "understood_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\rzSnYqvpQ4qCeOwUgYkFLTZj0ePITfCd.wav",
-    "lastUsed": 1761637172,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\EWhAGORA1S4QHmPOVZf6ZUcgke1UT5eB.wav",
+    "lastUsed": 1761696041,
+    "permanent": false,
+    "useCount": 3
+  },
+  "was that what you wanted?_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\F6Eg4xHPWDWM4E0yfyc5cfZIJ40viykr.wav",
+    "lastUsed": 1761695463,
     "permanent": false,
     "useCount": 1
   },
   "welcome back, austin. grim is online._default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\hwXFeZfR1tF3qyetKQgdjOKkiWaCQG5R.wav",
-    "lastUsed": 1761637162,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\SsEHJ75V6RUOpzmkAWNPZ342uoM8rKir.wav",
+    "lastUsed": 1761696038,
+    "permanent": false,
+    "useCount": 2
+  },
+  "yes, i can open the pad. the suggested command is 'open pad'._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\9z4tSJU3refmbUk5k5kxT0uWgoIMeIRy.wav",
+    "lastUsed": 1761695365,
     "permanent": false,
     "useCount": 1
   },
   "yes?_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\zUgJidyf0hppKPlcMnK3mJj2lHDMtNJ4.wav",
-    "lastUsed": 1761637292,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\zRggylQ5OMQ1Y211u0uUWJKn87Rs00Cw.wav",
+    "lastUsed": 1761695455,
     "permanent": false,
-    "useCount": 2
+    "useCount": 5
   },
   "yes_default_100": {
-    "file": "D:/G.R.I.M/resources/tts_out/temp\\b1mdE7PTV3tJaVu4vM0XFnAiq0gsndj6.wav",
-    "lastUsed": 1761637163,
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\bNyDbLD1N6zJmp2cQLC84D9urujJMJ0a.wav",
+    "lastUsed": 1761696041,
+    "permanent": false,
+    "useCount": 3
+  },
+  "you just asked that earlier — want me to recall my previous answer?_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\a1Ht2IjtMZaL5SemvoDISdUlcdGfkKQS.wav",
+    "lastUsed": 1761696866,
     "permanent": false,
     "useCount": 1
   }

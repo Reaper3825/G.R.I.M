@@ -248,12 +248,20 @@ void handleCommand(const std::string& line)
             const std::vector<std::string> banterPrefixes = {
                 "hey ", "hi ", "hello ", "yo ", "sup ",
                 "hey grim ", "hi grim ", "grim ",
-                "please ", "could you ", "can you ", "would you "
+                "please ", "could you ", "can you ", "would you ",
+                " can you ", " could you ", " would you ",  // ✅ FIX: Handle leading spaces
+                " please "
             };
             
             for (const auto& prefix : banterPrefixes) {
                 if (lowerCleaned.find(prefix) == 0) {
-                    cleaned = cleaned.substr(prefix.length());
+                    // ✅ FIX: Use lowerCleaned length to avoid case mismatch issues
+                    cleaned = line.substr(prefix.length());
+                    
+                    // ✅ Trim any remaining leading/trailing spaces
+                    cleaned.erase(0, cleaned.find_first_not_of(" \t\n\r"));
+                    cleaned.erase(cleaned.find_last_not_of(" \t\n\r") + 1);
+                    
                     LOG_DEBUG("HandleCommand", "Stripped banter prefix '" + prefix + "', cleaned: \"" + cleaned + "\"");
                     break; // Only strip first match
                 }
@@ -433,7 +441,8 @@ void handleCommand(const std::string& line)
             bool hasCommandWords = false;
             const std::vector<std::string> commandVerbs = {
                 "open", "close", "run", "launch", "show", "list", "set", 
-                "create", "delete", "search", "find", "play", "stop"
+                "create", "delete", "search", "find", "play", "stop",
+                "nevermind", "cancel", "stop", "forget", "undo", "clear"  // ✅ ADD: cancellation verbs
             };
             
             for (const auto& verb : commandVerbs) {
@@ -443,10 +452,18 @@ void handleCommand(const std::string& line)
                 }
             }
             
-            if (!hasCommandWords) {
+            // ✅ FIX: Don't teach as banter if NLP will match it later
+            // Check if command is in the command map (even if NLP didn't match)
+            bool isKnownCommand = (commandMap.find(cmd) != commandMap.end());
+            
+            if (!hasCommandWords && !isKnownCommand) {
                 // Likely banter that slipped through - teach classifier
                 GRIM::FastClassifier::updateWeights(line, GRIM::IntentType::Banter);
                 LOG_DEBUG("Feedback", "Taught classifier: \"" + line + "\" → Banter (no command verbs)");
+            } else if (isKnownCommand) {
+                // Known command - teach as command
+                GRIM::FastClassifier::updateWeights(line, GRIM::IntentType::Command);
+                LOG_DEBUG("Feedback", "Taught classifier: \"" + line + "\" → Command (found in command map)");
             } else {
                 // Has command words but NLP didn't match - might be new pattern
                 LOG_DEBUG("Feedback", "\"" + line + "\" has command words but no NLP match - potential learning opportunity");
@@ -503,7 +520,8 @@ void handleCommand(const std::string& line)
 
     // Request feedback for successful voice commands
     if (!GRIM::Feedback::isMultiCommandContext() && !GRIM::Feedback::hasPending() && 
-        result.success && result.category != "conversation" && GRIM::Feedback::isVoiceCommand())
+        result.success && result.category != "conversation" && result.category != "cancellation" && 
+        result.category != "banter" && GRIM::Feedback::isVoiceCommand())
     {
         std::string ask = "Was that what you wanted?";
         history.push(ask, Colors::Cyan.toUInt());
