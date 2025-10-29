@@ -1,0 +1,533 @@
+PS D:\G.R.I.M> .\out\build\release\GRIM.exe
+[2025-10-28 16:47:47][Logger] Writing logs to: D:\G.R.I.M\grim.log
+| 2025-10-28 16:47:47 | main.cpp | Initializing G.R.I.M | true |
+[2025-10-28 16:47:47][DEBUG][WebSocket] === WebSocket Server Startup Sequence ===
+[2025-10-28 16:47:47][DEBUG][WebSocket] Requested port: 8080
+[2025-10-28 16:47:47][DEBUG][WebSocket] Creating server thread...
+[2025-10-28 16:47:47][DEBUG][WebSocket] Server thread detached; running asynchronously
+| 2025-10-28 16:47:47 | main.cpp | WebSocket server started | true |
+[2025-10-28 16:47:47][DEBUG][Main] Heap check mode: Manual (removed CHECK_ALWAYS for debugging)
+[2025-10-28 16:47:47][DEBUG][WebSocket] Server thread started (thread ID: 5346136291480488861)
+[2025-10-28 16:47:47][DEBUG][WebSocket] Initializing uWebSockets App...
+| 2025-10-28 16:47:47 | main.cpp | Mouse initialized | true |
+[2025-10-28 16:47:47][DEBUG][Config] AI config patched (9 keys)
+[2025-10-28 16:47:47][DEBUG][WebSocket] Listening on port 8080
+[2025-10-28 16:47:47][DEBUG][WebSocket] Endpoint: ws://localhost:8080
+[2025-10-28 16:47:47][DEBUG][Resources] Using canonical resource path: D:/G.R.I.M\resources
+[2025-10-28 16:47:47][DEBUG][Config] Errors config patched (2 keys)
+[2025-10-28 16:47:47][DEBUG][Resources] Using canonical resource path: D:/G.R.I.M\resources
+[NLP] Loaded
+[2025-10-28 16:47:47][DEBUG][Resources] Using canonical resource path: D:/G.R.I.M\resources
+| 2025-10-28 16:47:47 | bootstrap_config.cpp | Memory config load | true |
+| 2025-10-28 16:47:47 | bootstrap_config.cpp | AI config patched | true |
+| 2025-10-28 16:47:47 | websocket_server.cpp | WebSocket server started | true |
+| 2025-10-28 16:47:47 | resources.cpp | Resource path set | true |
+| 2025-10-28 16:47:47 | bootstrap_config.cpp | Errors config patched | true |
+| 2025-10-28 16:47:47 | resources.cpp | Resource path set | true |
+| 2025-10-28 16:47:47 | bootstrap_config.cpp | NLP rules load | true |
+| 2025-10-28 16:47:47 | resources.cpp | Resource path set | true |
+| 2025-10-28 16:47:47 | bootstrap_config.cpp | Synonyms config load | true |
+| 2025-10-28 16:47:47 | bootstrap.cpp | Configs initialized | true |
+[2025-10-28 16:47:47][DEBUG][Aliases] Bootstrap: initializing (cache only, no scan)
+[2025-10-28 16:47:47][DEBUG][Resources] Using canonical resource path: D:/G.R.I.M\resources
+[2025-10-28 16:47:47][DEBUG][Aliases] Loaded app_aliases.json successfully
+| 2025-10-28 16:47:47 | aliases.cpp | Aliases init | true |
+| 2025-10-28 16:47:47 | resources.cpp | Resource path set | true |
+| 2025-10-28 16:47:47 | aliases.cpp | Aliases load | true |
+| 2025-10-28 16:47:47 | bootstrap.cpp | Aliases bootstrap finished | true |
+| 2025-10-28 16:47:47 | resources.cpp | Resource path set | true |
+[2025-10-28 16:47:47][DEBUG][Resources] Using canonical resource path: D:/G.R.I.M\resources
+| 2025-10-28 16:47:47 | resources.cpp | Font search | true |
+[2025-10-28 16:47:47][DEBUG][Resources] Found font: D:/G.R.I.M\resources\DejaVuMathTeXGyre.ttf
+| 2025-10-28 16:47:47 | bootstrap.cpp | Font search | true |
+[2025-10-28 16:47:47][DEBUG][Config] Font found: D:/G.R.I.M\resources\DejaVuMathTeXGyre.ttf
+[2025-10-28 16:47:47][DEBUG][SystemDetect] Wi-Fi connected: Yes
+[2025-10-28 16:47:47][DEBUG][SystemDetect] Starting IP geolocation request...
+[2025-10-28 16:47:47][DEBUG][SystemDetect] GeoIP success: Fayetteville, North Carolina 28306, United States
+[2025-10-28 16:47:47][DEBUG][SystemDetect] Location: Fayetteville, North Carolina 28306, United States
+[2025-10-28 16:47:47][DEBUG][AudioCore] PortAudio initialized successfully.
+| 2025-10-28 16:47:47 | system_detect.cpp | Output device defaulted | true |
+[2025-10-28 16:47:47][DEBUG][SystemDetect] Using default output device: Speakers (Razer BlackShark V2 H
+| 2025-10-28 16:47:47 | system_detect.cpp | ---- GRIM System Detection ---- | true |
+[2025-10-28 16:47:47][DEBUG][SystemDetect] OS: Windows (x86_64)
+[2025-10-28 16:47:47][DEBUG][SystemDetect] CPU cores: 20
+[2025-10-28 16:47:47][DEBUG][SystemDetect] RAM: 130861 MB
+[2025-10-28 16:47:47][DEBUG][SystemDetect] GPU detected: NVIDIA GeForce RTX 3080 Ti (2 device(s))
+[2025-10-28 16:47:47][DEBUG][SystemDetect] VRAM: 12086 MB
+[2025-10-28 16:47:47][DEBUG][SystemDetect] Driver: 32.0.15.8157
+[2025-10-28 16:47:47][DEBUG][SystemDetect] Voice backends:
+[2025-10-28 16:47:47][DEBUG][SystemDetect]   Windows SAPI: Yes
+[2025-10-28 16:47:47][DEBUG][SystemDetect]   macOS say:   No
+[2025-10-28 16:47:47][DEBUG][SystemDetect]   Linux Piper: No
+[2025-10-28 16:47:47][DEBUG][SystemDetect] Default input: Microphone (Razer BlackShark V2
+[2025-10-28 16:47:47][DEBUG][SystemDetect] Default output: Speakers (Razer BlackShark V2 H
+[2025-10-28 16:47:47][DEBUG][SystemDetect] Monitors detected: 3
+[2025-10-28 16:47:47][DEBUG][SystemDetect]   Monitor 0 [1920x1080 @(0,0)] [PRIMARY]
+[2025-10-28 16:47:47][DEBUG][SystemDetect]   Monitor 1 [1920x1080 @(-1920,248)]
+[2025-10-28 16:47:47][DEBUG][SystemDetect]   Monitor 2 [1920x1080 @(1920,248)]
+[2025-10-28 16:47:47][DEBUG][SystemDetect] Virtual desktop bounds: 3840x1328
+[2025-10-28 16:47:47][DEBUG][SystemDetect] Suggested Whisper model: large-v3
+| 2025-10-28 16:47:47 | system_detect.cpp | ------------------------------- | true |
+| 2025-10-28 16:47:47 | bootstrap.cpp | System detection | true |
+| 2025-10-28 16:47:47 | bootstrap.cpp | Coqui TTS init | true |
+[2025-10-28 16:47:47][DEBUG][Voice] Initializing Coqui TTS bridge...
+[2025-10-28 16:47:47][DEBUG][TTSCache] Loaded 30 cached entries
+| 2025-10-28 16:47:47 | tts_cache.cpp | TTS Cache initialized | true |
+[2025-10-28 16:47:47][DEBUG][Voice] Launching Coqui XTTS v2 bridge and waiting up to 120s for model load...
+[2025-10-28 16:47:50][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Patched torch.load to use weights_only=False
+[2025-10-28 16:47:55][DEBUG][Voice/Bridge] Skipped non-JSON: C:\Program Files\Python310\lib\site-packages\transformers\utils\generic.py:311: FutureWarning: `torch.utils._pytree._register_pytree_node` is deprecated. Please use `torch.utils._pytree.register_pytree_node` instead.
+[2025-10-28 16:47:55][DEBUG][Voice/Bridge] Skipped non-JSON:   torch.utils._pytree._register_pytree_node(
+[2025-10-28 16:47:55][DEBUG][Voice/Bridge] Skipped non-JSON: C:\Program Files\Python310\lib\site-packages\transformers\utils\generic.py:311: FutureWarning: `torch.utils._pytree._register_pytree_node` is deprecated. Please use `torch.utils._pytree.register_pytree_node` instead.
+[2025-10-28 16:47:55][DEBUG][Voice/Bridge] Skipped non-JSON:   torch.utils._pytree._register_pytree_node(
+[2025-10-28 16:47:59][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Warning: Could not import some XTTS classes: cannot import name 'VocoderConfig' from 'TTS.vocoder.configs' (C:\Program Files\Python310\lib\site-packages\TTS\vocoder\configs\__init__.py)
+[2025-10-28 16:47:59][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Registered safe globals for PyTorch 2.6+
+[2025-10-28 16:48:02][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Using GPU: NVIDIA GeForce RTX 3080 Ti
+[2025-10-28 16:48:02][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Loading model: tts_models/multilingual/multi-dataset/xtts_v2 on cuda
+[2025-10-28 16:48:20][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Model loaded successfully
+[2025-10-28 16:48:20][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] GPU optimizations enabled (TF32, cudnn benchmark)
+[2025-10-28 16:48:20][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Starting model warm-up...
+[2025-10-28 16:48:20][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Loaded embedding from cache: default
+[2025-10-28 16:48:20][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Dummy embedding loaded, running warm-up inference...
+[2025-10-28 16:48:26][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] \u2713 Model warmed up successfully (CUDA kernels initialized)
+[2025-10-28 16:48:26][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] XTTS v2 model detected - voice cloning enabled
+[2025-10-28 16:48:26][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Initialization complete, sending ready signal
+[2025-10-28 16:48:26][DEBUG][Voice/Bridge] Skipped non-JSON:  > tts_models/multilingual/multi-dataset/xtts_v2 is already downloaded.
+[2025-10-28 16:48:26][DEBUG][Voice/Bridge] Skipped non-JSON:  > Using model: xtts
+| 2025-10-28 16:48:26 | voice_speak.cpp | Coqui XTTS v2 bridge ready | true |
+[2025-10-28 16:48:26][DEBUG][Voice] Model: tts_models/multilingual/multi-dataset/xtts_v2 | Device: cuda | XTTS v2: Yes
+| 2025-10-28 16:48:26 | bootstrap.cpp | Coqui TTS init | true |
+[2025-10-28 16:48:26][DEBUG][Voice] Coqui TTS initialized (speaker=default, model=en_US-amy-medium.onnx)
+| 2025-10-28 16:48:26 | bootstrap.cpp | RL Bridge init | true |
+[2025-10-28 16:48:26][DEBUG][RL] Starting rl_bridge.py via unified BridgeManager...
+[2025-10-28 16:48:26][DEBUG][BridgeManager] Started bridge: rl
+[2025-10-28 16:48:26][DEBUG][RL] rl_bridge.py started via BridgeManager.
+| 2025-10-28 16:48:26 | bootstrap.cpp | RL Bridge init | true |
+[2025-10-28 16:48:26][DEBUG][RL] rl_bridge.py initialized and ready
+| 2025-10-28 16:48:27 | bootstrap.cpp | Whisper preload begin | true |
+| 2025-10-28 16:48:27 | resources.cpp | Resource path set | true |
+[2025-10-28 16:48:27][DEBUG][Resources] Using canonical resource path: D:/G.R.I.M\resources
+[2025-10-28 16:48:27][DEBUG][Voice] Preloading Whisper model: D:/G.R.I.M\resources\models\ggml-base.en.bin
+whisper_init_from_file_with_params_no_state: loading model from 'D:/G.R.I.M\resources\models\ggml-base.en.bin'
+whisper_init_with_params_no_state: use gpu    = 1
+whisper_init_with_params_no_state: flash attn = 1
+whisper_init_with_params_no_state: gpu_device = 0
+whisper_init_with_params_no_state: dtw        = 0
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: NVIDIA GeForce RTX 3080 Ti, compute capability 8.6, VMM: yes
+whisper_init_with_params_no_state: devices    = 2
+whisper_init_with_params_no_state: backends   = 2
+whisper_model_load: loading model
+whisper_model_load: n_vocab       = 51864
+whisper_model_load: n_audio_ctx   = 1500
+whisper_model_load: n_audio_state = 512
+whisper_model_load: n_audio_head  = 8
+whisper_model_load: n_audio_layer = 6
+whisper_model_load: n_text_ctx    = 448
+whisper_model_load: n_text_state  = 512
+whisper_model_load: n_text_head   = 8
+whisper_model_load: n_text_layer  = 6
+whisper_model_load: n_mels        = 80
+whisper_model_load: ftype         = 1
+whisper_model_load: qntvr         = 0
+whisper_model_load: type          = 2 (base)
+whisper_model_load: adding 1607 extra tokens
+whisper_model_load: n_langs       = 99
+whisper_model_load:        CUDA0 total size =   147.37 MB
+whisper_model_load: model size    =  147.37 MB
+whisper_backend_init_gpu: using CUDA0 backend
+whisper_init_state: kv self size  =    6.29 MB
+whisper_init_state: kv cross size =   18.87 MB
+whisper_init_state: kv pad  size  =    3.15 MB
+whisper_init_state: compute buffer (conv)   =   17.24 MB
+whisper_init_state: compute buffer (encode) =   23.09 MB
+whisper_init_state: compute buffer (cross)  =    4.66 MB
+whisper_init_state: compute buffer (decode) =   97.29 MB
+| 2025-10-28 16:48:27 | bootstrap.cpp | Whisper preload complete | true |
+[2025-10-28 16:48:27][DEBUG][Voice] Whisper model preloaded successfully (no listening loop)
+| 2025-10-28 16:48:27 | bootstrap.cpp | Bootstrap complete | true |
+| 2025-10-28 16:48:27 | main.cpp | Bootstrap checks complete | true |
+| 2025-10-28 16:48:27 | aliases.cpp | Aliases init | true |
+[2025-10-28 16:48:27][DEBUG][Aliases] Bootstrap: initializing (cache only, no scan)
+| 2025-10-28 16:48:27 | resources.cpp | Resource path set | true |
+[2025-10-28 16:48:27][DEBUG][Resources] Using canonical resource path: D:/G.R.I.M\resources
+| 2025-10-28 16:48:27 | aliases.cpp | Aliases load | true |
+[2025-10-28 16:48:27][DEBUG][Aliases] Loaded app_aliases.json successfully
+| 2025-10-28 16:48:27 | main.cpp | Aliases initialized | true |
+| 2025-10-28 16:48:27 | main.cpp | System detection complete | true |
+[2025-10-28 16:48:27][DEBUG][PluginManager] Scanning for plugins in: D:/G.R.I.M/plugins
+[2025-10-28 16:48:27][DEBUG][]
+[2025-10-28 16:48:27][DEBUG][PluginSystem] Registered command: profile_self
+[2025-10-28 16:48:27][DEBUG][PluginSystem] Registered command: sherlock_sweep
+[2025-10-28 16:48:27][DEBUG][PluginSystem] Registered command: osint_report
+[2025-10-28 16:48:27][DEBUG][]
+[2025-10-28 16:48:27][DEBUG][PluginManager] Loaded plugin: osint_plugin.dll
+| 2025-10-28 16:48:27 | main.cpp | Plugin manager initialized | true |
+| 2025-10-28 16:48:27 | main.cpp | Startup greeting spoken | true |
+[2025-10-28 16:48:27][DEBUG][Voice/Worker] Processing: Welcome back, Austin. Grim is online.
+| 2025-10-28 16:48:27 | main.cpp | Memory system initialized | true |
+[2025-10-28 16:48:27][DEBUG][TTSCache] Cache HIT for: Welcome back, Austin. Grim is ...
+| 2025-10-28 16:48:27 | main.cpp | TTS pre-cache started (background) | true |
+[2025-10-28 16:48:27][DEBUG][Voice/Coqui] Using cached audio: D:/G.R.I.M/resources/tts_out/temp\hwXFeZfR1tF3qyetKQgdjOKkiWaCQG5R.wav
+[2025-10-28 16:48:27][DEBUG][FastClassifier] NLP-enhanced 'open' weight: 2.000000 (usage:0, success:1.000000)
+[2025-10-28 16:48:27][DEBUG][PopupUI] notifyPopupActivity() called
+[2025-10-28 16:48:27][DEBUG][PopupUI] HWND not ready ΓÇö popup queued
+[2025-10-28 16:48:27][DEBUG][FastClassifier] NLP-enhanced 'search' weight: 2.000000 (usage:0, success:1.000000)
+[2025-10-28 16:48:27][DEBUG][Voice/Audio] Playing via AudioCore: D:/G.R.I.M/resources/tts_out/temp\hwXFeZfR1tF3qyetKQgdjOKkiWaCQG5R.wav
+[2025-10-28 16:48:27][DEBUG][FastClassifier] NLP-enhanced 'set' weight: 2.000000 (usage:0, success:1.000000)
+[2025-10-28 16:48:27][DEBUG][FastClassifier] NLP-enhanced 'list' weight: 2.000000 (usage:0, success:1.000000)
+[2025-10-28 16:48:27][DEBUG][FastClassifier] NLP-enhanced 'create' weight: 2.000000 (usage:0, success:1.000000)
+[2025-10-28 16:48:27][DEBUG][FastClassifier] NLP-enhanced 'delete' weight: 2.000000 (usage:0, success:1.000000)
+[2025-10-28 16:48:27][DEBUG][FastClassifier] NLP-enhanced 'delete' weight: 2.000000 (usage:0, success:1.000000)
+[2025-10-28 16:48:27][DEBUG][FastClassifier] NLP-enhanced 'show' weight: 2.000000 (usage:0, success:1.000000)
+[2025-10-28 16:48:27][DEBUG][FastClassifier] NLP-enhanced 'show' weight: 2.000000 (usage:0, success:1.000000)
+[2025-10-28 16:48:27][DEBUG][FastClassifier] Enhanced 9 verbs from 21 NLP rules
+[2025-10-28 16:48:27][DEBUG][FastClassifier] Initialized with 45 command indicators, 58 banter indicators
+| 2025-10-28 16:48:27 | intent_gate.cpp | Intent Gate initialized | true |
+| 2025-10-28 16:48:27 | main.cpp | Intent classification system initialized | true |
+| 2025-10-28 16:48:27 | main.cpp | Initializing BGFX on main thread | true |
+[2025-10-28 16:48:27][DEBUG][WindowManager] Initializing global BGFX context
+| 2025-10-28 16:48:27 | window_manager.cpp | Global BGFX initialized (WindowManager) | true |
+| 2025-10-28 16:48:27 | main.cpp | BGFX initialized successfully | true |
+| 2025-10-28 16:48:27 | main.cpp | Creating GRIM unified overlay window | true |
+[2025-10-28 16:48:27][DEBUG][Main] Virtual screen: 5760x1328 at (-1920,0)
+[2025-10-28 16:48:27][DEBUG][WindowManager] Creating overlay window: overlay
+[2025-10-28 16:48:27][DEBUG][WindowManager] Registered window: overlay
+| 2025-10-28 16:48:27 | window_manager.cpp | Transparent multi-monitor overlay created (5760x1328) | true |
+[2025-10-28 16:48:27][DEBUG][WindowManager] Queued platform update for window 'overlay'
+[2025-10-28 16:48:27][DEBUG][WindowManager] Applied platform update on main thread
+| 2025-10-28 16:48:27 | main.cpp | Unified overlay initialized successfully (multi-monitor) | true |
+[2025-10-28 16:48:27][DEBUG][UIRoot] Initializing UIRoot with overlay renderer
+[2025-10-28 16:48:27][DEBUG][OverlayRenderer] Initializing with thread safety
+[2025-10-28 16:48:27][DEBUG][OverlayRenderer] Initialized GDI overlay renderer (5760x1328)
+| 2025-10-28 16:48:27 | ui_root.cpp | UIRoot initialized (overlay renderer) | true |
+[2025-10-28 16:48:27][DEBUG][UIScrollBox] Constructed
+[2025-10-28 16:48:27][DEBUG][UISettingsMenu] Config loaded successfully
+[2025-10-28 16:48:27][DEBUG][UISettingsMenu] Config loaded, widgets will be created on first update
+[2025-10-28 16:48:27][DEBUG][UIRoot] Added panel: Console
+[2025-10-28 16:48:27][DEBUG][UIRoot] Added panel: Settings
+| 2025-10-28 16:48:27 | main.cpp | UIRoot and panels initialized (hidden) | true |
+| 2025-10-28 16:48:27 | main.cpp | Popup UI launched (layered window) | true |
+[2025-10-28 16:48:27][DEBUG][WakeKey] Initializing Key system hook...
+| 2025-10-28 16:48:27 | wake_key.cpp | WakeKey system active (overlay console toggle) | true |
+| 2025-10-28 16:48:27 | main.cpp | WakeKey listener started | true |
+[2025-10-28 16:48:27][DEBUG][WakeVoice] Starting wake-word listener...
+[2025-10-28 16:48:27][DEBUG][Porcupine] CWD: D:\G.R.I.M
+[2025-10-28 16:48:27][DEBUG][Porcupine] Initializing wake-word engine...
+[2025-10-28 16:48:27][DEBUG][Porcupine] Access key length: 56
+[2025-10-28 16:48:27][DEBUG][Porcupine] Model path: D:/G.R.I.M/external/porcupine/lib/common/porcupine_params.pv
+[2025-10-28 16:48:27][DEBUG][Porcupine] Keyword path: D:/G.R.I.M/resources/wakeword/grim.ppn
+[2025-10-28 16:48:27][DEBUG][Porcupine] Calling pv_porcupine_init...
+[2025-10-28 16:48:28][DEBUG][Porcupine] pv_porcupine_init returned status: 0
+[2025-10-28 16:48:28][DEBUG][Porcupine] Wake-word engine initialized successfully!
+[2025-10-28 16:48:28][DEBUG][WakeVoice] Wake-word system initialized and listening.
+| 2025-10-28 16:48:28 | main.cpp | WakeVoice listener started | true |
+| 2025-10-28 16:48:28 | main.cpp | Entering main thread render loop | true |
+[2025-10-28 16:48:28][DEBUG][InputState] Mouse input disabled - will clear on next frame
+[2025-10-28 16:48:28][DEBUG][WakeVoice] PortAudio input stream started.
+| 2025-10-28 16:48:28 | wake_voice.cpp | WakeVoice | true |
+[2025-10-28 16:48:28][TRACE][PopupUI] runPopupUI with size 256x256
+[2025-10-28 16:48:28][DEBUG][PopupUI] Deferring popup creation until BGFX idle
+[2025-10-28 16:48:29][DEBUG][PopupWindow] Creating popup overlay (non-blocking mode)
+[2025-10-28 16:48:29][TRACE][PW] CreateWindowExW
+[2025-10-28 16:48:29][DEBUG][PopupWindow] HWND created successfully (256x256)
+[2025-10-28 16:48:29][DEBUG][PopupUI] Popup thread ID = 43760
+[2025-10-28 16:48:29][DEBUG][WindowManager] Registered window: popup
+[2025-10-28 16:48:29][DEBUG][PopupUI] Loading alpha textures for 256x256
+[2025-10-28 16:48:30][DEBUG][Voice/Audio] Playback complete for: D:/G.R.I.M/resources/tts_out/temp\hwXFeZfR1tF3qyetKQgdjOKkiWaCQG5R.wav
+[2025-10-28 16:48:30][DEBUG][Voice] Pre-caching common phrases...
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: Yes
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: No
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: Okay
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: I'm listening
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: How can I help you?
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: Understood
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: Processing
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: Done
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: Ready
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: Error occurred
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: Please wait
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: Command executed
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: I'm here
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: Go ahead
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: Affirmative
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: Negative
+[2025-10-28 16:48:30][DEBUG][TTSCache] Cache HIT for: Acknowledged
+[2025-10-28 16:48:30][DEBUG][Voice] Pre-cache complete: 0 generated, 17 already cached
+[2025-10-28 16:48:31][DEBUG][PopupWindow] Loaded diffuse 4096x4096 and oreo 4096x4096
+[2025-10-28 16:48:31][DEBUG][PopupWindow] Combined diffuse+oreo stats: avg=68, min=0, max=255
+[2025-10-28 16:48:31][DEBUG][PopupUI] Waiting for alpha data to become ready...
+[2025-10-28 16:48:31][DEBUG][PopupUI] Alpha data ready ΓÇö applying initial transparency
+[2025-10-28 16:48:31][TRACE][PW] applyWindowAlphaIfReady (non-blocking)
+[2025-10-28 16:48:31][DEBUG][PopupWindow] Applied initial alpha to window successfully (frame 0)
+| 2025-10-28 16:48:31 | pop_ui.cpp | PopupUI shown with alpha | true |
+[2025-10-28 16:48:31][DEBUG][InputState] Mouse input enabled
+| 2025-10-28 16:48:31 | pop_ui.cpp | PopupUI shown | true |
+| 2025-10-28 16:48:31 | pop_ui.cpp | Popup UI Thread Started | true |
+[2025-10-28 16:48:41][DEBUG][PopupUI] Idle timeout reached - hiding popup
+| 2025-10-28 16:48:41 | pop_ui.cpp | PopupUI hidden | true |
+[2025-10-28 16:48:41][DEBUG][InputState] Mouse input disabled - will clear on next frame
+[2025-10-28 16:50:18][TRACE][WakeVoice] Wake word detected!
+[2025-10-28 16:50:18][DEBUG][PopupUI] notifyPopupActivity() called
+| 2025-10-28 16:50:18 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:50:18][DEBUG][Voice] Entering runVoiceDemo()
+[2025-10-28 16:50:18][DEBUG][Voice/Worker] Processing: Yes?
+[2025-10-28 16:50:18][DEBUG][Voice] Using input device: Microphone (Razer BlackShark V2
+[2025-10-28 16:50:18][DEBUG][TTSCache] Cache HIT for: Yes?
+[2025-10-28 16:50:18][DEBUG][Voice/Coqui] Using cached audio: D:/G.R.I.M/resources/tts_out/temp\zUgJidyf0hppKPlcMnK3mJj2lHDMtNJ4.wav
+[2025-10-28 16:50:18][DEBUG][InputState] Mouse input enabled
+[2025-10-28 16:50:18][DEBUG][PopupUI] notifyPopupActivity() called
+[2025-10-28 16:50:18][DEBUG][Voice] Listening...
+[2025-10-28 16:50:18][DEBUG][PopupUI] notifyPopupActivity() called
+| 2025-10-28 16:50:18 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:50:18][DEBUG][Voice/Audio] Playing via AudioCore: D:/G.R.I.M/resources/tts_out/temp\zUgJidyf0hppKPlcMnK3mJj2lHDMtNJ4.wav
+| 2025-10-28 16:50:18 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:50:19][DEBUG][Voice] Speech started
+[2025-10-28 16:50:19][DEBUG][PopupUI] notifyPopupActivity() called
+| 2025-10-28 16:50:19 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:50:21][DEBUG][Voice/Audio] Playback complete for: D:/G.R.I.M/resources/tts_out/temp\zUgJidyf0hppKPlcMnK3mJj2lHDMtNJ4.wav
+[2025-10-28 16:50:22][DEBUG][Voice] End of speech detected
+[2025-10-28 16:50:22][DEBUG][Voice] Stream stopped
+[2025-10-28 16:50:22][DEBUG][PopupUI] notifyPopupActivity() called
+| 2025-10-28 16:50:22 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:50:22][DEBUG][Voice] Forcing language: en
+[2025-10-28 16:50:22][DEBUG][Voice] Whisper params: temp=0.203448 beam=5 no_speech_thold=0.600000 lang=en
+[2025-10-28 16:50:22][DEBUG][Voice] Heard speech: " state 0-1"
+[2025-10-28 16:50:22][DEBUG][WakeVoice] Captured voice transcript:  state 0-1
+[2025-10-28 16:50:22][DEBUG][WakeVoice] runVoiceDemo() finished ΓÇö about to call handleCommand()
+[2025-10-28 16:50:22][TRACE][HandleCommand] START line=" state 0-1"
+[2025-10-28 16:50:22][DEBUG][Core] Ensuring core plugins registered...
+[CRITICAL] registerCorePlugin() ENTRY POINT HIT!
+[2025-10-28 16:50:22][DEBUG][Plugin] registerCorePlugin() called (HOST mode)
+[2025-10-28 16:50:22][DEBUG][Plugin] Registering core commands...
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: reload_nlp
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: grim_ai
+[2025-10-28 16:50:22][DEBUG][Plugin] Registering 'open' command
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: open
+[2025-10-28 16:50:22][DEBUG][Plugin] Registering 'search' command
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: search
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: pwd
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: cd
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: ls
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: mkdir
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: rm
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: clean
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: help
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: alias list
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: alias info
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: alias refresh
+[2025-10-28 16:50:22][DEBUG][Plugin] Registering UI commands
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: console
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: ui_console
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: toggle_console
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: settings
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: settings_ui
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: toggle_settings
+[2025-10-28 16:50:22][DEBUG][Plugin] Registering 'test_intent' command
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: test_intent
+[2025-10-28 16:50:22][DEBUG][Plugin] Registering 'test_nlp' command
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: test_nlp
+[2025-10-28 16:50:22][DEBUG][Plugin] Registering voice commands
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: test_tts
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: list_voices
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: nevermind
+[2025-10-28 16:50:22][DEBUG][Plugin] Registering speaker embedding commands
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: create_embedding
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: list_embeddings
+[2025-10-28 16:50:22][DEBUG][Plugin] Registering NLP management commands
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: nlp_stats
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: nlp_learn
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: nlp_save
+[2025-10-28 16:50:22][DEBUG][Plugin] Registering settings info command
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: settings_info
+[2025-10-28 16:50:22][DEBUG][PluginSystem] Registered command: config_info
+[2025-10-28 16:50:22][DEBUG][Plugin] Core command registration complete
+[2025-10-28 16:50:22][DEBUG][Context] Snapshot: 0 consecutive commands, last category:
+[2025-10-28 16:50:22][DEBUG][FastClassifier] Evaluated: ' state 0-1' ? unknown (confidence: 0.000000) [Cmd:0.000000 Ban:0.000000]
+[2025-10-28 16:50:22][DEBUG][IntentGate] Fast result: unknown (confidence: 0.000000)
+[2025-10-28 16:50:22][DEBUG][IntentGate] Confidence below threshold (0.000000 < 0.700000), defaulting to low-confidence command
+[2025-10-28 16:50:22][DEBUG][HandleCommand] Intent classified as: unknown (confidence: 0.000000)
+[2025-10-28 16:50:22][TRACE][HandleCommand] Parsed ΓåÆ cmdRaw="state" arg="0-1"
+[2025-10-28 16:50:22][DEBUG][HandleCommand] Command "state" NOT in map, trying NLP...
+[2025-10-28 16:50:22][DEBUG][Feedback] NLP failed to match - analyzing for classifier update
+[2025-10-28 16:50:22][DEBUG][FastClassifier] Updated weights for:  state 0-1 as banter
+[2025-10-28 16:50:22][DEBUG][Feedback] Taught classifier: " state 0-1" ΓåÆ Banter (no command verbs)
+[2025-10-28 16:50:22][DEBUG][HandleCommand] After normalization: cmd="state"
+[2025-10-28 16:50:22][DEBUG][HandleCommand] No match found, sending to AI interpret
+[2025-10-28 16:50:22][DEBUG][Personality] Using custom personality prompt
+[2025-10-28 16:50:22][DEBUG][AI] ai_interpret backend=ollama model=mistral
+[2025-10-28 16:50:22][DEBUG][AI] callAIAsync backend=ollama model=mistral
+[2025-10-28 16:50:26][DEBUG][AI] Ollama response (1089 bytes): {"model":"mistral","created_at":"2025-10-28T20:50:26.1515748Z","response":" {\"intent\":\"command\",\"suggested_command\":\"turn on\"}","done":true,"done_reason":"stop","context":[3,29473,1763,1228,20...
+[2025-10-28 16:50:26][DEBUG][AI] Extracted JSON: {"intent":"command","suggested_command":"turn on"}
+[2025-10-28 16:50:26][DEBUG][AI] Interpreter inferred command: turn on
+[NLP] Learned new pattern:
+[2025-10-28 16:50:26][DEBUG][AI] Γ£ô Taught NLP: " state 0-1" ΓåÆ turn on
+[2025-10-28 16:50:26][ERROR][ErrorManager] Unknown critical error code: ERR_CORE_UNKNOWN_COMMAND
+[2025-10-28 16:50:26][INFO] turn on
+[2025-10-28 16:50:26][TRACE][Context] Stored context object: state [command]
+[Error] Unknown error code: ERR_CORE_UNKNOWN_COMMAND (turn on)
+[2025-10-28 16:50:26][DEBUG][Feedback] Opened feedback prompt for command: state
+[2025-10-28 16:50:26][DEBUG][Voice/Worker] Processing: Was that what you wanted?
+[2025-10-28 16:50:26][DEBUG][Reward] Reward breakdown => Base: 1.00 | Time: 0.20 | Sentiment: 0.25 | Category: 0.00 | Diversity: 0.06 | Total: 1.51
+[2025-10-28 16:50:26][REWARD] Base: 1.00 | Time: 0.20 | Sent: 0.25 | Cat: 0.00 | Div: 0.06 | Total: 1.51 | Mean: 1.51 (1 samples)
+[2025-10-28 16:50:26][REWARD] Base: 1.00 | Time: 0.20 | Sent: 0.25 | Cat: 0.00 | Div: 0.06 | Total: 1.51 | Mean: 1.51 (1 samples)
+[2025-10-28 16:50:26][DEBUG][TTSCache] Cache HIT for: Was that what you wanted?
+[2025-10-28 16:50:26][TRACE][HandleCommand] END
+[2025-10-28 16:50:26][DEBUG][WakeVoice] handleCommand() returned successfully
+[2025-10-28 16:50:26][DEBUG][WakeVoice] Feedback prompt detected - waiting for response (max 15s)...
+[2025-10-28 16:50:26][DEBUG][WakeVoice] Listening for feedback response...
+[2025-10-28 16:50:26][DEBUG][Voice] Entering runVoiceDemo()
+[2025-10-28 16:50:26][DEBUG][Voice/Coqui] Using cached audio: D:/G.R.I.M/resources/tts_out/temp\y7mR9xMnTkOkxF8xh7p9b6jMEJx2f3EZ.wav
+[2025-10-28 16:50:26][DEBUG][Voice] Using input device: Microphone (Razer BlackShark V2
+[2025-10-28 16:50:26][DEBUG][PopupUI] notifyPopupActivity() called
+| 2025-10-28 16:50:26 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:50:26][DEBUG][Voice/Audio] Playing via AudioCore: D:/G.R.I.M/resources/tts_out/temp\y7mR9xMnTkOkxF8xh7p9b6jMEJx2f3EZ.wav
+[2025-10-28 16:50:26][DEBUG][Voice] Listening...
+[2025-10-28 16:50:26][DEBUG][PopupUI] notifyPopupActivity() called
+| 2025-10-28 16:50:26 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:50:31][DEBUG][Voice/Audio] Playback complete for: D:/G.R.I.M/resources/tts_out/temp\y7mR9xMnTkOkxF8xh7p9b6jMEJx2f3EZ.wav
+[2025-10-28 16:50:36][DEBUG][Voice] Max listening timeout reached (10000ms) - no speech detected
+[2025-10-28 16:50:36][DEBUG][PopupUI] Voice still active - delaying hide
+[2025-10-28 16:50:36][DEBUG][Voice] Stream stopped
+[2025-10-28 16:50:36][DEBUG][PopupUI] notifyPopupActivity() called
+| 2025-10-28 16:50:36 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:50:36][DEBUG][Voice] No speech detected or recognized
+[2025-10-28 16:50:36][DEBUG][WakeVoice] Listening for feedback response...
+[2025-10-28 16:50:36][DEBUG][Voice] Entering runVoiceDemo()
+[2025-10-28 16:50:36][DEBUG][Voice] Using input device: Microphone (Razer BlackShark V2
+[2025-10-28 16:50:36][DEBUG][Voice] Listening...
+[2025-10-28 16:50:36][DEBUG][PopupUI] notifyPopupActivity() called
+| 2025-10-28 16:50:36 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:50:41][DEBUG][Voice] Speech started
+[2025-10-28 16:50:41][DEBUG][PopupUI] notifyPopupActivity() called
+| 2025-10-28 16:50:41 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:50:43][DEBUG][Voice] Timeout reached
+[2025-10-28 16:50:43][DEBUG][Voice] Stream stopped
+[2025-10-28 16:50:43][DEBUG][PopupUI] notifyPopupActivity() called
+| 2025-10-28 16:50:43 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:50:43][DEBUG][Voice] Forcing language: en
+[2025-10-28 16:50:43][DEBUG][Voice] Whisper params: temp=0.203448 beam=5 no_speech_thold=0.600000 lang=en
+[2025-10-28 16:50:43][DEBUG][Voice] Heard speech: " (clicking)"
+[2025-10-28 16:50:43][DEBUG][WakeVoice] Follow-up speech:  (clicking)
+[2025-10-28 16:50:43][TRACE][HandleCommand] START line=" (clicking)"
+[2025-10-28 16:50:43][DEBUG][Context] Snapshot: 1 consecutive commands, last category:
+[2025-10-28 16:50:43][DEBUG][FastClassifier] Recent command boost (within 30s)
+[2025-10-28 16:50:43][DEBUG][FastClassifier] Evaluated: ' (clicking)' ? unknown (confidence: 0.000000) [Cmd:0.000000 Ban:0.000000]
+[2025-10-28 16:50:43][DEBUG][IntentGate] Fast result: unknown (confidence: 0.000000)
+[2025-10-28 16:50:43][DEBUG][IntentGate] Confidence below threshold (0.000000 < 0.700000), defaulting to low-confidence command
+[2025-10-28 16:50:43][DEBUG][HandleCommand] Intent classified as: unknown (confidence: 0.000000)
+[2025-10-28 16:50:43][TRACE][HandleCommand] Parsed ΓåÆ cmdRaw="(clicking)" arg=""
+[2025-10-28 16:50:43][DEBUG][Feedback] Processing feedback for command: "state"
+[2025-10-28 16:50:43][DEBUG][Feedback] User response: " (clicking)"
+[2025-10-28 16:50:43][DEBUG][Feedback] Similarity score: 0.000000
+[2025-10-28 16:50:43][DEBUG][Feedback] Final confidence: 0.140000
+[2025-10-28 16:50:43][DEBUG][Feedback] Low confidence - treating as new command
+[2025-10-28 16:50:43][DEBUG][HandleCommand] Command "(clicking)" NOT in map, trying NLP...
+[2025-10-28 16:50:43][DEBUG][Feedback] NLP failed to match - analyzing for classifier update
+[2025-10-28 16:50:43][DEBUG][FastClassifier] Updated weights for:  (clicking) as banter
+[2025-10-28 16:50:43][DEBUG][Feedback] Taught classifier: " (clicking)" ΓåÆ Banter (no command verbs)
+[2025-10-28 16:50:43][DEBUG][HandleCommand] After normalization: cmd="(clicking)"
+[2025-10-28 16:50:43][DEBUG][HandleCommand] No match found, sending to AI interpret
+[2025-10-28 16:50:43][DEBUG][Personality] Using custom personality prompt
+[2025-10-28 16:50:43][DEBUG][AI] ai_interpret backend=ollama model=mistral
+[2025-10-28 16:50:43][DEBUG][AI] callAIAsync backend=ollama model=mistral
+[2025-10-28 16:50:46][DEBUG][AI] Ollama response (1174 bytes): {"model":"mistral","created_at":"2025-10-28T20:50:46.1380241Z","response":" {\"intent\":\"conversation\",\"response\": \"I'm not designed to respond to physical actions like clicking.\"}","done":true,...
+[2025-10-28 16:50:46][DEBUG][AI] Extracted JSON: {"intent":"conversation","response": "I'm not designed to respond to physical actions like clicking."}
+[2025-10-28 16:50:46][DEBUG][AI] Interpreter conversational reply: I'm not designed to respond to physical actions like clicking.
+| 2025-10-28 16:50:46 | ai.cpp | Memory saved | true |
+[2025-10-28 16:50:46][ERROR][ErrorManager] Unknown critical error code: ERR_CORE_UNKNOWN_COMMAND
+[2025-10-28 16:50:46][INFO] I'm not designed to respond to physical actions like clicking.
+[2025-10-28 16:50:46][TRACE][Context] Stored context object: (clicking) [command]
+[Error] Unknown error code: ERR_CORE_UNKNOWN_COMMAND (I'm not designed to respond to physical actions like clicking.)
+[2025-10-28 16:50:46][DEBUG][Voice/Worker] Processing: I'm not designed to respond to physical actions like clicking.
+[2025-10-28 16:50:46][DEBUG][Reward] Reward breakdown => Base: 1.00 | Time: 0.20 | Sentiment: 0.25 | Category: 0.00 | Diversity: 0.06 | Total: 1.51
+[2025-10-28 16:50:46][REWARD] Base: 1.00 | Time: 0.20 | Sent: 0.25 | Cat: 0.00 | Div: 0.06 | Total: 1.51 | Mean: 1.51 (2 samples)
+[2025-10-28 16:50:46][REWARD] Base: 1.00 | Time: 0.20 | Sent: 0.25 | Cat: 0.00 | Div: 0.06 | Total: 1.51 | Mean: 1.51 (2 samples)
+[2025-10-28 16:50:46][DEBUG][TTSCache] Cache MISS for: I'm not designed to respond to...
+[2025-10-28 16:50:46][TRACE][HandleCommand] END
+[2025-10-28 16:50:46][DEBUG][WakeVoice] Feedback received and processed
+[2025-10-28 16:50:46][DEBUG][Voice/Coqui] XTTS v2 request (220 bytes) | Lang: en
+[2025-10-28 16:50:46][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Voice reference validated: D:/G.R.I.M/resources/voices/default.wav (9.66s, 22050Hz)
+[2025-10-28 16:50:46][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Using voice reference: D:/G.R.I.M/resources/voices/default.wav (language: en)
+[2025-10-28 16:50:46][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Loaded embedding from cache: default
+[2025-10-28 16:50:46][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Using cached embedding for: default (FAST MODE)
+[2025-10-28 16:50:50][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] \u26a1 Fast synthesis complete | Inference: 4.50s | Save: 0.08s | Total: 4.58s
+[2025-10-28 16:50:50][DEBUG][Voice/Bridge] Received response: {"status": "ok", "file": "D:/G.R.I.M/resources/tts_out/temp\\v4BeStuAi69giC0J5aV7u7lokzNVxOoU.wav"}
+[2025-10-28 16:50:50][DEBUG][TTSCache] File already in destination: D:/G.R.I.M/resources/tts_out/temp\v4BeStuAi69giC0J5aV7u7lokzNVxOoU.wav
+[2025-10-28 16:50:50][DEBUG][TTSCache] Stored TEMP cache: I'm not designed to respond to...
+[2025-10-28 16:50:50][DEBUG][TTSCache] Saved cache index with 31 entries
+[2025-10-28 16:50:50][DEBUG][Voice/Coqui] Returning final cached path: D:/G.R.I.M/resources/tts_out/temp\v4BeStuAi69giC0J5aV7u7lokzNVxOoU.wav
+[2025-10-28 16:50:50][DEBUG][PopupUI] notifyPopupActivity() called
+| 2025-10-28 16:50:50 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:50:50][DEBUG][Voice/Audio] Playing via AudioCore: D:/G.R.I.M/resources/tts_out/temp\v4BeStuAi69giC0J5aV7u7lokzNVxOoU.wav
+[2025-10-28 16:50:55][DEBUG][Voice/Audio] Playback complete for: D:/G.R.I.M/resources/tts_out/temp\v4BeStuAi69giC0J5aV7u7lokzNVxOoU.wav
+[2025-10-28 16:51:00][DEBUG][PopupUI] Idle timeout reached - hiding popup
+| 2025-10-28 16:51:00 | pop_ui.cpp | PopupUI hidden | true |
+[2025-10-28 16:51:00][DEBUG][InputState] Mouse input disabled - will clear on next frame
+[2025-10-28 16:52:07][TRACE][WakeVoice] Wake word detected!
+[2025-10-28 16:52:07][DEBUG][PopupUI] notifyPopupActivity() called
+| 2025-10-28 16:52:07 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:52:07][DEBUG][Voice] Entering runVoiceDemo()
+[2025-10-28 16:52:07][DEBUG][Voice/Worker] Processing: Yes?
+[2025-10-28 16:52:07][DEBUG][Voice] Using input device: Microphone (Razer BlackShark V2
+[2025-10-28 16:52:07][DEBUG][TTSCache] Cache HIT for: Yes?
+[2025-10-28 16:52:07][DEBUG][Voice/Coqui] Using cached audio: D:/G.R.I.M/resources/tts_out/temp\zUgJidyf0hppKPlcMnK3mJj2lHDMtNJ4.wav
+[2025-10-28 16:52:07][DEBUG][InputState] Mouse input enabled
+[2025-10-28 16:52:07][DEBUG][PopupUI] notifyPopupActivity() called
+[2025-10-28 16:52:07][DEBUG][Voice] Listening...
+[2025-10-28 16:52:07][DEBUG][PopupUI] notifyPopupActivity() called
+| 2025-10-28 16:52:07 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:52:07][DEBUG][Voice/Audio] Playing via AudioCore: D:/G.R.I.M/resources/tts_out/temp\zUgJidyf0hppKPlcMnK3mJj2lHDMtNJ4.wav
+| 2025-10-28 16:52:07 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:52:09][DEBUG][Voice/Audio] Playback complete for: D:/G.R.I.M/resources/tts_out/temp\zUgJidyf0hppKPlcMnK3mJj2lHDMtNJ4.wav
+[2025-10-28 16:52:10][DEBUG][Voice] Speech started
+[2025-10-28 16:52:10][DEBUG][PopupUI] notifyPopupActivity() called
+| 2025-10-28 16:52:10 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:52:12][DEBUG][Voice] End of speech detected
+[2025-10-28 16:52:12][DEBUG][Voice] Stream stopped
+[2025-10-28 16:52:12][DEBUG][PopupUI] notifyPopupActivity() called
+| 2025-10-28 16:52:12 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:52:12][DEBUG][Voice] Forcing language: en
+[2025-10-28 16:52:12][DEBUG][Voice] Whisper params: temp=0.203448 beam=5 no_speech_thold=0.600000 lang=en
+[2025-10-28 16:52:12][DEBUG][Voice] Heard speech: " How are you?"
+[2025-10-28 16:52:12][DEBUG][WakeVoice] Captured voice transcript:  How are you?
+[2025-10-28 16:52:12][DEBUG][WakeVoice] runVoiceDemo() finished ΓÇö about to call handleCommand()
+[2025-10-28 16:52:12][TRACE][HandleCommand] START line=" How are you?"
+[2025-10-28 16:52:12][DEBUG][Context] Snapshot: 2 consecutive commands, last category:
+[2025-10-28 16:52:12][DEBUG][FastClassifier] Evaluated: ' How are you?' ? banter (confidence: 0.464286) [Cmd:0.800000 Ban:1.560000]
+[2025-10-28 16:52:12][DEBUG][IntentGate] Fast result: banter (confidence: 0.464286)
+[2025-10-28 16:52:12][DEBUG][IntentGate] Confidence below threshold (0.464286 < 0.700000), defaulting to low-confidence command
+[2025-10-28 16:52:12][DEBUG][HandleCommand] Intent classified as: banter (confidence: 0.232143)
+[2025-10-28 16:52:12][DEBUG][HandleCommand] Routing to banter pipeline
+[2025-10-28 16:52:12][DEBUG][Personality] Using custom personality prompt
+[2025-10-28 16:52:12][DEBUG][AI] callAIAsync backend=ollama model=mistral
+[2025-10-28 16:52:12][DEBUG][AI] Ollama response (737 bytes): {"model":"mistral","created_at":"2025-10-28T20:52:12.966924Z","response":" I'm just a machine, but I'm here to help. What can I do for you today?","done":true,"done_reason":"stop","context":[3,29473,1...
+| 2025-10-28 16:52:12 | ai.cpp | Memory saved | true |
+[2025-10-28 16:52:12][ERROR][ErrorManager] Unknown critical error code: ERR_CORE_UNKNOWN_COMMAND
+[2025-10-28 16:52:12][TRACE][HandleCommand] END (banter route)
+[2025-10-28 16:52:12][DEBUG][WakeVoice] handleCommand() returned successfully
+[2025-10-28 16:52:12][DEBUG][WakeVoice] No feedback requested - returning to wake word detection immediately
+[2025-10-28 16:52:12][DEBUG][Voice/Worker] Processing:  I'm just a machine, but I'm here to help. What can I do for you today?
+[2025-10-28 16:52:12][DEBUG][TTSCache] Cache MISS for:  I'm just a machine, but I'm h...
+[2025-10-28 16:52:12][DEBUG][Voice/Coqui] XTTS v2 request (229 bytes) | Lang: en
+[2025-10-28 16:52:13][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Generated: D:/G.R.I.M/resources/tts_out/temp\v4BeStuAi69giC0J5aV7u7lokzNVxOoU.wav
+[2025-10-28 16:52:13][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Voice reference validated: D:/G.R.I.M/resources/voices/default.wav (9.66s, 22050Hz)
+[2025-10-28 16:52:13][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Using voice reference: D:/G.R.I.M/resources/voices/default.wav (language: en)
+[2025-10-28 16:52:13][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Loaded embedding from cache: default
+[2025-10-28 16:52:13][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] Using cached embedding for: default (FAST MODE)
+[2025-10-28 16:52:18][DEBUG][Voice/Bridge] Skipped non-JSON: [Coqui XTTS] \u26a1 Fast synthesis complete | Inference: 5.09s | Save: 0.06s | Total: 5.14s
+[2025-10-28 16:52:18][DEBUG][Voice/Bridge] Received response: {"status": "ok", "file": "D:/G.R.I.M/resources/tts_out/temp\\0yW6uPNAzc8i9kH2oSuElib24gF4h8NV.wav"}
+[2025-10-28 16:52:18][DEBUG][TTSCache] File already in destination: D:/G.R.I.M/resources/tts_out/temp\0yW6uPNAzc8i9kH2oSuElib24gF4h8NV.wav
+[2025-10-28 16:52:18][DEBUG][TTSCache] Stored TEMP cache:  I'm just a machine, but I'm h...
+[2025-10-28 16:52:18][DEBUG][TTSCache] Saved cache index with 32 entries
+[2025-10-28 16:52:18][DEBUG][Voice/Coqui] Returning final cached path: D:/G.R.I.M/resources/tts_out/temp\0yW6uPNAzc8i9kH2oSuElib24gF4h8NV.wav
+[2025-10-28 16:52:18][DEBUG][PopupUI] notifyPopupActivity() called
+| 2025-10-28 16:52:18 | pop_ui.cpp | PopupUI shown | true |
+[2025-10-28 16:52:18][DEBUG][Voice/Audio] Playing via AudioCore: D:/G.R.I.M/resources/tts_out/temp\0yW6uPNAzc8i9kH2oSuElib24gF4h8NV.wav
+[2025-10-28 16:52:23][DEBUG][Voice/Audio] Playback complete for: D:/G.R.I.M/resources/tts_out/temp\0yW6uPNAzc8i9kH2oSuElib24gF4h8NV.wav
+[2025-10-28 16:52:28][DEBUG][PopupUI] Voice still active - delaying hide
+[2025-10-28 16:52:38][DEBUG][PopupUI] Idle timeout reached - hiding popup
+| 2025-10-28 16:52:38 | pop_ui.cpp | PopupUI hidden | true |
+[2025-10-28 16:52:38][DEBUG][InputState] Mouse input disabled - will clear on next frame
+PS D:\G.R.I.M>
