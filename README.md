@@ -1,48 +1,162 @@
-# G.R.I.M
-G-eneral
-R-equest and
-I-nformation
-M-anager
+# G.R.I.M — General Request and Information Manager
 
-*/✨ GRIM — Your Personal Jarvis-Style AI Assistant ✨
+GRIM is a modular, C++-based personal AI assistant and automation platform. It combines natural language processing, plugin-based command handling, and extensible subsystems (voice, wakeword, UI, device control) so you can build a Jarvis-style assistant tailored to your environment.
 
-GRIM isn’t just another tool — it’s a living, evolving AI companion designed to feel like your own Jarvis. Built with speed, intelligence, and adaptability in mind, GRIM combines natural language, smart memory, and a sleek UI to make technology feel personal again.
+Key goals
+- **Offline-first design**: All core functions (NLP, voice, commands, AI inference) work completely offline. Only browser-based features require internet connectivity.
+- Practical local-first assistant with extendable plugins
+- Natural language intent handling and memory
+- Cross-platform design with configuration for native dependencies
 
- What GRIM Does Today
+Status
+- Active development. The project contains native C++ sources, CMake build scripts, optional CUDA support, and integrations for third-party libraries (e.g. whisper, porcupine).
 
-🖥 Smart System Control — open apps, manage files, set timers, and streamline your workflow.
+Table of contents
+- Overview
+- Features (current & roadmap)
+- Quick start (build & run)
+- Development notes
+- Project structure
+- Contributing
+- License & contact
 
- Advanced NLP & Memory — understand your commands with intent recognition, synonyms, and long-term recall.
+## Overview
 
- Command History & AI Response — seamless log of everything you say and do.
+GRIM (G.R.I.M) is intended as a foundation for a personal assistant that can be extended via plugins and modules. The codebase is written in modern C++ (C++20) and organized to separate concerns across directories such as `ai/`, `commands/`, `voice/`, `nlp/`, `plugins/`, and `ui/`.
 
- Custom UI & Animations — command-line precision wrapped in a Jarvis-style interface with listening and speaking animations.
+**Privacy & Offline Operation**: GRIM is designed to function entirely offline for all core features. Voice processing (Whisper.cpp, Coqui TTS), wake word detection (Porcupine), NLP, and AI inference run locally on your machine without requiring internet connectivity. Only features explicitly designed for web interaction (browser commands, external APIs) require network access.
 
- Where GRIM is Headed
+The project can be used as a command-line assistant or integrated into a richer UI through the `ui` and `popup_ui` modules. The design favors local models and components where possible, while providing hooks for external integrations.
 
- Full Voice Interaction — speech-to-text, text-to-speech, and hotword detection for a truly hands-free AI.
+## Features
 
- Biometric Profiles - using PIR sesnors and cameras G.R.I.M will map the silouhette, face shape, and voice patterns of anyone that enters in range
+Current (based on repository contents)
+- Intent recognition and NLP modules (see `nlp/` and `ai/`)
+- Command and plugin systems with hot-reloadable plugin architecture (`commands/`, `plugins/`)
+- Voice synthesis via **Coqui TTS** (XTTS model support via Python bridge)
+- Speech-to-text via **Whisper.cpp** integration (local inference)
+- Wakeword detection using **Porcupine** wake word engine
+- OSINT capabilities via **Sherlock** username search integration
+- Build configured with CMake 3.22+, C++20, optional CUDA support, and **CMakePresets.json** for Visual Studio
 
- Cross-Platform capability — Runs on Windows, Linux, and Mac(Future plans for VR are confirmed)
+Planned / Roadmap items (described in repo but may be in-progress)
+- Enhanced voice interaction (continuous conversation mode)
+- External API hooks (calendar, email, music streaming services)
+- Personal knowledge graph and expanded long-term memory
+- Cross-platform polish and optional VR overlay mode (Quest headset integration)
+- Biometric profiling using PIR sensors and camera-based silhouette/face recognition
 
- External API Hooks — plug into your calendar, email, music, and more.
+Note: The README avoids promising features that are not present in the code. See the repository files and modules for exact capabilities and current implementation status.
 
- VR Overlay Mode — bring GRIM into your Quest headset as a holographic AI panel.
+## Quick start — Build & run (Linux / macOS / Windows with minor adjustments)
 
- Smart Storage Bay Integration — control your custom hardware projects directly through GRIM.
+Prerequisites
+- CMake 3.22 or newer
+- A C++20-capable compiler (g++ / clang / MSVC)
+- Optional: CUDA toolkit if you want CUDA-accelerated code paths
+- Optional: vcpkg or other dependency management for third-party libs (the CMake config references a vcpkg layout)
 
- Personal Knowledge Graph — connect your notes, reminders, and projects into one evolving memory.
+Recommended build steps (out-of-source build):
 
- Jarvis Personality Layer — customizable moods, tones, and responses to fit your style.
+```bash
+# from repository root
+mkdir -p build
+cd build
+cmake -S .. -B . -DCMAKE_BUILD_TYPE=Release
+cmake --build . --config Release --parallel
 
- Plugin System — expand GRIM infinitely with drop-in modules.
+# Run the built executable (binary name: GRIM)
+./GRIM
+```
 
-GRIM is more than software — it’s the start of your own personal AI ecosystem. Whether you’re building, working, or dreaming, GRIM grows with you.
+**Using CMakePresets (Visual Studio / VS Code)**
 
-GRIM: Your Intelligence, Amplified.
+The project includes `CMakePresets.json` for streamlined builds with VS Code or Visual Studio:
 
-//G.R.I.M's Background
-Grim's origin comes from my and im sure other's absolute annoyance with software maintenance/upkeep; from updating apps and "cant find file" errors even though you you put it there 5 seconds ago but Noo it doesnt exist, somehow or full storage can't download from app from steam or even update. How about when you are trying to clear up some space and you want to remove files that are taking up half your drive but you dont know what it does so you dont want to remove it and it break your pc(Trust don't remove those files had to wipe my OS like 6 times unrelated). With Grim you can say grim clean this folder or drive it will then prompt you with what you want to keep i.e keep files needed by my os or only delete files that havent been used in the last 30 days. Grim will go through check for dependincies and with the power of AI will find those files see if you need them may even ask if you need them if not you can move to trash or fully delete it via your wishes.
-This is where Grims existence comes from a complete AI's existence dedicated to sorting out files
-*/
+```bash
+# Configure with preset
+cmake --preset=release   # or debug
+
+# Build with preset
+cmake --build --preset=release
+```
+
+This preset approach handles vcpkg toolchain, CUDA paths, and configuration automatically.
+
+Notes
+- On Windows the build uses vcpkg paths and copies DLLs into the runtime folder. If you use vcpkg, set `VCPKG_INSTALLED_DIR` or use the included vcpkg manifest approach.
+- Dependencies such as **Whisper.cpp**, **Porcupine**, and graphics/audio libraries are automatically linked; ensure their build artifacts are in the expected paths or adjust CMake variables.
+- **Coqui TTS** and **Sherlock OSINT** are accessed via Python bridges in `resources/python/`. Install requirements via `pip install -r resources/python/requirements.txt`.
+
+VS Code
+- The workspace contains a VS Code task for compiling a single C++ file. For the full project prefer the CMake flow above or use CMake Tools extension and the provided `CMakePresets.json`.
+
+## Development notes
+
+- **Code style**: modern C++ (C++20), precompiled headers are used (`pch.hpp`).
+- **Primary CMake target**: `GRIM` (created by `add_executable(GRIM ...)`).
+- **Hot-reloadable plugins**: the `plugins/` folder supports dynamic plugin loading at runtime. Example: `osint_plugin` (Sherlock integration). The `core_plugin` is compiled directly into the host executable.
+- **Third-party integrations**:
+  - **Whisper.cpp** — local speech-to-text (see `external/whisper.cpp`)
+  - **Porcupine** — wake word detection engine
+  - **Coqui TTS** — text-to-speech via Python bridge (`resources/python/coqui_bridge.py`)
+  - **Sherlock** — OSINT username search via Python bridge (`resources/python/osit_bridge.py`)
+- **Python bridges**: located in `resources/python/`, these allow C++ to call Python-based AI/OSINT tools. Install dependencies with `pip install -r resources/python/requirements.txt`.
+- **CMakePresets.json**: pre-configured build presets for Debug/Release with CUDA 12.5 support and vcpkg integration.
+
+Testing & running small pieces
+- For fast iteration you can build individual modules or create small test harnesses that link against the core target. See `commands/` and `ai/` for examples of components and how they are wired into the main target.
+
+## Project structure (high level)
+
+- `ai/` — AI-related modules and intent handling
+- `commands/` — command implementations and command routing
+- `plugins/` — plugin implementations (hot-reloadable plugins and core plugin)
+- `voice/`, `wake/` — audio, wakeword, and voice features
+- `nlp/` — natural language processing helpers and rules
+- `ui/`, `popup_ui/` — user-facing interface components
+- `cmake/` — CMake helper modules used by the build
+- `external/` — third-party code and integrations (may require separate builds)
+
+Explore the repository to find more specific files and examples for each subsystem.
+
+## Contributing
+
+Contributions are welcome! A few guidelines:
+
+**Core Principles:**
+- **Maintain offline-first design**: All core features must work completely offline. Only features explicitly meant for web interaction (browser commands, external API integrations) should require internet connectivity.
+- Open an issue to discuss larger changes before starting work.
+- Keep changes small and focused; prefer documentation and tests for new behavior.
+- Follow the existing C++ style (C++20) and include unit tests where practical.
+
+**Development Guidelines:**
+- Use local models and inference wherever possible (Whisper.cpp, Coqui TTS, local LLMs).
+- Avoid introducing cloud dependencies for core functionality.
+- If adding features that require licenses (models, third-party SDKs, or proprietary binaries), document those requirements in `docs/` or the relevant module folder.
+- Hot-reloadable plugins should be self-contained and minimize dependencies on the host executable.
+
+We value contributions that enhance privacy, performance, and extensibility while keeping GRIM a true local-first AI assistant.
+
+## License
+
+No license file is included in this repository by default. If you intend to publish or share this project, add a license (e.g., MIT, Apache-2.0) and include it as `LICENSE` in the repo root.
+
+## Contact & credits
+
+Author / maintainer: see repository metadata (commits). For questions, open an issue or create a pull request.
+
+## Next steps / suggested improvements
+
+- Add a concise `CONTRIBUTING.md` and `LICENSE` file.
+- Add example `config` files and a minimal demo scenario showing a common workflow (e.g., open an app, query an intent, run a command).
+- Add CI that builds the project on Linux/macOS/Windows and runs basic smoke tests.
+
+---
+
+If you'd like, I can also:
+- add badges (build / license / coverage),
+- include a short runnable example, or
+- generate a `CONTRIBUTING.md` and `LICENSE` for the repo.
+
+Thanks for building GRIM — tell me which follow-ups you'd like and I'll implement them.
