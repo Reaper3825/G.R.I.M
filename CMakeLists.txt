@@ -86,7 +86,6 @@ set_source_files_properties(
 )
 
 target_compile_definitions(GRIM PRIVATE GRIM_BUILD_HOST)
-target_precompile_headers(GRIM PRIVATE pch.hpp)
 
 include(cmake/Config.cmake)
 
@@ -107,6 +106,9 @@ target_include_directories(GRIM PRIVATE
     ${CMAKE_SOURCE_DIR}/external_collector
     ${CMAKE_SOURCE_DIR}/deps/include
 )
+
+# Configure PCH after include directories are set
+target_precompile_headers(GRIM PRIVATE ${CMAKE_SOURCE_DIR}/pch.hpp)
 
 if (MSVC)
     target_link_options(GRIM PRIVATE /SUBSYSTEM:CONSOLE)
