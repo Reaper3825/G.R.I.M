@@ -22,17 +22,17 @@ namespace TTSCache {
     // System messages that should be permanently cached
     static const std::vector<std::string> PERMANENT_PHRASES = {
         "Was that what you wanted?",
-        "Got it � I'll keep doing that.",
-        "Understood � I'll adjust next time.",
+        "Got it I'll keep doing that.",
+        "Understood I'll adjust next time.",
         "Opening notepad",
         "Opening",
         "Launching",
         "I processed",
         "commands. Was that correct?",
-        "Got it � I'll remember that next time.",
-        "I couldn't save that one � try again later.",
+        "Got it I'll remember that next time.",
+        "I couldn't save that one try again later.",
         "Sorry, I couldn't interpret that.",
-        // ✅ XTTS v2 specific phrases
+
         "Welcome back",
         "Grim is online",
         "Initializing",

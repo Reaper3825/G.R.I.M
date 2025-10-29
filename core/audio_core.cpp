@@ -11,7 +11,7 @@
 #include <cmath>
 
 // =============================================================
-// WAV loader (minimal PCM 16-bit little-endian reader)
+// WAV loader 
 // =============================================================
 namespace {
 struct WavHeader {
