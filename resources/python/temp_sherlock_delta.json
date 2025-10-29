@@ -1,0 +1,1397 @@
+{
+  "1337x": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.1337x.to/user/delta/"
+  },
+  "9GAG": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.9gag.com/u/delta"
+  },
+  "About.me": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://about.me/delta"
+  },
+  "Academia.edu": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://independent.academia.edu/delta"
+  },
+  "Airbit": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://airbit.com/delta"
+  },
+  "AllMyLinks": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://allmylinks.com/delta"
+  },
+  "AniWorld": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://aniworld.to/user/profil/delta"
+  },
+  "Anilist": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://anilist.co/user/delta/"
+  },
+  "Aparat": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.aparat.com/delta/"
+  },
+  "Apple Developer": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://developer.apple.com/forums/profile/delta"
+  },
+  "Apple Discussions": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://discussions.apple.com/profile/delta"
+  },
+  "Archive of Our Own": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://archiveofourown.org/users/delta"
+  },
+  "Arduino Forum": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://forum.arduino.cc/u/delta/summary"
+  },
+  "Asciinema": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://asciinema.org/~delta"
+  },
+  "Atcoder": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://atcoder.jp/users/delta"
+  },
+  "Audiojungle": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://audiojungle.net/user/delta"
+  },
+  "Autofrage": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.autofrage.net/nutzer/delta"
+  },
+  "Bandcamp": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.bandcamp.com/delta"
+  },
+  "Behance": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.behance.net/delta"
+  },
+  "BitBucket": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://bitbucket.org/delta/"
+  },
+  "Bitwarden Forum": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://community.bitwarden.com/u/delta/summary"
+  },
+  "Blipfoto": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.blipfoto.com/delta"
+  },
+  "Blitz Tactics": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://blitztactics.com/delta"
+  },
+  "Bluesky": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://bsky.app/profile/delta.bsky.social"
+  },
+  "BoardGameGeek": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://boardgamegeek.com/user/delta"
+  },
+  "BraveCommunity": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://community.brave.com/u/delta/"
+  },
+  "BugCrowd": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://bugcrowd.com/delta"
+  },
+  "BuyMeACoffee": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://buymeacoff.ee/delta"
+  },
+  "BuzzFeed": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://buzzfeed.com/delta"
+  },
+  "CGTrader": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.cgtrader.com/delta"
+  },
+  "Caddy Community": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://caddy.community/u/delta/summary"
+  },
+  "Carbonmade": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://delta.carbonmade.com"
+  },
+  "Championat": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.championat.com/user/delta"
+  },
+  "Chaos": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://chaos.social/@delta"
+  },
+  "Chess": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.chess.com/member/delta"
+  },
+  "Chollometro": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.chollometro.com/profile/delta"
+  },
+  "Clapper": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://clapperapp.com/delta"
+  },
+  "Clozemaster": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.clozemaster.com/players/delta"
+  },
+  "Clubhouse": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.clubhouse.com/@delta"
+  },
+  "CodeSandbox": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://codesandbox.io/u/delta"
+  },
+  "Codeberg": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://codeberg.org/delta"
+  },
+  "Codecademy": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.codecademy.com/profiles/delta"
+  },
+  "Codeforces": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://codeforces.com/profile/delta"
+  },
+  "Coders Rank": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://profile.codersrank.io/user/delta/"
+  },
+  "Cplusplus": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://cplusplus.com/user/delta"
+  },
+  "Cracked Forum": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://cracked.sh/delta"
+  },
+  "Crevado": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://delta.crevado.com"
+  },
+  "Crowdin": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://crowdin.com/profile/delta"
+  },
+  "CryptoHack": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://cryptohack.org/user/delta/"
+  },
+  "Cults3D": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://cults3d.com/en/users/delta/creations"
+  },
+  "DEV Community": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://dev.to/delta"
+  },
+  "DMOJ": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://dmoj.ca/user/delta"
+  },
+  "DailyMotion": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.dailymotion.com/delta"
+  },
+  "Dealabs": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.dealabs.com/profile/delta"
+  },
+  "DeviantArt": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.deviantart.com/delta"
+  },
+  "DigitalSpy": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://forums.digitalspy.com/profile/delta"
+  },
+  "Discord": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://discord.com"
+  },
+  "Discord.bio": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://discords.com/api-v2/bio/details/delta"
+  },
+  "Diskusjon.no": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.diskusjon.no"
+  },
+  "Disqus": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://disqus.com/delta"
+  },
+  "Docker Hub": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://hub.docker.com/u/delta/"
+  },
+  "Dribbble": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://dribbble.com/delta"
+  },
+  "Duolingo": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.duolingo.com/profile/delta"
+  },
+  "Eintracht Frankfurt Forum": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://community.eintracht.de/fans/delta"
+  },
+  "Empretienda AR": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://delta.empretienda.com.ar"
+  },
+  "EyeEm": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.eyeem.com/u/delta"
+  },
+  "Flickr": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.flickr.com/people/delta"
+  },
+  "Flightradar24": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://my.flightradar24.com/delta"
+  },
+  "Flipboard": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://flipboard.com/@delta"
+  },
+  "Freelancer": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.freelancer.com/u/delta"
+  },
+  "Freesound": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://freesound.org/people/delta/"
+  },
+  "GNOME VCS": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://gitlab.gnome.org/delta"
+  },
+  "GameFAQs": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://gamefaqs.gamespot.com/community/delta"
+  },
+  "Gamespot": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.gamespot.com/profile/delta/"
+  },
+  "GeeksforGeeks": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://auth.geeksforgeeks.org/user/delta"
+  },
+  "Genius (Artists)": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://genius.com/artists/delta"
+  },
+  "Genius (Users)": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://genius.com/delta"
+  },
+  "Gesundheitsfrage": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.gesundheitsfrage.net/nutzer/delta"
+  },
+  "Giant Bomb": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.giantbomb.com/profile/delta/"
+  },
+  "Giphy": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://giphy.com/delta"
+  },
+  "GitBook": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://delta.gitbook.io/"
+  },
+  "GitHub": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.github.com/delta"
+  },
+  "Gitee": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://gitee.com/delta"
+  },
+  "GoodReads": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.goodreads.com/delta"
+  },
+  "Gravatar": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "http://en.gravatar.com/delta"
+  },
+  "Gumroad": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.gumroad.com/delta"
+  },
+  "Gutefrage": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.gutefrage.net/nutzer/delta"
+  },
+  "HackMD": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://hackmd.io/@delta"
+  },
+  "Hackaday": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://hackaday.io/delta"
+  },
+  "HackenProof (Hackers)": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://hackenproof.com/hackers/delta"
+  },
+  "HackerEarth": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://hackerearth.com/@delta"
+  },
+  "HackerOne": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://hackerone.com/delta"
+  },
+  "HackerRank": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://hackerrank.com/delta"
+  },
+  "Hive Blog": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://hive.blog/@delta"
+  },
+  "Houzz": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://houzz.com/user/delta"
+  },
+  "HudsonRock": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://cavalier.hudsonrock.com/api/json/v2/osint-tools/search-by-username?username=delta"
+  },
+  "Hugging Face": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://huggingface.co/delta"
+  },
+  "IFTTT": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.ifttt.com/p/delta"
+  },
+  "Ifunny": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://ifunny.co/user/delta"
+  },
+  "Imgur": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://imgur.com/user/delta"
+  },
+  "Instapaper": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.instapaper.com/p/delta"
+  },
+  "Instructables": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.instructables.com/member/delta"
+  },
+  "Issuu": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://issuu.com/delta"
+  },
+  "Itch.io": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://delta.itch.io/"
+  },
+  "Itemfix": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.itemfix.com/c/delta"
+  },
+  "Kongregate": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.kongregate.com/accounts/delta"
+  },
+  "Kvinneguiden": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://forum.kvinneguiden.no"
+  },
+  "LOR": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.linux.org.ru/people/delta/profile"
+  },
+  "Laracast": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://laracasts.com/@delta"
+  },
+  "Launchpad": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://launchpad.net/~delta"
+  },
+  "LemmyWorld": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://lemmy.world/u/delta"
+  },
+  "LessWrong": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.lesswrong.com/users/delta"
+  },
+  "Letterboxd": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://letterboxd.com/delta"
+  },
+  "LibraryThing": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.librarything.com/profile/delta"
+  },
+  "Lichess": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://lichess.org/@/delta"
+  },
+  "LinkedIn": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://linkedin.com/in/delta"
+  },
+  "Linktree": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://linktr.ee/delta"
+  },
+  "LinuxFR.org": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://linuxfr.org/users/delta"
+  },
+  "LiveJournal": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://delta.livejournal.com"
+  },
+  "Lobsters": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://lobste.rs/u/delta"
+  },
+  "Mamot": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://mamot.fr/@delta"
+  },
+  "Medium": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://medium.com/@delta"
+  },
+  "Memrise": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.memrise.com/user/delta/"
+  },
+  "Minecraft": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://api.mojang.com/users/profiles/minecraft/delta"
+  },
+  "MixCloud": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.mixcloud.com/delta/"
+  },
+  "Monkeytype": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://monkeytype.com/profile/delta"
+  },
+  "MuseScore": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://musescore.com/delta"
+  },
+  "MyAnimeList": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://myanimelist.net/profile/delta"
+  },
+  "Mydealz": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.mydealz.de/profile/delta"
+  },
+  "Mydramalist": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.mydramalist.com/profile/delta"
+  },
+  "NICommunityForum": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://community.native-instruments.com/profile/delta"
+  },
+  "NationStates Nation": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://nationstates.net/nation=delta"
+  },
+  "NationStates Region": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://nationstates.net/region=delta"
+  },
+  "Naver": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://blog.naver.com/delta"
+  },
+  "NintendoLife": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.nintendolife.com/users/delta"
+  },
+  "NitroType": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.nitrotype.com/racer/delta"
+  },
+  "NotABug.org": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://notabug.org/delta"
+  },
+  "Nyaa.si": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://nyaa.si/user/delta"
+  },
+  "ObservableHQ": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://observablehq.com/@delta"
+  },
+  "Odysee": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://odysee.com/@delta"
+  },
+  "Open Collective": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://opencollective.com/delta"
+  },
+  "OpenGameArt": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://opengameart.org/users/delta"
+  },
+  "OpenStreetMap": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.openstreetmap.org/user/delta"
+  },
+  "OurDJTalk": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://ourdjtalk.com/members?username=delta"
+  },
+  "PCGamer": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://forums.pcgamer.com/members/?username=delta"
+  },
+  "Pastebin": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://pastebin.com/u/delta"
+  },
+  "Patched": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://patched.sh/User/delta"
+  },
+  "Patreon": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.patreon.com/delta"
+  },
+  "PepperNL": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://nl.pepper.com/profile/delta"
+  },
+  "PepperPL": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.pepper.pl/profile/delta"
+  },
+  "Periscope": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.periscope.tv/delta/"
+  },
+  "Pinterest": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.pinterest.com/delta/"
+  },
+  "Platzi": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://platzi.com/p/delta/"
+  },
+  "Plurk": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.plurk.com/delta"
+  },
+  "Pokemon Showdown": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://pokemonshowdown.com/users/delta"
+  },
+  "Polarsteps": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://polarsteps.com/delta"
+  },
+  "Preisjaeger": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.preisjaeger.at/profile/delta"
+  },
+  "PromoDJ": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "http://promodj.com/delta"
+  },
+  "Promodescuentos": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.promodescuentos.com/profile/delta"
+  },
+  "Pronouns.page": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://pronouns.page/@delta"
+  },
+  "Rajce.net": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://delta.rajce.idnes.cz/"
+  },
+  "Rarible": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://rarible.com/marketplace/api/v4/urls/delta"
+  },
+  "Realmeye": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.realmeye.com/player/delta"
+  },
+  "Reddit": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.reddit.com/user/delta"
+  },
+  "Replit.com": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://replit.com/@delta"
+  },
+  "ReverbNation": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.reverbnation.com/delta"
+  },
+  "Roblox": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.roblox.com/user.aspx?username=delta"
+  },
+  "RubyGems": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://rubygems.org/profiles/delta"
+  },
+  "Rumble": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://rumble.com/user/delta"
+  },
+  "RuneScape": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://apps.runescape.com/runemetrics/app/overview/player/delta"
+  },
+  "SWAPD": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://swapd.co/u/delta"
+  },
+  "Scratch": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://scratch.mit.edu/users/delta"
+  },
+  "Scribd": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.scribd.com/delta"
+  },
+  "ShitpostBot5000": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.shitpostbot.com/user/delta"
+  },
+  "Signal": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://community.signalusers.org/u/delta"
+  },
+  "Sketchfab": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://sketchfab.com/delta"
+  },
+  "Slack": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://delta.slack.com"
+  },
+  "Slashdot": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://slashdot.org/~delta"
+  },
+  "SlideShare": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://slideshare.net/delta"
+  },
+  "Slides": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://slides.com/delta"
+  },
+  "SmugMug": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://delta.smugmug.com"
+  },
+  "Smule": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.smule.com/delta"
+  },
+  "Snapchat": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.snapchat.com/add/delta"
+  },
+  "SoundCloud": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://soundcloud.com/delta"
+  },
+  "SpeakerDeck": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://speakerdeck.com/delta"
+  },
+  "Splice": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://splice.com/delta"
+  },
+  "Sportlerfrage": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.sportlerfrage.net/nutzer/delta"
+  },
+  "Spotify": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://open.spotify.com/user/delta"
+  },
+  "Star Citizen": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://robertsspaceindustries.com/citizens/delta"
+  },
+  "Status Cafe": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://status.cafe/users/delta"
+  },
+  "Steam Community (Group)": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://steamcommunity.com/groups/delta"
+  },
+  "Steam Community (User)": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://steamcommunity.com/id/delta/"
+  },
+  "Strava": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.strava.com/athletes/delta"
+  },
+  "SublimeForum": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://forum.sublimetext.com/u/delta"
+  },
+  "TETR.IO": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://ch.tetr.io/u/delta"
+  },
+  "TRAKTRAIN": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://traktrain.com/delta"
+  },
+  "Telegram": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://t.me/delta"
+  },
+  "Tellonym.me": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://tellonym.me/delta"
+  },
+  "Tenor": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://tenor.com/users/delta"
+  },
+  "Terraria Forums": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://forums.terraria.org/index.php?search/42798315/&c[users]=delta&o=relevance"
+  },
+  "TheMovieDB": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.themoviedb.org/u/delta"
+  },
+  "ThemeForest": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://themeforest.net/user/delta"
+  },
+  "Tiendanube": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://delta.mitiendanube.com/"
+  },
+  "TikTok": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.tiktok.com/@delta"
+  },
+  "Topcoder": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://profiles.topcoder.com/delta/"
+  },
+  "Topmate": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://topmate.io/delta"
+  },
+  "TradingView": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.tradingview.com/u/delta/"
+  },
+  "TrashboxRU": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://trashbox.ru/users/delta"
+  },
+  "Trello": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://trello.com/delta"
+  },
+  "Trovo": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://trovo.live/s/delta/"
+  },
+  "TryHackMe": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://tryhackme.com/p/delta"
+  },
+  "Tuna": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://tuna.voicemod.net/user/delta"
+  },
+  "Typeracer": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://data.typeracer.com/pit/profile?user=delta"
+  },
+  "Ultimate-Guitar": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://ultimate-guitar.com/u/delta"
+  },
+  "Untappd": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://untappd.com/user/delta"
+  },
+  "VK": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://vk.com/delta"
+  },
+  "Velog": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://velog.io/@delta/posts"
+  },
+  "Velomania": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://forum.velomania.ru/member.php?username=delta"
+  },
+  "Venmo": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://account.venmo.com/u/delta"
+  },
+  "Vimeo": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://vimeo.com/delta"
+  },
+  "VirusTotal": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.virustotal.com/gui/user/delta"
+  },
+  "Vjudge": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://VJudge.net/user/delta"
+  },
+  "Wakatime": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://wakatime.com/@delta"
+  },
+  "Warframe Market": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://warframe.market/profile/delta"
+  },
+  "Warrior Forum": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.warriorforum.com/members/delta.html"
+  },
+  "WebNode": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://delta.webnode.cz/"
+  },
+  "Weblate": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://hosted.weblate.org/user/delta/"
+  },
+  "Weebly": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://delta.weebly.com/"
+  },
+  "Wikidot": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "http://www.wikidot.com/user:info/delta"
+  },
+  "Wikipedia": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://en.wikipedia.org/wiki/Special:CentralAuth/delta?uselang=qqx"
+  },
+  "WordPress": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://delta.wordpress.com/"
+  },
+  "WordPressOrg": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://profiles.wordpress.org/delta/"
+  },
+  "Wykop": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.wykop.pl/ludzie/delta"
+  },
+  "Xbox Gamertag": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://xboxgamertag.com/search/delta"
+  },
+  "YandexMusic": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://music.yandex/users/delta/playlists"
+  },
+  "YouNow": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.younow.com/delta/"
+  },
+  "YouTube": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.youtube.com/@delta"
+  },
+  "akniga": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://akniga.org/profile/delta"
+  },
+  "chaos.social": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://chaos.social/@delta"
+  },
+  "couchsurfing": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.couchsurfing.com/people/delta"
+  },
+  "dailykos": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.dailykos.com/user/delta"
+  },
+  "datingRU": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "http://dating.ru/delta"
+  },
+  "devRant": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://devrant.com/users/delta"
+  },
+  "drive2": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.drive2.ru/users/delta"
+  },
+  "eintracht": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://community.eintracht.de/fans/delta"
+  },
+  "fl": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.fl.ru/users/delta"
+  },
+  "furaffinity": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.furaffinity.net/user/delta"
+  },
+  "geocaching": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.geocaching.com/p/default.aspx?u=delta"
+  },
+  "habr": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://habr.com/ru/users/delta"
+  },
+  "hackster": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.hackster.io/delta"
+  },
+  "hunting": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.hunting.ru/forum/members/?username=delta"
+  },
+  "igromania": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "http://forum.igromania.ru/member.php?username=delta"
+  },
+  "imood": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.imood.com/users/delta"
+  },
+  "interpals": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.interpals.net/delta"
+  },
+  "jbzd.com.pl": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://jbzd.com.pl/uzytkownik/delta"
+  },
+  "kaskus": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.kaskus.co.id/@delta"
+  },
+  "kwork": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://kwork.ru/user/delta"
+  },
+  "last.fm": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://last.fm/user/delta"
+  },
+  "leasehackr": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://forum.leasehackr.com/u/delta/summary/"
+  },
+  "livelib": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.livelib.ru/reader/delta"
+  },
+  "mastodon.cloud": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://mastodon.cloud/@delta"
+  },
+  "mastodon.xyz": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://mastodon.xyz/@delta"
+  },
+  "mercadolivre": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.mercadolivre.com.br/perfil/delta"
+  },
+  "minds": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.minds.com/delta/"
+  },
+  "note": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://note.com/delta"
+  },
+  "omg.lol": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://delta.omg.lol"
+  },
+  "opennet": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.opennet.ru/~delta"
+  },
+  "osu!": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://osu.ppy.sh/users/delta"
+  },
+  "pikabu": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://pikabu.ru/@delta"
+  },
+  "pixelfed.social": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://pixelfed.social/delta/"
+  },
+  "pr0gramm": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://pr0gramm.com/user/delta"
+  },
+  "programming.dev": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://programming.dev/u/delta"
+  },
+  "social.tchncs.de": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://social.tchncs.de/@delta"
+  },
+  "spletnik": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://spletnik.ru/user/delta"
+  },
+  "svidbook": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.svidbook.ru/user/delta"
+  },
+  "threads": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://www.threads.net/@delta"
+  },
+  "tistory": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://delta.tistory.com/"
+  },
+  "tumblr": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://delta.tumblr.com/"
+  },
+  "write.as": {
+    "http_status": "200",
+    "status": "Claimed",
+    "url": "https://write.as/delta"
+  }
+}

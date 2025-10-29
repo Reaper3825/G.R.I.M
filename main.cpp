@@ -221,19 +221,27 @@ int main(int argc, char* argv[])
     {
         auto frameStart = std::chrono::steady_clock::now();
 
+        // Capture input and convert to client coordinates for UI
+        InputState input;
+        input.captureFromHWND(overlayWin->hwnd);
+        
         MSG msg{};
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
         {
+            // Capture mouse wheel before dispatching
+            if (msg.message == WM_MOUSEWHEEL) {
+                // WM_MOUSEWHEEL provides delta in HIWORD(wParam)
+                // Positive = scroll up, Negative = scroll down
+                short delta = GET_WHEEL_DELTA_WPARAM(msg.wParam);
+                input.mouseWheelDelta = static_cast<float>(delta);
+            }
+            
             if (msg.message == WM_QUIT)
                 WindowManager::requestMainLoopStop();
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
 
-        // Capture input and convert to client coordinates for UI
-        InputState input;
-        input.captureFromHWND(overlayWin->hwnd);
-        
         UIRoot::get().update(input, 0.016f);
         UIRoot::get().draw();
 

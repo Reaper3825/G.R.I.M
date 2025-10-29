@@ -3,11 +3,14 @@
 #include <string>
 #include <memory>
 
+// Include plugin.hpp for GRIM_HOST_API macro
+#include "core/plugin.hpp"
+
 struct InputState;
 class UIRenderer;
 class OverlayRenderer;  // ? NEW: Forward declare
 
-class Widget {
+class GRIM_HOST_API Widget {
 public:
     Widget();
     virtual ~Widget() = default;

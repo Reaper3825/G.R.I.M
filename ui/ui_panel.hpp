@@ -4,9 +4,12 @@
 #include <memory>
 #include <functional>
 
+// Include plugin.hpp for GRIM_HOST_API macro
+#include "core/plugin.hpp"
+
 class OverlayRenderer;  // Forward declaration
 
-class UIPanel : public Widget {
+class GRIM_HOST_API UIPanel : public Widget {
 public:
     UIPanel(const std::string& title = "", bool draggable = true);
 

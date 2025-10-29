@@ -14,6 +14,9 @@ struct InputState {
     bool mousePressed[3]{};
     bool mouseReleased[3]{};
 
+    // NEW: Mouse wheel scroll delta
+    float mouseWheelDelta = 0.0f;  // Positive = scroll up, Negative = scroll down
+
     std::unordered_map<int, bool> keysDown;
     std::unordered_map<int, bool> keyPressed;
     std::unordered_map<int, bool> keyReleased;

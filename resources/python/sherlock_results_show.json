@@ -1,0 +1,1402 @@
+{
+  "1337x": {
+    "url_main": "https://www.1337x.to/user/show/",
+    "url": "https://www.1337x.to/user/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "7Cups": {
+    "url_main": "https://www.7cups.com/@show",
+    "url": "https://www.7cups.com/@show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "9GAG": {
+    "url_main": "https://www.9gag.com/u/show",
+    "url": "https://www.9gag.com/u/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "About.me": {
+    "url_main": "https://about.me/show",
+    "url": "https://about.me/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Academia.edu": {
+    "url_main": "https://independent.academia.edu/show",
+    "url": "https://independent.academia.edu/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "AllMyLinks": {
+    "url_main": "https://allmylinks.com/show",
+    "url": "https://allmylinks.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Anilist": {
+    "url_main": "https://anilist.co/user/show/",
+    "url": "https://anilist.co/user/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Apple Developer": {
+    "url_main": "https://developer.apple.com/forums/profile/show",
+    "url": "https://developer.apple.com/forums/profile/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Apple Discussions": {
+    "url_main": "https://discussions.apple.com/profile/show",
+    "url": "https://discussions.apple.com/profile/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Aparat": {
+    "url_main": "https://www.aparat.com/show/",
+    "url": "https://www.aparat.com/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Archive of Our Own": {
+    "url_main": "https://archiveofourown.org/users/show",
+    "url": "https://archiveofourown.org/users/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Atcoder": {
+    "url_main": "https://atcoder.jp/users/show",
+    "url": "https://atcoder.jp/users/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Vjudge": {
+    "url_main": "https://VJudge.net/user/show",
+    "url": "https://VJudge.net/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Audiojungle": {
+    "url_main": "https://audiojungle.net/user/show",
+    "url": "https://audiojungle.net/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Bandcamp": {
+    "url_main": "https://www.bandcamp.com/show",
+    "url": "https://www.bandcamp.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Bazar.cz": {
+    "url_main": "https://www.bazar.cz/show/",
+    "url": "https://www.bazar.cz/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Behance": {
+    "url_main": "https://www.behance.net/show",
+    "url": "https://www.behance.net/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "BitBucket": {
+    "url_main": "https://bitbucket.org/show/",
+    "url": "https://bitbucket.org/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "BoardGameGeek": {
+    "url_main": "https://boardgamegeek.com/user/show",
+    "url": "https://boardgamegeek.com/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "BraveCommunity": {
+    "url_main": "https://community.brave.com/u/show/",
+    "url": "https://community.brave.com/u/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "BuyMeACoffee": {
+    "url_main": "https://buymeacoff.ee/show",
+    "url": "https://buymeacoff.ee/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "BuzzFeed": {
+    "url_main": "https://buzzfeed.com/show",
+    "url": "https://buzzfeed.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "CGTrader": {
+    "url_main": "https://www.cgtrader.com/show",
+    "url": "https://www.cgtrader.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "CTAN": {
+    "url_main": "https://ctan.org/author/show",
+    "url": "https://ctan.org/author/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Carbonmade": {
+    "url_main": "https://show.carbonmade.com",
+    "url": "https://show.carbonmade.com",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "CashApp": {
+    "url_main": "https://cash.app/$show",
+    "url": "https://cash.app/$show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Championat": {
+    "url_main": "https://www.championat.com/user/show",
+    "url": "https://www.championat.com/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Chess": {
+    "url_main": "https://www.chess.com/member/show",
+    "url": "https://www.chess.com/member/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Clapper": {
+    "url_main": "https://clapperapp.com/show",
+    "url": "https://clapperapp.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Clozemaster": {
+    "url_main": "https://www.clozemaster.com/players/show",
+    "url": "https://www.clozemaster.com/players/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Clubhouse": {
+    "url_main": "https://www.clubhouse.com/@show",
+    "url": "https://www.clubhouse.com/@show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Codecademy": {
+    "url_main": "https://www.codecademy.com/profiles/show",
+    "url": "https://www.codecademy.com/profiles/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Codechef": {
+    "url_main": "https://www.codechef.com/users/show",
+    "url": "https://www.codechef.com/users/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Codeforces": {
+    "url_main": "https://codeforces.com/profile/show",
+    "url": "https://codeforces.com/profile/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Coders Rank": {
+    "url_main": "https://profile.codersrank.io/user/show/",
+    "url": "https://profile.codersrank.io/user/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "CodeSandbox": {
+    "url_main": "https://codesandbox.io/u/show",
+    "url": "https://codesandbox.io/u/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Codewars": {
+    "url_main": "https://www.codewars.com/users/show",
+    "url": "https://www.codewars.com/users/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Codolio": {
+    "url_main": "https://codolio.com/profile/show",
+    "url": "https://codolio.com/profile/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Coroflot": {
+    "url_main": "https://www.coroflot.com/show",
+    "url": "https://www.coroflot.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Cracked Forum": {
+    "url_main": "https://cracked.sh/show",
+    "url": "https://cracked.sh/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Crevado": {
+    "url_main": "https://show.crevado.com",
+    "url": "https://show.crevado.com",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Crowdin": {
+    "url_main": "https://crowdin.com/profile/show",
+    "url": "https://crowdin.com/profile/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Cults3D": {
+    "url_main": "https://cults3d.com/en/users/show/creations",
+    "url": "https://cults3d.com/en/users/show/creations",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "DEV Community": {
+    "url_main": "https://dev.to/show",
+    "url": "https://dev.to/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "DailyMotion": {
+    "url_main": "https://www.dailymotion.com/show",
+    "url": "https://www.dailymotion.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Dealabs": {
+    "url_main": "https://www.dealabs.com/profile/show",
+    "url": "https://www.dealabs.com/profile/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "DeviantArt": {
+    "url_main": "https://www.deviantart.com/show",
+    "url": "https://www.deviantart.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Discord": {
+    "url_main": "https://discord.com",
+    "url": "https://discord.com",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Diskusjon.no": {
+    "url_main": "https://www.diskusjon.no",
+    "url": "https://www.diskusjon.no",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Disqus": {
+    "url_main": "https://disqus.com/show",
+    "url": "https://disqus.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Docker Hub": {
+    "url_main": "https://hub.docker.com/u/show/",
+    "url": "https://hub.docker.com/u/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Duolingo": {
+    "url_main": "https://www.duolingo.com/profile/show",
+    "url": "https://www.duolingo.com/profile/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Eintracht Frankfurt Forum": {
+    "url_main": "https://community.eintracht.de/fans/show",
+    "url": "https://community.eintracht.de/fans/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Empretienda AR": {
+    "url_main": "https://show.empretienda.com.ar",
+    "url": "https://show.empretienda.com.ar",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "EyeEm": {
+    "url_main": "https://www.eyeem.com/u/show",
+    "url": "https://www.eyeem.com/u/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Flickr": {
+    "url_main": "https://www.flickr.com/people/show",
+    "url": "https://www.flickr.com/people/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Flightradar24": {
+    "url_main": "https://my.flightradar24.com/show",
+    "url": "https://my.flightradar24.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Flipboard": {
+    "url_main": "https://flipboard.com/@show",
+    "url": "https://flipboard.com/@show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Freelancer": {
+    "url_main": "https://www.freelancer.com/u/show",
+    "url": "https://www.freelancer.com/u/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Freesound": {
+    "url_main": "https://freesound.org/people/show/",
+    "url": "https://freesound.org/people/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "GNOME VCS": {
+    "url_main": "https://gitlab.gnome.org/show",
+    "url": "https://gitlab.gnome.org/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "GaiaOnline": {
+    "url_main": "https://www.gaiaonline.com/profiles/show",
+    "url": "https://www.gaiaonline.com/profiles/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "GameFAQs": {
+    "url_main": "https://gamefaqs.gamespot.com/community/show",
+    "url": "https://gamefaqs.gamespot.com/community/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "GeeksforGeeks": {
+    "url_main": "https://auth.geeksforgeeks.org/user/show",
+    "url": "https://auth.geeksforgeeks.org/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Genius (Users)": {
+    "url_main": "https://genius.com/show",
+    "url": "https://genius.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Giant Bomb": {
+    "url_main": "https://www.giantbomb.com/profile/show/",
+    "url": "https://www.giantbomb.com/profile/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Giphy": {
+    "url_main": "https://giphy.com/show",
+    "url": "https://giphy.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "GitBook": {
+    "url_main": "https://show.gitbook.io/",
+    "url": "https://show.gitbook.io/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "GitHub": {
+    "url_main": "https://www.github.com/show",
+    "url": "https://www.github.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Gitee": {
+    "url_main": "https://gitee.com/show",
+    "url": "https://gitee.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "GoodReads": {
+    "url_main": "https://www.goodreads.com/show",
+    "url": "https://www.goodreads.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Gravatar": {
+    "url_main": "http://en.gravatar.com/show",
+    "url": "http://en.gravatar.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Gumroad": {
+    "url_main": "https://www.gumroad.com/show",
+    "url": "https://www.gumroad.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "HackenProof (Hackers)": {
+    "url_main": "https://hackenproof.com/hackers/show",
+    "url": "https://hackenproof.com/hackers/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "HackerEarth": {
+    "url_main": "https://hackerearth.com/@show",
+    "url": "https://hackerearth.com/@show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "HackerOne": {
+    "url_main": "https://hackerone.com/show",
+    "url": "https://hackerone.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "HackMD": {
+    "url_main": "https://hackmd.io/@show",
+    "url": "https://hackmd.io/@show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Hive Blog": {
+    "url_main": "https://hive.blog/@show",
+    "url": "https://hive.blog/@show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Houzz": {
+    "url_main": "https://houzz.com/user/show",
+    "url": "https://houzz.com/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "HudsonRock": {
+    "url_main": "https://cavalier.hudsonrock.com/api/json/v2/osint-tools/search-by-username?username=show",
+    "url": "https://cavalier.hudsonrock.com/api/json/v2/osint-tools/search-by-username?username=show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Hugging Face": {
+    "url_main": "https://huggingface.co/show",
+    "url": "https://huggingface.co/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "IFTTT": {
+    "url_main": "https://www.ifttt.com/p/show",
+    "url": "https://www.ifttt.com/p/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Imgur": {
+    "url_main": "https://imgur.com/user/show",
+    "url": "https://imgur.com/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Itch.io": {
+    "url_main": "https://show.itch.io/",
+    "url": "https://show.itch.io/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "kaskus": {
+    "url_main": "https://www.kaskus.co.id/@show",
+    "url": "https://www.kaskus.co.id/@show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Kongregate": {
+    "url_main": "https://www.kongregate.com/accounts/show",
+    "url": "https://www.kongregate.com/accounts/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Kvinneguiden": {
+    "url_main": "https://forum.kvinneguiden.no",
+    "url": "https://forum.kvinneguiden.no",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Launchpad": {
+    "url_main": "https://launchpad.net/~show",
+    "url": "https://launchpad.net/~show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "LibraryThing": {
+    "url_main": "https://www.librarything.com/profile/show",
+    "url": "https://www.librarything.com/profile/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Linktree": {
+    "url_main": "https://linktr.ee/show",
+    "url": "https://linktr.ee/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "LiveJournal": {
+    "url_main": "https://show.livejournal.com",
+    "url": "https://show.livejournal.com",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Medium": {
+    "url_main": "https://medium.com/@show",
+    "url": "https://medium.com/@show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Memrise": {
+    "url_main": "https://www.memrise.com/user/show/",
+    "url": "https://www.memrise.com/user/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Minecraft": {
+    "url_main": "https://api.mojang.com/users/profiles/minecraft/show",
+    "url": "https://api.mojang.com/users/profiles/minecraft/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "MixCloud": {
+    "url_main": "https://www.mixcloud.com/show/",
+    "url": "https://www.mixcloud.com/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Monkeytype": {
+    "url_main": "https://monkeytype.com/profile/show",
+    "url": "https://monkeytype.com/profile/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "MyAnimeList": {
+    "url_main": "https://myanimelist.net/profile/show",
+    "url": "https://myanimelist.net/profile/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Mydramalist": {
+    "url_main": "https://www.mydramalist.com/profile/show",
+    "url": "https://www.mydramalist.com/profile/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "namuwiki": {
+    "url_main": "https://namu.wiki/w/%EC%82%AC%EC%9A%A9%EC%9E%90:show",
+    "url": "https://namu.wiki/w/%EC%82%AC%EC%9A%A9%EC%9E%90:show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "NationStates Nation": {
+    "url_main": "https://nationstates.net/nation=show",
+    "url": "https://nationstates.net/nation=show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "NationStates Region": {
+    "url_main": "https://nationstates.net/region=show",
+    "url": "https://nationstates.net/region=show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Naver": {
+    "url_main": "https://blog.naver.com/show",
+    "url": "https://blog.naver.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "NintendoLife": {
+    "url_main": "https://www.nintendolife.com/users/show",
+    "url": "https://www.nintendolife.com/users/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "NitroType": {
+    "url_main": "https://www.nitrotype.com/racer/show",
+    "url": "https://www.nitrotype.com/racer/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "NotABug.org": {
+    "url_main": "https://notabug.org/show",
+    "url": "https://notabug.org/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "ObservableHQ": {
+    "url_main": "https://observablehq.com/@show",
+    "url": "https://observablehq.com/@show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Odysee": {
+    "url_main": "https://odysee.com/@show",
+    "url": "https://odysee.com/@show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Pastebin": {
+    "url_main": "https://pastebin.com/u/show",
+    "url": "https://pastebin.com/u/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Patched": {
+    "url_main": "https://patched.sh/User/show",
+    "url": "https://patched.sh/User/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Patreon": {
+    "url_main": "https://www.patreon.com/show",
+    "url": "https://www.patreon.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "HotUKdeals": {
+    "url_main": "https://www.hotukdeals.com/profile/show",
+    "url": "https://www.hotukdeals.com/profile/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "PepperPL": {
+    "url_main": "https://www.pepper.pl/profile/show",
+    "url": "https://www.pepper.pl/profile/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Periscope": {
+    "url_main": "https://www.periscope.tv/show/",
+    "url": "https://www.periscope.tv/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "pixelfed.social": {
+    "url_main": "https://pixelfed.social/show/",
+    "url": "https://pixelfed.social/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Plurk": {
+    "url_main": "https://www.plurk.com/show",
+    "url": "https://www.plurk.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Polarsteps": {
+    "url_main": "https://polarsteps.com/show",
+    "url": "https://polarsteps.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "PromoDJ": {
+    "url_main": "http://promodj.com/show",
+    "url": "http://promodj.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Rajce.net": {
+    "url_main": "https://show.rajce.idnes.cz/",
+    "url": "https://show.rajce.idnes.cz/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Rarible": {
+    "url_main": "https://rarible.com/marketplace/api/v4/urls/show",
+    "url": "https://rarible.com/marketplace/api/v4/urls/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Reddit": {
+    "url_main": "https://www.reddit.com/user/show",
+    "url": "https://www.reddit.com/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Replit.com": {
+    "url_main": "https://replit.com/@show",
+    "url": "https://replit.com/@show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "ReverbNation": {
+    "url_main": "https://www.reverbnation.com/show",
+    "url": "https://www.reverbnation.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Roblox": {
+    "url_main": "https://www.roblox.com/user.aspx?username=show",
+    "url": "https://www.roblox.com/user.aspx?username=show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "RubyGems": {
+    "url_main": "https://rubygems.org/profiles/show",
+    "url": "https://rubygems.org/profiles/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Rumble": {
+    "url_main": "https://rumble.com/user/show",
+    "url": "https://rumble.com/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Scratch": {
+    "url_main": "https://scratch.mit.edu/users/show",
+    "url": "https://scratch.mit.edu/users/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Scribd": {
+    "url_main": "https://www.scribd.com/show",
+    "url": "https://www.scribd.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Slack": {
+    "url_main": "https://show.slack.com",
+    "url": "https://show.slack.com",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "SlideShare": {
+    "url_main": "https://slideshare.net/show",
+    "url": "https://slideshare.net/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Slides": {
+    "url_main": "https://slides.com/show",
+    "url": "https://slides.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Smule": {
+    "url_main": "https://www.smule.com/show",
+    "url": "https://www.smule.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "SpeakerDeck": {
+    "url_main": "https://speakerdeck.com/show",
+    "url": "https://speakerdeck.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Splice": {
+    "url_main": "https://splice.com/show",
+    "url": "https://splice.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Spotify": {
+    "url_main": "https://open.spotify.com/user/show",
+    "url": "https://open.spotify.com/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Star Citizen": {
+    "url_main": "https://robertsspaceindustries.com/citizens/show",
+    "url": "https://robertsspaceindustries.com/citizens/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Steam Community (Group)": {
+    "url_main": "https://steamcommunity.com/groups/show",
+    "url": "https://steamcommunity.com/groups/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Steam Community (User)": {
+    "url_main": "https://steamcommunity.com/id/show/",
+    "url": "https://steamcommunity.com/id/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Strava": {
+    "url_main": "https://www.strava.com/athletes/show",
+    "url": "https://www.strava.com/athletes/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "TETR.IO": {
+    "url_main": "https://ch.tetr.io/u/show",
+    "url": "https://ch.tetr.io/u/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "TheMovieDB": {
+    "url_main": "https://www.themoviedb.org/u/show",
+    "url": "https://www.themoviedb.org/u/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "TikTok": {
+    "url_main": "https://www.tiktok.com/@show",
+    "url": "https://www.tiktok.com/@show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Tiendanube": {
+    "url_main": "https://show.mitiendanube.com/",
+    "url": "https://show.mitiendanube.com/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Topcoder": {
+    "url_main": "https://profiles.topcoder.com/show/",
+    "url": "https://profiles.topcoder.com/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Telegram": {
+    "url_main": "https://t.me/show",
+    "url": "https://t.me/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Tellonym.me": {
+    "url_main": "https://tellonym.me/show",
+    "url": "https://tellonym.me/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Tenor": {
+    "url_main": "https://tenor.com/users/show",
+    "url": "https://tenor.com/users/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "ThemeForest": {
+    "url_main": "https://themeforest.net/user/show",
+    "url": "https://themeforest.net/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "tistory": {
+    "url_main": "https://show.tistory.com/",
+    "url": "https://show.tistory.com/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "TradingView": {
+    "url_main": "https://www.tradingview.com/u/show/",
+    "url": "https://www.tradingview.com/u/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "TrashboxRU": {
+    "url_main": "https://trashbox.ru/users/show",
+    "url": "https://trashbox.ru/users/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Trello": {
+    "url_main": "https://trello.com/show",
+    "url": "https://trello.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "TryHackMe": {
+    "url_main": "https://tryhackme.com/p/show",
+    "url": "https://tryhackme.com/p/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Tuna": {
+    "url_main": "https://tuna.voicemod.net/user/show",
+    "url": "https://tuna.voicemod.net/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Trovo": {
+    "url_main": "https://trovo.live/s/show/",
+    "url": "https://trovo.live/s/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Typeracer": {
+    "url_main": "https://data.typeracer.com/pit/profile?user=show",
+    "url": "https://data.typeracer.com/pit/profile?user=show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Ultimate-Guitar": {
+    "url_main": "https://ultimate-guitar.com/u/show",
+    "url": "https://ultimate-guitar.com/u/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Untappd": {
+    "url_main": "https://untappd.com/user/show",
+    "url": "https://untappd.com/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Velomania": {
+    "url_main": "https://forum.velomania.ru/member.php?username=show",
+    "url": "https://forum.velomania.ru/member.php?username=show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Vero": {
+    "url_main": "https://vero.co/show",
+    "url": "https://vero.co/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Vimeo": {
+    "url_main": "https://vimeo.com/show",
+    "url": "https://vimeo.com/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "VirusTotal": {
+    "url_main": "https://www.virustotal.com/gui/user/show",
+    "url": "https://www.virustotal.com/gui/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "VLR": {
+    "url_main": "https://www.vlr.gg/user/show",
+    "url": "https://www.vlr.gg/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Warrior Forum": {
+    "url_main": "https://www.warriorforum.com/members/show.html",
+    "url": "https://www.warriorforum.com/members/show.html",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Weblate": {
+    "url_main": "https://hosted.weblate.org/user/show/",
+    "url": "https://hosted.weblate.org/user/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Weebly": {
+    "url_main": "https://show.weebly.com/",
+    "url": "https://show.weebly.com/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Wikidot": {
+    "url_main": "http://www.wikidot.com/user:info/show",
+    "url": "http://www.wikidot.com/user:info/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Wikipedia": {
+    "url_main": "https://en.wikipedia.org/wiki/Special:CentralAuth/show?uselang=qqx",
+    "url": "https://en.wikipedia.org/wiki/Special:CentralAuth/show?uselang=qqx",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "WordPress": {
+    "url_main": "https://show.wordpress.com/",
+    "url": "https://show.wordpress.com/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "WordPressOrg": {
+    "url_main": "https://profiles.wordpress.org/show/",
+    "url": "https://profiles.wordpress.org/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Wordnik": {
+    "url_main": "https://www.wordnik.com/users/show",
+    "url": "https://www.wordnik.com/users/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Wykop": {
+    "url_main": "https://www.wykop.pl/ludzie/show",
+    "url": "https://www.wykop.pl/ludzie/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Xbox Gamertag": {
+    "url_main": "https://xboxgamertag.com/search/show",
+    "url": "https://xboxgamertag.com/search/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "YandexMusic": {
+    "url_main": "https://music.yandex/users/show/playlists",
+    "url": "https://music.yandex/users/show/playlists",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "YouNow": {
+    "url_main": "https://www.younow.com/show/",
+    "url": "https://www.younow.com/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "YouTube": {
+    "url_main": "https://www.youtube.com/@show",
+    "url": "https://www.youtube.com/@show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "couchsurfing": {
+    "url_main": "https://www.couchsurfing.com/people/show",
+    "url": "https://www.couchsurfing.com/people/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "datingRU": {
+    "url_main": "http://dating.ru/show",
+    "url": "http://dating.ru/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "drive2": {
+    "url_main": "https://www.drive2.ru/users/show",
+    "url": "https://www.drive2.ru/users/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "eintracht": {
+    "url_main": "https://community.eintracht.de/fans/show",
+    "url": "https://community.eintracht.de/fans/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "fl": {
+    "url_main": "https://www.fl.ru/users/show",
+    "url": "https://www.fl.ru/users/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "furaffinity": {
+    "url_main": "https://www.furaffinity.net/user/show",
+    "url": "https://www.furaffinity.net/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "geocaching": {
+    "url_main": "https://www.geocaching.com/p/default.aspx?u=show",
+    "url": "https://www.geocaching.com/p/default.aspx?u=show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "hackster": {
+    "url_main": "https://www.hackster.io/show",
+    "url": "https://www.hackster.io/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "igromania": {
+    "url_main": "http://forum.igromania.ru/member.php?username=show",
+    "url": "http://forum.igromania.ru/member.php?username=show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "interpals": {
+    "url_main": "https://www.interpals.net/show",
+    "url": "https://www.interpals.net/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "jbzd.com.pl": {
+    "url_main": "https://jbzd.com.pl/uzytkownik/show",
+    "url": "https://jbzd.com.pl/uzytkownik/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "kwork": {
+    "url_main": "https://kwork.ru/user/show",
+    "url": "https://kwork.ru/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "last.fm": {
+    "url_main": "https://last.fm/user/show",
+    "url": "https://last.fm/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "livelib": {
+    "url_main": "https://www.livelib.ru/reader/show",
+    "url": "https://www.livelib.ru/reader/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "mastodon.cloud": {
+    "url_main": "https://mastodon.cloud/@show",
+    "url": "https://mastodon.cloud/@show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "mastodon.social": {
+    "url_main": "https://mastodon.social/@show",
+    "url": "https://mastodon.social/@show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "mercadolivre": {
+    "url_main": "https://www.mercadolivre.com.br/perfil/show",
+    "url": "https://www.mercadolivre.com.br/perfil/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "minds": {
+    "url_main": "https://www.minds.com/show/",
+    "url": "https://www.minds.com/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "nnRU": {
+    "url_main": "https://show.www.nn.ru/",
+    "url": "https://show.www.nn.ru/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "osu!": {
+    "url_main": "https://osu.ppy.sh/users/show",
+    "url": "https://osu.ppy.sh/users/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "pikabu": {
+    "url_main": "https://pikabu.ru/@show",
+    "url": "https://pikabu.ru/@show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "Pinterest": {
+    "url_main": "https://www.pinterest.com/show/",
+    "url": "https://www.pinterest.com/show/",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "spletnik": {
+    "url_main": "https://spletnik.ru/user/show",
+    "url": "https://spletnik.ru/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "svidbook": {
+    "url_main": "https://www.svidbook.ru/user/show",
+    "url": "https://www.svidbook.ru/user/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  },
+  "write.as": {
+    "url_main": "https://write.as/show",
+    "url": "https://write.as/show",
+    "status": "Claimed",
+    "http_status": "200",
+    "response_time_s": 0
+  }
+}

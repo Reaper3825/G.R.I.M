@@ -6,8 +6,8 @@
 #include "logger.hpp"
 
 // Wrapper functions to convert CommandResult to PluginCommandFunc signature
-static CommandResult wrapProfileSelf(const std::string& args) {
-    return cmdProfileSelf(args);
+static CommandResult wrapProfilePerson(const std::string& args) {
+    return cmdProfilePerson(args);
 }
 
 static CommandResult wrapSherlockSweep(const std::string& args) {
@@ -26,21 +26,36 @@ static CommandResult wrapOsintClearCache(const std::string& args) {
     return cmdOsintClearCache(args);
 }
 
+static CommandResult wrapOsintScanSecrets(const std::string& args) {
+    return cmdOsintScanSecrets(args);
+}
+
+static CommandResult wrapOsintShowSecrets(const std::string& args) {
+    return cmdOsintShowSecrets(args);
+}
+
+static CommandResult wrapOsintShowUI(const std::string& args) {
+    return cmdOsintShowUI(args);
+}
+
 extern "C" GRIM_PLUGIN_API void registerGrimPlugin() {
-    LOG_DEBUG("Plugin", "OSINT Self-Audit plugin v2.0.0 loading");
+    LOG_DEBUG("Plugin", "OSINT Self-Audit plugin v2.1.0 loading");
 
     // Register main OSINT commands
-    grim_register_command("profile_self", wrapProfileSelf);
+    grim_register_command("profile_person", wrapProfilePerson);
     grim_register_command("sherlock_sweep", wrapSherlockSweep);
     grim_register_command("osint_report", wrapOsintReport);
     
     // Register utility commands
     grim_register_command("osint_status", wrapOsintStatus);
     grim_register_command("osint_clear_cache", wrapOsintClearCache);
+    grim_register_command("osint_scan_secrets", wrapOsintScanSecrets);
+    grim_register_command("osint_show_secrets", wrapOsintShowSecrets);
+    grim_register_command("osint_show_ui", wrapOsintShowUI);  // NEW
     
     // Aliases for convenience
     grim_register_command("osint", wrapOsintReport);  // Alias for osint_report
     grim_register_command("sherlock", wrapSherlockSweep);  // Short alias
 
-    LOG_DEBUG("Plugin", "OSINT commands registered (5 commands + 2 aliases)");
+    LOG_DEBUG("Plugin", "OSINT commands registered (8 commands + 2 aliases)");
 }

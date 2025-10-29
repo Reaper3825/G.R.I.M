@@ -31,6 +31,7 @@ struct OSINTConfig {
     bool useCache{true};
     int timeoutSeconds{30};
     bool verboseOutput{false};
+    bool scanForSecrets{false};  // NEW: Run sensitive data scanner
     std::string pythonPath;  // Optional custom python path
 };
 
