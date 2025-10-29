@@ -140,6 +140,118 @@
     "case_insensitive": true
   },
   {
+    "intent": "profile_self",
+    "description": "Scan digital footprint for a username (OSINT)",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:profile|scan|check|audit|analyze)\\s+(?:my\\s+)?(?:self|me|username|digital\\s+footprint|footprint|accounts?)\\s+(?:for\\s+)?(.+?)(?:\\s+(--no-cache|--verbose))?$",
+    "slot_names": ["username", "flags"],
+    "score_boost": 0.4,
+    "case_insensitive": true
+  },
+  {
+    "intent": "profile_self",
+    "description": "Profile username scan (shorter form)",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?profile[_ ]self\\s+(.+?)(?:\\s+(--no-cache|--verbose))?$",
+    "slot_names": ["username", "flags"],
+    "score_boost": 0.5,
+    "case_insensitive": true
+  },
+  {
+    "intent": "sherlock_sweep",
+    "description": "Comprehensive username enumeration across platforms",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:sherlock|sweep|enumerate|find\\s+accounts?|search\\s+platforms?)(?:\\s+for)?\\s+(.+?)(?:\\s+(--async))?$",
+    "slot_names": ["username", "flags"],
+    "score_boost": 0.4,
+    "case_insensitive": true
+  },
+  {
+    "intent": "sherlock_sweep",
+    "description": "Sherlock sweep command (direct)",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?sherlock[_ ]sweep\\s+(.+?)(?:\\s+(--async))?$",
+    "slot_names": ["username", "flags"],
+    "score_boost": 0.5,
+    "case_insensitive": true
+  },
+  {
+    "intent": "osint_report",
+    "description": "Generate comprehensive OSINT audit report",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:osint|generate|create|make)\\s+(?:audit\\s+)?(?:report|analysis)(?:\\s+for)?\\s+(.+?)(?:\\s+--export\\s+([\\w\\.\\-]+))?$",
+    "slot_names": ["username", "export_file"],
+    "score_boost": 0.4,
+    "case_insensitive": true
+  },
+  {
+    "intent": "osint_report",
+    "description": "OSINT report command (direct)",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?osint[_ ]report\\s+(.+?)(?:\\s+--export\\s+([\\w\\.\\-]+))?$",
+    "slot_names": ["username", "export_file"],
+    "score_boost": 0.5,
+    "case_insensitive": true
+  },
+  {
+    "intent": "osint_status",
+    "description": "Check status of OSINT scans",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:check|show|get)\\s+(?:osint\\s+)?(?:scan\\s+)?status(?:\\s+for)?(?:\\s+(.+))?$",
+    "slot_names": ["username"],
+    "score_boost": 0.4,
+    "case_insensitive": true
+  },
+  {
+    "intent": "osint_status",
+    "description": "OSINT status command (direct)",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?osint[_ ]status(?:\\s+(.+))?$",
+    "slot_names": ["username"],
+    "score_boost": 0.5,
+    "case_insensitive": true
+  },
+  {
+    "intent": "osint_clear_cache",
+    "description": "Clear OSINT scan cache",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:clear|clean|wipe|remove)\\s+(?:osint\\s+)?(?:scan\\s+)?cache$",
+    "slot_names": [],
+    "score_boost": 0.4,
+    "case_insensitive": true
+  },
+  {
+    "intent": "osint_clear_cache",
+    "description": "OSINT clear cache command (direct)",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?osint[_ ]clear[_ ]cache$",
+    "slot_names": [],
+    "score_boost": 0.5,
+    "case_insensitive": true
+  },
+  {
+    "intent": "osint",
+    "description": "General OSINT command (alias for osint_report)",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?osint\\s+(.+?)(?:\\s+--export\\s+([\\w\\.\\-]+))?$",
+    "slot_names": ["username", "export_file"],
+    "score_boost": 0.45,
+    "case_insensitive": true
+  },
+  {
+    "intent": "digital_footprint",
+    "description": "Check digital footprint (natural language)",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:what(?:'s|s| is)\\s+my|check\\s+my|show\\s+my|find\\s+my)\\s+digital\\s+footprint(?:\\s+for)?(?:\\s+(.+))?$",
+    "slot_names": ["username"],
+    "score_boost": 0.4,
+    "case_insensitive": true
+  },
+  {
+    "intent": "find_accounts",
+    "description": "Find accounts for username (natural language)",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:find|search|locate|discover)\\s+(?:all\\s+)?(?:my\\s+)?accounts?(?:\\s+for)?\\s+(.+?)(?:\\s+online)?$",
+    "slot_names": ["username"],
+    "score_boost": 0.35,
+    "case_insensitive": true
+  },
+  {
+    "intent": "privacy_audit",
+    "description": "Run privacy audit (natural language)",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:run|do|perform)\\s+(?:a\\s+)?(?:privacy|security)\\s+audit(?:\\s+for)?(?:\\s+(.+))?$",
+    "slot_names": ["username"],
+    "score_boost": 0.35,
+    "case_insensitive": true
+  },
+  {
     "intent": "grim_ai",
     "description": "General freeform AI query (catch-all)",
     "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*)(.+)$",

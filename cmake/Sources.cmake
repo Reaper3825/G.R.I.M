@@ -28,6 +28,8 @@ file(GLOB core_SOURCES "core/*.cpp")
 file(GLOB core_HEADERS "core/*.hpp")
 file(GLOB NET_SOURCES "net/*.cpp")
 file(GLOB NET_HEADERS "net/*.hpp")
+file(GLOB EXTERNAL_COLLECTOR_SOURCES "external_collector/*.cpp")
+file(GLOB EXTERNAL_COLLECTOR_HEADERS "external_collector/*.hpp")
 
 
 
@@ -55,6 +57,7 @@ set(GRIM_SOURCES
     ${memory_SOURCES}
     ${core_SOURCES}
     ${NET_SOURCES}
+    ${EXTERNAL_COLLECTOR_SOURCES}
 )
 
 set(GRIM_HEADERS
@@ -81,4 +84,5 @@ set(GRIM_HEADERS
     ${memory_HEADERS}
     ${core_HEADERS}
     ${NET_HEADERS}
+    ${EXTERNAL_COLLECTOR_HEADERS}
 )
