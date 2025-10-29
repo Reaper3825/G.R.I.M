@@ -8,4 +8,6 @@ struct CommandResult;
 CommandResult cmdProfileSelf(const std::string& args);
 CommandResult cmdSherlockSweep(const std::string& args);
 CommandResult cmdOsintReport(const std::string& args);
+CommandResult cmdOsintStatus(const std::string& args);
+CommandResult cmdOsintClearCache(const std::string& args);
 
