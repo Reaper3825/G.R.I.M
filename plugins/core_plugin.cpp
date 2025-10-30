@@ -12,6 +12,7 @@
 #include "commands_voice.hpp"
 #include "commands_ui.hpp"
 #include "commands_grim.hpp"  // ? NEW: GRIM system commands
+#include "commands_perception.hpp"
 
 // One shared registration list used by both host and plugin builds.
 static void register_all_commands() {
@@ -83,6 +84,12 @@ static void register_all_commands() {
     grim_register_command("clear_cache",   cmdClearCache);
     grim_register_command("reset_cache",   cmdResetCache);
 
+    // ✅ NEW: Perception/Vision commands
+    LOG_DEBUG("Plugin", "Registering perception commands");
+    grim_register_command("perception_what_see",      cmdPerceptionWhat);
+    grim_register_command("perception_read_text",     cmdPerceptionRead);
+ grim_register_command("perception_detect_objects", cmdPerceptionDetect);
+
     LOG_DEBUG("Plugin", "Core command registration complete");
     
     // (Add any additional core commands here; keep both paths in sync.)
@@ -105,3 +112,5 @@ void registerCorePlugin() {
     register_all_commands();
 }
 #endif
+
+

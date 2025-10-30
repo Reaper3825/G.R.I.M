@@ -5,11 +5,22 @@
     "openal-soft",
     {
       "name": "cpr",
-      "features": [ "ssl" ]
+      "features": [
+        "ssl"
+      ]
     },
     "nlohmann-json",
     "portaudio",
     "glfw3",
-    "uwebsockets"
+    "uwebsockets",
+    {
+      "features": [
+        "dnn",
+        "contrib"
+      ],
+      "name": "opencv"
+    },
+    "tesseract",
+    "leptonica"
   ]
 }

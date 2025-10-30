@@ -17,6 +17,12 @@
     "permanent": false,
     "useCount": 1
   },
+  "[perception] ocr result (confidence: 65%):\n---\ngalley\n@ austin - personal\nba icloud drive\nbp icloud photos\ni desktop\nbe documents\n& downloads\n@ music\nbe pictures\nbe videos\nbe austin wadkins\n@ thispc\n#5 development (c)\n(© new volume (d:}\n& development source (e)\n& [m.2.1]master (1:)\nwe libraries\ne network\nha control pane!\nb recycle bin\nbb sutosave\nbe [gurv3d.com]-ottsetup\nbe ancient brick work ruins\nbe blender saves\nbb brushes\nbe buildata\nbe cinebench2024_win_x86_64\n@ dev apps\ntiters | item selected 7.52kb |\n> new volume (d) >\ngrim >\nw wn sot~ 88 view ~\nare\nba bootstrap\nbaheipers\nbout\nba vcpkg installed\nba plugins\nbicrchash\nb sib-getterize\nbilitpngts-config\nbydocs\nbi synonymshpp\nbilis. devices.cop\nbi syster_detecthpp\nbb build debug loge\nbi crror managerhpp\nbialisses.cpp\nbbuitd fogint\nbshowat\nbidctant\nbinip.sutesjson\nbireward.iog\nfps n/a n/a | lat nia | fgovr n/a, n/a | srovr nva, n/a | rrovr nia, nia\nconsole\n2 settings\nsystem status: online\n“ype ‘help’ for available commands\n[90:86:44] > perception_read_text\n> perception_read_text\n[perception] ocr result (confidence: 60%):\ncache_index. json cache.\nreaper382 cmakepresetsjson untitled niptulesjson_ | mode. p:\npie latest index index\n| rrovr n/a, nia wy hy\nrecognition. the quick\nwe cateam g cloudy ---\nmain.cpp backut c++ isfml code pie latest.txt\nindexjson.be futurecomm: # c++ isfml code pie reaper3825.t?? sensitive\nhellogrim ?? +, 5 pp backup.tx\nple reap reaps i fes nia\"hiat cat nia tee ove n/a, nia] srovr n/a, n/a\nble ?? ay ?? 8 hello grim this is a test of optical character\nbrown fox jumps over the lazy dog. 460% windows (crlf) a | , few go ag\n> perception_read_text|\nbbreadmema\nbrrvsin.cop\nb stim.iog\nbi sitignore\nbrodepst\nbiv<pkg json\nbomakelistsint\n- a x\nq\ncd preview\nbacternal\narp\nosm\nbb eternal collector\nbabu\ni\nbascripts\nbr 203-3.12\nbb olb-genmarshal-sciptipy\nbikeepit\nbpydoc\nbipxthon-contig\nbi syronyms.cpp\nbvtisper tracert\nbhuild rlesselogist\nbb butte jog taint\nb loggerhop\nbi resper2825.nt\nbb ombicbsitwhoha.nt\nbi cmikepreseisjson\n1207 am\n&\n© % fb sopsoa02s\n---_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\kJivcXE1DOszOgTu2d7p83Owz0WMwK7D.wav",
+    "lastUsed": 1761797294,
+    "permanent": false,
+    "useCount": 1
+  },
   "[reaper3825's ui has been loaded.]_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\HUvYrW7bhFyoknk3qA4ck12Y3LksQyDY.wav",
     "lastUsed": 1761717999,
@@ -25,15 +31,15 @@
   },
   "acknowledged_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\r7y3EmRQfFDfIBP2kThJSxxskcpX77ua.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
   },
   "affirmative_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\WNqYyZd5qdlbPgl6XlQheYfXv51friFi.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
   },
   "background scan started for reaper3825_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\qeaKUYengQ5Ou8IEQuWWhYu0BrMgQJR5.wav",
@@ -67,21 +73,21 @@
   },
   "command executed_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\kFB1AQlQJ6lZdmTDue3m3KbWmv1gfrnj.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
   },
   "done_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\zCaUFPjMHo5haUJAYD7ax3wrn2WXVi3Z.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
   },
   "error occurred_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\KFgc4i6DwtW5J9cjWg0WjgBGP4DkC1kY.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
   },
   "feeling curious? ask me something interesting!_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\F3CHgJQVREjeF34Nz1LZhfU0l8kLmCKv.wav",
@@ -97,15 +103,21 @@
   },
   "go ahead_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\kYtREj90GkdIFTtCPErPGZLy8V3LXpI7.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
+  },
+  "help shown_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\73O3jx0BZQuSckaj31WOzWxtIdd2vf3f.wav",
+    "lastUsed": 1761791669,
+    "permanent": false,
+    "useCount": 1
   },
   "how can i help you?_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\nkixnWWuOaWr7nnVXvvuxebGYY9AFTNy.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
   },
   "i apologize for the confusion._default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\WESIUUzZOEL1m4d3CdblbT0YgRDJpsZ6.wav",
@@ -115,21 +127,21 @@
   },
   "i'm here_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\DHbVAtjRrjDe3sFBwYtlID8F5t02vFb3.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
   },
   "i'm listening_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\0T1XBWwQfV4g9rtztEeVVe7fGDCNetHb.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
   },
   "negative_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\RbREvfcKgtdrdGkxcq0LhvKx842Owvx1.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
   },
   "nlp rules reloaded_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\7TlfpgqtMRoD335Agn7cpDeYglYA7dmU.wav",
@@ -139,15 +151,15 @@
   },
   "no_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\cPorXAttNyZ12NNH5qLmS9rYNPatFzIJ.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
   },
   "okay_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\OF4MjgiuGCQKk3BRmsk66Q4ujcGhPmWm.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
   },
   "opening notepad_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\a8Vl9cKM7Qhib1O7aHN72lwfR4ZqiyrS.wav",
@@ -187,21 +199,21 @@
   },
   "please wait_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\dLHf0bprXh1YUetxftuF51Cf6MNVvQ1q.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
   },
   "processing_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\6m4TNpWWiplgqxRAo3wjVf1W5i9570RD.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
   },
   "ready_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\AlSoSTRrqtKk46AVlDKYprlqyWU1SGck.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
   },
   "report complete: 0 accounts found_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\dhGpetk1X06T3ROfaya5PBfEbmwaMopZ.wav",
@@ -265,9 +277,9 @@
   },
   "understood_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\EWhAGORA1S4QHmPOVZf6ZUcgke1UT5eB.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
   },
   "was that what you wanted?_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\F6Eg4xHPWDWM4E0yfyc5cfZIJ40viykr.wav",
@@ -277,9 +289,9 @@
   },
   "welcome back, austin. grim is online._default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\SsEHJ75V6RUOpzmkAWNPZ342uoM8rKir.wav",
-    "lastUsed": 1761741298,
+    "lastUsed": 1761797149,
     "permanent": false,
-    "useCount": 13
+    "useCount": 15
   },
   "welcome back, reaper3825! how can i assist you today?_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\JfyFgWgLiyEYPcuYvNsMvnNyvo3UjVcq.wav",
@@ -301,9 +313,9 @@
   },
   "yes_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\bNyDbLD1N6zJmp2cQLC84D9urujJMJ0a.wav",
-    "lastUsed": 1761741301,
+    "lastUsed": 1761797152,
     "permanent": false,
-    "useCount": 14
+    "useCount": 16
   },
   "you just asked that earlier — want me to recall my previous answer?_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\a1Ht2IjtMZaL5SemvoDISdUlcdGfkKQS.wav",

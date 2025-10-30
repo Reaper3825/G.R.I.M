@@ -230,5 +230,29 @@
     "case_insensitive": true,
     "description": "Test the intent classifier",
     "slot_names": []
+  }  ,
+  {
+    "intent": "perception_what_see",
+    "description": "Ask GRIM what it can see",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:what\\s+(?:do|can)\\s+you\\s+see|describe\\s+what\\s+you\\s+see)\\s*$",
+    "slot_names": [],
+    "score_boost": 0.35,
+    "case_insensitive": true
+  },
+  {
+    "intent": "perception_read_text",
+    "description": "Ask GRIM to read text",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:read|show)\\s+(?:the\\s+)?(?:text|screen)\\s*$",
+    "slot_names": [],
+    "score_boost": 0.35,
+    "case_insensitive": true
+  },
+  {
+    "intent": "perception_detect_objects",
+    "description": "Detect objects",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:detect|find|look for)\\s+(?:objects?|things?)\\s*$",
+    "slot_names": [],
+    "score_boost": 0.3,
+    "case_insensitive": true
   }
 ]
