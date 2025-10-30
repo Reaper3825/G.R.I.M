@@ -6,6 +6,7 @@ cmake_minimum_required(VERSION 3.22)
 set(VCPKG_FEATURE_FLAGS "manifests,versions" CACHE STRING "")
 set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/vcpkg_installed")
 include_directories("${VCPKG_INSTALLED_DIR}/x64-windows/include")
+include_directories("${VCPKG_INSTALLED_DIR}/x64-windows/include/opencv4")
 link_directories("${VCPKG_INSTALLED_DIR}/x64-windows/lib")
 
 project(GRIM LANGUAGES CXX CUDA)
@@ -88,6 +89,11 @@ set_source_files_properties(
 target_compile_definitions(GRIM PRIVATE GRIM_BUILD_HOST)
 
 include(cmake/Config.cmake)
+
+# Perception libraries (must be after Config.cmake)
+if(GRIM_USE_PERCEPTION AND GRIM_PERCEPTION_AVAILABLE)
+    target_link_libraries(GRIM PRIVATE opencv_core4 opencv_imgproc4 opencv_imgcodecs4 opencv_dnn4 tesseract55 leptonica-1.85.0)
+endif()
 
 target_include_directories(GRIM PRIVATE
     ${CMAKE_SOURCE_DIR}
@@ -246,3 +252,4 @@ message(STATUS "[GRIM] Build configuration complete.")
 # Note: core_plugin is built directly into GRIM.exe, not as a hot-reloadable DLL
 # Only independent plugins with minimal dependencies should be hot-reloadable
 add_subdirectory(plugins/osint_plugin)
+

@@ -23,6 +23,7 @@
 #include "ui/ui_settings_menu.hpp"
 #include "nlp/nlp.hpp"
 #include "timer.hpp"
+#include "perception/perception.hpp"  // ? Added
 #include <crtdbg.h>
 #include <chrono>
 #include <thread>
@@ -102,6 +103,12 @@ int main(int argc, char* argv[])
     // ======================================================
     GRIM::IntentGate::init();
     LOG_PHASE("Intent classification system initialized", true);
+
+    // ======================================================
+    // 6.5  Initialize Perception System
+    // ======================================================
+    GRIM::Perception::init();
+    LOG_PHASE("Perception system initialized", true);
 
     // ======================================================
     // 7. Initialize BGFX global context
@@ -271,6 +278,7 @@ int main(int argc, char* argv[])
     Voice::shutdownTTS();
     GRIM::RL::shutdown();
     GRIM::IntentGate::shutdown(); 
+    GRIM::Perception::shutdown();  // ? Added
     Mouse::shutdown();
 
     UIRoot::get().shutdown();

@@ -81,7 +81,34 @@ set(GRIM_FONT_PATH "" CACHE STRING "Path to TTF font file for UI")
 if(NOT GRIM_FONT_PATH STREQUAL "")
     add_definitions(-DGRIM_FONT_PATH=\"${GRIM_FONT_PATH}\")
 endif()
-
+# =========================================================
+# Perception/Vision AI Models (Optional)
+# =========================================================
+if(GRIM_USE_PERCEPTION)
+    message(STATUS "[GRIM] Perception models enabled - finding OpenCV and Tesseract")
+    
+    find_package(OpenCV QUIET COMPONENTS core imgproc dnn)
+    find_package(Tesseract CONFIG QUIET)
+    
+    if(OpenCV_FOUND AND Tesseract_FOUND)
+        message(STATUS "[GRIM] ✓ OpenCV ${OpenCV_VERSION} found")
+        message(STATUS "[GRIM] ✓ Tesseract found")
+        add_compile_definitions(GRIM_HAS_PERCEPTION)
+        set(GRIM_PERCEPTION_AVAILABLE TRUE)
+    else()
+        if(NOT OpenCV_FOUND)
+            message(WARNING "[GRIM] ✗ OpenCV not found - perception models disabled")
+        endif()
+        if(NOT Tesseract_FOUND)
+            message(WARNING "[GRIM] ✗ Tesseract not found - OCR model disabled")
+        endif()
+        message(STATUS "[GRIM] Install with: vcpkg install opencv[dnn,contrib] tesseract leptonica")
+        set(GRIM_PERCEPTION_LIBS "")
+    endif()
+else()
+    message(STATUS "[GRIM] Perception models disabled (set GRIM_USE_PERCEPTION=ON to enable)")
+    set(GRIM_PERCEPTION_LIBS "")
+endif()
 
 # =========================================================
 # Link Dependencies (static/import libraries)
@@ -107,5 +134,8 @@ target_link_libraries(GRIM PRIVATE
 
     # Graphics backend
     bgfx bimg bx
+
+    ${GRIM_PERCEPTION_LIBS}
 )
+
 

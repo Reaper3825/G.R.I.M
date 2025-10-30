@@ -91,7 +91,35 @@ grim_copy_dlls("${_dll_dir_vcpkg}"
 grim_copy_dlls("${_dll_dir_vcpkg}"
     OpenAL32.dll
 )
-
+# =========================================================
+# Perception/Vision DLLs (OpenCV, Tesseract) - Optional
+# =========================================================
+if(GRIM_USE_PERCEPTION)
+    find_package(OpenCV QUIET COMPONENTS core imgproc dnn)
+    find_package(Tesseract CONFIG QUIET)
+    
+    if(OpenCV_FOUND)
+        message(STATUS "[GRIM] Copying OpenCV DLLs for perception models")
+        grim_copy_dlls("${_dll_dir_vcpkg}"
+            opencv_core4.dll
+            opencv_imgproc4.dll
+            opencv_dnn4.dll
+            opencv_core480.dll
+            opencv_imgproc480.dll
+            opencv_dnn480.dll
+        )
+    endif()
+    
+    if(Tesseract_FOUND)
+        message(STATUS "[GRIM] Copying Tesseract DLLs for OCR model")
+        grim_copy_dlls("${_dll_dir_vcpkg}"
+            tesseract50.dll
+            tesseract51.dll
+            leptonica-1.82.0.dll
+            leptonica-1.83.0.dll
+        )
+    endif()
+endif()
 # --- Ensure correct OpenAL linkage ---
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_link_libraries(GRIM PRIVATE "${DEPS_LIB_DIR}/openal32.lib")
@@ -119,3 +147,5 @@ set_target_properties(GRIM PROPERTIES
 # Final message
 # =========================================================
 message(STATUS "[GRIM] Dependencies.cmake runtime copy setup complete.")
+
+
