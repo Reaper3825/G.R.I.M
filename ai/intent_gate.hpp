@@ -11,6 +11,7 @@ struct ContextSnapshot;
 // Simple intent classification
 enum class IntentType {
     Command,    // Actionable instruction (open, run, close, etc.)
+    Question,   // Information request (what is, how do, where can, etc.)
     Banter,     // Casual conversation (hey, thanks, lol, etc.)
     Unknown     // Uncertain - needs clarification
 };
@@ -50,6 +51,7 @@ private:
 inline std::string intentTypeToString(IntentType type) {
     switch (type) {
         case IntentType::Command: return "command";
+        case IntentType::Question: return "question";
         case IntentType::Banter: return "banter";
         case IntentType::Unknown: return "unknown";
         default: return "unknown";

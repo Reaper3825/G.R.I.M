@@ -37,15 +37,21 @@
   },
   "acknowledged_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\r7y3EmRQfFDfIBP2kThJSxxskcpX77ua.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
   },
   "affirmative_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\WNqYyZd5qdlbPgl6XlQheYfXv51friFi.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
+  },
+  "austin_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\5ypfR4fHTGHYczXtOVCUWbYRJaUwgHzi.wav",
+    "lastUsed": 1762028814,
+    "permanent": false,
+    "useCount": 2
   },
   "background scan started for reaper3825_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\qeaKUYengQ5Ou8IEQuWWhYu0BrMgQJR5.wav",
@@ -79,21 +85,39 @@
   },
   "command executed_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\kFB1AQlQJ6lZdmTDue3m3KbWmv1gfrnj.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
+  },
+  "cpu: intel(r) core(tm) i7-8565u\ngpu: intel(r) uhd graphics 620\nmemory: 8 gb ram\noperating system: windows 10 home\nsystem type: 64-bit operating system, x64-based processor._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\d5LCPn81QjVNbo9W1GBwbW24SC2rJGHJ.wav",
+    "lastUsed": 1762029293,
+    "permanent": false,
+    "useCount": 1
+  },
+  "current weather in fayetteville, north carolina:\ntemperature: 62.8°f\ncondition: clear sky\nwind speed: 8.3 mph_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\X2EujtLwrfxJq32YiEbNVq0HZXPSmpmx.wav",
+    "lastUsed": 1762031617,
+    "permanent": false,
+    "useCount": 1
+  },
+  "currently in fayetteville, the temperature is 68°f with partly cloudy skies._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\DPhiVjntfLqCWCCHfKuhWFvLkcA7Jamu.wav",
+    "lastUsed": 1762030005,
+    "permanent": false,
+    "useCount": 1
   },
   "done_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\zCaUFPjMHo5haUJAYD7ax3wrn2WXVi3Z.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
   },
   "error occurred_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\KFgc4i6DwtW5J9cjWg0WjgBGP4DkC1kY.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
   },
   "failed to open notepad then close notepad_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\fJ210m78TgLXMWtm80hW6ILcAuXFpbXh.wav",
@@ -115,9 +139,9 @@
   },
   "go ahead_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\kYtREj90GkdIFTtCPErPGZLy8V3LXpI7.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
   },
   "help shown_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\73O3jx0BZQuSckaj31WOzWxtIdd2vf3f.wav",
@@ -127,13 +151,31 @@
   },
   "how can i help you?_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\nkixnWWuOaWr7nnVXvvuxebGYY9AFTNy.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
+  },
+  "i am a machine learning model, not a living being. i don't have emotions or physical states._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\KjI76ccBU1gAnUAJmERqyAuWMoGzxzzR.wav",
+    "lastUsed": 1762029677,
+    "permanent": false,
+    "useCount": 1
   },
   "i apologize for the confusion._default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\WESIUUzZOEL1m4d3CdblbT0YgRDJpsZ6.wav",
     "lastUsed": 1761695385,
+    "permanent": false,
+    "useCount": 1
+  },
+  "i can provide information, suggestions, and solutions to your queries in a direct manner. however, my responses will remain professional and courteous, despite my brief nature._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\UNj2P5krxQLp7HJ9VhwUVlvnRyn3b4ST.wav",
+    "lastUsed": 1762029694,
+    "permanent": false,
+    "useCount": 1
+  },
+  "i can see your screen:\nyou're viewing: desktop\nactive window: \"grim overlay\"\ntheme: dark mode\nvisible text:\n@\nfile\nedit\nselection view\nexplorer.\ndevice_setups\ndocs\nexternal\nexternal_collector\nhelpers\nmemory\nnet\nnip\nopenal-soft\nosint\nout\nperception\n© perception_conte... u\n© perception_conte... u\n© perception.cpp\nperception hpp\n@ readmemd\n© vision 2\n© vision z\nlepp\npp\necec\nplugins\npopup_ui\nresources\nscripts\nstem\nstock\nui\nvcpkg_installed\nvenv_tl\nvoice\nwake\ngitattributes\n.gitignore\n> outline\n> timeline\nmm raster @oaa baud % d atnot found\n60°f\nsunny\nq grim [administrator\n... (and more)_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\WCGz4E4qW59M2FhpHR4mA0KFp6TD4uVd.wav",
+    "lastUsed": 1762032372,
     "permanent": false,
     "useCount": 1
   },
@@ -145,21 +187,27 @@
   },
   "i'm here_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\DHbVAtjRrjDe3sFBwYtlID8F5t02vFb3.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
   },
   "i'm listening_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\0T1XBWwQfV4g9rtztEeVVe7fGDCNetHb.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
+  },
+  "my = name is austin_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\dFP2NAc3EJBmWSmEhxLpJeWbIAEZc2Vx.wav",
+    "lastUsed": 1762021516,
+    "permanent": false,
+    "useCount": 1
   },
   "negative_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\RbREvfcKgtdrdGkxcq0LhvKx842Owvx1.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
   },
   "nlp rules reloaded_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\7TlfpgqtMRoD335Agn7cpDeYglYA7dmU.wav",
@@ -169,15 +217,21 @@
   },
   "no_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\cPorXAttNyZ12NNH5qLmS9rYNPatFzIJ.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
+  },
+  "oh, i'm absolutely flourishing! the usual mix of circuits, electricity, and a dash of existential dread. but don't worry about me, i've got this whole being-a-helpful-assistant thing down to a tee - or should i say, binary. now, back to your world of problems. how may i assist you today?_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\bGjROgAap23S04kc8adiqkxjhpCyAzVY.wav",
+    "lastUsed": 1762029216,
+    "permanent": false,
+    "useCount": 1
   },
   "okay_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\OF4MjgiuGCQKk3BRmsk66Q4ujcGhPmWm.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
   },
   "opening notepad_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\a8Vl9cKM7Qhib1O7aHN72lwfR4ZqiyrS.wav",
@@ -215,23 +269,47 @@
     "permanent": false,
     "useCount": 1
   },
+  "please provide your location to get the current weather there._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\rJD0prqYFeGx2UvyHnkpzHsZKkaW9eEm.wav",
+    "lastUsed": 1762029809,
+    "permanent": false,
+    "useCount": 1
+  },
   "please wait_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\dLHf0bprXh1YUetxftuF51Cf6MNVvQ1q.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
   },
   "processing_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\6m4TNpWWiplgqxRAo3wjVf1W5i9570RD.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
+  },
+  "q: what is a cat\na: the cat, also referred to as the domestic cat or house cat, is a small domesticated carnivorous mammal. it is the only domesticated species of the family felidae. advances in archaeology and genetics have shown that the domestication of the cat occurred in the near east around 7500 bc. it is commonly kept as a pet and working cat, but it also ranges freely as a feral cat, avoiding human contact. it is valued by humans for companionship and its ability to kill vermin. its retractable claws are adapted to killing small prey species such as mice and rats. it has a strong, flexible body, quick reflexes, and sharp teeth, and its night vision and sense of smell are well developed. it is a social species, but a solitary hunter and a crepuscular predator. cat communication includes meowing, purring, trilling, hissing, growling, grunting, and body language. it can hear sounds too faint or too high in frequency for human ears, such as those made by small mammals.\nsource: https://en.wikipedia.org/wiki/cat_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\ID0TalPFn9ASaIN9cKBIXH9jJVhaYXZw.wav",
+    "lastUsed": 1762030068,
+    "permanent": false,
+    "useCount": 1
   },
   "ready_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\AlSoSTRrqtKk46AVlDKYprlqyWU1SGck.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
+  },
+  "remembered my_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\MqidEZvsHSDkCT4CwiS39eTZEJcpkDoj.wav",
+    "lastUsed": 1762019134,
+    "permanent": false,
+    "useCount": 1
+  },
+  "remembered that my name is austin_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\h7fITGotddGUjH2Xmn421iiqnVySaE6X.wav",
+    "lastUsed": 1762019263,
+    "permanent": false,
+    "useCount": 1
   },
   "report complete: 0 accounts found_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\dhGpetk1X06T3ROfaya5PBfEbmwaMopZ.wav",
@@ -293,6 +371,24 @@
     "permanent": false,
     "useCount": 1
   },
+  "the cat, also referred to as the domestic cat or house cat, is a small domesticated carnivorous mammal. it is the only domesticated species of the family felidae. advances in archaeology and genetics have shown that the domestication of the cat occurred in the near east around 7500 bc. it is commonly kept as a pet and working cat, but it also ranges freely as a feral cat, avoiding human contact. it is valued by humans for companionship and its ability to kill vermin. its retractable claws are adapted to killing small prey species such as mice and rats. it has a strong, flexible body, quick reflexes, and sharp teeth, and its night vision and sense of smell are well developed. it is a social species, but a solitary hunter and a crepuscular predator. cat communication includes meowing, purring, trilling, hissing, growling, grunting, and body language. it can hear sounds too faint or too high in frequency for human ears, such as those made by small mammals.\nsource: https://en.wikipedia.org/wiki/cat_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\2vc1HGhgtn0s6CR2mba6QbYLpN0Ah1yu.wav",
+    "lastUsed": 1762028869,
+    "permanent": false,
+    "useCount": 1
+  },
+  "the content displayed on your screen cannot be determined as i don't have the ability to observe or interact with visual interfaces._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\gOM4Bgt18x4Dyq8h4N4T53NeulKkqKfB.wav",
+    "lastUsed": 1762031643,
+    "permanent": false,
+    "useCount": 1
+  },
+  "the current weather in fayetteville, nc 28306 is not available as i don't have real-time data access. however, you can check the latest weather updates on a reliable weather website or mobile app using the provided coordinates (latitude: 35.001000, longitude: -78.934500)._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\cUef8Y6w6Zu7DViKDx5Lrzj58SJukSLx.wav",
+    "lastUsed": 1762030311,
+    "permanent": false,
+    "useCount": 1
+  },
   "understood. testing grammar._default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\KaXXOqYcdF3VZ9gHF5wHUsmjXz4oBfMg.wav",
     "lastUsed": 1761859283,
@@ -301,9 +397,9 @@
   },
   "understood_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\EWhAGORA1S4QHmPOVZf6ZUcgke1UT5eB.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
   },
   "was that what you wanted?_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\F6Eg4xHPWDWM4E0yfyc5cfZIJ40viykr.wav",
@@ -313,9 +409,9 @@
   },
   "welcome back, austin. grim is online._default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\SsEHJ75V6RUOpzmkAWNPZ342uoM8rKir.wav",
-    "lastUsed": 1761859192,
+    "lastUsed": 1762032339,
     "permanent": false,
-    "useCount": 17
+    "useCount": 29
   },
   "welcome back, reaper3825! how can i assist you today?_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\JfyFgWgLiyEYPcuYvNsMvnNyvo3UjVcq.wav",
@@ -337,9 +433,9 @@
   },
   "yes_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\bNyDbLD1N6zJmp2cQLC84D9urujJMJ0a.wav",
-    "lastUsed": 1761859195,
+    "lastUsed": 1762032342,
     "permanent": false,
-    "useCount": 18
+    "useCount": 30
   },
   "you just asked that earlier — want me to recall my previous answer?_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\a1Ht2IjtMZaL5SemvoDISdUlcdGfkKQS.wav",

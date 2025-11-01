@@ -1,0 +1,25 @@
+// FlatBuffers schema for FastClassifier weight configuration
+namespace ClassifierWeights;
+
+// Individual weight entry for a keyword/token
+table WeightEntry {
+  token: string (required);  // The keyword or token to match
+  weight: float;             // Weight value for scoring
+}
+
+// Collection of weights for a specific category
+table CategoryWeights {
+  category: string (required);         // Category name (e.g., "command", "question", "banter")
+  weights: [WeightEntry] (required);   // List of token->weight mappings
+  default_weight: float = 1.0;         // Default weight for unknown tokens
+}
+
+// Root configuration for classifier
+table ClassifierConfig {
+  version: int = 1;                           // Schema version for compatibility
+  categories: [CategoryWeights] (required);   // All category weight configurations
+  merge_strategy: string;                     // How to merge with other providers: "override", "additive", "max"
+  priority: int = 50;                         // Provider priority (higher = more important)
+}
+
+root_type ClassifierConfig;

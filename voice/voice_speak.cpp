@@ -1,9 +1,9 @@
 #include "voice_speak.hpp"
 #include "tts_cache.hpp"  // ? Added
 #include "logger.hpp"
-#include "popup_ui/popup_ui.hpp" 
-
+#include "popup_ui/popup_ui.hpp"
 #include "core/audio_core.hpp"
+#include "ai/ai.hpp"  // ✅ NEW: For AI fallback message generation
 #include <thread>
 #include <chrono>
 #include <filesystem>
@@ -156,9 +156,9 @@ namespace Voice {
         }
 
 #ifdef _WIN32
-        if (g_engine == "coqui") {
+        if (g_engine == "coqui" && !g_ttsReady) {
             // =========================================================
-            // Integrated pipe + process creation snippet
+            // Launch Coqui XTTS v2 Python Bridge (Optimized with FP16 + torch.compile)
             // =========================================================
             SECURITY_ATTRIBUTES saAttr{};
             saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -313,6 +313,7 @@ namespace Voice {
 
             if (engine == "coqui") {
                 std::string wavPath = coquiSpeak(text, g_speaker, g_speed);
+                
                 if (!wavPath.empty()) {
                     playAudio(wavPath);
                     while (isPlaying()) {
@@ -536,6 +537,41 @@ namespace Voice {
                     LOG_DEBUG("Voice/Coqui", "Cache storage failed, using temp file: " + generatedFile);
                     return generatedFile;
                 }
+            } else if (resp.value("status", "") == "fallback_notice") {
+                // ✅ NEW: Handle fallback notice - have AI generate a "hold on" message
+                std::string fallbackMsg = resp.value("message", "Processing...");
+                LOG_DEBUG("Voice/Bridge", "Fallback notice received: " + fallbackMsg);
+                
+                // Generate an AI response for "give me a moment" type message
+                std::string aiPrompt = "Generate a brief, in-character message saying you need a moment to process something. Keep it under 15 words and make it sound natural for your personality.";
+                
+                // Call AI backend asynchronously to generate the message
+                auto aiFuture = callAIAsync(aiPrompt);
+                
+                // Wait for AI response with timeout
+                if (aiFuture.wait_for(std::chrono::seconds(3)) == std::future_status::ready) {
+                    std::string aiResponse = aiFuture.get();
+                    if (!aiResponse.empty()) {
+                        LOG_DEBUG("Voice/Fallback", "AI generated fallback message: " + aiResponse);
+                        // Speak the AI-generated message immediately while processing continues
+                        speak(aiResponse, "system");
+                    }
+                } else {
+                    LOG_DEBUG("Voice/Fallback", "AI timeout, using default message");
+                    speak("Give me just a moment...", "system");
+                }
+                
+                // Continue processing - wait for the actual TTS result
+                response = readJsonLineFromBridge(60000);
+                if (!response.empty()) {
+                    resp = json::parse(response);
+                    if (resp.value("status", "") == "ok" && resp.contains("file")) {
+                        std::string generatedFile = resp["file"].get<std::string>();
+                        std::string finalPath = TTSCache::store(text, speaker, speed, generatedFile);
+                        return !finalPath.empty() ? finalPath : generatedFile;
+                    }
+                }
+                return "";
             } else {
                 std::string errMsg = resp.value("message", "unknown error");
                 LOG_ERROR("Voice/Bridge", "Coqui TTS error: " + errMsg);

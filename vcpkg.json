@@ -21,6 +21,8 @@
       "name": "opencv"
     },
     "tesseract",
-    "leptonica"
+    "leptonica",
+    "onnxruntime-gpu",
+    "flatbuffers"
   ]
 }

@@ -2,12 +2,14 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <memory>
 
 namespace GRIM {
 
 // Forward declarations
 enum class IntentType;
 struct ContextSnapshot;
+class IWeightProvider;
 
 // Fast heuristic classifier result
 struct FastResult {
@@ -31,14 +33,28 @@ public:
     static void boostCommandWeight(const std::string& word, float weight = 1.3f);
     
 private:
+    // Weight providers (loaded from various sources)
+    static std::vector<std::shared_ptr<IWeightProvider>> providers_;
+    
     // Command indicators (verbs, action words)
     static std::unordered_map<std::string, float> commandWeights_;
     
     // Banter indicators (social phrases, greetings)
     static std::unordered_map<std::string, float> banterWeights_;
     
+    // Question indicators (question words, information seeking)
+    static std::unordered_map<std::string, float> questionWeights_;
+    
     // Learned weights from corrections
     static std::unordered_map<std::string, float> learnedWeights_;
+    
+    // Load and merge weights from all providers
+    static void loadWeightsFromProviders();
+    
+    // Merge weights using provider strategy
+    static void mergeWeights(const std::string& category, 
+                            const std::unordered_map<std::string, float>& newWeights,
+                            const std::string& strategy);
     
     // Tokenize and normalize input
     static std::vector<std::string> tokenize(const std::string& line);

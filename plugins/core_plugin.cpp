@@ -42,6 +42,12 @@ static void register_all_commands() {
     grim_register_command("alias info",    cmdAliasInfo);
     grim_register_command("alias refresh", cmdAliasRefresh);
 
+    // Memory commands
+    LOG_DEBUG("Plugin", "Registering memory commands");
+    grim_register_command("remember",      cmdRemember);
+    grim_register_command("recall",        cmdRecall);
+    grim_register_command("forget",        cmdForget);
+
     // UI Controls
     LOG_DEBUG("Plugin", "Registering UI commands");
     grim_register_command("console",       cmdToggleOverlayConsole);
