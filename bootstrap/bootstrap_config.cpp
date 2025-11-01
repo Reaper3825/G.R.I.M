@@ -6,8 +6,17 @@
 #include "console_history.hpp"
 #include "ai/ai.hpp"
 #include "logger.hpp"
+#include "nlp/grammar_parser.hpp"  // ✅ NEW: Grammar parser
 
 namespace fs = std::filesystem;
+
+extern NLP g_nlp;
+extern nlohmann::json aiConfig;
+
+// ✅ NEW: Global grammar parser instance DEFINITION
+namespace GRIM {
+    GrammarParser g_grammarParser;
+}
 
 // ----------------- helpers -----------------
 static bool mergeDefaults(nlohmann::json& cfg,
@@ -255,8 +264,27 @@ void initAll() {
     nlohmann::json errorsCfg;
     loadConfig(errPath, defaultErrors(), errorsCfg, "Errors config", "");
 
-    // NLP rules
-    fs::path nlpPath = fs::path(getResourcePath()) / "nlp_rules.json";
+  // ✅ NEW: Grammar-based NLP rules (BEFORE regex rules)
+    fs::path grammarPath = fs::path(getResourcePath()) / "nlp_grammar.json";
+    if (fs::exists(grammarPath)) {
+      if (GRIM::g_grammarParser.load(grammarPath.string())) {
+   LOG_PHASE("Grammar parser initialized", true);
+            
+          // Log statistics
+     auto stats = GRIM::g_grammarParser.getStats();
+          LOG_DEBUG("Grammar", "Loaded " + std::to_string(stats["components_loaded"].get<int>()) + 
+  " components, " + std::to_string(stats["verbs_loaded"].get<int>()) + 
+            " verbs, " + std::to_string(stats["templates_loaded"].get<int>()) + " templates");
+        } else {
+ LOG_ERROR("Config", "Failed to load grammar rules from: " + grammarPath.string());
+   LOG_PHASE("Grammar parser initialization", false);
+   }
+    } else {
+   LOG_DEBUG("Config", "Grammar file not found: " + grammarPath.string() + " - falling back to regex-only NLP");
+    }
+
+    // NLP rules (regex-based - now serves as fallback)
+fs::path nlpPath = fs::path(getResourcePath()) / "nlp_rules.json";
     if (!fs::exists(nlpPath)) {
         std::ofstream(nlpPath) << "[]\n";
         LOG_PHASE("NLP rules created", true);
@@ -264,9 +292,9 @@ void initAll() {
     std::string err;
     if (!g_nlp.load_rules(nlpPath.string(), &err)) {
         LOG_ERROR("Config", "Failed to load NLP rules: " + err);
-        LOG_PHASE("NLP rules load", false);
+   LOG_PHASE("NLP rules load", false);
     } else {
-        LOG_PHASE("NLP rules load", true);
+      LOG_PHASE("NLP rules load", true);
     }
 
     // synonyms.json
