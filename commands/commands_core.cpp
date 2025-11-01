@@ -48,6 +48,10 @@ Intent g_lastIntent;
 // ====================================================
 // Core Plugin Loader
 // ====================================================
+
+// Forward declaration (defined in core_plugin.cpp)
+extern void registerCorePlugin();
+
 void ensureCorePluginsRegistered()
 {
     static bool done = false;
@@ -55,8 +59,7 @@ void ensureCorePluginsRegistered()
     done = true;
 
     LOG_DEBUG("Core", "Ensuring core plugins registered...");
-    extern void registerCorePlugin();
-    registerCorePlugin();
+    registerCorePlugin();  // ✅ Call the actual registration function
 }
 
 // ====================================================

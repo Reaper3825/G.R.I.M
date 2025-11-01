@@ -7,7 +7,10 @@ set(VCPKG_FEATURE_FLAGS "manifests,versions" CACHE STRING "")
 set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/vcpkg_installed")
 include_directories("${VCPKG_INSTALLED_DIR}/x64-windows/include")
 include_directories("${VCPKG_INSTALLED_DIR}/x64-windows/include/opencv4")
+
+# Add library search paths for both Debug and Release
 link_directories("${VCPKG_INSTALLED_DIR}/x64-windows/lib")
+link_directories("${VCPKG_INSTALLED_DIR}/x64-windows/debug/lib")
 
 project(GRIM LANGUAGES CXX CUDA)
 
@@ -79,7 +82,7 @@ add_executable(GRIM ${GRIM_SOURCES} ${GRIM_HEADERS})
 # Allow GRIM.exe to export symbols for possible plugin use
 set_target_properties(GRIM PROPERTIES ENABLE_EXPORTS ON)
 
-# Compile the core plugin directly into the host
+# ✅ Compile the core plugin directly into the host
 target_sources(GRIM PRIVATE ${CMAKE_SOURCE_DIR}/plugins/core_plugin.cpp)
 set_source_files_properties(
     ${CMAKE_SOURCE_DIR}/plugins/core_plugin.cpp
@@ -90,10 +93,8 @@ target_compile_definitions(GRIM PRIVATE GRIM_BUILD_HOST)
 
 include(cmake/Config.cmake)
 
-# Perception libraries (must be after Config.cmake)
-if(GRIM_USE_PERCEPTION AND GRIM_PERCEPTION_AVAILABLE)
-    target_link_libraries(GRIM PRIVATE opencv_core4 opencv_imgproc4 opencv_imgcodecs4 opencv_dnn4 tesseract55 leptonica-1.85.0)
-endif()
+# Perception libraries are now linked in Config.cmake
+# (removed hardcoded linking here to avoid conflicts)
 
 target_include_directories(GRIM PRIVATE
     ${CMAKE_SOURCE_DIR}
@@ -252,4 +253,5 @@ message(STATUS "[GRIM] Build configuration complete.")
 # Note: core_plugin is built directly into GRIM.exe, not as a hot-reloadable DLL
 # Only independent plugins with minimal dependencies should be hot-reloadable
 add_subdirectory(plugins/osint_plugin)
+
 

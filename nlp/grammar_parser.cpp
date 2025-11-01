@@ -1,0 +1,494 @@
+#include "grammar_parser.hpp"
+#include "../logger.hpp"
+#include <algorithm>
+#include <sstream>
+#include <cctype>
+#include <fstream>
+
+namespace GRIM {
+
+GrammarParser::GrammarParser() {
+    LOG_DEBUG("GrammarParser", "Initializing grammar-based NLP parser");
+}
+
+bool GrammarParser::load(const std::string& path) {
+    try {
+        std::ifstream file(path);
+  if (!file.is_open()) {
+            LOG_ERROR("GrammarParser", "Failed to open grammar file: " + path);
+   return false;
+        }
+        
+  nlohmann::json grammar;
+ file >> grammar;
+        
+// Load grammar components
+        if (grammar.contains("grammar_components")) {
+        for (auto& [name, comp] : grammar["grammar_components"].items()) {
+        GrammarComponent component;
+      component.name = name;
+      component.description = comp.value("description", "");
+       component.optional = comp.value("optional", false);
+    component.capture = comp.value("capture", false);
+     component.requiresContext = comp.value("requires_context", false);
+   
+      if (comp.contains("patterns")) {
+       for (auto& pattern : comp["patterns"]) {
+    component.patterns.push_back(pattern.get<std::string>());
+           }
+         }
+      
+    components[name] = component;
+            }
+   }
+
+        // Load command verbs
+    if (grammar.contains("command_verbs")) {
+            for (auto& [verb, data] : grammar["command_verbs"].items()) {
+   CommandVerb cmdVerb;
+   cmdVerb.canonical = verb;
+         cmdVerb.intent = data.value("intent", "");
+      cmdVerb.requiresObject = data.value("requires_object", false);
+      
+ if (data.contains("synonyms")) {
+      for (auto& syn : data["synonyms"]) {
+  cmdVerb.synonyms.push_back(syn.get<std::string>());
+     }
+      }
+ 
+    verbs[verb] = cmdVerb;
+ }
+        }
+    
+        // Load command objects
+   if (grammar.contains("command_objects")) {
+   for (auto& [obj, data] : grammar["command_objects"].items()) {
+    CommandObject cmdObj;
+    cmdObj.canonical = obj;
+     cmdObj.category = data.value("category", "");
+      
+   if (data.contains("synonyms")) {
+       for (auto& syn : data["synonyms"]) {
+     cmdObj.synonyms.push_back(syn.get<std::string>());
+             }
+     }
+    
+objects[obj] = cmdObj;
+       }
+  }
+ 
+     // Load sentence templates
+        if (grammar.contains("sentence_templates")) {
+       for (auto& [name, tmpl] : grammar["sentence_templates"].items()) {
+       SentenceTemplate sentTmpl;
+                sentTmpl.name = name;
+        sentTmpl.structure = tmpl.value("structure", "");
+     sentTmpl.requiresContext = tmpl.value("requires_context", false);
+        sentTmpl.category = tmpl.value("category", "");
+      
+       if (tmpl.contains("examples")) {
+           for (auto& ex : tmpl["examples"]) {
+       sentTmpl.examples.push_back(ex.get<std::string>());
+        }
+  }
+       
+            templates.push_back(sentTmpl);
+    }
+    }
+   
+ // Load context rules
+      if (grammar.contains("context_rules")) {
+            contextRules = grammar["context_rules"];
+        }
+ 
+        // Load learning config
+        if (grammar.contains("learning_config")) {
+    learningConfig = grammar["learning_config"];
+    }
+ 
+        LOG_DEBUG("GrammarParser", "Loaded grammar: " + 
+   std::to_string(components.size()) + " components, " +
+      std::to_string(verbs.size()) + " verbs, " +
+        std::to_string(objects.size()) + " objects, " +
+     std::to_string(templates.size()) + " templates");
+     
+        return true;
+  
+    } catch (const std::exception& e) {
+LOG_ERROR("GrammarParser", std::string("Failed to load grammar: ") + e.what());
+     return false;
+    }
+}
+
+std::vector<std::string> GrammarParser::tokenize(const std::string& input) {
+std::vector<std::string> tokens;
+std::istringstream iss(input);
+    std::string token;
+    
+    while (iss >> token) {
+        // Convert to lowercase
+  std::transform(token.begin(), token.end(), token.begin(), ::tolower);
+ 
+    // Remove punctuation
+        token.erase(std::remove_if(token.begin(), token.end(), ::ispunct), token.end());
+        
+if (!token.empty()) {
+   tokens.push_back(token);
+   }
+    }
+    
+    return tokens;
+}
+
+std::vector<std::string> GrammarParser::splitCommands(const std::string& input) {
+    std::vector<std::string> commands;
+    
+    if (!contextRules.contains("multi_command_separator") ||
+        !contextRules["multi_command_separator"].value("enabled", false)) {
+ commands.push_back(input);
+        return commands;
+    }
+    
+    auto separators = contextRules["multi_command_separator"]["separators"];
+    
+ std::string current = input;
+    std::string lowerInput = input;
+ std::transform(lowerInput.begin(), lowerInput.end(), lowerInput.begin(), ::tolower);
+    
+    for (const auto& sep : separators) {
+        std::string separator = sep.get<std::string>();
+      size_t pos = lowerInput.find(separator);
+        
+        if (pos != std::string::npos) {
+  commands.push_back(current.substr(0, pos));
+            
+     std::string rest = current.substr(pos + separator.length());
+      // Trim whitespace
+            rest.erase(0, rest.find_first_not_of(" \t\n\r"));
+ 
+            // Recursively split remaining
+       auto restCommands = splitCommands(rest);
+commands.insert(commands.end(), restCommands.begin(), restCommands.end());
+     
+return commands;
+        }
+    }
+    
+    // No separator found
+    commands.push_back(input);
+    return commands;
+}
+
+double GrammarParser::levenshteinSimilarity(const std::string& a, const std::string& b) {
+std::vector<std::vector<int>> dp(a.length() + 1, std::vector<int>(b.length() + 1));
+  
+    for (size_t i = 0; i <= a.length(); i++) dp[i][0] = i;
+    for (size_t j = 0; j <= b.length(); j++) dp[0][j] = j;
+    
+    for (size_t i = 1; i <= a.length(); i++) {
+      for (size_t j = 1; j <= b.length(); j++) {
+     if (a[i-1] == b[j-1]) {
+       dp[i][j] = dp[i-1][j-1];
+        } else {
+       dp[i][j] = 1 + std::min({dp[i-1][j], dp[i][j-1], dp[i-1][j-1]});
+     }
+   }
+    }
+    
+    int distance = dp[a.length()][b.length()];
+    int maxLen = std::max(a.length(), b.length());
+ return maxLen > 0 ? 1.0 - (double)distance / maxLen : 0.0;
+}
+
+std::optional<std::string> GrammarParser::fuzzyMatchVerb(const std::string& token) {
+  if (!contextRules.contains("fuzzy_matching") ||
+  !contextRules["fuzzy_matching"].value("enabled", false)) {
+     return std::nullopt;
+  }
+    
+    double threshold = contextRules["fuzzy_matching"].value("threshold", 0.65);
+    double bestScore = 0.0;
+    std::string bestMatch;
+    
+    for (const auto& [verb, data] : verbs) {
+        // Check canonical
+ double score = levenshteinSimilarity(token, verb);
+        if (score > bestScore && score >= threshold) {
+     bestScore = score;
+   bestMatch = verb;
+        }
+        
+   // Check synonyms
+        for (const auto& syn : data.synonyms) {
+     score = levenshteinSimilarity(token, syn);
+            if (score > bestScore && score >= threshold) {
+     bestScore = score;
+   bestMatch = verb;
+   }
+   }
+    }
+    
+    if (!bestMatch.empty()) {
+   stats.fuzzyMatches++;
+ LOG_DEBUG("GrammarParser", "Fuzzy matched '" + token + "' ? '" + bestMatch + 
+        "' (score: " + std::to_string(bestScore) + ")");
+        return bestMatch;
+    }
+  
+    return std::nullopt;
+}
+
+std::optional<std::string> GrammarParser::matchVerb(
+    const std::string& input, size_t& position, CommandVerb& outVerb) {
+  
+    auto tokens = tokenize(input);
+    if (position >= tokens.size()) return std::nullopt;
+    
+    std::string token = tokens[position];
+    
+    // Direct match
+  for (const auto& [verb, data] : verbs) {
+        if (token == verb) {
+   outVerb = data;
+  position++;
+ return verb;
+        }
+        
+   // Check synonyms
+        for (const auto& syn : data.synonyms) {
+if (token == syn) {
+      outVerb = data;
+     position++;
+       return verb; // Return canonical form
+            }
+      }
+    }
+    
+    // Try fuzzy match
+    auto fuzzyMatch = fuzzyMatchVerb(token);
+    if (fuzzyMatch.has_value()) {
+   outVerb = verbs[fuzzyMatch.value()];
+  position++;
+        return fuzzyMatch.value();
+    }
+    
+    return std::nullopt;
+}
+
+std::optional<std::string> GrammarParser::matchObject(
+const std::string& input, size_t& position, CommandObject& outObject) {
+    
+    auto tokens = tokenize(input);
+    if (position >= tokens.size()) return std::nullopt;
+    
+    std::string token = tokens[position];
+    
+    // Direct match
+for (const auto& [obj, data] : objects) {
+   if (token == obj) {
+         outObject = data;
+       position++;
+   return obj;
+   }
+   
+ // Check synonyms
+        for (const auto& syn : data.synonyms) {
+     if (token == syn) {
+          outObject = data;
+position++;
+    return obj; // Return canonical form
+  }
+   }
+    }
+    
+    // If no match, might be a custom object (app name, etc.)
+    // Return the token itself
+    position++;
+    return token;
+}
+
+bool GrammarParser::matchTemplate(
+    const std::string& input,
+ const SentenceTemplate& tmpl,
+    GrammarParseResult& result) {
+    
+    // TODO: Implement full template matching
+ // For now, simplified version
+
+auto tokens = tokenize(input);
+    size_t position = 0;
+  
+    // Try to match structure elements
+    // Structure format: "[component] <required> [component]"
+    // [...] = optional, <...> = required
+    
+    // This is a simplified implementation
+    // Real implementation would parse the structure string properly
+    
+    return false; // Placeholder
+}
+
+GrammarParseResult GrammarParser::parse(const std::string& input) {
+    return parseWithContext(input, {});
+}
+
+GrammarParseResult GrammarParser::parseWithContext(
+    const std::string& input,
+    const std::unordered_map<std::string, std::string>& context) {
+    
+    stats.totalParses++;
+    
+    GrammarParseResult result;
+ 
+    // Check for multi-command
+    auto commands = splitCommands(input);
+    if (commands.size() > 1) {
+  stats.multiCommandParses++;
+        
+    for (const auto& cmd : commands) {
+            auto subResult = parseWithContext(cmd, context);
+     if (subResult.matched) {
+      result.subCommands.push_back(subResult);
+     }
+        }
+        
+        if (!result.subCommands.empty()) {
+     result.matched = true;
+ result.intent = "multi_command";
+     result.confidence = 0.8;
+            stats.successfulParses++;
+   return result;
+        }
+    }
+    
+    // Try each template
+    for (const auto& tmpl : templates) {
+        if (matchTemplate(input, tmpl, result)) {
+     result.matched = true;
+   result.matchedTemplate = tmpl.name;
+            result.confidence = calculateConfidence(result);
+     stats.successfulParses++;
+  
+       if (!context.empty()) {
+   stats.contextualParses++;
+   }
+         
+     return result;
+        }
+    }
+    
+    // Fallback: simple verb + object matching
+    auto tokens = tokenize(input);
+size_t position = 0;
+    
+    // Skip common prefixes (greeting, politeness)
+    while (position < tokens.size()) {
+  std::string token = tokens[position];
+        
+      bool isPrefix = false;
+ for (const auto& [name, comp] : components) {
+        if (comp.optional && !comp.capture) {
+    for (const auto& pattern : comp.patterns) {
+           if (token.find(pattern) != std::string::npos) {
+   isPrefix = true;
+   break;
+      }
+      }
+      }
+   if (isPrefix) break;
+   }
+        
+        if (!isPrefix) break;
+   position++;
+    }
+        
+  // Try to find verb
+    CommandVerb verb;
+    auto verbMatch = matchVerb(input, position, verb);
+    
+    if (verbMatch.has_value()) {
+   result.matched = true;
+        result.intent = verb.intent;
+      result.matchedComponents.push_back("verb:" + verbMatch.value());
+        
+      // Try to find object if required
+        if (verb.requiresObject && position < tokens.size()) {
+            CommandObject obj;
+auto objMatch = matchObject(input, position, obj);
+            
+    if (objMatch.has_value()) {
+       result.slots["object"] = objMatch.value();
+        result.matchedComponents.push_back("object:" + objMatch.value());
+      }
+   }
+   
+        result.confidence = calculateConfidence(result);
+     stats.successfulParses++;
+        return result;
+    }
+    
+    stats.failedParses++;
+    return result;
+}
+
+double GrammarParser::calculateConfidence(const GrammarParseResult& result) {
+    if (!result.matched) return 0.0;
+    
+    double confidence = 0.5; // Base confidence
+    
+    // Boost for matched template
+    if (!result.matchedTemplate.empty()) {
+        confidence += 0.2;
+    }
+    
+  // Boost for matched components
+    confidence += result.matchedComponents.size() * 0.1;
+    
+    // Boost for filled slots
+confidence += result.slots.size() * 0.05;
+    
+    return std::min(1.0, confidence);
+}
+
+bool GrammarParser::addVerb(const std::string& verb, const std::string& intent,
+       const std::vector<std::string>& synonyms) {
+  CommandVerb cmdVerb;
+    cmdVerb.canonical = verb;
+  cmdVerb.intent = intent;
+    cmdVerb.synonyms = synonyms;
+    
+  verbs[verb] = cmdVerb;
+    LOG_DEBUG("GrammarParser", "Added verb: " + verb + " ? " + intent);
+    return true;
+}
+
+bool GrammarParser::addObject(const std::string& object, const std::string& category,
+          const std::vector<std::string>& synonyms) {
+    CommandObject cmdObj;
+    cmdObj.canonical = object;
+    cmdObj.category = category;
+    cmdObj.synonyms = synonyms;
+    
+    objects[object] = cmdObj;
+    LOG_DEBUG("GrammarParser", "Added object: " + object + " (" + category + ")");
+    return true;
+}
+
+nlohmann::json GrammarParser::getStats() const {
+    return {
+        {"total_parses", stats.totalParses},
+   {"successful_parses", stats.successfulParses},
+ {"failed_parses", stats.failedParses},
+        {"multi_command_parses", stats.multiCommandParses},
+   {"contextual_parses", stats.contextualParses},
+        {"fuzzy_matches", stats.fuzzyMatches},
+ {"accuracy", stats.totalParses > 0 ? 
+  (double)stats.successfulParses / stats.totalParses : 0.0},
+    {"components_loaded", components.size()},
+        {"verbs_loaded", verbs.size()},
+    {"objects_loaded", objects.size()},
+        {"templates_loaded", templates.size()}
+    };
+}
+
+} // namespace GRIM
