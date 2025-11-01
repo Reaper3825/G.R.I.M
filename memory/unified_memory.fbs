@@ -1,0 +1,110 @@
+// FlatBuffers schema for GRIM unified memory system
+namespace GRIM.Memory;
+
+enum CommType : byte {
+    COMMAND = 0,
+    QUESTION = 1,
+    BANTER = 2,
+    UNKNOWN = 3
+}
+
+enum SourceType : byte {
+    USER_VOICE = 0,
+    USER_TEXT = 1,
+    SYSTEM_HW = 2,
+    SYSTEM_SW = 3,
+    NETWORK_API = 4,
+    GRIM_INTERNAL = 5,
+    BASE = 6,
+ FIELD = 7,
+    FUSED = 8
+}
+
+enum TypeTag : byte {
+    FACT = 0,
+    EVENT = 1,
+  COMMAND = 2,
+    STATUS = 3,
+    SUMMARY = 4,
+  LEARNED_COMMAND = 5,
+    UNKNOWN_COMMAND = 6,
+    PREDICTION = 7
+}
+
+enum IntentType : byte {
+    INFORM = 0,
+    ASK = 1,
+    SET_PREF = 2,
+    CORRECT = 3,
+    STATUS_UPDATE = 4,
+    QUERY = 5
+}
+
+enum ContextType : byte {
+    CONVERSATION = 0,
+    WAKE = 1,
+ DEV_MODE = 2,
+    MONITOR = 3,
+    SYSTEM_BOOT = 4,
+ COMMAND_LEARNING = 5
+}
+
+enum Modality : byte {
+    TEXT = 0,
+    AUDIO = 1,
+    VISION = 2,
+    SENSOR = 3
+}
+
+table MemoryRecord {
+    id:ulong;
+    timestamp:ulong;
+    source:SourceType;
+    type:TypeTag;
+    intent:IntentType;
+    context:ContextType;
+    comm_type:CommType;
+    modality:Modality;
+    raw:string;
+    normalized:string;
+    intent_name:string;
+    tags:[string];
+    confidence:float;
+    importance:float = 1.0;
+    recency_weight:float = 1.0;
+    embedding:[float];
+    parent_id:ulong = 0;
+    related_ids:[ulong];
+}
+
+table IndexEntry {
+    id:ulong;
+    offset:ulong;
+    embedding:[float];
+    type:TypeTag;
+    source:SourceType;
+    timestamp:ulong;
+    confidence:float;
+    tags:[string];
+}
+
+table TagIndex {
+    tag:string;
+    memory_ids:[ulong];
+}
+
+table MemoryMetadata {
+    schema_version:uint = 1;
+    build_time:ulong;
+    record_count:ulong;
+    total_size_bytes:ulong;
+}
+
+table MemoryStore {
+    metadata:MemoryMetadata;
+    records:[MemoryRecord];
+    index:[IndexEntry];
+    tag_index:[TagIndex];
+}
+
+root_type MemoryStore;

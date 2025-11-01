@@ -23,7 +23,8 @@
 #include "ui/ui_settings_menu.hpp"
 #include "nlp/nlp.hpp"
 #include "timer.hpp"
-#include "perception/perception.hpp"  // ? Added
+#include "perception/perception.hpp"
+#include "perception/perception_context.hpp" 
 #include <crtdbg.h>
 #include <chrono>
 #include <thread>
@@ -88,7 +89,7 @@ int main(int argc, char* argv[])
     // ======================================================
     // 4.   Memory system
     // ======================================================
-    g_memoryStorage.initialize("D:/G.R.I.M/data/memories.json");
+    g_memoryStorage.initialize("D:/G.R.I.M/data/memories.fb");
     GRIM::ContextManager::setMemoryStorage(&g_memoryStorage);
     LOG_PHASE("Memory system initialized", true);
     
@@ -109,6 +110,10 @@ int main(int argc, char* argv[])
     // ======================================================
     GRIM::Perception::init();
     LOG_PHASE("Perception system initialized", true);
+    
+    // ✅ NEW: Initialize context-aware perception manager
+    GRIM::Perception::initContextManager();
+    LOG_PHASE("Perception context manager initialized", true);
 
     // ======================================================
     // 7. Initialize BGFX global context

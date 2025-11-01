@@ -7,6 +7,7 @@
 #include "personality_manager.hpp"
 #include "nlp/nlp.hpp"  // ✅ NEW: For NLP integration
 #include "fast_classifier.hpp"  // ✅ NEW: For teaching classifier
+#include "system_detect.hpp"  // ✅ NEW: For location context
 #include <cpr/cpr.h>
 #include <fstream>
 #include <sstream>
@@ -225,7 +226,27 @@ CommandResult ai_process(const std::string& input) {
     for (int attempt = 1; attempt <= maxRetries; ++attempt) {
         try {
             std::string prefix = GRIM::PersonalityManager::generatePrefix();
-            auto future = callAIAsync(prefix + " " + input);
+            
+            // ✅ NEW: Add location context for location-aware conversations
+            std::string locationContext = "";
+            std::string lowerInput = input;
+            std::transform(lowerInput.begin(), lowerInput.end(), lowerInput.begin(), ::tolower);
+            
+            bool isLocationRelevant = (
+                lowerInput.find("weather") != std::string::npos ||
+                lowerInput.find("near me") != std::string::npos ||
+                lowerInput.find("nearby") != std::string::npos ||
+                lowerInput.find("local") != std::string::npos ||
+                lowerInput.find("where am i") != std::string::npos ||
+                lowerInput.find("my location") != std::string::npos ||
+                lowerInput.find("around here") != std::string::npos
+            );
+            
+            if (isLocationRelevant && (g_location.lat != 0.0 || g_location.lon != 0.0)) {
+                locationContext = " [USER LOCATION: " + g_location.fullAddress() + "]";
+            }
+            
+            auto future = callAIAsync(prefix + locationContext + " " + input);
             reply = future.get();
 
 
@@ -265,6 +286,14 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
     try {
         // --- Build context prompt with strict JSON formatting ---
         std::string personalityPrefix = GRIM::PersonalityManager::generatePrefix();
+        
+        // ✅ NEW: Add location context for location-aware queries
+        std::string locationContext = "";
+        if (g_location.lat != 0.0 || g_location.lon != 0.0) {
+            locationContext = "\n[USER LOCATION: " + g_location.fullAddress() + 
+                            " (lat: " + std::to_string(g_location.lat) + 
+                            ", lon: " + std::to_string(g_location.lon) + ")]";
+        }
 
         std::string prompt =
             "You are GRIM. Respond with ONLY valid JSON, no markdown, no explanations.\n\n"
@@ -277,7 +306,8 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
             "- If command: include \"suggested_command\"\n"
             "- If conversation/question: include \"response\"\n"
             "- Output MUST start with { and end with }\n\n"
-            "Input: \"" + input + "\"\n\n"
+            + personalityPrefix + locationContext +
+            "\n\nInput: \"" + input + "\"\n\n"
             "JSON response:";
 
         // --- Query backend (Mistral / LocalAI / OpenAI etc.) ---

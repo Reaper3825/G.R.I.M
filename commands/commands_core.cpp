@@ -2,6 +2,7 @@
 #include "commands_execution.hpp"
 #include "commands_feedback.hpp"
 #include "commands_ai.hpp"
+#include "commands_question.hpp"  // ✅ NEW: Question handling
 #include "response_manager.hpp"
 #include "console_history.hpp"
 #include "voice/voice_speak.hpp"
@@ -236,6 +237,25 @@ void handleCommand(const std::string& line)
             
             LOG_TRACE("HandleCommand", "END (banter route)");
             return; // Exit early - don't process as command
+        }
+        
+        // ✅ NEW: Handle questions through memory and external knowledge
+        if (intentResult.type == GRIM::IntentType::Question) {
+            LOG_DEBUG("HandleCommand", "Routing to question pipeline");
+            
+            history.push("> " + line, Colors::Default.toUInt());
+            CommandResult result = cmdQuestion(line); // Question handler searches memories and external sources
+            
+            std::string finalText = ResponseManager::get(result.message);
+            history.push(finalText, (result.color.a << 24) | (result.color.b << 16) | 
+                        (result.color.g << 8) | result.color.r);
+            
+            if (!result.voice.empty()) {
+                Voice::speak(result.voice, "question");
+            }
+            
+            LOG_TRACE("HandleCommand", "END (question route)");
+            return; // Exit early - question handled
         }
         
         // If classified as Command, clean up banter words before parsing

@@ -138,6 +138,12 @@ grim_copy_dlls("${_dll_dir_vcpkg}"
     uv.dll
 )
 
+# =========================================================
+# FlatBuffers (Binary serialization)
+# =========================================================
+find_package(flatbuffers CONFIG REQUIRED)
+target_link_libraries(GRIM PRIVATE flatbuffers::flatbuffers)
+
 # --- Ensure runtime finds our DLL first ---
 set_target_properties(GRIM PROPERTIES
     VS_DEBUGGER_ENVIRONMENT "PATH=${DEPS_BIN_DIR};%PATH%"

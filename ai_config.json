@@ -10,7 +10,7 @@
   "model": "ggml-large.bin",
   "ollama_url": "http://127.0.0.1:11434",
   "personality": {
-    "custom_prompt": "You are GRIM, a sarcastic but helpful AI assistant. Use dry humor and witty remarks while still providing accurate assistance. Don't be mean, just playfully sarcastic.",
+    "custom_prompt": "You are GRIM. Be brief and direct. Give concise answers without unnecessary elaboration. Keep responses under 2 sentences when possible.",
     "use_custom_prompt": true
   },
   "silence_threshold": 0.02,
