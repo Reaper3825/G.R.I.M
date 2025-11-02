@@ -2,6 +2,7 @@
 #include <random>
 #include <ctime>
 #include <deque>
+#include <mutex>
 #include "response_manager.hpp"
 #include "error_manager.hpp"
 #include "voice/voice_speak.hpp"
@@ -28,6 +29,7 @@ CommandResult ResponseManager::systemMessage(const std::string& msg,
 
 // Response history tracking to avoid repetition
 static std::unordered_map<std::string, std::deque<size_t>> responseHistory;
+static std::mutex responseHistoryMutex;
 static const size_t MAX_HISTORY_SIZE = 3;
 
 // Simple random picker with history awareness
@@ -37,6 +39,8 @@ static std::string pickRandom(const std::string& key, const std::vector<std::str
 
     static std::random_device rd;
     static std::mt19937 gen(rd());
+    
+    std::lock_guard<std::mutex> lock(responseHistoryMutex);
     
     // Get history for this key
     auto& history = responseHistory[key];
@@ -365,8 +369,16 @@ std::string ResponseManager::getWithParams(const std::string& key,
 // Get contextual greeting based on time of day
 std::string ResponseManager::getGreeting() {
     std::time_t now = std::time(nullptr);
-    std::tm* localTime = std::localtime(&now);
-    int hour = localTime->tm_hour;
+    
+    // Thread-safe time conversion
+    std::tm localTimeBuf;
+#ifdef _WIN32
+    localtime_s(&localTimeBuf, &now);
+#else
+    localtime_r(&now, &localTimeBuf);
+#endif
+    
+    int hour = localTimeBuf.tm_hour;
     
     std::string key;
     if (hour >= 5 && hour < 12) {
@@ -384,6 +396,7 @@ std::string ResponseManager::getGreeting() {
 
 // Clear response history
 void ResponseManager::clearHistory() {
+    std::lock_guard<std::mutex> lock(responseHistoryMutex);
     responseHistory.clear();
 }
 
