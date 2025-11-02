@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <ctime>
+#include <regex> // ✅ For monitor number parsing
 
 #ifdef _WIN32
 #include <windows.h>
@@ -700,10 +701,19 @@ std::string PerceptionContextManager::answerVisionQuestion(const std::string& qu
     std::ostringstream response;
     
     // General "what's on my screen" questions
-    if (lowerQ.find("what") != std::string::npos && 
-        (lowerQ.find("screen") != std::string::npos || lowerQ.find("see") != std::string::npos)) {
+    if (lowerQClean.find("what") != std::string::npos && 
+        (lowerQClean.find("screen") != std::string::npos || lowerQClean.find("see") != std::string::npos ||
+         lowerQClean.find("monitor") != std::string::npos)) {
         
-        response << "I can see your screen:\n\n";
+        response << "I can see ";
+        
+        // ✅ Indicate which monitor if multi-monitor
+        if (ctx.isMultiMonitor && ctx.monitorIndex >= 0) {
+            response << "monitor " << (ctx.monitorIndex + 1) << " (of " << ctx.totalMonitors << "):\n\n";
+        } else {
+            response << "your screen:\n\n";
+        }
+        
         response << "You're viewing: " << sceneTypeToString(ctx.sceneType) << "\n";
         
         if (!ctx.activeWindowTitle.empty()) {
@@ -739,7 +749,7 @@ std::string PerceptionContextManager::answerVisionQuestion(const std::string& qu
     }
     
     // Text reading questions
-    if (lowerQ.find("read") != std::string::npos || lowerQ.find("text") != std::string::npos) {
+    if (lowerQClean.find("read") != std::string::npos || lowerQClean.find("text") != std::string::npos) {
         if (ctx.hasText && !ctx.screenText.empty()) {
             return "Screen text:\n" + ctx.screenText;
         } else {
@@ -748,7 +758,7 @@ std::string PerceptionContextManager::answerVisionQuestion(const std::string& qu
     }
     
     // Object/element questions
-    if (lowerQ.find("object") != std::string::npos || lowerQ.find("element") != std::string::npos) {
+    if (lowerQClean.find("object") != std::string::npos || lowerQClean.find("element") != std::string::npos) {
         if (!ctx.detectedObjects.empty()) {
             response << "I can see these objects:\n";
             for (const auto& obj : ctx.detectedObjects) {
