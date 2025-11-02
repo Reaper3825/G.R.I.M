@@ -62,5 +62,21 @@
   "ERR_VOICE_TRANSCRIBE_FAIL": {
     "debug": "Whisper transcription failed during processing.",
     "user": "Could not transcribe speech."
+  },
+  "ERR_AI_INVALID_BACKEND": {
+    "debug": "User specified an unsupported AI backend name.",
+    "user": "[AI] Invalid backend. Use: ollama, localai, openai, or auto."
+  },
+  "ERR_RESPONSE_PARAM_MISSING": {
+    "debug": "Required parameter missing in response template.",
+    "user": "[Response] Template parameter missing."
+  },
+  "ERR_NETWORK_UNAVAILABLE": {
+    "debug": "Network connection required but unavailable.",
+    "user": "[Network] Connection unavailable."
+  },
+  "ERR_PERMISSION_DENIED": {
+    "debug": "Insufficient permissions for requested operation.",
+    "user": "[Permission] Access denied."
   }
 }
