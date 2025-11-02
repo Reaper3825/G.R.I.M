@@ -107,6 +107,12 @@ VS Code
 Testing & running small pieces
 - For fast iteration you can build individual modules or create small test harnesses that link against the core target. See `commands/` and `ai/` for examples of components and how they are wired into the main target.
 
+## Documentation
+
+Detailed documentation is available in the `docs/` directory:
+
+- **[Response System](docs/RESPONSE_SYSTEM.md)** — Comprehensive guide to the improved response system with history tracking, contextual responses, and parameter substitution
+
 ## Project structure (high level)
 
 - `ai/` — AI-related modules and intent handling
@@ -117,6 +123,7 @@ Testing & running small pieces
 - `ui/`, `popup_ui/` — user-facing interface components
 - `cmake/` — CMake helper modules used by the build
 - `external/` — third-party code and integrations (may require separate builds)
+- `docs/` — detailed documentation for subsystems and features
 
 Explore the repository to find more specific files and examples for each subsystem.
 
