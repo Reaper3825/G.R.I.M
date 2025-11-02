@@ -213,9 +213,38 @@ if (!networkAvailable) {
 
 ## Implementation Details
 
+### Thread Safety
+
+The response system is fully thread-safe:
+
+**Response History Protection**:
+```cpp
+static std::mutex responseHistoryMutex;
+
+// All access to responseHistory is protected
+std::lock_guard<std::mutex> lock(responseHistoryMutex);
+```
+
+**Thread-Safe Time Conversion**:
+```cpp
+// Uses platform-specific thread-safe functions
+#ifdef _WIN32
+    localtime_s(&localTimeBuf, &now);  // Windows thread-safe variant
+#else
+    localtime_r(&now, &localTimeBuf);  // POSIX thread-safe variant
+#endif
+```
+
+This ensures the response system can be safely called from multiple threads simultaneously, such as:
+- Voice processing thread
+- UI event handlers
+- AI background tasks
+- Multiple concurrent command handlers
+
 ### Response History Structure
 ```cpp
 static std::unordered_map<std::string, std::deque<size_t>> responseHistory;
+static std::mutex responseHistoryMutex;
 static const size_t MAX_HISTORY_SIZE = 3;
 ```
 
@@ -228,7 +257,17 @@ Each response key maintains a deque of recently used variant indices. When selec
 
 ### Time-Based Greeting Logic
 ```cpp
-int hour = std::localtime(&now)->tm_hour;
+std::time_t now = std::time(nullptr);
+std::tm localTimeBuf;
+
+// Thread-safe time conversion
+#ifdef _WIN32
+    localtime_s(&localTimeBuf, &now);  // Windows
+#else
+    localtime_r(&now, &localTimeBuf);  // POSIX
+#endif
+
+int hour = localTimeBuf.tm_hour;
 
 if (hour >= 5 && hour < 12) -> "greeting_morning"
 else if (hour >= 12 && hour < 17) -> "greeting_afternoon"
