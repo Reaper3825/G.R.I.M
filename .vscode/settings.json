@@ -118,7 +118,20 @@
         "shared_mutex": "cpp",
         "source_location": "cpp",
         "cfenv": "cpp",
-        "pointers": "cpp"
+        "pointers": "cpp",
+        "barrier": "cpp",
+        "csetjmp": "cpp",
+        "cuchar": "cpp",
+        "latch": "cpp",
+        "scoped_allocator": "cpp",
+        "spanstream": "cpp",
+        "stacktrace": "cpp",
+        "stdfloat": "cpp",
+        "syncstream": "cpp",
+        "*.inc": "cpp",
+        "netfwd": "cpp",
+        "rope": "cpp",
+        "slist": "cpp"
     },
 
     // ──────────────────────────────────────────────────────────────
@@ -135,5 +148,7 @@
 
     // Stop VS Code from auto-detecting nested repos
     "git.autoRepositoryDetection": false,
-    "makefile.makefilePath": "D:\\G.R.I.M\\CMakeLists.txt"
+    "makefile.makefilePath": "D:\\G.R.I.M\\CMakeLists.txt",
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.typeCheckingMode": "standard"
 }

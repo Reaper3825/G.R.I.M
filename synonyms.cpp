@@ -1,5 +1,8 @@
 #include "synonyms.hpp"
-
+#include <fstream>
+#include <iostream>
+#include <nlohmann/json.hpp>
+#include <algorithm>
 
 // ---------------- Globals ----------------
 

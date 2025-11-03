@@ -9,7 +9,8 @@
 #include "memory/memory_storage.hpp"
 #include "memory/context_manager.hpp"
 #include "ai/ai_rl.hpp"
-#include "ai/intent_gate.hpp" 
+#include "ai/intent_gate.hpp"
+#include "ai/task_planner.hpp"  // ✅ NEW: Multi-step task planning
 #include "core/window_manager.hpp"
 #include "core/plugin_manager.hpp"
 #include "core/input_parser.hpp"
@@ -114,6 +115,23 @@ int main(int argc, char* argv[])
     // ✅ NEW: Initialize context-aware perception manager
     GRIM::Perception::initContextManager();
     LOG_PHASE("Perception context manager initialized", true);
+    
+    // ======================================================
+    // 6.7  Initialize Task Planner
+    // ======================================================
+    GRIM::TaskPlanner::init();
+    LOG_PHASE("Task planner initialized", true);
+    
+    // ✅ NEW: Start continuous screen awareness
+    GRIM::Perception::ContinuousCaptureConfig captureConfig;
+    captureConfig.frameSkip = 30;              // Capture every 30 frames (~1/sec at 30fps)
+    captureConfig.captureIntervalMs = 1000;    // Or every 1000ms
+    captureConfig.useFrameSkip = false;        // Use time-based for consistency
+    captureConfig.captureAllMonitors = false;  // Just active monitor
+    captureConfig.changeThreshold = 0.05f;     // 5% change detection
+    captureConfig.useVisionAI = false;         // ✅ Vision AI too slow for background capture (only on-demand)
+    GRIM::Perception::g_contextManager->startContinuousCapture(captureConfig);
+    LOG_PHASE("Continuous screen capture started", true);
 
     // ======================================================
     // 7. Initialize BGFX global context

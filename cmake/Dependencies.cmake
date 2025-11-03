@@ -92,11 +92,12 @@ grim_copy_dlls("${_dll_dir_vcpkg}"
     OpenAL32.dll
 )
 # =========================================================
-# Perception/Vision DLLs (OpenCV, Tesseract) - Optional
+# Perception/Vision DLLs (OpenCV, Tesseract, ONNX) - Optional
 # =========================================================
 if(GRIM_USE_PERCEPTION)
-    find_package(OpenCV QUIET COMPONENTS core imgproc dnn)
+    find_package(OpenCV QUIET COMPONENTS core imgproc dnn photo)
     find_package(Tesseract CONFIG QUIET)
+    find_package(onnxruntime CONFIG QUIET)
     
     if(OpenCV_FOUND)
         message(STATUS "[GRIM] Copying OpenCV DLLs for perception models")
@@ -104,9 +105,11 @@ if(GRIM_USE_PERCEPTION)
             opencv_core4.dll
             opencv_imgproc4.dll
             opencv_dnn4.dll
+            opencv_photo4.dll
             opencv_core480.dll
             opencv_imgproc480.dll
             opencv_dnn480.dll
+            opencv_photo480.dll
         )
     endif()
     
@@ -117,6 +120,14 @@ if(GRIM_USE_PERCEPTION)
             tesseract51.dll
             leptonica-1.82.0.dll
             leptonica-1.83.0.dll
+        )
+    endif()
+    
+    # ONNX Runtime DLLs (library already linked in Config.cmake)
+    if(EXISTS "${VCPKG_INSTALLED_DIR}/x64-windows/bin/onnxruntime.dll")
+        grim_copy_dlls("${_dll_dir_vcpkg}"
+            onnxruntime.dll
+            onnxruntime_providers_shared.dll
         )
     endif()
 endif()

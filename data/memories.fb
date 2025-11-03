@@ -35,14 +35,14 @@
       "context": "conversation",
       "id": "",
       "intent": "inform",
-      "normalized": "I can see your screen:\n\nYou're viewing: Desktop\nActive window: \"GRIM Overlay\"\nTheme: Dark mode\n\nVisible text:\n@\n\nFile\n\nEdit\n\nSelection View\n\nEXPLORER.\n\ndevice_setups\ndocs\n\nexternal\nexternal_collector\nhelpers\n\nmemory\n\nnet\n\nnip\n\nopenal-soft\n\nosint\n\nout\n\nperception\n\n© perception_conte... U\n\n© perception_conte... U\n\n© perception.cpp\n\nperception hpp\n\n@ READMEmd\n© vision 2\n© vision z\n\nLepp\npp\n\necec\n\nplugins\npopup_ui\nresources\nscripts\n\nSTEM\n\nStock\n\nui\nvcpkg_installed\nvenv_tl\n\nvoice\n\nwake\ngitattributes\n\n.gitignore\n\n> OUTLINE\n> TIMELINE\nMM raster @oAa Baud % D atnot found\n\n60°F\nSunny\n\nQ GRIM [Administrator\n... (and more)",
-      "raw": "Vision: I can see your screen:\n\nYou're viewing: Desktop\nActive window: \"GRIM Overlay\"\nTheme: Dark mode\n\nVisible text:\n@\n\nFile\n\nEdit\n\nSelection View\n\nEXPLORER.\n\ndevice_setups\ndocs\n\nexternal\nexternal_collector\nhelpers\n\nmemory\n\nnet\n\nnip\n\nopenal-soft\n\nosint\n\nout\n\nperception\n\n© perception_conte... U\n\n© perception_conte... U\n\n© perception.cpp\n\nperception hpp\n\n@ READMEmd\n© vision 2\n© vision z\n\nLepp\npp\n\necec\n\nplugins\npopup_ui\nresources\nscripts\n\nSTEM\n\nStock\n\nui\nvcpkg_installed\nvenv_tl\n\nvoice\n\nwake\ngitattributes\n\n.gitignore\n\n> OUTLINE\n> TIMELINE\nMM raster @oAa Baud % D atnot found\n\n60°F\nSunny\n\nQ GRIM [Administrator\n... (and more)",
+      "normalized": "I can see monitor 1 (of 3):\n\nYou're viewing: Desktop\nActive window: \"GRIM Overlay\"\nTheme: Dark mode\n\nVisible text:\nN\n\n| a EXPLORER\nVG\n\nFile Edit Selection\n\n¥ IMPROVEMEN.\n© multi_monitoi\n\nQ\n»\na\nWe)\nRe\nA\ne\nAe\nA\n\n© perception_co..\n© perception_co...\n\n© perceptio...",
+      "raw": "Vision: I can see monitor 1 (of 3):\n\nYou're viewing: Desktop\nActive window: \"GRIM Overlay\"\nTheme: Dark mode\n\nVisible text:\nN\n\n| a EXPLORER\nVG\n\nFile Edit Selection\n\n¥ IMPROVEMEN.\n© multi_monitoi\n\nQ\n»\na\nWe)\nRe\nA\ne\nAe\nA\n\n© perception_co..\n© perception_co...\n\n© perceptio...",
       "source": "grim.internal",
       "tags": [
         "vision",
         "ocr"
       ],
-      "timestamp": 1762032360,
+      "timestamp": 1762150435,
       "type": "event"
     }
   ]

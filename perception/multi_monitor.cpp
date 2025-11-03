@@ -231,8 +231,8 @@ cv::Mat MultiMonitorManager::captureMonitor(int monitorIndex) const {
     DeleteDC(hdcMem);
     ReleaseDC(nullptr, hdcScreen);
     
-    LOG_DEBUG("MultiMonitor", "Captured monitor " + std::to_string(monitorIndex) + 
-              " (" + std::to_string(mon.width) + "x" + std::to_string(mon.height) + ")");
+    // LOG_DEBUG("MultiMonitor", "Captured monitor " + std::to_string(monitorIndex) + 
+    //           " (" + std::to_string(mon.width) + "x" + std::to_string(mon.height) + ")");
     
     return result;
 #else

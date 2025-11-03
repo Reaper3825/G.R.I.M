@@ -9,9 +9,10 @@ namespace Perception {
 // Vision AI backend types
 enum class VisionAIBackend {
     None,
-    Ollama_LLaVA,      // Local LLaVA via Ollama
-    Ollama_BakLLaVA,   // BakLLaVA variant
-    Ollama_LLaVA_Phi,  // Microsoft Phi-3 Vision
+    ONNX_Vision,       // ✅ Fast ONNX quantized vision model (recommended)
+    Ollama_LLaVA,      // Local LLaVA via Ollama (slow)
+    Ollama_BakLLaVA,   // BakLLaVA variant (slow)
+    Ollama_LLaVA_Phi,  // Microsoft Phi-3 Vision (slow)
     OpenAI_GPT4Vision, // OpenAI GPT-4 Vision API
     Azure_GPT4Vision,  // Azure OpenAI GPT-4 Vision
     GitHub_Models      // GitHub Models API
@@ -77,14 +78,20 @@ public:
     // Get current backend
     VisionAIBackend getCurrentBackend() const;
     
+    // ✅ Warm up the model on startup (async, non-blocking)
+    void warmupModel();
+    
 private:
     struct Impl;
     std::unique_ptr<Impl> pImpl;
     
     // Backend-specific implementations
+    VisionAnalysisResult analyzeWithONNX(const VisionAnalysisRequest& request);
     VisionAnalysisResult analyzeWithOllama(const VisionAnalysisRequest& request);
     VisionAnalysisResult analyzeWithOpenAI(const VisionAnalysisRequest& request);
     VisionAnalysisResult analyzeWithGitHub(const VisionAnalysisRequest& request);
+    VisionAnalysisResult analyzeWithHybridVision(const VisionAnalysisRequest& request);
+    VisionAnalysisResult analyzeWithFastVision(const VisionAnalysisRequest& request);
     
     // Helper: encode image to base64
     std::string encodeImageToBase64(const cv::Mat& image);

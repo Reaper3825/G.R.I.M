@@ -254,5 +254,45 @@
     "slot_names": [],
     "score_boost": 0.3,
     "case_insensitive": true
+  },
+  {
+    "intent": "move_mouse",
+    "description": "Move mouse to coordinates",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:move|put|position)\\s+(?:the\\s+)?mouse\\s+(?:to\\s+)?(.+)$",
+    "slot_names": ["coordinates"],
+    "score_boost": 0.35,
+    "case_insensitive": true
+  },
+  {
+    "intent": "click",
+    "description": "Click mouse button",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:click|press|tap)(?:\\s+(?:the\\s+)?(left|right|middle))?(?:\\s+(?:mouse\\s+)?button)?\\s*$",
+    "slot_names": ["button"],
+    "score_boost": 0.3,
+    "case_insensitive": true
+  },
+  {
+    "intent": "type",
+    "description": "Type text",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:type|write|enter)\\s+(.+)$",
+    "slot_names": ["text"],
+    "score_boost": 0.35,
+    "case_insensitive": true
+  },
+  {
+    "intent": "key",
+    "description": "Press keyboard key or key combo",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?(?:press|hit|tap)\\s+(?:the\\s+)?(?:key\\s+)?(.+)$",
+    "slot_names": ["key"],
+    "score_boost": 0.3,
+    "case_insensitive": true
+  },
+  {
+    "intent": "click_on",
+    "description": "Click on specific UI element by text or object type",
+    "pattern": "^(?:hey\\s+grim[, ]*|grim[, ]*|please\\s+)?click\\s+on\\s+(.+)$",
+    "slot_names": ["target"],
+    "score_boost": 0.4,
+    "case_insensitive": true
   }
 ]

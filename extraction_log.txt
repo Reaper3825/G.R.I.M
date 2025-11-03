@@ -1,0 +1,147 @@
+================================================================================
+GGUF to PyTorch - FULL Vision-Language Model Extraction
+================================================================================
+Input: C:\Users\Merlinthegrim\.ollama\models\blobs\sha256-9999d473417a8e179d993498195be5f42cab963acc75f4a6b15d981e8b68abed
+Size: 7.28 GB
+
+[GGUF] Parsing header...
+  Γ£à Magic: 0x46554747
+  Γ£à Version: 3
+  Γ£à Tensor count: 908
+  Γ£à Metadata count: 40
+
+[GGUF] Parsing 40 metadata entries...
+  [0] general.architecture = mllama
+  [1] general.file_type = 15
+  [2] general.parameter_count = 10670220900
+  [3] general.quantization_version = 2
+  [4] mllama.attention.cross_attention_layers = [3, 8, 13, 18, 23, 28, 33, 38]
+  [5] mllama.attention.head_count = 32
+  [6] mllama.attention.head_count_kv = 8
+  [7] mllama.attention.layer_norm_rms_epsilon = 9.999999747378752e-06
+  [8] mllama.block_count = 40
+  [9] mllama.context_length = 131072
+  [10] mllama.embedding_length = 4096
+  [11] mllama.feed_forward_length = 14336
+  [12] mllama.rope.dimension_count = 128
+  [13] mllama.rope.freq_base = 500000.0
+  [14] mllama.vision.attention.head_count = 16
+  [15] mllama.vision.attention.layer_norm_epsilon = 9.999999747378752e-06
+  [16] mllama.vision.block_count = 32
+  [17] mllama.vision.embedding_length = 1280
+  [18] mllama.vision.feed_forward_length = 5120
+  [19] mllama.vision.global.block_count = 8
+  [20] mllama.vision.image_size = 560
+  [21] mllama.vision.intermediate_layers_indices = [3, 7, 15, 23, 30]
+  [22] mllama.vision.max_num_tiles = 4
+  [23] mllama.vision.num_channels = 3
+  [24] mllama.vision.patch_size = 14
+
+  Total metadata keys: 40
+  Vision-related keys found: ['mllama.vision.attention.head_count', 'mllama.vision.attention.layer_norm_epsilon', 'mllama.vision.block_count', 'mllama.vision.embedding_length', 'mllama.vision.feed_forward_length', 'mllama.vision.global.block_count', 'mllama.vision.image_size', 'mllama.vision.intermediate_layers_indices', 'mllama.vision.max_num_tiles', 'mllama.vision.num_channels', 'mllama.vision.patch_size']
+
+[GGUF] Parsing 908 tensor info entries...
+
+[Analysis] Tensor prefixes:
+  blk: 392 tensors
+  mm: 2 tensors
+  output: 1 tensors
+  output_norm: 1 tensors
+  rope_freqs: 1 tensors
+  token_embd: 1 tensors
+  v: 510 tensors
+
+[GGUF] Tensor data starts at offset: 8391424
+
+[GGUF] Extracting ALL tensors (this will take a few minutes)...
+  Progress: [1/908] (0.1%) blk.0.attn_output.weight
+  Progress: [10/908] (1.1%) blk.1.attn_output.weight
+  Progress: [20/908] (2.2%) blk.2.attn_q.weight
+  Progress: [30/908] (3.3%) blk.3.attn_norm.weight
+  Progress: [40/908] (4.4%) blk.4.attn_k.weight
+  Progress: [50/908] (5.5%) blk.5.attn_k.weight
+  Progress: [60/908] (6.6%) blk.6.attn_q.weight
+  Progress: [70/908] (7.7%) blk.7.attn_v.weight
+  Progress: [80/908] (8.8%) blk.8.ffn_down.weight
+  Progress: [90/908] (9.9%) blk.9.attn_output.weight
+  Progress: [100/908] (11.0%) blk.10.attn_q.weight
+  Progress: [110/908] (12.1%) blk.11.attn_v.weight
+  Progress: [120/908] (13.2%) blk.13.cross_attn_k_norm.weight
+  Progress: [130/908] (14.3%) blk.13.ffn_gate.weight
+  Progress: [140/908] (15.4%) blk.14.attn_q.weight
+  Progress: [150/908] (16.5%) blk.15.attn_v.weight
+  Progress: [160/908] (17.6%) blk.17.attn_norm.weight
+  Progress: [170/908] (18.7%) blk.18.cross_attn_k_proj.weight
+  Progress: [180/908] (19.8%) blk.18.ffn_up.weight
+  Progress: [190/908] (20.9%) blk.19.attn_v.weight
+  Progress: [200/908] (22.0%) blk.21.attn_norm.weight
+  Progress: [210/908] (23.1%) blk.22.ffn_down.weight
+  Progress: [220/908] (24.2%) blk.23.cross_attn_o_proj.weight
+  Progress: [230/908] (25.3%) blk.23.ffn_norm.weight
+  Progress: [240/908] (26.4%) blk.25.attn_norm.weight
+  Progress: [250/908] (27.5%) blk.26.ffn_down.weight
+  Progress: [260/908] (28.6%) blk.27.attn_k.weight
+  Progress: [270/908] (29.7%) blk.28.cross_attn_q_norm.weight
+  Progress: [280/908] (30.8%) blk.29.attn_norm.weight
+  Progress: [290/908] (31.9%) blk.30.ffn_down.weight
+  Progress: [300/908] (33.0%) blk.31.ffn_gate.weight
+  Progress: [310/908] (34.1%) blk.32.ffn_up.weight
+  Progress: [320/908] (35.2%) blk.33.cross_attn_q_proj.weight
+  Progress: [330/908] (36.3%) blk.34.ffn_down.weight
+  Progress: [340/908] (37.4%) blk.35.ffn_gate.weight
+  Progress: [350/908] (38.5%) blk.36.ffn_up.weight
+  Progress: [360/908] (39.6%) blk.37.ffn_norm.weight
+  Progress: [370/908] (40.7%) blk.38.cross_attn_v_proj.weight
+  Progress: [380/908] (41.9%) blk.39.attn_q.weight
+  Progress: [390/908] (43.0%) v.tile_position_embd.gate
+  Progress: [400/908] (44.1%) v.global.blk.0.ffn_norm.bias
+  Progress: [410/908] (45.2%) v.global.blk.1.ffn_up.bias
+  Progress: [420/908] (46.3%) v.global.blk.2.attn_gate
+  Progress: [430/908] (47.4%) v.global.blk.2.attn_k.weight
+  Progress: [440/908] (48.5%) v.global.blk.3.ffn_down.bias
+  Progress: [450/908] (49.6%) v.global.blk.4.attn_norm.bias
+  Progress: [460/908] (50.7%) v.global.blk.4.attn_q.weight
+  Progress: [470/908] (51.8%) v.global.blk.5.ffn_norm.bias
+  Progress: [480/908] (52.9%) v.global.blk.6.ffn_up.bias
+  Progress: [490/908] (54.0%) v.global.blk.7.attn_gate
+  Progress: [500/908] (55.1%) v.global.blk.7.attn_k.weight
+  Progress: [510/908] (56.2%) v.post_tile_position_embd.gate
+  Progress: [520/908] (57.3%) v.blk.0.ffn_norm.weight
+  Progress: [530/908] (58.4%) v.blk.1.ffn_down.weight
+  Progress: [540/908] (59.5%) v.blk.10.ffn_up.weight
+  Progress: [550/908] (60.6%) v.blk.11.attn_norm.weight
+  Progress: [560/908] (61.7%) v.blk.11.attn_v.weight
+  Progress: [570/908] (62.8%) v.blk.12.attn_output.weight
+  Progress: [580/908] (63.9%) v.blk.13.ffn_norm.weight
+  Progress: [590/908] (65.0%) v.blk.14.ffn_down.weight
+  Progress: [600/908] (66.1%) v.blk.15.ffn_up.weight
+  Progress: [610/908] (67.2%) v.blk.16.attn_norm.weight
+  Progress: [620/908] (68.3%) v.blk.16.attn_v.weight
+  Progress: [630/908] (69.4%) v.blk.17.attn_output.weight
+  Progress: [640/908] (70.5%) v.blk.18.ffn_norm.weight
+  Progress: [650/908] (71.6%) v.blk.19.ffn_down.weight
+  Progress: [660/908] (72.7%) v.blk.2.ffn_up.weight
+  Progress: [670/908] (73.8%) v.blk.20.attn_norm.weight
+  Progress: [680/908] (74.9%) v.blk.20.attn_v.weight
+  Progress: [690/908] (76.0%) v.blk.21.attn_output.weight
+  Progress: [700/908] (77.1%) v.blk.22.ffn_norm.weight
+  Progress: [710/908] (78.2%) v.blk.23.ffn_down.weight
+  Progress: [720/908] (79.3%) v.blk.24.ffn_up.weight
+  Progress: [730/908] (80.4%) v.blk.25.attn_norm.weight
+  Progress: [740/908] (81.5%) v.blk.25.attn_v.weight
+  Progress: [750/908] (82.6%) v.blk.26.attn_output.weight
+  Progress: [760/908] (83.7%) v.blk.27.ffn_norm.weight
+  Progress: [770/908] (84.8%) v.blk.28.ffn_down.weight
+  Progress: [780/908] (85.9%) v.blk.29.ffn_up.weight
+  Progress: [790/908] (87.0%) v.blk.3.attn_norm.weight
+  Progress: [800/908] (88.1%) v.blk.3.attn_v.weight
+  Progress: [810/908] (89.2%) v.blk.30.attn_output.weight
+  Progress: [820/908] (90.3%) v.blk.31.ffn_norm.weight
+  Progress: [830/908] (91.4%) v.blk.4.ffn_down.weight
+  Progress: [840/908] (92.5%) v.blk.5.ffn_up.weight
+  Progress: [850/908] (93.6%) v.blk.6.attn_norm.weight
+  Progress: [860/908] (94.7%) v.blk.6.attn_v.weight
+  Progress: [870/908] (95.8%) v.blk.7.attn_output.weight
+  Progress: [880/908] (96.9%) v.blk.8.ffn_norm.weight
+  Progress: [890/908] (98.0%) v.blk.9.ffn_down.weight
+  Progress: [900/908] (99.1%) token_embd.weight

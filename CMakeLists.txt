@@ -112,6 +112,7 @@ target_include_directories(GRIM PRIVATE
     ${CMAKE_SOURCE_DIR}/popup_ui
     ${CMAKE_SOURCE_DIR}/external_collector
     ${CMAKE_SOURCE_DIR}/perception
+    ${CMAKE_SOURCE_DIR}/vision
     ${CMAKE_SOURCE_DIR}/deps/include
 )
 

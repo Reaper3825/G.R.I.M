@@ -26,12 +26,16 @@ file(GLOB memory_SOURCES "memory/*.cpp")
 file(GLOB memory_HEADERS "memory/*.hpp")
 file(GLOB core_SOURCES "core/*.cpp")
 file(GLOB core_HEADERS "core/*.hpp")
+file(GLOB input_SOURCES "core/input/*.cpp")
+file(GLOB input_HEADERS "core/input/*.hpp")
 file(GLOB NET_SOURCES "net/*.cpp")
 file(GLOB NET_HEADERS "net/*.hpp")
 file(GLOB EXTERNAL_COLLECTOR_SOURCES "external_collector/*.cpp")
 file(GLOB EXTERNAL_COLLECTOR_HEADERS "external_collector/*.hpp")
 file(GLOB PERCEPTION_SOURCES "perception/*.cpp")
 file(GLOB PERCEPTION_HEADERS "perception/*.hpp")
+file(GLOB VISION_SOURCES "vision/*.cpp")
+file(GLOB VISION_HEADERS "vision/*.hpp")
 
 
 
@@ -58,9 +62,11 @@ set(GRIM_SOURCES
     ${helpers_SOURCES}
     ${memory_SOURCES}
     ${core_SOURCES}
+    ${input_SOURCES}
     ${NET_SOURCES}
     ${EXTERNAL_COLLECTOR_SOURCES}
     ${PERCEPTION_SOURCES}
+    ${VISION_SOURCES}
 )
 
 set(GRIM_HEADERS
@@ -86,7 +92,9 @@ set(GRIM_HEADERS
     ${helpers_HEADERS}
     ${memory_HEADERS}
     ${core_HEADERS}
+    ${input_HEADERS}
     ${NET_HEADERS}
     ${EXTERNAL_COLLECTOR_HEADERS}
     ${PERCEPTION_HEADERS}
+    ${VISION_HEADERS}
 )

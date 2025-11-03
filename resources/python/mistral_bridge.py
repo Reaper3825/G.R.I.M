@@ -1,24 +1,45 @@
 #!/usr/bin/env python3
 """
-Persistent Mistral bridge for intent classification.
+Persistent LLM bridge for intent classification.
 Loads model once, stays alive, processes JSON commands via stdin.
+Uses configured LLM via Ollama for fast intent detection.
 """
 
 import sys
 import json
 import subprocess
 from typing import Optional
+from pathlib import Path
+
+# Load AI config to get model name
+def load_ai_config():
+    """Load ai_config.json to get configured model"""
+    try:
+        config_path = Path(__file__).parent.parent.parent / "ai_config.json"
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+                return config.get("default_model", "llama3.1:8b")
+    except Exception as e:
+        log(f"Failed to load ai_config.json: {e}")
+    return "llama3.1:8b"  # Fallback default
+
+# Global model name from config
+MODEL_NAME = load_ai_config()
 
 def log(msg: str):
     """Log to stderr (never stdout - that's for JSON protocol)"""
-    print(f"[Mistral Bridge] {msg}", file=sys.stderr, flush=True)
+    print(f"[LLM Bridge] {msg}", file=sys.stderr, flush=True)
 
 def send_json(obj: dict):
     """Send JSON response to stdout"""
     print(json.dumps(obj), flush=True)
 
-def call_ollama(prompt: str, model: str = "mistral:latest") -> Optional[str]:
+def call_ollama(prompt: str, model: str = None) -> Optional[str]:
     """Call Ollama API for intent classification"""
+    if model is None:
+        model = MODEL_NAME
+    
     try:
         # Use ollama run with JSON output
         result = subprocess.run(
@@ -42,7 +63,7 @@ def call_ollama(prompt: str, model: str = "mistral:latest") -> Optional[str]:
         return None
 
 def classify_intent(text: str) -> dict:
-    """Classify text as command or banter using Mistral"""
+    """Classify text as command or banter using Llama"""
     
     prompt = f"""You are GRIM's intent classifier.
 Decide if this message is a COMMAND (actionable instruction) or BANTER (casual conversation).
@@ -64,7 +85,7 @@ Response:"""
     
     # Extract JSON from response
     try:
-        # Find JSON in response (Mistral might include extra text)
+        # Find JSON in response (model might include extra text)
         start = response.find('{')
         end = response.find('}', start)
         
@@ -90,7 +111,7 @@ Response:"""
 def persistent_loop():
     """Main loop - read commands from stdin, process, write to stdout"""
     
-    log("Starting persistent mode")
+    log(f"Starting persistent mode with model: {MODEL_NAME}")
     
     # Check if Ollama is available
     try:

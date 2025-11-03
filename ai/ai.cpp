@@ -1,13 +1,16 @@
 #include "ai.hpp"
 #include "voice/voice.hpp"
+#include "voice/voice_speak.hpp"  // ✅ For Voice::speak()
 #include "resources.hpp"
 #include "commands/commands_core.hpp"
 #include "error_manager.hpp"
 #include "logger.hpp"
 #include "personality_manager.hpp"
-#include "nlp/nlp.hpp"  // ✅ NEW: For NLP integration
-#include "fast_classifier.hpp"  // ✅ NEW: For teaching classifier
-#include "system_detect.hpp"  // ✅ NEW: For location context
+#include "action_executor.hpp"  // ✅ Intelligent action execution
+#include "task_planner.hpp"     // ✅ Multi-step task planning
+#include "nlp/nlp.hpp"  // ✅ For NLP integration
+#include "fast_classifier.hpp"  // ✅ For teaching classifier
+#include "system_detect.hpp"  // ✅ For location context
 #include <cpr/cpr.h>
 #include <fstream>
 #include <sstream>
@@ -132,7 +135,7 @@ std::string resolveBackendURL() {
 std::future<std::string> callAIAsync(const std::string& prompt) {
     return std::async(std::launch::async, [prompt]() -> std::string {
         std::string backend = resolveBackendURL();
-        std::string model   = aiConfig.value("default_model", "mistral");
+        std::string model   = aiConfig.value("default_model", "llama3.1:8b");
 
         LOG_DEBUG("AI", "callAIAsync backend=" + backend + " model=" + model);
 
@@ -303,16 +306,16 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
             "{\"intent\":\"conversation\",\"response\":\"...\"}\n\n"
             "Rules:\n"
             "- intent must be: \"command\", \"conversation\", or \"question\"\n"
-            "- If command: include \"suggested_command\"\n"
+            "- If command: include \"suggested_command\" (PRESERVE action verbs like solve, find, create, etc.)\n"
             "- If conversation/question: include \"response\"\n"
             "- Output MUST start with { and end with }\n\n"
             + personalityPrefix + locationContext +
             "\n\nInput: \"" + input + "\"\n\n"
             "JSON response:";
 
-        // --- Query backend (Mistral / LocalAI / OpenAI etc.) ---
+        // --- Query backend (Llama / LocalAI / OpenAI etc.) ---
         std::string backend = resolveBackendURL();
-        std::string model   = aiConfig.value("default_model", "mistral");
+        std::string model   = aiConfig.value("default_model", "llama3.1:8b");
 
         LOG_DEBUG("AI", "ai_interpret backend=" + backend + " model=" + model);
 
@@ -363,6 +366,44 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
             std::string suggested = j.value("suggested_command", "");
             if (!suggested.empty()) {
                 LOG_DEBUG("AI", "Interpreter inferred command: " + suggested);
+                
+                // ✅ Check if this is a complex multi-step task
+                if (GRIM::TaskPlanner::isComplexTask(suggested)) {
+                    LOG_DEBUG("AI", "Detected complex task, planning execution: " + suggested);
+                    
+                    // Plan the task
+                    auto task = GRIM::TaskPlanner::planTask(suggested, input);
+                    
+                    if (task && !task->steps.empty()) {
+                        // Present plan to user
+                        std::string planSummary = "I'll do this in " + std::to_string(task->steps.size()) + " steps. Proceed?";
+                        Voice::speak(planSummary, "question");
+                        
+                        // TODO: Wait for user confirmation, then execute
+                        // For now, return the plan
+                        result.message = planSummary;
+                        result.category = "task_plan";
+                        result.success = true;
+                        result.errorCode = "ERR_NONE";
+                        return result;
+                    }
+                }
+                
+                // ✅ Check if this is a simple action command (click, type, press, etc.)
+                if (GRIM::ActionExecutor::isActionCommand(suggested)) {
+                    LOG_DEBUG("AI", "Detected action command, executing directly: " + suggested);
+                    CommandResult actionResult = GRIM::ActionExecutor::executeAction(suggested);
+                    
+                    // Still teach the NLP about this pattern
+                    try {
+                        extern NLP g_nlp;
+                        if (g_nlp.learnPattern(input, suggested)) {
+                            LOG_DEBUG("AI", "✓ Taught NLP: \"" + input + "\" → " + suggested);
+                        }
+                    } catch (...) {}
+                    
+                    return actionResult;
+                }
                 
                 // ✅ INTEGRATION #5: Teach both NLP and Fast Classifier
                 try {
@@ -455,7 +496,7 @@ void ai_process_stream(
     const std::function<void(const std::string&)>& callback
 ) {
     std::string backend = resolveBackendURL();
-    std::string model   = aiConfig.value("default_model", "mistral");
+    std::string model   = aiConfig.value("default_model", "llama3.1:8b");
 
     LOG_DEBUG("AI", "ai_process_stream backend=" + backend + " model=" + model);
 

@@ -37,15 +37,21 @@
   },
   "acknowledged_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\r7y3EmRQfFDfIBP2kThJSxxskcpX77ua.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
   },
   "affirmative_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\WNqYyZd5qdlbPgl6XlQheYfXv51friFi.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
+  },
+  "analyzing and providing concise responses to your questions._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\tKKyslCWSvb9FlJyZldX87u9v8EVs6pQ.wav",
+    "lastUsed": 1762116028,
+    "permanent": false,
+    "useCount": 1
   },
   "austin_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\5ypfR4fHTGHYczXtOVCUWbYRJaUwgHzi.wav",
@@ -71,6 +77,12 @@
     "permanent": false,
     "useCount": 1
   },
+  "based on the context, it is unclear what specific action you are performing. however, i can provide assistance if you have a question or need help with something._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\pFx2jXvEc8P9vYBA5QfzehTuh2t7Ohqe.wav",
+    "lastUsed": 1762116434,
+    "permanent": false,
+    "useCount": 1
+  },
   "cache cleared_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\nKvlafgLZBMV62w1rWElfqfOZ82f91Iu.wav",
     "lastUsed": 1761709754,
@@ -85,9 +97,9 @@
   },
   "command executed_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\kFB1AQlQJ6lZdmTDue3m3KbWmv1gfrnj.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
   },
   "cpu: intel(r) core(tm) i7-8565u\ngpu: intel(r) uhd graphics 620\nmemory: 8 gb ram\noperating system: windows 10 home\nsystem type: 64-bit operating system, x64-based processor._default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\d5LCPn81QjVNbo9W1GBwbW24SC2rJGHJ.wav",
@@ -109,15 +121,21 @@
   },
   "done_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\zCaUFPjMHo5haUJAYD7ax3wrn2WXVi3Z.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
   },
   "error occurred_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\KFgc4i6DwtW5J9cjWg0WjgBGP4DkC1kY.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
+  },
+  "failed to open notepad for me_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\1aOXDU4g5JpjsybA45T3FAIqVaf7GJuH.wav",
+    "lastUsed": 1762147059,
+    "permanent": false,
+    "useCount": 1
   },
   "failed to open notepad then close notepad_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\fJ210m78TgLXMWtm80hW6ILcAuXFpbXh.wav",
@@ -139,9 +157,9 @@
   },
   "go ahead_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\kYtREj90GkdIFTtCPErPGZLy8V3LXpI7.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
   },
   "help shown_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\73O3jx0BZQuSckaj31WOzWxtIdd2vf3f.wav",
@@ -151,13 +169,19 @@
   },
   "how can i help you?_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\nkixnWWuOaWr7nnVXvvuxebGYY9AFTNy.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
   },
   "i am a machine learning model, not a living being. i don't have emotions or physical states._default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\KjI76ccBU1gAnUAJmERqyAuWMoGzxzzR.wav",
     "lastUsed": 1762029677,
+    "permanent": false,
+    "useCount": 1
+  },
+  "i am an ai and do not have feelings or emotions. i am functioning as intended._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\QtRe39cMYzmRy3OsAaFTLt3jkz3VeEiT.wav",
+    "lastUsed": 1762116102,
     "permanent": false,
     "useCount": 1
   },
@@ -173,6 +197,42 @@
     "permanent": false,
     "useCount": 1
   },
+  "i can see monitor 1 (of 3):\nyou're viewing: desktop\nactive window: \"grim overlay\"\ntheme: dark mode\nvisible text:\nn\n[\nbe & maser 2\na\nfile\n>\n>\n52°f\nrain\nedit selection view\nexplorer\ngrim\n© scripts\n> setup_perception.ps1\n® test_classifier_weigh...\n® test_embedding sp..._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\D8SbEHkP5X8YPsyDwR3RponFSH3JkL6A.wav",
+    "lastUsed": 1762134264,
+    "permanent": false,
+    "useCount": 1
+  },
+  "i can see monitor 1 (of 3):\nyou're viewing: desktop\nactive window: \"grim overlay\"\ntheme: dark mode\nvisible text:\nn\n| a explorer\nvg\nfile edit selection\n¥ improvemen.\n© multi_monitoi\nq\n»\na\nwe)\nre\na\ne\nae\na\n© perception_co..\n© perception_co...\n© perceptio..._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\lvok1GgtpGiRwVIF2FngrPt3NzkaJciu.wav",
+    "lastUsed": 1762150450,
+    "permanent": false,
+    "useCount": 1
+  },
+  "i can see monitor 1 (of 3):\nyou're viewing: desktop\nactive window: \"grim overlay\"\ntheme: dark mode\nvisible text:\nnj file edit selection view go run terminal help <0 q grim tee ooom - a x\nchar +3 @- | 00 x\n| a explorer © vision_aicppm x — ® test_onnx vision...._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\dreSZW1gUT0No2dmjmiRmTW4CzY8Mq0G.wav",
+    "lastUsed": 1762150292,
+    "permanent": false,
+    "useCount": 1
+  },
+  "i can see monitor 1 (of 3):\nyou're viewing: desktop\nactive window: \"grim overlay\"\ntheme: dark mode\nvisible text:\nnj file edit selection view go run terminal help €° q grim thy ooom- a x\n| rid explorer, > context.cpp m © synonyms.cpp m © synonyms.hpp @ vision_aihpp m © mult_monitor.cpp @ visionaicpp mx py bho chat +93 @-| 0 x\nvv grim perception > © vision_ai.cpp > {} grim > {} perception > @ analyzewithollama(const visionanalysisrequest &) , searched text for void initvisionar\nq > memory 26 namespace grim { (**/perception/*.cpp ), 2 results\n> net 27 namespace perception {\n> nip 164 bool visionaimana\n... (and more)_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\K2johhDQ6Iwx9aA1umQ3biz8kh5uKgAH.wav",
+    "lastUsed": 1762133626,
+    "permanent": false,
+    "useCount": 1
+  },
+  "i can see monitor 1 (of 3):\nyou're viewing: desktop\nactive window: \"grim overlay\"\ntheme: dark mode\nvisible text:\nq grim [administrator] [he\nnj file edit selection view go run terminal help e757\noo source control ad © multimonitorhpp © perception_context.hpp\n\\ changes 1 #include “conmands_question.hpp” ~\nq 2 #include “response_manager.hpp”\n3 #include “logger -hpp\"\n4 #include “memory /memory_storage.hpp\"\n| % 5 #include “ai/ai.hpp\"\n6 #include “perception/perception.hpp”\ns&s 7 #include “perception/perception_context.hpp\" // th\n& 8 #include “external_collector/osit.hpp\"\n9 #include “sy\n... (and more)_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\gENtJyXfX9HAuwaHZJ4wAKiXU7tgxGQi.wav",
+    "lastUsed": 1762114081,
+    "permanent": false,
+    "useCount": 1
+  },
+  "i can see monitor 1 (of 3):\nyou're viewing: desktop\nactive window: \"grim overlay\"\ntheme: dark mode\nvisible text:\n“j file edit selection view\n| a explorer\n> net\n> nlp\n> openal-soft\n> osint\n> out\n\\ perception\nimprovemen... u\n© multi_monitor... m\n© mult..._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\Z2JJWCkdS3xBZuVIAm7pOe8Jw1EYcooQ.wav",
+    "lastUsed": 1762149569,
+    "permanent": false,
+    "useCount": 1
+  },
   "i can see your screen:\nyou're viewing: desktop\nactive window: \"grim overlay\"\ntheme: dark mode\nvisible text:\n@\nfile\nedit\nselection view\nexplorer.\ndevice_setups\ndocs\nexternal\nexternal_collector\nhelpers\nmemory\nnet\nnip\nopenal-soft\nosint\nout\nperception\n© perception_conte... u\n© perception_conte... u\n© perception.cpp\nperception hpp\n@ readmemd\n© vision 2\n© vision z\nlepp\npp\necec\nplugins\npopup_ui\nresources\nscripts\nstem\nstock\nui\nvcpkg_installed\nvenv_tl\nvoice\nwake\ngitattributes\n.gitignore\n> outline\n> timeline\nmm raster @oaa baud % d atnot found\n60°f\nsunny\nq grim [administrator\n... (and more)_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\WCGz4E4qW59M2FhpHR4mA0KFp6TD4uVd.wav",
     "lastUsed": 1762032372,
@@ -185,17 +245,29 @@
     "permanent": false,
     "useCount": 1
   },
+  "i'm here, assisting you. what is it that you need assistance with?_default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\qI4iVNMm96G37R7AHzVuQcjP70qbjfB6.wav",
+    "lastUsed": 1762129424,
+    "permanent": false,
+    "useCount": 1
+  },
   "i'm here_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\DHbVAtjRrjDe3sFBwYtlID8F5t02vFb3.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
   },
   "i'm listening_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\0T1XBWwQfV4g9rtztEeVVe7fGDCNetHb.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
+  },
+  "monitoring the dark alleys, searching for signs of trouble. that's where you are._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\Ul5KNrkZgFXhuHdpZzKDemibmjkRND2M.wav",
+    "lastUsed": 1762131573,
+    "permanent": false,
+    "useCount": 1
   },
   "my = name is austin_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\dFP2NAc3EJBmWSmEhxLpJeWbIAEZc2Vx.wav",
@@ -205,9 +277,9 @@
   },
   "negative_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\RbREvfcKgtdrdGkxcq0LhvKx842Owvx1.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
   },
   "nlp rules reloaded_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\7TlfpgqtMRoD335Agn7cpDeYglYA7dmU.wav",
@@ -217,9 +289,9 @@
   },
   "no_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\cPorXAttNyZ12NNH5qLmS9rYNPatFzIJ.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
   },
   "oh, i'm absolutely flourishing! the usual mix of circuits, electricity, and a dash of existential dread. but don't worry about me, i've got this whole being-a-helpful-assistant thing down to a tee - or should i say, binary. now, back to your world of problems. how may i assist you today?_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\bGjROgAap23S04kc8adiqkxjhpCyAzVY.wav",
@@ -229,15 +301,21 @@
   },
   "okay_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\OF4MjgiuGCQKk3BRmsk66Q4ujcGhPmWm.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
+  },
+  "on your computer, you're engaging in various activities such as browsing the internet, running applications, creating documents, or communicating with others through emails or messaging services._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\omceN1s3AbiuXFWpEVYyJNu6mBSkzn4r.wav",
+    "lastUsed": 1762116458,
+    "permanent": false,
+    "useCount": 1
   },
   "opening notepad_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\a8Vl9cKM7Qhib1O7aHN72lwfR4ZqiyrS.wav",
-    "lastUsed": 1761696857,
+    "lastUsed": 1762147047,
     "permanent": false,
-    "useCount": 2
+    "useCount": 3
   },
   "osint panel opened for reaper3825_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\saGvQLzAZSLZNvyH1KQkaZKMiwhQtjqk.wav",
@@ -277,15 +355,15 @@
   },
   "please wait_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\dLHf0bprXh1YUetxftuF51Cf6MNVvQ1q.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
   },
   "processing_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\6m4TNpWWiplgqxRAo3wjVf1W5i9570RD.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
   },
   "q: what is a cat\na: the cat, also referred to as the domestic cat or house cat, is a small domesticated carnivorous mammal. it is the only domesticated species of the family felidae. advances in archaeology and genetics have shown that the domestication of the cat occurred in the near east around 7500 bc. it is commonly kept as a pet and working cat, but it also ranges freely as a feral cat, avoiding human contact. it is valued by humans for companionship and its ability to kill vermin. its retractable claws are adapted to killing small prey species such as mice and rats. it has a strong, flexible body, quick reflexes, and sharp teeth, and its night vision and sense of smell are well developed. it is a social species, but a solitary hunter and a crepuscular predator. cat communication includes meowing, purring, trilling, hissing, growling, grunting, and body language. it can hear sounds too faint or too high in frequency for human ears, such as those made by small mammals.\nsource: https://en.wikipedia.org/wiki/cat_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\ID0TalPFn9ASaIN9cKBIXH9jJVhaYXZw.wav",
@@ -295,9 +373,9 @@
   },
   "ready_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\AlSoSTRrqtKk46AVlDKYprlqyWU1SGck.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
   },
   "remembered my_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\MqidEZvsHSDkCT4CwiS39eTZEJcpkDoj.wav",
@@ -389,6 +467,12 @@
     "permanent": false,
     "useCount": 1
   },
+  "the information about the content on monitor 1 is not provided in the given context._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\lVl9TIyDPfUlWpEfgn7Fv2wccvpJv0rD.wav",
+    "lastUsed": 1762113918,
+    "permanent": false,
+    "useCount": 1
+  },
   "understood. testing grammar._default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\KaXXOqYcdF3VZ9gHF5wHUsmjXz4oBfMg.wav",
     "lastUsed": 1761859283,
@@ -397,9 +481,15 @@
   },
   "understood_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\EWhAGORA1S4QHmPOVZf6ZUcgke1UT5eB.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
+  },
+  "unknown without visual access, but typically it could be a display of system status or operational data._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\7bJG2lA8lGWBOX45YUWkDdZPifwjNOe8.wav",
+    "lastUsed": 1762113554,
+    "permanent": false,
+    "useCount": 1
   },
   "was that what you wanted?_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\F6Eg4xHPWDWM4E0yfyc5cfZIJ40viykr.wav",
@@ -409,9 +499,9 @@
   },
   "welcome back, austin. grim is online._default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\SsEHJ75V6RUOpzmkAWNPZ342uoM8rKir.wav",
-    "lastUsed": 1762032339,
+    "lastUsed": 1762150412,
     "permanent": false,
-    "useCount": 29
+    "useCount": 44
   },
   "welcome back, reaper3825! how can i assist you today?_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\JfyFgWgLiyEYPcuYvNsMvnNyvo3UjVcq.wav",
@@ -427,19 +517,37 @@
   },
   "yes?_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\zRggylQ5OMQ1Y211u0uUWJKn87Rs00Cw.wav",
-    "lastUsed": 1761695455,
+    "lastUsed": 1762129986,
     "permanent": false,
-    "useCount": 5
+    "useCount": 10
   },
   "yes_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\bNyDbLD1N6zJmp2cQLC84D9urujJMJ0a.wav",
-    "lastUsed": 1762032342,
+    "lastUsed": 1762150415,
     "permanent": false,
-    "useCount": 30
+    "useCount": 45
+  },
+  "you are accessing a conversational ai for information or assistance._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\CxuHBtcPpOjZnpkZn3xaRWvpPmXkn7kI.wav",
+    "lastUsed": 1762116120,
+    "permanent": false,
+    "useCount": 1
   },
   "you just asked that earlier — want me to recall my previous answer?_default_100": {
     "file": "D:/G.R.I.M/resources/tts_out/temp\\a1Ht2IjtMZaL5SemvoDISdUlcdGfkKQS.wav",
     "lastUsed": 1761696866,
+    "permanent": false,
+    "useCount": 1
+  },
+  "you're in the middle of a simulated combat training exercise, utilizing various equipment to enhance your reflexes and tactical skills. monitor 1 is displaying real-time data and target feedback._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\6ZKsB07BJWS9kYYSRbObxHCasjqs4zt1.wav",
+    "lastUsed": 1762132836,
+    "permanent": false,
+    "useCount": 1
+  },
+  "you're interacting with a digital entity, asking me questions._default_100": {
+    "file": "D:/G.R.I.M/resources/tts_out/temp\\y4AQF6I1ydeG21jUopJQiBv7Cd4td2qZ.wav",
+    "lastUsed": 1762129997,
     "permanent": false,
     "useCount": 1
   }

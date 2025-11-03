@@ -1,0 +1,70 @@
+{
+  "test_cases": [
+    {
+      "prompt": "What is GRIM?",
+      "expected": "GRIM is an advanced AI assistant system",
+      "category": "general"
+    },
+    {
+      "prompt": "How can you help me?",
+      "expected": "I can assist with various tasks including information retrieval, analysis, and problem-solving",
+      "category": "general"
+    },
+    {
+      "prompt": "What are your capabilities?",
+      "expected": "I have capabilities in natural language understanding, data processing, and adaptive learning",
+      "category": "capabilities"
+    },
+    {
+      "prompt": "Explain machine learning in simple terms",
+      "expected": "Machine learning is a method where computers learn from data to make predictions or decisions",
+      "category": "technical"
+    },
+    {
+      "prompt": "What is the purpose of self-training?",
+      "expected": "Self-training allows AI systems to improve over time by learning from new data",
+      "category": "technical"
+    },
+    {
+      "prompt": "How do you ensure data quality?",
+      "expected": "Data quality is ensured through verification, cross-referencing, and reliability scoring",
+      "category": "technical"
+    },
+    {
+      "prompt": "What safety measures are in place?",
+      "expected": "Safety measures include domain whitelisting, regression testing, and automated archiving",
+      "category": "safety"
+    },
+    {
+      "prompt": "Can you learn from user interactions?",
+      "expected": "Yes, I can adapt and learn from interactions through the self-training pipeline",
+      "category": "capabilities"
+    },
+    {
+      "prompt": "What happens if a training fails?",
+      "expected": "Failed training runs do not affect the current model, and previous versions are archived",
+      "category": "safety"
+    },
+    {
+      "prompt": "How is model quality validated?",
+      "expected": "Model quality is validated through evaluation tests and accuracy thresholds before deployment",
+      "category": "technical"
+    }
+  ],
+  
+  "evaluation_config": {
+    "min_passing_score": 0.85,
+    "categories": [
+      "general",
+      "capabilities",
+      "technical",
+      "safety"
+    ],
+    "category_weights": {
+      "general": 1.0,
+      "capabilities": 1.2,
+      "technical": 1.5,
+      "safety": 2.0
+    }
+  }
+}

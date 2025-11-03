@@ -31,6 +31,10 @@ QuestionResult QuestionHandler::process(const std::string& question) {
     
     if (lowerQ.find("see") != std::string::npos || 
         lowerQ.find("screen") != std::string::npos ||
+        lowerQ.find("monitor") != std::string::npos ||
+        lowerQ.find("display") != std::string::npos ||
+        lowerQ.find("what's on") != std::string::npos ||
+        lowerQ.find("what is on") != std::string::npos ||
         lowerQ.find("read text") != std::string::npos) {
         QuestionResult visionResult = searchVision(question);
         if (visionResult.answered) {
@@ -501,7 +505,10 @@ QuestionResult QuestionHandler::searchVision(const std::string& question) {
         lowerQ.find("read") != std::string::npos ||
         lowerQ.find("text on screen") != std::string::npos ||
         lowerQ.find("screen") != std::string::npos ||
+        lowerQ.find("monitor") != std::string::npos ||
+        lowerQ.find("display") != std::string::npos ||
         lowerQ.find("what's on") != std::string::npos ||
+        lowerQ.find("what is on") != std::string::npos ||
         lowerQ.find("show me") != std::string::npos ||
         lowerQ.find("looking at") != std::string::npos ||
         lowerQ.find("viewing") != std::string::npos
@@ -981,12 +988,31 @@ CommandResult cmdQuestion(const std::string& question) {
         
         LOG_DEBUG("QuestionHandler", "Answered " + sourceStr + confidenceStr);
         
+        // ✅ FIX: Truncate long vision responses for TTS (XTTS has 400 token limit ~= 300 chars safe)
+        std::string voiceResponse = result.answer;
+        const size_t MAX_TTS_LENGTH = 300;
+        
+        if (result.source == GRIM::AnswerSource::Vision && voiceResponse.length() > MAX_TTS_LENGTH) {
+            // Intelligently truncate - find last complete sentence before limit
+            size_t truncateAt = voiceResponse.find_last_of(".!?", MAX_TTS_LENGTH);
+            if (truncateAt != std::string::npos && truncateAt > 100) {
+                voiceResponse = voiceResponse.substr(0, truncateAt + 1);
+            } else {
+                // No sentence boundary found, hard truncate with ellipsis
+                voiceResponse = voiceResponse.substr(0, MAX_TTS_LENGTH - 3) + "...";
+            }
+            
+            LOG_DEBUG("QuestionHandler", "Truncated vision response for TTS: " + 
+                      std::to_string(result.answer.length()) + " -> " + 
+                      std::to_string(voiceResponse.length()) + " chars");
+        }
+        
         return {
             true,
-            result.answer,
+            result.answer,  // Full answer for console/UI
             "",  // Empty error code for success
             "answer",
-            result.answer,
+            voiceResponse,  // Truncated answer for voice
             Colors::Cyan
         };
     } else {

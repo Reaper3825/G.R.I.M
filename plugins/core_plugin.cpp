@@ -96,6 +96,14 @@ static void register_all_commands() {
     grim_register_command("perception_read_text",     cmdPerceptionRead);
  grim_register_command("perception_detect_objects", cmdPerceptionDetect);
 
+    // ✅ NEW: Input Control commands
+    LOG_DEBUG("Plugin", "Registering input control commands");
+    grim_register_command("move_mouse",    cmdInputMoveMouse);
+    grim_register_command("click",         cmdInputClick);
+    grim_register_command("type",          cmdInputType);
+    grim_register_command("key",           cmdInputKey);
+    grim_register_command("click_on",      cmdInputClickOn);
+
     LOG_DEBUG("Plugin", "Core command registration complete");
     
     // (Add any additional core commands here; keep both paths in sync.)

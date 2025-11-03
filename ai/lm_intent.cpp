@@ -65,7 +65,7 @@ static std::string readLineFromBridge(int timeoutMs = 5000) {
 void LMIntent::init() {
     if (initialized_) return;
     
-    LOG_DEBUG("LMIntent", "Initializing Mistral bridge...");
+    LOG_DEBUG("LMIntent", "Initializing LLM intent bridge...");
     
 #ifdef _WIN32
     // Create pipes for stdin/stdout communication (same pattern as Coqui)
@@ -106,7 +106,7 @@ void LMIntent::init() {
     si.hStdInput = hStdinRd;
     si.dwFlags |= STARTF_USESTDHANDLES;
     
-    // Launch Python bridge
+    // Launch Python bridge (uses Ollama with configured model)
     std::string cmd = "python D:/G.R.I.M/resources/python/mistral_bridge.py";
     std::vector<char> mutableCmd(cmd.begin(), cmd.end());
     mutableCmd.push_back('\0');
@@ -129,7 +129,7 @@ void LMIntent::init() {
     CloseHandle(hStdinRd);
     
     if (!success) {
-        LOG_ERROR("LMIntent", "Failed to launch mistral_bridge.py: " + std::to_string(GetLastError()));
+        LOG_ERROR("LMIntent", "Failed to launch intent bridge: " + std::to_string(GetLastError()));
         CloseHandle(hBridgeStdinWr);
         CloseHandle(hBridgeStdoutRd);
         initialized_ = true;
@@ -143,7 +143,7 @@ void LMIntent::init() {
     std::string response = readLineFromBridge(15000);  // 15s timeout for model loading
     
     if (response.empty()) {
-        LOG_ERROR("LMIntent", "No handshake received from Mistral bridge");
+        LOG_ERROR("LMIntent", "No handshake received from intent bridge");
         initialized_ = true;
         available_ = false;
         return;

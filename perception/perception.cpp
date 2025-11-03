@@ -5,6 +5,7 @@
 #include <sstream>
 #include <fstream>
 #include <algorithm>
+#include <mutex>
 
 // ✅ OpenCV includes
 #include <opencv2/opencv.hpp>
@@ -27,6 +28,9 @@ namespace GRIM {
 
         // ✅ Tesseract OCR engine
         static tesseract::TessBaseAPI* g_tessEngine = nullptr;
+        
+        // ✅ Mutex to protect Tesseract (NOT thread-safe!)
+        static std::mutex g_tessEngineMutex;
 
         // ✅ YOLO model components (optional - loaded on demand)
         static cv::dnn::Net g_yoloNet;
@@ -425,6 +429,71 @@ namespace GRIM {
 #endif
         }
 
+        // ✅ NEW: Perform OCR on preprocessed cv::Mat (for enhanced OCR)
+        std::string readTextFromImage(const cv::Mat& image) {
+            if (!initialized) {
+                return "";
+            }
+
+            if (image.empty()) {
+                return "";
+            }
+            
+            // ✅ Validate image dimensions to prevent Tesseract errors
+            if (image.cols < 10 || image.rows < 10) {
+                LOG_DEBUG("Perception", "Image too small for OCR (min 10x10 required)");
+                return "";
+            }
+            
+            // ✅ Validate image is 8-bit grayscale or 24-bit color
+            if (image.depth() != CV_8U) {
+                LOG_ERROR("Perception", "Invalid image depth for OCR (must be CV_8U)");
+                return "";
+            }
+            
+            // ✅ Ensure image data is valid and continuous
+            if (!image.isContinuous() || image.data == nullptr) {
+                LOG_ERROR("Perception", "Image data is not continuous or null");
+                return "";
+            }
+
+#ifdef _WIN32
+            if (!g_tessEngine) {
+                return "";
+            }
+
+            // ✅ Lock mutex - Tesseract is NOT thread-safe!
+            std::lock_guard<std::mutex> lock(g_tessEngineMutex);
+            
+            try {
+                // Make a copy to ensure data stability during OCR
+                cv::Mat imageCopy = image.clone();
+                
+                // Set image data for Tesseract
+                g_tessEngine->SetImage(imageCopy.data, imageCopy.cols, imageCopy.rows,
+                    imageCopy.channels(), imageCopy.step);
+
+                // Get OCR result
+                char* outText = g_tessEngine->GetUTF8Text();
+                if (!outText) {
+                    LOG_DEBUG("Perception", "Tesseract returned null text");
+                    return "";
+                }
+                
+                std::string result(outText);
+                delete[] outText;
+
+                return result;
+            }
+            catch (const std::exception& e) {
+                LOG_ERROR("Perception", std::string("readTextFromImage failed: ") + e.what());
+                return "";
+            }
+#else
+            return "";
+#endif
+        }
+
         // ✅ NEW: Advanced object detection with YOLO
         std::string detectObjectsAdvanced(const std::vector<unsigned char>& imageData, int width, int height) {
             if (!g_yoloLoaded) {
@@ -521,7 +590,7 @@ namespace GRIM {
                 return "[Error] Perception system not initialized";
             }
 
-            LOG_DEBUG("Perception", "Detecting objects...");
+            // LOG_DEBUG("Perception", "Detecting objects...");
 
 #ifdef _WIN32
             std::vector<BYTE> buffer;

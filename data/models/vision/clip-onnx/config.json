@@ -1,0 +1,7 @@
+{
+  "model_type": "mobilenet",
+  "image_size": 224,
+  "vision_model": "mobilenet-vision.onnx",
+  "text_model": "textual.onnx",
+  "description": "MobileNetV2 ONNX for fast image classification"
+}

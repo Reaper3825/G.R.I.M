@@ -5,16 +5,18 @@
     "openai": ""
   },
   "backend": "auto",
-  "default_model": "mistral",
+  "default_model": "llama3.1:8b",
   "localai_url": "http://127.0.0.1:8080/v1",
   "model": "ggml-large.bin",
   "ollama_url": "http://127.0.0.1:11434",
+  "onnx_vision_model": "D:/G.R.I.M/data/models/vision/llama3.2-vision-onnx/vision_encoder.onnx",
   "personality": {
     "custom_prompt": "You are GRIM. Be brief and direct. Give concise answers without unnecessary elaboration. Keep responses under 2 sentences when possible.",
     "use_custom_prompt": true
   },
   "silence_threshold": 0.02,
   "silence_timeout_ms": 4000,
+  "vision_model": "llama3.2-vision:11b",
   "voice": {
     "confidence_threshold": 0.6,
     "coqui": {
