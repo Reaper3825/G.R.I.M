@@ -1,5 +1,8 @@
 #include <unordered_map>
 #include <random>
+#include <ctime>
+#include <deque>
+#include <mutex>
 #include "response_manager.hpp"
 #include "error_manager.hpp"
 #include "voice/voice_speak.hpp"
@@ -24,12 +27,59 @@ CommandResult ResponseManager::systemMessage(const std::string& msg,
 
 
 
-// Simple random picker
-static std::string pickRandom(const std::vector<std::string>& options) {
+// Response history tracking to avoid repetition
+static std::unordered_map<std::string, std::deque<size_t>> responseHistory;
+static std::mutex responseHistoryMutex;
+static const size_t MAX_HISTORY_SIZE = 3;
+
+// Simple random picker with history awareness
+static std::string pickRandom(const std::string& key, const std::vector<std::string>& options) {
+    if (options.empty()) return "";
+    if (options.size() == 1) return options[0];
+
     static std::random_device rd;
     static std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dist(0, static_cast<int>(options.size()) - 1);
-    return options[dist(gen)];
+    
+    std::lock_guard<std::mutex> lock(responseHistoryMutex);
+    
+    // Get history for this key
+    auto& history = responseHistory[key];
+    
+    // Try to pick a response not in recent history
+    std::vector<size_t> availableIndices;
+    for (size_t i = 0; i < options.size(); ++i) {
+        bool inHistory = false;
+        for (size_t histIdx : history) {
+            if (histIdx == i) {
+                inHistory = true;
+                break;
+            }
+        }
+        if (!inHistory) {
+            availableIndices.push_back(i);
+        }
+    }
+    
+    // If all responses are in history, clear it and use all options
+    if (availableIndices.empty()) {
+        availableIndices.clear();
+        for (size_t i = 0; i < options.size(); ++i) {
+            availableIndices.push_back(i);
+        }
+        history.clear();
+    }
+    
+    // Pick a random index from available options
+    std::uniform_int_distribution<> dist(0, static_cast<int>(availableIndices.size()) - 1);
+    size_t chosenIdx = availableIndices[dist(gen)];
+    
+    // Update history
+    history.push_back(chosenIdx);
+    if (history.size() > MAX_HISTORY_SIZE) {
+        history.pop_front();
+    }
+    
+    return options[chosenIdx];
 }
 
 // Response database
@@ -223,12 +273,54 @@ static std::unordered_map<std::string, std::vector<std::string>> responses = {
         "All systems online.",
         "Boot complete. Let’s roll."
     }},
+
+    // --- Greetings (Time-based) ---
+    { "greeting_morning", {
+        "Good morning!",
+        "Morning! Ready to assist.",
+        "Rise and shine! What can I do for you?"
+    }},
+    { "greeting_afternoon", {
+        "Good afternoon!",
+        "Afternoon! How can I help?",
+        "Hey there! What's on the agenda?"
+    }},
+    { "greeting_evening", {
+        "Good evening!",
+        "Evening! What do you need?",
+        "Hello! Ready for the evening."
+    }},
+    { "greeting_night", {
+        "Still up? I'm here if you need me.",
+        "Late night session? Let's do this.",
+        "Working late? I've got your back."
+    }},
+
+    // --- Acknowledgments ---
+    { "ack_understood", {
+        "Got it.",
+        "Understood.",
+        "Okay.",
+        "Sure thing."
+    }},
+    { "ack_working", {
+        "Working on it...",
+        "Give me a moment...",
+        "One second...",
+        "Processing..."
+    }},
+    { "ack_done", {
+        "Done.",
+        "All set.",
+        "Complete.",
+        "Finished."
+    }},
 };
 
 std::string ResponseManager::get(const std::string& keyOrMessage) {
     auto it = responses.find(keyOrMessage);
     if (it != responses.end() && !it->second.empty()) {
-        return pickRandom(it->second);
+        return pickRandom(keyOrMessage, it->second);
     }
 
     // ✅ FIX: If it already looks like a full message, return it as-is
@@ -254,5 +346,57 @@ std::string ResponseManager::get(const std::string& keyOrMessage) {
 
     // Otherwise, treat as an unknown intent key and fallback gracefully
     return ErrorManager::getUserMessage("ERR_CORE_UNKNOWN_COMMAND") + " (" + keyOrMessage + ")";
+}
+
+// Get a response with parameter substitution
+std::string ResponseManager::getWithParams(const std::string& key,
+                                          const std::unordered_map<std::string, std::string>& params) {
+    std::string response = get(key);
+    
+    // Replace {param_name} with actual values
+    for (const auto& [paramName, paramValue] : params) {
+        std::string placeholder = "{" + paramName + "}";
+        size_t pos = 0;
+        while ((pos = response.find(placeholder, pos)) != std::string::npos) {
+            response.replace(pos, placeholder.length(), paramValue);
+            pos += paramValue.length();
+        }
+    }
+    
+    return response;
+}
+
+// Get contextual greeting based on time of day
+std::string ResponseManager::getGreeting() {
+    std::time_t now = std::time(nullptr);
+    
+    // Thread-safe time conversion
+    std::tm localTimeBuf;
+#ifdef _WIN32
+    localtime_s(&localTimeBuf, &now);
+#else
+    localtime_r(&now, &localTimeBuf);
+#endif
+    
+    int hour = localTimeBuf.tm_hour;
+    
+    std::string key;
+    if (hour >= 5 && hour < 12) {
+        key = "greeting_morning";
+    } else if (hour >= 12 && hour < 17) {
+        key = "greeting_afternoon";
+    } else if (hour >= 17 && hour < 22) {
+        key = "greeting_evening";
+    } else {
+        key = "greeting_night";
+    }
+    
+    return get(key);
+}
+
+// Clear response history
+void ResponseManager::clearHistory() {
+    std::lock_guard<std::mutex> lock(responseHistoryMutex);
+    responseHistory.clear();
 }
 

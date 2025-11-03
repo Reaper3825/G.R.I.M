@@ -139,3 +139,4 @@ osint/
 venv_rl/
 out/build/
 out/build/
+_codeql_detected_source_root
