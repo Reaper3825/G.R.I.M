@@ -3,6 +3,7 @@
 #include "commands_feedback.hpp"
 #include "commands_ai.hpp"
 #include "commands_question.hpp"  // ✅ NEW: Question handling
+#include "command_registry.hpp"   // ✅ NEW: Command registry
 #include "response_manager.hpp"
 #include "console_history.hpp"
 #include "voice/voice_speak.hpp"
@@ -76,9 +77,19 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
     {
         LOG_DEBUG("Dispatch", "Running command \"" + cmd + "\" arg=\"" + arg + "\"");
         try {
-            return it->second(arg);
+            CommandResult result = it->second(arg);
+            
+            // ✅ NEW: Record command usage analytics
+            if (result.success) {
+                GRIM::CommandRegistry::recordSuccess(cmd);
+            } else {
+                GRIM::CommandRegistry::recordFailure(cmd);
+            }
+            
+            return result;
         } catch (const std::exception& e) {
             LOG_ERROR("Dispatch", "Exception in command \"" + cmd + "\": " + e.what());
+            GRIM::CommandRegistry::recordFailure(cmd);  // ✅ Record failure
             return CommandResult{
                 false,
                 "[Error] Exception while running command: " + cmd,

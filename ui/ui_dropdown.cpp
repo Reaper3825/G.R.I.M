@@ -76,26 +76,30 @@ void UIDropdown::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     // Draw label
     renderer.drawText({position.x, position.y + 15}, label, 0xFFFFFFFF);
     
+    // Recalculate dropdown position based on current position (for scrolling)
+    Vec2 currentDropdownPos = {position.x + 150, position.y + 5};
+    Vec2 currentDropdownSize = {size.x - 160, 30};
+    
     // Draw dropdown box
-    renderer.drawRect(dropdownPos, dropdownSize, 0xFF303030);
-    renderer.drawRect(dropdownPos, {dropdownSize.x, 2}, 0xFF00FFFF);
-    renderer.drawRect(dropdownPos, {2, dropdownSize.y}, 0xFF00FFFF);
-    renderer.drawRect({dropdownPos.x, dropdownPos.y + dropdownSize.y - 2}, {dropdownSize.x, 2}, 0xFF00FFFF);
-    renderer.drawRect({dropdownPos.x + dropdownSize.x - 2, dropdownPos.y}, {2, dropdownSize.y}, 0xFF00FFFF);
+    renderer.drawRect(currentDropdownPos, currentDropdownSize, 0xFF303030);
+    renderer.drawRect(currentDropdownPos, {currentDropdownSize.x, 2}, 0xFF00FFFF);
+    renderer.drawRect(currentDropdownPos, {2, currentDropdownSize.y}, 0xFF00FFFF);
+    renderer.drawRect({currentDropdownPos.x, currentDropdownPos.y + currentDropdownSize.y - 2}, {currentDropdownSize.x, 2}, 0xFF00FFFF);
+    renderer.drawRect({currentDropdownPos.x + currentDropdownSize.x - 2, currentDropdownPos.y}, {2, currentDropdownSize.y}, 0xFF00FFFF);
     
     // Draw selected item
     std::string selected = getSelectedItem();
-    renderer.drawText({dropdownPos.x + 8, dropdownPos.y + 8}, selected, 0xFFFFFFFF);
+    renderer.drawText({currentDropdownPos.x + 8, currentDropdownPos.y + 8}, selected, 0xFFFFFFFF);
     
     // Draw arrow indicator
     std::string arrow = expanded ? "?" : "?";
-    renderer.drawText({dropdownPos.x + dropdownSize.x - 20, dropdownPos.y + 8}, arrow, 0xFF00FFFF);
+    renderer.drawText({currentDropdownPos.x + currentDropdownSize.x - 20, currentDropdownPos.y + 8}, arrow, 0xFF00FFFF);
     
     // Draw expanded options
     if (expanded) {
         for (size_t i = 0; i < options.size(); ++i) {
-            Vec2 optPos = {dropdownPos.x, dropdownPos.y + dropdownSize.y + i * 25};
-            Vec2 optSize = {dropdownSize.x, 25};
+            Vec2 optPos = {currentDropdownPos.x, currentDropdownPos.y + currentDropdownSize.y + i * 25};
+            Vec2 optSize = {currentDropdownSize.x, 25};
             
             uint32_t bgColor = (i == static_cast<size_t>(selectedIndex)) ? 0xFF404040 : 0xFF202020;
             renderer.drawRect(optPos, optSize, bgColor);

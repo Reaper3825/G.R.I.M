@@ -9,6 +9,7 @@
 #include "logger.hpp"
 #include "voice/voice.hpp"
 #include "ai/ai_rl.hpp"
+#include "ai/ai.hpp"  // ✅ NEW: For warmupOllamaModel()
 
 #include <filesystem>    // ✅ for fs::path
 #include <whisper.h>     // ✅ for whisper_context + init functions
@@ -103,6 +104,15 @@ void runBootstrapChecks(int argc, char** argv) {
     } else {
         LOG_PHASE("RL Bridge init", true);
         LOG_DEBUG("RL", "rl_bridge.py initialized and ready");
+    }
+
+    // ============================================================
+    // AI Model Warmup (preload into VRAM for instant responses)
+    // ============================================================
+    if (aiConfig.value("backend", "ollama") == "ollama") {
+        LOG_PHASE("AI model warmup begin", true);
+        warmupOllamaModel();
+        LOG_PHASE("AI model warmup complete", true);
     }
 
     // ============================================================

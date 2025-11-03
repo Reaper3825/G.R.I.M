@@ -131,8 +131,46 @@ bool NLP::load_rules(const std::string& path, std::string* err) {
     try {
    nlohmann::json j;
         in >> j;
-    std::string rulesText = j.dump();
-        return load_rules_from_string(rulesText, err);
+        
+        // ✅ FIX: Parse JSON directly instead of round-tripping through string
+        if (!j.is_array()) {
+            if (err) *err = "Expected JSON array of rules, got: " + std::string(j.type_name());
+            return false;
+        }
+
+        std::vector<Rule> newRules;
+        for (const auto& ruleJson : j) {
+            Rule rule;
+            rule.intent = ruleJson.value("intent", "");
+            rule.description = ruleJson.value("description", "");
+            rule.pattern_str = ruleJson.value("pattern", "");
+            rule.category = ruleJson.value("category", "general");
+            rule.score_boost = ruleJson.value("score_boost", 0.0);
+            rule.case_insensitive = ruleJson.value("case_insensitive", true);
+
+            if (ruleJson.contains("slot_names")) {
+                rule.slot_names = ruleJson["slot_names"].get<std::vector<std::string>>();
+            }
+
+            // Compile regex
+            auto flags = std::regex::ECMAScript;
+            if (rule.case_insensitive) {
+                flags |= std::regex::icase;
+            }
+
+            try {
+                rule.pattern = std::regex(rule.pattern_str, flags);
+            } catch (const std::regex_error& e) {
+                if (err) *err = "Regex error in rule '" + rule.intent + "': " + e.what();
+                return false;
+            }
+
+            newRules.push_back(rule);
+        }
+
+        rules = std::move(newRules);
+        return true;
+        
     } catch (const std::exception& e) {
         if (err) *err = std::string("Parse error: ") + e.what();
      return false;

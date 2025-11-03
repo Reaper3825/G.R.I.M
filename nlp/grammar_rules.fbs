@@ -1,0 +1,91 @@
+// FlatBuffers schema for Grammar-Based NLP Rules
+// Derived from treebank annotations (Universal Dependencies)
+namespace GrammarRules;
+
+// Grammar component (e.g., noun phrase, verb phrase, etc.)
+table GrammarComponent {
+  name: string (required);           // Component identifier (e.g., "NP", "VP", "greeting")
+  description: string;                // Human-readable description
+  patterns: [string];                 // Regex patterns or token sequences
+  optional: bool = false;             // Whether this component is optional in templates
+  capture: bool = false;              // Whether to capture matched text as slot
+  requires_context: bool = false;     // Whether component needs contextual information
+  frequency: int = 0;                 // Frequency count from treebank
+  weight: float = 1.0;                // Derived weight (normalized from frequency)
+}
+
+// Command verb definition with synonyms
+table CommandVerb {
+  canonical: string (required);       // Canonical form (e.g., "open", "search")
+  synonyms: [string];                 // Variations (e.g., "launch", "start" for "open")
+  intent: string;                     // Mapped intent category
+  requires_object: bool = false;      // Whether verb requires a direct object
+  frequency: int = 0;                 // Treebank frequency
+  weight: float = 1.0;                // Probability/importance weight
+  pipeline_category: string;          // "command", "query", "banter", etc.
+}
+
+// Command object (nouns, noun phrases)
+table CommandObject {
+  canonical: string (required);       // Canonical form (e.g., "browser", "music")
+  synonyms: [string];                 // Variations
+  category: string;                   // Semantic category (e.g., "application", "media")
+  frequency: int = 0;                 // Treebank frequency
+  weight: float = 1.0;                // Importance weight
+}
+
+// Sentence template (production rule)
+table SentenceTemplate {
+  name: string (required);            // Template identifier
+  structure: string (required);       // Pattern like "[greeting] <verb> [article] <object>"
+  examples: [string];                 // Example sentences matching this template
+  requires_context: bool = false;     // Context requirement
+  category: string;                   // Template category
+  frequency: int = 0;                 // How often this pattern appears
+  weight: float = 1.0;                // Template priority/probability
+  pipeline_category: string;          // "command", "query", "banter", "conversation"
+  
+  // Treebank-derived metadata
+  avg_depth: float = 0.0;             // Average parse tree depth
+  common_modifiers: [string];         // Common modifiers for this pattern
+}
+
+// Context rule for disambiguation
+table ContextRule {
+  condition: string (required);       // Condition pattern (JSON path or rule)
+  action: string (required);          // Action to take when condition matches
+  priority: int = 50;                 // Rule priority
+  weight_modifier: float = 1.0;       // How much to adjust weights
+}
+
+// Learning configuration
+table LearningConfig {
+  enable_online_learning: bool = true;
+  min_confidence_threshold: float = 0.6;
+  feedback_weight: float = 0.3;
+  decay_rate: float = 0.95;
+}
+
+// Root grammar configuration
+table GrammarConfig {
+  version: int = 1;                           // Schema version
+  language: string;                           // Language code
+  treebank_source: string;                    // Source treebank (e.g., "UD_English-EWT")
+  
+  // Core grammar data
+  components: [GrammarComponent];             // Grammar components
+  verbs: [CommandVerb];                       // Command verbs
+  objects: [CommandObject];                   // Command objects
+  templates: [SentenceTemplate];              // Sentence templates
+  
+  // Advanced features
+  context_rules: [ContextRule];               // Context-based rules
+  learning_config: LearningConfig;            // Learning parameters
+  
+  // Metadata
+  generated_timestamp: long;                  // Generation time (Unix timestamp)
+  total_sentences_analyzed: int = 0;          // Number of sentences in training data
+  merge_strategy: string;                     // How to merge with runtime updates
+}
+
+root_type GrammarConfig;

@@ -3,6 +3,7 @@
 #include "voice/voice_speak.hpp"  // ✅ For Voice::speak()
 #include "resources.hpp"
 #include "commands/commands_core.hpp"
+#include "commands/command_registry.hpp"  // ✅ NEW: Command registry
 #include "error_manager.hpp"
 #include "logger.hpp"
 #include "personality_manager.hpp"
@@ -11,6 +12,7 @@
 #include "nlp/nlp.hpp"  // ✅ For NLP integration
 #include "fast_classifier.hpp"  // ✅ For teaching classifier
 #include "system_detect.hpp"  // ✅ For location context
+#include "helpers/grim_input.hpp"  // ✅ For parseInput
 #include <cpr/cpr.h>
 #include <fstream>
 #include <sstream>
@@ -132,6 +134,20 @@ std::string resolveBackendURL() {
 // =========================================================
 // Core async AI call
 // =========================================================
+// =========================================================
+// Session management for KV cache reuse
+// =========================================================
+static std::vector<nlohmann::json> g_conversationHistory;
+static std::string g_currentModel;  // Track model to detect changes
+static bool g_modelWarmedUp = false;  // Track if model is loaded
+static bool g_systemPromptAdded = false;  // Track if system prompt is in history
+
+void clearConversationHistory() {
+    g_conversationHistory.clear();
+    g_systemPromptAdded = false;
+    LOG_DEBUG("AI", "Conversation history cleared");
+}
+
 std::future<std::string> callAIAsync(const std::string& prompt) {
     return std::async(std::launch::async, [prompt]() -> std::string {
         std::string backend = resolveBackendURL();
@@ -141,20 +157,102 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
 
         try {
             if (backend == "ollama") {
-                // ✅ FIX: Ollama returns NDJSON (newline-delimited JSON), need to combine responses
+                // ✅ LATENCY FIX: Model warmup detection
+                if (g_currentModel != model) {
+                    g_currentModel = model;
+                    g_modelWarmedUp = false;
+                    g_systemPromptAdded = false;
+                    LOG_DEBUG("AI", "Model changed to " + model + ", warmup needed");
+                }
+                
+                // ✅ LATENCY FIX: Add system prompt ONCE and keep it cached
+                if (!g_systemPromptAdded && aiConfig.contains("personality")) {
+                    auto personality = aiConfig["personality"];
+                    if (personality.value("use_custom_prompt", false)) {
+                        std::string systemPrompt = personality.value("custom_prompt", 
+                            "You are GRIM. Be brief and direct.");
+                        
+                        // Create system message as proper JSON object
+                        nlohmann::json systemMsg = nlohmann::json::object();
+                        systemMsg["role"] = "system";
+                        systemMsg["content"] = systemPrompt;
+                        
+                        g_conversationHistory.insert(g_conversationHistory.begin(), systemMsg);
+                        g_systemPromptAdded = true;
+                        LOG_DEBUG("AI", "System prompt cached in conversation history");
+                    }
+                }
+                
+                // Add user message to history
+                nlohmann::json userMsg = nlohmann::json::object();
+                userMsg["role"] = "user";
+                userMsg["content"] = prompt;
+                g_conversationHistory.push_back(userMsg);
+                
+                // Trim history based on config (keep recent context + system prompt)
+                size_t maxHistory = aiConfig.value("conversation_history_size", 10);
+                size_t systemMsgCount = g_systemPromptAdded ? 1 : 0;
+                
+                if (g_conversationHistory.size() > (maxHistory + systemMsgCount)) {
+                    // Keep system message, trim from position 1 onwards
+                    size_t toErase = g_conversationHistory.size() - (maxHistory + systemMsgCount);
+                    g_conversationHistory.erase(
+                        g_conversationHistory.begin() + systemMsgCount,
+                        g_conversationHistory.begin() + systemMsgCount + toErase
+                    );
+                }
+                
+                // Build optimized request with configurable performance parameters
+                nlohmann::json options = {
+                    {"num_ctx", 4096},
+                    {"num_predict", 512},
+                    {"temperature", 0.7},
+                    {"top_k", 40},
+                    {"top_p", 0.9},
+                    {"repeat_penalty", 1.1},
+                    {"num_thread", 8},
+                    {"num_gpu", 99},              // ✅ NEW: Use all available GPU layers
+                    {"num_batch", 512},           // ✅ NEW: Batch size for prompt processing
+                    {"use_mmap", true},           // ✅ NEW: Memory-map model for faster loading
+                    {"use_mlock", false},         // ✅ NEW: Don't lock in RAM (can cause issues)
+                    {"low_vram", false}           // ✅ NEW: We have enough VRAM
+                };
+                
+                // Override with user config if present
+                if (aiConfig.contains("ollama_options")) {
+                    for (auto& [key, value] : aiConfig["ollama_options"].items()) {
+                        options[key] = value;
+                    }
+                }
+                
+                nlohmann::json requestBody = {
+                    {"model", model}, 
+                    {"messages", g_conversationHistory},
+                    {"stream", false},
+                    {"options", options},
+                    {"keep_alive", "30m"}  // ✅ NEW: Keep model loaded for 30 minutes
+                };
+                
+                auto start = std::chrono::high_resolution_clock::now();
+                
                 auto resp = cpr::Post(
-                    cpr::Url{ aiConfig.value("ollama_url", "http://127.0.0.1:11434") + "/api/generate" },
+                    cpr::Url{ aiConfig.value("ollama_url", "http://127.0.0.1:11434") + "/api/chat" },
                     cpr::Header{{"Content-Type","application/json"}},
-                    cpr::Body{ nlohmann::json{
-                        {"model", model}, 
-                        {"prompt", prompt},
-                        {"stream", false}  // ✅ Disable streaming for simpler response
-                    }.dump() }
+                    cpr::Body{ requestBody.dump() },
+                    cpr::Timeout{60000}  // ✅ NEW: 60s timeout for first warmup
                 );
                 
+                auto end = std::chrono::high_resolution_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+                
                 if (resp.status_code == 200) {
-                    LOG_DEBUG("AI", "Ollama response (" + std::to_string(resp.text.size()) + " bytes): " + 
-                             resp.text.substr(0, 200) + "...");
+                    LOG_DEBUG("AI", "Ollama response in " + std::to_string(duration) + "ms (" + 
+                             std::to_string(resp.text.size()) + " bytes)");
+                    
+                    if (!g_modelWarmedUp) {
+                        LOG_DEBUG("AI", "Model warmed up (first call took " + std::to_string(duration) + "ms)");
+                        g_modelWarmedUp = true;
+                    }
                     
                     auto j = nlohmann::json::parse(resp.text, nullptr, false);
                     
@@ -163,7 +261,14 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
                         return "[AI] Backend call failed";
                     }
                     
-                    std::string response = j.value("response", "");
+                    std::string response = j["message"]["content"].get<std::string>();
+                    
+                    // Add assistant response to history for context
+                    nlohmann::json assistantMsg = nlohmann::json::object();
+                    assistantMsg["role"] = "assistant";
+                    assistantMsg["content"] = response;
+                    g_conversationHistory.push_back(assistantMsg);
+                    
                     if (response.empty()) {
                         LOG_ERROR("AI", "Ollama returned empty response field. Full JSON: " + resp.text.substr(0, 500));
                         return "[AI] Backend call failed";
@@ -172,7 +277,9 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
                     return response;
                 }
                 
-                LOG_ERROR("AI", "Ollama HTTP error: " + std::to_string(resp.status_code));
+                // ✅ NEW: Log the actual error message from Ollama
+                LOG_ERROR("AI", "Ollama HTTP " + std::to_string(resp.status_code) + ": " + resp.text);
+                LOG_DEBUG("AI", "Request body was: " + requestBody.dump().substr(0, 500));
                 return "[AI] Backend call failed";
             }
             else if (backend == "localai" || backend == "openai") {
@@ -211,6 +318,58 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
 
         return "[AI] Backend call failed";
     });
+}
+
+// =========================================================
+// Model warmup (preload and cache model in memory/VRAM)
+// =========================================================
+void warmupOllamaModel() {
+    std::string backend = resolveBackendURL();
+    if (backend != "ollama") {
+        LOG_DEBUG("AI", "Skipping warmup - backend is not Ollama");
+        return;
+    }
+    
+    std::string model = aiConfig.value("default_model", "llama3.1:8b");
+    LOG_DEBUG("AI", "Warming up Ollama model: " + model);
+    
+    try {
+        // Use a minimal prompt to trigger model loading
+        nlohmann::json warmupBody = {
+            {"model", model},
+            {"messages", nlohmann::json::array({
+                {{"role", "user"}, {"content", "hi"}}
+            })},
+            {"stream", false},
+            {"options", {
+                {"num_predict", 1},  // Generate only 1 token
+                {"num_ctx", 512}     // Minimal context
+            }},
+            {"keep_alive", "30m"}  // Keep model loaded
+        };
+        
+        auto start = std::chrono::high_resolution_clock::now();
+        
+        auto resp = cpr::Post(
+            cpr::Url{aiConfig.value("ollama_url", "http://127.0.0.1:11434") + "/api/chat"},
+            cpr::Header{{"Content-Type", "application/json"}},
+            cpr::Body{warmupBody.dump()},
+            cpr::Timeout{60000}
+        );
+        
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+        
+        if (resp.status_code == 200) {
+            LOG_DEBUG("AI", "Model warmup complete in " + std::to_string(duration) + "ms");
+            g_currentModel = model;
+            g_modelWarmedUp = true;
+        } else {
+            LOG_ERROR("AI", "Model warmup failed with status " + std::to_string(resp.status_code));
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("AI", std::string("Model warmup exception: ") + e.what());
+    }
 }
 
 // =========================================================
@@ -298,17 +457,24 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
                             ", lon: " + std::to_string(g_location.lon) + ")]";
         }
 
+        // ✅ NEW: Add available commands context for AI
+        std::string availableCommands = GRIM::CommandRegistry::generateCompactPrompt();
+        
         std::string prompt =
             "You are GRIM. Respond with ONLY valid JSON, no markdown, no explanations.\n\n"
+            + availableCommands + "\n"  // ✅ Available tools
             "Format:\n"
-            "{\"intent\":\"command\",\"suggested_command\":\"...\"}\n"
+            "{\"intent\":\"command\",\"suggested_command\":\"command_name argument\"}\n"
             "OR\n"
             "{\"intent\":\"conversation\",\"response\":\"...\"}\n\n"
             "Rules:\n"
             "- intent must be: \"command\", \"conversation\", or \"question\"\n"
-            "- If command: include \"suggested_command\" (PRESERVE action verbs like solve, find, create, etc.)\n"
+            "- If command: suggested_command MUST use a command from the list above with proper arguments\n"
+            "- For actions: use action commands (open, search, etc.)\n"
+            "- For questions: use information commands (system_info, list_tools, etc.) OR provide direct answer\n"
             "- If conversation/question: include \"response\"\n"
-            "- Output MUST start with { and end with }\n\n"
+            "- Output MUST start with { and end with }\n"
+            "- DO NOT invent commands - only use commands from the available list\n\n"
             + personalityPrefix + locationContext +
             "\n\nInput: \"" + input + "\"\n\n"
             "JSON response:";
@@ -446,11 +612,27 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
                     LOG_ERROR("AI", std::string("Failed to teach systems: ") + e.what());
                 }
                 
-                result.message = suggested;
-                result.category = "command_infer";
-                result.success = true;
-                result.errorCode = "ERR_NONE";
-                return result;
+                // ✅ NEW: Actually execute the suggested command using dispatchCommand
+                LOG_DEBUG("AI", "Executing AI-suggested command: " + suggested);
+                
+                // Parse command and argument
+                auto [cmd, arg] = GRIMInput::parseInput(suggested);
+                
+                // Execute the command through the normal dispatch
+                extern CommandResult dispatchCommand(const std::string&, const std::string&);
+                CommandResult cmdResult = dispatchCommand(cmd, arg);
+                
+                // Record analytics if successful
+                if (cmdResult.success) {
+                    GRIM::CommandRegistry::recordSuccess(cmd);
+                } else {
+                    GRIM::CommandRegistry::recordFailure(cmd);
+                }
+                
+                // Mark that it was AI-inferred
+                cmdResult.category = cmdResult.category.empty() ? "ai_inferred" : cmdResult.category;
+                
+                return cmdResult;
             }
         }
         else if (intent == "conversation" || intent == "question") {

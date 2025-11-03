@@ -1,0 +1,17 @@
+// FlatBuffer schema for GRIM Aliases System
+namespace AliasesSchema;
+
+// Individual alias entry
+table AliasEntry {
+  key: string (key);
+  path: string;
+}
+
+// Main aliases container
+table Aliases {
+  user: [AliasEntry];
+  auto: [AliasEntry];
+  timestamp: int64;
+}
+
+root_type Aliases;

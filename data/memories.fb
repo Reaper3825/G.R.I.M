@@ -31,18 +31,21 @@
       "type": "fact"
     },
     {
-      "confidence": 0.8500000238418579,
-      "context": "conversation",
+      "confidence": 0.800000011920929,
+      "context": "monitor",
       "id": "",
       "intent": "inform",
-      "normalized": "I can see monitor 1 (of 3):\n\nYou're viewing: Desktop\nActive window: \"GRIM Overlay\"\nTheme: Dark mode\n\nVisible text:\nN\n\n| a EXPLORER\nVG\n\nFile Edit Selection\n\n¥ IMPROVEMEN.\n© multi_monitoi\n\nQ\n»\na\nWe)\nRe\nA\ne\nAe\nA\n\n© perception_co..\n© perception_co...\n\n© perceptio...",
-      "raw": "Vision: I can see monitor 1 (of 3):\n\nYou're viewing: Desktop\nActive window: \"GRIM Overlay\"\nTheme: Dark mode\n\nVisible text:\nN\n\n| a EXPLORER\nVG\n\nFile Edit Selection\n\n¥ IMPROVEMEN.\n© multi_monitoi\n\nQ\n»\na\nWe)\nRe\nA\ne\nAe\nA\n\n© perception_co..\n© perception_co...\n\n© perceptio...",
+      "normalized": "Significant screen change detected (18% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: CMakeLists.txt - G.R.I.M - Visual Studio Code [Administrator] (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help <> Q GRIM [Administrator] tee eaooogm - 3s x\n\n| amore ++ @ ui settings menuhpp M & aliases.fos © perception.cpp ® testonnx visionpy © hybrid_visionhpp M CMakelists.txt x te cHaT +39 8+ (03 x\nY GRIM M CMakelists.bt\n[yinusuuies wee Cee Mat LPR EUG (I AML ANU REL Ew wang) ee wan) HUE) ean\n.gitmodules.bak 181\nninja_deps is20 #\n= 103 183 # DLL Copy (Per-Configuration Safe)\n184\n2t03-3.12 185 set(_runtime_dir \"${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}... (2986 total chars)\n",
+      "raw": "Significant screen change detected (18% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: CMakeLists.txt - G.R.I.M - Visual Studio Code [Administrator] (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help <> Q GRIM [Administrator] tee eaooogm - 3s x\n\n| amore ++ @ ui settings menuhpp M & aliases.fos © perception.cpp ® testonnx visionpy © hybrid_visionhpp M CMakelists.txt x te cHaT +39 8+ (03 x\nY GRIM M CMakelists.bt\n[yinusuuies wee Cee Mat LPR EUG (I AML ANU REL Ew wang) ee wan) HUE) ean\n.gitmodules.bak 181\nninja_deps is20 #\n= 103 183 # DLL Copy (Per-Configuration Safe)\n184\n2t03-3.12 185 set(_runtime_dir \"${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}... (2986 total chars)\n",
       "source": "grim.internal",
       "tags": [
-        "vision",
-        "ocr"
+        "visual-context",
+        "screen-capture",
+        "IDE/Code Editor",
+        "Code.exe",
+        "monitor-1"
       ],
-      "timestamp": 1762150435,
+      "timestamp": 1762206253,
       "type": "event"
     }
   ]

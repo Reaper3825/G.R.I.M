@@ -16,3 +16,8 @@ CommandResult cmdNlpSave(const std::string& arg);
 
 // ? Settings command
 CommandResult cmdSettings(const std::string& arg);
+
+// ✅ NEW: Command registry commands
+CommandResult cmdListTools(const std::string& arg);
+CommandResult cmdToolInfo(const std::string& arg);
+CommandResult cmdToolStats(const std::string& arg);

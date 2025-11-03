@@ -1,0 +1,284 @@
+{
+  "version": 1,
+  "language": "en",
+  "treebank_source": "Manual/Starter - To be replaced with UD extraction",
+  "grammar_components": {
+    "greeting": {
+      "description": "Greeting phrases",
+      "patterns": [
+        "^(hi|hello|hey|greetings?)\\b",
+        "\\b(good morning|good afternoon|good evening)\\b"
+      ],
+      "optional": true,
+      "capture": false,
+      "requires_context": false
+    },
+    "polite": {
+      "description": "Polite modifiers and requests",
+      "patterns": [
+        "\\b(please|kindly)\\b",
+        "\\b(could you|would you|can you|will you)\\b"
+      ],
+      "optional": true,
+      "capture": false,
+      "requires_context": false
+    },
+    "article": {
+      "description": "Articles",
+      "patterns": [
+        "\\b(a|an|the)\\b"
+      ],
+      "optional": true,
+      "capture": false,
+      "requires_context": false
+    },
+    "determiner": {
+      "description": "Determiners",
+      "patterns": [
+        "\\b(this|that|these|those)\\b",
+        "\\b(my|your|his|her|its|our|their)\\b"
+      ],
+      "optional": true,
+      "capture": false,
+      "requires_context": false
+    },
+    "preposition": {
+      "description": "Common prepositions",
+      "patterns": [
+        "\\b(in|on|at|to|for|with|from|by|of)\\b"
+      ],
+      "optional": true,
+      "capture": false,
+      "requires_context": false
+    },
+    "adverb": {
+      "description": "Common adverbs",
+      "patterns": [
+        "\\b(quickly|slowly|now|immediately|soon)\\b"
+      ],
+      "optional": true,
+      "capture": false,
+      "requires_context": false
+    }
+  },
+  "command_verbs": {
+    "open": {
+      "intent": "command_open",
+      "synonyms": ["launch", "start", "run", "execute"],
+      "requires_object": true,
+      "pipeline_category": "command",
+      "frequency": 100,
+      "weight": 0.95
+    },
+    "close": {
+      "intent": "command_close",
+      "synonyms": ["quit", "exit", "terminate", "kill"],
+      "requires_object": true,
+      "pipeline_category": "command",
+      "frequency": 80,
+      "weight": 0.85
+    },
+    "search": {
+      "intent": "query_search",
+      "synonyms": ["find", "lookup", "query", "google"],
+      "requires_object": true,
+      "pipeline_category": "query",
+      "frequency": 90,
+      "weight": 0.9
+    },
+    "show": {
+      "intent": "query_show",
+      "synonyms": ["display", "present", "reveal"],
+      "requires_object": true,
+      "pipeline_category": "query",
+      "frequency": 70,
+      "weight": 0.75
+    },
+    "tell": {
+      "intent": "conversation_tell",
+      "synonyms": ["say", "speak", "inform"],
+      "requires_object": true,
+      "pipeline_category": "conversation",
+      "frequency": 60,
+      "weight": 0.7
+    },
+    "create": {
+      "intent": "command_create",
+      "synonyms": ["make", "generate", "build"],
+      "requires_object": true,
+      "pipeline_category": "command",
+      "frequency": 65,
+      "weight": 0.72
+    },
+    "delete": {
+      "intent": "command_delete",
+      "synonyms": ["remove", "erase", "destroy"],
+      "requires_object": true,
+      "pipeline_category": "command",
+      "frequency": 55,
+      "weight": 0.68
+    },
+    "set": {
+      "intent": "command_set",
+      "synonyms": ["configure", "adjust", "modify"],
+      "requires_object": true,
+      "pipeline_category": "command",
+      "frequency": 75,
+      "weight": 0.8
+    },
+    "get": {
+      "intent": "query_get",
+      "synonyms": ["fetch", "retrieve", "obtain"],
+      "requires_object": true,
+      "pipeline_category": "query",
+      "frequency": 85,
+      "weight": 0.88
+    }
+  },
+  "command_objects": {
+    "browser": {
+      "category": "application",
+      "synonyms": ["chrome", "firefox", "edge", "safari"],
+      "frequency": 50,
+      "weight": 0.65
+    },
+    "editor": {
+      "category": "application",
+      "synonyms": ["vscode", "notepad", "vim", "code"],
+      "frequency": 45,
+      "weight": 0.6
+    },
+    "file": {
+      "category": "file_system",
+      "synonyms": ["document", "text"],
+      "frequency": 80,
+      "weight": 0.85
+    },
+    "folder": {
+      "category": "file_system",
+      "synonyms": ["directory", "dir"],
+      "frequency": 70,
+      "weight": 0.78
+    },
+    "music": {
+      "category": "media",
+      "synonyms": ["song", "audio", "track"],
+      "frequency": 40,
+      "weight": 0.55
+    },
+    "video": {
+      "category": "media",
+      "synonyms": ["movie", "clip"],
+      "frequency": 35,
+      "weight": 0.5
+    },
+    "timer": {
+      "category": "system",
+      "synonyms": ["alarm", "reminder"],
+      "frequency": 30,
+      "weight": 0.45
+    },
+    "window": {
+      "category": "ui",
+      "synonyms": ["tab", "pane"],
+      "frequency": 42,
+      "weight": 0.58
+    }
+  },
+  "sentence_templates": {
+    "template_imperative_simple": {
+      "structure": "[polite] <verb> [article] <object>",
+      "examples": [
+        "open the browser",
+        "please close the window",
+        "start music"
+      ],
+      "requires_context": false,
+      "category": "command",
+      "frequency": 150,
+      "weight": 0.92,
+      "pipeline_category": "command"
+    },
+    "template_imperative_with_modifier": {
+      "structure": "[polite] <verb> [article] <object> [adverb]",
+      "examples": [
+        "open the browser quickly",
+        "close this window now"
+      ],
+      "requires_context": false,
+      "category": "command",
+      "frequency": 80,
+      "weight": 0.75,
+      "pipeline_category": "command"
+    },
+    "template_question_simple": {
+      "structure": "[polite] <verb> [article] <object>",
+      "examples": [
+        "can you show the file",
+        "could you find my document"
+      ],
+      "requires_context": false,
+      "category": "query",
+      "frequency": 120,
+      "weight": 0.88,
+      "pipeline_category": "query"
+    },
+    "template_greeting": {
+      "structure": "[greeting] [polite]",
+      "examples": [
+        "hello",
+        "hi there",
+        "hey grim"
+      ],
+      "requires_context": false,
+      "category": "banter",
+      "frequency": 100,
+      "weight": 0.85,
+      "pipeline_category": "banter"
+    },
+    "template_conversation": {
+      "structure": "[polite] <verb> [preposition] <object>",
+      "examples": [
+        "tell me about the weather",
+        "talk to me about music"
+      ],
+      "requires_context": false,
+      "category": "conversation",
+      "frequency": 70,
+      "weight": 0.72,
+      "pipeline_category": "conversation"
+    },
+    "template_set_timer": {
+      "structure": "[polite] <verb> [article] <object> [preposition]",
+      "examples": [
+        "set a timer for",
+        "create an alarm at"
+      ],
+      "requires_context": false,
+      "category": "command",
+      "frequency": 60,
+      "weight": 0.68,
+      "pipeline_category": "command"
+    }
+  },
+  "context_rules": {
+    "previous_command_followup": {
+      "condition": "context.has('last_command')",
+      "action": "boost_related_intents",
+      "priority": 70,
+      "weight_modifier": 1.2
+    },
+    "time_sensitive": {
+      "condition": "input.contains('now', 'immediately', 'urgent')",
+      "action": "prioritize_execution",
+      "priority": 90,
+      "weight_modifier": 1.5
+    }
+  },
+  "learning_config": {
+    "enable_online_learning": true,
+    "min_confidence_threshold": 0.6,
+    "feedback_weight": 0.3,
+    "decay_rate": 0.95
+  }
+}

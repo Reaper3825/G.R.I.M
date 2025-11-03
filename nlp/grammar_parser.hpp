@@ -64,6 +64,9 @@ public:
     // Load grammar from JSON file
     bool load(const std::string& path);
     
+    // Load grammar from FlatBuffer binary file
+    bool loadBinary(const std::string& path);
+    
     // Parse input using grammar rules
     GrammarParseResult parse(const std::string& input);
     

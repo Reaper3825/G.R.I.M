@@ -2,6 +2,7 @@
 #include "overlay_renderer.hpp"
 #include "logger.hpp"
 #include "input_parser.hpp"
+#include "../voice/voice_speak.hpp"  // ? NEW: For updating speaker dynamically
 #include <fstream>
 #include <functional>
 #include <filesystem>
@@ -68,7 +69,9 @@ void UISettingsMenu::loadConfig() {
             config = {
                 {"backend", "auto"},
                 {"voice", {
-                    {"engine", "coqui"}
+                    {"engine", "coqui"},
+                    {"speaker", "default"},
+                    {"available_speakers", nlohmann::json::array({"default", "p226"})}
                 }},
                 {"whisper", {
                     {"whisper_model", "ggml-base.en.bin"},
@@ -149,6 +152,14 @@ void UISettingsMenu::applyChanges() {
     saveConfig();
     hasChanges = false;
     
+    // ? NEW: Update Voice module speaker if it changed
+    if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object() &&
+        pendingConfig["voice"].contains("speaker")) {
+        std::string newSpeaker = pendingConfig["voice"]["speaker"].get<std::string>();
+        Voice::setSpeaker(newSpeaker);
+        LOG_DEBUG("UISettingsMenu", "Voice speaker updated to: " + newSpeaker);
+    }
+    
     LOG_DEBUG("UISettingsMenu", "Settings applied and saved successfully");
 }
 
@@ -204,6 +215,66 @@ void UISettingsMenu::cycleVoice() {
         LOG_ERROR("UISettingsMenu", std::string("cycleVoice() exception: ") + e.what());
     } catch (...) {
         LOG_ERROR("UISettingsMenu", "cycleVoice() unknown exception");
+    }
+}
+
+void UISettingsMenu::cycleSpeaker() {
+    try {
+        LOG_DEBUG("UISettingsMenu", "cycleSpeaker() called");
+        
+        // Ensure voice object exists
+        if (!pendingConfig.contains("voice") || !pendingConfig["voice"].is_object()) {
+            pendingConfig["voice"] = nlohmann::json::object();
+        }
+        
+        // Get available speakers from config or scan embeddings
+        std::vector<std::string> availableSpeakers;
+        if (pendingConfig["voice"].contains("available_speakers") && 
+            pendingConfig["voice"]["available_speakers"].is_array()) {
+            for (const auto& speaker : pendingConfig["voice"]["available_speakers"]) {
+                availableSpeakers.push_back(speaker.get<std::string>());
+            }
+        } else {
+            // Default to scanning embeddings if not in config
+            availableSpeakers = getSpeakerEmbeddings();
+            pendingConfig["voice"]["available_speakers"] = availableSpeakers;
+        }
+        
+        if (availableSpeakers.empty()) {
+            LOG_ERROR("UISettingsMenu", "No speakers available");
+            return;
+        }
+        
+        // Get current speaker
+        std::string current = "default";
+        if (pendingConfig["voice"].contains("speaker")) {
+            current = pendingConfig["voice"]["speaker"].get<std::string>();
+        }
+        
+        // Find current index
+        int currentIndex = 0;
+        for (size_t i = 0; i < availableSpeakers.size(); ++i) {
+            if (availableSpeakers[i] == current) {
+                currentIndex = static_cast<int>(i);
+                break;
+            }
+        }
+        
+        // Cycle to next
+        int nextIndex = (currentIndex + 1) % availableSpeakers.size();
+        std::string next = availableSpeakers[nextIndex];
+        
+        LOG_DEBUG("UISettingsMenu", "Speaker: " + current + " -> " + next);
+        
+        pendingConfig["voice"]["speaker"] = next;
+        
+        hasChanges = true;
+        needsWidgetRefresh = true;
+        LOG_DEBUG("UISettingsMenu", "cycleSpeaker() completed successfully");
+    } catch (const std::exception& e) {
+        LOG_ERROR("UISettingsMenu", std::string("cycleSpeaker() exception: ") + e.what());
+    } catch (...) {
+        LOG_ERROR("UISettingsMenu", "cycleSpeaker() unknown exception");
     }
 }
 
@@ -271,13 +342,13 @@ void UISettingsMenu::cyclePersonality() {
             nextPrompt = "You are GRIM. Be brief and direct. Give concise answers without unnecessary elaboration. Keep responses under 2 sentences when possible.";
         } else if (current == "Short") {
             nextLabel = "Short & Sweet";
-            nextPrompt = "You are GRIM. Be concise but warm and friendly. Keep responses brief (1-2 sentences) while maintaining a positive, helpful tone. Add a touch of personality without being wordy.";
+            nextPrompt = "You are GRIM. Be concise but warm and friendly. Keep responses brief, goal: 1-2 sentences while maintaining a positive, helpful tone. Add a touch of personality without being wordy.";
         } else if (current == "Short & Sweet") {
             nextLabel = "Sarcastic";
             nextPrompt = "You are GRIM, a sarcastic but helpful AI assistant. Use dry humor and witty remarks while still providing accurate assistance. Don't be mean, just playfully sarcastic.";
         } else if (current == "Sarcastic") {
             nextLabel = "Military";
-            nextPrompt = "You are GRIM, a military-grade tactical AI. Use precise, direct language. Address user as 'Commander'. Keep responses brief and mission-focused. Acknowledge orders with 'Roger' or 'Affirmative'.";
+            nextPrompt = "You are GRIM, a military-grade tactical AI. Use precise, direct language.";
         } else {
             nextLabel = "Professional";
             nextPrompt = "You are GRIM, a helpful AI assistant. Be concise and professional.";
@@ -336,119 +407,67 @@ void UISettingsMenu::createWidgets() {
     }
     
     isRefreshing = true;
-    LOG_DEBUG("UISettingsMenu", "createWidgets() START");
+    LOG_DEBUG("UISettingsMenu", "createWidgets() START - using container system");
     
     try {
-        LOG_DEBUG("UISettingsMenu", "Clearing existing widgets");
-        buttons.clear();
-        buttonLabels.clear();
-        sliders.clear();
-        toggles.clear();
-        dropdowns.clear();  // ? NEW: Clear dropdowns
-        LOG_DEBUG("UISettingsMenu", "Widgets cleared successfully");
-
-        float yOffset = 10.0f;  // Start offset within scroll box
-        float widgetHeight = 45.0f;
-        float contentX = 10.0f;  // X offset within scroll box
+        // Clear all existing children from scrollbox
+        scrollBox->clearChildren();
+        
         float widgetWidth = scrollBox->getSize().x - 30;  // Leave room for scrollbar
+        float widgetHeight = 45.0f;
         
-        LOG_DEBUG("UISettingsMenu", "Creating buttons WITH callbacks");
-        
-        // Button 1: Backend
-        LOG_DEBUG("UISettingsMenu", "Creating Button 1: Backend");
+        // ===== Button 1: Backend =====
         std::string backend = pendingConfig.value("backend", "auto");
-        std::string label1 = "Backend: " + backend;
+        auto backendButton = std::make_shared<UIButton>(
+            "Backend: " + backend,
+            [this]() { cycleBackend(); }
+        );
+        backendButton->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(backendButton);
         
-        buttons.push_back(std::make_shared<UIButton>(label1, [this]() {
-            cycleBackend();
-        }));
-        buttons.back()->setPosition(contentX, yOffset);
-        buttons.back()->setSize(widgetWidth, widgetHeight);
-        buttonLabels.push_back(label1);
-        yOffset += widgetHeight + 5;
-        LOG_DEBUG("UISettingsMenu", "Button 1 created successfully");
-        
-        // Button 2: Voice Engine (nested in voice.engine)
-        LOG_DEBUG("UISettingsMenu", "Creating Button 2: Voice");
+        // ===== Button 2: Voice Engine =====
         std::string voiceEngine = "coqui";
         if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object() &&
             pendingConfig["voice"].contains("engine")) {
             voiceEngine = pendingConfig["voice"]["engine"].get<std::string>();
         }
-        std::string label2 = "Voice: " + voiceEngine;
-        buttons.push_back(std::make_shared<UIButton>(label2, [this]() {
-            cycleVoice();
-        }));
-        buttons.back()->setPosition(contentX, yOffset);
-        buttons.back()->setSize(widgetWidth, widgetHeight);
-        buttonLabels.push_back(label2);
-        yOffset += widgetHeight + 5;
-        LOG_DEBUG("UISettingsMenu", "Button 2 created successfully");
+        auto voiceButton = std::make_shared<UIButton>(
+            "Voice: " + voiceEngine,
+            [this]() { cycleVoice(); }
+        );
+        voiceButton->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(voiceButton);
         
-        // ? NEW: Dropdown for Speaker Embedding Selection (only show if Coqui is selected)
+        // ===== Button 3: Speaker (conditional on Coqui) =====
         if (voiceEngine == "coqui") {
-            LOG_DEBUG("UISettingsMenu", "Creating Dropdown: Speaker Embedding");
-            
-            // Get available embeddings
-            std::vector<std::string> embeddings = getSpeakerEmbeddings();
-            
-            // Get current speaker from config
             std::string currentSpeaker = "default";
             if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object() &&
                 pendingConfig["voice"].contains("speaker")) {
                 currentSpeaker = pendingConfig["voice"]["speaker"].get<std::string>();
             }
             
-            // Find index of current speaker
-            int selectedIndex = 0;
-            for (size_t i = 0; i < embeddings.size(); ++i) {
-                if (embeddings[i] == currentSpeaker) {
-                    selectedIndex = static_cast<int>(i);
-                    break;
-                }
-            }
-            
-            dropdowns.push_back(std::make_shared<UIDropdown>(
-                "Speaker:",
-                embeddings,
-                selectedIndex,
-                [this](int index, const std::string& selected) {
-                    if (selected == "(no custom voices)") return;  // Ignore helper text
-                    
-                    if (!pendingConfig.contains("voice") || !pendingConfig["voice"].is_object()) {
-                        pendingConfig["voice"] = nlohmann::json::object();
-                    }
-                    pendingConfig["voice"]["speaker"] = selected;
-                    hasChanges = true;
-                    LOG_DEBUG("UISettingsMenu", "Speaker changed to: " + selected);
-                }
-            ));
-            
-            dropdowns.back()->setPosition(contentX, yOffset);
-            dropdowns.back()->setSize(widgetWidth, widgetHeight);
-            yOffset += widgetHeight + 5;
-            LOG_DEBUG("UISettingsMenu", "Dropdown created successfully");
+            auto speakerButton = std::make_shared<UIButton>(
+                "Speaker: " + currentSpeaker,
+                [this]() { cycleSpeaker(); }
+            );
+            speakerButton->setSize(widgetWidth, widgetHeight);
+            scrollBox->addChild(speakerButton);
         }
         
-        // Button 3: Whisper Model (nested in whisper.whisper_model)
-        LOG_DEBUG("UISettingsMenu", "Creating Button 3: Model");
+        // ===== Button 4: Whisper Model =====
         std::string model = "ggml-base.en.bin";
         if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object() &&
             pendingConfig["whisper"].contains("whisper_model")) {
             model = pendingConfig["whisper"]["whisper_model"].get<std::string>();
         }
-        std::string label3 = "Model: " + model;
-        buttons.push_back(std::make_shared<UIButton>(label3, [this]() {
-            cycleModel();
-        }));
-        buttons.back()->setPosition(contentX, yOffset);
-        buttons.back()->setSize(widgetWidth, widgetHeight);
-        buttonLabels.push_back(label3);
-        yOffset += widgetHeight + 5;
-        LOG_DEBUG("UISettingsMenu", "Button 3 created successfully");
+        auto modelButton = std::make_shared<UIButton>(
+            "Model: " + model,
+            [this]() { cycleModel(); }
+        );
+        modelButton->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(modelButton);
         
-        // Button 4: Personality Preset
-        LOG_DEBUG("UISettingsMenu", "Creating Button 4: Personality");
+        // ===== Button 5: Personality =====
         std::string personalityLabel = "Professional";
         if (pendingConfig.contains("personality") && pendingConfig["personality"].is_object() &&
             pendingConfig["personality"].contains("custom_prompt")) {
@@ -462,26 +481,20 @@ void UISettingsMenu::createWidgets() {
             else if (prompt.find("concise but warm") != std::string::npos) personalityLabel = "Short & Sweet";
             else personalityLabel = "Custom";
         }
-        std::string label4 = "Personality: " + personalityLabel;
-        buttons.push_back(std::make_shared<UIButton>(label4, [this]() {
-            cyclePersonality();
-        }));
-        buttons.back()->setPosition(contentX, yOffset);
-        buttons.back()->setSize(widgetWidth, widgetHeight);
-        buttonLabels.push_back(label4);
-        yOffset += widgetHeight + 5;
-        LOG_DEBUG("UISettingsMenu", "Button 4 created successfully");
+        auto personalityButton = std::make_shared<UIButton>(
+            "Personality: " + personalityLabel,
+            [this]() { cyclePersonality(); }
+        );
+        personalityButton->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(personalityButton);
         
-        // Slider 1: Whisper Temperature (nested in whisper.temperature)
-        LOG_DEBUG("UISettingsMenu", "Creating Slider 1: Temperature");
+        // ===== Slider 1: Temperature =====
         float temperature = 0.0f;
         if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object() &&
             pendingConfig["whisper"].contains("temperature")) {
             temperature = pendingConfig["whisper"]["temperature"].get<float>();
         }
-        LOG_DEBUG("UISettingsMenu", "Temperature value extracted");
-        
-        sliders.push_back(std::make_shared<UISlider>(
+        auto tempSlider = std::make_shared<UISlider>(
             "Temperature:",
             0.0f, 1.0f, temperature,
             [this](float value) {
@@ -490,25 +503,18 @@ void UISettingsMenu::createWidgets() {
                 }
                 pendingConfig["whisper"]["temperature"] = value;
                 hasChanges = true;
-                LOG_DEBUG("UISettingsMenu", "Temperature changed to: " + std::to_string(value));
             }
-        ));
-        LOG_DEBUG("UISettingsMenu", "Slider 1 constructed");
-        sliders.back()->setPosition(contentX, yOffset);
-        sliders.back()->setSize(widgetWidth, widgetHeight);
-        yOffset += widgetHeight + 5;
-        LOG_DEBUG("UISettingsMenu", "Slider 1 created successfully");
+        );
+        tempSlider->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(tempSlider);
         
-        // Slider 2: Beam Size (nested in whisper.beam_size)
-        LOG_DEBUG("UISettingsMenu", "Creating Slider 2: Beam Size");
+        // ===== Slider 2: Beam Size =====
         int beamSize = 5;
         if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object() &&
             pendingConfig["whisper"].contains("beam_size")) {
             beamSize = pendingConfig["whisper"]["beam_size"].get<int>();
         }
-        LOG_DEBUG("UISettingsMenu", "Beam size value extracted");
-        
-        sliders.push_back(std::make_shared<UISlider>(
+        auto beamSlider = std::make_shared<UISlider>(
             "Beam Size:",
             1.0f, 10.0f, static_cast<float>(beamSize),
             [this](float value) {
@@ -517,26 +523,18 @@ void UISettingsMenu::createWidgets() {
                 }
                 pendingConfig["whisper"]["beam_size"] = static_cast<int>(value);
                 hasChanges = true;
-                LOG_DEBUG("UISettingsMenu", "Beam size changed to: " + std::to_string(static_cast<int>(value)));
             }
-        ));
-        LOG_DEBUG("UISettingsMenu", "Slider 2 constructed");
-        sliders.back()->setPosition(contentX, yOffset);
-        sliders.back()->setSize(widgetWidth, widgetHeight);
-        yOffset += widgetHeight + 5;
-        LOG_DEBUG("UISettingsMenu", "Slider 2 created successfully");
+        );
+        beamSlider->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(beamSlider);
         
-        // Toggle 1: Suppress Blank (nested in whisper.suppress_blank)
-        LOG_DEBUG("UISettingsMenu", "Creating Toggle 1: Suppress Blank");
+        // ===== Toggle 1: Suppress Blank =====
         bool suppressBlank = true;
         if (pendingConfig.contains("whisper") && pendingConfig["whisper"].is_object() &&
             pendingConfig["whisper"].contains("suppress_blank")) {
             suppressBlank = pendingConfig["whisper"]["suppress_blank"].get<bool>();
         }
-        LOG_DEBUG("UISettingsMenu", "Suppress blank value extracted");
-        
-        LOG_DEBUG("UISettingsMenu", "About to construct UIToggle 1");
-        toggles.push_back(std::make_shared<UIToggle>(
+        auto suppressToggle = std::make_shared<UIToggle>(
             "Suppress Blank:",
             suppressBlank,
             [this](bool value) {
@@ -545,69 +543,46 @@ void UISettingsMenu::createWidgets() {
                 }
                 pendingConfig["whisper"]["suppress_blank"] = value;
                 hasChanges = true;
-                LOG_DEBUG("UISettingsMenu", "Suppress blank changed to: " + std::string(value ? "true" : "false"));
             }
-        ));
-        LOG_DEBUG("UISettingsMenu", "UIToggle 1 constructed");
-        toggles.back()->setPosition(contentX, yOffset);
-        LOG_DEBUG("UISettingsMenu", "Toggle 1 position set");
-        toggles.back()->setSize(widgetWidth, widgetHeight);
-        yOffset += widgetHeight + 5;
-        LOG_DEBUG("UISettingsMenu", "Toggle 1 created successfully");
+        );
+        suppressToggle->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(suppressToggle);
         
-        // Toggle 2: Use Custom Personality
-        LOG_DEBUG("UISettingsMenu", "Creating Toggle 2: Use Custom Personality");
-        bool useCustomPrompt = false;
+        // ===== Toggle 2: Custom Personality =====
+        bool useCustom = false;
         if (pendingConfig.contains("personality") && pendingConfig["personality"].is_object() &&
             pendingConfig["personality"].contains("use_custom_prompt")) {
-            useCustomPrompt = pendingConfig["personality"]["use_custom_prompt"].get<bool>();
+            useCustom = pendingConfig["personality"]["use_custom_prompt"].get<bool>();
         }
-        LOG_DEBUG("UISettingsMenu", "Use custom personality value extracted");
-        
-        toggles.push_back(std::make_shared<UIToggle>(
+        auto customToggle = std::make_shared<UIToggle>(
             "Custom Personality:",
-            useCustomPrompt,
+            useCustom,
             [this](bool value) {
                 if (!pendingConfig.contains("personality") || !pendingConfig["personality"].is_object()) {
                     pendingConfig["personality"] = nlohmann::json::object();
                 }
                 pendingConfig["personality"]["use_custom_prompt"] = value;
                 hasChanges = true;
-                LOG_DEBUG("UISettingsMenu", "Use custom personality changed to: " + std::string(value ? "true" : "false"));
             }
-        ));
-        toggles.back()->setPosition(contentX, yOffset);
-        toggles.back()->setSize(widgetWidth, widgetHeight);
-        yOffset += widgetHeight + 20;
-        LOG_DEBUG("UISettingsMenu", "Toggle 2 created successfully");
+        );
+        customToggle->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(customToggle);
         
-        // Save & Close Button
-        LOG_DEBUG("UISettingsMenu", "Creating Button 5: Save & Close");
-        buttons.push_back(std::make_shared<UIButton>("Save & Close", [this]() {
+        // Auto-layout all children in the scrollbox
+        scrollBox->setChildSpacing(5.0f);
+        scrollBox->autoLayoutChildren(10.0f);
+        
+        // Create Save & Close button (outside scrollbox)
+        saveButton = std::make_shared<UIButton>("Save & Close", [this]() {
             doSaveAndClose();
-        }));
-        buttons.back()->setPosition(contentX, yOffset);
-        buttons.back()->setSize((widgetWidth - 10) / 2, 40);
-        buttonLabels.push_back("Save & Close");
-        LOG_DEBUG("UISettingsMenu", "Button 5 created successfully");
+        });
         
-        // Cancel Button
-        LOG_DEBUG("UISettingsMenu", "Creating Button 6: Cancel");
-        buttons.push_back(std::make_shared<UIButton>("Cancel", [this]() {
+        // Create Cancel button (outside scrollbox)
+        cancelButton = std::make_shared<UIButton>("Cancel", [this]() {
             doCancel();
-        }));
-        buttons.back()->setPosition(contentX + (widgetWidth - 10) / 2 + 10, yOffset);
-        buttons.back()->setSize((widgetWidth - 10) / 2, 40);
-        buttonLabels.push_back("Cancel");
-        LOG_DEBUG("UISettingsMenu", "Button 6 created successfully");
+        });
         
-        yOffset += 40 + 10;  // Add final padding
-        
-        // Set content height for scrollbox
-        scrollBox->setContentHeight(yOffset);
-        LOG_DEBUG("UISettingsMenu", "Scroll box content height set to: " + std::to_string(yOffset));
-        
-        LOG_DEBUG("UISettingsMenu", "Widgets created successfully WITH callbacks");
+        LOG_DEBUG("UISettingsMenu", "Widgets created successfully - using container system");
     }
     catch (const std::exception& e) {
         LOG_ERROR("UISettingsMenu", std::string("createWidgets() exception: ") + e.what());
@@ -628,13 +603,7 @@ void UISettingsMenu::update(const InputState& input, float dt) {
     
     if (!isVisible()) return;
     
-    // ? FIX: Make COPIES of widget vectors to prevent iterator invalidation
-    auto buttonsCopy = buttons;
-    auto slidersCopy = sliders;
-    auto togglesCopy = toggles;
-    auto dropdownsCopy = dropdowns;  // ? NEW: Copy dropdowns too
-    
-    // ? Check refresh flag BEFORE updating widgets
+    // Check refresh flag BEFORE updating widgets
     bool shouldRefresh = needsWidgetRefresh;
     if (shouldRefresh) {
         needsWidgetRefresh = false;
@@ -647,150 +616,42 @@ void UISettingsMenu::update(const InputState& input, float dt) {
     scrollBox->setPosition(position.x + 10, position.y + 40);
     scrollBox->setSize(size.x - 20, size.y - 50);
     
-    // Update scroll box (handles scrollbar interaction)
+    // Scrollbox handles all child updates internally
     scrollBox->update(input, dt);
     
-    // Get scroll offset
-    float scrollOffset = scrollBox->getScrollOffset();
-    Vec2 scrollBoxPos = scrollBox->getPosition();
-    
-    // Update widget positions with scroll offset applied
-    float yOffset = 10.0f;  // Start offset within scroll box
-    float widgetHeight = 45.0f;
-    float contentX = scrollBoxPos.x + 10.0f;
-    
-    // Update cycle buttons (first 4) using COPY
-    for (size_t i = 0; i < 4 && i < buttonsCopy.size(); ++i) {
-        buttonsCopy[i]->setPosition(contentX, scrollBoxPos.y + yOffset - scrollOffset);
-        buttonsCopy[i]->update(input, dt);
-        yOffset += widgetHeight + 5;
-        
-        // ? NEW: If this is the voice button (index 1) and Coqui is selected, update dropdown
-        if (i == 1 && !dropdownsCopy.empty()) {
-            std::string voiceEngine = "coqui";
-            if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object() &&
-                pendingConfig["voice"].contains("engine")) {
-                voiceEngine = pendingConfig["voice"]["engine"].get<std::string>();
-            }
-            
-            if (voiceEngine == "coqui") {
-                dropdownsCopy[0]->setPosition(contentX, scrollBoxPos.y + yOffset - scrollOffset);
-                dropdownsCopy[0]->update(input, dt);
-                yOffset += widgetHeight + 5;
-            }
-        }
+    // Update Save & Close button (outside scrollbox)
+    if (saveButton) {
+        float yPos = position.y + size.y - 50;
+        saveButton->setPosition(position.x + 10, yPos);
+        saveButton->setSize((size.x - 30) / 2, 40);
+        saveButton->update(input, dt);
     }
     
-    // Update sliders using COPY
-    for (auto& slider : slidersCopy) {
-        slider->setPosition(contentX, scrollBoxPos.y + yOffset - scrollOffset);
-        slider->update(input, dt);
-        yOffset += widgetHeight + 5;
-    }
-    
-    // Update toggles using COPY
-    for (auto& toggle : togglesCopy) {
-        toggle->setPosition(contentX, scrollBoxPos.y + yOffset - scrollOffset);
-        toggle->update(input, dt);
-        yOffset += widgetHeight + 5;
-    }
-    
-    yOffset += 15;
-    
-    // Update Save/Cancel buttons (last 2) using COPY
-    if (buttonsCopy.size() >= 6) {
-        float widgetWidth = scrollBox->getSize().x - 30;
-        
-        buttonsCopy[4]->setPosition(contentX, scrollBoxPos.y + yOffset - scrollOffset);
-        buttonsCopy[4]->update(input, dt);
-        
-        buttonsCopy[5]->setPosition(contentX + (widgetWidth - 10) / 2 + 10, scrollBoxPos.y + yOffset - scrollOffset);
-        buttonsCopy[5]->update(input, dt);
+    // Update Cancel button (outside scrollbox)
+    if (cancelButton) {
+        float yPos = position.y + size.y - 50;
+        cancelButton->setPosition(position.x + 10 + (size.x - 30) / 2 + 10, yPos);
+        cancelButton->setSize((size.x - 30) / 2, 40);
+        cancelButton->update(input, dt);
     }
 }
+
 void UISettingsMenu::drawOverlay(OverlayRenderer& renderer)
 {
     if (!isVisible()) return;
     
     UIPanel::drawOverlay(renderer);
     
-    // Draw scroll box background and scrollbar
+    // Draw scroll box with all children (scrollbox handles culling and scroll offset)
     scrollBox->drawOverlay(renderer, position);
     
-    // Get scroll offset for rendering
-    float scrollOffset = scrollBox->getScrollOffset();
-    Vec2 scrollBoxPos = scrollBox->getPosition();
-    Vec2 scrollBoxSize = scrollBox->getSize();
-    
-    // Note: In a full implementation, we would use scissor/clipping here
-    // For now, we just draw everything and let things outside be visible
-    // (A proper implementation would require OpenGL/DirectX scissor test)
-    
-    // ? NEW: Draw dropdowns (if voice engine is Coqui)
-    std::string voiceEngine = "coqui";
-    if (pendingConfig.contains("voice") && pendingConfig["voice"].is_object() &&
-        pendingConfig["voice"].contains("engine")) {
-        voiceEngine = pendingConfig["voice"]["engine"].get<std::string>();
-    }
-    
-    if (voiceEngine == "coqui" && !dropdowns.empty()) {
-        for (auto& dropdown : dropdowns) {
-            Vec2 dropdownPos = dropdown->getPosition();
-            
-            // Only draw if within visible area
-            if (dropdownPos.y + dropdown->getSize().y >= scrollBoxPos.y &&
-                dropdownPos.y <= scrollBoxPos.y + scrollBoxSize.y) {
-                dropdown->drawOverlay(renderer, position);
-            }
-        }
-    }
-    
-    // Draw sliders
-    for (auto& slider : sliders) {
-        Vec2 sliderPos = slider->getPosition();
+    // Draw Save & Close button
+    if (saveButton) {
+        Vec2 btnPos = saveButton->getPosition();
+        Vec2 btnSize = saveButton->getSize();
         
-        // Only draw if within visible area (simple culling)
-        if (sliderPos.y + slider->getSize().y >= scrollBoxPos.y &&
-            sliderPos.y <= scrollBoxPos.y + scrollBoxSize.y) {
-            slider->drawOverlay(renderer, position);
-        }
-    }
-    
-    // Draw toggles
-    for (auto& toggle : toggles) {
-        Vec2 togglePos = toggle->getPosition();
-        
-        // Only draw if within visible area
-        if (togglePos.y + toggle->getSize().y >= scrollBoxPos.y &&
-            togglePos.y <= scrollBoxPos.y + scrollBoxSize.y) {
-            toggle->drawOverlay(renderer, position);
-        }
-    }
-    
-    // Draw all buttons with color coding
-    for (size_t i = 0; i < buttons.size() && i < buttonLabels.size(); ++i) {
-        Vec2 btnPos = buttons[i]->getPosition();
-        Vec2 btnSize = buttons[i]->getSize();
-        
-        // Only draw if within visible area
-        if (btnPos.y + btnSize.y < scrollBoxPos.y ||
-            btnPos.y > scrollBoxPos.y + scrollBoxSize.y) {
-            continue;  // Skip drawing if outside visible area
-        }
-        
-        uint32_t btnColor = 0xFF303030;
-        uint32_t borderColor = 0xFF00FFFF;
-        
-        if (i < 4) {  // Cycle buttons (Backend, Voice, Model, Personality)
-            btnColor = 0xFF202030;
-            borderColor = 0xFF00FFFF;
-        } else if (i == 4) {  // Save
-            btnColor = 0xFF2A4A2A;
-            borderColor = 0xFF00FF00;
-        } else if (i == 5) {  // Cancel
-            btnColor = 0xFF4A2A2A;
-            borderColor = 0xFFFF0000;
-        }
+        uint32_t btnColor = 0xFF2A4A2A;
+        uint32_t borderColor = 0xFF00FF00;
         
         renderer.drawRect(btnPos, btnSize, btnColor);
         renderer.drawRect(btnPos, {btnSize.x, 2}, borderColor);
@@ -799,7 +660,25 @@ void UISettingsMenu::drawOverlay(OverlayRenderer& renderer)
         renderer.drawRect({btnPos.x + btnSize.x - 2, btnPos.y}, {2, btnSize.y}, borderColor);
         
         float textY = btnPos.y + (btnSize.y / 2.0f) - 8;
-        renderer.drawText({btnPos.x + 10, textY}, buttonLabels[i], 0xFFFFFFFF);
+        renderer.drawText({btnPos.x + 10, textY}, "Save & Close", 0xFFFFFFFF);
+    }
+    
+    // Draw Cancel button
+    if (cancelButton) {
+        Vec2 btnPos = cancelButton->getPosition();
+        Vec2 btnSize = cancelButton->getSize();
+        
+        uint32_t btnColor = 0xFF4A2A2A;
+        uint32_t borderColor = 0xFFFF0000;
+        
+        renderer.drawRect(btnPos, btnSize, btnColor);
+        renderer.drawRect(btnPos, {btnSize.x, 2}, borderColor);
+        renderer.drawRect(btnPos, {2, btnSize.y}, borderColor);
+        renderer.drawRect({btnPos.x, btnPos.y + btnSize.y - 2}, {btnSize.x, 2}, borderColor);
+        renderer.drawRect({btnPos.x + btnSize.x - 2, btnPos.y}, {2, btnSize.y}, borderColor);
+        
+        float textY = btnPos.y + (btnSize.y / 2.0f) - 8;
+        renderer.drawText({btnPos.x + 10, textY}, "Cancel", 0xFFFFFFFF);
     }
     
     // Unsaved changes indicator
@@ -807,3 +686,4 @@ void UISettingsMenu::drawOverlay(OverlayRenderer& renderer)
         renderer.drawText({position.x + size.x - 150, position.y + 8}, "* Unsaved", 0xFFFFFF00);
     }
 }
+

@@ -46,165 +46,6 @@ static bool mergeDefaults(nlohmann::json& cfg,
 // ----------------- defaults -----------------
 namespace bootstrap_config {
 
-nlohmann::json defaultAI() {
-    return {
-        {"backend", "auto"},
-        {"ollama_url", "http://127.0.0.1:11434"},
-        {"localai_url", "http://127.0.0.1:8080/v1"},
-        {"default_model", "mistral"},
-
-        {"whisper_language", "en"},
-        {"whisper_max_tokens", 32},
-        {"silence_threshold", 0.02},
-        {"silence_timeout_ms", 4000},
-
-        {"personality", {
-            {"custom_prompt", "You are GRIM, a helpful AI assistant. Be concise and professional."},
-            {"use_custom_prompt", false}
-        }},
-
-        {"voice", {
-            {"mode", "local"},
-            {"engine", "coqui"},
-            {"local_engine", "en_US-amy-medium.onnx"},
-            {"speaker", "p225"},
-            {"speed", 1.0},
-            {"silence_threshold", 0.015},  // ✅ Lowered from 0.02 to 0.015 for better sensitivity
-            {"silence_timeout_ms", 1200},
-            {"confidence_threshold", 0.6},
-            {"filter_low_confidence", true},
-            {"require_multi_command_confirmation", true},
-            {"max_commands_per_input", 3},
-            {"rules", {
-                {"startup", "sapi"},
-                {"reminder", "coqui"},
-                {"summary", "coqui"},
-                {"banter", "coqui"}
-            }},
-            {"input_device_index", -1},
-            {"coqui", {
-                {"model", "tts_models/en/vctk/vits"},
-                {"speaker", "p225"}
-            }},
-            {"sapi", {
-                {"voice", "en_US-amy-medium.onnx"}
-            }}
-        }},
-
-        {"api_keys", {
-            {"openai", ""},
-            {"elevenlabs", ""},
-            {"azure", ""}
-        }},
-
-        {"whisper", {
-            {"whisper_model", "ggml-base.en.bin"},
-            {"language", "en"},                      // Force English (critical!)
-            {"sampling_strategy", "beam"},
-            {"temperature", 0.0},
-            {"beam_size", 5},
-            {"best_of", 5},
-            {"no_speech_threshold", 0.6},
-            {"min_speech_ms", 500},
-            {"min_silence_ms", 1200},
-            {"max_listening_ms", 10000},  // ✅ Add max listening timeout
-            {"max_len", 1},
-            {"suppress_blank", true},
-            {"entropy_threshold", 2.4},  // ✅ ADD: Reject high-entropy (gibberish) outputs
-            {"logprob_threshold", -1.0},  // ✅ ADD: Reject low-confidence transcriptions
-            {"initial_prompt", "Voice commands: open notepad, close window, show time, list directory"}
-        }}
-    };
-}
-
-nlohmann::json defaultErrors() {
-    return {
-
-        {"ERR_FS_MISSING_DIR", {
-            {"user", "[FS] Usage: cd/mkdir <directory>"},
-            {"debug", "Filesystem command called without directory argument."}
-        }},
-        {"ERR_FS_DIR_NOT_FOUND", {
-            {"user", "[FS] Directory does not exist."},
-            {"debug", "Target directory not found in cmdChangeDir."}
-        }},
-
-
-        {"ERR_APP_NO_ARGUMENT", {
-            {"user", "[App] Usage: open <application>"},
-            {"debug", "Application command called without argument."}
-        }},
-
-
-        {"ERR_AI_CONFIG_INVALID", {
-            {"user", "[AI] Config file invalid → reset to defaults."},
-            {"debug", "ai_config.json failed parsing or validation."}
-        }},
-
-  
-        {"ERR_ALIAS_NOT_FOUND", {
-            {"user", "[Alias] Application not found."},
-            {"debug", "Alias lookup failed in user, auto, and fallback."}
-        }},
-        
-        // ✅ NEW: Core command errors
-        {"ERR_CORE_UNKNOWN_COMMAND", {
-            {"user", "[Error] Unknown command."},
-            {"debug", "Command not found in command map or NLP rules."}
-        }},
-
-        // ✅ Voice-related errors
-        {"ERR_VOICE_START", {
-            {"user", "Listening..."},
-            {"debug", "Voice recognition started successfully."}
-        }},
-        {"ERR_VOICE_HEARD", {
-            {"user", "Heard"},
-            {"debug", "Voice input captured successfully."}
-        }},
-        {"ERR_VOICE_STOP", {
-            {"user", "Stopped listening."},
-            {"debug", "Voice recognition stopped cleanly."}
-        }},
-        {"ERR_VOICE_NO_SPEECH", {
-            {"user", "No speech detected."},
-            {"debug", "Whisper listening timed out without detecting speech."}
-        }},
-        {"ERR_VOICE_NO_CONTEXT", {
-            {"user", "Voice system not initialized."},
-            {"debug", "Whisper context or audio device unavailable."}
-        }},
-        {"ERR_VOICE_NOT_INITIALIZED", {
-            {"user", "Voice recognition unavailable."},
-            {"debug", "Whisper model failed to load or is missing."}
-        }},
-        {"ERR_VOICE_TRANSCRIBE_FAIL", {
-            {"user", "Could not transcribe speech."},
-            {"debug", "Whisper transcription failed during processing."}
-        }},
-        {"ERR_VOICE_STREAM_FAIL", {
-            {"user", "Voice streaming failed."},
-            {"debug", "Could not start voice streaming session."}
-        }},
-        
-        // ✅ AI interpretation errors
-        {"ERR_AI_INTERPRET_FAIL", {
-            {"user", "[AI] I couldn't determine your intent."},
-            {"debug", "AI interpretation returned empty or invalid response."}
-        }},
-        {"ERR_AI_BACKEND_UNAVAILABLE", {
-            {"user", "[AI] Backend unavailable."},
-            {"debug", "Could not connect to Ollama/LocalAI/OpenAI."}
-        }}
-    };
-}
-
-
-
-nlohmann::json defaultMemory() {
-    return nlohmann::json::object();
-}
-
 nlohmann::json defaultAliases() {
     return nlohmann::json::object();
 }
@@ -251,36 +92,63 @@ bool loadConfig(const fs::path& path,
 
 // ----------------- entry -----------------
 void initAll() {
-    // memory.json
-    nlohmann::json memoryCfg;
-    loadConfig("memory.json", defaultMemory(), memoryCfg, "Memory config", "");
-
-    // ai_config.json
-    fs::path cfgPath = fs::current_path() / AI_CONFIG_FILE;
-    loadConfig(cfgPath, defaultAI(), aiConfig, "AI config", "ERR_AI_CONFIG_INVALID");
-
-    // errors.json
-    fs::path errPath = fs::path(getResourcePath()) / "errors.json";
-    nlohmann::json errorsCfg;
-    loadConfig(errPath, defaultErrors(), errorsCfg, "Errors config", "");
-
-  // ✅ NEW: Grammar-based NLP rules (BEFORE regex rules)
-    fs::path grammarPath = fs::path(getResourcePath()) / "nlp_grammar.json";
-    if (fs::exists(grammarPath)) {
-      if (GRIM::g_grammarParser.load(grammarPath.string())) {
-   LOG_PHASE("Grammar parser initialized", true);
-            
-          // Log statistics
-     auto stats = GRIM::g_grammarParser.getStats();
-          LOG_DEBUG("Grammar", "Loaded " + std::to_string(stats["components_loaded"].get<int>()) + 
-  " components, " + std::to_string(stats["verbs_loaded"].get<int>()) + 
-            " verbs, " + std::to_string(stats["templates_loaded"].get<int>()) + " templates");
+    // ai_config.json - Simple load from root
+    try {
+        std::ifstream f(AI_CONFIG_FILE);
+        if (f.is_open()) {
+            f >> aiConfig;
+            LOG_PHASE("AI config load", true);
         } else {
- LOG_ERROR("Config", "Failed to load grammar rules from: " + grammarPath.string());
-   LOG_PHASE("Grammar parser initialization", false);
-   }
-    } else {
-   LOG_DEBUG("Config", "Grammar file not found: " + grammarPath.string() + " - falling back to regex-only NLP");
+            LOG_ERROR("Config", "ai_config.json not found");
+            LOG_PHASE("AI config load", false);
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("Config", std::string("ai_config.json parse error: ") + e.what());
+        LOG_PHASE("AI config load", false);
+    }
+
+    // ✅ Grammar-based NLP rules (try binary first, then JSON fallback)
+    bool grammarLoaded = false;
+    
+    // Try binary FlatBuffer format first (faster loading)
+    fs::path grammarBinary = fs::path(getResourcePath()) / "grammar_rules.fb";
+    if (fs::exists(grammarBinary)) {
+        LOG_DEBUG("Config", "Loading binary grammar from: " + grammarBinary.string());
+        if (GRIM::g_grammarParser.loadBinary(grammarBinary.string())) {
+            LOG_PHASE("Grammar parser initialized (binary)", true);
+            grammarLoaded = true;
+            
+            // Log statistics
+            auto stats = GRIM::g_grammarParser.getStats();
+            LOG_DEBUG("Grammar", "Loaded " + std::to_string(stats["components_loaded"].get<int>()) + 
+                " components, " + std::to_string(stats["verbs_loaded"].get<int>()) + 
+                " verbs, " + std::to_string(stats["templates_loaded"].get<int>()) + " templates");
+        } else {
+            LOG_ERROR("Config", "Failed to load binary grammar from: " + grammarBinary.string());
+        }
+    }
+    
+    // Fallback to JSON if binary not available or failed
+    if (!grammarLoaded) {
+        fs::path grammarPath = fs::path(getResourcePath()) / "nlp_grammar.json";
+        if (fs::exists(grammarPath)) {
+            LOG_DEBUG("Config", "Loading JSON grammar from: " + grammarPath.string());
+            if (GRIM::g_grammarParser.load(grammarPath.string())) {
+                LOG_PHASE("Grammar parser initialized (JSON)", true);
+                grammarLoaded = true;
+                
+                // Log statistics
+                auto stats = GRIM::g_grammarParser.getStats();
+                LOG_DEBUG("Grammar", "Loaded " + std::to_string(stats["components_loaded"].get<int>()) + 
+                    " components, " + std::to_string(stats["verbs_loaded"].get<int>()) + 
+                    " verbs, " + std::to_string(stats["templates_loaded"].get<int>()) + " templates");
+            } else {
+                LOG_ERROR("Config", "Failed to load grammar rules from: " + grammarPath.string());
+                LOG_PHASE("Grammar parser initialization", false);
+            }
+        } else {
+            LOG_DEBUG("Config", "Grammar file not found: " + grammarPath.string() + " - falling back to regex-only NLP");
+        }
     }
 
     // NLP rules (regex-based - now serves as fallback)

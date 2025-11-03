@@ -633,5 +633,14 @@ namespace Voice {
     std::string getLanguage() {
         return g_language;
     }
+    
+    void setSpeaker(const std::string& speaker) {
+        g_speaker = speaker;
+        LOG_DEBUG("Voice", "Speaker updated to: " + speaker);
+    }
+    
+    std::string getSpeaker() {
+        return g_speaker;
+    }
 
 } // namespace Voice

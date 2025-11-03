@@ -139,3 +139,6 @@ osint/
 venv_rl/
 out/build/
 out/build/
+VCTK-final/
+VCTK-final/*
+VCTK-final

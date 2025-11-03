@@ -1,4 +1,5 @@
 #include "commands_question.hpp"
+#include "command_registry.hpp"  // ✅ NEW: For tool knowledge
 #include "response_manager.hpp"
 #include "logger.hpp"
 #include "memory/memory_storage.hpp" 
@@ -9,6 +10,7 @@
 #include "system_detect.hpp" 
 #include <algorithm>
 #include <sstream>
+#include <map>  // ✅ NEW: For category grouping
 #include <regex>
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
@@ -49,6 +51,21 @@ QuestionResult QuestionHandler::process(const std::string& question) {
         QuestionResult osintResult = searchOSINT(question);
         if (osintResult.answered && osintResult.confidence > 0.5f) {
             return osintResult;
+        }
+    }
+    
+    // ✅ NEW: Check for tool/command/capability questions
+    if (lowerQ.find("tool") != std::string::npos || 
+        lowerQ.find("command") != std::string::npos ||
+        lowerQ.find("what can you") != std::string::npos ||
+        lowerQ.find("what do you") != std::string::npos ||
+        lowerQ.find("what are you able") != std::string::npos ||
+        lowerQ.find("capabilities") != std::string::npos ||
+        lowerQ.find("functions") != std::string::npos ||
+        lowerQ.find("features") != std::string::npos) {
+        QuestionResult toolResult = searchToolKnowledge(question);
+        if (toolResult.answered) {
+            return toolResult;
         }
     }
     
@@ -607,6 +624,113 @@ QuestionResult QuestionHandler::searchOSINT(const std::string& query) {
         }
     }
     
+    return result;
+}
+
+// ============================================================================
+// Tool/Command Knowledge Search
+// ============================================================================
+
+QuestionResult QuestionHandler::searchToolKnowledge(const std::string& question) {
+    QuestionResult result;
+    result.answered = true;
+    result.source = AnswerSource::BaseMemory;
+    result.confidence = 0.95f;
+    
+    LOG_DEBUG("QuestionHandler", "Searching tool knowledge for: " + question);
+    
+    std::string lowerQ = question;
+    std::transform(lowerQ.begin(), lowerQ.end(), lowerQ.begin(), ::tolower);
+    
+    // Get all registered tools
+    auto allTools = GRIM::CommandRegistry::getAllTools();
+    
+    // Check what type of question this is
+    if (lowerQ.find("how many") != std::string::npos || 
+        lowerQ.find("count") != std::string::npos) {
+        // Count question
+        result.answer = "I have " + std::to_string(allTools.size()) + 
+                       " registered tools and commands available.";
+        return result;
+    }
+    
+    if (lowerQ.find("list") != std::string::npos || 
+        lowerQ.find("show all") != std::string::npos ||
+        lowerQ.find("what tools") != std::string::npos ||
+        lowerQ.find("what commands") != std::string::npos) {
+        // List all tools by category
+        std::ostringstream answer;
+        answer << "I have " << allTools.size() << " tools available:\n\n";
+        
+        // Group by category
+        std::map<std::string, std::vector<std::string>> byCategory;
+        for (const auto& tool : allTools) {
+            byCategory[tool.category].push_back(tool.name + ": " + tool.description);
+        }
+        
+        for (const auto& [category, tools] : byCategory) {
+            answer << "**" << category << "**:\n";
+            int count = 0;
+            for (const auto& tool : tools) {
+                answer << "  - " << tool << "\n";
+                if (++count >= 5 && tools.size() > 6) {
+                    answer << "  ... and " << (tools.size() - 5) << " more\n";
+                    break;
+                }
+            }
+            answer << "\n";
+        }
+        
+        answer << "Use 'list_tools [category]' for filtered lists or 'tool_info <name>' for details.";
+        result.answer = answer.str();
+        return result;
+    }
+    
+    if (lowerQ.find("what can you") != std::string::npos ||
+        lowerQ.find("capabilities") != std::string::npos ||
+        lowerQ.find("features") != std::string::npos) {
+        // General capabilities question
+        std::ostringstream answer;
+        answer << "I can help you with:\n\n";
+        
+        auto categories = GRIM::CommandRegistry::getCategories();
+        for (const auto& category : categories) {
+            auto categoryTools = GRIM::CommandRegistry::getToolsByCategory(category);
+            answer << "**" << category << "** (" << categoryTools.size() << " tools): ";
+            
+            // List first few examples
+            int count = 0;
+            for (const auto& tool : categoryTools) {
+                if (count > 0) answer << ", ";
+                answer << tool.name;
+                if (++count >= 3) break;
+            }
+            if (categoryTools.size() > 3) {
+                answer << ", ...";
+            }
+            answer << "\n";
+        }
+        
+        answer << "\nAsk 'what tools do you have' for a complete list.";
+        result.answer = answer.str();
+        return result;
+    }
+    
+    // Check if asking about a specific capability
+    for (const auto& tool : allTools) {
+        // Check if tool name or description matches question keywords
+        if (lowerQ.find(tool.name) != std::string::npos ||
+            tool.description.find(question) != std::string::npos) {
+            result.answer = "Yes, I can help with that. Use the '" + tool.name + 
+                          "' command: " + tool.description;
+            return result;
+        }
+    }
+    
+    // General answer
+    result.answer = "I have " + std::to_string(allTools.size()) + 
+                   " tools for actions, information queries, and system management. " +
+                   "Try 'list_tools' to see everything I can do.";
     return result;
 }
 

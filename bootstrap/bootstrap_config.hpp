@@ -17,8 +17,5 @@ namespace bootstrap_config {
                     const std::string& errorCode = "");
 
     // Canonical defaults
-    nlohmann::json defaultAI();
-    nlohmann::json defaultErrors();
-    nlohmann::json defaultMemory();
     nlohmann::json defaultAliases();
 }

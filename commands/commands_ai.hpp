@@ -23,6 +23,14 @@ CommandResult cmdAiBackend(const std::string& arg);
 CommandResult cmdReloadNlp(const std::string& arg);
 
 /**
+ * @brief Clear AI conversation context to start fresh.
+ * 
+ * Usage:
+ *   clear_context
+ */
+CommandResult cmdClearContext(const std::string& arg);
+
+/**
  * @brief General AI query (catch-all).
  * 
  * Usage:

@@ -27,6 +27,7 @@ private:
     
     void cycleBackend();
     void cycleVoice();
+    void cycleSpeaker();
     void cycleModel();
     void cyclePersonality();
     void doSaveAndClose();
@@ -39,11 +40,10 @@ private:
     nlohmann::json pendingConfig;
     
     std::shared_ptr<UIScrollBox> scrollBox;
-    std::vector<std::shared_ptr<UIButton>> buttons;
-    std::vector<std::string> buttonLabels;
-    std::vector<std::shared_ptr<UISlider>> sliders;
-    std::vector<std::shared_ptr<UIToggle>> toggles;
-    std::vector<std::shared_ptr<UIDropdown>> dropdowns;  // ? NEW: Dropdown storage
+    
+    // Keep references to action buttons for external access (Save/Cancel)
+    std::shared_ptr<UIButton> saveButton;
+    std::shared_ptr<UIButton> cancelButton;
     
     bool hasChanges = false;
     bool isRefreshing = false;

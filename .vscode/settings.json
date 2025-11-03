@@ -3,12 +3,56 @@
 
     // MS C/C++ extension (ms-vscode.cpptools) — use compile_commands.json
     "C_Cpp.default.compileCommands": "D:/G.R.I.M/build/compile_commands.json",
+    
+    // Exclude dependency folders from IntelliSense indexing
+    "C_Cpp.files.exclude": {
+        "**/vcpkg_installed/**": true,
+        "**/external/**": true,
+        "**/deps/**": true,
+        "**/build/**": true,
+        "**/out/**": true,
+        "**/.venv/**": true,
+        "**/venv_rl/**": true,
+        "**/openal-soft/**": true,
+        "**/VCTK-final/**": true,
+        "**/.git/**": true,
+        "**/.vs/**": true,
+        "**/.vscode/.browse.VC.db*": true
+    },
+    
+    // Exclude from search
+    "search.exclude": {
+        "**/vcpkg_installed/**": true,
+        "**/external/**": true,
+        "**/deps/**": true,
+        "**/build/**": true,
+        "**/out/**": true,
+        "**/.venv/**": true,
+        "**/venv_rl/**": true,
+        "**/openal-soft/**": true,
+        "**/VCTK-final/**": true
+    },
+    
+    // Exclude from file watcher (improves performance)
+    "files.watcherExclude": {
+        "**/vcpkg_installed/**": true,
+        "**/external/**": true,
+        "**/deps/**": true,
+        "**/build/**": true,
+        "**/out/**": true,
+        "**/.venv/**": true,
+        "**/venv_rl/**": true,
+        "**/openal-soft/**": true,
+        "**/VCTK-final/**": true
+    },
 
     // clangd extension — point to the same database
     "clangd.arguments": [
         "--compile-commands-dir=D:/G.R.I.M/build",
         "--header-insertion=never",
-        "--cross-file-rename"
+        "--cross-file-rename",
+        "--query-driver=**",
+        "--background-index=false"
     ],
 
     // Optional: disable cpptools IntelliSense squiggles if you prefer clangd
@@ -141,9 +185,16 @@
         "D:/G.R.I.M/external"
     ],
 
-    // Hide all .git folders inside external/
+    // Hide all .git folders inside external/ and build artifacts
     "files.exclude": {
-        "**/external/**/.git": true
+        "**/external/**/.git": true,
+        "**/build/**": true,
+        "**/out/build/**": true,
+        "**/.vs/**": true,
+        "**/.vscode/.browse.VC.db*": true,
+        "**/*.obj": true,
+        "**/*.pdb": true,
+        "**/*.ilk": true
     },
 
     // Stop VS Code from auto-detecting nested repos

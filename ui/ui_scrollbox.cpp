@@ -138,10 +138,20 @@ void UIScrollBox::update(const InputState& input, float dt) {
         // For now, this is a placeholder for future mouse wheel support
     }
     
-    // Update children (with scroll offset applied)
+    // Update children with positions adjusted for scrolling
     for (auto& child : children) {
         if (child->isVisible()) {
+            Vec2 childPos = child->getPosition();  // Relative to content area
+            
+            // Calculate absolute screen position for update
+            Vec2 absolutePos = {position.x + childPos.x, position.y + childPos.y - scrollOffset};
+            
+            // Temporarily update child position for input handling
+            child->setPosition(absolutePos.x, absolutePos.y);
             child->update(input, dt);
+            
+            // Restore relative position
+            child->setPosition(childPos.x, childPos.y);
         }
     }
 }
@@ -164,21 +174,21 @@ void UIScrollBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     for (auto& child : children) {
         if (!child->isVisible()) continue;
         
-        Vec2 childPos = child->getPosition();
+        Vec2 childPos = child->getPosition();  // Relative to content area
         Vec2 childSize = child->getSize();
         
-        // Apply scroll offset to child position
-        Vec2 scrolledPos = {childPos.x, childPos.y - scrollOffset};
+        // Calculate absolute screen position: scrollbox position + child relative position - scroll offset
+        Vec2 absolutePos = {position.x + childPos.x, position.y + childPos.y - scrollOffset};
         
         // Simple culling - only draw if visible in scrollbox
-        if (scrolledPos.y + childSize.y < position.y || 
-            scrolledPos.y > position.y + size.y) {
+        if (absolutePos.y + childSize.y < position.y || 
+            absolutePos.y > position.y + size.y) {
             continue; // Child is outside visible area
         }
         
         // Temporarily update child position for rendering
         Vec2 originalPos = childPos;
-        child->setPosition(position.x + scrolledPos.x, position.y + scrolledPos.y);
+        child->setPosition(absolutePos.x, absolutePos.y);
         
         // Render the child
         child->drawOverlay(renderer, panelPos);
@@ -212,11 +222,13 @@ void UIScrollBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
 
 void UIScrollBox::autoLayoutChildren(float startY) {
     float currentY = startY;
+    float contentX = 10.0f;  // X offset within scrollbox content area
     
     for (auto& child : children) {
         if (child->isVisible()) {
             Vec2 childSize = child->getSize();
-            child->setPosition(position.x, currentY - scrollOffset);
+            // Set position relative to scrollbox content area (not screen position)
+            child->setPosition(contentX, currentY);
             currentY += childSize.y + childSpacing;
         }
     }

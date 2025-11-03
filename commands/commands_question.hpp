@@ -54,6 +54,9 @@ private:
     // Search OSINT databases for people/usernames
     static QuestionResult searchOSINT(const std::string& query);
     
+    // ✅ NEW: Search tool/command knowledge (what can GRIM do)
+    static QuestionResult searchToolKnowledge(const std::string& question);
+    
     // Helper: Perform web search using DuckDuckGo API
     static std::string performWebSearch(const std::string& query);
     

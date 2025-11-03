@@ -1,4 +1,5 @@
 #include "grammar_parser.hpp"
+#include "grammar_rules_generated.h"
 #include "../logger.hpp"
 #include <algorithm>
 #include <sstream>
@@ -117,6 +118,123 @@ objects[obj] = cmdObj;
     } catch (const std::exception& e) {
 LOG_ERROR("GrammarParser", std::string("Failed to load grammar: ") + e.what());
      return false;
+    }
+}
+
+bool GrammarParser::loadBinary(const std::string& path) {
+    try {
+        // Read binary file
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
+        if (!file.is_open()) {
+            LOG_ERROR("GrammarParser", "Failed to open binary grammar file: " + path);
+            return false;
+        }
+        
+        std::streamsize size = file.tellg();
+        file.seekg(0, std::ios::beg);
+        
+        std::vector<uint8_t> buffer(size);
+        if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
+            LOG_ERROR("GrammarParser", "Failed to read binary grammar file");
+            return false;
+        }
+        
+        // Parse FlatBuffer
+        auto config = GrammarRules::GetGrammarConfig(buffer.data());
+        if (!config) {
+            LOG_ERROR("GrammarParser", "Invalid FlatBuffer grammar format");
+            return false;
+        }
+        
+        // Load components
+        if (config->components()) {
+            for (auto comp : *config->components()) {
+                GrammarComponent component;
+                component.name = comp->name()->str();
+                component.description = comp->description() ? comp->description()->str() : "";
+                component.optional = comp->optional();
+                component.capture = comp->capture();
+                component.requiresContext = comp->requires_context();
+                
+                if (comp->patterns()) {
+                    for (auto pattern : *comp->patterns()) {
+                        component.patterns.push_back(pattern->str());
+                    }
+                }
+                
+                components[component.name] = component;
+            }
+        }
+        
+        // Load verbs
+        if (config->verbs()) {
+            for (auto verb : *config->verbs()) {
+                CommandVerb cmdVerb;
+                cmdVerb.canonical = verb->canonical()->str();
+                cmdVerb.intent = verb->intent() ? verb->intent()->str() : "";
+                cmdVerb.requiresObject = verb->requires_object();
+                
+                if (verb->synonyms()) {
+                    for (auto syn : *verb->synonyms()) {
+                        cmdVerb.synonyms.push_back(syn->str());
+                    }
+                }
+                
+                verbs[cmdVerb.canonical] = cmdVerb;
+            }
+        }
+        
+        // Load objects
+        if (config->objects()) {
+            for (auto obj : *config->objects()) {
+                CommandObject cmdObj;
+                cmdObj.canonical = obj->canonical()->str();
+                cmdObj.category = obj->category() ? obj->category()->str() : "";
+                
+                if (obj->synonyms()) {
+                    for (auto syn : *obj->synonyms()) {
+                        cmdObj.synonyms.push_back(syn->str());
+                    }
+                }
+                
+                objects[cmdObj.canonical] = cmdObj;
+            }
+        }
+        
+        // Load templates
+        if (config->templates()) {
+            for (auto tmpl : *config->templates()) {
+                SentenceTemplate sentTmpl;
+                sentTmpl.name = tmpl->name()->str();
+                sentTmpl.structure = tmpl->structure()->str();
+                sentTmpl.requiresContext = tmpl->requires_context();
+                sentTmpl.category = tmpl->category() ? tmpl->category()->str() : "";
+                
+                if (tmpl->examples()) {
+                    for (auto ex : *tmpl->examples()) {
+                        sentTmpl.examples.push_back(ex->str());
+                    }
+                }
+                
+                templates.push_back(sentTmpl);
+            }
+        }
+        
+        LOG_DEBUG("GrammarParser", "Loaded binary grammar: " + 
+            std::to_string(components.size()) + " components, " +
+            std::to_string(verbs.size()) + " verbs, " +
+            std::to_string(objects.size()) + " objects, " +
+            std::to_string(templates.size()) + " templates");
+        
+        LOG_DEBUG("GrammarParser", "Source: " + 
+            std::string(config->treebank_source() ? config->treebank_source()->c_str() : "unknown") +
+            ", Sentences analyzed: " + std::to_string(config->total_sentences_analyzed()));
+        
+        return true;
+        
+    } catch (const std::exception& e) {
+        LOG_ERROR("GrammarParser", std::string("Failed to load binary grammar: ") + e.what());
+        return false;
     }
 }
 

@@ -42,25 +42,28 @@ void UIToggle::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     // Draw label
     renderer.drawText({position.x, position.y + 15}, label, 0xFFFFFFFF);
     
+    // Recalculate toggle position based on current position (for scrolling)
+    Vec2 currentTogglePos = {position.x + size.x - 60, position.y + 8};
+    
     // Draw toggle background
     uint32_t bgColor = enabled ? 0xFF2A4A2A : 0xFF4A2A2A;  // Green if ON, red if OFF
-    renderer.drawRect(togglePos, toggleSize, bgColor);
+    renderer.drawRect(currentTogglePos, toggleSize, bgColor);
     
     // Draw toggle border
     uint32_t borderColor = enabled ? 0xFF00FF00 : 0xFFFF0000;
-    renderer.drawRect(togglePos, {toggleSize.x, 2}, borderColor);
-    renderer.drawRect(togglePos, {2, toggleSize.y}, borderColor);
-    renderer.drawRect({togglePos.x, togglePos.y + toggleSize.y - 2}, {toggleSize.x, 2}, borderColor);
-    renderer.drawRect({togglePos.x + toggleSize.x - 2, togglePos.y}, {2, toggleSize.y}, borderColor);
+    renderer.drawRect(currentTogglePos, {toggleSize.x, 2}, borderColor);
+    renderer.drawRect(currentTogglePos, {2, toggleSize.y}, borderColor);
+    renderer.drawRect({currentTogglePos.x, currentTogglePos.y + toggleSize.y - 2}, {toggleSize.x, 2}, borderColor);
+    renderer.drawRect({currentTogglePos.x + toggleSize.x - 2, currentTogglePos.y}, {2, toggleSize.y}, borderColor);
     
     // Draw toggle handle (circle approximated with rectangle)
-    float handleX = enabled ? (togglePos.x + toggleSize.x - 22) : (togglePos.x + 2);
-    Vec2 handlePos = {handleX, togglePos.y + 2};
+    float handleX = enabled ? (currentTogglePos.x + toggleSize.x - 22) : (currentTogglePos.x + 2);
+    Vec2 handlePos = {handleX, currentTogglePos.y + 2};
     Vec2 handleSize = {20, 20};
     
     renderer.drawRect(handlePos, handleSize, 0xFFFFFFFF);
     
     // Draw state text
     std::string stateText = enabled ? "ON" : "OFF";
-    renderer.drawText({togglePos.x + (enabled ? 5.0f : 25.0f), togglePos.y + 7}, stateText, 0xFF000000);
+    renderer.drawText({currentTogglePos.x + (enabled ? 5.0f : 25.0f), currentTogglePos.y + 7}, stateText, 0xFF000000);
 }

@@ -93,6 +93,11 @@ target_compile_definitions(GRIM PRIVATE GRIM_BUILD_HOST)
 
 include(cmake/Config.cmake)
 
+# Ensure ONNX Runtime includes are available if perception is enabled
+if(GRIM_USE_PERCEPTION)
+    target_include_directories(GRIM PRIVATE "${VCPKG_INSTALLED_DIR}/x64-windows/include")
+endif()
+
 # Perception libraries are now linked in Config.cmake
 # (removed hardcoded linking here to avoid conflicts)
 
@@ -193,6 +198,7 @@ add_custom_command(TARGET GRIM POST_BUILD
     # Whisper / GGML (Debug + Release)
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${_dll_dir_whisper}/Debug"   "${_runtime_dir}"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${_dll_dir_whisper}/Release" "${_runtime_dir}"
+        "${_runtime_dir}"
 
     # Vcpkg DLLs (Config-specific)
     COMMAND ${CMAKE_COMMAND} -E echo "[GRIM] Copying $<CONFIG> vcpkg DLLs..."

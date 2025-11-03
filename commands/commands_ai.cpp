@@ -88,6 +88,18 @@ CommandResult cmdReloadNlp(const std::string& /*arg*/) {
     return r;
 }
 
+CommandResult cmdClearContext(const std::string& /*arg*/) {
+    clearConversationHistory();
+    return {
+        true,
+        "[AI] Conversation context cleared",
+        "ERR_NONE",
+        "routine",
+        "Context cleared",
+        Colors::Green
+    };
+}
+
 CommandResult cmdGrimAi(const std::string& arg) {
     LOG_TRACE("AI", "cmdGrimAi called with arg=\"" + arg + "\"");
 

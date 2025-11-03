@@ -2,12 +2,13 @@
 #include "aliases.hpp"
 #include "console_history.hpp"
 #include "error_manager.hpp"
+#include <sstream>
 
 // ====================================================
 // alias list → dump aliases by section
 // ====================================================
 CommandResult cmdAliasList(const std::string& /*arg*/) {
-    const nlohmann::json& all = aliases::getAll();
+    const auto all = aliases::getAll();
 
     if (all.empty()) {
         return {
@@ -22,24 +23,9 @@ CommandResult cmdAliasList(const std::string& /*arg*/) {
 
     std::ostringstream oss;
     oss << "[Alias] Listing loaded aliases:\n";
-
-    if (all.contains("user")) {
-        oss << " [USER]\n";
-        for (auto& [k, v] : all["user"].items()) {
-            oss << "   " << k << " → " << v << "\n";
-        }
-    }
-    if (all.contains("auto")) {
-        oss << " [AUTO]\n";
-        for (auto& [k, v] : all["auto"].items()) {
-            oss << "   " << k << " → " << v << "\n";
-        }
-    }
-    if (all.contains("fallback")) {
-        oss << " [FALLBACK]\n";
-        for (auto& [k, v] : all["fallback"].items()) {
-            oss << "   " << k << " → " << v << "\n";
-        }
+    oss << " [ALL ALIASES]\n";
+    for (const auto& [k, v] : all) {
+        oss << "   " << k << " → " << v << "\n";
     }
 
     return {

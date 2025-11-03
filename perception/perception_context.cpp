@@ -45,6 +45,24 @@ static std::string sceneTypeToString(VisualContext::SceneType type) {
     }
 }
 
+// Helper function to clean special symbols from text for TTS
+static std::string cleanTextForTTS(const std::string& text) {
+    std::string cleaned;
+    cleaned.reserve(text.length());
+    
+    for (char c : text) {
+        // Keep alphanumeric, spaces, basic punctuation, and newlines
+        if (std::isalnum(static_cast<unsigned char>(c)) || 
+            c == ' ' || c == '.' || c == ',' || c == '?' || c == '!' || 
+            c == ':' || c == ';' || c == '\n' || c == '\r' || c == '-' || 
+            c == '\'' || c == '"' || c == '(' || c == ')') {
+            cleaned += c;
+        }
+    }
+    
+    return cleaned;
+}
+
 std::string VisualContext::toSummary() const {
     if (!isValid) {
         return "Visual context unavailable: " + errorMessage;
@@ -878,12 +896,12 @@ std::string PerceptionContextManager::answerVisionQuestion(const std::string& qu
         
         response << "I can see ";
         
-        // ✅ Indicate which monitor if multi-monitor
-        if (ctx.isMultiMonitor && ctx.monitorIndex >= 0) {
-            response << "monitor " << (ctx.monitorIndex + 1) << " (of " << ctx.totalMonitors << "):\n\n";
-        } else {
+        // Monitor information removed from voice output - not needed for most interactions
+        // if (ctx.isMultiMonitor && ctx.monitorIndex >= 0) {
+        //     response << "monitor " << (ctx.monitorIndex + 1) << " (of " << ctx.totalMonitors << "):\n\n";
+        // } else {
             response << "your screen:\n\n";
-        }
+        // }
         
         // ✅ NEW: Prioritize AI vision description if available
         if (ctx.hasAIAnalysis && !ctx.aiDescription.empty()) {
@@ -896,17 +914,20 @@ std::string PerceptionContextManager::answerVisionQuestion(const std::string& qu
             response << "Active window: \"" << ctx.activeWindowTitle << "\"\n";
         }
         
-        if (ctx.isDarkTheme) {
-            response << "Theme: Dark mode\n";
-        }
+        // Theme detection removed from voice output - not useful for most interactions
+        // if (ctx.isDarkTheme) {
+        //     response << "Theme: Dark mode\n";
+        // }
         
         // ✅ Only show OCR text if no AI description is available
         if (!ctx.hasAIAnalysis && ctx.hasText && !ctx.screenText.empty()) {
             response << "\nVisible text:\n";
+            // Clean symbols from text for better TTS output
+            std::string cleanedText = cleanTextForTTS(ctx.screenText);
             // ✅ Shortened preview - only show first 150 characters to keep voice response brief
-            std::string preview = ctx.screenText.substr(0, std::min<size_t>(150, ctx.screenText.length()));
+            std::string preview = cleanedText.substr(0, std::min<size_t>(150, cleanedText.length()));
             response << preview;
-            if (ctx.screenText.length() > 150) {
+            if (cleanedText.length() > 150) {
                 response << "...";
             }
         }

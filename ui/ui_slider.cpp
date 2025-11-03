@@ -84,16 +84,20 @@ void UISlider::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     oss << std::fixed << std::setprecision(2) << value;
     renderer.drawText({position.x + size.x - 50, position.y + 10}, oss.str(), 0xFF00FFFF);
     
+    // Recalculate slider positions based on current position (for scrolling)
+    Vec2 currentSliderStart = {position.x + 150, position.y + 15};
+    Vec2 currentSliderSize = {size.x - 160, 10};
+    
     // Draw slider track
-    renderer.drawRect(sliderStart, sliderSize, 0xFF404040);
+    renderer.drawRect(currentSliderStart, currentSliderSize, 0xFF404040);
     
     // Draw filled portion
-    float fillWidth = sliderSize.x * getNormalizedValue();
-    renderer.drawRect(sliderStart, {fillWidth, sliderSize.y}, 0xFF00FFFF);
+    float fillWidth = currentSliderSize.x * getNormalizedValue();
+    renderer.drawRect(currentSliderStart, {fillWidth, currentSliderSize.y}, 0xFF00FFFF);
     
     // Draw handle
-    float handleX = getHandleX();
-    Vec2 handlePos = {handleX - 7.5f, sliderStart.y - 5};
+    float handleX = currentSliderStart.x + getNormalizedValue() * currentSliderSize.x;
+    Vec2 handlePos = {handleX - 7.5f, currentSliderStart.y - 5};
     Vec2 handleSize = {15, 20};
     
     uint32_t handleColor = dragging ? 0xFF00FFFF : 0xFFCCCCCC;

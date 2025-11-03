@@ -48,6 +48,12 @@ std::string resolveBackendURL();
 // ====================================================
 std::future<std::string> callAIAsync(const std::string& prompt);
 
+// ====================================================
+// Conversation management (for KV cache optimization)
+// ====================================================
+void clearConversationHistory();  // Clear conversation context to start fresh
+void warmupOllamaModel();         // Preload and warm up the AI model
+
 // Warm up the AI backend at launch to avoid first-call delays.
 void warmupAI();
 

@@ -30,4 +30,6 @@ namespace Voice {
     bool isXTTSv2Enabled();
     void setLanguage(const std::string& lang);
     std::string getLanguage();
+    void setSpeaker(const std::string& speaker);  // ? NEW: Update speaker dynamically
+    std::string getSpeaker();                      // ? NEW: Get current speaker
 }

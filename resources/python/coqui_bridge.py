@@ -111,7 +111,7 @@ VOICE_REFERENCES = {
     # Default voice references (you can add custom ones here)
     "default": "D:/G.R.I.M/resources/voices/default.wav",  # ✅ Default XTTS v2 voice
     "p225": None,  # Backward compatibility - maps to default
-    "p226": None,
+    "p226": "D:/G.R.I.M/resources/voices/p226_reference.wav",  # ✅ VCTK p226 male voice
 }
 
 # ✅ NEW: Speaker embedding cache
