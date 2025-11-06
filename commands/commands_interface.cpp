@@ -52,29 +52,3 @@ CommandResult cmdShowHelp([[maybe_unused]] const std::string& arg) {
         Colors::Cyan        // color
     };
 }
-
-// ====================================================
-// [Utility] Reload NLP rules
-// ====================================================
-CommandResult cmd_reloadNLP([[maybe_unused]] const std::string& arg) {
-    std::string err;
-    if (!g_nlp.load_rules(getResourcePath() + "/nlp_rules.json", &err)) {
-        return {
-            false,                                      // success
-            "[NLP] Failed to reload rules: " + err,     // message
-            "ERR_NLP_LOAD_FAILED",                      // errorCode
-            "error",                                    // category
-            "NLP reload failed",                        // voice
-            Colors::Red                                 // color
-        };
-    }
-
-    return {
-        true,                               // success
-        "[NLP] Rules reloaded.",            // message
-        "ERR_NONE",                         // errorCode
-        "routine",                          // category
-        "NLP rules reloaded",               // voice
-        Colors::Yellow                      // color
-    };
-}

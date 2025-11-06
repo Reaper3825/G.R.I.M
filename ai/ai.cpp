@@ -13,6 +13,7 @@
 #include "fast_classifier.hpp"  // ✅ For teaching classifier
 #include "system_detect.hpp"  // ✅ For location context
 #include "helpers/grim_input.hpp"  // ✅ For parseInput
+#include "grim_backend.hpp"  // ✅ Native GRIM model backend (external reference)
 #include <cpr/cpr.h>
 #include <fstream>
 #include <sstream>
@@ -112,6 +113,11 @@ void setLastCommand(const std::string& command) {
 std::string resolveBackendURL() {
     std::string backend = aiConfig.value("backend", "auto");
 
+    // Native GRIM backend - always available
+    if (backend == "grim_native") {
+        return "grim_native";
+    }
+
     if (backend == "auto") {
         try {
             auto r = cpr::Get(cpr::Url{aiConfig.value("ollama_url","http://127.0.0.1:11434") + "/api/tags"},
@@ -156,6 +162,105 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
         LOG_DEBUG("AI", "callAIAsync backend=" + backend + " model=" + model);
 
         try {
+            // ✅ NATIVE GRIM-TEXT BACKEND (HTTP Server)
+            if (backend == "grim_native") {
+                model = "grim-text";  // Override model name for grim-text server
+                
+                // Check for model change
+                if (g_currentModel != model) {
+                    g_currentModel = model;
+                    g_modelWarmedUp = false;
+                    g_systemPromptAdded = false;
+                    LOG_DEBUG("AI", "Model changed to " + model + ", warmup needed");
+                }
+                
+                // Add system prompt once
+                if (!g_systemPromptAdded && aiConfig.contains("personality")) {
+                    auto personality = aiConfig["personality"];
+                    if (personality.value("use_custom_prompt", false)) {
+                        std::string systemPrompt = personality.value("custom_prompt", 
+                            "You are GRIM. Be brief and direct.");
+                        
+                        nlohmann::json systemMsg = nlohmann::json::object();
+                        systemMsg["role"] = "system";
+                        systemMsg["content"] = systemPrompt;
+                        
+                        g_conversationHistory.insert(g_conversationHistory.begin(), systemMsg);
+                        g_systemPromptAdded = true;
+                        LOG_DEBUG("AI", "System prompt cached for grim-text");
+                    }
+                }
+                
+                // Add user message to history
+                nlohmann::json userMsg = nlohmann::json::object();
+                userMsg["role"] = "user";
+                userMsg["content"] = prompt;
+                g_conversationHistory.push_back(userMsg);
+                
+                // Trim history
+                size_t maxHistory = aiConfig.value("conversation_history_size", 10);
+                size_t systemMsgCount = g_systemPromptAdded ? 1 : 0;
+                
+                if (g_conversationHistory.size() > (maxHistory + systemMsgCount)) {
+                    size_t toErase = g_conversationHistory.size() - (maxHistory + systemMsgCount);
+                    g_conversationHistory.erase(
+                        g_conversationHistory.begin() + systemMsgCount,
+                        g_conversationHistory.begin() + systemMsgCount + toErase
+                    );
+                }
+                
+                // Build request body (Ollama-compatible format)
+                nlohmann::json requestBody = {
+                    {"model", model},
+                    {"messages", g_conversationHistory},
+                    {"stream", false},
+                    {"max_tokens", aiConfig.value("max_tokens", 256)},
+                    {"temperature", aiConfig.value("temperature", 0.8f)}
+                };
+                
+                auto start = std::chrono::high_resolution_clock::now();
+                
+                // Call grim-text server
+                auto resp = cpr::Post(
+                    cpr::Url{ aiConfig.value("grim_text_url", "http://127.0.0.1:11435") + "/api/chat" },
+                    cpr::Header{{"Content-Type","application/json"}},
+                    cpr::Body{ requestBody.dump() },
+                    cpr::Timeout{30000}
+                );
+                
+                auto end = std::chrono::high_resolution_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+                
+                if (resp.status_code == 200) {
+                    LOG_DEBUG("AI", "grim-text response in " + std::to_string(duration) + "ms");
+                    
+                    auto j = nlohmann::json::parse(resp.text, nullptr, false);
+                    
+                    if (j.is_discarded()) {
+                        LOG_ERROR("AI", "Failed to parse grim-text JSON: " + resp.text.substr(0, 500));
+                        return "[AI] Backend call failed";
+                    }
+                    
+                    std::string response = j["message"]["content"].get<std::string>();
+                    
+                    // Add assistant response to history
+                    nlohmann::json assistantMsg = nlohmann::json::object();
+                    assistantMsg["role"] = "assistant";
+                    assistantMsg["content"] = response;
+                    g_conversationHistory.push_back(assistantMsg);
+                    
+                    if (response.empty()) {
+                        LOG_ERROR("AI", "grim-text returned empty response");
+                        return "[AI] Backend call failed";
+                    }
+                    
+                    return response;
+                }
+                
+                LOG_ERROR("AI", "grim-text HTTP " + std::to_string(resp.status_code) + ": " + resp.text);
+                return "[AI] Backend call failed - is grim-text server running?";
+            }
+            
             if (backend == "ollama") {
                 // ✅ LATENCY FIX: Model warmup detection
                 if (g_currentModel != model) {

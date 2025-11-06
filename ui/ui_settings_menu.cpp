@@ -170,8 +170,9 @@ void UISettingsMenu::cycleBackend() {
         std::string current = pendingConfig.value("backend", "auto");
         LOG_DEBUG("UISettingsMenu", "Current backend: " + current);
         
-        // Valid backends: auto, ollama, localai, openai
-        std::string next = (current == "auto") ? "ollama" :
+        // Valid backends: auto, grim_native, ollama, localai, openai
+        std::string next = (current == "auto") ? "grim_native" :
+                           (current == "grim_native") ? "ollama" :
                            (current == "ollama") ? "localai" :
                            (current == "localai") ? "openai" : "auto";
         LOG_DEBUG("UISettingsMenu", "Next backend: " + next);

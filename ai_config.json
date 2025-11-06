@@ -1,84 +1,88 @@
 {
-  "api_keys": {
-    "azure": "",
-    "elevenlabs": "",
-    "openai": ""
-  },
-  "backend": "ollama",
-  "default_model": "llama3.1:8b",
-  "localai_url": "http://127.0.0.1:8080/v1",
-  "ollama_url": "http://127.0.0.1:11434",
-  "ollama_options": {
-    "num_ctx": 4096,
-    "num_predict": 512,
-    "temperature": 0.7,
-    "top_k": 40,
-    "top_p": 0.9,
-    "repeat_penalty": 1.1,
-    "num_thread": 8,
-    "num_gpu": 99,
-    "num_batch": 512,
-    "use_mmap": true,
-    "use_mlock": false,
-    "low_vram": false
-  },
-  "conversation_history_size": 10,
-  "personality": {
-    "custom_prompt": "You are GRIM. Be brief and direct. Give concise answers without unnecessary elaboration. Keep responses under 2 sentences when possible.",
-    "use_custom_prompt": true
-  },
-  "silence_threshold": 0.02,
-  "silence_timeout_ms": 4000,
-  "vision_model": "llama3.2-vision:11b",
-  "voice": {
-    "available_speakers": [
-      "default",
-      "p226"
-    ],
-    "confidence_threshold": 0.6,
-    "coqui": {
-      "model": "tts_models/en/vctk/vits",
-      "speaker": "p225"
+    "api_keys": {
+        "azure": "",
+        "elevenlabs": "",
+        "openai": ""
     },
-    "engine": "coqui",
-    "filter_low_confidence": true,
-    "input_device_index": -1,
-    "local_engine": "en_US-amy-medium.onnx",
-    "max_commands_per_input": 3,
-    "mode": "local",
-    "require_multi_command_confirmation": true,
-    "rules": {
-      "banter": "coqui",
-      "reminder": "coqui",
-      "startup": "sapi",
-      "summary": "coqui"
+    "backend": "grim_native",
+    "model_path": "resources/models/GRIM-text/training/checkpoints/model_embeddings.npy",
+    "tokenizer_path": "resources/models/GRIM-text/training/models/vocab.txt",
+    "max_tokens": 256,
+    "conversation_history_size": 10,
+    "default_model": "llama3.1:8b",
+    "localai_url": "http://127.0.0.1:8080/v1",
+    "ollama_options": {
+        "low_vram": false,
+        "num_batch": 512,
+        "num_ctx": 4096,
+        "num_gpu": 99,
+        "num_predict": 512,
+        "num_thread": 8,
+        "repeat_penalty": 1.1,
+        "temperature": 0.7,
+        "top_k": 40,
+        "top_p": 0.9,
+        "use_mlock": false,
+        "use_mmap": true
     },
-    "sapi": {
-      "voice": "en_US-amy-medium.onnx"
+    "ollama_url": "http://127.0.0.1:11434",
+    "grim_text_url": "http://127.0.0.1:11435",
+    "personality": {
+        "custom_prompt": "You are GRIM. Be brief and direct. Give concise answers without unnecessary elaboration. Keep responses under 2 sentences when possible.",
+        "use_custom_prompt": true
     },
-    "silence_threshold": 0.015,
-    "silence_timeout_ms": 1200,
-    "speaker": "p226",
-    "speed": 1.5
-  },
-  "whisper": {
-    "beam_size": 5,
-    "best_of": 5,
-    "entropy_threshold": 2.4,
-    "initial_prompt": "Voice commands: open notepad, close window, show time, list directory",
-    "language": "en",
-    "logprob_threshold": -1.0,
-    "max_len": 1,
-    "max_listening_ms": 10000,
-    "min_silence_ms": 1200,
-    "min_speech_ms": 500,
-    "no_speech_threshold": 0.6,
-    "sampling_strategy": "beam",
     "silence_threshold": 0.02,
-    "suppress_blank": true,
-    "temperature": 0.2,
-    "whisper_model": "ggml-base.en.bin"
-  },
-  "whisper_language": "en",
-  "whisper_max_tokens": 32
+    "silence_timeout_ms": 4000,
+    "vision_model": "llama3.2-vision:11b",
+    "voice": {
+        "available_speakers": [
+            "default",
+            "p226"
+        ],
+        "confidence_threshold": 0.6,
+        "coqui": {
+            "model": "tts_models/en/vctk/vits",
+            "speaker": "p226"
+        },
+        "engine": "coqui",
+        "filter_low_confidence": true,
+        "input_device_index": -1,
+        "local_engine": "en_US-amy-medium.onnx",
+        "max_commands_per_input": 3,
+        "mode": "local",
+        "require_multi_command_confirmation": true,
+        "rules": {
+            "banter": "coqui",
+            "reminder": "coqui",
+            "startup": "sapi",
+            "summary": "coqui"
+        },
+        "sapi": {
+            "voice": "en_US-amy-medium.onnx"
+        },
+        "silence_threshold": 0.015,
+        "silence_timeout_ms": 1200,
+        "speaker": "p226",
+        "speed": 1.5
+    },
+    "whisper": {
+        "beam_size": 5,
+        "best_of": 5,
+        "entropy_threshold": 2.4,
+        "initial_prompt": "Voice commands: open notepad, close window, show time, list directory",
+        "language": "en",
+        "logprob_threshold": -1.0,
+        "max_len": 1,
+        "max_listening_ms": 10000,
+        "min_silence_ms": 1200,
+        "min_speech_ms": 500,
+        "no_speech_threshold": 0.6,
+        "sampling_strategy": "beam",
+        "silence_threshold": 0.02,
+        "suppress_blank": true,
+        "temperature": 0.2,
+        "whisper_model": "ggml-base.en.bin"
+    },
+    "whisper_language": "en",
+    "whisper_max_tokens": 32
 }

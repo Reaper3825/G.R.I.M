@@ -39,6 +39,9 @@ namespace TTSCache {
 
     // Cleanup old temp files (older than N hours)
     void cleanupOldFiles(int maxAgeHours = 24);
+    
+    // Migrate old cache files to speaker-specific directories
+    void migrateToSpeakerDirs(const std::string& defaultSpeaker = "default");
 
     // Get cache statistics
     nlohmann::json getStats();

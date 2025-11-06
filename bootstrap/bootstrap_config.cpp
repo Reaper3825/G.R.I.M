@@ -5,6 +5,7 @@
 #include "nlp/nlp.hpp"
 #include "console_history.hpp"
 #include "ai/ai.hpp"
+#include "ai/grim_backend.hpp"  // ✅ Native GRIM backend (external reference)
 #include "logger.hpp"
 #include "nlp/grammar_parser.hpp"  // ✅ NEW: Grammar parser
 
@@ -98,6 +99,19 @@ void initAll() {
         if (f.is_open()) {
             f >> aiConfig;
             LOG_PHASE("AI config load", true);
+            
+            // ✅ Initialize native GRIM backend if configured
+            if (aiConfig.value("backend", "") == "grim_native") {
+                std::string modelPath = aiConfig.value("model_path", "resources/models/GRIM-text/training/checkpoints/model_embeddings.npy");
+                std::string tokenizerPath = aiConfig.value("tokenizer_path", "resources/models/GRIM-text/training/models/vocab.txt");
+                
+                if (GRIM::initGRIMBackend(modelPath, tokenizerPath)) {
+                    LOG_PHASE("Native GRIM model initialized", true);
+                } else {
+                    LOG_ERROR("AI", "Failed to initialize native GRIM backend");
+                    LOG_PHASE("Native GRIM model initialization", false);
+                }
+            }
         } else {
             LOG_ERROR("Config", "ai_config.json not found");
             LOG_PHASE("AI config load", false);
@@ -107,9 +121,10 @@ void initAll() {
         LOG_PHASE("AI config load", false);
     }
 
-    // ✅ Grammar-based NLP rules (try binary first, then JSON fallback)
+    // ✅ Grammar-based NLP rules (temporarily disabled)
     bool grammarLoaded = false;
     
+    /*
     // Try binary FlatBuffer format first (faster loading)
     fs::path grammarBinary = fs::path(getResourcePath()) / "grammar_rules.fb";
     if (fs::exists(grammarBinary)) {
@@ -150,6 +165,7 @@ void initAll() {
             LOG_DEBUG("Config", "Grammar file not found: " + grammarPath.string() + " - falling back to regex-only NLP");
         }
     }
+    */
 
     // NLP rules (regex-based - now serves as fallback)
 fs::path nlpPath = fs::path(getResourcePath()) / "nlp_rules.json";

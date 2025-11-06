@@ -9,8 +9,7 @@ endif()
 # Prevent nvcc debug build issues during compiler ID detection
 set(CMAKE_CUDA_FLAGS_INIT "-allow-unsupported-compiler -Xcompiler=/w")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS_INIT}" CACHE STRING "Initial CUDA flags" FORCE)
-set(GRIM_ROOT_DIR ${CMAKE_SOURCE_DIR} CACHE PATH "Root of GRIM project")
-add_compile_definitions(GRIM_ROOT_DIR="${GRIM_ROOT_DIR}")
+# GRIM_ROOT_DIR is already defined in root CMakeLists.txt - don't redefine it here
 
 # =========================================================
 # GRIM Compiler & Build Configuration
@@ -55,7 +54,14 @@ if(GRIM_USE_CUDA)
     add_definitions(-DGGML_CUDA_ARCH=86)
 
     if(MSVC)
-        add_compile_definitions(CMAKE_INTDIR=Release)
+        # Do NOT manually add CMAKE_INTDIR here.
+        # The MSVC generator already injects a CMAKE_INTDIR define for per-configuration
+        # compilation. Manually adding it here caused duplicate -DCMAKE_INTDIR=...
+        # definitions when other parts of the pipeline (or the Visual Studio
+        # generator) also add the define. If a specific target truly requires a
+        # hard-coded value, use target_compile_definitions(...) on that target
+        # only, guarded by an appropriate condition.
+        # add_compile_definitions(CMAKE_INTDIR=Release)  # intentionally disabled
     endif()
 endif()
 
@@ -115,11 +121,22 @@ if(GRIM_USE_PERCEPTION)
         message(WARNING "[GRIM] ✗ Tesseract not found - OCR model disabled")
     endif()
     
-    # ONNX Runtime - link directly from vcpkg
+    # ONNX Runtime - use IMPORTED target to avoid transitive dependency issues
     set(ONNX_LIB_PATH "${VCPKG_INSTALLED_DIR}/x64-windows/lib/onnxruntime.lib")
     if(EXISTS "${ONNX_LIB_PATH}")
         message(STATUS "[GRIM] ✓ ONNX Runtime found")
-        list(APPEND GRIM_PERCEPTION_LIBS "${ONNX_LIB_PATH}")
+        
+        # Create IMPORTED target to prevent CMake from resolving broken transitive dependencies
+        if(NOT TARGET onnxruntime_imported)
+            add_library(onnxruntime_imported STATIC IMPORTED GLOBAL)
+            set_target_properties(onnxruntime_imported PROPERTIES
+                IMPORTED_LOCATION "${ONNX_LIB_PATH}"
+                INTERFACE_INCLUDE_DIRECTORIES "${VCPKG_INSTALLED_DIR}/x64-windows/include"
+                IMPORTED_LINK_INTERFACE_LANGUAGES "CXX"
+            )
+        endif()
+        
+        list(APPEND GRIM_PERCEPTION_LIBS onnxruntime_imported)
         target_include_directories(GRIM PRIVATE "${VCPKG_INSTALLED_DIR}/x64-windows/include")
         add_compile_definitions(GRIM_HAS_ONNXRUNTIME)
     else()
@@ -141,12 +158,21 @@ endif()
 # =========================================================
 # Link Dependencies (static/import libraries)
 # =========================================================
+# Handle both multi-config (VS) and single-config (Ninja) generators
+if(CMAKE_CONFIGURATION_TYPES)
+    # Multi-config generator (Visual Studio)
+    set(_build_config_dir "${CMAKE_CFG_INTDIR}")
+else()
+    # Single-config generator (Ninja, Make)
+    set(_build_config_dir "${CMAKE_BUILD_TYPE}")
+endif()
+
 link_directories(
     "${DEPS_LIB_DIR}"
-    "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/src/${CMAKE_CFG_INTDIR}"
-    "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bgfx/${CMAKE_CFG_INTDIR}"
-    "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bimg/${CMAKE_CFG_INTDIR}"
-    "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bx/${CMAKE_CFG_INTDIR}"
+    "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/src/${_build_config_dir}"
+    "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bgfx/${_build_config_dir}"
+    "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bimg/${_build_config_dir}"
+    "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bx/${_build_config_dir}"
 )
 
 target_link_libraries(GRIM PRIVATE
@@ -165,5 +191,18 @@ target_link_libraries(GRIM PRIVATE
 
     ${GRIM_PERCEPTION_LIBS}
 )
+
+# =========================================================
+# OpenAL - Force release version for all configurations
+# =========================================================
+# Create IMPORTED target to avoid CUDA device link issues with raw library paths
+set(_openal_release_lib "${VCPKG_INSTALLED_DIR}/x64-windows/lib/OpenAL32.lib")
+if(NOT TARGET OpenAL32_IMPORTED)
+    add_library(OpenAL32_IMPORTED STATIC IMPORTED GLOBAL)
+    set_target_properties(OpenAL32_IMPORTED PROPERTIES
+        IMPORTED_LOCATION "${_openal_release_lib}"
+    )
+endif()
+target_link_libraries(GRIM PRIVATE OpenAL32_IMPORTED)
 
 

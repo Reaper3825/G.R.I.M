@@ -3,6 +3,7 @@
 #include <fstream>
 #include <chrono>
 #include <algorithm>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -59,7 +60,17 @@ namespace TTSCache {
                        std::isspace(static_cast<unsigned char>(b)); 
             }), normalized.end());
         
-        return normalized + "_" + speaker + "_" + std::to_string(static_cast<int>(speed * 100));
+        // ? NEW: Speaker is now part of directory path, not the key
+        // This prevents cache collisions between speakers
+        return speaker + "/" + normalized + "_" + std::to_string(static_cast<int>(speed * 100));
+    }
+    
+    // =========================================================
+    // Get speaker-specific directory
+    // =========================================================
+    static fs::path getSpeakerDir(const std::string& speaker, bool isPermanent) {
+        fs::path baseDir = isPermanent ? g_cacheDir : g_tempDir;
+        return baseDir / speaker;
     }
 
     // =========================================================
@@ -128,15 +139,20 @@ namespace TTSCache {
     g_tempDir  = fs::path("D:/G.R.I.M/resources/tts_out/temp");
     g_indexFile = fs::path("D:/G.R.I.M/resources/tts_out/cache_index.json");
 
+    // Create base directories (speaker subdirs created on-demand)
     fs::create_directories(g_cacheDir);
     fs::create_directories(g_tempDir);
 
     loadIndex();
+    
+    // Migrate old cache files to speaker-specific directories
+    // This runs once and moves any loose .wav files into default/ subdirectory
+    migrateToSpeakerDirs("default");
 
     // 🔹 Disable cleanup on startup — this was deleting new files before reuse
     // cleanupOldFiles(24);
 
-    LOG_PHASE("TTS Cache initialized", true);
+    LOG_PHASE("TTS Cache initialized (per-speaker organization)", true);
 }
 
 
@@ -198,15 +214,15 @@ namespace TTSCache {
         // Decide if this should be permanent
         bool shouldBePermanent = isPermanent;
 
-        // Determine destination directory
-        fs::path destDir = shouldBePermanent ? g_cacheDir : g_tempDir;
+        // Get speaker-specific directory
+        fs::path destDir = getSpeakerDir(speaker, shouldBePermanent);
         fs::create_directories(destDir);
 
         // Generate destination filename (keep the same random name)
         fs::path srcPath(filePath);
         fs::path destPath = destDir / srcPath.filename();
 
-        // Move file from temp to cache/temp
+        // Move file from temp to speaker-specific cache/temp
         if (fs::exists(srcPath) && srcPath != destPath)
         {
             try
@@ -243,7 +259,7 @@ namespace TTSCache {
 
         std::string cacheType = shouldBePermanent ? "PERMANENT" : "TEMP";
         std::string logText = text.length() > 30 ? text.substr(0, 30) + "..." : text;
-        LOG_DEBUG("TTSCache", "Stored " + cacheType + " cache: " + logText);
+        LOG_DEBUG("TTSCache", "Stored " + cacheType + " cache [" + speaker + "]: " + logText);
 
         // Save index to disk
         saveIndex();
@@ -259,9 +275,18 @@ namespace TTSCache {
             if (key.find(text) != std::string::npos && !entry.isPermanent) {
                 entry.isPermanent = true;
                 
-                // Move file from temp to cache
+                // Extract speaker from key (format: "speaker/normalized_text_speed")
+                std::string speaker = "default";
+                size_t slashPos = key.find('/');
+                if (slashPos != std::string::npos) {
+                    speaker = key.substr(0, slashPos);
+                }
+                
+                // Move file from temp/{speaker}/ to cache/{speaker}/
                 fs::path oldPath = fs::path(entry.filePath);
-                fs::path newPath = g_cacheDir / oldPath.filename();
+                fs::path speakerCacheDir = g_cacheDir / speaker;
+                fs::create_directories(speakerCacheDir);
+                fs::path newPath = speakerCacheDir / oldPath.filename();
                 
                 try {
                     if (fs::exists(oldPath)) {
@@ -269,7 +294,7 @@ namespace TTSCache {
                         fs::copy_file(oldPath, newPath, fs::copy_options::overwrite_existing);
                         fs::remove(oldPath);
                         entry.filePath = newPath.string();
-                        LOG_DEBUG("TTSCache", "Marked as permanent: " + text);
+                        LOG_DEBUG("TTSCache", "Marked as permanent [" + speaker + "]: " + text);
                     }
                 } catch (const std::exception& e) {
                     LOG_ERROR("TTSCache", std::string("Failed to mark permanent: ") + e.what());
@@ -318,12 +343,63 @@ namespace TTSCache {
         }
     }
 
+    // =========================================================
+    // Migrate old cache files to speaker-specific directories
+    // =========================================================
+    void migrateToSpeakerDirs(const std::string& defaultSpeaker) {
+        std::lock_guard<std::mutex> lock(g_cacheMutex);
+        
+        LOG_DEBUG("TTSCache", "Migrating old cache files to speaker-specific directories...");
+        
+        int migratedCount = 0;
+        
+        // Scan old cache and temp directories for orphaned files
+        std::vector<fs::path> oldDirs = {g_cacheDir, g_tempDir};
+        
+        for (const auto& dir : oldDirs) {
+            if (!fs::exists(dir)) continue;
+            
+            bool isPermanent = (dir == g_cacheDir);
+            fs::path targetDir = getSpeakerDir(defaultSpeaker, isPermanent);
+            fs::create_directories(targetDir);
+            
+            try {
+                for (const auto& entry : fs::directory_iterator(dir)) {
+                    // Skip subdirectories (those are speaker dirs)
+                    if (entry.is_directory()) continue;
+                    
+                    // Skip if not a .wav file
+                    if (entry.path().extension() != ".wav") continue;
+                    
+                    // Move to speaker-specific directory
+                    fs::path oldPath = entry.path();
+                    fs::path newPath = targetDir / oldPath.filename();
+                    
+                    if (!fs::exists(newPath)) {
+                        fs::rename(oldPath, newPath);
+                        migratedCount++;
+                        LOG_DEBUG("TTSCache", "Migrated: " + oldPath.filename().string() + " → " + defaultSpeaker);
+                    }
+                }
+            } catch (const std::exception& e) {
+                LOG_ERROR("TTSCache", std::string("Migration error: ") + e.what());
+            }
+        }
+        
+        if (migratedCount > 0) {
+            LOG_DEBUG("TTSCache", "Migrated " + std::to_string(migratedCount) + " files to [" + defaultSpeaker + "] directory");
+        } else {
+            LOG_DEBUG("TTSCache", "No files to migrate");
+        }
+    }
+
     json getStats() {
         std::lock_guard<std::mutex> lock(g_cacheMutex);
         
         size_t permanentCount = 0;
         size_t tempCount = 0;
         size_t totalSize = 0;
+        std::unordered_map<std::string, size_t> speakerCounts;
 
         for (const auto& [key, entry] : g_cache) {
             if (entry.isPermanent) {
@@ -332,6 +408,14 @@ namespace TTSCache {
                 tempCount++;
             }
 
+            // Extract speaker from key (format: "speaker/...")
+            std::string speaker = "unknown";
+            size_t slashPos = key.find('/');
+            if (slashPos != std::string::npos) {
+                speaker = key.substr(0, slashPos);
+            }
+            speakerCounts[speaker]++;
+
             try {
                 if (fs::exists(entry.filePath)) {
                     totalSize += fs::file_size(entry.filePath);
@@ -339,11 +423,17 @@ namespace TTSCache {
             } catch (...) {}
         }
 
+        json speakerJson = json::object();
+        for (const auto& [speaker, count] : speakerCounts) {
+            speakerJson[speaker] = count;
+        }
+
         return {
             {"total_entries", g_cache.size()},
             {"permanent", permanentCount},
             {"temp", tempCount},
-            {"total_size_mb", totalSize / (1024.0 * 1024.0)}
+            {"total_size_mb", totalSize / (1024.0 * 1024.0)},
+            {"per_speaker", speakerJson}
         };
     }
 

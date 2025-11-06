@@ -185,7 +185,7 @@ def get_voice_reference(speaker_id):
         ref_path = VOICE_REFERENCES[speaker_id]
         
         # If specific speaker has no reference, use default
-        if not ref_path or speaker_id in ["p225", "p226"]:
+        if not ref_path or speaker_id == "p225":  # Only p225 maps to default, p226 has its own voice
             ref_path = VOICE_REFERENCES["default"]
         
         if ref_path and os.path.exists(ref_path):

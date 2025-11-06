@@ -10,6 +10,7 @@
 #include "voice/voice.hpp"
 #include "ai/ai_rl.hpp"
 #include "ai/ai.hpp"  // ✅ NEW: For warmupOllamaModel()
+#include "ai/grim_text_server_manager.hpp"  // ✅ NEW: For GRIM-text server
 
 #include <filesystem>    // ✅ for fs::path
 #include <whisper.h>     // ✅ for whisper_context + init functions
@@ -84,10 +85,10 @@ void runBootstrapChecks(int argc, char** argv) {
         } else {
             LOG_PHASE("Coqui TTS init", true);
             LOG_DEBUG("Voice",
-                "Coqui TTS initialized (speaker=" +
-                voiceCfg.value("speaker", "p225") +
-                ", model=" +
-                voiceCfg.value("local_engine", "unknown") + ")");
+                "Coqui XTTS v2 initialized (speaker=" +
+                voiceCfg.value("speaker", "default") +
+                ", language=" +
+                voiceCfg.value("language", "en") + ")");
         }
     } else {
         LOG_PHASE("Coqui TTS skipped", true);
@@ -106,6 +107,23 @@ void runBootstrapChecks(int argc, char** argv) {
         LOG_DEBUG("RL", "rl_bridge.py initialized and ready");
     }
 
+    // ============================================================
+    // GRIM-text Server Startup (if using native backend)
+    // ============================================================
+    if (aiConfig.value("backend", "auto") == "grim_native") {
+        LOG_PHASE("GRIM-text server startup", true);
+        LOG_DEBUG("Bootstrap", "Starting GRIM-text server...");
+        
+        if (GRIM::startGRIMTextServer()) {
+            LOG_PHASE("GRIM-text server startup", true);
+            LOG_DEBUG("Bootstrap", "GRIM-text server running at " + 
+                     aiConfig.value("grim_text_url", "http://127.0.0.1:11435"));
+        } else {
+            LOG_ERROR("Bootstrap", "Failed to start GRIM-text server");
+            LOG_PHASE("GRIM-text server startup", false);
+        }
+    }
+    
     // ============================================================
     // AI Model Warmup (preload into VRAM for instant responses)
     // ============================================================

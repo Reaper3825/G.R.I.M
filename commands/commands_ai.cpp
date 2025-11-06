@@ -49,7 +49,7 @@ CommandResult cmdAiBackend(const std::string& arg) {
 
     std::string selected = (input == "auto") ? autoSelectBackend() : input;
 
-    if (selected == "ollama" || selected == "localai" || selected == "openai") {
+    if (selected == "grim_native" || selected == "ollama" || selected == "localai" || selected == "openai") {
         aiConfig["backend"] = selected;
         LOG_TRACE("AI", "Backend set to: " + selected);
 
@@ -105,6 +105,50 @@ CommandResult cmdGrimAi(const std::string& arg) {
 
     std::string backend = resolveBackendURL();
     LOG_DEBUG("AI", "Current backend resolved: " + backend);
+
+    // Handle grim_native backend (GRIM-text server)
+    if (backend == "grim_native") {
+        std::string model = "grim-text";
+        std::string prompt = arg;
+
+        auto resp = cpr::Post(
+            cpr::Url{ aiConfig.value("grim_text_url", "http://127.0.0.1:11435") + "/api/generate" },
+            cpr::Header{{"Content-Type","application/json"}},
+            cpr::Body{ nlohmann::json{
+                {"model", model},
+                {"prompt", prompt},
+                {"max_tokens", aiConfig.value("max_tokens", 256)},
+                {"temperature", aiConfig.value("temperature", 0.8f)},
+                {"stream", false}
+            }.dump() }
+        );
+
+        if (resp.status_code == 200) {
+            auto j = nlohmann::json::parse(resp.text, nullptr, false);
+            if (!j.is_discarded() && j.contains("response")) {
+                std::string reply = j["response"].get<std::string>();
+                LOG_TRACE("AI", "grim-text replied successfully");
+                return {
+                    true,               // success
+                    reply,              // message
+                    "ERR_NONE",         // errorCode
+                    "routine",          // category
+                    reply,              // voice
+                    Colors::Cyan        // color
+                };
+            }
+        }
+
+        LOG_ERROR("AI", "grim-text backend error - is server running?");
+        return {
+            false,                                          // success
+            "[AI] grim-text backend error",                 // message
+            "ERR_AI_BACKEND_FAILED",                        // errorCode
+            "error",                                        // category
+            "grim-text backend error",                      // voice
+            Colors::Red                                     // color
+        };
+    }
 
     if (backend == "ollama") {
         std::string model  = aiConfig.value("default_model", "mistral");

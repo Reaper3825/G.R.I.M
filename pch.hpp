@@ -2,25 +2,7 @@
 #pragma once
 
 // ---------------------------------------------------------
-// External libraries
-// ---------------------------------------------------------
-#include <nlohmann/json.hpp>
-
-
-// ---------------------------------------------------------
-// Windows / SAPI (only compiled on Windows)
-// ---------------------------------------------------------
-#ifdef _WIN32
-  #define WIN32_LEAN_AND_MEAN
-  #include <windows.h>
-  #define NOMINMAX
-  #include <sapi.h>
-  #include <sphelper.h>
-  #include <atlbase.h>
-#endif
-
-// ---------------------------------------------------------
-// Standard Library
+// Standard Library (MUST come first for nlohmann/json)
 // ---------------------------------------------------------
 #include <algorithm>
 #include <atomic>
@@ -45,4 +27,26 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+// ---------------------------------------------------------
+// Windows / SAPI (only compiled on Windows, after STL)
+// ---------------------------------------------------------
+#ifdef _WIN32
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #ifndef NOMINMAX
+    #define NOMINMAX
+  #endif
+  #include <windows.h>
+  #include <sapi.h>
+  #include <sphelper.h>
+  #include <atlbase.h>
+#endif
+
+// ---------------------------------------------------------
+// External libraries (after standard library and Windows)
+// ---------------------------------------------------------
+#include <nlohmann/json.hpp>
+
 #include "logger.hpp"

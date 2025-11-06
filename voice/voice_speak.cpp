@@ -137,7 +137,7 @@ namespace Voice {
         TTSCache::init();
         
         try {
-            fs::path cfgPath = fs::path("D:/G.R.I.M/resources/ai_config.json");
+            fs::path cfgPath = fs::path("D:/G.R.I.M/ai_config.json");
             if (fs::exists(cfgPath)) {
                 std::ifstream in(cfgPath);
                 json cfg;
@@ -149,6 +149,8 @@ namespace Voice {
                     if (v.contains("speed"))       g_speed     = v["speed"].get<double>();
                     if (v.contains("language"))    g_language  = v["language"].get<std::string>();  // ? Load language
                     if (v.contains("output_dir"))  g_outputDir = v["output_dir"].get<std::string>();
+                    
+                    LOG_DEBUG("Voice/Init", "Loaded config: speaker=" + g_speaker + ", language=" + g_language + ", engine=" + g_engine);
                 }
             }
         } catch (const std::exception& e) {
@@ -189,8 +191,8 @@ namespace Voice {
             si.hStdInput  = hChildStdinRd;
             si.dwFlags |= STARTF_USESTDHANDLES;
 
-            // ? Launch XTTS v2 bridge with GPU support
-            std::string cmd = "python D:/G.R.I.M/resources/python/coqui_bridge.py --persistent --model tts_models/multilingual/multi-dataset/xtts_v2 --gpu";
+            // ? Launch XTTS v2 bridge with GPU support and configured speaker
+            std::string cmd = "python D:/G.R.I.M/resources/python/coqui_bridge.py --persistent --model tts_models/multilingual/multi-dataset/xtts_v2 --gpu --speaker " + g_speaker + " --language " + g_language;
             std::vector<char> mutableCmd(cmd.begin(), cmd.end());
             mutableCmd.push_back('\0');
 
@@ -500,7 +502,7 @@ namespace Voice {
         BOOL ok = WriteFile(hChildStdinWr, line.c_str(), (DWORD)line.size(), &written, nullptr);
         
         if (g_xttsV2Enabled) {
-            LOG_DEBUG("Voice/Coqui", "XTTS v2 request (" + std::to_string(written) + " bytes) | Lang: " + g_language);
+            LOG_DEBUG("Voice/Coqui", "XTTS v2 request (" + std::to_string(written) + " bytes) | Speaker: " + speaker + " | Lang: " + g_language);
         } else {
             LOG_DEBUG("Voice/Coqui", "Sent request (" + std::to_string(written) + " bytes): " + line);
         }

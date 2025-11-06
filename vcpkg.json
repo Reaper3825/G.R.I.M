@@ -23,6 +23,7 @@
     "tesseract",
     "leptonica",
     "onnxruntime-gpu",
-    "flatbuffers"
+    "flatbuffers",
+    "cpp-httplib"
   ]
 }

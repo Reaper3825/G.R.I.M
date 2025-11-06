@@ -470,8 +470,8 @@ void PerceptionContextManager::analyzeWindowContext(VisualContext& ctx) {
         }
     }
     
-    LOG_DEBUG("PerceptionContext", "Active window: \"" + ctx.activeWindowTitle + 
-              "\" (" + ctx.activeProcessName + ")");
+    // LOG_DEBUG("PerceptionContext", "Active window: \"" + ctx.activeWindowTitle + 
+    //           "\" (" + ctx.activeProcessName + ")");
 #endif
 }
 

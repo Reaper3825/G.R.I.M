@@ -14,6 +14,8 @@
 #include "commands_ui.hpp"
 #include "commands_grim.hpp"  // ? NEW: GRIM system commands
 #include "commands_perception.hpp"
+#include "commands_tasks.hpp"
+#include "commands_question.hpp"
 
 // Helper macro for registering with metadata
 #define REGISTER_TOOL(cmd, handler, desc, cat, isInfo) \
@@ -98,18 +100,6 @@ static void register_all_commands() {
     REGISTER_TOOL("console", cmdToggleOverlayConsole,
                   "Toggle overlay console visibility",
                   "ui", false);
-    REGISTER_TOOL("ui_console", cmdToggleOverlayConsole,
-                  "Toggle overlay console visibility",
-                  "ui", false);
-    REGISTER_TOOL("toggle_console", cmdToggleOverlayConsole,
-                  "Toggle overlay console visibility",
-                  "ui", false);
-    REGISTER_TOOL("settings", cmdToggleSettings,
-                  "Toggle settings panel visibility",
-                  "ui", false);
-    REGISTER_TOOL("settings_ui", cmdToggleSettings,
-                  "Toggle settings panel visibility",
-                  "ui", false);
     REGISTER_TOOL("toggle_settings", cmdToggleSettings,
                   "Toggle settings panel visibility",
                   "ui", false);
@@ -176,20 +166,17 @@ static void register_all_commands() {
 
     // Settings info command (renamed to avoid conflict)
     LOG_DEBUG("Plugin", "Registering settings info command");
-    REGISTER_TOOL("settings_info", cmdSettings,
-                  "Show current settings and configuration",
-                  "information", true);
-    REGISTER_TOOL("config_info", cmdSettings,
+    REGISTER_TOOL("settings", cmdSettings,
                   "Show current settings and configuration",
                   "information", true);
 
     // ? NEW: GRIM system management commands
     LOG_DEBUG("Plugin", "Registering GRIM system commands");
-    REGISTER_TOOL("clear_cache", cmdClearCache,
-                  "Clear system caches",
+    REGISTER_TOOL("clear_tts_cache", cmdClearCache,
+                  "Clear TTS audio cache",
                   "system", false);
-    REGISTER_TOOL("reset_cache", cmdResetCache,
-                  "Reset all caches to default",
+    REGISTER_TOOL("reset_tts_cache", cmdResetCache,
+                  "Reset TTS cache and regenerate common phrases",
                   "system", false);
 
     // ✅ NEW: Perception/Vision commands
@@ -221,6 +208,51 @@ static void register_all_commands() {
     REGISTER_TOOL("click_on", cmdInputClickOn,
                   "Click on detected screen element",
                   "action", false);
+
+    // ✅ NEW: Task management commands
+    LOG_DEBUG("Plugin", "Registering task management commands");
+    REGISTER_TOOL("execute_task", cmdExecuteTask,
+                  "Execute a task",
+                  "action", false);
+    REGISTER_TOOL("task_status", cmdTaskStatus,
+                  "Check task execution status",
+                  "information", true);
+    REGISTER_TOOL("task_cancel", cmdTaskCancel,
+                  "Cancel running task",
+                  "action", false);
+
+    // ✅ NEW: Timer commands
+    LOG_DEBUG("Plugin", "Registering timer commands");
+    REGISTER_TOOL("set_timer", cmdSetTimer,
+                  "Set a countdown timer",
+                  "action", false);
+
+    // ✅ NEW: Question handler
+    LOG_DEBUG("Plugin", "Registering question handler");
+    REGISTER_TOOL("question", cmdQuestion,
+                  "Ask GRIM a question (searches memory and external sources)",
+                  "information", true);
+
+    // ✅ NEW: Additional voice commands (advanced TTS)
+    LOG_DEBUG("Plugin", "Registering additional voice commands");
+    REGISTER_TOOL("voice", cmdVoice,
+                  "General voice command handler",
+                  "system", false);
+    REGISTER_TOOL("voice_stream", cmdVoiceStream,
+                  "Stream voice output",
+                  "system", false);
+    REGISTER_TOOL("test_sapi", cmd_testSAPI,
+                  "Test SAPI TTS backend",
+                  "system", false);
+    REGISTER_TOOL("tts_device", cmd_ttsDevice,
+                  "Configure TTS output device",
+                  "system", false);
+
+    // ✅ NEW: AI backend management
+    LOG_DEBUG("Plugin", "Registering AI backend command");
+    REGISTER_TOOL("ai_backend", cmdAiBackend,
+                  "Show or change active AI backend",
+                  "system", false);
 
     LOG_DEBUG("Plugin", "Core command registration complete");
     LOG_DEBUG("CommandRegistry", "Total registered tools: " + 

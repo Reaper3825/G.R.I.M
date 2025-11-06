@@ -37,8 +37,14 @@ file(GLOB PERCEPTION_HEADERS "perception/*.hpp")
 file(GLOB VISION_SOURCES "vision/*.cpp")
 file(GLOB VISION_HEADERS "vision/*.hpp")
 
-
-
+# =========================================================
+# GRIM-text Model: Standalone Build (2025-11-05)
+# =========================================================
+# GRIM-text is built separately like Ollama, not compiled into GRIM.exe
+# Use resources/models/GRIM-text/training/CMakeLists.txt to build the model
+# GRIM loads the model at runtime as an external dependency
+# =========================================================
+set(GRIM_GPU_SOURCES "")
 
 set(GRIM_SOURCES
     main.cpp
@@ -67,6 +73,7 @@ set(GRIM_SOURCES
     ${EXTERNAL_COLLECTOR_SOURCES}
     ${PERCEPTION_SOURCES}
     ${VISION_SOURCES}
+    ${GRIM_GPU_SOURCES}
 )
 
 set(GRIM_HEADERS

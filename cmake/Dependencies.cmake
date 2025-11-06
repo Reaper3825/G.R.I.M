@@ -8,7 +8,14 @@
 # =========================================================
 # Base runtime and dependency paths
 # =========================================================
-set(_runtime_dir "${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}")
+# Handle both multi-config (VS) and single-config (Ninja) generators
+if(CMAKE_CONFIGURATION_TYPES)
+    # Multi-config generator (Visual Studio)
+    set(_runtime_dir "${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}")
+else()
+    # Single-config generator (Ninja, Make)
+    set(_runtime_dir "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}")
+endif()
 
 if (NOT DEFINED VCPKG_INSTALLED_DIR)
     set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/external/vcpkg/installed")
@@ -131,12 +138,6 @@ if(GRIM_USE_PERCEPTION)
         )
     endif()
 endif()
-# --- Ensure correct OpenAL linkage ---
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    target_link_libraries(GRIM PRIVATE "${DEPS_LIB_DIR}/openal32.lib")
-else()
-    target_link_libraries(GRIM PRIVATE "${DEPS_LIB_DIR}/openal32.lib")
-endif()
 
 # =========================================================
 # uWebSockets (WebSocket server)
@@ -154,6 +155,12 @@ grim_copy_dlls("${_dll_dir_vcpkg}"
 # =========================================================
 find_package(flatbuffers CONFIG REQUIRED)
 target_link_libraries(GRIM PRIVATE flatbuffers::flatbuffers)
+
+# =========================================================
+# nlohmann_json (JSON parsing for verification system)
+# =========================================================
+find_package(nlohmann_json CONFIG REQUIRED)
+target_link_libraries(GRIM PRIVATE nlohmann_json::nlohmann_json)
 
 # --- Ensure runtime finds our DLL first ---
 set_target_properties(GRIM PROPERTIES

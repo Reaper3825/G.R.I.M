@@ -1,0 +1,18 @@
+<Project>
+  <!-- 
+    MSBuild auto-loads this file for all .vcxproj in subdirectories.
+    Strips CMAKE_INTDIR duplicates from CUDA compilation to fix nvcc error.
+  -->
+  
+  <PropertyGroup>
+    <CudaCompileAdditionalOptions>--expt-relaxed-constexpr</CudaCompileAdditionalOptions>
+  </PropertyGroup>
+  
+  <Target Name="FixCudaDefines" BeforeTargets="CudaCompile">
+    <ItemGroup>
+      <CudaCompile>
+        <Defines>@(CudaCompile->Metadata('Defines')->Replace('CMAKE_INTDIR="Debug";','')->Replace('CMAKE_INTDIR="Release";','')->Replace('CMAKE_INTDIR="RelWithDebInfo";','')->Replace('CMAKE_INTDIR="MinSizeRel";',''))</Defines>
+      </CudaCompile>
+    </ItemGroup>
+  </Target>
+</Project>

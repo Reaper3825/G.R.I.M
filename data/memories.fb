@@ -35,17 +35,17 @@
       "context": "monitor",
       "id": "",
       "intent": "inform",
-      "normalized": "Significant screen change detected (18% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: CMakeLists.txt - G.R.I.M - Visual Studio Code [Administrator] (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help <> Q GRIM [Administrator] tee eaooogm - 3s x\n\n| amore ++ @ ui settings menuhpp M & aliases.fos © perception.cpp ® testonnx visionpy © hybrid_visionhpp M CMakelists.txt x te cHaT +39 8+ (03 x\nY GRIM M CMakelists.bt\n[yinusuuies wee Cee Mat LPR EUG (I AML ANU REL Ew wang) ee wan) HUE) ean\n.gitmodules.bak 181\nninja_deps is20 #\n= 103 183 # DLL Copy (Per-Configuration Safe)\n184\n2t03-3.12 185 set(_runtime_dir \"${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}... (2986 total chars)\n",
-      "raw": "Significant screen change detected (18% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: CMakeLists.txt - G.R.I.M - Visual Studio Code [Administrator] (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help <> Q GRIM [Administrator] tee eaooogm - 3s x\n\n| amore ++ @ ui settings menuhpp M & aliases.fos © perception.cpp ® testonnx visionpy © hybrid_visionhpp M CMakelists.txt x te cHaT +39 8+ (03 x\nY GRIM M CMakelists.bt\n[yinusuuies wee Cee Mat LPR EUG (I AML ANU REL Ew wang) ee wan) HUE) ean\n.gitmodules.bak 181\nninja_deps is20 #\n= 103 183 # DLL Copy (Per-Configuration Safe)\n184\n2t03-3.12 185 set(_runtime_dir \"${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}... (2986 total chars)\n",
+      "normalized": "Significant screen change detected (15% change)\n\nScreen 1920x1080 (Monitor 2 of 3)\nScene: Desktop | Theme: Dark\nText: Beam Bm =: - Bw\n\nRecycle Bin References tiles for AnyDeskere OCD.250.. Heart qsprite.. fsspritesc TechPowe... GRIMLdesk.,. opacity and\nmomo see Reviewpdf GPU-Z diffuse w.\ni oo Pa ae ee\n— ' e sts\nautosave Game Ruins. «UE Assets cuda_125.1.. ProcessExpl.. Lab Blood g.sprit.he.. Camomile ASUS — lens flare|..._ vis studio\nPressurepdt\n© && administrator: Windows Pom X= = ++ Y - aq *xX\n| | | - | | | r ) | = :\\G.R.I.M\\plugins\\osint_plugin.cpp(S8,69): warning C4100: ‘user_data': unreferenced par... (3725 total chars)\n",
+      "raw": "Significant screen change detected (15% change)\n\nScreen 1920x1080 (Monitor 2 of 3)\nScene: Desktop | Theme: Dark\nText: Beam Bm =: - Bw\n\nRecycle Bin References tiles for AnyDeskere OCD.250.. Heart qsprite.. fsspritesc TechPowe... GRIMLdesk.,. opacity and\nmomo see Reviewpdf GPU-Z diffuse w.\ni oo Pa ae ee\n— ' e sts\nautosave Game Ruins. «UE Assets cuda_125.1.. ProcessExpl.. Lab Blood g.sprit.he.. Camomile ASUS — lens flare|..._ vis studio\nPressurepdt\n© && administrator: Windows Pom X= = ++ Y - aq *xX\n| | | - | | | r ) | = :\\G.R.I.M\\plugins\\osint_plugin.cpp(S8,69): warning C4100: ‘user_data': unreferenced par... (3725 total chars)\n",
       "source": "grim.internal",
       "tags": [
         "visual-context",
         "screen-capture",
-        "IDE/Code Editor",
-        "Code.exe",
-        "monitor-1"
+        "Desktop",
+        "Explorer.EXE",
+        "monitor-2"
       ],
-      "timestamp": 1762206253,
+      "timestamp": 1762381114,
       "type": "event"
     }
   ]

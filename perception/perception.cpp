@@ -207,6 +207,9 @@ namespace GRIM {
                 return false;
             }
 
+            // Suppress Tesseract warning messages
+            g_tessEngine->SetVariable("debug_file", "nul");  // Windows null device
+
             // Set page segmentation mode (PSM_AUTO = automatic)
             g_tessEngine->SetPageSegMode(tesseract::PSM_AUTO);
 
