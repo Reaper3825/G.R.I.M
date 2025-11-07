@@ -17,6 +17,9 @@ public:
     
     // For overlay rendering
     void drawOverlay(class OverlayRenderer& renderer, const Vec2& panelPos);
+    
+    // Check if this slider is editing
+    bool isEditing() const { return editingText; }
 
 private:
     std::string label;
@@ -28,6 +31,13 @@ private:
     bool dragging = false;
     Vec2 sliderStart{0, 0};
     Vec2 sliderSize{0, 0};
+    
+    // Text editing
+    bool editingText = false;
+    std::string textBuffer;
+    float valueBeforeEdit = 0.0f;
+    Vec2 textBoxPos{0, 0};
+    Vec2 textBoxSize{0, 0};
     
     float getNormalizedValue() const;
     float getHandleX() const;

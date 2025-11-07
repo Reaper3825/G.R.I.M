@@ -35,17 +35,17 @@
       "context": "monitor",
       "id": "",
       "intent": "inform",
-      "normalized": "Significant screen change detected (15% change)\n\nScreen 1920x1080 (Monitor 2 of 3)\nScene: Desktop | Theme: Dark\nText: Beam Bm =: - Bw\n\nRecycle Bin References tiles for AnyDeskere OCD.250.. Heart qsprite.. fsspritesc TechPowe... GRIMLdesk.,. opacity and\nmomo see Reviewpdf GPU-Z diffuse w.\ni oo Pa ae ee\n— ' e sts\nautosave Game Ruins. «UE Assets cuda_125.1.. ProcessExpl.. Lab Blood g.sprit.he.. Camomile ASUS — lens flare|..._ vis studio\nPressurepdt\n© && administrator: Windows Pom X= = ++ Y - aq *xX\n| | | - | | | r ) | = :\\G.R.I.M\\plugins\\osint_plugin.cpp(S8,69): warning C4100: ‘user_data': unreferenced par... (3725 total chars)\n",
-      "raw": "Significant screen change detected (15% change)\n\nScreen 1920x1080 (Monitor 2 of 3)\nScene: Desktop | Theme: Dark\nText: Beam Bm =: - Bw\n\nRecycle Bin References tiles for AnyDeskere OCD.250.. Heart qsprite.. fsspritesc TechPowe... GRIMLdesk.,. opacity and\nmomo see Reviewpdf GPU-Z diffuse w.\ni oo Pa ae ee\n— ' e sts\nautosave Game Ruins. «UE Assets cuda_125.1.. ProcessExpl.. Lab Blood g.sprit.he.. Camomile ASUS — lens flare|..._ vis studio\nPressurepdt\n© && administrator: Windows Pom X= = ++ Y - aq *xX\n| | | - | | | r ) | = :\\G.R.I.M\\plugins\\osint_plugin.cpp(S8,69): warning C4100: ‘user_data': unreferenced par... (3725 total chars)\n",
+      "normalized": "Significant screen change detected (32% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: GRIM Overlay (GRIM.exe)\nScene: Desktop | Theme: Dark\nText: @ Serum (® camigemamare « |) ame a|s fisyettevile techrical community Tx] [7\n\n(OMT OM oi itips//connectrouterintegration prodmbeducation com/app/#/conneci/coversheet)\n\n12) YouTube} Q[ Maps ss, Class Score Detail] | GRIM. text bTraining? Control]\n\nBio 169 Online FA 25\nJardware:))\n\npus\n\nBack to Canvas\n\nGo to Connect section or reset linking\n\nConnect Quick Links\n\nSecley's Anatomy & Physiology\n\nsave! Configl PARSTSIOS | Author: Cinnamon VanPutie\n\nRelease: 2025\n|Add[Data}Source] < =) Read Book\nE -e... (815 total chars)\n",
+      "raw": "Significant screen change detected (32% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: GRIM Overlay (GRIM.exe)\nScene: Desktop | Theme: Dark\nText: @ Serum (® camigemamare « |) ame a|s fisyettevile techrical community Tx] [7\n\n(OMT OM oi itips//connectrouterintegration prodmbeducation com/app/#/conneci/coversheet)\n\n12) YouTube} Q[ Maps ss, Class Score Detail] | GRIM. text bTraining? Control]\n\nBio 169 Online FA 25\nJardware:))\n\npus\n\nBack to Canvas\n\nGo to Connect section or reset linking\n\nConnect Quick Links\n\nSecley's Anatomy & Physiology\n\nsave! Configl PARSTSIOS | Author: Cinnamon VanPutie\n\nRelease: 2025\n|Add[Data}Source] < =) Read Book\nE -e... (815 total chars)\n",
       "source": "grim.internal",
       "tags": [
         "visual-context",
         "screen-capture",
         "Desktop",
-        "Explorer.EXE",
-        "monitor-2"
+        "GRIM.exe",
+        "monitor-1"
       ],
-      "timestamp": 1762381114,
+      "timestamp": 1762486875,
       "type": "event"
     }
   ]

@@ -28,7 +28,7 @@
     #include <unistd.h>
 #endif
 
-#ifdef GGML_USE_CUBLAS
+#ifdef WHISPER_USE_CUDA
     #include <cuda_runtime.h>
 #endif
 
@@ -352,7 +352,7 @@ SystemInfo detectSystem() {
         info.ramMB = sys.totalram / (1024 * 1024);
 #endif
 
-#ifdef GGML_USE_CUBLAS
+#ifdef WHISPER_USE_CUDA
     int deviceCount = 0;
     if (cudaGetDeviceCount(&deviceCount) == cudaSuccess && deviceCount > 0) {
         info.hasGPU = true;

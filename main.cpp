@@ -23,6 +23,7 @@
 #include "ui/ui_root.hpp"
 #include "ui/console_panel.hpp"
 #include "ui/ui_settings_menu.hpp"
+#include "ui/ui_training_panel.hpp"
 #include "nlp/nlp.hpp"
 #include "timer.hpp"
 #include "perception/perception.hpp"
@@ -40,6 +41,9 @@ namespace fs = std::filesystem;
 
 // External system info (defined in bootstrap.cpp)
 extern SystemInfo g_systemInfo;
+
+// Global training panel for commands
+std::shared_ptr<UITrainingPanel> g_trainingPanel;
 
 // ============================================================
 // Main entry point
@@ -194,27 +198,22 @@ int main(int argc, char* argv[])
 
     auto consolePanel  = std::make_shared<ConsolePanel>();
     auto settingsPanel = std::make_shared<UISettingsMenu>();
+    auto trainingPanel = std::make_shared<UITrainingPanel>();
+    
+    // Assign to global for command access
+    g_trainingPanel = trainingPanel;
 
-    // Center panels on primary monitor
-    int primaryWidth = GetSystemMetrics(SM_CXSCREEN);
-    int primaryHeight = GetSystemMetrics(SM_CYSCREEN);
-    
-    consolePanel->setPosition(
-        (primaryWidth - consolePanel->getSize().x) / 2.0f,
-        (primaryHeight - consolePanel->getSize().y) / 2.0f
-    );
-    
-    settingsPanel->setPosition(
-        (primaryWidth - settingsPanel->getSize().x) / 2.0f,
-        (primaryHeight - settingsPanel->getSize().y) / 2.0f
-    );
+    // Panels use window-relative coordinates set in their constructors
+    // No need to reposition them here
     
     // Hide panels initially - they should only show when explicitly toggled
     consolePanel->setVisible(false);
     settingsPanel->setVisible(false);
+    trainingPanel->setVisible(false);
 
     UIRoot::get().addPanel(consolePanel);
     UIRoot::get().addPanel(settingsPanel);
+    UIRoot::get().addPanel(trainingPanel);
 
     LOG_PHASE("UIRoot and panels initialized (hidden)", true);
 

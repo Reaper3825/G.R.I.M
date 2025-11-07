@@ -2,13 +2,13 @@
 #include "overlay_renderer.hpp"
 #include "logger.hpp"
 #include "core/input_parser.hpp"  // For InputState
+#include "system_detect.hpp"  // For g_systemInfo
 #include <fstream>
 #include <filesystem>
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
-#include <windows.h> // For GetSystemMetrics
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -20,21 +20,14 @@ UIOsintResults::UIOsintResults()
     size.x = 1200.0f;
     size.y = 700.0f;
     
-    // Get primary monitor dimensions (where most UI should appear)
-    int primaryWidth = GetSystemMetrics(SM_CXSCREEN);
-    int primaryHeight = GetSystemMetrics(SM_CYSCREEN);
-    
-    // Position in the middle third of the screen vertically for better visibility
-    // Horizontally centered
-    position.x = (static_cast<float>(primaryWidth) - size.x) / 2.0f;
-    position.y = static_cast<float>(primaryHeight) * 0.2f;  // Start at 20% down from top
+    // Use simple window-relative coordinates (like other panels)
+    position = { 300, 200 };
     
     setResizable(true);
-    setDraggable(true);  // Ensure it's draggable so user can move it
+    setDraggable(true);
     
     LOG_DEBUG("OSINT-UI", "Panel positioned at (" + std::to_string(position.x) + ", " + 
-              std::to_string(position.y) + ") on screen " + std::to_string(primaryWidth) + 
-              "x" + std::to_string(primaryHeight));
+              std::to_string(position.y) + ")");
 }
 
 bool UIOsintResults::loadFindings(const std::string& username) {

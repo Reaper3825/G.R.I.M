@@ -3,12 +3,21 @@
 #include "input_parser.hpp"
 #include "helpers/mouse.hpp"
 #include "logger.hpp"
+#include "ui_focus_manager.hpp"
 #include <algorithm>
 
 UIPanel::UIPanel(const std::string& t, bool drag)
-    : title(t), draggable(drag) {}
+    : title(t), draggable(drag) 
+{
+    // Generate unique panel ID
+    panelID = UIFocusManager::getInstance().generateUniqueID();
+}
 
 void UIPanel::addChild(std::shared_ptr<Widget> w) {
+    // Set the panel ID for the widget so it knows which panel it belongs to
+    if (w) {
+        w->setPanelID(panelID);
+    }
     children.push_back(std::move(w));
 }
 

@@ -9,6 +9,8 @@
 #include <memory>
 #include "core/window_manager.hpp"
 #include "core/ui_sync.hpp"
+#include "ui_training_panel.hpp"
+#include "ui_focus_manager.hpp"
 
 using namespace GRIMConsole;
 
@@ -19,6 +21,9 @@ ConsoleState GRIMConsole::g_state;
 ConsoleHistory GRIMConsole::g_history;
 std::vector<Timer> GRIMConsole::g_uiTimers;
 nlohmann::json GRIMConsole::g_longTermMemory;
+
+// External reference to training panel (for checking if sliders are editing)
+extern std::shared_ptr<UITrainingPanel> g_trainingPanel;
 
 static HWND g_hwnd = nullptr;
 static uint32_t g_width = 1280;
@@ -117,6 +122,11 @@ static LRESULT CALLBACK ConsoleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         case WM_CHAR:
         if (wParam == VK_RETURN)
         {
+            // Don't process Enter if any UI element has focus
+            if (UIFocusManager::getInstance().hasAnyFocus()) {
+                return 0;  // Ignore Enter - let the focused widget handle it
+            }
+            
             std::string input = g_state.inputBuffer;
             g_state.inputBuffer.clear();
             if (!input.empty())

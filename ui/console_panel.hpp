@@ -26,6 +26,7 @@ private:
     uint64_t lastCaretToggle = 0;
     
     UIButton settingsButton;  // ? NEW: Settings button
+    UIButton trainingButton;  // Training control button
     
     // Helper to get current time string
     std::string getCurrentTime() const;

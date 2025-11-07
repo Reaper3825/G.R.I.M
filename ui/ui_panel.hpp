@@ -3,6 +3,7 @@
 #include <vector>
 #include <memory>
 #include <functional>
+#include <cstdint>
 
 // Include plugin.hpp for GRIM_HOST_API macro
 #include "core/plugin.hpp"
@@ -12,6 +13,10 @@ class OverlayRenderer;  // Forward declaration
 class GRIM_HOST_API UIPanel : public Widget {
 public:
     UIPanel(const std::string& title = "", bool draggable = true);
+    
+    // Focus management
+    uint64_t getPanelID() const { return panelID; }
+    void setPanelID(uint64_t id) { panelID = id; }
 
     void addChild(std::shared_ptr<Widget> w);
     void removeChild(Widget* w);
@@ -52,6 +57,8 @@ protected:
     float titleBarHeight = 30.0f;
     float resizeHandleSize = 20.0f;  // Increased from 10 to 20 pixels
     std::function<void()> onClose = nullptr;
+    
+    uint64_t panelID = 0;  // Unique panel identifier for focus tracking
     
     // Helper to check if mouse is over resize handle (bottom-right corner)
     bool isOverResizeHandle(const Vec2& mousePos) const;

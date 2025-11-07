@@ -1,0 +1,17 @@
+========================================
+  GRIM-text Training Control Server
+========================================
+
+[Server] Starting on http://127.0.0.1:11436
+
+API Endpoints:
+  GET  /health                - Health check
+  GET  /api/status            - Get training status
+  POST /api/training/start    - Start training
+  POST /api/training/stop     - Stop training
+  POST /api/config            - Update configuration
+  GET  /api/logs              - Get training logs
+
+Press Ctrl+C to stop
+
+[Server] Binding to port...

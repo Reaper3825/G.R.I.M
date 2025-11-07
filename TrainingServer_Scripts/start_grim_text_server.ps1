@@ -6,9 +6,9 @@ Write-Host "  GRIM-text Server Launcher" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-$serverExe = "resources\models\GRIM-text\training\build_vs_cuda\Release\grim_text_server.exe"
-$vocabPath = "resources\models\GRIM-text\training\models\vocab.txt"
-$modelPath = "resources\models\GRIM-text\training\models\grim_text_trained.bin"
+$serverExe = "d:\G.R.I.M\resources\models\GRIM-text\training\build_vs_cuda\Release\grim_text_server.exe"
+$vocabPath = "d:\G.R.I.M\resources\models\GRIM-text\training\models\vocab.bin"
+$modelPath = "d:\G.R.I.M\resources\models\GRIM-text\training\models\grim_text_trained.bin"
 $port = 11435
 
 # Check if server executable exists

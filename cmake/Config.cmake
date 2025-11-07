@@ -52,6 +52,15 @@ if(GRIM_USE_CUDA)
     # Force architecture to sm_86 only
     set(CMAKE_CUDA_ARCHITECTURES 86)
     add_definitions(-DGGML_CUDA_ARCH=86)
+    
+    # Find and link CUDA runtime
+    find_package(CUDAToolkit QUIET)
+    if(CUDAToolkit_FOUND)
+        message(STATUS "[GRIM] CUDA Toolkit found - linking cudart")
+        target_link_libraries(GRIM PRIVATE CUDA::cudart)
+    else()
+        message(WARNING "[GRIM] CUDA Toolkit not found - CUDA detection may fail at runtime")
+    endif()
 
     if(MSVC)
         # Do NOT manually add CMAKE_INTDIR here.

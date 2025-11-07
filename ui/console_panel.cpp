@@ -2,7 +2,8 @@
 #include "logger.hpp"
 #include "input_parser.hpp"
 #include "overlay_renderer.hpp"
-#include "ui_root.hpp"  // ? NEW: For accessing settings panel
+#include "ui_root.hpp" 
+#include "ui_slider.hpp"  // For checking if slider is editing
 #include "commands/commands_core.hpp"
 #include "helpers/key.hpp"
 #include <windows.h>
@@ -22,16 +23,29 @@ ConsolePanel::ConsolePanel()
           } else {
               LOG_DEBUG("ConsolePanel", "Settings panel not found - may not be initialized yet");
           }
+      }),
+      trainingButton("⚡ Training", []() {
+          // Open training panel
+          auto trainingPanel = UIRoot::get().getPanel("GRIM-text Training Control");
+          if (trainingPanel) {
+              trainingPanel->setVisible(true);
+              LOG_DEBUG("ConsolePanel", "Opened training panel via button");
+          } else {
+              LOG_DEBUG("ConsolePanel", "Training panel not found - may not be initialized yet");
+          }
       })
 {
-    position = { 100, 100 };
+    position = { 100, 300 };
     size = { 900, 500 };
     setBackground(0xE0101010);
     setBorder(0xFF00FF00);
     
-    // ? Position settings button in top-right corner of console
+    // ? Position buttons in top-right corner of console
     settingsButton.setPosition(position.x + size.x - 110, position.y + 5);
     settingsButton.setSize(100, 25);
+    
+    trainingButton.setPosition(position.x + size.x - 220, position.y + 5);
+    trainingButton.setSize(100, 25);
     
     // Add stylized welcome message to GLOBAL history
     auto& history = getConsoleHistory();
@@ -54,11 +68,13 @@ void ConsolePanel::update(const InputState& input, float dt)
     // Call base panel update to handle drag/resize
     UIPanel::update(input, dt);
 
-    // ? Update settings button position to follow panel
+    // ? Update button positions to follow panel
     settingsButton.setPosition(position.x + size.x - 110, position.y + 5);
+    trainingButton.setPosition(position.x + size.x - 220, position.y + 5);
     
-    // ? Update settings button (handle clicks)
+    // ? Update buttons (handle clicks)
     settingsButton.update(input, dt);
+    trainingButton.update(input, dt);
 
     // Update caret blink
     uint64_t now = GetTickCount64();
@@ -134,20 +150,32 @@ void ConsolePanel::drawOverlay(OverlayRenderer& renderer)
     // First, let the base panel draw its background, border, and title
     UIPanel::drawOverlay(renderer);
     
-    // ? Draw settings button
-    Vec2 btnPos = settingsButton.getPosition();
-    Vec2 btnSize = settingsButton.getSize();
+    // ? Draw buttons
+    // Settings button
+    Vec2 settingsPos = settingsButton.getPosition();
+    Vec2 settingsSize = settingsButton.getSize();
     
-    // Settings button styling (dark gray with cyan border)
-    renderer.drawRect(btnPos, btnSize, 0xFF202020);  // Dark background
-    renderer.drawRect(btnPos, {btnSize.x, 2}, 0xFF00FFFF);  // Top border (cyan)
-    renderer.drawRect(btnPos, {2, btnSize.y}, 0xFF00FFFF);  // Left border
-    renderer.drawRect({btnPos.x, btnPos.y + btnSize.y - 2}, {btnSize.x, 2}, 0xFF00FFFF);  // Bottom
-    renderer.drawRect({btnPos.x + btnSize.x - 2, btnPos.y}, {2, btnSize.y}, 0xFF00FFFF);  // Right
+    renderer.drawRect(settingsPos, settingsSize, 0xFF202020);  // Dark background
+    renderer.drawRect(settingsPos, {settingsSize.x, 2}, 0xFF00FFFF);  // Top border (cyan)
+    renderer.drawRect(settingsPos, {2, settingsSize.y}, 0xFF00FFFF);  // Left border
+    renderer.drawRect({settingsPos.x, settingsPos.y + settingsSize.y - 2}, {settingsSize.x, 2}, 0xFF00FFFF);  // Bottom
+    renderer.drawRect({settingsPos.x + settingsSize.x - 2, settingsPos.y}, {2, settingsSize.y}, 0xFF00FFFF);  // Right
     
-    // Draw button text (centered)
-    float textY = btnPos.y + (btnSize.y / 2.0f) - 8;
-    renderer.drawText({btnPos.x + 8, textY}, "? Settings", 0xFF00FFFF);  // Cyan text
+    float settingsTextY = settingsPos.y + (settingsSize.y / 2.0f) - 8;
+    renderer.drawText({settingsPos.x + 8, settingsTextY}, "? Settings", 0xFF00FFFF);  // Cyan text
+    
+    // Training button
+    Vec2 trainingPos = trainingButton.getPosition();
+    Vec2 trainingSize = trainingButton.getSize();
+    
+    renderer.drawRect(trainingPos, trainingSize, 0xFF202020);  // Dark background
+    renderer.drawRect(trainingPos, {trainingSize.x, 2}, 0xFF00FF00);  // Top border (green)
+    renderer.drawRect(trainingPos, {2, trainingSize.y}, 0xFF00FF00);  // Left border
+    renderer.drawRect({trainingPos.x, trainingPos.y + trainingSize.y - 2}, {trainingSize.x, 2}, 0xFF00FF00);  // Bottom
+    renderer.drawRect({trainingPos.x + trainingSize.x - 2, trainingPos.y}, {2, trainingSize.y}, 0xFF00FF00);  // Right
+    
+    float trainingTextY = trainingPos.y + (trainingSize.y / 2.0f) - 8;
+    renderer.drawText({trainingPos.x + 8, trainingTextY}, "⚡ Training", 0xFF00FF00);  // Green text
     
     // Now draw console-specific content on top
     

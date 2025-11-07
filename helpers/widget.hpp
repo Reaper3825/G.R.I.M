@@ -2,6 +2,7 @@
 #include "helpers/vector2.hpp"
 #include <string>
 #include <memory>
+#include <cstdint>
 
 // Include plugin.hpp for GRIM_HOST_API macro
 #include "core/plugin.hpp"
@@ -14,6 +15,13 @@ class GRIM_HOST_API Widget {
 public:
     Widget();
     virtual ~Widget() = default;
+    
+    // Focus management
+    uint64_t getFocusID() const { return focusID; }
+    void setFocusID(uint64_t id) { focusID = id; }
+    
+    uint64_t getPanelID() const { return panelID; }
+    void setPanelID(uint64_t id) { panelID = id; }
 
     virtual void update(const InputState& input, float dt);
     virtual void draw(UIRenderer& renderer);
@@ -36,4 +44,6 @@ protected:
     bool visible = true;
     Vec2 position{0.0f, 0.0f};
     Vec2 size{100.0f, 50.0f};
+    uint64_t focusID = 0;  // Unique widget focus identifier
+    uint64_t panelID = 0;  // ID of panel this widget belongs to
 };
