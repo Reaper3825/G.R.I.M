@@ -18,6 +18,11 @@
 #include <httplib.h>
 #include <flatbuffers/flatbuffers.h>
 #include "training_control_generated.h"
+#include <memory>
+#include <mutex>
+#include <queue>
+#include <chrono>
+#include <thread>
 
 namespace GRIMText {
 
@@ -57,15 +62,30 @@ struct TrainingConfig {
 
 class TrainingControlClient {
 public:
-    TrainingControlClient(const std::string& host = "127.0.0.1", int port = 11436)
-        : host_(host), port_(port) {}
+    TrainingControlClient(const std::string& host = "127.0.0.1", int port = 11436, size_t poolSize = 4)
+        : host_(host), port_(port), poolSize_(poolSize) {
+        // Pre-create connection pool
+        for (size_t i = 0; i < poolSize_; ++i) {
+            auto client = std::make_unique<httplib::Client>(host_, port_);
+            client->set_keep_alive(true);
+            client->set_connection_timeout(2);
+            client->set_read_timeout(5);
+            availableClients_.push(std::move(client));
+        }
+    }
+    
+    ~TrainingControlClient() {
+        std::lock_guard<std::mutex> lock(poolMutex_);
+        while (!availableClients_.empty()) {
+            availableClients_.pop();
+        }
+    }
     
     // Check if server is running
     bool isServerRunning() {
         try {
-            httplib::Client client(host_, port_);
-            client.set_connection_timeout(1);
-            auto res = client.Get("/health");
+            auto client = getClient();
+            auto res = client->Get("/health");
             return res && res->status == 200;
         } catch (...) {
             return false;
@@ -75,8 +95,8 @@ public:
     // Get current training status
     bool getStatus(TrainingState& state, TrainingStats& stats, TrainingConfig& config) {
         try {
-            httplib::Client client(host_, port_);
-            auto res = client.Get("/api/status");
+            auto client = getClient();
+            auto res = client->Get("/api/status");
             
             if (!res || res->status != 200) {
                 return false;
@@ -136,7 +156,7 @@ public:
     // Start training
     bool startTraining(const TrainingConfig* customConfig = nullptr) {
         try {
-            httplib::Client client(host_, port_);
+            auto client = getClient();
             
             flatbuffers::FlatBufferBuilder builder(512);
             flatbuffers::Offset<Control::TrainingConfig> configOffset = 0;
@@ -163,7 +183,7 @@ public:
             auto request = Control::CreateStartTrainingRequest(builder, configOffset);
             builder.Finish(request);
             
-            auto res = client.Post("/api/training/start", 
+            auto res = client->Post("/api/training/start", 
                                   reinterpret_cast<const char*>(builder.GetBufferPointer()),
                                   builder.GetSize(),
                                   "application/octet-stream");
@@ -188,13 +208,13 @@ public:
     // Stop training
     bool stopTraining() {
         try {
-            httplib::Client client(host_, port_);
+            auto client = getClient();
             
             flatbuffers::FlatBufferBuilder builder(64);
             auto request = Control::CreateStopTrainingRequest(builder);
             builder.Finish(request);
             
-            auto res = client.Post("/api/training/stop",
+            auto res = client->Post("/api/training/stop",
                                   reinterpret_cast<const char*>(builder.GetBufferPointer()),
                                   builder.GetSize(),
                                   "application/octet-stream");
@@ -219,7 +239,7 @@ public:
     // Update configuration
     bool updateConfig(const TrainingConfig& config) {
         try {
-            httplib::Client client(host_, port_);
+            auto client = getClient();
             
             flatbuffers::FlatBufferBuilder builder(512);
             
@@ -243,7 +263,7 @@ public:
             auto request = Control::CreateUpdateConfigRequest(builder, fbConfig);
             builder.Finish(request);
             
-            auto res = client.Post("/api/config",
+            auto res = client->Post("/api/config",
                                   reinterpret_cast<const char*>(builder.GetBufferPointer()),
                                   builder.GetSize(),
                                   "application/octet-stream");
@@ -302,14 +322,14 @@ public:
         CheckpointDetectResult result;
         
         try {
-            httplib::Client client(host_, port_);
+            auto client = getClient();
             
             flatbuffers::FlatBufferBuilder builder(256);
             auto dirPath = builder.CreateString(checkpoint_dir);
             auto request = Control::CreateCheckpointDetectRequest(builder, dirPath);
             builder.Finish(request);
             
-            auto res = client.Post("/api/checkpoints/detect",
+            auto res = client->Post("/api/checkpoints/detect",
                                   reinterpret_cast<const char*>(builder.GetBufferPointer()),
                                   builder.GetSize(),
                                   "application/octet-stream");
@@ -356,8 +376,8 @@ public:
         CheckpointMergeResult result;
         
         try {
-            httplib::Client client(host_, port_);
-            client.set_read_timeout(300); // 5 minutes for merge operation
+            auto client = getClient();
+            client->set_read_timeout(300); // 5 minutes for merge operation
             
             flatbuffers::FlatBufferBuilder builder(512);
             auto checkpointDirStr = builder.CreateString(checkpoint_dir);
@@ -372,7 +392,7 @@ public:
             );
             builder.Finish(request);
             
-            auto res = client.Post("/api/checkpoints/merge",
+            auto res = client->Post("/api/checkpoints/merge",
                                   reinterpret_cast<const char*>(builder.GetBufferPointer()),
                                   builder.GetSize(),
                                   "application/octet-stream");
@@ -419,8 +439,8 @@ public:
         std::cout << "[CLIENT]     TIMEOUT: 600 seconds" << std::endl;
         
         try {
-            httplib::Client client(host_, port_);
-            client.set_read_timeout(600); // 10 minutes for full pipeline
+            auto client = getClient();
+            client->set_read_timeout(600); // 10 minutes for full pipeline
             
             std::cout << "[CLIENT] Building FlatBuffer request..." << std::endl;
             flatbuffers::FlatBufferBuilder builder(256);
@@ -429,7 +449,7 @@ public:
             builder.Finish(request);
             
             std::cout << "[CLIENT] Sending HTTP POST (size: " << builder.GetSize() << " bytes)..." << std::endl;
-            auto res = client.Post("/api/collection/start",
+            auto res = client->Post("/api/collection/start",
                                   reinterpret_cast<const char*>(builder.GetBufferPointer()),
                                   builder.GetSize(),
                                   "application/octet-stream");
@@ -466,9 +486,62 @@ public:
     }
 
 private:
+    // Connection pool RAII guard
+    struct ClientGuard {
+        std::unique_ptr<httplib::Client> client;
+        std::queue<std::unique_ptr<httplib::Client>>& pool;
+        std::mutex& mutex;
+        
+        ClientGuard(std::unique_ptr<httplib::Client> c, 
+                   std::queue<std::unique_ptr<httplib::Client>>& p,
+                   std::mutex& m)
+            : client(std::move(c)), pool(p), mutex(m) {}
+        
+        ~ClientGuard() {
+            if (client) {
+                std::lock_guard<std::mutex> lock(mutex);
+                pool.push(std::move(client));
+            }
+        }
+        
+        httplib::Client* operator->() { return client.get(); }
+        httplib::Client& operator*() { return *client; }
+    };
+    
+    // Get a client from the pool (thread-safe)
+    ClientGuard getClient() {
+        std::unique_lock<std::mutex> lock(poolMutex_);
+        
+        // Wait for available client with short timeout
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+        while (availableClients_.empty()) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                // Create temporary client if pool exhausted
+                lock.unlock();
+                auto tempClient = std::make_unique<httplib::Client>(host_, port_);
+                tempClient->set_keep_alive(true);
+                tempClient->set_connection_timeout(2);
+                tempClient->set_read_timeout(5);
+                return ClientGuard(std::move(tempClient), availableClients_, poolMutex_);
+            }
+            lock.unlock();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            lock.lock();
+        }
+        
+        auto client = std::move(availableClients_.front());
+        availableClients_.pop();
+        return ClientGuard(std::move(client), availableClients_, poolMutex_);
+    }
+
     std::string host_;
     int port_;
+    size_t poolSize_;
     std::string lastError_;
+    
+    // Thread-safe connection pool
+    std::mutex poolMutex_;
+    std::queue<std::unique_ptr<httplib::Client>> availableClients_;
 };
 
 } // namespace GRIMText

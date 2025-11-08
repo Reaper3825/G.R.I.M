@@ -35,17 +35,17 @@
       "context": "monitor",
       "id": "",
       "intent": "inform",
-      "normalized": "Significant screen change detected (15% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: CMakeLists.txt - G.R.I.M (Workspace) - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help eof Q GRIM Workspace) | Ge eoamd- 4 x\n\n‘Lhpp M & > test_training_server.ps1 U © training_control_clienthpp U M CMokelists.o¢ UX > test_connectio % O > CHAT +9 @- [0 x\nPeriect: ine controi server nas been rebut ana aepioyea.\n\nGR.LM > control > M_ CMakelists.txt\n1 # GRIM-text Training Control Server Build\n\nSummary\n2 cmake_minimum_required(VERSION 3.22} i Fixed the leak\n. 3 project (TrainingControlServer LANGUAGES CXX) ved tne connecton earn\n¢... (3252 total chars)\n",
-      "raw": "Significant screen change detected (15% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: CMakeLists.txt - G.R.I.M (Workspace) - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help eof Q GRIM Workspace) | Ge eoamd- 4 x\n\n‘Lhpp M & > test_training_server.ps1 U © training_control_clienthpp U M CMokelists.o¢ UX > test_connectio % O > CHAT +9 @- [0 x\nPeriect: ine controi server nas been rebut ana aepioyea.\n\nGR.LM > control > M_ CMakelists.txt\n1 # GRIM-text Training Control Server Build\n\nSummary\n2 cmake_minimum_required(VERSION 3.22} i Fixed the leak\n. 3 project (TrainingControlServer LANGUAGES CXX) ved tne connecton earn\n¢... (3252 total chars)\n",
+      "normalized": "Significant screen change detected (17% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: trainingprogressproblem.md - G.R.I.M (Workspace) - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: SY} File Edit\n\nQ EXPLORER,\n\n\\ G.R.LM (WORKSPACE)\n\nQ vGRiM &\n\n© resources\n\nse apr meniytrtoy ours\n\nd& test_alpha.b64\n£\n\nSelection View Go Run Terminal\n\n\"= test_alpha.png\n\n> scripts\n> STEM\n> Stock\nCe “ .\n> TrainingServer_Scripts\n\nRe v ui i]\n€ console_panelcpp\n¢ console_panelhpp\nA ¢ console_ui.cpp\n¢ console_ui-hpp\n@ ¢ embedded_shader.cpp\n¢ overlay renderer.cpp\n& © overlay renderer hpp\n¥ trainingprogressproblem.md 94,U\nA © ui_button.cpp\n¢ ui_buttonhpp\n(Hs © ui_config:hpp\n€ ui_conso... (3727 total chars)\n",
+      "raw": "Significant screen change detected (17% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: trainingprogressproblem.md - G.R.I.M (Workspace) - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: SY} File Edit\n\nQ EXPLORER,\n\n\\ G.R.LM (WORKSPACE)\n\nQ vGRiM &\n\n© resources\n\nse apr meniytrtoy ours\n\nd& test_alpha.b64\n£\n\nSelection View Go Run Terminal\n\n\"= test_alpha.png\n\n> scripts\n> STEM\n> Stock\nCe “ .\n> TrainingServer_Scripts\n\nRe v ui i]\n€ console_panelcpp\n¢ console_panelhpp\nA ¢ console_ui.cpp\n¢ console_ui-hpp\n@ ¢ embedded_shader.cpp\n¢ overlay renderer.cpp\n& © overlay renderer hpp\n¥ trainingprogressproblem.md 94,U\nA © ui_button.cpp\n¢ ui_buttonhpp\n(Hs © ui_config:hpp\n€ ui_conso... (3727 total chars)\n",
       "source": "grim.internal",
       "tags": [
         "visual-context",
         "screen-capture",
         "IDE/Code Editor",
         "Code.exe",
-        "monitor-1"
+        "monitor-3"
       ],
-      "timestamp": 1762591794,
+      "timestamp": 1762637484,
       "type": "event"
     }
   ]

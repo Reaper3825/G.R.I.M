@@ -180,6 +180,7 @@ bool TrainingServerManager::start() {
 
 void TrainingServerManager::shutdown() {
     if (!running_) {
+        LOG_DEBUG("TrainingServer", "Shutdown called but server not running");
         return;
     }
     
@@ -188,13 +189,14 @@ void TrainingServerManager::shutdown() {
 #ifdef _WIN32
     // Only terminate if we own the process handle
     if (hProcess_ != nullptr) {
-        LOG_DEBUG("TrainingServer", "Terminating managed server process");
+        LOG_DEBUG("TrainingServer", "Terminating managed server process (PID: " + std::to_string(processInfo_.dwProcessId) + ")");
         TerminateProcess(hProcess_, 0);
         WaitForSingleObject(hProcess_, 5000);
         CloseHandle(hProcess_);
         CloseHandle(processInfo_.hThread);
         hProcess_ = nullptr;
         ZeroMemory(&processInfo_, sizeof(processInfo_));
+        LOG_DEBUG("TrainingServer", "Managed server process terminated successfully");
     } else {
         LOG_DEBUG("TrainingServer", "Server not managed by this instance (external process)");
         LOG_DEBUG("TrainingServer", "Leaving external server running");

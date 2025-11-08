@@ -4,6 +4,7 @@
 #include <thread>
 #include <future>
 #include <chrono>
+#include <ctime>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <Windows.h>
@@ -1140,50 +1141,40 @@ void UITrainingPanel::startTrainingSession() {
         trainingProgressBar->setValue(0.0f);
     }
     
-    addLog("Checking for checkpoint files...", 0);
-    checkpointMergeStatus = "Detecting checkpoints...";
+    // Check if training data exists (should be created by DataCollection pipeline)
+    std::string trainBinPath = "resources/models/GRIM-text/training/data/tokenized/train.bin";
+    std::string grmtPath = "resources/models/GRIM-text/training/data/training_data.grmt";
     
-    // Step 1: Detect checkpoints
-    auto detectResult = client->detectCheckpoints("data");
+    std::ifstream checkBin(trainBinPath, std::ios::binary | std::ios::ate);
+    std::ifstream checkGrmt(grmtPath, std::ios::binary | std::ios::ate);
     
-    if (detectResult.success && detectResult.checkpointCount > 0) {
-        addLog("Found " + std::to_string(detectResult.checkpointCount) + " checkpoint file(s) with " + 
-               std::to_string(detectResult.totalEntries) + " entries", 0);
-        
-        // Step 2: Merge checkpoints to .grmt
-        addLog("Merging checkpoints with verified data...", 0);
-        checkpointMergeStatus = "Merging " + std::to_string(detectResult.checkpointCount) + 
-                                " checkpoints (" + std::to_string(detectResult.totalEntries) + " entries)...";
-        currentState = Control::TrainingState_Collecting; // Show we're processing
-        
-        auto mergeResult = client->mergeCheckpoints("data", "data/verified", "data", false);
-        
-        if (mergeResult.success) {
-            addLog("Checkpoint merge successful!", 0);
-            addLog("  Output: " + mergeResult.outputGrmtPath, 0);
-            addLog("  Final entries: " + std::to_string(mergeResult.finalEntries), 0);
-            checkpointMergeStatus = "Merge complete: " + std::to_string(mergeResult.finalEntries) + " entries ready";
-            
-            // Update config to use the merged data
-            currentConfig.dataPath = mergeResult.outputGrmtPath;
-            
-        } else {
-            addLog("Checkpoint merge failed: " + mergeResult.error, 2);
-            checkpointMergeStatus = "Merge failed: " + mergeResult.error;
-            currentState = Control::TrainingState_Idle;
-            return;
-        }
-    } else {
-        if (!detectResult.success) {
-            addLog("Checkpoint detection failed: " + detectResult.error, 1);
-            checkpointMergeStatus = "";
-        } else {
-            addLog("No checkpoints found, using existing training data", 0);
-            checkpointMergeStatus = "";
-        }
+    bool hasTrainBin = checkBin.is_open() && checkBin.tellg() > 0;
+    bool hasGrmt = checkGrmt.is_open() && checkGrmt.tellg() > 0;
+    
+    checkBin.close();
+    checkGrmt.close();
+    
+    if (!hasTrainBin && !hasGrmt) {
+        addLog("ERROR: No training data found!", 2);
+        addLog("Please run DataCollection pipeline first to generate training data.", 2);
+        addLog("Expected files:", 1);
+        addLog("  - " + trainBinPath, 1);
+        addLog("  - " + grmtPath, 1);
+        currentState = Control::TrainingState_Idle;
+        return;
     }
     
-    // Step 3: Start training with merged data
+    addLog("Training data found, starting training...", 0);
+    // Prefer tokenized .bin files (native format for train_gpu.exe)
+    if (hasTrainBin) {
+        addLog("  Using tokenized binary: " + trainBinPath, 0);
+        currentConfig.dataPath = "data/tokenized/train.bin";  // Relative to training/ dir
+    } else if (hasGrmt) {
+        addLog("  Using GRMT data: " + grmtPath, 0);
+        currentConfig.dataPath = "data/training_data.grmt";  // Relative to training/ dir
+    }
+    
+    // Start training with existing data
     addLog("Starting training session...", 0);
     checkpointMergeStatus = "";  // Clear status before training starts
     
@@ -1194,6 +1185,30 @@ void UITrainingPanel::startTrainingSession() {
         std::string error = "Failed to start training session";
         if (!client->getLastError().empty()) {
             error += ": " + client->getLastError();
+            
+            // If it's "already in progress", show current session details from cached stats
+            if (client->getLastError().find("already in progress") != std::string::npos && currentStats.startTime > 0) {
+                // Calculate when the session started using cached stats (no network call)
+                auto now = std::chrono::system_clock::now();
+                auto startTime = std::chrono::system_clock::from_time_t(currentStats.startTime);
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - startTime);
+                
+                std::time_t startTimeT = currentStats.startTime;
+                std::tm startTm;
+#ifdef _WIN32
+                localtime_s(&startTm, &startTimeT);  // Thread-safe version
+#else
+                localtime_r(&startTimeT, &startTm);  // POSIX thread-safe version
+#endif
+                char timeBuf[64];
+                std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &startTm);
+                
+                addLog("Current training session details:", 1);
+                addLog("  Started: " + std::string(timeBuf), 1);
+                addLog("  Elapsed: " + std::to_string(elapsed.count()) + " seconds", 1);
+                addLog("  State: " + getStateString(currentState), 1);
+                addLog("  Progress: " + std::to_string((int)currentStats.trainingProgress) + "%", 1);
+            }
         }
         addLog(error, 2);
         currentState = Control::TrainingState_Idle;

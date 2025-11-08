@@ -12,6 +12,7 @@
 #include "ai/intent_gate.hpp"
 #include "ai/task_planner.hpp"  // ✅ NEW: Multi-step task planning
 #include "ai/grim_text_server_manager.hpp"  // ✅ NEW: GRIM-text server lifecycle
+#include "ai/training_server_manager.hpp"  // ✅ NEW: Training control server lifecycle
 #include "core/window_manager.hpp"
 #include "core/plugin_manager.hpp"
 #include "core/input_parser.hpp"
@@ -327,8 +328,11 @@ int main(int argc, char* argv[])
     // ======================================================
     LOG_PHASE("Shutting down subsystems", true);
 
-    // Shutdown GRIM-text server
+    // Shutdown GRIM-text server (inference)
     GRIM::stopGRIMTextServer();
+    
+    // Shutdown training control server
+    GRIM::stopTrainingServer();
     
     WakeKey::stop();
     WakeVoice::stop();

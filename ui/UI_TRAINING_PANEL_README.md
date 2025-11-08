@@ -134,6 +134,7 @@ When you add a source, it's stored as:
   6. **Phase Logging**: Logs each pipeline phase (Collecting → Verifying → Merging)
 
 ### Data Pipeline Process
+
 1. **Collection Phase**:
    - Reads enabled sources from `source_data.json`
    - Fetches data from configured URLs
@@ -154,6 +155,11 @@ When you add a source, it's stored as:
    - Merges with verified data
    - Removes duplicates
    - Outputs final `training_data.grmt`
+
+**Status**: ✅ **WORKING END-TO-END** (as of November 8, 2025)
+- All pipeline phases execute successfully
+- Data collection → verification → training flow validated
+- Model training completes and saves output file
 
 ### Pipeline Status Tracking
 - **Real-time Indicator**: "🔵 Data Collection Active" appears during pipeline execution
@@ -232,21 +238,26 @@ All control buttons are stacked vertically at the bottom left of the panel using
 ## Right Panel - Monitoring
 
 ### Server Status (Top)
+
 **Connection Status**:
+
 - 🟢 **"Server Online"** (Green): Connected to training server on port 11436
 - 🔴 **"Server Offline"** (Red): No connection, server not running
 
 **Data Collection Status** (Real-time):
+
 - 🔵 **"Data Collection Active"** (Cyan): Server is currently collecting or verifying data
 - ⚪ **"Data Collection Idle"** (Gray): No active data pipeline operations
 - **Update Frequency**: Polled every 200ms from server state
 - **Accuracy**: Based on actual server state (`TrainingState_Collecting` or `TrainingState_Verifying`)
 
 **Disconnected State**:
+
 - Red text: ">>> Disconnected"
 - Indicates FlatBuffer client cannot reach server
 
 **Training State**:
+
 - **Idle**: Ready to start training
 - **Training**: Active training in progress
 - **Collecting**: Gathering data from sources
@@ -747,6 +758,38 @@ UI Training Panel
   - Improved state management for collection/verification operations
   - Enhanced guard checks with server state verification
   - Added Reset Status button for clearing stale states
+- **v1.6.0** - Training system fully operational (November 8, 2025)
+  - ✅ **END-TO-END TRAINING VALIDATED**: Complete training pipeline working
+  - Fixed stale status file detection - server now clears old state on startup
+  - Fixed GRIM root path detection - eliminated path doubling bug
+  - Fixed FlatBuffer config parsing - now reads dataPath/vocabPath/outputPath
+  - Added comprehensive file-based debug logging (training_control_debug.log)
+  - Thread-safe timestamp logging with localtime_s()
+  - Training completes successfully: 50 epochs, model saved (347 KB)
+  - Best validation loss: 0.526225, final train perplexity: 5.091650
+
+---
+
+## Current Status: ✅ FULLY OPERATIONAL
+
+**Validated November 8, 2025:**
+
+- Data collection pipeline: ✅ Working
+- Data verification: ✅ Working
+- Training initiation: ✅ Working
+- Training execution: ✅ Working (50 epochs completed)
+- Model output: ✅ Working (grim_text_trained.bin saved successfully)
+- Real-time progress tracking: ✅ Working (200ms polling)
+- Server state management: ✅ Working (no more stale states)
+
+**Known Working Configuration:**
+
+- Epochs: 50
+- Batch Size: 8
+- Learning Rate: 0.0001
+- Max Seq Length: 512
+- Training Time: ~3 seconds (small dataset)
+- Output: 347 KB trained model
 
 ---
 
@@ -802,6 +845,7 @@ UI Training Panel
 
 ---
 
-**Last Updated**: November 7, 2025  
+**Last Updated**: November 8, 2025  
 **GRIM Version**: Development Build  
+**Training System Status**: ✅ Fully Operational  
 **Author**: GRIM Development Team

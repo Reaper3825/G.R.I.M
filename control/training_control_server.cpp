@@ -33,8 +33,10 @@
 #include <atomic>
 #include <mutex>
 #include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <cstdlib>
+#include <sstream>
 #include <nlohmann/json.hpp>
 #include "training_paths.hpp"
 
@@ -93,10 +95,29 @@ public:
     InternalTrainingStats stats;
     InternalTrainingConfig config;
     
+    // Stuck state detection
+    std::chrono::steady_clock::time_point lastStateChange;
+    std::chrono::seconds stuckStateTimeout{300};  // 5 minutes
+    
 #ifdef _WIN32
     HANDLE trainingProcess = nullptr;
     DWORD trainingPID = 0;
 #endif
+    
+    ControllerState() {
+        lastStateChange = std::chrono::steady_clock::now();
+    }
+    
+    void setState(TrainingState newState) {
+        state = newState;
+        lastStateChange = std::chrono::steady_clock::now();
+    }
+    
+    bool isStateStuckForTooLong() {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastStateChange);
+        return elapsed > stuckStateTimeout;
+    }
     
     void updateStats(const InternalTrainingStats& newStats) {
         std::lock_guard<std::mutex> lock(statsMutex);
@@ -185,7 +206,7 @@ private:
                         g_state.updateStats(stats);
                         
                         // Update state based on FlatBuffer state
-                        g_state.state = statusResponse->state();
+                        g_state.setState(statusResponse->state());
                     }
                 }
             } catch (const std::exception& e) {
@@ -209,8 +230,21 @@ class TrainingProcessController {
 public:
     bool startTraining(const InternalTrainingConfig& config) {
 #ifdef _WIN32
+        // Open debug log file
+        std::ofstream debugLog("training_control_debug.log", std::ios::app);
+        auto now = std::chrono::system_clock::now();
+        auto timeT = std::chrono::system_clock::to_time_t(now);
+        std::tm timeTm;
+        localtime_s(&timeTm, &timeT);
+        char timeBuf[64];
+        std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &timeTm);
+        
+        debugLog << "\n===== START TRAINING ATTEMPT =====" << std::endl;
+        debugLog << "Time: " << timeBuf << std::endl;
+        
         // Kill existing process if running
         stopTraining();
+        debugLog << "Stopped existing process (if any)" << std::endl;
         
         // Use safe path resolution to find train_gpu.exe
         std::string exePathStr = GRIM::Training::getSafeResourcePath(
@@ -218,15 +252,21 @@ public:
             GRIM::Training::PathResolutionMode::Relative
         );
         
+        debugLog << "First getSafeResourcePath returned: '" << exePathStr << "'" << std::endl;
+        
         if (exePathStr.empty()) {
             // Try searching for it
+            debugLog << "First path resolution failed, searching..." << std::endl;
             exePathStr = GRIM::Training::getSafeResourcePath(
                 "train_gpu.exe",
                 GRIM::Training::PathResolutionMode::Search
             );
+            debugLog << "Search getSafeResourcePath returned: '" << exePathStr << "'" << std::endl;
         }
         
         if (exePathStr.empty()) {
+            debugLog << "ERROR: train_gpu.exe not found!" << std::endl;
+            debugLog.close();
             std::cerr << "[Controller] ERROR: train_gpu.exe not found in GRIM directory tree" << std::endl;
             std::cerr << "[Controller] Please ensure the training executable is built" << std::endl;
             return false;
@@ -234,23 +274,38 @@ public:
         
         fs::path exePath(exePathStr);
         
+        debugLog << "exePath: " << exePath << std::endl;
+        debugLog << "exePath.parent_path(): " << exePath.parent_path() << std::endl;
+        
         // Get GRIM root for resolving other paths
         fs::path grimRoot;
 #ifdef GRIM_ROOT_DIR
         grimRoot = fs::path(GRIM_ROOT_DIR);
+        debugLog << "Using GRIM_ROOT_DIR: " << grimRoot << std::endl;
 #else
-        // Walk up from exe path to find GRIM root
+        // getSafeResourcePath returns paths starting from the canonical resource root
+        // So we need to find where that resource root is and go up one level
         grimRoot = exePath.parent_path();
+        debugLog << "Starting grimRoot walk from: " << grimRoot << std::endl;
+        
         for (int i = 0; i < 10; ++i) {
-            if (fs::exists(grimRoot / "control") || fs::exists(grimRoot / "resources")) {
+            debugLog << "  Checking iteration " << i << ": " << grimRoot << std::endl;
+            debugLog << "    Has 'control'? " << fs::exists(grimRoot / "control") << std::endl;
+            debugLog << "    Has 'resources'? " << fs::exists(grimRoot / "resources") << std::endl;
+            
+            // We want to find the folder that CONTAINS both "control" AND "resources"
+            if (fs::exists(grimRoot / "control") && fs::exists(grimRoot / "resources")) {
+                debugLog << "  Found GRIM root!" << std::endl;
                 break;
             }
             if (!grimRoot.has_parent_path()) {
+                debugLog << "  No more parents, using current_path()" << std::endl;
                 grimRoot = fs::current_path();
                 break;
             }
             grimRoot = grimRoot.parent_path();
         }
+        debugLog << "Final grimRoot: " << grimRoot << std::endl;
 #endif
         
         fs::path workingDir = grimRoot / "resources/models/GRIM-text/training";
@@ -260,6 +315,13 @@ public:
         fs::path vocabPath = grimRoot / "resources/models/GRIM-text/training" / config.vocabPath;
         fs::path outputPath = grimRoot / "resources/models/GRIM-text/training" / config.outputPath;
         
+        debugLog << "GRIM root: " << grimRoot << std::endl;
+        debugLog << "train_gpu.exe: " << exePath << std::endl;
+        debugLog << "Working dir: " << workingDir << std::endl;
+        debugLog << "Data path: " << dataPath << std::endl;
+        debugLog << "Vocab path: " << vocabPath << std::endl;
+        debugLog << "Output path: " << outputPath << std::endl;
+        
         std::cout << "[Controller] GRIM root: " << grimRoot << std::endl;
         std::cout << "[Controller] Found train_gpu.exe at: " << exePath << std::endl;
         std::cout << "[Controller] Data path: " << dataPath << std::endl;
@@ -268,15 +330,21 @@ public:
         
         // Verify paths exist
         if (!fs::exists(vocabPath)) {
+            debugLog << "ERROR: Vocab file not found at: " << vocabPath << std::endl;
+            debugLog.close();
             std::cerr << "[Controller] ERROR: Vocab file not found at: " << vocabPath << std::endl;
             std::cerr << "[Controller] Expected: " << vocabPath << std::endl;
             return false;
         }
         if (!fs::exists(dataPath)) {
+            debugLog << "ERROR: Data file not found at: " << dataPath << std::endl;
+            debugLog.close();
             std::cerr << "[Controller] ERROR: Data file not found at: " << dataPath << std::endl;
             std::cerr << "[Controller] Expected: " << dataPath << std::endl;
             return false;
         }
+        
+        debugLog << "Path validation passed" << std::endl;
         
         std::ostringstream cmdLine;
         cmdLine << "\"" << exePath.string() << "\""
@@ -293,6 +361,9 @@ public:
             cmdLine << " --cpu";
         }
         
+        debugLog << "Command line length: " << cmdLine.str().length() << " chars" << std::endl;
+        debugLog << "Full command: " << cmdLine.str() << std::endl;
+        
         std::cout << "[Controller] Starting training: " << cmdLine.str() << std::endl;
         
         // Create process
@@ -300,6 +371,8 @@ public:
         PROCESS_INFORMATION pi = {0};
         
         std::string cmd = cmdLine.str();
+        debugLog << "About to call CreateProcessA..." << std::endl;
+        
         if (!CreateProcessA(
             nullptr,
             const_cast<char*>(cmd.c_str()),
@@ -312,15 +385,53 @@ public:
             &si,
             &pi
         )) {
-            std::cerr << "[Controller] Failed to start process: " << GetLastError() << std::endl;
+            DWORD errorCode = GetLastError();
+            
+            debugLog << "CreateProcessA FAILED!" << std::endl;
+            debugLog << "Windows Error Code: " << errorCode << std::endl;
+            debugLog.close();
+            
+            // Log to console (may be lost if CREATE_NO_WINDOW)
+            std::cout << "[Controller] *** FAILED TO START TRAINING PROCESS ***" << std::endl;
+            std::cout << "[Controller] Windows Error Code: " << errorCode << std::endl;
+            std::cout << "[Controller] Working Directory: " << workingDir.string() << std::endl;
+            std::cout << "[Controller] Command Line Length: " << cmd.length() << " chars" << std::endl;
+            std::cout << "[Controller] Command: " << cmd << std::endl;
+            std::cerr << "[Controller] Failed to start process: " << errorCode << std::endl;
+            
+            // Also write to file for debugging
+            std::ofstream errorLog("training_control_error.log", std::ios::app);
+            if (errorLog.is_open()) {
+                auto now = std::chrono::system_clock::now();
+                auto timeT = std::chrono::system_clock::to_time_t(now);
+                std::tm timeTm;
+                localtime_s(&timeTm, &timeT);
+                char timeBuf[64];
+                std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &timeTm);
+                
+                errorLog << "===== TRAINING START FAILURE =====" << std::endl;
+                errorLog << "Time: " << timeBuf << std::endl;
+                errorLog << "Windows Error Code: " << errorCode << std::endl;
+                errorLog << "Working Directory: " << workingDir.string() << std::endl;
+                errorLog << "Command Length: " << cmd.length() << " chars" << std::endl;
+                errorLog << "Full Command: " << cmd << std::endl;
+                errorLog << "===================================\n" << std::endl;
+                errorLog.close();
+            }
+            
             return false;
         }
+        
+        debugLog << "CreateProcessA SUCCESS!" << std::endl;
+        debugLog << "Process ID: " << pi.dwProcessId << std::endl;
+        debugLog << "===================================\n" << std::endl;
+        debugLog.close();
         
         g_state.trainingProcess = pi.hProcess;
         g_state.trainingPID = pi.dwProcessId;
         CloseHandle(pi.hThread);
         
-        g_state.state = TrainingState_Training;
+        g_state.setState(TrainingState_Training);
         std::cout << "[Controller] Training started (PID: " << pi.dwProcessId << ")" << std::endl;
         return true;
 #else
@@ -337,7 +448,7 @@ public:
             CloseHandle(g_state.trainingProcess);
             g_state.trainingProcess = nullptr;
             g_state.trainingPID = 0;
-            g_state.state = TrainingState_Idle;
+            g_state.setState(TrainingState_Idle);
             return true;
         }
 #endif
@@ -356,7 +467,7 @@ public:
                     CloseHandle(g_state.trainingProcess);
                     g_state.trainingProcess = nullptr;
                     g_state.trainingPID = 0;
-                    g_state.state = TrainingState_Completed;
+                    g_state.setState(TrainingState_Completed);
                 }
             }
         }
@@ -582,6 +693,35 @@ void setupAPI(httplib::Server& server) {
     server.Get("/api/status", [](const httplib::Request&, httplib::Response& res) {
         flatbuffers::FlatBufferBuilder builder(1024);
         
+        // Smart guard: Auto-cleanup stuck states on every status check
+        bool processActuallyRunning = g_processController.isTrainingRunning();
+        auto currentState = g_state.state.load();
+        
+        // Guard 1: Process died but state wasn't updated
+        if ((currentState == TrainingState_Training || currentState == TrainingState_Collecting) 
+            && !processActuallyRunning) {
+            std::cout << "[Controller] Auto-cleanup: Process died (state=" << currentState 
+                     << " but no process running)" << std::endl;
+            g_state.setState(TrainingState_Idle);
+            
+            InternalTrainingStats stats = g_state.getStats();
+            if (stats.lastError.empty()) {
+                stats.lastError = "Process terminated unexpectedly";
+            }
+            stats.currentPhase = "Ready";
+            g_state.updateStats(stats);
+        }
+        // Guard 2: State stuck for too long (5+ minutes without change)
+        else if (currentState != TrainingState_Idle && g_state.isStateStuckForTooLong()) {
+            std::cout << "[Controller] Auto-cleanup: State stuck for >5 minutes (state=" << currentState << ")" << std::endl;
+            g_state.setState(TrainingState_Idle);
+            
+            InternalTrainingStats stats = g_state.getStats();
+            stats.lastError = "Training timed out or became unresponsive";
+            stats.currentPhase = "Ready";
+            g_state.updateStats(stats);
+        }
+        
         auto stats = g_state.getStats();
         auto config = g_state.getConfig();
         
@@ -647,7 +787,26 @@ void setupAPI(httplib::Server& server) {
     server.Post("/api/training/start", [](const httplib::Request& req, httplib::Response& res) {
         flatbuffers::FlatBufferBuilder builder(256);
         
-        if (g_state.state != TrainingState_Idle && g_state.state != TrainingState_Completed) {
+        // Smart guard: Check if state is stuck (process dead but state not idle)
+        bool processActuallyRunning = g_processController.isTrainingRunning();
+        bool stateClaimsRunning = (g_state.state != TrainingState_Idle && g_state.state != TrainingState_Completed);
+        
+        if (stateClaimsRunning && !processActuallyRunning) {
+            // Stuck state detected: process is dead but state wasn't cleared
+            std::cout << "[Controller] WARNING: Stuck state detected (state=" << g_state.state 
+                     << " but no process running)" << std::endl;
+            std::cout << "[Controller] Auto-clearing stuck state..." << std::endl;
+            
+            g_state.setState(TrainingState_Idle);
+            InternalTrainingStats stats = g_state.getStats();
+            stats.currentPhase = "Ready";
+            stats.lastError = "";
+            g_state.updateStats(stats);
+            
+            stateClaimsRunning = false;  // Allow training to proceed
+        }
+        
+        if (stateClaimsRunning) {
             auto error = builder.CreateString("Training already in progress");
             auto message = builder.CreateString("");
             auto response = CreateStartTrainingResponse(builder, false, message, error);
@@ -672,6 +831,16 @@ void setupAPI(httplib::Server& server) {
                     config.learningRate = fbConfig->learning_rate();
                     config.maxSeqLen = fbConfig->max_seq_len();
                     config.useGPU = fbConfig->use_gpu();
+                    // Also read path config if provided
+                    if (fbConfig->data_path() && fbConfig->data_path()->size() > 0) {
+                        config.dataPath = fbConfig->data_path()->str();
+                    }
+                    if (fbConfig->vocab_path() && fbConfig->vocab_path()->size() > 0) {
+                        config.vocabPath = fbConfig->vocab_path()->str();
+                    }
+                    if (fbConfig->output_path() && fbConfig->output_path()->size() > 0) {
+                        config.outputPath = fbConfig->output_path()->str();
+                    }
                     g_state.updateConfig(config);
                 }
             } catch (const std::exception& e) {
@@ -943,7 +1112,7 @@ void setupAPI(httplib::Server& server) {
         
         // Update state to Collecting
         {
-            g_state.state = TrainingState_Collecting;
+            g_state.setState(TrainingState_Collecting);
             InternalTrainingStats stats = g_state.getStats();
             stats.collectionProgress = 0.0f;
             stats.currentPhase = std::string("Starting data collection: ") + mode;
@@ -979,8 +1148,21 @@ void setupAPI(httplib::Server& server) {
             } else {
                 std::cout << "[Data Collection] Found executable at: " << exePathStr << std::endl;
                 std::filesystem::path exePath(exePathStr);
-                // Run the pipeline
+                
+                // Build command line with correct arguments for full pipeline
+                // Output to training/data so training can directly use the files
                 std::string cmdLine = "\"" + exePath.string() + "\" " + mode;
+                
+                // Add output directory for merge step (relative to DataCollection dir)
+                if (mode == "full" || mode == "merge") {
+                    cmdLine += " --output-dir \"../../../training/data\"";
+                }
+                
+                // Add config path for collect step (relative to DataCollection dir)  
+                if (mode == "full" || mode == "collect") {
+                    cmdLine += " --config \"../../source_data.json\"";
+                }
+                
                 std::cout << "[Data Collection] Command line: " << cmdLine << std::endl;
                 
 #ifdef _WIN32
@@ -1106,7 +1288,7 @@ void setupAPI(httplib::Server& server) {
         
         // Reset state
         {
-            g_state.state = TrainingState_Idle;
+            g_state.setState(TrainingState_Idle);
             InternalTrainingStats stats = g_state.getStats();
             if (!success) {
                 stats.collectionProgress = 0.0f;
@@ -1173,6 +1355,24 @@ int main(int argc, char** argv) {
     // Resolve status file path from canonical resource root
     fs::path statusFilePath = GRIM::Training::getTrainingStatusFilePath();
     std::cout << "[Server] Monitoring status file: " << statusFilePath << std::endl;
+    
+    // ✅ FIX: Delete stale status file on server startup to prevent false "training in progress" state
+    if (fs::exists(statusFilePath)) {
+        try {
+            fs::remove(statusFilePath);
+            std::cout << "[Server] Deleted stale status file from previous session" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "[Server] WARNING: Failed to delete stale status file: " << e.what() << std::endl;
+        }
+    }
+    
+    // Ensure state starts clean
+    g_state.setState(TrainingState_Idle);
+    InternalTrainingStats cleanStats = {};
+    cleanStats.currentPhase = "Ready";
+    cleanStats.lastError = "";
+    g_state.updateStats(cleanStats);
+    std::cout << "[Server] State initialized to Idle" << std::endl;
     
     // Start status file monitor
     StatusFileMonitor monitor(statusFilePath.string());
