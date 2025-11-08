@@ -11,59 +11,44 @@ UIButton::UIButton(const std::string& lbl, std::function<void()> cb)
 void UIButton::update(const InputState& input, float) {
     Vec2 m = input.mousePos;
     
-    // Check if mouse is over button
-    bool inside = (m.x >= position.x && m.x <= position.x + size.x &&
-                   m.y >= position.y && m.y <= position.y + size.y);
+    // Expand hitbox slightly for easier clicking (5px padding)
+    float hitPadding = 5.0f;
+    bool inside = (m.x >= position.x - hitPadding && m.x <= position.x + size.x + hitPadding &&
+                   m.y >= position.y - hitPadding && m.y <= position.y + size.y + hitPadding);
     
-    // Track hover state
-    hovered = inside;
+    // Track hover state (use exact bounds for visual feedback)
+    hovered = (m.x >= position.x && m.x <= position.x + size.x &&
+               m.y >= position.y && m.y <= position.y + size.y);
     
-    // Use Mouse class directly (bypasses InputState filtering for UI)
-    bool mouseDown = Mouse::isDown(MouseButton::Left);
-    bool mousePressed = Mouse::wasPressed(MouseButton::Left);
-    bool mouseReleased = Mouse::wasReleased(MouseButton::Left);
+    // Use BOTH InputState and Mouse class for maximum reliability
+    // This ensures we catch the click even if one source misses it
+    bool mouseDown = input.mouseDown[0] || Mouse::isDown(MouseButton::Left);
+    bool mousePressed = input.mousePressed[0] || Mouse::wasPressed(MouseButton::Left);
+    bool mouseReleased = input.mouseReleased[0] || Mouse::wasReleased(MouseButton::Left);
     
-    // ? FIX: Check mouse state even if input filtering is disabled
-    // The Mouse class tracks the actual hardware state, so we can use it
-    // to complete button clicks even when InputState filtering changes
-    
-    // Button state machine
+    // Simplified state machine - more forgiving
     if (inside && mousePressed && !pressed) {
-        // Mouse pressed inside button
+        // Mouse pressed inside expanded hitbox - start press
         pressed = true;
-        pressedInside = true;  // ? Remember we started inside
+        pressedInside = true;
         LOG_DEBUG("UIButton", "Pressed: " + label);
     }
-    else if (pressed && mouseReleased) {
-        // Mouse released - trigger callback if we started inside
-        pressed = false;
-        
-        // ? FIX: Use pressedInside flag instead of current 'inside' state
-        // This way the callback can change UI layout without affecting the click
-        if (pressedInside && callback) {
-            LOG_DEBUG("UIButton", "Clicked: " + label);
-            callback();
-        }
-        
-        pressedInside = false;
-    }
-    else if (pressed && !mouseDown) {
-        // Lost mouse down state
-        if (!input.mouseInputEnabled) {
-            // ? Expected: Input filtering disabled (panel closed)
-            // Still trigger the callback if we were pressed inside
-            if (pressedInside && callback) {
-                LOG_DEBUG("UIButton", "Clicked (filter disabled): " + label);
+    else if (pressed) {
+        // We're in pressed state - waiting for release
+        if (mouseReleased || !mouseDown) {
+            // Mouse released OR lost mouse down state
+            // Trigger callback if we're still near the button (expanded hitbox)
+            // This is very forgiving - allows slight mouse movement
+            if (inside && callback) {
+                LOG_DEBUG("UIButton", "Clicked: " + label);
                 callback();
             }
+            else {
+                LOG_DEBUG("UIButton", "Click cancelled (mouse moved away): " + label);
+            }
+            pressed = false;
+            pressedInside = false;
         }
-        else {
-            // Unexpected loss of state
-            LOG_DEBUG("UIButton", "Press state lost: " + label);
-        }
-        
-        pressed = false;
-        pressedInside = false;
     }
 }
 

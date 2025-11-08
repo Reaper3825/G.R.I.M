@@ -2,7 +2,12 @@
 #pragma once
 #include <unordered_map>
 #include <functional>
+#include <mutex>
+#include <vector>
 #include <Windows.h>
+
+// Forward declaration
+struct InputState;
 
 enum class MouseButton {
     Left, Right, Middle, X1, X2, Unknown
@@ -29,11 +34,15 @@ public:
     static void endFrame();
     static void onPress(MouseButton btn, std::function<void(MouseButton)> cb);
     static void onRelease(MouseButton btn, std::function<void(MouseButton)> cb);
+    
+    // ✅ NEW: Update from InputState instead of using hooks
+    static void updateFromInput(const InputState& input);
 
 private:
     static std::unordered_map<MouseButton, MouseState> buttonStates;
-    static HHOOK mouseHook;
-    static LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam);
+    static std::mutex stateMutex;
+    
+    // ✅ DEPRECATED: Hook-based methods kept for compatibility but not used
     static void setDown(MouseButton btn);
     static void setUp(MouseButton btn);
 };

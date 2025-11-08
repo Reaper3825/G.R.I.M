@@ -13,7 +13,7 @@ extern nlohmann::json aiConfig;
 UISettingsMenu::UISettingsMenu()
     : UIPanel("Settings", true), hasChanges(false), isRefreshing(false), needsWidgetRefresh(false)
 {
-    position = { 200, 200 };
+    position = { 200, 425 };
     size = { 500, 600 };  // Increased height to accommodate scrollbox
     setVisible(false);
     setBackground(0xC0202020);

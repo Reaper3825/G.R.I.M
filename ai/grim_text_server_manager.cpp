@@ -32,21 +32,18 @@ GRIMTextServerManager& GRIMTextServerManager::getInstance() {
 GRIMTextServerManager::GRIMTextServerManager() 
     : serverPath_("resources/models/GRIM-text/training/build_vs_cuda/Release/grim_text_server.exe"),
       serverURL_("http://127.0.0.1:11435"),
-      trainingControlURL_("http://127.0.0.1:11436"),
-      running_(false),
-      trainingControlRunning_(false)
+      running_(false)
 #ifdef _WIN32
-      , hProcess_(nullptr),
-      hTrainingControlProcess_(nullptr)
+      , hProcess_(nullptr)
 #endif
 {
+#ifdef _WIN32
     ZeroMemory(&processInfo_, sizeof(processInfo_));
-    ZeroMemory(&trainingControlProcessInfo_, sizeof(trainingControlProcessInfo_));
+#endif
 }
 
 GRIMTextServerManager::~GRIMTextServerManager() {
     shutdown();
-    stopTrainingControlServer();
 }
 
 void GRIMTextServerManager::setServerPath(const std::string& path) {
@@ -239,152 +236,6 @@ void stopGRIMTextServer() {
 
 bool isGRIMTextServerRunning() {
     return GRIMTextServerManager::getInstance().isRunning();
-}
-
-//======================================================//
-//  Training Control Server Management
-//======================================================//
-
-bool GRIMTextServerManager::startTrainingControlServer() {
-    if (trainingControlRunning_) {
-        LOG_DEBUG("TrainingControlServer", "Training control server already running");
-        return true;
-    }
-    
-    LOG_DEBUG("TrainingControlServer", "Starting training control server...");
-    
-#ifdef _WIN32
-    fs::path serverExe = fs::absolute("resources/models/GRIM-text/training/build_vs_cuda/control/Release/training_control_server.exe");
-    
-    if (!fs::exists(serverExe)) {
-        LOG_ERROR("TrainingControlServer", "Server executable not found: " + serverExe.string());
-        return false;
-    }
-    
-    LOG_DEBUG("TrainingControlServer", "Server path: " + serverExe.string());
-    
-    // Setup startup info
-    STARTUPINFOA si{};
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    
-    ZeroMemory(&trainingControlProcessInfo_, sizeof(trainingControlProcessInfo_));
-    
-    // Build command line
-    std::string cmdLine = "\"" + serverExe.string() + "\" --port 11436";
-    
-    std::vector<char> mutableCmd(cmdLine.begin(), cmdLine.end());
-    mutableCmd.push_back('\0');
-    
-    LOG_DEBUG("TrainingControlServer", "Command: " + cmdLine);
-    
-    BOOL success = CreateProcessA(
-        nullptr,
-        mutableCmd.data(),
-        nullptr,
-        nullptr,
-        FALSE,
-        CREATE_NEW_CONSOLE | CREATE_NO_WINDOW,
-        nullptr,
-        serverExe.parent_path().string().c_str(),
-        &si,
-        &trainingControlProcessInfo_
-    );
-    
-    if (!success) {
-        DWORD error = GetLastError();
-        LOG_ERROR("TrainingControlServer", "Failed to launch server: " + std::to_string(error));
-        return false;
-    }
-    
-    hTrainingControlProcess_ = trainingControlProcessInfo_.hProcess;
-    trainingControlRunning_ = true;
-    
-    LOG_DEBUG("TrainingControlServer", "Server started (PID: " + std::to_string(trainingControlProcessInfo_.dwProcessId) + ")");
-    LOG_DEBUG("TrainingControlServer", "Server will be ready in a few seconds...");
-    
-    // Return immediately - don't block waiting for health check
-    // The training panel will handle waiting for the server to be ready
-    return true;
-    
-#else
-    LOG_ERROR("TrainingControlServer", "Not implemented for this platform");
-    return false;
-#endif
-}
-
-void GRIMTextServerManager::stopTrainingControlServer() {
-    if (!trainingControlRunning_) {
-        return;
-    }
-    
-    LOG_DEBUG("TrainingControlServer", "Stopping training control server...");
-    
-#ifdef _WIN32
-    if (hTrainingControlProcess_ != nullptr) {
-        TerminateProcess(hTrainingControlProcess_, 0);
-        WaitForSingleObject(hTrainingControlProcess_, 5000);
-        CloseHandle(hTrainingControlProcess_);
-        CloseHandle(trainingControlProcessInfo_.hThread);
-        hTrainingControlProcess_ = nullptr;
-        ZeroMemory(&trainingControlProcessInfo_, sizeof(trainingControlProcessInfo_));
-    }
-#endif
-    
-    trainingControlRunning_ = false;
-    LOG_DEBUG("TrainingControlServer", "Training control server stopped");
-}
-
-bool GRIMTextServerManager::isTrainingControlServerRunning() const {
-#ifdef _WIN32
-    if (!trainingControlRunning_) {
-        return false;
-    }
-    
-    if (hTrainingControlProcess_ == nullptr) {
-        return false;
-    }
-    
-    DWORD exitCode = 0;
-    if (GetExitCodeProcess(hTrainingControlProcess_, &exitCode)) {
-        if (exitCode != STILL_ACTIVE) {
-            return false;
-        }
-    }
-    
-    // Process is running, now check if it's responding to HTTP requests
-    try {
-        httplib::Client client("127.0.0.1", 11436);
-        client.set_connection_timeout(1);  // 1 second timeout
-        client.set_read_timeout(1);
-        
-        auto res = client.Get("/health");
-        if (res && res->status == 200) {
-            return true;  // Server is running AND responding
-        }
-    } catch (...) {
-        // Connection failed - server not ready yet
-    }
-    
-    return false;  // Process running but not responding yet
-#endif
-    
-    return trainingControlRunning_;
-}
-
-// Helper functions for training control server
-bool startTrainingControlServer() {
-    return GRIMTextServerManager::getInstance().startTrainingControlServer();
-}
-
-void stopTrainingControlServer() {
-    GRIMTextServerManager::getInstance().stopTrainingControlServer();
-}
-
-bool isTrainingControlServerRunning() {
-    return GRIMTextServerManager::getInstance().isTrainingControlServerRunning();
 }
 
 } // namespace GRIM

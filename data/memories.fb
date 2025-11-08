@@ -35,17 +35,17 @@
       "context": "monitor",
       "id": "",
       "intent": "inform",
-      "normalized": "Significant screen change detected (32% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: GRIM Overlay (GRIM.exe)\nScene: Desktop | Theme: Dark\nText: @ Serum (® camigemamare « |) ame a|s fisyettevile techrical community Tx] [7\n\n(OMT OM oi itips//connectrouterintegration prodmbeducation com/app/#/conneci/coversheet)\n\n12) YouTube} Q[ Maps ss, Class Score Detail] | GRIM. text bTraining? Control]\n\nBio 169 Online FA 25\nJardware:))\n\npus\n\nBack to Canvas\n\nGo to Connect section or reset linking\n\nConnect Quick Links\n\nSecley's Anatomy & Physiology\n\nsave! Configl PARSTSIOS | Author: Cinnamon VanPutie\n\nRelease: 2025\n|Add[Data}Source] < =) Read Book\nE -e... (815 total chars)\n",
-      "raw": "Significant screen change detected (32% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: GRIM Overlay (GRIM.exe)\nScene: Desktop | Theme: Dark\nText: @ Serum (® camigemamare « |) ame a|s fisyettevile techrical community Tx] [7\n\n(OMT OM oi itips//connectrouterintegration prodmbeducation com/app/#/conneci/coversheet)\n\n12) YouTube} Q[ Maps ss, Class Score Detail] | GRIM. text bTraining? Control]\n\nBio 169 Online FA 25\nJardware:))\n\npus\n\nBack to Canvas\n\nGo to Connect section or reset linking\n\nConnect Quick Links\n\nSecley's Anatomy & Physiology\n\nsave! Configl PARSTSIOS | Author: Cinnamon VanPutie\n\nRelease: 2025\n|Add[Data}Source] < =) Read Book\nE -e... (815 total chars)\n",
+      "normalized": "Significant screen change detected (15% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: CMakeLists.txt - G.R.I.M (Workspace) - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help eof Q GRIM Workspace) | Ge eoamd- 4 x\n\n‘Lhpp M & > test_training_server.ps1 U © training_control_clienthpp U M CMokelists.o¢ UX > test_connectio % O > CHAT +9 @- [0 x\nPeriect: ine controi server nas been rebut ana aepioyea.\n\nGR.LM > control > M_ CMakelists.txt\n1 # GRIM-text Training Control Server Build\n\nSummary\n2 cmake_minimum_required(VERSION 3.22} i Fixed the leak\n. 3 project (TrainingControlServer LANGUAGES CXX) ved tne connecton earn\n¢... (3252 total chars)\n",
+      "raw": "Significant screen change detected (15% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: CMakeLists.txt - G.R.I.M (Workspace) - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: “J File Edit Selection View Go Run Terminal Help eof Q GRIM Workspace) | Ge eoamd- 4 x\n\n‘Lhpp M & > test_training_server.ps1 U © training_control_clienthpp U M CMokelists.o¢ UX > test_connectio % O > CHAT +9 @- [0 x\nPeriect: ine controi server nas been rebut ana aepioyea.\n\nGR.LM > control > M_ CMakelists.txt\n1 # GRIM-text Training Control Server Build\n\nSummary\n2 cmake_minimum_required(VERSION 3.22} i Fixed the leak\n. 3 project (TrainingControlServer LANGUAGES CXX) ved tne connecton earn\n¢... (3252 total chars)\n",
       "source": "grim.internal",
       "tags": [
         "visual-context",
         "screen-capture",
-        "Desktop",
-        "GRIM.exe",
+        "IDE/Code Editor",
+        "Code.exe",
         "monitor-1"
       ],
-      "timestamp": 1762486875,
+      "timestamp": 1762591794,
       "type": "event"
     }
   ]

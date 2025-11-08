@@ -33,6 +33,12 @@ public:
     // Check if a screen position should receive input (is over visible UI)
     bool shouldReceiveInputAt(float x, float y) const;
     
+    // Check if any UI panel is currently visible
+    bool hasVisiblePanels() const;
+    
+    // Check if UI consumed input this frame (for blocking pass-through)
+    bool didConsumeInput() const { return m_inputConsumed; }
+    
     // Inject text input from WM_CHAR messages
     void injectTextInput(const std::string& text);
     
@@ -55,4 +61,5 @@ private:
     OverlayRenderer m_renderer;  // Changed from UIRenderer to OverlayRenderer
     
     std::string m_pendingTextInput; // Buffer for WM_CHAR input
+    bool m_inputConsumed = false;   // Track if UI consumed input this frame
 };

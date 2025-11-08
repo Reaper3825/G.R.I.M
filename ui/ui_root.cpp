@@ -36,9 +36,15 @@ void UIRoot::shutdown()
 
 void UIRoot::update(const InputState& input, float dt)
 {
+    // Reset consumption flag each frame
+    m_inputConsumed = false;
+    
     // Create a modified input state with injected text
     InputState modifiedInput = input;
     modifiedInput.textInput = consumeTextInput();
+    
+    // Check if cursor is over any visible UI
+    bool cursorOverUI = shouldReceiveInputAt(input.mousePos.x, input.mousePos.y);
     
     // Update all visible panels with the modified input
     for (auto& panel : m_panels)
@@ -46,6 +52,15 @@ void UIRoot::update(const InputState& input, float dt)
         if (panel && panel->isVisible())
         {
             panel->update(modifiedInput, dt);
+            
+            // If cursor is over this panel, mark input as consumed
+            Vec2 pos = panel->getPosition();
+            Vec2 size = panel->getSize();
+            if (input.mousePos.x >= pos.x && input.mousePos.x <= pos.x + size.x &&
+                input.mousePos.y >= pos.y && input.mousePos.y <= pos.y + size.y)
+            {
+                m_inputConsumed = true;
+            }
         }
     }
 }
@@ -175,6 +190,16 @@ bool UIRoot::shouldReceiveInputAt(float x, float y) const
     }
     
     return false; // Mouse is not over any UI, pass through
+}
+
+bool UIRoot::hasVisiblePanels() const
+{
+    for (const auto& panel : m_panels)
+    {
+        if (panel && panel->isVisible())
+            return true;
+    }
+    return false;
 }
 
 void UIRoot::injectTextInput(const std::string& text)

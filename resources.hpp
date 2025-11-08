@@ -38,8 +38,17 @@ void loadMemory();
 void saveMemory();
 void rememberCorrection(const std::string& wrong, const std::string& right);
 void rememberShortcut(const std::string& phrase, const std::string& command);
+void getSafeResourcePath(std::string& outPath);
 void incrementUsageCount(const std::string& command);
-void setLastCommand(const std::string& command);
+
+// Path resolution modes
+enum class PathResolutionMode {
+    Absolute,  // Treat as absolute path
+    Relative,  // Resolve relative to GRIM root
+    Search     // Search for file in GRIM directory tree
+};
+
+std::string getSafeResourcePath(const std::string& target, PathResolutionMode mode = PathResolutionMode::Relative);
 
 // ====================================================
 // Global logging helper (system-level, not user history)

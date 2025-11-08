@@ -1,0 +1,8 @@
+=== GRIM COMPLETE TRAINING DATA PIPELINE ===
+
+[0/7] Checking for existing checkpoints...
+  No checkpoint files found - starting fresh
+
+[1/7] Collecting data from web sources...
+[ERROR] Failed to open config file: source_data.json
+ERROR: Failed to load config

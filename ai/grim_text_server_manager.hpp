@@ -1,10 +1,12 @@
 //======================================================//
 //  GRIM-text Server Manager
-//  Manages lifecycle of grim_text_server.exe
+//  Manages lifecycle of grim_text_server.exe (INFERENCE ONLY)
+//  
+//  For training control, use training_server_manager.hpp
 //  
 //  Author: GRIM Development Team
-//  Date: November 6, 2025
-//  Version: 1.0.0
+//  Date: November 7, 2025
+//  Version: 2.0.0 - Separated from training control
 //======================================================//
 
 #pragma once
@@ -31,17 +33,11 @@ public:
     // Health check
     bool checkHealth(int timeoutMs = 5000);
     
-    // Training control server
-    bool startTrainingControlServer();
-    void stopTrainingControlServer();
-    bool isTrainingControlServerRunning() const;
-    
     // Configuration
     void setServerPath(const std::string& path);
     void setServerURL(const std::string& url);
     
     std::string getServerURL() const { return serverURL_; }
-    std::string getTrainingControlURL() const { return trainingControlURL_; }
     
     // Destructor must be public for unique_ptr
     ~GRIMTextServerManager();
@@ -55,15 +51,11 @@ private:
     
     std::string serverPath_;
     std::string serverURL_;
-    std::string trainingControlURL_;
     std::atomic<bool> running_;
-    std::atomic<bool> trainingControlRunning_;
     
 #ifdef _WIN32
     PROCESS_INFORMATION processInfo_;
     HANDLE hProcess_;
-    PROCESS_INFORMATION trainingControlProcessInfo_;
-    HANDLE hTrainingControlProcess_;
 #endif
 };
 
@@ -74,10 +66,5 @@ extern std::unique_ptr<GRIMTextServerManager> g_grimTextServerManager;
 bool startGRIMTextServer();
 void stopGRIMTextServer();
 bool isGRIMTextServerRunning();
-
-// Training control server helpers
-bool startTrainingControlServer();
-void stopTrainingControlServer();
-bool isTrainingControlServerRunning();
 
 } // namespace GRIM

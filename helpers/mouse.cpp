@@ -1,66 +1,71 @@
 // mouse.cpp
 #include "mouse.hpp"
 #include "logger.hpp"
+#include "input_parser.hpp"  // ✅ For InputState definition
 
 std::unordered_map<MouseButton, MouseState> Mouse::buttonStates;
-HHOOK Mouse::mouseHook = nullptr;
+std::mutex Mouse::stateMutex;
 
-static DWORD g_mouseThreadId = 0;
-static std::thread g_mouseThread;
-
-static MouseButton fromButton(WPARAM wp) {
-    switch (wp) {
-        case WM_LBUTTONDOWN:
-        case WM_LBUTTONUP: return MouseButton::Left;
-        case WM_RBUTTONDOWN:
-        case WM_RBUTTONUP: return MouseButton::Right;
-        case WM_MBUTTONDOWN:
-        case WM_MBUTTONUP: return MouseButton::Middle;
-        case WM_XBUTTONDOWN:
-        case WM_XBUTTONUP:
-            return HIWORD(wp) == XBUTTON1 ? MouseButton::X1 : MouseButton::X2;
-        default: return MouseButton::Unknown;
-    }
-}
-
-LRESULT CALLBACK Mouse::LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
-    if (nCode == HC_ACTION) {
-        auto* ms = reinterpret_cast<MSLLHOOKSTRUCT*>(lParam);
-        POINT pt = ms->pt;
-
-        switch (wParam) {
-            case WM_LBUTTONDOWN: case WM_RBUTTONDOWN: case WM_MBUTTONDOWN: case WM_XBUTTONDOWN:
-                setDown(fromButton(wParam)); break;
-            case WM_LBUTTONUP: case WM_RBUTTONUP: case WM_MBUTTONUP: case WM_XBUTTONUP:
-                setUp(fromButton(wParam)); break;
-            case WM_MOUSEMOVE:
-                for (auto& [btn, st] : buttonStates)
-                    st.position = pt;
-                break;
-        }
-    }
-    return CallNextHookEx(nullptr, nCode, wParam, lParam);
-}
+// ✅ REMOVED: Hook-based system replaced with direct polling
+// This eliminates threading issues and improves reliability
 
 void Mouse::initialize() {
-    if (mouseHook) return;
-
-    g_mouseThread = std::thread([] {
-        g_mouseThreadId = GetCurrentThreadId();
-        HINSTANCE hInst = GetModuleHandleW(nullptr);
-        mouseHook = SetWindowsHookExW(WH_MOUSE_LL, LowLevelMouseProc, hInst, 0);
-        MSG msg;
-        while (GetMessageW(&msg, nullptr, 0, 0)) { }
-        if (mouseHook) { UnhookWindowsHookEx(mouseHook); mouseHook = nullptr; }
-    });
-    g_mouseThread.detach();
+    LOG_DEBUG("Mouse", "Mouse system initialized (direct polling mode)");
 }
 
 void Mouse::shutdown() {
-    if (g_mouseThreadId) PostThreadMessageW(g_mouseThreadId, WM_QUIT, 0, 0);
+    std::lock_guard<std::mutex> lock(stateMutex);
+    buttonStates.clear();
+    LOG_DEBUG("Mouse", "Mouse system shutdown");
+}
+
+// ✅ NEW: Update mouse state from InputState (called from main loop)
+void Mouse::updateFromInput(const struct InputState& input) {
+    std::lock_guard<std::mutex> lock(stateMutex);
+    
+    // Use position from InputState (already in screen coordinates)
+    POINT pos;
+    pos.x = static_cast<LONG>(input.mousePos.x);
+    pos.y = static_cast<LONG>(input.mousePos.y);
+    
+    // Map InputState buttons to MouseButton enum
+    struct ButtonMapping { MouseButton btn; int index; };
+    ButtonMapping mappings[] = {
+        {MouseButton::Left, 0},
+        {MouseButton::Right, 1},
+        {MouseButton::Middle, 2}
+    };
+    
+    for (const auto& mapping : mappings) {
+        auto& state = buttonStates[mapping.btn];
+        state.position = pos;
+        
+        bool down = input.mouseDown[mapping.index];
+        bool pressed = input.mousePressed[mapping.index];
+        bool released = input.mouseReleased[mapping.index];
+        
+        // Update state
+        state.down = down;
+        state.pressed = pressed;
+        state.released = released;
+        
+        // Fire callbacks
+        if (pressed) {
+            for (auto& cb : state.pressCallbacks) {
+                cb(mapping.btn);
+            }
+        }
+        if (released) {
+            for (auto& cb : state.releaseCallbacks) {
+                cb(mapping.btn);
+            }
+        }
+    }
 }
 
 void Mouse::setDown(MouseButton btn) {
+    // ✅ DEPRECATED: Now updated via updateFromInput()
+    std::lock_guard<std::mutex> lock(stateMutex);
     auto& s = buttonStates[btn];
     if (!s.down) {
         s.pressed = true;
@@ -70,6 +75,8 @@ void Mouse::setDown(MouseButton btn) {
 }
 
 void Mouse::setUp(MouseButton btn) {
+    // ✅ DEPRECATED: Now updated via updateFromInput()
+    std::lock_guard<std::mutex> lock(stateMutex);
     auto& s = buttonStates[btn];
     if (s.down) {
         s.released = true;
@@ -78,9 +85,20 @@ void Mouse::setUp(MouseButton btn) {
     s.down = false;
 }
 
-bool Mouse::isDown(MouseButton btn)      { return buttonStates[btn].down; }
-bool Mouse::wasPressed(MouseButton btn)  { return buttonStates[btn].pressed; }
-bool Mouse::wasReleased(MouseButton btn) { return buttonStates[btn].released; }
+bool Mouse::isDown(MouseButton btn) {
+    std::lock_guard<std::mutex> lock(stateMutex);
+    return buttonStates[btn].down;
+}
+
+bool Mouse::wasPressed(MouseButton btn) {
+    std::lock_guard<std::mutex> lock(stateMutex);
+    return buttonStates[btn].pressed;
+}
+
+bool Mouse::wasReleased(MouseButton btn) {
+    std::lock_guard<std::mutex> lock(stateMutex);
+    return buttonStates[btn].released;
+}
 
 POINT Mouse::getPosition() {
     POINT pt;
@@ -89,6 +107,7 @@ POINT Mouse::getPosition() {
 }
 
 void Mouse::endFrame() {
+    std::lock_guard<std::mutex> lock(stateMutex);
     for (auto& [_, s] : buttonStates) {
         s.pressed = false;
         s.released = false;
@@ -96,6 +115,7 @@ void Mouse::endFrame() {
 }
 
 void Mouse::onPress(MouseButton btn, std::function<void(MouseButton)> cb) {
+    std::lock_guard<std::mutex> lock(stateMutex);
     buttonStates[btn].pressCallbacks.push_back(std::move(cb));
 }
 void Mouse::onRelease(MouseButton btn, std::function<void(MouseButton)> cb) {

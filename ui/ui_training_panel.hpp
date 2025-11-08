@@ -6,7 +6,8 @@
 #include "ui_layout_box.hpp"
 #include "ui_inputbox.hpp"
 #include "ui_training_config.hpp"
-#include "../resources/models/GRIM-text/training/control/training_control_client.hpp"
+#include "../control/training_control_client.hpp"
+#include "../control/data_collection_client.hpp"
 #include <memory>
 #include <string>
 #include <vector>
@@ -38,6 +39,7 @@ private:
     void initializeClient();
     void resetState();
     void pollServer();
+    void pollDataCollectionServerAsync();  // Async polling to avoid blocking main thread
     void handleStartTraining();
     void handleStopTraining();
     void handlePauseResume();
@@ -57,20 +59,35 @@ private:
     uint32_t getStateColor(GRIMText::Control::TrainingState state) const;
     
     std::unique_ptr<GRIMText::TrainingControlClient> client;
+    std::unique_ptr<GRIM::DataCollection::DataCollectionClient> dataCollectionClient;
     GRIMText::Control::TrainingState currentState;
     GRIMText::TrainingStats currentStats;
     GRIMText::TrainingConfig currentConfig;
     
     bool serverConnected;
+    bool serverStarting;  // Flag to prevent duplicate server starts
+    bool dataCollectionServerConnected;  // Connection status for data collection server
+    bool dataCollectionActive;  // Flag to track if data collection is in progress
+    bool dataCollectionCompleted;  // Flag to track if current collection has completed (prevents re-logging)
+    bool pipelineRequestPending;  // Flag to track if a pipeline request is in flight
+    bool firstPollDone;  // Flag to detect first poll after connection for stale state detection
+    float collectionStuckTimer;  // Timer to detect stuck collection operations
+    float lastCollectionProgress;  // Last recorded collection progress
     std::string lastError;
+    std::string checkpointMergeStatus;  // Status message for checkpoint merge operations
     float pollTimer;
     float pollInterval;
+    float dataCollectionPollTimer;  // Separate poll timer for data collection server
+    float dataCollectionPollInterval;  // Poll interval for data collection (500ms to reduce load)
+    std::future<void> dataCollectionPollFuture;  // Async polling to avoid blocking main thread
+    std::atomic<bool> dataCollectionPollInProgress;  // Flag to prevent overlapping polls
     
     std::shared_ptr<UIButton> startButton;
     std::shared_ptr<UIButton> stopButton;
     std::shared_ptr<UIButton> pauseResumeButton;
     std::shared_ptr<UIButton> saveConfigButton;
     std::shared_ptr<UIButton> shutdownServerButton;
+    std::shared_ptr<UIButton> resetStatusButton;
     std::shared_ptr<UIButton> addSourceButton;
     
     // Layout boxes for organizing buttons
@@ -83,14 +100,20 @@ private:
     void loadSourcesFromJSON();
     void saveSourceToJSON(const std::string& url);
     
-    // Verification system
-    std::shared_ptr<UIButton> runVerificationButton;
+    // Unified data pipeline system (collect → verify → merge)
+    std::shared_ptr<UIButton> collectDataButton;
+    void startDataCollection();
     std::string verificationStats;
-    void runDataVerification();
     void updateVerificationStats();
     
-    // Progress bar
+    // Data size tracking
+    std::string datasetSizeInfo;
+    void updateDatasetSize();
+    
+    // Progress bars
     std::shared_ptr<UIProgressBar> trainingProgressBar;
+    std::shared_ptr<UIProgressBar> collectionProgressBar;
+    float collectionAnimTime;  // For animated progress during collection
     
     // Hardware info and estimation
     std::string hardwareInfo;

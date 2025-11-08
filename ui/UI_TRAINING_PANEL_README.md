@@ -121,27 +121,54 @@ When you add a source, it's stored as:
 
 ## Data Verification
 
-### Run Verification Button
-- **Function**: Executes `verifier.exe` to validate collected data
-- **Color**: Purple border (0xFFAA00FF)
-- **Process Management**:
-  - Spawns verifier.exe using Windows CreateProcess API
-  - Runs hidden (no console window)
-  - 60-second timeout
-  - Tracked by Process ID (logged)
-  - Proper handle cleanup
+### Run Data Pipeline Button
+- **Label**: "Run Data Pipeline"
+- **Function**: Executes unified data collection pipeline (collect → verify → merge)
+- **Color**: Cyan border (0xFF00AAFF)
+- **Process**:
+  1. **HTTP Request**: Sends POST to `/api/collection/start` on training control server
+  2. **Background Execution**: Runs asynchronously in detached thread (non-blocking UI)
+  3. **Timeout**: 10-minute timeout for long data collection operations
+  4. **State Tracking**: Sets `dataCollectionActive` flag and updates UI indicator
+  5. **Progress Updates**: Server reports progress via `collectionProgress` field (0-100%)
+  6. **Phase Logging**: Logs each pipeline phase (Collecting → Verifying → Merging)
 
-### Verification Process
-1. **Input**: Reads unverified entries from `data/collected/`
-2. **Checks**:
+### Data Pipeline Process
+1. **Collection Phase**:
+   - Reads enabled sources from `source_data.json`
+   - Fetches data from configured URLs
+   - Saves raw entries to `data/collected/`
+   - Respects `fetch_limit` and rate limiting
+
+2. **Verification Phase**:
    - Domain whitelist approval (40% weight)
    - Content quality validation (40% weight)
      - Min length: 100 characters
      - Max length: 50,000 characters
    - Source type reliability (20% weight)
    - Duplicate detection (Jaccard similarity)
-3. **Output**: Verified entries saved to `data/verified/`
-4. **Stats**: Written to `verification_stats.json`
+   - Output: Verified entries saved to `data/verified/`
+
+3. **Checkpoint Merge Phase**:
+   - Detects existing checkpoint files (`.checkpoint`)
+   - Merges with verified data
+   - Removes duplicates
+   - Outputs final `training_data.grmt`
+
+### Pipeline Status Tracking
+- **Real-time Indicator**: "🔵 Data Collection Active" appears during pipeline execution
+- **Progress Bar**: Shows collection progress (0-100%)
+- **Phase Logging**: 
+  ```
+  [19:25:12] === DATA COLLECTION INITIATED ===
+  [19:25:12] Starting unified data pipeline (collect → verify → merge)...
+  [19:25:13] >>> Sending HTTP POST to /api/collection/start...
+  [19:25:13]   → Collecting from sources...
+  [19:26:45]   → Verifying data quality...
+  [19:27:30]   → Merging with existing data...
+  [19:28:01] ✓ Data pipeline completed successfully!
+  ```
+- **Automatic Reset**: Status indicator clears when pipeline completes or errors
 
 ### Verification Stats Display
 Shows after verification completes:
@@ -209,6 +236,12 @@ All control buttons are stacked vertically at the bottom left of the panel using
 - 🟢 **"Server Online"** (Green): Connected to training server on port 11436
 - 🔴 **"Server Offline"** (Red): No connection, server not running
 
+**Data Collection Status** (Real-time):
+- 🔵 **"Data Collection Active"** (Cyan): Server is currently collecting or verifying data
+- ⚪ **"Data Collection Idle"** (Gray): No active data pipeline operations
+- **Update Frequency**: Polled every 200ms from server state
+- **Accuracy**: Based on actual server state (`TrainingState_Collecting` or `TrainingState_Verifying`)
+
 **Disconnected State**:
 - Red text: ">>> Disconnected"
 - Indicates FlatBuffer client cannot reach server
@@ -216,6 +249,8 @@ All control buttons are stacked vertically at the bottom left of the panel using
 **Training State**:
 - **Idle**: Ready to start training
 - **Training**: Active training in progress
+- **Collecting**: Gathering data from sources
+- **Verifying**: Running quality checks on collected data
 - **Paused**: Training paused, can resume
 - **Completed**: Training finished successfully
 - **Error**: Training encountered an error
@@ -294,9 +329,10 @@ totalProgress = epochProgress + batchProgress
 ```
 
 **Real-time Updates**:
-- Polls server every 1.5 seconds
-- Updates based on `TrainingStats` from server
+- Polls server every 200ms (0.2 seconds) for fast training visibility
+- Updates based on `TrainingStats` from FlatBuffer status file
 - Shows percentage: "0.0%" to "100.0%"
+- Optimized for rapid training sessions (completes in seconds on small datasets)
 
 ### Training Statistics (When Connected)
 
@@ -451,9 +487,10 @@ The panel communicates with the GRIM-text training server using FlatBuffers:
 - `UpdateConfig` - Send new configuration
 
 **Polling**:
-- Interval: 1.5 seconds
+- Interval: 200ms (0.2 seconds) - optimized for fast training visibility
 - Automatic when panel visible
-- Gets `TrainingState`, `TrainingStats`, `TrainingConfig`
+- Gets `TrainingState`, `TrainingStats`, `TrainingConfig` from FlatBuffer status file
+- Server monitors `training_status.fb` every 500ms
 
 ### Training Control Client
 
@@ -544,9 +581,11 @@ if (g_trainingPanel) {
 ## Performance Considerations
 
 ### Update Frequency
-- **Server Polling**: Every 1.5 seconds (configurable)
+
+- **Server Polling**: Every 200ms (0.2 seconds) for real-time progress visibility
 - **UI Refresh**: Every frame (~60 FPS)
 - **Log Limit**: 1000 entries to prevent memory bloat
+- **Server Status File Monitoring**: Every 500ms by training_control_server
 
 ### Resource Usage
 - **Minimal CPU**: Polling only when visible
@@ -588,6 +627,21 @@ if (g_trainingPanel) {
 ### Buttons Not Clickable
 **Fixed**: Buttons now use `drawOverlay()` instead of manual rendering
 **If Still Broken**: Check that button `update()` is called in `UITrainingPanel::update()`
+
+### Data Pipeline Returns Immediately
+**Symptom**: "Pipeline already running" message appears even though nothing is running
+**Cause**: State desynchronization between UI and server
+**Solutions**:
+1. Click "Reset Status" button to clear stale state
+2. Check server console for actual pipeline status
+3. Verify server state via status indicator (should show "Data Collection Idle")
+4. If issue persists, restart GRIM and the training control server
+
+**Technical Details**:
+- UI maintains `currentState` flag to prevent duplicate calls
+- Guard check queries server to verify actual running state
+- `dataCollectionActive` flag updated every 200ms from server state
+- Thread-safe state management prevents race conditions
 
 ### Progress Bar Stuck at 0%
 **Cause**: Server not sending stats updates
@@ -677,6 +731,22 @@ UI Training Panel
   - Dynamic slider precision
   - Warmup steps affect time
   - Improved process management for verifier
+- **v1.4.0** - Real-time progress optimization (November 6, 2025)
+  - Reduced polling interval from 1.5s to 200ms for fast training visibility
+  - Fixed working directory for train_gpu.exe to enable proper log/status file creation
+  - Added server auto-detection to prevent duplicate server instances
+  - Updated verifier path to correct build location (build_vs_cuda/Release/)
+  - Server now properly monitors training_status.fb via StatusFileMonitor (500ms interval)
+  - Progress bar now updates smoothly even for training sessions completing in seconds
+- **v1.5.0** - Unified data pipeline & status tracking (November 7, 2025)
+  - Replaced separate collect/verify buttons with unified "Run Data Pipeline" button
+  - Added real-time Data Collection Status indicator (🔵 Active / ⚪ Idle)
+  - Status indicator automatically syncs with server state every 200ms
+  - Fixed race condition preventing duplicate pipeline execution
+  - `dataCollectionActive` flag now accurately reflects server state
+  - Improved state management for collection/verification operations
+  - Enhanced guard checks with server state verification
+  - Added Reset Status button for clearing stale states
 
 ---
 
@@ -732,6 +802,6 @@ UI Training Panel
 
 ---
 
-**Last Updated**: November 6, 2025  
+**Last Updated**: November 7, 2025  
 **GRIM Version**: Development Build  
 **Author**: GRIM Development Team

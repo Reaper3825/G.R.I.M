@@ -118,7 +118,7 @@ target_include_directories(GRIM PRIVATE
     ${CMAKE_SOURCE_DIR}/wake
     ${CMAKE_SOURCE_DIR}/memory
     ${CMAKE_SOURCE_DIR}/nlp
-    ${CMAKE_SOURCE_DIR}/resources/models/GRIM-text/training/control
+    ${CMAKE_SOURCE_DIR}/control
     ${CMAKE_SOURCE_DIR}/ui
     ${CMAKE_SOURCE_DIR}/helpers
     ${CMAKE_SOURCE_DIR}/bootstrap

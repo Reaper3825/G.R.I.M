@@ -1,0 +1,115 @@
+// FlatBuffer schema for Data Collection Server Protocol
+namespace GRIM.DataCollection;
+
+// Collection modes
+enum CollectionMode : byte {
+    Full = 0,      // Full pipeline: collect + verify + merge
+    CollectOnly = 1,
+    VerifyOnly = 2,
+    MergeOnly = 3
+}
+
+// Collection status
+enum CollectionStatus : byte {
+    Idle = 0,
+    Collecting = 1,
+    Verifying = 2,
+    Merging = 3,
+    Complete = 4,
+    Failed = 5
+}
+
+// Request to start data collection
+table DataCollectionRequest {
+    mode: string;  // "full", "collect", "verify", "merge"
+}
+
+// Response from collection start
+table DataCollectionResponse {
+    success: bool;
+    message: string;
+    error: string;
+}
+
+// Status query response
+table StatusResponse {
+    status: CollectionStatus;
+    progress: float;  // 0.0 to 100.0
+    current_phase: string;
+    error_message: string;
+    is_collecting: bool;
+}
+
+// Verification log entry
+table VerificationLogEntry {
+    timestamp: string;
+    file_path: string;
+    entry_id: uint64;
+    passed: bool;
+    error_message: string;
+    validation_issues: [string];
+}
+
+// Verification statistics
+table VerificationStats {
+    total_entries: uint64;
+    passed: uint64;
+    failed: uint64;
+    warnings: uint64;
+    start_time: string;
+    end_time: string;
+    duration_seconds: float;
+}
+
+// Collection log entry
+table CollectionLogEntry {
+    timestamp: string;
+    source: string;  // URL or file path
+    entries_collected: uint64;
+    bytes_collected: uint64;
+    success: bool;
+    error_message: string;
+}
+
+// Collection statistics
+table CollectionStats {
+    total_sources: uint64;
+    sources_processed: uint64;
+    total_entries: uint64;
+    total_bytes: uint64;
+    failed_sources: uint64;
+    start_time: string;
+    end_time: string;
+    duration_seconds: float;
+}
+
+// Merge statistics
+table MergeStats {
+    input_files: uint64;
+    output_entries: uint64;
+    duplicates_removed: uint64;
+    bytes_written: uint64;
+    start_time: string;
+    end_time: string;
+    duration_seconds: float;
+}
+
+// Complete pipeline report
+table PipelineReport {
+    collection_stats: CollectionStats;
+    verification_stats: VerificationStats;
+    merge_stats: MergeStats;
+    collection_logs: [CollectionLogEntry];
+    verification_logs: [VerificationLogEntry];
+    overall_success: bool;
+    total_duration_seconds: float;
+}
+
+// Health check response
+table HealthResponse {
+    status: string;  // "ok", "busy", "error"
+    uptime_seconds: float;
+    current_operation: string;
+}
+
+root_type DataCollectionRequest;

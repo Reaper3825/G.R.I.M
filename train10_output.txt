@@ -1,0 +1,42 @@
+[2025-11-07 02:43:15] ========================================
+[2025-11-07 02:43:15]   GRIM-text Training Session
+[2025-11-07 02:43:15]   Session ID: 17625013957134013
+[2025-11-07 02:43:15] ========================================
+[2025-11-07 02:43:15] Configuration:
+[2025-11-07 02:43:15]   Data: data/training_data.grmt
+[2025-11-07 02:43:15]   Vocab: models/vocab.bin
+[2025-11-07 02:43:15]   Output: models/grim_text_10epoch.bin
+[2025-11-07 02:43:15]   Epochs: 10
+[2025-11-07 02:43:15]   Batch size: 4
+[2025-11-07 02:43:15]   Learning rate: 0.000100
+[2025-11-07 02:43:15] 
+[2025-11-07 02:43:15] Loading vocabulary...
+[2025-11-07 02:43:15] ✓ Loaded 113 tokens
+[2025-11-07 02:43:15] Loading training data...
+[DataLoader] GRMT version 1
+[DataLoader] Sequences: 1620
+[DataLoader] Vocab size: 117
+[2025-11-07 02:43:15] ✓ Loaded 1620 sequences
+[2025-11-07 02:43:15] 
+[2025-11-07 02:43:15] Train sequences: 1458
+[2025-11-07 02:43:15] Val sequences: 162
+[2025-11-07 02:43:15] 
+[2025-11-07 02:43:15] Initializing model...
+[2025-11-07 02:43:15]   vocab_size: 113
+[2025-11-07 02:43:15]   d_model: 768
+[2025-11-07 02:43:15]   num_layers: 12
+[2025-11-07 02:43:15]   num_heads: 12
+[2025-11-07 02:43:15] ✓ Model initialized
+[2025-11-07 02:43:15] 
+[2025-11-07 02:43:15] Starting training...
+[2025-11-07 02:43:15] ========================================
+[2025-11-07 02:43:15] 
+[2025-11-07 02:43:15] Epoch 1/10
+[2025-11-07 02:43:15] Step 0 | Loss: 1.9742 | PPL: 7.20 | GradNorm: 1.6609 | Tokens/sec: 320000032
+[2025-11-07 02:43:15] Step 10 | Loss: 0.9354 | PPL: 2.55 | GradNorm: 1.3217 | Tokens/sec: 5120000512
+[2025-11-07 02:43:15] Step 20 | Loss: 0.8182 | PPL: 2.27 | GradNorm: 2.7278 | Tokens/sec: 10240001024
+[2025-11-07 02:43:15] Step 30 | Loss: 2.0373 | PPL: 7.67 | GradNorm: 2.1505 | Tokens/sec: 20480002048
+[2025-11-07 02:43:15] Step 40 | Loss: 1.4102 | PPL: 4.10 | GradNorm: 0.5385 | Tokens/sec: 20480002048
+[2025-11-07 02:43:15] Step 50 | Loss: 1.9670 | PPL: 7.15 | GradNorm: 1.9449 | Tokens/sec: 10240001024
+[2025-11-07 02:43:15] Step 60 | Loss: 0.9294 | PPL: 2.53 | GradNorm: 1.6228 | Tokens/sec: 4096000000
+[2025-11-07 02:43:15] Step 70 | Loss: 1.3274 | PPL: 3.77 | GradNorm: 1.5104 | Tokens/sec: 20480002048

@@ -1,6 +1,7 @@
 #include "window_manager.hpp"
 #include "logger.hpp"
 #include "popup_ui/popup_window.hpp"
+#include "popup_ui/popup_ui.hpp"
 #include "ui/ui_root.hpp"
 #include <windowsx.h>
 
@@ -118,23 +119,14 @@ static LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     {
     case WM_NCHITTEST:
     {
-        // Get screen coordinates from lParam
-        POINT screenPt;
-        screenPt.x = GET_X_LPARAM(lParam);
-        screenPt.y = GET_Y_LPARAM(lParam);
-        
-        // Convert to client coordinates
-        POINT clientPt = screenPt;
-        ScreenToClient(hwnd, &clientPt);
-        
-        // Check with UIRoot if this position should receive input
-        if (UIRoot::get().shouldReceiveInputAt(static_cast<float>(clientPt.x), 
-                                                static_cast<float>(clientPt.y)))
+        // ✅ FIX: Always return HTCLIENT when ANY UI is visible
+        // This prevents cursor disappearing and keeps input consistent
+        if (UIRoot::get().hasVisiblePanels() || isPopupVisible())
         {
-            return HTCLIENT; // Allow input
+            return HTCLIENT; // Window is interactive - keeps cursor visible
         }
         
-        // Default to transparent (pass-through)
+        // No UI visible - completely transparent
         return HTTRANSPARENT;
     }
     

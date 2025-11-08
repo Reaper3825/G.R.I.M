@@ -1,6 +1,6 @@
 #pragma once
 #include <nlohmann/json.hpp>
-#include "../resources/models/GRIM-text/training/control/training_control_client.hpp"
+#include "../control/training_control_client.hpp"
 #include <string>
 #include <fstream>
 
