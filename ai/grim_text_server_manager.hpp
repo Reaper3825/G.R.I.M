@@ -56,6 +56,7 @@ private:
 #ifdef _WIN32
     PROCESS_INFORMATION processInfo_;
     HANDLE hProcess_;
+    HANDLE hMutex_;  // Mutex to prevent multiple instances
 #endif
 };
 

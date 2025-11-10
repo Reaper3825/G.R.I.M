@@ -79,6 +79,46 @@ void OverlayRenderer::shutdown()
     m_pixels = nullptr;
 }
 
+void OverlayRenderer::setFont(const std::string& fontName, int fontSize)
+{
+    std::lock_guard<std::mutex> lock(m_renderMutex);
+    
+    if (!m_hdcMem) {
+        LOG_ERROR("OverlayRenderer", "Cannot set font - renderer not initialized");
+        return;
+    }
+    
+    // Delete old font if it exists
+    if (m_font) {
+        DeleteObject(m_font);
+        m_font = nullptr;
+    }
+    
+    // Convert font name to wide string
+    std::wstring wFontName;
+    wFontName.reserve(fontName.length());
+    for (char c : fontName) {
+        wFontName.push_back(static_cast<wchar_t>(c));
+    }
+    
+    // Create new font
+    m_font = CreateFontW(fontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, wFontName.c_str());
+    
+    if (m_font) {
+        SelectObject(m_hdcMem, m_font);
+        LOG_DEBUG("OverlayRenderer", "Font changed to: " + fontName + " (size " + std::to_string(fontSize) + ")");
+    } else {
+        LOG_ERROR("OverlayRenderer", "Failed to create font: " + fontName);
+        // Fallback to default
+        m_font = CreateFontW(fontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Consolas");
+        SelectObject(m_hdcMem, m_font);
+    }
+}
+
 void OverlayRenderer::beginFrame()
 {
     std::lock_guard<std::mutex> lock(m_renderMutex);  // ? ADD thread safety
@@ -222,6 +262,71 @@ void OverlayRenderer::drawText(const Vec2& pos, const std::string& text, uint32_
             
             // Set alpha to make pixel visible (preserve the RGB that GDI wrote)
             pixels[idx] = (255 << 24) | (pr << 16) | (pg << 8) | pb;
+        }
+    }
+}
+
+void OverlayRenderer::drawLine(const Vec2& start, const Vec2& end, uint32_t color, float thickness)
+{
+    std::lock_guard<std::mutex> lock(m_renderMutex);
+    
+    if (!m_pixels)
+        return;
+    
+    // Extract RGBA components
+    uint8_t a = (color >> 24) & 0xFF;
+    uint8_t r = (color >> 16) & 0xFF;
+    uint8_t g = (color >> 8) & 0xFF;
+    uint8_t b = color & 0xFF;
+    
+    // Pre-multiply alpha
+    r = (r * a) / 255;
+    g = (g * a) / 255;
+    b = (b * a) / 255;
+    
+    uint32_t premultColor = (a << 24) | (r << 16) | (g << 8) | b;
+    
+    // Bresenham's line algorithm with thickness
+    float dx = end.x - start.x;
+    float dy = end.y - start.y;
+    float len = std::sqrt(dx * dx + dy * dy);
+    
+    if (len < 0.01f) {
+        // Draw a point
+        drawRect(start, {thickness, thickness}, color);
+        return;
+    }
+    
+    // Draw line as series of thick points with anti-aliasing
+    // Use more segments for smoother lines (at least 2 segments per pixel)
+    int segments = static_cast<int>(len * 2.0f) + 1;
+    uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
+    
+    for (int i = 0; i <= segments; ++i) {
+        float t = static_cast<float>(i) / segments;
+        float fx = start.x + dx * t;
+        float fy = start.y + dy * t;
+        int x = static_cast<int>(fx);
+        int y = static_cast<int>(fy);
+        
+        // Draw thick point with circular brush for smoother appearance
+        int halfThick = static_cast<int>(thickness / 2.0f) + 1;
+        float radiusSq = (thickness / 2.0f) * (thickness / 2.0f);
+        
+        for (int py = -halfThick; py <= halfThick; ++py) {
+            for (int px = -halfThick; px <= halfThick; ++px) {
+                // Use circular brush instead of square
+                float distSq = static_cast<float>(px * px + py * py);
+                if (distSq <= radiusSq) {
+                    int xx = x + px;
+                    int yy = y + py;
+                    
+                    if (xx >= 0 && xx < m_width && yy >= 0 && yy < m_height) {
+                        int idx = yy * m_width + xx;
+                        pixels[idx] = premultColor;
+                    }
+                }
+            }
         }
     }
 }

@@ -22,6 +22,10 @@ public:
     // Drawing primitives
     void drawRect(const Vec2& pos, const Vec2& size, uint32_t color);
     void drawText(const Vec2& pos, const std::string& text, uint32_t color);
+    void drawLine(const Vec2& start, const Vec2& end, uint32_t color, float thickness = 1.0f);
+    
+    // Font management
+    void setFont(const std::string& fontName, int fontSize = 16);
     
 private:
     HWND m_hwnd = nullptr;

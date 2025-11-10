@@ -171,13 +171,23 @@ public:
     }
 
     bool stopCollection() {
+        std::cout << "[DataCollectionClient] Sending stop request to server..." << std::endl;
         try {
             httplib::Client client(host_, port_);
             client.set_read_timeout(5);
 
             auto res = client.Post("/api/collection/stop", "", "application/json");
-            return res && res->status == 200;
-        } catch (...) {
+            bool success = res && (res->status == 200 || res->status == 202);
+            
+            if (success) {
+                std::cout << "[DataCollectionClient] Collection stopped successfully" << std::endl;
+            } else {
+                std::cout << "[DataCollectionClient] Stop request failed" << std::endl;
+            }
+            
+            return success;
+        } catch (const std::exception& e) {
+            std::cout << "[DataCollectionClient] Exception during stop: " << e.what() << std::endl;
             return false;
         }
     }

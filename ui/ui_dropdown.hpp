@@ -17,8 +17,17 @@ public:
     std::string getSelectedItem() const;
     std::string getLabel() const { return label; }
     
+    // Set maximum visible items before scrolling (default: 8)
+    void setMaxVisibleItems(int max) { maxVisibleItems = std::max(1, max); }
+    
     // For overlay rendering
     void drawOverlay(class OverlayRenderer& renderer, const Vec2& panelPos);
+    
+    // Separate method to draw expanded list on top of everything
+    void drawExpandedList(class OverlayRenderer& renderer, const Vec2& panelPos);
+    
+    // Check if dropdown is currently expanded
+    bool isExpanded() const { return expanded; }
 
 private:
     std::string label;
@@ -29,4 +38,9 @@ private:
     bool expanded = false;
     Vec2 dropdownPos{0, 0};
     Vec2 dropdownSize{0, 0};
+    
+    // Scrolling support
+    int maxVisibleItems = 8;  // Maximum items to show before scrolling
+    int scrollOffset = 0;     // Current scroll position (in items)
 };
+

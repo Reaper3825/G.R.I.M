@@ -25,6 +25,9 @@
     "leptonica",
     "onnxruntime-gpu",
     "flatbuffers",
-    "cpp-httplib"
+    "cpp-httplib",
+    "gumbo",
+    "ffmpeg",
+    "simdjson"
   ]
 }

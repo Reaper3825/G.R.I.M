@@ -48,6 +48,9 @@ public:
     HWND getHWND() const { return m_hwnd; }
     uint32_t getWidth() const { return m_width; }
     uint32_t getHeight() const { return m_height; }
+    
+    // Get renderer instance for font updates
+    OverlayRenderer& getRenderer() { return m_renderer; }
 
 private:
     UIRoot() = default;

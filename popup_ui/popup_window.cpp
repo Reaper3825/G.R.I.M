@@ -1,6 +1,6 @@
 #include "pch.hpp"
 #include "popup_window.hpp"
-#include "ui/console_ui.hpp"
+#include "ui/ui_root.hpp"
 #include <windows.h>
 #include <stb/stb_image.h>
 #include "core/ui_sync.hpp"
@@ -45,7 +45,11 @@ static LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     case WM_LBUTTONDOWN:
     {
         LOG_DEBUG("PopupWindow", "Popup clicked — showing GRIM console");
-        GRIMConsole::showConsole();
+        auto consolePanel = UIRoot::get().getPanel("Console");
+        if (consolePanel) {
+            consolePanel->setVisible(true);
+            LOG_DEBUG("PopupWindow", "Console panel shown");
+        }
         return 0;
     }
 

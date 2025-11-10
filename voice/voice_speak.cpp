@@ -192,7 +192,10 @@ namespace Voice {
             si.dwFlags |= STARTF_USESTDHANDLES;
 
             // ? Launch XTTS v2 bridge with GPU support and configured speaker
-            std::string cmd = "python D:/G.R.I.M/resources/python/coqui_bridge.py --persistent --model tts_models/multilingual/multi-dataset/xtts_v2 --gpu --speaker " + g_speaker + " --language " + g_language;
+            // Use the virtual environment Python interpreter to ensure dependencies are available
+            std::string pythonExe = "D:/G.R.I.M/.venv/Scripts/python.exe";
+            std::string scriptPath = "D:/G.R.I.M/resources/python/coqui_bridge.py";
+            std::string cmd = pythonExe + " " + scriptPath + " --persistent --model tts_models/multilingual/multi-dataset/xtts_v2 --gpu --speaker " + g_speaker + " --language " + g_language;
             std::vector<char> mutableCmd(cmd.begin(), cmd.end());
             mutableCmd.push_back('\0');
 

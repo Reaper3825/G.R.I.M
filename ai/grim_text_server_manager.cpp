@@ -35,6 +35,7 @@ GRIMTextServerManager::GRIMTextServerManager()
       running_(false)
 #ifdef _WIN32
       , hProcess_(nullptr)
+      , hMutex_(nullptr)
 #endif
 {
 #ifdef _WIN32
@@ -74,6 +75,23 @@ bool GRIMTextServerManager::start() {
         LOG_DEBUG("GRIMTextServer", "Server already running");
         return true;
     }
+    
+    // Check if another instance is already running
+#ifdef _WIN32
+    hMutex_ = CreateMutexA(nullptr, FALSE, "Global\\GRIMTextServerMutex");
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        LOG_DEBUG("GRIMTextServer", "Another GRIM-text server is already running");
+        if (checkHealth(2000)) {
+            LOG_DEBUG("GRIMTextServer", "Existing server is healthy, reusing it");
+            running_ = true;  // Mark as running so we don't try to stop it
+            return true;
+        }
+        LOG_DEBUG("GRIMTextServer", "Existing server not responding, killing stale processes");
+        // Kill any orphaned grim_text_server processes
+        system("taskkill /F /IM grim_text_server.exe >nul 2>&1");
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+#endif
     
     LOG_DEBUG("GRIMTextServer", "Starting GRIM-text server...");
     
@@ -125,7 +143,7 @@ bool GRIMTextServerManager::start() {
         nullptr,
         nullptr,
         FALSE,
-        CREATE_NEW_CONSOLE | CREATE_NO_WINDOW,
+        CREATE_NO_WINDOW,  // Don't create new console - inherit parent's process group
         nullptr,
         serverExe.parent_path().string().c_str(),
         &si,
@@ -203,6 +221,12 @@ void GRIMTextServerManager::shutdown() {
         
         hProcess_ = nullptr;
         ZeroMemory(&processInfo_, sizeof(processInfo_));
+    }
+    
+    // Release the mutex
+    if (hMutex_) {
+        CloseHandle(hMutex_);
+        hMutex_ = nullptr;
     }
 #endif
     

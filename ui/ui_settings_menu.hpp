@@ -35,6 +35,9 @@ private:
     
     // ? NEW: Helper to scan for available speaker embeddings
     std::vector<std::string> getSpeakerEmbeddings();
+    
+    // ? NEW: Helper to scan for available fonts
+    std::vector<std::string> getFontList();
 
     nlohmann::json config;
     nlohmann::json pendingConfig;

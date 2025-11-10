@@ -17,6 +17,7 @@
 #include "core/plugin_manager.hpp"
 #include "core/input_parser.hpp"
 #include "core/platform_input.hpp"  // ✅ NEW: Cross-platform input
+#include "core/platform_clipboard.hpp"  // ✅ NEW: Cross-platform clipboard
 #include "helpers/mouse.hpp"
 #include "helpers/key.hpp"
 #include "helpers/cerr_suppressor.hpp"
@@ -33,7 +34,12 @@
 #include <crtdbg.h>
 #include <chrono>
 #include <thread>
+#include <csignal>
+#include <atomic>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #define CHECK_HEAP() _CrtCheckMemory()
 
@@ -48,6 +54,49 @@ extern SystemInfo g_systemInfo;
 std::shared_ptr<UITrainingPanel> g_trainingPanel;
 
 // ============================================================
+// Signal Handler for Clean Shutdown
+// ============================================================
+
+std::atomic<bool> g_shutdownRequested{false};
+
+#ifdef _WIN32
+BOOL WINAPI consoleHandler(DWORD signal) {
+    if (signal == CTRL_C_EVENT || signal == CTRL_CLOSE_EVENT || signal == CTRL_BREAK_EVENT) {
+        LOG_PHASE("Shutdown signal received, cleaning up...", true);
+        g_shutdownRequested = true;
+        
+        // Stop all child processes
+        LOG_DEBUG("Shutdown", "Stopping GRIM-text servers...");
+        GRIM::stopGRIMTextServer();
+        
+        LOG_DEBUG("Shutdown", "Stopping training control server...");
+        GRIM::stopTrainingServer();
+        
+        // Give a moment for servers to shut down
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        
+        LOG_PHASE("Cleanup complete, exiting...", true);
+        std::exit(0);  // Exit cleanly after cleanup
+    }
+    return FALSE;
+}
+#else
+void signalHandler(int signal) {
+    if (signal == SIGINT || signal == SIGTERM) {
+        LOG_PHASE("Shutdown signal received, cleaning up...", true);
+        g_shutdownRequested = true;
+        
+        // Stop all child processes
+        GRIM::stopGRIMTextServer();
+        GRIM::stopTrainingServer();
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        std::exit(0);
+    }
+}
+#endif
+
+// ============================================================
 // Main entry point
 // ============================================================
 int main(int argc, char* argv[])
@@ -56,6 +105,20 @@ int main(int argc, char* argv[])
     initLogger("grim.log");
     LOG_PHASE("Initializing G.R.I.M", true);
 
+    // ======================================================
+    // 0. Install signal handlers for clean shutdown
+    // ======================================================
+#ifdef _WIN32
+    if (!SetConsoleCtrlHandler(consoleHandler, TRUE)) {
+        LOG_ERROR("Main", "Failed to set console handler");
+    } else {
+        LOG_DEBUG("Main", "Signal handler installed (Ctrl+C will clean up child processes)");
+    }
+#else
+    std::signal(SIGINT, signalHandler);
+    std::signal(SIGTERM, signalHandler);
+    LOG_DEBUG("Main", "Signal handlers installed");
+#endif
 
     // ======================================================
     // 1. Start WebSocket + logger
@@ -70,6 +133,10 @@ int main(int argc, char* argv[])
     // ✅ NEW: Initialize cross-platform input system
     PlatformInput::initialize();
     LOG_PHASE("Platform input initialized", true);
+
+    // ✅ NEW: Initialize cross-platform clipboard system
+    PlatformClipboard::initialize();
+    LOG_PHASE("Platform clipboard initialized", true);
 
     Mouse::initialize();
     LOG_PHASE("Mouse initialized", true);
@@ -304,7 +371,7 @@ int main(int argc, char* argv[])
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(frameEnd - frameStart);
         
         // ✅ LOG: Frame timing breakdown if frame is slow
-        if (elapsed.count() > 20) { // More than 20ms = potential stutter
+        if (elapsed.count() > 30) { // More than 20ms = potential stutter
             auto inputMs = std::chrono::duration_cast<std::chrono::microseconds>(inputCaptureEnd - inputCaptureStart).count() / 1000.0;
             auto uiUpdateMs = std::chrono::duration_cast<std::chrono::microseconds>(uiUpdateEnd - uiUpdateStart).count() / 1000.0;
             auto uiDrawMs = std::chrono::duration_cast<std::chrono::microseconds>(uiDrawEnd - uiDrawStart).count() / 1000.0;
@@ -345,6 +412,9 @@ int main(int argc, char* argv[])
     
     // ✅ NEW: Shutdown cross-platform input system
     PlatformInput::shutdown();
+    
+    // ✅ NEW: Shutdown cross-platform clipboard system
+    PlatformClipboard::shutdown();
 
     UIRoot::get().shutdown();
     WindowManager::shutdown();

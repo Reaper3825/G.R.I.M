@@ -2,7 +2,6 @@
 #include "logger.hpp"
 #include "voice/voice.hpp"
 #include "ui/ui_helpers.hpp"
-#include "ui/console_ui.hpp"
 #include "ui/ui_root.hpp"
 #include "commands/commands_core.hpp"
 #include "ai/ai.hpp"

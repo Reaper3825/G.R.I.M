@@ -2,6 +2,7 @@
 #include "overlay_renderer.hpp"
 #include "logger.hpp"
 #include "input_parser.hpp"
+#include "ui_root.hpp"  // ? NEW: For accessing renderer
 #include "../voice/voice_speak.hpp"  // ? NEW: For updating speaker dynamically
 #include <fstream>
 #include <functional>
@@ -57,6 +58,39 @@ std::vector<std::string> UISettingsMenu::getSpeakerEmbeddings() {
     }
     
     return embeddings;
+}
+
+// ? NEW: Scan for available fonts in resources/fonts directory
+std::vector<std::string> UISettingsMenu::getFontList() {
+    std::vector<std::string> fonts;
+    
+    // Add system fonts first
+    fonts.push_back("Consolas");
+    fonts.push_back("Courier New");
+    fonts.push_back("Arial");
+    fonts.push_back("Segoe UI");
+    
+    try {
+        std::string fontDir = "D:/G.R.I.M/resources/fonts";
+        
+        if (std::filesystem::exists(fontDir)) {
+            for (const auto& entry : std::filesystem::directory_iterator(fontDir)) {
+                if (entry.path().extension() == ".ttf" || entry.path().extension() == ".otf") {
+                    std::string fontName = entry.path().stem().string();
+                    // Add only if not already in list
+                    if (std::find(fonts.begin(), fonts.end(), fontName) == fonts.end()) {
+                        fonts.push_back(fontName);
+                    }
+                }
+            }
+        }
+        
+        LOG_DEBUG("UISettingsMenu", "Found " + std::to_string(fonts.size()) + " fonts");
+    } catch (const std::exception& e) {
+        LOG_ERROR("UISettingsMenu", std::string("Failed to scan fonts: ") + e.what());
+    }
+    
+    return fonts;
 }
 
 void UISettingsMenu::loadConfig() {
@@ -158,6 +192,21 @@ void UISettingsMenu::applyChanges() {
         std::string newSpeaker = pendingConfig["voice"]["speaker"].get<std::string>();
         Voice::setSpeaker(newSpeaker);
         LOG_DEBUG("UISettingsMenu", "Voice speaker updated to: " + newSpeaker);
+    }
+    
+    // ? NEW: Update UI font if it changed
+    if (pendingConfig.contains("ui") && pendingConfig["ui"].is_object() &&
+        pendingConfig["ui"].contains("font_name")) {
+        std::string newFont = pendingConfig["ui"]["font_name"].get<std::string>();
+        int fontSize = 16; // Default
+        if (pendingConfig["ui"].contains("font_size")) {
+            fontSize = pendingConfig["ui"]["font_size"].get<int>();
+        }
+        
+        // Get UIRoot renderer and update font
+        auto& uiRoot = UIRoot::get();
+        uiRoot.getRenderer().setFont(newFont, fontSize);
+        LOG_DEBUG("UISettingsMenu", "UI font updated to: " + newFont + " (size " + std::to_string(fontSize) + ")");
     }
     
     LOG_DEBUG("UISettingsMenu", "Settings applied and saved successfully");
@@ -488,6 +537,39 @@ void UISettingsMenu::createWidgets() {
         );
         personalityButton->setSize(widgetWidth, widgetHeight);
         scrollBox->addChild(personalityButton);
+        
+        // ===== Dropdown 1: Font Selection =====
+        std::vector<std::string> availableFonts = getFontList();
+        std::string currentFont = "Consolas";
+        if (pendingConfig.contains("ui") && pendingConfig["ui"].is_object() &&
+            pendingConfig["ui"].contains("font_name")) {
+            currentFont = pendingConfig["ui"]["font_name"].get<std::string>();
+        }
+        
+        // Find current font index
+        int fontIndex = 0;
+        for (size_t i = 0; i < availableFonts.size(); ++i) {
+            if (availableFonts[i] == currentFont) {
+                fontIndex = static_cast<int>(i);
+                break;
+            }
+        }
+        
+        auto fontDropdown = std::make_shared<UIDropdown>(
+            "Font:",
+            availableFonts,
+            fontIndex,
+            [this](int idx, const std::string& fontName) {
+                if (!pendingConfig.contains("ui") || !pendingConfig["ui"].is_object()) {
+                    pendingConfig["ui"] = nlohmann::json::object();
+                }
+                pendingConfig["ui"]["font_name"] = fontName;
+                hasChanges = true;
+                LOG_DEBUG("UISettingsMenu", "Font selected: " + fontName);
+            }
+        );
+        fontDropdown->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(fontDropdown);
         
         // ===== Slider 1: Temperature =====
         float temperature = 0.0f;

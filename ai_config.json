@@ -26,6 +26,15 @@
         "use_mmap": true
     },
     "ollama_url": "http://127.0.0.1:11434",
+    "paths": {
+        "grim_text": {
+            "checkpoints": "resources/models/GRIM-text/checkpoints",
+            "logs": "resources/models/GRIM-text/training/logs",
+            "model": "ddddddddd",
+            "training_data": "",
+            "vocab": "help"
+        }
+    },
     "personality": {
         "custom_prompt": "You are GRIM. Be brief and direct. Give concise answers without unnecessary elaboration. Keep responses under 2 sentences when possible.",
         "use_custom_prompt": true
@@ -36,10 +45,10 @@
     "training": {
         "config": {
             "batch_size": 8,
-            "data_path": "data/training_data.grmt",
-            "epochs": 50,
-            "learning_rate": 9.999999747378752e-05,
-            "max_seq_len": 1024,
+            "data_path": "data/tokenized/train.bin",
+            "epochs": 10,
+            "learning_rate": 9.999999974752427e-07,
+            "max_seq_len": 512,
             "output_path": "models/grim_text_trained.bin",
             "use_flash_attention": true,
             "use_gpu": true,
@@ -48,6 +57,10 @@
         },
         "server_host": "127.0.0.1",
         "server_port": 11436
+    },
+    "ui": {
+        "font_name": "DejaVuSans-Bold",
+        "font_size": 16
     },
     "vision_model": "llama3.2-vision:11b",
     "voice": {

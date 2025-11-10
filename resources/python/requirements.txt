@@ -21,6 +21,9 @@ librosa>=0.10.0
 # Protocol buffers (compatible version)
 protobuf==3.20.3
 
+# Prevent setuptools upgrade that would break librosa's pkg_resources usage
+setuptools<81
+
 # Utilities
 pydub>=0.25.1
 inflect>=5.6.0

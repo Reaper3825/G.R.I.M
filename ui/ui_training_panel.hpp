@@ -5,6 +5,7 @@
 #include "ui_progress_bar.hpp"
 #include "ui_layout_box.hpp"
 #include "ui_inputbox.hpp"
+#include "ui_graph.hpp"
 #include "ui_training_config.hpp"
 #include "../control/training_control_client.hpp"
 #include "../control/data_collection_client.hpp"
@@ -106,9 +107,25 @@ private:
     std::string verificationStats;
     void updateVerificationStats();
     
+    // GRIM-text path configuration inputs
+    std::shared_ptr<UIInputBox> vocabPathInput;
+    std::shared_ptr<UIInputBox> modelPathInput;
+    std::shared_ptr<UIInputBox> trainingDataPathInput;
+    std::shared_ptr<UIInputBox> checkpointsPathInput;
+    std::shared_ptr<UIInputBox> logsPathInput;
+    std::string vocabPathBuffer;
+    std::string modelPathBuffer;
+    std::string trainingDataPathBuffer;
+    std::string checkpointsPathBuffer;
+    std::string logsPathBuffer;
+    void loadPathsFromConfig();
+    void savePathsToConfig();
+    
     // Data size tracking
     std::string datasetSizeInfo;
+    std::string checkpointStatsInfo;  // Info about collected checkpoints
     void updateDatasetSize();
+    void updateCheckpointStats();
     
     // Progress bars
     std::shared_ptr<UIProgressBar> trainingProgressBar;
@@ -148,4 +165,17 @@ private:
     };
     std::vector<LossPoint> lossHistory;
     size_t maxLossHistory;
+    
+    // System resource monitoring
+    std::shared_ptr<UIGraph> resourceMonitorGraph;
+    float resourceSampleTimer;
+    float resourceSampleInterval;  // Sample every 0.5 seconds
+    std::vector<DataPoint> cpuHistory;
+    std::vector<DataPoint> memoryHistory;
+    std::vector<DataPoint> gpuHistory;
+    int resourceSampleCount;
+    int maxResourceSamples;
+    
+    void updateResourceMonitoring(float dt);
+    void sampleSystemResources();
 };

@@ -6,6 +6,7 @@
 #include "ui/ui_root.hpp"        // ✅ NEW: For checking UI visibility
 #include "popup_ui/popup_ui.hpp" // ✅ NEW: For checking popup visibility
 #include "platform_input.hpp"    // ✅ NEW: Cross-platform input abstraction
+#include "platform_clipboard.hpp" // ✅ NEW: Cross-platform clipboard abstraction
 
 #include <algorithm>
 #include <cctype>
@@ -70,6 +71,11 @@ void InputState::captureFromHWND(HWND hwnd)
     
     // Reset per-frame data
     textInput.clear();
+    pastedText.clear();
+    copyRequested = false;
+    pasteRequested = false;
+    cutRequested = false;
+    
     for (int i = 0; i < 3; ++i)
     {
         mousePressed[i] = false;
@@ -119,11 +125,32 @@ void InputState::captureFromHWND(HWND hwnd)
     ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
     shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
     alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+    
+    // ✅ NEW: Detect clipboard shortcuts (Ctrl+C, Ctrl+V, Ctrl+X)
+    if (ctrl && !shift && !alt) {
+        // Ctrl+C - Copy
+        if (keyPressed['C']) {
+            copyRequested = true;
+        }
+        // Ctrl+V - Paste
+        else if (keyPressed['V']) {
+            pasteRequested = true;
+            pastedText = PlatformClipboard::getText();
+        }
+        // Ctrl+X - Cut
+        else if (keyPressed['X']) {
+            cutRequested = true;
+        }
+    }
 }
 
 void InputState::resetFrameState()
 {
     textInput.clear();
+    pastedText.clear();
+    copyRequested = false;
+    pasteRequested = false;
+    cutRequested = false;
     
     for (int i = 0; i < 3; ++i)
     {

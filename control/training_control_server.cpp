@@ -1150,17 +1150,33 @@ void setupAPI(httplib::Server& server) {
                 std::filesystem::path exePath(exePathStr);
                 
                 // Build command line with correct arguments for full pipeline
-                // Output to training/data so training can directly use the files
+                // Use absolute paths to avoid nested directory issues
                 std::string cmdLine = "\"" + exePath.string() + "\" " + mode;
                 
-                // Add output directory for merge step (relative to DataCollection dir)
+                // Add output directory for merge step (absolute path to training/data)
                 if (mode == "full" || mode == "merge") {
-                    cmdLine += " --output-dir \"../../../training/data\"";
+                    std::string trainingDataPath = GRIM::Training::getSafeResourcePath(
+                        "resources/models/GRIM-text/training/data",
+                        GRIM::Training::PathResolutionMode::Relative
+                    );
+                    if (!trainingDataPath.empty()) {
+                        cmdLine += " --output-dir \"" + trainingDataPath + "\"";
+                    } else {
+                        cmdLine += " --output-dir \"../../../training/data\"";  // Fallback
+                    }
                 }
                 
-                // Add config path for collect step (relative to DataCollection dir)  
+                // Add config path for collect step (absolute path to source_data.json)
                 if (mode == "full" || mode == "collect") {
-                    cmdLine += " --config \"../../source_data.json\"";
+                    std::string configPath = GRIM::Training::getSafeResourcePath(
+                        "resources/models/GRIM-text/DataCollection/source_data.json",
+                        GRIM::Training::PathResolutionMode::Relative
+                    );
+                    if (!configPath.empty()) {
+                        cmdLine += " --config \"" + configPath + "\"";
+                    } else {
+                        cmdLine += " --config \"../../source_data.json\"";  // Fallback
+                    }
                 }
                 
                 std::cout << "[Data Collection] Command line: " << cmdLine << std::endl;

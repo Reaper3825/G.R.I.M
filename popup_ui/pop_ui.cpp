@@ -5,7 +5,7 @@
 #include "logger.hpp"
 #include "pch.hpp"
 #include "voice/voice_speak.hpp"
-#include "ui/console_ui.hpp"
+#include "ui/ui_root.hpp"
 #include <windows.h>
 #include <atomic>
 #include <thread>
@@ -163,7 +163,11 @@ void runPopupUI(int width, int height)
             if (hwndUnderCursor == g_hwnd)
             {
                 LOG_DEBUG("PopupUI", "Popup clicked — showing GRIM console");
-                GRIMConsole::showConsole();
+                auto consolePanel = UIRoot::get().getPanel("Console");
+                if (consolePanel) {
+                    consolePanel->setVisible(true);
+                    LOG_DEBUG("PopupUI", "Console panel shown");
+                }
             }
         }
         Mouse::endFrame();

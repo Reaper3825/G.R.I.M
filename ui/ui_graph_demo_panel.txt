@@ -1,0 +1,322 @@
+#include "ui_graph_demo_panel.hpp"
+#include "overlay_renderer.hpp"
+#include "logger.hpp"
+#include <random>
+#include <sstream>
+#include <iomanip>
+
+UIGraphDemoPanel::UIGraphDemoPanel() 
+    : UIPanel("Graph Widget Demo", true)
+{
+    position = {100, 100};
+    size = {1200, 800};
+    setBackground(0xE0181818);
+    
+    initGraphs();
+    initControls();
+    
+    LOG_DEBUG("UIGraphDemoPanel", "Demo panel initialized");
+}
+
+void UIGraphDemoPanel::initGraphs() {
+    // Line Graph - Training Loss Simulation
+    lineGraph = std::make_shared<UIGraph>("Training Loss Over Time", GraphType::Line);
+    lineGraph->setPosition(20, 80);
+    lineGraph->setSize(550, 250);
+    lineGraph->setData(generateTrendData(50, -0.05f));
+    lineGraph->getConfig().showGrid = true;
+    lineGraph->getConfig().animated = true;
+    lineGraph->getConfig().primaryColor = 0xFF00AAFF;
+    lineGraph->getConfig().lineThickness = 2.5f;
+    lineGraph->setOnPointHover([this](int index, const DataPoint& point) {
+        statusMessage = "Line Graph - Point " + std::to_string(index) + 
+                       ": " + std::to_string(point.value);
+    });
+    addChild(lineGraph);
+    
+    // Bar Graph - Monthly Performance
+    barGraph = std::make_shared<UIGraph>("Monthly Performance", GraphType::Bar);
+    barGraph->setPosition(600, 80);
+    barGraph->setSize(550, 250);
+    barGraph->setData(generateCategoricalData());
+    barGraph->getConfig().showLabels = true;
+    barGraph->getConfig().showValues = true;
+    barGraph->getConfig().barWidth = 0.7f;
+    barGraph->getConfig().animated = true;
+    barGraph->setOnPointClick([this](int index, const DataPoint& point) {
+        statusMessage = "Bar clicked: " + point.label + " = " + std::to_string(point.value);
+    });
+    addChild(barGraph);
+    
+    // Pie Chart - Resource Distribution
+    pieChart = std::make_shared<UIGraph>("Resource Distribution", GraphType::Pie);
+    pieChart->setPosition(20, 360);
+    pieChart->setSize(350, 350);
+    std::vector<DataPoint> pieData = {
+        DataPoint(45.0f, "Training", 0xFF00AAFF),
+        DataPoint(25.0f, "Inference", 0xFFFF6600),
+        DataPoint(20.0f, "Data Load", 0xFF00FF00),
+        DataPoint(10.0f, "Other", 0xFFAA00FF)
+    };
+    pieChart->setData(pieData);
+    pieChart->getConfig().showLegend = true;
+    pieChart->getConfig().showValues = true;
+    addChild(pieChart);
+    
+    // Multi-Line Graph - Metrics Comparison
+    multiLineGraph = std::make_shared<UIGraph>("Training Metrics", GraphType::MultiLine);
+    multiLineGraph->setPosition(400, 360);
+    multiLineGraph->setSize(750, 300);
+    multiLineGraph->addSeries("Train Loss", generateTrendData(40, -0.04f), 0xFF00AAFF);
+    multiLineGraph->addSeries("Val Loss", generateTrendData(40, -0.035f), 0xFFFF6600);
+    
+    std::vector<DataPoint> accuracy;
+    for (int i = 0; i < 40; ++i) {
+        accuracy.push_back(DataPoint(100.0f * (1.0f - std::exp(-i * 0.08f))));
+    }
+    multiLineGraph->addSeries("Accuracy", accuracy, 0xFF00FF00);
+    multiLineGraph->getConfig().showLegend = true;
+    multiLineGraph->getConfig().showGrid = true;
+    multiLineGraph->getConfig().lineThickness = 2.0f;
+    addChild(multiLineGraph);
+    
+    // Real-time Graph - Live Data Simulation
+    realtimeGraph = std::make_shared<UIGraph>("Real-time CPU Usage", GraphType::Area);
+    realtimeGraph->setPosition(20, 720);
+    realtimeGraph->setSize(1130, 150);
+    realtimeGraph->setAxisRange(0.0f, 100.0f);
+    realtimeGraph->getConfig().maxDataPoints = 100;
+    realtimeGraph->getConfig().useDownsampling = true;
+    realtimeGraph->getConfig().primaryColor = 0xFF00FFAA;
+    realtimeGraph->getConfig().showGrid = false;
+    realtimeGraph->getConfig().showLabels = false;
+    addChild(realtimeGraph);
+}
+
+void UIGraphDemoPanel::initControls() {
+    // Switch Type Button
+    btnSwitchType = std::make_shared<UIButton>("Switch Type", [this]() {
+        switchGraphType();
+    });
+    btnSwitchType->setPosition(20, 40);
+    btnSwitchType->setSize(120, 30);
+    addChild(btnSwitchType);
+    
+    // Add Data Button
+    btnAddData = std::make_shared<UIButton>("Add Data", [this]() {
+        addRandomData();
+    });
+    btnAddData->setPosition(150, 40);
+    btnAddData->setSize(120, 30);
+    addChild(btnAddData);
+    
+    // Clear Data Button
+    btnClearData = std::make_shared<UIButton>("Clear Data", [this]() {
+        clearAllData();
+    });
+    btnClearData->setPosition(280, 40);
+    btnClearData->setSize(120, 30);
+    addChild(btnClearData);
+    
+    // Toggle Animation Button
+    btnToggleAnimation = std::make_shared<UIButton>("Toggle Anim", [this]() {
+        toggleAnimation();
+    });
+    btnToggleAnimation->setPosition(410, 40);
+    btnToggleAnimation->setSize(120, 30);
+    addChild(btnToggleAnimation);
+    
+    // Randomize Button
+    btnRandomize = std::make_shared<UIButton>("Randomize", [this]() {
+        randomizeData();
+    });
+    btnRandomize->setPosition(540, 40);
+    btnRandomize->setSize(120, 30);
+    addChild(btnRandomize);
+}
+
+void UIGraphDemoPanel::update(const InputState& input, float dt) {
+    if (!isVisible()) return;
+    
+    UIPanel::update(input, dt);
+    
+    // Update real-time graph
+    updateRealtimeGraph(dt);
+}
+
+void UIGraphDemoPanel::drawOverlay(OverlayRenderer& renderer) {
+    if (!isVisible()) return;
+    
+    UIPanel::drawOverlay(renderer);
+    
+    // Draw status message at bottom
+    if (!statusMessage.empty()) {
+        renderer.drawText({position.x + 20, position.y + size.y - 25}, 
+                         statusMessage, 0xFFFFFFFF);
+    }
+    
+    // Draw performance info
+    std::ostringstream oss;
+    oss << "Graph Types: Line, Bar, Pie, Multi-Line, Area | "
+        << "Interactive: Hover & Click | Performance Optimized";
+    renderer.drawText({position.x + 20, position.y + 10}, oss.str(), 0xFF888888);
+}
+
+// ============================================================
+// Control Handlers
+// ============================================================
+
+void UIGraphDemoPanel::switchGraphType() {
+    const GraphType types[] = {
+        GraphType::Line,
+        GraphType::Bar,
+        GraphType::Area,
+        GraphType::Scatter,
+        GraphType::HorizontalBar
+    };
+    
+    currentGraphType = (currentGraphType + 1) % 5;
+    lineGraph->setGraphType(types[currentGraphType]);
+    
+    statusMessage = "Switched to graph type: " + std::to_string(currentGraphType);
+    LOG_DEBUG("UIGraphDemoPanel", statusMessage);
+}
+
+void UIGraphDemoPanel::addRandomData() {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<> dis(20.0, 80.0);
+    
+    float value = dis(gen);
+    lineGraph->addDataPoint(value, "Point " + std::to_string(dataPointCounter++));
+    
+    statusMessage = "Added data point: " + std::to_string(value);
+}
+
+void UIGraphDemoPanel::clearAllData() {
+    lineGraph->clearData();
+    barGraph->clearData();
+    pieChart->clearData();
+    multiLineGraph->clearSeries();
+    realtimeGraph->clearData();
+    
+    dataPointCounter = 0;
+    statusMessage = "All data cleared";
+    LOG_DEBUG("UIGraphDemoPanel", "Data cleared");
+}
+
+void UIGraphDemoPanel::toggleAnimation() {
+    bool currentState = lineGraph->getConfig().animated;
+    
+    lineGraph->getConfig().animated = !currentState;
+    barGraph->getConfig().animated = !currentState;
+    multiLineGraph->getConfig().animated = !currentState;
+    
+    statusMessage = std::string("Animation ") + (!currentState ? "enabled" : "disabled");
+}
+
+void UIGraphDemoPanel::randomizeData() {
+    // Randomize line graph
+    lineGraph->setData(generateRandomData(50));
+    
+    // Randomize bar graph
+    barGraph->setData(generateCategoricalData());
+    
+    // Randomize pie chart
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<> dis(10.0, 50.0);
+    
+    std::vector<DataPoint> pieData = {
+        DataPoint(dis(gen), "Training", 0xFF00AAFF),
+        DataPoint(dis(gen), "Inference", 0xFFFF6600),
+        DataPoint(dis(gen), "Data Load", 0xFF00FF00),
+        DataPoint(dis(gen), "Other", 0xFFAA00FF)
+    };
+    pieChart->setData(pieData);
+    
+    statusMessage = "Data randomized";
+}
+
+void UIGraphDemoPanel::updateRealtimeGraph(float dt) {
+    updateTimer += dt;
+    
+    // Update every 100ms
+    if (updateTimer >= 0.1f) {
+        updateTimer = 0.0f;
+        
+        // Simulate CPU usage with some randomness
+        static float cpuBase = 40.0f;
+        static float cpuTrend = 0.0f;
+        
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_real_distribution<> dis(-5.0, 5.0);
+        
+        cpuTrend += dis(gen) * 0.1f;
+        cpuTrend = std::max(-10.0f, std::min(10.0f, cpuTrend));
+        
+        float cpuUsage = cpuBase + cpuTrend + dis(gen);
+        cpuUsage = std::max(0.0f, std::min(100.0f, cpuUsage));
+        
+        realtimeGraph->addDataPoint(cpuUsage);
+    }
+}
+
+// ============================================================
+// Data Generators
+// ============================================================
+
+std::vector<DataPoint> UIGraphDemoPanel::generateTrendData(int points, float trend) {
+    std::vector<DataPoint> data;
+    data.reserve(points);
+    
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<> dis(-5.0, 5.0);
+    
+    float startValue = 100.0f;
+    
+    for (int i = 0; i < points; ++i) {
+        float value = startValue * std::exp(i * trend) + dis(gen);
+        data.push_back(DataPoint(value, "Step " + std::to_string(i)));
+    }
+    
+    return data;
+}
+
+std::vector<DataPoint> UIGraphDemoPanel::generateRandomData(int points, float min, float max) {
+    std::vector<DataPoint> data;
+    data.reserve(points);
+    
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<> dis(min, max);
+    
+    for (int i = 0; i < points; ++i) {
+        data.push_back(DataPoint(dis(gen), "Point " + std::to_string(i)));
+    }
+    
+    return data;
+}
+
+std::vector<DataPoint> UIGraphDemoPanel::generateCategoricalData() {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<> dis(60.0, 100.0);
+    
+    std::vector<DataPoint> data;
+    
+    const char* months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun"};
+    const uint32_t colors[] = {
+        0xFF00AA00, 0xFF00AA00, 0xFF00AA00,  // Green
+        0xFFFFAA00,                           // Yellow
+        0xFF00AA00, 0xFF00FF00                // Green, Bright green
+    };
+    
+    for (int i = 0; i < 6; ++i) {
+        data.push_back(DataPoint(dis(gen), months[i], colors[i]));
+    }
+    
+    return data;
+}

@@ -14,7 +14,7 @@
 
 ConsolePanel::ConsolePanel()
     : UIPanel("Console", true),  // Enable dragging
-      settingsButton("? Settings", []() {  // ? FIX: Safer lambda that doesn't capture 'this'
+      settingsButton(std::make_shared<UIButton>("⚙ Settings", []() {  // ✅ FIX: Safer lambda that doesn't capture 'this'
           // Open settings panel directly without command system
           auto settingsPanel = UIRoot::get().getPanel("Settings");
           if (settingsPanel) {
@@ -23,8 +23,8 @@ ConsolePanel::ConsolePanel()
           } else {
               LOG_DEBUG("ConsolePanel", "Settings panel not found - may not be initialized yet");
           }
-      }),
-      trainingButton("⚡ Training", []() {
+      })),
+      trainingButton(std::make_shared<UIButton>("⚡ Training", []() {
           // Open training panel
           auto trainingPanel = UIRoot::get().getPanel("GRIM-text Training Control");
           if (trainingPanel) {
@@ -33,19 +33,53 @@ ConsolePanel::ConsolePanel()
           } else {
               LOG_DEBUG("ConsolePanel", "Training panel not found - may not be initialized yet");
           }
-      })
+      }))
 {
     position = { 100, 300 };
     size = { 900, 500 };
     setBackground(0xE0101010);
+    
+    // Initialize console input box
+    consoleInput = std::make_shared<UIInputBox>(&inputBuffer);
+    consoleInput->setPlaceholder("Type command...");
+    consoleInput->setVisible(true);
+    
+    // ✅ Bind the OnTextSubmitted delegate to handle command execution
+    consoleInput->OnTextSubmitted.Bind([this](const std::string& submittedText) {
+        if (!submittedText.empty()) {
+            LOG_DEBUG("ConsolePanel", "Executing command via delegate: " + submittedText);
+            
+            auto& history = getConsoleHistory();
+            
+            // Add separator before command
+            history.push("  -----------------------------------------------------------", 0xFF00FF00);
+            
+            // Add input to history with timestamp
+            std::string timestamp = "[" + getCurrentTime() + "]";
+            history.push("  " + timestamp + " > " + submittedText, 0xFF00FFFF);
+            
+            // Execute command (handleCommand adds results to history internally)
+            handleCommand(submittedText);
+            
+            // Add separator after output
+            history.push("  -----------------------------------------------------------", 0xFF444444);
+            history.push("", 0xFF000000);
+        }
+    });
+    
+    LOG_DEBUG("ConsolePanel", "Console input box initialized with delegate binding");
     setBorder(0xFF00FF00);
     
-    // ? Position buttons in top-right corner of console
-    settingsButton.setPosition(position.x + size.x - 110, position.y + 5);
-    settingsButton.setSize(100, 25);
+    // ✅ Position buttons in top-right corner of console
+    if (settingsButton) {
+        settingsButton->setPosition(position.x + size.x - 110, position.y + 5);
+        settingsButton->setSize(100, 25);
+    }
     
-    trainingButton.setPosition(position.x + size.x - 220, position.y + 5);
-    trainingButton.setSize(100, 25);
+    if (trainingButton) {
+        trainingButton->setPosition(position.x + size.x - 220, position.y + 5);
+        trainingButton->setSize(100, 25);
+    }
     
     // Add stylized welcome message to GLOBAL history
     auto& history = getConsoleHistory();
@@ -68,78 +102,31 @@ void ConsolePanel::update(const InputState& input, float dt)
     // Call base panel update to handle drag/resize
     UIPanel::update(input, dt);
 
-    // ? Update button positions to follow panel
-    settingsButton.setPosition(position.x + size.x - 110, position.y + 5);
-    trainingButton.setPosition(position.x + size.x - 220, position.y + 5);
-    
-    // ? Update buttons (handle clicks)
-    settingsButton.update(input, dt);
-    trainingButton.update(input, dt);
-
-    // Update caret blink
-    uint64_t now = GetTickCount64();
-    if (now - lastCaretToggle > 500) {
-        caretVisible = !caretVisible;
-        lastCaretToggle = now;
+    // ✅ Update button positions to follow panel
+    if (settingsButton) {
+        settingsButton->setPosition(position.x + size.x - 110, position.y + 5);
+        settingsButton->update(input, dt);
+    }
+    if (trainingButton) {
+        trainingButton->setPosition(position.x + size.x - 220, position.y + 5);
+        trainingButton->update(input, dt);
     }
 
     if (!isVisible()) return;
+    
+    // ✅ Update console input box
+    if (consoleInput) {
+        // Position at bottom of console panel
+        float inputY = position.y + size.y - 42;
+        consoleInput->setPosition(position.x + 40, inputY);
+        consoleInput->setSize(size.x - 50, 30);
+        consoleInput->update(input, dt);
+    }
 
-    // Use Key class for reliable key press detection
-    // Handle Enter key - execute command
-    if (Key::wasPressed(KeyCode::Enter)) {
-        if (!inputBuffer.empty()) {
-            LOG_DEBUG("ConsolePanel", "Executing command: " + inputBuffer);
-            
-            auto& history = getConsoleHistory();
-            
-            // Add separator before command
-            history.push("  -----------------------------------------------------------", 0xFF00FF00);
-            
-            // Add input to history with timestamp
-            std::string timestamp = "[" + getCurrentTime() + "]";
-            history.push("  " + timestamp + " > " + inputBuffer, 0xFF00FFFF);
-            
-            // Execute command (handleCommand adds results to history internally)
-            std::string cmd = inputBuffer;
-            inputBuffer.clear();
-            
-            // Call the command handler
-            handleCommand(cmd);
-            
-            // Add separator after output
-            history.push("  -----------------------------------------------------------", 0xFF444444);
-            history.push("", 0xFF000000);
-        }
-    }
-    // Handle Backspace
-    else if (Key::wasPressed(KeyCode::Backspace)) {
-        if (!inputBuffer.empty())
-            inputBuffer.pop_back();
-    }
     // Handle Escape - close console
-    else if (Key::wasPressed(KeyCode::Escape)) {
+    if (Key::wasPressed(KeyCode::Escape)) {
         setVisible(false);
         LOG_DEBUG("ConsolePanel", "Console closed via ESC key");
-    }
-    // Handle Up Arrow - history previous
-    else if (Key::wasPressed(KeyCode::Up)) {
-        // TODO: Implement command history navigation
-        LOG_DEBUG("ConsolePanel", "History navigation not yet implemented");
-    }
-    // Handle Down Arrow - history next
-    else if (Key::wasPressed(KeyCode::Down)) {
-        // TODO: Implement command history navigation
-    }
-    
-    // Handle text input from WM_CHAR messages
-    if (!input.textInput.empty()) {
-        for (char ch : input.textInput) {
-            // Filter out control characters except space
-            if (ch >= 32 && ch < 127) {
-                inputBuffer.push_back(ch);
-            }
-        }
     }
 }
 
@@ -150,32 +137,14 @@ void ConsolePanel::drawOverlay(OverlayRenderer& renderer)
     // First, let the base panel draw its background, border, and title
     UIPanel::drawOverlay(renderer);
     
-    // ? Draw buttons
-    // Settings button
-    Vec2 settingsPos = settingsButton.getPosition();
-    Vec2 settingsSize = settingsButton.getSize();
+    // ✅ Draw buttons using their drawOverlay method
+    if (settingsButton) {
+        settingsButton->drawOverlay(renderer, position);
+    }
     
-    renderer.drawRect(settingsPos, settingsSize, 0xFF202020);  // Dark background
-    renderer.drawRect(settingsPos, {settingsSize.x, 2}, 0xFF00FFFF);  // Top border (cyan)
-    renderer.drawRect(settingsPos, {2, settingsSize.y}, 0xFF00FFFF);  // Left border
-    renderer.drawRect({settingsPos.x, settingsPos.y + settingsSize.y - 2}, {settingsSize.x, 2}, 0xFF00FFFF);  // Bottom
-    renderer.drawRect({settingsPos.x + settingsSize.x - 2, settingsPos.y}, {2, settingsSize.y}, 0xFF00FFFF);  // Right
-    
-    float settingsTextY = settingsPos.y + (settingsSize.y / 2.0f) - 8;
-    renderer.drawText({settingsPos.x + 8, settingsTextY}, "? Settings", 0xFF00FFFF);  // Cyan text
-    
-    // Training button
-    Vec2 trainingPos = trainingButton.getPosition();
-    Vec2 trainingSize = trainingButton.getSize();
-    
-    renderer.drawRect(trainingPos, trainingSize, 0xFF202020);  // Dark background
-    renderer.drawRect(trainingPos, {trainingSize.x, 2}, 0xFF00FF00);  // Top border (green)
-    renderer.drawRect(trainingPos, {2, trainingSize.y}, 0xFF00FF00);  // Left border
-    renderer.drawRect({trainingPos.x, trainingPos.y + trainingSize.y - 2}, {trainingSize.x, 2}, 0xFF00FF00);  // Bottom
-    renderer.drawRect({trainingPos.x + trainingSize.x - 2, trainingPos.y}, {2, trainingSize.y}, 0xFF00FF00);  // Right
-    
-    float trainingTextY = trainingPos.y + (trainingSize.y / 2.0f) - 8;
-    renderer.drawText({trainingPos.x + 8, trainingTextY}, "⚡ Training", 0xFF00FF00);  // Green text
+    if (trainingButton) {
+        trainingButton->drawOverlay(renderer, position);
+    }
     
     // Now draw console-specific content on top
     
@@ -208,7 +177,7 @@ void ConsolePanel::drawOverlay(OverlayRenderer& renderer)
         y += 20.0f;
     }
 
-    // Draw input area
+    // ✅ Draw input area using UIInputBox
     float inputY = position.y + size.y - 50;
     
     // Input area background with border
@@ -218,12 +187,10 @@ void ConsolePanel::drawOverlay(OverlayRenderer& renderer)
     // Draw input prompt
     renderer.drawText({position.x + 18, inputY + 10}, ">", 0xFF00FF00);
     
-    // Draw input buffer with cursor
-    std::string displayInput = inputBuffer;
-    if (caretVisible)
-        displayInput += "|";
-    
-    renderer.drawText({position.x + 35, inputY + 10}, displayInput, 0xFF00FFFF);
+    // ✅ Draw the UIInputBox
+    if (consoleInput) {
+        consoleInput->drawOverlay(renderer, position);
+    }
     
     // Draw help text
     renderer.drawText({position.x + 15, inputY + 28}, "ESC: Close", 0xFF666666);

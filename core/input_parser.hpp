@@ -29,6 +29,12 @@ struct InputState {
     // ? NEW: Mouse input filtering flag
     bool mouseInputEnabled = true;  // If false, mouse events are suppressed
 
+    // ? NEW: Clipboard operations state
+    bool copyRequested = false;   // Ctrl+C pressed this frame
+    bool pasteRequested = false;  // Ctrl+V pressed this frame
+    bool cutRequested = false;    // Ctrl+X pressed this frame
+    std::string pastedText;       // Text pasted this frame (if any)
+
     static InputState capture();                // Existing static method
     void captureFromHWND(HWND hwnd);            // New method for overlay
     void resetFrameState();                     // Clears transient inputs

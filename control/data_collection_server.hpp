@@ -106,7 +106,13 @@ private:
         server.Post("/api/collection/stop", [this](const httplib::Request& req, httplib::Response& res) {
             std::cout << "[DataCollectionServer] Stop request received" << std::endl;
             state_.shouldStop = true;
-            res.set_content("{\"status\":\"stopping\"}", "application/json");
+            state_.isCollecting = false;  // Force reset state
+            state_.progress = 0.0f;
+            {
+                std::lock_guard<std::mutex> lock(state_.stateMutex);
+                state_.currentPhase = "Stopped";
+            }
+            res.set_content("{\"status\":\"stopped\"}", "application/json");
         });
 
         // Shutdown server endpoint

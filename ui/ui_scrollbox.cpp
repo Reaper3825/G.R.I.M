@@ -1,6 +1,7 @@
 #include "ui_scrollbox.hpp"
 #include "overlay_renderer.hpp"
 #include "input_parser.hpp"
+#include "ui_dropdown.hpp"  // For checking if child is a dropdown
 #include "helpers/mouse.hpp"
 #include "logger.hpp"
 #include <algorithm>
@@ -217,6 +218,28 @@ void UIScrollBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
         renderer.drawRect(sbPos, {1, sbSize.y}, 0xFF7A7A7A);
         renderer.drawRect({sbPos.x, sbPos.y + sbSize.y - 1}, {sbSize.x, 1}, 0xFF2A2A2A);
         renderer.drawRect({sbPos.x + sbSize.x - 1, sbPos.y}, {1, sbSize.y}, 0xFF2A2A2A);
+    }
+    
+    // SECOND PASS: Draw expanded dropdown lists on top of everything
+    for (auto& child : children) {
+        if (!child->isVisible()) continue;
+        
+        // Check if this is a dropdown widget
+        auto dropdown = std::dynamic_pointer_cast<UIDropdown>(child);
+        if (dropdown && dropdown->isExpanded()) {
+            Vec2 childPos = child->getPosition();
+            Vec2 absolutePos = {position.x + childPos.x, position.y + childPos.y - scrollOffset};
+            
+            // Temporarily update position
+            Vec2 originalPos = childPos;
+            child->setPosition(absolutePos.x, absolutePos.y);
+            
+            // Draw the expanded list
+            dropdown->drawExpandedList(renderer, panelPos);
+            
+            // Restore position
+            child->setPosition(originalPos.x, originalPos.y);
+        }
     }
 }
 

@@ -41,6 +41,7 @@ void rememberShortcut(const std::string& phrase, const std::string& command);
 void getSafeResourcePath(std::string& outPath);
 void incrementUsageCount(const std::string& command);
 
+
 // Path resolution modes
 enum class PathResolutionMode {
     Absolute,  // Treat as absolute path
@@ -49,7 +50,7 @@ enum class PathResolutionMode {
 };
 
 std::string getSafeResourcePath(const std::string& target, PathResolutionMode mode = PathResolutionMode::Relative);
-
+std::vector<std::string> listFiles(const std::string& folderPath);
 // ====================================================
 // Global logging helper (system-level, not user history)
 // ====================================================

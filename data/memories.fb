@@ -35,17 +35,17 @@
       "context": "monitor",
       "id": "",
       "intent": "inform",
-      "normalized": "Significant screen change detected (17% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: trainingprogressproblem.md - G.R.I.M (Workspace) - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: SY} File Edit\n\nQ EXPLORER,\n\n\\ G.R.LM (WORKSPACE)\n\nQ vGRiM &\n\n© resources\n\nse apr meniytrtoy ours\n\nd& test_alpha.b64\n£\n\nSelection View Go Run Terminal\n\n\"= test_alpha.png\n\n> scripts\n> STEM\n> Stock\nCe “ .\n> TrainingServer_Scripts\n\nRe v ui i]\n€ console_panelcpp\n¢ console_panelhpp\nA ¢ console_ui.cpp\n¢ console_ui-hpp\n@ ¢ embedded_shader.cpp\n¢ overlay renderer.cpp\n& © overlay renderer hpp\n¥ trainingprogressproblem.md 94,U\nA © ui_button.cpp\n¢ ui_buttonhpp\n(Hs © ui_config:hpp\n€ ui_conso... (3727 total chars)\n",
-      "raw": "Significant screen change detected (17% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: trainingprogressproblem.md - G.R.I.M (Workspace) - Visual Studio Code (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: SY} File Edit\n\nQ EXPLORER,\n\n\\ G.R.LM (WORKSPACE)\n\nQ vGRiM &\n\n© resources\n\nse apr meniytrtoy ours\n\nd& test_alpha.b64\n£\n\nSelection View Go Run Terminal\n\n\"= test_alpha.png\n\n> scripts\n> STEM\n> Stock\nCe “ .\n> TrainingServer_Scripts\n\nRe v ui i]\n€ console_panelcpp\n¢ console_panelhpp\nA ¢ console_ui.cpp\n¢ console_ui-hpp\n@ ¢ embedded_shader.cpp\n¢ overlay renderer.cpp\n& © overlay renderer hpp\n¥ trainingprogressproblem.md 94,U\nA © ui_button.cpp\n¢ ui_buttonhpp\n(Hs © ui_config:hpp\n€ ui_conso... (3727 total chars)\n",
+      "normalized": "Significant screen change detected (16% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: S0F\nSunny\n\nOF administrator Windows Pom X = + Y\n\n(Uzez5-11-18 15:\nWH=8 .822600ns\n\n(2825-11-18 15:26:22] [DEBUG] [MainLoop] SLOW FRAME (33ms): Input=6.adeseans, UI Update=8.0398eens, UI\n\n-022880ns\n(zez5-11-18 15:\ni=8.23e8ans\n(zez5-11-18 1:\nH=8.923800ns\n\n38] [DEBUG] [HainLoop] SLOW\n\n(zez5-11-18 1:\n\n[2925-11-18 1 1] [DEBUG] [PerceptionContext] Stored visual context in memory:\n(zez5-11-18 1:\n\n[2925-11-18 1 2] [DEBUG] [UIInputBox] Input box gained focus\n\n[2625-11-18 15:26:34] [DEBUG] [UIFocusManager]... (2415 total chars)\n",
+      "raw": "Significant screen change detected (16% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: S0F\nSunny\n\nOF administrator Windows Pom X = + Y\n\n(Uzez5-11-18 15:\nWH=8 .822600ns\n\n(2825-11-18 15:26:22] [DEBUG] [MainLoop] SLOW FRAME (33ms): Input=6.adeseans, UI Update=8.0398eens, UI\n\n-022880ns\n(zez5-11-18 15:\ni=8.23e8ans\n(zez5-11-18 1:\nH=8.923800ns\n\n38] [DEBUG] [HainLoop] SLOW\n\n(zez5-11-18 1:\n\n[2925-11-18 1 1] [DEBUG] [PerceptionContext] Stored visual context in memory:\n(zez5-11-18 1:\n\n[2925-11-18 1 2] [DEBUG] [UIInputBox] Input box gained focus\n\n[2625-11-18 15:26:34] [DEBUG] [UIFocusManager]... (2415 total chars)\n",
       "source": "grim.internal",
       "tags": [
         "visual-context",
         "screen-capture",
-        "IDE/Code Editor",
-        "Code.exe",
+        "Terminal/Console",
+        "WindowsTerminal.exe",
         "monitor-3"
       ],
-      "timestamp": 1762637484,
+      "timestamp": 1762806463,
       "type": "event"
     }
   ]
