@@ -5,6 +5,11 @@ project(TrainingControlServer LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Set prefix path to vcpkg_installed for package discovery
+if(NOT DEFINED CMAKE_PREFIX_PATH AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../vcpkg_installed/x64-windows")
+    set(CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../vcpkg_installed/x64-windows" CACHE PATH "vcpkg installed packages")
+endif()
+
 # Find dependencies
 find_package(flatbuffers CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)

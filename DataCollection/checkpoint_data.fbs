@@ -1,0 +1,32 @@
+// FlatBuffers schema for GRIM checkpoint data
+// Optimized for fast serialization/deserialization during data collection
+namespace GRIMCheckpoint;
+
+//======================================================//
+//  Checkpoint Entry - Minimal, Fast Schema
+//======================================================//
+
+table CheckpointEntry {
+    content: string (required);              // Text content
+    source_url: string (required);           // Where it came from
+    source_type: string;                     // "github", "web", "arxiv", etc.
+    reliability_score: float = 0.7;          // Default reliability
+    fetch_timestamp: uint64;                 // Unix timestamp when collected
+    content_hash: uint64;                    // Hash for deduplication
+}
+
+//======================================================//
+//  Checkpoint File - Collection of entries
+//======================================================//
+
+table Checkpoint {
+    entries: [CheckpointEntry];              // All collected entries
+    checkpoint_id: uint32;                   // Checkpoint number
+    total_entries: uint32;                   // Total count
+    created_timestamp: uint64;               // When checkpoint was created
+    collection_session_id: string;           // Session identifier
+}
+
+root_type Checkpoint;
+file_identifier "GRIM";
+file_extension "ckpt";

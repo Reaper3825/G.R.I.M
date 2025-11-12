@@ -1,0 +1,13 @@
+=== GRIM Data Split Information ===
+
+Train:      106 samples (79.6992%)
+Validation: 13 samples (9.77444%)
+Test:       14 samples (10.5263%)
+Total:      133 samples
+
+Configuration:
+  Random seed:    42
+  Strategy:       Random
+  Shuffle:        Yes
+
+Generated: 2025-11-08 23:29:49

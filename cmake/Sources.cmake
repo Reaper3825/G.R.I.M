@@ -36,7 +36,12 @@ file(GLOB PERCEPTION_SOURCES "perception/*.cpp")
 file(GLOB PERCEPTION_HEADERS "perception/*.hpp")
 file(GLOB VISION_SOURCES "vision/*.cpp")
 file(GLOB VISION_HEADERS "vision/*.hpp")
-
+file(GLOB DataCollection_SOURCES "DataCollection/*.cpp")
+file(GLOB DataCollection_HEADERS "DataCollection/*.hpp")
+# Exclude standalone entry point files (these have main() functions)
+list(FILTER DataCollection_SOURCES EXCLUDE REGEX "main_data_collection\\.cpp$")
+list(FILTER DataCollection_SOURCES EXCLUDE REGEX "merge_checkpoints\\.cpp$")
+list(FILTER DataCollection_SOURCES EXCLUDE REGEX "main_verifier\\.cpp$")
 # =========================================================
 # GRIM-text Model: Standalone Build (2025-11-05)
 # =========================================================
@@ -74,6 +79,7 @@ set(GRIM_SOURCES
     ${PERCEPTION_SOURCES}
     ${VISION_SOURCES}
     ${GRIM_GPU_SOURCES}
+    ${DataCollection_SOURCES}
 )
 
 set(GRIM_HEADERS
@@ -104,4 +110,5 @@ set(GRIM_HEADERS
     ${EXTERNAL_COLLECTOR_HEADERS}
     ${PERCEPTION_HEADERS}
     ${VISION_HEADERS}
+    ${DataCollection_HEADERS}
 )

@@ -135,4 +135,12 @@ table DataCollectionResponse {
     error:string;
 }
 
+table ServerShutdownRequest {
+}
+
+table ServerShutdownResponse {
+    success:bool;
+    message:string;
+}
+
 root_type StatusResponse;

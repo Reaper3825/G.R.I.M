@@ -11,17 +11,20 @@ The Training Control Panel provides a comprehensive interface for managing the G
 The panel is divided into two main columns:
 
 ### Left Column (35%) - Configuration & Data Management
-- **Training Configuration** - Adjustable hyperparameters
+- **Training Configuration** - Adjustable hyperparameters (5 sliders)
 - **Data Source Management** - Add custom data sources
-- **Data Verification** - Quality control for training data
-- **Control Buttons** - Start/Stop/Pause/Close
+- **Data Pipeline** - Unified collect/verify/merge process
+- **Training Data Path** - Specify dataset for training (only path exposed in UI)
 
 ### Right Column (65%) - Monitoring & Logs
-- **Server Status** - Connection state and training state
-- **Hardware Information** - GPU/CPU/RAM details
-- **Training Progress** - Real-time progress bar and statistics
-- **Verbose Output** - Reserved for detailed metrics
-- **Training Logs** - Real-time log messages with timestamps
+- **Server Status** - Connection state and data collection state
+- **Training State** - Current training phase
+- **Training Statistics** - Epoch, batch, loss, perplexity
+- **System Resource Monitoring** - Real-time CPU/Memory/GPU graph
+- **Training Progress Bars** - Dual progress bars (training & data collection)
+- **Verbose Output** - Reserved for future detailed metrics
+- **Training Logs** - Real-time scrollable log messages with timestamps
+- **Control Buttons** - Start/Stop/Pause/Reset/Close (bottom left)
 
 ---
 
@@ -31,26 +34,29 @@ The panel is divided into two main columns:
 
 All sliders feature **dynamic precision** based on their value range:
 
-#### **Epochs** (Range: 1 - 100)
+#### **Epochs** (Range: 1 - 50)
 - **Purpose**: Number of complete passes through the training dataset
 - **Default**: 10
-- **Precision**: 2 decimal places
+- **Precision**: Integer (0 decimal places)
 - **Impact**: More epochs = longer training, better convergence (risk of overfitting)
 - **Time Effect**: Linear - doubles epochs = doubles training time
 
-#### **Batch Size** (Range: 1 - 64)
+#### **Batch Size** (Range: 1 - 128)
 - **Purpose**: Number of samples processed simultaneously
 - **Default**: 8
-- **Precision**: 2 decimal places
+- **Precision**: Integer (0 decimal places)
 - **GPU Impact**: 
   - Larger batches = better GPU utilization
   - Too large = out of memory errors
 - **Time Effect**: 
   - Larger batches = fewer batches per epoch = faster
-  - Batch size 16+ gets 10% efficiency gain
-  - Batch size <4 gets 20% slowdown
+  - Batch size 32+ gets 50% efficiency gain
+  - Batch size 16+ gets 20% efficiency gain
+  - Batch size 8+ gets standard speed
+  - Batch size 4+ gets 30% slowdown
+  - Batch size <4 gets 50% slowdown
 
-#### **Learning Rate** (Range: 0.00001 - 0.01)
+#### **Learning Rate** (Range: 0.000001 - 0.01)
 - **Purpose**: Step size for gradient descent optimization
 - **Default**: 0.0001
 - **Precision**: 6 decimal places (e.g., 0.000100)
@@ -80,9 +86,10 @@ All sliders feature **dynamic precision** based on their value range:
 
 ### Save Config Button
 - **Function**: Saves current configuration to `ai_config.json`
-- **Color**: Blue border (0xFF00AAFF)
+- **Color**: Cyan border (0xFF00AAFF)
 - **Persistence**: Configuration survives GRIM restarts
 - **Auto-save**: Also triggered when starting training
+- **Location**: Below configuration sliders in left panel scrollable area
 
 ---
 
@@ -119,19 +126,29 @@ When you add a source, it's stored as:
 
 ---
 
-## Data Verification
+## Data Collection & Verification
+
+### Data Collection Status Indicator
+- **Display**: Shows real-time status above the data pipeline button
+- **States**:
+  - **"🔵 [ACTIVE] Data Collection"** (Cyan): Pipeline is currently running (collecting/verifying)
+  - **"🟢 [COMPLETED] Data Collection"** (Green): Pipeline finished successfully (≥99% progress)
+  - **"⚪ [IDLE] Data Collection"** (Gray): No active pipeline operations
+- **Update Frequency**: Polled every 200ms from server state
+- **Progress Display**: Shows percentage when active or completed (e.g., "(85%)")
 
 ### Run Data Pipeline Button
 - **Label**: "Run Data Pipeline"
 - **Function**: Executes unified data collection pipeline (collect → verify → merge)
 - **Color**: Cyan border (0xFF00AAFF)
+- **Location**: Left panel scrollable area, below data source input
 - **Process**:
-  1. **HTTP Request**: Sends POST to `/api/collection/start` on training control server
+  1. **In-Process Execution**: Runs via DataCollectionManager (no HTTP, no external server)
   2. **Background Execution**: Runs asynchronously in detached thread (non-blocking UI)
-  3. **Timeout**: 10-minute timeout for long data collection operations
-  4. **State Tracking**: Sets `dataCollectionActive` flag and updates UI indicator
-  5. **Progress Updates**: Server reports progress via `collectionProgress` field (0-100%)
-  6. **Phase Logging**: Logs each pipeline phase (Collecting → Verifying → Merging)
+  3. **State Tracking**: Sets `dataCollectionActive` flag and updates UI indicator
+  4. **Progress Updates**: Manager reports progress via getStatus() (0-100%)
+  5. **Phase Logging**: Logs each pipeline phase (Collecting → Verifying → Merging)
+  6. **Auto-Completion Detection**: Automatically detects when pipeline finishes (progress ≥99%)
 
 ### Data Pipeline Process
 
@@ -161,31 +178,48 @@ When you add a source, it's stored as:
 - Data collection → verification → training flow validated
 - Model training completes and saves output file
 
+### Data Collection Progress Bar
+- **Display**: Cyan-colored progress bar in right panel
+- **Range**: 0-100%
+- **Updates**: Smooth animated progress (30% interpolation to prevent visual jumps)
+- **Resets**: Automatically resets to 0% when new collection starts
+- **Completion**: Holds at final progress when collection completes
+- **Current Phase Display**: Shows pipeline phase text below bar (e.g., "Phase: Collecting from sources...")
+
 ### Pipeline Status Tracking
-- **Real-time Indicator**: "🔵 Data Collection Active" appears during pipeline execution
-- **Progress Bar**: Shows collection progress (0-100%)
+- **Real-time Indicator**: Status changes based on actual pipeline state
 - **Phase Logging**: 
   ```
-  [19:25:12] === DATA COLLECTION INITIATED ===
-  [19:25:12] Starting unified data pipeline (collect → verify → merge)...
-  [19:25:13] >>> Sending HTTP POST to /api/collection/start...
+  [19:25:12] Starting data collection pipeline...
   [19:25:13]   → Collecting from sources...
   [19:26:45]   → Verifying data quality...
   [19:27:30]   → Merging with existing data...
-  [19:28:01] ✓ Data pipeline completed successfully!
+  [19:28:01] ✓ Data collection completed successfully!
   ```
-- **Automatic Reset**: Status indicator clears when pipeline completes or errors
+- **Automatic Reset**: Status indicator updates when pipeline completes or errors
+- **Progress Tracking**: UI polls collectionManager->getStatus() every frame during update cycle
+
+### Dataset Information Display
+Shows in left panel scrollable area:
+- **Dataset Size Info**: Displays number of processed/verified samples in training-ready dataset
+  - Color: Bright cyan (0xFF00FFAA)
+  - Example: "Dataset: 1,234 samples ready"
+- **Checkpoint Stats Info**: Shows raw collected data before merging
+  - Color: Gray (0xFF888888)
+  - Example: "Checkpoints: 567 raw entries"
+  - Displayed in right panel above dataset info
 
 ### Verification Stats Display
-Shows after verification completes:
+Shows in left panel after pipeline completes (if verification_stats.json exists):
 ```
 Processed: 150
 Passed: 90
 Failed: 60
 ```
 - **Processed**: Total entries checked
-- **Passed**: Entries meeting reliability threshold (0.8)
+- **Passed**: Entries meeting reliability threshold
 - **Failed**: Rejected entries (domain/quality/duplicate)
+- **Color**: Gray (0xFF808080)
 
 ---
 
@@ -194,40 +228,59 @@ Failed: 60
 All control buttons are stacked vertically at the bottom left of the panel using a VBox layout.
 
 ### Start Training Button
-- **Label**: "▶ Start"
-- **Color**: Green when enabled (0xFF00FF00), Gray when disabled
-- **Enabled When**: Server connected AND state is Idle
+- **Label**: "▶ Start Training"
+- **Color**: Green border (0xFF00FF00)
+- **Size**: 140px wide × 35px tall
+- **Enabled When**: Always clickable (internal validation handles state checks)
 - **Function**:
-  1. Auto-starts GRIM-text server if not running (500ms delay for initialization)
-  2. Validates server connection
-  3. Sends training start command via FlatBuffer protocol
-  4. Updates configuration from sliders
-  5. Begins training session
-- **Hotkey**: None (use mouse click)
+  1. Checks server connection, attempts reconnect if disconnected
+  2. Validates training is not already in progress (checks server state)
+  3. Updates configuration from sliders
+  4. Validates training data exists (train.bin or .grmt file)
+  5. Loads paths from ai_config.json
+  6. Sends training start command via TrainingControlClient
+  7. Resets progress bar and statistics
+- **Smart State Handling**: Detects and corrects UI/server state desync
+- **Data Validation**: Warns if no training data found, suggests running data pipeline
 
 ### Stop Training Button
-- **Label**: "⏹ Stop"
-- **Color**: Red when enabled (0xFFFF0000), Gray when disabled
-- **Enabled When**: Server connected AND (Training OR Paused)
+- **Label**: "⏹ Stop Training"
+- **Color**: Red border (0xFFFF0000)
+- **Size**: 140px wide × 35px tall
+- **Enabled When**: Always clickable (internal validation handles state checks)
 - **Function**:
-  1. Validates current state
-  2. Sends stop command to server
-  3. Resets progress bar to 0%
-  4. Transitions state to Idle
-- **Safety**: Prevents accidental stops when not training
+  1. Validates server connection
+  2. Checks if training is actually running
+  3. Sends stop command to server via TrainingControlClient
+  4. Logs stop request
+- **Safety**: Internal checks prevent stopping when not training
 
 ### Pause/Resume Button
-- **Label**: "⏸ Pause" or "▶ Resume"
-- **Color**: Orange when enabled (0xFFFFAA00), Gray when disabled
-- **Enabled When**: Server connected AND (Training OR Paused)
+- **Label**: "⏸ Pause Training" or "▶ Resume Training"
+- **Color**: Orange border (0xFFFFAA00)
+- **Size**: 140px wide × 35px tall
+- **Enabled When**: Always clickable (internal validation handles state checks)
 - **Function**:
-  - **When Training**: Sends pause command, label changes to "▶ Resume"
-  - **When Paused**: Sends resume command, label changes to "⏸ Pause"
-- **State Aware**: Button text updates automatically
+  - **When Training**: Sends pause command via TrainingControlClient
+  - **When Paused**: Sends resume command via TrainingControlClient
+- **State Aware**: Button text updates automatically based on currentState
+
+### Reset Status Button
+- **Label**: "Reset Status"
+- **Color**: Yellow border (0xFFFFAA00)
+- **Size**: 140px wide × 35px tall
+- **Always Enabled**: Can always reset status
+- **Function**: 
+  1. Calls resetState() to clear all training state flags
+  2. Clears checkpoint merge status
+  3. Removes stale training_status.fb file if it exists
+  4. Logs reset action
+- **Use Case**: Clear stale state when UI desynchronizes from server
 
 ### Close Panel Button
-- **Label**: "✖ Close"
-- **Color**: Blue border (0xFF00AAFF)
+- **Label**: "Close Panel"
+- **Color**: Cyan border (0xFF00AAFF)
+- **Size**: 140px wide × 35px tall
 - **Always Enabled**: Can always close the panel
 - **Function**: Hides the panel (`setVisible(false)`)
 - **Server Behavior**: Does NOT stop the training server
@@ -237,58 +290,58 @@ All control buttons are stacked vertically at the bottom left of the panel using
 
 ## Right Panel - Monitoring
 
-### Server Status (Top)
+### Server Status (Top Right)
 
-**Connection Status**:
-
-- 🟢 **"Server Online"** (Green): Connected to training server on port 11436
-- 🔴 **"Server Offline"** (Red): No connection, server not running
+**Training Server Connection Status**:
+- 🟢 **"[ONLINE] Training"** (Green): Connected to training server
+- 🔴 **"[OFFLINE] Training"** (Red): No connection, server not running
+- **Location**: Fixed at top of right panel (not scrollable)
+- **Update Frequency**: Polled every 200ms via client->isServerRunning()
 
 **Data Collection Status** (Real-time):
-
-- 🔵 **"Data Collection Active"** (Cyan): Server is currently collecting or verifying data
-- ⚪ **"Data Collection Idle"** (Gray): No active data pipeline operations
-- **Update Frequency**: Polled every 200ms from server state
-- **Accuracy**: Based on actual server state (`TrainingState_Collecting` or `TrainingState_Verifying`)
-
-**Disconnected State**:
-
-- Red text: ">>> Disconnected"
-- Indicates FlatBuffer client cannot reach server
+- 🔵 **"[ACTIVE] Data Collection"** (Cyan): Pipeline is currently running
+- 🟢 **"[COMPLETED] Data Collection"** (Green): Pipeline finished (progress ≥99%)
+- ⚪ **"[IDLE] Data Collection"** (Gray): No active pipeline operations
+- **Location**: Below server status in right panel
+- **Update Frequency**: Updated every frame from dataCollectionActive flag
+- **Accuracy**: Flag set by startDataCollection(), cleared when pipeline completes
 
 **Training State**:
+- **Display**: "State: [STATE]" with color coding
+- **Possible States**:
+  - **Idle**: Ready to start training (White)
+  - **Training**: Active training in progress (Green)
+  - **Collecting**: Gathering data from sources (Cyan)
+  - **Verifying**: Running quality checks on collected data (Yellow)
+  - **Paused**: Training paused, can resume (Orange)
+  - **Completed**: Training finished successfully (Green)
+  - **Error**: Training encountered an error (Red)
+- **Location**: Below data collection status
 
-- **Idle**: Ready to start training
-- **Training**: Active training in progress
-- **Collecting**: Gathering data from sources
-- **Verifying**: Running quality checks on collected data
-- **Paused**: Training paused, can resume
-- **Completed**: Training finished successfully
-- **Error**: Training encountered an error
+### System Resource Monitoring
 
-### Hardware Information
+**Resource Monitoring Graph**:
+- **Type**: Area graph with 3 data series
+- **Series**:
+  - **CPU Usage** (Cyan - 0xFF00AAFF): Percentage of CPU utilization
+  - **Memory Usage** (Green - 0xFF00FF00): Percentage of RAM used
+  - **GPU Usage** (Orange - 0xFFFF6600): Percentage of GPU utilization
+- **Y-Axis Range**: 0-100%
+- **Sample Rate**: 500ms (2 samples per second)
+- **History**: 60 samples (30 seconds of data)
+- **Features**:
+  - Auto-scaling disabled (fixed 0-100% range)
+  - Grid lines enabled (5 horizontal lines)
+  - Legend enabled (bottom of graph)
+  - Axis labels enabled
+  - Line thickness: 2px
+- **Location**: Right panel, below training state
+- **Size**: Full right panel width - 20px × 200px height
 
-Displays real-time system capabilities from `g_systemInfo`:
-
-**GPU Information**:
-```
-GPU: NVIDIA GeForce RTX 3080 Ti (12287 MB VRAM)
-CUDA: Available
-```
-- Shows GPU model name and VRAM capacity
-- CUDA status indicates GPU acceleration availability
-
-**CPU Information**:
-```
-CPU: 20 cores
-```
-- Total logical processor count
-
-**RAM Information**:
-```
-RAM: 130861 MB
-```
-- Total system memory in megabytes (~127 GB)
+**Resource Sampling**:
+- Samples CPU, memory, and GPU every 500ms during training
+- Uses system_detect functions for accurate readings
+- Clamps values to 0-100% range to prevent display issues
 
 ### Estimated Training Time
 
@@ -327,23 +380,50 @@ trainingTime = totalBatches × timePerBatch + warmupSteps × timePerBatch
 ### Training Progress Bar
 
 **Visual Indicator**:
-- Width: Full right panel width - 20px
-- Height: 30px
-- Color: Cyan (0xFF00FFFF)
-- Background: Dark gray (0xFF202020)
+- **Label**: "Training Progress"
+- **Width**: Full right panel width - 20px
+- **Height**: 30px
+- **Fill Color**: Dark green (0xFF00AA00)
+- **Background**: Very dark gray (0xFF1A1A1A)
+- **Location**: Right panel, below resource graph
 
-**Progress Calculation**:
-```
-epochProgress = (currentEpoch - 1) / totalEpochs
-batchProgress = currentBatch / totalBatches / totalEpochs
-totalProgress = epochProgress + batchProgress
-```
+**Progress Source**:
+- Uses `currentStats.trainingProgress` directly from server (0-100%)
+- Converted to 0.0-1.0 range for UIProgressBar
+- Server calculates progress on every batch update in train_gpu.exe
 
 **Real-time Updates**:
 - Polls server every 200ms (0.2 seconds) for fast training visibility
-- Updates based on `TrainingStats` from FlatBuffer status file
+- Updates based on `TrainingStats` from server status checks
 - Shows percentage: "0.0%" to "100.0%"
 - Optimized for rapid training sessions (completes in seconds on small datasets)
+
+### Data Collection Progress Bar
+
+**Visual Indicator**:
+- **Label**: "Data Collection Progress"
+- **Width**: Full right panel width - 20px
+- **Height**: 30px
+- **Fill Color**: Cyan (0xFF00AAFF)
+- **Background**: Very dark gray (0xFF1A1A1A)
+- **Location**: Right panel, below training progress bar
+
+**Progress Source**:
+- Uses `currentStats.collectionProgress` directly from server (0-100%)
+- Converted to 0.0-1.0 range for UIProgressBar
+- Updated by DataCollectionManager every second during collection
+
+**Smooth Animation**:
+- Implements 70/30 interpolation to prevent visual jumps
+- Resets to 0% when new collection starts
+- Progress never decreases during active collection
+- Holds final value when collection completes
+
+**Current Phase Display**:
+- Shows below progress bar when active
+- Example: "Phase: Collecting from sources..."
+- Color: Cyan (0xFF00AAFF)
+- Source: `currentStats.currentPhase` from server
 
 ### Training Statistics (When Connected)
 
@@ -377,41 +457,56 @@ Perplexity: 12.34
 ### Verbose Output Area
 
 **Reserved Section** for future features:
-- GPU utilization graphs
-- Memory usage tracking
+- GPU utilization graphs (currently shown in resource monitor)
+- Memory usage tracking (currently shown in resource monitor)
 - Token throughput metrics (tokens/second)
 - Gradient statistics
 - Learning rate schedule visualization
+- Per-layer activation statistics
 
-Currently displays placeholder text in gray.
+**Current Display**:
+- Placeholder text in gray
+- Located between control buttons and logs section
+- ~110px height reserved
 
 ### Training Logs
 
 **Scrollable Log Area**:
-- Auto-scroll: Automatically scrolls to newest messages
-- Max entries: 1000 logs (oldest removed)
-- Timestamp format: `[HH:MM:SS]`
+- **Auto-scroll**: Shows newest messages at bottom
+- **Max entries**: 1000 logs (oldest removed when exceeded)
+- **Timestamp format**: `[HH:MM:SS]` (24-hour format)
+- **Location**: Bottom of right panel
+- **Background**: Very dark gray (0xFF0A0A0A)
+- **Border**: Dark gray (0xFF303030)
+- **Thread-safe**: Uses mutex for concurrent log access
+- **Line height**: 18px per entry
+- **Visible logs**: Calculated based on available height
 
-**Log Levels**:
-- **Level 0 (Cyan)**: Info messages
-  - Configuration loaded
-  - Server started
+**Log Levels & Colors**:
+- **Level 0 (Green - 0xFF00FF00)**: Info messages
+  - Configuration loaded/saved
+  - Training panel initialized
   - Training progress milestones
-- **Level 1 (Yellow)**: Warnings
+  - Data collection phases
+- **Level 1 (Yellow/Orange - 0xFFFFAA00)**: Warnings
   - Validation issues
+  - State desynchronization
   - Non-critical errors
-- **Level 2 (Red)**: Errors
+  - Retry attempts
+- **Level 2 (Red - 0xFFFF0000)**: Errors
   - Connection failures
   - Training errors
   - File I/O errors
+  - Missing data files
 
 **Example Log Output**:
 ```
-[19:17:12] Configuration loaded from ai_config.json
 [19:17:12] Training panel initialized
+[19:17:12] Configuration loaded from ai_config.json
 [19:18:56] Configuration saved to ai_config.json
-[19:19:02] Starting GRIM-text server...
-[19:19:03] Server connection established
+[19:19:02] Server connection established
+[19:20:15] Training data found, starting training...
+[19:20:15]   Using tokenized binary: train.bin
 ```
 
 ---
@@ -431,12 +526,23 @@ Currently displays placeholder text in gray.
     "warmup_steps": 1000,
     "optimizer": "adam",
     "gradient_clip": 1.0
+  },
+  "paths": {
+    "grim_text": {
+      "vocab": "resources/models/GRIM-text/training/vocab.bin",
+      "model": "resources/models/GRIM-text/grim_text.bin",
+      "training_data": "resources/models/GRIM-text/training/data/training_data.grmt",
+      "checkpoints": "resources/models/GRIM-text/training/checkpoints",
+      "logs": "resources/models/GRIM-text/training/logs",
+      "training_status": "resources/models/GRIM-text/training/training_status.fb"
+    }
   }
 }
 ```
-- Loaded on panel initialization
-- Saved when "Save Config" clicked or training starts
+- Loaded on panel initialization via loadPathsFromConfig()
+- Saved when "Save Config" clicked or training data path changes
 - Persists between GRIM sessions
+- All paths loaded in background, only training_data path exposed in UI
 
 #### `source_data.json` (resources/models/GRIM-text/training/)
 ```json
@@ -483,25 +589,33 @@ Currently displays placeholder text in gray.
 
 ## Server Communication
 
-### FlatBuffer Protocol
+### Training Control Client
 
-The panel communicates with the GRIM-text training server using FlatBuffers:
+The panel communicates with the training server via `TrainingControlClient`:
 
-**Port**: 11436 (HTTP)
+**Communication Method**: Direct client connection (not FlatBuffer)
 
-**Message Types**:
-- `StartTraining` - Begin training session
-- `StopTraining` - Halt training
-- `PauseTraining` - Pause training
-- `ResumeTraining` - Resume from pause
-- `GetStatus` - Request current state and stats
-- `UpdateConfig` - Send new configuration
+**Client Operations**:
+- `isServerRunning()` - Check if server is responsive
+- `getStatus(state, stats, config)` - Retrieve current training state and statistics
+- `startTraining(config)` - Begin training session with configuration
+- `stopTraining()` - Halt training
+- `pauseTraining()` - Pause training
+- `resumeTraining()` - Resume from pause
 
 **Polling**:
-- Interval: 200ms (0.2 seconds) - optimized for fast training visibility
-- Automatic when panel visible
-- Gets `TrainingState`, `TrainingStats`, `TrainingConfig` from FlatBuffer status file
-- Server monitors `training_status.fb` every 500ms
+- **Interval**: 200ms (0.2 seconds) - optimized for fast training visibility
+- **Automatic**: Runs continuously when panel visible
+- **Thread-safe**: Uses atomic flag to prevent concurrent polling
+- **Async**: Runs on detached thread to avoid blocking UI
+- **Gets**: `TrainingState`, `TrainingStats`, `TrainingConfig` from server
+- **Crash Detection**: Monitors for stalled progress (75 polls = ~15 seconds)
+
+**Data Collection**:
+- **Method**: In-process via DataCollectionManager (no server communication)
+- **Polling**: Checks status every frame via collectionManager->getStatus()
+- **Progress**: Updates UI with progress, phase, and running state
+- **Completion**: Auto-detects when progress reaches ≥99%
 
 ### Training Control Client
 
@@ -579,13 +693,17 @@ if (g_trainingPanel) {
 ### Scrolling
 
 **Left Panel (Configuration)**:
-- Scrollable when content exceeds height
-- Scroll bar on right edge (cyan)
-- Mouse wheel support (if implemented)
+- **Scrollable**: When content exceeds height
+- **Scroll bar**: Right edge (cyan - 0xFF00FFFF when scrollbar, 0xFF202020 track)
+- **Track**: Dark gray background
+- **Handle Size**: Proportional to content/viewport ratio
+- **Handle Position**: Follows scroll position
+- **Mouse Support**: Click and drag scrollbar (mouse wheel may be implemented)
 
 **Logs Area**:
-- Auto-scroll to newest entries
-- Manual scroll locks auto-scroll temporarily
+- **Auto-scroll**: Always shows newest entries at bottom
+- **Display**: Shows only entries that fit in viewport (calculated by height / 18px)
+- **Rendering**: Skips entries outside visible area for performance
 
 ---
 
@@ -596,7 +714,9 @@ if (g_trainingPanel) {
 - **Server Polling**: Every 200ms (0.2 seconds) for real-time progress visibility
 - **UI Refresh**: Every frame (~60 FPS)
 - **Log Limit**: 1000 entries to prevent memory bloat
-- **Server Status File Monitoring**: Every 500ms by training_control_server
+- **Resource Sampling**: Every 500ms (0.5 seconds) for CPU/Memory/GPU monitoring
+- **Resource History**: 60 samples (30 seconds of data retained)
+- **Data Collection Polling**: Every frame via getStatus() when dataCollectionActive flag set
 
 ### Resource Usage
 - **Minimal CPU**: Polling only when visible
@@ -604,9 +724,11 @@ if (g_trainingPanel) {
 - **Memory**: ~1-2 MB for panel state and logs
 
 ### Thread Safety
-- Verification runs on detached thread
-- Server start uses async thread (500ms delay)
-- Proper mutex locking for shared state
+- **Data collection**: Runs on detached thread via DataCollectionManager
+- **Server polling**: Runs on detached thread (async, non-blocking)
+- **Atomic polling flag**: Prevents concurrent polling requests
+- **Log mutex**: Thread-safe log access via std::mutex
+- **Status polling**: Released immediately after completion to allow next poll
 
 ---
 
@@ -640,19 +762,24 @@ if (g_trainingPanel) {
 **If Still Broken**: Check that button `update()` is called in `UITrainingPanel::update()`
 
 ### Data Pipeline Returns Immediately
-**Symptom**: "Pipeline already running" message appears even though nothing is running
-**Cause**: State desynchronization between UI and server
+**Symptom**: Pipeline completes instantly or doesn't start
+**Causes**: 
+1. No enabled sources in source_data.json
+2. DataCollectionManager already has an active pipeline
+3. Missing data collection configuration
+
 **Solutions**:
-1. Click "Reset Status" button to clear stale state
-2. Check server console for actual pipeline status
-3. Verify server state via status indicator (should show "Data Collection Idle")
-4. If issue persists, restart GRIM and the training control server
+1. Add data sources via "Add Source" input box
+2. Check source_data.json for enabled sources
+3. Click "Reset Status" button to clear state
+4. Verify DataCollectionManager status via logs
 
 **Technical Details**:
-- UI maintains `currentState` flag to prevent duplicate calls
-- Guard check queries server to verify actual running state
-- `dataCollectionActive` flag updated every 200ms from server state
-- Thread-safe state management prevents race conditions
+- UI maintains `dataCollectionActive` flag to prevent duplicate calls
+- Pipeline runs in-process via DataCollectionManager (no server/HTTP)
+- `pipelineRequestPending` flag prevents concurrent requests
+- Status polled every frame via collectionManager->getStatus()
+- Auto-completion detection when progress ≥99% and isRunning = false
 
 ### Progress Bar Stuck at 0%
 **Cause**: Server not sending stats updates
@@ -692,34 +819,44 @@ if (g_trainingPanel) {
 
 ```
 UI Training Panel
-├── Left Column (Scrollable)
+├── Left Column (35% width, Scrollable)
 │   ├── Configuration Sliders (5)
-│   │   ├── Epochs
-│   │   ├── Batch Size
-│   │   ├── Learning Rate
-│   │   ├── Max Seq Length
-│   │   └── Warmup Steps
+│   │   ├── Epochs (1-50)
+│   │   ├── Batch Size (1-128)
+│   │   ├── Learning Rate (0.000001-0.01)
+│   │   ├── Max Seq Length (512-16384)
+│   │   └── Warmup Steps (0-5000)
 │   ├── Save Config Button
 │   ├── Data Source Section
 │   │   ├── URL Input Box
 │   │   └── Add Source Button
-│   ├── Verification Section
-│   │   ├── Run Verification Button
-│   │   └── Stats Display
-│   └── (Scroll Bar)
-├── Right Column
-│   ├── Server Status
-│   ├── Hardware Info
-│   ├── Time Estimate
-│   ├── Progress Bar
-│   ├── Training Stats
-│   ├── Verbose Area (Reserved)
-│   └── Logs (Scrollable)
-└── Bottom Left (VBox)
-    ├── Start Training
-    ├── Stop Training
-    ├── Pause/Resume
-    └── Close Panel
+│   ├── Data Collection Section
+│   │   ├── Collection Status Indicator
+│   │   └── Run Data Pipeline Button
+│   ├── Training Data Path Section
+│   │   └── Training Data Input Box (only path shown in UI)
+│   ├── Verification Stats Display (gray text)
+│   ├── Dataset Size Info (cyan text)
+│   └── (Scroll Bar - cyan)
+├── Right Column (65% width)
+│   ├── Training Server Status (fixed top)
+│   ├── Data Collection Status (with progress %)
+│   ├── Checkpoint Stats Info (gray)
+│   ├── Dataset Size Info (cyan)
+│   ├── Training State (colored by state)
+│   ├── Training Statistics (Epoch/Batch/Loss/Perplexity)
+│   ├── System Resource Graph (CPU/Memory/GPU - 200px height)
+│   ├── Training Progress Bar (green fill)
+│   ├── Data Collection Progress Bar (cyan fill)
+│   │   └── Current Phase Display
+│   ├── Verbose Output Area (reserved - ~110px)
+│   └── Training Logs (scrollable, color-coded by level)
+└── Bottom Left (VBox - 140×35px buttons)
+    ├── Start Training (green)
+    ├── Stop Training (red)
+    ├── Pause/Resume Training (orange)
+    ├── Reset Status (yellow)
+    └── Close Panel (cyan)
 ```
 
 ---
@@ -767,6 +904,14 @@ UI Training Panel
   - Thread-safe timestamp logging with localtime_s()
   - Training completes successfully: 50 epochs, model saved (347 KB)
   - Best validation loss: 0.526225, final train perplexity: 5.091650
+- **v1.7.0** - UI refinement and path management (November 12, 2025)
+  - Removed 4 path input boxes from UI (vocab, model, checkpoints, logs)
+  - Kept only training data path input exposed to user
+  - All paths still loaded/saved in background from ai_config.json
+  - Simplified left panel configuration area
+  - Reduced file size from 2,100 lines to 2,017 lines (~83 lines removed)
+  - Improved UI clarity - users only see what they need to configure
+  - Background path management remains fully functional
 
 ---
 
@@ -845,7 +990,8 @@ UI Training Panel
 
 ---
 
-**Last Updated**: November 8, 2025  
+**Last Updated**: November 12, 2025  
 **GRIM Version**: Development Build  
+**File Size**: 2,017 lines (reduced from 2,100)  
 **Training System Status**: ✅ Fully Operational  
 **Author**: GRIM Development Team

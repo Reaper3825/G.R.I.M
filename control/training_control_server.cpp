@@ -39,6 +39,7 @@
 #include <sstream>
 #include <nlohmann/json.hpp>
 #include "training_paths.hpp"
+#include "ai_config_paths.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -64,7 +65,6 @@ struct InternalTrainingStats {
     float gpuMemoryUsed = 0.0f;
     float gpuMemoryTotal = 0.0f;
     float trainingProgress = 0.0f;
-    float collectionProgress = 0.0f;
     std::string currentPhase = "Idle";
     std::string lastError = "";
     int64_t startTime = 0;
@@ -310,10 +310,22 @@ public:
         
         fs::path workingDir = grimRoot / "resources/models/GRIM-text/training";
         
-        // Convert config paths to absolute paths from GRIM root
-        fs::path dataPath = grimRoot / "resources/models/GRIM-text/training" / config.dataPath;
-        fs::path vocabPath = grimRoot / "resources/models/GRIM-text/training" / config.vocabPath;
-        fs::path outputPath = grimRoot / "resources/models/GRIM-text/training" / config.outputPath;
+        // Use paths from config (which are now loaded from ai_config.json as absolute paths)
+        // If they're relative, resolve them; if absolute, use them directly
+        fs::path dataPath = config.dataPath;
+        fs::path vocabPath = config.vocabPath;
+        fs::path outputPath = config.outputPath;
+        
+        // If paths are relative, resolve them from GRIM root
+        if (dataPath.is_relative()) {
+            dataPath = grimRoot / "resources/models/GRIM-text/training" / dataPath;
+        }
+        if (vocabPath.is_relative()) {
+            vocabPath = grimRoot / "resources/models/GRIM-text/training" / vocabPath;
+        }
+        if (outputPath.is_relative()) {
+            outputPath = grimRoot / "resources/models/GRIM-text/training" / outputPath;
+        }
         
         debugLog << "GRIM root: " << grimRoot << std::endl;
         debugLog << "train_gpu.exe: " << exePath << std::endl;
@@ -479,196 +491,6 @@ public:
 TrainingProcessController g_processController;
 
 //======================================================//
-//  Checkpoint Detection & Merge Functions
-//======================================================//
-
-struct CheckpointDetectResult {
-    bool success = false;
-    int checkpointCount = 0;
-    int totalEntries = 0;
-    int64_t totalSize = 0;
-    std::vector<std::tuple<std::string, int64_t, int>> checkpoints; // path, size, entries
-    std::string error;
-};
-
-CheckpointDetectResult detectCheckpoints(const std::string& checkpoint_dir) {
-    CheckpointDetectResult result;
-    
-    try {
-        if (!fs::exists(checkpoint_dir)) {
-            result.error = "Checkpoint directory does not exist: " + checkpoint_dir;
-            return result;
-        }
-        
-        // Find all checkpoint_*.json files
-        for (const auto& entry : fs::directory_iterator(checkpoint_dir)) {
-            if (!entry.is_regular_file()) continue;
-            
-            std::string filename = entry.path().filename().string();
-            if (filename.substr(0, 11) == "checkpoint_" && 
-                filename.size() > 5 && 
-                filename.substr(filename.size() - 5) == ".json") {
-                
-                // Get file size
-                int64_t fileSize = fs::file_size(entry.path());
-                
-                // Count entries in checkpoint
-                int entryCount = 0;
-                try {
-                    std::ifstream file(entry.path());
-                    nlohmann::json j;
-                    file >> j;
-                    if (j.contains("data") && j["data"].is_array()) {
-                        entryCount = j["data"].size();
-                    }
-                } catch (...) {
-                    // Skip malformed checkpoints
-                    continue;
-                }
-                
-                result.checkpoints.push_back({entry.path().string(), fileSize, entryCount});
-                result.totalSize += fileSize;
-                result.totalEntries += entryCount;
-            }
-        }
-        
-        result.checkpointCount = result.checkpoints.size();
-        result.success = true;
-        
-    } catch (const std::exception& e) {
-        result.error = std::string("Exception during checkpoint detection: ") + e.what();
-        result.success = false;
-    }
-    
-    return result;
-}
-
-struct CheckpointMergeResult {
-    bool success = false;
-    int checkpointEntries = 0;
-    int verifiedEntries = 0;
-    int finalEntries = 0;
-    std::string outputGrmtPath;
-    std::string error;
-    std::string message;
-};
-
-CheckpointMergeResult mergeCheckpoints(const std::string& checkpoint_dir, 
-                                       const std::string& verified_dir,
-                                       const std::string& output_dir,
-                                       bool skip_verification) {
-    CheckpointMergeResult result;
-    
-    try {
-        // Build command to run merge_checkpoints executable
-        // Try multiple possible locations
-        std::vector<fs::path> possible_paths = {
-            fs::absolute(".") / "resources/models/GRIM-text/training/build_vs_cuda/Release/merge_checkpoints.exe",
-            fs::absolute(".") / "resources/models/GRIM-text/training/build_ninja/merge_checkpoints.exe",
-            fs::absolute(".") / "resources/models/GRIM-text/training/merge_checkpoints.exe"
-        };
-        
-        fs::path exe_path;
-        bool found = false;
-        for (const auto& path : possible_paths) {
-            if (fs::exists(path)) {
-                exe_path = path;
-                found = true;
-                break;
-            }
-        }
-        
-        if (!found) {
-            result.error = "merge_checkpoints.exe not found. Tried:\n";
-            for (const auto& path : possible_paths) {
-                result.error += "  - " + path.string() + "\n";
-            }
-            return result;
-        }
-        
-        std::cout << "[Checkpoint Merge] Using executable: " << exe_path.string() << std::endl;
-        
-        std::stringstream cmd;
-        cmd << "\"" << exe_path.string() << "\""
-            << " --checkpoint-dir \"" << checkpoint_dir << "\""
-            << " --verified-dir \"" << verified_dir << "\""
-            << " --output-dir \"" << output_dir << "\"";
-        
-        if (skip_verification) {
-            cmd << " --skip-verification";
-        }
-        
-        std::cout << "[Checkpoint Merge] Running: " << cmd.str() << std::endl;
-        
-        // Execute the merge process
-#ifdef _WIN32
-        STARTUPINFOA si = {sizeof(si)};
-        PROCESS_INFORMATION pi = {0};
-        
-        std::string cmdStr = cmd.str();
-        if (!CreateProcessA(
-            nullptr,
-            const_cast<char*>(cmdStr.c_str()),
-            nullptr,
-            nullptr,
-            FALSE,
-            0, // Show window for feedback
-            nullptr,
-            nullptr,
-            &si,
-            &pi
-        )) {
-            result.error = "Failed to start merge process: " + std::to_string(GetLastError());
-            return result;
-        }
-        
-        // Wait for process to complete
-        WaitForSingleObject(pi.hProcess, INFINITE);
-        
-        DWORD exitCode;
-        GetExitCodeProcess(pi.hProcess, &exitCode);
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        
-        if (exitCode != 0) {
-            result.error = "Merge process failed with exit code: " + std::to_string(exitCode);
-            return result;
-        }
-#else
-        int exitCode = system(cmd.str().c_str());
-        if (exitCode != 0) {
-            result.error = "Merge process failed with exit code: " + std::to_string(exitCode);
-            return result;
-        }
-#endif
-        
-        // After successful merge, look for output .grmt file
-        fs::path tokenizedDir = fs::path(output_dir) / "tokenized";
-        fs::path trainBin = tokenizedDir / "train.bin";
-        
-        if (fs::exists(trainBin)) {
-            result.outputGrmtPath = trainBin.string();
-            result.success = true;
-            result.message = "Checkpoint merge completed successfully";
-            
-            // Try to get statistics from the merge output
-            // (In a real implementation, you'd parse the output or read a status file)
-            result.checkpointEntries = 0; // Would be populated from merge output
-            result.verifiedEntries = 0;
-            result.finalEntries = 0;
-        } else {
-            result.error = "Merge completed but output file not found: " + trainBin.string();
-        }
-        
-    } catch (const std::exception& e) {
-        result.error = std::string("Exception during checkpoint merge: ") + e.what();
-        result.success = false;
-    }
-    
-    return result;
-}
-
-//======================================================//
 //  HTTP API Handlers
 //======================================================//
 
@@ -741,7 +563,6 @@ void setupAPI(httplib::Server& server) {
             stats.gpuMemoryUsed,
             stats.gpuMemoryTotal,
             stats.trainingProgress,
-            stats.collectionProgress,
             currentPhase,
             lastError,
             stats.startTime,
@@ -961,371 +782,34 @@ void setupAPI(httplib::Server& server) {
         }
     });
     
-    // Detect checkpoints
-    server.Post("/api/checkpoints/detect", [](const httplib::Request& req, httplib::Response& res) {
-        flatbuffers::FlatBufferBuilder builder(2048);
+    // Shutdown server
+    server.Post("/api/server/shutdown", [&server](const httplib::Request&, httplib::Response& res) {
+        flatbuffers::FlatBufferBuilder builder(256);
         
-        std::string checkpoint_dir = "data"; // Default
+        std::cout << "[Server] Shutdown request received" << std::endl;
         
-        if (!req.body.empty()) {
-            try {
-                auto request = flatbuffers::GetRoot<CheckpointDetectRequest>(req.body.data());
-                if (request->checkpoint_dir()) {
-                    checkpoint_dir = request->checkpoint_dir()->str();
-                }
-            } catch (const std::exception& e) {
-                auto error = builder.CreateString(std::string("Invalid request: ") + e.what());
-                auto message = builder.CreateString("");
-                auto response = CreateCheckpointDetectResponse(builder, false, 0, 0, 0, 0, message, error);
-                builder.Finish(response);
-                
-                res.status = 400;
-                res.set_content(reinterpret_cast<const char*>(builder.GetBufferPointer()), 
-                               builder.GetSize(), 
-                               "application/octet-stream");
-                return;
-            }
+        // Stop any running training first
+        if (g_processController.stopTraining()) {
+            std::cout << "[Server] Training process stopped" << std::endl;
         }
         
-        auto detectResult = detectCheckpoints(checkpoint_dir);
-        
-        // Build CheckpointInfo vector
-        std::vector<flatbuffers::Offset<CheckpointInfo>> checkpointInfos;
-        for (const auto& [path, size, count] : detectResult.checkpoints) {
-            auto pathStr = builder.CreateString(path);
-            checkpointInfos.push_back(CreateCheckpointInfo(builder, pathStr, size, count));
-        }
-        auto checkpointsVec = builder.CreateVector(checkpointInfos);
-        
-        auto message = builder.CreateString(detectResult.success ? "Checkpoints detected" : "");
-        auto error = builder.CreateString(detectResult.error);
-        
-        auto response = CreateCheckpointDetectResponse(builder,
-            detectResult.success,
-            detectResult.checkpointCount,
-            detectResult.totalEntries,
-            detectResult.totalSize,
-            checkpointsVec,
-            message,
-            error
-        );
+        // Send success response before shutting down
+        auto message = builder.CreateString("Server shutting down");
+        auto response = CreateServerShutdownResponse(builder, true, message);
         builder.Finish(response);
         
         res.set_content(reinterpret_cast<const char*>(builder.GetBufferPointer()), 
                        builder.GetSize(), 
                        "application/octet-stream");
+        
+        // Stop server in separate thread to allow response to be sent
+        std::thread([&server]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::cout << "[Server] Stopping HTTP server..." << std::endl;
+            server.stop();
+        }).detach();
     });
     
-    // Merge checkpoints
-    server.Post("/api/checkpoints/merge", [](const httplib::Request& req, httplib::Response& res) {
-        flatbuffers::FlatBufferBuilder builder(1024);
-        
-        std::string checkpoint_dir = "data";
-        std::string verified_dir = "data/verified";
-        std::string output_dir = "data";
-        bool skip_verification = false;
-        
-        if (!req.body.empty()) {
-            try {
-                auto request = flatbuffers::GetRoot<CheckpointMergeRequest>(req.body.data());
-                if (request->checkpoint_dir()) checkpoint_dir = request->checkpoint_dir()->str();
-                if (request->verified_dir()) verified_dir = request->verified_dir()->str();
-                if (request->output_dir()) output_dir = request->output_dir()->str();
-                skip_verification = request->skip_verification();
-            } catch (const std::exception& e) {
-                auto error = builder.CreateString(std::string("Invalid request: ") + e.what());
-                auto message = builder.CreateString("");
-                auto outputPath = builder.CreateString("");
-                auto response = CreateCheckpointMergeResponse(builder, false, message, error, 0, 0, 0, outputPath);
-                builder.Finish(response);
-                
-                res.status = 400;
-                res.set_content(reinterpret_cast<const char*>(builder.GetBufferPointer()), 
-                               builder.GetSize(), 
-                               "application/octet-stream");
-                return;
-            }
-        }
-        
-        auto mergeResult = mergeCheckpoints(checkpoint_dir, verified_dir, output_dir, skip_verification);
-        
-        auto message = builder.CreateString(mergeResult.message);
-        auto error = builder.CreateString(mergeResult.error);
-        auto outputPath = builder.CreateString(mergeResult.outputGrmtPath);
-        
-        auto response = CreateCheckpointMergeResponse(builder,
-            mergeResult.success,
-            message,
-            error,
-            mergeResult.checkpointEntries,
-            mergeResult.verifiedEntries,
-            mergeResult.finalEntries,
-            outputPath
-        );
-        builder.Finish(response);
-        
-        if (!mergeResult.success) {
-            res.status = 500;
-        }
-        
-        res.set_content(reinterpret_cast<const char*>(builder.GetBufferPointer()), 
-                       builder.GetSize(), 
-                       "application/octet-stream");
-    });
-    
-    // Data collection endpoint
-    server.Post("/api/collection/start", [](const httplib::Request& req, httplib::Response& res) {
-        std::cout << "\n========================================" << std::endl;
-        std::cout << "=== DATA COLLECTION REQUEST RECEIVED ===" << std::endl;
-        std::cout << "========================================" << std::endl;
-        std::cout << "[SERVER] >>> HTTP POST to /api/collection/start" << std::endl;
-        std::cout << "[SERVER]     FROM: " << req.remote_addr << ":" << req.remote_port << std::endl;
-        std::cout << "[SERVER]     CONTENT-TYPE: " << req.get_header_value("Content-Type") << std::endl;
-        std::cout << "[SERVER]     BODY SIZE: " << req.body.size() << " bytes" << std::endl;
-        std::cout << "[Data Collection] Got request from UI" << std::endl;
-        
-        flatbuffers::FlatBufferBuilder builder(512);
-        
-        std::string mode = "full";
-        
-        if (!req.body.empty()) {
-            try {
-                auto request = flatbuffers::GetRoot<DataCollectionRequest>(req.body.data());
-                if (request->mode()) {
-                    mode = request->mode()->str();
-                    std::cout << "[Data Collection] Mode: " << mode << std::endl;
-                }
-            } catch (const std::exception& e) {
-                std::cout << "[Data Collection] ERROR parsing request: " << e.what() << std::endl;
-                auto error = builder.CreateString(std::string("Invalid request: ") + e.what());
-                auto message = builder.CreateString("");
-                auto response = CreateDataCollectionResponse(builder, false, message, error);
-                builder.Finish(response);
-                
-                res.status = 400;
-                res.set_content(reinterpret_cast<const char*>(builder.GetBufferPointer()), 
-                               builder.GetSize(), 
-                               "application/octet-stream");
-                return;
-            }
-        }
-        
-        // Update state to Collecting
-        {
-            g_state.setState(TrainingState_Collecting);
-            InternalTrainingStats stats = g_state.getStats();
-            stats.collectionProgress = 0.0f;
-            stats.currentPhase = std::string("Starting data collection: ") + mode;
-            g_state.updateStats(stats);
-        }
-        
-        std::string result_message;
-        std::string result_error;
-        bool success = false;
-        
-        std::cout << "[Data Collection] Starting pipeline in mode: " << mode << std::endl;
-        
-        try {
-            // Build path to grim_data_pipeline.exe using safe path resolution
-            std::cout << "[Data Collection] Searching for grim_data_pipeline.exe..." << std::endl;
-            std::string exePathStr = GRIM::Training::getSafeResourcePath(
-                "resources/models/GRIM-text/DataCollection/build/Release/grim_data_pipeline.exe",
-                GRIM::Training::PathResolutionMode::Relative
-            );
-            
-            if (exePathStr.empty()) {
-                std::cout << "[Data Collection] Relative path failed, trying search..." << std::endl;
-                // Try searching for it
-                exePathStr = GRIM::Training::getSafeResourcePath(
-                    "grim_data_pipeline.exe",
-                    GRIM::Training::PathResolutionMode::Search
-                );
-            }
-            
-            if (exePathStr.empty()) {
-                result_error = "grim_data_pipeline.exe not found in GRIM directory tree";
-                std::cerr << "[Data Collection] ERROR: " << result_error << std::endl;
-            } else {
-                std::cout << "[Data Collection] Found executable at: " << exePathStr << std::endl;
-                std::filesystem::path exePath(exePathStr);
-                
-                // Build command line with correct arguments for full pipeline
-                // Use absolute paths to avoid nested directory issues
-                std::string cmdLine = "\"" + exePath.string() + "\" " + mode;
-                
-                // Add output directory for merge step (absolute path to training/data)
-                if (mode == "full" || mode == "merge") {
-                    std::string trainingDataPath = GRIM::Training::getSafeResourcePath(
-                        "resources/models/GRIM-text/training/data",
-                        GRIM::Training::PathResolutionMode::Relative
-                    );
-                    if (!trainingDataPath.empty()) {
-                        cmdLine += " --output-dir \"" + trainingDataPath + "\"";
-                    } else {
-                        cmdLine += " --output-dir \"../../../training/data\"";  // Fallback
-                    }
-                }
-                
-                // Add config path for collect step (absolute path to source_data.json)
-                if (mode == "full" || mode == "collect") {
-                    std::string configPath = GRIM::Training::getSafeResourcePath(
-                        "resources/models/GRIM-text/DataCollection/source_data.json",
-                        GRIM::Training::PathResolutionMode::Relative
-                    );
-                    if (!configPath.empty()) {
-                        cmdLine += " --config \"" + configPath + "\"";
-                    } else {
-                        cmdLine += " --config \"../../source_data.json\"";  // Fallback
-                    }
-                }
-                
-                std::cout << "[Data Collection] Command line: " << cmdLine << std::endl;
-                
-#ifdef _WIN32
-                STARTUPINFOA si = {};
-                si.cb = sizeof(si);
-                si.dwFlags = STARTF_USESHOWWINDOW;
-                si.wShowWindow = SW_HIDE;
-                
-                PROCESS_INFORMATION pi = {};
-                
-                std::vector<char> cmdBuf(cmdLine.begin(), cmdLine.end());
-                cmdBuf.push_back('\0');
-                
-                std::filesystem::path workingDir = exePath.parent_path().parent_path().parent_path();
-                std::cout << "[Data Collection] Working directory: " << workingDir.string() << std::endl;
-                
-                BOOL createResult = CreateProcessA(
-                    nullptr,
-                    cmdBuf.data(),
-                    nullptr,
-                    nullptr,
-                    FALSE,
-                    CREATE_NO_WINDOW,
-                    nullptr,
-                    workingDir.string().c_str(),
-                    &si,
-                    &pi
-                );
-                
-                if (!createResult) {
-                    DWORD lastError = GetLastError();
-                    result_error = "Failed to start pipeline process. Error code: " + std::to_string(lastError);
-                    std::cerr << "[Data Collection] " << result_error << std::endl;
-                } else {
-                    std::cout << "[Data Collection] Process started (PID: " << pi.dwProcessId << ")" << std::endl;
-                    
-                    // Update initial phase
-                    {
-                        InternalTrainingStats stats = g_state.getStats();
-                        stats.currentPhase = "Processing data sources...";
-                        g_state.updateStats(stats);
-                    }
-                    
-                    // Update progress periodically while waiting
-                    DWORD waitResult;
-                    int progressStep = 0;
-                    int phaseCounter = 0;
-                    do {
-                        waitResult = WaitForSingleObject(pi.hProcess, 1000); // Wait 1 second
-                        
-                        if (waitResult == WAIT_TIMEOUT) {
-                            // Still running, update progress (cap at 99, will set to 100 on success)
-                            if (progressStep < 99) {
-                                progressStep++;
-                                InternalTrainingStats stats = g_state.getStats();
-                                stats.collectionProgress = static_cast<float>(progressStep);
-                                
-                                // Update phase description every 10 seconds to show activity
-                                phaseCounter++;
-                                if (phaseCounter % 10 == 0) {
-                                    if (progressStep < 30) {
-                                        stats.currentPhase = "Collecting from data sources...";
-                                    } else if (progressStep < 60) {
-                                        stats.currentPhase = "Verifying collected data...";
-                                    } else if (progressStep < 90) {
-                                        stats.currentPhase = "Merging data entries...";
-                                    } else {
-                                        stats.currentPhase = "Finalizing dataset...";
-                                    }
-                                }
-                                
-                                g_state.updateStats(stats);
-                                std::cout << "[Data Collection] Progress: " << progressStep << "% - " << stats.currentPhase << std::endl;
-                            } else {
-                                // Stay at 99% until process completes
-                                InternalTrainingStats stats = g_state.getStats();
-                                stats.currentPhase = "Completing final steps...";
-                                g_state.updateStats(stats);
-                                std::cout << "[Data Collection] Still running (99%)..." << std::endl;
-                            }
-                        }
-                    } while (waitResult == WAIT_TIMEOUT);
-                    
-                    DWORD exitCode = 0;
-                    GetExitCodeProcess(pi.hProcess, &exitCode);
-                    
-                    std::cout << "[Data Collection] Process finished with exit code: " << exitCode << std::endl;
-                    
-                    CloseHandle(pi.hProcess);
-                    CloseHandle(pi.hThread);
-                    
-                    if (exitCode == 0) {
-                        success = true;
-                        result_message = "Data collection completed successfully";
-                        std::cout << "[Data Collection] SUCCESS" << std::endl;
-                        
-                        InternalTrainingStats stats = g_state.getStats();
-                        stats.collectionProgress = 100.0f;
-                        stats.currentPhase = "Data collection complete!";
-                        g_state.updateStats(stats);
-                    } else {
-                        result_error = "Pipeline failed with exit code: " + std::to_string(exitCode);
-                        std::cerr << "[Data Collection] FAILED: " << result_error << std::endl;
-                    }
-                }
-#else
-                // Unix-like systems
-                int exitCode = system(cmdLine.c_str());
-                if (exitCode == 0) {
-                    success = true;
-                    result_message = "Data collection completed successfully";
-                } else {
-                    result_error = "Pipeline failed with exit code: " + std::to_string(exitCode);
-                }
-#endif
-            }
-        } catch (const std::exception& e) {
-            result_error = std::string("Exception during collection: ") + e.what();
-            std::cerr << "[Data Collection] EXCEPTION: " << result_error << std::endl;
-        }
-        
-        std::cout << "[Data Collection] Resetting state to Idle" << std::endl;
-        
-        // Reset state
-        {
-            g_state.setState(TrainingState_Idle);
-            InternalTrainingStats stats = g_state.getStats();
-            if (!success) {
-                stats.collectionProgress = 0.0f;
-            }
-            stats.currentPhase = "";
-            g_state.updateStats(stats);
-        }
-        
-        auto message = builder.CreateString(result_message);
-        auto error = builder.CreateString(result_error);
-        auto response = CreateDataCollectionResponse(builder, success, message, error);
-        builder.Finish(response);
-        
-        if (!success) {
-            res.status = 500;
-        }
-        
-        res.set_content(reinterpret_cast<const char*>(builder.GetBufferPointer()), 
-                       builder.GetSize(), 
-                       "application/octet-stream");
-    });
 }
 
 //======================================================//
@@ -1390,6 +874,47 @@ int main(int argc, char** argv) {
     g_state.updateStats(cleanStats);
     std::cout << "[Server] State initialized to Idle" << std::endl;
     
+    // Load paths from ai_config.json (the centralized source of truth)
+    GRIM::Config::GrimTextPaths grimPaths;
+    if (GRIM::Config::loadGrimTextPaths(grimPaths)) {
+        // Update config with loaded paths
+        InternalTrainingConfig loadedConfig = g_state.getConfig();
+        
+        if (!grimPaths.training_data.empty()) {
+            loadedConfig.dataPath = grimPaths.training_data;
+            std::cout << "[Server] ✓ Loaded training_data path from ai_config.json: " << grimPaths.training_data << std::endl;
+        }
+        
+        if (!grimPaths.vocab.empty()) {
+            loadedConfig.vocabPath = grimPaths.vocab;
+            std::cout << "[Server] ✓ Loaded vocab path from ai_config.json: " << grimPaths.vocab << std::endl;
+        }
+        
+        if (!grimPaths.model.empty()) {
+            loadedConfig.outputPath = grimPaths.model;
+            std::cout << "[Server] ✓ Loaded model path from ai_config.json: " << grimPaths.model << std::endl;
+        }
+        
+        g_state.updateConfig(loadedConfig);
+    } else {
+        std::cout << "[Server] WARNING: Could not load paths from ai_config.json, using defaults" << std::endl;
+    }
+    
+    // Also load training hyperparameters
+    GRIM::Config::TrainingHyperparameters hyperparams;
+    if (GRIM::Config::loadTrainingHyperparameters(hyperparams)) {
+        InternalTrainingConfig config = g_state.getConfig();
+        config.epochs = hyperparams.epochs;
+        config.batchSize = hyperparams.batch_size;
+        config.learningRate = hyperparams.learning_rate;
+        config.maxSeqLen = hyperparams.max_seq_len;
+        config.warmupSteps = hyperparams.warmup_steps;
+        config.useGPU = hyperparams.use_gpu;
+        config.useFlashAttention = hyperparams.use_flash_attention;
+        g_state.updateConfig(config);
+        std::cout << "[Server] ✓ Loaded training hyperparameters from ai_config.json" << std::endl;
+    }
+    
     // Start status file monitor
     StatusFileMonitor monitor(statusFilePath.string());
     std::cout << "[Server] Starting status monitor..." << std::endl;
@@ -1414,10 +939,7 @@ int main(int argc, char** argv) {
     std::cout << "  POST /api/training/start    - Start training" << std::endl;
     std::cout << "  POST /api/training/stop     - Stop training" << std::endl;
     std::cout << "  POST /api/config            - Update configuration" << std::endl;
-    std::cout << "  POST /api/checkpoints/detect - Detect checkpoint files" << std::endl;
-    std::cout << "  POST /api/checkpoints/merge  - Merge checkpoints to .grmt" << std::endl;
-    std::cout << "  POST /api/collection/start   - Start data collection pipeline" << std::endl;
-    std::cout << "  GET  /api/logs              - Get training logs" << std::endl;
+    std::cout << "  POST /api/server/shutdown   - Shutdown server" << std::endl;
     std::cout << std::endl;
     std::cout << "Press Ctrl+C to stop" << std::endl;
     std::cout << std::endl;

@@ -1,5 +1,4 @@
 #include "voice/voice_speak.hpp"
-
 #include "bootstrap/bootstrap.hpp"
 #include "aliases.hpp"
 #include "popup_ui/popup_ui.hpp"
@@ -10,14 +9,14 @@
 #include "memory/context_manager.hpp"
 #include "ai/ai_rl.hpp"
 #include "ai/intent_gate.hpp"
-#include "ai/task_planner.hpp"  // ✅ NEW: Multi-step task planning
-#include "ai/grim_text_server_manager.hpp"  // ✅ NEW: GRIM-text server lifecycle
-#include "ai/training_server_manager.hpp"  // ✅ NEW: Training control server lifecycle
+#include "ai/task_planner.hpp" 
+#include "ai/grim_text_server_manager.hpp"  
+#include "ai/training_server_manager.hpp"  
 #include "core/window_manager.hpp"
 #include "core/plugin_manager.hpp"
 #include "core/input_parser.hpp"
-#include "core/platform_input.hpp"  // ✅ NEW: Cross-platform input
-#include "core/platform_clipboard.hpp"  // ✅ NEW: Cross-platform clipboard
+#include "core/platform_input.hpp"  
+#include "core/platform_clipboard.hpp"  
 #include "helpers/mouse.hpp"
 #include "helpers/key.hpp"
 #include "helpers/cerr_suppressor.hpp"
@@ -200,7 +199,7 @@ int main(int argc, char* argv[])
     GRIM::TaskPlanner::init();
     LOG_PHASE("Task planner initialized", true);
     
-    // ✅ NEW: Start continuous screen awareness
+    // Start continuous screen awareness
     GRIM::Perception::ContinuousCaptureConfig captureConfig;
     captureConfig.frameSkip = 30;              // Capture every 30 frames (~1/sec at 30fps)
     captureConfig.captureIntervalMs = 1000;    // Or every 1000ms
@@ -370,8 +369,8 @@ int main(int argc, char* argv[])
         auto frameEnd = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(frameEnd - frameStart);
         
-        // ✅ LOG: Frame timing breakdown if frame is slow
-        if (elapsed.count() > 30) { // More than 20ms = potential stutter
+        // Frame timing breakdown if frame is slow
+        if (elapsed.count() > 40) { // More than 20ms = potential stutter
             auto inputMs = std::chrono::duration_cast<std::chrono::microseconds>(inputCaptureEnd - inputCaptureStart).count() / 1000.0;
             auto uiUpdateMs = std::chrono::duration_cast<std::chrono::microseconds>(uiUpdateEnd - uiUpdateStart).count() / 1000.0;
             auto uiDrawMs = std::chrono::duration_cast<std::chrono::microseconds>(uiDrawEnd - uiDrawStart).count() / 1000.0;
@@ -407,13 +406,10 @@ int main(int argc, char* argv[])
     Voice::shutdownTTS();
     GRIM::RL::shutdown();
     GRIM::IntentGate::shutdown(); 
-    GRIM::Perception::shutdown();  // ? Added
+    GRIM::Perception::shutdown();  
     Mouse::shutdown();
     
-    // ✅ NEW: Shutdown cross-platform input system
     PlatformInput::shutdown();
-    
-    // ✅ NEW: Shutdown cross-platform clipboard system
     PlatformClipboard::shutdown();
 
     UIRoot::get().shutdown();

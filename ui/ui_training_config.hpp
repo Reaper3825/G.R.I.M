@@ -23,6 +23,7 @@ public:
             if (j.contains("training") && j["training"].contains("config")) {
                 auto& tc = j["training"]["config"];
                 
+                // Load only hyperparameters - paths are in paths.grim_text section
                 config.epochs = tc.value("epochs", 3);
                 config.batchSize = tc.value("batch_size", 8);
                 config.learningRate = tc.value("learning_rate", 0.0001f);
@@ -30,9 +31,6 @@ public:
                 config.warmupSteps = tc.value("warmup_steps", 1000);
                 config.useGPU = tc.value("use_gpu", true);
                 config.useFlashAttention = tc.value("use_flash_attention", true);
-                config.dataPath = tc.value("data_path", "data/training_data.grmt");
-                config.vocabPath = tc.value("vocab_path", "models/vocab.bin");
-                config.outputPath = tc.value("output_path", "models/grim_text_trained.bin");
             }
         } catch (const std::exception& e) {
             // Return defaults on error
@@ -57,6 +55,7 @@ public:
                 j["training"] = nlohmann::json::object();
             }
             
+            // Save only hyperparameters, NOT paths (paths are in paths.grim_text section)
             j["training"]["config"] = {
                 {"epochs", config.epochs},
                 {"batch_size", config.batchSize},
@@ -64,10 +63,7 @@ public:
                 {"max_seq_len", config.maxSeqLen},
                 {"warmup_steps", config.warmupSteps},
                 {"use_gpu", config.useGPU},
-                {"use_flash_attention", config.useFlashAttention},
-                {"data_path", config.dataPath},
-                {"vocab_path", config.vocabPath},
-                {"output_path", config.outputPath}
+                {"use_flash_attention", config.useFlashAttention}
             };
             
             // Write back to file

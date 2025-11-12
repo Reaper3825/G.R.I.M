@@ -1,0 +1,10 @@
+^D:\G.R.I.M\RESOURCES\MODELS\GRIM-TEXT\DATACOLLECTION\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/G.R.I.M/resources/models/GRIM-text/DataCollection -BD:/G.R.I.M/resources/models/GRIM-text/DataCollection --check-stamp-file D:/G.R.I.M/resources/models/GRIM-text/DataCollection/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

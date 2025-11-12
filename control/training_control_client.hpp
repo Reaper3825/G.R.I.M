@@ -48,6 +48,7 @@ struct TrainingStats {
 };
 
 struct TrainingConfig {
+    // Training hyperparameters (stored in training.config section)
     int epochs = 3;
     int batchSize = 8;
     float learningRate = 0.0001f;
@@ -55,9 +56,12 @@ struct TrainingConfig {
     int warmupSteps = 1000;
     bool useGPU = true;
     bool useFlashAttention = true;
-    std::string dataPath = "data/training_data.grmt";
-    std::string vocabPath = "models/vocab.bin";
-    std::string outputPath = "models/grim_text_trained.bin";
+    
+    // Internal path fields - populated from paths.grim_text at runtime
+    // DO NOT save/load these directly - use GRIM::Config::loadGrimTextPaths() instead
+    std::string dataPath = "";
+    std::string vocabPath = "";
+    std::string outputPath = "";
 };
 
 class TrainingControlClient {
@@ -222,6 +226,37 @@ public:
             if (!res || res->status != 200) {
                 if (res) {
                     auto response = flatbuffers::GetRoot<Control::StopTrainingResponse>(
+                        reinterpret_cast<const uint8_t*>(res->body.data())
+                    );
+                    lastError_ = response->message() ? response->message()->str() : "Unknown error";
+                }
+                return false;
+            }
+            
+            return true;
+        } catch (const std::exception& e) {
+            lastError_ = e.what();
+            return false;
+        }
+    }
+    
+    // Shutdown server
+    bool shutdownServer() {
+        try {
+            auto client = getClient();
+            
+            flatbuffers::FlatBufferBuilder builder(64);
+            auto request = Control::CreateServerShutdownRequest(builder);
+            builder.Finish(request);
+            
+            auto res = client->Post("/api/server/shutdown",
+                                  reinterpret_cast<const char*>(builder.GetBufferPointer()),
+                                  builder.GetSize(),
+                                  "application/octet-stream");
+            
+            if (!res || res->status != 200) {
+                if (res) {
+                    auto response = flatbuffers::GetRoot<Control::ServerShutdownResponse>(
                         reinterpret_cast<const uint8_t*>(res->body.data())
                     );
                     lastError_ = response->message() ? response->message()->str() : "Unknown error";

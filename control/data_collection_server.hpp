@@ -171,7 +171,17 @@ private:
 
         // ✅ FIX: Set isCollecting flag BEFORE launching thread to avoid race condition
         state_.isCollecting.store(true, std::memory_order_release);
-        state_.progress.store(0.0f, std::memory_order_release);
+        
+        // ✅ SMART PROGRESS RESET: If progress is -1 (completion signal), reset to 0
+        // Otherwise start from current progress (allows resuming)
+        float currentProgress = state_.progress.load(std::memory_order_acquire);
+        if (currentProgress < 0.0f) {
+            std::cout << "[DataCollectionServer] Resetting progress from -1 to 0 (new collection cycle)" << std::endl;
+            state_.progress.store(0.0f, std::memory_order_release);
+        } else {
+            std::cout << "[DataCollectionServer] Starting collection from progress: " << currentProgress << "%" << std::endl;
+        }
+        
         state_.shouldStop.store(false, std::memory_order_release);
         state_.lastError = "";
         {
@@ -247,18 +257,28 @@ private:
             
             if (success) {
                 std::cout << "[DataCollectionServer] Collection completed successfully!" << std::endl;
-                state_.progress = 100.0f;
-                std::lock_guard<std::mutex> lock(state_.stateMutex);
-                state_.currentPhase = "Complete";
+                {
+                    std::lock_guard<std::mutex> lock(state_.stateMutex);
+                    state_.currentPhase = "Complete";
+                }
+                // Set progress to -1 to signal completion (will be reset to 0 on next start)
+                state_.progress.store(-1.0f, std::memory_order_release);
+                std::cout << "[DataCollectionServer] Progress set to -1 (completion signal)" << std::endl;
             } else {
                 std::cerr << "[DataCollectionServer] Collection failed!" << std::endl;
-                std::lock_guard<std::mutex> lock(state_.stateMutex);
-                state_.currentPhase = "Failed";
+                {
+                    std::lock_guard<std::mutex> lock(state_.stateMutex);
+                    state_.currentPhase = "Failed";
+                }
+                // Set progress to -1 on failure too (clean restart)
+                state_.progress.store(-1.0f, std::memory_order_release);
             }
 
         } catch (const std::exception& e) {
             state_.lastError = e.what();
             std::cerr << "[DataCollectionServer] EXCEPTION: " << e.what() << std::endl;
+            // Set progress to -1 on exception too
+            state_.progress.store(-1.0f, std::memory_order_release);
         }
 
         state_.isCollecting = false;

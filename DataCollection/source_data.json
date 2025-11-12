@@ -1,0 +1,1174 @@
+{
+  "version": "1.0.0",
+  "description": "GRIM Web Data Collection Configuration - Intelligent Multi-Tier Strategy",
+  "collection_settings": {
+    "max_entries_per_source": 10000,
+    "timeout_seconds": 45,
+    "rate_limit_delay_ms": 300,
+    "max_retries": 5,
+    "user_agent": "GRIM-DataCollector/1.0 (Educational AI Training)",
+    "concurrent_requests": 15,
+    "enable_smart_filtering": true,
+    "prefer_text_content": true
+  },
+  
+  "data_sources": [
+    {
+      "name": "Wikipedia API - Featured Articles",
+      "url": "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=artificial%20intelligence%20OR%20machine%20learning%20OR%20natural%20language%20processing&format=json&srlimit=50",
+      "source_type": "wikipedia_api",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 1000,
+      "crawl_depth": 1,
+      "comment": "Wikipedia API returns clean structured text"
+    },
+    {
+      "name": "Common Crawl News - Text Extracts",
+      "url": "https://data.commoncrawl.org/",
+      "source_type": "common_crawl",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 2000,
+      "crawl_depth": 1,
+      "comment": "Pre-processed news articles from Common Crawl"
+    },
+    {
+      "name": "OpenSubtitles - Conversational Text",
+      "url": "https://opus.nlpl.eu/OpenSubtitles.php",
+      "source_type": "opus_subtitles",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false,
+      "fetch_limit": 500,
+      "crawl_depth": 1,
+      "comment": "Natural conversational text from movie subtitles"
+    },
+    {
+      "name": "Stack Exchange Data Dump - Q&A",
+      "url": "https://archive.org/details/stackexchange",
+      "source_type": "stack_exchange",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 1000,
+      "crawl_depth": 1,
+      "comment": "Technical Q&A with high-quality answers"
+    },
+    {
+      "name": "Project Gutenberg - Direct Text Files",
+      "url": "https://www.gutenberg.org/files/84/84-0.txt",
+      "source_type": "gutenberg",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 50,
+      "crawl_depth": 1,
+      "comment": "Direct .txt files - no HTML cleaning needed"
+    },
+    {
+      "name": "ArXiv Papers - Full Text API",
+      "url": "http://export.arxiv.org/api/query?search_query=cat:cs.AI+OR+cat:cs.CL&start=0&max_results=100&sortBy=submittedDate&sortOrder=descending",
+      "source_type": "arxiv",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 500,
+      "crawl_depth": 1,
+      "comment": "ArXiv abstracts are clean text"
+    },
+    {
+      "name": "PubMed Central - Biomedical Articles",
+      "url": "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7306716/",
+      "source_type": "pmc",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 500,
+      "crawl_depth": 2,
+      "comment": "Open access biomedical research papers"
+    },
+    {
+      "name": "PLOS ONE - Open Access Science",
+      "url": "https://journals.plos.org/plosone/",
+      "source_type": "plos",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 300,
+      "crawl_depth": 2,
+      "content_filter": {
+        "path_patterns": ["/article/"]
+      },
+      "comment": "High-quality peer-reviewed open access articles"
+    },
+    {
+      "name": "Reuters News - Text Archive",
+      "url": "https://www.reuters.com/",
+      "source_type": "news",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false,
+      "fetch_limit": 500,
+      "crawl_depth": 2,
+      "content_filter": {
+        "path_patterns": ["/technology/", "/science/"]
+      },
+      "comment": "Professional news articles with clean formatting"
+    },
+    {
+      "name": "BBC News - Technology & Science",
+      "url": "https://www.bbc.com/news/technology",
+      "source_type": "news",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false,
+      "fetch_limit": 500,
+      "crawl_depth": 2,
+      "comment": "High-quality journalism with clear writing"
+    },
+    {
+      "name": "MedlinePlus Medical Encyclopedia",
+      "url": "https://medlineplus.gov/encyclopedia.html",
+      "source_type": "medical",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 1000,
+      "crawl_depth": 2,
+      "comment": "NIH-verified medical terminology and health information"
+    },
+    {
+      "name": "National Library of Medicine - MeSH",
+      "url": "https://www.nlm.nih.gov/mesh/meshhome.html",
+      "source_type": "medical_terminology",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 2000,
+      "crawl_depth": 2,
+      "comment": "Medical Subject Headings - comprehensive medical terminology"
+    },
+    {
+      "name": "WHO Health Topics",
+      "url": "https://www.who.int/health-topics/",
+      "source_type": "medical",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 500,
+      "crawl_depth": 2,
+      "comment": "World Health Organization authoritative health information"
+    },
+    {
+      "name": "Stanford Encyclopedia of Philosophy",
+      "url": "https://plato.stanford.edu/",
+      "source_type": "philosophy",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 1000,
+      "crawl_depth": 2,
+      "content_filter": {
+        "path_patterns": ["/entries/", "/archives/"]
+      },
+      "comment": "Peer-reviewed philosophical articles - gold standard"
+    },
+    {
+      "name": "Internet Encyclopedia of Philosophy",
+      "url": "https://iep.utm.edu/",
+      "source_type": "philosophy",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 800,
+      "crawl_depth": 2,
+      "comment": "Comprehensive peer-reviewed philosophy encyclopedia"
+    },
+    {
+      "name": "Routledge Encyclopedia of Philosophy",
+      "url": "https://www.rep.routledge.com/",
+      "source_type": "philosophy",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 500,
+      "crawl_depth": 2,
+      "comment": "Professional philosophy reference"
+    },
+    {
+      "name": "GitHub - Python Standard Library",
+      "url": "https://github.com/python/cpython/tree/main/Lib",
+      "source_type": "code",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 1000,
+      "crawl_depth": 2,
+      "comment": "Python standard library source code with docstrings"
+    },
+    {
+      "name": "GitHub - TensorFlow Core",
+      "url": "https://github.com/tensorflow/tensorflow/tree/master/tensorflow/python",
+      "source_type": "code",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 800,
+      "crawl_depth": 2,
+      "comment": "Well-documented machine learning library code"
+    },
+    {
+      "name": "GitHub - Linux Kernel Documentation",
+      "url": "https://github.com/torvalds/linux/tree/master/Documentation",
+      "source_type": "code_docs",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 500,
+      "crawl_depth": 2,
+      "comment": "Comprehensive systems programming documentation"
+    },
+    {
+      "name": "Oxford English Grammar Course",
+      "url": "https://www.oxfordlearnersdictionaries.com/grammar/",
+      "source_type": "grammar",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 500,
+      "crawl_depth": 2,
+      "comment": "Authoritative grammar rules and examples"
+    },
+    {
+      "name": "Purdue OWL - Writing Lab",
+      "url": "https://owl.purdue.edu/owl/purdue_owl.html",
+      "source_type": "grammar",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 800,
+      "crawl_depth": 3,
+      "comment": "Academic writing and grammar standards"
+    },
+    {
+      "name": "Cambridge Grammar - British Council",
+      "url": "https://learnenglish.britishcouncil.org/grammar/",
+      "source_type": "grammar",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 400,
+      "crawl_depth": 2,
+      "comment": "British English grammar with clear explanations"
+    },
+    {
+      "name": "Physics arXiv - Theoretical Physics",
+      "url": "http://export.arxiv.org/api/query?search_query=cat:physics.gen-ph+OR+cat:quant-ph+OR+cat:gr-qc&start=0&max_results=100&sortBy=submittedDate&sortOrder=descending",
+      "source_type": "arxiv_physics",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 1000,
+      "crawl_depth": 1,
+      "comment": "Quantum mechanics, general relativity, theoretical physics"
+    },
+    {
+      "name": "CERN Document Server",
+      "url": "https://cds.cern.ch/",
+      "source_type": "physics",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 500,
+      "crawl_depth": 2,
+      "comment": "Particle physics research papers and documentation"
+    },
+    {
+      "name": "Fermilab Physics Resources",
+      "url": "https://www.fnal.gov/pub/science/",
+      "source_type": "physics",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 300,
+      "crawl_depth": 2,
+      "comment": "High-energy physics and particle research"
+    },
+    {
+      "name": "APA PsycNet - Psychology Articles",
+      "url": "https://psycnet.apa.org/",
+      "source_type": "psychology",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 500,
+      "crawl_depth": 2,
+      "comment": "American Psychological Association research database"
+    },
+    {
+      "name": "Psychology Today - Therapy Topics",
+      "url": "https://www.psychologytoday.com/us/basics",
+      "source_type": "therapy",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false,
+      "fetch_limit": 600,
+      "crawl_depth": 2,
+      "comment": "Therapeutic approaches and mental health information"
+    },
+    {
+      "name": "National Institute of Mental Health",
+      "url": "https://www.nimh.nih.gov/health/topics",
+      "source_type": "therapy",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 500,
+      "crawl_depth": 2,
+      "comment": "Evidence-based mental health and therapy information"
+    },
+    {
+      "name": "Cognitive Behavioral Therapy - Beck Institute",
+      "url": "https://beckinstitute.org/",
+      "source_type": "therapy",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 300,
+      "crawl_depth": 2,
+      "comment": "CBT techniques and therapeutic methodologies"
+    },
+    {
+      "name": "Logic Matters - Peter Smith",
+      "url": "https://www.logicmatters.net/",
+      "source_type": "logic",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 300,
+      "crawl_depth": 2,
+      "comment": "Mathematical logic and formal reasoning"
+    },
+    {
+      "name": "ProofWiki - Mathematical Proofs",
+      "url": "https://proofwiki.org/wiki/Main_Page",
+      "source_type": "reasoning",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 1000,
+      "crawl_depth": 2,
+      "comment": "Formal mathematical proofs and logical reasoning"
+    },
+    {
+      "name": "Wolfram MathWorld",
+      "url": "https://mathworld.wolfram.com/",
+      "source_type": "mathematics",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 1500,
+      "crawl_depth": 2,
+      "comment": "Comprehensive mathematics encyclopedia"
+    },
+    {
+      "name": "MIT OpenCourseWare - Logic & Philosophy",
+      "url": "https://ocw.mit.edu/courses/linguistics-and-philosophy/",
+      "source_type": "reasoning",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 500,
+      "crawl_depth": 3,
+      "comment": "Academic reasoning and logical analysis courses"
+    },
+    {
+      "name": "OpenStax - Free Textbooks",
+      "url": "https://openstax.org/subjects",
+      "source_type": "textbooks",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 800,
+      "crawl_depth": 3,
+      "comment": "Peer-reviewed open-source college textbooks"
+    },
+    {
+      "name": "Khan Academy - Science & Math",
+      "url": "https://www.khanacademy.org/",
+      "source_type": "educational",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 1000,
+      "crawl_depth": 3,
+      "content_filter": {
+        "path_patterns": ["/science/", "/math/", "/computing/"]
+      },
+      "comment": "Clear educational explanations across disciplines"
+    },
+    {
+      "name": "Project Gutenberg - Public Domain Literature",
+      "url": "https://www.gutenberg.org/ebooks/search/?sort_order=downloads",
+      "source_type": "gutenberg",
+      "enabled": false,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 1000,
+      "content_filter": {
+        "formats": ["text/plain", "text/html"],
+        "languages": ["en"],
+        "subjects": ["Philosophy", "Science", "Literature", "History", "Logic"]
+      },
+      "comment": "Disabled - use direct text version instead"
+    },
+    {
+      "name": "MIT OpenCourseWare",
+      "url": "https://ocw.mit.edu/",
+      "source_type": "tech_docs",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "crawl_depth": 3,
+      "content_filter": {
+        "path_patterns": ["/courses/linguistics-and-philosophy/", "/courses/electrical-engineering/", "/courses/computer-science/"]
+      }
+    },
+    {
+      "name": "Directory of Open Access Books",
+      "url": "https://www.doabooks.org/",
+      "source_type": "open_books",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 500
+    },
+    {
+      "name": "JSTOR Open Access Books",
+      "url": "https://about.jstor.org/librarians/books/open-access-books-jstor/",
+      "source_type": "jstor_oa",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 300
+    },
+    {
+      "name": "Stanford Encyclopedia of Philosophy",
+      "url": "https://plato.stanford.edu/",
+      "source_type": "philosophy",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "crawl_depth": 2,
+      "content_filter": {
+        "path_patterns": ["/entries/", "/archives/"]
+      }
+    },
+    {
+      "name": "MIT Classics Archive - Aristotle's Rhetoric",
+      "url": "https://classics.mit.edu/Aristotle/rhetoric.html",
+      "source_type": "classical_texts",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false
+    },
+    {
+      "name": "American Rhetoric Database",
+      "url": "https://americanrhetoric.com/",
+      "source_type": "rhetoric",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 500,
+      "content_filter": {
+        "types": ["speeches", "transcripts"]
+      }
+    },
+    {
+      "name": "Open Logic Project",
+      "url": "https://openlogicproject.org/",
+      "source_type": "logic",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "content_filter": {
+        "formats": ["LaTeX", "PDF"]
+      }
+    },
+    {
+      "name": "Internet Encyclopedia of Philosophy",
+      "url": "https://iep.utm.edu/",
+      "source_type": "philosophy",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "crawl_depth": 2
+    },
+    {
+      "name": "PhilPapers",
+      "url": "https://philpapers.org/",
+      "source_type": "academic_papers",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 1000,
+      "content_filter": {
+        "open_access_only": true
+      }
+    },
+    {
+      "name": "ArXiv - Computer Science Papers",
+      "url": "http://export.arxiv.org/api/query?search_query=cat:cs.AI+OR+cat:cs.CL+OR+cat:cs.LG&max_results=200",
+      "source_type": "arxiv",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "fetch_limit": 200,
+      "content_filter": {
+        "categories": ["cs.AI", "cs.CL", "cs.LG", "cs.NE"],
+        "min_year": 2020
+      }
+    },
+    {
+      "name": "Wikipedia - Technology Articles",
+      "url": "https://en.wikipedia.org/w/api.php?action=query&list=random&rnnamespace=0&rnlimit=100&format=json",
+      "source_type": "wikipedia",
+      "enabled": true,
+      "priority": 7,
+      "requires_auth": false,
+      "fetch_limit": 200,
+      "content_filter": {
+        "categories": ["Technology", "Computer science", "Artificial intelligence", "Programming"],
+        "min_length": 1000
+      }
+    },
+    {
+      "name": "Stack Overflow - Top Questions",
+      "url": "https://api.stackexchange.com/2.3/questions?order=desc&sort=votes&site=stackoverflow&tagged=python;machine-learning",
+      "source_type": "stackoverflow",
+      "enabled": true,
+      "priority": 6,
+      "requires_auth": false,
+      "api_key_env": "STACKOVERFLOW_KEY",
+      "fetch_limit": 100,
+      "content_filter": {
+        "min_score": 10,
+        "tags": ["python", "machine-learning", "deep-learning", "nlp"],
+        "has_accepted_answer": true
+      }
+    },
+    {
+      "name": "Hugging Face Documentation",
+      "url": "https://huggingface.co/docs",
+      "source_type": "tech_docs",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "crawl_depth": 2,
+      "content_filter": {
+        "path_patterns": ["/transformers/", "/datasets/", "/tokenizers/"]
+      }
+    },
+    {
+      "name": "Python Official Documentation",
+      "url": "https://docs.python.org/3/",
+      "source_type": "tech_docs",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false,
+      "crawl_depth": 3,
+      "content_filter": {
+        "path_patterns": ["/library/", "/tutorial/", "/reference/"],
+        "exclude_patterns": ["/bugs/", "/devguide/"]
+      }
+    },
+    {
+      "name": "PyTorch Tutorials",
+      "url": "https://pytorch.org/tutorials/",
+      "source_type": "tech_docs",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "crawl_depth": 2
+    },
+    {
+      "name": "TensorFlow Documentation",
+      "url": "https://www.tensorflow.org/api_docs",
+      "source_type": "tech_docs",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false,
+      "crawl_depth": 2
+    },
+    {
+      "name": "PubMed Central - Open Access",
+      "url": "https://www.ncbi.nlm.nih.gov/pmc/",
+      "source_type": "academic_papers",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false,
+      "fetch_limit": 500,
+      "content_filter": {
+        "subjects": ["neuroscience", "cognitive science", "linguistics"],
+        "open_access_only": true
+      }
+    },
+    {
+      "name": "Intel ARK - CPU Specifications",
+      "url": "https://ark.intel.com/content/www/us/en/ark.html",
+      "source_type": "hardware_specs",
+      "enabled": true,
+      "priority": 7,
+      "requires_auth": false,
+      "crawl_depth": 2,
+      "content_filter": {
+        "product_types": ["processors", "chipsets"]
+      }
+    },
+    {
+      "name": "NVIDIA GPU Specifications",
+      "url": "https://www.nvidia.com/en-us/technologies/",
+      "source_type": "hardware_specs",
+      "enabled": true,
+      "priority": 7,
+      "requires_auth": false,
+      "crawl_depth": 2,
+      "content_filter": {
+        "path_patterns": ["/cuda/", "/gpu/", "/architecture/"]
+      }
+    },
+    {
+      "name": "TechPowerUp GPU Database",
+      "url": "https://www.techpowerup.com/gpu-specs/",
+      "source_type": "hardware_specs",
+      "enabled": true,
+      "priority": 7,
+      "requires_auth": false,
+      "fetch_limit": 1000
+    },
+    {
+      "name": "WikiChip - Microprocessor Database",
+      "url": "https://en.wikichip.org/",
+      "source_type": "hardware_specs",
+      "enabled": true,
+      "priority": 7,
+      "requires_auth": false,
+      "crawl_depth": 2
+    },
+    {
+      "name": "MDN Web Docs",
+      "url": "https://developer.mozilla.org/en-US/docs/Web",
+      "source_type": "tech_docs",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false,
+      "crawl_depth": 3,
+      "content_filter": {
+        "path_patterns": ["/JavaScript/", "/Web/API/", "/Learn/"]
+      }
+    },
+    {
+      "name": "Rust Documentation",
+      "url": "https://doc.rust-lang.org/",
+      "source_type": "tech_docs",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false,
+      "crawl_depth": 2,
+      "content_filter": {
+        "path_patterns": ["/book/", "/reference/", "/std/"]
+      }
+    },
+    {
+      "name": "Go Documentation",
+      "url": "https://golang.org/doc/",
+      "source_type": "tech_docs",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false,
+      "crawl_depth": 2
+    },
+    {
+      "name": ".NET Documentation",
+      "url": "https://docs.microsoft.com/en-us/dotnet/",
+      "source_type": "tech_docs",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false,
+      "crawl_depth": 2
+    },
+    {
+      "name": "Glottolog - Linguistic Database",
+      "url": "https://glottolog.org/",
+      "source_type": "linguistics",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false,
+      "crawl_depth": 2
+    },
+    {
+      "name": "Corpus of Historical American English",
+      "url": "https://www.english-corpora.org/coha/",
+      "source_type": "linguistics",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false,
+      "fetch_limit": 500
+    },
+    {
+      "name": "Wordnik - Dictionary API",
+      "url": "https://www.wordnik.com/",
+      "source_type": "linguistics",
+      "enabled": true,
+      "priority": 7,
+      "requires_auth": false,
+      "fetch_limit": 1000
+    },
+    {
+      "name": "Avalon Project - Historical Documents",
+      "url": "https://avalon.law.yale.edu/",
+      "source_type": "rhetoric",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "crawl_depth": 2
+    },
+    {
+      "name": "Purdue OWL - Writing Resources",
+      "url": "https://owl.purdue.edu/",
+      "source_type": "rhetoric",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false,
+      "crawl_depth": 2
+    },
+    {
+      "name": "UNC Writing Center Resources",
+      "url": "https://writingcenter.unc.edu/tips-and-tools/",
+      "source_type": "rhetoric",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false,
+      "crawl_depth": 2
+    },
+    {
+      "name": "Early Modern Texts - Philosophy",
+      "url": "https://www.earlymoderntexts.com/",
+      "source_type": "philosophy",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "crawl_depth": 2
+    },
+    {
+      "name": "PhilSci Archive - Philosophy of Science",
+      "url": "http://philsci-archive.pitt.edu/",
+      "source_type": "philosophy",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "fetch_limit": 500
+    },
+    {
+      "name": "OpenStax - Free Textbooks",
+      "url": "https://openstax.org/",
+      "source_type": "open_books",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "crawl_depth": 2,
+      "content_filter": {
+        "subjects": ["Philosophy", "Logic", "Computer Science", "Mathematics"]
+      }
+    },
+    {
+      "name": "LibriSpeech - Speech Corpus Transcripts",
+      "url": "https://www.openslr.org/12/",
+      "source_type": "speech_corpus",
+      "enabled": true,
+      "priority": 7,
+      "requires_auth": false
+    },
+    {
+      "name": "VCTK Speech Corpus Transcripts",
+      "url": "https://datashare.ed.ac.uk/handle/10283/3443",
+      "source_type": "speech_corpus",
+      "enabled": true,
+      "priority": 7,
+      "requires_auth": false
+    },
+    {
+      "name": "Common Voice Dataset",
+      "url": "https://commonvoice.mozilla.org/en/datasets",
+      "source_type": "speech_corpus",
+      "enabled": true,
+      "priority": 7,
+      "requires_auth": false
+    },
+    {
+      "name": "Oxford English Dictionary - Grammar Resources",
+      "url": "https://public.oed.com/",
+      "source_type": "grammar",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "content_filter": {
+        "subjects": ["Grammar", "Etymology", "Usage"]
+      }
+    },
+    {
+      "name": "Cambridge Grammar - Academic Writing",
+      "url": "https://dictionary.cambridge.org/grammar/british-grammar/",
+      "source_type": "grammar",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false
+    },
+    {
+      "name": "Strunk & White - Elements of Style (Public Domain)",
+      "url": "https://www.bartleby.com/141/",
+      "source_type": "grammar",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false
+    },
+    {
+      "name": "The Chicago Manual of Style Online",
+      "url": "https://www.chicagomanualofstyle.org/",
+      "source_type": "grammar",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false
+    },
+    {
+      "name": "Stanford Encyclopedia of Philosophy - Logic & Reasoning",
+      "url": "https://plato.stanford.edu/contents.html#l",
+      "source_type": "theoretical_reasoning",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "content_filter": {
+        "subjects": ["Logic", "Epistemology", "Philosophy of Science", "Reasoning"]
+      }
+    },
+    {
+      "name": "Nature - Theoretical Physics & Mathematics",
+      "url": "https://www.nature.com/subjects/theoretical-physics",
+      "source_type": "theoretical_science",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false
+    },
+    {
+      "name": "PhilSci Archive - Philosophy of Science",
+      "url": "http://philsci-archive.pitt.edu/",
+      "source_type": "theoretical_reasoning",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false
+    },
+    {
+      "name": "arXiv - Theoretical Computer Science",
+      "url": "https://arxiv.org/list/cs.LO/recent",
+      "source_type": "theoretical_science",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false,
+      "content_filter": {
+        "categories": ["cs.LO", "cs.CC", "math.LO", "quant-ph"]
+      }
+    },
+    {
+      "name": "Science Direct - Theoretical & Applied Mathematics",
+      "url": "https://www.sciencedirect.com/journal/theoretical-computer-science",
+      "source_type": "theoretical_science",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false
+    },
+    {
+      "name": "Oxford Academic - Mind (Philosophy Journal)",
+      "url": "https://academic.oup.com/mind",
+      "source_type": "erudite_writing",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false
+    },
+    {
+      "name": "Journal of Symbolic Logic",
+      "url": "https://www.cambridge.org/core/journals/journal-of-symbolic-logic",
+      "source_type": "theoretical_reasoning",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false
+    },
+    {
+      "name": "Review of Symbolic Logic",
+      "url": "https://www.cambridge.org/core/journals/review-of-symbolic-logic",
+      "source_type": "theoretical_reasoning",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false
+    },
+    {
+      "name": "Internet Archive - Classical Rhetoric Texts",
+      "url": "https://archive.org/details/texts",
+      "source_type": "erudite_writing",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false,
+      "content_filter": {
+        "subjects": ["Rhetoric", "Classical Literature", "Philosophy"]
+      }
+    },
+    {
+      "name": "Project MUSE - Academic Humanities",
+      "url": "https://muse.jhu.edu/",
+      "source_type": "erudite_writing",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false
+    },
+    {
+      "name": "Linguistic Society of America",
+      "url": "https://www.linguisticsociety.org/",
+      "source_type": "grammar",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false
+    },
+    {
+      "name": "Grammar Girl - Quick & Dirty Tips",
+      "url": "https://www.quickanddirtytips.com/grammar-girl/",
+      "source_type": "grammar",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false
+    },
+    {
+      "name": "Merriam-Webster - Words at Play",
+      "url": "https://www.merriam-webster.com/words-at-play",
+      "source_type": "grammar",
+      "enabled": true,
+      "priority": 8,
+      "requires_auth": false
+    },
+    {
+      "name": "The Philosopher's Index",
+      "url": "https://philpapers.org/",
+      "source_type": "theoretical_reasoning",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false
+    },
+    {
+      "name": "arXiv - Mathematical Logic",
+      "url": "https://arxiv.org/list/math.LO/recent",
+      "source_type": "theoretical_reasoning",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false
+    },
+    {
+      "name": "Foundations of Physics Journal",
+      "url": "https://www.springer.com/journal/10701",
+      "source_type": "theoretical_science",
+      "enabled": true,
+      "priority": 9,
+      "requires_auth": false
+    },
+    {
+      "name": "Oxford Handbook of Philosophy",
+      "url": "https://www.oxfordhandbooks.com/",
+      "source_type": "erudite_writing",
+      "enabled": true,
+      "priority": 10,
+      "requires_auth": false
+    },
+    {
+      "name": "Reddit - Machine Learning",
+      "url": "https://www.reddit.com/r/MachineLearning/top.json?limit=100&t=month",
+      "source_type": "reddit",
+      "enabled": false,
+      "priority": 5,
+      "requires_auth": false,
+      "content_filter": {
+        "min_score": 50,
+        "post_types": ["discussion", "research"],
+        "exclude_flairs": ["meme", "spam"]
+      }
+    },
+    {
+      "name": "News API - Tech News",
+      "url": "https://newsapi.org/v2/everything?q=artificial+intelligence&language=en&sortBy=relevancy",
+      "source_type": "news_api",
+      "enabled": false,
+      "priority": 6,
+      "requires_auth": true,
+      "api_key_env": "NEWS_API_KEY",
+      "fetch_limit": 100,
+      "content_filter": {
+        "sources": ["techcrunch", "wired", "arstechnica", "theverge"],
+        "min_length": 500
+      }
+    }
+  ],
+  
+  "verification_settings": {
+    "enabled": true,
+    "min_reliability_threshold": 0.8,
+    "cross_reference_enabled": true,
+    "min_cross_references": 2,
+    
+    "domain_whitelist": [
+      "github.com",
+      "arxiv.org",
+      "wikipedia.org",
+      "stackoverflow.com",
+      "huggingface.co",
+      "python.org",
+      "pytorch.org",
+      "tensorflow.org",
+      "google.com",
+      "microsoft.com",
+      "openai.com",
+      "anthropic.com",
+      "gutenberg.org",
+      "ocw.mit.edu",
+      "plato.stanford.edu",
+      "iep.utm.edu",
+      "philpapers.org",
+      "ncbi.nlm.nih.gov",
+      "ark.intel.com",
+      "nvidia.com",
+      "techpowerup.com",
+      "wikichip.org",
+      "developer.mozilla.org",
+      "doc.rust-lang.org",
+      "golang.org",
+      "docs.microsoft.com",
+      "glottolog.org",
+      "english-corpora.org",
+      "wordnik.com",
+      "americanrhetoric.com",
+      "avalon.law.yale.edu",
+      "owl.purdue.edu",
+      "writingcenter.unc.edu",
+      "earlymoderntexts.com",
+      "philsci-archive.pitt.edu",
+      "openstax.org",
+      "openslr.org",
+      "datashare.ed.ac.uk",
+      "commonvoice.mozilla.org",
+      "classics.mit.edu",
+      "openlogicproject.org",
+      "doabooks.org",
+      "jstor.org",
+      "public.oed.com",
+      "dictionary.cambridge.org",
+      "bartleby.com",
+      "chicagomanualofstyle.org",
+      "nature.com",
+      "sciencedirect.com",
+      "academic.oup.com",
+      "cambridge.org",
+      "archive.org",
+      "muse.jhu.edu",
+      "linguisticsociety.org",
+      "quickanddirtytips.com",
+      "merriam-webster.com",
+      "springer.com",
+      "oxfordhandbooks.com"
+    ],
+    
+    "domain_blacklist": [
+      "example.com",
+      "spam.com",
+      "ads.com"
+    ],
+    
+    "content_quality_checks": {
+      "min_length": 100,
+      "max_length": 50000,
+      "min_words": 20,
+      "check_grammar": true,
+      "check_encoding": true,
+      "detect_spam": true,
+      "detect_duplicates": true
+    }
+  },
+  
+  "parsing_settings": {
+    "max_tokens_per_example": 2048,
+    "overlap_tokens": 128,
+    "extract_entities": true,
+    "extract_keywords": true,
+    "extract_topics": true,
+    
+    "parsing_strategies": [
+      {
+        "name": "code_documentation",
+        "enabled": true,
+        "triggers": ["```", "def ", "class ", "function"],
+        "format": "instruction_following"
+      },
+      {
+        "name": "qa_generation",
+        "enabled": true,
+        "triggers": ["?", "how to", "what is", "why"],
+        "format": "question_answer"
+      },
+      {
+        "name": "summarization",
+        "enabled": true,
+        "min_length": 500,
+        "format": "text_completion"
+      },
+      {
+        "name": "next_sentence",
+        "enabled": true,
+        "format": "text_completion"
+      }
+    ]
+  },
+  
+  "storage_settings": {
+    "output_format": "flatbuffer",
+    "compression": "zlib",
+    "output_dir": "data/raw",
+    "verified_dir": "data/verified",
+    "parsed_dir": "data/parsed",
+    
+    "file_naming": {
+      "pattern": "{source_type}_{date}_{session_id}.gwbt",
+      "include_timestamp": true,
+      "include_checksum": true
+    },
+    
+    "index_enabled": true,
+    "create_splits": true,
+    "train_ratio": 0.8,
+    "val_ratio": 0.1,
+    "test_ratio": 0.1
+  },
+  
+  "logging": {
+    "level": "INFO",
+    "log_file": "logs/data_collection.log",
+    "verbose": true,
+    "log_to_console": true,
+    "log_statistics": true
+  },
+  
+  "safety": {
+    "respect_robots_txt": true,
+    "min_request_interval_ms": 1000,
+    "max_concurrent_domains": 3,
+    "max_file_size_mb": 10,
+    "timeout_per_request_sec": 30,
+    "max_redirects": 5
+  }
+}

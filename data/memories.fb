@@ -35,17 +35,17 @@
       "context": "monitor",
       "id": "",
       "intent": "inform",
-      "normalized": "Significant screen change detected (16% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: S0F\nSunny\n\nOF administrator Windows Pom X = + Y\n\n(Uzez5-11-18 15:\nWH=8 .822600ns\n\n(2825-11-18 15:26:22] [DEBUG] [MainLoop] SLOW FRAME (33ms): Input=6.adeseans, UI Update=8.0398eens, UI\n\n-022880ns\n(zez5-11-18 15:\ni=8.23e8ans\n(zez5-11-18 1:\nH=8.923800ns\n\n38] [DEBUG] [HainLoop] SLOW\n\n(zez5-11-18 1:\n\n[2925-11-18 1 1] [DEBUG] [PerceptionContext] Stored visual context in memory:\n(zez5-11-18 1:\n\n[2925-11-18 1 2] [DEBUG] [UIInputBox] Input box gained focus\n\n[2625-11-18 15:26:34] [DEBUG] [UIFocusManager]... (2415 total chars)\n",
-      "raw": "Significant screen change detected (16% change)\n\nScreen 1920x1080 (Monitor 3 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: S0F\nSunny\n\nOF administrator Windows Pom X = + Y\n\n(Uzez5-11-18 15:\nWH=8 .822600ns\n\n(2825-11-18 15:26:22] [DEBUG] [MainLoop] SLOW FRAME (33ms): Input=6.adeseans, UI Update=8.0398eens, UI\n\n-022880ns\n(zez5-11-18 15:\ni=8.23e8ans\n(zez5-11-18 1:\nH=8.923800ns\n\n38] [DEBUG] [HainLoop] SLOW\n\n(zez5-11-18 1:\n\n[2925-11-18 1 1] [DEBUG] [PerceptionContext] Stored visual context in memory:\n(zez5-11-18 1:\n\n[2925-11-18 1 2] [DEBUG] [UIInputBox] Input box gained focus\n\n[2625-11-18 15:26:34] [DEBUG] [UIFocusManager]... (2415 total chars)\n",
+      "normalized": "Significant screen change detected (20% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: GRIM Overlay (GRIM.exe)\nScene: Desktop | Theme: Dark\nText: N\nfe\nQ\n\n>eePrRdyvyE\n\n= &\n\nFile\n\nEdit Selection View Go Run\n\nEXPLORER. oo\n\n\\ GRLLM (WORKSPACE)\nVv GRIM .\n\ndocs\nexternal e\nexternal_collector\n\ngrim-node-editor\n\nhelpers\n\nlogs\n\nmemory\n\nmodels\n\nnet\n\nnip\n\nopenal-soft\n\nosint\n\nout\n\nperception\n\nplugins\n\npopup_ui\n\nresources .\nscripts\n\n‘STEM\n\n> Stock\n\n> TrainingServer_Scripts\n\nvu\n\n© console_panel.cpp\n© console_panel.hpp\n\n© embedded_shader.cpp\n\n© overlay_renderer.cpp\n\n© overlay_rendererhpp\n\n¥ trainingprogressproblem.md\n© ui_button.pp\n\n© ui_button... (2710 total chars)\n",
+      "raw": "Significant screen change detected (20% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: GRIM Overlay (GRIM.exe)\nScene: Desktop | Theme: Dark\nText: N\nfe\nQ\n\n>eePrRdyvyE\n\n= &\n\nFile\n\nEdit Selection View Go Run\n\nEXPLORER. oo\n\n\\ GRLLM (WORKSPACE)\nVv GRIM .\n\ndocs\nexternal e\nexternal_collector\n\ngrim-node-editor\n\nhelpers\n\nlogs\n\nmemory\n\nmodels\n\nnet\n\nnip\n\nopenal-soft\n\nosint\n\nout\n\nperception\n\nplugins\n\npopup_ui\n\nresources .\nscripts\n\n‘STEM\n\n> Stock\n\n> TrainingServer_Scripts\n\nvu\n\n© console_panel.cpp\n© console_panel.hpp\n\n© embedded_shader.cpp\n\n© overlay_renderer.cpp\n\n© overlay_rendererhpp\n\n¥ trainingprogressproblem.md\n© ui_button.pp\n\n© ui_button... (2710 total chars)\n",
       "source": "grim.internal",
       "tags": [
         "visual-context",
         "screen-capture",
-        "Terminal/Console",
-        "WindowsTerminal.exe",
-        "monitor-3"
+        "Desktop",
+        "GRIM.exe",
+        "monitor-1"
       ],
-      "timestamp": 1762806463,
+      "timestamp": 1762978869,
       "type": "event"
     }
   ]

@@ -1,0 +1,10 @@
+^D:\G.R.I.M\CONTROL\CMAKEFILES\9413F788DE6B9C20F0B92A56465B76D0\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/G.R.I.M/control -BD:/G.R.I.M/control --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/G.R.I.M/control/TrainingControlServer.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

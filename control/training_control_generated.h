@@ -67,6 +67,12 @@ struct DataCollectionRequestBuilder;
 struct DataCollectionResponse;
 struct DataCollectionResponseBuilder;
 
+struct ServerShutdownRequest;
+struct ServerShutdownRequestBuilder;
+
+struct ServerShutdownResponse;
+struct ServerShutdownResponseBuilder;
+
 enum TrainingState : int8_t {
   TrainingState_Idle = 0,
   TrainingState_Collecting = 1,
@@ -1598,6 +1604,98 @@ inline ::flatbuffers::Offset<DataCollectionResponse> CreateDataCollectionRespons
       success,
       message__,
       error__);
+}
+
+struct ServerShutdownRequest FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ServerShutdownRequestBuilder Builder;
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           verifier.EndTable();
+  }
+};
+
+struct ServerShutdownRequestBuilder {
+  typedef ServerShutdownRequest Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  explicit ServerShutdownRequestBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<ServerShutdownRequest> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<ServerShutdownRequest>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<ServerShutdownRequest> CreateServerShutdownRequest(
+    ::flatbuffers::FlatBufferBuilder &_fbb) {
+  ServerShutdownRequestBuilder builder_(_fbb);
+  return builder_.Finish();
+}
+
+struct ServerShutdownResponse FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ServerShutdownResponseBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_SUCCESS = 4,
+    VT_MESSAGE = 6
+  };
+  bool success() const {
+    return GetField<uint8_t>(VT_SUCCESS, 0) != 0;
+  }
+  const ::flatbuffers::String *message() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_MESSAGE);
+  }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint8_t>(verifier, VT_SUCCESS, 1) &&
+           VerifyOffset(verifier, VT_MESSAGE) &&
+           verifier.VerifyString(message()) &&
+           verifier.EndTable();
+  }
+};
+
+struct ServerShutdownResponseBuilder {
+  typedef ServerShutdownResponse Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_success(bool success) {
+    fbb_.AddElement<uint8_t>(ServerShutdownResponse::VT_SUCCESS, static_cast<uint8_t>(success), 0);
+  }
+  void add_message(::flatbuffers::Offset<::flatbuffers::String> message) {
+    fbb_.AddOffset(ServerShutdownResponse::VT_MESSAGE, message);
+  }
+  explicit ServerShutdownResponseBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<ServerShutdownResponse> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<ServerShutdownResponse>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<ServerShutdownResponse> CreateServerShutdownResponse(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    bool success = false,
+    ::flatbuffers::Offset<::flatbuffers::String> message = 0) {
+  ServerShutdownResponseBuilder builder_(_fbb);
+  builder_.add_message(message);
+  builder_.add_success(success);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<ServerShutdownResponse> CreateServerShutdownResponseDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    bool success = false,
+    const char *message = nullptr) {
+  auto message__ = message ? _fbb.CreateString(message) : 0;
+  return GRIMText::Control::CreateServerShutdownResponse(
+      _fbb,
+      success,
+      message__);
 }
 
 inline const GRIMText::Control::StatusResponse *GetStatusResponse(const void *buf) {

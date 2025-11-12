@@ -2,7 +2,6 @@
 #include <sstream>
 #include <iomanip>
 #include <thread>
-#include <future>
 #include <chrono>
 #include <ctime>
 #include <fstream>
@@ -13,11 +12,11 @@
 #include "ui_slider.hpp"
 #include "ui_graph.hpp"
 #include "overlay_renderer.hpp"
-#include "../logger.hpp"
-#include "../system_detect.hpp"
-#include "../ai/training_server_manager.hpp"
-#include "../control/data_collection_server.hpp"
-#include "../resources.hpp"
+#include "logger.hpp"
+#include "system_detect.hpp"
+#include "ai/training_server_manager.hpp"
+#include "resources.hpp"
+#include "control/ai_config_paths.hpp"
 
 #ifdef WHISPER_USE_CUDA
     #include <cuda_runtime.h>
@@ -32,18 +31,11 @@ UITrainingPanel::UITrainingPanel()
       currentState(Control::TrainingState_Idle),
       serverConnected(false),
       serverStarting(false),  // Initialize server starting flag
-      dataCollectionServerConnected(false),  // Initialize data collection server connection
       dataCollectionActive(false),  // Initialize data collection flag
       dataCollectionCompleted(false),  // Initialize completion flag
       pipelineRequestPending(false),  // Initialize pipeline request flag
-      firstPollDone(false),  // Initialize first poll flag
-      collectionStuckTimer(0.0f),  // Initialize stuck timer
-      lastCollectionProgress(0.0f),  // Initialize last progress
       pollTimer(0.0f),
       pollInterval(0.2f),  // Poll every 200ms for fast training updates
-      dataCollectionPollTimer(0.0f),  // Initialize data collection poll timer
-      dataCollectionPollInterval(1.0f),  // Poll data collection server every 1 second (reduce load)
-      dataCollectionPollInProgress(false),  // Initialize async poll flag
       maxLogEntries(1000),
       logScrollPosition(0.0f),
       autoScrollLogs(true),
@@ -71,16 +63,22 @@ UITrainingPanel::UITrainingPanel()
     // Load config from JSON
     loadConfigFromJSON();
     
-    // Initialize client with config from JSON
+    // Initialize training controller with config from JSON
     std::string host = TrainingConfigManager::getServerHost();
     int port = TrainingConfigManager::getServerPort();
     try {
-        client = std::make_unique<TrainingControlClient>(host, port);
-        LOG_DEBUG("UITrainingPanel", "Training control client created");
+        trainingController = std::make_unique<GRIM::UI::UITrainingController>(host, port);
+        LOG_DEBUG("UITrainingPanel", "Training controller created");
+        
+        // Setup callbacks for training events
+        setupCallbacks();
     } catch (const std::exception& e) {
-        LOG_ERROR("UITrainingPanel", std::string("Failed to create client: ") + e.what());
-        lastError = std::string("Client init failed: ") + e.what();
+        LOG_ERROR("UITrainingPanel", std::string("Failed to create training controller: ") + e.what());
+        lastError = std::string("Controller init failed: ") + e.what();
     }
+    
+    // Initialize data collection manager (in-process)
+    collectionManager = std::make_unique<GRIM::DataCollection::DataCollectionManager>();
     
     // Initialize configuration sliders
     epochsSlider = std::make_shared<UISlider>("Epochs", 1.0f, 50.0f, 
@@ -239,23 +237,11 @@ UITrainingPanel::UITrainingPanel()
         startDataCollection();
     });
     
-    // GRIM-text path configuration inputs
-    vocabPathInput = std::make_shared<UIInputBox>(&vocabPathBuffer);
-    vocabPathInput->setPlaceholder("Vocab path (vocab.bin)");
-    
-    modelPathInput = std::make_shared<UIInputBox>(&modelPathBuffer);
-    modelPathInput->setPlaceholder("Model path (grim_text.bin)");
-    
+    // Training data path configuration input (only this one exposed in UI)
     trainingDataPathInput = std::make_shared<UIInputBox>(&trainingDataPathBuffer);
-    trainingDataPathInput->setPlaceholder("Training data path (.grmt)");
+    trainingDataPathInput->setPlaceholder("Training data path (.grmt or .bin)");
     
-    checkpointsPathInput = std::make_shared<UIInputBox>(&checkpointsPathBuffer);
-    checkpointsPathInput->setPlaceholder("Checkpoints directory");
-    
-    logsPathInput = std::make_shared<UIInputBox>(&logsPathBuffer);
-    logsPathInput->setPlaceholder("Logs directory");
-    
-    // Load paths from ai_config.json
+    // Load paths from ai_config.json (loads all paths, but only training data shown in UI)
     loadPathsFromConfig();
     
     // Create vertical layout box for the 4 main buttons (Start, Stop, Pause, Close)
@@ -313,17 +299,35 @@ UITrainingPanel::UITrainingPanel()
 }
 
 UITrainingPanel::~UITrainingPanel() {
-    // Shutdown data collection server if connected
-    if (dataCollectionClient && dataCollectionServerConnected) {
-        addLog("[DataCollection] Shutting down data collection server...", 0);
-        dataCollectionClient->shutdownServer();
-    }
+    // Cleanup handled by RAII
+}
+
+// Setup callbacks for training controller
+void UITrainingPanel::setupCallbacks() {
+    if (!trainingController) return;
+    
+    // Progress update callback
+    trainingController->setProgressCallback([this](const GRIMText::TrainingStats& stats) {
+        currentStats = stats;
+    });
+    
+    // State change callback
+    trainingController->setStateChangeCallback([this](GRIMText::Control::TrainingState oldState, GRIMText::Control::TrainingState newState) {
+        std::string oldStateName = getStateString(oldState);
+        std::string newStateName = getStateString(newState);
+        addLog("Training state changed: " + oldStateName + " -> " + newStateName, 1);
+    });
+    
+    // Error callback
+    trainingController->setErrorCallback([this](const std::string& error) {
+        lastError = error;
+        addLog("Error: " + error, 2);
+    });
 }
 
 void UITrainingPanel::resetState() {
     currentState = Control::TrainingState_Idle;
     serverStarting = false;  // Reset server starting flag
-    dataCollectionServerConnected = false;  // Reset data collection server connection
     dataCollectionActive = false;  // Reset data collection flag
     dataCollectionCompleted = false;  // Reset completion flag
     pipelineRequestPending = false;  // Reset pipeline request flag
@@ -368,42 +372,13 @@ void UITrainingPanel::update(const InputState& input, float dt) {
     // Update source input
     if (sourceUrlInput) sourceUrlInput->update(input, dt);
     
-    // Update GRIM-text path inputs and auto-save on change
-    static std::string lastVocabPath, lastModelPath, lastTrainingDataPath, lastCheckpointsPath, lastLogsPath;
-    
-    if (vocabPathInput) {
-        vocabPathInput->update(input, dt);
-        if (vocabPathBuffer != lastVocabPath) {
-            lastVocabPath = vocabPathBuffer;
-            savePathsToConfig();
-        }
-    }
-    if (modelPathInput) {
-        modelPathInput->update(input, dt);
-        if (modelPathBuffer != lastModelPath) {
-            lastModelPath = modelPathBuffer;
-            savePathsToConfig();
-        }
-    }
+    // Update training data path input and save if changed
+    static std::string lastTrainingDataPath;
     if (trainingDataPathInput) {
         trainingDataPathInput->update(input, dt);
         if (trainingDataPathBuffer != lastTrainingDataPath) {
             lastTrainingDataPath = trainingDataPathBuffer;
-            savePathsToConfig();
-        }
-    }
-    if (checkpointsPathInput) {
-        checkpointsPathInput->update(input, dt);
-        if (checkpointsPathBuffer != lastCheckpointsPath) {
-            lastCheckpointsPath = checkpointsPathBuffer;
-            savePathsToConfig();
-        }
-    }
-    if (logsPathInput) {
-        logsPathInput->update(input, dt);
-        if (logsPathBuffer != lastLogsPath) {
-            lastLogsPath = logsPathBuffer;
-            savePathsToConfig();
+            savePathsToConfig();  // Save all paths when training data changes
         }
     }
     
@@ -414,287 +389,116 @@ void UITrainingPanel::update(const InputState& input, float dt) {
         pollServer();
     }
     
-    // Poll data collection server more frequently for real-time progress
-    dataCollectionPollTimer += dt;
-    if (dataCollectionPollTimer >= dataCollectionPollInterval) {
-        dataCollectionPollTimer = 0.0f;
-        pollDataCollectionServerAsync();  // Use async version to avoid blocking
+    // Poll data collection manager if active
+    if (dataCollectionActive && collectionManager) {
+        auto status = collectionManager->getStatus();
+        
+        // Update currentStats with collection progress
+        currentStats.collectionProgress = status.progress;
+        
+        // Check if collection completed
+        if (!status.isRunning && status.progress >= 99.0f) {
+            dataCollectionActive = false;
+            dataCollectionCompleted = true;
+            pipelineRequestPending = false;
+            
+            if (status.phase == "complete") {
+                addLog("✓ Data collection completed successfully!", 1);
+            } else if (status.phase == "error") {
+                addLog("✗ Data collection failed: " + status.message, 2);
+            }
+        }
     }
 }
 
 void UITrainingPanel::pollServer() {
-    if (!client) return;
+    if (!trainingController) return;
     
-    // ✅ FIX: Skip if already polling (prevents stacking async requests)
-    static std::atomic<bool> isPolling{false};
-    if (isPolling.exchange(true)) {
-        return; // Already polling, skip this frame
+    // Check connection
+    bool previouslyConnected = serverConnected;
+    serverConnected = trainingController->isServerRunning();
+    
+    // Detect server disconnect during training
+    if (previouslyConnected && !serverConnected) {
+        if (currentState == Control::TrainingState_Training || 
+            currentState == Control::TrainingState_Collecting ||
+            currentState == Control::TrainingState_Verifying) {
+            addLog("Server disconnected during operation - training may have crashed", 2);
+            currentState = Control::TrainingState_Error;
+            currentStats.lastError = "Server disconnected unexpectedly";
+            checkpointMergeStatus = "";
+        }
     }
     
-    // ✅ FIX: Run network I/O on background thread to avoid blocking UI
-    std::thread([this]() {
-        // Check connection
-        bool previouslyConnected = serverConnected;
-        serverConnected = client->isServerRunning();
-        
-        // Reset first poll flag when we reconnect
-        if (!previouslyConnected && serverConnected) {
-            firstPollDone = false;
-        }
-        
-        // Detect server disconnect during training
-        if (previouslyConnected && !serverConnected) {
-            if (currentState == Control::TrainingState_Training || 
-                currentState == Control::TrainingState_Collecting ||
-                currentState == Control::TrainingState_Verifying) {
-                addLog("Server disconnected during operation - training may have crashed", 2);
-                currentState = Control::TrainingState_Error;
-                currentStats.lastError = "Server disconnected unexpectedly";
-                checkpointMergeStatus = "";
-            }
-        }
-    
     if (serverConnected) {
-        // Get status
-        Control::TrainingState state;
-        TrainingStats stats;
-        TrainingConfig config;
-        
-        if (client->getStatus(state, stats, config)) {
+        // Poll status through controller (this triggers callbacks automatically)
+        if (trainingController->pollStatus()) {
             Control::TrainingState previousState = currentState;
             
-            // Detect stale collection/verification states on first poll after connection
-            // (server crashed or was killed mid-operation, leaving stale status file)
-            if (!firstPollDone && (state == Control::TrainingState_Collecting || state == Control::TrainingState_Verifying)) {
-                // If we're in collecting/verifying state but there's no active progress, it's stale
-                addLog("Detected stale '" + getStateString(state) + "' state from previous session, resetting...", 1);
-                state = Control::TrainingState_Idle;
-                stats = TrainingStats();  // Clear stats
-            }
-            firstPollDone = true;
+            // Update current state from controller
+            currentState = trainingController->getCurrentState();
+            currentStats = trainingController->getCurrentStats();
+            currentConfig = trainingController->getCurrentConfig();
             
             // Detect state transitions
-            if (previousState != state) {
+            if (previousState != currentState) {
                 // Training -> Completed
                 if (previousState == Control::TrainingState_Training && 
-                    state == Control::TrainingState_Completed) {
+                    currentState == Control::TrainingState_Completed) {
                     addLog("Training completed successfully!", 0);
                     checkpointMergeStatus = "";
                 }
                 // Training -> Error
                 else if (previousState == Control::TrainingState_Training && 
-                         state == Control::TrainingState_Error) {
-                    addLog("Training encountered an error: " + stats.lastError, 2);
+                         currentState == Control::TrainingState_Error) {
+                    addLog("Training encountered an error: " + currentStats.lastError, 2);
                     checkpointMergeStatus = "";
                 }
                 // Training -> Paused
                 else if (previousState == Control::TrainingState_Training && 
-                         state == Control::TrainingState_Paused) {
+                         currentState == Control::TrainingState_Paused) {
                     addLog("Training paused", 1);
                 }
                 // Paused -> Training
                 else if (previousState == Control::TrainingState_Paused && 
-                         state == Control::TrainingState_Training) {
+                         currentState == Control::TrainingState_Training) {
                     addLog("Training resumed", 0);
                 }
                 // Any -> Idle (unexpected stop)
                 else if (previousState == Control::TrainingState_Training && 
-                         state == Control::TrainingState_Idle) {
+                         currentState == Control::TrainingState_Idle) {
                     addLog("Training stopped unexpectedly - process may have crashed", 2);
-                    stats.lastError = "Training process terminated";
+                    currentStats.lastError = "Training process terminated";
                     checkpointMergeStatus = "";
                 }
             }
             
-            // Detect training crash by checking if process_running flag is false during training
-            if (state == Control::TrainingState_Training) {
-                // The StatusResponse has a process_running field we should check
-                // If state says Training but process isn't running, it crashed
-                static int crashCheckCounter = 0;
-                crashCheckCounter++;
-                
-                // Check every 5 polls (~1 second) to avoid false positives
-                if (crashCheckCounter >= 5) {
-                    crashCheckCounter = 0;
-                    
-                    // If we haven't received any stat updates in a while, something is wrong
-                    static float lastLoss = -1.0f;
-                    static int lastBatch = -1;
-                    
-                    if (stats.currentLoss == lastLoss && stats.currentBatch == lastBatch) {
-                        static int stalledCounter = 0;
-                        stalledCounter++;
-                        
-                        // If stats haven't changed for 75 polls (~15 seconds), assume crash
-                        // Increased from 25 polls to allow for slow training steps
-                        if (stalledCounter > 75) {
-                            addLog("Training appears to have stalled or crashed - no progress detected", 2);
-                            currentState = Control::TrainingState_Error;
-                            stats.lastError = "Training process stalled - no progress";
-                            stalledCounter = 0;
-                            checkpointMergeStatus = "";
-                        }
-                    } else {
-                        static int stalledCounter = 0;
-                        stalledCounter = 0; // Reset if we see progress
-                        lastLoss = stats.currentLoss;
-                        lastBatch = stats.currentBatch;
-                    }
-                }
-            }
-            
-            currentState = state;
-            currentStats = stats;
-            currentConfig = config;
-            
             // Update data collection active flag based on server state
-            dataCollectionActive = (state == Control::TrainingState_Collecting || 
-                                   state == Control::TrainingState_Verifying);
+            dataCollectionActive = (currentState == Control::TrainingState_Collecting || 
+                                   currentState == Control::TrainingState_Verifying);
             
             // Log phase changes during data collection
             static std::string lastPhase = "";
-            if (state == Control::TrainingState_Collecting && 
-                !stats.currentPhase.empty() && 
-                stats.currentPhase != lastPhase) {
-                addLog("  → " + stats.currentPhase, 0);
-                lastPhase = stats.currentPhase;
-            } else if (state != Control::TrainingState_Collecting) {
+            if (currentState == Control::TrainingState_Collecting && 
+                !currentStats.currentPhase.empty() && 
+                currentStats.currentPhase != lastPhase) {
+                addLog("  → " + currentStats.currentPhase, 0);
+                lastPhase = currentStats.currentPhase;
+            } else if (currentState != Control::TrainingState_Collecting) {
                 lastPhase = "";  // Reset when not collecting
             }
             
         } else {
-            // Failed to get status from server
+            // Failed to get status from controller
             if (currentState == Control::TrainingState_Training) {
                 addLog("Failed to communicate with training server", 2);
-                // Don't immediately switch to error, might be temporary
             }
         }
     } else {
         // Server disconnected - reset collection flag
         dataCollectionActive = false;
     }
-    
-    isPolling = false; // ✅ FIX: Release lock so next poll can run
-    }).detach(); // ✅ FIX: Run async, don't wait
 }
-
-void UITrainingPanel::pollDataCollectionServerAsync() {
-    // Check if previous poll is still running
-    if (dataCollectionPollInProgress.exchange(true)) {
-        return; // Skip if already polling
-    }
-    
-    // ✅ FIX: Launch DIRECT async task (avoid double-threading with pollDataCollectionServer)
-    dataCollectionPollFuture = std::async(std::launch::async, [this]() {
-        if (!dataCollectionClient) {
-            // Initialize client on first poll
-            dataCollectionClient = std::make_unique<GRIM::DataCollection::DataCollectionClient>("localhost", 11437);
-            addLog("[DataCollection] Client initialized for localhost:11437", 0);
-        }
-        
-        // Check if data collection server is running (FAST timeout)
-        bool previouslyConnected = dataCollectionServerConnected;
-        dataCollectionServerConnected = dataCollectionClient->isServerRunning();
-        
-        if (!previouslyConnected && dataCollectionServerConnected) {
-            addLog("[DataCollection] Server connected!", 0);
-        } else if (previouslyConnected && !dataCollectionServerConnected) {
-            addLog("[DataCollection] Server disconnected!", 1);
-        }
-        
-        // If server is not connected, nothing more to poll
-        if (!dataCollectionServerConnected) {
-            dataCollectionPollInProgress = false;
-            return;
-        }
-        
-        // Get current collection status (FAST timeout)
-        auto status = dataCollectionClient->getStatus();
-        
-        // Only update state if we got a valid response (prevents flickering on timeout)
-        if (!status.valid) {
-            dataCollectionPollInProgress = false;
-            return;
-        }
-        
-        // Update dataCollectionActive flag based on server status
-        bool wasCollecting = dataCollectionActive;
-        
-        // Don't update to inactive if we've already marked as completed (prevents flickering)
-        if (!dataCollectionCompleted || status.isCollecting) {
-            dataCollectionActive = status.isCollecting;
-        }
-        
-        // Detect collection start
-        if (!wasCollecting && dataCollectionActive) {
-            addLog("[DataCollection] Collection started on server", 0);
-            lastCollectionProgress = 0.0f;
-            collectionStuckTimer = 0.0f;
-            dataCollectionCompleted = false;  // Reset completion flag on new collection
-        }
-        
-        // Detect collection completion (only log once)
-        if (wasCollecting && !dataCollectionActive) {
-            if (!dataCollectionCompleted) {
-                addLog("[DataCollection] Collection completed/stopped on server", 0);
-                dataCollectionCompleted = true;  // Mark as completed to prevent re-logging
-                pipelineRequestPending = false;
-                // Keep final progress/phase values to show completion state
-                
-                if (!status.error.empty()) {
-                    addLog("[DataCollection] ERROR: " + status.error, 2);
-                }
-            }
-        }
-        
-        // Update collection progress and phase (only during active collection, not after completion)
-        if (dataCollectionActive && !dataCollectionCompleted) {
-            // Only update progress if it's non-zero or we're just starting (prevents false resets)
-            if (status.progress > 0.0f || currentStats.collectionProgress < 1.0f) {
-                // Log significant progress changes to debug oscillation
-                if (std::abs(status.progress - currentStats.collectionProgress) > 5.0f) {
-                    addLog("[DataCollection] Progress jump: " + 
-                           std::to_string((int)currentStats.collectionProgress) + "% -> " + 
-                           std::to_string((int)status.progress) + "%", 0);
-                }
-                currentStats.collectionProgress = status.progress;
-            }
-            
-            // Only update phase if not empty (prevents clearing on idle status)
-            if (!status.phase.empty()) {
-                currentStats.currentPhase = status.phase;
-            }
-            
-            // Detect stuck collection (progress not changing)
-            if (status.progress == lastCollectionProgress) {
-                collectionStuckTimer += dataCollectionPollInterval;
-                
-                // If stuck for more than 30 seconds, log warning
-                if (collectionStuckTimer > 30.0f) {
-                    static float lastWarningTime = 0.0f;
-                    if (collectionStuckTimer - lastWarningTime > 10.0f) {  // Warn every 10 seconds
-                        addLog("[DataCollection] WARNING: Progress stuck at " + 
-                               std::to_string((int)status.progress) + "% for " + 
-                               std::to_string((int)collectionStuckTimer) + " seconds", 1);
-                        lastWarningTime = collectionStuckTimer;
-                    }
-                }
-            } else {
-                collectionStuckTimer = 0.0f;  // Reset timer when progress changes
-                lastCollectionProgress = status.progress;
-            }
-            
-            // Update checkpoint stats periodically during collection
-            if (status.isCollecting) {
-                updateCheckpointStats();
-                updateDatasetSize();
-            }
-        }
-        
-        dataCollectionPollInProgress = false;
-    });
-}
-
 
 void UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     if (!isVisible()) return;
@@ -722,12 +526,6 @@ void UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
     uint32_t trainingServerColor = serverConnected ? 0xFF00FF00 : 0xFFFF0000;
     renderer.drawText({leftX, leftY}, trainingServerStatus, trainingServerColor);
     
-    // Data collection server status (right side)
-    std::string collectionServerStatus = dataCollectionServerConnected ? "[ONLINE] Collection" : "[OFFLINE] Collection";
-    uint32_t collectionServerColor = dataCollectionServerConnected ? 0xFF00FF00 : 0xFFFF0000;
-    renderer.drawText({leftX + 200, leftY}, collectionServerStatus, collectionServerColor);
-    leftY += 25;
-    
     // Draw separator line
     renderer.drawRect({leftX, leftY}, {leftPanelWidth, 2}, 0xFF404040);
     leftY += 10;
@@ -752,9 +550,10 @@ void UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
                             25 + // "Add Data Source" header
                             30 + 5 + // Input box + spacing
                             btnHeight + 20 + // Add Source button + spacing
-                            25 + // "Data Verification" header
-                            btnHeight + 10 + // Run Verification button
-                            btnHeight + 10 + // Collect Data button
+                            25 + // Data collection status
+                            btnHeight + 10 + // Data Pipeline button
+                            25 + // "Training Data Path" header
+                            30 + 10 + // Training data input + spacing
                             60 + // Stats display
                             25; // Dataset size info
     
@@ -888,58 +687,15 @@ void UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
             renderY += btnHeight + 15;
         }
         
-        // GRIM-text Path Configuration Section
-        renderer.drawText({leftX + 10, renderY}, "=== GRIM-text Paths ===", 0xFF00AAFF);
+        // Training Data Path Configuration Section
+        renderer.drawText({leftX + 10, renderY}, "Training Data Path:", 0xFF00AAFF);
         renderY += 25;
         
-        // Vocab Path Input
-        renderer.drawText({leftX + 10, renderY}, "Vocab:", 0xFFCCCCCC);
-        renderY += 20;
-        if (vocabPathInput) {
-            vocabPathInput->setPosition(leftX + 10, renderY);
-            vocabPathInput->setSize(sliderWidth, 25);
-            vocabPathInput->drawOverlay(renderer, position);
-            renderY += 30;
-        }
-        
-        // Model Path Input
-        renderer.drawText({leftX + 10, renderY}, "Model:", 0xFFCCCCCC);
-        renderY += 20;
-        if (modelPathInput) {
-            modelPathInput->setPosition(leftX + 10, renderY);
-            modelPathInput->setSize(sliderWidth, 25);
-            modelPathInput->drawOverlay(renderer, position);
-            renderY += 30;
-        }
-        
-        // Training Data Path Input
-        renderer.drawText({leftX + 10, renderY}, "Training Data:", 0xFFCCCCCC);
-        renderY += 20;
         if (trainingDataPathInput) {
             trainingDataPathInput->setPosition(leftX + 10, renderY);
             trainingDataPathInput->setSize(sliderWidth, 25);
             trainingDataPathInput->drawOverlay(renderer, position);
-            renderY += 30;
-        }
-        
-        // Checkpoints Path Input
-        renderer.drawText({leftX + 10, renderY}, "Checkpoints:", 0xFFCCCCCC);
-        renderY += 20;
-        if (checkpointsPathInput) {
-            checkpointsPathInput->setPosition(leftX + 10, renderY);
-            checkpointsPathInput->setSize(sliderWidth, 25);
-            checkpointsPathInput->drawOverlay(renderer, position);
-            renderY += 30;
-        }
-        
-        // Logs Path Input
-        renderer.drawText({leftX + 10, renderY}, "Logs:", 0xFFCCCCCC);
-        renderY += 20;
-        if (logsPathInput) {
-            logsPathInput->setPosition(leftX + 10, renderY);
-            logsPathInput->setSize(sliderWidth, 25);
-            logsPathInput->drawOverlay(renderer, position);
-            renderY += 30;
+            renderY += 35;
         }
         
         // Verification stats display
@@ -1245,8 +1001,8 @@ void UITrainingPanel::drawOverlay(OverlayRenderer& renderer) {
 // ============================================================
 
 void UITrainingPanel::startTrainingSession() {
-    if (!client) {
-        addLog("Cannot start: client not initialized", 2);
+    if (!trainingController) {
+        addLog("Cannot start: training controller not initialized", 2);
         return;
     }
     
@@ -1263,29 +1019,8 @@ void UITrainingPanel::startTrainingSession() {
     
     // Check if already training
     if (currentState == Control::TrainingState_Training) {
-        // Double-check with server to see if training is ACTUALLY running
-        Control::TrainingState serverState;
-        TrainingStats serverStats;
-        TrainingConfig serverConfig;
-        
-        if (client->getStatus(serverState, serverStats, serverConfig)) {
-            if (serverState == Control::TrainingState_Training) {
-                addLog("Training session already in progress on server (progress: " + 
-                       std::to_string((int)serverStats.trainingProgress) + "%), please wait...", 1);
-                return;
-            } else {
-                // Server says it's not training, but our UI thinks it is - fix the desync
-                addLog("Detected state desync - server is " + getStateString(serverState) + 
-                       ", resetting UI state...", 1);
-                currentState = serverState;
-                currentStats = serverStats;
-                // Continue to start training
-            }
-        } else {
-            addLog("WARNING: Cannot verify server state, assuming stale UI state, proceeding...", 1);
-            currentState = Control::TrainingState_Idle;
-            // Continue to start training
-        }
+        addLog("Training session already in progress, please wait...", 1);
+        return;
     }
     
     // Save current config to ensure consistency
@@ -1330,42 +1065,30 @@ void UITrainingPanel::startTrainingSession() {
         currentConfig.dataPath = "data/training_data.grmt";  // Relative to training/ dir
     }
     
+    // Load vocab and output paths from ai_config.json
+    GRIM::Config::GrimTextPaths paths;
+    if (GRIM::Config::loadGrimTextPaths(paths)) {
+        currentConfig.vocabPath = paths.vocab;
+        currentConfig.outputPath = paths.model;
+        addLog("Loaded paths from ai_config.json", 0);
+        addLog("  Vocab: " + currentConfig.vocabPath, 0);
+        addLog("  Output: " + currentConfig.outputPath, 0);
+    } else {
+        addLog("WARNING: Failed to load paths from ai_config.json, using defaults", 1);
+    }
+    
     // Start training with existing data
     addLog("Starting training session...", 0);
     checkpointMergeStatus = "";  // Clear status before training starts
     
-    if (client->startTraining(&currentConfig)) {
-        addLog("Training process launched - monitoring progress...", 0);
+    if (trainingController && trainingController->startTraining(currentConfig)) {
+        addLog("✓ Training process launched - monitoring progress...", 0);
         addLog("This will take time depending on epochs and data size.", 1);
         currentState = Control::TrainingState_Training;
     } else {
         std::string error = "Failed to start training session";
-        if (!client->getLastError().empty()) {
-            error += ": " + client->getLastError();
-            
-            // If it's "already in progress", show current session details from cached stats
-            if (client->getLastError().find("already in progress") != std::string::npos && currentStats.startTime > 0) {
-                // Calculate when the session started using cached stats (no network call)
-                auto now = std::chrono::system_clock::now();
-                auto startTime = std::chrono::system_clock::from_time_t(currentStats.startTime);
-                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - startTime);
-                
-                std::time_t startTimeT = currentStats.startTime;
-                std::tm startTm;
-#ifdef _WIN32
-                localtime_s(&startTm, &startTimeT);  // Thread-safe version
-#else
-                localtime_r(&startTimeT, &startTm);  // POSIX thread-safe version
-#endif
-                char timeBuf[64];
-                std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &startTm);
-                
-                addLog("Current training session details:", 1);
-                addLog("  Started: " + std::string(timeBuf), 1);
-                addLog("  Elapsed: " + std::to_string(elapsed.count()) + " seconds", 1);
-                addLog("  State: " + getStateString(currentState), 1);
-                addLog("  Progress: " + std::to_string((int)currentStats.trainingProgress) + "%", 1);
-            }
+        if (trainingController) {
+            error += ": " + trainingController->getLastError();
         }
         addLog(error, 2);
         currentState = Control::TrainingState_Idle;
@@ -1373,7 +1096,7 @@ void UITrainingPanel::startTrainingSession() {
 }
 
 void UITrainingPanel::stopTrainingSession() {
-    if (!client || !serverConnected) {
+    if (!trainingController || !serverConnected) {
         addLog("Cannot stop: server not connected", 2);
         return;
     }
@@ -1386,7 +1109,7 @@ void UITrainingPanel::stopTrainingSession() {
     
     addLog("Stopping training session gracefully...", 0);
     
-    if (client->stopTraining()) {
+    if (trainingController->stopTraining()) {
         addLog("Training session stopped successfully", 0);
         currentState = Control::TrainingState_Idle;
         
@@ -1395,12 +1118,12 @@ void UITrainingPanel::stopTrainingSession() {
             trainingProgressBar->setValue(0.0f);
         }
     } else {
-        addLog("Failed to stop training session", 2);
+        addLog("Failed to stop training session: " + trainingController->getLastError(), 2);
     }
 }
 
 void UITrainingPanel::pauseTrainingSession() {
-    if (!client || !serverConnected) {
+    if (!trainingController || !serverConnected) {
         addLog("Cannot pause: server not connected", 2);
         return;
     }
@@ -1417,7 +1140,7 @@ void UITrainingPanel::pauseTrainingSession() {
 }
 
 void UITrainingPanel::resumeTrainingSession() {
-    if (!client || !serverConnected) {
+    if (!trainingController || !serverConnected) {
         addLog("Cannot resume: server not connected", 2);
         return;
     }
@@ -1429,13 +1152,13 @@ void UITrainingPanel::resumeTrainingSession() {
     }
     
     // TODO: Implement resume functionality in training server
-    addLog("Resuming training (functionality pending on server)", 1);
+    addLog("Resuming training (TODO)", 1);
     currentState = Control::TrainingState_Training;
 }
 
 void UITrainingPanel::shutdownTrainingServer() {
-    if (!client) {
-        addLog("Cannot shutdown: client not initialized", 2);
+    if (!trainingController) {
+        addLog("Cannot shutdown: controller not initialized", 2);
         return;
     }
     
@@ -1444,10 +1167,14 @@ void UITrainingPanel::shutdownTrainingServer() {
         stopTrainingSession();
     }
     
-    // TODO: Add proper server shutdown endpoint to training_control_server
-    addLog("Server shutdown requested (implementation pending)", 1);
-    serverConnected = false;
-    currentState = Control::TrainingState_Idle;
+    addLog("Shutting down training control server...", 1);
+    if (trainingController->stopServer()) {
+        addLog("Server shutdown successful", 0);
+        serverConnected = false;
+        currentState = Control::TrainingState_Idle;
+    } else {
+        addLog("Failed to shutdown server: " + trainingController->getLastError(), 2);
+    }
 }
 
 void UITrainingPanel::handleStartTraining() {
@@ -1806,126 +1533,47 @@ void UITrainingPanel::updateVerificationStats() {
 
 void UITrainingPanel::startDataCollection() {
     addLog("=== DATA COLLECTION INITIATED ===", 0x00FFFF00);
-    addLog("Starting unified data pipeline via dedicated collection server...", 0);
-    addLog("DEBUG: Checking data collection server connection...", 0);
+    addLog("Starting data pipeline (in-process)...", 0);
     
-    // Initialize data collection client if not already done
-    if (!dataCollectionClient) {
-        dataCollectionClient = std::make_unique<GRIM::DataCollection::DataCollectionClient>("localhost", 11437);
-        addLog("[DataCollection] Client initialized", 0);
+    // Guard: Check if collection is already active
+    if (dataCollectionActive) {
+        addLog("Collection already active, ignoring duplicate request", 1);
+        return;
     }
     
-    // Check if data collection server is running
-    if (!dataCollectionClient->isServerRunning()) {
-        addLog("ERROR: Data collection server not running!", 2);
-        addLog("Please start the data collection server on port 11437", 2);
-        addLog("Attempting to start data collection server...", 0);
-        
-        // Try to start the data collection server
-        if (!GRIM::DataCollection::startDataCollectionServer()) {
-            addLog("CRITICAL: Failed to start data collection server!", 2);
-            addLog("Please check logs and ensure port 11437 is available.", 2);
-            return;
-        }
-        
-        // Wait briefly for server to initialize
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        
-        // Re-check connection
-        if (!dataCollectionClient->isServerRunning()) {
-            addLog("CRITICAL: Data collection server started but not responding!", 2);
-            return;
-        }
-        
-        addLog("Data collection server started successfully!", 0);
-        dataCollectionServerConnected = true;
-    }
-    
-    addLog("DEBUG: Checking pipelineRequestPending and dataCollectionActive flags...", 0);
-    
-    // Guard 1: Check if request is already pending
+    // Guard: Check if request is already pending
     if (pipelineRequestPending) {
         addLog("Pipeline request already in progress, please wait...", 1);
         return;
     }
     
-    addLog("DEBUG: Getting FRESH data collection server status...", 0);
-    
-    // Guard 2: Check ACTUAL server status (not cached flag)
-    auto status = dataCollectionClient->getStatus();
-    if (status.isCollecting) {
-        addLog("WARNING: Server reports collection already in progress!", 1);
-        addLog("  Progress: " + std::to_string((int)status.progress) + "%", 0);
-        addLog("  Phase: " + status.phase, 0);
-        dataCollectionActive = true;  // Sync our state
-        return;
-    }
-    
-    // Sync flag with fresh server status
-    dataCollectionActive = false;
-    
-    // Reset completion flag to allow logging completion of new collection
+    // Reset state
+    dataCollectionActive = true;
     dataCollectionCompleted = false;
-    
-    addLog("DEBUG: All guards passed, setting pipelineRequestPending = true", 0);
-    
-    // Set pending flag to prevent duplicate clicks
     pipelineRequestPending = true;
     
-    addLog("DEBUG: Launching async thread for HTTP request to data collection server...", 0);
+    addLog("Launching data collection via DataCollectionManager...", 0);
     
-    // Run pipeline asynchronously via data collection server
-    std::thread([this]() {
-        try {
-            addLog(">>> [UI_TRAINING_PANEL] Sending HTTP POST request", 0);
-            addLog("    FROM: UI Thread (ui_training_panel.cpp:startDataCollection)", 0);
-            addLog("    TO: http://localhost:11437/api/collection/start", 0);
-            addLog("    METHOD: POST | BODY: mode='full'", 0);
-            addLog(">>> Requesting data collection from dedicated collection server...", 0);
-            
-            // Store start time
-            auto startTime = std::chrono::steady_clock::now();
-            
-            // Call the data collection client (returns quickly, collection runs async on server)
-            addLog(">>> [DATA_COLLECTION_CLIENT] Calling DataCollectionClient::startCollection('full')", 0);
-            auto result = dataCollectionClient->startCollection("full");
-            
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - startTime
-            ).count();
-            
-            addLog("<<< [DATA_COLLECTION_CLIENT] Got HTTP response after " + std::to_string(elapsed) + "ms", 0);
-            addLog("    FROM: http://localhost:11437/api/collection/start", 0);
-            addLog("    SUCCESS: " + std::string(result.success ? "true" : "false"), 0);
-            addLog("    MESSAGE: " + result.message, 0);
-            addLog("    ERROR: " + result.error, 0);
-            
-            if (result.success) {
-                addLog("✓ Data collection request accepted by server!", 1);
-                addLog("  " + result.message, 0);
-                addLog("  Monitor progress in real-time via status indicator", 0);
-                // Note: pipelineRequestPending will be cleared by pollDataCollectionServer when collection finishes
-            } else if (!result.error.empty()) {
-                addLog("✗ Data collection request failed: " + result.error, 2);
-                pipelineRequestPending = false;  // Clear pending flag on error
-            } else {
-                addLog("✗ Data collection failed with no error message", 2);
-                pipelineRequestPending = false;  // Clear pending flag on error
-            }
-            
-            addLog("Data collection request processing complete", 0);
-            
-        } catch (const std::exception& e) {
-            addLog("✗ Exception during data collection request: " + std::string(e.what()), 2);
-            pipelineRequestPending = false;  // Clear pending flag on exception
-            addLog("Pipeline request failed due to exception", 1);
-        }
-    }).detach();
+    // Start collection using the manager
+    if (collectionManager->startCollection("full")) {
+        addLog("✓ Data collection started successfully", 1);
+    } else {
+        addLog("✗ Failed to start data collection", 2);
+        dataCollectionActive = false;
+        pipelineRequestPending = false;
+    }
 }
 
 void UITrainingPanel::updateDatasetSize() {
-    // Check for training data file
-    std::string grmtPath = getResourcePath() + "/models/GRIM-text/training/data/training_data.grmt";
+    // Load training data path from ai_config.json
+    GRIM::Config::GrimTextPaths paths;
+    if (!GRIM::Config::loadGrimTextPaths(paths)) {
+        datasetSizeInfo = "Dataset: Config error";
+        addLog("Failed to load paths from ai_config.json", 1);
+        return;
+    }
+    
+    std::string grmtPath = paths.training_data;
     
     try {
         if (std::filesystem::exists(grmtPath)) {
@@ -2033,11 +1681,7 @@ bool UITrainingPanel::isAnySliderEditing() const {
     if (warmupStepsSlider && warmupStepsSlider->isEditing()) return true;
     
     // Check input boxes
-    if (vocabPathInput && vocabPathInput->isFocused()) return true;
-    if (modelPathInput && modelPathInput->isFocused()) return true;
     if (trainingDataPathInput && trainingDataPathInput->isFocused()) return true;
-    if (checkpointsPathInput && checkpointsPathInput->isFocused()) return true;
-    if (logsPathInput && logsPathInput->isFocused()) return true;
     if (sourceUrlInput && sourceUrlInput->isFocused()) return true;
     
     return false;
@@ -2228,6 +1872,9 @@ void UITrainingPanel::loadPathsFromConfig() {
             }
             if (paths.contains("training_data")) {
                 trainingDataPathBuffer = paths["training_data"].get<std::string>();
+                if (trainingDataPathInput) {
+                    trainingDataPathInput->setText(trainingDataPathBuffer);
+                }
             }
             if (paths.contains("checkpoints")) {
                 checkpointsPathBuffer = paths["checkpoints"].get<std::string>();
@@ -2235,6 +1882,8 @@ void UITrainingPanel::loadPathsFromConfig() {
             if (paths.contains("logs")) {
                 logsPathBuffer = paths["logs"].get<std::string>();
             }
+            
+            LOG_DEBUG("UITrainingPanel", "Loaded paths from ai_config.json");
         }
     } catch (const std::exception& e) {
         LOG_ERROR("UITrainingPanel", "Error loading paths from config: " + std::string(e.what()));
@@ -2270,6 +1919,12 @@ void UITrainingPanel::savePathsToConfig() {
         config["paths"]["grim_text"]["training_data"] = trainingDataPathBuffer;
         config["paths"]["grim_text"]["checkpoints"] = checkpointsPathBuffer;
         config["paths"]["grim_text"]["logs"] = logsPathBuffer;
+        
+        // Derive training_status path from training_data path
+        std::filesystem::path trainingDataPath(trainingDataPathBuffer);
+        std::filesystem::path trainingDir = trainingDataPath.parent_path().parent_path(); // Go up from data/ to training/
+        std::filesystem::path statusPath = trainingDir / "training_status.fb";
+        config["paths"]["grim_text"]["training_status"] = statusPath.string();
         
         // Write back to file
         std::ofstream configFileOut("ai_config.json");

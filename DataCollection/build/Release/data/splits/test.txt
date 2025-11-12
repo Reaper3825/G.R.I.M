@@ -1,0 +1,187 @@
+<|startoftext|> The Internet Classics Archive | Rhetoric by Aristotle 
+
+Home Browse and Comment Search Buy Books and CD-ROMs Help 
+
+Rhetoric By Aristotle
+ Written 350 B.C.E
+ Translated by W. Rhys Roberts
+
+Rhetoric has been divided into
+the following sections:
+ Book I [186k] Book II [191k] Book III [131k] Download: A 373k
+text-only version is available for download . <|endoftext|>
+<|startoftext|> Landau--Kolmogorov inequality revisited
+
+ The Landau-Kolmogorov problem consists of finding the upper bound $M_k$ for
+the norm of intermediate derivative $|f^{(k)}|$, when the bounds $|f| \le M_0$
+and $|f^{(n)}| \le M_n$, for the norms of the function and of its higher
+derivative, are given.
+ Here, we consider the case of a finite interval, and when all the norms are
+the max-norms. Our interest to that particular case is motivated by the fact
+that there are good chances to add this case to a short list of
+Landau--Kolmogorov inequalities where a complete solution exists, i.e., a
+solution that covers all values of $n,k\in\N$ (and, for a finite interval, all
+values of $\sigma = M_n/M_0$).
+ The main guideline here is Karlin's conjecture that says that, for all
+$n,k\in\N$ and all $\sigma>0$, the maximum of $|f^{(k)}|$ is attained by a
+certain Chebyshev or Zolotarev spline. So far, it has been proved only for
+small $n \ge 4$ with all $\sigma$, and for all $n$ with particular $\sigma =
+\sigma_n$. Here, we prove Karlin's conjecture in several further subcases:
+ 1) all $n,k\in\N$ and all $0 < \sigma \le \sigma_n$
+ 2) all $n \in \N$, all $\sigma > 0$, with $k=1,2$
+ 3) all $\sigma > 0$, with $n < 10$ and $0 < k < n$. <|endoftext|>
+<|startoftext|> Project MUSE 
+
+browse or Search: Search: Information for Publishers Information for Librarians Information for Individuals Information for Instructors
+
+Recent Additions issue Confluencia: Revista Hispnica de Cultura y Literatura : Volume 41, Number 1, Fall 2025 book Desarrollo e integracin issue Narrative Inquiry in Bioethics : Volume 15, Number 2, 2025 book Mtodo prudencial una perspectiva para la reparacin colectiva de una comunidad religiosa. book En el principio era la tica. issue Journal of Supreme Court History : Volume 50, Number 3, 2025 view more books view more journals Hopkins Book Collection USHMM on Project MUSE MUSE News August 5, 2025 Five New Hosted Journals Now Available on Project MUSE Discover scholarly journals on topics ranging from national security to peace and non-violence Project MUSE launches 5 new hosted journals encompassing a wide variety of topics, ranging from national security to peace and non-violence, and from Global Black Thought to a journal on Appalachia.
+
+ May 8, 2025 Project MUSE and the United States Holocaust Memorial Museum Launch New Landmark Initiative USHMM Landmark Initiative Project MUSE, a division of Johns Hopkins University Press, in collaboration with the United States Holocaust Memorial Museum, announces today a new landmark in the Museums longstanding Encyclopedia of Camps and Ghettos, 19331945 (ECG) series: ECG volumes I-IV are now fully searchable, open access digital publications freely available to everyone around the world. May 7, 2025 Kelley Squazzo Appointed Director of Project MUSE New MUSE Director Johns Hopkins University Press has appointed Kelley Squazzo as the new Director of Project MUSE, effective immediately. With 25 years of experience in scholarly and educational publishing, Kelley brings a dynamic vision, deep industry expertise, and an unwavering passion for digital innovation in the humanities and social sciences. <|endoftext|>
+<|startoftext|> The Hitchhiker's Guide to the All-Interval 12-Tone Rows
+
+ This article revisits the generation, classification and categorization of
+all-intervals 12-tone series (AIS). Inspired by the seminal work of Morris and
+Starr in 1974 (Morris and Starr, The Structure of All-Interval Series 1974), it
+expands their analysis using complex network theory and provides composers and
+theorists with the re-ordering scheme that links all AISs together by chains of
+relations. <|endoftext|>
+<|startoftext|> A Note on Computational Complexity of Kill-all Go
+
+ Kill-all Go is a variant of Go in which Black tries to capture all white
+stones, while White tries to survive. We consider computational complexity of
+Kill-all Go with two rulesets, Chinese rules and Japanese rules. We prove that:
+(i) Kill-all Go with Chinese rules is PSPACE-hard, and (ii) Kill-all Go with
+Japanese rules is EXPTIME-complete. <|endoftext|>
+<|startoftext|> Orbit structure of interval exchange transformations with flip
+
+ A sharp bound on the number of invariant components of an interval exchange
+transformation is provided. More precisely, it is proved that the number of
+periodic components n_per and the number of minimal components n_min of an
+interval exchange transformation of n intervals satisfy n_per+2 n_min\le n.
+Besides, it is shown that almost all interval exchange transformations are
+typical, that is, have all the periodic components stable and all the minimal
+components robust (i.e. persistent under almost all small perturbations).
+Finally, we find all the possible values for the integer vector (n_per, n_min)
+for all typical interval exchange transformation of n intervals. <|endoftext|>
+<|startoftext|> All Books - Project Gutenberg 
+
+All Books Sort By: Popularity Release Date Title Random Displaying results 125 
+|
+ Next Frankenstein; Or, The Modern Prometheus Mary Wollstonecraft Shelley 213357 downloads Moby Dick; Or, The Whale Herman Melville 126168 downloads Romeo and Juliet William Shakespeare 86565 downloads Pride and Prejudice Jane Austen 77503 downloads The Strange Case of Dr. Jekyll and Mr. Hyde Robert Louis Stevenson 63835 downloads Alice's Adventures in Wonderland Lewis Carroll 62724 downloads The Complete Works of William Shakespeare William Shakespeare 59545 downloads A Room with a View E. M. Forster 56545 downloads Middlemarch George Eliot 54747 downloads The Scarlet Letter Nathaniel Hawthorne 53765 downloads Little Women; Or, Meg, Jo, Beth, and Amy Louisa May Alcott 51061 downloads Dracula Bram Stoker 49044 downloads The Legend of Sleepy Hollow Washington Irving 48747 downloads The Blue Castle: a novel L. M. Montgomery 46249 downloads The Enchanted April Elizabeth Von Arnim 44133 downloads Beowulf: An Anglo-Saxon Epic Poem 43807 downloads Jane Eyre: An Autobiography Charlotte Bront 42625 downloads The Adventures of Ferdinand Count Fathom Complete T. Smollett 40982 downloads Cranford Elizabeth Cleghorn Gaskell 40861 downloads The Expedition of Humphry Clinker T. Smollett 40744 downloads Twenty years after Alexandre Dumas and Auguste Maquet 40673 downloads My Life Volume 1 Richard Wagner 40534 downloads History of Tom Jones, a Foundling Henry Fielding 39994 downloads The Adventures of Roderick Random T. Smollett 39626 downloads Crime and Punishment Fyodor Dostoyevsky 38434 downloads 
+Displaying results 125
+ 
+|
+ Next <|endoftext|>
+<|startoftext|> All Order $'$ Corrections to Fermionic Couplings of
+ D-brane-Anti-D-brane Effective Actions
+
+ We first point out to all order $\alpha'$ corrections to lower order
+fermionic couplings and their effective actions of type II super string theory.
+In order to reveal all symmetries of the particular D-brane Anti-D-brane
+system, and to construct not only all the singularity structures but also all
+order $\alpha'$ corrections of fermionic couplings to tachyons, we employ all
+the Conformal Field Theory (CFT) methods to a six point function. Basically, we
+construct all the correlation functions of four spin operators and two world
+sheet fermion fields. The S-matrix of two fermion fields, two real tachyons in
+the presence of a closed string Ramond-Ramond (RR) field in type II will be
+explored. Applying all the symmetries of the amplitude, a proper expansion for
+D-brane Anti D-brane is also found out. Having carried out all the Effective
+Field Theory (EFT) techniques, one would discover all order singularity
+structures of string theory. The entire algebraic computations of the amplitude
+of $<V_{C^{-1}(z,\bar z)} V_{\bar\psi^{-1/2}(x_1)} V_{\psi^{-1/2}(x_2)}
+V_{T^{0}(x_3)} V_{T^{0}(x_4)}>$ have also been derived. Various new string
+couplings are revealed as well. Eventually, making comparison the S-matrix with
+all EFT parts, all order $\alpha'$ higher derivative corrections to two
+fermions -- two tachyons in the world volume of D-brane Anti D-brane of type II
+are discovered accordingly. <|endoftext|>
+<|startoftext|> Medical Subject Headings - Home Page 
+
+Menu Products and Services All Products and Services ClinicalTrials.gov Digital Collections LocatorPlus Catalog Medical Subject Headings (MeSH) MedlinePlus PubMed/MEDLINE Unified Medical Language System (UMLS) Resources for You For Researchers For Publishers For Librarians For Educators/Trainers For Health care Professionals For the Public Explore NLM About the Library Visit the Library History of Medicine NLM by Organization Spotlights and Events Grants and Research NLM Extramural Programs NLM Division of Intramural Research National Center for Biotechnology Information Lister Hill National Center for Biomedical Communications
+
+Medical Subject Headings MeSH Home 
+ 
+ 
+ 
+ | Learn About MeSH 
+ 
+ 
+ 
+ | MeSH Browser 
+ 
+ 
+ 
+ | Download MeSH Data 
+ 
+ 
+ 
+ | MeSH on Demand 
+ 
+ 
+ 
+ | Suggestions
+
+Welcome to Medical Subject Headings The Medical Subject Headings (MeSH) thesaurus is a controlled and hierarchically-organized vocabulary produced by the National Library of Medicine. It is used for indexing, cataloging, and searching of biomedical and health-related information. MeSH includes the subject headings appearing in MEDLINE/PubMed, the NLM Catalog, and other NLM databases. Recent MeSH Updates Visit our Annual MeSH Processing (AMP) page to see all recent MeSH developments including the most recent ones listed below 2025 MeSH files are now in production
+ MeSH Browser now displays 2024 and 2025 MeSH vocabularies Reports of MeSH changes now appear on our Annual MeSH Processing (AMP) page All 2025 MeSH files are now available on the MeSH Download Page MeSH in Resource Description Format(RDF) MeSH RDF FTP now contain 2025 MeSH in RDF format An open MeSH API is available for retrieving MeSH data You can also use our SPARQL query editor for querying MeSH data Obtain MeSH Data Download MeSH Data MeSH on Demand Access RDF MeSH Data View MeSH Pubtypes User Input and Suggestions Make Suggestions for new MeSH vocabulary Downloading or Other Problems: Our technical staff can help MeSH Request System for NLM Staff Learn About MeSH Tutorials and Webinars MeSH Vocabulary
+ Introduction to MeSH Browser Instructions Finding Keywords for Publications MeSH Qualifiers List MeSH Qualifiers with Scope Notes Publication Characteristics (Publication Types) with Scope Notes Search and Retrieval using MeSH
+ Cataloging with MeSH Terminology Searching PubMed Using MeSH Search Terms PubMed Online Training Related MeSH Efforts RxNorm: A drug vocabulary used for e-prescribing, formulary, medication history, government reporting, drug compendia mapping, and other uses Daily Med: Provides trustworthy information about marketed drugs in the United States Unified Medical Language System (UMLS) Metathesaurus: A collection of biomedical names and codes grouped as sets of synonyms, derived from over 150 medical vocabulary sources. NLM Classification: A NLM vocabulary used for the arrangement of library materials in the field of medicine and related sciences. Archived Publications Alphabetic Listing of MeSH Last updated: December 6, 2016 Changes in ASCII MeSH Format Last updated: April 9, 2016 Files Available to Download Last updated: November 29, 2018 MeSH Staff Presentations and Publications Last updated: June 22, 2016 MeSH Staff Presentations and Publications (Archive) Last updated: April 24, 2013 Use of Medical Subject Headings For Cataloging Last updated: October 29, 2019 Last Reviewed: September 11, 2025 <|endoftext|>
+<|startoftext|> Decoupling for degenerate hypersurfaces
+
+ We utilise the two principles of decoupling introduced in arXiv:2407.16108 to
+prove the following conditional result: assuming uniform decoupling for graphs
+of polynomials in all dimensions with identically zero Gaussian curvature, we
+can prove decoupling for all smooth hypersurfaces in all dimensions. Moreover,
+we are able to prove (unconditional) decoupling for all smooth hypersurfaces in
+$\mathbb R^4$ and graphs of homogeneous polynomials in $\mathbb R^5$. <|endoftext|>
+<|startoftext|> Symmetric Biderivations on Complex Semisimple Lie Algebras
+
+ This paper studies biderivations on finite-dimensional complex semisimple Lie
+algebras to their finite-dimensional modules. More precisely, we prove that all
+such symmetric biderivations are trivial. As applications, we determine all
+biderivations on Takiff algebras and symplectic oscillator algebras, as well as
+all supersymmetric biderivations over some Lie superalgebras including all
+finite-dimensional classical simple Lie superalgebras. <|endoftext|>
+<|startoftext|> Interdependencies of less-equal-relations between partial
+ Lovsz-vectors of digraphs
+
+ For digraphs $G$ and $H$, let ${\cal H}(G,H)$ be the set of all homomorphisms
+from $G$ to $H$, and let ${\cal S}(G,H)$ be the subset of those homomorphisms
+mapping all proper arcs in $G$ to proper arcs in $H$. From an earlier
+investigation we know that for certain digraphs $R$ and $S$, the relation "$\#
+{\cal S}(G,R) \leq \# {\cal S}(G,S)$ for all $G \in \mathfrak{ D }'$" implies
+"$\# {\cal H}(G,R) \leq \# {\cal H}(G,S)$ for all $G \in \mathfrak{ D }'$",
+where $\mathfrak{ D }'$ is a subclass of digraphs. Now we ask for the inverse:
+For which digraphs $R, S$ and which subclasses $\mathfrak{ D }'$ of digraphs
+does "$\# {\cal H}(G,R) \leq \# {\cal H}(G,S)$ for all $G \in \mathfrak{ D }'$"
+imply "$\# {\cal S}(G,R) \leq \# {\cal S}(G,S)$ for all $G \in \mathfrak{ D
+}'$"? We prove this implication for three combinations of digraph classes. In
+particular, the relations are equivalent for all flat posets $R, S$ with
+respect to all flat posets $G$. <|endoftext|>
+<|startoftext|> On Robin's Inequality and the Kaneko-Lagarias Inequality
+
+ We provide new, elementary proofs that Robin's inequality and the Lagarias
+inequality hold for almost every number, including all numbers not divisible by
+one of the prime numbers $2$, $3$, $5$; all primorials; given $k$ a natural
+number, all sufficiently large numbers of the form $2^kn$ for $n\ge1$ odd; and
+all $21$-free integers. Additionally, we prove that the Kaneko-Lagarias
+inequality holds for all natural numbers if and only if it holds for all
+superabundant numbers. <|endoftext|>
+<|startoftext|> How to construct a closed subscheme, or a coherent subsheaf, with
+ prescribed germs
+
+ We show that a closed subscheme of a given locally noetherian scheme can be
+constructed by prescribing it germs at all points of the ambient scheme in a
+manner consistent with specialization of points, provided the resulting set of
+all associated points of all the germs is locally finite. More generally, we
+prove a similar result for constructing a coherent subsheaf of a coherent sheaf
+by prescribing its stalks at all points in a manner consistent with
+specializations of points, again provided the set of all associated points of
+all the corresponding local quotients is locally finite.
+ On any locally noetherian scheme, we show that there exists a unique global
+section of any coherent sheaf which has a prescribed family of germs which is
+consistent with specialization of points.
+ It is not clear how to formulate an analogous result for constructing a
+coherent sheaf in terms of prescribed stalks. Even when the set of all
+associated points of all the prescribed stalks is locally finite, such a
+construction need not succeed as we show with an example. This raises the
+question of how to set up effective descent data for coherent sheaves purely in
+terms of germs and their specializations. <|endoftext|>

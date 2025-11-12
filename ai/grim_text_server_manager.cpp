@@ -4,6 +4,7 @@
 
 #include "grim_text_server_manager.hpp"
 #include "../logger.hpp"
+#include "../control/ai_config_paths.hpp"  // ✅ For reading paths from ai_config.json
 #include <cpr/cpr.h>
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -95,12 +96,17 @@ bool GRIMTextServerManager::start() {
     
     LOG_DEBUG("GRIMTextServer", "Starting GRIM-text server...");
     
+    // ✅ Load paths from ai_config.json
+    Config::GrimTextPaths grimPaths;
+    if (!Config::loadGrimTextPaths(grimPaths, "ai_config.json")) {
+        LOG_ERROR("GRIMTextServer", "Failed to load paths from ai_config.json");
+        return false;
+    }
+    
     // Resolve absolute paths
     fs::path serverExe = fs::absolute(serverPath_);
-    // Use paths relative to GRIM root
-    fs::path grimRoot = fs::absolute(".");
-    fs::path vocabPath = grimRoot / "resources/models/GRIM-text/training/models/vocab.bin";
-    fs::path modelPath = grimRoot / "resources/models/GRIM-text/training/models/grim_text.bin";
+    fs::path vocabPath = fs::absolute(grimPaths.vocab);
+    fs::path modelPath = fs::absolute(grimPaths.model);  // ✅ Read model path from ai_config.json
     
     if (!fs::exists(serverExe)) {
         LOG_ERROR("GRIMTextServer", "Server executable not found: " + serverExe.string());
@@ -110,6 +116,12 @@ bool GRIMTextServerManager::start() {
     
     if (!fs::exists(vocabPath)) {
         LOG_ERROR("GRIMTextServer", "Vocabulary file not found: " + vocabPath.string());
+        return false;
+    }
+    
+    if (!fs::exists(modelPath)) {
+        LOG_ERROR("GRIMTextServer", "Model file not found: " + modelPath.string());
+        LOG_ERROR("GRIMTextServer", "Train the model first or merge checkpoints");
         return false;
     }
     

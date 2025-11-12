@@ -7,8 +7,8 @@
 #include "ui_inputbox.hpp"
 #include "ui_graph.hpp"
 #include "ui_training_config.hpp"
-#include "../control/training_control_client.hpp"
-#include "../control/data_collection_client.hpp"
+#include "../control/training_controller.hpp"
+#include "DataCollection/data_collection_manager.hpp"
 #include <memory>
 #include <string>
 #include <vector>
@@ -37,10 +37,10 @@ public:
     bool isAnySliderEditing() const;
 
 private:
-    void initializeClient();
+    void initializeController();
+    void setupCallbacks();
     void resetState();
     void pollServer();
-    void pollDataCollectionServerAsync();  // Async polling to avoid blocking main thread
     void handleStartTraining();
     void handleStopTraining();
     void handlePauseResume();
@@ -49,6 +49,11 @@ private:
     void updateConfigFromSliders();
     void updateSlidersFromConfig();
     
+    // Callbacks for training controller
+    void onProgressUpdate(const GRIMText::TrainingStats& stats);
+    void onStateChange(GRIMText::TrainingState oldState, GRIMText::TrainingState newState);
+    void onError(const std::string& error);
+    
     struct LogEntry {
         std::string timestamp;
         std::string message;
@@ -56,32 +61,28 @@ private:
     };
     
     void addLog(const std::string& message, int level);
-    std::string getStateString(GRIMText::Control::TrainingState state) const;
-    uint32_t getStateColor(GRIMText::Control::TrainingState state) const;
+    std::string getStateString(GRIMText::TrainingState state) const;
+    uint32_t getStateColor(GRIMText::TrainingState state) const;
     
-    std::unique_ptr<GRIMText::TrainingControlClient> client;
-    std::unique_ptr<GRIM::DataCollection::DataCollectionClient> dataCollectionClient;
-    GRIMText::Control::TrainingState currentState;
+    // Training controller (replaces direct client usage)
+    std::unique_ptr<GRIM::UI::UITrainingController> trainingController;
+    
+    GRIMText::TrainingState currentState;
     GRIMText::TrainingStats currentStats;
     GRIMText::TrainingConfig currentConfig;
     
+    // Data collection manager (in-process)
+    std::unique_ptr<GRIM::DataCollection::DataCollectionManager> collectionManager;
+    
     bool serverConnected;
     bool serverStarting;  // Flag to prevent duplicate server starts
-    bool dataCollectionServerConnected;  // Connection status for data collection server
     bool dataCollectionActive;  // Flag to track if data collection is in progress
     bool dataCollectionCompleted;  // Flag to track if current collection has completed (prevents re-logging)
     bool pipelineRequestPending;  // Flag to track if a pipeline request is in flight
-    bool firstPollDone;  // Flag to detect first poll after connection for stale state detection
-    float collectionStuckTimer;  // Timer to detect stuck collection operations
-    float lastCollectionProgress;  // Last recorded collection progress
     std::string lastError;
     std::string checkpointMergeStatus;  // Status message for checkpoint merge operations
     float pollTimer;
     float pollInterval;
-    float dataCollectionPollTimer;  // Separate poll timer for data collection server
-    float dataCollectionPollInterval;  // Poll interval for data collection (500ms to reduce load)
-    std::future<void> dataCollectionPollFuture;  // Async polling to avoid blocking main thread
-    std::atomic<bool> dataCollectionPollInProgress;  // Flag to prevent overlapping polls
     
     std::shared_ptr<UIButton> startButton;
     std::shared_ptr<UIButton> stopButton;
@@ -107,12 +108,8 @@ private:
     std::string verificationStats;
     void updateVerificationStats();
     
-    // GRIM-text path configuration inputs
-    std::shared_ptr<UIInputBox> vocabPathInput;
-    std::shared_ptr<UIInputBox> modelPathInput;
+    // GRIM-text path configuration - only training data path shown in UI
     std::shared_ptr<UIInputBox> trainingDataPathInput;
-    std::shared_ptr<UIInputBox> checkpointsPathInput;
-    std::shared_ptr<UIInputBox> logsPathInput;
     std::string vocabPathBuffer;
     std::string modelPathBuffer;
     std::string trainingDataPathBuffer;

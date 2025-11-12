@@ -38,6 +38,7 @@ Decoupled training control for GRIM-text via HTTP + FlatBuffers.
 - `POST /api/training/start` - Start training
 - `POST /api/training/stop` - Stop training
 - `POST /api/config` - Update configuration
+- `POST /api/server/shutdown` - Shutdown server gracefully
 
 ### 2. Control Client (`training_control_client.hpp`)
 - Header-only client library
@@ -79,6 +80,11 @@ if (client.startTraining(&customConfig)) {
 // Stop training
 if (client.stopTraining()) {
     std::cout << "Training stopped" << std::endl;
+}
+
+// Shutdown server
+if (client.shutdownServer()) {
+    std::cout << "Server shutdown initiated" << std::endl;
 }
 ```
 

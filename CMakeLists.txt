@@ -187,6 +187,9 @@ target_link_directories(GRIM PRIVATE
 target_link_libraries(GRIM PRIVATE bx bimg bgfx)
 target_link_libraries(GRIM PRIVATE whisper)
 
+# Link gumbo HTML parser (used by DataCollection)
+find_package(unofficial-gumbo CONFIG REQUIRED)
+target_link_libraries(GRIM PRIVATE unofficial::gumbo::gumbo)
 
 message(STATUS "[GRIM] Build configuration complete.")
 
