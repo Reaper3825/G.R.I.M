@@ -9,6 +9,13 @@ int main(int argc, char** argv) {
     config.reliability_threshold = 0.3f;  // Lower threshold for basic validation
     config.min_length = 50;
     config.max_length = 100000;
+    config.enable_semantic_model = true;
+    config.semantic_use_gpu = true;
+    config.semantic_hard_filter = true;
+    config.semantic_min_score = 0.55f;
+    config.semantic_quality_weight = 0.4f;
+    config.semantic_model_path = "resources/models/GRIM-text/quality/deberta-v3-base-mnli.onnx";
+    config.semantic_tokenizer_path = "resources/models/GRIM-text/quality/deberta-v3-base-mnli.spm";
 
     // Set default weights including "unknown" source type
     config.source_type_weights = {

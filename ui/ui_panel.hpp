@@ -7,12 +7,18 @@
 
 // Include plugin.hpp for GRIM_HOST_API macro
 #include "core/plugin.hpp"
-
 class OverlayRenderer;  // Forward declaration
+
+struct PanelChromeOptions {
+    bool enableMinimize = true;
+    bool enableMaximize = true;
+};
 
 class GRIM_HOST_API UIPanel : public Widget {
 public:
     UIPanel(const std::string& title = "", bool draggable = true);
+    
+    static void setCanvasSize(const Vec2& canvasSize);
     
     // Focus management
     uint64_t getPanelID() const { return panelID; }
@@ -38,6 +44,9 @@ public:
     
     void setDraggable(bool drag) { draggable = drag; }
     void setResizable(bool resize) { resizable = resize; }
+    void setChromeOptions(const PanelChromeOptions& opts) { chromeOptions = opts; }
+    bool isMinimized() const { return minimized; }
+    bool isMaximized() const { return maximized; }
 
 protected:
     std::string title;
@@ -59,7 +68,22 @@ protected:
     std::function<void()> onClose = nullptr;
     
     uint64_t panelID = 0;  // Unique panel identifier for focus tracking
+
+    PanelChromeOptions chromeOptions{};
+    bool minimized = false;
+    bool maximized = false;
+    bool minimizeHovered = false;
+    bool maximizeHovered = false;
+    float storedHeight = 0.0f;
+    Vec2 storedPosition{0.0f, 0.0f};
+    Vec2 storedSize{0.0f, 0.0f};
+    static Vec2 s_canvasSize;
+    static constexpr float chromeButtonSize = 18.0f;
     
     // Helper to check if mouse is over resize handle (bottom-right corner)
     bool isOverResizeHandle(const Vec2& mousePos) const;
+    bool handleChromeButtons(const InputState& input);
+    void toggleMinimize();
+    void toggleMaximize();
+    Vec2 chromeButtonOrigin(bool minimizeButton) const;
 };

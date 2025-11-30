@@ -1,6 +1,9 @@
 #include "ui_root.hpp"
 #include "logger.hpp"
 #include "input_parser.hpp"
+#include "system_detect.hpp"
+
+extern SystemInfo g_systemInfo;
 
 void UIRoot::init(HWND hwnd, uint32_t width, uint32_t height)
 {
@@ -9,6 +12,7 @@ void UIRoot::init(HWND hwnd, uint32_t width, uint32_t height)
     m_hwnd = hwnd;
     m_width = width;
     m_height = height;
+    m_uiThreadId = std::this_thread::get_id();
     
     // Initialize the overlay renderer
     m_renderer.init(hwnd, width, height);
@@ -39,6 +43,9 @@ void UIRoot::update(const InputState& input, float dt)
     // Reset consumption flag each frame
     m_inputConsumed = false;
     
+    processPendingTasks();
+    UIPanel::setCanvasSize({static_cast<float>(m_width), static_cast<float>(m_height)});
+    
     // Create a modified input state with injected text
     InputState modifiedInput = input;
     modifiedInput.textInput = consumeTextInput();
@@ -47,7 +54,8 @@ void UIRoot::update(const InputState& input, float dt)
     bool cursorOverUI = shouldReceiveInputAt(input.mousePos.x, input.mousePos.y);
     
     // Update all visible panels with the modified input
-    for (auto& panel : m_panels)
+    auto panels = snapshotPanels();
+    for (auto& panel : panels)
     {
         if (panel && panel->isVisible())
         {
@@ -67,20 +75,18 @@ void UIRoot::update(const InputState& input, float dt)
 
 void UIRoot::draw()
 {
-    // ? FIX: Lock to prevent re-entrant rendering
-    static bool isRendering = false;
-    if (isRendering) {
+    if (m_drawGuard.test_and_set(std::memory_order_acquire)) {
         LOG_DEBUG("UIRoot", "Skipping draw() - already rendering (re-entrant call blocked)");
         return;
     }
     
-    isRendering = true;
+    auto panels = snapshotPanels();
     
     // Begin frame - clears to transparent
     m_renderer.beginFrame();
     
     // Draw all visible panels using drawOverlay
-    for (auto& panel : m_panels)
+    for (auto& panel : panels)
     {
         if (panel && panel->isVisible())
         {
@@ -91,33 +97,44 @@ void UIRoot::draw()
     // End frame - updates layered window
     m_renderer.endFrame();
     
-    isRendering = false;
+    m_drawGuard.clear(std::memory_order_release);
 }
 
 void UIRoot::addPanel(const std::shared_ptr<UIPanel>& panel)
 {
-    if (!panel)
+    auto task = [this, panel]() {
+        if (!panel)
+        {
+            LOG_ERROR("UIRoot", "Attempted to add null panel");
+            return;
+        }
+
+        std::unique_lock lock(m_panelMutex);
+        m_panels.push_back(panel);
+
+        std::string panelName = panel->getTitle();
+        if (panelName.empty())
+        {
+            panelName = "panel_" + std::to_string(m_panels.size());
+        }
+
+        m_panelMap[panelName] = panel;
+        LOG_DEBUG("UIRoot", "Added panel: " + panelName);
+    };
+
+    if (!isUIThread())
     {
-        LOG_ERROR("UIRoot", "Attempted to add null panel");
-        return;
+        postTask(task);
     }
-    
-    m_panels.push_back(panel);
-    
-    // Use panel title or generate name
-    std::string panelName = panel->getTitle();
-    if (panelName.empty())
+    else
     {
-        panelName = "panel_" + std::to_string(m_panels.size());
+        task();
     }
-    
-    m_panelMap[panelName] = panel;
-    
-    LOG_DEBUG("UIRoot", "Added panel: " + panelName);
 }
 
 std::shared_ptr<UIPanel> UIRoot::getPanel(const std::string& name)
 {
+    std::shared_lock lock(m_panelMutex);
     auto it = m_panelMap.find(name);
     if (it != m_panelMap.end())
     {
@@ -133,18 +150,7 @@ void UIRoot::updateWindowZOrder()
     if (!m_hwnd)
         return;
     
-    // Check if any panel is visible
-    bool anyVisible = false;
-    for (const auto& panel : m_panels)
-    {
-        if (panel && panel->isVisible())
-        {
-            anyVisible = true;
-            break;
-        }
-    }
-    
-    if (anyVisible)
+    if (hasVisiblePanels())
     {
         // Show window and bring to TOPMOST when UI is visible
         ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
@@ -160,21 +166,31 @@ void UIRoot::updateWindowZOrder()
 
 void UIRoot::setVisible(const std::string& name, bool visible)
 {
-    auto panel = getPanel(name);
-    if (panel)
+    auto task = [this, name, visible]() {
+        auto panel = getPanel(name);
+        if (panel)
+        {
+            panel->setVisible(visible);
+            LOG_DEBUG("UIRoot", "Set panel '" + name + "' visibility to " + (visible ? "true" : "false"));
+            updateWindowZOrder();
+        }
+    };
+
+    if (!isUIThread())
     {
-        panel->setVisible(visible);
-        LOG_DEBUG("UIRoot", "Set panel '" + name + "' visibility to " + (visible ? "true" : "false"));
-        
-        // Update window Z-order based on new visibility state
-        updateWindowZOrder();
+        postTask(std::move(task));
+    }
+    else
+    {
+        task();
     }
 }
 
 bool UIRoot::shouldReceiveInputAt(float x, float y) const
 {
     // Check if position is over any visible panel
-    for (const auto& panel : m_panels)
+    auto panels = snapshotPanels();
+    for (const auto& panel : panels)
     {
         if (!panel || !panel->isVisible())
             continue;
@@ -194,7 +210,8 @@ bool UIRoot::shouldReceiveInputAt(float x, float y) const
 
 bool UIRoot::hasVisiblePanels() const
 {
-    for (const auto& panel : m_panels)
+    auto panels = snapshotPanels();
+    for (const auto& panel : panels)
     {
         if (panel && panel->isVisible())
             return true;
@@ -212,4 +229,85 @@ std::string UIRoot::consumeTextInput()
     std::string result = m_pendingTextInput;
     m_pendingTextInput.clear();
     return result;
+}
+
+UIRoot::MonitorRect UIRoot::getMonitorRectAt(const Vec2& point) const
+{
+    MonitorRect rect;
+    rect.origin = {0.0f, 0.0f};
+    rect.size = {static_cast<float>(m_width), static_cast<float>(m_height)};
+
+    if (g_systemInfo.monitors.empty())
+        return rect;
+
+    Vec2 screenPoint{
+        point.x + static_cast<float>(g_systemInfo.virtualOriginX),
+        point.y + static_cast<float>(g_systemInfo.virtualOriginY)
+    };
+
+    const MonitorInfo* chosen = nullptr;
+    for (const auto& monitor : g_systemInfo.monitors)
+    {
+        float x1 = static_cast<float>(monitor.x);
+        float y1 = static_cast<float>(monitor.y);
+        float x2 = x1 + static_cast<float>(monitor.width);
+        float y2 = y1 + static_cast<float>(monitor.height);
+
+        if (screenPoint.x >= x1 && screenPoint.x <= x2 &&
+            screenPoint.y >= y1 && screenPoint.y <= y2)
+        {
+            chosen = &monitor;
+            break;
+        }
+    }
+
+    if (!chosen)
+    {
+        for (const auto& monitor : g_systemInfo.monitors)
+        {
+            if (monitor.isPrimary)
+            {
+                chosen = &monitor;
+                break;
+            }
+        }
+
+        if (!chosen)
+        {
+            chosen = &g_systemInfo.monitors.front();
+        }
+    }
+
+    rect.origin.x = static_cast<float>(chosen->x - g_systemInfo.virtualOriginX);
+    rect.origin.y = static_cast<float>(chosen->y - g_systemInfo.virtualOriginY);
+    rect.size.x = static_cast<float>(chosen->width);
+    rect.size.y = static_cast<float>(chosen->height);
+    return rect;
+}
+
+void UIRoot::postTask(std::function<void()> task)
+{
+    if (!task) return;
+    std::lock_guard lock(m_taskMutex);
+    m_pendingTasks.push_back(std::move(task));
+}
+
+void UIRoot::processPendingTasks()
+{
+    std::vector<std::function<void()>> tasks;
+    {
+        std::lock_guard lock(m_taskMutex);
+        tasks.swap(m_pendingTasks);
+    }
+
+    for (auto& task : tasks)
+    {
+        if (task) task();
+    }
+}
+
+std::vector<std::shared_ptr<UIPanel>> UIRoot::snapshotPanels() const
+{
+    std::shared_lock lock(m_panelMutex);
+    return m_panels;
 }

@@ -142,3 +142,13 @@ out/build/
 VCTK-final/
 VCTK-final/*
 VCTK-final
+.ckpt
+.ckpt*
+plugins/*
+plugins/
+plugins/*
+data/
+data/*
+*.fbs
+.venv310/
+.venv310/*

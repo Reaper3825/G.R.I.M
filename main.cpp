@@ -26,6 +26,7 @@
 #include "ui/console_panel.hpp"
 #include "ui/ui_settings_menu.hpp"
 #include "ui/ui_training_panel.hpp"
+#include "ui/ui_DataCollection.hpp"
 #include "nlp/nlp.hpp"
 #include "timer.hpp"
 #include "perception/perception.hpp"
@@ -248,6 +249,10 @@ int main(int argc, char* argv[])
     LOG_DEBUG("Main", "Virtual screen: " + std::to_string(virtualWidth) + "x" + 
               std::to_string(virtualHeight) + " at (" + 
               std::to_string(virtualX) + "," + std::to_string(virtualY) + ")");
+    g_systemInfo.virtualOriginX = virtualX;
+    g_systemInfo.virtualOriginY = virtualY;
+    g_systemInfo.totalScreenWidth = virtualWidth;
+    g_systemInfo.totalScreenHeight = virtualHeight;
 
     GRIMWindow* overlayWin = WindowManager::createOverlay("overlay", virtualWidth, virtualHeight, true);
     if (!overlayWin) {
@@ -271,6 +276,7 @@ int main(int argc, char* argv[])
     auto consolePanel  = std::make_shared<ConsolePanel>();
     auto settingsPanel = std::make_shared<UISettingsMenu>();
     auto trainingPanel = std::make_shared<UITrainingPanel>();
+    auto dataCollectionPanel = std::make_shared<UIDataCollectionPanel>();
     
     // Assign to global for command access
     g_trainingPanel = trainingPanel;
@@ -282,10 +288,12 @@ int main(int argc, char* argv[])
     consolePanel->setVisible(false);
     settingsPanel->setVisible(false);
     trainingPanel->setVisible(false);
+    dataCollectionPanel->setVisible(false);
 
     UIRoot::get().addPanel(consolePanel);
     UIRoot::get().addPanel(settingsPanel);
     UIRoot::get().addPanel(trainingPanel);
+    UIRoot::get().addPanel(dataCollectionPanel);
 
     LOG_PHASE("UIRoot and panels initialized (hidden)", true);
 
@@ -330,6 +338,7 @@ int main(int argc, char* argv[])
         
         // ✅ NEW: Update Mouse class state from InputState for better reliability
         Mouse::updateFromInput(input);
+        Key::updateFromInput(input);
         auto inputCaptureEnd = std::chrono::steady_clock::now();
         
         MSG msg{};

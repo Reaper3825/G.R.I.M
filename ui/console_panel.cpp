@@ -14,8 +14,7 @@
 
 ConsolePanel::ConsolePanel()
     : UIPanel("Console", true),  // Enable dragging
-      settingsButton(std::make_shared<UIButton>("⚙ Settings", []() {  // ✅ FIX: Safer lambda that doesn't capture 'this'
-          // Open settings panel directly without command system
+      settingsButton(std::make_shared<UIButton>("Settings", []() {
           auto settingsPanel = UIRoot::get().getPanel("Settings");
           if (settingsPanel) {
               settingsPanel->setVisible(true);
@@ -24,7 +23,17 @@ ConsolePanel::ConsolePanel()
               LOG_DEBUG("ConsolePanel", "Settings panel not found - may not be initialized yet");
           }
       })),
-      trainingButton(std::make_shared<UIButton>("⚡ Training", []() {
+      DCButton(std::make_shared<UIButton>(" Data Collection ", []() {
+          // Open data collection panel
+          auto dataCollectionPanel = UIRoot::get().getPanel("DataCollection");
+          if (dataCollectionPanel) {
+              dataCollectionPanel->setVisible(true);
+              LOG_DEBUG("ConsolePanel", "Opened data collection panel via button");
+          } else {
+              LOG_DEBUG("ConsolePanel", "Data collection panel not found - may not be initialized yet");
+          }
+      })),
+      trainingButton(std::make_shared<UIButton>(" Training ", []() {
           // Open training panel
           auto trainingPanel = UIRoot::get().getPanel("GRIM-text Training Control");
           if (trainingPanel) {
@@ -111,6 +120,10 @@ void ConsolePanel::update(const InputState& input, float dt)
         trainingButton->setPosition(position.x + size.x - 220, position.y + 5);
         trainingButton->update(input, dt);
     }
+        if (DCButton) {
+        DCButton->setPosition(position.x + size.x - 330, position.y + 5);
+        DCButton->update(input, dt);
+    }
 
     if (!isVisible()) return;
     
@@ -144,6 +157,10 @@ void ConsolePanel::drawOverlay(OverlayRenderer& renderer)
     
     if (trainingButton) {
         trainingButton->drawOverlay(renderer, position);
+    }
+
+    if (DCButton) {
+        DCButton->drawOverlay(renderer, position);
     }
     
     // Now draw console-specific content on top

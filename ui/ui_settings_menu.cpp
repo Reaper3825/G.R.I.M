@@ -105,7 +105,7 @@ void UISettingsMenu::loadConfig() {
                 {"voice", {
                     {"engine", "coqui"},
                     {"speaker", "default"},
-                    {"available_speakers", nlohmann::json::array({"default", "p226"})}
+                    {"available_speakers", nlohmann::json::array({"default", "p226", "grim"})}
                 }},
                 {"whisper", {
                     {"whisper_model", "ggml-base.en.bin"},

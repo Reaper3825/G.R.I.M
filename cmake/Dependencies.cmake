@@ -82,6 +82,28 @@ grim_copy_dlls("${_dll_dir_vcpkg}"
 )
 
 # =========================================================
+# FFmpeg media stack
+# =========================================================
+grim_copy_dlls("${_dll_dir_vcpkg}"
+    avcodec-60.dll
+    avdevice-60.dll
+    avfilter-9.dll
+    avformat-60.dll
+    avutil-58.dll
+    swresample-4.dll
+    swscale-7.dll
+)
+
+# =========================================================
+# SentencePiece runtime (tokenizer)
+# =========================================================
+grim_copy_dlls("${_dll_dir_vcpkg}"
+    sentencepiece.dll
+    sentencepiece_train.dll
+    abseil_dll.dll
+)
+
+# =========================================================
 # Graphics dependencies
 # =========================================================
 grim_copy_dlls("${_dll_dir_vcpkg}"
@@ -165,6 +187,56 @@ target_link_libraries(GRIM PRIVATE nlohmann_json::nlohmann_json)
 # --- Ensure runtime finds our DLL first ---
 set_target_properties(GRIM PROPERTIES
     VS_DEBUGGER_ENVIRONMENT "PATH=${DEPS_BIN_DIR};%PATH%"
+)
+
+# =========================================================
+# FFmpeg (media/transcoding helpers) - linked directly from vcpkg libs
+# =========================================================
+set(_grim_ffmpeg_libs
+    avcodec
+    avdevice
+    avfilter
+    avformat
+    avutil
+    swresample
+    swscale
+)
+target_link_libraries(GRIM PRIVATE ${_grim_ffmpeg_libs})
+
+# =========================================================
+# SentencePiece (tokenizer runtime for verifier)
+# =========================================================
+set(_sentencepiece_core_libs
+    sentencepiece
+    sentencepiece_train
+    libprotobuf-lite
+    abseil_dll
+)
+
+set(_sentencepiece_absl_libs
+    absl_decode_rust_punycode
+    absl_demangle_rust
+    absl_flags_commandlineflag_internal
+    absl_flags_commandlineflag
+    absl_flags_config
+    absl_flags_internal
+    absl_flags_marshalling
+    absl_flags_parse
+    absl_flags_private_handle_accessor
+    absl_flags_program_name
+    absl_flags_reflection
+    absl_flags_usage_internal
+    absl_flags_usage
+    absl_log_flags
+    absl_log_internal_structured_proto
+    absl_poison
+    absl_tracing_internal
+    absl_utf8_for_code_point
+)
+
+target_link_libraries(GRIM PRIVATE
+    ${_sentencepiece_core_libs}
+    ${_sentencepiece_absl_libs}
 )
 
 # =========================================================

@@ -30,6 +30,7 @@ private:
     
     std::shared_ptr<UIButton> settingsButton;  // Settings button
     std::shared_ptr<UIButton> trainingButton;  // Training control button
+    std::shared_ptr<UIButton> DCButton;        // Data Collection button
     
     // Helper to get current time string
     std::string getCurrentTime() const;

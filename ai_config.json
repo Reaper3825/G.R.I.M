@@ -4,7 +4,7 @@
         "elevenlabs": "",
         "openai": ""
     },
-    "backend": "grim_native",
+    "backend": "ollama",
     "conversation_history_size": 10,
     "default_model": "llama3.1:8b",
     "grim_text_url": "http://127.0.0.1:11435",
@@ -15,7 +15,7 @@
         "low_vram": false,
         "num_batch": 512,
         "num_ctx": 4096,
-        "num_gpu": 99,
+        "num_gpu": 10,
         "num_predict": 512,
         "num_thread": 8,
         "repeat_penalty": 1.1,
@@ -50,13 +50,50 @@
     "tokenizer_path": "resources/models/GRIM-text/training/models/vocab.txt",
     "training": {
         "config": {
-            "batch_size": 8,
-            "epochs": 2,
-            "learning_rate": 9.999999747378752e-05,
-            "max_seq_len": 512,
+            "log_interval": 1,
+            "batch_size": 4,
+            "epochs": 1,
+            "gradient_clip": 10.0,
+            "learning_rate": 3e-05,
+            "max_seq_len": 2048,
             "use_flash_attention": true,
             "use_gpu": true,
-            "warmup_steps": 1000
+            "warmup_steps": 50,
+            "dynamic_lr": {
+                "enabled": true,
+                "auto_generate": true
+            },
+            "soft_restart": {
+                "enabled": true,
+                "loss_increase_threshold": 0.2
+            },
+            "activation_quantization": {
+                "enabled": true,
+                "apply_to_embeddings": true,
+                "apply_to_encoder_outputs": true,
+                "apply_to_layer_caches": true,
+                "apply_to_qkv_cache": true,
+                "apply_to_logits": true,
+                "scale": 0.0625,
+                "clip_min": -127.0,
+                "clip_max": 127.0,
+                "zero_point": 0,
+                "symmetric": true
+            },
+            "auto_stop": {
+                "enabled": true,
+                "plateau_patience": 8,
+                "plateau_min_delta": 0.002,
+                "high_loss_threshold": 10.5,
+                "high_loss_patience": 5
+            },
+            "micro_validation": {
+                "enabled": true,
+                "interval": 200,
+                "batch_limit": 5,
+                "min_step": 150,
+                "prefer_short": true
+            }
         },
         "server_host": "127.0.0.1",
         "server_port": 11436
@@ -69,7 +106,8 @@
     "voice": {
         "available_speakers": [
             "default",
-            "p226"
+            "p226",
+            "grim"
         ],
         "confidence_threshold": 0.6,
         "coqui": {
@@ -86,7 +124,7 @@
         "rules": {
             "banter": "coqui",
             "reminder": "coqui",
-            "startup": "sapi",
+            "startup": "coqui",
             "summary": "coqui"
         },
         "sapi": {
@@ -94,7 +132,7 @@
         },
         "silence_threshold": 0.015,
         "silence_timeout_ms": 1200,
-        "speaker": "p226",
+        "speaker": "grim",
         "speed": 1.5
     },
     "whisper": {

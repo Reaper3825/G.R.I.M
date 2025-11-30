@@ -13,8 +13,103 @@
 // Globals
 // ===========================================================
 std::atomic<bool> g_alphaReady{ false };
-std::vector<uint8_t> g_alphaPixels;
+std::vector<uint8_t> g_popupPixels;
+std::vector<uint8_t> g_emissiveMask;
+std::vector<uint8_t> g_occlusionMask;
+std::vector<uint8_t> g_shadowMask;
+std::vector<uint8_t> g_roughnessMask;
 std::mutex g_alphaMutex;
+static int g_popupWidth = 0;
+static int g_popupHeight = 0;
+
+// ===========================================================
+// Shadow helpers
+// ===========================================================
+static void boxBlurPass(const std::vector<float>& in, std::vector<float>& out,
+                        int width, int height, int radius, bool horizontal)
+{
+    if (radius <= 0)
+    {
+        out = in;
+        return;
+    }
+
+    out.assign(width * height, 0.0f);
+    int kernel = radius * 2 + 1;
+
+    for (int y = 0; y < height; ++y)
+    {
+        for (int x = 0; x < width; ++x)
+        {
+            float sum = 0.0f;
+            int samples = 0;
+
+            for (int k = -radius; k <= radius; ++k)
+            {
+                int sampleX = horizontal ? x + k : x;
+                int sampleY = horizontal ? y : y + k;
+
+                if (sampleX < 0 || sampleX >= width || sampleY < 0 || sampleY >= height)
+                    continue;
+
+                sum += in[sampleY * width + sampleX];
+                ++samples;
+            }
+
+            out[y * width + x] = (samples > 0) ? (sum / samples) : 0.0f;
+        }
+    }
+}
+
+static std::vector<uint8_t> buildShadowMask(const std::vector<uint8_t>& rgbaPixels,
+                                            const std::vector<uint8_t>& occlusionMask,
+                                            int width, int height)
+{
+    if (rgbaPixels.empty() || width == 0 || height == 0)
+        return {};
+
+    std::vector<float> mask(width * height, 0.0f);
+    constexpr float alphaCutoff = 0.92f;      // drop anything below 92% opacity
+    constexpr float occlusionCutoff = 0.2f;   // ignore very low occlusion contributions
+
+    for (int i = 0; i < width * height; ++i)
+    {
+        float alpha = rgbaPixels[i * 4 + 3] / 255.0f;
+        float occlusion = occlusionMask.empty() ? 1.0f : (occlusionMask[i] / 255.0f);
+
+        if (alpha < alphaCutoff || occlusion < occlusionCutoff)
+        {
+            mask[i] = 0.0f;
+            continue;
+        }
+
+        // Remap so surviving pixels still produce a full-strength shadow edge.
+        float alphaRemapped = (alpha - alphaCutoff) / (1.0f - alphaCutoff);
+        float occlusionRemapped = (occlusion - occlusionCutoff) / (1.0f - occlusionCutoff);
+        alphaRemapped = std::clamp(alphaRemapped, 0.0f, 1.0f);
+        occlusionRemapped = std::clamp(occlusionRemapped, 0.0f, 1.0f);
+
+        mask[i] = alphaRemapped * (0.4f + 0.6f * occlusionRemapped);
+    }
+
+    std::vector<float> temp;
+    temp.reserve(width * height);
+
+    // Multiple passes for smoother blur
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        boxBlurPass(mask, temp, width, height, 6, true);
+        boxBlurPass(temp, mask, width, height, 6, false);
+    }
+
+    std::vector<uint8_t> shadow(width * height);
+    for (int i = 0; i < width * height; ++i)
+    {
+        float value = std::clamp(mask[i], 0.0f, 1.0f);
+        shadow[i] = static_cast<uint8_t>(value * 255.0f);
+    }
+    return shadow;
+}
 
 // ===========================================================
 
@@ -147,9 +242,13 @@ void queueWindowAlphaReadback(int width, int height)
         return;
     }
 
-    LOG_DEBUG("PopupWindow", "Loaded diffuse " + std::to_string(diffuseW) + "x" + std::to_string(diffuseH) + " and oreo " + std::to_string(oreoW) + "x" + std::to_string(oreoH));
+    LOG_DEBUG("PopupWindow", "Loaded diffuse " + std::to_string(diffuseW) + "x" + std::to_string(diffuseH) +
+                             " and oreo " + std::to_string(oreoW) + "x" + std::to_string(oreoH));
 
     std::vector<uint8_t> combinedData(width * height * 4);
+    std::vector<uint8_t> emissiveData(width * height, 0);
+    std::vector<uint8_t> occlusionData(width * height, 0);
+    std::vector<uint8_t> roughnessData(width * height, 0);
 
     for (int y = 0; y < height; ++y)
     {
@@ -171,26 +270,41 @@ void queueWindowAlphaReadback(int width, int height)
             combinedData[dstIdx + 0] = diffuseData[diffuseIdx + 0]; // R
             combinedData[dstIdx + 1] = diffuseData[diffuseIdx + 1]; // G
             combinedData[dstIdx + 2] = diffuseData[diffuseIdx + 2]; // B
-            combinedData[dstIdx + 3] = oreoData[oreoIdx + 3];       // A from oreo
+
+            uint8_t opacity = oreoData[oreoIdx + 3];
+            combinedData[dstIdx + 3] = opacity;
+
+            int pixelIndex = (y * width + x);
+            occlusionData[pixelIndex] = oreoData[oreoIdx + 0];
+            roughnessData[pixelIndex] = oreoData[oreoIdx + 1];
+            emissiveData[pixelIndex] = oreoData[oreoIdx + 2];
         }
     }
 
     stbi_image_free(diffuseData);
     stbi_image_free(oreoData);
 
+    auto shadowData = buildShadowMask(combinedData, occlusionData, width, height);
+
     {
         std::lock_guard<std::mutex> lock(g_alphaMutex);
-        g_alphaPixels = std::move(combinedData);
+        g_popupPixels = std::move(combinedData);
+        g_emissiveMask = std::move(emissiveData);
+        g_occlusionMask = std::move(occlusionData);
+        g_roughnessMask = std::move(roughnessData);
+        g_shadowMask = std::move(shadowData);
+        g_popupWidth = width;
+        g_popupHeight = height;
         g_alphaReady = true;
     }
 
     uint64_t alphaSum = 0;
     uint8_t minAlpha = 255;
     uint8_t maxAlpha = 0;
-    size_t pixelCount = g_alphaPixels.size() / 4;
+    size_t pixelCount = g_popupPixels.size() / 4;
     for (size_t i = 0; i < pixelCount; ++i)
     {
-        uint8_t alpha = g_alphaPixels[i * 4 + 3];
+        uint8_t alpha = g_popupPixels[i * 4 + 3];
         alphaSum += alpha;
         minAlpha = (std::min)(minAlpha, alpha);
         maxAlpha = (std::max)(maxAlpha, alpha);
@@ -223,7 +337,7 @@ void applyWindowAlphaIfReady(HWND hwnd, int width, int height, uint32_t frameIdx
     std::vector<uint8_t> pixelsCopy;
     {
         std::lock_guard<std::mutex> lock(g_alphaMutex);
-        pixelsCopy = g_alphaPixels;
+        pixelsCopy = g_popupPixels;
         // DON'T SET g_alphaReady = false; - Animation needs continuous access!
     }
 
@@ -308,24 +422,37 @@ void applyWindowAlphaIfReady(HWND hwnd, int width, int height, uint32_t frameIdx
 // ===========================================================
 // Apply animation to window with SMOOTH BILINEAR INTERPOLATION
 // ===========================================================
-void applyAnimationToWindow(HWND hwnd, int width, int height, float scale, float alpha)
+void applyAnimationToWindow(HWND hwnd, int width, int height, float scale, float alpha, float voiceIntensity)
 {
     if (!hwnd || !IsWindow(hwnd))
         return;
+    voiceIntensity = std::clamp(voiceIntensity, 0.0f, 1.0f);
 
-    // Get current alpha pixels
+    // Get current cached data
     std::vector<uint8_t> pixelsCopy;
+    std::vector<uint8_t> emissiveCopy;
+    std::vector<uint8_t> occlusionCopy;
+    std::vector<uint8_t> shadowCopy;
+    std::vector<uint8_t> roughnessCopy;
+    int baseWidth = width;
+    int baseHeight = height;
     {
         std::lock_guard<std::mutex> lock(g_alphaMutex);
-        if (g_alphaPixels.empty())
+        if (g_popupPixels.empty())
         {
             static int emptyWarningCount = 0;
             if (++emptyWarningCount <= 5) {
-                LOG_ERROR("PopupWindow", "applyAnimationToWindow: g_alphaPixels is EMPTY! Animation cannot render.");
+                LOG_ERROR("PopupWindow", "applyAnimationToWindow: g_popupPixels is EMPTY! Animation cannot render.");
             }
             return;
         }
-        pixelsCopy = g_alphaPixels;
+        pixelsCopy = g_popupPixels;
+        emissiveCopy = g_emissiveMask;
+        occlusionCopy = g_occlusionMask;
+        shadowCopy = g_shadowMask;
+        roughnessCopy = g_roughnessMask;
+        if (g_popupWidth > 0) baseWidth = g_popupWidth;
+        if (g_popupHeight > 0) baseHeight = g_popupHeight;
     }
 
     if (pixelsCopy.empty())
@@ -365,17 +492,88 @@ void applyAnimationToWindow(HWND hwnd, int width, int height, float scale, float
         return;
     }
 
-    // Copy source pixels (RGBA → BGRA) with alpha
+    // Prepare source buffer with shadow + emissive tinting
     uint8_t* src = static_cast<uint8_t*>(bitsSrc);
-    for (int i = 0; i < width * height; ++i)
+    std::fill(src, src + (width * height * 4), 0);
+
+    // Drop shadow (draw first so sprite overwrites overlap)
+    if (!shadowCopy.empty())
     {
-        uint8_t originalAlpha = pixelsCopy[i * 4 + 3];
-        uint8_t finalAlpha = static_cast<uint8_t>(originalAlpha * alpha);
-        
-        src[i * 4 + 0] = pixelsCopy[i * 4 + 2]; // B
-        src[i * 4 + 1] = pixelsCopy[i * 4 + 1]; // G
-        src[i * 4 + 2] = pixelsCopy[i * 4 + 0]; // R
-        src[i * 4 + 3] = finalAlpha;             // A
+        const int shadowOffsetX = 8;
+        const int shadowOffsetY = 10;
+        const float shadowAlphaScale = std::clamp(alpha * 0.65f, 0.0f, 1.0f);
+
+        for (int y = 0; y < baseHeight; ++y)
+        {
+            for (int x = 0; x < baseWidth; ++x)
+            {
+                int idx = y * baseWidth + x;
+                uint8_t mask = shadowCopy[idx];
+                if (mask == 0)
+                    continue;
+
+                int dstX = x + shadowOffsetX;
+                int dstY = y + shadowOffsetY;
+                if (dstX < 0 || dstX >= width || dstY < 0 || dstY >= height)
+                    continue;
+
+                uint8_t finalAlpha = static_cast<uint8_t>(mask * shadowAlphaScale);
+                size_t dstIdx = (dstY * width + dstX) * 4;
+
+                if (finalAlpha > src[dstIdx + 3])
+                {
+                    src[dstIdx + 0] = 15;
+                    src[dstIdx + 1] = 18;
+                    src[dstIdx + 2] = 22;
+                    src[dstIdx + 3] = finalAlpha;
+                }
+            }
+        }
+    }
+
+    auto sampleMask = [](const std::vector<uint8_t>& mask, int idx) -> float {
+        if (mask.empty()) return 0.0f;
+        return mask[idx] / 255.0f;
+    };
+
+    for (int y = 0; y < baseHeight; ++y)
+    {
+        for (int x = 0; x < baseWidth; ++x)
+        {
+            if (x >= width || y >= height)
+                continue;
+
+            size_t srcIdx = (y * baseWidth + x) * 4;
+            float occlusion = sampleMask(occlusionCopy, y * baseWidth + x);
+            float shading = occlusion;
+
+            float roughness = sampleMask(roughnessCopy, y * baseWidth + x);
+            float smoothness = 1.0f - roughness;
+            float specularScale = 1.0f + smoothness * 0.2f; // smoother = brighter highlight
+            float specularAdd = smoothness * 25.0f;
+
+            float emissiveMask = sampleMask(emissiveCopy, y * baseWidth + x);
+            float emissiveBoost = 1.0f + voiceIntensity * emissiveMask;
+            float emissiveAdd = voiceIntensity * emissiveMask * 180.0f;
+
+            auto toneMap = [&](float value) -> uint8_t {
+                float boosted = value * shading * emissiveBoost * specularScale + emissiveAdd + specularAdd;
+                return static_cast<uint8_t>(std::clamp(boosted, 0.0f, 255.0f));
+            };
+
+            uint8_t finalR = toneMap(pixelsCopy[srcIdx + 0]);
+            uint8_t finalG = toneMap(pixelsCopy[srcIdx + 1]);
+            uint8_t finalB = toneMap(pixelsCopy[srcIdx + 2]);
+
+            uint8_t originalAlpha = pixelsCopy[srcIdx + 3];
+            uint8_t finalAlpha = static_cast<uint8_t>(originalAlpha * alpha);
+
+            size_t dstIdx = (y * width + x) * 4;
+            src[dstIdx + 0] = finalB;
+            src[dstIdx + 1] = finalG;
+            src[dstIdx + 2] = finalR;
+            src[dstIdx + 3] = finalAlpha;
+        }
     }
 
     // Create destination bitmap

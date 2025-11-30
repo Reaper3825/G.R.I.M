@@ -20,9 +20,8 @@
 #include "verifier.hpp"
 #include "data_preprocessor.hpp"
 #include "data_splitter.hpp"
-#include "../resources/models/GRIM-text/GRIM/grim_tokenizer.hpp"
-#include "../../../../control/training_control_generated.h"
-#include "../../../../control/ai_config_paths.hpp"  // For loading paths from ai_config.json
+#include "control/training_control_generated.h"
+#include "control/ai_config_paths.hpp"  // For loading paths from ai_config.json
 #include "checkpoint_data_generated.h"  // FlatBuffers checkpoint schema
 #include <flatbuffers/flatbuffers.h>
 #include <system_error>
@@ -31,10 +30,19 @@
 using namespace GRIM::Training;
 namespace fs = std::filesystem;
 
+namespace {
+    std::string g_checkpoint_dir;
+    std::string g_verified_dir;
+    std::string g_output_dir = "data";
+    std::string g_raw_dir;
+}
+
 // Forward declarations
 int runCollect(const std::string& config_path, std::function<void(float)> progressCallback);
-int runVerify(const std::string& config_path);
-int runMerge(const std::string& config_path);
+int runVerify(const std::string& raw_dir, const std::string& verified_dir);
+int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
+             const std::string& output_dir, bool skip_verification,
+             bool retrain_vocab, int vocab_size);
 
 static void printUsage() {
     std::cout << "GRIM Data Pipeline - Unified data preparation tool\n\n";
@@ -50,11 +58,14 @@ static void printUsage() {
     std::cout << "  --raw-dir <dir>          Raw data directory (default: data/raw)\n";
     std::cout << "  --verified-dir <dir>     Verified data directory (default: data/verified)\n";
     std::cout << "  --output-dir <dir>       Output directory (default: data)\n";
-    std::cout << "  --skip-verification      Skip re-verification when merging\n\n";
+    std::cout << "  --skip-verification      Skip re-verification when merging\n";
+    std::cout << "  --retrain-vocab          Force retrain tokenizer (ignores existing vocab)\n";
+    std::cout << "  --vocab-size <size>      Vocabulary size for tokenizer (default: 50000)\n\n";
     std::cout << "Examples:\n";
     std::cout << "  grim_data_pipeline collect --config source_data.json\n";
     std::cout << "  grim_data_pipeline verify --raw-dir data/raw\n";
     std::cout << "  grim_data_pipeline merge --checkpoint-dir ../../../data\n";
+    std::cout << "  grim_data_pipeline merge --retrain-vocab --vocab-size 30000\n";
     std::cout << "  grim_data_pipeline full --config source_data.json\n";
 }
 
@@ -147,95 +158,131 @@ int runCollect(const std::string& config_path, std::function<void(float)> progre
         return 1;
     }
     
+    std::string resolved_raw_dir = g_raw_dir.empty() ? GRIM::Config::getCollectedDir() : g_raw_dir;
+    if (resolved_raw_dir.empty()) {
+        resolved_raw_dir = "data/raw";
+    }
+    fs::path raw_dir_path(resolved_raw_dir);
+    std::error_code mkdirErr;
+    fs::create_directories(raw_dir_path, mkdirErr);
+
+    collector.setOutputDir(resolved_raw_dir);
+
     std::cout << "[2/2] Collecting data...\n";
-    updateCollectionProgress(0);
-    
     size_t collected = collector.collectData();
-    updateCollectionProgress(100);
-    
-    const auto& raw_data = collector.getCollectedData();
-    std::cout << "✓ Collected: " << collected << " new entries\n";
-    std::cout << "✓ Total entries: " << raw_data.size() << "\n\n";
-    
-    // Save checkpoint using ai_config path
-    std::string checkpoint_dir = "data"; // Default
-    GRIM::Config::GrimTextPaths grimPaths;
-    if (GRIM::Config::loadGrimTextPaths(grimPaths, "ai_config.json") && !grimPaths.checkpoints.empty()) {
-        checkpoint_dir = grimPaths.checkpoints;
-        std::cout << "[Checkpoint] Using checkpoint dir from ai_config: " << checkpoint_dir << "\n";
+    std::cout << "\xE2\x9C\x93 Collected entries: " << collected << "\n";
+
+    auto now = std::chrono::system_clock::now();
+    auto timestamp = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+    std::string stamp = std::to_string(timestamp);
+
+    fs::path raw_output_path = raw_dir_path / ("collected_" + stamp + ".jsonl");
+    if (collector.saveToJsonl(raw_output_path.string())) {
+        std::cout << "\xE2\x9C\x93 Saved raw JSONL: " << raw_output_path.string() << "\n";
     } else {
-        std::cout << "[Checkpoint] WARNING: Using default checkpoint dir: " << checkpoint_dir << "\n";
+        std::cerr << "WARNING: Failed to save raw JSONL output." << std::endl;
     }
-    
-    // Create checkpoint directory if needed
-    std::filesystem::create_directories(checkpoint_dir);
-    
-    // Save as FlatBuffer checkpoint (.ckpt extension)
-    std::string checkpoint_file = checkpoint_dir + "/checkpoint_" + std::to_string(raw_data.size()) + ".ckpt";
-    if (collector.saveCheckpoint(checkpoint_file)) {
-        std::cout << "✓ Saved checkpoint: " << checkpoint_file << "\n";
+
+    if (!g_checkpoint_dir.empty()) {
+        fs::path checkpoint_dir = g_checkpoint_dir;
+        fs::create_directories(checkpoint_dir, mkdirErr);
+        fs::path checkpoint_path = checkpoint_dir / ("checkpoint_" + stamp + ".ckpt");
+        if (collector.saveCheckpoint(checkpoint_path.string())) {
+            std::cout << "\xE2\x9C\x93 Saved checkpoint: " << checkpoint_path.string() << "\n";
+        } else {
+            std::cerr << "WARNING: Failed to save checkpoint." << std::endl;
+        }
     }
-    
-    std::cout << "\nNext: Run 'verify' mode to filter quality data\n";
-    
+
+    const auto& stats = collector.getStats();
+    std::cout << stats.toString() << std::endl;
+    std::cout << "=== COLLECTION COMPLETE ===\n\n";
     return 0;
 }
 
 int runVerify(const std::string& raw_dir, const std::string& verified_dir) {
     std::cout << "=== VERIFYING DATA ===\n\n";
-    
-    Config config;
-    config.input_dir = raw_dir;
-    config.output_dir = verified_dir;
-    config.reliability_threshold = 0.3f;
-    config.min_length = 50;
-    config.max_length = 100000;
-    
-    config.source_type_weights = {
-        {"academic", 1.0f}, {"philosophy", 0.95f}, {"technical", 0.9f},
-        {"wikipedia", 0.8f}, {"github", 0.85f}, {"gutenberg", 0.9f},
-        {"arxiv", 1.0f}, {"jstor_oa", 1.0f}, {"unknown", 0.6f}
-    };
-    
-    std::cout << "[1/2] Loading entries from " << raw_dir << "...\n";
-    
-    Verifier verifier(config);
-    auto entries = verifier.load_unverified_entries();
-    
-    std::cout << "✓ Loaded " << entries.size() << " entries\n\n";
-    
-    std::cout << "[2/2] Verifying quality...\n";
-    auto verified = verifier.verify_entries(entries);
-    
-    std::cout << "✓ Verified " << verified.size() << " entries\n\n";
-    
-    if (!verifier.save_verified_entries(verified)) {
-        std::cerr << "ERROR: Failed to save verified entries\n";
+
+    std::string resolved_raw_dir = raw_dir.empty() ? g_raw_dir : raw_dir;
+    if (resolved_raw_dir.empty()) {
+        resolved_raw_dir = GRIM::Config::getCollectedDir();
+    }
+    if (resolved_raw_dir.empty()) {
+        resolved_raw_dir = "data/raw";
+    }
+
+    std::string resolved_verified_dir = verified_dir.empty() ? g_verified_dir : verified_dir;
+    if (resolved_verified_dir.empty()) {
+        resolved_verified_dir = GRIM::Config::getVerifiedDir();
+    }
+    if (resolved_verified_dir.empty()) {
+        resolved_verified_dir = "data/verified";
+    }
+
+    if (!fs::exists(resolved_raw_dir)) {
+        std::cerr << "ERROR: Raw directory not found: " << resolved_raw_dir << "\n";
         return 1;
     }
-    
+    fs::create_directories(resolved_verified_dir);
+
+    Config verifier_config;
+    verifier_config.input_dir = resolved_raw_dir;
+    verifier_config.output_dir = resolved_verified_dir;
+    verifier_config.verbose_logging = true;
+    verifier_config.save_rejected = true;
+
+    Verifier verifier(verifier_config);
+
+    auto unverified_entries = verifier.load_unverified_entries();
+    if (unverified_entries.empty()) {
+        std::cout << "No new entries to verify in " << resolved_raw_dir << "\n";
+        return 0;
+    }
+
+    std::cout << "Loaded " << unverified_entries.size() << " unverified entries.\n";
+    auto verified_entries = verifier.verify_entries(unverified_entries);
+    std::cout << "\xE2\x9C\x93 Verification complete: " << verified_entries.size() << " entries passed filters.\n";
+
+    if (!verifier.save_verified_entries(verified_entries)) {
+        std::cerr << "ERROR: Failed to save verified entries to " << resolved_verified_dir << "\n";
+        return 1;
+    }
+
     auto stats = verifier.get_stats();
-    std::cout << "=== Statistics ===\n";
-    std::cout << "Total processed: " << stats.total_processed << "\n";
-    std::cout << "Passed: " << stats.passed_verification << "\n";
-    std::cout << "Failed: " << stats.failed_verification << "\n";
-    std::cout << "Domain rejected: " << stats.domain_rejected << "\n";
-    std::cout << "Quality rejected: " << stats.quality_rejected << "\n";
-    std::cout << "Duplicates: " << stats.duplicate_rejected << "\n\n";
-    
-    std::cout << "Next: Run 'merge' mode to prepare training data\n";
-    
+    stats.writeSummaryToLog();
+    std::cout << "Saved verification summary.\n";
+    std::cout << "High quality: " << stats.high_quality_count
+              << ", Medium: " << stats.medium_quality_count
+              << ", Low: " << stats.low_quality_count << "\n";
+    std::cout << "=== VERIFICATION COMPLETE ===\n\n";
     return 0;
 }
 
-int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir, 
-             const std::string& output_dir, bool skip_verification) {
-    std::cout << "=== MERGING & PREPARING DATA ===\n\n";
-    
+int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
+             const std::string& output_dir, bool skip_verification,
+             bool retrain_vocab, int vocab_size) {
+    (void)skip_verification;
+    (void)retrain_vocab;
+    (void)vocab_size;
+
+    std::string resolved_checkpoint_dir = checkpoint_dir.empty() ? g_checkpoint_dir : checkpoint_dir;
+    std::string resolved_verified_dir = verified_dir.empty() ? g_verified_dir : verified_dir;
+    std::string resolved_output_dir = output_dir.empty() ? g_output_dir : output_dir;
+
+    if (resolved_checkpoint_dir.empty()) {
+        resolved_checkpoint_dir = "data/checkpoints";
+    }
+    if (resolved_verified_dir.empty()) {
+        resolved_verified_dir = "data/verified";
+    }
+    if (resolved_output_dir.empty()) {
+        resolved_output_dir = "data";
+    }
+
     // Load checkpoint files if provided (FlatBuffer only)
     std::vector<std::string> checkpoint_files;
-    if (!checkpoint_dir.empty() && fs::exists(checkpoint_dir)) {
-        for (const auto& entry : fs::directory_iterator(checkpoint_dir)) {
+    if (!resolved_checkpoint_dir.empty() && fs::exists(resolved_checkpoint_dir)) {
+        for (const auto& entry : fs::directory_iterator(resolved_checkpoint_dir)) {
             if (entry.is_regular_file()) {
                 std::string filename = entry.path().filename().string();
                 std::string ext = entry.path().extension().string();
@@ -246,32 +293,32 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
             }
         }
     }
-    
-    std::cout << "[1/5] Loading data...\n";
+
+    std::cout << "[1/4] Loading data...\n";
     std::cout << "  Checkpoints: " << checkpoint_files.size() << "\n";
-    
+
     // Load existing verified entries from JSONL files
     std::vector<VerifiedEntry> existing_verified;
-    
-    if (fs::exists(verified_dir)) {
-        for (const auto& entry : fs::directory_iterator(verified_dir)) {
+
+    if (fs::exists(resolved_verified_dir)) {
+        for (const auto& entry : fs::directory_iterator(resolved_verified_dir)) {
             if (entry.is_regular_file() && entry.path().extension() == ".jsonl") {
                 std::ifstream file(entry.path());
                 std::string line;
-                
+
                 while (std::getline(file, line)) {
                     if (line.empty()) continue;
-                    
+
                     try {
                         nlohmann::json j = nlohmann::json::parse(line);
-                        
+
                         VerifiedEntry ve;
                         ve.content = j["content"].get<std::string>();
                         ve.source_url = j["source_url"].get<std::string>();
                         ve.source_type = j["source_type"].get<std::string>();
                         ve.reliability_score = j.value("reliability_score", 0.8f);
                         ve.verification_time = j.value("verification_time", (time_t)0);
-                        
+
                         existing_verified.push_back(ve);
                     } catch (...) {
                         continue;  // Skip malformed entries
@@ -280,9 +327,9 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
             }
         }
     }
-    
+
     std::cout << "  Verified entries: " << existing_verified.size() << "\n";
-    
+
     // Load checkpoint files (FlatBuffer format only)
     std::vector<VerifiedEntry> checkpoint_entries;
     for (const auto& checkpoint_file : checkpoint_files) {
@@ -290,61 +337,61 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
             // Load FlatBuffer checkpoint
             std::ifstream file(checkpoint_file, std::ios::binary);
             if (!file.is_open()) continue;
-            
+
             // Read entire file
             file.seekg(0, std::ios::end);
             size_t fileSize = file.tellg();
             file.seekg(0, std::ios::beg);
-            
+
             std::vector<uint8_t> buffer(fileSize);
             file.read(reinterpret_cast<char*>(buffer.data()), fileSize);
             file.close();
-            
+
             // Parse FlatBuffer
             auto checkpoint = GRIMCheckpoint::GetCheckpoint(buffer.data());
             if (!checkpoint || !checkpoint->entries()) {
                 std::cerr << "  Warning: Invalid FlatBuffer format in " << checkpoint_file << "\n";
                 continue;
             }
-            
+
             // Convert to VerifiedEntry
             for (const auto* fb_entry : *checkpoint->entries()) {
                 if (!fb_entry || !fb_entry->content() || !fb_entry->source_url()) continue;
-                
+
                 VerifiedEntry ve;
                 ve.content = fb_entry->content()->str();
                 ve.source_url = fb_entry->source_url()->str();
                 ve.source_type = fb_entry->source_type() ? fb_entry->source_type()->str() : "web";
                 ve.reliability_score = fb_entry->reliability_score();
                 ve.verification_time = fb_entry->fetch_timestamp();
-                
+
                 if (!ve.content.empty()) {
                     checkpoint_entries.push_back(ve);
                 }
             }
-            
-            std::cout << "  Loaded " << checkpoint->entries()->size() 
-                     << " entries from " << fs::path(checkpoint_file).filename().string() 
-                     << " (" << (fileSize / 1024) << " KB FlatBuffer)" << std::endl;
-            
+
+            std::cout << "  Loaded " << checkpoint->entries()->size()
+                      << " entries from " << fs::path(checkpoint_file).filename().string()
+                      << " (" << (fileSize / 1024) << " KB FlatBuffer)" << std::endl;
+
         } catch (const std::exception& e) {
-            std::cerr << "  Warning: Failed to read " << checkpoint_file 
-                     << ": " << e.what() << "\n";
+            std::cerr << "  Warning: Failed to read " << checkpoint_file
+                      << ": " << e.what() << "\n";
             continue;
         }
     }
-    
+
     std::cout << "  Checkpoint entries: " << checkpoint_entries.size() << "\n\n";
-    
+
     // Combine all data
     std::vector<VerifiedEntry> all_verified = existing_verified;
     all_verified.insert(all_verified.end(), checkpoint_entries.begin(), checkpoint_entries.end());
-    
+
     // Deduplicate
-    std::cout << "[2/5] Deduplicating...\n";
+    std::cout << "[2/4] Deduplicating...\n";
     std::unordered_set<std::string> seen_hashes;
     std::vector<VerifiedEntry> deduplicated;
-    
+
     for (const auto& entry : all_verified) {
         std::string hash = std::to_string(std::hash<std::string>{}(entry.content));
         if (seen_hashes.find(hash) == seen_hashes.end()) {
@@ -352,119 +399,60 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
             deduplicated.push_back(entry);
         }
     }
-    
-    std::cout << "✓ Deduplicated: " << deduplicated.size() << " unique entries\n\n";
-    
+
+    std::cout << "\xE2\x9C\x93 Deduplicated: " << deduplicated.size() << " unique entries\n\n";
+
     // Preprocess
-    std::cout << "[3/5] Preprocessing...\n";
+    std::cout << "[3/4] Preprocessing...\n";
     PreprocessorConfig prep_config;
-    prep_config.remove_html = true;     // CRITICAL: Remove HTML tags for clean text
-    prep_config.min_length = 75;       // More forgiving - accept shorter HTML extractions
-    prep_config.min_words = 15;         // More forgiving - accept brief but quality content
-    prep_config.min_alpha_ratio = 0.5f; // More forgiving - accept technical/structured content
+    prep_config.remove_html = true;     // Remove HTML tags for clean text
+    prep_config.min_length = 75;        // Accept shorter high-quality content
+    prep_config.min_words = 15;         // Allow concise but valuable snippets
+    prep_config.min_alpha_ratio = 0.5f; // Allow technical/structured content
+    prep_config.max_length = 100000;    // Allow long-form content (up to 100K chars)
+    prep_config.max_repetition_ratio = 0.5f;
+    prep_config.dedup_threshold = 0.9f;
     DataPreprocessor preprocessor(prep_config);
-    
+
     std::vector<std::string> cleaned_texts;
     for (const auto& entry : deduplicated) {
         std::string clean = preprocessor.preprocess(entry.content);
-        
+
         if (!preprocessor.passesQualityFilter(clean)) continue;
         if (preprocessor.isDuplicate(clean)) continue;
-        
+
         clean = preprocessor.addSpecialTokens(clean);
         cleaned_texts.push_back(clean);
     }
-    
-    std::cout << "✓ Cleaned: " << cleaned_texts.size() << " entries\n\n";
-    
-    // Split data
-    std::cout << "[4/5] Splitting train/val/test...\n";
-    SplitConfig split_config;
-    split_config.train_ratio = 0.8f;
-    split_config.val_ratio = 0.1f;
-    split_config.test_ratio = 0.1f;
-    
-    DataSplitter<std::string> splitter(split_config);
-    auto split = splitter.split(cleaned_texts);
-    
-    std::cout << "✓ Train: " << split.train.size() << "\n";
-    std::cout << "✓ Val:   " << split.validation.size() << "\n";
-    std::cout << "✓ Test:  " << split.test.size() << "\n\n";
-    
-    // Tokenize
-    std::cout << "[5/5] Tokenizing...\n";
-    
-    GRIM::TokenizerConfig tok_config;
-    tok_config.vocab_size = 50000;
-    tok_config.max_length = 8192;
-    tok_config.special_tokens = {"<pad>", "<unk>", "<s>", "</s>"};
-    
-    GRIM::GrimTokenizer tokenizer(tok_config);
-    
-    // Get absolute paths using resource resolver
-    auto resource_root = GRIM::Training::resolveResourceRoot();
-    auto training_models_dir = resource_root / "models/GRIM-text/training/models";
-    auto training_data_dir = resource_root / "models/GRIM-text/training/data";
-    auto vocab_path = training_models_dir / "vocab.bin";
-    
-    // Try to load existing tokenizer
-    fs::create_directories(training_models_dir);
-    if (fs::exists(vocab_path)) {
-        if (tokenizer.load(vocab_path.string())) {
-            std::cout << "✓ Loaded existing tokenizer from " << vocab_path.string() << "\n";
-        }
-    } else {
-        std::cout << "  Training new tokenizer...\n";
-        tokenizer.trainFromCorpus(split.train, 10000);
-        tokenizer.save(vocab_path.string());
-        std::cout << "✓ Trained new tokenizer (vocab=" << tokenizer.vocabSize() << ")\n";
+
+    std::cout << "\xE2\x9C\x93 Cleaned: " << cleaned_texts.size() << " entries\n\n";
+
+    // Instead of splitting/tokenizing here, write a merged cleaned cache for training/tokenizer pipeline.
+    std::cout << "[4/4] Writing merged verified cache...\n";
+
+    fs::create_directories(resolved_output_dir);
+    fs::path cache_path = fs::path(resolved_output_dir) / "merged_verified_cache.jsonl";
+
+    std::ofstream cache_file(cache_path, std::ios::out | std::ios::trunc);
+    if (!cache_file.is_open()) {
+        std::cerr << "ERROR: Failed to open merged cache file for writing: "
+                  << cache_path.string() << "\n";
+        return 1;
     }
-    
-    // Tokenize all splits
-    auto train_tokens = tokenizer.encodeBatch(split.train);
-    auto val_tokens = tokenizer.encodeBatch(split.validation);
-    auto test_tokens = tokenizer.encodeBatch(split.test);
-    
-    // Save tokenized data in .grmt format
-    fs::create_directories(training_data_dir);
-    
-    auto save_grmt = [&tokenizer](const std::string& path, const std::vector<std::vector<int>>& data) {
-        std::ofstream file(path, std::ios::binary);
-        
-        // Header: magic, version, num_sequences, vocab_size
-        uint32_t magic = 0x474D5254; // "GRMT"
-        uint32_t version = 1;
-        uint32_t num_sequences = data.size();
-        uint32_t vocab_size = tokenizer.vocabSize();
-        
-        file.write(reinterpret_cast<const char*>(&magic), 4);
-        file.write(reinterpret_cast<const char*>(&version), 4);
-        file.write(reinterpret_cast<const char*>(&num_sequences), 4);
-        file.write(reinterpret_cast<const char*>(&vocab_size), 4);
-        
-        // Sequences
-        for (const auto& seq : data) {
-            uint32_t len = seq.size();
-            file.write(reinterpret_cast<const char*>(&len), 4);
-            file.write(reinterpret_cast<const char*>(seq.data()), len * sizeof(int));
-        }
-        
-        return file.good();
-    };
-    
-    save_grmt((training_data_dir / "training_data.grmt").string(), train_tokens);
-    save_grmt((training_data_dir / "validation_data.grmt").string(), val_tokens);
-    save_grmt((training_data_dir / "test_data.grmt").string(), test_tokens);
-    
-    std::cout << "✓ Saved training data in .grmt format\n\n";
-    
-    std::cout << "=== PIPELINE COMPLETE ===\n";
-    std::cout << "✓ Training data: " << (training_data_dir / "training_data.grmt").string() << "\n";
-    std::cout << "✓ Vocabulary: " << vocab_path.string() << "\n";
-    std::cout << "✓ Total sequences: " << train_tokens.size() << " train, " 
-              << val_tokens.size() << " val\n\n";
-    std::cout << "Ready for training!\n";
-    
+
+    for (const auto& text : cleaned_texts) {
+        nlohmann::json j;
+        j["content"] = text;
+        cache_file << j.dump() << "\n";
+    }
+
+    cache_file.close();
+
+    std::cout << "\xE2\x9C\x93 Wrote merged verified cache: " << cache_path.string() << "\n";
+    std::cout << "=== MERGE COMPLETE (CACHE-ONLY) ===\n";
+    std::cout << "Total cached entries: " << cleaned_texts.size() << "\n\n";
+    std::cout << "Ready for tokenizer/training pipeline to consume cache.\n";
+
     return 0;
 }
 
@@ -473,14 +461,14 @@ int StartDataCollection(int argc, char** argv, std::function<void(float)> progre
         printUsage();
         return 1;
     }
-    
+
     std::string mode = argv[1];
-    
+
     if (mode == "--help" || mode == "-h") {
         printUsage();
         return 0;
     }
-    
+
     // Parse options - defaults will be overridden by ai_config.json
     std::string config_path = "";  // Will be loaded from ai_config.json
     std::string checkpoint_dir;
@@ -488,7 +476,9 @@ int StartDataCollection(int argc, char** argv, std::function<void(float)> progre
     std::string verified_dir;
     std::string output_dir = "data";
     bool skip_verification = false;
-    
+    bool retrain_vocab = false;
+    int vocab_size = 50000;  // Default vocab size
+
     // Load paths from ai_config.json (centralized source of truth)
     std::cout << "[DataPipeline] Loading paths from ai_config.json..." << std::endl;
     GRIM::Config::GrimTextPaths grimPaths;
@@ -529,7 +519,7 @@ int StartDataCollection(int argc, char** argv, std::function<void(float)> progre
     } else {
         std::cout << "[DataPipeline] WARNING: Could not load paths from ai_config.json, using defaults" << std::endl;
     }
-    
+
     // Command-line arguments override ai_config.json
     for (int i = 2; i < argc; i++) {
         std::string arg = argv[i];
@@ -554,7 +544,21 @@ int StartDataCollection(int argc, char** argv, std::function<void(float)> progre
         else if (arg == "--skip-verification") {
             skip_verification = true;
         }
+        else if (arg == "--retrain-vocab") {
+            retrain_vocab = true;
+            std::cout << "[DataPipeline] Will retrain tokenizer (ignoring existing vocab)\n";
+        }
+        else if (arg == "--vocab-size" && i + 1 < argc) {
+            vocab_size = std::stoi(argv[++i]);
+            std::cout << "[DataPipeline] Vocab size set to: " << vocab_size << "\n";
+        }
     }
+
+    // Persist paths for helper routines that rely on global context
+    g_checkpoint_dir = checkpoint_dir;
+    g_verified_dir = verified_dir;
+    g_output_dir = output_dir;
+    g_raw_dir = raw_dir;
     
     // Run requested mode
     if (mode == "collect") {
@@ -568,7 +572,7 @@ int StartDataCollection(int argc, char** argv, std::function<void(float)> progre
         return runVerify(raw_dir, verified_dir);
     }
     else if (mode == "merge") {
-        return runMerge(checkpoint_dir, verified_dir, output_dir, skip_verification);
+        return runMerge(checkpoint_dir, verified_dir, output_dir, skip_verification, retrain_vocab, vocab_size);
     }
     else if (mode == "full") {
         if (config_path.empty()) {
@@ -582,7 +586,7 @@ int StartDataCollection(int argc, char** argv, std::function<void(float)> progre
         result = runVerify(raw_dir, verified_dir);
         if (result != 0) return result;
         
-        return runMerge(checkpoint_dir, verified_dir, output_dir, skip_verification);
+        return runMerge(checkpoint_dir, verified_dir, output_dir, skip_verification, retrain_vocab, vocab_size);
     }
     else {
         std::cerr << "ERROR: Unknown mode '" << mode << "'\n\n";

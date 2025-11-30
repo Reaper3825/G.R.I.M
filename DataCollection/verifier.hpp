@@ -46,6 +46,18 @@ struct Config {
     float high_quality_threshold = 0.8f;
     float medium_quality_threshold = 0.6f;
     float low_quality_threshold = 0.4f;
+
+    // Semantic verifier (DeBERTa ONNX)
+    bool enable_semantic_model = false;
+    bool semantic_use_gpu = true;
+    bool semantic_hard_filter = true;
+    int semantic_max_seq_length = 512;
+    float semantic_min_score = 0.55f;
+    float semantic_quality_weight = 0.35f;
+    std::string semantic_model_path;
+    std::string semantic_tokenizer_path;
+    std::vector<std::string> semantic_positive_prompts;
+    std::vector<std::string> semantic_negative_prompts;
 };
 
 struct Stats {
@@ -55,6 +67,7 @@ struct Stats {
     size_t domain_rejected = 0;
     size_t quality_rejected = 0;
     size_t duplicate_rejected = 0;
+    size_t semantic_rejected = 0;
     
     // Enhanced: Quality tier tracking
     size_t high_quality_count = 0;

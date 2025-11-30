@@ -11,6 +11,7 @@
       ]
     },
     "nlohmann-json",
+    "sentencepiece",
     "portaudio",
     "glfw3",
     "uwebsockets",

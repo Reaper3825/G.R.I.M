@@ -55,7 +55,7 @@ using namespace GRIMText::Control;
 
 struct InternalTrainingStats {
     int currentEpoch = 0;
-    int totalEpochs = 3;
+    int totalEpochs = 0;
     int currentBatch = 0;
     int totalBatches = 0;
     float currentLoss = 0.0f;
@@ -65,6 +65,7 @@ struct InternalTrainingStats {
     float gpuMemoryUsed = 0.0f;
     float gpuMemoryTotal = 0.0f;
     float trainingProgress = 0.0f;
+    float collectionProgress = 0.0f;
     std::string currentPhase = "Idle";
     std::string lastError = "";
     int64_t startTime = 0;
@@ -308,7 +309,8 @@ public:
         debugLog << "Final grimRoot: " << grimRoot << std::endl;
 #endif
         
-        fs::path workingDir = grimRoot / "resources/models/GRIM-text/training";
+        // Set working directory to GRIM root so train_gpu.exe can find ai_config.json
+        fs::path workingDir = fs::absolute(grimRoot);
         
         // Use paths from config (which are now loaded from ai_config.json as absolute paths)
         // If they're relative, resolve them; if absolute, use them directly
@@ -475,11 +477,21 @@ public:
                 if (exitCode == STILL_ACTIVE) {
                     return true;
                 } else {
-                    // Process has exited
+                    // Process has exited - check exit code to determine success vs error
                     CloseHandle(g_state.trainingProcess);
                     g_state.trainingProcess = nullptr;
                     g_state.trainingPID = 0;
-                    g_state.setState(TrainingState_Completed);
+                    
+                    // Only mark as completed if exit code is 0 (success)
+                    // Otherwise it's an error or premature exit
+                    if (exitCode == 0) {
+                        g_state.setState(TrainingState_Completed);
+                    } else {
+                        g_state.setState(TrainingState_Error);
+                        std::ostringstream errorMsg;
+                        errorMsg << "Training process exited with code " << exitCode;
+                        g_state.stats.lastError = errorMsg.str();
+                    }
                 }
             }
         }
@@ -563,6 +575,7 @@ void setupAPI(httplib::Server& server) {
             stats.gpuMemoryUsed,
             stats.gpuMemoryTotal,
             stats.trainingProgress,
+            stats.collectionProgress,
             currentPhase,
             lastError,
             stats.startTime,

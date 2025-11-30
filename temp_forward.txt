@@ -1,0 +1,268 @@
+0001: // flash_attention_forward.cu - Flash Attention 2 Forward Pass Implementation
+0002: // Based on "Flash Attention 2: Faster Attention with Better Parallelism and Work Partitioning"
+0003: // Implements tiled attention with online softmax normalization
+0004: 
+0005: #include "grim_flash_attention.hpp"
+0006: #include <cuda_runtime.h>
+0007: #include <device_launch_parameters.h>
+0008: #include <float.h>
+0009: #include <cmath>
+0010: 
+0011: namespace GRIM {
+0012: 
+0013: // CUDA kernel for Flash Attention forward pass
+0014: // Uses shared memory tiling to reduce HBM accesses from O(N^2) to O(N)
+0015: template<int BLOCK_SIZE_Q, int BLOCK_SIZE_KV, int HEAD_DIM>
+0016: __global__ void flashAttentionForwardKernel(
+0017:     const float* __restrict__ Q,      // [batch, heads, seq_len, head_dim]
+0018:     const float* __restrict__ K,      // [batch, heads, seq_len, head_dim]
+0019:     const float* __restrict__ V,      // [batch, heads, seq_len, head_dim]
+0020:     float* __restrict__ output,       // [batch, heads, seq_len, head_dim]
+0021:     const float* __restrict__ alibi_slopes, // [heads] or nullptr
+0022:     int batch_size,
+0023:     int num_heads,
+0024:     int seq_len,
+0025:     int head_dim,
+0026:     bool use_alibi,
+0027:     float alibi_scale
+0028: ) {
+0029:     // Shared memory for Q, K, V blocks
+0030:     __shared__ float Q_smem[BLOCK_SIZE_Q][HEAD_DIM];
+0031:     __shared__ float K_smem[BLOCK_SIZE_KV][HEAD_DIM];
+0032:     __shared__ float V_smem[BLOCK_SIZE_KV][HEAD_DIM];
+0033:     
+0034:     // Shared memory for attention scores
+0035:     __shared__ float S_smem[BLOCK_SIZE_Q][BLOCK_SIZE_KV];
+0036:     
+0037:     // Thread and block indices
+0038:     const int batch_idx = blockIdx.z;
+0039:     const int head_idx = blockIdx.y;
+0040:     const int q_block_idx = blockIdx.x;
+0041:     
+0042:     const int tid = threadIdx.x;
+0043:     const int num_threads = blockDim.x;
+0044:     
+0045:     // Global offsets
+0046:     const int qkv_offset = batch_idx * num_heads * seq_len * head_dim + 
+0047:                            head_idx * seq_len * head_dim;
+0048:     
+0049:     const float* Q_head = Q + qkv_offset;
+0050:     const float* K_head = K + qkv_offset;
+0051:     const float* V_head = V + qkv_offset;
+0052:     float* O_head = output + qkv_offset;
+0053:     
+0054:     const int q_start = q_block_idx * BLOCK_SIZE_Q;
+0055:     const int q_end = min(q_start + BLOCK_SIZE_Q, seq_len);
+0056:     const int q_size = q_end - q_start;
+0057:     
+0058:     // Get ALiBi slope for this head
+0059:     float alibi_slope = 0.0f;
+0060:     if (use_alibi && alibi_slopes != nullptr) {
+0061:         alibi_slope = alibi_slopes[head_idx] * alibi_scale;
+0062:     }
+0063:     
+0064:     const float scale = 1.0f / sqrtf(static_cast<float>(head_dim));
+0065:     
+0066:     // Initialize accumulators for online softmax
+0067:     // Using Kahan-Babuška algorithm for numerical stability
+0068:     float row_max[BLOCK_SIZE_Q];
+0069:     float row_sum[BLOCK_SIZE_Q];
+0070:     float O_acc[BLOCK_SIZE_Q][HEAD_DIM];
+0071:     
+0072:     #pragma unroll
+0073:     for (int i = 0; i < BLOCK_SIZE_Q; ++i) {
+0074:         row_max[i] = -FLT_MAX;
+0075:         row_sum[i] = 0.0f;
+0076:         #pragma unroll
+0077:         for (int d = 0; d < HEAD_DIM; ++d) {
+0078:             O_acc[i][d] = 0.0f;
+0079:         }
+0080:     }
+0081:     
+0082:     // Load Q block into shared memory
+0083:     for (int i = tid; i < q_size * head_dim; i += num_threads) {
+0084:         const int q_row = i / head_dim;
+0085:         const int q_col = i % head_dim;
+0086:         Q_smem[q_row][q_col] = Q_head[(q_start + q_row) * head_dim + q_col];
+0087:     }
+0088:     __syncthreads();
+0089:     
+0090:     // Iterate over KV blocks
+0091:     const int num_kv_blocks = (seq_len + BLOCK_SIZE_KV - 1) / BLOCK_SIZE_KV;
+0092:     
+0093:     for (int kv_block_idx = 0; kv_block_idx < num_kv_blocks; ++kv_block_idx) {
+0094:         const int kv_start = kv_block_idx * BLOCK_SIZE_KV;
+0095:         const int kv_end = min(kv_start + BLOCK_SIZE_KV, seq_len);
+0096:         const int kv_size = kv_end - kv_start;
+0097:         
+0098:         // Load K and V blocks into shared memory
+0099:         for (int i = tid; i < kv_size * head_dim; i += num_threads) {
+0100:             const int kv_row = i / head_dim;
+0101:             const int kv_col = i % head_dim;
+0102:             const int global_idx = (kv_start + kv_row) * head_dim + kv_col;
+0103:             K_smem[kv_row][kv_col] = K_head[global_idx];
+0104:             V_smem[kv_row][kv_col] = V_head[global_idx];
+0105:         }
+0106:         __syncthreads();
+0107:         
+0108:         // Compute attention scores: S = Q @ K^T
+0109:         for (int q_idx = tid; q_idx < q_size; q_idx += num_threads) {
+0110:             #pragma unroll
+0111:             for (int kv_idx = 0; kv_idx < kv_size; ++kv_idx) {
+0112:                 float score = 0.0f;
+0113:                 
+0114:                 #pragma unroll
+0115:                 for (int d = 0; d < HEAD_DIM; ++d) {
+0116:                     score += Q_smem[q_idx][d] * K_smem[kv_idx][d];
+0117:                 }
+0118:                 
+0119:                 score *= scale;
+0120:                 
+0121:                 // Apply ALiBi bias if enabled
+0122:                 if (use_alibi) {
+0123:                     const int q_pos = q_start + q_idx;
+0124:                     const int kv_pos = kv_start + kv_idx;
+0125:                     const float distance = static_cast<float>(kv_pos - q_pos);
+0126:                     score += alibi_slope * distance;
+0127:                 }
+0128:                 
+0129:                 // Apply causal mask (for autoregressive generation)
+0130:                 const int q_global_pos = q_start + q_idx;
+0131:                 const int kv_global_pos = kv_start + kv_idx;
+0132:                 if (kv_global_pos > q_global_pos) {
+0133:                     score = -FLT_MAX;
+0134:                 }
+0135:                 
+0136:                 S_smem[q_idx][kv_idx] = score;
+0137:             }
+0138:         }
+0139:         __syncthreads();
+0140:         
+0141:         // Online softmax and accumulation
+0142:         for (int q_idx = tid; q_idx < q_size; q_idx += num_threads) {
+0143:             // Find new max for this block
+0144:             float block_max = -FLT_MAX;
+0145:             #pragma unroll
+0146:             for (int kv_idx = 0; kv_idx < kv_size; ++kv_idx) {
+0147:                 block_max = fmaxf(block_max, S_smem[q_idx][kv_idx]);
+0148:             }
+0149:             
+0150:             // Update global max and rescale previous sum
+0151:             const float old_max = row_max[q_idx];
+0152:             const float new_max = fmaxf(old_max, block_max);
+0153:             const float old_scale = expf(old_max - new_max);
+0154:             const float new_scale = expf(block_max - new_max);
+0155:             
+0156:             row_max[q_idx] = new_max;
+0157:             row_sum[q_idx] *= old_scale;
+0158:             
+0159:             // Compute softmax probabilities for this block and accumulate
+0160:             float block_sum = 0.0f;
+0161:             #pragma unroll
+0162:             for (int kv_idx = 0; kv_idx < kv_size; ++kv_idx) {
+0163:                 const float prob = expf(S_smem[q_idx][kv_idx] - new_max);
+0164:                 S_smem[q_idx][kv_idx] = prob;
+0165:                 block_sum += prob;
+0166:             }
+0167:             
+0168:             row_sum[q_idx] += block_sum;
+0169:             
+0170:             // Accumulate output: O += P @ V (rescale previous accumulation)
+0171:             #pragma unroll
+0172:             for (int d = 0; d < HEAD_DIM; ++d) {
+0173:                 O_acc[q_idx][d] *= old_scale;
+0174:                 
+0175:                 float weighted_sum = 0.0f;
+0176:                 #pragma unroll
+0177:                 for (int kv_idx = 0; kv_idx < kv_size; ++kv_idx) {
+0178:                     weighted_sum += S_smem[q_idx][kv_idx] * V_smem[kv_idx][d];
+0179:                 }
+0180:                 
+0181:                 O_acc[q_idx][d] += weighted_sum;
+0182:             }
+0183:         }
+0184:         __syncthreads();
+0185:     }
+0186:     
+0187:     // Final normalization and write output
+0188:     for (int i = tid; i < q_size * head_dim; i += num_threads) {
+0189:         const int q_idx = i / head_dim;
+0190:         const int d = i % head_dim;
+0191:         
+0192:         const float final_output = O_acc[q_idx][d] / row_sum[q_idx];
+0193:         O_head[(q_start + q_idx) * head_dim + d] = final_output;
+0194:     }
+0195: }
+0196: 
+0197: // Host function to launch Flash Attention forward pass
+0198: void flashAttentionForward(
+0199:     const float* Q,
+0200:     const float* K,
+0201:     const float* V,
+0202:     float* output,
+0203:     const float* alibi_slopes,
+0204:     const FlashAttentionConfig& config
+0205: ) {
+0206:     // Determine optimal block sizes if not set
+0207:     int block_q = config.block_size_q;
+0208:     int block_kv = config.block_size_kv;
+0209:     
+0210:     if (block_q <= 0 || block_kv <= 0) {
+0211:         computeOptimalBlockSizes(config.seq_len, config.head_dim, block_q, block_kv);
+0212:     }
+0213:     
+0214:     // Calculate grid dimensions
+0215:     const int num_q_blocks = (config.seq_len + block_q - 1) / block_q;
+0216:     
+0217:     dim3 grid(num_q_blocks, config.num_heads, config.batch_size);
+0218:     
+0219:     // Use 256 threads per block (good occupancy on most GPUs)
+0220:     const int num_threads = 256;
+0221:     
+0222:     cudaStream_t stream = config.stream ? config.stream : 0;
+0223:     
+0224:     // Template dispatch based on head dimension and block sizes
+0225:     // Optimized configurations: 48x48 blocks for best speed/memory balance
+0226:     if (config.head_dim == 32 && block_q == 48 && block_kv == 48) {
+0227:         flashAttentionForwardKernel<48, 48, 32><<<grid, num_threads, 0, stream>>>(
+0228:             Q, K, V, output, alibi_slopes,
+0229:             config.batch_size, config.num_heads, config.seq_len, config.head_dim,
+0230:             config.use_alibi, config.alibi_scale
+0231:         );
+0232:     } else if (config.head_dim == 64 && block_q == 48 && block_kv == 48) {
+0233:         flashAttentionForwardKernel<48, 48, 64><<<grid, num_threads, 0, stream>>>(
+0234:             Q, K, V, output, alibi_slopes,
+0235:             config.batch_size, config.num_heads, config.seq_len, config.head_dim,
+0236:             config.use_alibi, config.alibi_scale
+0237:         );
+0238:     } else {
+0239:         // Fallback to 32 head_dim (most conservative)
+0240:         flashAttentionForwardKernel<48, 48, 32><<<grid, num_threads, 0, stream>>>(
+0241:             Q, K, V, output, alibi_slopes,
+0242:             config.batch_size, config.num_heads, config.seq_len, config.head_dim,
+0243:             config.use_alibi, config.alibi_scale
+0244:         );
+0245:     }
+0246:     
+0247:     // Check for errors
+0248:     cudaError_t err = cudaGetLastError();
+0249:     if (err != cudaSuccess) {
+0250:         printf("Flash Attention Forward Error: %s\n", cudaGetErrorString(err));
+0251:     }
+0252: }
+0253: 
+0254: void flashAttentionForwardWithWorkspace(
+0255:     const float* Q,
+0256:     const float* K,
+0257:     const float* V,
+0258:     float* output,
+0259:     const float* alibi_slopes,
+0260:     void* workspace,
+0261:     const FlashAttentionConfig& config
+0262: ) {
+0263:     // Current implementation doesn't use workspace for forward pass
+0264:     // Workspace is primarily for backward pass
+0265:     flashAttentionForward(Q, K, V, output, alibi_slopes, config);
+0266: }
+0267: 
+0268: } // namespace GRIM

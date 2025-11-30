@@ -31,33 +31,41 @@ bool InputState::shouldProcessMouseInput()
 InputState InputState::capture()
 {
     InputState state{};
-    
-    // ✅ ALWAYS ENABLE: Removed filtering for reliability
     state.mouseInputEnabled = true;
-    
-    // Capture mouse position using cross-platform API
-    int x, y;
+
+    static std::array<bool, 256> prevKeyDown{};
+
+    int x = 0, y = 0;
     PlatformInput::getCursorPos(x, y);
     state.mousePos.x = static_cast<float>(x);
     state.mousePos.y = static_cast<float>(y);
-    
-    // ✅ SIMPLIFIED: Always capture mouse buttons using cross-platform API
+
     for (int i = 0; i < 3; ++i)
     {
         state.mouseDown[i] = PlatformInput::isMouseButtonDown(i);
     }
-    
-    // Capture modifier keys using cross-platform API
+
     state.ctrl = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Control));
     state.shift = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Shift));
     state.alt = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Alt));
-    
-    // Capture all keyboard keys using cross-platform API
+
     for (int i = 0; i < 256; ++i)
     {
-        state.keysDown[i] = PlatformInput::isKeyDown(i);
+        bool down = PlatformInput::isKeyDown(i);
+        state.keysDown[i] = down;
+
+        if (down && !prevKeyDown[i])
+        {
+            state.keyPressed[i] = true;
+        }
+        else if (!down && prevKeyDown[i])
+        {
+            state.keyReleased[i] = true;
+        }
+
+        prevKeyDown[i] = down;
     }
-    
+
     return state;
 }
 
@@ -65,9 +73,11 @@ void InputState::captureFromHWND(HWND hwnd)
 {
     // Static variables to persist across frames
     static bool prevMouseDown[3] = {false, false, false};
+    static std::array<bool, 256> prevKeyDown{};
+    static Vec2 prevMousePos{0.0f, 0.0f};
     
-    // ✅ ALWAYS ENABLE MOUSE INPUT - Remove filtering to fix missed clicks
     mouseInputEnabled = true;
+    mouseWheelDelta = 0.0f;
     
     // Reset per-frame data
     textInput.clear();
@@ -84,21 +94,23 @@ void InputState::captureFromHWND(HWND hwnd)
     keyPressed.clear();
     keyReleased.clear();
     
-    // Mouse position relative to window
-    POINT p{};
-    GetCursorPos(&p);
-    ScreenToClient(hwnd, &p);
-    
-    static POINT lastPos{};
-    mouseDelta.x = static_cast<float>(p.x - lastPos.x);
-    mouseDelta.y = static_cast<float>(p.y - lastPos.y);
-    lastPos = p;
-    
-    mousePos.x = static_cast<float>(p.x);
-    mousePos.y = static_cast<float>(p.y);
-    
-    // ✅ FIX: Use GetAsyncKeyState directly - most reliable for Windows
-    // The abstraction layer was adding unnecessary complexity
+    int relX = 0;
+    int relY = 0;
+    if (hwnd)
+    {
+        PlatformInput::getCursorPosRelative(reinterpret_cast<void*>(hwnd), relX, relY);
+    }
+    else
+    {
+        PlatformInput::getCursorPos(relX, relY);
+    }
+
+    mousePos.x = static_cast<float>(relX);
+    mousePos.y = static_cast<float>(relY);
+    mouseDelta.x = mousePos.x - prevMousePos.x;
+    mouseDelta.y = mousePos.y - prevMousePos.y;
+    prevMousePos = mousePos;
+
     for (int i = 0; i < 3; ++i)
     {
         int vk = (i == 0) ? VK_LBUTTON : (i == 1) ? VK_RBUTTON : VK_MBUTTON;
@@ -111,20 +123,25 @@ void InputState::captureFromHWND(HWND hwnd)
         prevMouseDown[i] = down;
     }
     
-    // Keyboard (always enabled) - Direct Windows API for reliability
+    // Keyboard state transitions
     for (int i = 0; i < 256; ++i)
     {
+#ifdef _WIN32
         bool down = (GetAsyncKeyState(i) & 0x8000) != 0;
-        bool wasDown = keysDown.count(i) && keysDown[i];
-        
-        if (down && !wasDown) keyPressed[i] = true;
-        if (!down && wasDown) keyReleased[i] = true;
+#else
+        bool down = PlatformInput::isKeyDown(i);
+#endif
+
+        if (down && !prevKeyDown[i]) keyPressed[i] = true;
+        if (!down && prevKeyDown[i]) keyReleased[i] = true;
+
         keysDown[i] = down;
+        prevKeyDown[i] = down;
     }
     
-    ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-    shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-    alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+    ctrl = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Control));
+    shift = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Shift));
+    alt = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Alt));
     
     // ✅ NEW: Detect clipboard shortcuts (Ctrl+C, Ctrl+V, Ctrl+X)
     if (ctrl && !shift && !alt) {

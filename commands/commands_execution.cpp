@@ -3,7 +3,7 @@
 #include "logger.hpp"
 #include "memory/memory_storage.hpp"
 #include "memory/memory_router.hpp"
-#include "ai/ai_rl.hpp"
+#include "Reward_Learning/grim_rl.hpp"
 #include "nlp/nlp.hpp"
 #include "input_parser.hpp"
 #include "synonyms.hpp"
@@ -69,21 +69,8 @@ CommandResult tryLearnedCommand(const std::string& cmd, const std::string& arg)
 
 CommandResult tryRLInference(const std::string& cmd, const std::string& arg)
 {
-    try {
-        nlohmann::json obs = {
-            {"type","unknown_command"},
-            {"input", cmd + " " + arg},
-            {"context", longTermMemory}
-        };
-
-        auto rlRes = GRIM::RL::getAction(obs);
-        if (rlRes.contains("suggested_command")) {
-            std::string inferred = rlRes["suggested_command"].get<std::string>();
-            LOG_DEBUG("RL", "RL suggested command: " + inferred);
-            return dispatchCommand(inferred, arg);
-        }
-    } catch (const std::exception& e) {
-        LOG_ERROR("Dispatch", std::string("RL reasoning failed: ") + e.what());
+    if (auto suggestion = GRIM::RewardLearning::suggestForUnknownCommand(cmd, arg, longTermMemory)) {
+        return dispatchCommand(*suggestion, arg);
     }
 
     return CommandResult{false, "", "ERR_NOT_FOUND", "", "", Colors::Default};

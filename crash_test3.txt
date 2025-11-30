@@ -1,0 +1,2153 @@
+
+========================================
+  GRIM-text GPU Training Starting
+  Version: 1.1.0 - Refactored
+========================================
+
+[TrainGPU] Loading configuration...
+[Config] Loading GRIM-text paths from: "D:\\G.R.I.M\\ai_config.json"
+[Config] GRIM-text paths from ai_config.json:
+  vocab: D:/G.R.I.M/resources/models/GRIM-text/training/models/vocab.bin
+  model: D:/G.R.I.M/resources/models/GRIM-text/grim_text.bin
+  training_data: D:/G.R.I.M/resources/models/GRIM-text/training/data/training_data.grmt
+  checkpoints: D:/G.R.I.M/resources/models/GRIM-text/checkpoints
+  collected: D:/G.R.I.M/resources/models/GRIM-text/data/collected
+  verified: D:/G.R.I.M/resources/models/GRIM-text/data/verified
+  logs: D:/G.R.I.M/resources/models/GRIM-text/training/logs
+  training_status: D:/G.R.I.M/resources/models/GRIM-text/training\training_status.fb
+  merge_checkpoints_exe: D:/G.R.I.M/resources/models/GRIM-text/DataCollection/Release/merge_checkpoints.exe
+  collector_log: D:/G.R.I.M/resources/models/GRIM-text/training/logs/collector.log
+  source_config: D:/G.R.I.M/DataCollection/source_data.json
+[TrainGPU] ✓ Training data: D:/G.R.I.M/resources/models/GRIM-text/training/data/training_data.grmt
+[TrainGPU] ✓ Vocab: D:/G.R.I.M/resources/models/GRIM-text/training/models/vocab.bin
+
+[TrainGPU] Validating paths...
+[TrainGPU] ✓ All paths validated
+
+[2025-11-13 14:07:27] ========================================
+[2025-11-13 14:07:27]   GRIM-text Training Session
+[2025-11-13 14:07:27]   Session ID: 17630608478693298
+[2025-11-13 14:07:27] ========================================
+[Config] Loading GRIM-text paths from: "D:\\G.R.I.M\\ai_config.json"
+[Config] GRIM-text paths from ai_config.json:
+  vocab: D:/G.R.I.M/resources/models/GRIM-text/training/models/vocab.bin
+  model: D:/G.R.I.M/resources/models/GRIM-text/grim_text.bin
+  training_data: D:/G.R.I.M/resources/models/GRIM-text/training/data/training_data.grmt
+  checkpoints: D:/G.R.I.M/resources/models/GRIM-text/checkpoints
+  collected: D:/G.R.I.M/resources/models/GRIM-text/data/collected
+  verified: D:/G.R.I.M/resources/models/GRIM-text/data/verified
+  logs: D:/G.R.I.M/resources/models/GRIM-text/training/logs
+  training_status: D:/G.R.I.M/resources/models/GRIM-text/training\training_status.fb
+  merge_checkpoints_exe: D:/G.R.I.M/resources/models/GRIM-text/DataCollection/Release/merge_checkpoints.exe
+  collector_log: D:/G.R.I.M/resources/models/GRIM-text/training/logs/collector.log
+  source_config: D:/G.R.I.M/DataCollection/source_data.json
+[2025-11-13 14:07:27] Configuration:
+[2025-11-13 14:07:27]   Data: D:/G.R.I.M/resources/models/GRIM-text/training/data/training_data.grmt
+[2025-11-13 14:07:27]   Vocab: D:/G.R.I.M/resources/models/GRIM-text/training/models/vocab.bin
+[2025-11-13 14:07:27]   Epochs: 1
+[2025-11-13 14:07:27]   Batch size: 2
+[2025-11-13 14:07:27]   Learning rate: 0.000100
+[2025-11-13 14:07:27] 
+[2025-11-13 14:07:27] Loading vocabulary...
+[2025-11-13 14:07:27] ✓ Loaded 1330 tokens
+[2025-11-13 14:07:27] Loading training data...
+[DataLoader] GRMT version 1
+[DataLoader] Sequences: 2255
+[DataLoader] Vocab size: 1330
+[2025-11-13 14:07:28] ✓ Loaded 2255 sequences
+[2025-11-13 14:07:28] 
+[2025-11-13 14:07:28] ⚠️ Truncated 1323 sequences to 2048 tokens
+[2025-11-13 14:07:28] Train sequences: 2030
+[2025-11-13 14:07:28] Val sequences: 225
+[2025-11-13 14:07:28] 
+[2025-11-13 14:07:28] Initializing model...
+=== LanguageModel constructor START use_gpu=1 ===
+=== LanguageModel constructor START use_gpu=1 ===
+🔧 Positional (ALiBi): Computing for 12 heads...
+  Head 0: slope = 0.629961 (exp=-0.666667)
+  Head 1: slope = 0.39685 (exp=-1.33333)
+  Head 2: slope = 0.25 (exp=-2)
+  Head 11: slope = 0.00390625 (exp=-8)
+📊 Positional: Required memory: 48 bytes, Available: 11070 MB
+✅ Positional: GPU memory allocated at 0000001E0F400000
+✅ Positional: Slopes initialized successfully!
+   Type: ALiBi, GPU ptr=0000001E0F400000, verified slope[0]=0.629961
+USE_CUDA is defined
+GPU mode: Skipping CPU encoder/lm_head creation
+Calling initGPU()...
+initGPU() called, use_gpu=1
+🚀 Initializing GPU-accelerated transformer layers...
+✓ CUDA Device initialized: NVIDIA GeForce RTX 3080 Ti
+  - Compute capability: 8.6
+  - Memory: 12287 MB
+GPUEmbeddingStack: Initializing CUDA...
+GPUEmbeddingStack: Creating cuBLAS handle...
+GPUEmbeddingStack: cuBLAS handle created
+GPUEmbeddingStack: Creating CUDA stream...
+GPUEmbeddingStack: CUDA stream created (stream=000001FBB5A45190)
+  Uploading token embeddings (1330x768)...
+    ✓ Token embeddings uploaded
+  Uploading positional encodings (2048x768)...
+    ✓ Positional encodings uploaded
+  Uploading layer norm parameters...
+    ✓ Layer norm parameters uploaded
+  Converting to FP16 for Tensor Cores...
+    ✓ FP16 conversion complete
+  ✅ All embedding weights uploaded successfully
+✓ GPU embeddings initialized
+GPUEncoderLayer: Stream created successfully (stream=000001FBB5A451E0)
+GPUEncoderLayer: Creating GPULayerNorm #1...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5A451E0)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #1 created
+GPUEncoderLayer: Creating GPULayerNorm #2...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5A451E0)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #2 created
+GPUEncoderLayer: Creating GPUMultiHeadAttention...
+GPUEncoderLayer: GPUMultiHeadAttention created
+GPUEncoderLayer: Creating GPUFeedForwardNetwork...
+GPUEncoderLayer: GPUFeedForwardNetwork created
+GPUEncoderLayer: Constructor complete (weights uninitialized)
+GPUEncoderLayer: Stream created successfully (stream=000001FBB5DF2420)
+GPUEncoderLayer: Creating GPULayerNorm #1...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5DF2420)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #1 created
+GPUEncoderLayer: Creating GPULayerNorm #2...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5DF2420)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #2 created
+GPUEncoderLayer: Creating GPUMultiHeadAttention...
+GPUEncoderLayer: GPUMultiHeadAttention created
+GPUEncoderLayer: Creating GPUFeedForwardNetwork...
+GPUEncoderLayer: GPUFeedForwardNetwork created
+GPUEncoderLayer: Constructor complete (weights uninitialized)
+GPUEncoderLayer: Stream created successfully (stream=000001FBB5DF2400)
+GPUEncoderLayer: Creating GPULayerNorm #1...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5DF2400)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #1 created
+GPUEncoderLayer: Creating GPULayerNorm #2...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5DF2400)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #2 created
+GPUEncoderLayer: Creating GPUMultiHeadAttention...
+GPUEncoderLayer: GPUMultiHeadAttention created
+GPUEncoderLayer: Creating GPUFeedForwardNetwork...
+GPUEncoderLayer: GPUFeedForwardNetwork created
+GPUEncoderLayer: Constructor complete (weights uninitialized)
+GPUEncoderLayer: Stream created successfully (stream=000001FBB5DF23D0)
+GPUEncoderLayer: Creating GPULayerNorm #1...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5DF23D0)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #1 created
+GPUEncoderLayer: Creating GPULayerNorm #2...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5DF23D0)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #2 created
+GPUEncoderLayer: Creating GPUMultiHeadAttention...
+GPUEncoderLayer: GPUMultiHeadAttention created
+GPUEncoderLayer: Creating GPUFeedForwardNetwork...
+GPUEncoderLayer: GPUFeedForwardNetwork created
+GPUEncoderLayer: Constructor complete (weights uninitialized)
+GPUEncoderLayer: Stream created successfully (stream=000001FBB5DF23C0)
+GPUEncoderLayer: Creating GPULayerNorm #1...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5DF23C0)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #1 created
+GPUEncoderLayer: Creating GPULayerNorm #2...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5DF23C0)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #2 created
+GPUEncoderLayer: Creating GPUMultiHeadAttention...
+GPUEncoderLayer: GPUMultiHeadAttention created
+GPUEncoderLayer: Creating GPUFeedForwardNetwork...
+GPUEncoderLayer: GPUFeedForwardNetwork created
+GPUEncoderLayer: Constructor complete (weights uninitialized)
+GPUEncoderLayer: Stream created successfully (stream=000001FBB5DF2680)
+GPUEncoderLayer: Creating GPULayerNorm #1...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5DF2680)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #1 created
+GPUEncoderLayer: Creating GPULayerNorm #2...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5DF2680)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #2 created
+GPUEncoderLayer: Creating GPUMultiHeadAttention...
+GPUEncoderLayer: GPUMultiHeadAttention created
+GPUEncoderLayer: Creating GPUFeedForwardNetwork...
+GPUEncoderLayer: GPUFeedForwardNetwork created
+GPUEncoderLayer: Constructor complete (weights uninitialized)
+GPUEncoderLayer: Stream created successfully (stream=000001FBB5DF2790)
+GPUEncoderLayer: Creating GPULayerNorm #1...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5DF2790)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #1 created
+GPUEncoderLayer: Creating GPULayerNorm #2...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5DF2790)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #2 created
+GPUEncoderLayer: Creating GPUMultiHeadAttention...
+GPUEncoderLayer: GPUMultiHeadAttention created
+GPUEncoderLayer: Creating GPUFeedForwardNetwork...
+GPUEncoderLayer: GPUFeedForwardNetwork created
+GPUEncoderLayer: Constructor complete (weights uninitialized)
+GPUEncoderLayer: Stream created successfully (stream=000001FBB5DF25C0)
+GPUEncoderLayer: Creating GPULayerNorm #1...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5DF25C0)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #1 created
+GPUEncoderLayer: Creating GPULayerNorm #2...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5DF25C0)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #2 created
+GPUEncoderLayer: Creating GPUMultiHeadAttention...
+GPUEncoderLayer: GPUMultiHeadAttention created
+GPUEncoderLayer: Creating GPUFeedForwardNetwork...
+GPUEncoderLayer: GPUFeedForwardNetwork created
+GPUEncoderLayer: Constructor complete (weights uninitialized)
+GPUEncoderLayer: Stream created successfully (stream=000001FBB5DF2610)
+GPUEncoderLayer: Creating GPULayerNorm #1...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5DF2610)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #1 created
+GPUEncoderLayer: Creating GPULayerNorm #2...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBB5DF2610)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #2 created
+GPUEncoderLayer: Creating GPUMultiHeadAttention...
+GPUEncoderLayer: GPUMultiHeadAttention created
+GPUEncoderLayer: Creating GPUFeedForwardNetwork...
+GPUEncoderLayer: GPUFeedForwardNetwork created
+GPUEncoderLayer: Constructor complete (weights uninitialized)
+GPUEncoderLayer: Stream created successfully (stream=000001FBE4234C00)
+GPUEncoderLayer: Creating GPULayerNorm #1...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBE4234C00)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #1 created
+GPUEncoderLayer: Creating GPULayerNorm #2...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBE4234C00)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #2 created
+GPUEncoderLayer: Creating GPUMultiHeadAttention...
+GPUEncoderLayer: GPUMultiHeadAttention created
+GPUEncoderLayer: Creating GPUFeedForwardNetwork...
+GPUEncoderLayer: GPUFeedForwardNetwork created
+GPUEncoderLayer: Constructor complete (weights uninitialized)
+GPUEncoderLayer: Stream created successfully (stream=000001FBE4234BA0)
+GPUEncoderLayer: Creating GPULayerNorm #1...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBE4234BA0)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #1 created
+GPUEncoderLayer: Creating GPULayerNorm #2...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBE4234BA0)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #2 created
+GPUEncoderLayer: Creating GPUMultiHeadAttention...
+GPUEncoderLayer: GPUMultiHeadAttention created
+GPUEncoderLayer: Creating GPUFeedForwardNetwork...
+GPUEncoderLayer: GPUFeedForwardNetwork created
+GPUEncoderLayer: Constructor complete (weights uninitialized)
+GPUEncoderLayer: Stream created successfully (stream=000001FBE4234980)
+GPUEncoderLayer: Creating GPULayerNorm #1...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBE4234980)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #1 created
+GPUEncoderLayer: Creating GPULayerNorm #2...
+GPULayerNorm: Constructor starting (dim=768, eps=1e-05, stream=000001FBE4234980)
+GPULayerNorm: Allocating gamma buffer...
+GPULayerNorm: Gamma allocated
+GPULayerNorm: Allocating beta buffer...
+GPULayerNorm: Beta allocated
+GPULayerNorm: Uploading gamma...
+GPULayerNorm: Gamma uploaded
+GPULayerNorm: Uploading beta...
+GPULayerNorm: Beta uploaded
+GPULayerNorm: Constructor complete
+GPUEncoderLayer: GPULayerNorm #2 created
+GPUEncoderLayer: Creating GPUMultiHeadAttention...
+GPUEncoderLayer: GPUMultiHeadAttention created
+GPUEncoderLayer: Creating GPUFeedForwardNetwork...
+GPUEncoderLayer: GPUFeedForwardNetwork created
+GPUEncoderLayer: Constructor complete (weights uninitialized)
+✓ GPU encoder initialized with 12 layers
+  - Attention: GPU-accelerated
+  - FFN: GPU-accelerated with fused GELU
+  - Layer Norm: GPU-accelerated
+⚡ Enabling Flash Attention 2...
+✓ Flash Attention enabled (min_seq_len=512)
+initGPU() returned
+Initializing training state...
+✓ Created cuBLAS handle for gradient operations
+📊 Allocating activation caches for max_tokens=4096 (batch=2, seq_len=2048)
+✓ Allocated reusable loss buffers (2048 tokens)
+✓ Allocated backward pass temp buffers: grad_ffn=12MB, grad_ffn_hidden=48MB, grad_attn=12MB
+✓ Training state initialized with full gradient buffers
+  - Embedding grads: 3 MB
+  - Encoder layer grads: 12 layers
+  - LM head grads allocated
+[2025-11-13 14:07:28] ✓ Model initialized
+[2025-11-13 14:07:28] 
+[2025-11-13 14:07:28] Initializing optimizer state...
+[2025-11-13 14:07:28] ✓ Optimizer state initialized
+[2025-11-13 14:07:28] 
+[2025-11-13 14:07:28] GPU Memory: 7894 MB free / 12287 MB total
+[2025-11-13 14:07:28] 
+[2025-11-13 14:07:28] Starting training...
+[2025-11-13 14:07:28] ========================================
+[2025-11-13 14:07:28] 
+[2025-11-13 14:07:28] Warmup steps: 1000
+[2025-11-13 14:07:28] Target learning rate: 0.000100
+[2025-11-13 14:07:28] 
+[2025-11-13 14:07:28] Epoch 1/1
+[2025-11-13 14:07:28] Created 1015 dynamic batches
+[2025-11-13 14:07:28] Batch sizes range from 1 to 2 (adaptive based on sequence length)
+[2025-11-13 14:07:28] 
+[2025-11-13 14:07:28] Processing batch 1/1015 (size=2, max_len=2048)
+[2025-11-13 14:07:28]   [Memory] GPU: 7894 MB free / 12287 MB total (35% used)
+[backward] Computing gradients for loss=7.12442 (batch=1, seq_len=2048)
+[backward] ✓ LM head gradients computed
+[backward] Processing layer 11
+[backward] Layer 11 cached pointers:
+  ln2_output=0000001EC4C00000
+  ffn_pre_gelu=0000001EC5800000
+  ffn_output=0000001EC8800000
+  ln1_output=0000001EC2800000
+  attn_output=0000001EC3400000
+  layer_input=0000001EBEC00000
+[backward] Layer 11 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EC3400000 (attn output before LN2)
+  gamma=0000001E1CDE7000
+  grad_gamma=0000001E316E0000
+  grad_beta=0000001E316E0C00
+[backward] Layer 11 FFN backward...
+[backward] Layer 11 computing grad_W2...
+[backward] Layer 11 propagating gradient through W2...
+[backward] Layer 11 GELU backward...
+[backward] Layer 11 ✓ GELU backward complete
+[backward] Layer 11 computing grad_W1...
+[backward] Layer 11 propagating gradient through W1...
+[backward] Layer 11 ✓ FFN backward complete
+[backward] Layer 11 residual add...
+[backward] Layer 11 ✓ Residual add complete
+[backward] Processing layer 10
+[backward] Layer 10 cached pointers:
+  ln2_output=0000001EBA400000
+  ffn_pre_gelu=0000001EBB000000
+  ffn_output=0000001EBE000000
+  ln1_output=0000001EB8000000
+  attn_output=0000001EB8C00000
+  layer_input=0000001EB4400000
+[backward] Layer 10 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EB8C00000 (attn output before LN2)
+  gamma=0000001E1CDBCC00
+  grad_gamma=0000001E316D6400
+  grad_beta=0000001E316D7000
+[backward] Layer 10 FFN backward...
+[backward] Layer 10 computing grad_W2...
+[backward] Layer 10 propagating gradient through W2...
+[backward] Layer 10 GELU backward...
+[backward] Layer 10 ✓ GELU backward complete
+[backward] Layer 10 computing grad_W1...
+[backward] Layer 10 propagating gradient through W1...
+[backward] Layer 10 ✓ FFN backward complete
+[backward] Layer 10 residual add...
+[backward] Layer 10 ✓ Residual add complete
+[backward] Processing layer 9
+[backward] Layer 9 cached pointers:
+  ln2_output=0000001EAFC00000
+  ffn_pre_gelu=0000001EB0800000
+  ffn_output=0000001EB3800000
+  ln1_output=0000001EAD800000
+  attn_output=0000001EAE400000
+  layer_input=0000001EA9C00000
+[backward] Layer 9 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EAE400000 (attn output before LN2)
+  gamma=0000001E1CD72800
+  grad_gamma=0000001E316CC800
+  grad_beta=0000001E316CD400
+[backward] Layer 9 FFN backward...
+[backward] Layer 9 computing grad_W2...
+[backward] Layer 9 propagating gradient through W2...
+[backward] Layer 9 GELU backward...
+[backward] Layer 9 ✓ GELU backward complete
+[backward] Layer 9 computing grad_W1...
+[backward] Layer 9 propagating gradient through W1...
+[backward] Layer 9 ✓ FFN backward complete
+[backward] Layer 9 residual add...
+[backward] Layer 9 ✓ Residual add complete
+[backward] Processing layer 8
+[backward] Layer 8 cached pointers:
+  ln2_output=0000001EA5400000
+  ffn_pre_gelu=0000001EA6000000
+  ffn_output=0000001EA9000000
+  ln1_output=0000001EA3000000
+  attn_output=0000001EA3C00000
+  layer_input=0000001E9F400000
+[backward] Layer 8 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EA3C00000 (attn output before LN2)
+  gamma=0000001E1CD28400
+  grad_gamma=0000001E316C2C00
+  grad_beta=0000001E316C3800
+[backward] Layer 8 FFN backward...
+[backward] Layer 8 computing grad_W2...
+[backward] Layer 8 propagating gradient through W2...
+[backward] Layer 8 GELU backward...
+[backward] Layer 8 ✓ GELU backward complete
+[backward] Layer 8 computing grad_W1...
+[backward] Layer 8 propagating gradient through W1...
+[backward] Layer 8 ✓ FFN backward complete
+[backward] Layer 8 residual add...
+[backward] Layer 8 ✓ Residual add complete
+[backward] Processing layer 7
+[backward] Layer 7 cached pointers:
+  ln2_output=0000001E9AC00000
+  ffn_pre_gelu=0000001E9B800000
+  ffn_output=0000001E9E800000
+  ln1_output=0000001E98800000
+  attn_output=0000001E99400000
+  layer_input=0000001E94C00000
+[backward] Layer 7 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E99400000 (attn output before LN2)
+  gamma=0000001E1CCDE000
+  grad_gamma=0000001E316B9000
+  grad_beta=0000001E316B9C00
+[backward] Layer 7 FFN backward...
+[backward] Layer 7 computing grad_W2...
+[backward] Layer 7 propagating gradient through W2...
+[backward] Layer 7 GELU backward...
+[backward] Layer 7 ✓ GELU backward complete
+[backward] Layer 7 computing grad_W1...
+[backward] Layer 7 propagating gradient through W1...
+[backward] Layer 7 ✓ FFN backward complete
+[backward] Layer 7 residual add...
+[backward] Layer 7 ✓ Residual add complete
+[backward] Processing layer 6
+[backward] Layer 6 cached pointers:
+  ln2_output=0000001E90400000
+  ffn_pre_gelu=0000001E91000000
+  ffn_output=0000001E94000000
+  ln1_output=0000001E8E000000
+  attn_output=0000001E8EC00000
+  layer_input=0000001E8A400000
+[backward] Layer 6 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E8EC00000 (attn output before LN2)
+  gamma=0000001E1CC93C00
+  grad_gamma=0000001E316AF400
+  grad_beta=0000001E316B0000
+[backward] Layer 6 FFN backward...
+[backward] Layer 6 computing grad_W2...
+[backward] Layer 6 propagating gradient through W2...
+[backward] Layer 6 GELU backward...
+[backward] Layer 6 ✓ GELU backward complete
+[backward] Layer 6 computing grad_W1...
+[backward] Layer 6 propagating gradient through W1...
+[backward] Layer 6 ✓ FFN backward complete
+[backward] Layer 6 residual add...
+[backward] Layer 6 ✓ Residual add complete
+[backward] Processing layer 5
+[backward] Layer 5 cached pointers:
+  ln2_output=0000001E85C00000
+  ffn_pre_gelu=0000001E86800000
+  ffn_output=0000001E89800000
+  ln1_output=0000001E83800000
+  attn_output=0000001E84400000
+  layer_input=0000001E7FC00000
+[backward] Layer 5 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E84400000 (attn output before LN2)
+  gamma=0000001E1CC49800
+  grad_gamma=0000001E316A5800
+  grad_beta=0000001E316A6400
+[backward] Layer 5 FFN backward...
+[backward] Layer 5 computing grad_W2...
+[backward] Layer 5 propagating gradient through W2...
+[backward] Layer 5 GELU backward...
+[backward] Layer 5 ✓ GELU backward complete
+[backward] Layer 5 computing grad_W1...
+[backward] Layer 5 propagating gradient through W1...
+[backward] Layer 5 ✓ FFN backward complete
+[backward] Layer 5 residual add...
+[backward] Layer 5 ✓ Residual add complete
+[backward] Processing layer 4
+[backward] Layer 4 cached pointers:
+  ln2_output=0000001E7B400000
+  ffn_pre_gelu=0000001E7C000000
+  ffn_output=0000001E7F000000
+  ln1_output=0000001E79000000
+  attn_output=0000001E79C00000
+  layer_input=0000001E75400000
+[backward] Layer 4 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E79C00000 (attn output before LN2)
+  gamma=0000001E0F5FF200
+  grad_gamma=0000001E3169BC00
+  grad_beta=0000001E3169C800
+[backward] Layer 4 FFN backward...
+[backward] Layer 4 computing grad_W2...
+[backward] Layer 4 propagating gradient through W2...
+[backward] Layer 4 GELU backward...
+[backward] Layer 4 ✓ GELU backward complete
+[backward] Layer 4 computing grad_W1...
+[backward] Layer 4 propagating gradient through W1...
+[backward] Layer 4 ✓ FFN backward complete
+[backward] Layer 4 residual add...
+[backward] Layer 4 ✓ Residual add complete
+[backward] Processing layer 3
+[backward] Layer 3 cached pointers:
+  ln2_output=0000001E70C00000
+  ffn_pre_gelu=0000001E71800000
+  ffn_output=0000001E74800000
+  ln1_output=0000001E6E800000
+  attn_output=0000001E6F400000
+  layer_input=0000001E6AC00000
+[backward] Layer 3 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E6F400000 (attn output before LN2)
+  gamma=0000001E0F5B4E00
+  grad_gamma=0000001E31692000
+  grad_beta=0000001E31692C00
+[backward] Layer 3 FFN backward...
+[backward] Layer 3 computing grad_W2...
+[backward] Layer 3 propagating gradient through W2...
+[backward] Layer 3 GELU backward...
+[backward] Layer 3 ✓ GELU backward complete
+[backward] Layer 3 computing grad_W1...
+[backward] Layer 3 propagating gradient through W1...
+[backward] Layer 3 ✓ FFN backward complete
+[backward] Layer 3 residual add...
+[backward] Layer 3 ✓ Residual add complete
+[backward] Processing layer 2
+[backward] Layer 2 cached pointers:
+  ln2_output=0000001E66400000
+  ffn_pre_gelu=0000001E67000000
+  ffn_output=0000001E6A000000
+  ln1_output=0000001E64000000
+  attn_output=0000001E64C00000
+  layer_input=0000001E60400000
+[backward] Layer 2 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E64C00000 (attn output before LN2)
+  gamma=0000001E0F56AA00
+  grad_gamma=0000001E31688400
+  grad_beta=0000001E31689000
+[backward] Layer 2 FFN backward...
+[backward] Layer 2 computing grad_W2...
+[backward] Layer 2 propagating gradient through W2...
+[backward] Layer 2 GELU backward...
+[backward] Layer 2 ✓ GELU backward complete
+[backward] Layer 2 computing grad_W1...
+[backward] Layer 2 propagating gradient through W1...
+[backward] Layer 2 ✓ FFN backward complete
+[backward] Layer 2 residual add...
+[backward] Layer 2 ✓ Residual add complete
+[backward] Processing layer 1
+[backward] Layer 1 cached pointers:
+  ln2_output=0000001E5BC00000
+  ffn_pre_gelu=0000001E5C800000
+  ffn_output=0000001E5F800000
+  ln1_output=0000001E59800000
+  attn_output=0000001E5A400000
+  layer_input=0000001E55C00000
+[backward] Layer 1 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E5A400000 (attn output before LN2)
+  gamma=0000001E10BFE800
+  grad_gamma=0000001E1CDFE000
+  grad_beta=0000001E1CDFEC00
+[backward] Layer 1 FFN backward...
+[backward] Layer 1 computing grad_W2...
+[backward] Layer 1 propagating gradient through W2...
+[backward] Layer 1 GELU backward...
+[backward] Layer 1 ✓ GELU backward complete
+[backward] Layer 1 computing grad_W1...
+[backward] Layer 1 propagating gradient through W1...
+[backward] Layer 1 ✓ FFN backward complete
+[backward] Layer 1 residual add...
+[backward] Layer 1 ✓ Residual add complete
+[backward] Processing layer 0
+[backward] Layer 0 cached pointers:
+  ln2_output=0000001E51400000
+  ffn_pre_gelu=0000001E52000000
+  ffn_output=0000001E55000000
+  ln1_output=0000001E4F000000
+  attn_output=0000001E4FC00000
+  layer_input=0000001E4E400000
+[backward] Layer 0 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E4FC00000 (attn output before LN2)
+  gamma=0000001E10BF4400
+  grad_gamma=0000001E1CDF4400
+  grad_beta=0000001E1CDF5000
+[backward] Layer 0 FFN backward...
+[backward] Layer 0 computing grad_W2...
+[backward] Layer 0 propagating gradient through W2...
+[backward] Layer 0 GELU backward...
+[backward] Layer 0 ✓ GELU backward complete
+[backward] Layer 0 computing grad_W1...
+[backward] Layer 0 propagating gradient through W1...
+[backward] Layer 0 ✓ FFN backward complete
+[backward] Layer 0 residual add...
+[backward] Layer 0 ✓ Residual add complete
+[backward] ✓ Full backward pass complete
+[2025-11-13 14:07:30]   [GradNorm] Norm: 1173317.875000
+[scaleGradients] Scaled all gradients by 0.000852284
+[2025-11-13 14:07:30]   [GradClip] Scaled by 0.000852
+[updateWeights] Building parameter groups...
+[buildParameterGroups] Building 147 parameter groups...
+[buildParameterGroups] ✓ Built 147 parameter groups
+[updateWeights] Allocating optimizer states for 147 groups...
+[updateWeights] ✓ Allocated 147 unique m_state buffers and 147 unique v_state buffers (expected: 147 each)
+    [UpdateParam] idx=0 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=1 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=2 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=3 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=4 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=5 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=6 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=7 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=8 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=9 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=10 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=11 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=12 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=13 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=14 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=15 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=16 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=17 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=18 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=19 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=20 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=21 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=22 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=23 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=24 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=25 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=26 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=27 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=28 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=29 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=30 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=31 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=32 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=33 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=34 GPU memory: 3366 MB free / 12287 MB total
+[2025-11-13 14:07:30]   Step 1 | Loss: 7.124423 | LR: 0.000000
+[backward] Computing gradients for loss=7.12147 (batch=1, seq_len=2048)
+[backward] ✓ LM head gradients computed
+[backward] Processing layer 11
+[backward] Layer 11 cached pointers:
+  ln2_output=0000001EC4C00000
+  ffn_pre_gelu=0000001EC5800000
+  ffn_output=0000001EC8800000
+  ln1_output=0000001EC2800000
+  attn_output=0000001EC3400000
+  layer_input=0000001EBEC00000
+[backward] Layer 11 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EC3400000 (attn output before LN2)
+  gamma=0000001E1CDE7000
+  grad_gamma=0000001E316E0000
+  grad_beta=0000001E316E0C00
+[backward] Layer 11 FFN backward...
+[backward] Layer 11 computing grad_W2...
+[backward] Layer 11 propagating gradient through W2...
+[backward] Layer 11 GELU backward...
+[backward] Layer 11 ✓ GELU backward complete
+[backward] Layer 11 computing grad_W1...
+[backward] Layer 11 propagating gradient through W1...
+[backward] Layer 11 ✓ FFN backward complete
+[backward] Layer 11 residual add...
+[backward] Layer 11 ✓ Residual add complete
+[backward] Processing layer 10
+[backward] Layer 10 cached pointers:
+  ln2_output=0000001EBA400000
+  ffn_pre_gelu=0000001EBB000000
+  ffn_output=0000001EBE000000
+  ln1_output=0000001EB8000000
+  attn_output=0000001EB8C00000
+  layer_input=0000001EB4400000
+[backward] Layer 10 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EB8C00000 (attn output before LN2)
+  gamma=0000001E1CDBCC00
+  grad_gamma=0000001E316D6400
+  grad_beta=0000001E316D7000
+[backward] Layer 10 FFN backward...
+[backward] Layer 10 computing grad_W2...
+[backward] Layer 10 propagating gradient through W2...
+[backward] Layer 10 GELU backward...
+[backward] Layer 10 ✓ GELU backward complete
+[backward] Layer 10 computing grad_W1...
+[backward] Layer 10 propagating gradient through W1...
+[backward] Layer 10 ✓ FFN backward complete
+[backward] Layer 10 residual add...
+[backward] Layer 10 ✓ Residual add complete
+[backward] Processing layer 9
+[backward] Layer 9 cached pointers:
+  ln2_output=0000001EAFC00000
+  ffn_pre_gelu=0000001EB0800000
+  ffn_output=0000001EB3800000
+  ln1_output=0000001EAD800000
+  attn_output=0000001EAE400000
+  layer_input=0000001EA9C00000
+[backward] Layer 9 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EAE400000 (attn output before LN2)
+  gamma=0000001E1CD72800
+  grad_gamma=0000001E316CC800
+  grad_beta=0000001E316CD400
+[backward] Layer 9 FFN backward...
+[backward] Layer 9 computing grad_W2...
+[backward] Layer 9 propagating gradient through W2...
+[backward] Layer 9 GELU backward...
+[backward] Layer 9 ✓ GELU backward complete
+[backward] Layer 9 computing grad_W1...
+[backward] Layer 9 propagating gradient through W1...
+[backward] Layer 9 ✓ FFN backward complete
+[backward] Layer 9 residual add...
+[backward] Layer 9 ✓ Residual add complete
+[backward] Processing layer 8
+[backward] Layer 8 cached pointers:
+  ln2_output=0000001EA5400000
+  ffn_pre_gelu=0000001EA6000000
+  ffn_output=0000001EA9000000
+  ln1_output=0000001EA3000000
+  attn_output=0000001EA3C00000
+  layer_input=0000001E9F400000
+[backward] Layer 8 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EA3C00000 (attn output before LN2)
+  gamma=0000001E1CD28400
+  grad_gamma=0000001E316C2C00
+  grad_beta=0000001E316C3800
+[backward] Layer 8 FFN backward...
+[backward] Layer 8 computing grad_W2...
+[backward] Layer 8 propagating gradient through W2...
+[backward] Layer 8 GELU backward...
+[backward] Layer 8 ✓ GELU backward complete
+[backward] Layer 8 computing grad_W1...
+[backward] Layer 8 propagating gradient through W1...
+[backward] Layer 8 ✓ FFN backward complete
+[backward] Layer 8 residual add...
+[backward] Layer 8 ✓ Residual add complete
+[backward] Processing layer 7
+[backward] Layer 7 cached pointers:
+  ln2_output=0000001E9AC00000
+  ffn_pre_gelu=0000001E9B800000
+  ffn_output=0000001E9E800000
+  ln1_output=0000001E98800000
+  attn_output=0000001E99400000
+  layer_input=0000001E94C00000
+[backward] Layer 7 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E99400000 (attn output before LN2)
+  gamma=0000001E1CCDE000
+  grad_gamma=0000001E316B9000
+  grad_beta=0000001E316B9C00
+[backward] Layer 7 FFN backward...
+[backward] Layer 7 computing grad_W2...
+[backward] Layer 7 propagating gradient through W2...
+[backward] Layer 7 GELU backward...
+[backward] Layer 7 ✓ GELU backward complete
+[backward] Layer 7 computing grad_W1...
+[backward] Layer 7 propagating gradient through W1...
+[backward] Layer 7 ✓ FFN backward complete
+[backward] Layer 7 residual add...
+[backward] Layer 7 ✓ Residual add complete
+[backward] Processing layer 6
+[backward] Layer 6 cached pointers:
+  ln2_output=0000001E90400000
+  ffn_pre_gelu=0000001E91000000
+  ffn_output=0000001E94000000
+  ln1_output=0000001E8E000000
+  attn_output=0000001E8EC00000
+  layer_input=0000001E8A400000
+[backward] Layer 6 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E8EC00000 (attn output before LN2)
+  gamma=0000001E1CC93C00
+  grad_gamma=0000001E316AF400
+  grad_beta=0000001E316B0000
+[backward] Layer 6 FFN backward...
+[backward] Layer 6 computing grad_W2...
+[backward] Layer 6 propagating gradient through W2...
+[backward] Layer 6 GELU backward...
+[backward] Layer 6 ✓ GELU backward complete
+[backward] Layer 6 computing grad_W1...
+[backward] Layer 6 propagating gradient through W1...
+[backward] Layer 6 ✓ FFN backward complete
+[backward] Layer 6 residual add...
+[backward] Layer 6 ✓ Residual add complete
+[backward] Processing layer 5
+[backward] Layer 5 cached pointers:
+  ln2_output=0000001E85C00000
+  ffn_pre_gelu=0000001E86800000
+  ffn_output=0000001E89800000
+  ln1_output=0000001E83800000
+  attn_output=0000001E84400000
+  layer_input=0000001E7FC00000
+[backward] Layer 5 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E84400000 (attn output before LN2)
+  gamma=0000001E1CC49800
+  grad_gamma=0000001E316A5800
+  grad_beta=0000001E316A6400
+[backward] Layer 5 FFN backward...
+[backward] Layer 5 computing grad_W2...
+[backward] Layer 5 propagating gradient through W2...
+[backward] Layer 5 GELU backward...
+[backward] Layer 5 ✓ GELU backward complete
+[backward] Layer 5 computing grad_W1...
+[backward] Layer 5 propagating gradient through W1...
+[backward] Layer 5 ✓ FFN backward complete
+[backward] Layer 5 residual add...
+[backward] Layer 5 ✓ Residual add complete
+[backward] Processing layer 4
+[backward] Layer 4 cached pointers:
+  ln2_output=0000001E7B400000
+  ffn_pre_gelu=0000001E7C000000
+  ffn_output=0000001E7F000000
+  ln1_output=0000001E79000000
+  attn_output=0000001E79C00000
+  layer_input=0000001E75400000
+[backward] Layer 4 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E79C00000 (attn output before LN2)
+  gamma=0000001E0F5FF200
+  grad_gamma=0000001E3169BC00
+  grad_beta=0000001E3169C800
+[backward] Layer 4 FFN backward...
+[backward] Layer 4 computing grad_W2...
+[backward] Layer 4 propagating gradient through W2...
+[backward] Layer 4 GELU backward...
+[backward] Layer 4 ✓ GELU backward complete
+[backward] Layer 4 computing grad_W1...
+[backward] Layer 4 propagating gradient through W1...
+[backward] Layer 4 ✓ FFN backward complete
+[backward] Layer 4 residual add...
+[backward] Layer 4 ✓ Residual add complete
+[backward] Processing layer 3
+[backward] Layer 3 cached pointers:
+  ln2_output=0000001E70C00000
+  ffn_pre_gelu=0000001E71800000
+  ffn_output=0000001E74800000
+  ln1_output=0000001E6E800000
+  attn_output=0000001E6F400000
+  layer_input=0000001E6AC00000
+[backward] Layer 3 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E6F400000 (attn output before LN2)
+  gamma=0000001E0F5B4E00
+  grad_gamma=0000001E31692000
+  grad_beta=0000001E31692C00
+[backward] Layer 3 FFN backward...
+[backward] Layer 3 computing grad_W2...
+[backward] Layer 3 propagating gradient through W2...
+[backward] Layer 3 GELU backward...
+[backward] Layer 3 ✓ GELU backward complete
+[backward] Layer 3 computing grad_W1...
+[backward] Layer 3 propagating gradient through W1...
+[backward] Layer 3 ✓ FFN backward complete
+[backward] Layer 3 residual add...
+[backward] Layer 3 ✓ Residual add complete
+[backward] Processing layer 2
+[backward] Layer 2 cached pointers:
+  ln2_output=0000001E66400000
+  ffn_pre_gelu=0000001E67000000
+  ffn_output=0000001E6A000000
+  ln1_output=0000001E64000000
+  attn_output=0000001E64C00000
+  layer_input=0000001E60400000
+[backward] Layer 2 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E64C00000 (attn output before LN2)
+  gamma=0000001E0F56AA00
+  grad_gamma=0000001E31688400
+  grad_beta=0000001E31689000
+[backward] Layer 2 FFN backward...
+[backward] Layer 2 computing grad_W2...
+[backward] Layer 2 propagating gradient through W2...
+[backward] Layer 2 GELU backward...
+[backward] Layer 2 ✓ GELU backward complete
+[backward] Layer 2 computing grad_W1...
+[backward] Layer 2 propagating gradient through W1...
+[backward] Layer 2 ✓ FFN backward complete
+[backward] Layer 2 residual add...
+[backward] Layer 2 ✓ Residual add complete
+[backward] Processing layer 1
+[backward] Layer 1 cached pointers:
+  ln2_output=0000001E5BC00000
+  ffn_pre_gelu=0000001E5C800000
+  ffn_output=0000001E5F800000
+  ln1_output=0000001E59800000
+  attn_output=0000001E5A400000
+  layer_input=0000001E55C00000
+[backward] Layer 1 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E5A400000 (attn output before LN2)
+  gamma=0000001E10BFE800
+  grad_gamma=0000001E1CDFE000
+  grad_beta=0000001E1CDFEC00
+[backward] Layer 1 FFN backward...
+[backward] Layer 1 computing grad_W2...
+[backward] Layer 1 propagating gradient through W2...
+[backward] Layer 1 GELU backward...
+[backward] Layer 1 ✓ GELU backward complete
+[backward] Layer 1 computing grad_W1...
+[backward] Layer 1 propagating gradient through W1...
+[backward] Layer 1 ✓ FFN backward complete
+[backward] Layer 1 residual add...
+[backward] Layer 1 ✓ Residual add complete
+[backward] Processing layer 0
+[backward] Layer 0 cached pointers:
+  ln2_output=0000001E51400000
+  ffn_pre_gelu=0000001E52000000
+  ffn_output=0000001E55000000
+  ln1_output=0000001E4F000000
+  attn_output=0000001E4FC00000
+  layer_input=0000001E4E400000
+[backward] Layer 0 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E4FC00000 (attn output before LN2)
+  gamma=0000001E10BF4400
+  grad_gamma=0000001E1CDF4400
+  grad_beta=0000001E1CDF5000
+[backward] Layer 0 FFN backward...
+[backward] Layer 0 computing grad_W2...
+[backward] Layer 0 propagating gradient through W2...
+[backward] Layer 0 GELU backward...
+[backward] Layer 0 ✓ GELU backward complete
+[backward] Layer 0 computing grad_W1...
+[backward] Layer 0 propagating gradient through W1...
+[backward] Layer 0 ✓ FFN backward complete
+[backward] Layer 0 residual add...
+[backward] Layer 0 ✓ Residual add complete
+[backward] ✓ Full backward pass complete
+[2025-11-13 14:07:32]   [GradNorm] Norm: 50412220.000000
+[scaleGradients] Scaled all gradients by 1.98365e-05
+[2025-11-13 14:07:32]   [GradClip] Scaled by 0.000020
+    [UpdateParam] idx=0 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=1 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=2 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=3 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=4 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=5 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=6 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=7 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=8 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=9 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=10 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=11 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=12 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=13 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=14 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=15 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=16 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=17 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=18 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=19 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=20 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=21 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=22 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=23 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=24 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=25 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=26 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=27 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=28 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=29 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=30 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=31 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=32 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=33 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=34 GPU memory: 3366 MB free / 12287 MB total
+[2025-11-13 14:07:32]   Step 2 | Loss: 7.121469 | LR: 0.000000
+ERROR: GPU embedding computation failed!
+[backward] Computing gradients for loss=7.12145 (batch=1, seq_len=2048)
+[backward] ✓ LM head gradients computed
+[backward] Processing layer 11
+[backward] Layer 11 cached pointers:
+  ln2_output=0000001EC4C00000
+  ffn_pre_gelu=0000001EC5800000
+  ffn_output=0000001EC8800000
+  ln1_output=0000001EC2800000
+  attn_output=0000001EC3400000
+  layer_input=0000001EBEC00000
+[backward] Layer 11 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EC3400000 (attn output before LN2)
+  gamma=0000001E1CDE7000
+  grad_gamma=0000001E316E0000
+  grad_beta=0000001E316E0C00
+[backward] Layer 11 FFN backward...
+[backward] Layer 11 computing grad_W2...
+[backward] Layer 11 propagating gradient through W2...
+[backward] Layer 11 GELU backward...
+[backward] Layer 11 ✓ GELU backward complete
+[backward] Layer 11 computing grad_W1...
+[backward] Layer 11 propagating gradient through W1...
+[backward] Layer 11 ✓ FFN backward complete
+[backward] Layer 11 residual add...
+[backward] Layer 11 ✓ Residual add complete
+[backward] Processing layer 10
+[backward] Layer 10 cached pointers:
+  ln2_output=0000001EBA400000
+  ffn_pre_gelu=0000001EBB000000
+  ffn_output=0000001EBE000000
+  ln1_output=0000001EB8000000
+  attn_output=0000001EB8C00000
+  layer_input=0000001EB4400000
+[backward] Layer 10 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EB8C00000 (attn output before LN2)
+  gamma=0000001E1CDBCC00
+  grad_gamma=0000001E316D6400
+  grad_beta=0000001E316D7000
+[backward] Layer 10 FFN backward...
+[backward] Layer 10 computing grad_W2...
+[backward] Layer 10 propagating gradient through W2...
+[backward] Layer 10 GELU backward...
+[backward] Layer 10 ✓ GELU backward complete
+[backward] Layer 10 computing grad_W1...
+[backward] Layer 10 propagating gradient through W1...
+[backward] Layer 10 ✓ FFN backward complete
+[backward] Layer 10 residual add...
+[backward] Layer 10 ✓ Residual add complete
+[backward] Processing layer 9
+[backward] Layer 9 cached pointers:
+  ln2_output=0000001EAFC00000
+  ffn_pre_gelu=0000001EB0800000
+  ffn_output=0000001EB3800000
+  ln1_output=0000001EAD800000
+  attn_output=0000001EAE400000
+  layer_input=0000001EA9C00000
+[backward] Layer 9 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EAE400000 (attn output before LN2)
+  gamma=0000001E1CD72800
+  grad_gamma=0000001E316CC800
+  grad_beta=0000001E316CD400
+[backward] Layer 9 FFN backward...
+[backward] Layer 9 computing grad_W2...
+[backward] Layer 9 propagating gradient through W2...
+[backward] Layer 9 GELU backward...
+[backward] Layer 9 ✓ GELU backward complete
+[backward] Layer 9 computing grad_W1...
+[backward] Layer 9 propagating gradient through W1...
+[backward] Layer 9 ✓ FFN backward complete
+[backward] Layer 9 residual add...
+[backward] Layer 9 ✓ Residual add complete
+[backward] Processing layer 8
+[backward] Layer 8 cached pointers:
+  ln2_output=0000001EA5400000
+  ffn_pre_gelu=0000001EA6000000
+  ffn_output=0000001EA9000000
+  ln1_output=0000001EA3000000
+  attn_output=0000001EA3C00000
+  layer_input=0000001E9F400000
+[backward] Layer 8 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EA3C00000 (attn output before LN2)
+  gamma=0000001E1CD28400
+  grad_gamma=0000001E316C2C00
+  grad_beta=0000001E316C3800
+[backward] Layer 8 FFN backward...
+[backward] Layer 8 computing grad_W2...
+[backward] Layer 8 propagating gradient through W2...
+[backward] Layer 8 GELU backward...
+[backward] Layer 8 ✓ GELU backward complete
+[backward] Layer 8 computing grad_W1...
+[backward] Layer 8 propagating gradient through W1...
+[backward] Layer 8 ✓ FFN backward complete
+[backward] Layer 8 residual add...
+[backward] Layer 8 ✓ Residual add complete
+[backward] Processing layer 7
+[backward] Layer 7 cached pointers:
+  ln2_output=0000001E9AC00000
+  ffn_pre_gelu=0000001E9B800000
+  ffn_output=0000001E9E800000
+  ln1_output=0000001E98800000
+  attn_output=0000001E99400000
+  layer_input=0000001E94C00000
+[backward] Layer 7 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E99400000 (attn output before LN2)
+  gamma=0000001E1CCDE000
+  grad_gamma=0000001E316B9000
+  grad_beta=0000001E316B9C00
+[backward] Layer 7 FFN backward...
+[backward] Layer 7 computing grad_W2...
+[backward] Layer 7 propagating gradient through W2...
+[backward] Layer 7 GELU backward...
+[backward] Layer 7 ✓ GELU backward complete
+[backward] Layer 7 computing grad_W1...
+[backward] Layer 7 propagating gradient through W1...
+[backward] Layer 7 ✓ FFN backward complete
+[backward] Layer 7 residual add...
+[backward] Layer 7 ✓ Residual add complete
+[backward] Processing layer 6
+[backward] Layer 6 cached pointers:
+  ln2_output=0000001E90400000
+  ffn_pre_gelu=0000001E91000000
+  ffn_output=0000001E94000000
+  ln1_output=0000001E8E000000
+  attn_output=0000001E8EC00000
+  layer_input=0000001E8A400000
+[backward] Layer 6 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E8EC00000 (attn output before LN2)
+  gamma=0000001E1CC93C00
+  grad_gamma=0000001E316AF400
+  grad_beta=0000001E316B0000
+[backward] Layer 6 FFN backward...
+[backward] Layer 6 computing grad_W2...
+[backward] Layer 6 propagating gradient through W2...
+[backward] Layer 6 GELU backward...
+[backward] Layer 6 ✓ GELU backward complete
+[backward] Layer 6 computing grad_W1...
+[backward] Layer 6 propagating gradient through W1...
+[backward] Layer 6 ✓ FFN backward complete
+[backward] Layer 6 residual add...
+[backward] Layer 6 ✓ Residual add complete
+[backward] Processing layer 5
+[backward] Layer 5 cached pointers:
+  ln2_output=0000001E85C00000
+  ffn_pre_gelu=0000001E86800000
+  ffn_output=0000001E89800000
+  ln1_output=0000001E83800000
+  attn_output=0000001E84400000
+  layer_input=0000001E7FC00000
+[backward] Layer 5 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E84400000 (attn output before LN2)
+  gamma=0000001E1CC49800
+  grad_gamma=0000001E316A5800
+  grad_beta=0000001E316A6400
+[backward] Layer 5 FFN backward...
+[backward] Layer 5 computing grad_W2...
+[backward] Layer 5 propagating gradient through W2...
+[backward] Layer 5 GELU backward...
+[backward] Layer 5 ✓ GELU backward complete
+[backward] Layer 5 computing grad_W1...
+[backward] Layer 5 propagating gradient through W1...
+[backward] Layer 5 ✓ FFN backward complete
+[backward] Layer 5 residual add...
+[backward] Layer 5 ✓ Residual add complete
+[backward] Processing layer 4
+[backward] Layer 4 cached pointers:
+  ln2_output=0000001E7B400000
+  ffn_pre_gelu=0000001E7C000000
+  ffn_output=0000001E7F000000
+  ln1_output=0000001E79000000
+  attn_output=0000001E79C00000
+  layer_input=0000001E75400000
+[backward] Layer 4 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E79C00000 (attn output before LN2)
+  gamma=0000001E0F5FF200
+  grad_gamma=0000001E3169BC00
+  grad_beta=0000001E3169C800
+[backward] Layer 4 FFN backward...
+[backward] Layer 4 computing grad_W2...
+[backward] Layer 4 propagating gradient through W2...
+[backward] Layer 4 GELU backward...
+[backward] Layer 4 ✓ GELU backward complete
+[backward] Layer 4 computing grad_W1...
+[backward] Layer 4 propagating gradient through W1...
+[backward] Layer 4 ✓ FFN backward complete
+[backward] Layer 4 residual add...
+[backward] Layer 4 ✓ Residual add complete
+[backward] Processing layer 3
+[backward] Layer 3 cached pointers:
+  ln2_output=0000001E70C00000
+  ffn_pre_gelu=0000001E71800000
+  ffn_output=0000001E74800000
+  ln1_output=0000001E6E800000
+  attn_output=0000001E6F400000
+  layer_input=0000001E6AC00000
+[backward] Layer 3 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E6F400000 (attn output before LN2)
+  gamma=0000001E0F5B4E00
+  grad_gamma=0000001E31692000
+  grad_beta=0000001E31692C00
+[backward] Layer 3 FFN backward...
+[backward] Layer 3 computing grad_W2...
+[backward] Layer 3 propagating gradient through W2...
+[backward] Layer 3 GELU backward...
+[backward] Layer 3 ✓ GELU backward complete
+[backward] Layer 3 computing grad_W1...
+[backward] Layer 3 propagating gradient through W1...
+[backward] Layer 3 ✓ FFN backward complete
+[backward] Layer 3 residual add...
+[backward] Layer 3 ✓ Residual add complete
+[backward] Processing layer 2
+[backward] Layer 2 cached pointers:
+  ln2_output=0000001E66400000
+  ffn_pre_gelu=0000001E67000000
+  ffn_output=0000001E6A000000
+  ln1_output=0000001E64000000
+  attn_output=0000001E64C00000
+  layer_input=0000001E60400000
+[backward] Layer 2 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E64C00000 (attn output before LN2)
+  gamma=0000001E0F56AA00
+  grad_gamma=0000001E31688400
+  grad_beta=0000001E31689000
+[backward] Layer 2 FFN backward...
+[backward] Layer 2 computing grad_W2...
+[backward] Layer 2 propagating gradient through W2...
+[backward] Layer 2 GELU backward...
+[backward] Layer 2 ✓ GELU backward complete
+[backward] Layer 2 computing grad_W1...
+[backward] Layer 2 propagating gradient through W1...
+[backward] Layer 2 ✓ FFN backward complete
+[backward] Layer 2 residual add...
+[backward] Layer 2 ✓ Residual add complete
+[backward] Processing layer 1
+[backward] Layer 1 cached pointers:
+  ln2_output=0000001E5BC00000
+  ffn_pre_gelu=0000001E5C800000
+  ffn_output=0000001E5F800000
+  ln1_output=0000001E59800000
+  attn_output=0000001E5A400000
+  layer_input=0000001E55C00000
+[backward] Layer 1 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E5A400000 (attn output before LN2)
+  gamma=0000001E10BFE800
+  grad_gamma=0000001E1CDFE000
+  grad_beta=0000001E1CDFEC00
+[backward] Layer 1 FFN backward...
+[backward] Layer 1 computing grad_W2...
+[backward] Layer 1 propagating gradient through W2...
+[backward] Layer 1 GELU backward...
+[backward] Layer 1 ✓ GELU backward complete
+[backward] Layer 1 computing grad_W1...
+[backward] Layer 1 propagating gradient through W1...
+[backward] Layer 1 ✓ FFN backward complete
+[backward] Layer 1 residual add...
+[backward] Layer 1 ✓ Residual add complete
+[backward] Processing layer 0
+[backward] Layer 0 cached pointers:
+  ln2_output=0000001E51400000
+  ffn_pre_gelu=0000001E52000000
+  ffn_output=0000001E55000000
+  ln1_output=0000001E4F000000
+  attn_output=0000001E4FC00000
+  layer_input=0000001E4E400000
+[backward] Layer 0 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E4FC00000 (attn output before LN2)
+  gamma=0000001E10BF4400
+  grad_gamma=0000001E1CDF4400
+  grad_beta=0000001E1CDF5000
+[backward] Layer 0 FFN backward...
+[backward] Layer 0 computing grad_W2...
+[backward] Layer 0 propagating gradient through W2...
+[backward] Layer 0 GELU backward...
+[backward] Layer 0 ✓ GELU backward complete
+[backward] Layer 0 computing grad_W1...
+[backward] Layer 0 propagating gradient through W1...
+[backward] Layer 0 ✓ FFN backward complete
+[backward] Layer 0 residual add...
+[backward] Layer 0 ✓ Residual add complete
+[backward] ✓ Full backward pass complete
+[2025-11-13 14:07:32]   [GradNorm] Norm: 51368832.000000
+[scaleGradients] Scaled all gradients by 1.94671e-05
+[2025-11-13 14:07:32]   [GradClip] Scaled by 0.000019
+    [UpdateParam] idx=0 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=1 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=2 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=3 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=4 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=5 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=6 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=7 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=8 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=9 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=10 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=11 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=12 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=13 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=14 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=15 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=16 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=17 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=18 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=19 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=20 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=21 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=22 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=23 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=24 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=25 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=26 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=27 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=28 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=29 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=30 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=31 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=32 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=33 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=34 GPU memory: 3366 MB free / 12287 MB total
+[2025-11-13 14:07:32]   Step 3 | Loss: 7.121447 | LR: 0.000000
+ERROR: GPU embedding computation failed!
+[backward] Computing gradients for loss=7.12402 (batch=1, seq_len=2048)
+[backward] ✓ LM head gradients computed
+[backward] Processing layer 11
+[backward] Layer 11 cached pointers:
+  ln2_output=0000001EC4C00000
+  ffn_pre_gelu=0000001EC5800000
+  ffn_output=0000001EC8800000
+  ln1_output=0000001EC2800000
+  attn_output=0000001EC3400000
+  layer_input=0000001EBEC00000
+[backward] Layer 11 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EC3400000 (attn output before LN2)
+  gamma=0000001E1CDE7000
+  grad_gamma=0000001E316E0000
+  grad_beta=0000001E316E0C00
+[backward] Layer 11 FFN backward...
+[backward] Layer 11 computing grad_W2...
+[backward] Layer 11 propagating gradient through W2...
+[backward] Layer 11 GELU backward...
+[backward] Layer 11 ✓ GELU backward complete
+[backward] Layer 11 computing grad_W1...
+[backward] Layer 11 propagating gradient through W1...
+[backward] Layer 11 ✓ FFN backward complete
+[backward] Layer 11 residual add...
+[backward] Layer 11 ✓ Residual add complete
+[backward] Processing layer 10
+[backward] Layer 10 cached pointers:
+  ln2_output=0000001EBA400000
+  ffn_pre_gelu=0000001EBB000000
+  ffn_output=0000001EBE000000
+  ln1_output=0000001EB8000000
+  attn_output=0000001EB8C00000
+  layer_input=0000001EB4400000
+[backward] Layer 10 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EB8C00000 (attn output before LN2)
+  gamma=0000001E1CDBCC00
+  grad_gamma=0000001E316D6400
+  grad_beta=0000001E316D7000
+[backward] Layer 10 FFN backward...
+[backward] Layer 10 computing grad_W2...
+[backward] Layer 10 propagating gradient through W2...
+[backward] Layer 10 GELU backward...
+[backward] Layer 10 ✓ GELU backward complete
+[backward] Layer 10 computing grad_W1...
+[backward] Layer 10 propagating gradient through W1...
+[backward] Layer 10 ✓ FFN backward complete
+[backward] Layer 10 residual add...
+[backward] Layer 10 ✓ Residual add complete
+[backward] Processing layer 9
+[backward] Layer 9 cached pointers:
+  ln2_output=0000001EAFC00000
+  ffn_pre_gelu=0000001EB0800000
+  ffn_output=0000001EB3800000
+  ln1_output=0000001EAD800000
+  attn_output=0000001EAE400000
+  layer_input=0000001EA9C00000
+[backward] Layer 9 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EAE400000 (attn output before LN2)
+  gamma=0000001E1CD72800
+  grad_gamma=0000001E316CC800
+  grad_beta=0000001E316CD400
+[backward] Layer 9 FFN backward...
+[backward] Layer 9 computing grad_W2...
+[backward] Layer 9 propagating gradient through W2...
+[backward] Layer 9 GELU backward...
+[backward] Layer 9 ✓ GELU backward complete
+[backward] Layer 9 computing grad_W1...
+[backward] Layer 9 propagating gradient through W1...
+[backward] Layer 9 ✓ FFN backward complete
+[backward] Layer 9 residual add...
+[backward] Layer 9 ✓ Residual add complete
+[backward] Processing layer 8
+[backward] Layer 8 cached pointers:
+  ln2_output=0000001EA5400000
+  ffn_pre_gelu=0000001EA6000000
+  ffn_output=0000001EA9000000
+  ln1_output=0000001EA3000000
+  attn_output=0000001EA3C00000
+  layer_input=0000001E9F400000
+[backward] Layer 8 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EA3C00000 (attn output before LN2)
+  gamma=0000001E1CD28400
+  grad_gamma=0000001E316C2C00
+  grad_beta=0000001E316C3800
+[backward] Layer 8 FFN backward...
+[backward] Layer 8 computing grad_W2...
+[backward] Layer 8 propagating gradient through W2...
+[backward] Layer 8 GELU backward...
+[backward] Layer 8 ✓ GELU backward complete
+[backward] Layer 8 computing grad_W1...
+[backward] Layer 8 propagating gradient through W1...
+[backward] Layer 8 ✓ FFN backward complete
+[backward] Layer 8 residual add...
+[backward] Layer 8 ✓ Residual add complete
+[backward] Processing layer 7
+[backward] Layer 7 cached pointers:
+  ln2_output=0000001E9AC00000
+  ffn_pre_gelu=0000001E9B800000
+  ffn_output=0000001E9E800000
+  ln1_output=0000001E98800000
+  attn_output=0000001E99400000
+  layer_input=0000001E94C00000
+[backward] Layer 7 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E99400000 (attn output before LN2)
+  gamma=0000001E1CCDE000
+  grad_gamma=0000001E316B9000
+  grad_beta=0000001E316B9C00
+[backward] Layer 7 FFN backward...
+[backward] Layer 7 computing grad_W2...
+[backward] Layer 7 propagating gradient through W2...
+[backward] Layer 7 GELU backward...
+[backward] Layer 7 ✓ GELU backward complete
+[backward] Layer 7 computing grad_W1...
+[backward] Layer 7 propagating gradient through W1...
+[backward] Layer 7 ✓ FFN backward complete
+[backward] Layer 7 residual add...
+[backward] Layer 7 ✓ Residual add complete
+[backward] Processing layer 6
+[backward] Layer 6 cached pointers:
+  ln2_output=0000001E90400000
+  ffn_pre_gelu=0000001E91000000
+  ffn_output=0000001E94000000
+  ln1_output=0000001E8E000000
+  attn_output=0000001E8EC00000
+  layer_input=0000001E8A400000
+[backward] Layer 6 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E8EC00000 (attn output before LN2)
+  gamma=0000001E1CC93C00
+  grad_gamma=0000001E316AF400
+  grad_beta=0000001E316B0000
+[backward] Layer 6 FFN backward...
+[backward] Layer 6 computing grad_W2...
+[backward] Layer 6 propagating gradient through W2...
+[backward] Layer 6 GELU backward...
+[backward] Layer 6 ✓ GELU backward complete
+[backward] Layer 6 computing grad_W1...
+[backward] Layer 6 propagating gradient through W1...
+[backward] Layer 6 ✓ FFN backward complete
+[backward] Layer 6 residual add...
+[backward] Layer 6 ✓ Residual add complete
+[backward] Processing layer 5
+[backward] Layer 5 cached pointers:
+  ln2_output=0000001E85C00000
+  ffn_pre_gelu=0000001E86800000
+  ffn_output=0000001E89800000
+  ln1_output=0000001E83800000
+  attn_output=0000001E84400000
+  layer_input=0000001E7FC00000
+[backward] Layer 5 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E84400000 (attn output before LN2)
+  gamma=0000001E1CC49800
+  grad_gamma=0000001E316A5800
+  grad_beta=0000001E316A6400
+[backward] Layer 5 FFN backward...
+[backward] Layer 5 computing grad_W2...
+[backward] Layer 5 propagating gradient through W2...
+[backward] Layer 5 GELU backward...
+[backward] Layer 5 ✓ GELU backward complete
+[backward] Layer 5 computing grad_W1...
+[backward] Layer 5 propagating gradient through W1...
+[backward] Layer 5 ✓ FFN backward complete
+[backward] Layer 5 residual add...
+[backward] Layer 5 ✓ Residual add complete
+[backward] Processing layer 4
+[backward] Layer 4 cached pointers:
+  ln2_output=0000001E7B400000
+  ffn_pre_gelu=0000001E7C000000
+  ffn_output=0000001E7F000000
+  ln1_output=0000001E79000000
+  attn_output=0000001E79C00000
+  layer_input=0000001E75400000
+[backward] Layer 4 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E79C00000 (attn output before LN2)
+  gamma=0000001E0F5FF200
+  grad_gamma=0000001E3169BC00
+  grad_beta=0000001E3169C800
+[backward] Layer 4 FFN backward...
+[backward] Layer 4 computing grad_W2...
+[backward] Layer 4 propagating gradient through W2...
+[backward] Layer 4 GELU backward...
+[backward] Layer 4 ✓ GELU backward complete
+[backward] Layer 4 computing grad_W1...
+[backward] Layer 4 propagating gradient through W1...
+[backward] Layer 4 ✓ FFN backward complete
+[backward] Layer 4 residual add...
+[backward] Layer 4 ✓ Residual add complete
+[backward] Processing layer 3
+[backward] Layer 3 cached pointers:
+  ln2_output=0000001E70C00000
+  ffn_pre_gelu=0000001E71800000
+  ffn_output=0000001E74800000
+  ln1_output=0000001E6E800000
+  attn_output=0000001E6F400000
+  layer_input=0000001E6AC00000
+[backward] Layer 3 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E6F400000 (attn output before LN2)
+  gamma=0000001E0F5B4E00
+  grad_gamma=0000001E31692000
+  grad_beta=0000001E31692C00
+[backward] Layer 3 FFN backward...
+[backward] Layer 3 computing grad_W2...
+[backward] Layer 3 propagating gradient through W2...
+[backward] Layer 3 GELU backward...
+[backward] Layer 3 ✓ GELU backward complete
+[backward] Layer 3 computing grad_W1...
+[backward] Layer 3 propagating gradient through W1...
+[backward] Layer 3 ✓ FFN backward complete
+[backward] Layer 3 residual add...
+[backward] Layer 3 ✓ Residual add complete
+[backward] Processing layer 2
+[backward] Layer 2 cached pointers:
+  ln2_output=0000001E66400000
+  ffn_pre_gelu=0000001E67000000
+  ffn_output=0000001E6A000000
+  ln1_output=0000001E64000000
+  attn_output=0000001E64C00000
+  layer_input=0000001E60400000
+[backward] Layer 2 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E64C00000 (attn output before LN2)
+  gamma=0000001E0F56AA00
+  grad_gamma=0000001E31688400
+  grad_beta=0000001E31689000
+[backward] Layer 2 FFN backward...
+[backward] Layer 2 computing grad_W2...
+[backward] Layer 2 propagating gradient through W2...
+[backward] Layer 2 GELU backward...
+[backward] Layer 2 ✓ GELU backward complete
+[backward] Layer 2 computing grad_W1...
+[backward] Layer 2 propagating gradient through W1...
+[backward] Layer 2 ✓ FFN backward complete
+[backward] Layer 2 residual add...
+[backward] Layer 2 ✓ Residual add complete
+[backward] Processing layer 1
+[backward] Layer 1 cached pointers:
+  ln2_output=0000001E5BC00000
+  ffn_pre_gelu=0000001E5C800000
+  ffn_output=0000001E5F800000
+  ln1_output=0000001E59800000
+  attn_output=0000001E5A400000
+  layer_input=0000001E55C00000
+[backward] Layer 1 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E5A400000 (attn output before LN2)
+  gamma=0000001E10BFE800
+  grad_gamma=0000001E1CDFE000
+  grad_beta=0000001E1CDFEC00
+[backward] Layer 1 FFN backward...
+[backward] Layer 1 computing grad_W2...
+[backward] Layer 1 propagating gradient through W2...
+[backward] Layer 1 GELU backward...
+[backward] Layer 1 ✓ GELU backward complete
+[backward] Layer 1 computing grad_W1...
+[backward] Layer 1 propagating gradient through W1...
+[backward] Layer 1 ✓ FFN backward complete
+[backward] Layer 1 residual add...
+[backward] Layer 1 ✓ Residual add complete
+[backward] Processing layer 0
+[backward] Layer 0 cached pointers:
+  ln2_output=0000001E51400000
+  ffn_pre_gelu=0000001E52000000
+  ffn_output=0000001E55000000
+  ln1_output=0000001E4F000000
+  attn_output=0000001E4FC00000
+  layer_input=0000001E4E400000
+[backward] Layer 0 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E4FC00000 (attn output before LN2)
+  gamma=0000001E10BF4400
+  grad_gamma=0000001E1CDF4400
+  grad_beta=0000001E1CDF5000
+[backward] Layer 0 FFN backward...
+[backward] Layer 0 computing grad_W2...
+[backward] Layer 0 propagating gradient through W2...
+[backward] Layer 0 GELU backward...
+[backward] Layer 0 ✓ GELU backward complete
+[backward] Layer 0 computing grad_W1...
+[backward] Layer 0 propagating gradient through W1...
+[backward] Layer 0 ✓ FFN backward complete
+[backward] Layer 0 residual add...
+[backward] Layer 0 ✓ Residual add complete
+[backward] ✓ Full backward pass complete
+[2025-11-13 14:07:33]   [GradNorm] Norm: 52996404.000000
+[scaleGradients] Scaled all gradients by 1.88692e-05
+[2025-11-13 14:07:33]   [GradClip] Scaled by 0.000019
+    [UpdateParam] idx=0 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=1 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=2 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=3 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=4 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=5 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=6 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=7 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=8 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=9 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=10 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=11 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=12 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=13 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=14 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=15 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=16 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=17 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=18 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=19 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=20 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=21 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=22 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=23 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=24 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=25 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=26 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=27 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=28 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=29 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=30 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=31 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=32 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=33 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=34 GPU memory: 3366 MB free / 12287 MB total
+[2025-11-13 14:07:33]   Step 4 | Loss: 7.124024 | LR: 0.000000
+ERROR: GPU embedding computation failed!
+[backward] Computing gradients for loss=7.12408 (batch=1, seq_len=2048)
+[backward] ✓ LM head gradients computed
+[backward] Processing layer 11
+[backward] Layer 11 cached pointers:
+  ln2_output=0000001EC4C00000
+  ffn_pre_gelu=0000001EC5800000
+  ffn_output=0000001EC8800000
+  ln1_output=0000001EC2800000
+  attn_output=0000001EC3400000
+  layer_input=0000001EBEC00000
+[backward] Layer 11 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EC3400000 (attn output before LN2)
+  gamma=0000001E1CDE7000
+  grad_gamma=0000001E316E0000
+  grad_beta=0000001E316E0C00
+[backward] Layer 11 FFN backward...
+[backward] Layer 11 computing grad_W2...
+[backward] Layer 11 propagating gradient through W2...
+[backward] Layer 11 GELU backward...
+[backward] Layer 11 ✓ GELU backward complete
+[backward] Layer 11 computing grad_W1...
+[backward] Layer 11 propagating gradient through W1...
+[backward] Layer 11 ✓ FFN backward complete
+[backward] Layer 11 residual add...
+[backward] Layer 11 ✓ Residual add complete
+[backward] Processing layer 10
+[backward] Layer 10 cached pointers:
+  ln2_output=0000001EBA400000
+  ffn_pre_gelu=0000001EBB000000
+  ffn_output=0000001EBE000000
+  ln1_output=0000001EB8000000
+  attn_output=0000001EB8C00000
+  layer_input=0000001EB4400000
+[backward] Layer 10 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EB8C00000 (attn output before LN2)
+  gamma=0000001E1CDBCC00
+  grad_gamma=0000001E316D6400
+  grad_beta=0000001E316D7000
+[backward] Layer 10 FFN backward...
+[backward] Layer 10 computing grad_W2...
+[backward] Layer 10 propagating gradient through W2...
+[backward] Layer 10 GELU backward...
+[backward] Layer 10 ✓ GELU backward complete
+[backward] Layer 10 computing grad_W1...
+[backward] Layer 10 propagating gradient through W1...
+[backward] Layer 10 ✓ FFN backward complete
+[backward] Layer 10 residual add...
+[backward] Layer 10 ✓ Residual add complete
+[backward] Processing layer 9
+[backward] Layer 9 cached pointers:
+  ln2_output=0000001EAFC00000
+  ffn_pre_gelu=0000001EB0800000
+  ffn_output=0000001EB3800000
+  ln1_output=0000001EAD800000
+  attn_output=0000001EAE400000
+  layer_input=0000001EA9C00000
+[backward] Layer 9 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EAE400000 (attn output before LN2)
+  gamma=0000001E1CD72800
+  grad_gamma=0000001E316CC800
+  grad_beta=0000001E316CD400
+[backward] Layer 9 FFN backward...
+[backward] Layer 9 computing grad_W2...
+[backward] Layer 9 propagating gradient through W2...
+[backward] Layer 9 GELU backward...
+[backward] Layer 9 ✓ GELU backward complete
+[backward] Layer 9 computing grad_W1...
+[backward] Layer 9 propagating gradient through W1...
+[backward] Layer 9 ✓ FFN backward complete
+[backward] Layer 9 residual add...
+[backward] Layer 9 ✓ Residual add complete
+[backward] Processing layer 8
+[backward] Layer 8 cached pointers:
+  ln2_output=0000001EA5400000
+  ffn_pre_gelu=0000001EA6000000
+  ffn_output=0000001EA9000000
+  ln1_output=0000001EA3000000
+  attn_output=0000001EA3C00000
+  layer_input=0000001E9F400000
+[backward] Layer 8 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001EA3C00000 (attn output before LN2)
+  gamma=0000001E1CD28400
+  grad_gamma=0000001E316C2C00
+  grad_beta=0000001E316C3800
+[backward] Layer 8 FFN backward...
+[backward] Layer 8 computing grad_W2...
+[backward] Layer 8 propagating gradient through W2...
+[backward] Layer 8 GELU backward...
+[backward] Layer 8 ✓ GELU backward complete
+[backward] Layer 8 computing grad_W1...
+[backward] Layer 8 propagating gradient through W1...
+[backward] Layer 8 ✓ FFN backward complete
+[backward] Layer 8 residual add...
+[backward] Layer 8 ✓ Residual add complete
+[backward] Processing layer 7
+[backward] Layer 7 cached pointers:
+  ln2_output=0000001E9AC00000
+  ffn_pre_gelu=0000001E9B800000
+  ffn_output=0000001E9E800000
+  ln1_output=0000001E98800000
+  attn_output=0000001E99400000
+  layer_input=0000001E94C00000
+[backward] Layer 7 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E99400000 (attn output before LN2)
+  gamma=0000001E1CCDE000
+  grad_gamma=0000001E316B9000
+  grad_beta=0000001E316B9C00
+[backward] Layer 7 FFN backward...
+[backward] Layer 7 computing grad_W2...
+[backward] Layer 7 propagating gradient through W2...
+[backward] Layer 7 GELU backward...
+[backward] Layer 7 ✓ GELU backward complete
+[backward] Layer 7 computing grad_W1...
+[backward] Layer 7 propagating gradient through W1...
+[backward] Layer 7 ✓ FFN backward complete
+[backward] Layer 7 residual add...
+[backward] Layer 7 ✓ Residual add complete
+[backward] Processing layer 6
+[backward] Layer 6 cached pointers:
+  ln2_output=0000001E90400000
+  ffn_pre_gelu=0000001E91000000
+  ffn_output=0000001E94000000
+  ln1_output=0000001E8E000000
+  attn_output=0000001E8EC00000
+  layer_input=0000001E8A400000
+[backward] Layer 6 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E8EC00000 (attn output before LN2)
+  gamma=0000001E1CC93C00
+  grad_gamma=0000001E316AF400
+  grad_beta=0000001E316B0000
+[backward] Layer 6 FFN backward...
+[backward] Layer 6 computing grad_W2...
+[backward] Layer 6 propagating gradient through W2...
+[backward] Layer 6 GELU backward...
+[backward] Layer 6 ✓ GELU backward complete
+[backward] Layer 6 computing grad_W1...
+[backward] Layer 6 propagating gradient through W1...
+[backward] Layer 6 ✓ FFN backward complete
+[backward] Layer 6 residual add...
+[backward] Layer 6 ✓ Residual add complete
+[backward] Processing layer 5
+[backward] Layer 5 cached pointers:
+  ln2_output=0000001E85C00000
+  ffn_pre_gelu=0000001E86800000
+  ffn_output=0000001E89800000
+  ln1_output=0000001E83800000
+  attn_output=0000001E84400000
+  layer_input=0000001E7FC00000
+[backward] Layer 5 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E84400000 (attn output before LN2)
+  gamma=0000001E1CC49800
+  grad_gamma=0000001E316A5800
+  grad_beta=0000001E316A6400
+[backward] Layer 5 FFN backward...
+[backward] Layer 5 computing grad_W2...
+[backward] Layer 5 propagating gradient through W2...
+[backward] Layer 5 GELU backward...
+[backward] Layer 5 ✓ GELU backward complete
+[backward] Layer 5 computing grad_W1...
+[backward] Layer 5 propagating gradient through W1...
+[backward] Layer 5 ✓ FFN backward complete
+[backward] Layer 5 residual add...
+[backward] Layer 5 ✓ Residual add complete
+[backward] Processing layer 4
+[backward] Layer 4 cached pointers:
+  ln2_output=0000001E7B400000
+  ffn_pre_gelu=0000001E7C000000
+  ffn_output=0000001E7F000000
+  ln1_output=0000001E79000000
+  attn_output=0000001E79C00000
+  layer_input=0000001E75400000
+[backward] Layer 4 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E79C00000 (attn output before LN2)
+  gamma=0000001E0F5FF200
+  grad_gamma=0000001E3169BC00
+  grad_beta=0000001E3169C800
+[backward] Layer 4 FFN backward...
+[backward] Layer 4 computing grad_W2...
+[backward] Layer 4 propagating gradient through W2...
+[backward] Layer 4 GELU backward...
+[backward] Layer 4 ✓ GELU backward complete
+[backward] Layer 4 computing grad_W1...
+[backward] Layer 4 propagating gradient through W1...
+[backward] Layer 4 ✓ FFN backward complete
+[backward] Layer 4 residual add...
+[backward] Layer 4 ✓ Residual add complete
+[backward] Processing layer 3
+[backward] Layer 3 cached pointers:
+  ln2_output=0000001E70C00000
+  ffn_pre_gelu=0000001E71800000
+  ffn_output=0000001E74800000
+  ln1_output=0000001E6E800000
+  attn_output=0000001E6F400000
+  layer_input=0000001E6AC00000
+[backward] Layer 3 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E6F400000 (attn output before LN2)
+  gamma=0000001E0F5B4E00
+  grad_gamma=0000001E31692000
+  grad_beta=0000001E31692C00
+[backward] Layer 3 FFN backward...
+[backward] Layer 3 computing grad_W2...
+[backward] Layer 3 propagating gradient through W2...
+[backward] Layer 3 GELU backward...
+[backward] Layer 3 ✓ GELU backward complete
+[backward] Layer 3 computing grad_W1...
+[backward] Layer 3 propagating gradient through W1...
+[backward] Layer 3 ✓ FFN backward complete
+[backward] Layer 3 residual add...
+[backward] Layer 3 ✓ Residual add complete
+[backward] Processing layer 2
+[backward] Layer 2 cached pointers:
+  ln2_output=0000001E66400000
+  ffn_pre_gelu=0000001E67000000
+  ffn_output=0000001E6A000000
+  ln1_output=0000001E64000000
+  attn_output=0000001E64C00000
+  layer_input=0000001E60400000
+[backward] Layer 2 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E64C00000 (attn output before LN2)
+  gamma=0000001E0F56AA00
+  grad_gamma=0000001E31688400
+  grad_beta=0000001E31689000
+[backward] Layer 2 FFN backward...
+[backward] Layer 2 computing grad_W2...
+[backward] Layer 2 propagating gradient through W2...
+[backward] Layer 2 GELU backward...
+[backward] Layer 2 ✓ GELU backward complete
+[backward] Layer 2 computing grad_W1...
+[backward] Layer 2 propagating gradient through W1...
+[backward] Layer 2 ✓ FFN backward complete
+[backward] Layer 2 residual add...
+[backward] Layer 2 ✓ Residual add complete
+[backward] Processing layer 1
+[backward] Layer 1 cached pointers:
+  ln2_output=0000001E5BC00000
+  ffn_pre_gelu=0000001E5C800000
+  ffn_output=0000001E5F800000
+  ln1_output=0000001E59800000
+  attn_output=0000001E5A400000
+  layer_input=0000001E55C00000
+[backward] Layer 1 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E5A400000 (attn output before LN2)
+  gamma=0000001E10BFE800
+  grad_gamma=0000001E1CDFE000
+  grad_beta=0000001E1CDFEC00
+[backward] Layer 1 FFN backward...
+[backward] Layer 1 computing grad_W2...
+[backward] Layer 1 propagating gradient through W2...
+[backward] Layer 1 GELU backward...
+[backward] Layer 1 ✓ GELU backward complete
+[backward] Layer 1 computing grad_W1...
+[backward] Layer 1 propagating gradient through W1...
+[backward] Layer 1 ✓ FFN backward complete
+[backward] Layer 1 residual add...
+[backward] Layer 1 ✓ Residual add complete
+[backward] Processing layer 0
+[backward] Layer 0 cached pointers:
+  ln2_output=0000001E51400000
+  ffn_pre_gelu=0000001E52000000
+  ffn_output=0000001E55000000
+  ln1_output=0000001E4F000000
+  attn_output=0000001E4FC00000
+  layer_input=0000001E4E400000
+[backward] Layer 0 LN2 backward:
+  grad_output=0000001ED1400000
+  input=0000001E4FC00000 (attn output before LN2)
+  gamma=0000001E10BF4400
+  grad_gamma=0000001E1CDF4400
+  grad_beta=0000001E1CDF5000
+[backward] Layer 0 FFN backward...
+[backward] Layer 0 computing grad_W2...
+[backward] Layer 0 propagating gradient through W2...
+[backward] Layer 0 GELU backward...
+[backward] Layer 0 ✓ GELU backward complete
+[backward] Layer 0 computing grad_W1...
+[backward] Layer 0 propagating gradient through W1...
+[backward] Layer 0 ✓ FFN backward complete
+[backward] Layer 0 residual add...
+[backward] Layer 0 ✓ Residual add complete
+[backward] ✓ Full backward pass complete
+[2025-11-13 14:07:34]   [GradNorm] Norm: 26299.794922
+[scaleGradients] Scaled all gradients by 0.0380231
+[2025-11-13 14:07:34]   [GradClip] Scaled by 0.038023
+    [UpdateParam] idx=0 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=1 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=2 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=3 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=4 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=5 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=6 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=7 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=8 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=9 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=10 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=11 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=12 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=13 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=14 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=15 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=16 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=17 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=18 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=19 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=20 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=21 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=22 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=23 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=24 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=25 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=26 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=27 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=28 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=29 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=30 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=31 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=32 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=33 GPU memory: 3366 MB free / 12287 MB total
+    [UpdateParam] idx=34 GPU memory: 3366 MB free / 12287 MB total
+[2025-11-13 14:07:34]   Step 5 | Loss: 7.124084 | LR: 0.000000
+[2025-11-13 14:07:34] Processing batch 6/1015 (size=2, max_len=2048)
+ERROR: GPU embedding computation failed!
+ERROR: GPU embedding computation failed!

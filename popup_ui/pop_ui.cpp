@@ -24,7 +24,7 @@ void hidePopup();
 // Globals
 // ===========================================================
 extern std::mutex g_alphaMutex;
-extern std::vector<uint8_t> g_alphaPixels;
+extern std::vector<uint8_t> g_popupPixels;
 extern std::atomic<bool> g_alphaReady;
 
 static HWND g_hwnd = nullptr;
@@ -107,7 +107,7 @@ void runPopupUI(int width, int height)
         LOG_PHASE("PopupUI shown with alpha", true);
         
         // Apply initial animation frame
-        applyAnimationToWindow(g_hwnd, width, height, 1.0f, 1.0f);
+        applyAnimationToWindow(g_hwnd, width, height, 1.0f, 1.0f, g_anim.voiceIntensity);
     }
     else
     {
@@ -221,7 +221,7 @@ void runPopupUI(int width, int height)
         if (g_popupVisible && g_hwnd)
         {
             applyAnimationToWindow(g_hwnd, width, height,
-                                   g_anim.scale, g_anim.alpha);
+                                   g_anim.scale, g_anim.alpha, g_anim.voiceIntensity);
          }
 
         // Show popup automatically when voice starts speaking

@@ -3,6 +3,11 @@
 #include <vector>
 #include <unordered_map>
 #include <string>
+#include <functional>
+#include <mutex>
+#include <shared_mutex>
+#include <thread>
+#include <atomic>
 #include "overlay_renderer.hpp"
 #include "ui_panel.hpp"
 #include "logger.hpp"
@@ -29,6 +34,7 @@ public:
     void addPanel(const std::shared_ptr<UIPanel>& panel);
     std::shared_ptr<UIPanel> getPanel(const std::string& name);
     void setVisible(const std::string& name, bool visible);
+    void postTask(std::function<void()> task);
 
     // Check if a screen position should receive input (is over visible UI)
     bool shouldReceiveInputAt(float x, float y) const;
@@ -52,8 +58,17 @@ public:
     // Get renderer instance for font updates
     OverlayRenderer& getRenderer() { return m_renderer; }
 
+    struct MonitorRect {
+        Vec2 origin{0.0f, 0.0f};
+        Vec2 size{0.0f, 0.0f};
+    };
+    MonitorRect getMonitorRectAt(const Vec2& point) const;
+
 private:
     UIRoot() = default;
+    void processPendingTasks();
+    std::vector<std::shared_ptr<UIPanel>> snapshotPanels() const;
+    bool isUIThread() const { return std::this_thread::get_id() == m_uiThreadId; }
     void updateWindowZOrder();  // Helper to adjust window position based on visibility
     
     HWND m_hwnd = nullptr;
@@ -65,4 +80,10 @@ private:
     
     std::string m_pendingTextInput; // Buffer for WM_CHAR input
     bool m_inputConsumed = false;   // Track if UI consumed input this frame
+
+    std::thread::id m_uiThreadId;
+    mutable std::shared_mutex m_panelMutex;
+    std::mutex m_taskMutex;
+    std::vector<std::function<void()>> m_pendingTasks;
+    std::atomic_flag m_drawGuard = ATOMIC_FLAG_INIT;
 };

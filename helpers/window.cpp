@@ -1,5 +1,5 @@
 #include "window.hpp"
-#include "logger.hpp" // if you have your GRIM logger
+#include "logger.hpp"
 #include <chrono>
 #include <windowsx.h>
 #include <algorithm>

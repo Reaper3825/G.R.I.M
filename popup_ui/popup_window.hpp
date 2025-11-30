@@ -16,6 +16,5 @@ void queueWindowAlphaReadback(int width, int height);
 // Applies alpha map to layered window if ready
 void applyWindowAlphaIfReady(HWND hwnd, int width, int height, uint32_t frameIdx);
 
-// Apply animation state to window (scale, alpha, glow)
-void applyAnimationToWindow(HWND hwnd, int width, int height, float scale, float alpha);
-
+// Apply animation state to window (scale, alpha, voice-reactive emissive)
+void applyAnimationToWindow(HWND hwnd, int width, int height, float scale, float alpha, float voiceIntensity);

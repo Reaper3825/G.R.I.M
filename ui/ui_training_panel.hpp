@@ -7,13 +7,16 @@
 #include "ui_inputbox.hpp"
 #include "ui_graph.hpp"
 #include "ui_training_config.hpp"
-#include "../control/training_controller.hpp"
+#include "control/training_controller.hpp"
 #include "DataCollection/data_collection_manager.hpp"
+#include "hardware/resource_values.hpp"
 #include <memory>
 #include <string>
 #include <vector>
 #include <mutex>
 #include <chrono>
+#include <optional>
+#include <atomic>
 
 class OverlayRenderer;
 struct InputState;
@@ -121,8 +124,22 @@ private:
     // Data size tracking
     std::string datasetSizeInfo;
     std::string checkpointStatsInfo;  // Info about collected checkpoints
+    float datasetUpdateTimer;  // Timer to throttle expensive file operations
+    float datasetUpdateInterval;  // Update interval (e.g., 2.0 seconds)
     void updateDatasetSize();
     void updateCheckpointStats();
+    std::string readDatasetSizeSnapshot();
+    std::string readCheckpointStatsSnapshot();
+    void requestDatasetSnapshot();
+    void applyPendingDatasetSnapshot();
+    
+    struct DatasetSnapshotResult {
+        std::string datasetInfo;
+        std::string checkpointInfo;
+    };
+    std::atomic<bool> datasetSnapshotInFlight{false};
+    std::mutex datasetSnapshotMutex;
+    std::optional<DatasetSnapshotResult> pendingDatasetSnapshot;
     
     // Progress bars
     std::shared_ptr<UIProgressBar> trainingProgressBar;
@@ -174,5 +191,4 @@ private:
     int maxResourceSamples;
     
     void updateResourceMonitoring(float dt);
-    void sampleSystemResources();
 };

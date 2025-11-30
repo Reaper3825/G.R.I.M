@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <nlohmann/json.hpp>
 #include <Windows.h>
+#include <filesystem>
 #include "ui_training_panel.hpp"
 #include "ui_slider.hpp"
 #include "ui_graph.hpp"
@@ -43,12 +44,14 @@ UITrainingPanel::UITrainingPanel()
       leftPanelContentHeight(0.0f),
       leftPanelScrolling(false),
       maxLossHistory(500),
-      collectionAnimTime(0.0f)  // Initialize collection animation timer
+      collectionAnimTime(0.0f),  // Initialize collection animation timer
+      datasetUpdateTimer(0.0f),  // Initialize dataset update timer
+      datasetUpdateInterval(2.0f)  // Update dataset info every 2 seconds
 
     //Panel initialization
 {
     position = { 250, 500 };  //default position
-    size = { 1250, 1000 };   //default size
+    size = { 1350, 1100 };   //default size
     setVisible(false);
     setBackground(0xE0181818);
     
@@ -253,17 +256,17 @@ UITrainingPanel::UITrainingPanel()
     trainingProgressBar->setFillColor(0xFF00AA00);
     trainingProgressBar->setBackgroundColor(0xFF1A1A1A);
     
-    collectionProgressBar = std::make_shared<UIProgressBar>("Data Collection Progress", 1.0f);
+    collectionProgressBar = std::make_shared<UIProgressBar>("Data Collection ", 1.0f);
     collectionProgressBar->setFillColor(0xFF00AAFF);  // Cyan color for collection
     collectionProgressBar->setBackgroundColor(0xFF1A1A1A);
     
     // Initialize resource monitoring graph
     resourceMonitorGraph = std::make_shared<UIGraph>("System Resources", GraphType::Area);
     resourceSampleTimer = 0.0f;
-    resourceSampleInterval = 0.5f;  // Sample every 500ms
+    resourceSampleInterval = 1.0f;  // Sample every 1000ms
     resourceSampleCount = 0;
-    maxResourceSamples = 60;  // Keep 30 seconds of history (60 samples * 0.5s)
-    
+    maxResourceSamples = 30;  // Keep 30 seconds of history (30 samples * 1s)
+
     // Configure graph appearance
     GraphConfig& graphConfig = resourceMonitorGraph->getConfig();
     graphConfig.showGrid = true;
@@ -289,13 +292,17 @@ UITrainingPanel::UITrainingPanel()
     resourceMonitorGraph->addSeries("Memory", {}, 0xFF00FF00);   // Green
     resourceMonitorGraph->addSeries("GPU", {}, 0xFFFF6600);      // Orange
     
+    // Initialize the resource monitor singleton
+    ResourceMonitor::getInstance().initialize();
+    
     // Update hardware info and estimate
     updateHardwareInfo();
     calculateTrainingEstimate();
-    updateDatasetSize();
-    updateCheckpointStats();
+    // Don't call these in constructor - they're expensive
+    // updateDatasetSize();
+    // updateCheckpointStats();
     
-    addLog("Training panel initialized", 0);
+
 }
 
 UITrainingPanel::~UITrainingPanel() {
@@ -368,8 +375,6 @@ void UITrainingPanel::update(const InputState& input, float dt) {
     if (resetStatusButton) resetStatusButton->update(input, dt);
     if (addSourceButton) addSourceButton->update(input, dt);
     if (collectDataButton) collectDataButton->update(input, dt);
-    
-    // Update source input
     if (sourceUrlInput) sourceUrlInput->update(input, dt);
     
     // Update training data path input and save if changed
@@ -409,6 +414,19 @@ void UITrainingPanel::update(const InputState& input, float dt) {
             }
         }
     }
+    
+    // Throttle expensive file I/O operations (only update every 2 seconds)
+    datasetUpdateTimer += dt;
+    if (datasetUpdateTimer >= datasetUpdateInterval) {
+        datasetUpdateTimer = 0.0f;
+        requestDatasetSnapshot();
+    }
+
+    if (datasetSizeInfo.empty() && !datasetSnapshotInFlight.load()) {
+        requestDatasetSnapshot();
+    }
+
+    applyPendingDatasetSnapshot();
 }
 
 void UITrainingPanel::pollServer() {
@@ -1032,38 +1050,24 @@ void UITrainingPanel::startTrainingSession() {
         trainingProgressBar->setValue(0.0f);
     }
     
-    // Check if training data exists (should be created by DataCollection pipeline)
-    std::string trainBinPath = "resources/models/GRIM-text/training/data/tokenized/train.bin";
+    // Check if training data exists (.grmt is current format, .bin is deprecated)
     std::string grmtPath = "resources/models/GRIM-text/training/data/training_data.grmt";
     
-    std::ifstream checkBin(trainBinPath, std::ios::binary | std::ios::ate);
     std::ifstream checkGrmt(grmtPath, std::ios::binary | std::ios::ate);
-    
-    bool hasTrainBin = checkBin.is_open() && checkBin.tellg() > 0;
     bool hasGrmt = checkGrmt.is_open() && checkGrmt.tellg() > 0;
-    
-    checkBin.close();
     checkGrmt.close();
     
-    if (!hasTrainBin && !hasGrmt) {
+    if (!hasGrmt) {
         addLog("ERROR: No training data found!", 2);
         addLog("Please run DataCollection pipeline first to generate training data.", 2);
-        addLog("Expected files:", 1);
-        addLog("  - " + trainBinPath, 1);
-        addLog("  - " + grmtPath, 1);
+        addLog("Expected file: " + grmtPath, 1);
         currentState = Control::TrainingState_Idle;
         return;
     }
     
     addLog("Training data found, starting training...", 0);
-    // Prefer tokenized .bin files (native format for train_gpu.exe)
-    if (hasTrainBin) {
-        addLog("  Using tokenized binary: " + trainBinPath, 0);
-        currentConfig.dataPath = "data/tokenized/train.bin";  // Relative to training/ dir
-    } else if (hasGrmt) {
-        addLog("  Using GRMT data: " + grmtPath, 0);
-        currentConfig.dataPath = "data/training_data.grmt";  // Relative to training/ dir
-    }
+    addLog("  Using GRMT data: " + grmtPath, 0);
+    currentConfig.dataPath = "data/training_data.grmt";  // Relative to training/ dir
     
     // Load vocab and output paths from ai_config.json
     GRIM::Config::GrimTextPaths paths;
@@ -1214,14 +1218,13 @@ void UITrainingPanel::addLog(const std::string& message, int level) {
         logEntries.erase(logEntries.begin());
     }
     
-    // Also write to grim.log file for TTS system
-    if (level == 0) {
-        LOG_DEBUG("TrainingPanel", message);
-    } else if (level == 1) {
+    // Reduce file I/O overhead - only log warnings and errors
+    if (level == 1) {
         LOG_TRACE("TrainingPanel", message);
-    } else {
+    } else if (level == 2) {
         LOG_ERROR("TrainingPanel", message);
     }
+    // Skip level 0 (info) to reduce disk writes
 }
 
 std::string UITrainingPanel::getStateString(Control::TrainingState state) const {
@@ -1565,72 +1568,67 @@ void UITrainingPanel::startDataCollection() {
 }
 
 void UITrainingPanel::updateDatasetSize() {
-    // Load training data path from ai_config.json
-    GRIM::Config::GrimTextPaths paths;
-    if (!GRIM::Config::loadGrimTextPaths(paths)) {
-        datasetSizeInfo = "Dataset: Config error";
-        addLog("Failed to load paths from ai_config.json", 1);
-        return;
-    }
-    
-    std::string grmtPath = paths.training_data;
-    
-    try {
-        if (std::filesystem::exists(grmtPath)) {
-            auto fileSize = std::filesystem::file_size(grmtPath);
-            
-            // Format size in human-readable format
-            std::stringstream ss;
-            if (fileSize >= 1024 * 1024 * 1024) {
-                ss << std::fixed << std::setprecision(2) << (fileSize / (1024.0 * 1024.0 * 1024.0)) << " GB";
-            } else if (fileSize >= 1024 * 1024) {
-                ss << std::fixed << std::setprecision(2) << (fileSize / (1024.0 * 1024.0)) << " MB";
-            } else if (fileSize >= 1024) {
-                ss << std::fixed << std::setprecision(2) << (fileSize / 1024.0) << " KB";
-            } else {
-                ss << fileSize << " bytes";
-            }
-            
-            datasetSizeInfo = "Dataset: " + ss.str();
-            
-            // Estimate number of samples based on file size
-            // Rough estimate: ~2KB per training sample in .grmt format
-            int estimatedSamples = static_cast<int>(fileSize / 2048);
-            datasetSizeInfo += " (~" + std::to_string(estimatedSamples) + " samples)";
-            
-        } else {
-            datasetSizeInfo = "Dataset: Not found";
-        }
-    } catch (const std::exception& e) {
-        datasetSizeInfo = "Dataset: Error reading size";
-        addLog(std::string("Error reading dataset size: ") + e.what(), 1);
-    }
+    datasetSizeInfo = readDatasetSizeSnapshot();
 }
 
 void UITrainingPanel::updateCheckpointStats() {
-    // Count checkpoint files and get latest one
+    checkpointStatsInfo = readCheckpointStatsSnapshot();
+}
+
+std::string UITrainingPanel::readDatasetSizeSnapshot() {
+    GRIM::Config::GrimTextPaths paths;
+    if (!GRIM::Config::loadGrimTextPaths(paths)) {
+        addLog("Failed to load paths from ai_config.json", 1);
+        return "Dataset: Config error";
+    }
+
+    const std::string grmtPath = paths.training_data;
+    try {
+        if (std::filesystem::exists(grmtPath)) {
+            auto fileSize = std::filesystem::file_size(grmtPath);
+
+            std::stringstream ss;
+            if (fileSize >= 1024ull * 1024ull * 1024ull) {
+                ss << std::fixed << std::setprecision(2)
+                   << (fileSize / (1024.0 * 1024.0 * 1024.0)) << " GB";
+            } else if (fileSize >= 1024ull * 1024ull) {
+                ss << std::fixed << std::setprecision(2)
+                   << (fileSize / (1024.0 * 1024.0)) << " MB";
+            } else if (fileSize >= 1024ull) {
+                ss << std::fixed << std::setprecision(2)
+                   << (fileSize / 1024.0) << " KB";
+            } else {
+                ss << fileSize << " bytes";
+            }
+
+            std::string info = "Dataset: " + ss.str();
+            int estimatedSamples = static_cast<int>(fileSize / 2048);
+            info += " (~" + std::to_string(estimatedSamples) + " samples)";
+            return info;
+        }
+        return "Dataset: Not found";
+    } catch (const std::exception& e) {
+        addLog(std::string("Error reading dataset size: ") + e.what(), 1);
+        return "Dataset: Error reading size";
+    }
+}
+
+std::string UITrainingPanel::readCheckpointStatsSnapshot() {
     std::string checkpointDir = getResourcePath() + "/models/GRIM-text/DataCollection/data";
-    
     try {
         if (!std::filesystem::exists(checkpointDir)) {
-            checkpointStatsInfo = "Raw Data: No checkpoints";
-            return;
+            return "Raw Data: No checkpoints";
         }
-        
-        int totalCheckpoints = 0;
+
         int totalEntries = 0;
         uintmax_t totalSize = 0;
         std::filesystem::path latestCheckpoint;
         std::filesystem::file_time_type latestTime;
         bool hasCheckpoints = false;
-        
-        // Scan all checkpoint files
+
         for (const auto& entry : std::filesystem::directory_iterator(checkpointDir)) {
-            if (entry.is_regular_file() && entry.path().filename().string().find("checkpoint_") == 0) {
-                totalCheckpoints++;
+            if (entry.is_regular_file() && entry.path().filename().string().rfind("checkpoint_", 0) == 0) {
                 totalSize += entry.file_size();
-                
-                // Track latest checkpoint
                 auto modTime = entry.last_write_time();
                 if (!hasCheckpoints || modTime > latestTime) {
                     latestTime = modTime;
@@ -1639,36 +1637,65 @@ void UITrainingPanel::updateCheckpointStats() {
                 }
             }
         }
-        
+
         if (!hasCheckpoints) {
-            checkpointStatsInfo = "Raw Data: No checkpoints";
-            return;
+            return "Raw Data: No checkpoints";
         }
-        
-        // Count entries in latest checkpoint (JSONL format - one line per entry)
+
         std::ifstream latestFile(latestCheckpoint);
         if (latestFile.is_open()) {
             totalEntries = std::count(std::istreambuf_iterator<char>(latestFile),
-                                     std::istreambuf_iterator<char>(), '\n');
+                                      std::istreambuf_iterator<char>(), '\n');
             latestFile.close();
         }
-        
-        // Format the stats string
+
         std::stringstream ss;
         ss << "Raw Data: " << totalEntries << " entries";
-        
-        // Add size info
-        if (totalSize >= 1024 * 1024) {
-            ss << " (" << std::fixed << std::setprecision(1) << (totalSize / (1024.0 * 1024.0)) << " MB)";
-        } else if (totalSize >= 1024) {
-            ss << " (" << std::fixed << std::setprecision(1) << (totalSize / 1024.0) << " KB)";
+        if (totalSize >= 1024ull * 1024ull) {
+            ss << " (" << std::fixed << std::setprecision(1)
+               << (totalSize / (1024.0 * 1024.0)) << " MB)";
+        } else if (totalSize >= 1024ull) {
+            ss << " (" << std::fixed << std::setprecision(1)
+               << (totalSize / 1024.0) << " KB)";
         }
-        
-        checkpointStatsInfo = ss.str();
-        
+        return ss.str();
     } catch (const std::exception& e) {
-        checkpointStatsInfo = "Raw Data: Error reading checkpoints";
         addLog(std::string("Error reading checkpoint stats: ") + e.what(), 1);
+        return "Raw Data: Error reading checkpoints";
+    }
+}
+
+void UITrainingPanel::requestDatasetSnapshot() {
+    if (datasetSnapshotInFlight.exchange(true))
+        return;
+
+    std::thread([this]() {
+        DatasetSnapshotResult snapshot;
+        snapshot.datasetInfo = readDatasetSizeSnapshot();
+        snapshot.checkpointInfo = readCheckpointStatsSnapshot();
+
+        {
+            std::lock_guard<std::mutex> lock(datasetSnapshotMutex);
+            pendingDatasetSnapshot = std::move(snapshot);
+        }
+
+        datasetSnapshotInFlight.store(false);
+    }).detach();
+}
+
+void UITrainingPanel::applyPendingDatasetSnapshot() {
+    std::optional<DatasetSnapshotResult> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(datasetSnapshotMutex);
+        if (!pendingDatasetSnapshot.has_value())
+            return;
+        snapshot = std::move(pendingDatasetSnapshot);
+        pendingDatasetSnapshot.reset();
+    }
+
+    if (snapshot) {
+        datasetSizeInfo = snapshot->datasetInfo;
+        checkpointStatsInfo = snapshot->checkpointInfo;
     }
 }
 
@@ -1696,154 +1723,44 @@ void UITrainingPanel::updateResourceMonitoring(float dt) {
     
     if (resourceSampleTimer >= resourceSampleInterval) {
         resourceSampleTimer = 0.0f;
-        sampleSystemResources();
-    }
-}
-
-void UITrainingPanel::sampleSystemResources() {
-    float cpuUsage = 0.0f;
-    float memoryUsage = 0.0f;
-    float gpuUsage = 0.0f;
-    
-#ifdef _WIN32
-    // Get CPU usage (simple approximation based on thread activity)
-    // For a more accurate measurement, you'd need to use PDH (Performance Data Helper) API
-    // This is a simplified version
-    static ULARGE_INTEGER lastCPU, lastSysCPU, lastUserCPU;
-    static int numProcessors = 0;
-    static bool initialized = false;
-    
-    if (!initialized) {
-        SYSTEM_INFO sysInfo;
-        GetSystemInfo(&sysInfo);
-        numProcessors = sysInfo.dwNumberOfProcessors;
         
-        FILETIME ftime, fsys, fuser;
-        GetSystemTimeAsFileTime(&ftime);
-        memcpy(&lastCPU, &ftime, sizeof(FILETIME));
+        // Update the resource monitor
+        ResourceMonitor::getInstance().update();
         
-        HANDLE self = GetCurrentProcess();
-        GetProcessTimes(self, &ftime, &ftime, &fsys, &fuser);
-        memcpy(&lastSysCPU, &fsys, sizeof(FILETIME));
-        memcpy(&lastUserCPU, &fuser, sizeof(FILETIME));
+        // Get current resource usage
+        ResourceUsage usage = ResourceMonitor::getInstance().getCurrentUsage();
         
-        initialized = true;
-    }
-    
-    FILETIME ftime, fsys, fuser;
-    ULARGE_INTEGER now, sys, user;
-    
-    GetSystemTimeAsFileTime(&ftime);
-    memcpy(&now, &ftime, sizeof(FILETIME));
-    
-    HANDLE self = GetCurrentProcess();
-    GetProcessTimes(self, &ftime, &ftime, &fsys, &fuser);
-    memcpy(&sys, &fsys, sizeof(FILETIME));
-    memcpy(&user, &fuser, sizeof(FILETIME));
-    
-    double percent = 0.0;
-    if (now.QuadPart - lastCPU.QuadPart > 0) {
-        percent = (sys.QuadPart - lastSysCPU.QuadPart) + (user.QuadPart - lastUserCPU.QuadPart);
-        percent /= (now.QuadPart - lastCPU.QuadPart);
-        percent /= numProcessors;
-        percent *= 100.0;
-    }
-    
-    lastCPU = now;
-    lastUserCPU = user;
-    lastSysCPU = sys;
-    
-    cpuUsage = static_cast<float>(percent);
-    
-    // Get memory usage
-    MEMORYSTATUSEX memInfo;
-    memInfo.dwLength = sizeof(MEMORYSTATUSEX);
-    if (GlobalMemoryStatusEx(&memInfo)) {
-        memoryUsage = static_cast<float>(memInfo.dwMemoryLoad);  // Already in percentage
-    }
-    
-    // Get GPU usage
-#ifdef WHISPER_USE_CUDA
-    if (g_systemInfo.hasGPU && g_systemInfo.hasCUDA) {
-        size_t free_mem = 0, total_mem = 0;
-        cudaError_t err = cudaMemGetInfo(&free_mem, &total_mem);
+        // Add data points to the graph
+        std::string label = std::to_string(resourceSampleCount);
         
-        if (err == cudaSuccess && total_mem > 0) {
-            size_t used_mem = total_mem - free_mem;
-            gpuUsage = 100.0f * (static_cast<float>(used_mem) / static_cast<float>(total_mem));
-        } else {
-            // CUDA call failed, estimate based on training state
-            if (currentState == Control::TrainingState_Training) {
-                gpuUsage = 65.0f + (rand() % 20);
-            } else if (currentState == Control::TrainingState_Collecting) {
-                gpuUsage = 15.0f + (rand() % 10);
-            } else {
-                gpuUsage = 5.0f + (rand() % 5);
-            }
+        // Update CPU series
+        cpuHistory.push_back(DataPoint(usage.cpuUsage, label));
+        if (cpuHistory.size() > static_cast<size_t>(maxResourceSamples)) {
+            cpuHistory.erase(cpuHistory.begin());
         }
-    } else {
-        // No CUDA, estimate based on training state
-        if (currentState == Control::TrainingState_Training) {
-            gpuUsage = 60.0f + (rand() % 25);
-        } else if (currentState == Control::TrainingState_Collecting) {
-            gpuUsage = 10.0f + (rand() % 10);
-        } else {
-            gpuUsage = 2.0f + (rand() % 3);
+        
+        // Update Memory series
+        memoryHistory.push_back(DataPoint(usage.memoryUsage, label));
+        if (memoryHistory.size() > static_cast<size_t>(maxResourceSamples)) {
+            memoryHistory.erase(memoryHistory.begin());
         }
-    }
-#else
-    // No CUDA support compiled in
-    if (g_systemInfo.hasGPU) {
-        // Estimate based on training state
-        if (currentState == Control::TrainingState_Training) {
-            gpuUsage = 60.0f + (rand() % 25);
-        } else if (currentState == Control::TrainingState_Collecting) {
-            gpuUsage = 10.0f + (rand() % 10);
-        } else {
-            gpuUsage = 2.0f + (rand() % 3);
+        
+        // Update GPU series
+        gpuHistory.push_back(DataPoint(usage.gpuUsage, label));
+        if (gpuHistory.size() > static_cast<size_t>(maxResourceSamples)) {
+            gpuHistory.erase(gpuHistory.begin());
         }
-    } else {
-        gpuUsage = 0.0f;  // No GPU available
+        
+        // Update the graph with new data
+        if (resourceMonitorGraph) {
+            resourceMonitorGraph->clearSeries();
+            resourceMonitorGraph->addSeries("CPU", cpuHistory, 0xFF00AAFF);      // Cyan
+            resourceMonitorGraph->addSeries("Memory", memoryHistory, 0xFF00FF00); // Green
+            resourceMonitorGraph->addSeries("GPU", gpuHistory, 0xFFFF6600);      // Orange
+        }
+        
+        resourceSampleCount++;
     }
-#endif
-    
-#endif
-    
-    // Clamp values to 0-100 range
-    cpuUsage = std::max(0.0f, std::min(100.0f, cpuUsage));
-    memoryUsage = std::max(0.0f, std::min(100.0f, memoryUsage));
-    gpuUsage = std::max(0.0f, std::min(100.0f, gpuUsage));
-    
-    // Add data points to the graph
-    std::string label = std::to_string(resourceSampleCount);
-    
-    // Update CPU series
-    cpuHistory.push_back(DataPoint(cpuUsage, label));
-    if (cpuHistory.size() > static_cast<size_t>(maxResourceSamples)) {
-        cpuHistory.erase(cpuHistory.begin());
-    }
-    
-    // Update Memory series
-    memoryHistory.push_back(DataPoint(memoryUsage, label));
-    if (memoryHistory.size() > static_cast<size_t>(maxResourceSamples)) {
-        memoryHistory.erase(memoryHistory.begin());
-    }
-    
-    // Update GPU series
-    gpuHistory.push_back(DataPoint(gpuUsage, label));
-    if (gpuHistory.size() > static_cast<size_t>(maxResourceSamples)) {
-        gpuHistory.erase(gpuHistory.begin());
-    }
-    
-    // Update the graph with new data
-    if (resourceMonitorGraph) {
-        resourceMonitorGraph->clearSeries();
-        resourceMonitorGraph->addSeries("CPU", cpuHistory, 0xFF00AAFF);      // Cyan
-        resourceMonitorGraph->addSeries("Memory", memoryHistory, 0xFF00FF00); // Green
-        resourceMonitorGraph->addSeries("GPU", gpuHistory, 0xFFFF6600);      // Orange
-    }
-    
-    resourceSampleCount++;
 }
 
 // ====================================================

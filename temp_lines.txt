@@ -1,0 +1,72 @@
+0001: // grim_flash_attention.cu - Flash Attention utility functions and helpers
+0002: 
+0003: #include "grim_flash_attention.hpp"
+0004: #include <cuda_runtime.h>
+0005: #include <algorithm>
+0006: #include <cmath>
+0007: 
+0008: namespace GRIM {
+0009: 
+0010: // Compute optimal block sizes based on sequence length and head dimension
+0011: // Tries to maximize occupancy while fitting in shared memory
+0012: void computeOptimalBlockSizes(
+0013:     int seq_len,
+0014:     int head_dim,
+0015:     int& block_size_q,
+0016:     int& block_size_kv
+0017: ) {
+0018:     // Get device properties
+0019:     cudaDeviceProp prop;
+0020:     cudaGetDeviceProperties(&prop, 0);
+0021:     
+0022:     const int max_shared_mem = prop.sharedMemPerBlock;
+0023:     
+0024:     // Estimate shared memory usage per block
+0025:     // Q_smem: BLOCK_Q * HEAD_DIM * sizeof(float)
+0026:     // K_smem: BLOCK_KV * HEAD_DIM * sizeof(float)
+0027:     // V_smem: BLOCK_KV * HEAD_DIM * sizeof(float)
+0028:     // S_smem: BLOCK_Q * BLOCK_KV * sizeof(float)
+0029:     // P_smem: BLOCK_Q * BLOCK_KV * sizeof(float)
+0030:     // dO_smem: BLOCK_Q * HEAD_DIM * sizeof(float)
+0031:     // dP_smem: BLOCK_Q * BLOCK_KV * sizeof(float)
+0032:     
+0033:     // Conservative estimate: leave 20% headroom
+0034:     const int usable_shared_mem = static_cast<int>(max_shared_mem * 0.8);
+0035:     
+0036:     // Try different block sizes and pick the largest that fits
+0037:     const int candidate_sizes[] = {48, 32};  // Optimized for speed/memory balance
+0038:     
+0039:     for (int size : candidate_sizes) {
+0040:         // Estimate memory usage (worst case for backward pass)
+0041:         const int q_mem = size * head_dim * sizeof(float);           // Q_smem
+0042:         const int kv_mem = 2 * size * head_dim * sizeof(float);      // K_smem + V_smem
+0043:         const int score_mem = 3 * size * size * sizeof(float);       // S_smem + P_smem + dP_smem
+0044:         const int do_mem = size * head_dim * sizeof(float);          // dO_smem
+0045:         
+0046:         const int total_mem = q_mem + kv_mem + score_mem + do_mem;
+0047:         
+0048:         if (total_mem <= usable_shared_mem) {
+0049:             block_size_q = size;
+0050:             block_size_kv = size;
+0051:             return;
+0052:         }
+0053:     }
+0054:     
+0055:     // Fallback to small blocks if nothing fits
+0056:     block_size_q = 32;
+0057:     block_size_kv = 32;
+0058: }
+0059: 
+0060: // Calculate workspace size needed for Flash Attention
+0061: size_t getFlashAttentionWorkspaceSize(const FlashAttentionConfig& config) {
+0062:     // Current implementation doesn't require workspace
+0063:     // Future optimizations might use workspace for:
+0064:     // - Storing intermediate softmax statistics
+0065:     // - Temporary buffers for reductions
+0066:     // - Pinned host memory for async transfers
+0067:     
+0068:     // For now, return 0
+0069:     return 0;
+0070: }
+0071: 
+0072: } // namespace GRIM

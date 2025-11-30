@@ -2,9 +2,6 @@
 #include <string>
 #include <vector>
 
-
-
-
 //wifi check
 extern bool g_wifiConnected;
 
@@ -81,6 +78,8 @@ struct SystemInfo {
     int monitorCount = 0;
     int totalScreenWidth = 0;   // full virtual desktop width
     int totalScreenHeight = 0;  // full virtual desktop height
+    int virtualOriginX = 0;     // top-left virtual desktop origin
+    int virtualOriginY = 0;
     std::vector<MonitorInfo> monitors; // per-monitor info
 };
 

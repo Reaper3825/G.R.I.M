@@ -2,6 +2,11 @@ import sys
 import json
 import argparse
 import os
+import importlib
+import inspect
+import traceback
+from typing import Optional, Tuple
+
 import torch
 from pathlib import Path
 
@@ -69,6 +74,141 @@ except (ImportError, AttributeError) as e:
     # Older PyTorch or missing TTS - will be caught below
     print(f"[Coqui XTTS] Warning during safe globals registration: {e}", file=sys.stderr, flush=True)
 
+def _ensure_generation_mixin():
+    """Make sure XTTS GPT inference models stay compatible with new transformers."""
+    try:
+        from transformers.generation import GenerationMixin
+    except ImportError as e:
+        print(f"[Coqui XTTS] Warning: transformers missing GenerationMixin ({e})", file=sys.stderr, flush=True)
+        return
+
+    def _patch_target(module_name, attr_name, alias_modules=()):
+        """Inject GenerationMixin dynamically for modules missing generate()."""
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            return False
+
+        cls = getattr(module, attr_name, None)
+        if cls is None or hasattr(cls, "generate"):
+            return False
+
+        patched_cls = type(
+            attr_name,
+            (GenerationMixin, cls),
+            {"__module__": cls.__module__},
+        )
+
+        setattr(module, attr_name, patched_cls)
+        for alias in alias_modules:
+            try:
+                alias_module = importlib.import_module(alias)
+                setattr(alias_module, attr_name, patched_cls)
+            except ImportError:
+                continue
+
+        return cls
+
+    patched = False
+    patched = _patch_target(
+        "TTS.tts.layers.xtts.gpt_inference",
+        "GPT2InferenceModel",
+        alias_modules=("TTS.tts.layers.xtts.gpt",),
+    ) or patched
+    patched = _patch_target("TTS.tts.layers.tortoise.autoregressive", "GPT2InferenceModel") or patched
+
+    if patched:
+        print(
+            "[Coqui XTTS] Injected GenerationMixin into GPT2InferenceModel for transformers>=4.56",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+def _ensure_forward_kwarg_compat():
+    """Transformers >=4.56 sends new kwargs; strip ones unsupported by Coqui models."""
+    def _patch(module_name, attr_name):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            return False
+        cls = getattr(module, attr_name, None)
+        if cls is None or getattr(cls, "_grim_kwarg_patch", False):
+            return False
+
+        try:
+            params = inspect.signature(cls.forward).parameters
+        except (TypeError, ValueError):
+            params = {}
+
+        accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        if accepts_kwargs:
+            return False
+
+        original_forward = cls.forward
+        allowed = {name for name in params.keys() if name not in ("self",)}
+        warned = set()
+
+        def forward(self, *args, **kwargs):
+            removed = []
+            for key in list(kwargs):
+                if key not in allowed:
+                    kwargs.pop(key, None)
+                    removed.append(key)
+            attn = kwargs.get("attention_mask")
+            if attn is None:
+                input_ids = kwargs.get("input_ids")
+                if torch.is_tensor(input_ids):
+                    kwargs["attention_mask"] = torch.ones_like(input_ids, dtype=torch.long)
+
+            if removed:
+                new_keys = [k for k in removed if k not in warned]
+                if new_keys:
+                    warned.update(new_keys)
+                    print(
+                        f"[Coqui XTTS] Ignoring unsupported forward kwargs: {', '.join(new_keys)}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+            return original_forward(self, *args, **kwargs)
+
+        cls.forward = forward
+        cls._grim_kwarg_patch = True
+        return True
+
+    patched = False
+    patched = _patch("TTS.tts.layers.xtts.gpt_inference", "GPT2InferenceModel") or patched
+    patched = _patch("TTS.tts.layers.tortoise.autoregressive", "GPT2InferenceModel") or patched
+
+    if patched:
+        print(
+            "[Coqui XTTS] Added forward kwarg shim for GPT2InferenceModel",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+_ensure_generation_mixin()
+_ensure_forward_kwarg_compat()
+
+def _disable_gpt_cache():
+    try:
+        from TTS.tts.layers.xtts.gpt import GPT
+    except ImportError:
+        return
+
+    original_generate = GPT.generate
+
+    def patched_generate(self, *args, **kwargs):
+        kwargs.setdefault("use_cache", False)
+        return original_generate(self, *args, **kwargs)
+
+    GPT.generate = patched_generate
+    print("[Coqui XTTS] Disabled GPT cache usage for transformers>=4.56 compatibility", file=sys.stderr, flush=True)
+
+
+_disable_gpt_cache()
+
 # Try to import TTS API - fallback gracefully if not available
 try:
     from TTS.api import TTS
@@ -112,6 +252,7 @@ VOICE_REFERENCES = {
     "default": "D:/G.R.I.M/resources/voices/default.wav",  # ✅ Default XTTS v2 voice
     "p225": None,  # Backward compatibility - maps to default
     "p226": "D:/G.R.I.M/resources/voices/p226_reference.wav",  # ✅ VCTK p226 male voice
+    "grim": "D:/G.R.I.M/resources/voices/grim_reference.wav",  # GRIM AI voice (multi-reference)
 }
 
 # ✅ NEW: Speaker embedding cache
@@ -176,6 +317,52 @@ def load_embedding(speaker_id, device="cpu", dtype=torch.float32):
         log(f"[Coqui XTTS] Failed to load embedding: {e}")
         return None, None
 
+
+def _is_valid_tensor(tensor: Optional[torch.Tensor], min_dims: int = 2) -> bool:
+    return (
+        tensor is not None
+        and torch.is_tensor(tensor)
+        and tensor.ndim >= min_dims
+        and tensor.numel() > 0
+    )
+
+
+def ensure_embedding(
+    speaker_id: str,
+    device: str,
+    dtype: torch.dtype,
+    model=None,
+    allow_create: bool = True,
+) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    """Load embedding or recreate it from reference audio if cache missing/corrupted."""
+    gpt_cond, spk_emb = load_embedding(speaker_id, device=device, dtype=dtype)
+    if _is_valid_tensor(gpt_cond, min_dims=3) and _is_valid_tensor(spk_emb, min_dims=2):
+        return gpt_cond, spk_emb
+
+    if not allow_create or model is None:
+        if gpt_cond is None:
+            log(f"[Coqui XTTS] No cached embedding for {speaker_id}")
+        else:
+            log(f"[Coqui XTTS] Cached embedding invalid for {speaker_id}, skipping regeneration (model unavailable)")
+        return None, None
+
+    ref_path = get_voice_reference(speaker_id)
+    if not ref_path:
+        log(f"[Coqui XTTS] Cannot regenerate embedding for {speaker_id} - no voice reference found")
+        return None, None
+
+    try:
+        log(f"[Coqui XTTS] Rebuilding embedding for {speaker_id} from {ref_path}...")
+        gpt_cond_latent, speaker_embedding = model.get_conditioning_latents(audio_path=ref_path)
+        gpt_cond_latent = gpt_cond_latent.to(device=device, dtype=dtype)
+        speaker_embedding = speaker_embedding.to(device=device, dtype=dtype)
+        save_embedding(speaker_id, gpt_cond_latent, speaker_embedding)
+        log(f"[Coqui XTTS] ✓ Rebuilt embedding for {speaker_id}")
+        return gpt_cond_latent, speaker_embedding
+    except Exception as rebuild_err:
+        log(f"[Coqui XTTS] Failed to rebuild embedding for {speaker_id}: {rebuild_err}")
+        return None, None
+
 def get_voice_reference(speaker_id):
     """
     Get voice reference audio path for speaker.
@@ -230,6 +417,8 @@ def persistent_loop(model_name, speaker, use_gpu=True):
         tts = TTS(model_name).to(device)
         
         log(f"[Coqui XTTS] Model loaded successfully")
+
+        tts_model = tts.synthesizer.tts_model if hasattr(tts, "synthesizer") else None
         
         # ============================================
         # ✅ OPTIMIZATION: FP16 + torch.compile() + GPU Settings
@@ -237,8 +426,8 @@ def persistent_loop(model_name, speaker, use_gpu=True):
         model_dtype = torch.float32  # Track model precision for embeddings
         use_fp16 = False  # Track if FP16 is successfully enabled
         
-        if device == "cuda":
-            model = tts.synthesizer.tts_model
+        if device == "cuda" and tts_model is not None:
+            model = tts_model
             
             # Optimization: torch.compile() JIT (1.3-1.8x speedup)
             # Note: Requires triton (Linux only), will skip on Windows
@@ -278,11 +467,17 @@ def persistent_loop(model_name, speaker, use_gpu=True):
         # Warm up model with dummy synthesis
         log("[Coqui XTTS] Starting model warm-up...")
         try:
-            dummy_gpt, dummy_spk = load_embedding("default", device, dtype=model_dtype)
+            dummy_gpt, dummy_spk = ensure_embedding(
+                "default",
+                device=device,
+                dtype=model_dtype,
+                model=tts_model,
+                allow_create=True,
+            )
             
-            if dummy_gpt is not None and hasattr(tts, 'synthesizer'):
+            if dummy_gpt is not None and tts_model is not None:
                 log("[Coqui XTTS] Dummy embedding loaded, running warm-up inference...")
-                model = tts.synthesizer.tts_model
+                model = tts_model
                 
                 # ⚡ Important: Do a full inference to warm up all code paths
                 _ = model.inference(
@@ -294,8 +489,8 @@ def persistent_loop(model_name, speaker, use_gpu=True):
                 log("[Coqui XTTS] ✓ Model warmed up successfully (CUDA kernels initialized)")
             else:
                 if dummy_gpt is None:
-                    log("[Coqui XTTS] ⚠ No default embedding found - skipping warm-up")
-                    log("[Coqui XTTS] Run: python scripts/create_default_embedding.py")
+                    log("[Coqui XTTS] ⚠ No default embedding available - skipping warm-up")
+                    log("[Coqui XTTS] Run: python scripts/create_default_embedding.py (optional)")
                 else:
                     log("[Coqui XTTS] ⚠ Model API not accessible - skipping warm-up")
         except Exception as e:
@@ -347,7 +542,9 @@ def persistent_loop(model_name, speaker, use_gpu=True):
 
                 try:
                     # Create output directory if needed
-                    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                    out_dir = os.path.dirname(out_path)
+                    if out_dir:
+                        os.makedirs(out_dir, exist_ok=True)
                     
                     if is_xtts:
                         # ✅ XTTS v2 synthesis with speaker embeddings
@@ -370,7 +567,13 @@ def persistent_loop(model_name, speaker, use_gpu=True):
                         speaker_embedding = None
                         
                         if use_embedding:
-                            gpt_cond_latent, speaker_embedding = load_embedding(spk, device, dtype=model_dtype)
+                            gpt_cond_latent, speaker_embedding = ensure_embedding(
+                                spk,
+                                device=device,
+                                dtype=model_dtype,
+                                model=tts_model,
+                                allow_create=False,
+                            )
                         
                         # ✅ FIX: Use cached embedding if available
                         if gpt_cond_latent is not None and speaker_embedding is not None:
@@ -380,8 +583,9 @@ def persistent_loop(model_name, speaker, use_gpu=True):
                             
                             try:
                                 # Direct synthesis with pre-computed embeddings (0.5-1s)
-                                if hasattr(tts, 'synthesizer') and hasattr(tts.synthesizer, 'tts_model'):
-                                    model = tts.synthesizer.tts_model
+                                if tts_model is not None:
+                                    model = tts_model
+                                    log(f"[Coqui XTTS] Fast path model: {type(model).__name__}")
                                     
                                     # Time the inference
                                     t_inference_start = time.time()
@@ -393,6 +597,7 @@ def persistent_loop(model_name, speaker, use_gpu=True):
                                         gpt_cond_latent=gpt_cond_latent,
                                         speaker_embedding=speaker_embedding
                                     )
+                                    log(f"[Coqui XTTS] Fast path inference output type: {type(wav)}")
                                     
                                     t_inference = time.time() - t_inference_start
                                     
@@ -403,7 +608,11 @@ def persistent_loop(model_name, speaker, use_gpu=True):
                                     
                                     # ✅ FIX: Handle different wav formats
                                     if isinstance(wav, dict):
-                                        wav = wav['wav']
+                                        log(f"[Coqui XTTS] Fast path dict keys: {list(wav.keys())}")
+                                        wav = wav.get('wav')
+                                    
+                                    if wav is None:
+                                        raise RuntimeError("XTTS fast path returned no waveform")
                                     
                                     if torch.is_tensor(wav):
                                         wav = wav.cpu().numpy()
@@ -430,6 +639,7 @@ def persistent_loop(model_name, speaker, use_gpu=True):
                                     )
                             except Exception as e:
                                 log(f"[Coqui XTTS] Fast synthesis failed: {e}, trying fallback")
+                                log(traceback.format_exc())
                                 
                                 # ✅ NEW: Send "hold on" message for AI to announce
                                 # This lets GRIM know we're falling back to slow synthesis
@@ -461,8 +671,8 @@ def persistent_loop(model_name, speaker, use_gpu=True):
                                 # ✅ NEW: After slow synthesis, cache the embedding for next time
                                 try:
                                     log(f"[Coqui XTTS] Caching embedding for future use...")
-                                    if hasattr(tts, 'synthesizer') and hasattr(tts.synthesizer, 'tts_model'):
-                                        model = tts.synthesizer.tts_model
+                                    if tts_model is not None and hasattr(tts_model, 'get_conditioning_latents'):
+                                        model = tts_model
                                         
                                         # Compute and save embedding
                                         gpt_cond, spk_emb = model.get_conditioning_latents(
@@ -494,6 +704,7 @@ def persistent_loop(model_name, speaker, use_gpu=True):
                                     
                             except Exception as e:
                                 log(f"[Coqui XTTS] Synthesis error: {type(e).__name__}: {str(e)}")
+                                log(traceback.format_exc())
                                 raise
                             
                     else:
@@ -544,8 +755,8 @@ def persistent_loop(model_name, speaker, use_gpu=True):
                 try:
                     log(f"[Coqui XTTS] Creating embedding for {speaker_id} from {ref_path}")
                     
-                    if hasattr(tts, 'synthesizer') and hasattr(tts.synthesizer, 'tts_model'):
-                        model = tts.synthesizer.tts_model
+                    if tts_model is not None:
+                        model = tts_model
                         
                         # Compute embedding from reference audio
                         gpt_cond_latent, speaker_embedding = model.get_conditioning_latents(

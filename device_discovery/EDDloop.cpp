@@ -1,0 +1,1 @@
+//loop for external device discovery using Nmap to identify devices on the network. This file contains the implementation of the main loop that continuously scans the network for devices and updates the internal device list accordingly. it also holds the entry point for external device discovery.

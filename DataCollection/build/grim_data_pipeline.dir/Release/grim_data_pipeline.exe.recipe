@@ -2,10 +2,10 @@
 <Project>
   <ProjectOutputs>
     <ProjectOutput>
-      <FullPath>D:\G.R.I.M\resources\models\GRIM-text\DataCollection\build\x64\Release\ZERO_CHECK</FullPath>
+      <FullPath>D:\G.R.I.M\DataCollection\build\x64\Release\ZERO_CHECK</FullPath>
     </ProjectOutput>
     <ProjectOutput>
-      <FullPath>D:\G.R.I.M\resources\models\GRIM-text\DataCollection\build\Release\grim_data_pipeline.exe</FullPath>
+      <FullPath>D:\G.R.I.M\DataCollection\build\Release\grim_data_pipeline.exe</FullPath>
     </ProjectOutput>
   </ProjectOutputs>
   <ContentFiles />

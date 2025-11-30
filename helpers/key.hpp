@@ -2,7 +2,6 @@
 #include <unordered_map>
 #include <vector>
 #include <functional>
-#include <windows.h>
 
 // =====================================================
 // Comprehensive keyboard key enumeration for GRIM
@@ -84,6 +83,7 @@ public:
     static void initialize();   // start listening
     static void shutdown();     // stop listening
     static void endFrame();
+    static void updateFromInput(const struct InputState& input);
 
     static bool isDown(KeyCode code);
     static bool wasPressed(KeyCode code);
@@ -103,9 +103,6 @@ private:
     };
 
     static std::unordered_map<KeyCode, KeyState> keyStates;
-    static HHOOK keyboardHook;
-
-    static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
     static void setDown(KeyCode code);
     static void setUp(KeyCode code);
 };

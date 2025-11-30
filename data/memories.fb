@@ -35,17 +35,17 @@
       "context": "monitor",
       "id": "",
       "intent": "inform",
-      "normalized": "Significant screen change detected (20% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: GRIM Overlay (GRIM.exe)\nScene: Desktop | Theme: Dark\nText: N\nfe\nQ\n\n>eePrRdyvyE\n\n= &\n\nFile\n\nEdit Selection View Go Run\n\nEXPLORER. oo\n\n\\ GRLLM (WORKSPACE)\nVv GRIM .\n\ndocs\nexternal e\nexternal_collector\n\ngrim-node-editor\n\nhelpers\n\nlogs\n\nmemory\n\nmodels\n\nnet\n\nnip\n\nopenal-soft\n\nosint\n\nout\n\nperception\n\nplugins\n\npopup_ui\n\nresources .\nscripts\n\n‘STEM\n\n> Stock\n\n> TrainingServer_Scripts\n\nvu\n\n© console_panel.cpp\n© console_panel.hpp\n\n© embedded_shader.cpp\n\n© overlay_renderer.cpp\n\n© overlay_rendererhpp\n\n¥ trainingprogressproblem.md\n© ui_button.pp\n\n© ui_button... (2710 total chars)\n",
-      "raw": "Significant screen change detected (20% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: GRIM Overlay (GRIM.exe)\nScene: Desktop | Theme: Dark\nText: N\nfe\nQ\n\n>eePrRdyvyE\n\n= &\n\nFile\n\nEdit Selection View Go Run\n\nEXPLORER. oo\n\n\\ GRLLM (WORKSPACE)\nVv GRIM .\n\ndocs\nexternal e\nexternal_collector\n\ngrim-node-editor\n\nhelpers\n\nlogs\n\nmemory\n\nmodels\n\nnet\n\nnip\n\nopenal-soft\n\nosint\n\nout\n\nperception\n\nplugins\n\npopup_ui\n\nresources .\nscripts\n\n‘STEM\n\n> Stock\n\n> TrainingServer_Scripts\n\nvu\n\n© console_panel.cpp\n© console_panel.hpp\n\n© embedded_shader.cpp\n\n© overlay_renderer.cpp\n\n© overlay_rendererhpp\n\n¥ trainingprogressproblem.md\n© ui_button.pp\n\n© ui_button... (2710 total chars)\n",
+      "normalized": "Significant screen change detected (33% change)\n\nScreen 1920x1080 (Monitor 2 of 3)\nActive: popup_window.cpp - G.R.I.M (Workspace) - Visual Studio Code [Administrator] (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: eS )\noe\n\neee rags VE DL\n\nfs\n\nFile Edit Selection View Go Run Terminal\n\nEXPLORER.\n\n‘Y GRIM (WORKSPACE)\nv GRIM .\n> osint\n> out\n> perception .\n> plugins\nY popup_ui .\n© pop_uipp\n© popup_anim.cpp\n© popup_animhpp\n© popup_renderer.cpp\nG\nG\ne\nG\nV resources .\n> dejavu-fonts-ttf-2.37\n> fonts\n\npopup_renderer.hpp\n\npopup_uihpp\npopup_window.cpp\n\n=\n\npopup_window.hpp\n\nVv models .\n© GRIM-text\n> archive\n> checkpoints\n‘v OUTLINE\n\nNo symbols found in document ‘popup_window.cpp\"\n\n\\V TIMELINE popup. window.... (2282 total chars)\n",
+      "raw": "Significant screen change detected (33% change)\n\nScreen 1920x1080 (Monitor 2 of 3)\nActive: popup_window.cpp - G.R.I.M (Workspace) - Visual Studio Code [Administrator] (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: eS )\noe\n\neee rags VE DL\n\nfs\n\nFile Edit Selection View Go Run Terminal\n\nEXPLORER.\n\n‘Y GRIM (WORKSPACE)\nv GRIM .\n> osint\n> out\n> perception .\n> plugins\nY popup_ui .\n© pop_uipp\n© popup_anim.cpp\n© popup_animhpp\n© popup_renderer.cpp\nG\nG\ne\nG\nV resources .\n> dejavu-fonts-ttf-2.37\n> fonts\n\npopup_renderer.hpp\n\npopup_uihpp\npopup_window.cpp\n\n=\n\npopup_window.hpp\n\nVv models .\n© GRIM-text\n> archive\n> checkpoints\n‘v OUTLINE\n\nNo symbols found in document ‘popup_window.cpp\"\n\n\\V TIMELINE popup. window.... (2282 total chars)\n",
       "source": "grim.internal",
       "tags": [
         "visual-context",
         "screen-capture",
-        "Desktop",
-        "GRIM.exe",
-        "monitor-1"
+        "IDE/Code Editor",
+        "Code.exe",
+        "monitor-2"
       ],
-      "timestamp": 1762978869,
+      "timestamp": 1763609102,
       "type": "event"
     }
   ]

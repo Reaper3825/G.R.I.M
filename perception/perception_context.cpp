@@ -13,6 +13,7 @@
 #include <thread> // ✅ For continuous capture thread
 #include <mutex>  // ✅ For thread-safe context access
 #include <chrono> // ✅ For timing
+#include <atomic> // ✅ For async Vision AI init guard
 
 #ifdef _WIN32
 #include <windows.h>
@@ -29,6 +30,23 @@ namespace GRIM {
 namespace Perception {
 
 std::unique_ptr<PerceptionContextManager> g_contextManager = nullptr;
+
+// Helper to start Vision AI initialization once in the background
+namespace {
+    void startVisionAIInitAsync(VisionAIBackend backend) {
+        static std::atomic<bool> initScheduled{ false };
+        bool expected = false;
+        if (!initScheduled.compare_exchange_strong(expected, true)) {
+            return; // already scheduled
+        }
+
+        std::thread([backend]() {
+            LOG_DEBUG("PerceptionContext", "Vision AI initialization started (async)");
+            initVisionAI(backend);
+            LOG_DEBUG("PerceptionContext", "Vision AI initialization finished");
+        }).detach();
+    }
+}
 
 // Convert scene type to string
 static std::string sceneTypeToString(VisualContext::SceneType type) {
@@ -209,10 +227,13 @@ bool PerceptionContextManager::init() {
     // ✅ Initialize multi-monitor support
     GRIM::Perception::initMultiMonitor();
     
-    // ✅ Initialize Vision AI system for screen understanding
-    // Using ONNX backend for fast local inference (150ms vs 10-30s with Ollama)
-    initVisionAI(VisionAIBackend::ONNX_Vision);
-    LOG_DEBUG("PerceptionContext", "Vision AI initialized with ONNX backend");
+    // ✅ Initialize Vision AI system for screen understanding (on-demand)
+    if (pImpl->featureVisionAI && pImpl->captureConfig.useVisionAI) {
+        LOG_DEBUG("PerceptionContext", "Starting Vision AI initialization (ONNX backend) due to capture config");
+        startVisionAIInitAsync(VisionAIBackend::ONNX_Vision);
+    } else {
+        LOG_DEBUG("PerceptionContext", "Vision AI initialization deferred (useVisionAI=false or feature disabled)");
+    }
     
     // Initialize monitor context cache
     int monitorCount = GRIM::Perception::getMonitorCount();
@@ -533,6 +554,11 @@ void PerceptionContextManager::detectObjects(VisualContext& ctx) {
 void PerceptionContextManager::analyzeWithVisionAI(VisualContext& ctx) {
     if (ctx.screenshot.empty()) {
         return;
+    }
+    
+    if (!g_visionAI) {
+        LOG_DEBUG("PerceptionContext", "Vision AI requested - scheduling backend initialization");
+        startVisionAIInitAsync(VisionAIBackend::ONNX_Vision);
     }
     
     // Check if vision AI is available
@@ -1009,6 +1035,11 @@ void PerceptionContextManager::startContinuousCapture(const ContinuousCaptureCon
     pImpl->captureConfig = config;
     pImpl->currentFrame = 0;
     pImpl->lastCaptureTimePoint = std::chrono::steady_clock::now();
+
+    if (config.useVisionAI && pImpl->featureVisionAI) {
+        LOG_DEBUG("PerceptionContext", "Continuous capture requested Vision AI - initializing backend");
+        startVisionAIInitAsync(VisionAIBackend::ONNX_Vision);
+    }
     
     m_captureThreadRunning = true;
     m_captureThread = std::make_unique<std::thread>(&PerceptionContextManager::continuousCaptureThread, this);

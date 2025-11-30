@@ -36,8 +36,12 @@ file(GLOB PERCEPTION_SOURCES "perception/*.cpp")
 file(GLOB PERCEPTION_HEADERS "perception/*.hpp")
 file(GLOB VISION_SOURCES "vision/*.cpp")
 file(GLOB VISION_HEADERS "vision/*.hpp")
+file(GLOB REWARD_LEARNING_SOURCES "Reward_Learning/*.cpp")
+file(GLOB REWARD_LEARNING_HEADERS "Reward_Learning/*.hpp")
 file(GLOB DataCollection_SOURCES "DataCollection/*.cpp")
 file(GLOB DataCollection_HEADERS "DataCollection/*.hpp")
+file(GLOB hardware_SOURCES "hardware/*.cpp")
+file(GLOB hardware_HEADERS "hardware/*.hpp")
 # Exclude standalone entry point files (these have main() functions)
 list(FILTER DataCollection_SOURCES EXCLUDE REGEX "main_data_collection\\.cpp$")
 list(FILTER DataCollection_SOURCES EXCLUDE REGEX "merge_checkpoints\\.cpp$")
@@ -78,8 +82,10 @@ set(GRIM_SOURCES
     ${EXTERNAL_COLLECTOR_SOURCES}
     ${PERCEPTION_SOURCES}
     ${VISION_SOURCES}
+    ${REWARD_LEARNING_SOURCES}
     ${GRIM_GPU_SOURCES}
     ${DataCollection_SOURCES}
+    ${hardware_SOURCES}
 )
 
 set(GRIM_HEADERS
@@ -110,5 +116,7 @@ set(GRIM_HEADERS
     ${EXTERNAL_COLLECTOR_HEADERS}
     ${PERCEPTION_HEADERS}
     ${VISION_HEADERS}
+    ${REWARD_LEARNING_HEADERS}
     ${DataCollection_HEADERS}
+    ${hardware_HEADERS}
 )
