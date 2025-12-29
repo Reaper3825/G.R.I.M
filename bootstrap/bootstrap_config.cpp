@@ -103,7 +103,12 @@ void initAll() {
             // ✅ Initialize native GRIM backend if configured
             if (aiConfig.value("backend", "") == "grim_native") {
                 std::string modelPath = aiConfig.value("model_path", "resources/models/GRIM-text/training/checkpoints/model_embeddings.npy");
-                std::string tokenizerPath = aiConfig.value("tokenizer_path", "resources/models/GRIM-text/training/models/vocab.txt");
+                // Use paths.grim_text.vocab as primary source, fall back to default
+                std::string tokenizerPath = "resources/models/GRIM-text/training/models/vocab.bin";
+                if (aiConfig.contains("paths") && aiConfig["paths"].contains("grim_text") && 
+                    aiConfig["paths"]["grim_text"].contains("vocab")) {
+                    tokenizerPath = aiConfig["paths"]["grim_text"]["vocab"].get<std::string>();
+                }
                 
                 if (GRIM::initGRIMBackend(modelPath, tokenizerPath)) {
                     LOG_PHASE("Native GRIM model initialized", true);

@@ -665,9 +665,10 @@
       "enabled": true,
       "priority": 8,
       "requires_auth": false,
-      "crawl_depth": 3,
+      "crawl_depth": 2,
       "content_filter": {
-        "path_patterns": ["/JavaScript/", "/Web/API/", "/Learn/"]
+        "path_patterns": ["/JavaScript/", "/Web/API/", "/Learn/"],
+        "exclude_patterns": ["/CSS/", "/SVG/", "/MathML/", "scroll-padding", "border-image", "grid-template"]
       }
     },
     {

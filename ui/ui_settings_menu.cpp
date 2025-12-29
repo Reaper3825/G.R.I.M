@@ -4,6 +4,7 @@
 #include "input_parser.hpp"
 #include "ui_root.hpp"  // ? NEW: For accessing renderer
 #include "../voice/voice_speak.hpp"  // ? NEW: For updating speaker dynamically
+#include "../perception/perception_context.hpp"  // For vision AI control
 #include <fstream>
 #include <functional>
 #include <filesystem>
@@ -116,6 +117,9 @@ void UISettingsMenu::loadConfig() {
                 {"personality", {
                     {"custom_prompt", "You are GRIM, a helpful AI assistant. Be concise and professional."},
                     {"use_custom_prompt", false}
+                }},
+                {"vision", {
+                    {"enabled", true}
                 }}
             };
         }
@@ -192,6 +196,16 @@ void UISettingsMenu::applyChanges() {
         std::string newSpeaker = pendingConfig["voice"]["speaker"].get<std::string>();
         Voice::setSpeaker(newSpeaker);
         LOG_DEBUG("UISettingsMenu", "Voice speaker updated to: " + newSpeaker);
+    }
+    
+    // Update Vision AI feature if it changed
+    if (pendingConfig.contains("vision") && pendingConfig["vision"].is_object() &&
+        pendingConfig["vision"].contains("enabled")) {
+        bool visionEnabled = pendingConfig["vision"]["enabled"].get<bool>();
+        if (GRIM::Perception::g_contextManager) {
+            GRIM::Perception::g_contextManager->setFeatureEnabled("vision_ai", visionEnabled);
+            LOG_DEBUG("UISettingsMenu", "Vision AI " + std::string(visionEnabled ? "enabled" : "disabled"));
+        }
     }
     
     // ? NEW: Update UI font if it changed
@@ -650,6 +664,27 @@ void UISettingsMenu::createWidgets() {
         );
         customToggle->setSize(widgetWidth, widgetHeight);
         scrollBox->addChild(customToggle);
+        
+        // ===== Toggle 3: Vision AI =====
+        bool visionEnabled = true;
+        if (pendingConfig.contains("vision") && pendingConfig["vision"].is_object() &&
+            pendingConfig["vision"].contains("enabled")) {
+            visionEnabled = pendingConfig["vision"]["enabled"].get<bool>();
+        }
+        auto visionToggle = std::make_shared<UIToggle>(
+            "Vision AI:",
+            visionEnabled,
+            [this](bool value) {
+                if (!pendingConfig.contains("vision") || !pendingConfig["vision"].is_object()) {
+                    pendingConfig["vision"] = nlohmann::json::object();
+                }
+                pendingConfig["vision"]["enabled"] = value;
+                hasChanges = true;
+                LOG_DEBUG("UISettingsMenu", "Vision AI toggle changed to: " + std::string(value ? "ON" : "OFF"));
+            }
+        );
+        visionToggle->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(visionToggle);
         
         // Auto-layout all children in the scrollbox
         scrollBox->setChildSpacing(5.0f);

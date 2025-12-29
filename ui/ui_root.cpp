@@ -54,21 +54,74 @@ void UIRoot::update(const InputState& input, float dt)
     bool cursorOverUI = shouldReceiveInputAt(input.mousePos.x, input.mousePos.y);
     
     // Update all visible panels with the modified input
+    // Iterate in REVERSE order so top panels get input first
     auto panels = snapshotPanels();
+    std::shared_ptr<UIPanel> clickedPanel = nullptr;
+    bool anyPanelDragging = false;
+    
+    // First pass: check if any panel is currently dragging or resizing
     for (auto& panel : panels)
     {
-        if (panel && panel->isVisible())
+        if (panel && panel->isVisible() && (panel->isDragging() || panel->isResizing()))
+        {
+            anyPanelDragging = true;
+            break;
+        }
+    }
+    
+    for (int i = static_cast<int>(panels.size()) - 1; i >= 0; --i)
+    {
+        auto& panel = panels[i];
+        if (!panel || !panel->isVisible()) continue;
+        
+        Vec2 pos = panel->getPosition();
+        Vec2 size = panel->getSize();
+        bool isOver = (input.mousePos.x >= pos.x && input.mousePos.x <= pos.x + size.x &&
+                      input.mousePos.y >= pos.y && input.mousePos.y <= pos.y + size.y);
+        
+        // If a panel is dragging, only update that panel (the topmost one)
+        // Otherwise, only update topmost panel under cursor
+        if (!clickedPanel && (!anyPanelDragging || i == static_cast<int>(panels.size()) - 1))
         {
             panel->update(modifiedInput, dt);
             
-            // If cursor is over this panel, mark input as consumed
-            Vec2 pos = panel->getPosition();
-            Vec2 size = panel->getSize();
-            if (input.mousePos.x >= pos.x && input.mousePos.x <= pos.x + size.x &&
-                input.mousePos.y >= pos.y && input.mousePos.y <= pos.y + size.y)
+            if (isOver)
             {
                 m_inputConsumed = true;
+                
+                // On click, mark for bringing to front
+                if (input.mousePressed[0])
+                {
+                    clickedPanel = panel;
+                }
             }
+        }
+    }
+    
+    // Bring clicked panel to front after iteration
+    if (clickedPanel)
+    {
+        std::unique_lock lock(m_panelMutex);
+        
+        // Find panel in vector
+        auto it = std::find(m_panels.begin(), m_panels.end(), clickedPanel);
+        if (it != m_panels.end() && it != m_panels.end() - 1)
+        {
+            // Increment z-order of all visible panels except clicked one
+            for (auto& p : m_panels)
+            {
+                if (p && p->isVisible() && p != clickedPanel)
+                {
+                    p->setZOrder(p->getZOrder() + 1);
+                }
+            }
+            
+            // Set clicked panel to z-order -1 (active/top panel)
+            clickedPanel->setZOrder(-1);
+            
+            // Move to end (drawn last = on top)
+            m_panels.erase(it);
+            m_panels.push_back(clickedPanel);
         }
     }
 }
@@ -172,6 +225,13 @@ void UIRoot::setVisible(const std::string& name, bool visible)
         {
             panel->setVisible(visible);
             LOG_DEBUG("UIRoot", "Set panel '" + name + "' visibility to " + (visible ? "true" : "false"));
+            
+            // Bring newly visible panels to front
+            if (visible)
+            {
+                bringToFront(name);
+            }
+            
             updateWindowZOrder();
         }
     };
@@ -183,6 +243,46 @@ void UIRoot::setVisible(const std::string& name, bool visible)
     else
     {
         task();
+    }
+}
+
+void UIRoot::bringToFront(const std::string& name)
+{
+    std::unique_lock lock(m_panelMutex);
+    
+    // Find panel in vector
+    for (size_t i = 0; i < m_panels.size(); ++i)
+    {
+        if (m_panels[i] && m_panels[i]->getTitle() == name)
+        {
+            // Already at front
+            if (i == m_panels.size() - 1)
+            {
+                return;
+            }
+            
+            // Move to end (drawn last = on top)
+            auto panel = m_panels[i];
+            
+            // Increment z-order of all visible panels except this one
+            for (auto& p : m_panels)
+            {
+                if (p && p->isVisible() && p != panel)
+                {
+                    p->setZOrder(p->getZOrder() + 1);
+                }
+            }
+            
+            // Set this panel to z-order -1 (active/top panel)
+            panel->setZOrder(-1);
+            
+            m_panels.erase(m_panels.begin() + i);
+            m_panels.push_back(panel);
+            
+            LOG_DEBUG("UIRoot", "Brought panel '" + name + "' to front (active z-order: -1, array index: " + 
+                      std::to_string(m_panels.size() - 1) + ")");
+            return;
+        }
     }
 }
 

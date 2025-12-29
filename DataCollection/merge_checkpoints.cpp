@@ -11,7 +11,7 @@
 #include "verifier.hpp"
 #include "data_preprocessor.hpp"
 #include "data_splitter.hpp"
-#include "../resources/models/GRIM-text/GRIM/grim_tokenizer.hpp"
+#include "../resources/models/GRIM-text/Shared/UnigramByte/UniByte.hpp"
 #include "../../../control/ai_config_paths.hpp"
 
 using namespace GRIM::Training;
@@ -224,19 +224,35 @@ int StartMergeCheckpoints(int argc, char** argv) {
     std::cout << "[5/7] Preprocessing and cleaning...\n";
     
     PreprocessorConfig prep_config;
+    // CRITICAL: Limit text length to fit within model's max_seq_len after tokenization
+    // max_seq_len=900 tokens, ~4 chars/token average = 3500 chars max
+    prep_config.max_token_estimate_chars = 3500;
+    
     DataPreprocessor preprocessor(prep_config);
     
     std::vector<std::string> cleaned_texts;
+    size_t chunks_created = 0;
+    
     for (const auto& entry : deduplicated) {
         std::string clean = preprocessor.preprocess(entry.content);
         
-        if (!preprocessor.passesQualityFilter(clean)) continue;
-        if (preprocessor.isDuplicate(clean)) continue;
+        // Split long texts into chunks instead of discarding them
+        auto chunks = preprocessor.chunkLongText(clean);
         
-        clean = preprocessor.addSpecialTokens(clean);
-        cleaned_texts.push_back(clean);
+        for (const auto& chunk : chunks) {
+            if (!preprocessor.passesQualityFilter(chunk)) continue;
+            if (preprocessor.isDuplicate(chunk)) continue;
+            
+            std::string with_tokens = preprocessor.addSpecialTokens(chunk);
+            cleaned_texts.push_back(with_tokens);
+            
+            if (chunks.size() > 1) chunks_created++;
+        }
     }
     
+    if (chunks_created > 0) {
+        std::cout << "  Split " << chunks_created << " long texts into multiple chunks\n";
+    }
     std::cout << "✓ Cleaned: " << cleaned_texts.size() << "/" << deduplicated.size() 
               << " passed quality filters\n\n";
     

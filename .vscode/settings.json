@@ -48,11 +48,12 @@
 
     // clangd extension — point to the same database
     "clangd.arguments": [
-        "--compile-commands-dir=D:/G.R.I.M/build",
+        "--compile-commands-dir=D:/G.R.I.M",
         "--header-insertion=never",
         "--cross-file-rename",
         "--query-driver=**",
-        "--background-index=false"
+        "--background-index",
+        "--log=verbose"
     ],
 
     // Optional: disable cpptools IntelliSense squiggles if you prefer clangd

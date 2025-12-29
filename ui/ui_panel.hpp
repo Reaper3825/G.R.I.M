@@ -14,6 +14,14 @@ struct PanelChromeOptions {
     bool enableMaximize = true;
 };
 
+enum class MinimizeType {
+    Unknown,
+    SIDE,
+    TITLE_BAR,
+    CLOSE,
+    
+};
+
 class GRIM_HOST_API UIPanel : public Widget {
 public:
     UIPanel(const std::string& title = "", bool draggable = true);
@@ -42,11 +50,16 @@ public:
     void setTitle(const std::string& t) { title = t; }
     std::string getTitle() const { return title; }
     
+    int getZOrder() const { return zOrder; }
+    void setZOrder(int z) { zOrder = z; }
+    
     void setDraggable(bool drag) { draggable = drag; }
     void setResizable(bool resize) { resizable = resize; }
     void setChromeOptions(const PanelChromeOptions& opts) { chromeOptions = opts; }
     bool isMinimized() const { return minimized; }
     bool isMaximized() const { return maximized; }
+    bool isDragging() const { return dragging; }
+    bool isResizing() const { return resizing; }
 
 protected:
     std::string title;
@@ -68,6 +81,7 @@ protected:
     std::function<void()> onClose = nullptr;
     
     uint64_t panelID = 0;  // Unique panel identifier for focus tracking
+    int zOrder = 0;  // Z-order for rendering (higher = on top)
 
     PanelChromeOptions chromeOptions{};
     bool minimized = false;

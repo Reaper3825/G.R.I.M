@@ -48,14 +48,16 @@ struct Config {
     float low_quality_threshold = 0.4f;
 
     // Semantic verifier (DeBERTa ONNX)
+    // DISABLED by default - causes crashes when running in GRIM.exe
     bool enable_semantic_model = false;
-    bool semantic_use_gpu = true;
+    bool semantic_use_gpu = false;
     bool semantic_hard_filter = true;
     int semantic_max_seq_length = 512;
     float semantic_min_score = 0.55f;
     float semantic_quality_weight = 0.35f;
-    std::string semantic_model_path;
-    std::string semantic_tokenizer_path;
+    // Default paths point to the downloaded quality model layout under resources/
+    std::string semantic_model_path = "resources/models/GRIM-text/quality/deberta-v3-base-mnli/model.onnx";
+    std::string semantic_tokenizer_path = "resources/models/GRIM-text/quality/deberta-v3-base-mnli/spm.model";
     std::vector<std::string> semantic_positive_prompts;
     std::vector<std::string> semantic_negative_prompts;
 };
@@ -85,8 +87,12 @@ public:
     explicit Verifier(const Config& config);
     ~Verifier();
     
+    // Progress callback type
+    using ProgressCallback = std::function<void(float progress, size_t processed, size_t total)>;
+    
     std::vector<UnverifiedEntry> load_unverified_entries() const;
     std::vector<VerifiedEntry> verify_entries(const std::vector<UnverifiedEntry>& entries) const;
+    std::vector<VerifiedEntry> verify_entries(const std::vector<UnverifiedEntry>& entries, ProgressCallback callback) const;
     bool save_verified_entries(const std::vector<VerifiedEntry>& entries) const;
     Stats get_stats() const;
     

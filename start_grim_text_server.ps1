@@ -7,8 +7,8 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 $serverExe = "resources\models\GRIM-text\training\build_vs_cuda\Release\grim_text_server.exe"
-$vocabPath = "resources\models\GRIM-text\training\models\vocab.txt"
-$modelPath = "resources\models\GRIM-text\training\models\grim_text_trained.bin"
+$vocabPath = "resources\models\GRIM-text\training\models\vocab.bin"
+$modelPath = "resources\models\GRIM-text\checkpoints\checkpoint_epoch_5.bin"
 $port = 11435
 
 # Check if server executable exists

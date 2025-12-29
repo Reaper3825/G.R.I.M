@@ -34,6 +34,7 @@ public:
     void addPanel(const std::shared_ptr<UIPanel>& panel);
     std::shared_ptr<UIPanel> getPanel(const std::string& name);
     void setVisible(const std::string& name, bool visible);
+    void bringToFront(const std::string& name);  // Move panel to top of z-order
     void postTask(std::function<void()> task);
 
     // Check if a screen position should receive input (is over visible UI)
@@ -77,6 +78,7 @@ private:
     std::vector<std::shared_ptr<UIPanel>> m_panels;
     std::unordered_map<std::string, std::shared_ptr<UIPanel>> m_panelMap;
     OverlayRenderer m_renderer;  // Changed from UIRenderer to OverlayRenderer
+    static constexpr int m_activePanelIndex = -1;  // Active panel always has zOrder = -1
     
     std::string m_pendingTextInput; // Buffer for WM_CHAR input
     bool m_inputConsumed = false;   // Track if UI consumed input this frame

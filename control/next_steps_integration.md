@@ -250,7 +250,7 @@ void UITrainingPanel::handleStopTraining() {
 void UITrainingPanel::checkServerConnection() {
     if (!client.isServerRunning()) {
         // Try to start server
-        std::string serverPath = "resources/models/GRIM-text/training/build_vs_cuda/control/Release/training_control_server.exe";
+        std::string serverPath = "resources/models/GRIM-text/training/build/control/Release/training_control_server.exe";
         
         if (std::filesystem::exists(serverPath)) {
             #ifdef _WIN32

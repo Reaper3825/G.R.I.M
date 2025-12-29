@@ -8,6 +8,7 @@ import traceback
 from typing import Optional, Tuple
 
 import torch
+import threading
 from pathlib import Path
 
 # ✅ FIX 1: Disable numba caching to avoid permission errors when installed in Program Files
@@ -416,7 +417,7 @@ def persistent_loop(model_name, speaker, use_gpu=True):
         log(f"[Coqui XTTS] Loading model: {model_name} on {device}")
         tts = TTS(model_name).to(device)
         
-        log(f"[Coqui XTTS] Model loaded successfully")
+        log("[Coqui XTTS] Model loaded successfully")
 
         tts_model = tts.synthesizer.tts_model if hasattr(tts, "synthesizer") else None
         
@@ -464,45 +465,46 @@ def persistent_loop(model_name, speaker, use_gpu=True):
             torch.cuda.empty_cache()
             log("[Coqui XTTS] ✅ Optimizations applied")
 
-        # Warm up model with dummy synthesis
-        log("[Coqui XTTS] Starting model warm-up...")
-        try:
-            dummy_gpt, dummy_spk = ensure_embedding(
-                "default",
-                device=device,
-                dtype=model_dtype,
-                model=tts_model,
-                allow_create=True,
-            )
-            
-            if dummy_gpt is not None and tts_model is not None:
-                log("[Coqui XTTS] Dummy embedding loaded, running warm-up inference...")
-                model = tts_model
-                
-                # ⚡ Important: Do a full inference to warm up all code paths
-                _ = model.inference(
-                    text="System ready",
-                    language="en",
-                    gpt_cond_latent=dummy_gpt,
-                    speaker_embedding=dummy_spk
-                )
-                log("[Coqui XTTS] ✓ Model warmed up successfully (CUDA kernels initialized)")
-            else:
-                if dummy_gpt is None:
-                    log("[Coqui XTTS] ⚠ No default embedding available - skipping warm-up")
-                    log("[Coqui XTTS] Run: python scripts/create_default_embedding.py (optional)")
-                else:
-                    log("[Coqui XTTS] ⚠ Model API not accessible - skipping warm-up")
-        except Exception as e:
-            log(f"[Coqui XTTS] ⚠ Warm-up failed (non-critical): {e}")
-            import traceback
-            log(f"[Coqui XTTS] Traceback: {traceback.format_exc()}")
-        # ============================================
-        
         # Check if model is XTTS v2
         is_xtts = "xtts" in model_name.lower()
         if is_xtts:
             log("[Coqui XTTS] XTTS v2 model detected - voice cloning enabled")
+        
+        def warmup_model_background():
+            """Run expensive warm-up without blocking handshake."""
+            log("[Coqui XTTS] Starting model warm-up in background...")
+            try:
+                dummy_gpt, dummy_spk = ensure_embedding(
+                    "default",
+                    device=device,
+                    dtype=model_dtype,
+                    model=tts_model,
+                    allow_create=True,
+                )
+
+                if dummy_gpt is not None and tts_model is not None:
+                    log("[Coqui XTTS] Dummy embedding loaded, running warm-up inference...")
+                    model = tts_model
+
+                    _ = model.inference(
+                        text="System ready",
+                        language="en",
+                        gpt_cond_latent=dummy_gpt,
+                        speaker_embedding=dummy_spk
+                    )
+                    log("[Coqui XTTS] ✓ Model warmed up successfully (CUDA kernels initialized)")
+                else:
+                    if dummy_gpt is None:
+                        log("[Coqui XTTS] ⚠ No default embedding available - skipping warm-up")
+                        log("[Coqui XTTS] Run: python scripts/create_default_embedding.py (optional)")
+                    else:
+                        log("[Coqui XTTS] ⚠ Model API not accessible - skipping warm-up")
+            except Exception as e:
+                log(f"[Coqui XTTS] ⚠ Warm-up failed (non-critical): {e}")
+                import traceback
+                log(f"[Coqui XTTS] Traceback: {traceback.format_exc()}")
+
+        threading.Thread(target=warmup_model_background, name="xtts-warmup", daemon=True).start()
         
     except Exception as e:
         send({"status": "error", "message": f"Model load failed: {str(e)}"})

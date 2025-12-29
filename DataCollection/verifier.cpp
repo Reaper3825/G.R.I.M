@@ -23,9 +23,9 @@ using json = nlohmann::json;
 
 namespace {
 constexpr const char* kDefaultSemanticModelRelPath =
-    "resources/models/GRIM-text/quality/deberta-v3-base-mnli.onnx";
+    "resources/models/GRIM-text/quality/deberta-v3-base-mnli/model.onnx";
 constexpr const char* kDefaultSemanticTokenizerRelPath =
-    "resources/models/GRIM-text/quality/deberta-v3-base-mnli.spm";
+    "resources/models/GRIM-text/quality/deberta-v3-base-mnli/spm.model";
 
 struct SemanticEncodedInput {
     std::vector<int64_t> ids;
@@ -95,14 +95,18 @@ public:
 
 private:
     bool initialize(const Config& config) {
+        std::cout << "[Verifier] Initializing semantic quality filter...\n";
         if (!loadTokenizer(config.semantic_tokenizer_path)) {
-            std::cerr << "[Verifier] Semantic tokenizer unavailable, disabling semantic filter.\n";
+            std::cout << "[Verifier] ⚠ Semantic tokenizer unavailable, disabling semantic filter.\n";
+            std::cout << "[Verifier] ✓ Will use basic filters only (length, language, profanity).\n";
             return false;
         }
         if (!loadSession(config.semantic_model_path)) {
-            std::cerr << "[Verifier] Semantic ONNX model unavailable, disabling semantic filter.\n";
+            std::cout << "[Verifier] ⚠ Semantic ONNX model unavailable, disabling semantic filter.\n";
+            std::cout << "[Verifier] ✓ Will use basic filters only (length, language, profanity).\n";
             return false;
         }
+        std::cout << "[Verifier] ✓ Semantic quality filter ready.\n";
         return true;
     }
 
@@ -161,11 +165,21 @@ private:
                 }
             } catch (const std::exception& e) {
                 std::cerr << "[Verifier] CUDA provider unavailable: " << e.what() << "\n";
+                std::cerr << "[Verifier] Falling back to CPU provider (this will be slower).\n";
+                using_cuda_ = false;
             }
         }
 
         std::wstring model_path_w(path.begin(), path.end());
-        session_ = std::make_unique<Ort::Session>(*env_, model_path_w.c_str(), *session_options_);
+        
+        try {
+            session_ = std::make_unique<Ort::Session>(*env_, model_path_w.c_str(), *session_options_);
+        } catch (const std::exception& e) {
+            std::cerr << "[Verifier] Failed to create ONNX session: " << e.what() << "\n";
+            std::cerr << "[Verifier] Model path: " << path << "\n";
+            std::cerr << "[Verifier] Ensure ONNX Runtime is properly installed and the model file exists.\n";
+            return false;
+        }
 
         Ort::AllocatorWithDefaultOptions allocator;
         size_t num_inputs = session_->GetInputCount();
@@ -706,11 +720,26 @@ std::vector<UnverifiedEntry> Verifier::load_unverified_entries() const {
 }
 
 std::vector<VerifiedEntry> Verifier::verify_entries(const std::vector<UnverifiedEntry>& entries) const {
+    // Call the version with progress callback, passing nullptr
+    return verify_entries(entries, nullptr);
+}
+
+std::vector<VerifiedEntry> Verifier::verify_entries(const std::vector<UnverifiedEntry>& entries, ProgressCallback callback) const {
     std::vector<VerifiedEntry> verified;
     std::vector<VerifiedEntry> rejected;  // For optional saving
     
+    const size_t total = entries.size();
+    size_t processed = 0;
+    
     for (const auto& entry : entries) {
         pImpl->stats.total_processed++;
+        processed++;
+        
+        // Report progress every 10 entries or at key milestones
+        if (callback && (processed % 10 == 0 || processed == 1 || processed == total)) {
+            float progress = (static_cast<float>(processed) / static_cast<float>(total)) * 100.0f;
+            callback(progress, processed, total);
+        }
         
         std::string rejection_reason;
         bool should_accept = true;

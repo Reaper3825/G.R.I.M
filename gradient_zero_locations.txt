@@ -1,0 +1,416 @@
+================================================================================
+GRADIENT ZEROING OPERATIONS - GRIM-text Codebase
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Common\grim_transformer_gpu.hpp
+────────────────────────────────────────────────────────────────────────────────
+
+Line   264:
+  cudaMemsetAsync(grad_gamma_buf_.ptr(), 0, dim_ * sizeof(float), stream_);
+
+Line   265:
+  cudaMemsetAsync(grad_beta_buf_.ptr(), 0, dim_ * sizeof(float), stream_);
+
+Line   781:
+  cudaMemsetAsync(grad_b_o_buf_.ptr(), 0, config_.d_model * sizeof(float), stream_);
+
+Line   834:
+  cudaMemsetAsync(grad_scores_buf_.ptr(), 0,
+
+Line   836:
+  cudaMemsetAsync(grad_V_buf_.ptr(), 0,
+
+Line   855:
+  cudaMemsetAsync(grad_Q_buf_.ptr(), 0,
+
+Line   857:
+  cudaMemsetAsync(grad_K_buf_.ptr(), 0,
+
+Line   899:
+  cudaMemsetAsync(grad_b_qkv_buf_.ptr(), 0, 3 * config_.d_model * sizeof(float), stream_);
+
+Line   910:
+  cudaMemsetAsync(grad_W_qkv_buf_.ptr(), 0,
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\GRIM\grim_language_model_cuda.hpp
+────────────────────────────────────────────────────────────────────────────────
+
+Line   548:
+  void zeroGrad();
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Layers\Encoding\Encoding_GPU.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   102:
+  cudaMemsetAsync(g, 0, hidden_dim * sizeof(float), stream_);
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Layers\FeedForward\Feed_Forward_GPU.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   193:
+  cudaMemsetAsync(b1_.ptr(), 0, config_.d_ff * sizeof(float), config_.stream);
+
+Line   200:
+  cudaMemsetAsync(b2_.ptr(), 0, config_.d_model * sizeof(float), config_.stream);
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Layers\FlashAttention\Flash_Attention_Kernal.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line  1089:
+  err = cudaMemsetAsync(grad_Q, 0, q_elements * sizeof(float), stream);
+
+Line  1093:
+  err = cudaMemsetAsync(grad_K, 0, kv_elements * sizeof(float), stream);
+
+Line  1097:
+  err = cudaMemsetAsync(grad_V, 0, kv_elements * sizeof(float), stream);
+
+Line  1105:
+  err = cudaMemsetAsync(config.grad_alpha_q, 0, config.num_heads * sizeof(float), stream);
+
+Line  1111:
+  err = cudaMemsetAsync(config.grad_alpha_k, 0, num_kv_heads * sizeof(float), stream);
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Layers\GRIMTS\GRIM-TS.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   965:
+  cudaMemset(diversity_bloom, 0, bloom_words * sizeof(std::uint32_t));
+
+Line  1001:
+  cudaMemset(size, 0, sizeof(unsigned int));
+
+Line  1003:
+  cudaMemset(records, 0, capacity * sizeof(GuessRecord));
+
+Line  1004:
+  cudaMemset(evict_cursor, 0, sizeof(unsigned int));
+
+Line  1081:
+  cudaMemsetAsync(h_cache_state.records, 0,
+
+Line  1083:
+  cudaMemsetAsync(h_cache_state.size, 0, sizeof(unsigned int), stream);
+
+Line  1086:
+  cudaMemsetAsync(h_cache_state.evict_cursor, 0, sizeof(unsigned int), stream);
+
+Line  1089:
+  cudaMemsetAsync(h_cache_state.diversity_bloom, 0,
+
+Line  1185:
+  cudaMemsetAsync(new_records, 0, new_capacity * sizeof(GuessRecord), stream);
+
+Line  1204:
+  cudaMemset(h_cache_state.evict_cursor, 0, sizeof(unsigned int));
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Layers\InitInferenceState\InitinferenceState.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line    89:
+  cudaMemset(training_state_.lm_head_bias, 0, cfg.vocab_size * sizeof(float));
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Layers\LayernNorm\RMSNorm_GPU.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   148:
+  cudaMemsetAsync(buf, 0, weights_.size * sizeof(float), config_.stream);
+
+Line   172:
+  cudaMemsetAsync(weights_.gamma_grad, 0, weights_.size * sizeof(float), config_.stream);
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Layers\ScratchBlock\ScratchBlock_GPU.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   425:
+  cudaMemset(d_atom_type_embeddings_grad_, 0, atom_emb_size * sizeof(float));
+
+Line   426:
+  cudaMemset(d_atom_projection_grad_, 0, proj_size * sizeof(float));
+
+Line   540:
+  cudaMemsetAsync(d_num_atoms_, 0, sizeof(int), stream);
+
+Line   681:
+  cudaMemsetAsync(d_grad_atom_embeddings_temp, 0, temp_size * sizeof(float), stream);
+
+Line   763:
+  cudaMemsetAsync(d_num_atoms_, 0, sizeof(int), stream);
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Shared\Dropout\Dropout_GPU.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line    63:
+  cudaMemsetAsync(output, 0,
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Shared\GradTear\GradTear_GPU.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line    22:
+  __global__ void zeroGradientKernel(float* __restrict__ grads, std::size_t size) {
+
+Line    34:
+  __global__ void batchedZeroGradientKernel(
+
+Line   233:
+  zeroGradientsInternal("accumulation_start");
+
+Line   253:
+  zeroGradientsInternal("optimizer_complete");
+
+Line   265:
+  zeroGradientsInternal("manual");
+
+Line   268:
+  bool GradientTeardown::zeroGradientBuffer(const std::string& name) {
+
+Line   271:
+  cudaMemsetAsync(buf.grads, 0, buf.bytes(), config_.stream);
+
+Line   324:
+  void GradientTeardown::zeroGradientsInternal(const std::string& phase) {
+
+Line   354:
+  cudaError_t err = cudaMemsetAsync(buf.grads, 0, buf.bytes(), config_.stream);
+
+Line   431:
+  batchedZeroGradientKernel<<<grid, kBlockSize, 0, stream>>>(
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Shared\GradTear\GradTear_GPU.hpp
+────────────────────────────────────────────────────────────────────────────────
+
+Line    77:
+  std::size_t total_zero_ops = 0;         // Total cudaMemset calls
+
+Line   178:
+  bool zeroGradientBuffer(const std::string& name);
+
+Line   220:
+  void zeroGradientsInternal(const std::string& phase);
+
+Line   267:
+  /// Launch batched gradient zeroing kernel (more efficient than many cudaMemset)
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Shared\Gradients\GradientCC_GPU.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   144:
+  cudaMemsetAsync(d_squared_norm, 0, sizeof(float), stream);
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Shared\LogRecorder\LogRecorder.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   292:
+  cudaMemset(g_device_buffer.cursor, 0, sizeof(int));
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Shared\Loss\CrossEntropy\CrossEntropy_GPU.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   187:
+  cudaMemsetAsync(output, 0, sizeof(float), stream);
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Shared\Loss\Divergence\Divergence_GPU.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   317:
+  cudaMemsetAsync(delta_buffer, 0, sizeof(float), ctx.stream);
+
+Line   400:
+  cudaMemsetAsync(*ptr, 0, sizeof(float), stream);
+
+Line   486:
+  cudaMemsetAsync(*ptr, 0, sizeof(float), stream);
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Shared\Loss\FocalLoss\FocalLoss_GPU.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   121:
+  cudaMemsetAsync(focal_delta_dev, 0, sizeof(float), ctx.stream);
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Shared\Loss\LabelSmoothing\LabelSmoothing_GPU.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   133:
+  cudaMemsetAsync(delta_buffer, 0, sizeof(float), ctx.stream);
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Shared\Loss\Preference\Preference_KL_GPU.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   150:
+  cudaMemsetAsync(loss_accum, 0, sizeof(float), ctx.stream);
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Shared\Loss\TKML\TKML_GPU.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   157:
+  cudaMemsetAsync(loss_accum, 0, sizeof(float), ctx.stream);
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Shared\SoftRestart\SoftRestart.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line    81:
+  cudaMemset(param_state.momentum, 0, param_state.size * sizeof(float));
+
+Line    84:
+  cudaMemset(param_state.velocity, 0, param_state.size * sizeof(float));
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Shared\TensorConversion\TensorConversion.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   617:
+  cudaMemsetAsync(dst, 0, num_elements * sizeof(float), stream);
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Shared\UnigramByte\Unigram.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line  1121:
+  cudaMemsetAsync(d_needs_byte_fallback, 0, length * sizeof(bool), stream);
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Tests\causality_proof_tests.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   138:
+  float sum_other_grads = 0.0f;
+
+Line   268:
+  model->zeroGrad();
+
+Line   334:
+  model->zeroGrad();
+
+Line   422:
+  model->zeroGrad();
+
+Line   445:
+  model->zeroGrad();
+
+Line   507:
+  model->zeroGrad();
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\Tests\flash_attention_test.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line    52:
+  cudaMemset(d_ptr, 0, count * sizeof(float));
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\training\BackwardOps.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   185:
+  void LanguageModel::zeroGrad() {
+
+Line   200:
+  cudaMemsetAsync(training_state_.embedding_grads, 0,
+
+Line   207:
+  cudaMemsetAsync(training_state_.lm_head_weight_grads, 0,
+
+Line   212:
+  cudaMemsetAsync(training_state_.lm_head_bias_grads, 0,
+
+Line   222:
+  cudaMemsetAsync(enc->getRMS1GammaGrad(), 0, cfg.d_model * sizeof(float), training_state_.stream);
+
+Line   225:
+  cudaMemsetAsync(enc->getRMS2GammaGrad(), 0, cfg.d_model * sizeof(float), training_state_.stream);
+
+Line   231:
+  cudaMemsetAsync(training_state_.attn_qkv_weight_grads[layer], 0,
+
+Line   236:
+  cudaMemsetAsync(training_state_.attn_qkv_bias_grads[layer], 0,
+
+Line   240:
+  cudaMemsetAsync(training_state_.attn_out_weight_grads[layer], 0,
+
+Line   244:
+  cudaMemsetAsync(training_state_.attn_out_bias_grads[layer], 0,
+
+Line   249:
+  cudaMemsetAsync(training_state_.ffn_w1_grads[layer], 0,
+
+Line   253:
+  cudaMemsetAsync(training_state_.ffn_b1_grads[layer], 0,
+
+Line   257:
+  cudaMemsetAsync(training_state_.ffn_w2_grads[layer], 0,
+
+Line   261:
+  cudaMemsetAsync(training_state_.ffn_b2_grads[layer], 0,
+
+Line   269:
+  cudaMemsetAsync(training_state_.attn_alpha_q_grads[layer], 0,
+
+Line   275:
+  cudaMemsetAsync(training_state_.attn_alpha_k_grads[layer], 0,
+
+Line   288:
+  cudaMemsetAsync(atom_type_grad, 0,
+
+Line   294:
+  cudaMemsetAsync(proj_grad, 0,
+
+Line   656:
+  cudaMemset(group.m_state, 0, group.size * sizeof(float));
+
+Line   679:
+  cudaMemset(group.v_state, 0, group.size * sizeof(float));
+
+Line   819:
+  cudaMemset(group.m_state, 0, group.size * sizeof(float));
+
+Line   822:
+  cudaMemset(group.v_state, 0, group.size * sizeof(float));
+
+Line  1574:
+  cudaMemsetAsync(grad_Q, 0, q_size * sizeof(float), training_state_.stream);
+
+Line  1575:
+  cudaMemsetAsync(grad_K, 0, kv_size * sizeof(float), training_state_.stream);
+
+Line  1576:
+  cudaMemsetAsync(grad_V, 0, kv_size * sizeof(float), training_state_.stream);
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\training\InitTrainingState.cu
+────────────────────────────────────────────────────────────────────────────────
+
+Line   111:
+  cudaMemset(training_state_.lm_head_bias, 0, cfg.vocab_size * sizeof(float));
+
+Line   322:
+  cudaMemset(training_state_.sequence_weights, 0, max_batch_size * sizeof(float));
+
+────────────────────────────────────────────────────────────────────────────────
+FILE: resources\models\GRIM-text\training\training_logs_generated.h
+────────────────────────────────────────────────────────────────────────────────
+
+Line  1306:
+  uint32_t num_nan_grads = 0,

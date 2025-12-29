@@ -1,0 +1,480 @@
+MATRIX OPERATION VERIFICATION REPORT
+================================================================================
+
+Summary: 9 valid, 5 with issues
+
+
+================================================================================
+[ISSUES] Layers\Attention\QKV_Projector.cu:157
+================================================================================
+
+Operation: // ldb = d_model (row stride of W_qkv)                 input = weights.W_qkv × d_model]
+Transposes: A=CUBLAS_OP_T, B=CUBLAS_OP_N
+Dimensions: M=3 * d_model, N=// N: cols of result                 total_tokens, K=// M: rows of result                 d_model
+Leading dims: lda=// B: W_qkv [3*d_model, ldb=will be transposed                 d_model, ldc=// A: input [tokens
+
+Comment: N: cols of result                 total_tokens,             // M: rows of result                 d_model,                  // K: shared dimension                 &alpha,                 weights.W_qkv,            // B: W_qkv [3*d_model, d_model], will be transposed                 d_model,                  // ldb = d_model (row stride of W_qkv)                 input,                    // A: input [tokens, d_model]                 d_model,                  // lda = d_model (row stride of input)                 &beta,                 fused_qkv,                // C: fused_qkv [tokens, 3*d_model]                 3 * d_model);             // ldc = 3*d_model (row stride of output)
+
+Context:
+  //
+  // We want: fused_qkv = input @ W_qkv^T
+  //   [tokens, 3*d_model] = [tokens, d_model] @ [d_model, 3*d_model]
+  //
+  // cuBLAS row-major: C[M,N] = A[M,K] @ B^T[K,N] where B is [N,K]
+  // Call: sgemm(CUBLAS_OP_T, CUBLAS_OP_N, N, M, K, alpha, B, K, A, K, beta, C, N)
+  // Here: M=tokens, N=3*d_model, K=d_model
+  //   A = input [tokens, d_model], lda = d_model
+  //   B = W_qkv [3*d_model, d_model], transposed, ldb = d_model
+  //   C = fused_qkv [tokens, 3*d_model], ldc = 3*d_model
+
+Issues:
+  • Leading dimension ldc=// A: input [tokens doesn't match M=3 * d_model
+
+Analysis:
+  cuBLAS interpretation (column-major):
+    C[3 * d_model, // N: cols of result                 total_tokens] = op(weights.W_qkv)[?, // M: rows of result                 d_model] × op(d_model])[// M: rows of result                 d_model, ?]
+    A shape: [// M: rows of result                 d_model, 3 * d_model] (transposed)
+    B shape: [// M: rows of result                 d_model, // N: cols of result                 total_tokens]
+  
+  Row-major interpretation:
+    If matrices are stored row-major, this computes:
+    C^T = A × B^T  ⟹  C = B × A^T
+
+
+Code:
+    cublasStatus_t status = cublasSgemm(handle,                 CUBLAS_OP_T, CUBLAS_OP_N,                 3 * d_model,              // N: cols of result                 total_tokens,             // M: rows of result                 d_model,                  // K: shared dimension                 &alpha,                 weights.W_qkv,            // B: W_qkv [3*d_model, d_model], will be transposed                 d_model,                  // ldb = d_model (row stride of W_qkv)                 input,                    // A: input [tokens, d_model]                 d_model,                  // lda = d_model (row stride of input)                 &beta,                 fused_qkv,                // C: fused_qkv [tokens, 3*d_model]                 3 * d_model);             // ldc = 3*d_model (row stride of output)
+
+================================================================================
+[VALID] Layers\FeedForward\Feed_Forward_GPU.cu:108
+================================================================================
+
+Operation: ldb=d_model                 args.input = weights_.W1 × // W1 [d_ff
+Transposes: A=CUBLAS_OP_T, B=CUBLAS_OP_N
+Dimensions: M=config_.d_ff, N=tokens, K=config_.d_model
+Leading dims: lda=config_.d_model, ldb=d_model], ldc=config_.d_model
+
+Comment: W1 [d_ff, d_model], ldb=d_model                 args.input, config_.d_model,     // input [tokens, d_model], lda=d_model                 &beta,                 hidden, config_.d_ff);           // hidden [tokens, d_ff], ldc=d_ff
+
+Context:
+  // ROW-MAJOR: Hidden[tokens, d_ff] = Input[tokens, d_model] @ W1^T[d_model, d_ff]
+  // W1 stored as [d_ff, d_model] row-major, so we need W1^T
+  // cuBLAS row-major: C[M,N] = A[M,K] @ B^T[K,N] where B is [N,K]
+  // Call: sgemm(CUBLAS_OP_T, CUBLAS_OP_N, N, M, K, alpha, B, K, A, K, beta, C, N)
+  // Here: M=tokens, N=d_ff, K=d_model
+
+Analysis:
+  cuBLAS interpretation (column-major):
+    C[config_.d_ff, tokens] = op(weights_.W1)[?, config_.d_model] × op(// W1 [d_ff)[config_.d_model, ?]
+    A shape: [config_.d_model, config_.d_ff] (transposed)
+    B shape: [config_.d_model, tokens]
+  
+  Row-major interpretation:
+    If matrices are stored row-major, this computes:
+    C^T = A × B^T  ⟹  C = B × A^T
+
+
+Code:
+    cublasSgemm(handle,                 CUBLAS_OP_T, CUBLAS_OP_N,                 config_.d_ff, tokens, config_.d_model,                 &alpha,                 weights_.W1, config_.d_model,    // W1 [d_ff, d_model], ldb=d_model                 args.input, config_.d_model,     // input [tokens, d_model], lda=d_model                 &beta,                 hidden, config_.d_ff);           // hidden [tokens, d_ff], ldc=d_ff
+
+================================================================================
+[VALID] Layers\FeedForward\Feed_Forward_GPU.cu:131
+================================================================================
+
+Operation: ldb=d_ff                 hidden = weights_.W2 × // W2 [d_model
+Transposes: A=CUBLAS_OP_T, B=CUBLAS_OP_N
+Dimensions: M=config_.d_model, N=tokens, K=config_.d_ff
+Leading dims: lda=config_.d_ff, ldb=d_ff], ldc=config_.d_ff
+
+Comment: W2 [d_model, d_ff], ldb=d_ff                 hidden, config_.d_ff,            // hidden [tokens, d_ff], lda=d_ff                 &beta,                 args.output, config_.d_model);   // output [tokens, d_model], ldc=d_model
+
+Context:
+  // ROW-MAJOR: Output[tokens, d_model] = Hidden[tokens, d_ff] @ W2^T[d_ff, d_model]
+  // W2 stored as [d_model, d_ff] row-major, so we need W2^T
+  // cuBLAS row-major: C[M,N] = A[M,K] @ B^T[K,N] where B is [N,K]
+  // Call: sgemm(CUBLAS_OP_T, CUBLAS_OP_N, N, M, K, alpha, B, K, A, K, beta, C, N)
+  // Here: M=tokens, N=d_model, K=d_ff
+
+Analysis:
+  cuBLAS interpretation (column-major):
+    C[config_.d_model, tokens] = op(weights_.W2)[?, config_.d_ff] × op(// W2 [d_model)[config_.d_ff, ?]
+    A shape: [config_.d_ff, config_.d_model] (transposed)
+    B shape: [config_.d_ff, tokens]
+  
+  Row-major interpretation:
+    If matrices are stored row-major, this computes:
+    C^T = A × B^T  ⟹  C = B × A^T
+
+
+Code:
+    cublasSgemm(handle,                 CUBLAS_OP_T, CUBLAS_OP_N,                 config_.d_model, tokens, config_.d_ff,                 &alpha,                 weights_.W2, config_.d_ff,       // W2 [d_model, d_ff], ldb=d_ff                 hidden, config_.d_ff,            // hidden [tokens, d_ff], lda=d_ff                 &beta,                 args.output, config_.d_model);   // output [tokens, d_model], ldc=d_model
+
+================================================================================
+[ISSUES] Layers\LMHead\lm_head_GPU.cu:110
+================================================================================
+
+Operation: // n 		params.d_model = // encoder: row-major [tokens × tokens] 		params.vocab_size
+Transposes: A=CUBLAS_OP_T, B=CUBLAS_OP_N
+Dimensions: M=d_model] -> col-major [d_model, N=vocab], K=transpose to [vocab
+Leading dims: lda=d_model] -> col-major [d_model, ldb=// m 		total_tokens, ldc=// k 		&alpha
+
+Comment: weights: row-major [vocab, d_model] -> col-major [d_model, vocab], transpose to [vocab, d_model] 		CUBLAS_OP_N,               // encoder: row-major [tokens, d_model] -> col-major [d_model, tokens] 		params.vocab_size,         // m 		total_tokens,              // n 		params.d_model,            // k 		&alpha, 		params.weights, 		params.d_model,            // lda 		params.encoder_output, 		params.d_model,            // ldb 		&beta_zero, 		params.logits, 		params.vocab_size);        // ldc
+
+Context:
+  // FIXED: LM head should NOT scale by 1/sqrt(d_model) - that's for attention!
+  // Use alpha=1.0 for standard logits output
+
+Issues:
+  • Leading dimension ldc=// k 		&alpha doesn't match M=d_model] -> col-major [d_model
+
+Analysis:
+  cuBLAS interpretation (column-major):
+    C[d_model] -> col-major [d_model, vocab]] = op(// encoder: row-major [tokens)[?, transpose to [vocab] × op(tokens] 		params.vocab_size)[transpose to [vocab, ?]
+    A shape: [transpose to [vocab, d_model] -> col-major [d_model] (transposed)
+    B shape: [transpose to [vocab, vocab]]
+  
+  Row-major interpretation:
+    If matrices are stored row-major, this computes:
+    C^T = A × B^T  ⟹  C = B × A^T
+
+
+Code:
+	cublasStatus_t status = cublasSgemm( 		params.handle, 		CUBLAS_OP_T,               // weights: row-major [vocab, d_model] -> col-major [d_model, vocab], transpose to [vocab, d_model] 		CUBLAS_OP_N,               // encoder: row-major [tokens, d_model] -> col-major [d_model, tokens] 		params.vocab_size,         // m 		total_tokens,              // n 		params.d_model,            // k 		&alpha, 		params.weights, 		params.d_model,            // lda 		params.encoder_output, 		params.d_model,            // ldb 		&beta_zero, 		params.logits, 		params.vocab_size);        // ldc
+
+================================================================================
+[VALID] Layers\LMHead\lm_head_GPU.cu:196
+================================================================================
+
+Operation: params.weights = tokens] 		params.d_model × // N = tokens 		params.vocab_size
+Transposes: A=CUBLAS_OP_N, B=CUBLAS_OP_N
+Dimensions: M=d_model] -> col-major [d_model, N=vocab] 		CUBLAS_OP_N, K=// grad_logits: row-major [tokens
+Leading dims: lda=// M = d_model 		total_tokens, ldb=// K = vocab_size 		&alpha, ldc=// A = weights 		params.d_model
+
+Comment: weights: row-major [vocab, d_model] -> col-major [d_model, vocab] 		CUBLAS_OP_N,              // grad_logits: row-major [tokens, vocab] -> col-major [vocab, tokens] 		params.d_model,           // M = d_model 		total_tokens,             // N = tokens 		params.vocab_size,        // K = vocab_size 		&alpha, 		params.weights,           // A = weights 		params.d_model,           // lda = leading dim of weights 		params.grad_logits,       // B = grad_logits 		params.vocab_size,        // ldb = leading dim of grad_logits 		&beta_zero, 		params.grad_encoder,      // C = grad_encoder 		params.d_model);          // ldc = leading dim of grad_encoder
+
+Context:
+  // FIXED: LM head backward should also use alpha=1.0 (not scaled)
+
+Analysis:
+  cuBLAS interpretation (column-major):
+    C[d_model] -> col-major [d_model, vocab] 		CUBLAS_OP_N] = op(tokens] 		params.d_model)[?, // grad_logits: row-major [tokens] × op(// N = tokens 		params.vocab_size)[// grad_logits: row-major [tokens, ?]
+    A shape: [d_model] -> col-major [d_model, // grad_logits: row-major [tokens]
+    B shape: [// grad_logits: row-major [tokens, vocab] 		CUBLAS_OP_N]
+  
+  Row-major interpretation:
+    If matrices are stored row-major, this computes:
+    C^T = A^T × B^T  ⟹  C = B × A
+
+
+Code:
+	cublasStatus_t status = cublasSgemm( 		params.handle, 		CUBLAS_OP_N,              // weights: row-major [vocab, d_model] -> col-major [d_model, vocab] 		CUBLAS_OP_N,              // grad_logits: row-major [tokens, vocab] -> col-major [vocab, tokens] 		params.d_model,           // M = d_model 		total_tokens,             // N = tokens 		params.vocab_size,        // K = vocab_size 		&alpha, 		params.weights,           // A = weights 		params.d_model,           // lda = leading dim of weights 		params.grad_logits,       // B = grad_logits 		params.vocab_size,        // ldb = leading dim of grad_logits 		&beta_zero, 		params.grad_encoder,      // C = grad_encoder 		params.d_model);          // ldc = leading dim of grad_encoder
+
+================================================================================
+[ISSUES] Layers\LMHead\lm_head_GPU.cu:237
+================================================================================
+
+Operation: // A 			params.d_model = // m 			params.vocab_size × // k 			&alpha
+Transposes: A=CUBLAS_OP_N, B=CUBLAS_OP_N
+Dimensions: M=tokens] 			CUBLAS_OP_T, N=// grad_logits: col-major [vocab, K=tokens] -> [tokens
+Leading dims: lda=// n 			total_tokens, ldb=params.encoder_output, ldc=// lda 			params.grad_logits
+
+Comment: encoder_output: col-major [d_model, tokens] 			CUBLAS_OP_T,           // grad_logits: col-major [vocab, tokens] -> [tokens, vocab] 			params.d_model,        // m 			params.vocab_size,     // n 			total_tokens,          // k 			&alpha, 			params.encoder_output, // A 			params.d_model,        // lda 			params.grad_logits,    // B 			params.vocab_size,     // ldb 			&beta, 			params.grad_weight,    // C 			params.d_model);       // ldc
+
+Issues:
+  • Leading dimension ldc=// lda 			params.grad_logits doesn't match M=tokens] 			CUBLAS_OP_T
+
+Analysis:
+  cuBLAS interpretation (column-major):
+    C[tokens] 			CUBLAS_OP_T, // grad_logits: col-major [vocab] = op(// m 			params.vocab_size)[?, tokens] -> [tokens] × op(// k 			&alpha)[tokens] -> [tokens, ?]
+    A shape: [tokens] 			CUBLAS_OP_T, tokens] -> [tokens]
+    B shape: [tokens] -> [tokens, // grad_logits: col-major [vocab]
+  
+  Row-major interpretation:
+    If matrices are stored row-major, this computes:
+    C^T = A^T × B^T  ⟹  C = B × A
+
+
+Code:
+		status = cublasSgemm( 			params.handle, 			CUBLAS_OP_N,           // encoder_output: col-major [d_model, tokens] 			CUBLAS_OP_T,           // grad_logits: col-major [vocab, tokens] -> [tokens, vocab] 			params.d_model,        // m 			params.vocab_size,     // n 			total_tokens,          // k 			&alpha, 			params.encoder_output, // A 			params.d_model,        // lda 			params.grad_logits,    // B 			params.vocab_size,     // ldb 			&beta, 			params.grad_weight,    // C 			params.d_model);       // ldc
+
+================================================================================
+[ISSUES] training\BackwardOps.cu:981
+================================================================================
+
+Operation: ffn_output = grad_ffn_input × d_model]
+Transposes: A=CUBLAS_OP_N, B=CUBLAS_OP_T
+Dimensions: M=cfg.d_model, N=// M: rows of C in col-major             cfg.d_ff, K=// N: cols of C in col-major             total_tokens
+Leading dims: lda=// A: [total_tokens, ldb=lda=d_model             cfg.d_model, ldc=// B: [total_tokens
+
+Comment: M: rows of C in col-major             cfg.d_ff,                              // N: cols of C in col-major             total_tokens,                          // K: shared dimension             &alpha,             grad_ffn_input,                        // A: [total_tokens, d_model], lda=d_model             cfg.d_model,             ffn_output,                            // B: [total_tokens, d_ff], ldb=d_ff (transposed)             cfg.d_ff,             &beta_param,             training_state_.ffn_w2_grads[layer],   // C: [d_model, d_ff] column-major, ldc=d_model             cfg.d_model         ));
+
+Context:
+  // Get FFN weight access
+  // Step 3.3.1: Compute grad_W2 = ffn_output^T @ grad_ffn_input
+  // ffn_output: [total_tokens, d_ff]  (output of GELU, input to W2)
+  // grad_ffn_input: [total_tokens, d_model]  (gradient from LN2)
+  // W2 logical shape: [d_ff, d_model] (maps d_ff -> d_model)
+  // W2 CUBLAS storage: [d_model, d_ff] column-major with lda=d_model
+  // grad_W2 must match W2 storage format
+
+Issues:
+  • Leading dimension ldc=// B: [total_tokens doesn't match M=cfg.d_model
+
+Analysis:
+  cuBLAS interpretation (column-major):
+    C[cfg.d_model, // M: rows of C in col-major             cfg.d_ff] = op(grad_ffn_input)[?, // N: cols of C in col-major             total_tokens] × op(d_model])[// N: cols of C in col-major             total_tokens, ?]
+    A shape: [cfg.d_model, // N: cols of C in col-major             total_tokens]
+    B shape: [// M: rows of C in col-major             cfg.d_ff, // N: cols of C in col-major             total_tokens] (transposed)
+  
+  Row-major interpretation:
+    If matrices are stored row-major, this computes:
+    C^T = A^T × B  ⟹  C = B^T × A
+
+
+Code:
+        CUBLAS_CHECK(cublasSgemm(             training_state_.cublas_handle,             CUBLAS_OP_N, CUBLAS_OP_T,             cfg.d_model,                           // M: rows of C in col-major             cfg.d_ff,                              // N: cols of C in col-major             total_tokens,                          // K: shared dimension             &alpha,             grad_ffn_input,                        // A: [total_tokens, d_model], lda=d_model             cfg.d_model,             ffn_output,                            // B: [total_tokens, d_ff], ldb=d_ff (transposed)             cfg.d_ff,             &beta_param,             training_state_.ffn_w2_grads[layer],   // C: [d_model, d_ff] column-major, ldc=d_model             cfg.d_model         ));
+
+================================================================================
+[VALID] training\BackwardOps.cu:1013
+================================================================================
+
+Operation: // [total_tokens = enc_ffn ? enc_ffn->getFFNW2() : nullptr × d_model] - W2 weights             cfg.d_ff
+Transposes: A=CUBLAS_OP_N, B=CUBLAS_OP_N
+Dimensions: M=cfg.d_ff, N=// rows of grad_ffn_hidden             total_tokens, K=// cols of grad_ffn_hidden             cfg.d_model
+Leading dims: lda=// [d_ff, ldb=grad_ffn_input, ldc=d_model]             cfg.d_model
+
+Comment: rows of grad_ffn_hidden             total_tokens,                          // cols of grad_ffn_hidden             cfg.d_model,                           // shared dimension             &alpha,             enc_ffn ? enc_ffn->getFFNW2() : nullptr,                      // [d_ff, d_model] - W2 weights             cfg.d_ff,             grad_ffn_input,                        // [total_tokens, d_model]             cfg.d_model,             &beta_zero,             grad_ffn_hidden,                       // [total_tokens, d_ff]             cfg.d_ff         ));
+
+Context:
+  // Step 3.3.3: Propagate gradient back through W2
+  // grad_ffn_hidden = W2^T @ grad_ffn_input
+  // W2: [d_ff, d_model], so W2^T: [d_model, d_ff]
+  // grad_ffn_input: [total_tokens, d_model]
+  // grad_ffn_hidden: [total_tokens, d_ff]
+
+Analysis:
+  cuBLAS interpretation (column-major):
+    C[cfg.d_ff, // rows of grad_ffn_hidden             total_tokens] = op(enc_ffn ? enc_ffn->getFFNW2() : nullptr)[?, // cols of grad_ffn_hidden             cfg.d_model] × op(d_model] - W2 weights             cfg.d_ff)[// cols of grad_ffn_hidden             cfg.d_model, ?]
+    A shape: [cfg.d_ff, // cols of grad_ffn_hidden             cfg.d_model]
+    B shape: [// cols of grad_ffn_hidden             cfg.d_model, // rows of grad_ffn_hidden             total_tokens]
+  
+  Row-major interpretation:
+    If matrices are stored row-major, this computes:
+    C^T = A^T × B^T  ⟹  C = B × A
+
+
+Code:
+        CUBLAS_CHECK(cublasSgemm(             training_state_.cublas_handle,             CUBLAS_OP_N, CUBLAS_OP_N,             cfg.d_ff,                              // rows of grad_ffn_hidden             total_tokens,                          // cols of grad_ffn_hidden             cfg.d_model,                           // shared dimension             &alpha,             enc_ffn ? enc_ffn->getFFNW2() : nullptr,                      // [d_ff, d_model] - W2 weights             cfg.d_ff,             grad_ffn_input,                        // [total_tokens, d_model]             cfg.d_model,             &beta_zero,             grad_ffn_hidden,                       // [total_tokens, d_ff]             cfg.d_ff         ));
+
+================================================================================
+[VALID] training\BackwardOps.cu:1051
+================================================================================
+
+Operation: // [total_tokens = grad_ffn_hidden × d_ff]             cfg.d_ff
+Transposes: A=CUBLAS_OP_N, B=CUBLAS_OP_T
+Dimensions: M=cfg.d_ff, N=// rows of grad_W1             cfg.d_model, K=// cols of grad_W1             total_tokens
+Leading dims: lda=// [total_tokens, ldb=ln2_output, ldc=d_model] - input to W1             cfg.d_model
+
+Comment: rows of grad_W1             cfg.d_model,                           // cols of grad_W1             total_tokens,                          // shared dimension             &alpha,             grad_ffn_hidden,                       // [total_tokens, d_ff]             cfg.d_ff,             ln2_output,                            // [total_tokens, d_model] - input to W1             cfg.d_model,             &beta_param,             training_state_.ffn_w1_grads[layer],   // [d_model, d_ff] (transposed storage)             cfg.d_ff         ));
+
+Context:
+  // Step 3.3.5: Compute grad_W1 = ln2_output^T @ grad_ffn_hidden
+  // ln2_output: [total_tokens, d_model]  (input to FFN W1)
+  // grad_ffn_hidden: [total_tokens, d_ff]  (gradient after GELU)
+  // grad_W1: [d_model, d_ff]
+  // W1: [d_model, d_ff]  (maps d_model -> d_ff)
+
+Analysis:
+  cuBLAS interpretation (column-major):
+    C[cfg.d_ff, // rows of grad_W1             cfg.d_model] = op(grad_ffn_hidden)[?, // cols of grad_W1             total_tokens] × op(d_ff]             cfg.d_ff)[// cols of grad_W1             total_tokens, ?]
+    A shape: [cfg.d_ff, // cols of grad_W1             total_tokens]
+    B shape: [// rows of grad_W1             cfg.d_model, // cols of grad_W1             total_tokens] (transposed)
+  
+  Row-major interpretation:
+    If matrices are stored row-major, this computes:
+    C^T = A^T × B  ⟹  C = B^T × A
+
+
+Code:
+        CUBLAS_CHECK(cublasSgemm(             training_state_.cublas_handle,             CUBLAS_OP_N, CUBLAS_OP_T,             cfg.d_ff,                              // rows of grad_W1             cfg.d_model,                           // cols of grad_W1             total_tokens,                          // shared dimension             &alpha,             grad_ffn_hidden,                       // [total_tokens, d_ff]             cfg.d_ff,             ln2_output,                            // [total_tokens, d_model] - input to W1             cfg.d_model,             &beta_param,             training_state_.ffn_w1_grads[layer],   // [d_model, d_ff] (transposed storage)             cfg.d_ff         ));
+
+================================================================================
+[VALID] training\BackwardOps.cu:1086
+================================================================================
+
+Operation: // [total_tokens = enc_ffn ? enc_ffn->getFFNW1() : nullptr × d_ff] - W1 weights             cfg.d_model
+Transposes: A=CUBLAS_OP_N, B=CUBLAS_OP_N
+Dimensions: M=cfg.d_model, N=// rows of grad_ffn_input             total_tokens, K=// cols of grad_ffn_input             cfg.d_ff
+Leading dims: lda=// [d_model, ldb=grad_ffn_hidden, ldc=d_ff]             cfg.d_ff
+
+Comment: rows of grad_ffn_input             total_tokens,                          // cols of grad_ffn_input             cfg.d_ff,                              // shared dimension             &alpha,             enc_ffn ? enc_ffn->getFFNW1() : nullptr,                      // [d_model, d_ff] - W1 weights             cfg.d_model,             grad_ffn_hidden,                       // [total_tokens, d_ff]             cfg.d_ff,             &beta_zero,             grad_ffn_input,                        // [total_tokens, d_model] (overwrite)             cfg.d_model         ));
+
+Context:
+  // Step 3.3.7: Propagate gradient back through W1
+  // grad_ffn_input = W1^T @ grad_ffn_hidden
+  // W1: [d_model, d_ff], so W1^T: [d_ff, d_model]
+  // grad_ffn_hidden: [total_tokens, d_ff]
+  // grad_ffn_input: [total_tokens, d_model]
+
+Analysis:
+  cuBLAS interpretation (column-major):
+    C[cfg.d_model, // rows of grad_ffn_input             total_tokens] = op(enc_ffn ? enc_ffn->getFFNW1() : nullptr)[?, // cols of grad_ffn_input             cfg.d_ff] × op(d_ff] - W1 weights             cfg.d_model)[// cols of grad_ffn_input             cfg.d_ff, ?]
+    A shape: [cfg.d_model, // cols of grad_ffn_input             cfg.d_ff]
+    B shape: [// cols of grad_ffn_input             cfg.d_ff, // rows of grad_ffn_input             total_tokens]
+  
+  Row-major interpretation:
+    If matrices are stored row-major, this computes:
+    C^T = A^T × B^T  ⟹  C = B × A
+
+
+Code:
+        CUBLAS_CHECK(cublasSgemm(             training_state_.cublas_handle,             CUBLAS_OP_N, CUBLAS_OP_N,             cfg.d_model,                           // rows of grad_ffn_input             total_tokens,                          // cols of grad_ffn_input             cfg.d_ff,                              // shared dimension             &alpha,             enc_ffn ? enc_ffn->getFFNW1() : nullptr,                      // [d_model, d_ff] - W1 weights             cfg.d_model,             grad_ffn_hidden,                       // [total_tokens, d_ff]             cfg.d_ff,             &beta_zero,             grad_ffn_input,                        // [total_tokens, d_model] (overwrite)             cfg.d_model         ));
+
+================================================================================
+[VALID] training\BackwardOps.cu:1222
+================================================================================
+
+Operation: // grad [total_tokens = enc_attn ? enc_attn->getAttnWo() : nullptr × d_model]             cfg.d_model
+Transposes: A=CUBLAS_OP_T, B=CUBLAS_OP_N
+Dimensions: M=// FIX: Need OP_T on W_o for row-major grad @ W_o             cfg.d_model, N=// M: rows of result             total_tokens, K=// N: cols of result             cfg.d_model
+Leading dims: lda=// W_o [d_model, ldb=grad_attn_input, ldc=d_model]             cfg.d_model
+
+Comment: FIX: Need OP_T on W_o for row-major grad @ W_o             cfg.d_model,                              // M: rows of result             total_tokens,                             // N: cols of result             cfg.d_model,                              // K: shared dim             &alpha,             enc_attn ? enc_attn->getAttnWo() : nullptr,         // W_o [d_model, d_model]             cfg.d_model,             grad_attn_input,                          // grad [total_tokens, d_model]             cfg.d_model,             &beta_zero,             grad_attn_out_before_proj,                // result [total_tokens, d_model]             cfg.d_model         ));
+
+Context:
+  // grad_attn_out = grad_attn_input @ W_o
+  // Forward was: output = attn @ W_o^T, so backward is: grad_attn = grad_out @ W_o
+  // grad_attn_input: [total_tokens, d_model] row-major
+  // W_o: [d_model, d_model] row-major
+  // grad_attn_out: [total_tokens, d_model] row-major
+  // cuBLAS row-major: C = A @ B uses CUBLAS_OP_T on B, CUBLAS_OP_N on A
+  // C'[d_model, tokens] = W_o^T'[d_model, d_model] @ grad'[d_model, tokens]
+
+Analysis:
+  cuBLAS interpretation (column-major):
+    C[// FIX: Need OP_T on W_o for row-major grad @ W_o             cfg.d_model, // M: rows of result             total_tokens] = op(enc_attn ? enc_attn->getAttnWo() : nullptr)[?, // N: cols of result             cfg.d_model] × op(d_model]             cfg.d_model)[// N: cols of result             cfg.d_model, ?]
+    A shape: [// N: cols of result             cfg.d_model, // FIX: Need OP_T on W_o for row-major grad @ W_o             cfg.d_model] (transposed)
+    B shape: [// N: cols of result             cfg.d_model, // M: rows of result             total_tokens]
+  
+  Row-major interpretation:
+    If matrices are stored row-major, this computes:
+    C^T = A × B^T  ⟹  C = B × A^T
+  Relationship check:
+    Forward: was: output = attn @ w_o^t, so backward is: grad_attn = grad_out @ w_o
+    Backward: is: grad_attn = grad_out @ w_o
+
+
+Code:
+        CUBLAS_CHECK(cublasSgemm(             training_state_.cublas_handle,             CUBLAS_OP_T, CUBLAS_OP_N,                  // FIX: Need OP_T on W_o for row-major grad @ W_o             cfg.d_model,                              // M: rows of result             total_tokens,                             // N: cols of result             cfg.d_model,                              // K: shared dim             &alpha,             enc_attn ? enc_attn->getAttnWo() : nullptr,         // W_o [d_model, d_model]             cfg.d_model,             grad_attn_input,                          // grad [total_tokens, d_model]             cfg.d_model,             &beta_zero,             grad_attn_out_before_proj,                // result [total_tokens, d_model]             cfg.d_model         ));
+
+================================================================================
+[VALID] training\BackwardOps.cu:1261
+================================================================================
+
+Operation: // B: attn [tokens = grad_attn_input × d_model] row-major                 cfg.d_model
+Transposes: A=CUBLAS_OP_N, B=CUBLAS_OP_T
+Dimensions: M=// grad_col @ attn_col^T                 cfg.d_model, N=// M: rows of result                 cfg.d_model, K=// N: cols of result                 total_tokens
+Leading dims: lda=// A: grad [tokens, ldb=// lda: leading dim of A                 cached_attn_raw_out, ldc=d_model] row-major                 cfg.d_model
+
+Comment: grad_col @ attn_col^T                 cfg.d_model,                           // M: rows of result                 cfg.d_model,                           // N: cols of result                 total_tokens,                          // K: shared dim (tokens)                 &alpha,                 grad_attn_input,                       // A: grad [tokens, d_model] row-major                 cfg.d_model,                           // lda: leading dim of A                 cached_attn_raw_out,                   // B: attn [tokens, d_model] row-major                 cfg.d_model,                           // ldb: leading dim of B                 &beta_param,                 training_state_.attn_out_weight_grads[layer],  // C: [d_model, d_model]                 cfg.d_model                            // ldc: leading dim of C             ));
+
+Context:
+  // M = d_model, N = d_model, K = tokens
+  //
+  // cuBLAS sees row-major as transposed col-major:
+  //   grad row[tokens, d_model] = grad_col[d_model, tokens]
+  //   attn row[tokens, d_model] = attn_col[d_model, tokens]
+  //
+  // We want grad^T @ attn = [d_model, tokens] @ [tokens, d_model]
+  // In cuBLAS: op(A)=grad_col (no trans) = [d_model, tokens]
+  //            op(B)=attn_col^T (trans) = [tokens, d_model]
+  // So: CUBLAS_OP_N on grad, CUBLAS_OP_T on attn
+
+Analysis:
+  cuBLAS interpretation (column-major):
+    C[// grad_col @ attn_col^T                 cfg.d_model, // M: rows of result                 cfg.d_model] = op(grad_attn_input)[?, // N: cols of result                 total_tokens] × op(d_model] row-major                 cfg.d_model)[// N: cols of result                 total_tokens, ?]
+    A shape: [// grad_col @ attn_col^T                 cfg.d_model, // N: cols of result                 total_tokens]
+    B shape: [// M: rows of result                 cfg.d_model, // N: cols of result                 total_tokens] (transposed)
+  
+  Row-major interpretation:
+    If matrices are stored row-major, this computes:
+    C^T = A^T × B  ⟹  C = B^T × A
+
+
+Code:
+            CUBLAS_CHECK(cublasSgemm(                 training_state_.cublas_handle,                 CUBLAS_OP_N, CUBLAS_OP_T,              // grad_col @ attn_col^T                 cfg.d_model,                           // M: rows of result                 cfg.d_model,                           // N: cols of result                 total_tokens,                          // K: shared dim (tokens)                 &alpha,                 grad_attn_input,                       // A: grad [tokens, d_model] row-major                 cfg.d_model,                           // lda: leading dim of A                 cached_attn_raw_out,                   // B: attn [tokens, d_model] row-major                 cfg.d_model,                           // ldb: leading dim of B                 &beta_param,                 training_state_.attn_out_weight_grads[layer],  // C: [d_model, d_model]                 cfg.d_model                            // ldc: leading dim of C             ));
+
+================================================================================
+[VALID] training\BackwardOps.cu:1454
+================================================================================
+
+Operation: // [tokens = ln1_output × d_model] row-major             cfg.d_model
+Transposes: A=CUBLAS_OP_N, B=CUBLAS_OP_T
+Dimensions: M=cfg.d_model, N=// M: rows of C^T             3 * cfg.d_model, K=// N: cols of C^T             total_tokens
+Leading dims: lda=// [tokens, ldb=grad_qkv_concat, ldc=3*d_model] row-major             3 * cfg.d_model
+
+Comment: M: rows of C^T             3 * cfg.d_model,                       // N: cols of C^T             total_tokens,                          // K             &alpha,             ln1_output,                            // [tokens, d_model] row-major             cfg.d_model,             grad_qkv_concat,                       // [tokens, 3*d_model] row-major             3 * cfg.d_model,             &beta_param,             training_state_.attn_qkv_weight_grads[layer],  // [3*d_model, d_model] row-major             cfg.d_model         ));
+
+Context:
+  // 3.8: Compute QKV weight gradients
+  // grad_W_qkv = grad_qkv^T @ ln1_output = [3*d_model, tokens] @ [tokens, d_model] = [3*d_model, d_model]
+  // All tensors are row-major:
+  //   grad_qkv_concat: [tokens, 3*d_model] row-major, stride=3*d_model
+  //   ln1_output: [tokens, d_model] row-major, stride=d_model
+  //   grad_W_qkv: [3*d_model, d_model] row-major, stride=d_model
+  // cuBLAS row-major: C = A^T @ B computed as C^T = B^T @ A in col-major
+  // C^T[d_model, 3*d_model] = B^T[d_model, tokens] @ A[tokens, 3*d_model]
+
+Analysis:
+  cuBLAS interpretation (column-major):
+    C[cfg.d_model, // M: rows of C^T             3 * cfg.d_model] = op(ln1_output)[?, // N: cols of C^T             total_tokens] × op(d_model] row-major             cfg.d_model)[// N: cols of C^T             total_tokens, ?]
+    A shape: [cfg.d_model, // N: cols of C^T             total_tokens]
+    B shape: [// M: rows of C^T             3 * cfg.d_model, // N: cols of C^T             total_tokens] (transposed)
+  
+  Row-major interpretation:
+    If matrices are stored row-major, this computes:
+    C^T = A^T × B  ⟹  C = B^T × A
+
+
+Code:
+        CUBLAS_CHECK(cublasSgemm(             training_state_.cublas_handle,             CUBLAS_OP_N, CUBLAS_OP_T,             cfg.d_model,                           // M: rows of C^T             3 * cfg.d_model,                       // N: cols of C^T             total_tokens,                          // K             &alpha,             ln1_output,                            // [tokens, d_model] row-major             cfg.d_model,             grad_qkv_concat,                       // [tokens, 3*d_model] row-major             3 * cfg.d_model,             &beta_param,             training_state_.attn_qkv_weight_grads[layer],  // [3*d_model, d_model] row-major             cfg.d_model         ));
+
+================================================================================
+[ISSUES] training\BackwardOps.cu:1520
+================================================================================
+
+Operation: // lda = leading dim of A = 3*d_model (before transpose)             grad_qkv_concat = w_qkv_ptr × d_model] row-major = [d_model
+Transposes: A=CUBLAS_OP_T, B=CUBLAS_OP_N
+Dimensions: M=// W_qkv needs transpose in cuBLAS view             cfg.d_model, N=// M: rows of C (col-major view)             total_tokens, K=// N: cols of C             3 * cfg.d_model
+Leading dims: lda=// W_qkv [3*d_model, ldb=3*d_model] col-major             3 * cfg.d_model, ldc=// [tokens
+
+Comment: W_qkv needs transpose in cuBLAS view             cfg.d_model,                           // M: rows of C (col-major view)             total_tokens,                          // N: cols of C             3 * cfg.d_model,                       // K             &alpha,             w_qkv_ptr,                             // W_qkv [3*d_model, d_model] row-major = [d_model, 3*d_model] col-major             3 * cfg.d_model,                       // lda = leading dim of A = 3*d_model (before transpose)             grad_qkv_concat,                       // [tokens, 3*d_model] row-major = [3*d_model, tokens] col-major             3 * cfg.d_model,                       // ldb = 3*d_model             &beta_zero,             grad_qkv_input,                        // [tokens, d_model] row-major = [d_model, tokens] col-major             cfg.d_model                            // ldc = d_model         ));
+
+Context:
+  // Backward through W_qkv projection:
+  // Forward was: QKV = X @ W_qkv^T  (X:[tokens,d_model], W_qkv:[3*d_model,d_model])
+  // Backward:    grad_input = grad_qkv @ W_qkv
+  //
+  // W_qkv row-major [3*d_model, d_model] = col-major [d_model, 3*d_model]
+  // To get W_qkv (not transposed) in math, we need CUBLAS_OP_T on the col-major view
+  // Result: C = W_qkv^T(cublas) @ B = [d_model, 3*d_model]^T @ [3*d_model, tokens]
+  //         C = [d_model, tokens] = grad_input in col-major
+
+Issues:
+  • Leading dimension ldc=// [tokens doesn't match M=// W_qkv needs transpose in cuBLAS view             cfg.d_model
+
+Analysis:
+  cuBLAS interpretation (column-major):
+    C[// W_qkv needs transpose in cuBLAS view             cfg.d_model, // M: rows of C (col-major view)             total_tokens] = op(w_qkv_ptr)[?, // N: cols of C             3 * cfg.d_model] × op(d_model] row-major = [d_model)[// N: cols of C             3 * cfg.d_model, ?]
+    A shape: [// N: cols of C             3 * cfg.d_model, // W_qkv needs transpose in cuBLAS view             cfg.d_model] (transposed)
+    B shape: [// N: cols of C             3 * cfg.d_model, // M: rows of C (col-major view)             total_tokens]
+  
+  Row-major interpretation:
+    If matrices are stored row-major, this computes:
+    C^T = A × B^T  ⟹  C = B × A^T
+  Relationship check:
+    Forward: was: qkv = x @ w_qkv^t  (x:[tokens,d_model], w_qkv:[3*d_model,d_model])
+    Backward: through w_qkv projection:
+
+
+Code:
+        CUBLAS_CHECK(cublasSgemm(             training_state_.cublas_handle,             CUBLAS_OP_T, CUBLAS_OP_N,              // W_qkv needs transpose in cuBLAS view             cfg.d_model,                           // M: rows of C (col-major view)             total_tokens,                          // N: cols of C             3 * cfg.d_model,                       // K             &alpha,             w_qkv_ptr,                             // W_qkv [3*d_model, d_model] row-major = [d_model, 3*d_model] col-major             3 * cfg.d_model,                       // lda = leading dim of A = 3*d_model (before transpose)             grad_qkv_concat,                       // [tokens, 3*d_model] row-major = [3*d_model, tokens] col-major             3 * cfg.d_model,                       // ldb = 3*d_model             &beta_zero,             grad_qkv_input,                        // [tokens, d_model] row-major = [d_model, tokens] col-major             cfg.d_model                            // ldc = d_model         ));

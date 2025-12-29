@@ -31,7 +31,7 @@ GRIMTextServerManager& GRIMTextServerManager::getInstance() {
 }
 
 GRIMTextServerManager::GRIMTextServerManager() 
-    : serverPath_("resources/models/GRIM-text/training/build_vs_cuda/Release/grim_text_server.exe"),
+    : serverPath_("resources/models/GRIM-text/training/build/Release/grim_text_server.exe"),
       serverURL_("http://127.0.0.1:11435"),
       running_(false)
 #ifdef _WIN32
@@ -110,7 +110,7 @@ bool GRIMTextServerManager::start() {
     
     if (!fs::exists(serverExe)) {
         LOG_ERROR("GRIMTextServer", "Server executable not found: " + serverExe.string());
-        LOG_ERROR("GRIMTextServer", "Build GRIM-text first: cmake --build resources/models/GRIM-text/training/build_vs_cuda --config Release");
+        LOG_ERROR("GRIMTextServer", "Build GRIM-text first: cmake --build resources/models/GRIM-text/training/build --config Release");
         return false;
     }
     

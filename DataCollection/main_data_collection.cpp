@@ -18,7 +18,7 @@
 #include "verifier.hpp"
 #include "data_preprocessor.hpp"
 #include "data_splitter.hpp"
-#include "../resources/models/GRIM-text/GRIM/grim_tokenizer.hpp"
+#include "../resources/models/GRIM-text/Shared/UnigramByte/UniByte.hpp"
 #include "../../../../control/training_control_generated.h"
 #include <flatbuffers/flatbuffers.h>
 #include <system_error>
@@ -309,18 +309,12 @@ int StartMainDataCollection(int argc, char** argv) {
     //======================================================//
     std::cout << "[5/7] Training BPE tokenizer on data...\n";
     
-    GRIM::TokenizerConfig tok_config;
-    tok_config.vocab_size = 50000;
-    tok_config.max_length = 2048;
-    tok_config.special_tokens = {"<pad>", "<unk>", "<s>", "</s>"};
-    tok_config.unk_token = "<unk>";
-    tok_config.pad_token = "<pad>";
-    tok_config.bos_token = "<s>";
-    tok_config.eos_token = "</s>";
-    tok_config.add_bos = true;
-    tok_config.add_eos = true;
+    GRIM::Tokenizer::UniByteConfig tok_config;
+    tok_config.target_vocab_size = 50000;
+    tok_config.enable_byte_fallback = true;
+    tok_config.enable_scratch_block_reasoning = true;
     
-    GRIM::GrimTokenizer tokenizer(tok_config);
+    GRIM::Tokenizer::UniByte tokenizer(tok_config);
     
     // Train on training split only
     std::cout << "  Training BPE with " << split.train.size() << " samples...\n";

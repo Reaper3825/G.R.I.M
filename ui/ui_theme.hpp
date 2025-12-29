@@ -13,6 +13,8 @@ namespace UITheme {
         constexpr uint32_t WidgetBgHover   = 0xFF303030;  // Widget on hover
         constexpr uint32_t WidgetBgActive  = 0xFF353535;  // Widget when clicked
         constexpr uint32_t WidgetBgDisabled= 0xFF1A1A1A;  // Disabled widget
+        constexpr uint32_t Background      = 0xFF0A0A0A;  // Deep background
+        constexpr uint32_t SliderTrack     = 0xFF202020;  // Slider track background
         
         // Accents
         constexpr uint32_t Primary         = 0xFF00DDFF;  // Cyan
@@ -64,6 +66,7 @@ namespace UITheme {
         constexpr float SliderHeight       = 40.0f;  // Slider with label
         constexpr float ToggleHeight       = 30.0f;  // Toggle switch
         constexpr float DropdownHeight     = 35.0f;  // Dropdown box
+        constexpr float ProgressBarHeight  = 30.0f;  // Progress bar height
         
         constexpr float BorderWidth        = 2.0f;   // Standard border
         constexpr float BorderWidthSubtle  = 1.0f;   // Subtle border

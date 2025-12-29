@@ -45,6 +45,7 @@ namespace Voice {
     #ifdef _WIN32
     static HANDLE hChildStdinWr = nullptr;
     static HANDLE hChildStdoutRd = nullptr;
+    static HANDLE hChildStderrRd = nullptr;
     static PROCESS_INFORMATION piProcInfo{};
     #endif
 
@@ -129,6 +130,50 @@ namespace Voice {
     }
 #endif
 
+    #ifdef _WIN32
+    // Thread to read child's stderr so it doesn't get mixed into stdout JSON stream
+    static std::thread stderrReaderThread;
+
+    static void stderrReaderLoop() {
+        if (!hChildStderrRd) return;
+
+        std::string line;
+        char ch;
+        DWORD read = 0, avail = 0;
+
+        while (true) {
+            if (!PeekNamedPipe(hChildStderrRd, nullptr, 0, nullptr, &avail, nullptr)) {
+                break;
+            }
+            if (avail == 0) {
+                // If process exited, stop
+                DWORD exitCode = 0;
+                if (piProcInfo.hProcess && GetExitCodeProcess(piProcInfo.hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+            if (!ReadFile(hChildStderrRd, &ch, 1, &read, nullptr) || read == 0) {
+                break;
+            }
+            if (ch == '\r') continue;
+            if (ch == '\n') {
+                if (!line.empty()) {
+                    LOG_DEBUG("Voice/Bridge/Stderr", line);
+                    line.clear();
+                }
+                continue;
+            }
+            line.push_back(ch);
+        }
+
+        if (!line.empty()) {
+            LOG_DEBUG("Voice/Bridge/Stderr", line);
+        }
+    }
+    #endif
+
     // =========================================================
     // Init / Shutdown
     // =========================================================
@@ -169,6 +214,7 @@ namespace Voice {
 
             HANDLE hChildStdoutRdLocal = nullptr, hChildStdoutWr = nullptr;
             HANDLE hChildStdinRd = nullptr, hChildStdinWrLocal = nullptr;
+            HANDLE hChildStderrRdLocal = nullptr, hChildStderrWr = nullptr;
 
             // Create pipe for child process's STDOUT
             if (!CreatePipe(&hChildStdoutRdLocal, &hChildStdoutWr, &saAttr, 0))
@@ -182,11 +228,17 @@ namespace Voice {
 
             SetHandleInformation(hChildStdinWrLocal, HANDLE_FLAG_INHERIT, 0);
 
+            // Create pipe for child process's STDERR (separate from STDOUT)
+            if (!CreatePipe(&hChildStderrRdLocal, &hChildStderrWr, &saAttr, 0))
+                LOG_ERROR("Voice/Init", "Failed to create stderr pipe");
+
+            SetHandleInformation(hChildStderrRdLocal, HANDLE_FLAG_INHERIT, 0);
+
             // Set up STARTUPINFOA
             STARTUPINFOA si{};
             ZeroMemory(&piProcInfo, sizeof(piProcInfo));
             si.cb = sizeof(STARTUPINFOA);
-            si.hStdError  = hChildStdoutWr;
+            si.hStdError  = hChildStderrWr;
             si.hStdOutput = hChildStdoutWr;
             si.hStdInput  = hChildStdinRd;
             si.dwFlags |= STARTF_USESTDHANDLES;
@@ -220,10 +272,19 @@ namespace Voice {
             // Close the unneeded ends in parent
             CloseHandle(hChildStdoutWr);
             CloseHandle(hChildStdinRd);
+            CloseHandle(hChildStderrWr);
 
             // Store pipe ends we need
             hChildStdoutRd = hChildStdoutRdLocal;
             hChildStdinWr = hChildStdinWrLocal;
+            hChildStderrRd = hChildStderrRdLocal;
+
+            // Launch stderr reader thread to log child's stderr separately
+            try {
+                stderrReaderThread = std::thread(stderrReaderLoop);
+            } catch (...) {
+                LOG_ERROR("Voice/Init", "Failed to start stderr reader thread");
+            }
 
             // =========================================================
             // Extended handshake + ready logic for XTTS v2
@@ -272,6 +333,15 @@ namespace Voice {
             WaitForSingleObject(piProcInfo.hProcess, 2000);
             CloseHandle(piProcInfo.hProcess);
             CloseHandle(piProcInfo.hThread);
+        }
+        if (hChildStderrRd) {
+            CloseHandle(hChildStderrRd);
+            hChildStderrRd = nullptr;
+        }
+
+        if (stderrReaderThread.joinable()) {
+            // Give the stderr thread a brief moment to finish
+            stderrReaderThread.join();
         }
 #endif
         // ? Shutdown cache (saves index + cleanup)

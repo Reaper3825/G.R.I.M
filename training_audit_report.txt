@@ -1,0 +1,143 @@
+================================================================================
+GRIM TRAINING DATA QUALITY AUDIT
+================================================================================
+Date: 2025-12-16 22:24:58
+Data file: D:/G.R.I.M/resources/models/GRIM-text/training/data/training_data.grmt
+Vocab file: D:/G.R.I.M/resources/models/GRIM-text/training/data/vocab.txt
+Total sequences: 39347
+Sampled: 10
+================================================================================
+
+CLASSIFICATION SUMMARY
+--------------------------------------------------------------------------------
+  prose               :   4 ( 40.0%)  [weight: 1.0×]
+  code                :   3 ( 30.0%)  [weight: 1.0×]
+  documentation       :   2 ( 20.0%)  [weight: 1.0×]
+  mixed_junk          :   1 ( 10.0%)  [weight: 0.3×]
+
+INDIVIDUAL SAMPLES
+================================================================================
+
+================================================================================
+SAMPLE 1/10 - Sequence #2167
+================================================================================
+Tokens: 257
+Classification: [documentation]
+Score breakdown: {'boilerplate': 0, 'documentation': 4, 'prose': 3, 'code': 2, 'junk': 0}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+As an example, one model proposed for the plume activity on Enceladus suggests that a sthe observed abundances of water and other species in the plume can be explained by clathrate degassing (Kieffer et al., <ATOM_URL>). Solid-state convection, typically thought to oc- cur exclusively in large planetary objects, may play a role in driving activity on Enceladus (Roberts & Nimmo <ATOM_URL>; Barr <ATOM_URL>). SLRI heating and mantle porosity have been envoked to explain the early thermal evolution of Iapetus (Castillo-Rogez et al., <ATOM_URL>). A removal of the artificial boundary between small body and planetary satellite models is well justified by recent spacecraft observations. Improved numerical methods, e.g., coupled models of hydrothermal and thermal convection (e.g., Travis & Schubert <ATOM_URL>) can help remove the boundary between these fields. However, uncertainties about the material properties of ice and rock at planetary con- ditions have led to uncertainties about which physical processes occur inside a given body. For example, solid-state convection is difficult to start, but can occur in the <ATOM_URL> kilometer- thick ice mantle of Enceladus (Barr & McKinnon <ATOM_URL>). McCord and Sotin (<ATOM_URL>) also demonstrated that convection onset is possible in the case of Ceres. Castillo-Rogez
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 2/10 - Sequence #3870
+================================================================================
+Tokens: 257
+Classification: [code]
+Score breakdown: {'boilerplate': 0, 'documentation': 0, 'prose': 0, 'code': 3, 'junk': 0}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+<ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> (k) N = <ATOM_URL>; fd = <ATOM_URL>; fI = <ATOM_URL> (o) N = <ATOM_URL>; fd = <ATOM_URL>; fI = <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> simulation No. <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> (l) N = <ATOM_URL>; fd = <ATOM_URL>; fI = <ATOM_URL> (p) N = <ATOM_URL>; fd = <ATOM_URL>; fI = <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> simulation No. <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> (m) N = <ATOM_URL>; fd = <ATOM_URL>; fI = <ATOM_URL> (q) N = <ATOM_URL>; fd = <ATOM_URL>; fI = <ATOM_URL> <ATOM_URL>
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 3/10 - Sequence #7145
+================================================================================
+Tokens: 258
+Classification: [code]
+Score breakdown: {'boilerplate': 0, 'documentation': 4, 'prose': 3, 'code': 6, 'junk': 0}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+days for a Jupiter- mass planet orbiting VB <ATOM_URL> with = <ATOM_URL><ATOM_UUID> The fractional deviation due to the magnification <ATOM_URL> of the dim background star is small, so that deep observations are required. Planets in the zone for resonant lensing: Orbital motion is still important enough to significantly increase the probability of detection (see Figure <ATOM_URL> of Paper I). The magnification tends to be large, making it easier to identify the magnification of the dim background star. As is the case for close-orbit planets, frequent observations will either discover planets in the zone for resonant lensing, or else will place strong limits on their existence. Wide-orbit planets: There is a high probability of discovering wide-orbit planets during an interval of weeks from the closest approach. Observing Strategy: While intensive monitoring of a system in which the distance and time of approach is uncertain cannot be justified, a discovery would be important. We therefore propose a compromise between the scientific potential and the uncertainty asso- ciated with the event. First we consider the questions of detectability in more detail. If telescopes at approximately ten locations around the globe can each observe the source star <ATOM_URL> <ATOM_URL> times per night, a reasonably densely sampled light curve can be developed. Because the background star is so dim, the signal-to-noise ratios required to reliably mea- sure the magnification may require meter-cl
+... (truncated, total 1529 chars)
+
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 4/10 - Sequence #8738
+================================================================================
+Tokens: 257
+Classification: [mixed_junk]
+Score breakdown: {'boilerplate': 0, 'documentation': 2, 'prose': 3, 'code': 0, 'junk': 5}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+). For all materials in this pressure regime we simply use the VE or BME. For a derivation of these EOSs, see Poirier (<ATOM_URL>). The VE is <ATOM_URL><ATOM_UUID> " <ATOM_URL><ATOM_UUID> # ( " <ATOM_URL><ATOM_UUID> #) <ATOM_URL> P = 3K<ATOM_URL> <ATOM_URL> exp (K <ATOM_URL> <ATOM_URL>) <ATOM_URL> , (<ATOM_URL>) <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> and the third-order finite strain BME is " <ATOM_URL><ATOM_UUID> # ( " #) <ATOM_URL><ATOM_UUID> <ATOM_URL><ATOM_UUID> <ATOM_URL> <ATOM_URL> P = K<ATOM_URL> <ATOM_URL> + (K <ATOM_URL> <ATOM_URL>) <ATOM_URL> . (<ATOM_URL>) <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> Where <ATOM_URL> is the reference density, K<ATOM_URL> = V (P <ATOM_UUID> ) P =<ATOM_URL> is the bulk modulus of the material, K<ATOM_URL> = (K<ATOM_UUID> ) P =<ATOM_URL> is its pressure derivative. Their values for the materials used in this paper are summarized in Table <ATOM_EMAIL> The VE is used for the -phase of iron because it is more suitable than the BME for extrapolation to high pressures (Poirier <ATOM_URL>). The third-order BME is used for other materials. <ATOM_EMAIL> Carbon Model There is an assumption used in modeling the interior structure of solid exoplanets: their constituents are similar to the terrestrial planets in our solar system. They have an iron core and a silicate envelope for the differentiated model. But based on current observation
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 5/10 - Sequence #21017
+================================================================================
+Tokens: 257
+Classification: [prose]
+Score breakdown: {'boilerplate': 0, 'documentation': 2, 'prose': 3, 'code': 2, 'junk': 0}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+% of the total planet mass, at <ATOM_URL>% Bayesian confidence. The most water rich composition within the <ATOM_URL>% credible region that have iron abundances below the (<ATOM_URL>) constraints from silicate collisional stripping simulations is <ATOM_URL>% H<ATOM_URL> O. Finally, considering the possibility for a H<ATOM_UUID> gas layer on Kepler-36b, we find that Kepler- 36b could have no more than <ATOM_URL>% of its mass in solar composition H<ATOM_UUID> layer. <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> Figure S<ATOM_URL>: Two-parameter joint posterior distributions of the primary model parameters (ex- cluding contamination parameters; see <ATOM_EMAIL><ATOM_EMAIL>). The densities are plotted logarithmically in order to elucidate the nature of the parameter correlations. The indices listed along the diagonal indicate which parameter is associated with the corresponding row and column. The parameter name corresponding to a given index is indicated in Table S<ATOM_URL> in the Index column. <ATOM_URL> Formally nonHill Stable (sample of <ATOM_URL>,<ATOM_URL>) <ATOM_URL> <ATOM_URL> (deg) <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> (deg) <ATOM_EMAIL> <ATOM_EMAIL> e<ATOM_URL> <ATOM_EMAIL> <ATOM_EMAIL> <ATOM_EMAIL> <ATOM_EMAIL> <ATOM_EMAIL> <ATOM_EMAIL> <ATOM_EMAIL> <ATOM_EMAIL> e<ATOM_URL> Figure
+... (truncated, total 1523 chars)
+
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 6/10 - Sequence #23124
+================================================================================
+Tokens: 257
+Classification: [prose]
+Score breakdown: {'boilerplate': 0, 'documentation': 0, 'prose': 3, 'code': 2, 'junk': 0}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+the pressure remains constant in each layer and the temperature in the <ATOM_URL> bar pressure regime), which is a simple conse- varies according to the longitude-dependent profiles calculated quence of the eastward transport of heat. An eastward jet and with the radiative model. We start the integration at the substel- the resulting shift of the thermal emission peak was predicted lar meridian with a chemical composition calculated at chemi- by Showman & Guillot (<ATOM_URL>) to be a common phenomenon cal equilibrium with solar elemental abundances (Asplund et al. in hot Jupiter atmospheres. The shift was later observed in the <ATOM_URL>) and the (T, p) profile shown in the bottom panel of Fig. <ATOM_EMAIL> thermal phase curve of HD 189733b by Knutson et al. (<ATOM_URL>). The chemical equilibrium calculations are done with a code that In the same vein, we find that the temperature is not homoge- minimizes the Gibbs energy following the algorithm of Gordon neous in the nightside (which would be the case in the absence & McBride (<ATOM_URL>). The choice of the initial composition at thee anof winds), but rather inhomogeneous, with the coldest regions chemical equilibrium values of hot regions such as the substellar located close to the morning limb (see mid and bottom panels meridian results very convenient as it accelerates considerably of Fig. <ATOM_URL>). A second effect worth to note is that the longitudinal the convergence towards a periodic state. The reasons for that
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 7/10 - Sequence #25957
+================================================================================
+Tokens: 258
+Classification: [code]
+Score breakdown: {'boilerplate': 0, 'documentation': 0, 'prose': 3, 'code': 4, 'junk': 0}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+, we ultimately detrend our data using only the slit loss term because our precision is not high enough to justify using additional correction terms.. <ATOM_URL> <ATOM_EMAIL> Needle in a Haystack: Searching for Transit Signatures We are unable to measure GJ 1214bs transit light curve directly, because this signal is buried in the slit loss term we remove from all spectral time series. This removal has the effect of subtracting a constant offset value C from the transmission spectrum. The overall shape of the spectrum is therefore unchanged, and we can still hope to measure the modified transmission spectrum i.e., d = (RP <ATOM_UUID> )<ATOM_URL> C. If GJ 1214b has a cloudless, H<ATOM_URL> <ATOM_UUID> atmosphere we expect substantial variations in d across the wavelength ranges we observe (cf. Figure <ATOM_URL>; also Miller-Ricci & Fortney <ATOM_URL>); but if the planet has a denser atmosphere (and thus a smaller atmospheric scale height) we expect to see an essentially flat transit spectrum in this case we might see no transit signature in any wavelength channel. Clouds would further suppress any spectral features occuring below a given altitude. Photon noise alone precludes detection of the residual differential transit signal in any single spec- tral line. Even when examining time series that average over broad spectral regions (e.g., molecular bandheads) we are unable to detect any transit-like
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 8/10 - Sequence #28852
+================================================================================
+Tokens: 258
+Classification: [documentation]
+Score breakdown: {'boilerplate': 0, 'documentation': 6, 'prose': 3, 'code': 2, 'junk': 0}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+Note again that the curves for KS<ATOM_URL>, DS<ATOM_URL> and Ch<ATOM_URL> models are inferred from the data analysis (for both northward and southward IMF) rather than obtained from a successful idea, which is not based on real data, or from model extrapolation of magnetopause crossings from normal conditions. However even the KS<ATOM_URL>, DS<ATOM_URL> and Ch<ATOM_URL> models developed using GMC data predict very different solar wind conditions required for GMC. The contradiction results obtained from statistical comparison of the MP models using parameters PCP and FAR are probably owing to weak effectiveness of the methodic of analysis. Actually the PCP and FAR can not indicate the most realistic MP model which is better describe actual dynamic of the magnetopause under strongly disturbed solar wind conditions. Indeed models with very strong underestimation or overestimation may have the same PCP. So the methodic used in Shue et al. [2000b, <ATOM_URL>] gives sometime strange results showing that all three model are good, despite their predictions of the SW pressure (Table <ATOM_URL>) are significantly different (up to a factor of two). As it was noted by Shue et al. [2000b] in context with SH<ATOM_URL> and PR<ATOM_URL> the high PCP and FAR indicate that the occurrences of the MP crossings are depended on other necessary conditions. To solve this problem it is very important
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 9/10 - Sequence #29205
+================================================================================
+Tokens: 257
+Classification: [prose]
+Score breakdown: {'boilerplate': 0, 'documentation': 0, 'prose': 3, 'code': 2, 'junk': 0}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+). the degenerate leading<ATOM_UUID> modes predicted by WKB HD <ATOM_URL>: This star hosts an edge-on debris disc; the theory. The modes are degenerate for cold discs and split dominant thermal emission from the disc arises at radii <ATOM_URL> into close (in frequency) pairs as the mean eccentricity AU but the disc is visible to much larger radii. The sur- grows, until for e & <ATOM_EMAIL> there is no apparent pairing in fre- face brightness of the east side of the disc is about <ATOM_URL> mag quency space (see Fig. <ATOM_URL>). fainter than the west side at a given radius and the surface- Some of the non-axisymmetric structure that is com- brightness distribution perpendicular to the disc midplane monly observed in debris discs, such as clumps, lopsided is asymmetric on the west side (Kalas et al. <ATOM_URL>); both rings, and spiral arms may be due to slow modes, perhaps features can arise naturally from an m = <ATOM_URL> distortion. excited by the fly-by of a passing star or binary companion. HD <ATOM_URL>: There is a dust ring at <ATOM_URL> AU that exhibits These features are normally ascribed to hypothetical mas- clumps and a lopsided brightness distribution in <ATOM_EMAIL> mm sive planets embedded in the disc. The two hypotheses can images (Corder et al. <ATOM_URL>). These might be due either to be distinguished in some discs by monitoring the motion of a planetary resonance or to
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 10/10 - Sequence #38170
+================================================================================
+Tokens: 257
+Classification: [prose]
+Score breakdown: {'boilerplate': 0, 'documentation': 2, 'prose': 3, 'code': 0, 'junk': 0}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+, where the cold- importance of transport-induced quenching on extraso- est western-terminator-average model has a CH<ATOM_URL> quench lar giant planets. Fig. <ATOM_URL> demonstrates this sensitivity. point near the <ATOM_URL> bar, <ATOM_URL> K level, whereas the For larger eddy diffusion coefficients, transport-induced warmest projected-area-weighted dayside-average mod- quenching becomes effective at deeper pressures, lead- els have quench points near <ATOM_EMAIL> bar, <ATOM_URL> K. The re- ing to larger mole fractions of quenched species. Larger sulting CH<ATOM_URL> quenched mole fraction is a factor of <ATOM_URL> Kzz values also allow molecular constituents to be carried greater for the cooler western-terminator model than for to higher altitudes. Both these processes contribute to the warmer dayside-average model. Ammonia quenches enhanced abundances of photochemically derived prod- at even greater pressures and temperatures, at which ucts when atmospheric mixing is more vigorous. For ex- point the temperature profiles are more uniform (see ample, when quenched species like CH<ATOM_URL> and NH<ATOM_URL> are Fig. <ATOM_URL>), so that the differences between models are less more abundant and carried to higher altitudes, photo- pronounced. The HCN profiles are more complicated be- chemical products like HCN and other nitriles, and C<ATOM_URL> H<ATOM_URL> cause
+--------------------------------------------------------------------------------

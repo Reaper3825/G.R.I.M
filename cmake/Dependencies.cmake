@@ -112,6 +112,7 @@ grim_copy_dlls("${_dll_dir_vcpkg}"
     zlib1.dll
     libbz2.dll
     jpeg62.dll
+    zip.dll
 )
 
 # =========================================================
@@ -183,6 +184,23 @@ target_link_libraries(GRIM PRIVATE flatbuffers::flatbuffers)
 # =========================================================
 find_package(nlohmann_json CONFIG REQUIRED)
 target_link_libraries(GRIM PRIVATE nlohmann_json::nlohmann_json)
+
+# =========================================================
+# libzip (Archive extraction for DataCollection)
+# =========================================================
+find_package(libzip CONFIG REQUIRED)
+target_link_libraries(GRIM PRIVATE libzip::zip)
+
+# =========================================================
+# Poppler (PDF text extraction for HuggingFace datasets)
+# =========================================================
+find_package(unofficial-poppler CONFIG REQUIRED)
+target_link_libraries(GRIM PRIVATE unofficial::poppler::poppler-cpp)
+
+grim_copy_dlls("${_dll_dir_vcpkg}"
+    poppler.dll
+    poppler-cpp.dll
+)
 
 # --- Ensure runtime finds our DLL first ---
 set_target_properties(GRIM PROPERTIES

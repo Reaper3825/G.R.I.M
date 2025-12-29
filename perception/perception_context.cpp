@@ -5,6 +5,7 @@
 #include "logger.hpp"         // ✅ For logging functions
 #include "memory/memory_storage.hpp" // ✅ For memory integration
 #include "core/input/InputController.hpp" // ✅ Input control integration
+#include "ai.hpp" // For global aiConfig
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
@@ -25,6 +26,9 @@
 
 // External reference to global memory storage
 extern GRIM::MemoryStorage g_memoryStorage;
+
+// External reference to global aiConfig
+extern nlohmann::json aiConfig;
 
 namespace GRIM {
 namespace Perception {
@@ -218,6 +222,14 @@ bool PerceptionContextManager::init() {
     }
     
     LOG_DEBUG("PerceptionContext", "Initializing context manager");
+    
+    // Load vision enabled setting from config
+    if (aiConfig.contains("vision") && aiConfig["vision"].is_object() &&
+        aiConfig["vision"].contains("enabled")) {
+        pImpl->featureVisionAI = aiConfig["vision"]["enabled"].get<bool>();
+        LOG_DEBUG("PerceptionContext", "Vision AI feature " + 
+                  std::string(pImpl->featureVisionAI ? "enabled" : "disabled") + " from config");
+    }
     
     // Ensure base perception system is initialized
     if (!GRIM::Perception::isAvailable()) {

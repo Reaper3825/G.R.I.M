@@ -1,0 +1,76 @@
+CompileFlags:
+  # Use the generated compile_commands.json in root
+  CompilationDatabase: .
+  
+  # Add CUDA support (treat .cu files as C++)
+  Add:
+    - "-xc++"
+    - "-std=c++17"
+    # GRIM-text root and subdirectories (matching CMakeLists.txt)
+    - "-ID:/G.R.I.M/resources/models/GRIM-text"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/training"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/GRIM"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Shared"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Layers"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/archive"
+    # Shared subdirectories
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Shared/Telemetry"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Shared/LogRecorder"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Shared/UnigramByte"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Shared/Loss"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Shared/Optimizers"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Shared/Gradients"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Shared/GPUBuffer"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Shared/GradTear"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Shared/GradAccumulationController"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Shared/Activations"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Shared/HyperParameters"
+    # Layers subdirectories
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Layers/BackwardOps"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Layers/Embedding"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Layers/FlashAttention"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Layers/Attention"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Layers/LayernNorm"
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/Layers/Serialization"
+    # Control directory (for ai_config_paths.hpp)
+    - "-ID:/G.R.I.M/control"
+    # Main GRIM includes
+    - "-ID:/G.R.I.M"
+    - "-ID:/G.R.I.M/external/whisper.cpp"
+    # CUDA includes
+    - "-IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include"
+    # vcpkg includes
+    - "-ID:/G.R.I.M/vcpkg_installed/x64-windows/include"
+    - "-ID:/G.R.I.M/vcpkg_installed/x64-windows/include/opencv4"
+    # Defines
+    - "-DCUDA_ENABLED=1"
+    - "-DUSE_CUDA=1"
+    - "-DNOMINMAX"
+    - "-D_CRT_SECURE_NO_WARNINGS"
+  
+  # Remove CUDA-specific flags that confuse clangd
+  Remove:
+    - "-forward-unknown-to-host-compiler"
+    - "-rdc=*"
+    - "--generate-code=*"
+    - "-gencode=*"
+    - "--expt-relaxed-constexpr"
+    - "--extended-lambda"
+
+Index:
+  # Enable background indexing for fast navigation
+  Background: Build
+  
+Diagnostics:
+  # Suppress common CUDA/template warnings
+  Suppress:
+    - "unused-value"
+    - "unknown-cuda-version"
+  UnusedIncludes: None
+  MissingIncludes: None
+
+InlayHints:
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: Yes

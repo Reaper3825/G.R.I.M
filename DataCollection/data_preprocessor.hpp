@@ -6,10 +6,11 @@
 #pragma once
 #include <string>
 #include <vector>
-#include <regex>
 #include <unordered_set>
-#include <algorithm>
 #include <sstream>
+#include <algorithm>
+#include <cctype>
+#include <cstring>
 
 namespace GRIM {
 namespace Training {
@@ -27,6 +28,11 @@ struct PreprocessorConfig {
     int min_words = 10;
     float max_repetition_ratio = 0.3f;  // % of repeated tokens
     float min_alpha_ratio = 0.7f;  // % of alphabetic chars
+    
+    // Token-based length limit (critical for model compatibility)
+    // Rough estimate: 1 token ≈ 4-5 characters for English text
+    // With max_seq_len=900, limit to ~3500 chars to stay safe
+    int max_token_estimate_chars = 3500;  // characters (approx max_seq_len * 4)
     
     // Deduplication
     bool deduplicate = true;
@@ -70,9 +76,16 @@ public:
     
     // Quality filtering
     bool passesQualityFilter(const std::string& text) {
-        // Length check
+        // Length check (character-based)
         if (text.length() < static_cast<size_t>(config_.min_length) ||
             text.length() > static_cast<size_t>(config_.max_length)) {
+            return false;
+        }
+        
+        // Token-estimate length check (critical for model compatibility)
+        // This prevents sequences from exceeding model's max_seq_len after tokenization
+        if (config_.max_token_estimate_chars > 0 &&
+            text.length() > static_cast<size_t>(config_.max_token_estimate_chars)) {
             return false;
         }
         
@@ -95,6 +108,76 @@ public:
         }
         
         return true;
+    }
+    
+    // Split long text into chunks that fit within token limits
+    // This preserves valuable long-form content instead of discarding it
+    std::vector<std::string> chunkLongText(const std::string& text) {
+        std::vector<std::string> chunks;
+        
+        // If text is within limit, return as-is
+        if (text.length() <= static_cast<size_t>(config_.max_token_estimate_chars)) {
+            chunks.push_back(text);
+            return chunks;
+        }
+        
+        // Split on sentence boundaries (., !, ?) to keep coherent chunks
+        size_t target_chunk_size = config_.max_token_estimate_chars;
+        size_t overlap = 100;  // 100 char overlap between chunks for context
+        
+        size_t pos = 0;
+        while (pos < text.length()) {
+            size_t chunk_end = std::min(pos + target_chunk_size, text.length());
+            
+            // If not at end, try to break on sentence boundary
+            if (chunk_end < text.length()) {
+                // Look back up to 200 chars for a sentence ending
+                size_t search_start = (chunk_end > 200) ? chunk_end - 200 : pos;
+                size_t best_break = std::string::npos;
+                
+                // Start from the last valid character before chunk_end.
+                for (size_t i = (chunk_end == 0 ? 0 : chunk_end - 1); i > search_start; --i) {
+                    char c = text[i];
+                    if (c == '.' || c == '!' || c == '?') {
+                        // Check if followed by space or end
+                        if (i + 1 >= text.length() || text[i + 1] == ' ' || text[i + 1] == '\n') {
+                            best_break = i + 1;
+                            break;
+                        }
+                    }
+                }
+                
+                if (best_break != std::string::npos) {
+                    chunk_end = best_break;
+                }
+            }
+            
+            std::string chunk = text.substr(pos, chunk_end - pos);
+            
+            // Only add if chunk meets minimum quality
+            if (chunk.length() >= static_cast<size_t>(config_.min_length)) {
+                chunks.push_back(chunk);
+            }
+            
+            // If we reached the end, we're done. This prevents an infinite loop
+            // when the remaining tail is <= overlap (chunk_end-overlap == pos).
+            if (chunk_end >= text.length()) {
+                break;
+            }
+
+            // Move forward, with overlap for context continuity.
+            size_t next_pos = (chunk_end > overlap) ? (chunk_end - overlap) : chunk_end;
+            if (next_pos <= pos) {
+                // Safety: guarantee forward progress.
+                next_pos = chunk_end;
+            }
+            pos = next_pos;
+            
+            // Prevent infinite loop
+            if (pos >= text.length()) break;
+        }
+        
+        return chunks;
     }
     
     // Deduplication
@@ -138,59 +221,170 @@ public:
 private:
     PreprocessorConfig config_;
     std::unordered_set<std::string> seen_ngrams_;
+
+    static inline char toLowerAscii(char c) {
+        return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+
+    static inline bool startsWithIgnoreCase(const std::string& s, size_t pos, const char* literal) {
+        for (size_t i = 0; literal[i] != '\0'; ++i) {
+            if (pos + i >= s.size()) return false;
+            if (toLowerAscii(s[pos + i]) != toLowerAscii(literal[i])) return false;
+        }
+        return true;
+    }
+
+    static inline size_t findIgnoreCase(const std::string& s, const char* needle, size_t startPos) {
+        if (!needle || needle[0] == '\0') return startPos;
+        for (size_t i = startPos; i < s.size(); ++i) {
+            if (startsWithIgnoreCase(s, i, needle)) return i;
+        }
+        return std::string::npos;
+    }
+
+    static inline bool isTagNameChar(char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == ':';
+    }
     
     std::string removeHTML(const std::string& text) {
-        std::string result = text;
-        
-        // Remove script and style tags with their content
-        static std::regex script_regex("<script[^>]*>.*?</script>", std::regex::icase);
-        static std::regex style_regex("<style[^>]*>.*?</style>", std::regex::icase);
-        result = std::regex_replace(result, script_regex, " ");
-        result = std::regex_replace(result, style_regex, " ");
-        
-        // Remove HTML comments
-        static std::regex comment_regex("<!--.*?-->");
-        result = std::regex_replace(result, comment_regex, " ");
-        
-        // Convert common block tags to newlines for better text flow
-        static std::regex block_tags("<(?:p|br|div|h[1-6]|li|tr)[^>]*>", std::regex::icase);
-        result = std::regex_replace(result, block_tags, "\n");
-        
-        // Remove all remaining HTML tags
-        static std::regex html_tag_regex("<[^>]*>");
-        result = std::regex_replace(result, html_tag_regex, " ");
-        
-        // Decode common HTML entities
-        static std::vector<std::pair<std::string, std::string>> entities = {
-            {"&nbsp;", " "}, {"&amp;", "&"}, {"&lt;", "<"}, {"&gt;", ">"}, 
-            {"&quot;", "\""}, {"&#39;", "'"}, {"&apos;", "'"}, {"&mdash;", "—"},
-            {"&ndash;", "–"}, {"&hellip;", "..."}, {"&bull;", "•"}
-        };
-        for (const auto& [entity, replacement] : entities) {
+        // NOTE: std::regex can exhibit pathological slowdowns on some large HTML blobs.
+        // This implementation uses linear scans to avoid apparent "hangs".
+        std::string out;
+        out.reserve(text.size());
+
+        size_t i = 0;
+        while (i < text.size()) {
+            const char c = text[i];
+            if (c != '<') {
+                out.push_back(c);
+                ++i;
+                continue;
+            }
+
+            // HTML comment: <!-- ... -->
+            if (startsWithIgnoreCase(text, i, "<!--")) {
+                const size_t end = text.find("-->", i + 4);
+                i = (end == std::string::npos) ? text.size() : (end + 3);
+                out.push_back(' ');
+                continue;
+            }
+
+            // Parse tag name
+            size_t namePos = i + 1;
+            while (namePos < text.size() && (text[namePos] == '/' || std::isspace(static_cast<unsigned char>(text[namePos])))) {
+                ++namePos;
+            }
+            size_t nameEnd = namePos;
+            while (nameEnd < text.size() && isTagNameChar(text[nameEnd])) {
+                ++nameEnd;
+            }
+
+            std::string tag;
+            tag.reserve(nameEnd > namePos ? (nameEnd - namePos) : 0);
+            for (size_t k = namePos; k < nameEnd; ++k) {
+                tag.push_back(toLowerAscii(text[k]));
+            }
+
+            // Find end of this tag
+            const size_t close = text.find('>', i + 1);
+            if (close == std::string::npos) {
+                // Malformed, treat '<' as text
+                out.push_back('<');
+                ++i;
+                continue;
+            }
+
+            // Drop script/style bodies entirely
+            if (tag == "script" || tag == "style") {
+                const char* closer = (tag == "script") ? "</script" : "</style";
+                const size_t bodyEndStart = findIgnoreCase(text, closer, close + 1);
+                if (bodyEndStart == std::string::npos) {
+                    i = text.size();
+                } else {
+                    const size_t bodyEndClose = text.find('>', bodyEndStart);
+                    i = (bodyEndClose == std::string::npos) ? text.size() : (bodyEndClose + 1);
+                }
+                out.push_back(' ');
+                continue;
+            }
+
+            // Convert common block-ish tags to newlines
+            if (tag == "p" || tag == "br" || tag == "div" || tag == "li" || tag == "tr" ||
+                (tag.size() == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6')) {
+                out.push_back('\n');
+            } else {
+                out.push_back(' ');
+            }
+
+            i = close + 1;
+        }
+
+        // Decode a small set of common HTML entities (fast path)
+        auto replaceAll = [&](const char* needle, const char* replacement) {
             size_t pos = 0;
-            while ((pos = result.find(entity, pos)) != std::string::npos) {
-                result.replace(pos, entity.length(), replacement);
-                pos += replacement.length();
+            const size_t needleLen = std::strlen(needle);
+            const size_t replLen = std::strlen(replacement);
+            while ((pos = out.find(needle, pos)) != std::string::npos) {
+                out.replace(pos, needleLen, replacement);
+                pos += replLen;
+            }
+        };
+        replaceAll("&nbsp;", " ");
+        replaceAll("&amp;", "&");
+        replaceAll("&lt;", "<");
+        replaceAll("&gt;", ">");
+        replaceAll("&quot;", "\"");
+        replaceAll("&#39;", "'");
+        replaceAll("&apos;", "'");
+        replaceAll("&mdash;", "—");
+        replaceAll("&ndash;", "–");
+        replaceAll("&hellip;", "...");
+        replaceAll("&bull;", "•");
+
+        // Replace any remaining "&...;" entities with a space (bounded, linear-time)
+        for (size_t p = 0; p < out.size(); ++p) {
+            if (out[p] != '&') continue;
+
+            size_t semi = std::string::npos;
+            const size_t maxScan = (p + 32 < out.size()) ? (p + 32) : (out.size() - 1);
+            for (size_t q = p + 1; q <= maxScan; ++q) {
+                if (out[q] == ';') {
+                    semi = q;
+                    break;
+                }
+                // Early stop on whitespace; it's not an entity.
+                if (out[q] == ' ' || out[q] == '\n' || out[q] == '\t') break;
+            }
+
+            if (semi != std::string::npos) {
+                for (size_t q = p; q <= semi; ++q) out[q] = ' ';
+                p = semi;
             }
         }
-        
-        // Remove remaining HTML entities
-        static std::regex html_entity_regex("&[a-zA-Z0-9#]+;");
-        result = std::regex_replace(result, html_entity_regex, " ");
-        
-        // Clean up excessive whitespace
-        static std::regex multi_space_regex("  +");
-        result = std::regex_replace(result, multi_space_regex, " ");
-        
-        static std::regex multi_newline_regex("\n\n+");
-        result = std::regex_replace(result, multi_newline_regex, "\n\n");
-        
-        return result;
+
+        return out;
     }
     
     std::string normalizeURLs(const std::string& text) {
-        static std::regex url_regex(R"(https?://[^\s]+)");
-        return std::regex_replace(text, url_regex, "<URL>");
+        // Fast URL normalization (avoids regex worst-cases)
+        std::string out;
+        out.reserve(text.size());
+
+        size_t i = 0;
+        while (i < text.size()) {
+            if (startsWithIgnoreCase(text, i, "http://") || startsWithIgnoreCase(text, i, "https://")) {
+                out += "<URL>";
+                // Skip until whitespace
+                while (i < text.size() && !std::isspace(static_cast<unsigned char>(text[i]))) {
+                    ++i;
+                }
+                continue;
+            }
+            out.push_back(text[i]);
+            ++i;
+        }
+
+        return out;
     }
     
     std::string removeControlChars(const std::string& text) {
@@ -208,17 +402,47 @@ private:
     }
     
     std::string normalizeWhitespace(const std::string& text) {
-        static std::regex multi_space_regex("[ \\t]+");
-        static std::regex multi_newline_regex("\\n{3,}");
-        
-        std::string result = std::regex_replace(text, multi_space_regex, " ");
-        result = std::regex_replace(result, multi_newline_regex, "\n\n");
-        
+        std::string out;
+        out.reserve(text.size());
+
+        bool in_space = false;
+        int newline_run = 0;
+
+        for (char c : text) {
+            const unsigned char uc = static_cast<unsigned char>(c);
+
+            if (c == '\r') continue;
+
+            if (c == '\n') {
+                newline_run++;
+                in_space = false;
+                if (newline_run <= 2) {
+                    out.push_back('\n');
+                }
+                continue;
+            }
+
+            newline_run = 0;
+
+            if (c == ' ' || c == '\t') {
+                if (!in_space) {
+                    out.push_back(' ');
+                    in_space = true;
+                }
+                continue;
+            }
+
+            in_space = false;
+            out.push_back(static_cast<char>(uc));
+        }
+
         // Trim leading/trailing whitespace
-        result.erase(0, result.find_first_not_of(" \t\n\r"));
-        result.erase(result.find_last_not_of(" \t\n\r") + 1);
-        
-        return result;
+        size_t start = 0;
+        while (start < out.size() && (out[start] == ' ' || out[start] == '\n' || out[start] == '\t')) start++;
+        size_t end = out.size();
+        while (end > start && (out[end - 1] == ' ' || out[end - 1] == '\n' || out[end - 1] == '\t')) end--;
+
+        return out.substr(start, end - start);
     }
     
     int countWords(const std::string& text) {

@@ -35,17 +35,17 @@
       "context": "monitor",
       "id": "",
       "intent": "inform",
-      "normalized": "Significant screen change detected (33% change)\n\nScreen 1920x1080 (Monitor 2 of 3)\nActive: popup_window.cpp - G.R.I.M (Workspace) - Visual Studio Code [Administrator] (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: eS )\noe\n\neee rags VE DL\n\nfs\n\nFile Edit Selection View Go Run Terminal\n\nEXPLORER.\n\n‘Y GRIM (WORKSPACE)\nv GRIM .\n> osint\n> out\n> perception .\n> plugins\nY popup_ui .\n© pop_uipp\n© popup_anim.cpp\n© popup_animhpp\n© popup_renderer.cpp\nG\nG\ne\nG\nV resources .\n> dejavu-fonts-ttf-2.37\n> fonts\n\npopup_renderer.hpp\n\npopup_uihpp\npopup_window.cpp\n\n=\n\npopup_window.hpp\n\nVv models .\n© GRIM-text\n> archive\n> checkpoints\n‘v OUTLINE\n\nNo symbols found in document ‘popup_window.cpp\"\n\n\\V TIMELINE popup. window.... (2282 total chars)\n",
-      "raw": "Significant screen change detected (33% change)\n\nScreen 1920x1080 (Monitor 2 of 3)\nActive: popup_window.cpp - G.R.I.M (Workspace) - Visual Studio Code [Administrator] (Code.exe)\nScene: IDE/Code Editor | Theme: Dark\nText: eS )\noe\n\neee rags VE DL\n\nfs\n\nFile Edit Selection View Go Run Terminal\n\nEXPLORER.\n\n‘Y GRIM (WORKSPACE)\nv GRIM .\n> osint\n> out\n> perception .\n> plugins\nY popup_ui .\n© pop_uipp\n© popup_anim.cpp\n© popup_animhpp\n© popup_renderer.cpp\nG\nG\ne\nG\nV resources .\n> dejavu-fonts-ttf-2.37\n> fonts\n\npopup_renderer.hpp\n\npopup_uihpp\npopup_window.cpp\n\n=\n\npopup_window.hpp\n\nVv models .\n© GRIM-text\n> archive\n> checkpoints\n‘v OUTLINE\n\nNo symbols found in document ‘popup_window.cpp\"\n\n\\V TIMELINE popup. window.... (2282 total chars)\n",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: OM administrator: windows Pow X = + v — a x\nFPs N/A WIA | LAT N/A | FGOVR N/A, N/A | SROVR NIA, N/A | RROVR NIA, NIA\n\n[2025-12-21 19:24:09] [DEBUG] [Voice] Launching Coqui XTTS v2 bridge and waiting up to 120s for model load...\n[2025-12-21 19:24:11] [DEBUG] [Voice/Bridge/Stderr] [Coqui XTTS] Patched torch.load to use weights_only=False\n[2025-12-21 19:24:13] [DEBUG] [Voice/Bridge/Stderr] D:\\G.R.I.M\\.venv\\Lib\\site-packages\\librosa\\core\\intervals.py:8: UserWarning: pkg_resources is deprecated as ... (4936 total chars)\n",
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: OM administrator: windows Pow X = + v — a x\nFPs N/A WIA | LAT N/A | FGOVR N/A, N/A | SROVR NIA, N/A | RROVR NIA, NIA\n\n[2025-12-21 19:24:09] [DEBUG] [Voice] Launching Coqui XTTS v2 bridge and waiting up to 120s for model load...\n[2025-12-21 19:24:11] [DEBUG] [Voice/Bridge/Stderr] [Coqui XTTS] Patched torch.load to use weights_only=False\n[2025-12-21 19:24:13] [DEBUG] [Voice/Bridge/Stderr] D:\\G.R.I.M\\.venv\\Lib\\site-packages\\librosa\\core\\intervals.py:8: UserWarning: pkg_resources is deprecated as ... (4936 total chars)\n",
       "source": "grim.internal",
       "tags": [
         "visual-context",
         "screen-capture",
-        "IDE/Code Editor",
-        "Code.exe",
-        "monitor-2"
+        "Terminal/Console",
+        "WindowsTerminal.exe",
+        "monitor-1"
       ],
-      "timestamp": 1763609102,
+      "timestamp": 1766363089,
       "type": "event"
     }
   ]

@@ -85,7 +85,8 @@ resources/models/*.bin
 /resources/models/whisper/*
 resources/Resources/models/
 resources/wakeword/*
-
+data/
+data/*
 # ==============================
 # Python / Virtual Environments
 # ==============================
@@ -102,7 +103,6 @@ resources/.venv/
 *.onnx
 *.dic
 *.db
-
 
 vcpkg_installed/** -text
 external/bgfx.cmake/
@@ -152,3 +152,7 @@ data/*
 *.fbs
 .venv310/
 .venv310/*
+.cache/
+.cache/*
+*.bin*
+*.ckpt*

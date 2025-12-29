@@ -11,6 +11,7 @@
       ]
     },
     "nlohmann-json",
+    "libzip",
     "sentencepiece",
     "portaudio",
     "glfw3",
@@ -29,6 +30,7 @@
     "cpp-httplib",
     "gumbo",
     "ffmpeg",
-    "simdjson"
+    "simdjson",
+    "poppler"
   ]
 }

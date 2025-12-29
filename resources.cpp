@@ -26,8 +26,6 @@ std::string getResourcePath() {
     fs::path base = fs::path(GRIM_ROOT_DIR) / "resources";
 
     if (fs::exists(base)) {
-        LOG_PHASE("Resource path set", true);
-        LOG_DEBUG("Resources", "Using canonical resource path: " + base.string());
         return base.string();
     }
 

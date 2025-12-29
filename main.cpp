@@ -150,9 +150,6 @@ int main(int argc, char* argv[])
     aliases::init();
     LOG_PHASE("Aliases initialized", true);
 
-    // System info is now populated by bootstrap
-    LOG_PHASE("System detection complete", true);
-
     PluginManager::initialize("D:/G.R.I.M/plugins");
     LOG_PHASE("Plugin manager initialized", true);
 
@@ -160,10 +157,27 @@ int main(int argc, char* argv[])
     // 3. Voice / Queue
     // ======================================================
     Voice::initQueue();
-    while (!Voice::isReady())
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    Voice::speak("Welcome back, Austin. Grim is online.", "system");
-    LOG_PHASE("Startup greeting spoken", true);
+    // Wait up to 10s for TTS to become ready (avoids blocking startup indefinitely)
+    {
+        const int kWaitTimeoutMs = 10000;
+        auto tStart = std::chrono::steady_clock::now();
+        while (!Voice::isReady()) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - tStart).count();
+            if (elapsed > kWaitTimeoutMs) {
+                LOG_ERROR("Main", "TTS not ready after 10s - continuing without voice");
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+    if (Voice::isReady()) {
+        Voice::speak("Welcome back, Austin. Grim is online.", "system");
+        LOG_PHASE("Startup greeting spoken", true);
+    } else {
+        LOG_DEBUG("Main", "Skipping startup greeting (TTS unavailable)");
+        LOG_PHASE("Startup greeting spoken", false);
+    }
 
     // ======================================================
     // 4.   Memory system
@@ -177,7 +191,7 @@ int main(int argc, char* argv[])
     // ======================================================
     Voice::initPreCache();
     LOG_PHASE("TTS pre-cache started (background)", true);
-
+    
     // ======================================================
     // 6.   Initialize Intent Classification System
     // ======================================================
@@ -201,16 +215,18 @@ int main(int argc, char* argv[])
     LOG_PHASE("Task planner initialized", true);
     
     // Start continuous screen awareness
+    bool useContinuousCapture = true;
+    if (useContinuousCapture) {
     GRIM::Perception::ContinuousCaptureConfig captureConfig;
     captureConfig.frameSkip = 30;              // Capture every 30 frames (~1/sec at 30fps)
     captureConfig.captureIntervalMs = 1000;    // Or every 1000ms
     captureConfig.useFrameSkip = false;        // Use time-based for consistency
     captureConfig.captureAllMonitors = false;  // Just active monitor
-    captureConfig.changeThreshold = 0.05f;     // 5% change detection
+    captureConfig.changeThreshold = 1.0;     // 5% change detection
     captureConfig.useVisionAI = false;         // ✅ Vision AI too slow for background capture (only on-demand)
     GRIM::Perception::g_contextManager->startContinuousCapture(captureConfig);
-    LOG_PHASE("Continuous screen capture started", true);
-
+    }
+        LOG_PHASE("Continuous screen capture started", useContinuousCapture);
     // ======================================================
     // 7. Initialize BGFX global context
     // ======================================================

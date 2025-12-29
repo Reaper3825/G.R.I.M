@@ -1,3 +1,5 @@
+//ABSOLUTELY SHOULD NOT BE USED WITH GRIM-text
+
 #pragma once
 #include <functional>
 #include <vector>
@@ -83,9 +85,10 @@ public:
     // Broadcast with fire-and-forget async behavior (don't wait for completion)
     void BroadcastAsyncDetached(Args... args) const
     {
-        for (const auto& [_, func] : listeners)
+        for (const auto& pair : listeners)
         {
-            std::thread([func, args...]() { func(args...); }).detach();
+            const auto& callback = pair.second;
+            std::thread([callback, args...]() { callback(args...); }).detach();
         }
     }
 

@@ -10,10 +10,11 @@
 //  - Content filtering and validation
 //  - Progress tracking
 //  - Error handling and logging
+//  - URL/Content deduplication via CollectionStateManager
 //  
 //  Author: GRIM Development Team
 //  Date: November 4, 2025
-//  Version: 2.0.0
+//  Version: 2.1.0 - Added persistent state tracking
 //======================================================//
 
 #pragma once
@@ -50,6 +51,9 @@ using json = nlohmann::json;
 // AI Config for paths
 #include "../../control/ai_config_paths.hpp"
 
+// Persistent state tracking for deduplication
+#include "collection_state.hpp"
+
 namespace GRIM {
 namespace Training {
 
@@ -57,91 +61,80 @@ namespace Training {
 using CrawlConfig = AsyncCrawler::CrawlConfig;
 
 //======================================================//
-//  Source Type Enum
+//  Fetcher Type Enum (Internal - for API routing)
+//  This determines HOW to fetch, not WHAT category the data is
 //======================================================//
 
-enum class SourceType {
-    UNKNOWN = 0,
-    NEWS_API = 1,
-    GITHUB = 2,
-    TECH_DOCS = 3,
-    WIKIPEDIA = 4,
-    ARXIV = 5,
-    STACKOVERFLOW = 6,
-    REDDIT = 7,
-    CUSTOM = 8,
-    GUTENBERG = 9,
-    OPEN_BOOKS = 10,
-    JSTOR_OA = 11,
-    PHILOSOPHY = 12,
-    CLASSICAL_TEXTS = 13,
-    ACADEMIC_PAPERS = 14,
-    LOGIC = 15,
-    THEORETICAL_REASONING = 16,
-    THEORETICAL_SCIENCE = 17,
-    GRAMMAR = 18,
-    RHETORIC = 19,
-    LINGUISTICS = 20,
-    SPEECH_CORPUS = 21,
-    HARDWARE_SPECS = 22,
-    ERUDITE_WRITING = 23
+enum class FetcherType {
+    HTML_CRAWL = 0,    // Default: Generic HTML crawling
+    GITHUB_API,        // GitHub REST API
+    ARXIV_API,         // ArXiv API
+    WIKIPEDIA_API,     // Wikipedia API
+    STACKOVERFLOW_API, // StackExchange API
+    REDDIT_API,        // Reddit JSON API
+    NEWS_API,          // News API
+    TECH_DOCS          // Technical documentation sites
 };
 
-inline SourceType sourceTypeFromString(const std::string& str) {
-    if (str == "news_api") return SourceType::NEWS_API;
-    if (str == "github") return SourceType::GITHUB;
-    if (str == "tech_docs") return SourceType::TECH_DOCS;
-    if (str == "wikipedia") return SourceType::WIKIPEDIA;
-    if (str == "arxiv") return SourceType::ARXIV;
-    if (str == "stackoverflow") return SourceType::STACKOVERFLOW;
-    if (str == "reddit") return SourceType::REDDIT;
-    if (str == "gutenberg") return SourceType::GUTENBERG;
-    if (str == "open_books") return SourceType::OPEN_BOOKS;
-    if (str == "jstor_oa") return SourceType::JSTOR_OA;
-    if (str == "philosophy") return SourceType::PHILOSOPHY;
-    if (str == "classical_texts") return SourceType::CLASSICAL_TEXTS;
-    if (str == "academic_papers") return SourceType::ACADEMIC_PAPERS;
-    if (str == "logic") return SourceType::LOGIC;
-    if (str == "theoretical_reasoning") return SourceType::THEORETICAL_REASONING;
-    if (str == "theoretical_science") return SourceType::THEORETICAL_SCIENCE;
-    if (str == "grammar") return SourceType::GRAMMAR;
-    if (str == "rhetoric") return SourceType::RHETORIC;
-    if (str == "linguistics") return SourceType::LINGUISTICS;
-    if (str == "speech_corpus") return SourceType::SPEECH_CORPUS;
-    if (str == "hardware_specs") return SourceType::HARDWARE_SPECS;
-    if (str == "erudite_writing") return SourceType::ERUDITE_WRITING;
-    if (str == "custom") return SourceType::CUSTOM;
-    return SourceType::UNKNOWN;
+// Legacy SourceType alias for backward compatibility
+using SourceType = FetcherType;
+
+// Convert explicit fetcher string to FetcherType
+inline FetcherType fetcherTypeFromString(const std::string& str) {
+    if (str == "github" || str == "github_api") return FetcherType::GITHUB_API;
+    if (str == "arxiv" || str == "arxiv_api") return FetcherType::ARXIV_API;
+    if (str == "wikipedia" || str == "wikipedia_api") return FetcherType::WIKIPEDIA_API;
+    if (str == "stackoverflow" || str == "stack_exchange") return FetcherType::STACKOVERFLOW_API;
+    if (str == "reddit" || str == "reddit_api") return FetcherType::REDDIT_API;
+    if (str == "news_api") return FetcherType::NEWS_API;
+    if (str == "tech_docs") return FetcherType::TECH_DOCS;
+    // Default to HTML crawl for any other value
+    return FetcherType::HTML_CRAWL;
 }
 
-inline std::string sourceTypeToString(SourceType type) {
+// Auto-detect fetcher type from URL patterns
+inline FetcherType detectFetcherFromUrl(const std::string& url) {
+    if (url.find("api.github.com") != std::string::npos || 
+        url.find("github.com") != std::string::npos) {
+        return FetcherType::GITHUB_API;
+    }
+    if (url.find("arxiv.org") != std::string::npos) {
+        return FetcherType::ARXIV_API;
+    }
+    if (url.find("wikipedia.org") != std::string::npos) {
+        return FetcherType::WIKIPEDIA_API;
+    }
+    if (url.find("stackexchange.com") != std::string::npos ||
+        url.find("stackoverflow.com") != std::string::npos) {
+        return FetcherType::STACKOVERFLOW_API;
+    }
+    if (url.find("reddit.com") != std::string::npos) {
+        return FetcherType::REDDIT_API;
+    }
+    if (url.find("newsapi.org") != std::string::npos) {
+        return FetcherType::NEWS_API;
+    }
+    // Default to HTML crawl
+    return FetcherType::HTML_CRAWL;
+}
+
+inline std::string fetcherTypeToString(FetcherType type) {
     switch (type) {
-        case SourceType::NEWS_API: return "news_api";
-        case SourceType::GITHUB: return "github";
-        case SourceType::TECH_DOCS: return "tech_docs";
-        case SourceType::WIKIPEDIA: return "wikipedia";
-        case SourceType::ARXIV: return "arxiv";
-        case SourceType::STACKOVERFLOW: return "stackoverflow";
-        case SourceType::REDDIT: return "reddit";
-        case SourceType::CUSTOM: return "custom";
-        case SourceType::GUTENBERG: return "gutenberg";
-        case SourceType::OPEN_BOOKS: return "open_books";
-        case SourceType::JSTOR_OA: return "jstor_oa";
-        case SourceType::PHILOSOPHY: return "philosophy";
-        case SourceType::CLASSICAL_TEXTS: return "classical_texts";
-        case SourceType::ACADEMIC_PAPERS: return "academic_papers";
-        case SourceType::LOGIC: return "logic";
-        case SourceType::THEORETICAL_REASONING: return "theoretical_reasoning";
-        case SourceType::THEORETICAL_SCIENCE: return "theoretical_science";
-        case SourceType::GRAMMAR: return "grammar";
-        case SourceType::RHETORIC: return "rhetoric";
-        case SourceType::LINGUISTICS: return "linguistics";
-        case SourceType::SPEECH_CORPUS: return "speech_corpus";
-        case SourceType::HARDWARE_SPECS: return "hardware_specs";
-        case SourceType::ERUDITE_WRITING: return "erudite_writing";
-        default: return "unknown";
+        case FetcherType::GITHUB_API: return "github_api";
+        case FetcherType::ARXIV_API: return "arxiv_api";
+        case FetcherType::WIKIPEDIA_API: return "wikipedia_api";
+        case FetcherType::STACKOVERFLOW_API: return "stackoverflow_api";
+        case FetcherType::REDDIT_API: return "reddit_api";
+        case FetcherType::NEWS_API: return "news_api";
+        case FetcherType::TECH_DOCS: return "tech_docs";
+        case FetcherType::HTML_CRAWL:
+        default: return "html_crawl";
     }
 }
+
+// Legacy alias for backward compatibility
+inline SourceType sourceTypeFromString(const std::string& str) { return fetcherTypeFromString(str); }
+inline std::string sourceTypeToString(SourceType type) { return fetcherTypeToString(type); }
 
 //======================================================//
 //  Content Filter Configuration
@@ -207,7 +200,16 @@ struct ContentFilter {
 struct DataSource {
     std::string name;
     std::string url;
-    SourceType source_type = SourceType::UNKNOWN;
+    
+    // User-defined category (from JSON) - defaults to "miscellaneous"
+    std::string source_type_str = "miscellaneous";
+    
+    // Internal fetcher type - auto-detected from URL or explicit "fetcher" field
+    FetcherType fetcher_type = FetcherType::HTML_CRAWL;
+    
+    // Legacy alias for backward compatibility
+    SourceType source_type = SourceType::HTML_CRAWL;
+    
     bool enabled = true;
     int priority = 5;  // 1-10, higher = more trusted
     
@@ -215,10 +217,16 @@ struct DataSource {
     std::string api_key_env;  // Environment variable name
     std::string api_key;      // Actual key (loaded from env)
     
-    int fetch_limit = 100;
+    int fetch_limit = -1;  // -1 = not set, use dynamic calculation
     int crawl_depth = 2;  // Default to depth 2 for article crawling
     
     ContentFilter filter;
+    
+    // Auto-detect fetcher from URL if not explicitly set
+    void autoDetectFetcher() {
+        fetcher_type = detectFetcherFromUrl(url);
+        source_type = fetcher_type;  // Keep legacy alias in sync
+    }
     
     // Load API key from environment
     void loadApiKey() {
@@ -231,9 +239,9 @@ struct DataSource {
     }
     
     // Calculate dynamic fetch_limit based on crawl depth
-    // Deeper crawls discover exponentially more pages, so we need higher limits
+    // Only applies if user hasn't explicitly set a fetch_limit
     void applyDynamicFetchLimit() {
-        if (fetch_limit == 100) {  // Only adjust if still at default
+        if (fetch_limit == -1) {  // Only adjust if not explicitly set
             switch (crawl_depth) {
                 case 1:
                     fetch_limit = 100;   // Single page
@@ -260,7 +268,13 @@ struct RawDataEntry {
     std::string content;
     std::string source_url;
     std::string source_name;
-    SourceType source_type = SourceType::UNKNOWN;
+    
+    // User-defined category string (from JSON source config)
+    std::string source_type_str = "miscellaneous";
+    
+    // Legacy enum for backward compatibility
+    SourceType source_type = SourceType::HTML_CRAWL;
+    
     int source_priority = 5;
     
     std::string author;
@@ -293,6 +307,8 @@ struct CollectionStats {
     uint32_t successful = 0;
     uint32_t failed = 0;
     uint32_t filtered_out = 0;
+    uint32_t duplicates_skipped = 0;  // URLs already collected
+    uint32_t content_duplicates = 0;  // Same content from different URLs
     
     std::chrono::milliseconds total_time{0};
     std::chrono::milliseconds avg_request_time{0};
@@ -308,6 +324,8 @@ struct CollectionStats {
         successful = 0;
         failed = 0;
         filtered_out = 0;
+        duplicates_skipped = 0;
+        content_duplicates = 0;
         total_time = std::chrono::milliseconds(0);
         avg_request_time = std::chrono::milliseconds(0);
         per_source_type.clear();
@@ -321,6 +339,8 @@ struct CollectionStats {
         oss << "  Sources: " << enabled_sources << "/" << total_sources << " enabled\n";
         oss << "  Fetched: " << total_fetched << " (" << successful << " success, " 
             << failed << " failed, " << filtered_out << " filtered)\n";
+        oss << "  Duplicates: " << duplicates_skipped << " URLs skipped, " 
+            << content_duplicates << " content duplicates\n";
         oss << "  Time: " << total_time.count() << " ms total, " 
             << avg_request_time.count() << " ms avg/request\n";
         oss << "  By Source Type:\n";
@@ -346,6 +366,7 @@ struct CollectorConfig {
     
     std::string output_dir;
     int max_entries_per_source = 100;
+    int max_new_entries_per_run = 5000;  // Global limit: stop after collecting this many NEW entries total
     int timeout_seconds = 15;  // Faster timeout (was 30)
     int rate_limit_delay_ms = 100;  // 10x faster (was 1000)
     int max_retries = 3;
@@ -404,10 +425,27 @@ public:
     // Merge multiple checkpoint files into collected_data_
     bool mergeCheckpoints(const std::vector<std::string>& checkpoint_paths);
     
+    // State management - persistent tracking of collected URLs and content
+    void initializeStateManager(const std::string& stateDir);
+    bool hasCollectedUrl(const std::string& url) const;
+    bool hasSeenContent(const std::string& content) const;
+    void markUrlCollected(const std::string& url, const std::string& sourceType);
+    void markContentSeen(const std::string& content);
+    size_t getUniqueUrlCount() const;
+    size_t getUniqueContentCount() const;
+    void saveCollectionState();
+    void clearCollectionState();
+    
 private:
     CollectorConfig config_;
     CollectionStats stats_;
     std::vector<RawDataEntry> collected_data_;
+    
+    // Persistent state manager for deduplication
+    mutable std::unique_ptr<DataCollection::CollectionStateManager> stateManager_;
+    
+    // Function map for fetcher types - extensible design
+    std::unordered_map<FetcherType, std::function<std::vector<RawDataEntry>(const DataSource&)>> source_fetchers_;
     
     std::mutex data_mutex_;
     std::mutex log_mutex_;
@@ -462,6 +500,10 @@ private:
     void logError(const std::string& error);
     void logWarning(const std::string& warning);
     
+    // Source fetcher registration - allows adding new fetcher types dynamically
+    void registerSourceFetcher(FetcherType type, std::function<std::vector<RawDataEntry>(const DataSource&)> fetcher);
+    void initializeDefaultFetchers();
+    
     std::string getCurrentTimestamp() const;
     uint64_t getCurrentUnixTime() const;
     
@@ -495,6 +537,12 @@ WebDataCollector::WebDataCollector()
     // Load collector log path from ai_config
     config_.log_file = GRIM::Config::getCollectorLogPath();
     
+    // Load max_new_entries_per_run from ai_config.json
+    GRIM::Config::DataCollectionConfig dc_config;
+    if (GRIM::Config::loadDataCollectionConfig(dc_config)) {
+        config_.max_new_entries_per_run = dc_config.max_new_entries_per_run;
+    }
+    
     curl_global_init(CURL_GLOBAL_DEFAULT);
     curl_handle_ = curl_easy_init();
     if (!curl_handle_) {
@@ -505,11 +553,20 @@ WebDataCollector::WebDataCollector()
     downloader_ = std::make_unique<StreamingDownloader>();
     crawler_ = std::make_unique<AsyncCrawler>();
     
+    // Initialize state manager for deduplication
+    std::string stateDir = config_.output_dir + "/collection_state";
+    stateManager_ = std::make_unique<DataCollection::CollectionStateManager>(stateDir);
+    
+    // Initialize source fetcher map
+    initializeDefaultFetchers();
+    
     // Open log file if configured
     if (!config_.log_file.empty()) {
         log_file_.open(config_.log_file, std::ios::app);
         if (log_file_.is_open()) {
             log("WebDataCollector initialized (default constructor)");
+            log("State manager loaded with " + std::to_string(stateManager_->getTotalUniqueUrls()) + " unique URLs");
+            log("Global limit: " + std::to_string(config_.max_new_entries_per_run) + " max new entries per run");
         }
     }
 }
@@ -527,6 +584,14 @@ WebDataCollector::WebDataCollector(const CollectorConfig& config)
         config_.log_file = GRIM::Config::getCollectorLogPath();
     }
     
+    // If max_new_entries_per_run not explicitly set, load from ai_config.json
+    if (config_.max_new_entries_per_run == 5000) {  // Check if still default
+        GRIM::Config::DataCollectionConfig dc_config;
+        if (GRIM::Config::loadDataCollectionConfig(dc_config)) {
+            config_.max_new_entries_per_run = dc_config.max_new_entries_per_run;
+        }
+    }
+    
     curl_global_init(CURL_GLOBAL_DEFAULT);
     curl_handle_ = curl_easy_init();
     if (!curl_handle_) {
@@ -537,15 +602,29 @@ WebDataCollector::WebDataCollector(const CollectorConfig& config)
     downloader_ = std::make_unique<StreamingDownloader>();
     crawler_ = std::make_unique<AsyncCrawler>();
     
+    // Initialize state manager for deduplication
+    std::string stateDir = config_.output_dir + "/collection_state";
+    stateManager_ = std::make_unique<DataCollection::CollectionStateManager>(stateDir);
+    
+    // Initialize source fetcher map
+    initializeDefaultFetchers();
+    
     if (!config_.log_file.empty()) {
         log_file_.open(config_.log_file, std::ios::app);
         if (log_file_.is_open()) {
             log("WebDataCollector initialized");
+            log("State manager loaded with " + std::to_string(stateManager_->getTotalUniqueUrls()) + " unique URLs");
+            log("Global limit: " + std::to_string(config_.max_new_entries_per_run) + " max new entries per run");
         }
     }
 }
 
 WebDataCollector::~WebDataCollector() {
+    // Save state before shutting down
+    if (stateManager_) {
+        stateManager_->saveState();
+    }
+    
     if (curl_handle_) {
         curl_easy_cleanup(curl_handle_);
     }
@@ -574,6 +653,8 @@ bool WebDataCollector::loadConfigFromJson(const std::string& json_path) {
             auto settings = config_json["collection_settings"];
             if (settings.contains("max_entries_per_source"))
                 config_.max_entries_per_source = settings["max_entries_per_source"];
+            if (settings.contains("max_new_entries_per_run"))
+                config_.max_new_entries_per_run = settings["max_new_entries_per_run"];
             if (settings.contains("timeout_seconds"))
                 config_.timeout_seconds = settings["timeout_seconds"];
             if (settings.contains("rate_limit_delay_ms"))
@@ -593,12 +674,19 @@ bool WebDataCollector::loadConfigFromJson(const std::string& json_path) {
                 DataSource source;
                 source.name = source_json.value("name", "");
                 source.url = source_json.value("url", "");
-                source.source_type = sourceTypeFromString(source_json.value("source_type", "unknown"));
+                
+                // source_type is now optional - defaults to "miscellaneous"
+                source.source_type_str = source_json.value("source_type", "miscellaneous");
+                
+                // Fetcher is ALWAYS auto-detected from URL pattern
+                source.autoDetectFetcher();
+                source.source_type = source.fetcher_type;  // Keep legacy alias in sync
+                
                 source.enabled = source_json.value("enabled", true);
                 source.priority = source_json.value("priority", 5);
                 source.requires_auth = source_json.value("requires_auth", false);
                 source.api_key_env = source_json.value("api_key_env", "");
-                source.fetch_limit = source_json.value("fetch_limit", 100);
+                source.fetch_limit = source_json.value("fetch_limit", -1);  // -1 = use dynamic calculation
                 source.crawl_depth = source_json.value("crawl_depth", 2);  // Default to depth 2 for HTML crawling
                 
                 // Load API key from environment
@@ -613,6 +701,14 @@ bool WebDataCollector::loadConfigFromJson(const std::string& json_path) {
                         source.filter.max_length = filter_json["max_length"];
                     if (filter_json.contains("min_stars"))
                         source.filter.min_stars = filter_json["min_stars"];
+                    if (filter_json.contains("path_patterns")) {
+                        for (const auto& p : filter_json["path_patterns"])
+                            source.filter.path_patterns.push_back(p.get<std::string>());
+                    }
+                    if (filter_json.contains("exclude_patterns")) {
+                        for (const auto& p : filter_json["exclude_patterns"])
+                            source.filter.exclude_patterns.push_back(p.get<std::string>());
+                    }
                     // ... parse other filter fields
                 }
                 
@@ -671,12 +767,23 @@ size_t WebDataCollector::collectData() {
     }
     
     log("Processing " + std::to_string(stats_.enabled_sources) + " enabled sources");
+    log("Global limit: " + std::to_string(config_.max_new_entries_per_run) + " max new entries");
+    
+    // Track total NEW entries collected across all sources
+    size_t total_new_entries = 0;
     
     // Process each source
     progress_total_ = stats_.enabled_sources;
     progress_current_ = 0;
     
     for (const auto& source : config_.sources) {
+        // Check global limit before processing next source
+        if (static_cast<int>(total_new_entries) >= config_.max_new_entries_per_run) {
+            log("\n⚠ Reached global limit of " + std::to_string(config_.max_new_entries_per_run) + 
+                " new entries. Stopping collection.");
+            break;
+        }
+        
         if (!source.enabled) {
             log("Skipping disabled source: " + source.name);
             continue;
@@ -686,6 +793,7 @@ size_t WebDataCollector::collectData() {
         log("URL: " + source.url);
         log("Type: " + sourceTypeToString(source.source_type));
         log("Fetch limit: " + std::to_string(source.fetch_limit) + ", Crawl depth: " + std::to_string(source.crawl_depth));
+        log("Progress: " + std::to_string(total_new_entries) + "/" + std::to_string(config_.max_new_entries_per_run) + " new entries");
         
         try {
             auto start_time = std::chrono::steady_clock::now();
@@ -693,15 +801,63 @@ size_t WebDataCollector::collectData() {
             auto end_time = std::chrono::steady_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
             
+            // Filter out duplicates using state manager
+            size_t new_entries = 0;
+            size_t url_duplicates = 0;
+            size_t content_duplicates = 0;
+            
             {
                 std::lock_guard<std::mutex> lock(data_mutex_);
-                collected_data_.insert(collected_data_.end(), entries.begin(), entries.end());
-                stats_.successful += entries.size();
-                stats_.per_source_type[source.source_type] += entries.size();
+                std::string sourceTypeName = sourceTypeToString(source.source_type);
+                
+                // Calculate how many more we can accept before hitting global limit
+                int remaining_capacity = config_.max_new_entries_per_run - static_cast<int>(total_new_entries);
+                
+                for (const auto& entry : entries) {
+                    // Stop if we've hit global limit
+                    if (static_cast<int>(new_entries) >= remaining_capacity) {
+                        log("[LIMIT] Reached global max_new_entries_per_run limit, stopping source");
+                        break;
+                    }
+                    
+                    // Check if URL has already been collected
+                    if (stateManager_ && stateManager_->hasCollectedUrl(entry.source_url)) {
+                        url_duplicates++;
+                        continue;
+                    }
+                    
+                    // Check if content has already been seen
+                    if (stateManager_ && stateManager_->hasSeenContent(entry.content)) {
+                        content_duplicates++;
+                        continue;
+                    }
+                    
+                    // New unique entry - add it
+                    collected_data_.push_back(entry);
+                    new_entries++;
+                    
+                    // Mark as collected for future deduplication
+                    if (stateManager_) {
+                        stateManager_->markUrlCollected(entry.source_url, sourceTypeName);
+                        stateManager_->markContentSeen(entry.content);
+                    }
+                }
+                
+                // Update total new entries count
+                total_new_entries += new_entries;
+                
+                stats_.successful += new_entries;
+                stats_.duplicates_skipped += url_duplicates;
+                stats_.content_duplicates += content_duplicates;
+                stats_.per_source_type[source.source_type] += new_entries;
             }
             
-            if (entries.size() > 0) {
-                log("[SUCCESS] " + source.name + ": " + std::to_string(entries.size()) + " entries in " + std::to_string(duration) + "s");
+            if (new_entries > 0) {
+                log("[SUCCESS] " + source.name + ": " + std::to_string(new_entries) + " new entries in " + std::to_string(duration) + "s");
+                if (url_duplicates > 0 || content_duplicates > 0) {
+                    log("  Skipped: " + std::to_string(url_duplicates) + " URL duplicates, " + 
+                        std::to_string(content_duplicates) + " content duplicates");
+                }
                 // Log sample content length
                 size_t avg_length = 0;
                 for (const auto& entry : entries) {
@@ -710,7 +866,12 @@ size_t WebDataCollector::collectData() {
                 avg_length /= entries.size();
                 log("  Average content length: " + std::to_string(avg_length) + " chars");
             } else {
-                logWarning("[EMPTY] " + source.name + ": No entries collected in " + std::to_string(duration) + "s");
+                if (url_duplicates > 0 || content_duplicates > 0) {
+                    log("[SKIP] " + source.name + ": All " + std::to_string(entries.size()) + 
+                        " entries were duplicates (collected previously)");
+                } else {
+                    logWarning("[EMPTY] " + source.name + ": No entries collected in " + std::to_string(duration) + "s");
+                }
             }
             
         } catch (const std::exception& e) {
@@ -724,11 +885,16 @@ size_t WebDataCollector::collectData() {
         progress_current_++;
         updateProgress(progress_current_, progress_total_);
         
-        // Save checkpoint every 5 sources
+        // Save checkpoint every 5 sources (also saves state)
         if (progress_current_ % 5 == 0) {
             std::string checkpoint_file = "data/checkpoint_" + std::to_string(progress_current_) + ".ckpt";
             if (saveCheckpoint(checkpoint_file)) {
                 log("Checkpoint saved: " + checkpoint_file + " (" + std::to_string(collected_data_.size()) + " entries)");
+            }
+            // Also save state manager state periodically
+            if (stateManager_) {
+                stateManager_->saveState();
+                log("Collection state saved (" + std::to_string(stateManager_->getTotalUniqueUrls()) + " unique URLs)");
             }
         }
         
@@ -738,6 +904,11 @@ size_t WebDataCollector::collectData() {
         } catch (...) {
             // Ignore rate limit errors
         }
+    }
+    
+    // Save final state
+    if (stateManager_) {
+        stateManager_->saveState();
     }
     
     auto end_time = std::chrono::steady_clock::now();
@@ -756,61 +927,38 @@ size_t WebDataCollector::collectData() {
 }
 
 std::vector<RawDataEntry> WebDataCollector::fetchFromSource(const DataSource& source) {
-    std::string type_name;
-    switch (source.source_type) {
-        case SourceType::GITHUB:
-            type_name = "GITHUB_API";
-            log("[SOURCE] Starting " + type_name + ": " + source.name);
-            return fetchGitHub(source);
-        case SourceType::ARXIV:
-            type_name = "ARXIV_API";
-            log("[SOURCE] Starting " + type_name + ": " + source.name);
-            return fetchArXiv(source);
-        case SourceType::WIKIPEDIA:
-            type_name = "WIKIPEDIA_API";
-            log("[SOURCE] Starting " + type_name + ": " + source.name);
-            return fetchWikipedia(source);
-        case SourceType::STACKOVERFLOW:
-            type_name = "STACKOVERFLOW_API";
-            log("[SOURCE] Starting " + type_name + ": " + source.name);
-            return fetchStackOverflow(source);
-        case SourceType::REDDIT:
-            type_name = "REDDIT_API";
-            log("[SOURCE] Starting " + type_name + ": " + source.name);
-            return fetchReddit(source);
-        case SourceType::NEWS_API:
-            type_name = "NEWS_API";
-            log("[SOURCE] Starting " + type_name + ": " + source.name);
-            return fetchNewsAPI(source);
-        case SourceType::TECH_DOCS:
-            type_name = "TECH_DOCS";
-            log("[SOURCE] Starting " + type_name + ": " + source.name);
-            return fetchTechDocs(source);
-        case SourceType::CUSTOM:
-        case SourceType::GUTENBERG:
-        case SourceType::OPEN_BOOKS:
-        case SourceType::JSTOR_OA:
-        case SourceType::PHILOSOPHY:
-        case SourceType::CLASSICAL_TEXTS:
-        case SourceType::ACADEMIC_PAPERS:
-        case SourceType::LOGIC:
-        case SourceType::THEORETICAL_REASONING:
-        case SourceType::THEORETICAL_SCIENCE:
-        case SourceType::GRAMMAR:
-        case SourceType::RHETORIC:
-        case SourceType::LINGUISTICS:
-        case SourceType::SPEECH_CORPUS:
-        case SourceType::HARDWARE_SPECS:
-        case SourceType::ERUDITE_WRITING:
-            type_name = "HTML_CRAWL";
-            log("[SOURCE] Starting " + type_name + " (depth=" + std::to_string(source.crawl_depth) + "): " + source.name);
-            return fetchCustom(source);
-        default:
-            // All other unknown types should try HTML crawling
-            type_name = "HTML_CRAWL_FALLBACK";
-            log("[SOURCE] Starting " + type_name + " (unknown type, trying HTML): " + source.name);
-            return fetchCustom(source);
+    // Look up fetcher by FetcherType (auto-detected or explicit from config)
+    auto it = source_fetchers_.find(source.fetcher_type);
+    
+    if (it != source_fetchers_.end()) {
+        // Found registered fetcher
+        log("[SOURCE] Fetcher: " + fetcherTypeToString(source.fetcher_type) + 
+            ", Category: " + source.source_type_str + ", Name: " + source.name);
+        return it->second(source);
+    } else {
+        // Default to HTML crawl for unknown fetcher types
+        log("[SOURCE] HTML_CRAWL (fallback), Category: " + source.source_type_str + ", Name: " + source.name);
+        return fetchCustom(source);
     }
+}
+
+void WebDataCollector::registerSourceFetcher(FetcherType type, std::function<std::vector<RawDataEntry>(const DataSource&)> fetcher) {
+    source_fetchers_[type] = fetcher;
+    log("Registered fetcher: " + fetcherTypeToString(type));
+}
+
+void WebDataCollector::initializeDefaultFetchers() {
+    // Register API-based fetchers (keyed by FetcherType)
+    source_fetchers_[FetcherType::GITHUB_API] = [this](const DataSource& s) { return fetchGitHub(s); };
+    source_fetchers_[FetcherType::ARXIV_API] = [this](const DataSource& s) { return fetchArXiv(s); };
+    source_fetchers_[FetcherType::WIKIPEDIA_API] = [this](const DataSource& s) { return fetchWikipedia(s); };
+    source_fetchers_[FetcherType::STACKOVERFLOW_API] = [this](const DataSource& s) { return fetchStackOverflow(s); };
+    source_fetchers_[FetcherType::REDDIT_API] = [this](const DataSource& s) { return fetchReddit(s); };
+    source_fetchers_[FetcherType::NEWS_API] = [this](const DataSource& s) { return fetchNewsAPI(s); };
+    source_fetchers_[FetcherType::TECH_DOCS] = [this](const DataSource& s) { return fetchTechDocs(s); };
+    
+    // HTML crawl is the default fallback for all other sources
+    source_fetchers_[FetcherType::HTML_CRAWL] = [this](const DataSource& s) { return fetchCustom(s); };
 }
 
 std::vector<RawDataEntry> WebDataCollector::fetchGitHub(const DataSource& source) {
@@ -1361,7 +1509,14 @@ std::vector<RawDataEntry> WebDataCollector::fetchCustom(const DataSource& source
                 
                 // Filter links based on source patterns
                 std::vector<std::string> valid_links;
+                size_t urls_skipped_duplicate = 0;
                 for (const auto& link : links) {
+                    // Pre-fetch URL duplicate check - skip URLs we already have
+                    if (stateManager_ && stateManager_->hasCollectedUrl(link)) {
+                        urls_skipped_duplicate++;
+                        continue;  // Don't waste time fetching known URLs
+                    }
+                    
                     // Apply path patterns if specified
                     bool matches_pattern = source.filter.path_patterns.empty();
                     for (const auto& pattern : source.filter.path_patterns) {
@@ -1384,10 +1539,14 @@ std::vector<RawDataEntry> WebDataCollector::fetchCustom(const DataSource& source
                         valid_links.push_back(link);
                     }
                     
-                    // Stop after we have enough
+                    // Stop after we have enough candidate URLs
                     if (valid_links.size() >= static_cast<size_t>(source.fetch_limit - entries.size())) {
                         break;
                     }
+                }
+                
+                if (urls_skipped_duplicate > 0) {
+                    log("[HTML] Skipped " + std::to_string(urls_skipped_duplicate) + " already-collected URLs");
                 }
                 
                 log("[HTML] Crawling " + std::to_string(std::min(valid_links.size(), 
@@ -1663,9 +1822,22 @@ bool WebDataCollector::saveToJsonl(const std::string& output_path) {
     }
     
     for (const auto& entry : collected_data_) {
-        // TODO: Serialize to JSON line
-        // For now, simple output
-        file << "{\"content\":\"...\"}" << std::endl;
+        // Serialize entry to JSON line
+        nlohmann::json j;
+        j["content"] = entry.content;
+        j["source_url"] = entry.source_url;
+        j["source_type"] = sourceTypeToString(entry.source_type);
+        j["author"] = entry.author;
+        j["title"] = entry.title;
+        j["publish_date"] = entry.publish_date;
+        j["fetch_date"] = entry.fetch_date;
+        
+        // Add metadata if present (struct stores it as `metadata_json`)
+        if (!entry.metadata_json.empty()) {
+            j["metadata"] = entry.metadata_json;
+        }
+        
+        file << j.dump() << std::endl;
     }
     
     file.close();
@@ -1692,17 +1864,17 @@ bool WebDataCollector::saveToFlatBuffer(const std::string& output_path) {
         auto author_offset = builder.CreateString(entry.author);
         auto title_offset = builder.CreateString(entry.title);
         
-        // Map C++ enum to FlatBuffer enum
+        // Map C++ FetcherType enum to FlatBuffer SourceType enum
         GRIMWebTraining::SourceType fb_source_type;
         switch (entry.source_type) {
-            case SourceType::NEWS_API: fb_source_type = GRIMWebTraining::SourceType_NEWS_API; break;
-            case SourceType::GITHUB: fb_source_type = GRIMWebTraining::SourceType_GITHUB; break;
-            case SourceType::TECH_DOCS: fb_source_type = GRIMWebTraining::SourceType_TECH_DOCS; break;
-            case SourceType::WIKIPEDIA: fb_source_type = GRIMWebTraining::SourceType_WIKIPEDIA; break;
-            case SourceType::ARXIV: fb_source_type = GRIMWebTraining::SourceType_ARXIV; break;
-            case SourceType::STACKOVERFLOW: fb_source_type = GRIMWebTraining::SourceType_STACKOVERFLOW; break;
-            case SourceType::REDDIT: fb_source_type = GRIMWebTraining::SourceType_REDDIT; break;
-            case SourceType::CUSTOM: fb_source_type = GRIMWebTraining::SourceType_CUSTOM; break;
+            case FetcherType::NEWS_API: fb_source_type = GRIMWebTraining::SourceType_NEWS_API; break;
+            case FetcherType::GITHUB_API: fb_source_type = GRIMWebTraining::SourceType_GITHUB; break;
+            case FetcherType::TECH_DOCS: fb_source_type = GRIMWebTraining::SourceType_TECH_DOCS; break;
+            case FetcherType::WIKIPEDIA_API: fb_source_type = GRIMWebTraining::SourceType_WIKIPEDIA; break;
+            case FetcherType::ARXIV_API: fb_source_type = GRIMWebTraining::SourceType_ARXIV; break;
+            case FetcherType::STACKOVERFLOW_API: fb_source_type = GRIMWebTraining::SourceType_STACKOVERFLOW; break;
+            case FetcherType::REDDIT_API: fb_source_type = GRIMWebTraining::SourceType_REDDIT; break;
+            case FetcherType::HTML_CRAWL: fb_source_type = GRIMWebTraining::SourceType_CUSTOM; break;
             default: fb_source_type = GRIMWebTraining::SourceType_UNKNOWN; break;
         }
         
@@ -1985,6 +2157,63 @@ bool WebDataCollector::mergeCheckpoints(const std::vector<std::string>& checkpoi
     }
     
     return failed_count == 0;
+}
+
+//======================================================//
+// State Manager Methods - Persistent deduplication tracking
+//======================================================//
+
+void WebDataCollector::initializeStateManager(const std::string& stateDir) {
+    stateManager_ = std::make_unique<DataCollection::CollectionStateManager>(stateDir);
+    log("State manager initialized at: " + stateDir);
+    log("Loaded " + std::to_string(stateManager_->getTotalUniqueUrls()) + " unique URLs");
+    log("Loaded " + std::to_string(stateManager_->getTotalUniqueContent()) + " unique content hashes");
+}
+
+bool WebDataCollector::hasCollectedUrl(const std::string& url) const {
+    if (!stateManager_) return false;
+    return stateManager_->hasCollectedUrl(url);
+}
+
+bool WebDataCollector::hasSeenContent(const std::string& content) const {
+    if (!stateManager_) return false;
+    return stateManager_->hasSeenContent(content);
+}
+
+void WebDataCollector::markUrlCollected(const std::string& url, const std::string& sourceType) {
+    if (stateManager_) {
+        stateManager_->markUrlCollected(url, sourceType);
+    }
+}
+
+void WebDataCollector::markContentSeen(const std::string& content) {
+    if (stateManager_) {
+        stateManager_->markContentSeen(content);
+    }
+}
+
+size_t WebDataCollector::getUniqueUrlCount() const {
+    if (!stateManager_) return 0;
+    return stateManager_->getTotalUniqueUrls();
+}
+
+size_t WebDataCollector::getUniqueContentCount() const {
+    if (!stateManager_) return 0;
+    return stateManager_->getTotalUniqueContent();
+}
+
+void WebDataCollector::saveCollectionState() {
+    if (stateManager_) {
+        stateManager_->saveState();
+        log("Collection state saved");
+    }
+}
+
+void WebDataCollector::clearCollectionState() {
+    if (stateManager_) {
+        stateManager_->clear();
+        log("Collection state cleared");
+    }
 }
 
 } // namespace Training

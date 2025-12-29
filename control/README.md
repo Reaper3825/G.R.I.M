@@ -117,17 +117,17 @@ flatc --cpp training_control.fbs
 ```bash
 cd D:\G.R.I.M\resources\models\GRIM-text\training
 cmake --preset vs-cuda-release
-cmake --build build_vs_cuda --config Release --target training_control_server
+cmake --build build --config Release --target training_control_server
 ```
 
-Output: `build_vs_cuda\Release\training_control_server.exe`
+Output: `build\Release\training_control_server.exe`
 
 ## Running
 
 ### Start Control Server
 ```powershell
 cd D:\G.R.I.M\resources\models\GRIM-text\training
-.\build_vs_cuda\Release\training_control_server.exe
+.\build\Release\training_control_server.exe
 ```
 
 Server starts on `http://127.0.0.1:11436`
@@ -278,7 +278,7 @@ if (!client.isServerRunning()) {
 flatc --cpp training_control.fbs
 
 # Rebuild server
-cmake --build build_vs_cuda --config Release --target training_control_server
+cmake --build build --config Release --target training_control_server
 ```
 
 ## License

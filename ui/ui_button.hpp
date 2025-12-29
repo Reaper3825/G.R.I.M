@@ -14,6 +14,10 @@ public:
     // Accessors for state
     bool isHovered() const { return hovered; }
     bool isPressed() const { return pressed; }
+    
+    // Mutators
+    void setText(const std::string& text) { label = text; }
+    std::string getText() const { return label; }
 
 private:
     std::string label;

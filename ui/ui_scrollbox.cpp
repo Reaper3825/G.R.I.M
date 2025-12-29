@@ -171,7 +171,10 @@ void UIScrollBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     renderer.drawRect({position.x, position.y + size.y - 1}, {size.x, 1}, 0xFF333333);
     renderer.drawRect({position.x + size.x - 1, position.y}, {1, size.y}, 0xFF333333);
     
+
+    
     // Render children with scroll offset and culling
+    int drawnCount = 0;
     for (auto& child : children) {
         if (!child->isVisible()) continue;
         
@@ -181,9 +184,15 @@ void UIScrollBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
         // Calculate absolute screen position: scrollbox position + child relative position - scroll offset
         Vec2 absolutePos = {position.x + childPos.x, position.y + childPos.y - scrollOffset};
         
+        // DEBUG: Log culling check for first child
+
+        
         // Simple culling - only draw if visible in scrollbox
         if (absolutePos.y + childSize.y < position.y || 
             absolutePos.y > position.y + size.y) {
+            if (drawnCount == 0) {
+
+            }
             continue; // Child is outside visible area
         }
         
@@ -193,9 +202,15 @@ void UIScrollBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
         
         // Render the child
         child->drawOverlay(renderer, panelPos);
+        drawnCount++;
         
         // Restore original position
         child->setPosition(originalPos.x, originalPos.y);
+    }
+    
+    // DEBUG: Log how many children were drawn
+    if (!children.empty()) {
+        LOG_DEBUG("UIScrollBox", "Drew " + std::to_string(drawnCount) + " of " + std::to_string(children.size()) + " children");
     }
     
     // Draw scrollbar if needed

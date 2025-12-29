@@ -1,146 +1,1022 @@
 [
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\cc.exe -DGGML_COMMIT=\\\"edea8a9c\\\" -DGGML_SCHED_MAX_COPIES=4 -DGGML_VERSION=\\\"0.0.3069\\\" -D_CRT_SECURE_NO_WARNINGS -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wcast-qual -Wno-unused-function -Wdouble-promotion -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-base.dir\\ggml.c.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml.c",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml.c",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml.c.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_COMMIT=\\\"edea8a9c\\\" -DGGML_SCHED_MAX_COPIES=4 -DGGML_VERSION=\\\"0.0.3069\\\" -D_CRT_SECURE_NO_WARNINGS -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-base.dir\\ggml.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\cc.exe -DGGML_COMMIT=\\\"edea8a9c\\\" -DGGML_SCHED_MAX_COPIES=4 -DGGML_VERSION=\\\"0.0.3069\\\" -D_CRT_SECURE_NO_WARNINGS -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wcast-qual -Wno-unused-function -Wdouble-promotion -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-base.dir\\ggml-alloc.c.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-alloc.c",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-alloc.c",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-alloc.c.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_COMMIT=\\\"edea8a9c\\\" -DGGML_SCHED_MAX_COPIES=4 -DGGML_VERSION=\\\"0.0.3069\\\" -D_CRT_SECURE_NO_WARNINGS -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-base.dir\\ggml-backend.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-backend.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-backend.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_COMMIT=\\\"edea8a9c\\\" -DGGML_SCHED_MAX_COPIES=4 -DGGML_VERSION=\\\"0.0.3069\\\" -D_CRT_SECURE_NO_WARNINGS -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-base.dir\\ggml-opt.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-opt.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-opt.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-opt.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_COMMIT=\\\"edea8a9c\\\" -DGGML_SCHED_MAX_COPIES=4 -DGGML_VERSION=\\\"0.0.3069\\\" -D_CRT_SECURE_NO_WARNINGS -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-base.dir\\ggml-threading.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-threading.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-threading.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-threading.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\cc.exe -DGGML_COMMIT=\\\"edea8a9c\\\" -DGGML_SCHED_MAX_COPIES=4 -DGGML_VERSION=\\\"0.0.3069\\\" -D_CRT_SECURE_NO_WARNINGS -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wcast-qual -Wno-unused-function -Wdouble-promotion -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-base.dir\\ggml-quants.c.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-quants.c",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-quants.c",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-quants.c.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_COMMIT=\\\"edea8a9c\\\" -DGGML_SCHED_MAX_COPIES=4 -DGGML_VERSION=\\\"0.0.3069\\\" -D_CRT_SECURE_NO_WARNINGS -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-base.dir\\gguf.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\gguf.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/gguf.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-base.dir/gguf.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml.dir\\ggml-backend-reg.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-backend-reg.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-backend-reg.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml.dir/ggml-backend-reg.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\cc.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wcast-qual -Wno-unused-function -Wdouble-promotion -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\ggml-cpu.c.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\ggml-cpu.c",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/ggml-cpu.c",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.c.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\ggml-cpu.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\ggml-cpu.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/ggml-cpu.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\repack.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\repack.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/repack.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/repack.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\hbm.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\hbm.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/hbm.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/hbm.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\cc.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wcast-qual -Wno-unused-function -Wdouble-promotion -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\quants.c.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\quants.c",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/quants.c",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/quants.c.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\traits.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\traits.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/traits.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/traits.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\amx\\amx.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\amx\\amx.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/amx/amx.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/amx.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\amx\\mmq.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\amx\\mmq.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/amx/mmq.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/mmq.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\binary-ops.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\binary-ops.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/binary-ops.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/binary-ops.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\unary-ops.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\unary-ops.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/unary-ops.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/unary-ops.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\vec.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\vec.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/vec.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/vec.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\ops.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\ops.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/ops.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ops.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\cc.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wcast-qual -Wno-unused-function -Wdouble-promotion -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\arch\\x86\\quants.c.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\arch\\x86\\quants.c",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/arch/x86/quants.c",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/x86/quants.c.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DGGML_USE_OPENMP -D_CRT_SECURE_NO_WARNINGS -D_WIN32_WINNT=0x602 -D_XOPEN_SOURCE=600 -ID:/G.R.I.M/external/whisper.cpp/ggml/src/.. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/. -ID:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -fopenmp -o external\\whisper.cpp\\ggml\\src\\CMakeFiles\\ggml-cpu.dir\\ggml-cpu\\arch\\x86\\repack.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\ggml\\src\\ggml-cpu\\arch\\x86\\repack.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/ggml/src/ggml-cpu/arch/x86/repack.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/x86/repack.cpp.obj"
-},
-{
-  "directory": "D:/G.R.I.M",
-  "command": "C:\\msys64\\mingw64\\bin\\c++.exe -DGGML_USE_CPU -DWHISPER_VERSION=\\\"1.7.6\\\" -D_CRT_SECURE_NO_WARNINGS -ID:/G.R.I.M/external/whisper.cpp/src/. -ID:/G.R.I.M/external/whisper.cpp/src/../include -ID:/G.R.I.M/external/whisper.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wpedantic -Wmissing-declarations -Wmissing-noreturn -Wcast-qual -Wno-unused-function -o external\\whisper.cpp\\src\\CMakeFiles\\whisper.dir\\whisper.cpp.obj -c D:\\G.R.I.M\\external\\whisper.cpp\\src\\whisper.cpp",
-  "file": "D:/G.R.I.M/external/whisper.cpp/src/whisper.cpp",
-  "output": "D:/G.R.I.M/external/whisper.cpp/src/CMakeFiles/whisper.dir/whisper.cpp.obj"
-}
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Common\\grim_language_model_gpu.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Common\\grim_language_model_gpu.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Common\\grim_model_serialization.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Common\\grim_model_serialization.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Common\\grim_training_kernels.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Common\\grim_training_kernels.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Common\\grim_transformer_gpu.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Common\\grim_transformer_gpu.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Common\\ScaleBuffer.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Common\\ScaleBuffer.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Tests\\causality_proof_tests.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Tests\\causality_proof_tests.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Tests\\flash_attention_test.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Tests\\flash_attention_test.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Tests\\ScratchBlockTest.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Tests\\ScratchBlockTest.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Tests\\unigrambyte_self_test.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Tests\\unigrambyte_self_test.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\ForwardWithCache_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\ForwardWithCache_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Forward_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Forward_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\IncrementalGeneration_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\IncrementalGeneration_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\LanguageModel_Training.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\LanguageModel_Training.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\tokenizer_self_test.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\tokenizer_self_test.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\train_gpu.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\train_gpu.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\train_gpu_old.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\train_gpu_old.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase2_TrainingLoop.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase2_TrainingLoop.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase3_Cleanup.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase3_Cleanup.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingLoop\\build_ninja\\CMakeFiles\\4.1.1\\CompilerIdCUDA\\CMakeCUDACompilerId.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingLoop\\build_ninja\\CMakeFiles\\4.1.1\\CompilerIdCUDA\\CMakeCUDACompilerId.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingLoop\\build\\CMakeFiles\\4.1.1\\CompilerIdCUDA\\CMakeCUDACompilerId.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingLoop\\build\\CMakeFiles\\4.1.1\\CompilerIdCUDA\\CMakeCUDACompilerId.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Batching\\Batching_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Batching\\Batching_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\DataLoader\\DataLoader.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\DataLoader\\DataLoader.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Dropout\\Dropout_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Dropout\\Dropout_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\DynamicWarmup\\DynamicWarmup_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\DynamicWarmup\\DynamicWarmup_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Dynamic_LR\\DynamicLR.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Dynamic_LR\\DynamicLR.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\DynaSeqs\\DynaSeq_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\DynaSeqs\\DynaSeq_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GPUBuffer\\GPUBuffer.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GPUBuffer\\GPUBuffer.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GradAccumulationController\\GradAccumulationController_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GradAccumulationController\\GradAccumulationController_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GradAccumulationController\\GradAccumulationController_Integration.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GradAccumulationController\\GradAccumulationController_Integration.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Gradients\\GradientCC_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Gradients\\GradientCC_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Gradients\\GradientCC_Host_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Gradients\\GradientCC_Host_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GradTear\\GradTear_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GradTear\\GradTear_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GradTear\\GradTear_Test.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GradTear\\GradTear_Test.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\LogRecorder\\LogRecorder.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\LogRecorder\\LogRecorder.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\RareTokens\\RareTokens_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\RareTokens\\RareTokens_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\ScratchBlock\\ScratchBlock_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\ScratchBlock\\ScratchBlock_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\SoftRestart\\SoftRestart.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\SoftRestart\\SoftRestart.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\StreamController\\StreamController_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\StreamController\\StreamController_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TeacherLogits\\TeacherLogits_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TeacherLogits\\TeacherLogits_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Telemetry\\TelemetryControl_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Telemetry\\TelemetryControl_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Telemetry\\TelemetryLattice_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Telemetry\\TelemetryLattice_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TensorContract\\TensorContract_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TensorContract\\TensorContract_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TensorConversion\\TensorConversion.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TensorConversion\\TensorConversion.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TNC\\Token-normalized_clipping.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TNC\\Token-normalized_clipping.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TrainingState\\TrainingStateGPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TrainingState\\TrainingStateGPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\AhoCorasick.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\AhoCorasick.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\Atomtable.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\Atomtable.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\Byte.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\Byte.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\UniByte.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\UniByte.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\Unigram.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\Unigram.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\PBM\\Alibi\\Alibi_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\PBM\\Alibi\\Alibi_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\PBM\\AlibiRoPE_Hybrid\\AlibiRopE_Hybrid.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\PBM\\AlibiRoPE_Hybrid\\AlibiRopE_Hybrid.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\PBM\\RoPE\\RoPE.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\PBM\\RoPE\\RoPE.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\PBM\\RoPE\\Kernels\\RoPE_Kernel.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\PBM\\RoPE\\Kernels\\RoPE_Kernel.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Optimizers\\AdamW\\AdamW_gpu.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Optimizers\\AdamW\\AdamW_gpu.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Optimizers\\AdamW\\AdamW_Kernal_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Optimizers\\AdamW\\AdamW_Kernal_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\ComputeLoss\\ComputeLossBatch.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\ComputeLoss\\ComputeLossBatch.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\ComputeLoss\\ComputeLossHost_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\ComputeLoss\\ComputeLossHost_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\ComputeLoss\\ComputeLoss_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\ComputeLoss\\ComputeLoss_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\CrossEntropy\\CrossEntropy_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\CrossEntropy\\CrossEntropy_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\Divergence\\Divergence_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\Divergence\\Divergence_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\FocalLoss\\FocalLoss_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\FocalLoss\\FocalLoss_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\LabelSmoothing\\LabelSmoothing_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\LabelSmoothing\\LabelSmoothing_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\LossContext\\LossContext.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\LossContext\\LossContext.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\Preference\\Preference_KL_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\Preference\\Preference_KL_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\TKML\\TKML_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\TKML\\TKML_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\UnifiedLoss\\UnifiedLoss_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\UnifiedLoss\\UnifiedLoss_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\GELU\\GELU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\GELU\\GELU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Attention\\QKV_Projector.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Attention\\QKV_Projector.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardKernels.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardKernels.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardOps_Orchestrator.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardOps_Orchestrator.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardPhase1_OutputLayer.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardPhase1_OutputLayer.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardPhase2_Encoder.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardPhase2_Encoder.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardPhase3_InputLayer.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardPhase3_InputLayer.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Embedding\\EmbeddingBackward.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Embedding\\EmbeddingBackward.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Embedding\\EmbeddingRuntime.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Embedding\\EmbeddingRuntime.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Embedding\\Embedding_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Embedding\\Embedding_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Encoding\\Encoding_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Encoding\\Encoding_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\FeedForward\\Feed_Forward_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\FeedForward\\Feed_Forward_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\FlashAttention\\Flash_Attention_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\FlashAttention\\Flash_Attention_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\FlashAttention\\Flash_Attention_Kernal.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\FlashAttention\\Flash_Attention_Kernal.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\GRIMTS\\GRIM-TS.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\GRIMTS\\GRIM-TS.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\InitInferenceState\\InitinferenceState.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\InitInferenceState\\InitinferenceState.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LayernNorm\\LayerNorm_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LayernNorm\\LayerNorm_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LayernNorm\\LayerNorm_Kernal_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LayernNorm\\LayerNorm_Kernal_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LayernNorm\\RMSNorm_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LayernNorm\\RMSNorm_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LayernNorm\\RMSNorm_Kernel_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LayernNorm\\RMSNorm_Kernel_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LMHead\\lm_head_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LMHead\\lm_head_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Quantization\\Quantization_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Quantization\\Quantization_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Serialization\\Serialization_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Serialization\\Serialization_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Tokenizer\\Tokenizer_GPU.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Tokenizer\\Tokenizer_GPU.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\GRIM\\build\\CMakeFiles\\4.1.1\\CompilerIdCUDA\\CMakeCUDACompilerId.cu",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\GRIM\\build\\CMakeFiles\\4.1.1\\CompilerIdCUDA\\CMakeCUDACompilerId.cu"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\GRIM\\grim_text_server.cpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\GRIM\\grim_text_server.cpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\convert_vocab_to_binary.cpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\convert_vocab_to_binary.cpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingLoop\\build_ninja\\CMakeFiles\\4.1.1\\CompilerIdCUDA\\tmp\\CMakeCUDACompilerId.cudafe1.cpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingLoop\\build_ninja\\CMakeFiles\\4.1.1\\CompilerIdCUDA\\tmp\\CMakeCUDACompilerId.cudafe1.cpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingLoop\\build\\CMakeFiles\\4.1.1\\CompilerIdCXX\\CMakeCXXCompilerId.cpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingLoop\\build\\CMakeFiles\\4.1.1\\CompilerIdCXX\\CMakeCXXCompilerId.cpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Stability\\StabilityOverrides.cpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Stability\\StabilityOverrides.cpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Telemetry\\telemetry_usage_example.cpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Telemetry\\telemetry_usage_example.cpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\GRIM\\build\\CMakeFiles\\4.1.1\\CompilerIdCXX\\CMakeCXXCompilerId.cpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\GRIM\\build\\CMakeFiles\\4.1.1\\CompilerIdCXX\\CMakeCXXCompilerId.cpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\pch.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\pch.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Common\\grim_model_serialization_version.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Common\\grim_model_serialization_version.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Common\\grim_scale_buffer.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Common\\grim_scale_buffer.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Common\\grim_transformer_gpu.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Common\\grim_transformer_gpu.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\GRIM\\grim_generation.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\GRIM\\grim_generation.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\GRIM\\grim_language_model_cuda.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\GRIM\\grim_language_model_cuda.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\grim_layer_gpu.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\grim_layer_gpu.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Tests\\flash_attention_test.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Tests\\flash_attention_test.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Tests\\ScratchBlockTest.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Tests\\ScratchBlockTest.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Tests\\unigrambyte_self_test.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Tests\\unigrambyte_self_test.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\metrics_collector.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\metrics_collector.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\module_logger.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\module_logger.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingEvents.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingEvents.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\training_data_loader.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\training_data_loader.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\training_logger.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\training_logger.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\training_paths.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\training_paths.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\training_status_writer.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\training_status_writer.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase2_TrainingLoop.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase2_TrainingLoop.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase3_Cleanup.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase3_Cleanup.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Batching\\Batching_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Batching\\Batching_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\DataLoader\\DataLoader.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\DataLoader\\DataLoader.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Delegate\\Delegate.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Delegate\\Delegate.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Dropout\\Dropout_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Dropout\\Dropout_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\DynamicWarmup\\DynamicWarmup_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\DynamicWarmup\\DynamicWarmup_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Dynamic_LR\\DynamicLR.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Dynamic_LR\\DynamicLR.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\DynaSeqs\\DynaSeq_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\DynaSeqs\\DynaSeq_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GPUBuffer\\GPUBuffer.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GPUBuffer\\GPUBuffer.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GradAccumulationController\\GradAccumulationController_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GradAccumulationController\\GradAccumulationController_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GradAccumulationController\\GradAccumulationController_Integration.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GradAccumulationController\\GradAccumulationController_Integration.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Gradients\\GradientCC_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Gradients\\GradientCC_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Gradients\\GradientCC_Host_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Gradients\\GradientCC_Host_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GradTear\\GradTear_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GradTear\\GradTear_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GradTear\\GradTear_Integration.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\GradTear\\GradTear_Integration.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\HyperParameters\\HyperParameters_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\HyperParameters\\HyperParameters_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\LogRecorder\\LogRecorder.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\LogRecorder\\LogRecorder.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\Loss.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\Loss.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\RareTokens\\RareTokens_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\RareTokens\\RareTokens_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\ScratchBlock\\ScratchBlock_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\ScratchBlock\\ScratchBlock_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\SoftRestart\\SoftRestart.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\SoftRestart\\SoftRestart.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Stability\\StabilityOverrides.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Stability\\StabilityOverrides.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\StreamController\\StreamController_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\StreamController\\StreamController_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TeacherLogits\\TeacherLogits_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TeacherLogits\\TeacherLogits_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Telemetry\\TelemetryControl_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Telemetry\\TelemetryControl_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Telemetry\\TelemetryLattice_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Telemetry\\TelemetryLattice_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Telemetry\\TelemetryLattice_Internal.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Telemetry\\TelemetryLattice_Internal.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Telemetry\\TelemetryState_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Telemetry\\TelemetryState_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TensorContract\\TensorContract_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TensorContract\\TensorContract_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TensorConversion\\TensorConversion.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TensorConversion\\TensorConversion.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TNC\\Token-normalized_clipping.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TNC\\Token-normalized_clipping.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TrainingState\\TrainingState_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\TrainingState\\TrainingState_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\AhoCorasick.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\AhoCorasick.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\AtomTable.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\AtomTable.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\Byte.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\Byte.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\UniByte.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\UniByte.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\Unigram.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\UnigramByte\\Unigram.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\PBM\\Alibi\\Alibi_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\PBM\\Alibi\\Alibi_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\PBM\\AlibiRoPE_Hybrid\\AlibiRoPE_Hybrid.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\PBM\\AlibiRoPE_Hybrid\\AlibiRoPE_Hybrid.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\PBM\\RoPE\\RoPE.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\PBM\\RoPE\\RoPE.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\PBM\\RoPE\\Kernels\\RoPE_Kernel.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\PBM\\RoPE\\Kernels\\RoPE_Kernel.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Optimizers\\AdamW\\AdamW_gpu.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Optimizers\\AdamW\\AdamW_gpu.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Optimizers\\AdamW\\AdamW_Kernal_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Optimizers\\AdamW\\AdamW_Kernal_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\ComputeLoss\\ComputeLossBatch.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\ComputeLoss\\ComputeLossBatch.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\ComputeLoss\\ComputeLossHost_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\ComputeLoss\\ComputeLossHost_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\ComputeLoss\\ComputeLoss_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\ComputeLoss\\ComputeLoss_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\CrossEntropy\\CrossEntropy_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\CrossEntropy\\CrossEntropy_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\Divergence\\Divergence_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\Divergence\\Divergence_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\FocalLoss\\FocalLoss_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\FocalLoss\\FocalLoss_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\LabelSmoothing\\LabelSmoothing_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\LabelSmoothing\\LabelSmoothing_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\LossContext\\LossContext.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\LossContext\\LossContext.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\Preference\\Preference_KL_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\Preference\\Preference_KL_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\TKML\\TKML_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\TKML\\TKML_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\UnifiedLoss\\UnifiedLoss_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Loss\\UnifiedLoss\\UnifiedLoss_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\GELU\\GELU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\GELU\\GELU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Attention\\QKV_Projector.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Attention\\QKV_Projector.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardContext.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardContext.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardOps_Orchestrator.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardOps_Orchestrator.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardPhase1_OutputLayer.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardPhase1_OutputLayer.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardPhase2_Encoder.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardPhase2_Encoder.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardPhase3_InputLayer.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\BackwardOps\\BackwardPhase3_InputLayer.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Embedding\\EmbeddingBackward.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Embedding\\EmbeddingBackward.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Embedding\\EmbeddingRuntime.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Embedding\\EmbeddingRuntime.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Embedding\\Embedding_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Embedding\\Embedding_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Encoding\\Encoding_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Encoding\\Encoding_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\FeedForward\\Feed_Forward_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\FeedForward\\Feed_Forward_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\FlashAttention\\Flash_attention_gpu.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\FlashAttention\\Flash_attention_gpu.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\FlashAttention\\Flash_Attention_Kernal.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\FlashAttention\\Flash_Attention_Kernal.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\GRIMTS\\GRIM-TS.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\GRIMTS\\GRIM-TS.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\InitInferenceState\\InitinferenceState.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\InitInferenceState\\InitinferenceState.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LayernNorm\\LayerNorm_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LayernNorm\\LayerNorm_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LayernNorm\\LayerNorm_Kernal_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LayernNorm\\LayerNorm_Kernal_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LayernNorm\\RMSNorm_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LayernNorm\\RMSNorm_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LayernNorm\\RMSNorm_Kernel_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LayernNorm\\RMSNorm_Kernel_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LMHead\\lm_head_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\LMHead\\lm_head_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Quantization\\Quantization_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Quantization\\Quantization_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Serialization\\Serialization_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Serialization\\Serialization_GPU.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Tokenizer\\GrimTokenizer.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Tokenizer\\GrimTokenizer.hpp"
+  },
+  {
+    "directory": "D:/G.R.I.M",
+    "file": "d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Tokenizer\\Tokenizer_GPU.hpp",
+    "command": "clang++ -xc++ -std=c++17 -ID:/G.R.I.M/resources/models/GRIM-text -ID:/G.R.I.M/resources/models/GRIM-text/training -ID:/G.R.I.M/resources/models/GRIM-text/training/TrainingLoop -ID:/G.R.I.M/resources/models/GRIM-text/GRIM -ID:/G.R.I.M/resources/models/GRIM-text/Shared -ID:/G.R.I.M/resources/models/GRIM-text/Layers -ID:/G.R.I.M/resources/models/GRIM-text/archive -ID:/G.R.I.M/control -ID:/G.R.I.M/vcpkg_installed/x64-windows/include -IC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include -DCUDA_ENABLED=1 -DNOMINMAX -c d:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Tokenizer\\Tokenizer_GPU.hpp"
+  }
 ]

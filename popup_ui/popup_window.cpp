@@ -377,10 +377,11 @@ void applyWindowAlphaIfReady(HWND hwnd, int width, int height, uint32_t frameIdx
     uint8_t* dst = static_cast<uint8_t*>(bits);
     for (int i = 0; i < width * height; ++i)
     {
-        dst[i * 4 + 0] = pixelsCopy[i * 4 + 2]; // B
-        dst[i * 4 + 1] = pixelsCopy[i * 4 + 1]; // G
-        dst[i * 4 + 2] = pixelsCopy[i * 4 + 0]; // R
-        dst[i * 4 + 3] = pixelsCopy[i * 4 + 3]; // A
+        uint8_t a = pixelsCopy[i * 4 + 3];
+        dst[i * 4 + 0] = static_cast<uint8_t>((pixelsCopy[i * 4 + 2] * a) / 255); // B
+        dst[i * 4 + 1] = static_cast<uint8_t>((pixelsCopy[i * 4 + 1] * a) / 255); // G
+        dst[i * 4 + 2] = static_cast<uint8_t>((pixelsCopy[i * 4 + 0] * a) / 255); // R
+        dst[i * 4 + 3] = a; // A
     }
 
     HBITMAP oldBmp = (HBITMAP)SelectObject(hdcMem, hBmp);
@@ -522,9 +523,9 @@ void applyAnimationToWindow(HWND hwnd, int width, int height, float scale, float
 
                 if (finalAlpha > src[dstIdx + 3])
                 {
-                    src[dstIdx + 0] = 15;
-                    src[dstIdx + 1] = 18;
-                    src[dstIdx + 2] = 22;
+                    src[dstIdx + 0] = static_cast<uint8_t>((15 * finalAlpha) / 255);
+                    src[dstIdx + 1] = static_cast<uint8_t>((18 * finalAlpha) / 255);
+                    src[dstIdx + 2] = static_cast<uint8_t>((22 * finalAlpha) / 255);
                     src[dstIdx + 3] = finalAlpha;
                 }
             }
@@ -561,12 +562,16 @@ void applyAnimationToWindow(HWND hwnd, int width, int height, float scale, float
                 return static_cast<uint8_t>(std::clamp(boosted, 0.0f, 255.0f));
             };
 
-            uint8_t finalR = toneMap(pixelsCopy[srcIdx + 0]);
-            uint8_t finalG = toneMap(pixelsCopy[srcIdx + 1]);
-            uint8_t finalB = toneMap(pixelsCopy[srcIdx + 2]);
-
             uint8_t originalAlpha = pixelsCopy[srcIdx + 3];
             uint8_t finalAlpha = static_cast<uint8_t>(originalAlpha * alpha);
+
+            auto premul = [&](uint8_t channel) -> uint8_t {
+                return static_cast<uint8_t>((toneMap(channel) * finalAlpha) / 255);
+            };
+
+            uint8_t finalR = premul(pixelsCopy[srcIdx + 0]);
+            uint8_t finalG = premul(pixelsCopy[srcIdx + 1]);
+            uint8_t finalB = premul(pixelsCopy[srcIdx + 2]);
 
             size_t dstIdx = (y * width + x) * 4;
             src[dstIdx + 0] = finalB;

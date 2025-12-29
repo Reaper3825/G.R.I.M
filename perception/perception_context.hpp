@@ -108,7 +108,7 @@ struct VisualContext {
     bool isDarkTheme = false;
     
     // Change detection
-    float changeScore = 0.0f; // 0.0 = no change, 1.0 = completely different
+    float changeScore = 1.0f; // 0.0 = no change, 1.0 = completely different
     
     // Raw screenshot (optional - can be large)
     cv::Mat screenshot; // Empty by default to save memory

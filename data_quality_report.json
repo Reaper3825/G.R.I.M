@@ -1,0 +1,19 @@
+{
+  "token_stats": {
+    "unique_tokens": 28352,
+    "total_tokens": 8594154,
+    "top_10_ratio": 0.1159332262372771,
+    "zipf_exponent": 0.7261219857191231,
+    "singleton_ratio": 0.10785835214446952
+  },
+  "sequence_stats": {
+    "unique_sequences": 6733,
+    "total_sequences": 6733,
+    "duplicate_ratio": 0.0,
+    "length_mean": 1276.4226941927818,
+    "length_std": 483.46751781896177
+  },
+  "similarity_mean": 0.10206175963235536,
+  "similarity_std": 0.03284532096127432,
+  "issues": []
+}
