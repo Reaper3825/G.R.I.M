@@ -1,0 +1,37 @@
+{
+  "file": "D:\\G.R.I.M\\gradient_dumps\\layer6_ffn_w2_grads.bin",
+  "summary": {
+    "count": 2359296,
+    "mean": 0.004284770773081271,
+    "std": 0.281313883747875,
+    "min": -3.7741756439208984,
+    "max": 4.467141628265381,
+    "max_single_increase": {
+      "value": 3.9114878475666046,
+      "index": 843179
+    },
+    "max_single_decrease": {
+      "value": -4.643638417124748,
+      "index": 1273259
+    },
+    "longest_increasing_run": {
+      "length": 8,
+      "total_delta": 0.18127592653036118,
+      "start_index": 291311
+    },
+    "longest_decreasing_run": {
+      "length": 8,
+      "total_delta": -0.20243872702121735,
+      "start_index": 643799
+    },
+    "trend_reversals": 1577572,
+    "last_reversal_index": 2359294,
+    "last_reversal_value_before": 0.4998462200164795,
+    "last_reversal_value_after": 0.14400610327720642,
+    "linear_trend": {
+      "slope": 1.1437972654608695e-08,
+      "intercept": -0.00920800507399624,
+      "r2": 0.0007668305234705963
+    }
+  }
+}

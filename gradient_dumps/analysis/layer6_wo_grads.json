@@ -1,0 +1,37 @@
+{
+  "file": "D:\\G.R.I.M\\gradient_dumps\\layer6_wo_grads.bin",
+  "summary": {
+    "count": 589824,
+    "mean": 0.00022302890568082212,
+    "std": 0.6024410109948384,
+    "min": -4.668639183044434,
+    "max": 5.078519821166992,
+    "max_single_increase": {
+      "value": 7.937892436981201,
+      "index": 58320
+    },
+    "max_single_decrease": {
+      "value": -7.328326463699341,
+      "index": 211152
+    },
+    "longest_increasing_run": {
+      "length": 7,
+      "total_delta": 0.8740072846412659,
+      "start_index": 464635
+    },
+    "longest_decreasing_run": {
+      "length": 7,
+      "total_delta": -0.31486882269382477,
+      "start_index": 7913
+    },
+    "trend_reversals": 405382,
+    "last_reversal_index": 589822,
+    "last_reversal_value_before": -1.0450931787490845,
+    "last_reversal_value_after": 0.04925665631890297,
+    "linear_trend": {
+      "slope": 1.2041925204568235e-09,
+      "intercept": -0.00013210131681588042,
+      "r2": 1.1583143255666783e-07
+    }
+  }
+}

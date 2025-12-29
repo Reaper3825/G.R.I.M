@@ -9,6 +9,8 @@ set(VCPKG_FEATURE_FLAGS "manifests,versions" CACHE STRING "")
 set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/vcpkg_installed")
 include_directories("${VCPKG_INSTALLED_DIR}/x64-windows/include")
 include_directories("${VCPKG_INSTALLED_DIR}/x64-windows/include/opencv4")
+# Make GRIM-text shared headers available to all targets (e.g., TrainingLoop)
+include_directories("${CMAKE_SOURCE_DIR}/resources/models/GRIM-text/Shared")
 
 # Add library search paths for both Debug and Release
 link_directories("${VCPKG_INSTALLED_DIR}/x64-windows/lib")

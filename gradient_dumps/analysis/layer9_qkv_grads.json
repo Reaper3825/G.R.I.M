@@ -1,0 +1,37 @@
+{
+  "file": "D:\\G.R.I.M\\gradient_dumps\\layer9_qkv_grads.bin",
+  "summary": {
+    "count": 983040,
+    "mean": 0.0006693141768115853,
+    "std": 0.05572611492945478,
+    "min": -0.8130284547805786,
+    "max": 0.9045068621635437,
+    "max_single_increase": {
+      "value": 0.8964991867542267,
+      "index": 853200
+    },
+    "max_single_decrease": {
+      "value": -0.8807016871869564,
+      "index": 853183
+    },
+    "longest_increasing_run": {
+      "length": 8,
+      "total_delta": 0.012206231709569693,
+      "start_index": 512494
+    },
+    "longest_decreasing_run": {
+      "length": 7,
+      "total_delta": -0.021094822324812412,
+      "start_index": 21123
+    },
+    "trend_reversals": 789589,
+    "last_reversal_index": 983038,
+    "last_reversal_value_before": -0.011120114475488663,
+    "last_reversal_value_after": 0.052106473594903946,
+    "linear_trend": {
+      "slope": 8.866635834900952e-10,
+      "intercept": 0.00023350173558632547,
+      "r2": 2.0387376545305536e-05
+    }
+  }
+}
