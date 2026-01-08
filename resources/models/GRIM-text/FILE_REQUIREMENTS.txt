@@ -1,0 +1,159 @@
+# =============================================================================
+# GRIM-text Executable File Requirements
+# =============================================================================
+
+## 1. DATA COLLECTION (collect_data / verifier)
+## Location: DataCollection/build/Release/
+
+### collect_data.exe (Web Collector)
+Input Files:
+  - source_data.json              # Web source configuration (URLs, priorities)
+
+Output Files:
+  - data/raw/*.flatbuf            # Raw collected data in FlatBuffer format
+  - data/raw/*.json               # Alternative JSON format
+
+Directory Structure:
+  DataCollection/
+    ├── source_data.json          # REQUIRED: Source configuration
+    └── data/
+        └── raw/                  # OUTPUT: Raw collected data
+
+
+### verifier.exe (Data Quality Filter)
+Input Files:
+  - data/raw/*.flatbuf            # From collect_data output
+
+Output Files:
+  - data/verified/*.flatbuf       # Verified/filtered data
+
+Directory Structure:
+  DataCollection/
+    └── data/
+        ├── raw/                  # INPUT: Unverified data
+        └── verified/             # OUTPUT: Quality-filtered data
+
+
+### merge_checkpoints.exe (Data Merger)
+Input Files:
+  - data/verified/*.flatbuf       # Multiple verified data files
+
+Output Files:
+  - data/training_data.grmt       # Merged binary training data
+  - models/vocab.bin              # Generated vocabulary file
+
+Directory Structure:
+  DataCollection/
+    ├── data/
+    │   ├── verified/             # INPUT: Verified data chunks
+    │   └── training_data.grmt    # OUTPUT: Final training data
+    └── models/
+        └── vocab.bin             # OUTPUT: Tokenizer vocabulary
+
+
+## =============================================================================
+## 2. TRAINING LOOP (train_gpu.exe)
+## Location: training/TrainingLoop/build/Release/
+
+### train_gpu.exe (GPU Training)
+Input Files:
+  - data/training_data.grmt       # Binary training data (from merge_checkpoints)
+  - models/vocab.bin              # Vocabulary file (from merge_checkpoints)
+
+Output Files:
+  - checkpoints/*.bin             # Model checkpoints during training
+  - models/grim_text.bin          # Final trained model
+  - training_status.fb            # Real-time training status (FlatBuffer)
+  - logs/training_*.fb            # Training logs and metrics
+
+Command Line Options:
+  --data <path>          Training data path (default: data/training_data.grmt)
+  --vocab <path>         Vocabulary path (default: models/vocab.bin)
+  --output <path>        Output model path (default: models/grim_text.bin)
+  --epochs <n>           Number of epochs (default: 3)
+  --batch <n>            Batch size (default: 8)
+  --lr <float>           Learning rate (default: 0.0001)
+
+Directory Structure:
+  training/TrainingLoop/
+    ├── data/
+    │   └── training_data.grmt    # INPUT: Training data
+    ├── models/
+    │   ├── vocab.bin             # INPUT: Vocabulary
+    │   └── grim_text.bin         # OUTPUT: Trained model
+    ├── checkpoints/              # OUTPUT: Model checkpoints
+    │   ├── checkpoint_500.bin
+    │   ├── checkpoint_1000.bin
+    │   └── ...
+    ├── logs/                     # OUTPUT: Training logs
+    │   └── training_*.fb
+    └── training_status.fb        # OUTPUT: Live status
+
+
+## =============================================================================
+## 3. MODEL SERVER (grim_model.exe)
+## Location: GRIM/cmake/build/Release/
+
+### grim_model.exe (Inference Server)
+Input Files:
+  - models/vocab.bin              # Vocabulary file (from training)
+  - models/grim_text.bin          # Trained model weights (from training)
+
+Runtime Behavior:
+  - Starts HTTP server at http://127.0.0.1:11435
+  - Loads model into GPU memory
+  - Provides Ollama-compatible API endpoint: /api/generate
+
+API Usage:
+  POST http://127.0.0.1:11435/api/generate
+  {
+    \"model\": \"grim-text\",
+    \"prompt\": \"Your text here\",
+    \"stream\": false,
+    \"options\": {
+      \"temperature\": 0.8,
+      \"max_tokens\": 256
+    }
+  }
+
+Directory Structure:
+  GRIM/
+    └── models/
+        ├── vocab.bin             # INPUT: Vocabulary
+        └── grim_text.bin         # INPUT: Trained model
+
+
+## =============================================================================
+## COMPLETE PIPELINE FLOW
+## =============================================================================
+
+1. Data Collection Phase:
+   collect_data.exe (source_data.json) 
+     → data/raw/*.flatbuf
+
+2. Data Verification Phase:
+   verifier.exe (data/raw/*.flatbuf) 
+     → data/verified/*.flatbuf
+
+3. Data Preparation Phase:
+   merge_checkpoints.exe (data/verified/*.flatbuf) 
+     → data/training_data.grmt + models/vocab.bin
+
+4. Training Phase:
+   train_gpu.exe (data/training_data.grmt + models/vocab.bin) 
+     → models/grim_text.bin + checkpoints/*.bin
+
+5. Inference Phase:
+   grim_model.exe (models/vocab.bin + models/grim_text.bin) 
+     → HTTP API server
+
+
+## =============================================================================
+## MINIMAL FILE REQUIREMENTS (To Start)
+## =============================================================================
+
+To begin the pipeline, you only need:
+  ✓ DataCollection/source_data.json  # Configure your data sources
+
+All other files are generated automatically through the pipeline!
+

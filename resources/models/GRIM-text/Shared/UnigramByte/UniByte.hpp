@@ -1,0 +1,296 @@
+//======================================================//
+//  UniByte.hpp
+//  Unified Unigram LM + Byte Fallback Tokenizer for GRIM
+//  
+//  This orchestrator combines:
+//  - Unigram LM for high-quality subword tokenization
+//  - Byte fallback for 100% coverage
+//  - Structural detection for atom injection
+//  - Placeholder system for ScratchBlock integration
+//  
+//  Token ID Layout:
+//    [0-255]                  = Byte tokens (fallback)
+//    [ATOM_TOKEN_OFFSET..UNIGRAM_VOCAB_OFFSET-1] = Atom tokens (structural placeholders)
+//    [UNIGRAM_VOCAB_OFFSET+]  = Unigram vocabulary
+//  
+//  Author: GRIM Team
+//  Date: December 2025
+//======================================================//
+
+#pragma once
+
+#include "Byte.hpp"
+#include "Unigram.hpp"
+
+#include <cuda_runtime.h>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+#include <functional>
+
+namespace GRIM {
+namespace Tokenizer {
+
+// Text feature side-channel (FP16, fixed width).
+constexpr int kTextFeatureDim = 16;
+
+//======================================================//
+//  Structural Detection Result
+//======================================================//
+struct StructuralSpan {
+    size_t start;           // Start position in text (may include leading whitespace)
+    size_t end;             // End position (exclusive)
+    AtomType atom_type;     // Type of structure detected
+    
+    // Zero-copy buffer reference (NO std::string allocation!)
+    const char* buffer_ptr; // Pointer to original text buffer
+    uint32_t offset;        // Offset in buffer for tokenization (may include whitespace)
+    uint32_t length;        // Length of span for tokenization (end - start)
+    
+    // Original content bounds (without whitespace widening)
+    uint32_t content_offset; // Offset to actual atom content
+    uint32_t content_length; // Length of actual atom content
+    
+    int placeholder_id;     // Token ID of placeholder
+    
+    // Helper: get string_view of full span (may include leading whitespace)
+    std::string_view view() const {
+        return std::string_view(buffer_ptr + offset, length);
+    }
+    
+    // Helper: get string_view of just the atom content (no whitespace)
+    std::string_view contentView() const {
+        return std::string_view(buffer_ptr + content_offset, content_length);
+    }
+};
+
+//======================================================//
+//  Encoded Result with Metadata
+//======================================================//
+struct UniByteResult {
+    std::vector<int> token_ids;
+    std::vector<StructuralSpan> atoms;          // Detected structures
+    std::vector<bool> is_byte_fallback;         // Per-token: was byte fallback used?
+    std::vector<float> token_numeric_values;    // Per-token numeric value (0 if none)
+    std::vector<uint8_t> token_numeric_mask;    // Per-token numeric mask (1 if valid)
+    std::vector<uint16_t> token_text_features;  // Per-token text features [tokens * kTextFeatureDim] (FP16)
+    std::vector<uint8_t> token_text_mask;       // Per-token text feature mask (1 if valid)
+    size_t unigram_tokens = 0;
+    size_t byte_tokens = 0;
+    size_t atom_tokens = 0;
+};
+
+//======================================================//
+//  UniByte Configuration
+//======================================================//
+struct UniByteConfig {
+    // Vocabulary
+    int target_vocab_size = 50000;
+    float character_coverage = 0.9995f;
+    int min_subword_freq = 3;  // Minimum frequency for subwords to be included
+    bool prune_during_mining = false;  // Enable memory pruning during subword mining (disable if you have lots of RAM)
+    
+    // Scratch Block Reasoning (AtomTable-based structured reasoning)
+    bool enable_scratch_block_reasoning = true;  // Toggle internal reasoning layer
+    
+    // Structural detection (only used if scratch block reasoning enabled)
+    bool detect_numbers = true;
+    bool detect_urls = true;
+    bool detect_emails = true;
+    bool detect_paths = true;
+    bool detect_dates = true;
+    bool detect_code_literals = true;
+    
+    // Byte fallback
+    bool enable_byte_fallback = true;
+    
+    // GPU settings
+    bool prefer_gpu = true;
+    int gpu_batch_size = 32;
+};
+
+//======================================================//
+//  UniByte - Main Orchestrator
+//======================================================//
+class UniByte {
+public:
+    explicit UniByte(const UniByteConfig& config = UniByteConfig());
+    ~UniByte();
+
+    // Disable copy
+    UniByte(const UniByte&) = delete;
+    UniByte& operator=(const UniByte&) = delete;
+
+    // Move support
+    UniByte(UniByte&&) noexcept;
+    UniByte& operator=(UniByte&&) noexcept;
+
+    //--------------------------------------------------//
+    // Initialization
+    //--------------------------------------------------//
+    
+    // Load vocabulary from file (tries binary first, then text)
+    bool load(const std::string& vocab_path);
+    
+    // Save vocabulary to file (binary primary, text optional)
+    bool save(const std::string& vocab_path, bool save_text_format = false) const;
+    
+    // Train from corpus
+    bool train(const std::vector<std::string>& texts);
+    
+    // Train with explicit vocab size
+    void trainFromCorpus(const std::vector<std::string>& corpus, int target_vocab_size) {
+        config_.target_vocab_size = target_vocab_size;
+        train(corpus);
+    }
+    
+    // Initialize GPU resources
+    bool initGPU();
+
+    //--------------------------------------------------//
+    // Encoding
+    //--------------------------------------------------//
+    
+    // Standard encode (returns just token IDs)
+    // Uses scratch block reasoning if enabled, otherwise falls back to normal UnigramByte
+    std::vector<int> encode(const std::string& text) const;
+    
+    // Full encode with metadata (includes atom detection results)
+    UniByteResult encodeWithMetadata(const std::string& text) const;
+    
+    // Batch encode
+    std::vector<std::vector<int>> encodeBatch(const std::vector<std::string>& texts) const;
+    
+    //--------------------------------------------------//
+    // Scratch Block Reasoning Control
+    //--------------------------------------------------//
+    
+    // Enable/disable scratch block reasoning at runtime
+    void setScratchBlockReasoning(bool enabled);
+    bool isScratchBlockReasoningEnabled() const { return config_.enable_scratch_block_reasoning; }
+    
+    // GPU encode
+    bool encodeGPU(const char* d_text,
+                   size_t length,
+                   int* d_token_ids,
+                   int* d_token_count,
+                   int max_tokens);
+
+    //--------------------------------------------------//
+    // Decoding
+    //--------------------------------------------------//
+    
+    // Decode token IDs to text
+    std::string decode(const std::vector<int>& token_ids) const;
+    std::string decode(const int* token_ids, size_t count) const;
+    
+    // Decode with atom resolution (needs atom values from ScratchBlock)
+    using AtomResolver = std::function<std::string(int token_id, AtomType type)>;
+    std::string decodeWithAtoms(const std::vector<int>& token_ids,
+                                 const AtomResolver& resolver) const;
+
+    //--------------------------------------------------//
+    // Structural Detection
+    //--------------------------------------------------//
+    
+    // Detect structures in text
+    std::vector<StructuralSpan> detectStructures(const std::string& text) const;
+    
+    // Inject placeholders for detected structures
+    std::string injectPlaceholders(const std::string& text,
+                                    std::vector<StructuralSpan>& out_spans) const;
+
+    //--------------------------------------------------//
+    // Vocabulary Info
+    //--------------------------------------------------//
+    
+    int vocabSize() const;
+    int totalVocabSize() const;  // Including bytes and atoms
+    
+    // Cap vocabulary to top-K most frequent tokens (reduces loss computation time)
+    void capVocabSize(int max_vocab);
+    
+    // Special token IDs
+    int padId() const;
+    int unkId() const;
+    int bosId() const;
+    int eosId() const;
+    
+    // Token type checking
+    bool isByteToken(int token_id) const;
+    bool isAtomToken(int token_id) const;
+    bool isUnigramToken(int token_id) const;
+    
+    // Get token info
+    std::string tokenToString(int token_id) const;
+
+    //--------------------------------------------------//
+    // Component Access
+    //--------------------------------------------------//
+    
+    ByteEncoder& byteEncoder() { return byte_encoder_; }
+    const ByteEncoder& byteEncoder() const { return byte_encoder_; }
+    
+    UnigramLM& unigramLM() { return unigram_; }
+    const UnigramLM& unigramLM() const { return unigram_; }
+
+private:
+    UniByteConfig config_;
+    ByteEncoder byte_encoder_;
+    UnigramLM unigram_;
+    
+    bool gpu_initialized_ = false;
+    
+    // Structural detection patterns
+    struct DetectorState;
+    std::unique_ptr<DetectorState> detector_;
+    
+    void initDetector();
+    
+    // Internal encoding with structural awareness
+    UniByteResult encodeInternal(const std::string& text,
+                                  const std::vector<StructuralSpan>& structures) const;
+};
+
+//======================================================//
+//  Structural Pattern Detectors
+//======================================================//
+namespace Detector {
+
+// Detect integers: 42, -17, +5
+bool detectInteger(const std::string& text, size_t pos, size_t& end);
+
+// Detect floats: 3.14, -2.5e10, .5
+bool detectFloat(const std::string& text, size_t pos, size_t& end);
+
+// Detect hex: 0xFF, 0x1A2B
+bool detectHex(const std::string& text, size_t pos, size_t& end);
+
+// Detect binary: 0b1010
+bool detectBinary(const std::string& text, size_t pos, size_t& end);
+
+// NOTE: detectURL and detectEmail removed - Aho-Corasick in detectStructures() handles these
+
+// Detect file paths: /usr/bin, C:\Windows, ./relative
+bool detectPath(const std::string& text, size_t pos, size_t& end);
+
+// Detect dates: 2025-12-08, 12/08/2025
+bool detectDate(const std::string& text, size_t pos, size_t& end);
+
+// Detect times: 14:30:00, 2:30pm
+bool detectTime(const std::string& text, size_t pos, size_t& end);
+
+// Detect IP addresses: 192.168.1.1
+bool detectIPAddress(const std::string& text, size_t pos, size_t& end);
+
+// Detect string literals: "hello", 'world'
+bool detectStringLiteral(const std::string& text, size_t pos, size_t& end);
+
+// Detect identifiers: variable_name, functionName
+bool detectIdentifier(const std::string& text, size_t pos, size_t& end);
+
+} // namespace Detector
+
+} // namespace Tokenizer
+} // namespace GRIM

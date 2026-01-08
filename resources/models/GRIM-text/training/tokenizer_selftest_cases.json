@@ -1,0 +1,81 @@
+{
+  "description": "GRIM Tokenizer Self-Test Cases",
+  "version": "2.0",
+  "sections": {
+    "1_encoding_decoding": "Encoding/Decoding Visualization",
+    "2_spaces_grammar": "Spaces and Grammar Handling", 
+    "3_edge_cases": "Round-trip & Edge Cases"
+  },
+  "cases": [
+    {
+      "name": "ascii_baseline",
+      "text": "Hello, GRIM!",
+      "expected_tokens": [],
+      "notes": "Simple ASCII punctuation check",
+      "section": 1
+    },
+    {
+      "name": "model_input_simulation",
+      "text": "Hello, how are you?",
+      "expected_tokens": [],
+      "notes": "Matches actual model input - check space handling",
+      "section": 1
+    },
+    {
+      "name": "instruction_with_quotes",
+      "text": "Repeat the word 'hello' five times.",
+      "expected_tokens": [],
+      "notes": "The problematic prompt from user testing",
+      "section": 1
+    },
+    {
+      "name": "diacritics",
+      "text": "naïve façade résumé",
+      "expected_tokens": [],
+      "notes": "NFKC + lowercase behavior",
+      "section": 2
+    },
+    {
+      "name": "emoji_mixed",
+      "text": "🚀 Launch at 09:00!!!",
+      "expected_tokens": [],
+      "notes": "Emoji + digits + punctuation",
+      "section": 3
+    },
+    {
+      "name": "cjk",
+      "text": "こんにちは世界",
+      "expected_tokens": [],
+      "notes": "CJK multibyte coverage",
+      "section": 3
+    },
+    {
+      "name": "space_preservation",
+      "text": "one two three four",
+      "expected_tokens": [],
+      "notes": "CRITICAL: All spaces must survive round-trip",
+      "section": 2
+    },
+    {
+      "name": "punctuation_heavy",
+      "text": "foo::bar->baz(x, y)",
+      "expected_tokens": [],
+      "notes": "C++ style operators and brackets",
+      "section": 2
+    },
+    {
+      "name": "numbers_math",
+      "text": "2 + 2 = 4",
+      "expected_tokens": [],
+      "notes": "Math expression with spaces",
+      "section": 2
+    },
+    {
+      "name": "multiline",
+      "text": "line1\\nline2\\nline3",
+      "expected_tokens": [],
+      "notes": "Newline handling",
+      "section": 3
+    }
+  ]
+}

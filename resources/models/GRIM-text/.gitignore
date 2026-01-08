@@ -1,0 +1,189 @@
+# ============================================
+# GRIM-text .gitignore
+# ============================================
+
+# ============================================
+# Build outputs
+# ============================================
+**/build/
+**/build_ninja/
+**/Release/
+**/Debug/
+*.exe
+*.dll
+*.lib
+*.obj
+*.o
+*.a
+*.so
+*.pdb
+*.ilk
+*.pch
+*.idb
+*.exp
+
+# CMake generated
+**/CMakeCache.txt
+**/CMakeFiles/
+**/cmake_install.cmake
+Makefile
+*.vcxproj*
+*.sln
+
+# Visual Studio
+**/.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+x64/
+x86/
+[Bb]in/
+[Oo]bj/
+*.aps
+*.ncb
+*.opensdf
+*.sdf
+*.cachefile
+*.vc.db
+*.vc.opendb
+
+# ============================================
+# Training data (large files - NOT for repo)
+# ============================================
+training/data/
+data/collected/
+data/verified/
+
+# ============================================
+# Training logs (generated during runs)
+# ============================================
+training/logs/
+*.log
+
+# ============================================
+# Model checkpoints and weights
+# ============================================
+checkpoints/
+training/models/
+*.bin
+*.npz
+*.npy
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.pb
+*.h5
+*.model
+*.weights
+
+# ============================================
+# Quality verification models (DeBERTa ~2GB)
+# ============================================
+quality/
+
+# ============================================
+# Generated/cached files
+# ============================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+
+# Training status files (generated)
+*.fb
+
+# ============================================
+# Temporary and output files
+# ============================================
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+*.png
+*.jpg
+*.jpeg
+stderr_output.txt
+stderr_precheck.txt
+tmp_*.txt
+*_output.txt
+*_crash.log
+bad_sequences.log
+train_gpu_crash.log
+
+# ============================================
+# Large binary formats (handled by LFS if needed)
+# ============================================
+*.7z
+*.arrow
+*.bz2
+*.ftz
+*.gz
+*.joblib
+*.lfs.*
+*.mlmodel
+*.msgpack
+*.parquet
+*.pickle
+*.pkl
+*.rar
+*.tar
+*.tar.*
+*.tflite
+*.tgz
+*.wasm
+*.xz
+*.zip
+*.zst
+*tfevents*
+
+# ============================================
+# IDE specific
+# ============================================
+.idea/
+**/.vscode/
+*.code-workspace
+
+# ============================================
+# OS specific
+# ============================================
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ============================================
+# GRMT training data format
+# ============================================
+*.grmt
+*.jsonl
+
+# ============================================
+# Merge checkpoint tools (compiled)
+# ============================================
+merge_checkpoints.exe
+
+# ============================================
+# Analysis outputs (generated)
+# ============================================
+*_report.json
+*_analysis.json
+attndiag.txt
+diagnostic_output.txt
+gradient_heatmap.png
+attention_development.png
+training_plot.png
+training_run.txt
+training_run_new.txt
+
+# ============================================
+# Test outputs
+# ============================================
+Tests/output/

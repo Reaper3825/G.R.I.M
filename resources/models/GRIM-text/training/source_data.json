@@ -1,0 +1,22 @@
+{
+  "data_sources": [
+    {
+      "enabled": true,
+      "name": "Custom Source",
+      "priority": 5,
+      "requires_auth": false,
+      "source_type": "custom",
+      "url": "https://www.nimg.nig.gov/health/topics/attention-deficit-hyperactivity-disorder-adhd"
+    },
+    {
+      "enabled": true,
+      "name": "Custom Source",
+      "priority": 5,
+      "requires_auth": false,
+      "source_type": "custom",
+      "url": "https://www.nimg.nig.gov/health/topics/attention-deficit-hyperactivity-disorder-adhd"
+    }
+  ],
+  "description": "GRIM Web Data Collection Configuration",
+  "version": "1.0.0"
+}
