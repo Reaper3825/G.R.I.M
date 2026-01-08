@@ -6,9 +6,9 @@ import subprocess
 import time
 import requests
 
-server_path = r'resources\models\GRIM-text\training\build_vs_cuda\Release\grim_text_server.exe'
-vocab = r'resources\models\GRIM-text\training\models\vocab.bin'
-model = r'resources\models\GRIM-text\checkpoints\checkpoint_epoch_5.bin'
+server_path = r'resources\models\GRIM-text\training\build\Release\grim_text_server.exe'
+vocab = r'resources/models/GRIM-text/training/data/vocab.bin'
+model = r'resources/models/GRIM-text/checkpoints/checkpoint_epoch_1.bin'
 
 proc = subprocess.Popen([server_path, vocab, model, '11435'], 
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

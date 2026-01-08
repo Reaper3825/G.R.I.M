@@ -21,6 +21,7 @@ struct PreprocessorConfig {
     bool normalize_urls = true;
     bool normalize_whitespace = true;
     bool remove_control_chars = true;
+    bool strip_legacy_special_tokens = false;
     
     // Quality filtering
     int min_length = 50;           // characters
@@ -37,11 +38,11 @@ struct PreprocessorConfig {
     // Deduplication
     bool deduplicate = true;
     int dedup_ngram_size = 13;     // 13-gram deduplication
-    float dedup_threshold = 0.8f;   // 80% overlap = duplicate
+    float dedup_threshold = 0.7f;   // 70% overlap = duplicate
     
     // Special tokens
-    std::string bos_token = "<|startoftext|>";
-    std::string eos_token = "<|endoftext|>";
+    std::string bos_token = "<s>";
+    std::string eos_token = "</s>";
     std::string pad_token = "<|pad|>";
     std::string unk_token = "<|unk|>";
 };
@@ -54,6 +55,10 @@ public:
     // Main preprocessing pipeline
     std::string preprocess(const std::string& text) {
         std::string result = text;
+
+        if (config_.strip_legacy_special_tokens) {
+            result = stripSpecialTokens(result);
+        }
         
         if (config_.remove_html) {
             result = removeHTML(result);
@@ -244,6 +249,20 @@ private:
 
     static inline bool isTagNameChar(char c) {
         return std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == ':';
+    }
+
+    static std::string stripSpecialTokens(const std::string& text) {
+        std::string out = text;
+        const char* kLegacyTokens[] = {"<|startoftext|>", "<|endoftext|>", "<s>", "</s>"};
+        for (const char* token : kLegacyTokens) {
+            size_t pos = 0;
+            const size_t len = std::strlen(token);
+            while ((pos = out.find(token, pos)) != std::string::npos) {
+                out.replace(pos, len, " ");
+                pos += 1;
+            }
+        }
+        return out;
     }
     
     std::string removeHTML(const std::string& text) {

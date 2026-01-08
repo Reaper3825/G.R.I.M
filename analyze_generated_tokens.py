@@ -19,7 +19,7 @@ time.sleep(5)
 # Make request
 try:
     resp = requests.post('http://127.0.0.1:11435/api/generate',
-                        json={'prompt': 'Hello', 'max_tokens': 20, 'temperature': 0.3},
+                        json={'prompt': 'Hello', 'max_tokens': 20, 'temperature': 1.0 },
                         timeout=60)
     
     if resp.status_code == 200:

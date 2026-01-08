@@ -34,7 +34,7 @@
     "p2c",
     "c2p"
   ],
-  "position_biased_input": false,
+  "position_biased_input": true,
   "position_buckets": 256,
   "relative_attention": true,
   "share_att_key": true,

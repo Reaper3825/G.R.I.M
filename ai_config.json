@@ -50,17 +50,21 @@
     },
     "personality": {
         "custom_prompt": "You are GRIM. Be brief and direct. Give concise answers without unnecessary elaboration. Keep responses under 2 sentences when possible.",
-        "use_custom_prompt": true
+        "use_custom_prompt": false
     },
     "silence_threshold": 0.02,
     "silence_timeout_ms": 4000,
     "tokenizer": {
         "add_bos": true,
         "add_eos": true,
-        "enable_char_fallback": true,
+        "enable_byte_fallback": true,
+        "enable_char_fallback": false,
         "enable_lowercasing": true,
         "enable_nfkc_normalization": true,
         "max_length": 8192,
+        "max_vocab_size": 50000,
+        "min_subword_freq": 3,
+        "prune_during_mining": false,
         "model_type": "unibytes",
         "save_text_vocab": true,
         "scratch_block_reasoning": {
@@ -75,177 +79,118 @@
     }, 
     "training": {
         "config": {
-            "single_batch": {
-            "enabled": true,
-            "max_steps": 1000
-        },
-            "batch_strategy": "SIMILARITY_GROUPED", 
-            "log_recorder": {
-                "enabled": true,
-                "default_level": "Info",
-                "modules": {
-                    "ForwardPass": "Info",
-                    "BackwardPass": "WARN",
-                    "Optimizer": "Info",
-                    "Scheduler": "Info",
-                    "Activations": "Info",
-                    "GuessCache": "Info",
-                    "Validation": "Info",
-                    "Checkpoint": "Info",
-                    "DataLoader": "Info",
-                    "Inference": "Info",
-                    "LogRecorder": "Info",
-                    "Training": "Info",
-                    "TrainingOrchestrator": "Info",
-                    "StreamController": "Info",
-                    "Custom": "Info"
-                },
-                "layers": {
-                    "embedding": true,
-                    "rms_norm": true,
-                    "attention": true,
-                    "feed_forward": true,
-                    "residual": true,
-                    "encoding": true,
-                    "serialization": true
-                }
-            },
-            "activation_quantization": {
-                "apply_to_embeddings": false,
-                "apply_to_encoder_outputs": false,
-                "apply_to_layer_caches": false,
-                "apply_to_logits": false,
-                "apply_to_qkv_cache": false,
-                "clip_max": 127.0,
-                "clip_min": -127.0,
-                "enabled": false,
-                "scale": 0.0625,
-                "symmetric": true,
-                "zero_point": 0
-            },
-            "attention_dropout": 0.02,
-            "auto_stop": {
-                "enabled": true,
-                "high_loss_patience": 8,
-                "high_loss_threshold": 5.5,
-                "plateau_min_delta": 0.005,
-                "plateau_patience": 12
-            },
-            "batch_size": 4,
+            "epochs": 20,
+            "seed": 1,
+            "batch_size": 6,
             "gradient_accumulation_steps": 2,
-            "cuda_execution": {
-                "single_stream_mode": false,
-                "disable_async_frees": false,
-                "synchronize_after_kernels": false
-            },
-            "d_model": 768,
-            "dropout_rate": 0.1,
-            "max_seq_len": 2048,
-            "prediction_comparison": {
+            "batch_strategy": "RANDOM",
+            "learning_rate": 0.0003,
+            "weight_decay": 0.01,
+            "gradient_clip": 1.0,
+            "per_token_grad_scale": true,
+            "warmup_steps": 0,
+            "max_seq_len": 1024,
+            "log_interval": 1,
+            "atom_stats_interval": 10,
+            "atom_stats_max_seqs": 16,
+            "validation_interval": 100,
+            "checkpoint_interval": 1000,
+            "use_gpu": true,
+            "use_flash_attention": true,
+            
+            "single_batch": {
                 "enabled": false,
-                "interval": 100,
-                "top_k": 5,
-                "max_positions": 8,
-                "log_path": "resources/models/GRIM-text/training/prediction_comparison.log"
+                "max_steps": 1000
             },
-            "attention_diagnostics": {
-                "enabled": true,
-                "layer": -1,
-                "head": 0
-            },
+            
             "dynamic_lr": {
-                "auto_generate": true,
-                "baseline_capture_steps": 100,
+                "enabled": false,
+                "auto_generate": false,
+                "min": 5.0e-5,
+                "max": 3.0e-4,
+                "increase_factor": 1.1,
+                "decrease_factor": 0.1,
+                "upper_grad_norm": 12.0,
+                "lower_grad_norm": 4.0,
+                "max_loss_jump": 1.5,
+                "smoothing": 0.2,
+                "cooldown_steps": 5,
+                "warmup_steps": 25,
+                "max_step_up_ratio": 1.12,
+                "max_step_down_ratio": 0.72,
+                "auto_band": true,
+                "band_sigma": 1.5,
+                "band_floor": 3.0,
+                "band_ceiling": 250.0,
+                "band_min_samples": 12,
+                "band_min_span": 1.0,
+                "adaptive_smoothing": true,
+                "smoothing_min": 0.1,
+                "smoothing_max": 0.6,
+                "variance_reference": 25.0,
+                "adaptive_cooldown": true,
+                "cooldown_min": 1,
+                "cooldown_max": 8,
+                "adaptive_loss": true,
+                "loss_sigma": 3.0,
+                "loss_min_samples": 8,
+                "loss_floor": 0.25,
+                "guard_logging": true,
+                "guard_floor_steps": 200,
+                "guard_grad_multiplier": 1.6,
+                "guard_loss_patience": 12,
+                "guard_loss_multiplier": 1.05,
+                "baseline_capture_steps": 200,
                 "baseline_drift": 0.05,
-                "enabled": true,
-                "momentum_decay": 0.1,
-                "momentum_gain": 0.35,
                 "momentum_interval": 10,
-                "safety_gain": 0.1,
+                "momentum_gain": 0.35,
+                "momentum_decay": 0.33333,
                 "safety_interval": 4,
+                "safety_gain": 0.1,
                 "safety_scale": 2.4
             },
-            "epochs": 1,
-            "force_rebuild_vocab": false,
-            "seed": 1,
-            "gradient_clip": 0.0,
-            "per_token_grad_scale": false,
-            "learning_rate": 0.0001,
-            "weight_decay": 0.0,
-            "log_interval": 100,
-            "loss": {
-                "label_smoothing": {
-                    "enabled": false,
-                    "epsilon": 0.1
-                },
-                "focal": {
-                    "enabled": false,
-                    "alpha": 1.0,
-                    "gamma": 1.05
-                },
-                "distillation": {
-                    "enabled": false,
-                    "temperature": 1.0,
-                    "lambda": 0.5
-                },
-                "preference": {
-                    "enabled": false,
-                    "beta": 0.1
-                },
-                "masking": {
-                    "enabled": true,
-                    "tag": ""
-                }
+            
+            "soft_restart": {
+                "enabled": false,
+                "loss_increase_threshold": 3.0,
+                "max_step_window": 50,
+                "cooldown_steps": 200
             },
+            
+            "auto_stop": {
+                "enabled": true,
+                "plateau_patience": 12,
+                "plateau_min_delta": 0.005,
+                "high_loss_threshold": 5.5,
+                "high_loss_patience": 8
+            },
+            
+            "cache_limits": {
+                "max_cached_batch": 24,
+                "max_cached_seq_len": 2048
+            },
+            
             "micro_validation": {
-                "batch_limit": 5,
                 "enabled": false,
                 "interval": 200,
+                "batch_limit": 5,
                 "min_step": 150,
-                "prefer_short": true
+                "prefer_short": false
             },
-            "num_heads": 12,
-            "num_kv_heads": 4,
-            "num_layers": 6,
-            "scratch_block_reasoning": {
-                "atom_embedding_dim": 64,
-                "atom_scale": 0.1,
+            
+            "guess_aux": {
                 "enabled": true,
-                "max_atoms": 256
+                "lambda": 0.25,
+                "min_confidence": 0.7
             },
-            "scratch_blocks": {
-                "enabled": true,
-                "max_tokens_per_block": 16384,
-                "num_blocks": 4,
-                "use_write_combined": true
-            },
+            
             "shuffle": {
                 "enabled": false,
                 "epochs": 0
             },
-            "soft_restart": {
-                "enabled": false,
-                "loss_increase_threshold": 3.0
-            },
-            "stability_overrides": {
-                "batch_size": 3,
-                "clip_abs": 12.0,
-                "clip_per_token": 0.025,
-                "lr_min": 3e-05,
-                "max_seq_len": 1024,
-                "max_tokens_per_batch": 4096
-            },
-            "stability_overrides_enabled": true,
-            "tie_embeddings": true,
-            "qk_normalization": {
-                "enabled": false,
-                "scale": 16.0
-            },
-            "use_flash_attention": true,
-            "use_gpu": true,
-            "warmup_steps": 100,
+            
             "telemetry_control": {
-                "enabled": true,
+                "enabled": false,
                 "spike_thresholds": {
                     "mild": 3.0,
                     "moderate": 5.0,
@@ -291,18 +236,183 @@
                     "stabilization_steps": 50
                 },
                 "logging": {
-                    "verbose": true,
+                    "verbose": false,
                     "fail_loud_on_accumulation_bug": true
                 },
                 "plateau_noise": {
                     "enabled": true,
                     "patience": 25,
                     "variance_threshold": 0.01,
-                    "noise_std": 0.001,
+                    "noise_std": 0.1,
                     "proportional": true,
                     "cooldown": 10,
                     "max_per_epoch": 3
                 }
+            },
+            
+            "loss": {
+                "label_smoothing": {
+                    "enabled": false,
+                    "epsilon": 0.1
+                },
+                "focal": {
+                    "enabled": false,
+                    "gamma": 1.05,
+                    "alpha": 1.0
+                },
+                "preference": {
+                    "enabled": false,
+                    "beta": 0.1
+                },
+                "distillation": {
+                    "enabled": false,
+                    "temperature": 1.0,
+                    "lambda": 0.5
+                },
+                "masking": {
+                    "enabled": true,
+                    "tag": ""
+                },
+                "numeric_head": {
+                    "enabled": true,
+                    "weight": 0.1,
+                    "huber_delta": 1.0,
+                    "log_scale": true
+                }
+            },
+            
+            "stability_overrides_enabled": false,
+            "stability_overrides": {
+                "batch_size": 3,
+                "max_seq_len": 1024,
+                "max_tokens_per_batch": 32768,
+                "clip_abs": 12.0,
+                "clip_per_token": 0.025,
+                "lr_min": 3e-05
+            },
+            
+            "scratch_blocks": {
+                "enabled": true,
+                "max_tokens_per_block": 16384,
+                "num_blocks": 4,
+                "use_write_combined": false
+            },
+            
+            "scratch_block_reasoning": {
+                "enabled": true,
+                "atom_embedding_dim": 64,
+                "max_atoms": 4096,
+                "atom_scale": 0.1
+            },
+            
+            "activation_quantization": {
+                "enabled": false,
+                "apply_to_embeddings": false,
+                "apply_to_encoder_outputs": false,
+                "apply_to_layer_caches": false,
+                "apply_to_qkv_cache": false,
+                "apply_to_logits": false,
+                "scale": 0.0625,
+                "clip_min": -127.0,
+                "clip_max": 127.0,
+                "zero_point": 0,
+                "symmetric": true
+            },
+            
+            "cuda_execution": {
+                "single_stream_mode": true,
+                "disable_async_frees": false,
+                "synchronize_after_kernels": true
+            },
+            
+            "prediction_comparison": {
+                "enabled": false,
+                "interval": 100,
+                "top_k": 5,
+                "max_positions": 8,
+                "log_path": "resources/models/GRIM-text/training/prediction_comparison.log"
+            },
+            
+            "attention_diagnostics": {
+                "enabled": false,
+                "layer": -1,
+                "head": 0
+            },
+            
+            "log_recorder": {
+                "enabled": true,
+                "default_level": "Info",
+                "modules": {
+                    "ForwardPass": "WARN",
+                    "BackwardPass": "WARN",
+                    "Optimizer": "Info",
+                    "Scheduler": "Info",
+                    "Activations": "WARN",
+                    "GuessCache": "Info",
+                    "Validation": "Info",
+                    "Checkpoint": "Info",
+                    "DataLoader": "Info",
+                    "Inference": "Info",
+                    "LogRecorder": "Info",
+                    "Training": "Info",
+                    "TrainingOrchestrator": "Info",
+                    "StreamController": "Info",
+                    "Custom": "Info"
+                },
+                "layers": {
+                    "embedding": true,
+                    "rms_norm": true,
+                    "attention": true,
+                    "feed_forward": true,
+                    "residual": true,
+                    "encoding": true,
+                    "serialization": true
+                }
+            },
+            
+            "d_model": 768,
+            "num_layers": 12,
+            "num_heads": 12,
+            "num_kv_heads": 4,
+            "tie_embeddings": true,
+            "attention_dropout": 0.02,
+            "dropout_rate": 0.1,
+            "force_rebuild_vocab": true,
+            "qk_normalization": {
+                "enabled": false,
+                "scale": 16.0
+            },
+            "guess_cache": {
+                "enabled": true,
+                "initial_capacity": 16384,
+                "min_capacity": 4096,
+                "max_capacity": 262144,
+                "grow_threshold": 0.85,
+                "shrink_threshold": 0.25,
+                "grow_factor": 2.0,
+                "shrink_factor": 0.1,
+                "evict_window": 32,
+                "staleness_decay_rate": 0.01,
+                "variance_weight": 0.3,
+                "frequency_weight": 0.2,
+                "diversity_weight": 0.25,
+                "recency_weight": 0.25,
+                "enable_diversity_tracking": true,
+                "diversity_bloom_bits": 65536,
+                "diversity_hash_functions": 4,
+                "diversity_penalty": 0.15,
+                "confidence_floor": 0.01,
+                "confidence_ceiling": 0.999,
+                "confidence_adaptation_rate": 0.01,
+                "momentum_floor": 0.55,
+                "momentum_ceiling": 0.995,
+                "staleness_grace_period": 0.25,
+                "enable_async_transfers": true,
+                "pinned_buffer_size": 8192,
+                "num_streams": 2,
+                "enable_histograms": true,
+                "histogram_bins": 32,
+                "telemetry_sample_interval": 1
             }
         },
         "server_host": "127.0.0.1",

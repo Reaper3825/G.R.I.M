@@ -9,9 +9,9 @@ import os
 
 # Start server
 print('[Test] Starting grim_text_server...')
-server_path = r'resources\models\GRIM-text\training\build_vs_cuda\Release\grim_text_server.exe'
-vocab = r'resources\models\GRIM-text\training\models\vocab.bin'
-model = r'resources\models\GRIM-text\checkpoints\checkpoint_epoch_5.bin'
+server_path = r'resources\models\GRIM-text\training\build\Release\grim_text_server.exe'
+vocab = r'resources\models\GRIM-text\training\data\vocab.bin'
+model = r'resources\models\GRIM-text\checkpoints\checkpoint_epoch_1.bin'
 
 if not os.path.exists(server_path):
     print(f'ERROR: Server not found at {server_path}')

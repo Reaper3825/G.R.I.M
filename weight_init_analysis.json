@@ -1,0 +1,1351 @@
+{
+  "initialization_points": [
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\Encoding\\Encoding_GPU.cu",
+      "line": 293,
+      "code": "// Initialize attention weights to small random values (caller should re-initialize)",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\FlashAttention\\AttentionDiagnostics.cu",
+      "line": 133,
+      "code": "trace.k_std = sqrtf(fmaxf(0.0f, variance));",
+      "type": "stddev_calc",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\FlashAttention\\Flash_Attention_Kernal_old.cu",
+      "line": 555,
+      "code": "trace.k_std = sqrtf(fmaxf(0.0f, variance));",
+      "type": "stddev_calc",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\FlashAttention\\Flash_Attention_Kernal_old.hpp",
+      "line": 82,
+      "code": "fprintf(stderr, \"\u2551 - Check W_qkv initialization (should be Xavier/He scaled)       \u2551\\n\");",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ForwardOps\\ForwardKernels.cu",
+      "line": 263,
+      "code": "s_variance = rsqrtf(local_sum / static_cast<float>(d_model) + eps);",
+      "type": "variance_calc",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\GRIMTS\\GRIM-TS.cu",
+      "line": 293,
+      "code": "const float stddev = sqrtf(variance);",
+      "type": "stddev_calc",
+      "stddev": "sqrtf(variance)",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\GRIMTS\\GRIM-TS.cu",
+      "line": 499,
+      "code": "const float stddev = sqrtf(variance);",
+      "type": "stddev_calc",
+      "stddev": "sqrtf(variance)",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\InitInferenceState\\InitinferenceState.cu",
+      "line": 97,
+      "code": "std::cerr << \"[InitInferenceState] Failed to allocate LM head weights: \" << cudaGetErrorString(err) << std::endl;",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "line": 346,
+      "code": "// Kernel: Xavier initialization",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "line": 347,
+      "code": "__global__ void kernelXavierInit(",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "line": 381,
+      "code": "initializeWeights();",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "line": 449,
+      "code": "initializeWeights();",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "line": 460,
+      "code": "initializeWeights();",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "line": 509,
+      "code": "void ScratchBlockLayer::initializeWeights() {",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "line": 516,
+      "code": "// Xavier init for atom type embeddings",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "line": 518,
+      "code": "float atom_stddev = std::sqrt(2.0f / (NUM_ATOM_TYPES + config_.atom_embedding_dim));",
+      "type": "stddev_calc",
+      "stddev": "std::sqrt(2.0f / (NUM_ATOM_TYPES + config_.atom_embedding_dim))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "line": 522,
+      "code": "kernelXavierInit<<<grid_size, block_size, 0, stream>>>(",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "line": 525,
+      "code": "// Xavier init for projection",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "line": 527,
+      "code": "float proj_stddev = std::sqrt(2.0f / (config_.atom_embedding_dim + config_.d_model));",
+      "type": "stddev_calc",
+      "stddev": "std::sqrt(2.0f / (config_.atom_embedding_dim + config_.d_model))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "line": 530,
+      "code": "kernelXavierInit<<<grid_size, block_size, 0, stream>>>(",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.hpp",
+      "line": 172,
+      "code": "void initializeWeights();",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.cu",
+      "line": 1,
+      "code": "#include \"Xavier.hpp\"",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.cu",
+      "line": 20,
+      "code": "__global__ void XavierUniformKernel(float* data,",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.cu",
+      "line": 35,
+      "code": "const float rnd = curand_uniform(&state) * 2.0f - 1.0f; // (-1, 1)",
+      "type": "curand_call",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.cu",
+      "line": 39,
+      "code": "__global__ void XavierNormalKernel(float* data,",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.cu",
+      "line": 54,
+      "code": "const float rnd = curand_normal(&state);",
+      "type": "curand_call",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.cu",
+      "line": 62,
+      "code": "inline bool validateArgs(const XavierInitArgs& args) {",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.cu",
+      "line": 68,
+      "code": "void launchXavierUniform(const XavierInitArgs& args) {",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.cu",
+      "line": 74,
+      "code": "XavierUniformKernel<<<grid, kBlockSize, 0, args.stream>>>(",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.cu",
+      "line": 83,
+      "code": "void launchXavierNormal(const XavierInitArgs& args) {",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.cu",
+      "line": 89,
+      "code": "XavierNormalKernel<<<grid, kBlockSize, 0, args.stream>>>(",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.hpp",
+      "line": 8,
+      "code": "struct XavierConfig {",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.hpp",
+      "line": 17,
+      "code": "struct XavierInitArgs {",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.hpp",
+      "line": 27,
+      "code": "void launchXavierUniform(const XavierInitArgs& args);",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.hpp",
+      "line": 28,
+      "code": "void launchXavierNormal(const XavierInitArgs& args);",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.hpp",
+      "line": 30,
+      "code": "inline void launchXavierInit(const XavierInitArgs& args, bool normal = false) {",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.hpp",
+      "line": 30,
+      "code": "inline void launchXavierInit(const XavierInitArgs& args, bool normal = false) {",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.hpp",
+      "line": 32,
+      "code": "launchXavierNormal(args);",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.hpp",
+      "line": 34,
+      "code": "launchXavierUniform(args);",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.hpp",
+      "line": 42,
+      "code": "inline void launchXavierInit(float* weights, int size, float stddev,",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.hpp",
+      "line": 42,
+      "code": "inline void launchXavierInit(float* weights, int size, float stddev,",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.hpp",
+      "line": 44,
+      "code": "// Convert stddev to fan_in/fan_out: stddev = sqrt(2/(fan_in+fan_out))",
+      "type": "stddev_calc",
+      "stddev": "sqrt(2/(fan_in+fan_out))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.hpp",
+      "line": 45,
+      "code": "// If stddev = sqrt(2/N), then N = 2/stddev^2, so fan_in = fan_out = N/2 = 1/stddev^2",
+      "type": "stddev_calc",
+      "stddev": "sqrt(2/N), then N = 2/stddev^2, so fan_in = fan_out = N/2 = 1/stddev^2",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.hpp",
+      "line": 47,
+      "code": "XavierInitArgs args{};",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Activations\\Xavier\\Xavier.hpp",
+      "line": 55,
+      "code": "launchXavierNormal(args);  // Old code used normal distribution",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Shared\\Telemetry\\TelemetryControl_GPU.cu",
+      "line": 523,
+      "code": "float noise = curand_normal(&rng_state) * noise_std;",
+      "type": "curand_call",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Tests\\causality_proof_tests.cu",
+      "line": 358,
+      "code": "opt_state.initialized = false;  // Will be initialized by updateWeights",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 20,
+      "code": "#include \"../Shared/Activations/Xavier/Xavier.hpp\"",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 23,
+      "code": "using GRIM::launchXavierInit;",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 23,
+      "code": "using GRIM::launchXavierInit;",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 225,
+      "code": "// NOTE: Embeddings are initialized DIRECTLY on GPU via launchXavierInit() to avoid CPU->GPU copy overhead.",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 225,
+      "code": "// NOTE: Embeddings are initialized DIRECTLY on GPU via launchXavierInit() to avoid CPU->GPU copy overhead.",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 227,
+      "code": "// but we reinitialize to ensure proper Xavier scaling for training stability.",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 235,
+      "code": "// Initialize embeddings directly on GPU with proper Xavier scaling",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 236,
+      "code": "// Xavier initialization: stddev = sqrt(2 / (fan_in + fan_out))",
+      "type": "xavier_init",
+      "stddev": "sqrt(2 / (fan_in + fan_out))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 236,
+      "code": "// Xavier initialization: stddev = sqrt(2 / (fan_in + fan_out))",
+      "type": "stddev_calc",
+      "stddev": "sqrt(2 / (fan_in + fan_out))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 238,
+      "code": "float xavier_stddev = std::sqrt(2.0f / (cfg.d_model + cfg.vocab_size));",
+      "type": "xavier_init",
+      "stddev": "std::sqrt(2.0f / (cfg.d_model + cfg.vocab_size))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 238,
+      "code": "float xavier_stddev = std::sqrt(2.0f / (cfg.d_model + cfg.vocab_size));",
+      "type": "stddev_calc",
+      "stddev": "std::sqrt(2.0f / (cfg.d_model + cfg.vocab_size))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 239,
+      "code": "std::cout << \"\ud83c\udfb2 Initializing embedding weights directly on GPU with Xavier (stddev=\" << xavier_stddev << \")\" << std::endl;",
+      "type": "xavier_init",
+      "stddev": "\" << xavier_stddev << \")\" << std::endl",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 239,
+      "code": "std::cout << \"\ud83c\udfb2 Initializing embedding weights directly on GPU with Xavier (stddev=\" << xavier_stddev << \")\" << std::endl;",
+      "type": "init_weights",
+      "stddev": "\" << xavier_stddev << \")\" << std::endl",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 240,
+      "code": "launchXavierInit(training_state_.lm_head_weights, lm_head_weight_size, xavier_stddev, 42, training_state_.stream_ctrl.getPrimaryStream());",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 240,
+      "code": "launchXavierInit(training_state_.lm_head_weights, lm_head_weight_size, xavier_stddev, 42, training_state_.stream_ctrl.getPrimaryStream());",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 255,
+      "code": "std::cout << \"\u2713 Embedding weights initialized on GPU: avg_norm=\" << weight_norm",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 256,
+      "code": "<< \", max_abs=\" << weight_max << \" (expected ~\" << xavier_stddev << \")\" << std::endl;",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 270,
+      "code": "// Initialize LM head weights directly on GPU with Xavier scaling",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 270,
+      "code": "// Initialize LM head weights directly on GPU with Xavier scaling",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 271,
+      "code": "float xavier_stddev = std::sqrt(2.0f / (cfg.d_model + cfg.vocab_size));",
+      "type": "xavier_init",
+      "stddev": "std::sqrt(2.0f / (cfg.d_model + cfg.vocab_size))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 271,
+      "code": "float xavier_stddev = std::sqrt(2.0f / (cfg.d_model + cfg.vocab_size));",
+      "type": "stddev_calc",
+      "stddev": "std::sqrt(2.0f / (cfg.d_model + cfg.vocab_size))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 272,
+      "code": "std::cout << \"\ud83c\udfb2 Initializing LM head weights directly on GPU with Xavier (stddev=\" << xavier_stddev << \")\" << std::endl;",
+      "type": "xavier_init",
+      "stddev": "\" << xavier_stddev << \")\" << std::endl",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 272,
+      "code": "std::cout << \"\ud83c\udfb2 Initializing LM head weights directly on GPU with Xavier (stddev=\" << xavier_stddev << \")\" << std::endl;",
+      "type": "init_weights",
+      "stddev": "\" << xavier_stddev << \")\" << std::endl",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 273,
+      "code": "launchXavierInit(training_state_.lm_head_weights, lm_head_weight_size, xavier_stddev, 42, training_state_.stream_ctrl.getPrimaryStream());",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 273,
+      "code": "launchXavierInit(training_state_.lm_head_weights, lm_head_weight_size, xavier_stddev, 42, training_state_.stream_ctrl.getPrimaryStream());",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 288,
+      "code": "std::cout << \"\u2713 LM head weights initialized on GPU: avg_norm=\" << weight_norm",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 289,
+      "code": "<< \", max_abs=\" << weight_max << \" (expected ~\" << xavier_stddev << \")\" << std::endl;",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\InitTrainingState.cu",
+      "line": 392,
+      "code": "// DO NOT duplicate Xavier init here per Rule 20 (no backwards compatibility shims).",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\LanguageModel_Training.cu",
+      "line": 52,
+      "code": "void launchXavierInit(float* weights, int size, float stddev,",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\LanguageModel_Training.cu",
+      "line": 52,
+      "code": "void launchXavierInit(float* weights, int size, float stddev,",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 22,
+      "code": "#include \"../Shared/Activations/Xavier/Xavier.hpp\"",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 30,
+      "code": "using GRIM::launchXavierInit;",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 30,
+      "code": "using GRIM::launchXavierInit;",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 496,
+      "code": "// CRITICAL: Initialize encoder layer weights on GPU with Xavier initialization",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 496,
+      "code": "// CRITICAL: Initialize encoder layer weights on GPU with Xavier initialization",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 497,
+      "code": "std::cout << \"\ud83c\udfb2 Initializing encoder layer weights...\" << std::endl;",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 506,
+      "code": "// Initialize attention weights (W_qkv, W_o)",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 519,
+      "code": "// Xavier init for QKV: stddev = sqrt(2 / (d_model + total_qkv_dim))",
+      "type": "xavier_init",
+      "stddev": "sqrt(2 / (d_model + total_qkv_dim))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 519,
+      "code": "// Xavier init for QKV: stddev = sqrt(2 / (d_model + total_qkv_dim))",
+      "type": "stddev_calc",
+      "stddev": "sqrt(2 / (d_model + total_qkv_dim))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 520,
+      "code": "float xavier_qkv_stddev = std::sqrt(2.0f / (cfg.d_model + static_cast<float>(total_qkv_dim)));",
+      "type": "xavier_init",
+      "stddev": "std::sqrt(2.0f / (cfg.d_model + static_cast<float>(total_qkv_dim)))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 520,
+      "code": "float xavier_qkv_stddev = std::sqrt(2.0f / (cfg.d_model + static_cast<float>(total_qkv_dim)));",
+      "type": "stddev_calc",
+      "stddev": "std::sqrt(2.0f / (cfg.d_model + static_cast<float>(total_qkv_dim)))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 521,
+      "code": "launchXavierInit(w_qkv_ptr, static_cast<int>(qkv_size), xavier_qkv_stddev, 42 + layer * 4, primary_stream);",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 521,
+      "code": "launchXavierInit(w_qkv_ptr, static_cast<int>(qkv_size), xavier_qkv_stddev, 42 + layer * 4, primary_stream);",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 525,
+      "code": "float xavier_wo_stddev = xavier_qkv_stddev * residual_scale;",
+      "type": "xavier_init",
+      "stddev": "xavier_qkv_stddev * residual_scale",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 526,
+      "code": "launchXavierInit(w_o_ptr, cfg.d_model * cfg.d_model, xavier_wo_stddev, 43 + layer * 4, primary_stream);",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 526,
+      "code": "launchXavierInit(w_o_ptr, cfg.d_model * cfg.d_model, xavier_wo_stddev, 43 + layer * 4, primary_stream);",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 532,
+      "code": "// Initialize FFN weights (W1, W2)",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 539,
+      "code": "// Xavier init for W1: stddev = sqrt(2 / (d_model + d_ff))",
+      "type": "xavier_init",
+      "stddev": "sqrt(2 / (d_model + d_ff))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 539,
+      "code": "// Xavier init for W1: stddev = sqrt(2 / (d_model + d_ff))",
+      "type": "stddev_calc",
+      "stddev": "sqrt(2 / (d_model + d_ff))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 540,
+      "code": "float xavier_w1_stddev = std::sqrt(2.0f / (cfg.d_model + cfg.d_ff));",
+      "type": "xavier_init",
+      "stddev": "std::sqrt(2.0f / (cfg.d_model + cfg.d_ff))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 540,
+      "code": "float xavier_w1_stddev = std::sqrt(2.0f / (cfg.d_model + cfg.d_ff));",
+      "type": "stddev_calc",
+      "stddev": "std::sqrt(2.0f / (cfg.d_model + cfg.d_ff))",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 541,
+      "code": "launchXavierInit(w1_ptr, cfg.d_model * cfg.d_ff, xavier_w1_stddev, 44 + layer * 4, primary_stream);",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 541,
+      "code": "launchXavierInit(w1_ptr, cfg.d_model * cfg.d_ff, xavier_w1_stddev, 44 + layer * 4, primary_stream);",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 543,
+      "code": "// Xavier init for W2 with GPT-2 residual scaling",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 545,
+      "code": "float xavier_w2_stddev = std::sqrt(2.0f / (cfg.d_ff + cfg.d_model)) * residual_scale;",
+      "type": "xavier_init",
+      "stddev": "std::sqrt(2.0f / (cfg.d_ff + cfg.d_model)) * residual_scale",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 545,
+      "code": "float xavier_w2_stddev = std::sqrt(2.0f / (cfg.d_ff + cfg.d_model)) * residual_scale;",
+      "type": "stddev_calc",
+      "stddev": "std::sqrt(2.0f / (cfg.d_ff + cfg.d_model)) * residual_scale",
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 546,
+      "code": "launchXavierInit(w2_ptr, cfg.d_ff * cfg.d_model, xavier_w2_stddev, 45 + layer * 4, primary_stream);",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 546,
+      "code": "launchXavierInit(w2_ptr, cfg.d_ff * cfg.d_model, xavier_w2_stddev, 45 + layer * 4, primary_stream);",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\TrainingOps.cu",
+      "line": 558,
+      "code": "oss << \"\u2713 Encoder layer weights initialized with Xavier (layers 0-\" << (cfg.num_layers - 1) << \")\";",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 14,
+      "code": "//  6. Model initialization and weight seeding",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 45,
+      "code": "#include \"../../Shared/Activations/Xavier/Xavier.hpp\"",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 46,
+      "code": "using GRIM::launchXavierInit;",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 46,
+      "code": "using GRIM::launchXavierInit;",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 654,
+      "code": "uint64_t xavier_seed,",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 658,
+      "code": "logger.log(\"Initializing model with xavier_seed=\" + std::to_string(xavier_seed) + \"...\");",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 848,
+      "code": "// Xavier initialization for encoder weights if needed",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 848,
+      "code": "// Xavier initialization for encoder weights if needed",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 876,
+      "code": "const float qkv_std = std::sqrt(2.0f / (cfg.d_model + static_cast<float>(total_qkv_dim)));",
+      "type": "stddev_calc",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 877,
+      "code": "const float wo_std = std::sqrt(2.0f / (2.0f * cfg.d_model));",
+      "type": "stddev_calc",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 878,
+      "code": "const float w1_std = std::sqrt(2.0f / (cfg.d_model + cfg.d_ff));",
+      "type": "stddev_calc",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 879,
+      "code": "const float w2_std = std::sqrt(2.0f / (cfg.d_ff + cfg.d_model));",
+      "type": "stddev_calc",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 883,
+      "code": "launchXavierInit(w_qkv, static_cast<int>(qkv_size), qkv_std, xavier_seed + layer * 4 + 0, 0);",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 883,
+      "code": "launchXavierInit(w_qkv, static_cast<int>(qkv_size), qkv_std, xavier_seed + layer * 4 + 0, 0);",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 887,
+      "code": "launchXavierInit(w_o, cfg.d_model * cfg.d_model, wo_std, xavier_seed + layer * 4 + 1, 0);",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 887,
+      "code": "launchXavierInit(w_o, cfg.d_model * cfg.d_model, wo_std, xavier_seed + layer * 4 + 1, 0);",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 891,
+      "code": "launchXavierInit(w1, cfg.d_model * cfg.d_ff, w1_std, xavier_seed + layer * 4 + 2, 0);",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 891,
+      "code": "launchXavierInit(w1, cfg.d_model * cfg.d_ff, w1_std, xavier_seed + layer * 4 + 2, 0);",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 895,
+      "code": "launchXavierInit(w2, cfg.d_ff * cfg.d_model, w2_std, xavier_seed + layer * 4 + 3, 0);",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 895,
+      "code": "launchXavierInit(w2, cfg.d_ff * cfg.d_model, w2_std, xavier_seed + layer * 4 + 3, 0);",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 899,
+      "code": "logger.log(\"[EncoderInit] Layer \" + std::to_string(layer) + \" reseeded with Xavier\");",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 1130,
+      "code": "ctx.init_seed = ctx.base_seed + 1000;   // Weight initialization",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 1170,
+      "code": "<< \"  init_seed  = \" << ctx.init_seed << \" (weight initialization)\\n\"",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 1423,
+      "code": "// 8. Initialize production-grade RNG system (BEFORE model init for Xavier seeding)",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.cu",
+      "line": 1426,
+      "code": "// 9. Initialize model (uses RNG init_seed for Xavier)",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.hpp",
+      "line": 255,
+      "code": "* - init_seed = base_seed + 1000: Weight initialization (Xavier)",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.hpp",
+      "line": 255,
+      "code": "* - init_seed = base_seed + 1000: Weight initialization (Xavier)",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.hpp",
+      "line": 268,
+      "code": "uint64_t init_seed = 0;       // Weight initialization seed",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase1_Startup.hpp",
+      "line": 416,
+      "code": "uint64_t xavier_seed,",
+      "type": "xavier_init",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    },
+    {
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\Phases\\Phase2_TrainingLoop.cu",
+      "line": 1572,
+      "code": "// NOTE: Finite difference gradient check removed - requires direct weight access",
+      "type": "init_weights",
+      "stddev": null,
+      "variance": null,
+      "layer": null
+    }
+  ],
+  "analysis": {
+    "expected_values": {
+      "embedding": 0.00722412493717757,
+      "lm_head": 0.00722412493717757,
+      "W_qkv": 0.03608439182435161,
+      "W_o": 0.03608439182435161,
+      "W1_ffn": 0.02282177322938192,
+      "W2_ffn": 0.02282177322938192,
+      "residual_scale": 0.2041241452319315
+    },
+    "found_values": {
+      "GRIM-TS.cu:293": {
+        "stddev_expr": "sqrtf(variance)",
+        "type": "stddev_calc",
+        "layer": null,
+        "code": "const float stddev = sqrtf(variance);"
+      },
+      "GRIM-TS.cu:499": {
+        "stddev_expr": "sqrtf(variance)",
+        "type": "stddev_calc",
+        "layer": null,
+        "code": "const float stddev = sqrtf(variance);"
+      },
+      "ScratchBlock_GPU.cu:518": {
+        "stddev_expr": "std::sqrt(2.0f / (NUM_ATOM_TYPES + config_.atom_embedding_dim))",
+        "type": "stddev_calc",
+        "layer": null,
+        "code": "float atom_stddev = std::sqrt(2.0f / (NUM_ATOM_TYPES + config_.atom_embedding_dim));"
+      },
+      "ScratchBlock_GPU.cu:527": {
+        "stddev_expr": "std::sqrt(2.0f / (config_.atom_embedding_dim + config_.d_model))",
+        "type": "stddev_calc",
+        "layer": null,
+        "code": "float proj_stddev = std::sqrt(2.0f / (config_.atom_embedding_dim + config_.d_model));"
+      },
+      "Xavier.hpp:44": {
+        "stddev_expr": "sqrt(2/(fan_in+fan_out))",
+        "type": "stddev_calc",
+        "layer": null,
+        "code": "// Convert stddev to fan_in/fan_out: stddev = sqrt(2/(fan_in+fan_out))"
+      },
+      "Xavier.hpp:45": {
+        "stddev_expr": "sqrt(2/N), then N = 2/stddev^2, so fan_in = fan_out = N/2 = 1/stddev^2",
+        "type": "stddev_calc",
+        "layer": null,
+        "code": "// If stddev = sqrt(2/N), then N = 2/stddev^2, so fan_in = fan_out = N/2 = 1/stddev^2"
+      },
+      "InitTrainingState.cu:236": {
+        "stddev_expr": "sqrt(2 / (fan_in + fan_out))",
+        "type": "stddev_calc",
+        "layer": null,
+        "code": "// Xavier initialization: stddev = sqrt(2 / (fan_in + fan_out))"
+      },
+      "InitTrainingState.cu:238": {
+        "stddev_expr": "std::sqrt(2.0f / (cfg.d_model + cfg.vocab_size))",
+        "type": "stddev_calc",
+        "layer": null,
+        "code": "float xavier_stddev = std::sqrt(2.0f / (cfg.d_model + cfg.vocab_size));"
+      },
+      "InitTrainingState.cu:239": {
+        "stddev_expr": "\" << xavier_stddev << \")\" << std::endl",
+        "type": "init_weights",
+        "layer": null,
+        "code": "std::cout << \"\ud83c\udfb2 Initializing embedding weights directly on GPU with Xavier (stddev=\" << xavier_stddev << \")\" << std::endl;"
+      },
+      "InitTrainingState.cu:271": {
+        "stddev_expr": "std::sqrt(2.0f / (cfg.d_model + cfg.vocab_size))",
+        "type": "stddev_calc",
+        "layer": null,
+        "code": "float xavier_stddev = std::sqrt(2.0f / (cfg.d_model + cfg.vocab_size));"
+      },
+      "InitTrainingState.cu:272": {
+        "stddev_expr": "\" << xavier_stddev << \")\" << std::endl",
+        "type": "init_weights",
+        "layer": null,
+        "code": "std::cout << \"\ud83c\udfb2 Initializing LM head weights directly on GPU with Xavier (stddev=\" << xavier_stddev << \")\" << std::endl;"
+      },
+      "TrainingOps.cu:519": {
+        "stddev_expr": "sqrt(2 / (d_model + total_qkv_dim))",
+        "type": "stddev_calc",
+        "layer": null,
+        "code": "// Xavier init for QKV: stddev = sqrt(2 / (d_model + total_qkv_dim))"
+      },
+      "TrainingOps.cu:520": {
+        "stddev_expr": "std::sqrt(2.0f / (cfg.d_model + static_cast<float>(total_qkv_dim)))",
+        "type": "stddev_calc",
+        "layer": null,
+        "code": "float xavier_qkv_stddev = std::sqrt(2.0f / (cfg.d_model + static_cast<float>(total_qkv_dim)));"
+      },
+      "TrainingOps.cu:525": {
+        "stddev_expr": "xavier_qkv_stddev * residual_scale",
+        "type": "xavier_init",
+        "layer": null,
+        "code": "float xavier_wo_stddev = xavier_qkv_stddev * residual_scale;"
+      },
+      "TrainingOps.cu:539": {
+        "stddev_expr": "sqrt(2 / (d_model + d_ff))",
+        "type": "stddev_calc",
+        "layer": null,
+        "code": "// Xavier init for W1: stddev = sqrt(2 / (d_model + d_ff))"
+      },
+      "TrainingOps.cu:540": {
+        "stddev_expr": "std::sqrt(2.0f / (cfg.d_model + cfg.d_ff))",
+        "type": "stddev_calc",
+        "layer": null,
+        "code": "float xavier_w1_stddev = std::sqrt(2.0f / (cfg.d_model + cfg.d_ff));"
+      },
+      "TrainingOps.cu:545": {
+        "stddev_expr": "std::sqrt(2.0f / (cfg.d_ff + cfg.d_model)) * residual_scale",
+        "type": "stddev_calc",
+        "layer": null,
+        "code": "float xavier_w2_stddev = std::sqrt(2.0f / (cfg.d_ff + cfg.d_model)) * residual_scale;"
+      }
+    },
+    "mismatches": [],
+    "config": {
+      "d_model": 768,
+      "d_ff": 3072,
+      "vocab_size": 37555,
+      "num_layers": 12
+    }
+  },
+  "timestamp": "D:\\G.R.I.M"
+}

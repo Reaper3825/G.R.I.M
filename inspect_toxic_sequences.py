@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """Inspect sequences that cause gradient explosions"""
 import struct
+import sys
 
 data_path = r'D:\G.R.I.M\resources\models\GRIM-text\training\data\training_data.grmt'
-bad_seqs = [1118, 4251, 7528, 6359]  # Loss=90 sequences
+
+# Parse command line args or use defaults
+if len(sys.argv) > 1:
+    bad_seqs = [int(x) for x in sys.argv[1:]]
+else:
+    bad_seqs = [2622, 4053]  # Batch 189 sequences that cause NaN
 
 with open(data_path, 'rb') as f:
     magic = f.read(4)
@@ -14,13 +20,17 @@ with open(data_path, 'rb') as f:
     vocab_size = struct.unpack('<I', f.read(4))[0]  # Read vocab_size from header
     
     print(f'Version: {version}, Total sequences: {num_sequences}, Vocab size: {vocab_size}')
+    print(f'Inspecting sequences: {bad_seqs}')
     print(f'\n{"="*70}')
-    print(f'INSPECTING TOXIC SEQUENCES (cause gradient explosions)')
+    print(f'INSPECTING SEQUENCES')
     print(f'{"="*70}\n')
     
     for seq_idx in range(min(num_sequences, max(bad_seqs) + 1)):
         seq_len = struct.unpack('<I', f.read(4))[0]
-        tokens = struct.unpack(f'<{seq_len}i', f.read(seq_len * 4))
+        tokens = struct.unpack(f'<{seq_len}I', f.read(seq_len * 4))  # Read as unsigned
+        # Skip numeric values and mask
+        f.read(seq_len * 4)  # float32 numeric values
+        f.read(seq_len)  # uint8 numeric mask
         
         if seq_idx in bad_seqs:
             print(f'Sequence {seq_idx}: length={seq_len}')

@@ -1,0 +1,1707 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{3BB01328-76B7-31FF-AC21-4606FC996B1B}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>grim_libtorch_baseline</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.5.props" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\G.R.I.M\Tools\libtorch_baseline\build\Debug\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">grim_libtorch_baseline.dir\Debug\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">grim_libtorch_baseline</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\G.R.I.M\Tools\libtorch_baseline\build\Release\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">grim_libtorch_baseline.dir\Release\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">grim_libtorch_baseline</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\G.R.I.M\Tools\libtorch_baseline\build\MinSizeRel\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">grim_libtorch_baseline.dir\MinSizeRel\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">grim_libtorch_baseline</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\G.R.I.M\Tools\libtorch_baseline\build\RelWithDebInfo\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">grim_libtorch_baseline.dir\RelWithDebInfo\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">grim_libtorch_baseline</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</GenerateManifest>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\G.R.I.M\Tools\libtorch_baseline\..\..\resources\models\llama.cpp\vendor;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "D:/G.R.I.M/venv_rl/Lib/site-packages/torch/include" /external:I "D:/G.R.I.M/venv_rl/Lib/site-packages/torch/include/torch/csrc/api/include" /external:I "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include" /bigobj</AdditionalOptions>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <DebugInformationFormat>OldStyle</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>Disabled</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;USE_DISTRIBUTED;USE_C10D_GLOO;CMAKE_INTDIR="Debug"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;USE_DISTRIBUTED;USE_C10D_GLOO;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\G.R.I.M\Tools\libtorch_baseline\..\..\resources\models\llama.cpp\vendor;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\include;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\include\torch\csrc\api\include;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\G.R.I.M\Tools\libtorch_baseline\..\..\resources\models\llama.cpp\vendor;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\include;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\include\torch\csrc\api\include;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <PostBuildEvent>
+      <Message>																																			</Message>
+      <Command>setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/asmjit.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/c10.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/c10_cuda.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/caffe2_nvrtc.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cublas64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cublasLt64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudart64_110.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_adv64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_cnn64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_engines_precompiled64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_engines_runtime_compiled64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_graph64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_heuristic64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_ops64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cufft64_10.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cufftw64_10.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cupti64_2022.3.0.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/curand64_10.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cusolver64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cusolverMg64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cusparse64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/fbgemm.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/libiomp5md.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/libiompstubs5md.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/nvToolsExt64_1.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/nvrtc-builtins64_118.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/nvrtc64_112_0.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/shm.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch_cpu.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch_cuda.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch_global_deps.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch_python.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/uv.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/zlibwapi.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+    </PostBuildEvent>
+    <Link>
+      <AdditionalDependencies>D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\c10.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\kineto.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\caffe2_nvrtc.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\c10_cuda.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\torch.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\torch_cuda.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\torch_cpu.lib;-INCLUDE:?warp_size@cuda@at@@YAHXZ;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\c10_cuda.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\c10.lib;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\lib\x64\cudart.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>/lib;/lib/$(Configuration);/lib/intel64;/lib/intel64/$(Configuration);/lib/intel64_win;/lib/intel64_win/$(Configuration);/lib/win-x64;/lib/win-x64/$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>D:/G.R.I.M/Tools/libtorch_baseline/build/Debug/grim_libtorch_baseline.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>D:/G.R.I.M/Tools/libtorch_baseline/build/Debug/grim_libtorch_baseline.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+    <CudaLink>
+      <AdditionalOptions>-forward-unknown-to-host-compiler -Wno-deprecated-gpu-targets </AdditionalOptions>
+      <PerformDeviceLink>false</PerformDeviceLink>
+    </CudaLink>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\G.R.I.M\Tools\libtorch_baseline\..\..\resources\models\llama.cpp\vendor;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "D:/G.R.I.M/venv_rl/Lib/site-packages/torch/include" /external:I "D:/G.R.I.M/venv_rl/Lib/site-packages/torch/include/torch/csrc/api/include" /external:I "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include" /bigobj</AdditionalOptions>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_DISTRIBUTED;USE_C10D_GLOO;CMAKE_INTDIR="Release"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_DISTRIBUTED;USE_C10D_GLOO;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\G.R.I.M\Tools\libtorch_baseline\..\..\resources\models\llama.cpp\vendor;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\include;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\include\torch\csrc\api\include;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\G.R.I.M\Tools\libtorch_baseline\..\..\resources\models\llama.cpp\vendor;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\include;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\include\torch\csrc\api\include;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <PostBuildEvent>
+      <Message>																																			</Message>
+      <Command>setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/asmjit.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/c10.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/c10_cuda.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/caffe2_nvrtc.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cublas64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cublasLt64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudart64_110.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_adv64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_cnn64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_engines_precompiled64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_engines_runtime_compiled64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_graph64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_heuristic64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_ops64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cufft64_10.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cufftw64_10.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cupti64_2022.3.0.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/curand64_10.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cusolver64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cusolverMg64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cusparse64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/fbgemm.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/libiomp5md.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/libiompstubs5md.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/nvToolsExt64_1.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/nvrtc-builtins64_118.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/nvrtc64_112_0.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/shm.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch_cpu.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch_cuda.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch_global_deps.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch_python.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/uv.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/zlibwapi.dll D:/G.R.I.M/Tools/libtorch_baseline/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+    </PostBuildEvent>
+    <Link>
+      <AdditionalDependencies>D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\c10.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\kineto.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\caffe2_nvrtc.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\c10_cuda.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\torch.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\torch_cuda.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\torch_cpu.lib;-INCLUDE:?warp_size@cuda@at@@YAHXZ;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\c10_cuda.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\c10.lib;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\lib\x64\cudart.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>/lib;/lib/$(Configuration);/lib/intel64;/lib/intel64/$(Configuration);/lib/intel64_win;/lib/intel64_win/$(Configuration);/lib/win-x64;/lib/win-x64/$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>D:/G.R.I.M/Tools/libtorch_baseline/build/Release/grim_libtorch_baseline.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>D:/G.R.I.M/Tools/libtorch_baseline/build/Release/grim_libtorch_baseline.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+    <CudaLink>
+      <AdditionalOptions>-forward-unknown-to-host-compiler -Wno-deprecated-gpu-targets </AdditionalOptions>
+      <PerformDeviceLink>false</PerformDeviceLink>
+    </CudaLink>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\G.R.I.M\Tools\libtorch_baseline\..\..\resources\models\llama.cpp\vendor;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "D:/G.R.I.M/venv_rl/Lib/site-packages/torch/include" /external:I "D:/G.R.I.M/venv_rl/Lib/site-packages/torch/include/torch/csrc/api/include" /external:I "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include" /bigobj</AdditionalOptions>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MinSpace</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_DISTRIBUTED;USE_C10D_GLOO;CMAKE_INTDIR="MinSizeRel"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_DISTRIBUTED;USE_C10D_GLOO;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\G.R.I.M\Tools\libtorch_baseline\..\..\resources\models\llama.cpp\vendor;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\include;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\include\torch\csrc\api\include;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\G.R.I.M\Tools\libtorch_baseline\..\..\resources\models\llama.cpp\vendor;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\include;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\include\torch\csrc\api\include;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <PostBuildEvent>
+      <Message>																																			</Message>
+      <Command>setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/asmjit.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/c10.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/c10_cuda.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/caffe2_nvrtc.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cublas64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cublasLt64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudart64_110.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_adv64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_cnn64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_engines_precompiled64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_engines_runtime_compiled64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_graph64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_heuristic64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_ops64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cufft64_10.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cufftw64_10.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cupti64_2022.3.0.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/curand64_10.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cusolver64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cusolverMg64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cusparse64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/fbgemm.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/libiomp5md.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/libiompstubs5md.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/nvToolsExt64_1.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/nvrtc-builtins64_118.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/nvrtc64_112_0.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/shm.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch_cpu.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch_cuda.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch_global_deps.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch_python.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/uv.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/zlibwapi.dll D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+    </PostBuildEvent>
+    <Link>
+      <AdditionalDependencies>D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\c10.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\kineto.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\caffe2_nvrtc.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\c10_cuda.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\torch.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\torch_cuda.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\torch_cpu.lib;-INCLUDE:?warp_size@cuda@at@@YAHXZ;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\c10_cuda.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\c10.lib;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\lib\x64\cudart.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>/lib;/lib/$(Configuration);/lib/intel64;/lib/intel64/$(Configuration);/lib/intel64_win;/lib/intel64_win/$(Configuration);/lib/win-x64;/lib/win-x64/$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel/grim_libtorch_baseline.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>D:/G.R.I.M/Tools/libtorch_baseline/build/MinSizeRel/grim_libtorch_baseline.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+    <CudaLink>
+      <AdditionalOptions>-forward-unknown-to-host-compiler -Wno-deprecated-gpu-targets </AdditionalOptions>
+      <PerformDeviceLink>false</PerformDeviceLink>
+    </CudaLink>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\G.R.I.M\Tools\libtorch_baseline\..\..\resources\models\llama.cpp\vendor;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "D:/G.R.I.M/venv_rl/Lib/site-packages/torch/include" /external:I "D:/G.R.I.M/venv_rl/Lib/site-packages/torch/include/torch/csrc/api/include" /external:I "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include" /bigobj</AdditionalOptions>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <DebugInformationFormat>OldStyle</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_DISTRIBUTED;USE_C10D_GLOO;CMAKE_INTDIR="RelWithDebInfo"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_DISTRIBUTED;USE_C10D_GLOO;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\G.R.I.M\Tools\libtorch_baseline\..\..\resources\models\llama.cpp\vendor;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\include;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\include\torch\csrc\api\include;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\G.R.I.M\Tools\libtorch_baseline\..\..\resources\models\llama.cpp\vendor;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\include;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\include\torch\csrc\api\include;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <PostBuildEvent>
+      <Message>																																			</Message>
+      <Command>setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/asmjit.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/c10.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/c10_cuda.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/caffe2_nvrtc.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cublas64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cublasLt64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudart64_110.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_adv64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_cnn64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_engines_precompiled64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_engines_runtime_compiled64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_graph64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_heuristic64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cudnn_ops64_9.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cufft64_10.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cufftw64_10.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cupti64_2022.3.0.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/curand64_10.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cusolver64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cusolverMg64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/cusparse64_11.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/fbgemm.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/libiomp5md.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/libiompstubs5md.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/nvToolsExt64_1.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/nvrtc-builtins64_118.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/nvrtc64_112_0.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/shm.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch_cpu.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch_cuda.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch_global_deps.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/torch_python.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/uv.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/G.R.I.M/venv_rl/Lib/site-packages/torch/lib/zlibwapi.dll D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+    </PostBuildEvent>
+    <Link>
+      <AdditionalDependencies>D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\c10.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\kineto.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\caffe2_nvrtc.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\c10_cuda.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\torch.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\torch_cuda.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\torch_cpu.lib;-INCLUDE:?warp_size@cuda@at@@YAHXZ;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\c10_cuda.lib;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\lib\c10.lib;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\lib\x64\cudart.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>/lib;/lib/$(Configuration);/lib/intel64;/lib/intel64/$(Configuration);/lib/intel64_win;/lib/intel64_win/$(Configuration);/lib/win-x64;/lib/win-x64/$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo/grim_libtorch_baseline.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>D:/G.R.I.M/Tools/libtorch_baseline/build/RelWithDebInfo/grim_libtorch_baseline.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+    <CudaLink>
+      <AdditionalOptions>-forward-unknown-to-host-compiler -Wno-deprecated-gpu-targets </AdditionalOptions>
+      <PerformDeviceLink>false</PerformDeviceLink>
+    </CudaLink>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\G.R.I.M\Tools\libtorch_baseline\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule D:/G.R.I.M/Tools/libtorch_baseline/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/G.R.I.M/Tools/libtorch_baseline -BD:/G.R.I.M/Tools/libtorch_baseline/build --check-stamp-file D:/G.R.I.M/Tools/libtorch_baseline/build/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeCUDAInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeCheckCompilerFlagCommonPatterns.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CheckCXXCompilerFlag.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CheckCXXSourceCompiles.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\NVIDIA-CUDA.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\NVIDIA.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindCUDAToolkit.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindPackageHandleStandardArgs.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindPackageMessage.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindPython.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindPython\Support.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CheckCompilerFlag.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CheckFlagCommonConfig.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CheckSourceCompiles.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows-NVIDIA-CUDA.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\WindowsPaths.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\4.1.1\CMakeCUDACompiler.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\4.1.1\CMakeCXXCompiler.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\4.1.1\CMakeRCCompiler.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\4.1.1\CMakeSystem.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\detect_cuda_compute_capabilities.cu;D:\G.R.I.M\Tools\libtorch_baseline\build\detect_cuda_version.cc;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Caffe2Config.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Caffe2Targets-release.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Caffe2Targets.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\FindCUDAToolkit.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\FindCUDA.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\CMakeInitializeConfigs.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\FindCUDA.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\FindCUDA\select_compute_arch.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\FindPackageHandleStandardArgs.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\FindPackageMessage.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\public\cuda.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\public\mkl.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\public\mkldnn.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\public\utils.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Torch\TorchConfig.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Torch\TorchConfigVersion.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule D:/G.R.I.M/Tools/libtorch_baseline/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/G.R.I.M/Tools/libtorch_baseline -BD:/G.R.I.M/Tools/libtorch_baseline/build --check-stamp-file D:/G.R.I.M/Tools/libtorch_baseline/build/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeCUDAInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeCheckCompilerFlagCommonPatterns.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CheckCXXCompilerFlag.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CheckCXXSourceCompiles.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\NVIDIA-CUDA.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\NVIDIA.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindCUDAToolkit.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindPackageHandleStandardArgs.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindPackageMessage.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindPython.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindPython\Support.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CheckCompilerFlag.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CheckFlagCommonConfig.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CheckSourceCompiles.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows-NVIDIA-CUDA.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\WindowsPaths.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\4.1.1\CMakeCUDACompiler.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\4.1.1\CMakeCXXCompiler.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\4.1.1\CMakeRCCompiler.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\4.1.1\CMakeSystem.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\detect_cuda_compute_capabilities.cu;D:\G.R.I.M\Tools\libtorch_baseline\build\detect_cuda_version.cc;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Caffe2Config.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Caffe2Targets-release.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Caffe2Targets.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\FindCUDAToolkit.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\FindCUDA.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\CMakeInitializeConfigs.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\FindCUDA.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\FindCUDA\select_compute_arch.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\FindPackageHandleStandardArgs.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\FindPackageMessage.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\public\cuda.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\public\mkl.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\public\mkldnn.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\public\utils.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Torch\TorchConfig.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Torch\TorchConfigVersion.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule D:/G.R.I.M/Tools/libtorch_baseline/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/G.R.I.M/Tools/libtorch_baseline -BD:/G.R.I.M/Tools/libtorch_baseline/build --check-stamp-file D:/G.R.I.M/Tools/libtorch_baseline/build/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeCUDAInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeCheckCompilerFlagCommonPatterns.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CheckCXXCompilerFlag.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CheckCXXSourceCompiles.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\NVIDIA-CUDA.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\NVIDIA.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindCUDAToolkit.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindPackageHandleStandardArgs.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindPackageMessage.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindPython.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindPython\Support.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CheckCompilerFlag.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CheckFlagCommonConfig.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CheckSourceCompiles.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows-NVIDIA-CUDA.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\WindowsPaths.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\4.1.1\CMakeCUDACompiler.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\4.1.1\CMakeCXXCompiler.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\4.1.1\CMakeRCCompiler.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\4.1.1\CMakeSystem.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\detect_cuda_compute_capabilities.cu;D:\G.R.I.M\Tools\libtorch_baseline\build\detect_cuda_version.cc;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Caffe2Config.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Caffe2Targets-release.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Caffe2Targets.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\FindCUDAToolkit.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\FindCUDA.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\CMakeInitializeConfigs.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\FindCUDA.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\FindCUDA\select_compute_arch.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\FindPackageHandleStandardArgs.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\FindPackageMessage.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\public\cuda.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\public\mkl.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\public\mkldnn.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\public\utils.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Torch\TorchConfig.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Torch\TorchConfigVersion.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule D:/G.R.I.M/Tools/libtorch_baseline/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/G.R.I.M/Tools/libtorch_baseline -BD:/G.R.I.M/Tools/libtorch_baseline/build --check-stamp-file D:/G.R.I.M/Tools/libtorch_baseline/build/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeCUDAInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeCheckCompilerFlagCommonPatterns.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CheckCXXCompilerFlag.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\CheckCXXSourceCompiles.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\NVIDIA-CUDA.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Compiler\NVIDIA.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindCUDAToolkit.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindPackageHandleStandardArgs.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindPackageMessage.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindPython.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\FindPython\Support.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CheckCompilerFlag.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CheckFlagCommonConfig.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Internal\CheckSourceCompiles.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows-NVIDIA-CUDA.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.1\Modules\Platform\WindowsPaths.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\4.1.1\CMakeCUDACompiler.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\4.1.1\CMakeCXXCompiler.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\4.1.1\CMakeRCCompiler.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\4.1.1\CMakeSystem.cmake;D:\G.R.I.M\Tools\libtorch_baseline\build\detect_cuda_compute_capabilities.cu;D:\G.R.I.M\Tools\libtorch_baseline\build\detect_cuda_version.cc;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Caffe2Config.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Caffe2Targets-release.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Caffe2Targets.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\FindCUDAToolkit.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\FindCUDA.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\CMakeInitializeConfigs.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\FindCUDA.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\FindCUDA\select_compute_arch.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\FindPackageHandleStandardArgs.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\Modules_CUDA_fix\upstream\FindPackageMessage.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\public\cuda.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\public\mkl.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\public\mkldnn.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Caffe2\public\utils.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Torch\TorchConfig.cmake;D:\G.R.I.M\venv_rl\Lib\site-packages\torch\share\cmake\Torch\TorchConfigVersion.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\G.R.I.M\Tools\libtorch_baseline\build\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="D:\G.R.I.M\Tools\libtorch_baseline\main.cpp" />
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="D:\G.R.I.M\Tools\libtorch_baseline\build\ZERO_CHECK.vcxproj">
+      <Project>{3F1B43D8-F707-3AAA-BC69-483728A5FC49}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.5.targets" />
+  </ImportGroup>
+</Project>

@@ -32,6 +32,9 @@
 #include <optional>
 #include <type_traits>
 #include <map>
+#include <set>
+#include <sstream>
+#include <vector>
 
 namespace GRIM {
 namespace Config {
@@ -124,200 +127,218 @@ struct LogRecorderConfig {
  * 
  * This loads the training hyperparameters (epochs, batch_size, learning_rate, etc.)
  * from the training.config section of ai_config.json.
+ * 
+ * REQUIRED FIELDS: ALL fields must be explicitly set in ai_config.json (Rule 20: fail loud)
+ * NO DEFAULTS - every field must come from JSON configuration.
  */
 struct TrainingHyperparameters {
+    
     // Log Recorder configuration
     LogRecorderConfig log_recorder;
 
-    int epochs = 15;
-    int64_t seed = -1;  // -1 = random (timestamp), >= 0 = deterministic reproducible seed
-    int batch_size = 24;
-    int gradient_accumulation_steps = 1;  // Accumulate gradients over N batches before stepping optimizer
-    bool single_batch_overfit_enabled = false;  // Repeat first batch for overfit/debug
-    int single_batch_overfit_max_steps = 0;     // 0 = default to 1 step when enabled
-    std::string batch_strategy = "SIMILARITY_GROUPED";  // RANDOM, GREEDY, SIMILARITY_GROUPED, BEST_FIT_DECREASING
-    float learning_rate = 0.00003f;
-    float weight_decay = 0.01f;
-    float grad_clip_norm = 10.0f;
-    bool per_token_grad_scale = false;  // Match HyperParameters::DEFAULT_GRAD_SCALE_PER_TOKEN
-    int warmup_steps = 10;
-    int max_seq_len = 8192;
-    int log_interval = 1;
-    int validation_interval = 100;
-    int checkpoint_interval = 1000;
-    bool use_gpu = true;
-    bool use_flash_attention = true;
-    bool dynamic_lr_enabled = false;
-    bool dynamic_lr_autogenerate = true;
-    float dynamic_lr_min = 1.0e-6f;
-    float dynamic_lr_max = 3.0e-4f;
-    float dynamic_lr_increase_factor = 1.05f;
-    float dynamic_lr_decrease_factor = 0.5f;
-    float dynamic_lr_upper_grad_norm = 12.0f;
-    float dynamic_lr_lower_grad_norm = 4.0f;
-    float dynamic_lr_max_loss_jump = 1.5f;
-    float dynamic_lr_smoothing = 0.2f;
-    int dynamic_lr_cooldown_steps = 5;
-    int dynamic_lr_warmup_steps = 25;
-    float dynamic_lr_max_step_up_ratio = 1.12f;
-    float dynamic_lr_max_step_down_ratio = 0.72f;
-    bool dynamic_lr_auto_band = true;
-    float dynamic_lr_band_sigma = 1.5f;
-    float dynamic_lr_band_floor = 3.0f;
-    float dynamic_lr_band_ceiling = 250.0f;
-    int dynamic_lr_band_min_samples = 12;
-    float dynamic_lr_band_min_span = 1.0f;
-    bool dynamic_lr_adaptive_smoothing = true;
-    float dynamic_lr_smoothing_min = 0.1f;
-    float dynamic_lr_smoothing_max = 0.6f;
-    float dynamic_lr_variance_reference = 25.0f;
-    bool dynamic_lr_adaptive_cooldown = true;
-    int dynamic_lr_cooldown_min = 1;
-    int dynamic_lr_cooldown_max = 8;
-    bool dynamic_lr_adaptive_loss = true;
-    float dynamic_lr_loss_sigma = 3.0f;
-    int dynamic_lr_loss_min_samples = 8;
-    float dynamic_lr_loss_floor = 0.25f;
-    bool dynamic_lr_guard_logging = true;
-    int dynamic_lr_guard_floor_steps = 200;
-    float dynamic_lr_guard_grad_multiplier = 1.6f;
-    int dynamic_lr_guard_loss_patience = 12;
-    float dynamic_lr_guard_loss_multiplier = 1.05f;
-    int dynamic_lr_baseline_capture_steps = 32;
-    float dynamic_lr_baseline_drift = 0.05f;
-    int dynamic_lr_momentum_interval = 12;
-    float dynamic_lr_momentum_gain = 0.35f;
-    float dynamic_lr_momentum_decay = 0.7f;
-    int dynamic_lr_safety_interval = 4;
-    float dynamic_lr_safety_gain = 0.1f;
-    float dynamic_lr_safety_scale = 2.4f;
-    bool soft_restart_enabled = true;
-    float soft_restart_loss_increase_threshold = 0.2f;
-    int soft_restart_max_step_window = 50;
-    int soft_restart_cooldown_steps = 200;
-    bool auto_stop_enabled = true;
-    int auto_stop_plateau_patience = 3;
-    float auto_stop_plateau_min_delta = 0.01f;
-    float auto_stop_high_loss_threshold = 9.0f;
-    int auto_stop_high_loss_patience = 2;
-    int cache_max_batch = 24;
-    int cache_max_seq_len = 2048;
-    bool micro_validation_enabled = false;
-    int micro_validation_interval = 200;
-    int micro_validation_batch_limit = 3;
-    int micro_validation_min_step = 128;
-    bool micro_validation_prefer_short = true;
-    bool guess_aux_enabled = true;
-    float guess_aux_lambda = 0.25f;
-    float guess_aux_min_confidence = 0.7f;
-    bool shuffle_train_enabled = true;
-    int shuffle_train_epochs = 0;  // 0 == all epochs
+    // Core training parameters - NO DEFAULTS
+    int epochs;
+    int64_t seed;
+    int batch_size;
+    int gradient_accumulation_steps;
+    bool single_batch_overfit_enabled;
+    int single_batch_overfit_max_steps;
+    std::string batch_strategy;
+    float learning_rate;
+    float weight_decay;
+    float grad_clip_norm;
+    bool per_token_grad_scale;
+    int warmup_steps;
+    int max_seq_len;
+    int log_interval;
+    int atom_stats_interval;
+    int atom_stats_max_seqs;
+    int validation_interval;
+    int checkpoint_interval;
+    bool use_gpu;
+    bool use_flash_attention;
     
-    // Telemetry control (includes plateau noise injection)
-    bool telemetry_control_enabled = true;  // Enable gradient spike detection and interventions
-    float telemetry_spike_mild_threshold = 3.0f;
-    float telemetry_spike_moderate_threshold = 5.0f;
-    float telemetry_spike_severe_threshold = 10.0f;
-    float telemetry_moderate_grad_scale = 0.5f;
-    int telemetry_moderate_cooldown_extension = 3;
-    float telemetry_min_grad_for_nonzero_loss = 1e-10f;
-    float telemetry_loss_threshold_for_grad_check = 0.01f;
-    int telemetry_max_consecutive_zero_grad_steps = 3;
-    float telemetry_seq_len_regime_change_threshold = 0.3f;
-    int telemetry_regime_change_suppression_steps = 2;
-    float telemetry_volatility_damping_threshold = 100.0f;
-    float telemetry_max_volatility_damping = 1.0f;
-    float telemetry_gradient_decay_threshold = 0.0f;
-    float telemetry_max_decay_boost = 1.0f;
-    float telemetry_progress_boost_threshold = 100.0f;
-    float telemetry_max_progress_boost = 1.0f;
-    float telemetry_outlier_frequency_trigger = 0.95f;
-    float telemetry_outlier_persistence_trigger = 0.90f;
-    float telemetry_anchor_drift_sigma_multiplier = 5.0f;
-    int telemetry_soft_restart_cooldown_steps = 10;
-    int telemetry_warmup_steps = 100;
-    int telemetry_baseline_stabilization_steps = 50;
-    bool telemetry_verbose_logging = true;
-    bool telemetry_fail_loud_on_accumulation_bug = true;
-    bool telemetry_plateau_noise_enabled = true;
-    int telemetry_plateau_noise_patience = 50;  // Batches of low variance before triggering
-    float telemetry_plateau_noise_variance_threshold = 0.001f;  // Loss variance threshold
-    float telemetry_plateau_noise_std = 0.001f;  // Noise standard deviation
-    bool telemetry_plateau_noise_proportional = true;  // Scale noise by weight magnitude
-    int telemetry_plateau_noise_cooldown = 500;  // Batches between injections
-    int telemetry_plateau_noise_max_per_epoch = 3;  // Max injections per epoch
+    // Dynamic LR - NO DEFAULTS
+    bool dynamic_lr_enabled;
+    bool dynamic_lr_autogenerate;
+    float dynamic_lr_min;
+    float dynamic_lr_max;
+    float dynamic_lr_increase_factor;
+    float dynamic_lr_decrease_factor;
+    float dynamic_lr_upper_grad_norm;
+    float dynamic_lr_lower_grad_norm;
+    float dynamic_lr_max_loss_jump;
+    float dynamic_lr_smoothing;
+    int dynamic_lr_cooldown_steps;
+    int dynamic_lr_warmup_steps;
+    float dynamic_lr_max_step_up_ratio;
+    float dynamic_lr_max_step_down_ratio;
+    bool dynamic_lr_auto_band;
+    float dynamic_lr_band_sigma;
+    float dynamic_lr_band_floor;
+    float dynamic_lr_band_ceiling;
+    int dynamic_lr_band_min_samples;
+    float dynamic_lr_band_min_span;
+    bool dynamic_lr_adaptive_smoothing;
+    float dynamic_lr_smoothing_min;
+    float dynamic_lr_smoothing_max;
+    float dynamic_lr_variance_reference;
+    bool dynamic_lr_adaptive_cooldown;
+    int dynamic_lr_cooldown_min;
+    int dynamic_lr_cooldown_max;
+    bool dynamic_lr_adaptive_loss;
+    float dynamic_lr_loss_sigma;
+    int dynamic_lr_loss_min_samples;
+    float dynamic_lr_loss_floor;
+    bool dynamic_lr_guard_logging;
+    int dynamic_lr_guard_floor_steps;
+    float dynamic_lr_guard_grad_multiplier;
+    int dynamic_lr_guard_loss_patience;
+    float dynamic_lr_guard_loss_multiplier;
+    int dynamic_lr_baseline_capture_steps;
+    float dynamic_lr_baseline_drift;
+    int dynamic_lr_momentum_interval;
+    float dynamic_lr_momentum_gain;
+    float dynamic_lr_momentum_decay;
+    int dynamic_lr_safety_interval;
+    float dynamic_lr_safety_gain;
+    float dynamic_lr_safety_scale;
     
-    // Loss options
-    // NOTE: These are runtime defaults loaded from JSON. The actual Loss structs
-    // (GRIM::Loss::FocalLossConfig, etc.) use HyperParameters constants as their
-    // compile-time defaults. When training starts, these JSON values override those
-    // defaults. Keep these in sync with HyperParameters::DEFAULT_LOSS_* values for
-    // consistency, but the authoritative defaults are in HyperParameters_GPU.hpp.
-    bool loss_label_smoothing_enabled = true;
-    float loss_label_smoothing_epsilon = 0.1f;  // Match HyperParameters::DEFAULT_LOSS_LABEL_SMOOTHING_EPSILON
-    bool loss_focal_enabled = false;
-    float loss_focal_gamma = 2.0f;   // Match HyperParameters::DEFAULT_LOSS_FOCAL_GAMMA
-    float loss_focal_alpha = 1.0f;   // Match HyperParameters::DEFAULT_LOSS_FOCAL_ALPHA
-    bool loss_preference_enabled = false;
-    float loss_preference_beta = 0.1f;  // Match HyperParameters::DEFAULT_LOSS_PREFERENCE_BETA
-    bool loss_distillation_enabled = false;
-    float loss_distillation_temperature = 1.0f;  // Match HyperParameters::DEFAULT_LOSS_DISTILLATION_TEMPERATURE
-    float loss_distillation_lambda = 0.5f;  // Match HyperParameters::DEFAULT_LOSS_DISTILLATION_LAMBDA
-    bool loss_masking_enabled = false;
-    std::string loss_masking_tag = "";
+    // Soft restart - NO DEFAULTS
+    bool soft_restart_enabled;
+    float soft_restart_loss_increase_threshold;
+    int soft_restart_max_step_window;
+    int soft_restart_cooldown_steps;
     
-    // Stability overrides
-    bool stability_overrides_enabled = false;
-    int stability_override_batch_size = 0;
-    int stability_override_max_seq_len = 0;
-    int stability_override_max_tokens_per_batch = 0;
-    float stability_override_clip_abs = 0.0f;
-    float stability_override_clip_norm = 0.0f;
-    float stability_override_lr_min = 0.0f;
+    // Auto stop - NO DEFAULTS
+    bool auto_stop_enabled;
+    int auto_stop_plateau_patience;
+    float auto_stop_plateau_min_delta;
+    float auto_stop_high_loss_threshold;
+    int auto_stop_high_loss_patience;
     
-    // Scratch blocks
-    // NOTE: Authoritative defaults in HyperParameters::DEFAULT_SCRATCH_* constants
-    bool scratch_blocks_enabled = true;       // Match DEFAULT_SCRATCH_BLOCKS_ENABLED
-    size_t scratch_max_tokens_per_block = 16384;  // Match DEFAULT_SCRATCH_MAX_TOKENS_PER_BLOCK
-    size_t scratch_num_blocks = 4;            // Match DEFAULT_SCRATCH_NUM_BLOCKS
-    bool scratch_write_combined = false;      // Match DEFAULT_SCRATCH_WRITE_COMBINED
+    // Cache limits - NO DEFAULTS
+    int cache_max_batch;
+    int cache_max_seq_len;
     
-    // ScratchBlock reasoning (model config)
-    bool scratch_block_reasoning_enabled = true;
-    int scratch_block_reasoning_atom_embedding_dim = 64;
-    int scratch_block_reasoning_max_atoms = 256;
-    float scratch_block_reasoning_atom_scale = 0.1f;
+    // Micro validation - NO DEFAULTS
+    bool micro_validation_enabled;
+    int micro_validation_interval;
+    int micro_validation_batch_limit;
+    int micro_validation_min_step;
+    bool micro_validation_prefer_short;
     
-    // Activation quantization
-    bool activation_quantization_enabled = false;
-    bool activation_quantization_apply_to_embeddings = true;
-    bool activation_quantization_apply_to_encoder_outputs = false;
-    bool activation_quantization_apply_to_layer_caches = false;
-    bool activation_quantization_apply_to_qkv_cache = false;
-    bool activation_quantization_apply_to_logits = false;
-    float activation_quantization_scale = 1.0f;
-    float activation_quantization_clip_min = -127.0f;
-    float activation_quantization_clip_max = 127.0f;
-    int activation_quantization_zero_point = 0;
-    bool activation_quantization_symmetric = false;
+    // Guess aux - NO DEFAULTS
+    bool guess_aux_enabled;
+    float guess_aux_lambda;
+    float guess_aux_min_confidence;
     
-    // CUDA execution mode
-    bool single_stream_mode = false;         // Force single CUDA stream (disable overlap)
-    bool disable_async_frees = false;        // Use cudaFree instead of cudaFreeAsync
-    bool synchronize_after_kernels = false;  // Add cudaDeviceSynchronize after each kernel
+    // Shuffle - NO DEFAULTS
+    bool shuffle_train_enabled;
+    int shuffle_train_epochs;
     
-    // Prediction comparison logging (for debugging spike vs good batches)
-    bool prediction_comparison_enabled = false;  // Log model predictions for comparison
-    int prediction_comparison_interval = 100;    // Log every N good batches
-    int prediction_comparison_top_k = 5;         // Show top-K predictions per position
-    int prediction_comparison_max_positions = 10; // Max positions to log per sequence
-    std::string prediction_comparison_log_path = "prediction_comparison.log";
+    // Telemetry control - NO DEFAULTS
+    bool telemetry_control_enabled;
+    float telemetry_spike_mild_threshold;
+    float telemetry_spike_moderate_threshold;
+    float telemetry_spike_severe_threshold;
+    float telemetry_moderate_grad_scale;
+    int telemetry_moderate_cooldown_extension;
+    float telemetry_min_grad_for_nonzero_loss;
+    float telemetry_loss_threshold_for_grad_check;
+    int telemetry_max_consecutive_zero_grad_steps;
+    float telemetry_seq_len_regime_change_threshold;
+    int telemetry_regime_change_suppression_steps;
+    float telemetry_volatility_damping_threshold;
+    float telemetry_max_volatility_damping;
+    float telemetry_gradient_decay_threshold;
+    float telemetry_max_decay_boost;
+    float telemetry_progress_boost_threshold;
+    float telemetry_max_progress_boost;
+    float telemetry_outlier_frequency_trigger;
+    float telemetry_outlier_persistence_trigger;
+    float telemetry_anchor_drift_sigma_multiplier;
+    int telemetry_soft_restart_cooldown_steps;
+    int telemetry_warmup_steps;
+    int telemetry_baseline_stabilization_steps;
+    bool telemetry_verbose_logging;
+    bool telemetry_fail_loud_on_accumulation_bug;
+    bool telemetry_plateau_noise_enabled;
+    int telemetry_plateau_noise_patience;
+    float telemetry_plateau_noise_variance_threshold;
+    float telemetry_plateau_noise_std;
+    bool telemetry_plateau_noise_proportional;
+    int telemetry_plateau_noise_cooldown;
+    int telemetry_plateau_noise_max_per_epoch;
     
-    // Attention diagnostics - dump attention stats every step during training
-    // Use this to diagnose training plateau (saturated attention, gradient collapse)
-    bool attention_diag_enabled = true;   // Master switch - WARNING: adds ~10ms per batch
-    int attention_diag_layer = -1;         // Which layer to dump (-1 = all, 0 = first, etc)
-    int attention_diag_head = 0;           // Which head to dump (-1 = all, 0 = first only)
+    // Loss options - NO DEFAULTS
+    bool loss_label_smoothing_enabled;
+    float loss_label_smoothing_epsilon;
+    bool loss_focal_enabled;
+    float loss_focal_gamma;
+    float loss_focal_alpha;
+    bool loss_preference_enabled;
+    float loss_preference_beta;
+    bool loss_distillation_enabled;
+    float loss_distillation_temperature;
+    float loss_distillation_lambda;
+    bool loss_masking_enabled;
+    std::string loss_masking_tag;
+    bool loss_numeric_head_enabled;
+    float loss_numeric_head_weight;
+    float loss_numeric_head_huber_delta;
+    bool loss_numeric_head_log_scale;
+    
+    // Stability overrides - NO DEFAULTS
+    bool stability_overrides_enabled;
+    int stability_override_batch_size;
+    int stability_override_max_seq_len;
+    int stability_override_max_tokens_per_batch;
+    float stability_override_clip_abs;
+    float stability_override_clip_norm;
+    float stability_override_lr_min;
+    
+    // Scratch blocks - NO DEFAULTS
+    bool scratch_blocks_enabled;
+    size_t scratch_max_tokens_per_block;
+    size_t scratch_num_blocks;
+    bool scratch_write_combined;
+    
+    // ScratchBlock reasoning - NO DEFAULTS
+    bool scratch_block_reasoning_enabled;
+    int scratch_block_reasoning_atom_embedding_dim;
+    int scratch_block_reasoning_max_atoms;
+    float scratch_block_reasoning_atom_scale;
+    
+    // Activation quantization - NO DEFAULTS
+    bool activation_quantization_enabled;
+    bool activation_quantization_apply_to_embeddings;
+    bool activation_quantization_apply_to_encoder_outputs;
+    bool activation_quantization_apply_to_layer_caches;
+    bool activation_quantization_apply_to_qkv_cache;
+    bool activation_quantization_apply_to_logits;
+    float activation_quantization_scale;
+    float activation_quantization_clip_min;
+    float activation_quantization_clip_max;
+    int activation_quantization_zero_point;
+    bool activation_quantization_symmetric;
+    
+    // CUDA execution mode - NO DEFAULTS
+    bool single_stream_mode;
+    bool disable_async_frees;
+    bool synchronize_after_kernels;
+    
+    // Prediction comparison - NO DEFAULTS
+    bool prediction_comparison_enabled;
+    int prediction_comparison_interval;
+    int prediction_comparison_top_k;
+    int prediction_comparison_max_positions;
+    std::string prediction_comparison_log_path;
+    
+    // Attention diagnostics - NO DEFAULTS
+    bool attention_diag_enabled;
+    int attention_diag_layer;
+    int attention_diag_head;
 };
 
 /**
@@ -331,7 +352,10 @@ struct TrainingHyperparameters {
  */
 struct TokenizerConfig {
     int vocab_size = 50000;  // Target vocab size for training new tokenizer (actual size comes from vocab.bin)
+    int max_vocab_size = 0;  // Hard cap on loaded vocab (0 = no cap, >0 = keep top-K most frequent tokens)
     int max_length = 8192;
+    int min_subword_freq = 3;  // Minimum frequency for subwords to be included in vocab
+    bool prune_during_mining = false;  // Enable memory pruning during subword mining (disable if RAM is plentiful)
     std::string model_type = "unibytes";
     std::vector<std::string> special_tokens = {"<pad>", "<unk>", "<s>", "</s>", "<mask>"};
     bool add_bos = true;
@@ -345,8 +369,9 @@ struct TokenizerConfig {
     bool enable_parallel_tokenization = true;
     int parallel_threshold = 1000;
     bool enable_char_fallback = true;
+    bool enable_byte_fallback = true;
     uint32_t expected_checksum = 0;
-    bool save_text_vocab = false;  // Also save human-readable .txt alongside .bin
+    bool save_text_vocab = true;  // Also save human-readable .txt alongside .bin
     
     // Scratch block reasoning configuration
     bool enable_scratch_block_reasoning = true;
@@ -446,11 +471,206 @@ inline void assignTrainingField(FieldType& field, const nlohmann::json& node, co
     }
 }
 
+/**
+ * @brief Check if a nested JSON path exists
+ * @param json The root JSON object
+ * @param path Dot-separated path (e.g., "loss.focal.enabled")
+ * @return true if path exists
+ */
+inline bool jsonPathExists(const nlohmann::json& json, const std::string& path) {
+    const nlohmann::json* current = &json;
+    std::istringstream stream(path);
+    std::string segment;
+    
+    while (std::getline(stream, segment, '.')) {
+        if (!current->is_object() || !current->contains(segment)) {
+            return false;
+        }
+        current = &(*current)[segment];
+    }
+    return true;
+}
+
+/**
+ * @brief Validate all required fields exist in training.config JSON
+ * @param trainConfig The training.config JSON object
+ * @throws std::runtime_error listing all missing required fields
+ * 
+ * Rule 20: NO SILENT DEFAULTS. EVERY field MUST be explicitly set in ai_config.json.
+ * TrainingHyperparameters has NO default values - all must come from JSON.
+ */
+inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
+    // ALL fields required - NO DEFAULTS ANYWHERE
+    static const std::vector<std::string> REQUIRED = {
+        // Core training
+        "epochs", "seed", "batch_size", "gradient_accumulation_steps",
+        "batch_strategy", "learning_rate", "weight_decay",
+        "per_token_grad_scale", "warmup_steps", "max_seq_len", "log_interval",
+        "atom_stats_interval", "atom_stats_max_seqs",
+        "validation_interval", "checkpoint_interval", "use_gpu", "use_flash_attention",
+        
+        // Single batch overfit
+        "single_batch.enabled", "single_batch.max_steps",
+        
+        // Dynamic LR
+        "dynamic_lr.enabled", "dynamic_lr.auto_generate",
+        "dynamic_lr.min", "dynamic_lr.max",
+        "dynamic_lr.increase_factor", "dynamic_lr.decrease_factor",
+        "dynamic_lr.upper_grad_norm", "dynamic_lr.lower_grad_norm",
+        "dynamic_lr.max_loss_jump", "dynamic_lr.smoothing",
+        "dynamic_lr.cooldown_steps", "dynamic_lr.warmup_steps",
+        "dynamic_lr.max_step_up_ratio", "dynamic_lr.max_step_down_ratio",
+        "dynamic_lr.auto_band", "dynamic_lr.band_sigma",
+        "dynamic_lr.band_floor", "dynamic_lr.band_ceiling",
+        "dynamic_lr.band_min_samples", "dynamic_lr.band_min_span",
+        "dynamic_lr.adaptive_smoothing", "dynamic_lr.smoothing_min", "dynamic_lr.smoothing_max",
+        "dynamic_lr.variance_reference", "dynamic_lr.adaptive_cooldown",
+        "dynamic_lr.cooldown_min", "dynamic_lr.cooldown_max",
+        "dynamic_lr.adaptive_loss", "dynamic_lr.loss_sigma",
+        "dynamic_lr.loss_min_samples", "dynamic_lr.loss_floor",
+        "dynamic_lr.guard_logging", "dynamic_lr.guard_floor_steps",
+        "dynamic_lr.guard_grad_multiplier", "dynamic_lr.guard_loss_patience",
+        "dynamic_lr.guard_loss_multiplier", "dynamic_lr.baseline_capture_steps",
+        "dynamic_lr.baseline_drift", "dynamic_lr.momentum_interval",
+        "dynamic_lr.momentum_gain", "dynamic_lr.momentum_decay",
+        "dynamic_lr.safety_interval", "dynamic_lr.safety_gain", "dynamic_lr.safety_scale",
+        
+        // Soft restart
+        "soft_restart.enabled", "soft_restart.loss_increase_threshold",
+        "soft_restart.max_step_window", "soft_restart.cooldown_steps",
+        
+        // Auto stop
+        "auto_stop.enabled", "auto_stop.plateau_patience", "auto_stop.plateau_min_delta",
+        "auto_stop.high_loss_threshold", "auto_stop.high_loss_patience",
+        
+        // Cache limits
+        "cache_limits.max_cached_batch", "cache_limits.max_cached_seq_len",
+        
+        // Micro validation
+        "micro_validation.enabled", "micro_validation.interval",
+        "micro_validation.batch_limit", "micro_validation.min_step", "micro_validation.prefer_short",
+        
+        // Guess aux
+        "guess_aux.enabled", "guess_aux.lambda", "guess_aux.min_confidence",
+        
+        // Shuffle
+        "shuffle.enabled", "shuffle.epochs",
+        
+        // Telemetry control
+        "telemetry_control.enabled",
+        "telemetry_control.spike_thresholds.mild",
+        "telemetry_control.spike_thresholds.moderate",
+        "telemetry_control.spike_thresholds.severe",
+        "telemetry_control.response.moderate_grad_scale",
+        "telemetry_control.response.moderate_cooldown_extension",
+        "telemetry_control.accumulation_guard.min_grad_for_nonzero_loss",
+        "telemetry_control.accumulation_guard.loss_threshold",
+        "telemetry_control.accumulation_guard.max_consecutive_zero_grad_steps",
+        "telemetry_control.regime_change.seq_len_threshold",
+        "telemetry_control.regime_change.suppression_steps",
+        "telemetry_control.volatility_damping.threshold",
+        "telemetry_control.volatility_damping.max_damping",
+        "telemetry_control.gradient_decay.threshold",
+        "telemetry_control.gradient_decay.max_boost",
+        "telemetry_control.progress_boost.threshold",
+        "telemetry_control.progress_boost.max_boost",
+        "telemetry_control.outlier.frequency_trigger",
+        "telemetry_control.outlier.persistence_trigger",
+        "telemetry_control.drift.anchor_sigma_multiplier",
+        "telemetry_control.soft_restart.cooldown_steps",
+        "telemetry_control.baseline.warmup_steps",
+        "telemetry_control.baseline.stabilization_steps",
+        "telemetry_control.logging.verbose",
+        "telemetry_control.logging.fail_loud_on_accumulation_bug",
+        "telemetry_control.plateau_noise.enabled",
+        "telemetry_control.plateau_noise.patience",
+        "telemetry_control.plateau_noise.variance_threshold",
+        "telemetry_control.plateau_noise.noise_std",
+        "telemetry_control.plateau_noise.proportional",
+        "telemetry_control.plateau_noise.cooldown",
+        "telemetry_control.plateau_noise.max_per_epoch",
+        
+        // Loss
+        "loss.label_smoothing.enabled", "loss.label_smoothing.epsilon",
+        "loss.focal.enabled", "loss.focal.gamma", "loss.focal.alpha",
+        "loss.preference.enabled", "loss.preference.beta",
+        "loss.distillation.enabled", "loss.distillation.temperature", "loss.distillation.lambda",
+        "loss.masking.enabled", "loss.masking.tag",
+        "loss.numeric_head.enabled", "loss.numeric_head.weight",
+        "loss.numeric_head.huber_delta", "loss.numeric_head.log_scale",
+        
+        // Stability overrides
+        "stability_overrides_enabled",
+        "stability_overrides.batch_size", "stability_overrides.max_seq_len",
+        "stability_overrides.max_tokens_per_batch", "stability_overrides.clip_abs",
+        "stability_overrides.clip_per_token", "stability_overrides.lr_min",
+        
+        // Scratch blocks
+        "scratch_blocks.enabled", "scratch_blocks.max_tokens_per_block",
+        "scratch_blocks.num_blocks", "scratch_blocks.use_write_combined",
+        
+        // Scratch block reasoning
+        "scratch_block_reasoning.enabled", "scratch_block_reasoning.atom_embedding_dim",
+        "scratch_block_reasoning.max_atoms", "scratch_block_reasoning.atom_scale",
+        
+        // Activation quantization
+        "activation_quantization.enabled",
+        "activation_quantization.apply_to_embeddings",
+        "activation_quantization.apply_to_encoder_outputs",
+        "activation_quantization.apply_to_layer_caches",
+        "activation_quantization.apply_to_qkv_cache",
+        "activation_quantization.apply_to_logits",
+        "activation_quantization.scale",
+        "activation_quantization.clip_min", "activation_quantization.clip_max",
+        "activation_quantization.zero_point", "activation_quantization.symmetric",
+        
+        // CUDA execution
+        "cuda_execution.single_stream_mode",
+        "cuda_execution.disable_async_frees",
+        "cuda_execution.synchronize_after_kernels",
+        
+        // Prediction comparison
+        "prediction_comparison.enabled", "prediction_comparison.interval",
+        "prediction_comparison.top_k", "prediction_comparison.max_positions",
+        "prediction_comparison.log_path",
+        
+        // Attention diagnostics
+        "attention_diagnostics.enabled", "attention_diagnostics.layer", "attention_diagnostics.head",
+        
+        // Log recorder
+        "log_recorder.enabled", "log_recorder.default_level"
+    };
+    
+    std::vector<std::string> missing;
+    
+    for (const auto& path : REQUIRED) {
+        if (!jsonPathExists(trainConfig, path)) {
+            missing.push_back(path);
+        }
+    }
+    
+    // Check gradient clip (accepts either name)
+    if (!trainConfig.contains("grad_clip_norm") && !trainConfig.contains("gradient_clip")) {
+        missing.push_back("grad_clip_norm (or gradient_clip)");
+    }
+    
+    if (!missing.empty()) {
+        std::ostringstream oss;
+        oss << "FATAL: ai_config.json training.config missing " << missing.size() << " required fields:\n";
+        for (const auto& m : missing) {
+            oss << "  - " << m << "\n";
+        }
+        oss << "\nRule 20: NO SILENT DEFAULTS. ALL training config fields MUST be explicitly set.\n";
+        oss << "TrainingHyperparameters has NO default values - every field must come from JSON.";
+        throw std::runtime_error(oss.str());
+    }
+}
+
 inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, TrainingHyperparameters& params) {
     if (!trainConfig.is_object()) {
         return;
     }
-
+    
     assignTrainingField(params.epochs, trainConfig, "epochs");
     assignTrainingField(params.seed, trainConfig, "seed");
     assignTrainingField(params.batch_size, trainConfig, "batch_size");
@@ -464,6 +684,8 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.max_seq_len, trainConfig, "max_seq_len");
     assignTrainingField(params.warmup_steps, trainConfig, "warmup_steps");
     assignTrainingField(params.log_interval, trainConfig, "log_interval");
+    assignTrainingField(params.atom_stats_interval, trainConfig, "atom_stats_interval");
+    assignTrainingField(params.atom_stats_max_seqs, trainConfig, "atom_stats_max_seqs");
     assignTrainingField(params.validation_interval, trainConfig, "validation_interval");
     assignTrainingField(params.checkpoint_interval, trainConfig, "checkpoint_interval");
     assignTrainingField(params.use_gpu, trainConfig, "use_gpu");
@@ -473,7 +695,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         const auto& dlr = *it;
         if (dlr.is_boolean()) {
             params.dynamic_lr_enabled = dlr.get<bool>();
-            params.dynamic_lr_autogenerate = true;
+
         } else if (dlr.is_object()) {
             params.dynamic_lr_enabled = dlr.value("enabled", params.dynamic_lr_enabled);
             params.dynamic_lr_autogenerate = dlr.value("auto_generate", params.dynamic_lr_autogenerate);
@@ -568,6 +790,12 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
             params.micro_validation_min_step = micro.value("min_step", params.micro_validation_min_step);
             params.micro_validation_prefer_short = micro.value("prefer_short", params.micro_validation_prefer_short);
         }
+    }
+
+    if (auto it = trainConfig.find("atom_stats"); it != trainConfig.end() && it->is_object()) {
+        const auto& atom_stats = *it;
+        params.atom_stats_interval = atom_stats.value("interval", params.atom_stats_interval);
+        params.atom_stats_max_seqs = atom_stats.value("max_seqs", params.atom_stats_max_seqs);
     }
 
     if (auto it = trainConfig.find("single_batch"); it != trainConfig.end()) {
@@ -786,20 +1014,32 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
                 }
             }
         }
+
+        if (auto num_it = loss_cfg.find("numeric_head"); num_it != loss_cfg.end()) {
+            const auto& num = *num_it;
+            if (num.is_boolean()) {
+                params.loss_numeric_head_enabled = num.get<bool>();
+            } else if (num.is_object()) {
+                params.loss_numeric_head_enabled = num.value("enabled", params.loss_numeric_head_enabled);
+                params.loss_numeric_head_weight = num.value("loss_weight",
+                    num.value("weight", params.loss_numeric_head_weight));
+                params.loss_numeric_head_huber_delta = num.value("huber_delta", params.loss_numeric_head_huber_delta);
+                params.loss_numeric_head_log_scale = num.value("log_scale", params.loss_numeric_head_log_scale);
+            }
+        }
     }
     
-    // Load stability overrides
+    // Load stability overrides - ALWAYS parse values even if disabled
+    // (Phase1_Startup copies them unconditionally, so they must be initialized)
     params.stability_overrides_enabled = trainConfig.value("stability_overrides_enabled", params.stability_overrides_enabled);
-    if (params.stability_overrides_enabled) {
-        if (auto it = trainConfig.find("stability_overrides"); it != trainConfig.end() && it->is_object()) {
-            const auto& stab = *it;
-            params.stability_override_batch_size = stab.value("batch_size", params.stability_override_batch_size);
-            params.stability_override_max_seq_len = stab.value("max_seq_len", params.stability_override_max_seq_len);
-            params.stability_override_max_tokens_per_batch = stab.value("max_tokens_per_batch", params.stability_override_max_tokens_per_batch);
-            params.stability_override_clip_abs = stab.value("clip_abs", params.stability_override_clip_abs);
-            params.stability_override_clip_norm = stab.value("clip_per_token", params.stability_override_clip_norm);
-            params.stability_override_lr_min = stab.value("lr_min", params.stability_override_lr_min);
-        }
+    if (auto it = trainConfig.find("stability_overrides"); it != trainConfig.end() && it->is_object()) {
+        const auto& stab = *it;
+        params.stability_override_batch_size = stab.value("batch_size", params.stability_override_batch_size);
+        params.stability_override_max_seq_len = stab.value("max_seq_len", params.stability_override_max_seq_len);
+        params.stability_override_max_tokens_per_batch = stab.value("max_tokens_per_batch", params.stability_override_max_tokens_per_batch);
+        params.stability_override_clip_abs = stab.value("clip_abs", params.stability_override_clip_abs);
+        params.stability_override_clip_norm = stab.value("clip_per_token", params.stability_override_clip_norm);
+        params.stability_override_lr_min = stab.value("lr_min", params.stability_override_lr_min);
     }
     
     // Load scratch blocks configuration
@@ -870,7 +1110,10 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
 
 inline bool populateTrainingHyperparametersFromConfig(const nlohmann::json& config, TrainingHyperparameters& params) {
     if (config.contains("training") && config["training"].contains("config")) {
-        applyTrainingConfigObject(config["training"]["config"], params);
+        const auto& trainConfig = config["training"]["config"];
+        // Rule 20: Validate required fields BEFORE parsing (fail fast)
+        validateTrainingConfigJson(trainConfig);
+        applyTrainingConfigObject(trainConfig, params);
         return true;
     }
     return false;
@@ -904,6 +1147,8 @@ inline bool populateTokenizerConfigFromConfig(const nlohmann::json& config, Toke
 
     assignTrainingField(tokenizer_config.vocab_size, tok, "vocab_size");
     assignTrainingField(tokenizer_config.max_length, tok, "max_length");
+    assignTrainingField(tokenizer_config.min_subword_freq, tok, "min_subword_freq");
+    assignTrainingField(tokenizer_config.prune_during_mining, tok, "prune_during_mining");
     assignTrainingField(tokenizer_config.model_type, tok, "model_type");
     assignTrainingField(tokenizer_config.add_bos, tok, "add_bos");
     assignTrainingField(tokenizer_config.add_eos, tok, "add_eos");
@@ -916,6 +1161,7 @@ inline bool populateTokenizerConfigFromConfig(const nlohmann::json& config, Toke
     assignTrainingField(tokenizer_config.enable_parallel_tokenization, tok, "enable_parallel_tokenization");
     assignTrainingField(tokenizer_config.parallel_threshold, tok, "parallel_threshold");
     assignTrainingField(tokenizer_config.enable_char_fallback, tok, "enable_char_fallback");
+    assignTrainingField(tokenizer_config.enable_byte_fallback, tok, "enable_byte_fallback");
     assignTrainingField(tokenizer_config.expected_checksum, tok, "expected_checksum");
     assignTrainingField(tokenizer_config.save_text_vocab, tok, "save_text_vocab");
 

@@ -1232,8 +1232,7 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
 
                 if (preprocessor.isDuplicate(chunk)) continue;
 
-                std::string with_tokens = preprocessor.addSpecialTokens(chunk);
-                cleaned_texts.push_back(with_tokens);
+                cleaned_texts.push_back(chunk);
                 if (raw_chunks.size() > 1 || clean_chunks.size() > 1) chunks_created++;
             }
         }

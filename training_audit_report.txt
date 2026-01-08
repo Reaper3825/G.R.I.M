@@ -1,143 +1,318 @@
 ================================================================================
 GRIM TRAINING DATA QUALITY AUDIT
 ================================================================================
-Date: 2025-12-16 22:24:58
+Date: 2026-01-02 20:07:20
 Data file: D:/G.R.I.M/resources/models/GRIM-text/training/data/training_data.grmt
 Vocab file: D:/G.R.I.M/resources/models/GRIM-text/training/data/vocab.txt
-Total sequences: 39347
-Sampled: 10
+GRMT format version: 4
+Numeric side-channel: decoded
+Text feature dimension: 16 (FP16)
+Total sequences: 2081
+Sampled: 20
 ================================================================================
 
 CLASSIFICATION SUMMARY
 --------------------------------------------------------------------------------
-  prose               :   4 ( 40.0%)  [weight: 1.0×]
-  code                :   3 ( 30.0%)  [weight: 1.0×]
-  documentation       :   2 ( 20.0%)  [weight: 1.0×]
-  mixed_junk          :   1 ( 10.0%)  [weight: 0.3×]
+  mixed_junk          :  12 ( 60.0%)  [weight: 0.3×]
+  prose               :   4 ( 20.0%)  [weight: 1.0×]
+  code                :   4 ( 20.0%)  [weight: 1.0×]
+
+ATOM STATISTICS (ALL SEQUENCES)
+--------------------------------------------------------------------------------
+Atom token range: [256, 512)
+Total sequences: 2081
+Total tokens: 1107204
+Total atoms: 91657
+Overall atom ratio: 0.082782
+Avg atoms per seq: 44.04
+Avg atom ratio per seq: 0.081835
+Atoms per sequence (count): min=0 p50=36.00 p90=90.00 p95=109.00 p99=177.00 max=285
+Atom ratio per sequence: min=0.000000 p50=0.072250 p90=0.138889 p95=0.173077 p99=0.250000 max=0.396078
+
+TEXT FEATURE STATISTICS (GRMT v4)
+--------------------------------------------------------------------------------
+Feature dimension: 16 (FP16 per token)
+Total tokens: 1107204
+Tokens with features: 91657
+Feature coverage: 8.2782%
+Avg features per seq: 44.04
+Features per seq: min=0 p50=36.0 p90=90.0 max=285
+Category distribution:
+  NUMERIC     :    86523 ( 94.4%)
+  STRUCTURAL  :     4851 (  5.3%)
+  TEMPORAL    :      283 (  0.3%)
+  STRING      :        0 (  0.0%)
+  UNKNOWN     :        0 (  0.0%)
 
 INDIVIDUAL SAMPLES
 ================================================================================
 
 ================================================================================
-SAMPLE 1/10 - Sequence #2167
+SAMPLE 1/20 - Sequence #17
 ================================================================================
-Tokens: 257
-Classification: [documentation]
-Score breakdown: {'boilerplate': 0, 'documentation': 4, 'prose': 3, 'code': 2, 'junk': 0}
+Tokens: 991
+Classification: [mixed_junk]
+Score breakdown: {'boilerplate': 0, 'documentation': 2, 'prose': 3, 'code': 2, 'junk': 5}
 
 Decoded text (first 1500 chars):
 --------------------------------------------------------------------------------
-As an example, one model proposed for the plume activity on Enceladus suggests that a sthe observed abundances of water and other species in the plume can be explained by clathrate degassing (Kieffer et al., <ATOM_URL>). Solid-state convection, typically thought to oc- cur exclusively in large planetary objects, may play a role in driving activity on Enceladus (Roberts & Nimmo <ATOM_URL>; Barr <ATOM_URL>). SLRI heating and mantle porosity have been envoked to explain the early thermal evolution of Iapetus (Castillo-Rogez et al., <ATOM_URL>). A removal of the artificial boundary between small body and planetary satellite models is well justified by recent spacecraft observations. Improved numerical methods, e.g., coupled models of hydrothermal and thermal convection (e.g., Travis & Schubert <ATOM_URL>) can help remove the boundary between these fields. However, uncertainties about the material properties of ice and rock at planetary con- ditions have led to uncertainties about which physical processes occur inside a given body. For example, solid-state convection is difficult to start, but can occur in the <ATOM_URL> kilometer- thick ice mantle of Enceladus (Barr & McKinnon <ATOM_URL>). McCord and Sotin (<ATOM_URL>) also demonstrated that convection onset is possible in the case of Ceres. Castillo-Rogez
+stars near the target to have a modal 2 <PATH> of unity for a constant fit. As in Fleming et al. (2010), the targets 2 <PATH> was still not unity after this adjustment based on the ensemble, so we further scaled the targets error bars by a small amount ( 10%) to force 2 <PATH>=1 The final KELT light curve has 5036 data points taken between Nov. 15, 2006 and Jan. 17, 2010, with typical relative photometric precision of 1%. The Tycho catalog magnitudes (Hg et al. 2000) of our targets are generally unreliable at V >11 In particular, we find the error bars can sometimes be underestimated at the level of several tenths of a magnitude, resulting in colors that do not agree with spectroscopically-determined values of Teff . Therefore, we obtained absolute photometry to supersede and supplement the catalog colors. TYC 1240-945-1 was observed in BV under photometric conditions by the privately- owned Hereford Arizona Observatory (HAO) 11-inch on Jul. 29 and 31, 2009, together with a program of standards from Landolt (1992). It was observed again by this telescope in g r i under photometric conditions on Jan. 12, 2010, together with a program of Landolt standards that had u g r i z calibrations from Smith et al. (2002). This telescope is equipped with a 1.5k 1k CCD with a plate scale of 0.81" per pixel. For each program night, the standard star instrumental magnitudes were fit with a generic photometric equation (see Gary 2010 for more information on calibration procedures at HAO), and
+... (truncated, total 4846 chars)
+
 --------------------------------------------------------------------------------
 
 ================================================================================
-SAMPLE 2/10 - Sequence #3870
+SAMPLE 2/20 - Sequence #34
 ================================================================================
-Tokens: 257
+Tokens: 754
+Classification: [mixed_junk]
+Score breakdown: {'boilerplate': 0, 'documentation': 2, 'prose': 3, 'code': 4, 'junk': 5}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+nomenologies, nor by recent extensions (Boldyrev 2005). helicity K|HK |<PATH> for the Pm = 0.25 run. As it can be seen, the Changing the magnetic Prandtl number does not change the relative helicity is less than 1% for all scales of these simulations. power-law index for the kinetic energy. We note however 2 major Moreover, this quantity is strongly fluctuating and its sign is not effects: the overall spectra amplitudes are reduced and the dissi- well defined3 pation scales move to larger scale as one reduces Pm. These two These results tend to indicate that magnetic helicity is dy- effects are expected since it is known that smaller Pm turbulence namically unimportant in the unstratified simulations presented is associated with a smaller transport efficiency and therefore a here and that MRI saturation is not related to a magnetic quench- weaker injection of energy in the cascade. This effect is con- ing effect due to magnetic helicity accumulated at large scale. firmed by the injection spectra (Fig. 2) which are significantly This was to be expected in the first place as unstratified shearing reduced at smaller Pm. boxes (both with and without mean field) are mirror symmetric. We note that the energy injection peaks at the largest scale Note however that this picture might change when stratification of the box, although injection still exist at k 10 Therefore, is included. although a power-law spectrum is found for 2 10). on Fig. 5 Standard deviations are shown for kinetic 
+... (truncated, total 4026 chars)
+
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 3/20 - Sequence #95
+================================================================================
+Tokens: 845
+Classification: [mixed_junk]
+Score breakdown: {'boilerplate': 0, 'documentation': 0, 'prose': 3, 'code': 4, 'junk': 5}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+(au). At this distance from its 0.026-L parent star, the planet 10 0 (30 km s1 ) and a throughput of between 1.2% and indeed receives 30 0 times more flux than Neptune receives 2% (see Proffitt et al. 2010). The data were recorded in time-tag from the Sun, and has a blackbody brightness temperature of mode, and treated with the version 2.27 of CALSTIS, the STIS T B = 717 35 K (Demory et al. 2007). Using the Spitzer Space data pipeline. CALSTIS performs all the standard data reduction Telescope, Gillon et al. (2007b) inferred a planet mean density tasks (such as bias and dark subtraction, flat fielding, and wave- of 1.7 g cm3 , too weak to be that of a body composed ex- length and flux calibrations; see Dressel et al. 2007 for more clusively of water ice, so that GJ 436b must possess a hydro- details). For spectroscopy, the pipeline end-products for a single gen<PATH> envelope that would account for 10% to 20% of exposure are the two-dimensional spectral image and the one- the planets mass (Fortney et al. 2007; Figueira et al. 2009). The dimensional spectrum. detection of this envelope with transmission spectroscopy could Figure 1 shows the geometrically rectified, wavelength-, and validate the internal structure models predicting its presence. flux-calibrated 2-D spectral image (X2D). The spectral disper- To assess this possiblity, it is necessary to derived both the sion is along the x-axis. In this image, the stellar Ly emission stellar Ly emission line profile and brightne
+... (truncated, total 4054 chars)
+
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 4/20 - Sequence #317
+================================================================================
+Tokens: 969
+Classification: [prose]
+Score breakdown: {'boilerplate': 2, 'documentation': 4, 'prose': 8, 'code': 4, 'junk': 5}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+but that the estimates of Teff differed by twice the formal error. Hence we elected to adopt the results of the SME analysis for our final values, but we increased the uncertainty on Teff to 100 K to reflect the difference between the two estimates. We list our estimates for the spectroscopically determined parameters in Table 1 30 Table 5 Keck HIRES Radial Velocity Measurements for Kepler-20 Date of Obs. [BJD] Radial Velocity [m s1 ] Uncertainty [m s1 ]a 2455074 5.86 3.78 2.45507e+06 2.94 3.74 2455076 1.09 3.75 2455077 2.57 3.84 2455078 11.08 3.82 2455082 1.51 3.83 2.45508e+06 9.53 3.78 2455084 7.17 3.84 2455085 4.59 3.88 2.45513e+06 14.15 3.88 2455314 2.05 2.54 2455320 9.47 2.59 2455321 4.55 2.56 2455345 8.71 2.82 2455351 0.41 2.7 2455352 1.84 2.5 2455373 1.71 2.62 2455375 16.2 2.62 2455378 2.59 2.53 2455381 0.62 2.55 2455403 7.59 2.96 2455408 10.15 2.64 2455412 13.79 2.65 2455414 2.6 2.59 2.45543e+06 4.81 2.46 2.45544e+06 10.04 2.58 2.45544e+06 10.94 2.5 2.4555e+06 2.94 3.34 2.45552e+06 6.56 2.63 2455724 2.35 2.64 a Includes jitter of 2 m s1 31 4 Validation of the Planets Kepler-20b, Kepler-20c, and Kepler-20d While the analysis of the radial-velocity (3.3) data yielded detections for Kepler-20b and Kepler-20c, we found that our analyses of the bisector spans were not sufficient to confirm the planetary origin of those variations. Moreover, for Kepler-20d, K70.04, and K70.05 there is no Doppler detection. We therefore rely on a fundamentally different technique to establis
+... (truncated, total 4868 chars)
+
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 5/20 - Sequence #596
+================================================================================
+Tokens: 112
+Classification: [prose]
+Score breakdown: {'boilerplate': 0, 'documentation': 0, 'prose': 5, 'code': 0, 'junk': 0}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+results are displayed in Table 2 for i = 0, 1, 2, and j = 0, 1, 2 In the residuals, however, we can see that the maximum of de- From them, one can derive the quantities present in the expres- viation occurs close to the limb, more exactly, when the edge of sions of the flux fraction f , the subplanet velocity v p and the the planet is tangent to that of the star. Indeed, at the border of width p : " the star, the limb-darkening becomes steeper and steeper, and the derivatives x I (x, y) and y I (x, y) even go to infinity for
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 6/20 - Sequence #639
+================================================================================
+Tokens: 771
 Classification: [code]
-Score breakdown: {'boilerplate': 0, 'documentation': 0, 'prose': 0, 'code': 3, 'junk': 0}
+Score breakdown: {'boilerplate': 0, 'documentation': 2, 'prose': 3, 'code': 6, 'junk': 5}
 
 Decoded text (first 1500 chars):
 --------------------------------------------------------------------------------
-<ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> (k) N = <ATOM_URL>; fd = <ATOM_URL>; fI = <ATOM_URL> (o) N = <ATOM_URL>; fd = <ATOM_URL>; fI = <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> simulation No. <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> (l) N = <ATOM_URL>; fd = <ATOM_URL>; fI = <ATOM_URL> (p) N = <ATOM_URL>; fd = <ATOM_URL>; fI = <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> simulation No. <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> (m) N = <ATOM_URL>; fd = <ATOM_URL>; fI = <ATOM_URL> (q) N = <ATOM_URL>; fd = <ATOM_URL>; fI = <ATOM_URL> <ATOM_URL>
+parameter SPH was set to unity in these simulations, while SPH was set to zero. The disc sound speed was crudely modeled as a constant equal to 0.3 1<PATH> ap = 0.43 p rH throughout. The disc aspect ratio was H<PATH> 0.16 at R = 0.4RH (in dimensionless units of these equations RH = 31<PATH> ), where free particle orbit crossings occur. The fluid equations were taken in the Hill approximation, following the force equation (30). The particles were initially distributed so that surface density was initially (r, ) 1<PATH> in an annulus Rin 0.35rH . On the other hand, the cumulative gravitational torque on the disc inside the orbit crossing radius is actually positive. This does not mean that the gas gains angular momentum in this region. The viscous torques compensate by transporting the angular momentum out of this region so that the overall torque is negative. The negative cumulative gravitational disc torque is achieved somewhat outside the orbit crossing radius. A small amount of disc mass, less than 10%, that is located outside that Tidal Truncation of Circumplanetary Discs 17 Figure 9 The particle distribution in space for the two SPH simulations corresponding to those with the initial configuration in Fig. 7 at a time of 6 planetary orbital periods. 1 0.5 MHrL, THrL 0 -0.5 -1 -1.5 0 0.2 0.4 0.6 0.8 r Figure 10 Left: Cumulative disc mass (solid) in units of total disc mass Md and cumulative gravitational torque (dashed) on the disc in units of 0.01Md rH2 2 starting at the d
+... (truncated, total 4158 chars)
+
 --------------------------------------------------------------------------------
 
 ================================================================================
-SAMPLE 3/10 - Sequence #7145
+SAMPLE 7/20 - Sequence #773
 ================================================================================
-Tokens: 258
-Classification: [code]
-Score breakdown: {'boilerplate': 0, 'documentation': 4, 'prose': 3, 'code': 6, 'junk': 0}
+Tokens: 145
+Classification: [prose]
+Score breakdown: {'boilerplate': 0, 'documentation': 0, 'prose': 8, 'code': 0, 'junk': 0}
 
 Decoded text (first 1500 chars):
 --------------------------------------------------------------------------------
-days for a Jupiter- mass planet orbiting VB <ATOM_URL> with = <ATOM_URL><ATOM_UUID> The fractional deviation due to the magnification <ATOM_URL> of the dim background star is small, so that deep observations are required. Planets in the zone for resonant lensing: Orbital motion is still important enough to significantly increase the probability of detection (see Figure <ATOM_URL> of Paper I). The magnification tends to be large, making it easier to identify the magnification of the dim background star. As is the case for close-orbit planets, frequent observations will either discover planets in the zone for resonant lensing, or else will place strong limits on their existence. Wide-orbit planets: There is a high probability of discovering wide-orbit planets during an interval of weeks from the closest approach. Observing Strategy: While intensive monitoring of a system in which the distance and time of approach is uncertain cannot be justified, a discovery would be important. We therefore propose a compromise between the scientific potential and the uncertainty asso- ciated with the event. First we consider the questions of detectability in more detail. If telescopes at approximately ten locations around the globe can each observe the source star <ATOM_URL> <ATOM_URL> times per night, a reasonably densely sampled light curve can be developed. Because the background star is so dim, the signal-to-noise ratios required to reliably mea- sure the magnification may require meter-cl
-... (truncated, total 1529 chars)
+ular hydrogen is 1, i.e. at a column density ing efficiency (Watson et al. 1981). EUV is scaled N = 2.3 1019 m2 . The exobase temperature Te to different ages and M stars assuming propor- and Jeans parameter = GMp /((rp + he )kTe ) tionality to soft X-ray flux (Penz et al. 2008; are calculated by balancing the globally-averaged Penz & Micela 2008). EUV heating qEUV with heat lost to conduction, At sufficiently high EUV flux, the atmosphere radiative cooling, and escape. At > 2.8 we use expands to the scale of the planet, gravity at the 4 exobase decreases, no steady-state solution to the sphere, the effect on the adiabat is slight, amount- temperature profile exists, and
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 8/20 - Sequence #812
+================================================================================
+Tokens: 717
+Classification: [mixed_junk]
+Score breakdown: {'boilerplate': 0, 'documentation': 4, 'prose': 3, 'code': 2, 'junk': 5}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+the expansion of the envelope, while the Earths ets around post-MS stars. Their focus was, how- fate remained inconclusive, depending on uncon- ever, on planets around white dwarfs that survive strained parameters for tide. Other effects such engulfment by AGB stars. Of interest in this pa- as the gravitational drag, ram pressure, wind- per is planets around RGB or HeB stars that have accretion (Vila 1984; Duncan & Lissauer 1998), not entered the AGB phase yet. 2 This paper is organized as follows. In section 2, a given mass. In the above equation, a is the semi- we first describe our physical model and computa- major axis, t is time, Mp is the planets mass, M tion method to simulate the orbital evolution of a and R are the mass and radius of the host star, planet around its host star that is evolving off the respectively, k is the apsidal motion constant, and MS. In section 3, we derive a critical semimajor T is the eddy turnover timescale (see below). The axis beyond which planets survive the host stars first term on the right-hand side represents the ef- RGB<PATH> phase, and investigate its sensitivity to fect of stellar tide (Hut 1981). Since RGB stars stellar mass and other parameters. In section 4, are slow rotators, we assume no stellar rotation, we compare the derived survival limit with mea- which means that the stellar tide always causes sured semimajor axes of the detected planets. The orbital decay of the planet. comparison suggests that planet engulfment may As f
+... (truncated, total 3609 chars)
 
 --------------------------------------------------------------------------------
 
 ================================================================================
-SAMPLE 4/10 - Sequence #8738
+SAMPLE 9/20 - Sequence #814
 ================================================================================
-Tokens: 257
+Tokens: 689
+Classification: [prose]
+Score breakdown: {'boilerplate': 0, 'documentation': 4, 'prose': 8, 'code': 2, 'junk': 5}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+a few planets are smaller than acrit , those error 0.4 n=2 bars extend out to the curves of acrit . Second, 0.3 however, one realizes that on the high-mass side 1.5 1.6 1.7 1.8 1.9 2 2.1 2.2 2.3 2.4 2.5 2.6 2.7 2.8 2.9 3 3.1 3.2 3.3 (i.e., M > 2.1M), planets exist far above acrit . Host Stars Initial Mass [solar mass] There seems to be a gap between the theoretical survival-limit and the observed existence-limit of Fig. 5 The impacts of uncertainties in turbulent viscosity and eccentricity on the critical initial semi- planets. Thus, our comparison with observation major axes. The three solid lines show the results with suggests that planet engulfment by host stars may different frequency-dependent turbulent viscosities, not be the main reason for the lack of SPGPs, at namely, the power index, n, of f = min[1, (P<PATH> )n ] least, for M > 2.1M . Note that we have to keep being 0, 1, and 2 The dashed line corresponds to the in mind that the number of planets may be still case with constant quality factor Q = 105 (see text statistically insufficient. for more detail). The dash-dotted line corresponds to The presence of the gap is not due to observa- the case with finite eccentricity of 0.25 (and n = 2). tional biases. Clump giants typically show intrin- In those calculations, Z = 0.02 and Mp = 20MJ . The sic radial-velocity variability of = 1020 m s1 symbols with error bars represent the semimajor axes of the planets detected around GK clump giants. (Sato et al. 2005). Given th
+... (truncated, total 3391 chars)
+
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 10/20 - Sequence #858
+================================================================================
+Tokens: 396
 Classification: [mixed_junk]
 Score breakdown: {'boilerplate': 0, 'documentation': 2, 'prose': 3, 'code': 0, 'junk': 5}
 
 Decoded text (first 1500 chars):
 --------------------------------------------------------------------------------
-). For all materials in this pressure regime we simply use the VE or BME. For a derivation of these EOSs, see Poirier (<ATOM_URL>). The VE is <ATOM_URL><ATOM_UUID> " <ATOM_URL><ATOM_UUID> # ( " <ATOM_URL><ATOM_UUID> #) <ATOM_URL> P = 3K<ATOM_URL> <ATOM_URL> exp (K <ATOM_URL> <ATOM_URL>) <ATOM_URL> , (<ATOM_URL>) <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> and the third-order finite strain BME is " <ATOM_URL><ATOM_UUID> # ( " #) <ATOM_URL><ATOM_UUID> <ATOM_URL><ATOM_UUID> <ATOM_URL> <ATOM_URL> P = K<ATOM_URL> <ATOM_URL> + (K <ATOM_URL> <ATOM_URL>) <ATOM_URL> . (<ATOM_URL>) <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> Where <ATOM_URL> is the reference density, K<ATOM_URL> = V (P <ATOM_UUID> ) P =<ATOM_URL> is the bulk modulus of the material, K<ATOM_URL> = (K<ATOM_UUID> ) P =<ATOM_URL> is its pressure derivative. Their values for the materials used in this paper are summarized in Table <ATOM_EMAIL> The VE is used for the -phase of iron because it is more suitable than the BME for extrapolation to high pressures (Poirier <ATOM_URL>). The third-order BME is used for other materials. <ATOM_EMAIL> Carbon Model There is an assumption used in modeling the interior structure of solid exoplanets: their constituents are similar to the terrestrial planets in our solar system. They have an iron core and a silicate envelope for the differentiated model. But based on current observation
+tional information including parameters for the mass-independent quantities. According to 10 Valencia & OConnell (2009), we assume that a more massive planet is likely to convect in a plate tectonic regime similar to Earth. Thus, the more massive the planet, the higher the Rayleigh number that controls convection, the thinner the top boundary layer (lithosphere), and the higher the convective velocities. We recognize that there is an ongoing debate about the onset and significance of plate tectonics on super-Earth planets. On one hand, Stein et al. (2004) and ONeill & Lenardic (2007) pointed out that there might be in an episodic or stagnant lid regime, considering that increasing the planetary radius acts to decrease the ratio of driving to resisting stresses, an effect that appears to be robust when increases in planetary gravity are included. Other thermodynamic processes that peak at different planet masses (e.g., Noack & Breuer 2011) operate as well. On the other hand, Valencia et al. (2007) and Valencia & OConnell (2009) argued that planet tectonics of super-Earths should be considered inevitable. Their models show that as the planetary mass increases, the shear stress to overcome resistence to plate thickness increases while the plate thickness decreases, thereby enhancing plate weakness. These effects contribute favorably to the subduction of the lithosphere (like on Earth), a crucial component of plate tectonics. Noting that in the framework of our model, a plate- te
+... (truncated, total 2159 chars)
+
 --------------------------------------------------------------------------------
 
 ================================================================================
-SAMPLE 5/10 - Sequence #21017
+SAMPLE 11/20 - Sequence #1032
 ================================================================================
-Tokens: 257
-Classification: [prose]
-Score breakdown: {'boilerplate': 0, 'documentation': 2, 'prose': 3, 'code': 2, 'junk': 0}
+Tokens: 743
+Classification: [mixed_junk]
+Score breakdown: {'boilerplate': 0, 'documentation': 2, 'prose': 3, 'code': 2, 'junk': 5}
 
 Decoded text (first 1500 chars):
 --------------------------------------------------------------------------------
-% of the total planet mass, at <ATOM_URL>% Bayesian confidence. The most water rich composition within the <ATOM_URL>% credible region that have iron abundances below the (<ATOM_URL>) constraints from silicate collisional stripping simulations is <ATOM_URL>% H<ATOM_URL> O. Finally, considering the possibility for a H<ATOM_UUID> gas layer on Kepler-36b, we find that Kepler- 36b could have no more than <ATOM_URL>% of its mass in solar composition H<ATOM_UUID> layer. <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> Figure S<ATOM_URL>: Two-parameter joint posterior distributions of the primary model parameters (ex- cluding contamination parameters; see <ATOM_EMAIL><ATOM_EMAIL>). The densities are plotted logarithmically in order to elucidate the nature of the parameter correlations. The indices listed along the diagonal indicate which parameter is associated with the corresponding row and column. The parameter name corresponding to a given index is indicated in Table S<ATOM_URL> in the Index column. <ATOM_URL> Formally nonHill Stable (sample of <ATOM_URL>,<ATOM_URL>) <ATOM_URL> <ATOM_URL> (deg) <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> <ATOM_URL> (deg) <ATOM_EMAIL> <ATOM_EMAIL> e<ATOM_URL> <ATOM_EMAIL> <ATOM_EMAIL> <ATOM_EMAIL> <ATOM_EMAIL> <ATOM_EMAIL> <ATOM_EMAIL> <ATOM_EMAIL> <ATOM_EMAIL> e<ATOM_URL> Figure
-... (truncated, total 1523 chars)
+at earlier times, see 4.2. tadvect = R<PATH> . (18) Finally, we report the results for our dust-distribution The final timescale to consider is the timescale for turbu- simulations as a map of dust-to-gas enhancement, E, within lent<PATH> redistribution of the particle ensemble, which radial and temporal space, (R, t). While our simulations for Figure 2 we define as report mass values for each radial grid-point (600 total) of our model disc and at each output time-step, usually tdiffuse = R2 <PATH> . (19) t = 200 years, we present our results at lower (R, t) res- From the timescales plotted in Figure 2, one sees that olution in order to reduce noise from our particle-ensemble there are several important trends to consider. representation of the dust distribution. We present results using mass radially summed across three grid cells for 200 (i) The shortest time-scale is that for the appearance of radial grid-points of results output, and averaged across usu- these 0.2 mm grains within the disc, out to at least a few ally 250 time-steps for a results t = 5 104 years. tens of AU. At any one radius, then, it would be reasonable c 0 RAS, MNRAS 0, 0 Particle evolution in protoplanetary discs 7 to assume that the initial phases of grain growth are effec- tively instantaneous. However, when we consider the disc as 0.2 mm 6106 a whole, we find that even our lower limit on the growth time scale in the outer disc exceeds other time scales in the inner disc. This implies that by the tim
+... (truncated, total 3769 chars)
 
 --------------------------------------------------------------------------------
 
 ================================================================================
-SAMPLE 6/10 - Sequence #23124
+SAMPLE 12/20 - Sequence #1077
 ================================================================================
-Tokens: 257
-Classification: [prose]
-Score breakdown: {'boilerplate': 0, 'documentation': 0, 'prose': 3, 'code': 2, 'junk': 0}
+Tokens: 233
+Classification: [code]
+Score breakdown: {'boilerplate': 0, 'documentation': 2, 'prose': 3, 'code': 4, 'junk': 0}
 
 Decoded text (first 1500 chars):
 --------------------------------------------------------------------------------
-the pressure remains constant in each layer and the temperature in the <ATOM_URL> bar pressure regime), which is a simple conse- varies according to the longitude-dependent profiles calculated quence of the eastward transport of heat. An eastward jet and with the radiative model. We start the integration at the substel- the resulting shift of the thermal emission peak was predicted lar meridian with a chemical composition calculated at chemi- by Showman & Guillot (<ATOM_URL>) to be a common phenomenon cal equilibrium with solar elemental abundances (Asplund et al. in hot Jupiter atmospheres. The shift was later observed in the <ATOM_URL>) and the (T, p) profile shown in the bottom panel of Fig. <ATOM_EMAIL> thermal phase curve of HD 189733b by Knutson et al. (<ATOM_URL>). The chemical equilibrium calculations are done with a code that In the same vein, we find that the temperature is not homoge- minimizes the Gibbs energy following the algorithm of Gordon neous in the nightside (which would be the case in the absence & McBride (<ATOM_URL>). The choice of the initial composition at thee anof winds), but rather inhomogeneous, with the coldest regions chemical equilibrium values of hot regions such as the substellar located close to the morning limb (see mid and bottom panels meridian results very convenient as it accelerates considerably of Fig. <ATOM_URL>). A second effect worth to note is that the longitudinal the convergence towards a periodic state. The reasons for that
+In the Monte Carlo model, the trajectory of motion for P0 is determined from (4) by providing its initial position at the distance R = Resc (m1 ) from P1 at t = 0 The initial velocity of P0 with respect to P1 at the distance R is chosen from a distribution of weak escape velocities (see Figure 2). P0 then weakly escapes P1 . The initial positions and velocities of P1 and P1 are also given at t = 0 Their initial separation distance depends on the cluster properties and is a function of the number of stars in the cluster N. After the initial positions and velocities of P0 , P1 , P1 are given, the trajectory of P0 is propagated for t > 0 We search for the condition of the first weak capture of P0 with respect to P1 , given by a negative value of the Kepler energy of P0 with respect to P1 , E1 0, as P0 escapes P1 in three-dimensions, it can approach P1 from any direction. We search for weak capture with respect to P1 in the time interval t [0, Tmax ]Myr, where Tmax is the estimated age of the cluster Tmax = T = 322.5 Myr. The condition for capture is a negative value of the two-body Kepler energy of P0 with respect to P1 , E1
 --------------------------------------------------------------------------------
 
 ================================================================================
-SAMPLE 7/10 - Sequence #25957
+SAMPLE 13/20 - Sequence #1129
 ================================================================================
-Tokens: 258
+Tokens: 298
 Classification: [code]
 Score breakdown: {'boilerplate': 0, 'documentation': 0, 'prose': 3, 'code': 4, 'junk': 0}
 
 Decoded text (first 1500 chars):
 --------------------------------------------------------------------------------
-, we ultimately detrend our data using only the slit loss term because our precision is not high enough to justify using additional correction terms.. <ATOM_URL> <ATOM_EMAIL> Needle in a Haystack: Searching for Transit Signatures We are unable to measure GJ 1214bs transit light curve directly, because this signal is buried in the slit loss term we remove from all spectral time series. This removal has the effect of subtracting a constant offset value C from the transmission spectrum. The overall shape of the spectrum is therefore unchanged, and we can still hope to measure the modified transmission spectrum i.e., d = (RP <ATOM_UUID> )<ATOM_URL> C. If GJ 1214b has a cloudless, H<ATOM_URL> <ATOM_UUID> atmosphere we expect substantial variations in d across the wavelength ranges we observe (cf. Figure <ATOM_URL>; also Miller-Ricci & Fortney <ATOM_URL>); but if the planet has a denser atmosphere (and thus a smaller atmospheric scale height) we expect to see an essentially flat transit spectrum in this case we might see no transit signature in any wavelength channel. Clouds would further suppress any spectral features occuring below a given altitude. Photon noise alone precludes detection of the residual differential transit signal in any single spec- tral line. Even when examining time series that average over broad spectral regions (e.g., molecular bandheads) we are unable to detect any transit-like
+cipal components analysis on X and return the The decorrelation using PCA (with or without clipping of principal component coefficients. a few bad pixels) greatly reduces the effect of lamp vari- ations and other noise sources, achieving a noise floor of We generate the new state, X, using a truncated 50 ppm for a single spot. Data sets from different ex- set of m principal component vectors (m n, and perimental runs shown in Figures 10-13 show single spot m is typically 3-4). The normalized light curve Z is noise floors between 30-50 ppm. described by Z = XK + e, where e is an error vec- Figure 10 shows the result of first averaging the light tor. Minimizing the cost, eT e, with respect to K, curves of multiple spots together and then computing yields a least-squares solution for the sensitivities the Allan deviation of the averaged light curve. At short K = (XT X)1 XT Z. Repeated tests show the er- lag times, the initial noise level decreases as expected ror e to be nearly zero mean Gaussian, making the for photon-noise limited measurements: the noise is in- least squares estimate of K equivalent to a maxi- versely proportional to the square root of the number of mum likelihood estimate, and conferring upon it a spots, i.e. proportional to the square root of total number direct probabilistic interpretation. of photons. At longer lag times, the limiting noise floor 10 also drops as the square root of number of spots, i.e. as dius spots, photometry of
 --------------------------------------------------------------------------------
 
 ================================================================================
-SAMPLE 8/10 - Sequence #28852
+SAMPLE 14/20 - Sequence #1155
 ================================================================================
-Tokens: 258
-Classification: [documentation]
-Score breakdown: {'boilerplate': 0, 'documentation': 6, 'prose': 3, 'code': 2, 'junk': 0}
-
-Decoded text (first 1500 chars):
---------------------------------------------------------------------------------
-Note again that the curves for KS<ATOM_URL>, DS<ATOM_URL> and Ch<ATOM_URL> models are inferred from the data analysis (for both northward and southward IMF) rather than obtained from a successful idea, which is not based on real data, or from model extrapolation of magnetopause crossings from normal conditions. However even the KS<ATOM_URL>, DS<ATOM_URL> and Ch<ATOM_URL> models developed using GMC data predict very different solar wind conditions required for GMC. The contradiction results obtained from statistical comparison of the MP models using parameters PCP and FAR are probably owing to weak effectiveness of the methodic of analysis. Actually the PCP and FAR can not indicate the most realistic MP model which is better describe actual dynamic of the magnetopause under strongly disturbed solar wind conditions. Indeed models with very strong underestimation or overestimation may have the same PCP. So the methodic used in Shue et al. [2000b, <ATOM_URL>] gives sometime strange results showing that all three model are good, despite their predictions of the SW pressure (Table <ATOM_URL>) are significantly different (up to a factor of two). As it was noted by Shue et al. [2000b] in context with SH<ATOM_URL> and PR<ATOM_URL> the high PCP and FAR indicate that the occurrences of the MP crossings are depended on other necessary conditions. To solve this problem it is very important
---------------------------------------------------------------------------------
-
-================================================================================
-SAMPLE 9/10 - Sequence #29205
-================================================================================
-Tokens: 257
-Classification: [prose]
-Score breakdown: {'boilerplate': 0, 'documentation': 0, 'prose': 3, 'code': 2, 'junk': 0}
+Tokens: 309
+Classification: [code]
+Score breakdown: {'boilerplate': 0, 'documentation': 2, 'prose': 3, 'code': 4, 'junk': 0}
 
 Decoded text (first 1500 chars):
 --------------------------------------------------------------------------------
-). the degenerate leading<ATOM_UUID> modes predicted by WKB HD <ATOM_URL>: This star hosts an edge-on debris disc; the theory. The modes are degenerate for cold discs and split dominant thermal emission from the disc arises at radii <ATOM_URL> into close (in frequency) pairs as the mean eccentricity AU but the disc is visible to much larger radii. The sur- grows, until for e & <ATOM_EMAIL> there is no apparent pairing in fre- face brightness of the east side of the disc is about <ATOM_URL> mag quency space (see Fig. <ATOM_URL>). fainter than the west side at a given radius and the surface- Some of the non-axisymmetric structure that is com- brightness distribution perpendicular to the disc midplane monly observed in debris discs, such as clumps, lopsided is asymmetric on the west side (Kalas et al. <ATOM_URL>); both rings, and spiral arms may be due to slow modes, perhaps features can arise naturally from an m = <ATOM_URL> distortion. excited by the fly-by of a passing star or binary companion. HD <ATOM_URL>: There is a dust ring at <ATOM_URL> AU that exhibits These features are normally ascribed to hypothetical mas- clumps and a lopsided brightness distribution in <ATOM_EMAIL> mm sive planets embedded in the disc. The two hypotheses can images (Corder et al. <ATOM_URL>). These might be due either to be distinguished in some discs by monitoring the motion of a planetary resonance or to
+potential interlopers in each of our as bins. If we determine with these methods that a scattering event occurred, we first choose an interloper at random from the running list. For each of the potential interlopers we calculate w and weigh our choice of interloper with these values. Recall that includes gravitational focusing, and we determine w ~ by rotating the potential interloper to the same location as the target assuming cylindrical symmetry. With the interloper identified, our first step is to determine where in the encounter plane the closest approach of the encounter occurs if we assume no gravitational focusing. In most cases this is accomplished by choosing a random number, p {U}, calculating the impact parameter, b = rH p (11) and a random angle (0, 2]. We calculate the location of the closest approach in the encounter plane, (bx , bz ), from simple trigonometry. However, care must be taken if one of two situations occur. As explained above, if the system is in the shear-dominated regime then encounters may not be able to occur at large absolute values of bz . In particular, |bz | he (see the discussion associated with Eq. 4). We also have to make allowances for what MBNL9 call isolated bodies, which are populations of objects the are separated enough from one another and dynamically cold enough that their orbits do not cross. This case imposes a lower limit on the value of b. We determine whether objects are isolated from one another in the context of our as bin
+... (truncated, total 1573 chars)
+
 --------------------------------------------------------------------------------
 
 ================================================================================
-SAMPLE 10/10 - Sequence #38170
+SAMPLE 15/20 - Sequence #1329
 ================================================================================
-Tokens: 257
-Classification: [prose]
-Score breakdown: {'boilerplate': 0, 'documentation': 2, 'prose': 3, 'code': 0, 'junk': 0}
+Tokens: 78
+Classification: [mixed_junk]
+Score breakdown: {'boilerplate': 0, 'documentation': 0, 'prose': 0, 'code': 0, 'junk': 0}
 
 Decoded text (first 1500 chars):
 --------------------------------------------------------------------------------
-, where the cold- importance of transport-induced quenching on extraso- est western-terminator-average model has a CH<ATOM_URL> quench lar giant planets. Fig. <ATOM_URL> demonstrates this sensitivity. point near the <ATOM_URL> bar, <ATOM_URL> K level, whereas the For larger eddy diffusion coefficients, transport-induced warmest projected-area-weighted dayside-average mod- quenching becomes effective at deeper pressures, lead- els have quench points near <ATOM_EMAIL> bar, <ATOM_URL> K. The re- ing to larger mole fractions of quenched species. Larger sulting CH<ATOM_URL> quenched mole fraction is a factor of <ATOM_URL> Kzz values also allow molecular constituents to be carried greater for the cooler western-terminator model than for to higher altitudes. Both these processes contribute to the warmer dayside-average model. Ammonia quenches enhanced abundances of photochemically derived prod- at even greater pressures and temperatures, at which ucts when atmospheric mixing is more vigorous. For ex- point the temperature profiles are more uniform (see ample, when quenched species like CH<ATOM_URL> and NH<ATOM_URL> are Fig. <ATOM_URL>), so that the differences between models are less more abundant and carried to higher altitudes, photo- pronounced. The HCN profiles are more complicated be- chemical products like HCN and other nitriles, and C<ATOM_URL> H<ATOM_URL> cause
+decreases, separations that are comparable to or beyond the Hill sphere of the primary. 6 Discussion We have derived and plotted the locations of the fully synchronous tidal end states for all mass ratios and angular momenta and nd that only binary asteroid systems with nearly equal-mass components such as (90) Antiope and (69230) Hermes reside in these end states with all other 9 In Figs. 1 and 6, for mass ratios of q
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 16/20 - Sequence #1356
+================================================================================
+Tokens: 987
+Classification: [mixed_junk]
+Score breakdown: {'boilerplate': 0, 'documentation': 2, 'prose': 3, 'code': 4, 'junk': 5}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+the velocity variation, which is not seen here. Thus, the chance that the 0.83 d periodicity exhibited independently in both the photometry and velocities might be caused by an eclipsing binary seems quite remote. Precision Doppler measurements are used to constrain the mass of KOI-72.01 (Kepler- 10b) as discussed in Section 7 The absence of a Doppler signal for KOI-72.02 is used to compute an upper limit to the mass of this candidate under the planet interpretation. 4.4. Bisector Analysis From the Keck spectra, we computed a mean line profile and the corresponding mean line bisector. Time-varying line asymmetries are tracked by measuring the bisector spans the velocity difference between the top and bottom of the mean line bisector for each spectrum (Torres et al. 2005). When RV variations are the result of a blended spectrum between a star and an eclipsing binary, we expect the bisectors to reveal a phase-modulated line asymmetry (Queloz et al. 2001; Mandushev et al. 2005). In the case of Kepler-10b, there is no evidence for a correlation between the bisector spans and the RVs which would otherwise argue against the planetary interpretation (see Figure 7), and similarly for the 45-day signal of KOI-72.02. However, we note that the uncertainties in the bisector span measurements are quite large so that the RMS variation of the bisector spans (10.5 m s1 ) 26 exceeds the semi-amplitude of the RV variation (3.30.8 1 1 m s ). Therefore, we do not consider the bisector span measu
+... (truncated, total 5585 chars)
+
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 17/20 - Sequence #1588
+================================================================================
+Tokens: 664
+Classification: [mixed_junk]
+Score breakdown: {'boilerplate': 0, 'documentation': 4, 'prose': 3, 'code': 2, 'junk': 5}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+obliquity is either 0 or 180 during the whole evolution steps per Gyr and the asymptotic law is invalid on this and that the seasonal effect is negligible and the diurnal time scale. It means that for the time scale we are inter- effect is maximal (in one or the other direction). ested in, the Yarkovsky effect evolves faster than t so Nevertheless, there is still another phenomenon which faster than close encounters. This is exactly what we ob- must be taken into account : the collisions. We have to serve on Fig0.9 : for 250 Myr the close encounters take a distinguish whether a collision is destructive or not. The more important part in the diffusion process (equivalence collisional life time of a 1-10 km asteroid in the main belt of the two effects for D=19 km) whereas for 3 Gyr the is about 1 Gyr. But non-destructive collisions are more Yarkovsky effect is even more prevailing (equivalence for frequent and can reorient the spin axis of the asteroid. D=54 km). 8 Delisle and Laskar: Chaotic diffusion induced by massive asteroids 1 and that our findings are compatible with previous work EN A TEN on the Vesta family (?). We use the results we obtained YMX for the 11 asteroids to extrapolate and constrain the diffu- YRW sion that would result from close encounters with all the a250Myr (AU) 0.1 main belt asteroids. We show that this diffusion should not exceed 1.3 times the diffusion due to the 11 asteroids. Finally, we compare the diffusion due to close encounters 0.01 with the 
+... (truncated, total 3412 chars)
+
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 18/20 - Sequence #1637
+================================================================================
+Tokens: 419
+Classification: [mixed_junk]
+Score breakdown: {'boilerplate': 0, 'documentation': 0, 'prose': 3, 'code': 0, 'junk': 5}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+well as the observing dates are listed in Table 1 The Fig. 3 The distribution of magnitudes of known (black) and four fields partially overlap (see Figure 4) and cover a new (grey) asteroids found on this pilot run of the PTF survey. More than one third of the asteroids fainter than 20 mag have not total area of 21 deg2 . The footprints of these fields cover yet been discovered. ecliptic latitudes between 0.75 deg and 2.5 deg. Ta- ble 1 also lists the total number of exposures taken on each night and the time duration of the observing period 21.5 for acquiring each set of exposures for a given night and Field 110002 Field 110004 field. The seeing in the images ranged between 2.1 to 21 2.5 . We note that the observed fields are centered on the open cluster M44, and are also used by Agueros et 20.5 al. (2011) to study the mass-period relation of late-K to mid-M stars. Dec [deg] 20 4 RESULTS 19.5 4.1. Detected asteroids 19 We use the aforementioned asteroid pipeline to ana- lyze the small set of PTF observations listed in Table 1 18.5 Running the algorithm described in 2.1 we found 624 Field 110001 Field 110003 asteroids of which 145 were not yet designated by the 18 127 128 129 130 131 132 133 Minor Planet Center web service. Figure 4 shows the RA [deg] tracks of all 624 detected asteroids within the field of view. Table 6 lists all of the measurements taken for the Fig. 4 The tracks of 624 asteroids detected in the four overlap- 624 objects. The 145 unknown asteroids are faint
+... (truncated, total 2028 chars)
+
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 19/20 - Sequence #1791
+================================================================================
+Tokens: 919
+Classification: [mixed_junk]
+Score breakdown: {'boilerplate': 0, 'documentation': 4, 'prose': 3, 'code': 4, 'junk': 5}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+budget and result from a host of systematic errors such as characterizing and determining the PSF, detector imperfections, optical aberrations, effects of under-sampling the Iodine lines, etc. Two additional major sources of error are photon statistics and stellar jitter. The latter, which varies substantially from star to star, can be mitigated to some degree by selecting magnetically-inactive older stars and by time-averaging over the stars unresolved low-degree surface p-modes. For HD 207832, the expected jitter is 4.22 m s1 (Isaacson & Fischer 2010). This is in accord with the modest level of activity suggested by the quoted values of log R HK . All observations have been further binned on 2-hour timescales. Figure 1 shows the results. The top panel of this figure shows the individual RV obser- vations, and the middle panel shows the weighted Lomb-Scargle (LS) periodogram of the full RV data set (Gilliland & Baliunas 1987). In generating this periodogram, we used only the internal uncertainties in the statistical weights and did not include jitter. To examine the ef- fect of jitter, we added in quadrature 4.22 m s1 to each internal uncertainty and reproduced the periodogram. The results showed only negligible differences. The three horizontal lines in this figure and other comparable plots represent, from top to bottom, the 0.1%, 1%, and 10% False Alarm Probability (FAP) levels, respectively. The algorithm for computing the LS periodogram is described in detail in 13.8 of
+... (truncated, total 5205 chars)
+
+--------------------------------------------------------------------------------
+
+================================================================================
+SAMPLE 20/20 - Sequence #1853
+================================================================================
+Tokens: 527
+Classification: [mixed_junk]
+Score breakdown: {'boilerplate': 0, 'documentation': 2, 'prose': 3, 'code': 4, 'junk': 5}
+
+Decoded text (first 1500 chars):
+--------------------------------------------------------------------------------
+Sun-like host star. In the white area at the right, tidal heating is negligible and absorbed stellar flux is 239W<PATH> The right- most contours in each panel indicate Ios tidal heat flux of 2W<PATH>, a tidal heating of 10W<PATH>, and the critical flux for the runaway greenhouse (295W<PATH> for the Earth-like moon and 266W<PATH> for the Super-Ganymede). Positions of some massive satellites in the Solar System are shown for comparison. ! The Roche radii are 1.5Rp for an Earth-type moon about a Jupiter-like planet (upper left panel in Fig. 8), 1.6Rp for an Earth-type moon about a Neptune-mass planet (upper right), 1.9Rp for the Super-Ganymede about a Jupiter-class host (lower left), and 2.1Rp for the Super-Ganymede orbiting a Neptune-like planet (lower right). The extreme tidal heating rates in the red areas may not be realistic because we assume a constant time lag s of the satellites tidal bulge and ignore its dependence on the driving frequency as well as its variation due to the geological processes that should appear at such enormous heat fluxes. ! In Fig. 8, irradiation from the planet is neglected; thus decreasing distance between planet and moon goes along with increasing tidal heating only. An Earth-like exomoon (upper panels) could orbit as close as 5Rp, and tidal heating would not induce a runaway greenhouse if eps 0.001. If its orbit has an eccentricity similar to Titan (eps 0.03), then the orbital separation needed to be 10Rp to prevent a runaway greenhouse. Compar
+... (truncated, total 2694 chars)
+
 --------------------------------------------------------------------------------

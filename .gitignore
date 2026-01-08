@@ -87,6 +87,40 @@ resources/Resources/models/
 resources/wakeword/*
 data/
 data/*
+
+# ==============================
+# GRIM-text (AI Backend) - Include source, exclude data/builds
+# ==============================
+# First, UN-IGNORE the GRIM-text folder (override earlier ignores)
+!resources/models/GRIM-text/
+!resources/models/GRIM-text/**
+
+# Then exclude large files and generated content
+resources/models/GRIM-text/training/data/
+resources/models/GRIM-text/training/logs/
+resources/models/GRIM-text/training/models/
+resources/models/GRIM-text/quality/
+resources/models/GRIM-text/checkpoints/
+resources/models/GRIM-text/data/
+resources/models/GRIM-text/**/build/
+resources/models/GRIM-text/**/.vs/
+resources/models/GRIM-text/**/.vscode/
+resources/models/GRIM-text/**/__pycache__/
+resources/models/GRIM-text/Tests/output/
+resources/models/GRIM-text/**/*.exe
+resources/models/GRIM-text/**/*.lib
+resources/models/GRIM-text/**/*.obj
+resources/models/GRIM-text/**/*.pch
+resources/models/GRIM-text/**/*.pdb
+resources/models/GRIM-text/**/*.ilk
+resources/models/GRIM-text/**/*.log
+resources/models/GRIM-text/**/*.bin
+resources/models/GRIM-text/**/*.npz
+resources/models/GRIM-text/**/*.grmt
+resources/models/GRIM-text/**/*.jsonl
+resources/models/GRIM-text/**/*.png
+resources/models/GRIM-text/**/*.fb
+
 # ==============================
 # Python / Virtual Environments
 # ==============================

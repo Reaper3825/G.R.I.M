@@ -268,9 +268,6 @@ int StartMainDataCollection(int argc, char** argv) {
             continue;
         }
         
-        // Add special tokens
-        clean = preprocessor.addSpecialTokens(clean);
-        
         cleaned_texts.push_back(clean);
     }
     

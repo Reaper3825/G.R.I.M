@@ -243,8 +243,7 @@ int StartMergeCheckpoints(int argc, char** argv) {
             if (!preprocessor.passesQualityFilter(chunk)) continue;
             if (preprocessor.isDuplicate(chunk)) continue;
             
-            std::string with_tokens = preprocessor.addSpecialTokens(chunk);
-            cleaned_texts.push_back(with_tokens);
+            cleaned_texts.push_back(chunk);
             
             if (chunks.size() > 1) chunks_created++;
         }
