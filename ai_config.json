@@ -88,8 +88,9 @@
             "weight_decay": 0.01,
             "gradient_clip": 1.0,
             "per_token_grad_scale": true,
-            "warmup_steps": 0,
+            "warmup_steps": 10,
             "max_seq_len": 1024,
+            "min_seq_valid_tokens": 10,
             "log_interval": 1,
             "atom_stats_interval": 10,
             "atom_stats_max_seqs": 16,
@@ -124,14 +125,14 @@
                 "band_ceiling": 250.0,
                 "band_min_samples": 12,
                 "band_min_span": 1.0,
-                "adaptive_smoothing": true,
+                "adaptive_smoothing": false,
                 "smoothing_min": 0.1,
                 "smoothing_max": 0.6,
                 "variance_reference": 25.0,
                 "adaptive_cooldown": true,
                 "cooldown_min": 1,
                 "cooldown_max": 8,
-                "adaptive_loss": true,
+                "adaptive_loss": false,
                 "loss_sigma": 3.0,
                 "loss_min_samples": 8,
                 "loss_floor": 0.25,
@@ -252,11 +253,11 @@
             
             "loss": {
                 "label_smoothing": {
-                    "enabled": false,
+                    "enabled": true,
                     "epsilon": 0.1
                 },
                 "focal": {
-                    "enabled": false,
+                    "enabled": true,
                     "gamma": 1.05,
                     "alpha": 1.0
                 },
@@ -275,7 +276,7 @@
                 },
                 "numeric_head": {
                     "enabled": true,
-                    "weight": 0.1,
+                    "weight": 1.0,
                     "huber_delta": 1.0,
                     "log_scale": true
                 }
@@ -295,14 +296,14 @@
                 "enabled": true,
                 "max_tokens_per_block": 16384,
                 "num_blocks": 4,
-                "use_write_combined": false
+                "use_write_combined": true
             },
             
             "scratch_block_reasoning": {
                 "enabled": true,
                 "atom_embedding_dim": 64,
                 "max_atoms": 4096,
-                "atom_scale": 0.1
+                "atom_scale": 1.0
             },
             
             "activation_quantization": {
@@ -343,11 +344,11 @@
                 "enabled": true,
                 "default_level": "Info",
                 "modules": {
-                    "ForwardPass": "WARN",
-                    "BackwardPass": "WARN",
+                    "ForwardPass": "Info",
+                    "BackwardPass": "Info",
                     "Optimizer": "Info",
                     "Scheduler": "Info",
-                    "Activations": "WARN",
+                    "Activations": "Info",
                     "GuessCache": "Info",
                     "Validation": "Info",
                     "Checkpoint": "Info",
@@ -368,7 +369,7 @@
                     "encoding": true,
                     "serialization": true
                 }
-            },
+            }, 
             
             "d_model": 768,
             "num_layers": 12,
@@ -377,7 +378,7 @@
             "tie_embeddings": true,
             "attention_dropout": 0.02,
             "dropout_rate": 0.1,
-            "force_rebuild_vocab": true,
+            "force_rebuild_vocab": false,
             "qk_normalization": {
                 "enabled": false,
                 "scale": 16.0

@@ -47,58 +47,6 @@ void orderLog(const char* stage,
 		stamp, stage, batch_size, seq_len, total_tokens, valid_tokens);
 }
 
-float computeSequentialBatchLoss(
-	LanguageModel& model,
-	const std::vector<std::vector<int>>& batch_input_ids,
-	const std::vector<std::vector<int>>& batch_target_ids,
-	const std::vector<std::vector<float>>& batch_numeric_values,
-	const std::vector<std::vector<uint8_t>>& batch_numeric_mask)
-{
-	const size_t pair_count = std::min(batch_input_ids.size(), batch_target_ids.size());
-	if (pair_count == 0) {
-		return 0.0f;
-	}
-
-	float total_loss = 0.0f;
-	int valid_tokens = 0;
-
-	for (size_t idx = 0; idx < pair_count; ++idx) {
-		if (idx >= batch_numeric_values.size() || idx >= batch_numeric_mask.size()) {
-			throw std::runtime_error("computeSequentialBatchLoss: numeric side-channel missing");
-		}
-		const float seq_loss = model.computeLoss(batch_input_ids[idx],
-		                                         batch_target_ids[idx],
-		                                         batch_numeric_values[idx],
-		                                         batch_numeric_mask[idx]);
-		if (!std::isfinite(seq_loss) || seq_loss <= 0.0f) {
-			continue;
-		}
-
-		int seq_valid = 0;
-		if (idx < batch_target_ids.size()) {
-			for (int t : batch_target_ids[idx]) {
-				if (t >= 0) {
-					++seq_valid;
-				}
-			}
-		} else {
-			const int token_count = static_cast<int>(batch_input_ids[idx].size());
-			seq_valid = std::max(token_count - 1, 0);
-		}
-		if (seq_valid == 0) {
-			continue;
-		}
-		total_loss += seq_loss * static_cast<float>(seq_valid);
-		valid_tokens += seq_valid;
-	}
-
-	if (valid_tokens == 0) {
-		return 0.0f;
-	}
-
-	return total_loss / static_cast<float>(valid_tokens);
-}
-
 }  // namespace
 
 BatchPreparationResult prepareLossBatchInputs(

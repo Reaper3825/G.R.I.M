@@ -39,9 +39,6 @@ ClipSelection computeClipSelection(float base_clip,
 						   float long_sequence_limit = 1.0f,
 						   int long_sequence_threshold = 1152);
 
-// Convenience helper for logging/decision making.
-float computeNormalizedGrad(float grad_norm, const BatchTokenStats& stats);
-
 // String label for diagnostics/logging.
 const char* clipModeToString(ClipMode mode);
 

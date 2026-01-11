@@ -3,16 +3,10 @@
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../Layers/NumericHead/numeric_head_GPU.hpp"
 
-#include <exception>
-#include <chrono>
-
 namespace GRIM {
 namespace Forward {
 
 ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
-    auto phase_start = std::chrono::high_resolution_clock::now();
-    fprintf(stderr, "[PHASE_TIMING] Phase1 (Output) START\n");
-    
     FWD_INFO("[ForwardPhase1] START logits=" << (ctx.logits_target == ForwardLogitsTarget::FullSequence ? "full" : "last"));
 
     ForwardStatus validation = ctx.validate();
@@ -68,14 +62,11 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
         lm_params.seq_len = 1;
     }
 
-    auto lmhead_start = std::chrono::high_resolution_clock::now();
     try {
         launchLMHeadForward(lm_params);
     } catch (const std::exception& ex) {
         FWD_FAIL_LOUD(ctx, ForwardStatus::INVALID_STATE, ex.what(), -1);
     }
-    auto lmhead_end = std::chrono::high_resolution_clock::now();
-    auto lmhead_ms = std::chrono::duration<double, std::milli>(lmhead_end - lmhead_start).count();
 
     if (cfg->numeric_head_enabled) {
         if (!ts->numeric_head_weights || !ts->cached_numeric_predictions) {
@@ -128,9 +119,6 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
     }
 
     ctx.phase1_status = ForwardStatus::SUCCESS;
-    auto phase_end = std::chrono::high_resolution_clock::now();
-    auto phase_ms = std::chrono::duration<double, std::milli>(phase_end - phase_start).count();
-    fprintf(stderr, "[PHASE_TIMING] Phase1 (Output) COMPLETE: %.2f ms\n", phase_ms);
     FWD_INFO("[ForwardPhase1] COMPLETE");
     return ForwardStatus::SUCCESS;
 }

@@ -944,26 +944,14 @@ struct FlashAttentionBF16Scratch {
 class EncodingLayer;
 using GPUEncoderLayer = EncodingLayer;
 
-// GPUGrimEncoder - full interface
+// GPUGrimEncoder - Container for encoder layers, manages layer lifecycle
+// Forward pass logic is in ForwardPhase2_Encoder.cu::runFullEncoder()
+// This class only owns layers and provides access to them
 class GPUGrimEncoder {
 public:
     explicit GPUGrimEncoder(const EncoderConfig& config);
     
-    std::vector<Vector> forward(const std::vector<Vector>& embeddings,
-                                const ALiBiPositionalBias* alibi = nullptr);
-    
-
-    void forwardGPU(const float* d_embeddings, float* d_output,
-                   int batch_size, int seq_len, float* d_workspace,
-                   const ALiBiPositionalBias* alibi = nullptr,
-                   float** cache_Q_layers = nullptr,
-                   float** cache_K_layers = nullptr,
-                   float** cache_V_layers = nullptr,
-                   EncoderLayerCache* layer_caches = nullptr,
-                   const FlashAttentionBF16Scratch* fa_scratch = nullptr,
-                   float* entropy_output = nullptr);  // Per-layer entropy [num_layers * batch_size * num_heads]
-    
-    // Access to layers for training
+    // Access to layers for training/forward pass
     GPUEncoderLayer* getLayer(int index);
     const GPUEncoderLayer* getLayer(int index) const;
     int getNumLayers() const;

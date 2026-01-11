@@ -14,6 +14,7 @@
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <stdexcept>
+#include <string>
 
 namespace GRIM::Loss {
 namespace {
@@ -40,29 +41,24 @@ LossBreakdown launchLossPipeline(const LossContext& ctx,
     LossBreakdown breakdown{};
     
     //=========================================================================
-    // VALIDATION - Fail loud
+    // VALIDATION - Fail loud (Rule 20)
     //=========================================================================
     
-    if (!validate(ctx)) {
-        fprintf(stderr, "[ComputeLoss] FATAL: Context validation failed\n");
-        return breakdown;
-    }
+    validate(ctx);  // Throws on failure
     
     const int tokens = totalTokens(ctx);
     if (tokens <= 0) {
-        fprintf(stderr, "[ComputeLoss] FATAL: No tokens (batch=%d, seq=%d)\n",
-                ctx.batch_size, ctx.seq_len);
-        return breakdown;
+        throw std::runtime_error("[ComputeLoss] tokens=" + std::to_string(tokens) +
+            " (batch=" + std::to_string(ctx.batch_size) +
+            ", seq=" + std::to_string(ctx.seq_len) + ")");
     }
     
     if (!buffers.token_losses) {
-        fprintf(stderr, "[ComputeLoss] FATAL: token_losses buffer is NULL\n");
-        return breakdown;
+        throw std::runtime_error("[ComputeLoss] buffers.token_losses is NULL");
     }
     
     if (!buffers.grad_logits) {
-        fprintf(stderr, "[ComputeLoss] FATAL: grad_logits buffer is NULL\n");
-        return breakdown;
+        throw std::runtime_error("[ComputeLoss] buffers.grad_logits is NULL");
     }
 
     //=========================================================================
@@ -73,8 +69,8 @@ LossBreakdown launchLossPipeline(const LossContext& ctx,
     unified_cfg.focal_enabled = cfg.focal.enabled;
     unified_cfg.focal_alpha = cfg.focal.alpha;
     unified_cfg.focal_gamma = cfg.focal.gamma;
-    unified_cfg.smoothing_enabled = false; //cfg.label_smoothing.enabled;
-    unified_cfg.smoothing_epsilon =false;  // cfg.label_smoothing.epsilon;
+    unified_cfg.smoothing_enabled = cfg.label_smoothing.enabled;
+    unified_cfg.smoothing_epsilon = cfg.label_smoothing.epsilon;
     unified_cfg.strict_mode = false;  // Disabled - sync causes 14s stall per batch
     
     //=========================================================================

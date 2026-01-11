@@ -6,6 +6,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
+#include <string>
 
 namespace GRIM::Loss {
 namespace {
@@ -131,37 +133,34 @@ inline dim3 launchGrid(int total_threads)
 
 } // namespace
 
-bool validate(const LossContext& ctx)
+void validate(const LossContext& ctx)
 {
-	if (!ctx.logits || !ctx.targets) {
-		fprintf(stderr, "Loss::CrossEntropy - null pointer in inputs.\n");
-		return false;
+	if (!ctx.logits) {
+		throw std::runtime_error("[CrossEntropy] ctx.logits is NULL");
+	}
+	if (!ctx.targets) {
+		throw std::runtime_error("[CrossEntropy] ctx.targets is NULL");
 	}
 	if (ctx.batch_size <= 0 || ctx.seq_len <= 0 || ctx.vocab_size <= 0) {
-		fprintf(stderr,
-				"Loss::CrossEntropy - invalid dimensions (batch=%d seq=%d vocab=%d).\n",
-				ctx.batch_size,
-				ctx.seq_len,
-				ctx.vocab_size);
-		return false;
+		throw std::runtime_error("[CrossEntropy] invalid dimensions: batch=" +
+			std::to_string(ctx.batch_size) + " seq=" + std::to_string(ctx.seq_len) +
+			" vocab=" + std::to_string(ctx.vocab_size));
 	}
-	return true;
 }
 
 void computeCrossEntropyLoss(const LossContext& ctx,
 							 DeviceBuffers buffers)
 {
-	if (!validate(ctx)) {
-		return;
-	}
+	validate(ctx);  // Throws on failure
+	
 	if (!buffers.token_losses) {
-		fprintf(stderr, "Loss::CrossEntropy - token loss buffer is null.\n");
-		return;
+		throw std::runtime_error("[CrossEntropy::computeLoss] buffers.token_losses is NULL");
 	}
 
 	const int total_tokens = ctx.batch_size * ctx.seq_len;
 	if (total_tokens <= 0) {
-		return;
+		throw std::runtime_error("[CrossEntropy::computeLoss] total_tokens=" +
+			std::to_string(total_tokens) + " (must be > 0)");
 	}
 
 	crossEntropyLossKernel<<<launchGrid(total_tokens), kBlockSize, 0, ctx.stream>>>(
@@ -173,8 +172,8 @@ void computeCrossEntropyLoss(const LossContext& ctx,
 
 	const cudaError_t err = cudaGetLastError();
 	if (err != cudaSuccess) {
-		fprintf(stderr, "Loss::CrossEntropy - compute kernel failed: %s\n",
-				cudaGetErrorString(err));
+		throw std::runtime_error(std::string("[CrossEntropy::computeLoss] kernel failed: ") +
+			cudaGetErrorString(err));
 	}
 }
 
@@ -183,35 +182,45 @@ void reduceLossBuffer(const float* losses,
 					  int count,
 					  cudaStream_t stream)
 {
-	if (!losses || !output || count <= 0) {
-		return;
+	if (!losses) {
+		throw std::runtime_error("[CrossEntropy::reduceLossBuffer] losses is NULL");
+	}
+	if (!output) {
+		throw std::runtime_error("[CrossEntropy::reduceLossBuffer] output is NULL");
+	}
+	if (count <= 0) {
+		throw std::runtime_error("[CrossEntropy::reduceLossBuffer] count=" +
+			std::to_string(count) + " (must be > 0)");
 	}
 
-	cudaMemsetAsync(output, 0, sizeof(float), stream);
+	cudaError_t err = cudaMemsetAsync(output, 0, sizeof(float), stream);
+	if (err != cudaSuccess) {
+		throw std::runtime_error(std::string("[CrossEntropy::reduceLossBuffer] cudaMemsetAsync failed: ") +
+			cudaGetErrorString(err));
+	}
 
 	reduceLossKernel<<<launchGrid(count), kBlockSize, 0, stream>>>(losses, output, count);
 
-	const cudaError_t err = cudaGetLastError();
+	err = cudaGetLastError();
 	if (err != cudaSuccess) {
-		fprintf(stderr, "Loss::CrossEntropy - reduce kernel failed: %s\n",
-				cudaGetErrorString(err));
+		throw std::runtime_error(std::string("[CrossEntropy::reduceLossBuffer] kernel failed: ") +
+			cudaGetErrorString(err));
 	}
 }
 
 void computeCrossEntropyGradient(const LossContext& ctx,
 								 DeviceBuffers buffers)
 {
-	if (!validate(ctx)) {
-		return;
-	}
+	validate(ctx);  // Throws on failure
+	
 	if (!buffers.grad_logits) {
-		fprintf(stderr, "Loss::CrossEntropy - grad logits buffer is null.\n");
-		return;
+		throw std::runtime_error("[CrossEntropy::computeGradient] buffers.grad_logits is NULL");
 	}
 
 	const int total_tokens = ctx.batch_size * ctx.seq_len;
 	if (total_tokens <= 0) {
-		return;
+		throw std::runtime_error("[CrossEntropy::computeGradient] total_tokens=" +
+			std::to_string(total_tokens) + " (must be > 0)");
 	}
 
 	const int valid_tokens = ctx.valid_tokens > 0 ? ctx.valid_tokens : total_tokens;
@@ -232,8 +241,8 @@ void computeCrossEntropyGradient(const LossContext& ctx,
 
 	const cudaError_t err = cudaGetLastError();
 	if (err != cudaSuccess) {
-		fprintf(stderr, "Loss::CrossEntropy - gradient kernel failed: %s\n",
-				cudaGetErrorString(err));
+		throw std::runtime_error(std::string("[CrossEntropy::computeGradient] kernel failed: ") +
+			cudaGetErrorString(err));
 	}
 }
 

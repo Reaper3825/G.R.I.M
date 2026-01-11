@@ -1,7 +1,8 @@
 #include "RMSNorm_Kernel_GPU.hpp"
 
-#include <cstdio>
 #include <cuda_runtime.h>
+#include <stdexcept>
+#include <string>
 
 namespace {
 
@@ -14,22 +15,14 @@ __device__ __forceinline__ float warpReduceSum(float value) {
 	return value;
 }
 
-inline void logCudaFailure(cudaError_t err,
-						   const char* expr,
-						   const char* file,
-						   int line) {
-	if (err == cudaSuccess) {
-		return;
-	}
-	std::fprintf(stderr,
-				 "RMSNorm CUDA error at %s:%d (%s): %s\n",
-				 file,
-				 line,
-				 expr,
-				 cudaGetErrorString(err));
-}
-
-#define RMSN_CUDA_CHECK(expr) logCudaFailure((expr), #expr, __FILE__, __LINE__)
+#define RMSN_CUDA_CHECK(expr)                                                    \
+    do {                                                                         \
+        cudaError_t err__ = (expr);                                              \
+        if (err__ != cudaSuccess) {                                              \
+            throw std::runtime_error(std::string("[RMSNorm] CUDA error: ") +     \
+                                     cudaGetErrorString(err__));                 \
+        }                                                                        \
+    } while (0)
 
 __global__ void rmsNormKernel(const float* __restrict__ input,
 						 float* __restrict__ output,
@@ -102,20 +95,12 @@ void launchRMSNorm(const float* input,
 						        float eps,
 						        cudaStream_t stream) {
 	if (batch_size <= 0 || hidden_dim <= 0) {
-		std::fprintf(stderr,
-					 "launchRMSNorm: Invalid dimensions - batch_size=%d hidden_dim=%d\n",
-					 batch_size,
-					 hidden_dim);
-		return;
+		throw std::runtime_error("[RMSNorm] Invalid dimensions: batch_size=" + 
+								 std::to_string(batch_size) + " hidden_dim=" + 
+								 std::to_string(hidden_dim));
 	}
 
 	int threads = std::min(1024, ((hidden_dim + kWarpSize - 1) / kWarpSize) * kWarpSize);
-	cudaError_t prev_err = cudaGetLastError();
-	if (prev_err != cudaSuccess) {
-		std::fprintf(stderr,
-					 "launchRMSNorm: Previous CUDA error detected: %s\n",
-					 cudaGetErrorString(prev_err));
-	}
 
 	rmsNormKernel<<<batch_size, threads, 0, stream>>>(
 		input,
@@ -211,9 +196,10 @@ __global__ void rmsNormBackwardKernel(const float* __restrict__ input,
 	__syncthreads();
 
 	// Apply correction term for grad_input
+	// BUG FIX: Was missing inv_rms factor. Correct formula: dx = inv_rms * (g - norm * dot)
 	for (int i = tid; i < hidden_dim; i += blockDim.x) {
 		float norm = x[i] * local_inv_rms;
-		gi[i] -= norm * dot_shared;
+		gi[i] -= norm * local_inv_rms * dot_shared;
 	}
 }
 
@@ -227,7 +213,9 @@ void launchRMSNormBackward(const float* input,
                            float eps,
                            cudaStream_t stream) {
 	if (batch_size <= 0 || hidden_dim <= 0) {
-		return;
+		throw std::runtime_error("[RMSNormBackward] Invalid dimensions: batch_size=" + 
+								 std::to_string(batch_size) + " hidden_dim=" + 
+								 std::to_string(hidden_dim));
 	}
 	int threads = std::min(1024, ((hidden_dim + kWarpSize - 1) / kWarpSize) * kWarpSize);
 	rmsNormBackwardKernel<<<batch_size, threads, 0, stream>>>(

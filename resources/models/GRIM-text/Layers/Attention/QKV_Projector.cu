@@ -5,6 +5,8 @@
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <cstdio>
+#include <stdexcept>
+#include <string>
 
 namespace GRIM {
 namespace {
@@ -128,53 +130,55 @@ void launchQkvProjection(const float* input,
                          float* v_out,
                          float* workspace,
                          const QKVProjectionConfig& config) {
-    if (!input || !weights.W_qkv || !q_out || !k_out || !v_out) {
-        return;
+    // Rule 20: Fail loud on null pointers
+    if (!input) {
+        throw std::runtime_error("[QKV_Projector] launchQkvProjection: input is NULL");
+    }
+    if (!weights.W_qkv) {
+        throw std::runtime_error("[QKV_Projector] launchQkvProjection: weights.W_qkv is NULL");
+    }
+    if (!q_out) {
+        throw std::runtime_error("[QKV_Projector] launchQkvProjection: q_out is NULL");
+    }
+    if (!k_out) {
+        throw std::runtime_error("[QKV_Projector] launchQkvProjection: k_out is NULL");
+    }
+    if (!v_out) {
+        throw std::runtime_error("[QKV_Projector] launchQkvProjection: v_out is NULL");
     }
 
     const int total_tokens = config.batch_size * config.seq_len;
     const int d_model = config.d_model;
     
-    // Validate dimensions and configuration
+    // Rule 20: Fail loud on invalid dimensions
     if (total_tokens <= 0 || d_model <= 0 || config.num_heads <= 0) {
-        fprintf(stderr, "[QKV_Projector] launchQkvProjection: Invalid dimensions "
-                "tokens=%d d_model=%d num_heads=%d\n",
-                total_tokens, d_model, config.num_heads);
-        return;
+        throw std::runtime_error("[QKV_Projector] launchQkvProjection: Invalid dimensions "
+                "tokens=" + std::to_string(total_tokens) + " d_model=" + std::to_string(d_model) +
+                " num_heads=" + std::to_string(config.num_heads));
     }
     
-    // Validate head divisibility (required for correct QKV split)
+    // Rule 20: Fail loud on head divisibility
     if (d_model % config.num_heads != 0) {
-        fprintf(stderr, "[QKV_Projector] launchQkvProjection: d_model (%d) must be "
-                "divisible by num_heads (%d)\n",
-                d_model, config.num_heads);
-        return;
+        throw std::runtime_error("[QKV_Projector] launchQkvProjection: d_model (" +
+                std::to_string(d_model) + ") must be divisible by num_heads (" +
+                std::to_string(config.num_heads) + ")");
     }
     
-    // Stream should be set for proper async execution
+    // Rule 20: Fail loud on missing stream
     if (!config.stream) {
-        fprintf(stderr, "[QKV_Projector] launchQkvProjection: WARNING - "
-                "config.stream is nullptr, operations will execute on default stream\n");
+        throw std::runtime_error("[QKV_Projector] launchQkvProjection: config.stream is NULL - caller MUST provide valid stream");
     }
 
     const size_t workspace_bytes = getQkvProjectionWorkspaceSize(config);
-    bool owns_workspace = false;
-    float* fused_qkv = workspace;
-    if (!fused_qkv) {
-        cudaError_t alloc_err = cudaMalloc(&fused_qkv, workspace_bytes);
-        if (alloc_err != cudaSuccess) {
-            fprintf(stderr, "[QKV_Projector] cudaMalloc workspace failed: %s\n",
-                    cudaGetErrorString(alloc_err));
-            return;
-        }
-        owns_workspace = true;
+    // Rule 20: Require workspace - no silent allocation fallback
+    if (!workspace) {
+        throw std::runtime_error("[QKV_Projector] launchQkvProjection: workspace is NULL - caller MUST provide pre-allocated workspace");
     }
+    float* fused_qkv = workspace;
 
     cublasHandle_t handle = config.handle;
     if (!handle) {
-        fprintf(stderr, "[QKV_Projector] ERROR: config.handle is NULL. MUST pass training_state.cublas_handle per Rule 22.\n");
-        if (owns_workspace) cudaFree(fused_qkv);
-        return;
+        throw std::runtime_error("[QKV_Projector] launchQkvProjection: config.handle is NULL - MUST pass training_state.cublas_handle per Rule 22");
     }
     // REMOVED cublasSetStream - handle already bound to stream in InitTrainingState.cu
 
@@ -222,8 +226,9 @@ void launchQkvProjection(const float* input,
                 3 * d_model);             // ldc = 3*d_model (row stride of output)
     
     if (status != CUBLAS_STATUS_SUCCESS) {
-        fprintf(stderr, "[QKV_Projector] cublasSgemm failed: status=%d m=%d n=%d k=%d lda=%d ldb=%d ldc=%d\n",
-                status, 3 * d_model, total_tokens, d_model, d_model, d_model, 3 * d_model);
+        throw std::runtime_error("[QKV_Projector] cublasSgemm failed: status=" + std::to_string(status) +
+                " m=" + std::to_string(3 * d_model) + " n=" + std::to_string(total_tokens) +
+                " k=" + std::to_string(d_model));
     }
 
     addBias(fused_qkv, weights.b_qkv, total_tokens, 3 * d_model, config.stream);
@@ -243,8 +248,8 @@ void launchQkvProjection(const float* input,
                              d_model * sizeof(float), total_tokens,
                              cudaMemcpyDeviceToDevice, config.stream);
             if (err != cudaSuccess) {
-                fprintf(stderr, "[QKV_Projector] cudaMemcpy2DAsync for %s failed: %s\n",
-                        name, cudaGetErrorString(err));
+                throw std::runtime_error(std::string("[QKV_Projector] cudaMemcpy2DAsync for ") + name +
+                        " failed: " + cudaGetErrorString(err));
             }
         };
         
@@ -254,9 +259,6 @@ void launchQkvProjection(const float* input,
     }
 
     // Rule 22: Do NOT destroy handle - we don't own it!
-    if (owns_workspace) {
-        cudaFree(fused_qkv);
-    }
 }
 
 // GQA-specific projection using separate W_q, W_k, W_v
@@ -266,61 +268,69 @@ void launchGQAProjection(const float* input,
                          float* k_out,
                          float* v_out,
                          const QKVProjectionConfig& config) {
-    if (!input || !q_out || !k_out || !v_out) {
-        return;
+    // Rule 20: Fail loud on null pointers
+    if (!input) {
+        throw std::runtime_error("[GQAProjection] input is NULL");
+    }
+    if (!q_out) {
+        throw std::runtime_error("[GQAProjection] q_out is NULL");
+    }
+    if (!k_out) {
+        throw std::runtime_error("[GQAProjection] k_out is NULL");
+    }
+    if (!v_out) {
+        throw std::runtime_error("[GQAProjection] v_out is NULL");
     }
     
     const int total_tokens = config.batch_size * config.seq_len;
     const int d_model = config.d_model;
     
-    // Validate dimensions
+    // Rule 20: Fail loud on invalid dimensions
     if (total_tokens <= 0 || d_model <= 0 || config.num_heads <= 0) {
-        fprintf(stderr, "[GQAProjection] ERROR: Invalid dimensions "
-                "tokens=%d d_model=%d num_heads=%d\n",
-                total_tokens, d_model, config.num_heads);
-        return;
+        throw std::runtime_error("[GQAProjection] Invalid dimensions tokens=" +
+                std::to_string(total_tokens) + " d_model=" + std::to_string(d_model) +
+                " num_heads=" + std::to_string(config.num_heads));
     }
     
-    // GQA-specific validation
     if (d_model % config.num_heads != 0) {
-        fprintf(stderr, "[GQAProjection] ERROR: d_model (%d) must be divisible by num_heads (%d)\n",
-                d_model, config.num_heads);
-        return;
+        throw std::runtime_error("[GQAProjection] d_model (" + std::to_string(d_model) +
+                ") must be divisible by num_heads (" + std::to_string(config.num_heads) + ")");
     }
     
     const int num_kv_heads = config.getNumKVHeads();
     if (num_kv_heads > config.num_heads) {
-        fprintf(stderr, "[GQAProjection] ERROR: num_kv_heads (%d) cannot exceed num_heads (%d)\n",
-                num_kv_heads, config.num_heads);
-        return;
+        throw std::runtime_error("[GQAProjection] num_kv_heads (" + std::to_string(num_kv_heads) +
+                ") cannot exceed num_heads (" + std::to_string(config.num_heads) + ")");
     }
     if (config.num_heads % num_kv_heads != 0) {
-        fprintf(stderr, "[GQAProjection] ERROR: num_heads (%d) must be divisible by num_kv_heads (%d)\n",
-                config.num_heads, num_kv_heads);
-        return;
+        throw std::runtime_error("[GQAProjection] num_heads (" + std::to_string(config.num_heads) +
+                ") must be divisible by num_kv_heads (" + std::to_string(num_kv_heads) + ")");
     }
     
-    // For GQA, use separate W_q, W_k, W_v if provided
-    // Otherwise fall back to slicing W_qkv
-    const float* W_q = weights.W_q ? weights.W_q : weights.W_qkv;
+    // Rule 20: Require explicit GQA weights - NO FALLBACKS
+    if (!weights.W_q) {
+        throw std::runtime_error("[GQAProjection] weights.W_q is NULL - GQA mode requires separate Q weight matrix");
+    }
+    if (!weights.W_k) {
+        throw std::runtime_error("[GQAProjection] weights.W_k is NULL - GQA mode requires separate K weight matrix");
+    }
+    if (!weights.W_v) {
+        throw std::runtime_error("[GQAProjection] weights.W_v is NULL - GQA mode requires separate V weight matrix");
+    }
+    
+    const float* W_q = weights.W_q;
     const float* W_k = weights.W_k;
     const float* W_v = weights.W_v;
-    const float* b_q = weights.b_q ? weights.b_q : weights.b_qkv;
+    const float* b_q = weights.b_q;  // Biases are optional
     const float* b_k = weights.b_k;
     const float* b_v = weights.b_v;
-    
-    if (!W_q || !W_k || !W_v) {
-        fprintf(stderr, "[GQAProjection] ERROR: Missing weight pointers for GQA mode\n");
-        return;
-    }
     
     const int head_dim = d_model / config.num_heads;
     const int kv_dim = num_kv_heads * head_dim;
     
     cublasHandle_t handle = config.handle;
     if (!handle) {
-        fprintf(stderr, "[GQAProjection] ERROR: config.handle is NULL. MUST pass training_state.cublas_handle per Rule 22.\n");
-        return;
+        throw std::runtime_error("[GQAProjection] config.handle is NULL - MUST pass training_state.cublas_handle per Rule 22");
     }
     // REMOVED cublasSetStream - handle already bound to stream in InitTrainingState.cu
     
@@ -338,7 +348,7 @@ void launchGQAProjection(const float* input,
                 &beta,
                 q_out, d_model);
     if (status != CUBLAS_STATUS_SUCCESS) {
-        fprintf(stderr, "[GQAProjection] Q projection cublasSgemm failed: %d\n", status);
+        throw std::runtime_error("[GQAProjection] Q projection cublasSgemm failed: status=" + std::to_string(status));
     }
     
     // K projection: [tokens, d_model] @ W_k^T[kv_dim, d_model] = [tokens, kv_dim]
@@ -351,7 +361,7 @@ void launchGQAProjection(const float* input,
                 &beta,
                 k_out, kv_dim);
     if (status != CUBLAS_STATUS_SUCCESS) {
-        fprintf(stderr, "[GQAProjection] K projection cublasSgemm failed: %d\n", status);
+        throw std::runtime_error("[GQAProjection] K projection cublasSgemm failed: status=" + std::to_string(status));
     }
     
     // K-TRACE: After K projection (before bias)
@@ -367,7 +377,7 @@ void launchGQAProjection(const float* input,
                 &beta,
                 v_out, kv_dim);
     if (status != CUBLAS_STATUS_SUCCESS) {
-        fprintf(stderr, "[GQAProjection] V projection cublasSgemm failed: %d\n", status);
+        throw std::runtime_error("[GQAProjection] V projection cublasSgemm failed: status=" + std::to_string(status));
     }
     
     // Add biases
@@ -403,28 +413,28 @@ void launchQKVReshapeToBHSD(const float* q_in,
                             int num_kv_heads,
                             int head_dim,
                             cudaStream_t stream) {
-    if (!q_in || !k_in || !v_in || !q_out || !k_out || !v_out) {
-        fprintf(stderr, "[QKV_Projector] launchQKVReshapeToBHSD: Invalid inputs "
-                "q_in=%p k_in=%p v_in=%p q_out=%p k_out=%p v_out=%p\n",
-                (void*)q_in, (void*)k_in, (void*)v_in, (void*)q_out, (void*)k_out, (void*)v_out);
-        return;
-    }
+    // Rule 20: Fail loud on null pointers
+    if (!q_in) throw std::runtime_error("[QKVReshapeToBHSD] q_in is NULL");
+    if (!k_in) throw std::runtime_error("[QKVReshapeToBHSD] k_in is NULL");
+    if (!v_in) throw std::runtime_error("[QKVReshapeToBHSD] v_in is NULL");
+    if (!q_out) throw std::runtime_error("[QKVReshapeToBHSD] q_out is NULL");
+    if (!k_out) throw std::runtime_error("[QKVReshapeToBHSD] k_out is NULL");
+    if (!v_out) throw std::runtime_error("[QKVReshapeToBHSD] v_out is NULL");
     
-    // Validate dimensions
+    // Rule 20: Fail loud on invalid dimensions
     if (batch_size <= 0 || seq_len <= 0 || num_heads <= 0 || 
         num_kv_heads <= 0 || head_dim <= 0) {
-        fprintf(stderr, "[QKV_Projector] launchQKVReshapeToBHSD: Invalid dimensions "
-                "batch=%d seq=%d heads=%d kv_heads=%d head_dim=%d\n",
-                batch_size, seq_len, num_heads, num_kv_heads, head_dim);
-        return;
+        throw std::runtime_error("[QKVReshapeToBHSD] Invalid dimensions batch=" +
+                std::to_string(batch_size) + " seq=" + std::to_string(seq_len) +
+                " heads=" + std::to_string(num_heads) + " kv_heads=" + std::to_string(num_kv_heads) +
+                " head_dim=" + std::to_string(head_dim));
     }
     
     // GQA alignment check
     if (num_kv_heads > num_heads || num_heads % num_kv_heads != 0) {
-        fprintf(stderr, "[QKV_Projector] launchQKVReshapeToBHSD: Invalid GQA config "
-                "num_heads=%d must be divisible by num_kv_heads=%d\n",
-                num_heads, num_kv_heads);
-        return;
+        throw std::runtime_error("[QKVReshapeToBHSD] Invalid GQA config num_heads=" +
+                std::to_string(num_heads) + " must be divisible by num_kv_heads=" +
+                std::to_string(num_kv_heads));
     }
     
     constexpr int threads = 256;
@@ -439,7 +449,7 @@ void launchQKVReshapeToBHSD(const float* q_in,
             q_in, q_out, batch_size, seq_len, num_heads, head_dim, q_stride);
         err = cudaGetLastError();
         if (err != cudaSuccess) {
-            fprintf(stderr, "[QKV_Projector] Q reshape kernel failed: %s\n",
+            throw std::runtime_error(std::string("[QKVReshapeToBHSD] Q reshape kernel failed: ") +
                     cudaGetErrorString(err));
         }
     }
@@ -454,7 +464,7 @@ void launchQKVReshapeToBHSD(const float* q_in,
             k_in, k_out, batch_size, seq_len, num_kv_heads, head_dim, kv_stride);
         err = cudaGetLastError();
         if (err != cudaSuccess) {
-            fprintf(stderr, "[QKV_Projector] K reshape kernel failed: %s\n",
+            throw std::runtime_error(std::string("[QKVReshapeToBHSD] K reshape kernel failed: ") +
                     cudaGetErrorString(err));
         }
         
@@ -465,7 +475,7 @@ void launchQKVReshapeToBHSD(const float* q_in,
             v_in, v_out, batch_size, seq_len, num_kv_heads, head_dim, kv_stride);
         err = cudaGetLastError();
         if (err != cudaSuccess) {
-            fprintf(stderr, "[QKV_Projector] V reshape kernel failed: %s\n",
+            throw std::runtime_error(std::string("[QKVReshapeToBHSD] V reshape kernel failed: ") +
                     cudaGetErrorString(err));
         }
     }
@@ -478,14 +488,15 @@ void launchReshapeToBHSD(const float* src,
                          int num_heads,
                          int head_dim,
                          cudaStream_t stream) {
-    if (!src || !dst || batch_size <= 0 || seq_len <= 0 || 
-        num_heads <= 0 || head_dim <= 0) {
-        if (src && dst) {
-            fprintf(stderr, "[QKV_Projector] launchReshapeToBHSD: Invalid dimensions "
-                    "batch=%d seq=%d heads=%d head_dim=%d\n",
-                    batch_size, seq_len, num_heads, head_dim);
-        }
-        return;
+    // Rule 20: Fail loud on null pointers
+    if (!src) throw std::runtime_error("[ReshapeToBHSD] src is NULL");
+    if (!dst) throw std::runtime_error("[ReshapeToBHSD] dst is NULL");
+    
+    // Rule 20: Fail loud on invalid dimensions
+    if (batch_size <= 0 || seq_len <= 0 || num_heads <= 0 || head_dim <= 0) {
+        throw std::runtime_error("[ReshapeToBHSD] Invalid dimensions batch=" +
+                std::to_string(batch_size) + " seq=" + std::to_string(seq_len) +
+                " heads=" + std::to_string(num_heads) + " head_dim=" + std::to_string(head_dim));
     }
 
     const int total = batch_size * num_heads * seq_len * head_dim;
@@ -499,7 +510,7 @@ void launchReshapeToBHSD(const float* src,
     
     const cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        fprintf(stderr, "[QKV_Projector] launchReshapeToBHSD kernel launch failed: %s\n",
+        throw std::runtime_error(std::string("[ReshapeToBHSD] kernel launch failed: ") +
                 cudaGetErrorString(err));
     }
 }
@@ -511,14 +522,15 @@ void launchReshapeFromBHSD(const float* src,
                            int num_heads,
                            int head_dim,
                            cudaStream_t stream) {
-    if (!src || !dst || batch_size <= 0 || seq_len <= 0 || 
-        num_heads <= 0 || head_dim <= 0) {
-        if (src && dst) {
-            fprintf(stderr, "[QKV_Projector] launchReshapeFromBHSD: Invalid dimensions "
-                    "batch=%d seq=%d heads=%d head_dim=%d\n",
-                    batch_size, seq_len, num_heads, head_dim);
-        }
-        return;
+    // Rule 20: Fail loud on null pointers
+    if (!src) throw std::runtime_error("[ReshapeFromBHSD] src is NULL");
+    if (!dst) throw std::runtime_error("[ReshapeFromBHSD] dst is NULL");
+    
+    // Rule 20: Fail loud on invalid dimensions
+    if (batch_size <= 0 || seq_len <= 0 || num_heads <= 0 || head_dim <= 0) {
+        throw std::runtime_error("[ReshapeFromBHSD] Invalid dimensions batch=" +
+                std::to_string(batch_size) + " seq=" + std::to_string(seq_len) +
+                " heads=" + std::to_string(num_heads) + " head_dim=" + std::to_string(head_dim));
     }
 
     const int d_model = num_heads * head_dim;
@@ -531,7 +543,7 @@ void launchReshapeFromBHSD(const float* src,
     
     const cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        fprintf(stderr, "[QKV_Projector] launchReshapeFromBHSD kernel launch failed: %s\n",
+        throw std::runtime_error(std::string("[ReshapeFromBHSD] kernel launch failed: ") +
                 cudaGetErrorString(err));
     }
 }

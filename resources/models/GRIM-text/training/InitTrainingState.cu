@@ -226,12 +226,14 @@ void LanguageModel::initTrainingState() {
             training_state_.lm_head_weights_owned = false;  // Aliased to EmbeddingRuntime - don't free!
             std::cout << "🔗 LM head weights tied to embeddings at " << (void*)training_state_.lm_head_weights << std::endl;
             
-            // Initialize embeddings directly on GPU with proper Xavier scaling
-            // Xavier initialization: stddev = sqrt(2 / (fan_in + fan_out))
-            // For embedding matrix [vocab_size x d_model]: fan_in=d_model, fan_out=vocab_size
-            float xavier_stddev = std::sqrt(2.0f / (cfg.d_model + cfg.vocab_size));
-            std::cout << "🎲 Initializing embedding weights directly on GPU with Xavier (stddev=" << xavier_stddev << ")" << std::endl;
-            launchXavierInit(training_state_.lm_head_weights, lm_head_weight_size, xavier_stddev, 42, training_state_.stream_ctrl.getPrimaryStream());
+            // Initialize embeddings directly on GPU with proper scaling
+            // BUG FIX: Was using Xavier formula sqrt(2/(d_model+vocab_size)) = 0.00625 - WAY TOO SMALL!
+            // Embeddings are lookup tables, not dense layers. Each row is independent.
+            // PyTorch uses N(0, 1) by default, GPT-2 uses 0.02.
+            // We use 0.1 for stronger initial signal - can adjust if training unstable.
+            constexpr float embedding_stddev = 0.1f;  // Reasonable for embedding init
+            std::cout << "🎲 Initializing embedding weights directly on GPU (stddev=" << embedding_stddev << ")" << std::endl;
+            launchXavierInit(training_state_.lm_head_weights, lm_head_weight_size, embedding_stddev, 42, training_state_.stream_ctrl.getPrimaryStream());
             
             cudaStreamSynchronize(training_state_.stream_ctrl.getPrimaryStream());
             
@@ -247,7 +249,7 @@ void LanguageModel::initTrainingState() {
             }
             float weight_norm = std::sqrt(weight_sum_sq / sample_weights.size());
             std::cout << "✓ Embedding weights initialized on GPU: avg_norm=" << weight_norm
-                      << ", max_abs=" << weight_max << " (expected ~" << xavier_stddev << ")" << std::endl;
+                      << ", max_abs=" << weight_max << " (expected ~" << embedding_stddev << ")" << std::endl;
         } else {
             std::cerr << "ERROR: tie_embeddings=true but embedding buffer not available!" << std::endl;
             return;
@@ -261,10 +263,11 @@ void LanguageModel::initTrainingState() {
         }
         training_state_.lm_head_weights_owned = true;  // We allocated - must free!
         
-        // Initialize LM head weights directly on GPU with Xavier scaling
-        float xavier_stddev = std::sqrt(2.0f / (cfg.d_model + cfg.vocab_size));
-        std::cout << "🎲 Initializing LM head weights directly on GPU with Xavier (stddev=" << xavier_stddev << ")" << std::endl;
-        launchXavierInit(training_state_.lm_head_weights, lm_head_weight_size, xavier_stddev, 42, training_state_.stream_ctrl.getPrimaryStream());
+        // Initialize LM head weights with proper scaling (not Xavier - embeddings are lookup tables)
+        // BUG FIX: Was using sqrt(2/(d_model+vocab_size)) = 0.00625 - WAY TOO SMALL!
+        constexpr float embedding_stddev = 0.1f;  // Reasonable for embedding init
+        std::cout << "🎲 Initializing LM head weights directly on GPU (stddev=" << embedding_stddev << ")" << std::endl;
+        launchXavierInit(training_state_.lm_head_weights, lm_head_weight_size, embedding_stddev, 42, training_state_.stream_ctrl.getPrimaryStream());
         
         cudaStreamSynchronize(training_state_.stream_ctrl.getPrimaryStream());
         
@@ -280,7 +283,7 @@ void LanguageModel::initTrainingState() {
         }
         float weight_norm = std::sqrt(weight_sum_sq / sample_weights.size());
         std::cout << "✓ LM head weights initialized on GPU: avg_norm=" << weight_norm
-                  << ", max_abs=" << weight_max << " (expected ~" << xavier_stddev << ")" << std::endl;
+                  << ", max_abs=" << weight_max << " (expected ~" << embedding_stddev << ")" << std::endl;
     }
     
     if (cfg.use_bias) {

@@ -5,14 +5,6 @@
 
 namespace GRIM {
 
-struct XavierConfig {
-    std::size_t elements = 0;
-    float fan_in = 1.0f;
-    float fan_out = 1.0f;
-    unsigned long long seed = 1337ULL;
-    unsigned long long subsequence = 0ULL;
-    cudaStream_t stream = nullptr;
-};
 
 struct XavierInitArgs {
     float* data = nullptr;

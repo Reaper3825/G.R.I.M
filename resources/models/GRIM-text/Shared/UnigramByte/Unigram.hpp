@@ -156,10 +156,10 @@ public:
                            int min_subword_freq = 3,
                            bool prune_during_mining = false);
     
-    // Add a piece with auto-generated token_id
-    void addPiece(const std::string& text, float score, bool is_user_defined = false);
+    // DELETED: Auto-ID overload removed per Rule 20 (no silent fallbacks)
+    // Callers MUST provide explicit token_id = UNIGRAM_VOCAB_OFFSET + pieces_.size()
     
-    // Add a piece with explicit token_id (for loading from saved vocab)
+    // Add a piece with explicit token_id (REQUIRED - no auto-ID)
     void addPiece(const std::string& text, float score, int token_id, bool is_user_defined);
     
     // Get piece by ID

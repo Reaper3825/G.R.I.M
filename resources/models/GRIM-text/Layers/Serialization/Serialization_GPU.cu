@@ -23,25 +23,13 @@
 
 namespace {
 
-constexpr auto kSerializationLogModule = GRIM::Logging::ModuleId::Checkpoint;
+constexpr auto kLogModule = GRIM::Logging::ModuleId::Checkpoint;
 
 template <typename... Args>
-std::string MakeLogMessage(Args&&... args) {
+std::string Msg(Args&&... args) {
     std::ostringstream oss;
     (oss << ... << args);
     return oss.str();
-}
-
-inline void SerializationLogError(const std::string& message) {
-    GRIM::Logging::EmitModuleError(kSerializationLogModule, message);
-}
-
-inline void SerializationLogWarn(const std::string& message) {
-    GRIM::Logging::EmitModuleWarning(kSerializationLogModule, message);
-}
-
-inline void SerializationLogInfo(const std::string& message) {
-    GRIM::Logging::EmitModuleInfo(kSerializationLogModule, message);
 }
 
 } // namespace
@@ -51,8 +39,8 @@ inline void SerializationLogInfo(const std::string& message) {
     do {                                                                                                             \
         cudaError_t err__ = (call);                                                                                  \
         if (err__ != cudaSuccess) {                                                                                  \
-            SerializationLogError(MakeLogMessage("[SerializationLayer] CUDA error ", __FILE__, ':', __LINE__, ": ", \
-                                         cudaGetErrorString(err__)));                                                   \
+            GRIM::Logging::EmitModuleError(kLogModule, Msg("[CUDA] ", __FILE__, ':', __LINE__, ": ",                 \
+                                         cudaGetErrorString(err__)));                                                \
             throw std::runtime_error("CUDA failure");                                                                 \
         }                                                                                                            \
     } while (0)
@@ -69,21 +57,18 @@ void SerializationLayer::setConfig(const SerializationConfig& config) {
 bool SerializationLayer::load(const SerializationLoadRequest& request) {
     const auto& cfg = request.config;
     if (cfg.vocab_size <= 0 || cfg.d_model <= 0 || cfg.num_layers <= 0) {
-        SerializationLogError("[SerializationLayer::load] Invalid model dimensions");
+        GRIM::Logging::EmitModuleError(kLogModule, "[load] Invalid model dimensions");
         return false;
     }
     if (request.encoder_layers.size() != static_cast<std::size_t>(cfg.num_layers)) {
-        SerializationLogError(MakeLogMessage("[SerializationLayer::load] Encoder layer view mismatch (expected ",
-                                            cfg.num_layers,
-                                            ", got ",
-                                            request.encoder_layers.size(),
-                                            ")"));
+        GRIM::Logging::EmitModuleError(kLogModule, Msg("[load] Encoder layer mismatch (expected ",
+                                            cfg.num_layers, ", got ", request.encoder_layers.size(), ")"));
         return false;
     }
 
     std::ifstream file(request.path, std::ios::binary | std::ios::ate);
     if (!file) {
-        SerializationLogError(MakeLogMessage("[SerializationLayer::load] Failed to open: ", request.path));
+        GRIM::Logging::EmitModuleError(kLogModule, Msg("[load] Failed to open: ", request.path));
         return false;
     }
     const auto file_size = static_cast<std::size_t>(file.tellg());
@@ -91,54 +76,46 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
 
     std::vector<uint8_t> buffer(file_size);
     if (!file.read(reinterpret_cast<char*>(buffer.data()), file_size)) {
-        SerializationLogError("[SerializationLayer::load] Read failed");
+        GRIM::Logging::EmitModuleError(kLogModule, "[load] Read failed");
         return false;
     }
 
     flatbuffers::Verifier verifier(buffer.data(), buffer.size());
     if (!GRIMTransformer::VerifyTransformerModelBuffer(verifier)) {
-        SerializationLogError("[SerializationLayer::load] Invalid FlatBuffer");
+        GRIM::Logging::EmitModuleError(kLogModule, "[load] Invalid FlatBuffer");
         return false;
     }
 
     const auto* model_fb = GRIMTransformer::GetTransformerModel(buffer.data());
     if (!model_fb) {
-        SerializationLogError("[SerializationLayer::load] Failed to parse FlatBuffer");
+        GRIM::Logging::EmitModuleError(kLogModule, "[load] Failed to parse FlatBuffer");
         return false;
     }
     if (model_fb->version() != GRIM_MODEL_VERSION) {
-        SerializationLogError(MakeLogMessage("[SerializationLayer::load] Version mismatch (",
-                                            model_fb->version(),
-                                            " != ",
-                                            GRIM_MODEL_VERSION,
-                                            ")"));
+        GRIM::Logging::EmitModuleError(kLogModule, Msg("[load] Version mismatch (",
+                                            model_fb->version(), " != ", GRIM_MODEL_VERSION, ")"));
         return false;
     }
 
     const auto* fb_config = model_fb->config();
     if (!fb_config || fb_config->vocab_size() != cfg.vocab_size || fb_config->d_model() != cfg.d_model ||
         fb_config->num_layers() != cfg.num_layers || fb_config->num_heads() != cfg.num_heads) {
-        SerializationLogError("[SerializationLayer::load] Config mismatch");
+        GRIM::Logging::EmitModuleError(kLogModule, "[load] Config mismatch");
         return false;
     }
 
-    // GQA: Validate num_kv_heads match (no fallback - both must be properly set)
     const int checkpoint_kv_heads = static_cast<int>(fb_config->num_kv_heads());
-    
     if (checkpoint_kv_heads != cfg.num_kv_heads) {
-        SerializationLogError(MakeLogMessage("[SerializationLayer::load] GQA config mismatch: checkpoint has num_kv_heads=",
-                                            checkpoint_kv_heads,
-                                            " but model expects num_kv_heads=",
-                                            cfg.num_kv_heads,
-                                            ". Cannot load MHA checkpoint into GQA model or vice versa."));
+        GRIM::Logging::EmitModuleError(kLogModule, Msg("[load] GQA mismatch: checkpoint num_kv_heads=",
+                                            checkpoint_kv_heads, " but model expects ", cfg.num_kv_heads));
         return false;
     }
-    SerializationLogInfo(MakeLogMessage("[SerializationLayer::load] GQA config: num_heads=", 
-                                        fb_config->num_heads(), ", num_kv_heads=", checkpoint_kv_heads));
+    GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[load] GQA: num_heads=", 
+                                        fb_config->num_heads(), " num_kv_heads=", checkpoint_kv_heads));
 
     const auto* fb_embeddings = model_fb->embeddings();
     if (!fb_embeddings) {
-        SerializationLogError("[SerializationLayer::load] Embedding block missing");
+        GRIM::Logging::EmitModuleError(kLogModule, "[load] Embedding block missing");
         return false;
     }
 
@@ -151,21 +128,15 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
                                    const DeviceWriteView& view,
                                    const char* label) -> bool {
         if (host.empty()) {
-            SerializationLogInfo(MakeLogMessage("[SerializationLayer::load] Skipping empty ", label));
             return true;
         }
         if (!view.ptr) {
-            SerializationLogError(MakeLogMessage("[SerializationLayer::load] Missing destination for ", label));
+            GRIM::Logging::EmitModuleError(kLogModule, Msg("[load] Missing destination for ", label));
             return false;
         }
         if (view.count != host.size()) {
-            SerializationLogError(MakeLogMessage("[SerializationLayer::load] Size mismatch for ",
-                                                label,
-                                                " (dest=",
-                                                view.count,
-                                                ", src=",
-                                                host.size(),
-                                                ")"));
+            GRIM::Logging::EmitModuleError(kLogModule, Msg("[load] Size mismatch for ", label,
+                                                " (dest=", view.count, ", src=", host.size(), ")"));
             return false;
         }
         CUDA_CHECK(cudaMemcpy(view.ptr, host.data(), host.size() * sizeof(float), cudaMemcpyHostToDevice));
@@ -174,7 +145,7 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
 
     if (cfg.use_gpu) {
         if (!request.gpu_embedding.token_embeddings.ptr) {
-            SerializationLogError("[SerializationLayer::load] GPU embedder not initialized");
+            GRIM::Logging::EmitModuleError(kLogModule, "[load] GPU embedder not initialized");
             return false;
         }
         if (!upload_device_vector(token_host, request.gpu_embedding.token_embeddings, "token embeddings")) {
@@ -200,7 +171,7 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
 
     const auto* fb_layers = model_fb->encoder_layers();
     if (!fb_layers || fb_layers->size() != static_cast<std::size_t>(cfg.num_layers)) {
-        SerializationLogError("[SerializationLayer::load] Encoder layers missing or malformed");
+        GRIM::Logging::EmitModuleError(kLogModule, "[load] Encoder layers missing or malformed");
         return false;
     }
 
@@ -251,10 +222,9 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
             if (!upload_device_vector(lm_proj_host, request.lm_head.projection, "LM head projection")) {
                 return false;
             }
-        } else if (cfg.tie_embeddings) {
-            SerializationLogInfo("[SerializationLayer::load] LM head projection tied to embeddings");
-        } else {
-            SerializationLogWarn("[SerializationLayer::load] LM head projection missing");
+        } else if (!cfg.tie_embeddings) {
+            GRIM::Logging::EmitModuleError(kLogModule, "[load] LM head projection missing (tie_embeddings=false)");
+            return false;
         }
 
         if (cfg.use_bias && request.lm_head.bias.ptr && fb_lm_head->bias_data()) {
@@ -263,7 +233,8 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
                 return false;
             }
         } else if (cfg.use_bias) {
-            SerializationLogWarn("[SerializationLayer::load] LM head bias missing");
+            GRIM::Logging::EmitModuleError(kLogModule, "[load] LM head bias missing (use_bias=true)");
+            return false;
         }
     }
 
@@ -276,7 +247,8 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
                 return false;
             }
         } else {
-            SerializationLogWarn("[SerializationLayer::load] Numeric head projection missing");
+            GRIM::Logging::EmitModuleError(kLogModule, "[load] Numeric head projection missing");
+            return false;
         }
 
         if (request.numeric_head.expect_bias && request.numeric_head.bias.ptr && fb_numeric_head->bias_data()) {
@@ -286,20 +258,21 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
                 return false;
             }
         } else if (request.numeric_head.expect_bias) {
-            SerializationLogWarn("[SerializationLayer::load] Numeric head bias missing");
+            GRIM::Logging::EmitModuleError(kLogModule, "[load] Numeric head bias missing");
+            return false;
         }
     } else if (request.numeric_head.enabled) {
-        SerializationLogWarn("[SerializationLayer::load] Numeric head block missing");
+        GRIM::Logging::EmitModuleError(kLogModule, "[load] Numeric head block missing in checkpoint");
+        return false;
     }
 
-    // Load ScratchBlock weights (if present in file and destination is provided)
     const auto* fb_scratch_block = model_fb->scratch_block();
     if (fb_scratch_block && fb_scratch_block->enabled()) {
         if (request.scratch_block.atom_type_embeddings.ptr && fb_scratch_block->atom_type_embeddings()) {
             std::vector<float> sb_atom_emb(fb_scratch_block->atom_type_embeddings()->begin(),
                                            fb_scratch_block->atom_type_embeddings()->end());
             if (!upload_device_vector(sb_atom_emb, request.scratch_block.atom_type_embeddings, "ScratchBlock atom_type_embeddings")) {
-                SerializationLogWarn("[SerializationLayer::load] Failed to load ScratchBlock atom_type_embeddings");
+                return false;
             }
         }
         
@@ -307,46 +280,36 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
             std::vector<float> sb_atom_proj(fb_scratch_block->atom_projection()->begin(),
                                             fb_scratch_block->atom_projection()->end());
             if (!upload_device_vector(sb_atom_proj, request.scratch_block.atom_projection, "ScratchBlock atom_projection")) {
-                SerializationLogWarn("[SerializationLayer::load] Failed to load ScratchBlock atom_projection");
+                return false;
             }
         }
         
-        // Load text feature projection (VALUE encoding path)
         if (request.scratch_block.text_feature_projection.ptr && fb_scratch_block->text_feature_projection()) {
             std::vector<float> sb_text_proj(fb_scratch_block->text_feature_projection()->begin(),
                                             fb_scratch_block->text_feature_projection()->end());
             if (!upload_device_vector(sb_text_proj, request.scratch_block.text_feature_projection, "ScratchBlock text_feature_projection")) {
-                SerializationLogWarn("[SerializationLayer::load] Failed to load ScratchBlock text_feature_projection");
+                return false;
             }
         }
         
-        SerializationLogInfo(MakeLogMessage("[SerializationLayer::load] ScratchBlock loaded: enabled=", 
-                                            fb_scratch_block->enabled(),
-                                            " atom_types=", fb_scratch_block->num_atom_types(),
+        GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[load] ScratchBlock: atom_types=", 
+                                            fb_scratch_block->num_atom_types(),
                                             " atom_dim=", fb_scratch_block->atom_embedding_dim()));
     }
 
-    SerializationLogInfo("[SerializationLayer::load] Model loaded successfully");
+    GRIM::Logging::EmitModuleInfo(kLogModule, "[load] Model loaded successfully");
     return true;
 }
 
 bool SerializationLayer::save(const SerializationSaveRequest& request) {
-    SerializationLogInfo("[SerializationLayer::save] ENTERED");
     const auto& cfg = request.sources.config;
-    SerializationLogInfo(MakeLogMessage("[SerializationLayer::save] Config: vocab=", cfg.vocab_size,
-                                        " d_model=", cfg.d_model,
-                                        " layers=", cfg.num_layers,
-                                        " encoder_layers_size=", request.sources.encoder_layers.size()));
     if (cfg.vocab_size <= 0 || cfg.d_model <= 0 || cfg.num_layers <= 0) {
-        SerializationLogError("[SerializationLayer::save] Invalid model dimensions");
+        GRIM::Logging::EmitModuleError(kLogModule, "[save] Invalid model dimensions");
         return false;
     }
     if (request.sources.encoder_layers.size() != static_cast<std::size_t>(cfg.num_layers)) {
-        SerializationLogError(MakeLogMessage("[SerializationLayer::save] Encoder layer view mismatch (expected ",
-                                            cfg.num_layers,
-                                            ", got ",
-                                            request.sources.encoder_layers.size(),
-                                            ")"));
+        GRIM::Logging::EmitModuleError(kLogModule, Msg("[save] Encoder layer mismatch (expected ",
+                                            cfg.num_layers, ", got ", request.sources.encoder_layers.size(), ")"));
         return false;
     }
 
@@ -388,21 +351,16 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
 
     auto download_device_vector = [](const DeviceReadView& view, const char* label) -> std::vector<float> {
         if (view.count == 0) {
-            SerializationLogInfo(MakeLogMessage("[SerializationLayer::save] Skipping empty ", label));
             return {};
         }
         if (!view.ptr) {
-            SerializationLogError(MakeLogMessage("[SerializationLayer::save] Missing ", label, " buffer"));
+            GRIM::Logging::EmitModuleError(kLogModule, Msg("[save] Missing ", label, " buffer"));
             return {};
         }
-        SerializationLogInfo(MakeLogMessage("[SerializationLayer::save] Downloading ", label, " (", view.count, " floats)"));
         std::vector<float> host(view.count);
         cudaError_t err = cudaMemcpy(host.data(), view.ptr, view.count * sizeof(float), cudaMemcpyDeviceToHost);
         if (err != cudaSuccess) {
-            SerializationLogError(MakeLogMessage("[SerializationLayer::save] Failed to download ",
-                                                label,
-                                                ": ",
-                                                cudaGetErrorString(err)));
+            GRIM::Logging::EmitModuleError(kLogModule, Msg("[save] Failed to download ", label, ": ", cudaGetErrorString(err)));
             return {};
         }
         return host;
@@ -410,7 +368,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
 
     flatbuffers::Offset<flatbuffers::Vector<float>> fb_token_embed = 0;
     flatbuffers::Offset<flatbuffers::Vector<float>> fb_rms_gamma = 0;
-    bool use_rms = false;
+    bool use_rms = true;
 
     if (cfg.use_gpu && request.sources.gpu_embedding.token_embeddings.ptr) {
         auto token_embed_data = download_device_vector(request.sources.gpu_embedding.token_embeddings, "token embeddings");
@@ -430,7 +388,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
     } else {
         const auto& cpu_embed = request.sources.cpu_embedding;
         if (cpu_embed.token_data.empty()) {
-            SerializationLogError("[SerializationLayer::save] CPU embedding data is missing");
+            GRIM::Logging::EmitModuleError(kLogModule, "[save] CPU embedding data is missing");
             return false;
         }
         fb_token_embed = builder.CreateVector(cpu_embed.token_data);
@@ -537,10 +495,9 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             return false;
         }
         fb_lm_proj = builder.CreateVector(lm_proj);
-    } else if (cfg.tie_embeddings) {
-        SerializationLogInfo("[SerializationLayer::save] LM head projection tied to embeddings");
-    } else {
-        SerializationLogWarn("[SerializationLayer::save] LM head weights not initialized");
+    } else if (!cfg.tie_embeddings) {
+        GRIM::Logging::EmitModuleError(kLogModule, "[save] LM head projection missing (tie_embeddings=false)");
+        return false;
     }
 
     if (cfg.use_bias) {
@@ -551,7 +508,8 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             }
             fb_lm_bias = builder.CreateVector(lm_bias);
         } else {
-            SerializationLogWarn("[SerializationLayer::save] LM head bias not initialized");
+            GRIM::Logging::EmitModuleError(kLogModule, "[save] LM head bias missing (use_bias=true)");
+            return false;
         }
     }
 
@@ -589,7 +547,8 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             static_cast<uint32_t>(cfg.d_model),
             cfg.use_bias && num_view.bias.ptr != nullptr);
     } else if (num_view.enabled) {
-        SerializationLogWarn("[SerializationLayer::save] Numeric head projection missing");
+        GRIM::Logging::EmitModuleError(kLogModule, "[save] Numeric head projection missing");
+        return false;
     }
 
     // Save ScratchBlock weights (if enabled)
@@ -611,7 +570,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
                 static_cast<uint32_t>(sb_view.d_model),
                 sb_view.atom_scale,
                 sb_view.enabled);
-            SerializationLogInfo(MakeLogMessage("[SerializationLayer::save] ScratchBlock saved: atom_emb=",
+            GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[save] ScratchBlock: atom_emb=",
                                                 sb_atom_emb.size(), " atom_proj=", sb_atom_proj.size(),
                                                 " text_proj=", sb_text_proj.size()));
         }
@@ -664,7 +623,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             std::filesystem::create_directories(parent);
         }
     } catch (const std::exception& ex) {
-        SerializationLogError(MakeLogMessage("[SerializationLayer::save] Failed to create directories: ", ex.what()));
+        GRIM::Logging::EmitModuleError(kLogModule, Msg("[save] Failed to create directories: ", ex.what()));
         return false;
     }
 
@@ -674,12 +633,12 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
     {
         std::ofstream file(temp_path, std::ios::binary);
         if (!file) {
-            SerializationLogError(MakeLogMessage("[SerializationLayer::save] Failed to open: ", temp_path));
+            GRIM::Logging::EmitModuleError(kLogModule, Msg("[save] Failed to open: ", temp_path));
             return false;
         }
         file.write(reinterpret_cast<const char*>(builder.GetBufferPointer()), builder.GetSize());
         if (!file) {
-            SerializationLogError("[SerializationLayer::save] Write failed");
+            GRIM::Logging::EmitModuleError(kLogModule, "[save] Write failed");
             return false;
         }
         file.flush();
@@ -688,24 +647,24 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
     if (!config_.atomic_write) {
         std::filesystem::rename(temp_path, final_path, ec);
         if (ec) {
-            SerializationLogError(MakeLogMessage("[SerializationLayer::save] Rename failed: ", ec.message()));
+            GRIM::Logging::EmitModuleError(kLogModule, Msg("[save] Rename failed: ", ec.message()));
             return false;
         }
     } else {
     #ifdef _WIN32
         if (!MoveFileExA(temp_path.c_str(), final_path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-            SerializationLogError("[SerializationLayer::save] Rename failed");
+            GRIM::Logging::EmitModuleError(kLogModule, "[save] Rename failed");
             return false;
         }
     #else
         if (std::rename(temp_path.c_str(), final_path.c_str()) != 0) {
-            SerializationLogError("[SerializationLayer::save] Rename failed");
+            GRIM::Logging::EmitModuleError(kLogModule, "[save] Rename failed");
             return false;
         }
     #endif
     }
 
-    SerializationLogInfo(MakeLogMessage("[SerializationLayer::save] Model saved: ", final_path));
+    GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[save] Model saved: ", final_path));
     return true;
 }
 

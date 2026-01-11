@@ -211,10 +211,16 @@ struct GRMTHeader {
 
 // Returns: pair of (flat token sequence, vocab_size)
 static std::pair<std::vector<int64_t>, uint32_t> load_grmt(const std::string& path, int64_t max_tokens = -1) {
+    std::cout << "[GRMT] Opening file: " << path << "\n";
+    std::cout.flush();
+    
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) {
         throw std::runtime_error("failed to open GRMT file: " + path);
     }
+    
+    std::cout << "[GRMT] Reading header...\n";
+    std::cout.flush();
     
     GRMTHeader header;
     file.read(reinterpret_cast<char*>(&header.magic), sizeof(uint32_t));
@@ -222,19 +228,33 @@ static std::pair<std::vector<int64_t>, uint32_t> load_grmt(const std::string& pa
     file.read(reinterpret_cast<char*>(&header.num_sequences), sizeof(uint32_t));
     file.read(reinterpret_cast<char*>(&header.vocab_size), sizeof(uint32_t));
     
+    std::cout << "[GRMT] Header read complete\n";
+    std::cout.flush();
+    
     // Validate header
+    std::cout << "[GRMT] Validating magic...\n";
+    std::cout.flush();
+    
     constexpr uint32_t kGRMTMagic = 0x474D5254;  // "GRMT"
     if (header.magic != kGRMTMagic) {
         throw std::runtime_error("invalid GRMT magic: " + std::to_string(header.magic));
     }
-    if (header.version != 4) {
-        throw std::runtime_error("unsupported GRMT version: " + std::to_string(header.version));
+    
+    std::cout << "[GRMT] Validating version...\n";
+    std::cout.flush();
+    
+    if (header.version < 4 || header.version > 5) {
+        throw std::runtime_error("unsupported GRMT version: " + std::to_string(header.version) + " (expected 4 or 5)");
     }
     
+    std::cout << "[GRMT] Printing header info...\n";
+    std::cout.flush();
+    
     std::cout << "[GRMT] Loading " << path << "\n";
-    std::cout << "[GRMT] version=" << header.version 
-              << " sequences=" << header.num_sequences 
-              << " vocab_size=" << header.vocab_size << "\n";
+    std::cout << "[GRMT] version=" << header.version << "\n";
+    std::cout << "[GRMT] sequences=" << header.num_sequences << "\n"; 
+    std::cout << "[GRMT] vocab_size=" << header.vocab_size << "\n";
+    std::cout.flush();
     
     std::vector<int64_t> all_tokens;
     all_tokens.reserve(1024 * 1024);  // Pre-allocate 1M tokens
@@ -255,6 +275,11 @@ static std::pair<std::vector<int64_t>, uint32_t> load_grmt(const std::string& pa
         std::vector<uint32_t> token_ids(seq_len);
         file.read(reinterpret_cast<char*>(token_ids.data()), seq_len * sizeof(uint32_t));
         
+        // GRMT v5: Skip targets array (int32 array, same length as token_ids)
+        if (header.version >= 5) {
+            file.seekg(seq_len * sizeof(int32_t), std::ios::cur);
+        }
+        
         // Skip numeric_values (float array)
         file.seekg(seq_len * sizeof(float), std::ios::cur);
         
@@ -268,7 +293,14 @@ static std::pair<std::vector<int64_t>, uint32_t> load_grmt(const std::string& pa
         file.seekg(seq_len * sizeof(uint8_t), std::ios::cur);
         
         // Append tokens to flat sequence
+        // IMPORTANT: Skip atom tokens (256-511) - they are structural placeholders
+        // that vanilla transformers can't handle properly. Only keep:
+        // - Byte tokens (0-255)
+        // - Unigram tokens (512+)
         for (uint32_t tid : token_ids) {
+            if (tid >= 256 && tid < 512) {
+                continue;  // Skip atom placeholders
+            }
             all_tokens.push_back(static_cast<int64_t>(tid));
         }
         
@@ -306,7 +338,8 @@ public:
     };
     
     std::vector<Piece> pieces_;           // Unigram pieces (index in file order)
-    std::unordered_map<std::string, uint32_t> piece_to_id_;  // For encoding
+    std::unordered_map<std::string, uint32_t> piece_to_id_;  // For encoding: text -> token_id
+    std::unordered_map<uint32_t, std::string> id_to_piece_;  // For decoding: token_id -> text
     uint32_t total_vocab_size_ = 0;
     
     bool load(const std::string& vocab_path) {
@@ -327,8 +360,8 @@ public:
         // Read version (2 bytes)
         uint16_t version;
         file.read(reinterpret_cast<char*>(&version), sizeof(version));
-        if (version != 2) {
-            std::cerr << "[GRIMVocab] Unsupported version: " << version << "\n";
+        if (version < 2 || version > 3) {
+            std::cerr << "[GRIMVocab] Unsupported version: " << version << " (expected 2 or 3)\n";
             return false;
         }
         
@@ -352,10 +385,10 @@ public:
         file.read(reinterpret_cast<char*>(&total_vocab_size_), sizeof(total_vocab_size_));
         
         std::cout << "[GRIMVocab] Loading " << vocab_path << "\n";
-        std::cout << "[GRIMVocab] unigram_pieces=" << unigram_count 
+        std::cout << "[GRIMVocab] version=" << version << " unigram_pieces=" << unigram_count 
                   << " total_vocab_size=" << total_vocab_size_ << "\n";
         
-        // Read pieces: length (4 bytes) + text + score (4 bytes float)
+        // Read pieces: length (4 bytes) + text + score (4 bytes float) [+ token_id (4 bytes) for v3]
         pieces_.clear();
         pieces_.reserve(unigram_count);
         
@@ -374,17 +407,34 @@ public:
             float score;
             file.read(reinterpret_cast<char*>(&score), sizeof(score));
             
+            // Version 3 includes stored token_id after score - we MUST use this!
+            // The stored ID matches what the tokenizer/DataLoader uses.
+            uint32_t token_id;
+            if (version == 3) {
+                file.read(reinterpret_cast<char*>(&token_id), sizeof(token_id));
+            } else {
+                // Fallback for v2: compute as before
+                token_id = UNIGRAM_TOKEN_BASE + i;
+            }
+            
             bool is_special = !text.empty() && text[0] == '<';
             pieces_.push_back({text, score, is_special});
             
-            // Map piece to its global token ID (offset by UNIGRAM_TOKEN_BASE)
-            piece_to_id_[text] = UNIGRAM_TOKEN_BASE + i;
+            // Map piece to its STORED token ID (critical for v3!)
+            piece_to_id_[text] = token_id;
+            // Reverse mapping for decoding
+            id_to_piece_[token_id] = text;
+        }
+        
+        if (!file.good()) {
+            std::cerr << "[GRIMVocab] File read error after loading pieces\n";
+            return false;
         }
         
         std::cout << "[GRIMVocab] Loaded " << pieces_.size() << " unigram pieces\n";
         return true;
     }
-    
+
     // Simple greedy encode (not Viterbi - good enough for prompts)
     std::vector<int64_t> encode(const std::string& text) const {
         std::vector<int64_t> tokens;
@@ -426,15 +476,18 @@ public:
             if (id < 256) {
                 // Byte token
                 out.push_back(static_cast<char>(id));
-            } else if (id >= UNIGRAM_TOKEN_BASE && (id - UNIGRAM_TOKEN_BASE) < pieces_.size()) {
-                // Unigram piece
-                out.append(pieces_[id - UNIGRAM_TOKEN_BASE].text);
-            } else if (id >= ATOM_TOKEN_BASE && id < UNIGRAM_TOKEN_BASE) {
-                // Atom placeholder - skip or show placeholder
-                out.append("[ATOM:" + std::to_string(id - ATOM_TOKEN_BASE) + "]");
             } else {
-                // Unknown token
-                out.append("[UNK:" + std::to_string(id) + "]");
+                // Look up in id_to_piece_ map (works for both atoms and unigrams with v3 stored IDs)
+                auto it = id_to_piece_.find(id);
+                if (it != id_to_piece_.end()) {
+                    out.append(it->second);
+                } else if (id >= ATOM_TOKEN_BASE && id < UNIGRAM_TOKEN_BASE) {
+                    // Atom placeholder not in vocab - show placeholder
+                    out.append("[ATOM:" + std::to_string(id - ATOM_TOKEN_BASE) + "]");
+                } else {
+                    // Unknown token
+                    out.append("[UNK:" + std::to_string(id) + "]");
+                }
             }
         }
         
@@ -1103,17 +1156,37 @@ static std::vector<int64_t> generate(GPT & model,
 //======================================================//
 
 int main(int argc, char ** argv) {
+    std::cout << "[STARTUP] Parsing arguments...\n";
+    std::cout.flush();
+    
     TrainConfig cfg;
     auto args = parse_args(argc, argv);
+    std::cout << "[STARTUP] Applying config...\n";
+    std::cout.flush();
+    
     apply_args(args, cfg);
+    
+    std::cout << "[STARTUP] Config ready\n";
+    std::cout.flush();
 
     //======================================================//
     //  Configuration Summary
     //======================================================//
+    std::cout << "[STARTUP] Printing config summary...\n";
+    std::cout.flush();
+    
     std::cout << "\n========================================\n";
     std::cout << "LIBTORCH BASELINE (GRIM-text Feature Parity)\n";
     std::cout << "========================================\n";
-    std::cout << "[Config] dataset: " << cfg.data_path << "\n";
+    if (cfg.use_grmt) {
+        std::cout << "[Config] mode: GRMT (full vocab)\n";
+        std::cout << "[Config] vocab: " << cfg.vocab_path << "\n";
+        std::cout << "[Config] training: " << cfg.grmt_path << "\n";
+        std::cout << "[Config] validation: " << cfg.grmt_val_path << "\n";
+    } else {
+        std::cout << "[Config] mode: JSONL (byte-level)\n";
+        std::cout << "[Config] dataset: " << cfg.data_path << "\n";
+    }
     std::cout << "[Config] seq_len=" << cfg.seq_len
               << " batch_size=" << cfg.batch_size
               << " epochs=" << cfg.epochs << "\n";
@@ -1159,12 +1232,17 @@ int main(int argc, char ** argv) {
             std::cerr << "[ERROR] failed to load vocab file\n";
             return 1;
         }
+        std::cout << "[STARTUP] Vocab loaded successfully, loading GRMT data...\n";
+        std::cout.flush();
         
         // Load from GRMT binary format (full GRIM-text vocab)
         if (!fs::exists(cfg.grmt_path)) {
             std::cerr << "[ERROR] missing GRMT dataset: " << cfg.grmt_path << "\n";
             return 1;
         }
+        std::cout << "[STARTUP] Opening GRMT file...\n";
+        std::cout.flush();
+        
         auto [grmt_data, grmt_vocab] = load_grmt(cfg.grmt_path, cfg.max_tokens);
         data = std::move(grmt_data);
         vocab_size = grmt_vocab;

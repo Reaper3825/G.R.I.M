@@ -209,17 +209,18 @@ bool ensureCapacity(std::size_t required, cudaStream_t stream) {
 		return false;
 	}
 	
-	// Zero-initialize ALL slots to catch any missed init kernels.
-	// This sets has_nan=0, has_inf=0, size=0 which makes uninit detection easier.
-	// NOTE: min_val/max_val will be wrong (0 instead of ±INF) but the init kernel
-	// will overwrite them anyway. If init kernel doesn't run, we'll see size=0.
-	const cudaError_t memset_err = cudaMemset(
+	// BUG FIX: Use cudaMemsetAsync on the SAME stream as the init/compute kernels.
+	// Previously used synchronous cudaMemset (NULL stream) which doesn't synchronize
+	// with non-blocking streams. This caused a race condition where init kernels
+	// could run before memset completed, leaving slots with stale zeros.
+	const cudaError_t memset_err = cudaMemsetAsync(
 		g_device_results,
 		0,
-		alloc_size * sizeof(GradStatsResult));
+		alloc_size * sizeof(GradStatsResult),
+		stream);
 	if (memset_err != cudaSuccess) {
 		std::ostringstream oss;
-		oss << "[GradStats] cudaMemset failed: " << cudaGetErrorString(memset_err);
+		oss << "[GradStats] cudaMemsetAsync failed: " << cudaGetErrorString(memset_err);
 		GRIM::Logging::EmitModuleError(GRIM::Logging::ModuleId::BackwardPass, oss.str());
 		cudaFree(g_device_results);
 		g_device_results = nullptr;
@@ -280,6 +281,8 @@ void enqueue(const char* name,
 	float explosion_threshold,
 	cudaStream_t stream) {
 	if (!name || !data || size == 0) {
+		fprintf(stderr, "[GradStats] enqueue SKIPPED: name=%p data=%p size=%zu\n", 
+		        (void*)name, (void*)data, size);
 		return;
 	}
 	if (!stream) {
@@ -290,6 +293,9 @@ void enqueue(const char* name,
 	}
 
 	const std::size_t index = g_entries.size();
+	fprintf(stderr, "[GradStats] enqueue '%s' index=%zu size=%zu data=%p\n", 
+	        name, index, size, (void*)data);
+	
 	if (!ensureCapacity(index + 1, stream)) {
 		return;
 	}

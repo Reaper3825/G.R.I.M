@@ -395,11 +395,11 @@ __global__ void kernelTrieLookup(
 UnigramLM::UnigramLM() 
     : gpu_(std::make_unique<GPUData>())
 {
-    // Initialize with special tokens
-    addPiece("<unk>", -10.0f, true);
-    addPiece("<pad>", -10.0f, true);
-    addPiece("<s>", -10.0f, true);
-    addPiece("</s>", -10.0f, true);
+    // Initialize with special tokens - explicit IDs required (no auto-ID per Rule 20)
+    addPiece("<unk>", -10.0f, UNIGRAM_VOCAB_OFFSET + 0, true);
+    addPiece("<pad>", -10.0f, UNIGRAM_VOCAB_OFFSET + 1, true);
+    addPiece("<s>", -10.0f, UNIGRAM_VOCAB_OFFSET + 2, true);
+    addPiece("</s>", -10.0f, UNIGRAM_VOCAB_OFFSET + 3, true);
     
     // Build trie with special tokens so encode() works even without explicit buildTrie call
     buildTrie();
@@ -451,18 +451,21 @@ UnigramLM& UnigramLM::operator=(UnigramLM&& other) noexcept {
 // Vocabulary Management
 //--------------------------------------------------//
 
-void UnigramLM::addPiece(const std::string& text, float score, bool is_user_defined) {
-    // Compute token_id automatically
-    addPiece(text, score, UNIGRAM_VOCAB_OFFSET + static_cast<int>(pieces_.size()), is_user_defined);
-}
+// DELETED: Auto-ID overload removed per Rule 20 (no silent fallbacks)
+// Callers MUST provide explicit token_id = UNIGRAM_VOCAB_OFFSET + pieces_.size()
 
 void UnigramLM::addPiece(const std::string& text, float score, int token_id, bool is_user_defined) {
     if (piece_to_id_.count(text)) {
-        // Update existing piece
+        // Update existing piece - but preserve token_id for user-defined tokens!
+        // User-defined tokens (special tokens like <unk>, <s>, space) have manually assigned IDs.
+        // If we overwrite their token_id, we create gaps in the ID sequence and duplicates.
         int id = piece_to_id_[text];
         pieces_[id].score = score;
-        pieces_[id].token_id = token_id;  // Allow updating token_id too
-        pieces_[id].is_user_defined = is_user_defined;
+        // Only update token_id if the existing piece is NOT user-defined
+        if (!pieces_[id].is_user_defined) {
+            pieces_[id].token_id = token_id;
+            pieces_[id].is_user_defined = is_user_defined;
+        }
         return;
     }
     
@@ -545,7 +548,7 @@ bool UnigramLM::load(const std::string& vocab_path) {
                 std::cout << "[UnigramLM] Calling addPiece..." << std::endl << std::flush;
             }
             
-            addPiece(piece, score, false);
+            addPiece(piece, score, UNIGRAM_VOCAB_OFFSET + static_cast<int>(pieces_.size()), false);
             
             if (line_count == 1) {
                 std::cout << "[UnigramLM] First addPiece succeeded" << std::endl << std::flush;
@@ -639,6 +642,17 @@ bool UnigramLM::loadBinary(const std::string& vocab_path) {
         
         int token_id;
         bin_file.read(reinterpret_cast<char*>(&token_id), 4);
+        
+        // Validate token_id matches expected offset (Rule 20: fail loud on corruption)
+        const int expected_token_id = UNIGRAM_VOCAB_OFFSET + static_cast<int>(i);
+        if (token_id != expected_token_id) {
+            throw std::runtime_error(
+                "[UnigramLM] Token ID mismatch at piece " + std::to_string(i) + 
+                ": file has " + std::to_string(token_id) + 
+                " but expected " + std::to_string(expected_token_id) + 
+                " (UNIGRAM_VOCAB_OFFSET=" + std::to_string(UNIGRAM_VOCAB_OFFSET) + 
+                "). Vocab file was created with different atom count. Delete vocab.bin and training_data.grmt to regenerate.");
+        }
         
         addPiece(text, score, token_id, text[0] == '<');  // Special tokens start with <
     }
@@ -881,12 +895,12 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     pieces_.clear();
     piece_to_id_.clear();
     
-    // Re-add special tokens
-    addPiece("<unk>", -10.0f, true);
-    addPiece("<pad>", -10.0f, true);
-    addPiece("<s>", -10.0f, true);
-    addPiece("</s>", -10.0f, true);
-    addPiece(" ", -1.0f, true);  // Space is important
+    // Re-add special tokens with explicit IDs (no auto-ID per Rule 20)
+    addPiece("<unk>", -10.0f, UNIGRAM_VOCAB_OFFSET + 0, true);
+    addPiece("<pad>", -10.0f, UNIGRAM_VOCAB_OFFSET + 1, true);
+    addPiece("<s>", -10.0f, UNIGRAM_VOCAB_OFFSET + 2, true);
+    addPiece("</s>", -10.0f, UNIGRAM_VOCAB_OFFSET + 3, true);
+    addPiece(" ", -1.0f, UNIGRAM_VOCAB_OFFSET + 4, true);  // Space is important
     
     size_t covered = 0;
     size_t coverage_target = static_cast<size_t>(total_chars * character_coverage);
@@ -895,7 +909,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         if (covered >= coverage_target && pieces_.size() >= 256) break;
         
         float score = std::log(static_cast<float>(count) / total_chars);
-        addPiece(ch, score, false);
+        addPiece(ch, score, UNIGRAM_VOCAB_OFFSET + static_cast<int>(pieces_.size()), false);
         covered += count;
     }
     
@@ -997,7 +1011,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         }
         
         float score = std::log(static_cast<float>(count) / total_chars);
-        addPiece(subword, score, false);
+        addPiece(subword, score, UNIGRAM_VOCAB_OFFSET + static_cast<int>(pieces_.size()), false);
         added++;
     }
     

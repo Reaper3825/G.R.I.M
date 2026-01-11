@@ -1,21 +1,12 @@
 #include "ForwardOps_Orchestrator.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 
-#include <chrono>
 #include <sstream>
-#include <iomanip>
 
 namespace GRIM {
 namespace Forward {
 
-namespace {
-using Clock = std::chrono::high_resolution_clock;
-using Duration = std::chrono::duration<double, std::milli>;
-} // namespace
-
 ForwardStatus executeForward(ForwardContext& ctx) {
-    const bool log_info = GRIM::ForwardOps::ShouldLogForwardInfo();
-    auto start_time = log_info ? Clock::now() : Clock::time_point{};
 
     FWD_INFO("[ForwardOrch] ====== FORWARD PASS START ======");
     FWD_INFO("[ForwardOrch] mode=" << modeToString(ctx.mode)
@@ -29,10 +20,7 @@ ForwardStatus executeForward(ForwardContext& ctx) {
         return validation;
     }
 
-    auto phase3_start = log_info ? Clock::now() : Clock::time_point{};
     ForwardStatus phase3_status = executePhase3_InputLayer(ctx);
-    auto phase3_end = log_info ? Clock::now() : Clock::time_point{};
-    Duration phase3_time = log_info ? (phase3_end - phase3_start) : Duration::zero();
     ctx.phase3_status = phase3_status;
     if (phase3_status != ForwardStatus::SUCCESS) {
         FWD_ERROR("[ForwardOrch] Phase 3 FAILED: " << statusToString(phase3_status));
@@ -40,10 +28,7 @@ ForwardStatus executeForward(ForwardContext& ctx) {
         return phase3_status;
     }
 
-    auto phase2_start = log_info ? Clock::now() : Clock::time_point{};
     ForwardStatus phase2_status = executePhase2_Encoder(ctx);
-    auto phase2_end = log_info ? Clock::now() : Clock::time_point{};
-    Duration phase2_time = log_info ? (phase2_end - phase2_start) : Duration::zero();
     ctx.phase2_status = phase2_status;
     if (phase2_status != ForwardStatus::SUCCESS) {
         FWD_ERROR("[ForwardOrch] Phase 2 FAILED: " << statusToString(phase2_status));
@@ -54,10 +39,7 @@ ForwardStatus executeForward(ForwardContext& ctx) {
         return phase2_status;
     }
 
-    auto phase1_start = log_info ? Clock::now() : Clock::time_point{};
     ForwardStatus phase1_status = executePhase1_OutputLayer(ctx);
-    auto phase1_end = log_info ? Clock::now() : Clock::time_point{};
-    Duration phase1_time = log_info ? (phase1_end - phase1_start) : Duration::zero();
     ctx.phase1_status = phase1_status;
     if (phase1_status != ForwardStatus::SUCCESS) {
         FWD_ERROR("[ForwardOrch] Phase 1 FAILED: " << statusToString(phase1_status));
@@ -65,15 +47,7 @@ ForwardStatus executeForward(ForwardContext& ctx) {
         return phase1_status;
     }
 
-    auto end_time = log_info ? Clock::now() : Clock::time_point{};
-    Duration total_time = log_info ? (end_time - start_time) : Duration::zero();
-
     FWD_INFO("[ForwardOrch] ====== FORWARD PASS COMPLETE ======");
-    FWD_INFO("[ForwardOrch] Total: " << std::fixed << std::setprecision(2) << total_time.count() << "ms");
-    FWD_INFO("[ForwardOrch]  Phase 3 (Input):  " << std::setw(8) << phase3_time.count() << "ms");
-    FWD_INFO("[ForwardOrch]  Phase 2 (Encoder):" << std::setw(8) << phase2_time.count() << "ms");
-    FWD_INFO("[ForwardOrch]  Phase 1 (Output): " << std::setw(8) << phase1_time.count() << "ms");
-
     return ForwardStatus::SUCCESS;
 }
 

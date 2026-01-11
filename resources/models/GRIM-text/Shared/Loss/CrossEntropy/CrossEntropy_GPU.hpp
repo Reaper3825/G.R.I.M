@@ -4,7 +4,7 @@
 
 namespace GRIM::Loss {
 
-bool validate(const LossContext& ctx);
+void validate(const LossContext& ctx);
 
 void computeCrossEntropyLoss(const LossContext& ctx,
 							 DeviceBuffers buffers);

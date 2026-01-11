@@ -5,12 +5,7 @@
 //  Two-layer MLP with GELU activation:
 //    hidden = GELU(input @ W1^T + b1)
 //    output = hidden @ W2^T + b2
-//  
-//  Uses shared components:
-//    - Shared/Activations/GELU for GELU forward/backward
 //======================================================//
-
-#define USE_CUDA
 
 #include "Feed_Forward_GPU.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
@@ -18,7 +13,6 @@
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
-#include <cstdio>
 #include <stdexcept>
 #include <algorithm>
 
@@ -172,23 +166,17 @@ FeedForwardLayer& FeedForwardLayer::operator=(FeedForwardLayer&& other) noexcept
 }
 
 void FeedForwardLayer::initCublas() {
-    // Use centralized cuBLAS handle (Rule 22: NO local handle creation)
     if (!config_.cublas_handle) {
-        throw std::runtime_error("FeedForwardLayer::initCublas: config_.cublas_handle is NULL. "
-                                 "MUST pass training_state.cublas_handle per Rule 22.");
+        throw std::runtime_error("FeedForwardLayer: cublas_handle is NULL - caller MUST provide handle");
     }
-    config_.cublas_handle = config_.cublas_handle;  // Store pointer, do NOT own
 }
 
 void FeedForwardLayer::destroyCublas() {
-    // Rule 22: Do NOT destroy config_.cublas_handle - we don't own it!
-    // It's owned by training_state and destroyed in TrainingState destructor
-    config_.cublas_handle = nullptr;  // Just clear pointer
+    config_.cublas_handle = nullptr;
 }
 
 void FeedForwardLayer::setConfig(const FeedForwardConfig& cfg) {
     config_ = cfg;
-    // REMOVED cublasSetStream - handle already bound to stream in InitTrainingState.cu
 }
 
 void FeedForwardLayer::ensureWeightStorage() {
@@ -215,10 +203,6 @@ void FeedForwardLayer::ensureWeightStorage() {
         cudaMemsetAsync(b2_.ptr(), 0, config_.d_model * sizeof(float), config_.stream);
     }
 }
-
-// DELETED: resolveStream() - Rule 20
-// Stream fallback hides bugs. Caller MUST always provide stream explicitly.
-// If config_.stream is needed, caller should pass it directly.
 
 std::size_t FeedForwardLayer::requiredWorkspaceBytes(int total_tokens) const {
     if (total_tokens <= 0) return 0;
@@ -256,15 +240,12 @@ void FeedForwardLayer::forwardGPU(const float* d_input, float* d_output,
         throw std::runtime_error("FeedForwardLayer::forwardGPU: weights not initialized");
     }
     if (!config_.stream) {
-        fprintf(stderr, "[FATAL] FeedForwardLayer::forwardGPU: config_.stream is NULL (default stream usage disallowed)\n");
-        throw std::runtime_error("FeedForwardLayer::forwardGPU: config_.stream is NULL - MUST provide stream (Rule 20)");
+        throw std::runtime_error("FeedForwardLayer::forwardGPU: stream is NULL");
     }
 
     const cudaStream_t stream = config_.stream;
     const float alpha = 1.0f;
     const float beta = 0.0f;
-
-    // REMOVED cublasSetStream - handle already bound to stream in InitTrainingState.cu
 
     // Allocate internal buffers if external ones not provided
     const std::size_t hidden_elements = static_cast<std::size_t>(total_tokens) * config_.d_ff;
@@ -286,18 +267,15 @@ void FeedForwardLayer::forwardGPU(const float* d_input, float* d_output,
     }
 
     // Layer 1: pre_gelu = input @ W1^T + b1
-    // ROW-MAJOR: [tokens, d_model] @ [d_model, d_ff] = [tokens, d_ff]
-    // W1 stored as [d_ff, d_model] row-major, so we need W1^T
-    // cuBLAS row-major: C[M,N] = A[M,K] @ B^T[K,N] where B is [N,K]
-    // Here: M=tokens, N=d_ff, K=d_model
+    // [tokens, d_model] @ [d_ff, d_model]^T = [tokens, d_ff]
     cublasSgemm(config_.cublas_handle,
                 CUBLAS_OP_T, CUBLAS_OP_N,
                 config_.d_ff, total_tokens, config_.d_model,
                 &alpha,
-                W1_.ptr(), config_.d_model,    // W1 [d_ff, d_model], ldb=d_model
-                d_input, config_.d_model,       // input [tokens, d_model], lda=d_model
+                W1_.ptr(), config_.d_model,
+                d_input, config_.d_model,
                 &beta,
-                pre_gelu, config_.d_ff);        // output [tokens, d_ff], ldc=d_ff
+                pre_gelu, config_.d_ff);
 
     // Add bias b1
     launchFFNBiasAdd(pre_gelu, b1_.ptr(), total_tokens, config_.d_ff, stream);
@@ -311,34 +289,18 @@ void FeedForwardLayer::forwardGPU(const float* d_input, float* d_output,
     launchGeluForward(gelu_args);
 
     // Layer 2: output = post_gelu @ W2^T + b2
-    // ROW-MAJOR: [tokens, d_ff] @ [d_ff, d_model] = [tokens, d_model]
-    // W2 stored as [d_model, d_ff] row-major, so we need W2^T
-    // Here: M=tokens, N=d_model, K=d_ff
+    // [tokens, d_ff] @ [d_model, d_ff]^T = [tokens, d_model]
     cublasSgemm(config_.cublas_handle,
                 CUBLAS_OP_T, CUBLAS_OP_N,
                 config_.d_model, total_tokens, config_.d_ff,
                 &alpha,
-                W2_.ptr(), config_.d_ff,        // W2 [d_model, d_ff], ldb=d_ff
-                post_gelu, config_.d_ff,        // post_gelu [tokens, d_ff], lda=d_ff
+                W2_.ptr(), config_.d_ff,
+                post_gelu, config_.d_ff,
                 &beta,
-                d_output, config_.d_model);     // output [tokens, d_model], ldc=d_model
+                d_output, config_.d_model);
 
     // Add bias b2
     launchFFNBiasAdd(d_output, b2_.ptr(), total_tokens, config_.d_model, stream);
 }
-
-//======================================================//
-//  DELETED: backward(), backwardGPU() - Rule 20
-//  Training uses BackwardPhase2_Encoder.cu::computeFFNBackward()
-//  which implements FFN backward directly with proper gradient tracking.
-//  This dead code was never called by production training.
-//======================================================//
-
-//======================================================//
-//  DELETED: CRTP Interface - Rule 20
-//  onConfigure, forwardImpl, backwardImpl, applyGradientsImpl removed.
-//  Use forward(FeedForwardForwardArgs&) directly.
-//  Training backward uses BackwardPhase2_Encoder.cu.
-//======================================================//
 
 } // namespace GRIM

@@ -12,12 +12,11 @@
 
 #include "Encoding_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
-#include "../FlashAttention/Flash_Attention_Kernal.hpp"  // FlashAttention v2 C API
-#include "../../Shared/PBM/PositionalBiasMethod.hpp"     // Unified PBM (ALiBi+RoPE)
+#include "../FlashAttention/Flash_Attention_Kernal.hpp"
+#include "../../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/TensorConversion/TensorConversion.hpp"
 #include <cuda_runtime.h>
-#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -397,17 +396,10 @@ void EncodingLayer::forward(const EncodingForwardArgs& args) {
     const int num_kv_heads = config_.effectiveKVHeads();
     const int head_dim = config_.headDim();
     
-    // Rule 20: Stream is REQUIRED - crash if null, don't silently fallback
     if (!args.stream) {
-        fprintf(stderr, "[FATAL] EncodingLayer::forward: stream is NULL (default stream usage disallowed) at %s:%d\n",
-                __FILE__, __LINE__);
-        throw std::runtime_error("EncodingLayer::forward: stream is NULL! "
-                                 "Caller MUST provide valid CUDA stream at " + 
-                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+        throw std::runtime_error("EncodingLayer::forward: stream is NULL");
     }
     cudaStream_t stream = args.stream;
-    
-    // REMOVED cublasSetStream - handle already bound to stream in InitTrainingState.cu
     
     // Validate workspace
     const std::size_t required = requiredWorkspaceBytes(total_tokens, seq_len);
@@ -517,15 +509,7 @@ void EncodingLayer::forward(const EncodingForwardArgs& args) {
             stream
         );
     } else {
-        // Rule 20: NO FALLBACKS - crash immediately!
-        std::cerr << "[EncodingLayer::forward] FATAL: RoPE not initialized!" << std::endl;
-        std::cerr << "  config_.pos_encoding: " << (void*)config_.pos_encoding << std::endl;
-        if (config_.pos_encoding) {
-            std::cerr << "  rope_inv_freq: " << (void*)config_.pos_encoding->rope_inv_freq << std::endl;
-            std::cerr << "  rotary_dim: " << config_.pos_encoding->rotary_dim << std::endl;
-        }
-        throw std::runtime_error("RoPE inv_freq is NULL! Attention REQUIRES positional encoding. "
-                                 "Fix initPBM() - model cannot train without RoPE!");
+        throw std::runtime_error("EncodingLayer::forward: RoPE not initialized - model requires positional encoding");
     }
     
     // Cache Q, K, V in BHSD format for backward
@@ -626,12 +610,12 @@ void EncodingLayer::forward(const EncodingForwardArgs& args) {
     
     //--------------------------------------------------
     // 6. Output projection: attn_out @ W_o^T + b_o
+    //    Use ln2_out as temp to avoid GEMM input/output aliasing (UB in cuBLAS)
     //--------------------------------------------------
     const float alpha = 1.0f;
     const float beta = 0.0f;
     
-    // attn_out [tokens, d_model] @ W_o^T [d_model, d_model] -> output [tokens, d_model]
-    // cuBLAS row-major: C = A @ B^T
+    // attn_out [tokens, d_model] @ W_o^T [d_model, d_model] -> ln2_out (temp)
     CUBLAS_CHECK(cublasSgemm(config_.cublas_handle,
                              CUBLAS_OP_T, CUBLAS_OP_N,
                              d_model, total_tokens, d_model,
@@ -639,21 +623,21 @@ void EncodingLayer::forward(const EncodingForwardArgs& args) {
                              W_o_, d_model,
                              attn_out, d_model,
                              &beta,
-                             attn_out, d_model));  // Reuse attn_out buffer
+                             ln2_out, d_model));  // Output to temp buffer
     
-    launchAddBias(attn_out, b_o_, total_tokens, d_model, stream);
+    launchAddBias(ln2_out, b_o_, total_tokens, d_model, stream);
 
     // Cache attention output after W_o projection for backward (BSM layout).
     if (args.cache_attn_output) {
-        CUDA_CHECK(cudaMemcpyAsync(args.cache_attn_output, attn_out,
+        CUDA_CHECK(cudaMemcpyAsync(args.cache_attn_output, ln2_out,
                                     static_cast<std::size_t>(total_tokens) * d_model * sizeof(float),
                                     cudaMemcpyDeviceToDevice, stream));
     }
     
     //--------------------------------------------------
-    // 7. Residual1: input + attn_out -> residual1
+    // 7. Residual1: input + proj_out -> residual1
     //--------------------------------------------------
-    launchResidualAdd(args.input, attn_out, residual1, total_tokens * d_model, stream);
+    launchResidualAdd(args.input, ln2_out, residual1, total_tokens * d_model, stream);
     
     if (args.cache_residual1) {
         CUDA_CHECK(cudaMemcpyAsync(args.cache_residual1, residual1,
@@ -667,7 +651,6 @@ void EncodingLayer::forward(const EncodingForwardArgs& args) {
     launchRMSNormForward(residual1, rms2_gamma_, ln2_out,
                          total_tokens, d_model, config_.rms_epsilon, stream);
     
-    // REMOVED cache_ln2_input copy - backward uses cache_residual1 directly (redundant copy!)
     if (args.cache_ln2_out) {
         CUDA_CHECK(cudaMemcpyAsync(args.cache_ln2_out, ln2_out,
                                     total_tokens * d_model * sizeof(float),
@@ -689,11 +672,7 @@ void EncodingLayer::forward(const EncodingForwardArgs& args) {
     
     ffn_->forward(ffn_args, nullptr);
     
-    // REMOVED cache_ffn_input copy - backward uses cache_ln2_out directly (redundant copy!)
-    
-    // BUG FIX: Cache post-GELU output for backward pass (required for grad_W2 computation)
-    // Previously missing - caused cached_ffn_outputs to contain garbage data,
-    // resulting in corrupted W2 weight gradients and ~4x smaller FFN gradient norms.
+    // Cache post-GELU output for backward pass (required for grad_W2 computation)
     if (args.cache_ffn_output) {
         CUDA_CHECK(cudaMemcpyAsync(args.cache_ffn_output, post_gelu,
                                     static_cast<std::size_t>(total_tokens) * config_.d_ff * sizeof(float),
@@ -712,17 +691,5 @@ void EncodingLayer::forward(const EncodingForwardArgs& args) {
                                     cudaMemcpyDeviceToDevice, stream));
     }
 }
-
-//======================================================//
-//  DELETED: backward() - Rule 20
-//  Training uses BackwardPhase2_Encoder.cu directly.
-//  If you need encoder backward, use that file.
-//======================================================//
-
-//======================================================//
-//  DELETED: CRTP Interface - Rule 20
-//  forwardImpl/backwardImpl/applyGradientsImpl removed.
-//  Use forward(EncodingForwardArgs&) directly.
-//======================================================//
 
 } // namespace GRIM

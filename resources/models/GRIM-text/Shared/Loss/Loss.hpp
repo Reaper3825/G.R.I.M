@@ -109,7 +109,7 @@ struct AuxiliaryBatchViews {
 	int sample_count = 0;
 };
 
-bool validate(const LossContext& ctx);
+void validate(const LossContext& ctx);
 
 LossBreakdown computeLossTerms(const LossContext& ctx,
 							   const LossConfig& cfg,

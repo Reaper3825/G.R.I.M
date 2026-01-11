@@ -152,7 +152,6 @@ void validate_conversion(const TensorView& src, const TensorView& dst, const cha
             << src.size_elements() << ", dst=" << dst.size_elements() << ")";
         throw ContractViolation(oss.str());
     }
-    // Note: We allow aliasing for in-place operations - caller's responsibility
 }
 
 //======================================================//
@@ -692,51 +691,14 @@ void convert(const TensorView& src, TensorView& dst, cudaStream_t stream) {
 }
 
 bool can_convert_inplace(const TensorView& tensor, Layout target_layout) {
-    // In-place conversion is generally NOT safe for layout changes
-    // that require element reordering. This function explicitly returns
-    // whether in-place conversion is geometrically valid.
-    
-    const Layout from = tensor.layout();
-    
-    // Same layout - trivially safe
-    if (from == target_layout) {
-        return true;
-    }
-    
-    // 2D <-> 4D conversions NEVER safe in-place (require different element orderings)
-    if (is_flat_layout(from) != is_flat_layout(target_layout)) {
-        return false;
-    }
-    
-    // 4D <-> 4D conversions (BHSD, BHDS, BSHD):
-    // In theory, some could be safe if dimensions match perfectly (e.g., seq == heads),
-    // but this is rare and error-prone. Conservatively return false.
-    if (is_4d_layout(from) && is_4d_layout(target_layout)) {
-        // Special case: if tensor has unit dimensions, conversion might be safe
-        if (tensor.is_4d()) {
-            const auto& s = tensor.shape.as_4d();
-            // E.g., BHSD [B,H,1,D] -> BSHD [B,1,H,D] is safe only if S==H==1
-            // This is too narrow to be useful; always require out-of-place
-        }
-        return false;
-    }
-    
-    // 2D <-> 2D (BSM, QKV_FUSED): not semantically meaningful conversions,
-    // they represent different data, not different layouts of same data
-    return false;
+    // In-place conversion is NOT safe for layout changes that require element reordering.
+    // Only same-layout is safe (trivially - no conversion needed).
+    return tensor.layout() == target_layout;
 }
 
-bool convert_inplace(TensorView& tensor, Layout target_layout, cudaStream_t stream) {
-    // PRECONDITION: can_convert_inplace(tensor, target_layout) == true
-    // Calling this without checking the precondition leads to data corruption!
-    
-    if (tensor.layout() == target_layout) {
-        return true;  // No conversion needed
-    }
-    
-    // If we reached here and layouts differ, the caller violated the precondition
-    // We could throw or return false; returning false is safer
-    return false;
+bool convert_inplace(TensorView& tensor, Layout target_layout, cudaStream_t /*stream*/) {
+    // Only "conversion" that works in-place is no conversion at all
+    return tensor.layout() == target_layout;
 }
 
 //======================================================//
@@ -878,66 +840,13 @@ void merge_qkv_grads_gqa(const TensorView& grad_Q, const TensorView& grad_K, con
 
 #ifndef NDEBUG
 
-__global__ void kernel_compute_stats(const float* data, size_t n,
-                                      float* sum_sq, float* max_abs,
-                                      int* nan_count, int* inf_count) {
-    __shared__ float s_sum_sq[BLOCK_SIZE];
-    __shared__ float s_max_abs[BLOCK_SIZE];
-    __shared__ int s_nan_count[BLOCK_SIZE];
-    __shared__ int s_inf_count[BLOCK_SIZE];
-    
-    int tid = threadIdx.x;
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    float local_sum_sq = 0.0f;
-    float local_max_abs = 0.0f;
-    int local_nan = 0;
-    int local_inf = 0;
-    
-    if (idx < n) {
-        float v = data[idx];
-        if (isnan(v)) {
-            local_nan = 1;
-        } else if (isinf(v)) {
-            local_inf = 1;
-        } else {
-            local_sum_sq = v * v;
-            local_max_abs = fabsf(v);
-        }
-    }
-    
-    s_sum_sq[tid] = local_sum_sq;
-    s_max_abs[tid] = local_max_abs;
-    s_nan_count[tid] = local_nan;
-    s_inf_count[tid] = local_inf;
-    __syncthreads();
-    
-    // Reduction
-    for (int stride = BLOCK_SIZE / 2; stride > 0; stride >>= 1) {
-        if (tid < stride) {
-            s_sum_sq[tid] += s_sum_sq[tid + stride];
-            s_max_abs[tid] = fmaxf(s_max_abs[tid], s_max_abs[tid + stride]);
-            s_nan_count[tid] += s_nan_count[tid + stride];
-            s_inf_count[tid] += s_inf_count[tid + stride];
-        }
-        __syncthreads();
-    }
-    
-    if (tid == 0) {
-        atomicAdd(sum_sq, s_sum_sq[0]);
-        // atomicMax for float requires special handling
-        atomicAdd(nan_count, s_nan_count[0]);
-        atomicAdd(inf_count, s_inf_count[0]);
-    }
-}
-
 void debug_print_stats(const TensorView& tensor, const char* label, cudaStream_t stream) {
     if (!tensor.is_valid()) {
         printf("[TensorContract] %s: INVALID TENSOR\n", label);
         return;
     }
     
-    // Sample a subset for performance
+    // Sample a subset for performance (CPU-side for simplicity)
     const size_t sample_size = std::min<size_t>(tensor.size_elements(), 1024);
     std::vector<float> samples(sample_size);
     

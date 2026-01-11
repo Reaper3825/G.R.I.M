@@ -201,10 +201,11 @@ __global__ void finalizeNormsKernel(
         atomicMax(reinterpret_cast<int*>(&max_norm), __float_as_int(norm));
     }
     
-    // NO SYNC NEEDED: Atomics provide memory ordering guarantees.
-    // Thread 0 will see all completed atomic writes to shared memory.
-    // Adding __syncthreads() here would be a deadlock bug when num_groups < blockDim.x
-    // because not all threads execute the code above (divergent barrier).
+    // CRITICAL SYNC: All threads must complete atomic operations before thread 0 reads results.
+    // Previous comment claimed "atomics provide memory ordering guarantees" - this is WRONG.
+    // atomicAdd to shared memory does NOT guarantee visibility to other threads without a barrier.
+    // Without this sync, thread 0 can read partial sums (race condition).
+    __syncthreads();
     
     // Thread 0 finalizes metrics
     if (tid == 0) {

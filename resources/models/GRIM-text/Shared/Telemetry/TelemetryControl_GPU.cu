@@ -17,6 +17,7 @@
 #include <cmath>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <iostream>
 
 namespace GRIM::Telemetry {
@@ -542,7 +543,13 @@ void launchPlateauNoiseInjection(
     uint64_t seed,
     cudaStream_t stream
 ) {
-    if (weights == nullptr || num_elements == 0) return;
+    // Rule 20: Fail loud on invalid inputs
+    if (weights == nullptr) {
+        throw std::runtime_error("[launchPlateauNoiseInjection] weights is NULL");
+    }
+    if (num_elements == 0) {
+        throw std::runtime_error("[launchPlateauNoiseInjection] num_elements is 0");
+    }
     
     constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
     const int grid_size = static_cast<int>((num_elements + kBlockSize - 1) / kBlockSize);
@@ -550,6 +557,12 @@ void launchPlateauNoiseInjection(
     plateauNoiseKernel<<<grid_size, kBlockSize, 0, stream>>>(
         weights, num_elements, noise_std, proportional, seed
     );
+    
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("[launchPlateauNoiseInjection] kernel launch failed: ") +
+            cudaGetErrorString(err));
+    }
 }
 
 //=============================================================================
@@ -571,11 +584,13 @@ TelemetryControl::TelemetryControl(TelemetryControl&& other) noexcept
     , d_state_(other.d_state_)
     , d_decision_(other.d_decision_)
     , d_input_(other.d_input_)
+    , gpu_state_initialized_(other.gpu_state_initialized_)
 {
     other.d_config_ = nullptr;
     other.d_state_ = nullptr;
     other.d_decision_ = nullptr;
     other.d_input_ = nullptr;
+    other.gpu_state_initialized_ = false;
 }
 
 TelemetryControl& TelemetryControl::operator=(TelemetryControl&& other) noexcept {
@@ -586,10 +601,12 @@ TelemetryControl& TelemetryControl::operator=(TelemetryControl&& other) noexcept
         d_state_ = other.d_state_;
         d_decision_ = other.d_decision_;
         d_input_ = other.d_input_;
+        gpu_state_initialized_ = other.gpu_state_initialized_;
         other.d_config_ = nullptr;
         other.d_state_ = nullptr;
         other.d_decision_ = nullptr;
         other.d_input_ = nullptr;
+        other.gpu_state_initialized_ = false;
     }
     return *this;
 }
@@ -633,16 +650,24 @@ void TelemetryControl::freeGPU() {
     if (d_state_) { cudaFree(d_state_); d_state_ = nullptr; }
     if (d_decision_) { cudaFree(d_decision_); d_decision_ = nullptr; }
     if (d_input_) { cudaFree(d_input_); d_input_ = nullptr; }
+    gpu_state_initialized_ = false;
 }
 
-void TelemetryControl::reset() {
-    if (d_state_) {
-        // Can't reset without stream - caller must use cudaMemsetAsync with their stream
-        // Or just let first evaluate() call re-init
-        // For now, mark that reset is needed
-        static bool needs_reset = false;
-        needs_reset = true;  // Will be handled by first evaluate() call
+void TelemetryControl::reset(cudaStream_t stream) {
+    if (!d_state_) {
+        throw std::runtime_error("[TelemetryControl::reset] d_state_ is NULL - call initGPU first");
     }
+    StreamController::fatalIfDefaultStream(stream, "TelemetryControl::reset");
+    
+    // Reset GPU state to zeros
+    cudaError_t err = cudaMemsetAsync(d_state_, 0, sizeof(TelemetryControlState_GPU), stream);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("[TelemetryControl::reset] cudaMemsetAsync failed: ") +
+            cudaGetErrorString(err));
+    }
+    
+    // Mark that config needs to be re-copied on next evaluate (in case config changed)
+    gpu_state_initialized_ = false;
 }
 
 ControlDecision TelemetryControl::evaluate(
@@ -657,15 +682,26 @@ ControlDecision TelemetryControl::evaluate(
     if (!isInitialized()) {
         throw std::runtime_error("TelemetryControl::evaluate called before initGPU");
     }
+    if (!lattice) {
+        throw std::runtime_error("TelemetryControl::evaluate: lattice is NULL");
+    }
     StreamController::fatalIfDefaultStream(stream, "TelemetryControl::evaluate");
     
-    // First-time lazy init: copy config and zero state
-    static bool first_call = true;
-    if (first_call) {
-        cudaMemcpyAsync(d_config_, &config_, sizeof(TelemetryControlConfig),
+    // Per-instance lazy init: copy config and zero state on first call
+    // BUG FIX: Was using static bool which shared state across ALL instances!
+    if (!gpu_state_initialized_) {
+        cudaError_t err = cudaMemcpyAsync(d_config_, &config_, sizeof(TelemetryControlConfig),
                         cudaMemcpyHostToDevice, stream);
-        cudaMemsetAsync(d_state_, 0, sizeof(TelemetryControlState_GPU), stream);
-        first_call = false;
+        if (err != cudaSuccess) {
+            throw std::runtime_error(std::string("[TelemetryControl::evaluate] cudaMemcpyAsync config failed: ") +
+                cudaGetErrorString(err));
+        }
+        err = cudaMemsetAsync(d_state_, 0, sizeof(TelemetryControlState_GPU), stream);
+        if (err != cudaSuccess) {
+            throw std::runtime_error(std::string("[TelemetryControl::evaluate] cudaMemsetAsync state failed: ") +
+                cudaGetErrorString(err));
+        }
+        gpu_state_initialized_ = true;
     }
     
     // Pack input
@@ -677,8 +713,12 @@ ControlDecision TelemetryControl::evaluate(
     input.global_step = global_step;
     
     // Copy input to GPU (32 bytes H2D)
-    cudaMemcpyAsync(d_input_, &input, sizeof(ControlKernelInput),
+    cudaError_t err = cudaMemcpyAsync(d_input_, &input, sizeof(ControlKernelInput),
                     cudaMemcpyHostToDevice, stream);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("[TelemetryControl::evaluate] cudaMemcpyAsync input failed: ") +
+            cudaGetErrorString(err));
+    }
     
     // Extract device pointers from lattice (lattice struct is on host, but contains device pointers)
     const LatticeLevelState* d_lattice_levels = lattice->levels;
@@ -687,10 +727,21 @@ ControlDecision TelemetryControl::evaluate(
     // Launch kernel with device pointers (not host struct pointer!)
     launchControlDecisionKernel(d_lattice_levels, num_lattice_streams, d_config_, d_state_, d_input_, d_decision_, stream);
     
+    // Check kernel launch
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("[TelemetryControl::evaluate] kernel launch failed: ") +
+            cudaGetErrorString(err));
+    }
+    
     // Copy decision back (48 bytes D2H)
     ControlDecision result{};
-    cudaMemcpyAsync(&result, d_decision_, sizeof(ControlDecision),
+    err = cudaMemcpyAsync(&result, d_decision_, sizeof(ControlDecision),
                     cudaMemcpyDeviceToHost, stream);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("[TelemetryControl::evaluate] cudaMemcpyAsync decision failed: ") +
+            cudaGetErrorString(err));
+    }
     
     // Must sync to get result
     cudaStreamSynchronize(stream);

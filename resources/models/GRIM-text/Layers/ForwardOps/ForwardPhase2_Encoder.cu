@@ -8,15 +8,17 @@
 #include <cublas_v2.h>
 #include <cmath>
 #include <algorithm>
-#include <exception>
-#include <chrono>
 
 namespace GRIM {
 namespace Forward {
 
 namespace {
-static bool g_order_log_enabled = false;
 
+//======================================================//
+// runFullEncoder - CONSOLIDATED IMPLEMENTATION
+// Iterates through encoder layers directly (no delegation)
+// Uses ForwardContext stream (centralized controller pattern)
+//======================================================//
 ForwardStatus runFullEncoder(ForwardContext& ctx) {
     auto* ts = ctx.training_state;
     const auto* cfg = ctx.config;
@@ -28,13 +30,14 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
     float* encoder_output = ctx.encoder_output ? ctx.encoder_output : ts->cached_encoder_outputs;
     FWD_CHECK_PTR(ctx, encoder_output, "encoder_output", -1);
 
+    // Zero entropy output if enabled
     if (ctx.enable_entropy_output && ts->d_entropy_output && ts->entropy_output_capacity > 0) {
-        cudaMemsetAsync(ts->d_entropy_output,
-                        0,
+        cudaMemsetAsync(ts->d_entropy_output, 0,
                         ts->entropy_output_capacity * sizeof(float),
                         ctx.stream);
     }
 
+    // Setup Flash Attention BF16 scratch buffers
     FlashAttentionBF16Scratch fa_scratch{};
     fa_scratch.q = ts->fa_q_bf16;
     fa_scratch.k = ts->fa_k_bf16;
@@ -43,25 +46,78 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
     fa_scratch.q_elems = ts->fa_q_bf16_elems;
     fa_scratch.kv_elems = ts->fa_kv_bf16_elems;
 
-    ctx.gpu_encoder->forwardGPU(
-        ts->cached_embeddings,
-        encoder_output,
-        ctx.batch_size,
-        ctx.seq_len,
-        ts->encoder_workspace,
-        ctx.alibi,
-        ts->cached_Q.data(),
-        ts->cached_K.data(),
-        ts->cached_V.data(),
-        ctx.layer_caches,
-        &fa_scratch,
-        (ctx.enable_entropy_output ? ts->d_entropy_output : nullptr));
+    //======================================================//
+    // LAYER ITERATION - Previously in Forward_GPU.cu::forwardGPU()
+    // Now consolidated here using ForwardContext stream
+    //======================================================//
+    const float* d_layer_input = ts->cached_embeddings;
+    const int total_tokens = ctx.total_tokens;
+    const int num_layers = ctx.gpu_encoder->getNumLayers();
 
-    FWD_CHECK_CUDA(ctx, cudaGetLastError(), "gpu_encoder->forwardGPU", -1);
-    if (g_order_log_enabled) {
-        fprintf(stderr, "[ORDER] ForwardPhase2.encoder_done batch=%d seq=%d tokens=%d\n",
-                ctx.batch_size, ctx.seq_len, ctx.total_tokens);
+    for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
+
+        // Get the encoder layer
+        auto* enc_layer = ctx.gpu_encoder->getLayer(layer_idx);
+        if (!enc_layer) {
+            FWD_FAIL_LOUD(ctx, ForwardStatus::NULL_POINTER, "encoder layer is null", layer_idx);
+        }
+
+        // Setup workspace
+        LayerWorkspace<float> ws{};
+        ws.data = ts->encoder_workspace;
+        ws.bytes = enc_layer->requiredWorkspaceBytes(total_tokens, ctx.seq_len);
+
+        // Build EncodingForwardArgs - using ctx.stream (centralized)
+        EncodingForwardArgs args{};
+        args.input = d_layer_input;
+        args.output = encoder_output;
+        args.total_tokens = total_tokens;
+        args.seq_len = ctx.seq_len;
+        args.stream = ctx.stream;  // Use ForwardContext stream (centralized controller)
+
+        // Wire QKV caches
+        if (!ts->cached_Q.empty() && !ts->cached_K.empty() && !ts->cached_V.empty()) {
+            args.cache_q = ts->cached_Q[layer_idx];
+            args.cache_k = ts->cached_K[layer_idx];
+            args.cache_v = ts->cached_V[layer_idx];
+        }
+
+        // Wire layer activation caches for backward pass
+        if (ctx.layer_caches && layer_idx < ctx.layer_cache_count) {
+            args.cache_ln1_out = ctx.layer_caches[layer_idx].ln1_output;
+            args.cache_attn_input = ctx.layer_caches[layer_idx].attn_input;
+            args.cache_attn_bhsd = ctx.layer_caches[layer_idx].attn_bhsd;
+            args.cache_softmax_lse = ctx.layer_caches[layer_idx].softmax_lse;
+            args.cache_attn_output = ctx.layer_caches[layer_idx].attn_output;
+            args.cache_residual1 = ctx.layer_caches[layer_idx].residual1;
+            args.cache_ln2_out = ctx.layer_caches[layer_idx].ln2_output;
+            args.cache_ffn_pre_gelu = ctx.layer_caches[layer_idx].ffn_pre_gelu;
+            args.cache_ffn_output = ctx.layer_caches[layer_idx].ffn_output;
+            args.cache_layer_output = ctx.layer_caches[layer_idx].layer_output;
+        }
+
+        // Wire Flash Attention BF16 scratch
+        args.fa_q_bf16 = fa_scratch.q;
+        args.fa_k_bf16 = fa_scratch.k;
+        args.fa_v_bf16 = fa_scratch.v;
+        args.fa_out_bf16 = fa_scratch.out;
+        args.fa_q_bf16_elems = fa_scratch.q_elems;
+        args.fa_kv_bf16_elems = fa_scratch.kv_elems;
+
+        // Wire entropy output (per-layer: batch_size * num_heads)
+        if (ctx.enable_entropy_output && ts->d_entropy_output) {
+            args.entropy_output = ts->d_entropy_output + (layer_idx * ctx.batch_size * cfg->num_heads);
+        }
+
+        // Execute layer forward
+        enc_layer->setWorkspace(ws.data, ws.bytes);
+        enc_layer->forward(args);
+
+        // Next layer's input is this layer's output
+        d_layer_input = encoder_output;
     }
+
+    FWD_CHECK_CUDA(ctx, cudaGetLastError(), "encoder layer forward", -1);
 
     if (ctx.enable_activation_quantization && cfg->activation_quantization.enabled) {
         const size_t tokens = static_cast<size_t>(ctx.total_tokens);
@@ -358,38 +414,15 @@ ForwardStatus runIncrementalEncoder(ForwardContext& ctx) {
 } // anonymous namespace
 
 ForwardStatus executePhase2_Encoder(ForwardContext& ctx) {
-    auto phase_start = std::chrono::high_resolution_clock::now();
-    fprintf(stderr, "[PHASE_TIMING] Phase2 (Encoder) START\n");
-    
-    std::vector<std::pair<std::string, double>> op_timings;
-    
     FWD_INFO("[ForwardPhase2] START mode=" << modeToString(ctx.mode));
-    if (g_order_log_enabled) {
-        fprintf(stderr, "[ORDER] ForwardPhase2.enter mode=%s batch=%d seq=%d tokens=%d\n",
-                modeToString(ctx.mode), ctx.batch_size, ctx.seq_len, ctx.total_tokens);
-    }
 
-    auto checkpoint = std::chrono::high_resolution_clock::now();
     ForwardStatus validation = ctx.validate();
-    auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - phase_start).count();
-    op_timings.push_back({"validation", elapsed});
-    
     if (validation != ForwardStatus::SUCCESS) {
         ctx.error_message = "Phase 2 context validation failed";
         FWD_ERROR("[ForwardPhase2] Context validation failed: " << statusToString(validation));
-        if (g_order_log_enabled) {
-            fprintf(stderr, "[ORDER] ForwardPhase2.validation_fail status=%s batch=%d seq=%d tokens=%d\n",
-                    statusToString(validation), ctx.batch_size, ctx.seq_len, ctx.total_tokens);
-        }
         return validation;
     }
 
-    if (g_order_log_enabled) {
-        fprintf(stderr, "[ORDER] ForwardPhase2.dispatch mode=%s batch=%d seq=%d tokens=%d\n",
-                modeToString(ctx.mode), ctx.batch_size, ctx.seq_len, ctx.total_tokens);
-    }
-    
-    checkpoint = std::chrono::high_resolution_clock::now();
     ForwardStatus status = ForwardStatus::SUCCESS;
     try {
         if (ctx.mode == ForwardMode::DecodeIncremental) {
@@ -400,19 +433,9 @@ ForwardStatus executePhase2_Encoder(ForwardContext& ctx) {
     } catch (const std::exception& ex) {
         FWD_FAIL_LOUD(ctx, ForwardStatus::INVALID_STATE, ex.what(), -1);
     }
-    elapsed = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - phase_start).count();
-    op_timings.push_back({ctx.mode == ForwardMode::DecodeIncremental ? "runIncrementalEncoder" : "runFullEncoder", elapsed});
 
     ctx.phase2_status = status;
     if (status == ForwardStatus::SUCCESS) {
-        auto phase_end = std::chrono::high_resolution_clock::now();
-        auto phase_ms = std::chrono::duration<double, std::milli>(phase_end - phase_start).count();
-        fprintf(stderr, "[PHASE_TIMING] Phase2 (Encoder) COMPLETE: %.2f ms [", phase_ms);
-        for (size_t i = 0; i < op_timings.size(); ++i) {
-            fprintf(stderr, "%s=%.2fms", op_timings[i].first.c_str(), op_timings[i].second);
-            if (i < op_timings.size() - 1) fprintf(stderr, ", ");
-        }
-        fprintf(stderr, "]\n");
         FWD_INFO("[ForwardPhase2] COMPLETE");
     }
     return status;

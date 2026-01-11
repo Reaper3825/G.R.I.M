@@ -6,6 +6,9 @@
 #include "TrainingState_GPU.hpp"
 #include "../../GRIM/grim_language_model_cuda.hpp"
 
+#include <stdexcept>
+#include <string>
+
 #ifdef USE_CUDA
 
 namespace GRIM {
@@ -145,8 +148,23 @@ void TrainingState::allocateOptimizerStates(const std::vector<size_t>& sizes) {
 	
 	for (size_t i = 0; i < sizes.size(); ++i) {
 		if (sizes[i] > 0) {
-			cudaMalloc(&optimizer_m_states[i], sizes[i] * sizeof(float));
-			cudaMalloc(&optimizer_v_states[i], sizes[i] * sizeof(float));
+			// Rule 20: Check cudaMalloc and throw on failure
+			cudaError_t err_m = cudaMalloc(&optimizer_m_states[i], sizes[i] * sizeof(float));
+			if (err_m != cudaSuccess) {
+				freeOptimizerStates();
+				throw std::runtime_error("[TrainingState::allocateOptimizerStates] cudaMalloc m_states[" +
+					std::to_string(i) + "] failed: size=" + std::to_string(sizes[i]) +
+					" error=" + cudaGetErrorString(err_m));
+			}
+			
+			cudaError_t err_v = cudaMalloc(&optimizer_v_states[i], sizes[i] * sizeof(float));
+			if (err_v != cudaSuccess) {
+				freeOptimizerStates();
+				throw std::runtime_error("[TrainingState::allocateOptimizerStates] cudaMalloc v_states[" +
+					std::to_string(i) + "] failed: size=" + std::to_string(sizes[i]) +
+					" error=" + cudaGetErrorString(err_v));
+			}
+			
 			// Async zero using centralized stream
 			cudaMemsetAsync(optimizer_m_states[i], 0, sizes[i] * sizeof(float), primary_stream);
 			cudaMemsetAsync(optimizer_v_states[i], 0, sizes[i] * sizeof(float), primary_stream);
@@ -178,17 +196,15 @@ bool TrainingState::allocateGuessCacheBuffers(
 	size_t diversity_bloom_bits,
 	size_t pinned_buffer_size) 
 {
-	// Fail loud: refuse to allocate if already allocated
+	// Rule 20: Fail loud - throw if already allocated
 	if (guess_cache_buffers.allocated) {
-		fprintf(stderr, "[FATAL] TrainingState::allocateGuessCacheBuffers: buffers already allocated! "
-		        "Call freeGuessCacheBuffers() first. capacity=%zu\n", capacity);
-		return false;
+		throw std::runtime_error("[TrainingState::allocateGuessCacheBuffers] buffers already allocated! "
+			"Call freeGuessCacheBuffers() first. capacity=" + std::to_string(capacity));
 	}
 	
-	// Fail loud: refuse zero capacity
+	// Rule 20: Fail loud - throw on zero capacity
 	if (capacity == 0) {
-		fprintf(stderr, "[FATAL] TrainingState::allocateGuessCacheBuffers: capacity cannot be zero!\n");
-		return false;
+		throw std::runtime_error("[TrainingState::allocateGuessCacheBuffers] capacity cannot be zero!");
 	}
 	
 	// GuessRecord is defined in grim-ts.hpp, we need its size
@@ -205,37 +221,33 @@ bool TrainingState::allocateGuessCacheBuffers(
 	// Allocate records
 	cudaError_t err = cudaMalloc(&guess_cache_buffers.records, capacity * GUESS_RECORD_SIZE);
 	if (err != cudaSuccess) {
-		fprintf(stderr, "[FATAL] TrainingState::allocateGuessCacheBuffers: cudaMalloc records failed! "
-		        "capacity=%zu, size=%zuMB, error=%s\n", 
-		        capacity, (capacity * GUESS_RECORD_SIZE) / (1024*1024), cudaGetErrorString(err));
-		return false;
+		throw std::runtime_error("[TrainingState::allocateGuessCacheBuffers] cudaMalloc records failed! "
+			"capacity=" + std::to_string(capacity) + ", size=" + 
+			std::to_string((capacity * GUESS_RECORD_SIZE) / (1024*1024)) + "MB, error=" + cudaGetErrorString(err));
 	}
 	
 	// Allocate keys
 	err = cudaMalloc(&guess_cache_buffers.keys, capacity * sizeof(uint64_t));
 	if (err != cudaSuccess) {
-		fprintf(stderr, "[FATAL] TrainingState::allocateGuessCacheBuffers: cudaMalloc keys failed! error=%s\n", 
-		        cudaGetErrorString(err));
 		freeGuessCacheBuffers();
-		return false;
+		throw std::runtime_error("[TrainingState::allocateGuessCacheBuffers] cudaMalloc keys failed! error=" +
+			std::string(cudaGetErrorString(err)));
 	}
 	
 	// Allocate size counter
 	err = cudaMalloc(&guess_cache_buffers.size, sizeof(unsigned int));
 	if (err != cudaSuccess) {
-		fprintf(stderr, "[FATAL] TrainingState::allocateGuessCacheBuffers: cudaMalloc size failed! error=%s\n", 
-		        cudaGetErrorString(err));
 		freeGuessCacheBuffers();
-		return false;
+		throw std::runtime_error("[TrainingState::allocateGuessCacheBuffers] cudaMalloc size failed! error=" +
+			std::string(cudaGetErrorString(err)));
 	}
 	
 	// Allocate evict cursor
 	err = cudaMalloc(&guess_cache_buffers.evict_cursor, sizeof(unsigned int));
 	if (err != cudaSuccess) {
-		fprintf(stderr, "[FATAL] TrainingState::allocateGuessCacheBuffers: cudaMalloc evict_cursor failed! error=%s\n", 
-		        cudaGetErrorString(err));
 		freeGuessCacheBuffers();
-		return false;
+		throw std::runtime_error("[TrainingState::allocateGuessCacheBuffers] cudaMalloc evict_cursor failed! error=" +
+			std::string(cudaGetErrorString(err)));
 	}
 	
 	// Allocate diversity bloom filter (optional)
@@ -244,55 +256,49 @@ bool TrainingState::allocateGuessCacheBuffers(
 		err = cudaMalloc(&guess_cache_buffers.diversity_bloom, 
 		                 guess_cache_buffers.bloom_words * sizeof(uint32_t));
 		if (err != cudaSuccess) {
-			fprintf(stderr, "[FATAL] TrainingState::allocateGuessCacheBuffers: cudaMalloc diversity_bloom failed! "
-			        "bits=%zu, error=%s\n", diversity_bloom_bits, cudaGetErrorString(err));
 			freeGuessCacheBuffers();
-			return false;
+			throw std::runtime_error("[TrainingState::allocateGuessCacheBuffers] cudaMalloc diversity_bloom failed! "
+				"bits=" + std::to_string(diversity_bloom_bits) + " error=" + cudaGetErrorString(err));
 		}
 	}
 	
 	// Allocate calibration offset
 	err = cudaMalloc(&guess_cache_buffers.calibration_offset, sizeof(float));
 	if (err != cudaSuccess) {
-		fprintf(stderr, "[FATAL] TrainingState::allocateGuessCacheBuffers: cudaMalloc calibration_offset failed! error=%s\n", 
-		        cudaGetErrorString(err));
 		freeGuessCacheBuffers();
-		return false;
+		throw std::runtime_error("[TrainingState::allocateGuessCacheBuffers] cudaMalloc calibration_offset failed! error=" +
+			std::string(cudaGetErrorString(err)));
 	}
 	
 	// Allocate single-item transfer buffers
 	err = cudaMalloc(&guess_cache_buffers.single_meta_buffer, GUESS_METADATA_SIZE);
 	if (err != cudaSuccess) {
-		fprintf(stderr, "[FATAL] TrainingState::allocateGuessCacheBuffers: cudaMalloc single_meta_buffer failed! error=%s\n", 
-		        cudaGetErrorString(err));
 		freeGuessCacheBuffers();
-		return false;
+		throw std::runtime_error("[TrainingState::allocateGuessCacheBuffers] cudaMalloc single_meta_buffer failed! error=" +
+			std::string(cudaGetErrorString(err)));
 	}
 	
 	err = cudaMalloc(&guess_cache_buffers.single_reward_buffer, sizeof(float));
 	if (err != cudaSuccess) {
-		fprintf(stderr, "[FATAL] TrainingState::allocateGuessCacheBuffers: cudaMalloc single_reward_buffer failed! error=%s\n", 
-		        cudaGetErrorString(err));
 		freeGuessCacheBuffers();
-		return false;
+		throw std::runtime_error("[TrainingState::allocateGuessCacheBuffers] cudaMalloc single_reward_buffer failed! error=" +
+			std::string(cudaGetErrorString(err)));
 	}
 	
 	// Allocate pinned host memory for async transfers
 	if (pinned_buffer_size > 0) {
 		err = cudaMallocHost(&guess_cache_buffers.pinned_meta, pinned_buffer_size * GUESS_METADATA_SIZE);
 		if (err != cudaSuccess) {
-			fprintf(stderr, "[FATAL] TrainingState::allocateGuessCacheBuffers: cudaMallocHost pinned_meta failed! error=%s\n", 
-			        cudaGetErrorString(err));
 			freeGuessCacheBuffers();
-			return false;
+			throw std::runtime_error("[TrainingState::allocateGuessCacheBuffers] cudaMallocHost pinned_meta failed! error=" +
+				std::string(cudaGetErrorString(err)));
 		}
 		
 		err = cudaMallocHost(&guess_cache_buffers.pinned_rewards, pinned_buffer_size * sizeof(float));
 		if (err != cudaSuccess) {
-			fprintf(stderr, "[FATAL] TrainingState::allocateGuessCacheBuffers: cudaMallocHost pinned_rewards failed! error=%s\n", 
-			        cudaGetErrorString(err));
 			freeGuessCacheBuffers();
-			return false;
+			throw std::runtime_error("[TrainingState::allocateGuessCacheBuffers] cudaMallocHost pinned_rewards failed! error=" +
+				std::string(cudaGetErrorString(err)));
 		}
 		guess_cache_buffers.pinned_capacity = pinned_buffer_size;
 	}
@@ -313,11 +319,12 @@ bool TrainingState::allocateGuessCacheBuffers(
 	guess_cache_buffers.capacity = capacity;
 	guess_cache_buffers.allocated = true;
 	
+	// Info log - success case only
 	fprintf(stdout, "[INFO] TrainingState: Guess cache buffers allocated. capacity=%zu, "
 	        "diversity=%s, bloom_bits=%zu, pinned=%zu\n",
 	        capacity, enable_diversity ? "ON" : "OFF", diversity_bloom_bits, pinned_buffer_size);
 	
-	return true;
+	return true;  // Return kept for API compatibility, but failures throw
 }
 
 void TrainingState::freeGuessCacheBuffers() {

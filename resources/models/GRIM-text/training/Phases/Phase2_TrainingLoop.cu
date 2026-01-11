@@ -313,12 +313,14 @@ void logInferenceSample(TrainingContext& ctx, TrainingLoopState& state) {
     }
 
     GRIM::GenerationConfig cfg;
-    cfg.strategy = GRIM::SamplingStrategy::TOP_P;
-    cfg.do_sample = true;
+    // Use greedy for deterministic/reproducible samples (like PyTorch baseline)
+    // With untrained model: greedy produces repetition, sampling produces gibberish
+    cfg.strategy = GRIM::SamplingStrategy::GREEDY;
+    cfg.do_sample = false;
     cfg.max_new_tokens = max_new_tokens;
     cfg.min_new_tokens = std::max(1, max_new_tokens / 4);  // Generate at least some tokens before EOS
-    cfg.temperature = 1.0f;
-    cfg.top_p = 0.9f;
+    cfg.temperature = 1.0f;  // Ignored for greedy
+    cfg.top_p = 0.9f;        // Ignored for greedy
     cfg.num_return_sequences = 1;
     cfg.eos_token_id = ctx.tokenizer.eosId();
     cfg.pad_token_id = ctx.tokenizer.padId();
@@ -1024,6 +1026,153 @@ bool handleGradientSpike(
     return true;  // Spike detected
 }
 
+//======================================================//
+//  Numerical Gradient Check (Finite Difference)
+//======================================================//
+// Verifies backward pass correctness by comparing analytical gradients
+// against numerical gradients computed via finite differences:
+//   numerical_grad ≈ (L(θ + ε) - L(θ - ε)) / (2ε)
+//
+// This is an expensive operation (2 extra forward passes) and should only
+// be enabled for debugging. Control via GRIM_GRAD_CHECK_ENABLED env var.
+//======================================================//
+
+struct NumericalGradCheckResult {
+    bool performed = false;
+    bool passed = false;
+    float analytical_grad = 0.0f;
+    float numerical_grad = 0.0f;
+    float relative_error = 0.0f;
+    float loss_plus = 0.0f;
+    float loss_minus = 0.0f;
+    std::string param_name;
+    int param_index = 0;
+};
+
+NumericalGradCheckResult performNumericalGradientCheck(
+    TrainingContext& ctx,
+    const std::vector<std::vector<int>>& batch_inputs,
+    const std::vector<std::vector<int>>& batch_targets,
+    const std::vector<std::vector<float>>& batch_numeric_values,
+    const std::vector<std::vector<uint8_t>>& batch_numeric_mask,
+    const std::vector<std::vector<uint16_t>>& batch_text_features,
+    const std::vector<std::vector<uint8_t>>& batch_text_mask,
+    int batch_idx)
+{
+    NumericalGradCheckResult result;
+    
+    // Check if enabled via environment variable
+    static const bool enabled = []() {
+        const char* env = std::getenv("GRIM_GRAD_CHECK_ENABLED");
+        return env && (std::string(env) == "1" || std::string(env) == "true");
+    }();
+    
+    // Only run on first few batches to avoid performance impact
+    static const int max_check_batches = readEnvInt("GRIM_GRAD_CHECK_MAX_BATCHES", 3);
+    
+    if (!enabled || batch_idx >= max_check_batches) {
+        return result;
+    }
+    
+    result.performed = true;
+    
+    const auto& ts = ctx.model->getTrainingState();
+    const auto& cfg = ctx.model->getConfig();
+    cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
+    
+    // Choose a parameter to check - use embedding weight at a specific index
+    // This is a good choice because it's directly involved in both forward and backward
+    float* weight_ptr = ts.lm_head_weights;  // [vocab_size, d_model]
+    float* grad_ptr = ts.lm_head_weight_grads;
+    
+    if (!weight_ptr || !grad_ptr) {
+        ctx.logging.logger->log("[NumGradCheck] ERROR: lm_head weights or grads not available");
+        return result;
+    }
+    
+    // Pick a random but deterministic index based on batch number
+    // Use middle of vocabulary to avoid edge cases
+    const int vocab_mid = cfg.vocab_size / 2;
+    const int d_mid = cfg.d_model / 2;
+    result.param_index = vocab_mid * cfg.d_model + d_mid;
+    result.param_name = "lm_head_weights[" + std::to_string(vocab_mid) + "," + std::to_string(d_mid) + "]";
+    
+    // Read analytical gradient from backward pass
+    cudaMemcpyAsync(&result.analytical_grad, grad_ptr + result.param_index, 
+                    sizeof(float), cudaMemcpyDeviceToHost, stream);
+    
+    // Read original weight value
+    float original_weight = 0.0f;
+    cudaMemcpyAsync(&original_weight, weight_ptr + result.param_index, 
+                    sizeof(float), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    
+    // Epsilon for finite difference - choose based on weight magnitude
+    // Rule of thumb: ε ≈ sqrt(machine_epsilon) * max(1, |θ|)
+    const float eps = 1e-4f * std::max(1.0f, std::abs(original_weight));
+    
+    // === Perturb +ε ===
+    float perturbed_plus = original_weight + eps;
+    cudaMemcpyAsync(weight_ptr + result.param_index, &perturbed_plus, 
+                    sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaStreamSynchronize(stream);
+    
+    // Forward pass with perturbed weight (no gradient computation needed)
+    // NOTE: We use the same batch data to ensure consistency
+    result.loss_plus = ctx.model->computeLossBatch(
+        batch_inputs, batch_targets,
+        batch_numeric_values, batch_numeric_mask,
+        batch_text_features, batch_text_mask);
+    
+    // === Perturb -ε ===
+    float perturbed_minus = original_weight - eps;
+    cudaMemcpyAsync(weight_ptr + result.param_index, &perturbed_minus, 
+                    sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaStreamSynchronize(stream);
+    
+    // Forward pass with perturbed weight
+    result.loss_minus = ctx.model->computeLossBatch(
+        batch_inputs, batch_targets,
+        batch_numeric_values, batch_numeric_mask,
+        batch_text_features, batch_text_mask);
+    
+    // === Restore original weight ===
+    cudaMemcpyAsync(weight_ptr + result.param_index, &original_weight, 
+                    sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaStreamSynchronize(stream);
+    
+    // Compute numerical gradient: (L(θ+ε) - L(θ-ε)) / (2ε)
+    result.numerical_grad = (result.loss_plus - result.loss_minus) / (2.0f * eps);
+    
+    // Compute relative error
+    // Use formula that handles small gradients: |a - n| / max(|a|, |n|, 1e-8)
+    float max_grad = std::max(std::abs(result.analytical_grad), std::abs(result.numerical_grad));
+    max_grad = std::max(max_grad, 1e-8f);  // Avoid division by zero
+    result.relative_error = std::abs(result.analytical_grad - result.numerical_grad) / max_grad;
+    
+    // Threshold for pass/fail (typically 1e-4 to 1e-2 depending on precision)
+    const float error_threshold = 0.01f;  // 1% relative error
+    result.passed = (result.relative_error < error_threshold);
+    
+    // Log results
+    std::ostringstream log_msg;
+    log_msg << std::fixed << std::setprecision(8);
+    log_msg << "[NumGradCheck] batch=" << (batch_idx + 1) << " " << result.param_name << "\n";
+    log_msg << "  analytical_grad = " << result.analytical_grad << "\n";
+    log_msg << "  numerical_grad  = " << result.numerical_grad << "\n";
+    log_msg << "  L(θ+ε) = " << result.loss_plus << ", L(θ-ε) = " << result.loss_minus << "\n";
+    log_msg << "  ε = " << eps << "\n";
+    log_msg << "  relative_error  = " << (result.relative_error * 100.0f) << "%\n";
+    log_msg << "  " << (result.passed ? "✓ PASSED" : "✗ FAILED (threshold=" + std::to_string(error_threshold * 100) + "%)");
+    
+    ctx.logging.logger->log(log_msg.str());
+    
+    // Also print to stderr for visibility during debugging
+    fprintf(stderr, "\n%s\n", log_msg.str().c_str());
+    
+    return result;
+}
+
 bool maybeSaveCheckpoint(
     TrainingContext& ctx,
     float val_loss,
@@ -1448,32 +1597,41 @@ BatchResult processBatch(
     // Forward pass
     static int forward_call_count = 0;
     ++forward_call_count;
-    if (forward_call_count <= 3) {
-        ctx.logging.logger->log("[GradTrace] PRE-FORWARD call #" + std::to_string(forward_call_count) + 
-                                " batch_size=" + std::to_string(batch_inputs.size()));
-        
-        // Diagnostic: Log targets for first 3 batches to debug valid_tokens=0 issue
-        std::ostringstream target_info;
-        target_info << "[GradTrace] BATCH_TARGETS: ";
+    
+    // Log target and prediction distributions (uses ForwardPass module for filtering)
+    {
+        // Log target distribution - count occurrences of each target ID
+        std::map<int, int> target_counts;
         int total_valid = 0;
-        for (size_t seq = 0; seq < batch_targets.size(); ++seq) {
-            target_info << "seq" << seq << "=[";
-            int seq_valid = 0;
-            const auto& targets = batch_targets[seq];
-            for (size_t t = 0; t < std::min(targets.size(), size_t(5)); ++t) {
-                target_info << targets[t];
-                if (targets[t] >= 0) seq_valid++;
-                if (t + 1 < std::min(targets.size(), size_t(5))) target_info << ",";
+        int total_tokens = 0;
+        for (const auto& targets : batch_targets) {
+            for (int tid : targets) {
+                total_tokens++;
+                if (tid >= 0) {
+                    target_counts[tid]++;
+                    total_valid++;
+                }
             }
-            if (targets.size() > 5) target_info << "...";
-            target_info << "] valid=" << seq_valid;
-            for (size_t t = 0; t < targets.size(); ++t) {
-                if (targets[t] >= 0) total_valid++;
-            }
-            if (seq + 1 < batch_targets.size()) target_info << " | ";
         }
-        target_info << " TOTAL_VALID=" << total_valid;
-        ctx.logging.logger->log(target_info.str());
+        
+        // Find top-10 most common targets
+        std::vector<std::pair<int, int>> sorted_targets(target_counts.begin(), target_counts.end());
+        std::sort(sorted_targets.begin(), sorted_targets.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        
+        std::ostringstream target_info;
+        target_info << "BATCH_TARGET_DIST batch=" << batch_idx 
+                    << " total_tokens=" << total_tokens 
+                    << " valid=" << total_valid 
+                    << " unique=" << target_counts.size()
+                    << " top10=[";
+        for (size_t i = 0; i < std::min(sorted_targets.size(), size_t(10)); ++i) {
+            target_info << "tid=" << sorted_targets[i].first 
+                        << ":" << sorted_targets[i].second;
+            if (i + 1 < std::min(sorted_targets.size(), size_t(10))) target_info << ", ";
+        }
+        target_info << "]";
+        EmitModuleInfo(ModuleId::ForwardPass, target_info.str(), ctx.global_step);
     }
     
     if (!ctx.data.sequence_rarity.empty()) {
@@ -1498,6 +1656,54 @@ BatchResult processBatch(
         batch_text_features,
         batch_text_mask);
     ctx.model->clearSequenceLossWeights();
+    
+    // Log model predictions (what it predicts vs targets) - uses ForwardPass module for filtering
+    {
+        const auto& ts = ctx.model->getTrainingState();
+        if (ts.cached_logits && ts.cached_batch_size > 0 && ts.cached_seq_len > 0) {
+            const int total_tokens = ts.cached_batch_size * ts.cached_seq_len;
+            const int vocab_size = ctx.config.actual_vocab_size;
+            
+            // Sample logits to find top predicted tokens (only sample first N positions to avoid slow sync)
+            const int sample_positions = std::min(total_tokens, 100);
+            const size_t logit_bytes = static_cast<size_t>(sample_positions) * vocab_size * sizeof(float);
+            std::vector<float> logit_sample(sample_positions * vocab_size);
+            cudaMemcpy(logit_sample.data(), ts.cached_logits, logit_bytes, cudaMemcpyDeviceToHost);
+            
+            // Count argmax predictions
+            std::map<int, int> pred_counts;
+            for (int pos = 0; pos < sample_positions; ++pos) {
+                float max_logit = -1e30f;
+                int argmax = 0;
+                for (int v = 0; v < vocab_size; ++v) {
+                    float logit = logit_sample[pos * vocab_size + v];
+                    if (logit > max_logit) {
+                        max_logit = logit;
+                        argmax = v;
+                    }
+                }
+                pred_counts[argmax]++;
+            }
+            
+            // Sort by frequency
+            std::vector<std::pair<int, int>> sorted_preds(pred_counts.begin(), pred_counts.end());
+            std::sort(sorted_preds.begin(), sorted_preds.end(),
+                      [](const auto& a, const auto& b) { return a.second > b.second; });
+            
+            std::ostringstream pred_info;
+            pred_info << "BATCH_PRED_DIST batch=" << batch_idx
+                      << " sampled_pos=" << sample_positions
+                      << " unique_preds=" << pred_counts.size()
+                      << " top10=[";
+            for (size_t i = 0; i < std::min(sorted_preds.size(), size_t(10)); ++i) {
+                pred_info << "tid=" << sorted_preds[i].first 
+                          << ":" << sorted_preds[i].second;
+                if (i + 1 < std::min(sorted_preds.size(), size_t(10))) pred_info << ", ";
+            }
+            pred_info << "]";
+            EmitModuleInfo(ModuleId::ForwardPass, pred_info.str(), ctx.global_step);
+        }
+    }
     
     if (forward_call_count <= 3) {
         ctx.logging.logger->log("[GradTrace] POST-computeLossBatch call #" + std::to_string(forward_call_count) + 
@@ -1586,8 +1792,14 @@ BatchResult processBatch(
     if (state.initial_loss == 0.0f) {
         state.initial_loss = result.loss;
         state.min_observed_loss = result.loss;
+        // Calculate expected random baseline for reference (ln(vocab_size))
+        const float expected_random_baseline = std::log(static_cast<float>(ctx.config.actual_vocab_size));
+        const bool likely_from_checkpoint = result.loss < (expected_random_baseline - 1.0f);
+        std::string baseline_note = likely_from_checkpoint
+            ? "(from checkpoint, expected random=" + Internal::formatScalar(expected_random_baseline) + ")"
+            : "(random baseline for vocab=" + std::to_string(ctx.config.actual_vocab_size) + ")";
         ctx.logging.logger->log("[LossBaseline] Initial loss=" + Internal::formatScalar(state.initial_loss) +
-                                " (random baseline for vocab=" + std::to_string(ctx.config.actual_vocab_size) + ")");
+                                " " + baseline_note);
     } else {
         state.warmup_batches++;
         
@@ -1877,6 +2089,49 @@ BatchResult processBatch(
         */
     }
     
+    // ========================================================================
+    // NUMERICAL GRADIENT CHECK (Finite Difference Verification)
+    // ========================================================================
+    // Compares analytical gradients from backward pass against numerical gradients
+    // computed via central differences: numerical_grad ≈ (L(θ+ε) - L(θ-ε)) / (2ε)
+    // Enable via: GRIM_GRAD_CHECK_ENABLED=1 environment variable
+    // Control batch count via: GRIM_GRAD_CHECK_MAX_BATCHES=N (default: 3)
+    // WARNING: This is EXPENSIVE - adds 2 extra forward passes per checked batch!
+    //
+    // IMPORTANT: Only run on LAST micro-batch when gradients are fully accumulated
+    // ========================================================================
+    const int current_micro_step = ctx.optimizer.grad_controller->controller().currentMicroStep();
+    const int total_accum_steps = ctx.optimizer.grad_controller->controller().accumSteps();
+    const bool is_last_micro_batch = (current_micro_step + 1 >= total_accum_steps);
+    
+    // DEBUG: Log gradient check decision
+    ctx.logging.logger->log("[GradCheckDebug] batch=" + std::to_string(batch_idx + 1) + 
+                            " micro_step=" + std::to_string(current_micro_step) + 
+                            "/" + std::to_string(total_accum_steps) + 
+                            " is_last=" + (is_last_micro_batch ? "yes" : "no"));
+    
+    Internal::NumericalGradCheckResult grad_check_result{};
+    if (is_last_micro_batch) {
+        grad_check_result = Internal::performNumericalGradientCheck(
+            ctx,
+            batch_inputs, batch_targets,
+            batch_numeric_values, batch_numeric_mask,
+            batch_text_features, batch_text_mask,
+            batch_idx);
+        
+        // DEBUG: Log whether check was performed
+        ctx.logging.logger->log("[GradCheckDebug] performed=" + 
+                                std::string(grad_check_result.performed ? "yes" : "no"));
+    }
+    
+    if (grad_check_result.performed && !grad_check_result.passed) {
+        // Log a warning but don't abort - gradient check failures could be due to
+        // numerical precision issues, especially with mixed-precision training
+        ctx.logging.logger->log("[NumGradCheck] WARNING: Gradient check failed with " +
+                                Internal::formatScalar(grad_check_result.relative_error * 100.0f, 2) +
+                                "% relative error. This may indicate a bug in the backward pass.");
+    }
+    
     // NOTE: Window closes automatically via beginOptimizerStep() → endOptimizerStep()
     // State flow: ACCUMULATING → READY_FOR_STEP → IDLE
     
@@ -1899,9 +2154,8 @@ BatchResult processBatch(
     // Compute gradient norm on GPU (syncs every batch for correct clipping)
     auto norm_start = std::chrono::steady_clock::now();
     result.grad_norm = ctx.model->computeGradNorm(should_sync);
-    result.normalized_grad_norm = GRIM::TNC::computeNormalizedGrad(result.grad_norm, clip_selection.stats);
+    result.normalized_grad_norm = result.grad_norm;  // No longer normalized differently
     const float preclip_grad_norm = result.grad_norm;
-    const float preclip_norm_grad = result.normalized_grad_norm;
     auto norm_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - norm_start).count();
     
     // Log gradient component breakdown ONLY when we synced
@@ -1937,8 +2191,7 @@ BatchResult processBatch(
             ctx.logging.logger->log("[GradTrace] WARNING: grad_metrics not ready after computeGradNorm!");
         }
         
-        ctx.logging.logger->log("[GradTrace] POST-GRADNORM preclip=" + Internal::formatScalar(preclip_grad_norm) + 
-                                " per_token=" + Internal::formatScalar(preclip_norm_grad, 4));
+        ctx.logging.logger->log("[GradTrace] POST-GRADNORM preclip=" + Internal::formatScalar(preclip_grad_norm));
     }
     // else: No sync - grad_norm cached from last sync, no log spam
     
@@ -1947,7 +2200,7 @@ BatchResult processBatch(
     
     // Handle gradient spikes
     auto spike_start = std::chrono::steady_clock::now();
-    if (Internal::handleGradientSpike(ctx, state, batch, preclip_grad_norm, preclip_norm_grad, 
+    if (Internal::handleGradientSpike(ctx, state, batch, preclip_grad_norm, preclip_grad_norm, 
                                       result.loss, clip_selection, batch_idx)) {
         // CRITICAL: Zero gradients before reset - bad gradients must not persist
         // Even though beginAccumulationWindow() zeros at next batch start, we zero now

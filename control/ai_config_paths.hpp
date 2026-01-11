@@ -150,6 +150,7 @@ struct TrainingHyperparameters {
     bool per_token_grad_scale;
     int warmup_steps;
     int max_seq_len;
+    int min_seq_valid_tokens;  // Minimum valid tokens required (after masking first/last positions)
     int log_interval;
     int atom_stats_interval;
     int atom_stats_max_seqs;
@@ -505,7 +506,7 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         // Core training
         "epochs", "seed", "batch_size", "gradient_accumulation_steps",
         "batch_strategy", "learning_rate", "weight_decay",
-        "per_token_grad_scale", "warmup_steps", "max_seq_len", "log_interval",
+        "per_token_grad_scale", "warmup_steps", "max_seq_len", "min_seq_valid_tokens", "log_interval",
         "atom_stats_interval", "atom_stats_max_seqs",
         "validation_interval", "checkpoint_interval", "use_gpu", "use_flash_attention",
         
@@ -682,6 +683,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.grad_clip_norm, trainConfig, "grad_clip_norm");
     assignTrainingField(params.per_token_grad_scale, trainConfig, "per_token_grad_scale");
     assignTrainingField(params.max_seq_len, trainConfig, "max_seq_len");
+    assignTrainingField(params.min_seq_valid_tokens, trainConfig, "min_seq_valid_tokens");
     assignTrainingField(params.warmup_steps, trainConfig, "warmup_steps");
     assignTrainingField(params.log_interval, trainConfig, "log_interval");
     assignTrainingField(params.atom_stats_interval, trainConfig, "atom_stats_interval");

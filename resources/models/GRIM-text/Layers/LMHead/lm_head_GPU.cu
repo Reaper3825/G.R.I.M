@@ -1,14 +1,10 @@
-#define USE_CUDA
-
 #include "lm_head_GPU.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 
-#include <cmath>
 #include <stdexcept>
 #include <sstream>
-#include "../Shared/LogRecorder/LogRecorder.hpp"
 
-// External kernel declaration (global scope - defined in BackwardKernels.cu)
+// External kernel declaration (defined in BackwardKernels.cu)
 void launchBiasSumGradient(const float* grad_output,
                           float* grad_bias,
                           int total_tokens,
@@ -60,6 +56,11 @@ inline void addBias(float* logits,
 	const int total = vocab_size * total_tokens;
 	const int grid = (total + kBlockSize - 1) / kBlockSize;
 	addBiasKernel<<<grid, kBlockSize, 0, stream>>>(logits, bias, vocab_size, total_tokens);
+	
+	cudaError_t err = cudaGetLastError();
+	if (err != cudaSuccess) {
+		throw std::runtime_error(std::string("[LMHead::addBias] kernel launch failed: ") + cudaGetErrorString(err));
+	}
 }
 
 inline bool isDevicePtr(const void* ptr) {
@@ -105,32 +106,16 @@ void launchLMHeadForward(const LMHeadForwardParams& params) {
 
 	const int total_tokens = params.batch_size * params.seq_len;
 	if (total_tokens == 0) {
-		return;  // No-op for empty batch
+		return;
 	}
 
-	{
-		std::ostringstream oss;
-		oss << "[LMHead fwd] m=" << params.vocab_size
-		    << " n=" << total_tokens
-		    << " k=" << params.d_model
-		    << " lda=" << params.d_model      // weights leading dim (col-major d_model x vocab)
-		    << " ldb=" << params.d_model      // encoder leading dim (col-major d_model x tokens)
-		    << " ldc=" << params.vocab_size;  // logits leading dim (col-major vocab x tokens)
-		GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::ForwardPass, oss.str());
-	}
-
-
-	// REMOVED cublasSetStream - handle already bound to stream in InitTrainingState.cu
-
-	// FIXED: LM head should NOT scale by 1/sqrt(d_model) - that's for attention!
-	// Use alpha=1.0 for standard logits output
-	const float alpha = 1.0f;  // Was: 1.0f / std::sqrt(static_cast<float>(params.d_model))
-	const float beta_zero = 0.0f;
+	const float alpha = 1.0f;
+	const float beta = 0.0f;
 
 	cublasStatus_t status = cublasSgemm(
 		params.handle,
-		CUBLAS_OP_T,               // weights: row-major [vocab, d_model] -> col-major [d_model, vocab], transpose to [vocab, d_model]
-		CUBLAS_OP_N,               // encoder: row-major [tokens, d_model] -> col-major [d_model, tokens]
+		CUBLAS_OP_T,               // weights: row-major [vocab, d_model] -> transpose for GEMM
+		CUBLAS_OP_N,               // encoder: row-major [tokens, d_model]
 		params.vocab_size,         // m
 		total_tokens,              // n
 		params.d_model,            // k
@@ -139,19 +124,15 @@ void launchLMHeadForward(const LMHeadForwardParams& params) {
 		params.d_model,            // lda
 		params.encoder_output,
 		params.d_model,            // ldb
-		&beta_zero,
+		&beta,
 		params.logits,
 		params.vocab_size);        // ldc
-
 
 	if (status != CUBLAS_STATUS_SUCCESS) {
 		std::ostringstream oss;
 		oss << "[LMHead::forward] cublasSgemm failed status=" << status
 		    << " m=" << params.vocab_size << " n=" << total_tokens
-		    << " k=" << params.d_model
-		    << " lda=" << params.d_model
-		    << " ldb=" << params.d_model
-		    << " ldc=" << params.vocab_size;
+		    << " k=" << params.d_model;
 		throw std::runtime_error(oss.str());
 	}
 
@@ -203,92 +184,56 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 
 	const int total_tokens = params.batch_size * params.seq_len;
 	if (total_tokens == 0) {
-		return;  // No-op for empty batch
+		return;
 	}
 
-	{
-		std::ostringstream oss;
-		oss << "[LMHead bwd grad_encoder] m=" << params.d_model
-		    << " n=" << total_tokens
-		    << " k=" << params.vocab_size
-		    << " lda=" << params.d_model
-		    << " ldb=" << params.vocab_size
-		    << " ldc=" << params.d_model
-		    << " accumulate=" << params.accumulate;
-		GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::BackwardPass, oss.str());
-	}
-
-	// REMOVED cublasSetStream - handle already bound to stream in InitTrainingState.cu
-
-	// FIXED: LM head backward should also use alpha=1.0 (not scaled)
-	const float alpha = 1.0f;  // Was: 1.0f / std::sqrt(static_cast<float>(params.d_model))
-	const float beta_zero = 0.0f;
+	const float alpha = 1.0f;
 	const float beta = params.accumulate ? 1.0f : 0.0f;
 
+	// grad_encoder = weights @ grad_logits
 	cublasStatus_t status = cublasSgemm(
 		params.handle,
-		CUBLAS_OP_N,              // weights: row-major [vocab, d_model] -> col-major [d_model, vocab]
-		CUBLAS_OP_N,              // grad_logits: row-major [tokens, vocab] -> col-major [vocab, tokens]
-		params.d_model,           // M = d_model
-		total_tokens,             // N = tokens
-		params.vocab_size,        // K = vocab_size
+		CUBLAS_OP_N,              // weights: [d_model, vocab]
+		CUBLAS_OP_N,              // grad_logits: [vocab, tokens]
+		params.d_model,           // m
+		total_tokens,             // n
+		params.vocab_size,        // k
 		&alpha,
-		params.weights,           // A = weights
-		params.d_model,           // lda = leading dim of weights
-		params.grad_logits,       // B = grad_logits
-		params.vocab_size,        // ldb = leading dim of grad_logits
-		&beta_zero,
-		params.grad_encoder,      // C = grad_encoder
-		params.d_model);          // ldc = leading dim of grad_encoder
-
-
+		params.weights,
+		params.d_model,           // lda
+		params.grad_logits,
+		params.vocab_size,        // ldb
+		&beta,
+		params.grad_encoder,
+		params.d_model);          // ldc
 
 	if (status != CUBLAS_STATUS_SUCCESS) {
 		std::ostringstream oss;
-		oss << "[LMHead::backward] cublasSgemm grad_encoder failed status=" << status
-		    << " m=" << params.d_model << " n=" << total_tokens
-		    << " k=" << params.vocab_size
-		    << " lda=" << params.d_model
-		    << " ldb=" << params.vocab_size
-		    << " ldc=" << params.d_model;
+		oss << "[LMHead::backward] cublasSgemm grad_encoder failed status=" << status;
 		throw std::runtime_error(oss.str());
 	}
 
+	// grad_weight = encoder_output @ grad_logits^T
 	if (params.grad_weight && params.encoder_output) {
-		std::ostringstream oss;
-		oss << "[LMHead bwd grad_weight] m=" << params.d_model
-		    << " n=" << params.vocab_size
-		    << " k=" << total_tokens
-		    << " lda=" << params.d_model
-		    << " ldb=" << params.vocab_size
-		    << " ldc=" << params.d_model
-		    << " accumulate=" << params.accumulate;
-		GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::BackwardPass, oss.str());
-
 		status = cublasSgemm(
 			params.handle,
-			CUBLAS_OP_N,           // encoder_output: col-major [d_model, tokens]
-			CUBLAS_OP_T,           // grad_logits: col-major [vocab, tokens] -> [tokens, vocab]
+			CUBLAS_OP_N,           // encoder_output: [d_model, tokens]
+			CUBLAS_OP_T,           // grad_logits: [vocab, tokens]^T
 			params.d_model,        // m
 			params.vocab_size,     // n
 			total_tokens,          // k
 			&alpha,
-			params.encoder_output, // A
+			params.encoder_output,
 			params.d_model,        // lda
-			params.grad_logits,    // B
+			params.grad_logits,
 			params.vocab_size,     // ldb
 			&beta,
-			params.grad_weight,    // C
+			params.grad_weight,
 			params.d_model);       // ldc
 
 		if (status != CUBLAS_STATUS_SUCCESS) {
 			std::ostringstream oss;
-			oss << "[LMHead::backward] cublasSgemm grad_weight failed status=" << status
-			    << " m=" << params.d_model << " n=" << params.vocab_size
-			    << " k=" << total_tokens
-			    << " lda=" << params.d_model
-			    << " ldb=" << params.vocab_size
-			    << " ldc=" << params.d_model;
+			oss << "[LMHead::backward] cublasSgemm grad_weight failed status=" << status;
 			throw std::runtime_error(oss.str());
 		}
 	}

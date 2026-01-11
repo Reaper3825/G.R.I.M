@@ -809,6 +809,17 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
                 continue;
             }
 
+            // BUG FIX: Emit leading whitespace BEFORE the atom token
+            // The span was widened to include leading whitespace (detectStructures),
+            // but that whitespace must be tokenized separately to preserve it in output.
+            // span.start = widened start (may include whitespace)
+            // span.content_offset = original atom content start
+            if (span.content_offset > span.offset) {
+                size_t whitespace_start = span.offset;
+                size_t whitespace_end = span.content_offset;
+                appendSegmentTokens(whitespace_start, whitespace_end);
+            }
+
             // Emit a single atom token
             result.token_ids.push_back(atom_token_id);
             result.is_byte_fallback.push_back(false);

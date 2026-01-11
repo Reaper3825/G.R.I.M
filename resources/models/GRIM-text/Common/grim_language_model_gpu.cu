@@ -388,6 +388,35 @@ SampleResult sampleFromLogits(const std::vector<float>& logits,
         throw std::runtime_error("sampleFromLogits: probability sum is zero (temperature=" + 
                                  std::to_string(cfg.temperature) + "). Model outputs are degenerate.");
     }
+    
+    // DEBUG: Print top-5 logits to diagnose mode collapse
+    {
+        static int debug_sample_count = 0;
+        if (debug_sample_count < 20) {  // Only log first 20 samples per run
+            ++debug_sample_count;
+            std::vector<std::pair<int, float>> indexed_logits;
+            indexed_logits.reserve(logits.size());
+            for (int i = 0; i < static_cast<int>(logits.size()); ++i) {
+                indexed_logits.emplace_back(i, logits[i]);
+            }
+            std::partial_sort(indexed_logits.begin(), indexed_logits.begin() + 5, indexed_logits.end(),
+                              [](const auto& a, const auto& b) { return a.second > b.second; });
+            
+            fprintf(stderr, "[LOGITS_DEBUG] sample=%d top5_logits: ", debug_sample_count);
+            for (int i = 0; i < 5; ++i) {
+                fprintf(stderr, "[tid=%d logit=%.4f] ", indexed_logits[i].first, indexed_logits[i].second);
+            }
+            fprintf(stderr, "\n");
+            
+            // Also print logit statistics
+            float min_logit = *std::min_element(logits.begin(), logits.end());
+            float max_logit = *std::max_element(logits.begin(), logits.end());
+            float mean_logit = std::accumulate(logits.begin(), logits.end(), 0.0f) / logits.size();
+            fprintf(stderr, "[LOGITS_DEBUG] stats: min=%.4f max=%.4f mean=%.4f spread=%.4f\n",
+                    min_logit, max_logit, mean_logit, max_logit - min_logit);
+        }
+    }
+    
     if (!use_sampling) {
         // Greedy decoding
         int idx = static_cast<int>(std::distance(

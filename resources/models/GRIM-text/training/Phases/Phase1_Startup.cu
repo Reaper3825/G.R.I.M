@@ -480,6 +480,7 @@ GRIM::Tokenizer::UniByte initializeTokenizer(
 SequenceData loadTrainingData(
     const std::string& data_path,
     int max_seq_len,
+    int min_seq_valid_tokens,
     int sliding_window_stride,
     const GRIM::Tokenizer::UniByte& tokenizer,
     TrainingLogger& logger) {
@@ -697,6 +698,33 @@ SequenceData loadTrainingData(
     };
     filterOverlong(data.train_seqs, "train");
     filterOverlong(data.val_seqs, "val");
+
+    // HARD FILTER: Remove sequences with too few valid tokens after masking
+    // This prevents "valid_tokens=0" errors during loss computation
+    // (position 0 is always masked as BOS, final position is masked as boundary)
+    auto filterShortSequences = [&](std::vector<TrainingSequence>& sequences, const std::string& split_name) {
+        if (min_seq_valid_tokens <= 0) return;  // Disabled if <= 0
+        size_t before = sequences.size();
+        sequences.erase(
+            std::remove_if(sequences.begin(), sequences.end(),
+                [min_seq_valid_tokens](const TrainingSequence& seq) {
+                    // Count valid targets: excludes position 0 (BOS) and final position (boundary)
+                    // Mirrors the masking logic in ComputeLossBatch.cu::prepareLossBatchInputs()
+                    int valid = 0;
+                    for (size_t i = 1; i + 1 < seq.targets.size(); ++i) {
+                        if (seq.targets[i] >= 0) valid++;
+                    }
+                    return valid < min_seq_valid_tokens;
+                }),
+            sequences.end());
+        size_t removed = before - sequences.size();
+        if (removed > 0) {
+            logger.log("[FILTER] " + split_name + ": Removed " + std::to_string(removed) + 
+                       " sequences with < " + std::to_string(min_seq_valid_tokens) + " valid tokens");
+        }
+    };
+    filterShortSequences(data.train_seqs, "train");
+    filterShortSequences(data.val_seqs, "val");
     
     // Build views and catalogs
     data.train_views.reserve(data.train_seqs.size());
@@ -1438,6 +1466,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     ctx->data = Internal::loadTrainingData(
         ctx->config.paths.data_path,
         ctx->config.max_seq_len,
+        ctx->config.hyperparameters.min_seq_valid_tokens,
         ctx->config.sliding_window_stride,
         ctx->tokenizer,
         *ctx->logging.logger);

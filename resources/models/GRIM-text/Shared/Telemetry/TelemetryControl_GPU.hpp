@@ -276,8 +276,9 @@ public:
     
     /**
      * @brief Reset state (call at epoch boundary)
+     * @param stream CUDA stream for async memset
      */
-    void reset();
+    void reset(cudaStream_t stream);
     
     /**
      * @brief Get config (CPU-side copy)
@@ -298,6 +299,7 @@ private:
     TelemetryControlState_GPU* d_state_ = nullptr;    // Persistent state
     ControlDecision* d_decision_ = nullptr;           // Output buffer
     ControlKernelInput* d_input_ = nullptr;           // Input buffer
+    bool gpu_state_initialized_ = false;              // True after first evaluate() copies config/state
     
     void freeGPU();
 };

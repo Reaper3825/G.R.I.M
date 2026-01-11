@@ -3,8 +3,6 @@
 //  Forward orchestration for KV-cached generation
 //======================================================//
 
-#define USE_CUDA
-
 #include <vector>
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -40,88 +38,36 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
                                   const std::vector<float>& prompt_numeric_values,
                                   const std::vector<uint8_t>& prompt_numeric_mask) {
     const int seq_len = static_cast<int>(prompt_tokens.size());
-    {
-        std::ostringstream oss;
-        oss << "[forwardInit] ENTRY: seq_len=" << seq_len << " initialized=" 
-            << training_state_.initialized;
-        GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Inference, oss.str());
-    }
     
     if (!training_state_.initialized) {
-        GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Inference, 
-                                      "[forwardInit] State not initialized, initializing...");
         if (config_.execution_mode == ModelExecutionMode::TRAINING) {
             initTrainingState();
         } else {
             initInferenceState();
         }
-        GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Inference, 
-                                      "[forwardInit] Initialization complete");
     }
 
-    GRIM::ForwardOps::LogUnexpectedGradState(training_state_, "forwardInit");
-    const auto prefix = GRIM::ForwardOps::BuildForwardPrefix(training_state_, "forwardInit");
-
-    const auto& cfg = getConfig();
-    {
-        std::ostringstream oss;
-        oss << "[forwardInit] Config check: max_seq_len=" << cfg.max_seq_len 
-            << " kv_cache_capacity=" << training_state_.kv_cache_capacity;
-        GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Inference, oss.str());
-    }
-    
     if (seq_len <= 0) {
-        GRIM::Logging::EmitModuleError(GRIM::Logging::ModuleId::Inference, 
-                                       "[forwardInit] ERROR: seq_len <= 0, returning empty");
-        return Vector();
+        throw std::runtime_error("forwardInit: seq_len <= 0");
     }
     if (prompt_numeric_values.size() != static_cast<size_t>(seq_len) ||
         prompt_numeric_mask.size() != static_cast<size_t>(seq_len)) {
-        std::ostringstream oss;
-        oss << "[forwardInit] ERROR: numeric mismatch - values.size=" 
-            << prompt_numeric_values.size() << " mask.size=" << prompt_numeric_mask.size() 
-            << " expected=" << seq_len;
-        GRIM::Logging::EmitModuleError(GRIM::Logging::ModuleId::Inference, oss.str());
-        return Vector();
+        throw std::runtime_error("forwardInit: numeric arrays size mismatch with prompt_tokens");
     }
-
-    {
-        std::ostringstream oss;
-        oss << "[forwardInit] kv_cache_capacity=" << training_state_.kv_cache_capacity 
-            << " kv_cache_len=" << training_state_.kv_cache_len;
-        GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Inference, oss.str());
-    }
-    
     if (seq_len > training_state_.kv_cache_capacity) {
-        std::ostringstream oss;
-        oss << "[forwardInit] ERROR: seq_len > kv_cache_capacity (" << seq_len 
-            << " > " << training_state_.kv_cache_capacity << "), returning empty";
-        GRIM::Logging::EmitModuleError(GRIM::Logging::ModuleId::Inference, oss.str());
-        return Vector();
+        throw std::runtime_error("forwardInit: seq_len (" + std::to_string(seq_len) + 
+                                 ") exceeds kv_cache_capacity (" + 
+                                 std::to_string(training_state_.kv_cache_capacity) + ")");
+    }
+    if (!training_state_.cached_token_numeric_values || !training_state_.cached_token_numeric_mask) {
+        throw std::runtime_error("forwardInit: numeric buffers not allocated");
     }
 
-    GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Inference, 
-                                  "[forwardInit] Resetting KV cache state...");
     training_state_.kv_cache_len = 0;
     training_state_.cached_batch_size = 1;
     training_state_.cached_seq_len = seq_len;
-    training_state_.cached_num_layers = cfg.num_layers;
+    training_state_.cached_num_layers = getConfig().num_layers;
 
-    {
-        std::ostringstream oss;
-        oss << "[forwardInit] Checking numeric buffers: values=" << (void*)training_state_.cached_token_numeric_values
-            << " mask=" << (void*)training_state_.cached_token_numeric_mask;
-        GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Inference, oss.str());
-    }
-    
-    if (!training_state_.cached_token_numeric_values || !training_state_.cached_token_numeric_mask) {
-        GRIM::Logging::EmitModuleError(GRIM::Logging::ModuleId::Inference, 
-                                       "[forwardInit] ERROR: numeric buffers NULL, returning empty");
-        return Vector();
-    }
-    
-    GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Inference, 
-                                  "[forwardInit] Copying numeric data to device...");
     cudaMemcpyAsync(training_state_.cached_token_numeric_values,
                     prompt_numeric_values.data(),
                     static_cast<size_t>(seq_len) * sizeof(float),
@@ -133,13 +79,6 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
                     cudaMemcpyHostToDevice,
                     training_state_.stream_ctrl.getPrimaryStream());
 
-    {
-        std::ostringstream oss;
-        oss << "[forwardInit] Initializing forward context: mode=Prefill batch=1 seq=" << seq_len
-            << " logits_target=LastToken";
-        GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Inference, oss.str());
-    }
-    
     auto ctx = GRIM::Forward::initForwardContext(
         *this,
         GRIM::Forward::ForwardMode::Prefill,
@@ -154,35 +93,16 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
         false,
         false);
 
-    GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Inference, 
-                                  "[forwardInit] Executing forward pass...");
     const auto status = GRIM::Forward::executeForward(ctx);
-    
-    {
-        std::ostringstream oss;
-        oss << "[forwardInit] Forward status: " << GRIM::Forward::statusToString(status);
-        GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Inference, oss.str());
-    }
-    
     if (status != GRIM::Forward::ForwardStatus::SUCCESS) {
-        std::ostringstream oss;
-        oss << "[forwardInit] ERROR: Forward failed - status=" 
-            << GRIM::Forward::statusToString(status) << " error=" << ctx.error_message 
-            << ", returning empty";
-        GRIM::Logging::EmitModuleError(GRIM::Logging::ModuleId::Inference, oss.str());
-        return Vector();
+        throw std::runtime_error("forwardInit: forward failed - " + 
+                                 std::string(GRIM::Forward::statusToString(status)) + 
+                                 ": " + ctx.error_message);
     }
 
     training_state_.kv_cache_len = seq_len;
 
-    {
-        std::ostringstream oss;
-        oss << "[forwardInit] Copying logits from device: single_token_logits=" 
-            << (void*)training_state_.single_token_logits 
-            << " vocab_size=" << cfg.vocab_size;
-        GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Inference, oss.str());
-    }
-    
+    const auto& cfg = getConfig();
     Vector logits(cfg.vocab_size);
     cudaMemcpyAsync(logits.data.data(),
                     training_state_.single_token_logits,
@@ -190,12 +110,6 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
                     cudaMemcpyDeviceToHost,
                     training_state_.stream_ctrl.getPrimaryStream());
     training_state_.stream_ctrl.syncPrimaryStream();
-    
-    {
-        std::ostringstream oss;
-        oss << "[forwardInit] SUCCESS: returning logits with size=" << logits.data.size();
-        GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Inference, oss.str());
-    }
     
     return logits;
 }
@@ -205,39 +119,31 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
 //======================================================//
 Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t numeric_mask) {
     if (!training_state_.initialized) {
-        FWD_ERROR("[forwardStep] training state not initialized; call forwardInit first");
-        return Vector();
+        throw std::runtime_error("forwardStep: training state not initialized");
     }
-
-    GRIM::ForwardOps::LogUnexpectedGradState(training_state_, "forwardStep");
-    const auto prefix = GRIM::ForwardOps::BuildForwardPrefix(training_state_, "forwardStep");
-
     if (training_state_.kv_cache_len == 0) {
-        FWD_ERROR(prefix << " KV cache empty; call forwardInit first");
-        return Vector();
+        throw std::runtime_error("forwardStep: KV cache empty - call forwardInit first");
     }
 
     const auto& cfg = getConfig();
     const int new_pos = training_state_.kv_cache_len;
     const int new_seq_len = new_pos + 1;
+    
     if (new_seq_len > training_state_.kv_cache_capacity) {
-        FWD_ERROR(prefix << " sequence length=" << new_seq_len
-                         << " exceeds kv_cache_capacity=" << training_state_.kv_cache_capacity);
-        return Vector();
+        throw std::runtime_error("forwardStep: sequence length (" + std::to_string(new_seq_len) +
+                                 ") exceeds kv_cache_capacity (" + 
+                                 std::to_string(training_state_.kv_cache_capacity) + ")");
+    }
+    if (!training_state_.cached_token_numeric_values || !training_state_.cached_token_numeric_mask) {
+        throw std::runtime_error("forwardStep: numeric buffers not allocated");
     }
 
-    if (!training_state_.cached_token_numeric_values || !training_state_.cached_token_numeric_mask) {
-        FWD_ERROR(prefix << " numeric side-channel buffers not initialized");
-        return Vector();
-    }
     cudaMemcpyAsync(training_state_.cached_token_numeric_values + new_pos,
-                    &numeric_value,
-                    sizeof(float),
+                    &numeric_value, sizeof(float),
                     cudaMemcpyHostToDevice,
                     training_state_.stream_ctrl.getPrimaryStream());
     cudaMemcpyAsync(training_state_.cached_token_numeric_mask + new_pos,
-                    &numeric_mask,
-                    sizeof(uint8_t),
+                    &numeric_mask, sizeof(uint8_t),
                     cudaMemcpyHostToDevice,
                     training_state_.stream_ctrl.getPrimaryStream());
 
@@ -261,9 +167,9 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t nu
 
     const auto status = GRIM::Forward::executeForward(ctx);
     if (status != GRIM::Forward::ForwardStatus::SUCCESS) {
-        FWD_ERROR(prefix << " Forward failed: " << GRIM::Forward::statusToString(status)
-                         << " (" << ctx.error_message << ")");
-        return Vector();
+        throw std::runtime_error("forwardStep: forward failed - " +
+                                 std::string(GRIM::Forward::statusToString(status)) +
+                                 ": " + ctx.error_message);
     }
 
     training_state_.kv_cache_len = new_seq_len;
@@ -283,38 +189,31 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t nu
 //======================================================//
 Vector LanguageModel::forwardStepIncremental(int new_token, float numeric_value, uint8_t numeric_mask) {
     if (!training_state_.initialized) {
-        FWD_ERROR("[forwardStepIncremental] training state not initialized");
-        return Vector();
+        throw std::runtime_error("forwardStepIncremental: training state not initialized");
     }
-
-    GRIM::ForwardOps::LogUnexpectedGradState(training_state_, "forwardStepIncremental");
-    const auto prefix = GRIM::ForwardOps::BuildForwardPrefix(training_state_, "forwardStepIncremental");
-
     if (training_state_.kv_cache_len == 0) {
-        FWD_ERROR(prefix << " KV cache empty; call forwardInit first");
-        return Vector();
+        throw std::runtime_error("forwardStepIncremental: KV cache empty - call forwardInit first");
     }
 
     const auto& cfg = getConfig();
     const int query_pos = training_state_.kv_cache_len;
     const int kv_len = query_pos + 1;
+    
     if (kv_len > training_state_.kv_cache_capacity) {
-        FWD_ERROR(prefix << " exceeds kv_cache_capacity=" << training_state_.kv_cache_capacity);
-        return Vector();
+        throw std::runtime_error("forwardStepIncremental: kv_len (" + std::to_string(kv_len) +
+                                 ") exceeds kv_cache_capacity (" + 
+                                 std::to_string(training_state_.kv_cache_capacity) + ")");
+    }
+    if (!training_state_.cached_token_numeric_values || !training_state_.cached_token_numeric_mask) {
+        throw std::runtime_error("forwardStepIncremental: numeric buffers not allocated");
     }
 
-    if (!training_state_.cached_token_numeric_values || !training_state_.cached_token_numeric_mask) {
-        FWD_ERROR(prefix << " numeric side-channel buffers not initialized");
-        return Vector();
-    }
     cudaMemcpyAsync(training_state_.cached_token_numeric_values + query_pos,
-                    &numeric_value,
-                    sizeof(float),
+                    &numeric_value, sizeof(float),
                     cudaMemcpyHostToDevice,
                     training_state_.stream_ctrl.getPrimaryStream());
     cudaMemcpyAsync(training_state_.cached_token_numeric_mask + query_pos,
-                    &numeric_mask,
-                    sizeof(uint8_t),
+                    &numeric_mask, sizeof(uint8_t),
                     cudaMemcpyHostToDevice,
                     training_state_.stream_ctrl.getPrimaryStream());
 
@@ -338,9 +237,9 @@ Vector LanguageModel::forwardStepIncremental(int new_token, float numeric_value,
 
     const auto status = GRIM::Forward::executeForward(ctx);
     if (status != GRIM::Forward::ForwardStatus::SUCCESS) {
-        FWD_ERROR(prefix << " Forward failed: " << GRIM::Forward::statusToString(status)
-                         << " (" << ctx.error_message << ")");
-        return Vector();
+        throw std::runtime_error("forwardStepIncremental: forward failed - " +
+                                 std::string(GRIM::Forward::statusToString(status)) +
+                                 ": " + ctx.error_message);
     }
 
     training_state_.kv_cache_len = kv_len;
