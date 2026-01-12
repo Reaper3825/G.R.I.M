@@ -551,12 +551,16 @@ SequenceData loadTrainingData(
             new_text_features.reserve(seq.token_text_features.size() + (add_bos ? GRIM::Tokenizer::kTextFeatureDim : 0) + (add_eos ? GRIM::Tokenizer::kTextFeatureDim : 0));
             std::vector<uint8_t> new_text_mask;
             new_text_mask.reserve(seq.token_text_mask.size() + (add_bos ? 1 : 0) + (add_eos ? 1 : 0));
+            // GRMT v5: Also shift precomputed targets when adding BOS/EOS
+            std::vector<int> new_targets;
+            new_targets.reserve(seq.targets.size() + (add_bos ? 1 : 0) + (add_eos ? 1 : 0));
             if (add_bos) {
                 new_ids.push_back(bos_id);
                 new_numeric_values.push_back(0.0f);
                 new_numeric_mask.push_back(0);
                 for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) new_text_features.push_back(0);
                 new_text_mask.push_back(0);
+                new_targets.push_back(-1);  // BOS position has no target (masked)
                 added_bos++;
             }
             new_ids.insert(new_ids.end(), seq.token_ids.begin(), seq.token_ids.end());
@@ -572,12 +576,21 @@ SequenceData loadTrainingData(
             new_text_mask.insert(new_text_mask.end(),
                                  seq.token_text_mask.begin(),
                                  seq.token_text_mask.end());
+            // GRMT v5: Copy precomputed targets (shifted by BOS if added)
+            new_targets.insert(new_targets.end(),
+                               seq.targets.begin(),
+                               seq.targets.end());
             if (add_eos) {
                 new_ids.push_back(eos_id);
                 new_numeric_values.push_back(0.0f);
                 new_numeric_mask.push_back(0);
                 for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) new_text_features.push_back(0);
                 new_text_mask.push_back(0);
+                // GRMT v5: Last target before EOS should be -1 (don't train to predict EOS)
+                if (!new_targets.empty()) {
+                    new_targets.back() = -1;
+                }
+                new_targets.push_back(-1);  // EOS position has no target
                 added_eos++;
             }
             seq.token_ids = std::move(new_ids);
@@ -585,26 +598,9 @@ SequenceData loadTrainingData(
             seq.token_numeric_mask = std::move(new_numeric_mask);
             seq.token_text_features = std::move(new_text_features);
             seq.token_text_mask = std::move(new_text_mask);
+            // GRMT v5: Use shifted precomputed targets instead of recomputing from scratch
+            seq.targets = std::move(new_targets);
             changed = true;
-        }
-
-        if (changed) {
-            const size_t seq_len = seq.token_ids.size();
-            seq.targets.resize(seq_len);
-            for (size_t j = 0; j < seq_len; ++j) {
-                seq.targets[j] = (j + 1 < seq_len) ? seq.token_ids[j + 1] : -1;
-            }
-            // Mask first position (can't predict after BOS)
-            if (seq_len > 0) {
-                seq.targets[0] = -1;
-            }
-            // BUG FIX: Mask second-to-last position to prevent training model to predict EOS
-            // When sequence ends with EOS, the token before it gets target=EOS, which teaches
-            // the model to end generation prematurely. EOS should only be predicted when the
-            // model genuinely reaches end of thought, not at arbitrary sequence boundaries.
-            if (seq_len > 1 && eos_id >= 0 && seq.token_ids.back() == eos_id) {
-                seq.targets[seq_len - 2] = -1;
-            }
             modified++;
         }
     }

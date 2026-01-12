@@ -8,18 +8,18 @@ LIBTORCH BASELINE (GRIM-text Feature Parity)
 ========================================
 [Config] mode: GRMT (full vocab)
 [Config] vocab: D:\G.R.I.M\resources\models\GRIM-text\training\data\vocab.bin
-[Config] training: resources/models/GRIM-text/training/data/training_data.grmt
+[Config] training: D:\G.R.I.M\resources\models\GRIM-text\training\data\training_data.grmt
 [Config] validation: resources/models/GRIM-text/training/data/validation_data.grmt
-[Config] seq_len=256 batch_size=6 epochs=1
+[Config] seq_len=1024 batch_size=6 epochs=1
 
 [Features] Toggleable Settings:
   grad_accumulation: ON (steps=1)
-  lr_warmup: ON (steps=100)
+  lr_warmup: ON (steps=0)
   cosine_decay: ON
   grad_clipping: ON (max_norm=1)
   grad_metrics: ON
   validation: ON (interval=100)
-  sampling: ON (interval=200)
+  sampling: ON (interval=100)
   focal_loss: OFF (gamma=1, alpha=1)
   label_smoothing: OFF (eps=0.1)
   auto_stop: OFF (patience=10)
@@ -33,13 +33,13 @@ LIBTORCH BASELINE (GRIM-text Feature Parity)
 [GRIMVocab] Loaded 50103 unigram pieces
 [STARTUP] Vocab loaded successfully, loading GRMT data...
 [STARTUP] Opening GRMT file...
-[GRMT] Opening file: resources/models/GRIM-text/training/data/training_data.grmt
+[GRMT] Opening file: D:\G.R.I.M\resources\models\GRIM-text\training\data\training_data.grmt
 [GRMT] Reading header...
 [GRMT] Header read complete
 [GRMT] Validating magic...
 [GRMT] Validating version...
 [GRMT] Printing header info...
-[GRMT] Loading resources/models/GRIM-text/training/data/training_data.grmt
+[GRMT] Loading D:\G.R.I.M\resources\models\GRIM-text\training\data\training_data.grmt
 [GRMT] version=5
 [GRMT] sequences=16258
 [GRMT] vocab_size=50376

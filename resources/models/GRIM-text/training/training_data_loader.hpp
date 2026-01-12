@@ -110,6 +110,16 @@ bool load(const std::string& path) {
                     return false;
                 }
             }
+            // Also validate targets (when not masked)
+            for (size_t j = 0; j < sequences_[i].targets.size(); ++j) {
+                int target_id = sequences_[i].targets[j];
+                if (target_id >= 0 && static_cast<uint32_t>(target_id) >= vocab_size_) {
+                    err_stream << "FATAL: Sequence " << i << " position " << j 
+                              << " contains out-of-bounds target ID " 
+                              << target_id << " (vocab_size=" << vocab_size_ << ")\n";
+                    return false;
+                }
+            }
         }
         return true;
     }
@@ -228,11 +238,9 @@ private:
             seq.token_text_features.resize(seq_len * GRIM::Tokenizer::kTextFeatureDim);
             seq.token_text_mask.resize(seq_len);
   
-            for (uint32_t j = 0; j < seq_len; ++j) {
-                uint32_t token_id;
-                file.read(reinterpret_cast<char*>(&token_id), 4);
-                seq.token_ids[j] = static_cast<int>(token_id);
-            }
+            // Bulk read token_ids (written as int array by DataLoader.cu)
+            file.read(reinterpret_cast<char*>(seq.token_ids.data()),
+                      seq_len * sizeof(int));
             
             // GRMT v5: Read pre-computed targets immediately after token_ids
             if (version >= 5) {

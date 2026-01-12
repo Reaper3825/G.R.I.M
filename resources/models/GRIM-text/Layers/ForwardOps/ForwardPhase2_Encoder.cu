@@ -1,5 +1,6 @@
 #include "ForwardPhase2_Encoder.hpp"
 #include "ForwardKernels.hpp"
+#include "ForwardDiagnostics.cuh"
 
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
@@ -113,9 +114,35 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
         enc_layer->setWorkspace(ws.data, ws.bytes);
         enc_layer->forward(args);
 
+        // === DIAGNOSTIC: Log per-layer output ===
+        // Expected: After each layer, output should maintain reasonable scale
+        // RMSNorm should keep rms≈1, residual connections may increase variance slightly
+        {
+            const size_t layer_elements = static_cast<size_t>(total_tokens) * static_cast<size_t>(cfg->d_model);
+            char buf[128];
+            snprintf(buf, sizeof(buf), "encoder_layer_%d_output", layer_idx);
+            FWD_DIAG_BUFFER_EXPECTED(buf,
+                encoder_output, layer_elements,
+                0.0f, 1.0f + 0.2f * layer_idx,  // Variance may grow with depth
+                -10.0f, 10.0f,                   // Should stay bounded
+                ctx.stream);
+        }
+        // === END DIAGNOSTIC ===
+
         // Next layer's input is this layer's output
         d_layer_input = encoder_output;
     }
+
+    // === DIAGNOSTIC: Final encoder output ===
+    {
+        const size_t total_elements = static_cast<size_t>(total_tokens) * static_cast<size_t>(cfg->d_model);
+        FWD_DIAG_BUFFER_EXPECTED("encoder_final_output",
+            encoder_output, total_elements,
+            0.0f, 2.0f,       // After all layers, some variance growth expected
+            -15.0f, 15.0f,    // Should remain bounded
+            ctx.stream);
+    }
+    // === END DIAGNOSTIC ===
 
     FWD_CHECK_CUDA(ctx, cudaGetLastError(), "encoder layer forward", -1);
 

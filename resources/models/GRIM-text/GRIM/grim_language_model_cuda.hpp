@@ -626,6 +626,7 @@ public:
     void scaleGradients(float scale);
     void clampGradients(float min_val, float max_val);  // Clamp individual gradient values
     void dumpGradients(const std::string& path);  // Dump gradients to binary file for inspection
+    void dumpGradientValues(int step, const std::string& filepath);  // Dump gradient values to text file for comparison
     void logEmbeddingDiagnostics(const std::string& tag);
     void setSequenceLossWeights(const std::vector<float>& weights);
     void clearSequenceLossWeights();

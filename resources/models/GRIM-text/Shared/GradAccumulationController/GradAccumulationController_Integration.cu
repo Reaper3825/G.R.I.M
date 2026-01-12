@@ -10,6 +10,7 @@
 #include "GradAccumulationController_Integration.hpp"
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
+#include "../../Layers/ScratchBlock/ScratchBlock_GPU.hpp"  // Issue #29: ScratchBlock gradient registration
 #include "../LogRecorder/LogRecorder.hpp"
 
 namespace {
@@ -270,6 +271,44 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
                 prefix + "ffn_w2_bias",
                 ts.ffn_b2_grads[layer],
                 static_cast<std::size_t>(cfg.d_model)
+            );
+        }
+    }
+    
+    // ========== ScratchBlock Gradients (Issue #29: CRITICAL FIX) ==========
+    // These buffers were NOT registered previously, causing infinite gradient
+    // accumulation and explosion after ~490 batches!
+    auto* scratch_block = model.getScratchBlockLayer();
+    if (scratch_block && cfg.use_scratch_block) {
+        const auto& sb_config = scratch_block->getConfig();
+        
+        // Atom type embeddings gradients: [NUM_ATOM_TYPES, atom_embedding_dim]
+        if (scratch_block->getAtomTypeEmbeddingsGrad()) {
+            // NUM_ATOM_TYPES is a compile-time constant in HyperParameters
+            const int num_atom_types = 16;  // From HyperParameters::NUM_ATOM_TYPES
+            controller_.registerGradientBuffer(
+                "scratch_block_atom_type_embeddings_grad",
+                scratch_block->getAtomTypeEmbeddingsGrad(),
+                static_cast<std::size_t>(num_atom_types) * sb_config.atom_embedding_dim
+            );
+        }
+        
+        // Atom projection gradients: [atom_embedding_dim, d_model]
+        if (scratch_block->getAtomProjectionGrad()) {
+            controller_.registerGradientBuffer(
+                "scratch_block_atom_projection_grad",
+                scratch_block->getAtomProjectionGrad(),
+                static_cast<std::size_t>(sb_config.atom_embedding_dim) * cfg.d_model
+            );
+        }
+        
+        // Text feature projection gradients: [16, d_model] (FP16 text features → d_model)
+        if (scratch_block->getTextFeatureProjectionGrad()) {
+            const int text_feature_dim = 16;  // kTextFeatureDim in ScratchBlock_GPU.cu
+            controller_.registerGradientBuffer(
+                "scratch_block_text_projection_grad",
+                scratch_block->getTextFeatureProjectionGrad(),
+                static_cast<std::size_t>(text_feature_dim) * cfg.d_model
             );
         }
     }

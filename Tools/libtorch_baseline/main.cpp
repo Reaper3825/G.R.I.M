@@ -96,7 +96,7 @@ struct TrainConfig {
     
     // Focal loss: down-weight easy examples (gamma > 0)
     bool enable_focal_loss = false;
-    double focal_gamma = 2.0;
+    double focal_gamma = 1.0;
     double focal_alpha = 1.0;
     
     // Label smoothing: smooth target distribution
@@ -258,13 +258,28 @@ static std::pair<std::vector<int64_t>, uint32_t> load_grmt(const std::string& pa
     
     std::vector<int64_t> all_tokens;
     all_tokens.reserve(1024 * 1024);  // Pre-allocate 1M tokens
+    std::cout << "[GRMT] Pre-allocated token buffer\n";
+    std::cout.flush();
     
     constexpr size_t kTextFeatureDim = 16;  // Must match GRIM::Tokenizer::kTextFeatureDim
     
     // Read sequences
+    std::cout << "[GRMT] Starting sequence loop...\n";
+    std::cout.flush();
+    
     for (uint32_t seq_idx = 0; seq_idx < header.num_sequences; ++seq_idx) {
+        if (seq_idx == 0) {
+            std::cout << "[GRMT] Reading first sequence length at offset " << file.tellg() << "\n";
+            std::cout.flush();
+        }
+        
         uint32_t seq_len;
         file.read(reinterpret_cast<char*>(&seq_len), sizeof(uint32_t));
+        
+        if (seq_idx == 0) {
+            std::cout << "[GRMT] First seq_len=" << seq_len << ", file.good()=" << file.good() << "\n";
+            std::cout.flush();
+        }
         
         if (!file.good() || seq_len == 0 || seq_len > 100000) {
             std::cerr << "[GRMT] Warning: invalid seq_len=" << seq_len << " at seq " << seq_idx << "\n";
@@ -272,25 +287,59 @@ static std::pair<std::vector<int64_t>, uint32_t> load_grmt(const std::string& pa
         }
         
         // Read token IDs
+        if (seq_idx == 0) {
+            std::cout << "[GRMT] Allocating token_ids vector for " << seq_len << " tokens...\n";
+            std::cout.flush();
+        }
         std::vector<uint32_t> token_ids(seq_len);
+        
+        if (seq_idx == 0) {
+            std::cout << "[GRMT] Reading tokens from file...\n";
+            std::cout.flush();
+        }
         file.read(reinterpret_cast<char*>(token_ids.data()), seq_len * sizeof(uint32_t));
         
+        if (seq_idx == 0) {
+            std::cout << "[GRMT] Tokens read, skipping v5 targets array...\n";
+            std::cout.flush();
+        }
         // GRMT v5: Skip targets array (int32 array, same length as token_ids)
         if (header.version >= 5) {
             file.seekg(seq_len * sizeof(int32_t), std::ios::cur);
         }
         
+        if (seq_idx == 0) {
+            std::cout << "[GRMT] Skipping numeric_values...\n";
+            std::cout.flush();
+        }
         // Skip numeric_values (float array)
         file.seekg(seq_len * sizeof(float), std::ios::cur);
         
+        if (seq_idx == 0) {
+            std::cout << "[GRMT] Skipping numeric_mask...\n";
+            std::cout.flush();
+        }
         // Skip numeric_mask (uint8 array)
         file.seekg(seq_len * sizeof(uint8_t), std::ios::cur);
         
+        if (seq_idx == 0) {
+            std::cout << "[GRMT] Skipping text_features (" << (seq_len * kTextFeatureDim * sizeof(uint16_t)) << " bytes)...\n";
+            std::cout.flush();
+        }
         // Skip text_features (uint16 array, 8 features per token)
         file.seekg(seq_len * kTextFeatureDim * sizeof(uint16_t), std::ios::cur);
         
+        if (seq_idx == 0) {
+            std::cout << "[GRMT] Skipping text_mask...\n";
+            std::cout.flush();
+        }
         // Skip text_mask (uint8 array)
         file.seekg(seq_len * sizeof(uint8_t), std::ios::cur);
+        
+        if (seq_idx == 0) {
+            std::cout << "[GRMT] Appending tokens to all_tokens...\n";
+            std::cout.flush();
+        }
         
         // Append tokens to flat sequence
         // IMPORTANT: Skip atom tokens (256-511) - they are structural placeholders
@@ -962,6 +1011,45 @@ struct EpochResult {
 };
 
 //======================================================//
+//  Gradient Value Dump (for comparison with GRIM-text)
+//======================================================//
+
+static void dump_gradient_values(GPT& model, int64_t step, const std::string& path) {
+    std::ofstream file(path, std::ios::app);
+    file << "\n========== STEP " << step << " GRADIENT VALUES ==========\n";
+    
+    auto params = model->named_parameters();
+    for (const auto& p : params) {
+        // Check if gradient is defined
+        bool has_grad = p.value().grad().defined();
+        
+        auto grad = has_grad ? p.value().grad().flatten().to(torch::kCPU) 
+                             : torch::zeros({p.value().numel()});
+        int64_t numel = grad.numel();
+        int64_t num_to_print = std::min(numel, (int64_t)10);
+        
+        float norm = has_grad ? p.value().grad().norm().item<float>() : 0.0f;
+        
+        file << "\n[" << p.key() << "] shape=" << p.value().sizes() 
+             << " numel=" << numel << " norm=" << std::scientific << norm
+             << " has_grad=" << (has_grad ? "YES" : "NO") << "\n";
+        file << "  first " << num_to_print << " values: ";
+        
+        auto accessor = grad.accessor<float, 1>();
+        for (int64_t i = 0; i < num_to_print; ++i) {
+            file << std::scientific << std::setprecision(6) << accessor[i] << " ";
+        }
+        
+        // Also print stats
+        file << "\n  min=" << grad.min().item<float>() 
+             << " max=" << grad.max().item<float>()
+             << " mean=" << grad.mean().item<float>()
+             << " std=" << grad.std().item<float>() << "\n";
+    }
+    file.close();
+}
+
+//======================================================//
 //  Gradient Metrics (matches GRIM-text GradientMetrics)
 //======================================================//
 
@@ -1429,6 +1517,12 @@ int main(int argc, char ** argv) {
                 //======================================================//
                 //  Optimizer Step
                 //======================================================//
+                
+                // Dump gradient values for first 2 steps for comparison with GRIM-text
+                if (global_step < 2) {
+                    dump_gradient_values(model, global_step + 1, "pytorch_gradients.txt");
+                }
+                
                 optimizer.step();
                 optimizer.zero_grad();
                 global_step++;

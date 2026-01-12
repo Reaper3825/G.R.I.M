@@ -1,13 +1,125 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** 🔴 MAJOR BUG FOUND - beta_accum hardcoded to 1.0 (gradient accumulation broken)  
+**Status:** 🔴 CRITICAL BUG FOUND - gradient_clip accidentally disabled (Issue #30)  
 **Started:** December 22, 2025  
-**Last Updated:** January 12, 2026
+**Last Updated:** January 14, 2026
 **Original Symptom:** Loss drops from 10.5 → 8.3-8.8 in first ~50 batches, then plateaus indefinitely to include multiple epochs 
 
 ---
 
-## 🔴 CRITICAL BUG FOUND (January 12, 2026)
+## 🔴 CRITICAL BUG FOUND (January 14, 2026)
+
+### Issue #30: gradient_clip Accidentally Disabled - 150-950x Effective Learning Rate!
+
+**Symptom:** Training shows chaotic loss oscillation (6.1 → 14.5 → 7.4 → 15.6) with no downward trend. PyTorch baseline learns fine on same data. Gradient norms are 150-950 (should be ~1.0).
+
+**Evidence from training log (training_17682327871961251.log):**
+```
+[GradTrace] batch=2: total=152.7288 emb_lm_tied=73.43 numeric_head=81.28 attn=47.22 ffn=47.14 rms=0.41 sb=0.09
+[GradTrace] batch=10: total=945.5+ (growing out of control!)
+Loss: 6.4 → 6.1 → 9.6 → 14.5 → 7.4 → 8.0 → 15.6 → 15.4 (chaotic oscillation)
+```
+
+**Root Cause:**
+`gradient_clip` was accidentally changed from `1.0` to `0.0` in commit `b15e4b475` ("refactor: update head_dim calculations"):
+
+```bash
+# Commit b42d66065 (working): gradient_clip: 1.0
+# Commit b15e4b475 (HEAD, broken): gradient_clip: 0.0
+```
+
+**Why This Broke Training:**
+1. PyTorch baseline uses `clip_grad = 1.0` by default (verified in Tools/libtorch_baseline/main.cpp line 60)
+2. GRIM-text with `gradient_clip: 0.0` = NO CLIPPING
+3. Gradient norms are 150-950 instead of being clipped to 1.0
+4. Effective learning rate: `lr * grad_norm = 0.0003 * 150 = 0.045` (instead of 0.0003)
+5. This 150x+ effective LR causes optimizer to overshoot constantly
+6. Loss oscillates wildly as weights bounce between extremes
+
+**The Fix (ai_config.json):**
+```json
+// BEFORE (BUG - commit b15e4b475):
+"gradient_clip": 0.0,
+
+// AFTER (FIXED):
+"gradient_clip": 1.0,
+```
+
+**Status:** ✅ **FIX APPLIED** (Jan 14, 2026) - Rebuild NOT required (config-only change)
+
+---
+
+## 🔴 PREVIOUS CRITICAL BUG (January 13, 2026)
+
+### Issue #29: ScratchBlock Gradients NOT Registered with GradAccumulationController - INFINITE ACCUMULATION
+
+**Symptom:** Training shows high variation oscillation with no learning trend. PyTorch baseline learns fine on same data. After ~490 batches, ScratchBlock gradient component explodes from 0.03 → 429890+ (14 MILLION times increase).
+
+**Evidence from training log:**
+```
+# Healthy early training:
+[GradTrace] batch=50 grad_norm: total=2.3 emb_lm_tied=2.1 attn=0.3 ffn=0.2 rms=0.01 sb=0.03
+
+# After ~490 batches - EXPLOSION:
+[GradTrace] batch=499 sb=429890.5  ← 14 MILLION times larger!
+v_rms reaches 170 MILLION - massive gradient variance accumulation
+RMSNorm gamma gradients flagged as EXPLOSION with rms=3.59e+06
+```
+
+**Root Cause:**
+ScratchBlock gradient buffers were **NEVER REGISTERED** with GradAccumulationController in `GradAccumulationController_Integration.cu`:
+
+```cpp
+// BEFORE (BUG): ScratchBlock gradients NOT registered!
+// These buffers were created and used in backward() but NEVER zeroed:
+// - d_atom_type_embeddings_grad_
+// - d_atom_projection_grad_
+// - d_text_feature_projection_grad_
+```
+
+**Why This Broke Training:**
+1. Rule 22 MANDATES all gradients go through centralized controllers
+2. GradAccumulationController zeros all registered buffers before each backward pass
+3. ScratchBlock gradients were NOT registered → NEVER zeroed
+4. Each batch ADDED to previous batch's gradients infinitely
+5. After ~490 batches: accumulated garbage gradients exploded
+6. This corrupted gradient direction and caused chaotic oscillation
+
+**The Fix (GradAccumulationController_Integration.cu):**
+```cpp
+// AFTER (FIXED): Register ScratchBlock gradient buffers
+#include "../../Layers/ScratchBlock/ScratchBlock_GPU.hpp"  // Issue #29
+
+// In bindToModel(), add ScratchBlock gradient registration:
+if (cfg.use_scratch_block) {
+    // Get ScratchBlock instance
+    auto* scratch_block = model.getScratchBlock();
+    if (scratch_block) {
+        // Register atom type embedding gradients
+        auto atom_type_grad_info = scratch_block->getAtomTypeEmbeddingsGradInfo();
+        if (atom_type_grad_info.buffer && atom_type_grad_info.size > 0) {
+            controller.registerBuffer(
+                "scratch_block_atom_type_embeddings_grad",
+                atom_type_grad_info.buffer,
+                atom_type_grad_info.size,
+                BufferAccessPattern::AtomicAccumulate
+            );
+        }
+        // ... similar for atom_projection_grad and text_projection_grad
+    }
+}
+```
+
+**Why Previous Fix (Issue #28) Was Necessary But Not Sufficient:**
+Issue #28 fixed beta_accum=1.0 bug so cuBLAS overwrites correctly.
+BUT ScratchBlock uses **manual CUDA kernels and atomicAdd**, NOT cuBLAS!
+So even with beta_accum=0.0, ScratchBlock gradients still accumulated infinitely.
+
+**Status:** ✅ **FIX APPLIED** (Jan 13, 2026) - Rebuild required to test
+
+---
+
+## 🔴 PREVIOUS CRITICAL BUG (January 12, 2026)
 
 ### Issue #28: beta_accum ALWAYS 1.0 - Gradient Accumulation Fundamentally Broken
 

@@ -1060,6 +1060,61 @@ void LanguageModel::scaleOptimizerMoments(float scale) {
 }
 
 //======================================================//
+//  dumpGradientValues - Debug: Dump first N gradient values for each parameter
+//======================================================//
+
+void LanguageModel::dumpGradientValues(int step, const std::string& filepath) {
+    if (parameter_groups_.empty()) {
+        buildParameterGroups();
+    }
+    
+    cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
+    cudaStreamSynchronize(stream);  // Ensure all gradients computed
+    
+    std::ofstream file(filepath, std::ios::app);
+    file << "\n========== STEP " << step << " GRADIENT VALUES (GRIM-text) ==========\n";
+    
+    constexpr int NUM_TO_PRINT = 10;
+    std::vector<float> host_buffer(NUM_TO_PRINT);
+    
+    for (const auto& group : parameter_groups_) {
+        if (!group.grads || group.size == 0) continue;
+        
+        // Copy first N values to host
+        size_t copy_count = std::min(group.size, (size_t)NUM_TO_PRINT);
+        cudaMemcpy(host_buffer.data(), group.grads, copy_count * sizeof(float), cudaMemcpyDeviceToHost);
+        
+        // Compute stats on GPU (norm, min, max, mean)
+        float norm = 0.0f;
+        {
+            // Simple norm computation for stats
+            std::vector<float> full_buffer(group.size);
+            cudaMemcpy(full_buffer.data(), group.grads, group.size * sizeof(float), cudaMemcpyDeviceToHost);
+            double sum_sq = 0.0;
+            float min_val = full_buffer[0], max_val = full_buffer[0];
+            double sum = 0.0;
+            for (size_t i = 0; i < group.size; ++i) {
+                sum_sq += (double)full_buffer[i] * full_buffer[i];
+                sum += full_buffer[i];
+                if (full_buffer[i] < min_val) min_val = full_buffer[i];
+                if (full_buffer[i] > max_val) max_val = full_buffer[i];
+            }
+            norm = std::sqrt((float)sum_sq);
+            
+            file << "\n[" << group.name << "] size=" << group.size 
+                 << " norm=" << std::scientific << std::setprecision(6) << norm << "\n";
+            file << "  first " << copy_count << " values: ";
+            for (size_t i = 0; i < copy_count; ++i) {
+                file << host_buffer[i] << " ";
+            }
+            file << "\n  min=" << min_val << " max=" << max_val << " mean=" << (sum / group.size) << "\n";
+        }
+    }
+    
+    file.close();
+}
+
+//======================================================//
 //  computeGradNorm - GPU-Resident L2 Norm of All Gradients
 //======================================================//
 //

@@ -1,4 +1,5 @@
 #include "ForwardPhase3_InputLayer.hpp"
+#include "ForwardDiagnostics.cuh"
 
 #include "../../Layers/Embedding/Embedding_GPU.hpp"
 #include "../../Layers/ScratchBlock/ScratchBlock_GPU.hpp"
@@ -77,6 +78,21 @@ ForwardStatus executePhase3_InputLayer(ForwardContext& ctx) {
         auto emb_ms = std::chrono::duration<double, std::milli>(emb_end - emb_start).count();
         fprintf(stderr, "[VOCAB_TIMING] Phase3: Embedding lookup complete: %.2f ms\n", emb_ms);
         FWD_CHECK_CUDA(ctx, cudaGetLastError(), "embeddingRuntimeForward", -1);
+
+        // === DIAGNOSTIC: Log embedding output ===
+        // Expected: Xavier init means var ≈ 1/d_model, mean ≈ 0
+        // Position embeddings (RoPE+ALiBi) are added inside embedding layer
+        {
+            const size_t emb_elements = static_cast<size_t>(ctx.total_tokens) * static_cast<size_t>(cfg->d_model);
+            const float expected_var = 1.0f / cfg->d_model;  // Xavier init
+            FWD_DIAG_BUFFER_EXPECTED("embeddings (after lookup + position)",
+                ts->cached_embeddings, emb_elements,
+                0.0f, expected_var * 2,  // Some variance from position embeddings added
+                -1.0f, 1.0f,             // Should be small values
+                ctx.stream);
+        }
+        // === END DIAGNOSTIC ===
+
         if (g_order_log_enabled) {
             fprintf(stderr, "[ORDER] ForwardPhase3.embedding_done batch=%d seq=%d tokens=%d\n",
                     ctx.batch_size, ctx.seq_len, ctx.total_tokens);

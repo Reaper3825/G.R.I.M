@@ -1,4 +1,5 @@
 #include "ForwardPhase1_OutputLayer.hpp"
+#include "ForwardDiagnostics.cuh"
 
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../Layers/NumericHead/numeric_head_GPU.hpp"
@@ -67,6 +68,40 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
     } catch (const std::exception& ex) {
         FWD_FAIL_LOUD(ctx, ForwardStatus::INVALID_STATE, ex.what(), -1);
     }
+
+    // === DIAGNOSTIC: Log encoder output and logits ===
+    // Expected encoder_output: After RMSNorm, should have mean≈0, rms≈1
+    // Expected logits: Should be in reasonable range [-15, 15], mean near 0 if well-initialized
+    {
+        const size_t enc_elements = static_cast<size_t>(lm_params.batch_size) * 
+                                    static_cast<size_t>(lm_params.seq_len) * 
+                                    static_cast<size_t>(cfg->d_model);
+        const size_t logit_elements = static_cast<size_t>(lm_params.batch_size) * 
+                                      static_cast<size_t>(lm_params.seq_len) * 
+                                      static_cast<size_t>(cfg->vocab_size);
+        
+        FWD_DIAG_BUFFER_EXPECTED("encoder_output (LM head input)", 
+            lm_params.encoder_output, enc_elements,
+            0.0f, 1.0f,    // Expected mean≈0, var≈1 after RMSNorm
+            -10.0f, 10.0f, // Expected range
+            ctx.stream);
+        
+        FWD_DIAG_BUFFER_EXPECTED("logits (LM head output)", 
+            logits_output, logit_elements,
+            0.0f, 10.0f,      // Expected mean≈0, var depends on init
+            -20.0f, 20.0f,    // Expected range (can be larger for vocab projection)
+            ctx.stream);
+        
+        // Also log weight stats to verify initialization
+        const size_t weight_elements = static_cast<size_t>(cfg->d_model) * 
+                                       static_cast<size_t>(cfg->vocab_size);
+        FWD_DIAG_BUFFER_EXPECTED("lm_head_weights",
+            ts->lm_head_weights, weight_elements,
+            0.0f, 1.0f / cfg->d_model,  // Xavier: var = 1/d_model
+            -0.1f, 0.1f,                // Expected small values
+            ctx.stream);
+    }
+    // === END DIAGNOSTIC ===
 
     if (cfg->numeric_head_enabled) {
         if (!ts->numeric_head_weights || !ts->cached_numeric_predictions) {

@@ -668,7 +668,14 @@ int main(int argc, char** argv) {
             // Build context: all tokens up to and including current position
             int context_len = pos + 1;
             std::vector<int> context_ids(seq.token_ids.begin(), seq.token_ids.begin() + context_len);
-            int target_id = seq.token_ids[pos + 1];
+            // GRMT v5: Use precomputed targets instead of computing at runtime
+            int target_id = seq.targets[pos];
+            
+            // Skip if this target is masked (-1) - e.g., BOS/EOS boundary
+            if (target_id < 0) {
+                skipped_tokens++;
+                continue;
+            }
             
             // Get numeric side-channels for context
             std::vector<float> numeric_values(seq.token_numeric_values.begin(),

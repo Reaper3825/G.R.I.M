@@ -1,1418 +1,456 @@
-PS D:\G.R.I.M> .\Tools\libtorch_baseline\build\Release\grim_libtorch_baseline.exe `
->>   --data resources/models/GRIM-text/training/data/merged_verified_cache.jsonl `
->>   --field content `
->>   --seq_len 128 `
->>   --batch_size 4 `
->>   --steps 10000 `
->>   --log_interval 10 `
->>   --sample_interval 50 `
->>   --sample_tokens 80 `
->>   --prompt "Hello world"
-[baseline] dataset: resources/models/GRIM-text/training/data/merged_verified_cache.jsonl
-[baseline] field: content
-[baseline] seq_len=128 batch_size=4 steps=10000
-[baseline] tokens loaded: 2004945
-[baseline] device: cuda
-[baseline] step 10 loss=3.14757 ms/step=31.6
-[baseline] step 20 loss=2.67173 ms/step=16.5
-[baseline] step 30 loss=2.78478 ms/step=17.1
-[baseline] step 40 loss=2.64452 ms/step=17.1
-[baseline] step 50 loss=2.99914 ms/step=21
-[baseline] sample:
-Hello world the the the the the the the the the the the the the the the the the the the the
-[baseline] step 60 loss=2.69273 ms/step=34.3
-[baseline] step 70 loss=2.66691 ms/step=16.4
-[baseline] step 80 loss=2.60064 ms/step=16
-[baseline] step 90 loss=2.92612 ms/step=16.8
-[baseline] step 100 loss=2.63339 ms/step=17.7
-[baseline] sample:
-Hello worldererere the athe the the the athe the are the the the athe the are are athe athe
-[baseline] step 110 loss=2.69933 ms/step=32.3
-[baseline] step 120 loss=2.72947 ms/step=20.8
-[baseline] step 130 loss=2.61609 ms/step=20.3
-[baseline] step 140 loss=2.70219 ms/step=16.1
-[baseline] step 150 loss=2.59965 ms/step=15.9
-[baseline] sample:
-Hello world athe ar the athe the athe athe athe at an the an athe athe t the the at athe at
-[baseline] step 160 loss=2.54982 ms/step=31.9
-[baseline] step 170 loss=2.6596 ms/step=20.2
-[baseline] step 180 loss=2.56465 ms/step=17.6
-[baseline] step 190 loss=2.57592 ms/step=16.5
-[baseline] step 200 loss=2.69852 ms/step=16.3
-[baseline] sample:
-Hello world the the the the the the the the the athe athe athe the the the athe the the the
-[baseline] step 210 loss=2.82415 ms/step=32.4
-[baseline] step 220 loss=2.73134 ms/step=16
-[baseline] step 230 loss=2.52644 ms/step=16.4
-[baseline] step 240 loss=2.70445 ms/step=16.5
-[baseline] step 250 loss=2.71645 ms/step=15.9
-[baseline] sample:
-Hello world are the anthe an the and an the and the an the the anthe the an the the the ant
-[baseline] step 260 loss=2.52249 ms/step=32
-[baseline] step 270 loss=2.55183 ms/step=16.1
-[baseline] step 280 loss=2.70688 ms/step=16
-[baseline] step 290 loss=2.50343 ms/step=16
-[baseline] step 300 loss=2.65433 ms/step=16.1
-[baseline] sample:
-Hello world ation athe athe the the alathe athe athe the the ation the the athe at athe ath
-[baseline] step 310 loss=2.45183 ms/step=32
-[baseline] step 320 loss=2.5116 ms/step=15.9
-[baseline] step 330 loss=2.61 ms/step=16.7
-[baseline] step 340 loss=2.76272 ms/step=16.4
-[baseline] step 350 loss=2.57881 ms/step=16.4
-[baseline] sample:
-Hello world the the the the the the the are the the the the the the the the the the the are
-[baseline] step 360 loss=2.67195 ms/step=32.7
-[baseline] step 370 loss=2.62684 ms/step=16.9
-[baseline] step 380 loss=2.67046 ms/step=16
-[baseline] step 390 loss=2.58331 ms/step=16.7
-[baseline] step 400 loss=2.54093 ms/step=16.2
-[baseline] sample:
-Hello worlder the the the the the the the the or the the the the the the the the t the the
-[baseline] step 410 loss=2.80203 ms/step=32.4
-[baseline] step 420 loss=2.49795 ms/step=15.3
-[baseline] step 430 loss=2.69714 ms/step=15.7
-[baseline] step 440 loss=2.62161 ms/step=16.5
-[baseline] step 450 loss=2.61152 ms/step=16
-[baseline] sample:
-Hello world the the the the the the the the the the the the the the the the the the the the
-[baseline] step 460 loss=2.47776 ms/step=34.7
-[baseline] step 470 loss=2.55544 ms/step=16
-[baseline] step 480 loss=2.6417 ms/step=15.8
-[baseline] step 490 loss=2.49599 ms/step=16.9
-[baseline] step 500 loss=2.46835 ms/step=16.9
-[baseline] sample:
-Hello worlder the the the of the the the the of the or of the of o or of the the the ore or
-[baseline] step 510 loss=2.35305 ms/step=33.9
-[baseline] step 520 loss=2.39497 ms/step=16
-[baseline] step 530 loss=2.54852 ms/step=16
-[baseline] step 540 loss=2.44043 ms/step=16.3
-[baseline] step 550 loss=2.39385 ms/step=16.1
-[baseline] sample:
-Hello worlde the the the the the the the the the the the the the the the the the the the th
-[baseline] step 560 loss=2.41164 ms/step=33.1
-[baseline] step 570 loss=2.43215 ms/step=15.4
-[baseline] step 580 loss=2.39978 ms/step=15.9
-[baseline] step 590 loss=2.56532 ms/step=15.7
-[baseline] step 600 loss=2.57574 ms/step=16.1
-[baseline] sample:
-Hello world the the the the the the the the the the the the the t the the the the the the t
-[baseline] step 610 loss=2.62081 ms/step=34
-[baseline] step 620 loss=2.57041 ms/step=15.9
-[baseline] step 630 loss=2.65711 ms/step=15.6
-[baseline] step 640 loss=2.48181 ms/step=16
-[baseline] step 650 loss=2.32131 ms/step=16.3
-[baseline] sample:
-Hello world and the the the the mation the the the the the the the and and the the the ane
-[baseline] step 660 loss=2.34382 ms/step=33.3
-[baseline] step 670 loss=2.47202 ms/step=16.5
-[baseline] step 680 loss=2.14874 ms/step=16
-[baseline] step 690 loss=2.34734 ms/step=15.7
-[baseline] step 700 loss=2.31557 ms/step=15.9
-[baseline] sample:
-Hello world and and the the the the the the the the the the the the the the the the the an
-[baseline] step 710 loss=2.39201 ms/step=32.5
-[baseline] step 720 loss=2.36728 ms/step=15.4
-[baseline] step 730 loss=2.26922 ms/step=15.9
-[baseline] step 740 loss=2.3291 ms/step=16
-[baseline] step 750 loss=2.44861 ms/step=15.8
-[baseline] sample:
-Hello world the the the the the the the the st a st a st a st a de the st a st a st a sthe
-[baseline] step 760 loss=2.18776 ms/step=32.8
-[baseline] step 770 loss=2.55509 ms/step=16.1
-[baseline] step 780 loss=2.40418 ms/step=15.4
-[baseline] step 790 loss=2.31335 ms/step=16.8
-[baseline] step 800 loss=2.40501 ms/step=16.6
-[baseline] sample:
-Hello world the the the the the the the the st the the the the the st the the the the the t
-[baseline] step 810 loss=2.30268 ms/step=33
-[baseline] step 820 loss=2.19254 ms/step=16.6
-[baseline] step 830 loss=2.25341 ms/step=16.5
-[baseline] step 840 loss=2.1142 ms/step=16.6
-[baseline] step 850 loss=2.348 ms/step=15.8
-[baseline] sample:
-Hello world the the sterations and the ster and the st and the stere the ster and the st an
-[baseline] step 860 loss=2.17758 ms/step=35.4
-[baseline] step 870 loss=2.35898 ms/step=16.2
-[baseline] step 880 loss=2.24282 ms/step=16.3
-[baseline] step 890 loss=2.39699 ms/step=15.4
-[baseline] step 900 loss=2.09155 ms/step=18.3
-[baseline] sample:
-Hello world the properes and and and the spection the spections and the properese the prope
-[baseline] step 910 loss=2.37549 ms/step=33.5
-[baseline] step 920 loss=2.78856 ms/step=16.8
-[baseline] step 930 loss=2.30093 ms/step=16.3
-[baseline] step 940 loss=2.30985 ms/step=16.1
-[baseline] step 950 loss=2.12736 ms/step=16.6
-[baseline] sample:
-Hello world the the ster the steme the stere the the stere the the steme the stemesteres an
-[baseline] step 960 loss=2.2728 ms/step=32.8
-[baseline] step 970 loss=2.31952 ms/step=16.1
-[baseline] step 980 loss=2.33601 ms/step=16.1
-[baseline] step 990 loss=2.18566 ms/step=16.2
-[baseline] step 1000 loss=2.12531 ms/step=15.9
-[baseline] sample:
-Hello world the the composions an the massis an and and the massinge staression the the mat
-[baseline] step 1010 loss=2.32231 ms/step=33.7
-[baseline] step 1020 loss=2.09462 ms/step=15.4
-[baseline] step 1030 loss=2.15908 ms/step=15.5
-[baseline] step 1040 loss=2.1154 ms/step=16.5
-[baseline] step 1050 loss=2.34327 ms/step=15.5
-[baseline] sample:
-Hello world the solar and and the and the solar and and the solar and the and the solar and
-[baseline] step 1060 loss=1.95882 ms/step=33.7
-[baseline] step 1070 loss=2.14617 ms/step=15.9
-[baseline] step 1080 loss=2.32233 ms/step=15.8
-[baseline] step 1090 loss=2.11817 ms/step=16.1
-[baseline] step 1100 loss=2.10687 ms/step=15.7
-[baseline] sample:
-Hello world the sure the sume of the sure in the stere of the station the of the sure of th
-[baseline] step 1110 loss=2.25175 ms/step=34.4
-[baseline] step 1120 loss=2.07272 ms/step=15.9
-[baseline] step 1130 loss=2.24764 ms/step=15.9
-[baseline] step 1140 loss=2.07804 ms/step=15.5
-[baseline] step 1150 loss=2.03807 ms/step=17.1
-[baseline] sample:
-Hello world the semperation of the semper a secter a se sement and the se semperater a se a
-[baseline] step 1160 loss=2.34566 ms/step=34
-[baseline] step 1170 loss=2.19819 ms/step=16.1
-[baseline] step 1180 loss=2.25431 ms/step=15.9
-[baseline] step 1190 loss=1.98671 ms/step=16.5
-[baseline] step 1200 loss=2.05962 ms/step=19
-[baseline] sample:
-Hello world the stem the sollar the solar that the solar the solar the solar the sollar the
-[baseline] step 1210 loss=2.25285 ms/step=32.9
-[baseline] step 1220 loss=1.98517 ms/step=17.7
-[baseline] step 1230 loss=1.96929 ms/step=16
-[baseline] step 1240 loss=2.14754 ms/step=15.1
-[baseline] step 1250 loss=1.93155 ms/step=15.7
-[baseline] sample:
-Hello world the star and the solar and the solightar and and the mass a soll a dister and t
-[baseline] step 1260 loss=1.90784 ms/step=33.7
-[baseline] step 1270 loss=2.11704 ms/step=15.9
-[baseline] step 1280 loss=1.95923 ms/step=15.9
-[baseline] step 1290 loss=2.03937 ms/step=15.4
-[baseline] step 1300 loss=2.22589 ms/step=16.7
-[baseline] sample:
-Hello world the spectrace of the spectross of the spect of the some is the stement and the
-[baseline] step 1310 loss=2.20343 ms/step=32.5
-[baseline] step 1320 loss=1.99892 ms/step=17.1
-[baseline] step 1330 loss=1.87452 ms/step=18.8
-[baseline] step 1340 loss=2.05036 ms/step=15.8
-[baseline] step 1350 loss=1.97105 ms/step=15.6
-[baseline] sample:
-Hello world the constrical of the consition of the consition of the sollar consition of the
-[baseline] step 1360 loss=2.21349 ms/step=32.3
-[baseline] step 1370 loss=1.99598 ms/step=17.7
-[baseline] step 1380 loss=2.12882 ms/step=15.6
-[baseline] step 1390 loss=1.93707 ms/step=16.4
-[baseline] step 1400 loss=2.08957 ms/step=16.8
-[baseline] sample:
-Hello world the the procesed to the the produce of the sectration of the sume of the starsi
-[baseline] step 1410 loss=2.10346 ms/step=32.9
-[baseline] step 1420 loss=2.05273 ms/step=19.2
-[baseline] step 1430 loss=1.70623 ms/step=16.4
-[baseline] step 1440 loss=1.96097 ms/step=16.9
-[baseline] step 1450 loss=2.12678 ms/step=15.5
-[baseline] sample:
-Hello world the and the reary to the sime and the the reational of the period of the solar
-[baseline] step 1460 loss=1.84876 ms/step=32.8
-[baseline] step 1470 loss=2.03833 ms/step=20.4
-[baseline] step 1480 loss=1.90784 ms/step=16
-[baseline] step 1490 loss=1.88955 ms/step=15.4
-[baseline] step 1500 loss=2.14675 ms/step=16.1
-[baseline] sample:
-Hello world the procession the properiation of the properions of the sollar constraint the
-[baseline] step 1510 loss=1.87636 ms/step=32.2
-[baseline] step 1520 loss=1.92701 ms/step=18.6
-[baseline] step 1530 loss=1.77752 ms/step=17.8
-[baseline] step 1540 loss=1.87593 ms/step=15.4
-[baseline] step 1550 loss=2.11911 ms/step=16.1
-[baseline] sample:
-Hello world the star the stated the the star the star the solar the solar the solar the sta
-[baseline] step 1560 loss=1.70161 ms/step=32.7
-[baseline] step 1570 loss=1.84772 ms/step=16.4
-[baseline] step 1580 loss=2.1551 ms/step=16.2
-[baseline] step 1590 loss=1.85799 ms/step=15.5
-[baseline] step 1600 loss=1.84762 ms/step=16.3
-[baseline] sample:
-Hello world the precient of the solar the summe of the solar the solar the sumbity to the s
-[baseline] step 1610 loss=2.85382 ms/step=35.4
-[baseline] step 1620 loss=2.107 ms/step=17.4
-[baseline] step 1630 loss=1.88899 ms/step=17.2
-[baseline] step 1640 loss=1.76516 ms/step=16.2
-[baseline] step 1650 loss=1.88385 ms/step=15.4
-[baseline] sample:
-Hello world the proce the present the componing of the presention of the presention of the
-[baseline] step 1660 loss=1.81953 ms/step=33.1
-[baseline] step 1670 loss=1.84205 ms/step=16.4
-[baseline] step 1680 loss=1.71541 ms/step=16
-[baseline] step 1690 loss=1.79605 ms/step=15.7
-[baseline] step 1700 loss=1.84029 ms/step=15.3
-[baseline] sample:
-Hello world the proced and the solar constraint the solar constraint of the solar solar sol
-[baseline] step 1710 loss=1.77608 ms/step=40.2
-[baseline] step 1720 loss=1.976 ms/step=18.4
-[baseline] step 1730 loss=1.7484 ms/step=16
-[baseline] step 1740 loss=1.85929 ms/step=16.4
-[baseline] step 1750 loss=1.86529 ms/step=17
-[baseline] sample:
-Hello world and the processible of the planets of the planet and in the simular simulation
-[baseline] step 1760 loss=1.96114 ms/step=32.6
-[baseline] step 1770 loss=2.01658 ms/step=16.1
-[baseline] step 1780 loss=1.7665 ms/step=16.1
-[baseline] step 1790 loss=2.0252 ms/step=16.8
-[baseline] step 1800 loss=1.76568 ms/step=19.4
-[baseline] sample:
-Hello world and the stars of the stars of the stellar stellar star we of the star of the st
-[baseline] step 1810 loss=1.64096 ms/step=32.6
-[baseline] step 1820 loss=1.70189 ms/step=16.4
-[baseline] step 1830 loss=1.76536 ms/step=15.3
-[baseline] step 1840 loss=1.84884 ms/step=16.7
-[baseline] step 1850 loss=2.1627 ms/step=15.4
-[baseline] sample:
-Hello world and the solar ar the solar and the produce of the planet and the secalision of
-[baseline] step 1860 loss=1.83963 ms/step=31.9
-[baseline] step 1870 loss=1.71146 ms/step=16.9
-[baseline] step 1880 loss=1.82516 ms/step=15.8
-[baseline] step 1890 loss=1.8772 ms/step=16.9
-[baseline] step 1900 loss=1.85555 ms/step=15.7
-[baseline] sample:
-Hello world the second the seconsistent of the secates of the seconsion of the seconsion of
-[baseline] step 1910 loss=1.82582 ms/step=32.4
-[baseline] step 1920 loss=1.80854 ms/step=16.5
-[baseline] step 1930 loss=1.63696 ms/step=16.7
-[baseline] step 1940 loss=1.78765 ms/step=15.6
-[baseline] step 1950 loss=1.72175 ms/step=15.8
-[baseline] sample:
-Hello world the stars are of the solar stars are of the solar stars and the strans are of t
-[baseline] step 1960 loss=1.69909 ms/step=32.4
-[baseline] step 1970 loss=1.84734 ms/step=16.6
-[baseline] step 1980 loss=1.90949 ms/step=19.8
-[baseline] step 1990 loss=2.02142 ms/step=15.8
-[baseline] step 2000 loss=1.50813 ms/step=16.5
-[baseline] sample:
-Hello world the stand in the stars and the stars and the stars and the stars and the stars
-[baseline] step 2010 loss=1.76929 ms/step=34.9
-[baseline] step 2020 loss=1.79319 ms/step=15.8
-[baseline] step 2030 loss=1.91897 ms/step=16.3
-[baseline] step 2040 loss=1.78665 ms/step=15.9
-[baseline] step 2050 loss=1.8279 ms/step=15.8
-[baseline] sample:
-Hello world the problem the solar comparisitions of the solar atmosphere of the solar detec
-[baseline] step 2060 loss=1.73204 ms/step=32.4
-[baseline] step 2070 loss=1.95754 ms/step=16.2
-[baseline] step 2080 loss=2.14774 ms/step=16.2
-[baseline] step 2090 loss=1.78604 ms/step=16.4
-[baseline] step 2100 loss=1.69028 ms/step=16.3
-[baseline] sample:
-Hello world the cometation of the comparable to the the consional of the consident of the p
-[baseline] step 2110 loss=2.03122 ms/step=32.6
-[baseline] step 2120 loss=1.80918 ms/step=15.9
-[baseline] step 2130 loss=1.71393 ms/step=15.7
-[baseline] step 2140 loss=1.59705 ms/step=21.9
-[baseline] step 2150 loss=1.69159 ms/step=20.7
-[baseline] sample:
-Hello world be and the solar star of the solar star of the solar system of the solar stem o
-[baseline] step 2160 loss=1.58204 ms/step=31.9
-[baseline] step 2170 loss=1.61441 ms/step=15.9
-[baseline] step 2180 loss=1.76862 ms/step=15.7
-[baseline] step 2190 loss=1.89505 ms/step=21.2
-[baseline] step 2200 loss=1.64358 ms/step=23.1
-[baseline] sample:
-Hello world be the start of the solar pear see of the solar solar a section of the solar th
-[baseline] step 2210 loss=1.70037 ms/step=34.9
-[baseline] step 2220 loss=1.59251 ms/step=15.4
-[baseline] step 2230 loss=2.06859 ms/step=16.4
-[baseline] step 2240 loss=1.85381 ms/step=17.3
-[baseline] step 2250 loss=2.00432 ms/step=15.9
-[baseline] sample:
-Hello world the stars of the stars of the stars of the stellar of the stellar of the stella
-[baseline] step 2260 loss=1.87419 ms/step=33.5
-[baseline] step 2270 loss=1.74279 ms/step=16.6
-[baseline] step 2280 loss=1.732 ms/step=16.1
-[baseline] step 2290 loss=1.75241 ms/step=17.9
-[baseline] step 2300 loss=1.75416 ms/step=15.7
-[baseline] sample:
-Hello world a similar that the propertical properture of the similar discussed in the stars
-[baseline] step 2310 loss=1.59821 ms/step=32.4
-[baseline] step 2320 loss=1.78688 ms/step=15.6
-[baseline] step 2330 loss=1.79093 ms/step=15.6
-[baseline] step 2340 loss=1.67553 ms/step=16.3
-[baseline] step 2350 loss=1.63817 ms/step=16.1
-[baseline] sample:
-Hello world the solution of the solar solution of the solid star solar the solar solid the
-[baseline] step 2360 loss=1.54396 ms/step=32.9
-[baseline] step 2370 loss=1.77007 ms/step=16.1
-[baseline] step 2380 loss=1.88375 ms/step=15.7
-[baseline] step 2390 loss=1.49884 ms/step=16.9
-[baseline] step 2400 loss=1.94517 ms/step=15.7
-[baseline] sample:
-Hello world and the results of the results of the stars and starstellar starstellar with an
-[baseline] step 2410 loss=1.61354 ms/step=33.1
-[baseline] step 2420 loss=1.69085 ms/step=15.5
-[baseline] step 2430 loss=1.60613 ms/step=15.5
-[baseline] step 2440 loss=1.67702 ms/step=20.5
-[baseline] step 2450 loss=1.63454 ms/step=16.8
-[baseline] sample:
-Hello world and the constrates of the solution of the solar solar systems are and the consi
-[baseline] step 2460 loss=1.65084 ms/step=34.1
-[baseline] step 2470 loss=1.73995 ms/step=16
-[baseline] step 2480 loss=1.68745 ms/step=16
-[baseline] step 2490 loss=1.73597 ms/step=16
-[baseline] step 2500 loss=1.50527 ms/step=16.5
-[baseline] sample:
-Hello world and the solar stars of the stars are of the solar stars and the stars of the so
-[baseline] step 2510 loss=1.79077 ms/step=33.6
-[baseline] step 2520 loss=1.57982 ms/step=15.7
-[baseline] step 2530 loss=1.61111 ms/step=16
-[baseline] step 2540 loss=1.83779 ms/step=16.3
-[baseline] step 2550 loss=1.5528 ms/step=16.5
-[baseline] sample:
-Hello world and the mass and the solar that the solar that the stars and the solar mass and
-[baseline] step 2560 loss=1.75452 ms/step=34.1
-[baseline] step 2570 loss=1.42132 ms/step=16.3
-[baseline] step 2580 loss=1.65302 ms/step=15.8
-[baseline] step 2590 loss=1.51888 ms/step=16.3
-[baseline] step 2600 loss=1.49834 ms/step=15.5
-[baseline] sample:
-Hello world the propertical propertic of the propertic of the second second the secondaring
-[baseline] step 2610 loss=1.45251 ms/step=32.8
-[baseline] step 2620 loss=1.754 ms/step=16.9
-[baseline] step 2630 loss=1.89285 ms/step=15.9
-[baseline] step 2640 loss=1.58031 ms/step=16.8
-[baseline] step 2650 loss=1.5725 ms/step=15.9
-[baseline] sample:
-Hello world as the stars of the star stars of the stars of the stars of the stars of the st
-[baseline] step 2660 loss=1.94279 ms/step=33.3
-[baseline] step 2670 loss=1.47732 ms/step=16.9
-[baseline] step 2680 loss=1.91508 ms/step=15.7
-[baseline] step 2690 loss=1.74335 ms/step=16.1
-[baseline] step 2700 loss=1.85527 ms/step=16.2
-[baseline] sample:
-Hello world be the stars of the stars of the stellar system and the stem of the stellar sys
-[baseline] step 2710 loss=1.67785 ms/step=33.1
-[baseline] step 2720 loss=1.45407 ms/step=16.2
-[baseline] step 2730 loss=1.68399 ms/step=16.3
-[baseline] step 2740 loss=1.59415 ms/step=15.9
-[baseline] step 2750 loss=1.48005 ms/step=15.9
-[baseline] sample:
-Hello world the star stars of the stars of the stars of the solar system in the stem of the
-[baseline] step 2760 loss=1.83324 ms/step=33.1
-[baseline] step 2770 loss=1.41653 ms/step=18.6
-[baseline] step 2780 loss=1.98564 ms/step=16.4
-[baseline] step 2790 loss=1.89057 ms/step=15.8
-[baseline] step 2800 loss=1.8021 ms/step=16.3
-[baseline] sample:
-Hello world that the planet of the planets of the planets of the planet of the planets in t
-[baseline] step 2810 loss=1.67302 ms/step=33.5
-[baseline] step 2820 loss=1.71817 ms/step=15.9
-[baseline] step 2830 loss=1.55408 ms/step=16
-[baseline] step 2840 loss=1.76839 ms/step=15.7
-[baseline] step 2850 loss=1.77438 ms/step=16
-[baseline] sample:
-Hello world be the star of the stellar stars and the stellar stars and the stars and the st
-[baseline] step 2860 loss=1.72701 ms/step=32.6
-[baseline] step 2870 loss=1.95374 ms/step=16.3
-[baseline] step 2880 loss=1.7248 ms/step=16
-[baseline] step 2890 loss=1.43498 ms/step=15.9
-[baseline] step 2900 loss=1.55957 ms/step=16
-[baseline] sample:
-Hello world be detected by the substic of the stars of the surface of the star detected by
-[baseline] step 2910 loss=1.62695 ms/step=32.6
-[baseline] step 2920 loss=1.87799 ms/step=16.2
-[baseline] step 2930 loss=1.50768 ms/step=19.3
-[baseline] step 2940 loss=1.82414 ms/step=16.4
-[baseline] step 2950 loss=1.80902 ms/step=15.9
-[baseline] sample:
-Hello world be and the stars in the star in the stars of the star stars of the star in the
-[baseline] step 2960 loss=1.67222 ms/step=32.5
-[baseline] step 2970 loss=1.72251 ms/step=16.6
-[baseline] step 2980 loss=1.70517 ms/step=16
-[baseline] step 2990 loss=1.71657 ms/step=15.7
-[baseline] step 3000 loss=1.54305 ms/step=15.7
-[baseline] sample:
-Hello world be the compute of the planetary of the planets of the stars of the solutions of
-[baseline] step 3010 loss=1.81302 ms/step=32.4
-[baseline] step 3020 loss=1.80062 ms/step=15.6
-[baseline] step 3030 loss=1.49687 ms/step=16.2
-[baseline] step 3040 loss=1.89699 ms/step=16
-[baseline] step 3050 loss=1.56999 ms/step=15.8
-[baseline] sample:
-Hello world the star system in the solar system in the solar system that the second in the
-[baseline] step 3060 loss=1.50154 ms/step=32.6
-[baseline] step 3070 loss=1.73102 ms/step=15.9
-[baseline] step 3080 loss=1.58015 ms/step=16
-[baseline] step 3090 loss=1.76403 ms/step=16.1
-[baseline] step 3100 loss=1.47129 ms/step=15.8
-[baseline] sample:
-Hello world be the statistical spectrum and the solution of the solution of the star system
-[baseline] step 3110 loss=1.45314 ms/step=33.9
-[baseline] step 3120 loss=1.42156 ms/step=15.6
-[baseline] step 3130 loss=1.81866 ms/step=15.8
-[baseline] step 3140 loss=1.61688 ms/step=16.1
-[baseline] step 3150 loss=1.48631 ms/step=16.4
-[baseline] sample:
-Hello world be the secondary of the secondary system and the secondary of the sets of the s
-[baseline] step 3160 loss=1.63651 ms/step=33.6
-[baseline] step 3170 loss=1.77124 ms/step=15.9
-[baseline] step 3180 loss=1.47088 ms/step=16.5
-[baseline] step 3190 loss=1.62023 ms/step=16.2
-[baseline] step 3200 loss=1.63719 ms/step=16.1
-[baseline] sample:
-Hello world be the star second of the star second of the stars and the stars and the second
-[baseline] step 3210 loss=1.34929 ms/step=32.8
-[baseline] step 3220 loss=1.49839 ms/step=15.8
-[baseline] step 3230 loss=1.66212 ms/step=15.9
-[baseline] step 3240 loss=1.53547 ms/step=16.5
-[baseline] step 3250 loss=1.34048 ms/step=16
-[baseline] sample:
-Hello world between the planets of the planetary of the planets of the planets of the plane
-[baseline] step 3260 loss=1.49276 ms/step=33
-[baseline] step 3270 loss=1.54522 ms/step=15.9
-[baseline] step 3280 loss=1.65458 ms/step=16.2
-[baseline] step 3290 loss=1.9468 ms/step=16.2
-[baseline] step 3300 loss=1.63669 ms/step=15.9
-[baseline] sample:
-Hello world in the constating of the solar system of the solar system of the solid in the s
-[baseline] step 3310 loss=1.86041 ms/step=33.3
-[baseline] step 3320 loss=1.72421 ms/step=16
-[baseline] step 3330 loss=1.61531 ms/step=16.2
-[baseline] step 3340 loss=1.41723 ms/step=15.9
-[baseline] step 3350 loss=1.47881 ms/step=16.1
-[baseline] sample:
-Hello world be the properties of the properties of the produced that the properture of the
-[baseline] step 3360 loss=1.43253 ms/step=32.8
-[baseline] step 3370 loss=1.54427 ms/step=16.5
-[baseline] step 3380 loss=1.53021 ms/step=15.8
-[baseline] step 3390 loss=1.49081 ms/step=16.1
-[baseline] step 3400 loss=1.63272 ms/step=16.5
-[baseline] sample:
-Hello world and the spectra of the spectra of the solar system and the section of the plane
-[baseline] step 3410 loss=1.33644 ms/step=33.2
-[baseline] step 3420 loss=1.60433 ms/step=16.6
-[baseline] step 3430 loss=1.43788 ms/step=15.4
-[baseline] step 3440 loss=1.50949 ms/step=17.3
-[baseline] step 3450 loss=1.57257 ms/step=16.7
-[baseline] sample:
-Hello world be stars and the star system of the stars with the star system of the star of t
-[baseline] step 3460 loss=1.546 ms/step=33
-[baseline] step 3470 loss=1.65044 ms/step=15.9
-[baseline] step 3480 loss=1.52275 ms/step=16
-[baseline] step 3490 loss=1.33638 ms/step=16.1
-[baseline] step 3500 loss=1.73564 ms/step=16.7
-[baseline] sample:
-Hello world to the solar system of the solar systems of the solar systems in the solid in t
-[baseline] step 3510 loss=1.56819 ms/step=32.6
-[baseline] step 3520 loss=1.56078 ms/step=16
-[baseline] step 3530 loss=1.73279 ms/step=16.4
-[baseline] step 3540 loss=1.56187 ms/step=16.9
-[baseline] step 3550 loss=1.40142 ms/step=16.5
-[baseline] sample:
-Hello world be determined the star inclination of the star of the star wind that the star t
-[baseline] step 3560 loss=1.28497 ms/step=33.8
-[baseline] step 3570 loss=1.43857 ms/step=16.2
-[baseline] step 3580 loss=1.60396 ms/step=16.2
-[baseline] step 3590 loss=1.67087 ms/step=16.2
-[baseline] step 3600 loss=2.08295 ms/step=16.3
-[baseline] sample:
-Hello world and the production of the planet problem (see the solar system of the solar sys
-[baseline] step 3610 loss=1.62214 ms/step=33
-[baseline] step 3620 loss=1.33674 ms/step=16.5
-[baseline] step 3630 loss=1.64677 ms/step=15.8
-[baseline] step 3640 loss=1.6206 ms/step=16
-[baseline] step 3650 loss=1.69674 ms/step=16.2
-[baseline] sample:
-Hello world and the solid of the solid of the solid of the systems of the stellar systems o
-[baseline] step 3660 loss=1.68491 ms/step=33.1
-[baseline] step 3670 loss=1.66211 ms/step=16.4
-[baseline] step 3680 loss=1.602 ms/step=15.8
-[baseline] step 3690 loss=1.60006 ms/step=17.1
-[baseline] step 3700 loss=1.33721 ms/step=15.6
-[baseline] sample:
-Hello world and the condition of the stars of the stars of the star of the star of the star
-[baseline] step 3710 loss=1.70376 ms/step=33.5
-[baseline] step 3720 loss=1.47723 ms/step=16.2
-[baseline] step 3730 loss=1.73973 ms/step=16.1
-[baseline] step 3740 loss=1.75317 ms/step=19.1
-[baseline] step 3750 loss=1.52564 ms/step=15.9
-[baseline] sample:
-Hello world and the solar system of the stem of the star system of the star systems with a
-[baseline] step 3760 loss=1.54196 ms/step=32.9
-[baseline] step 3770 loss=1.65733 ms/step=16.2
-[baseline] step 3780 loss=1.74444 ms/step=16.3
-[baseline] step 3790 loss=1.7581 ms/step=16.2
-[baseline] step 3800 loss=1.50718 ms/step=15.8
-[baseline] sample:
-Hello world and the solar systems and the star solar systems and the solar systems and the
-[baseline] step 3810 loss=1.74854 ms/step=33.6
-[baseline] step 3820 loss=1.40498 ms/step=16.2
-[baseline] step 3830 loss=1.45076 ms/step=15.8
-[baseline] step 3840 loss=1.5733 ms/step=16.1
-[baseline] step 3850 loss=1.42903 ms/step=15.9
-[baseline] sample:
-Hello world the solar system that the solar system in the systems of the system in the sola
-[baseline] step 3860 loss=1.77757 ms/step=34.1
-[baseline] step 3870 loss=1.58241 ms/step=15.8
-[baseline] step 3880 loss=1.57333 ms/step=16
-[baseline] step 3890 loss=1.50518 ms/step=15.7
-[baseline] step 3900 loss=1.61174 ms/step=16.4
-[baseline] sample:
-Hello world the solar stars and the solar system of the solar systems are support that the
-[baseline] step 3910 loss=1.37697 ms/step=33.3
-[baseline] step 3920 loss=1.69089 ms/step=15.9
-[baseline] step 3930 loss=1.49935 ms/step=16.7
-[baseline] step 3940 loss=1.47442 ms/step=15.8
-[baseline] step 3950 loss=1.29601 ms/step=15.7
-[baseline] sample:
-Hello world and the star star of the star of the star of the star star of the stars of the
-[baseline] step 3960 loss=1.7347 ms/step=32.2
-[baseline] step 3970 loss=1.65539 ms/step=16.2
-[baseline] step 3980 loss=1.28347 ms/step=16.3
-[baseline] step 3990 loss=1.42513 ms/step=16.3
-[baseline] step 4000 loss=1.83706 ms/step=15.7
-[baseline] sample:
-Hello world be companion the process the considered by the solar system in the solar system
-[baseline] step 4010 loss=1.51684 ms/step=32.2
-[baseline] step 4020 loss=1.33206 ms/step=16.3
-[baseline] step 4030 loss=1.75718 ms/step=15.7
-[baseline] step 4040 loss=1.53991 ms/step=16.4
-[baseline] step 4050 loss=1.46469 ms/step=15.9
-[baseline] sample:
-Hello world and the planet are and the planet are and the planet are and the planet are and
-[baseline] step 4060 loss=1.32782 ms/step=32.8
-[baseline] step 4070 loss=1.65075 ms/step=16.5
-[baseline] step 4080 loss=1.4049 ms/step=15.8
-[baseline] step 4090 loss=1.66426 ms/step=16.1
-[baseline] step 4100 loss=1.51362 ms/step=15.5
-[baseline] sample:
-Hello world be the stars are the stars are the stars art properties of the stars are the re
-[baseline] step 4110 loss=1.55361 ms/step=32.8
-[baseline] step 4120 loss=1.57592 ms/step=15.7
-[baseline] step 4130 loss=1.439 ms/step=16.1
-[baseline] step 4140 loss=1.41637 ms/step=15.9
-[baseline] step 4150 loss=1.79588 ms/step=16
-[baseline] sample:
-Hello world an and the solid systems and the solid systems and the solid spectra and the so
-[baseline] step 4160 loss=1.57621 ms/step=33.1
-[baseline] step 4170 loss=1.56272 ms/step=16.4
-[baseline] step 4180 loss=1.58514 ms/step=15.7
-[baseline] step 4190 loss=1.55892 ms/step=16.5
-[baseline] step 4200 loss=1.56462 ms/step=15.6
-[baseline] sample:
-Hello world be seen the section of the star star signal of the solar system of the satellit
-[baseline] step 4210 loss=1.49495 ms/step=32.7
-[baseline] step 4220 loss=1.56058 ms/step=16.6
-[baseline] step 4230 loss=1.52044 ms/step=16.6
-[baseline] step 4240 loss=1.48096 ms/step=16.1
-[baseline] step 4250 loss=1.72372 ms/step=16
-[baseline] sample:
-Hello world expected the solid star with a signal solid of the solid systems are second the
-[baseline] step 4260 loss=1.4949 ms/step=33.5
-[baseline] step 4270 loss=1.59785 ms/step=15.8
-[baseline] step 4280 loss=1.56574 ms/step=16.6
-[baseline] step 4290 loss=1.51239 ms/step=16
-[baseline] step 4300 loss=1.283 ms/step=16.1
-[baseline] sample:
-Hello world explain the solar wind system in the system of the solar wind system in the sol
-[baseline] step 4310 loss=1.32448 ms/step=33.1
-[baseline] step 4320 loss=1.37182 ms/step=16.4
-[baseline] step 4330 loss=1.35009 ms/step=16.7
-[baseline] step 4340 loss=1.75099 ms/step=16.4
-[baseline] step 4350 loss=1.71251 ms/step=16.1
-[baseline] sample:
-Hello world stars and the stars of the star systems are the stellar systems are substellar
-[baseline] step 4360 loss=1.72939 ms/step=33
-[baseline] step 4370 loss=1.35059 ms/step=17.1
-[baseline] step 4380 loss=1.37152 ms/step=16.7
-[baseline] step 4390 loss=1.25343 ms/step=16
-[baseline] step 4400 loss=1.43689 ms/step=15.3
-[baseline] sample:
-Hello world be and the solar wind and the solar wind separation of the planets are star wit
-[baseline] step 4410 loss=1.32512 ms/step=32.3
-[baseline] step 4420 loss=1.22355 ms/step=16.2
-[baseline] step 4430 loss=1.37618 ms/step=16.6
-[baseline] step 4440 loss=1.56587 ms/step=16.4
-[baseline] step 4450 loss=1.45175 ms/step=15.7
-[baseline] sample:
-Hello world and the see of the stars and the stars of the stars and the stellar system is t
-[baseline] step 4460 loss=1.54092 ms/step=34.3
-[baseline] step 4470 loss=1.513 ms/step=17.7
-[baseline] step 4480 loss=1.58791 ms/step=18.3
-[baseline] step 4490 loss=1.44446 ms/step=18
-[baseline] step 4500 loss=1.50732 ms/step=16.7
-[baseline] sample:
-Hello world be star in the star space and the star semi-
-that the star sets are stars and t
-[baseline] step 4510 loss=1.35821 ms/step=37.8
-[baseline] step 4520 loss=1.61368 ms/step=17.2
-[baseline] step 4530 loss=1.55545 ms/step=17.6
-[baseline] step 4540 loss=1.79932 ms/step=17.7
-[baseline] step 4550 loss=1.44658 ms/step=17.4
-[baseline] sample:
-Hello world an in the solar system of the solar wind and the solar systems are the compared
-[baseline] step 4560 loss=1.36594 ms/step=37.8
-[baseline] step 4570 loss=1.68592 ms/step=22.9
-[baseline] step 4580 loss=1.47651 ms/step=23.3
-[baseline] step 4590 loss=1.55889 ms/step=23.9
-[baseline] step 4600 loss=1.56594 ms/step=24
-[baseline] sample:
-Hello world as the companion of the planetary systems are such as the consistent of the pre
-[baseline] step 4610 loss=1.50394 ms/step=44.3
-[baseline] step 4620 loss=1.2748 ms/step=24
-[baseline] step 4630 loss=1.62928 ms/step=23
-[baseline] step 4640 loss=1.63239 ms/step=23.3
-[baseline] step 4650 loss=1.29299 ms/step=23.4
-[baseline] sample:
-Hello world explain the structure of the star will as the strength of the star will protopl
-[baseline] step 4660 loss=1.37539 ms/step=44.2
-[baseline] step 4670 loss=1.58562 ms/step=22.6
-[baseline] step 4680 loss=1.501 ms/step=22.6
-[baseline] step 4690 loss=1.68038 ms/step=23.6
-[baseline] step 4700 loss=1.22628 ms/step=23.5
-[baseline] sample:
-Hello world et al. (2007). The stars of the predicted the predicted on the pressure of the
-[baseline] step 4710 loss=1.36367 ms/step=41.1
-[baseline] step 4720 loss=1.46703 ms/step=22.7
-[baseline] step 4730 loss=1.82863 ms/step=23.8
-[baseline] step 4740 loss=1.59258 ms/step=22.8
-[baseline] step 4750 loss=1.34928 ms/step=23.4
-[baseline] sample:
-Hello world be an exoplanet and the model of the planets and the model of the planet densit
-[baseline] step 4760 loss=1.53328 ms/step=41.8
-[baseline] step 4770 loss=1.3182 ms/step=23.6
-[baseline] step 4780 loss=1.6555 ms/step=23.1
-[baseline] step 4790 loss=1.67472 ms/step=24.1
-[baseline] step 4800 loss=1.35532 ms/step=22.7
-[baseline] sample:
-Hello world et al. (2009) and the results of the stellar compared model the results of the
-[baseline] step 4810 loss=1.51206 ms/step=41.5
-[baseline] step 4820 loss=1.67192 ms/step=22.6
-[baseline] step 4830 loss=1.32322 ms/step=22.7
-[baseline] step 4840 loss=1.55678 ms/step=22.8
-[baseline] step 4850 loss=1.31253 ms/step=23.6
-[baseline] sample:
-Hello world et al. (2009) and the star with the star with the star of the stellar component
-[baseline] step 4860 loss=1.58496 ms/step=42
-[baseline] step 4870 loss=1.50967 ms/step=23.9
-[baseline] step 4880 loss=1.44765 ms/step=23.5
-[baseline] step 4890 loss=1.58048 ms/step=23.8
-[baseline] step 4900 loss=1.60203 ms/step=23.6
-[baseline] sample:
-Hello world an extractly to the star and the star and the present of the present of the pre
-[baseline] step 4910 loss=1.65118 ms/step=40.5
-[baseline] step 4920 loss=1.7084 ms/step=23
-[baseline] step 4930 loss=1.6262 ms/step=22.8
-[baseline] step 4940 loss=1.65385 ms/step=23
-[baseline] step 4950 loss=1.4329 ms/step=22.9
-[baseline] sample:
-Hello world becomes and the structure of the star with the star with the star and the star
-[baseline] step 4960 loss=1.69141 ms/step=40.2
-[baseline] step 4970 loss=1.34451 ms/step=23.1
-[baseline] step 4980 loss=1.42027 ms/step=22.7
-[baseline] step 4990 loss=1.36722 ms/step=22.9
-[baseline] step 5000 loss=1.23783 ms/step=23
-[baseline] sample:
-Hello world the star wind in the star wind and the particular system the planets are the pl
-[baseline] step 5010 loss=1.36664 ms/step=39.7
-[baseline] step 5020 loss=1.55976 ms/step=23.1
-[baseline] step 5030 loss=1.31376 ms/step=22.7
-[baseline] step 5040 loss=1.49009 ms/step=22.5
-[baseline] step 5050 loss=1.57383 ms/step=23.2
-[baseline] sample:
-Hello world be the star in the probable is the star in the process are the processed by the
-[baseline] step 5060 loss=1.43854 ms/step=40.6
-[baseline] step 5070 loss=1.57372 ms/step=23.5
-[baseline] step 5080 loss=1.3779 ms/step=22.9
-[baseline] step 5090 loss=1.35989 ms/step=23
-[baseline] step 5100 loss=1.31841 ms/step=23
-[baseline] sample:
-Hello world produce to the structure of the strong of the solar system and the star with a
-[baseline] step 5110 loss=1.60187 ms/step=40.6
-[baseline] step 5120 loss=1.36103 ms/step=23.2
-[baseline] step 5130 loss=1.66892 ms/step=22.7
-[baseline] step 5140 loss=1.34063 ms/step=23.5
-[baseline] step 5150 loss=1.53255 ms/step=22.8
-[baseline] sample:
-Hello world be constraints on the star constraints on the planets of the star constrain the
-[baseline] step 5160 loss=1.44373 ms/step=40.8
-[baseline] step 5170 loss=1.49378 ms/step=22.9
-[baseline] step 5180 loss=1.58776 ms/step=23.2
-[baseline] step 5190 loss=1.5795 ms/step=23.1
-[baseline] step 5200 loss=1.24807 ms/step=23.3
-[baseline] sample:
-Hello world et al. 2009). The solar wind produced by the solar systems of the solar wind pr
-[baseline] step 5210 loss=1.43425 ms/step=39.6
-[baseline] step 5220 loss=1.38833 ms/step=22.9
-[baseline] step 5230 loss=1.47787 ms/step=23.2
-[baseline] step 5240 loss=1.40998 ms/step=23
-[baseline] step 5250 loss=1.77944 ms/step=22.7
-[baseline] sample:
-Hello world protoplanetary stars of the solar system of the solar system of the solar syste
-[baseline] step 5260 loss=1.26943 ms/step=42.8
-[baseline] step 5270 loss=1.34949 ms/step=23.2
-[baseline] step 5280 loss=1.6764 ms/step=22.8
-[baseline] step 5290 loss=1.42153 ms/step=22.6
-[baseline] step 5300 loss=1.48378 ms/step=23.2
-[baseline] sample:
-Hello world an expect the star and the solar system and the solar system of the same and th
-[baseline] step 5310 loss=1.49621 ms/step=40.5
-[baseline] step 5320 loss=1.43759 ms/step=23
-[baseline] step 5330 loss=1.71698 ms/step=22.9
-[baseline] step 5340 loss=1.63788 ms/step=22.9
-[baseline] step 5350 loss=1.29951 ms/step=23
-[baseline] sample:
-Hello world be detailed by the structure of the solar wind stars and and the solar wind sys
-[baseline] step 5360 loss=1.57856 ms/step=40.1
-[baseline] step 5370 loss=1.45154 ms/step=23.2
-[baseline] step 5380 loss=1.26051 ms/step=22.4
-[baseline] step 5390 loss=1.26949 ms/step=22.8
-[baseline] step 5400 loss=1.41368 ms/step=23.6
-[baseline] sample:
-Hello world be consistent of the solid consistent with the solar wind star wind in the sola
-[baseline] step 5410 loss=1.6774 ms/step=39.7
-[baseline] step 5420 loss=1.33482 ms/step=22.7
-[baseline] step 5430 loss=1.48124 ms/step=22.9
-[baseline] step 5440 loss=1.3458 ms/step=22.6
-[baseline] step 5450 loss=1.30782 ms/step=23.5
-[baseline] sample:
-Hello world be to the mass of the star of the system of the mass and the mass of the mass o
-[baseline] step 5460 loss=1.28532 ms/step=40.3
-[baseline] step 5470 loss=1.32888 ms/step=22.5
-[baseline] step 5480 loss=1.57058 ms/step=22.4
-[baseline] step 5490 loss=1.28509 ms/step=22.5
-[baseline] step 5500 loss=1.57228 ms/step=22.4
-[baseline] sample:
-Hello world as the structure of the system in the stellar radial velocity of the structure
-[baseline] step 5510 loss=1.33625 ms/step=39.9
-[baseline] step 5520 loss=1.48296 ms/step=22.4
-[baseline] step 5530 loss=1.49938 ms/step=22.6
-[baseline] step 5540 loss=1.53863 ms/step=22.6
-[baseline] step 5550 loss=1.58048 ms/step=22.3
-[baseline] sample:
-Hello world in the solar wind system is also similar the system is the solar wind in the so
-[baseline] step 5560 loss=1.34863 ms/step=40.7
-[baseline] step 5570 loss=1.47376 ms/step=23.1
-[baseline] step 5580 loss=1.71485 ms/step=22.4
-[baseline] step 5590 loss=1.29926 ms/step=22.6
-[baseline] step 5600 loss=1.33321 ms/step=22.4
-[baseline] sample:
-Hello world a similar that the same of the same of the same of the systems at the same and
-[baseline] step 5610 loss=1.22548 ms/step=41.7
-[baseline] step 5620 loss=1.40187 ms/step=24.2
-[baseline] step 5630 loss=1.3363 ms/step=24.1
-[baseline] step 5640 loss=1.37954 ms/step=24.1
-[baseline] step 5650 loss=1.411 ms/step=23.8
-[baseline] sample:
-Hello world a stellar that the star of the solar wind star with a stellar star orbital form
-[baseline] step 5660 loss=1.33436 ms/step=42.8
-[baseline] step 5670 loss=1.5097 ms/step=22.7
-[baseline] step 5680 loss=1.37421 ms/step=22.3
-[baseline] step 5690 loss=1.44188 ms/step=22.6
-[baseline] step 5700 loss=1.32581 ms/step=22.4
-[baseline] sample:
-Hello world are the mass of the solar wind masses of the solar wind the solar wind the sola
-[baseline] step 5710 loss=1.39677 ms/step=41.1
-[baseline] step 5720 loss=1.75132 ms/step=22.9
-[baseline] step 5730 loss=1.3113 ms/step=22.6
-[baseline] step 5740 loss=1.46395 ms/step=22.6
-[baseline] step 5750 loss=1.26575 ms/step=23
-[baseline] sample:
-Hello world as a single the solid system and the system as a significance of the system is
-[baseline] step 5760 loss=1.67154 ms/step=40.8
-[baseline] step 5770 loss=1.1612 ms/step=22.3
-[baseline] step 5780 loss=1.41098 ms/step=22.6
-[baseline] step 5790 loss=1.38624 ms/step=22.9
-[baseline] step 5800 loss=1.4174 ms/step=22.2
-[baseline] sample:
-Hello world and the properties of the planet with the produce of the planet solar wind as w
-[baseline] step 5810 loss=1.48203 ms/step=39.6
-[baseline] step 5820 loss=1.5155 ms/step=22.6
-[baseline] step 5830 loss=1.5505 ms/step=22.2
-[baseline] step 5840 loss=1.35618 ms/step=22.4
-[baseline] step 5850 loss=1.41933 ms/step=22.5
-[baseline] sample:
-Hello world and the solar wind and the mass of the star of the observational of the stars a
-[baseline] step 5860 loss=1.47098 ms/step=39.9
-[baseline] step 5870 loss=1.35449 ms/step=22.5
-[baseline] step 5880 loss=1.34331 ms/step=22.4
-[baseline] step 5890 loss=1.46084 ms/step=22.6
-[baseline] step 5900 loss=1.27367 ms/step=22.5
-[baseline] sample:
-Hello world and the solar wind systems and solar wind that the solar wind system in the sol
-[baseline] step 5910 loss=1.31879 ms/step=39.7
-[baseline] step 5920 loss=1.43387 ms/step=22.7
-[baseline] step 5930 loss=1.29801 ms/step=22.5
-[baseline] step 5940 loss=1.53059 ms/step=22.5
-[baseline] step 5950 loss=1.40607 ms/step=22.2
-[baseline] sample:
-Hello world and the solar wind system is smaller thank the solar wind star system is the so
-[baseline] step 5960 loss=1.27357 ms/step=39.9
-[baseline] step 5970 loss=1.47158 ms/step=22.4
-[baseline] step 5980 loss=1.16538 ms/step=22.5
-[baseline] step 5990 loss=1.47018 ms/step=22.3
-[baseline] step 6000 loss=1.49626 ms/step=22.5
-[baseline] sample:
-Hello world to the start of the planets and the planets are and the proposed of the planets
-[baseline] step 6010 loss=1.39774 ms/step=39.9
-[baseline] step 6020 loss=1.34232 ms/step=22.4
-[baseline] step 6030 loss=1.59056 ms/step=22.6
-[baseline] step 6040 loss=1.0887 ms/step=22.6
-[baseline] step 6050 loss=1.37982 ms/step=22.3
-[baseline] sample:
-Hello world and the star of the star of the star of the star of the star of the star of the
-[baseline] step 6060 loss=1.45937 ms/step=40.5
-[baseline] step 6070 loss=1.37652 ms/step=22.5
-[baseline] step 6080 loss=1.57945 ms/step=22.5
-[baseline] step 6090 loss=1.54504 ms/step=22.5
-[baseline] step 6100 loss=1.42554 ms/step=22.5
-[baseline] sample:
-Hello world be seen in the solar wind and the solar wind an experiment of the solar wind in
-[baseline] step 6110 loss=1.48643 ms/step=40.2
-[baseline] step 6120 loss=1.48193 ms/step=22.2
-[baseline] step 6130 loss=1.43737 ms/step=22.5
-[baseline] step 6140 loss=1.44984 ms/step=22.3
-[baseline] step 6150 loss=1.36512 ms/step=23
-[baseline] sample:
-Hello world and the standard lines are the planets are and the planets are not and the plan
-[baseline] step 6160 loss=1.43469 ms/step=40.7
-[baseline] step 6170 loss=1.52646 ms/step=24.3
-[baseline] step 6180 loss=1.20948 ms/step=22.9
-[baseline] step 6190 loss=1.53956 ms/step=23
-[baseline] step 6200 loss=1.46396 ms/step=22.7
-[baseline] sample:
-Hello world and the star of the star formation of the star formation of the star formation
-[baseline] step 6210 loss=1.48165 ms/step=40.4
-[baseline] step 6220 loss=1.35443 ms/step=22.8
-[baseline] step 6230 loss=1.50381 ms/step=22.7
-[baseline] step 6240 loss=1.24644 ms/step=22.3
-[baseline] step 6250 loss=1.37034 ms/step=22.7
-[baseline] sample:
-Hello world not in the star of the star of the star orbital planets are the star formation
-[baseline] step 6260 loss=1.29971 ms/step=40.8
-[baseline] step 6270 loss=1.44102 ms/step=22.6
-[baseline] step 6280 loss=1.59893 ms/step=22.8
-[baseline] step 6290 loss=1.72467 ms/step=23.2
-[baseline] step 6300 loss=1.30886 ms/step=22.8
-[baseline] sample:
-Hello world and the solar wind and the star orbital period of the stars of the solar system
-[baseline] step 6310 loss=1.31451 ms/step=40.7
-[baseline] step 6320 loss=1.28889 ms/step=22.7
-[baseline] step 6330 loss=1.25137 ms/step=22.7
-[baseline] step 6340 loss=1.56189 ms/step=22.8
-[baseline] step 6350 loss=1.25859 ms/step=22.8
-[baseline] sample:
-Hello world in the planets are comparable to the planets are compared to the planets are co
-[baseline] step 6360 loss=1.4056 ms/step=39.8
-[baseline] step 6370 loss=1.27297 ms/step=22.9
-[baseline] step 6380 loss=1.46008 ms/step=24.9
-[baseline] step 6390 loss=1.40919 ms/step=22.6
-[baseline] step 6400 loss=1.33662 ms/step=22.4
-[baseline] sample:
-Hello world be constant in the star of the solar wind model in the solar wind in the solar
-[baseline] step 6410 loss=1.37839 ms/step=40.8
-[baseline] step 6420 loss=1.47127 ms/step=22.3
-[baseline] step 6430 loss=1.57368 ms/step=22.7
-[baseline] step 6440 loss=1.40332 ms/step=23.1
-[baseline] step 6450 loss=1.39818 ms/step=22.5
-[baseline] sample:
-Hello world be consistent with the disk process of the solid consistent with a mass of the
-[baseline] step 6460 loss=1.30774 ms/step=40.7
-[baseline] step 6470 loss=1.56938 ms/step=23.1
-[baseline] step 6480 loss=1.5777 ms/step=22.8
-[baseline] step 6490 loss=1.66068 ms/step=23.3
-[baseline] step 6500 loss=1.30069 ms/step=23.2
-[baseline] sample:
-Hello world be constraint on the solar wind model and the solar wind in the solar wind is s
-[baseline] step 6510 loss=1.42247 ms/step=40.5
-[baseline] step 6520 loss=1.56339 ms/step=22.7
-[baseline] step 6530 loss=1.31335 ms/step=22.8
-[baseline] step 6540 loss=1.2959 ms/step=22.7
-[baseline] step 6550 loss=1.31691 ms/step=23.4
-[baseline] sample:
-Hello world be assumed to the solid consideration of the solid condense of the solid signat
-[baseline] step 6560 loss=1.29256 ms/step=40.7
-[baseline] step 6570 loss=1.62446 ms/step=22.8
-[baseline] step 6580 loss=1.34063 ms/step=22.7
-[baseline] step 6590 loss=1.48156 ms/step=23.3
-[baseline] step 6600 loss=1.46613 ms/step=23.3
-[baseline] sample:
-Hello world and the presence of the planets are the presence of the planets are the proceed
-[baseline] step 6610 loss=1.35888 ms/step=40.1
-[baseline] step 6620 loss=1.2561 ms/step=23.2
-[baseline] step 6630 loss=1.6058 ms/step=23.1
-[baseline] step 6640 loss=1.3655 ms/step=22.9
-[baseline] step 6650 loss=1.34596 ms/step=22.9
-[baseline] sample:
-Hello world be constraints on the stellar constraints on the stellar constraints on the ste
-[baseline] step 6660 loss=1.17881 ms/step=40.3
-[baseline] step 6670 loss=1.60644 ms/step=22.5
-[baseline] step 6680 loss=1.50414 ms/step=23.1
-[baseline] step 6690 loss=1.40724 ms/step=22.9
-[baseline] step 6700 loss=1.45694 ms/step=23.4
-[baseline] sample:
-Hello world be seen that the structure of the structure of the structure of the star of the
-[baseline] step 6710 loss=1.32518 ms/step=39.8
-[baseline] step 6720 loss=1.35228 ms/step=22.9
-[baseline] step 6730 loss=1.41158 ms/step=22.8
-[baseline] step 6740 loss=1.51914 ms/step=23.3
-[baseline] step 6750 loss=1.18499 ms/step=23.1
-[baseline] sample:
-Hello world and the planets are the probability of the planets are the properties of the pl
-[baseline] step 6760 loss=1.39748 ms/step=40.7
-[baseline] step 6770 loss=1.27264 ms/step=22.8
-[baseline] step 6780 loss=1.28769 ms/step=22.8
-[baseline] step 6790 loss=1.30637 ms/step=22.9
-[baseline] step 6800 loss=1.47277 ms/step=22.8
-[baseline] sample:
-Hello world and the solar wind star of the planet observations of the planet and the densit
-[baseline] step 6810 loss=1.5345 ms/step=40.1
-[baseline] step 6820 loss=1.23796 ms/step=23.2
-[baseline] step 6830 loss=1.37704 ms/step=23.4
-[baseline] step 6840 loss=1.24825 ms/step=22.7
-[baseline] step 6850 loss=1.33534 ms/step=23
-[baseline] sample:
-Hello world and the solar wind inclination is and the solar wind model of the solar wind th
-[baseline] step 6860 loss=1.28135 ms/step=40.2
-[baseline] step 6870 loss=1.47023 ms/step=23
-[baseline] step 6880 loss=1.28821 ms/step=23.5
-[baseline] step 6890 loss=1.40845 ms/step=23.1
-[baseline] step 6900 loss=1.58231 ms/step=23.7
-[baseline] sample:
-Hello world a significant fraction of the stellar system is shown in the solar wind in the
-[baseline] step 6910 loss=1.30279 ms/step=41.1
-[baseline] step 6920 loss=1.5612 ms/step=22.6
-[baseline] step 6930 loss=1.20543 ms/step=22.9
-[baseline] step 6940 loss=1.32904 ms/step=24.2
-[baseline] step 6950 loss=1.28415 ms/step=22.5
-[baseline] sample:
-Hello world in the solar wind system in the solar system is the solar wind interaction of t
-[baseline] step 6960 loss=1.1312 ms/step=40.8
-[baseline] step 6970 loss=1.08789 ms/step=22.9
-[baseline] step 6980 loss=1.3924 ms/step=22.7
-[baseline] step 6990 loss=1.39499 ms/step=22.8
-[baseline] step 7000 loss=1.36827 ms/step=22.6
-[baseline] sample:
-Hello world expected the solar wind processes of the solar wind processes of the solar wind
-[baseline] step 7010 loss=1.47126 ms/step=40.2
-[baseline] step 7020 loss=1.35353 ms/step=22.8
-[baseline] step 7030 loss=1.40187 ms/step=22.9
-[baseline] step 7040 loss=1.15122 ms/step=23.1
-[baseline] step 7050 loss=1.35476 ms/step=22.6
-[baseline] sample:
-Hello world be detected by the stellar system is an asteroid to the compared to the transit
-[baseline] step 7060 loss=1.5619 ms/step=40.2
-[baseline] step 7070 loss=1.35661 ms/step=22.9
-[baseline] step 7080 loss=1.46086 ms/step=22.9
-[baseline] step 7090 loss=1.294 ms/step=22.8
-[baseline] step 7100 loss=1.30857 ms/step=22.8
-[baseline] sample:
-Hello world be to the star of the star of the solar wind and the solar wind and the solar w
-[baseline] step 7110 loss=1.30698 ms/step=40.1
-[baseline] step 7120 loss=1.41864 ms/step=22.9
-[baseline] step 7130 loss=1.19835 ms/step=22.8
-[baseline] step 7140 loss=1.37827 ms/step=22.9
-[baseline] step 7150 loss=1.29725 ms/step=22.7
-[baseline] sample:
-Hello world be the star of the star of the star of the star of the star orbital period of t
-[baseline] step 7160 loss=1.23051 ms/step=40.1
-[baseline] step 7170 loss=1.45426 ms/step=22.8
-[baseline] step 7180 loss=1.40561 ms/step=23.8
-[baseline] step 7190 loss=1.37903 ms/step=24.9
-[baseline] step 7200 loss=1.37569 ms/step=23
-[baseline] sample:
-Hello world be strongly the strongly star in the solar wind is a function of the star of th
-[baseline] step 7210 loss=1.29157 ms/step=41.8
-[baseline] step 7220 loss=1.45581 ms/step=23
-[baseline] step 7230 loss=1.62902 ms/step=22.9
-[baseline] step 7240 loss=1.62164 ms/step=22.9
-[baseline] step 7250 loss=1.2951 ms/step=22.9
-[baseline] sample:
-Hello world be a simplified from the properties of the protoplanetary system is the propert
-[baseline] step 7260 loss=1.55007 ms/step=40.5
-[baseline] step 7270 loss=1.24589 ms/step=22.6
-[baseline] step 7280 loss=1.32378 ms/step=22.8
-[baseline] step 7290 loss=1.27851 ms/step=23.1
-[baseline] step 7300 loss=1.54814 ms/step=22.3
-[baseline] sample:
-Hello world be a similar to the solar wind discussion in the solar wind in the solar wind m
-[baseline] step 7310 loss=1.33231 ms/step=40.2
-[baseline] step 7320 loss=1.33344 ms/step=23.3
-[baseline] step 7330 loss=1.35255 ms/step=22.7
-[baseline] step 7340 loss=1.35665 ms/step=22.9
-[baseline] step 7350 loss=1.26481 ms/step=22.7
-[baseline] sample:
-Hello world become of the presence of the presence of the presence of the presence of the p
-[baseline] step 7360 loss=1.2869 ms/step=39.6
-[baseline] step 7370 loss=1.34288 ms/step=22.7
-[baseline] step 7380 loss=1.1109 ms/step=23
-[baseline] step 7390 loss=1.48764 ms/step=22.7
-[baseline] step 7400 loss=1.33991 ms/step=22.8
-[baseline] sample:
-Hello world be compared to the comparison of the planets are compared to the compared to th
-[baseline] step 7410 loss=1.32618 ms/step=40.5
-[baseline] step 7420 loss=1.38657 ms/step=23.4
-[baseline] step 7430 loss=1.31356 ms/step=23.1
-[baseline] step 7440 loss=1.45479 ms/step=22.6
-[baseline] step 7450 loss=1.42979 ms/step=23
-[baseline] sample:
-Hello world extrasolar systems and the planets are shown in the planets and the planets are
-[baseline] step 7460 loss=1.36429 ms/step=40.2
-[baseline] step 7470 loss=1.55741 ms/step=25
-[baseline] step 7480 loss=1.31465 ms/step=24.4
-[baseline] step 7490 loss=1.42309 ms/step=22.5
-[baseline] step 7500 loss=1.25207 ms/step=23.1
-[baseline] sample:
-Hello world also be also below the star of the star of the star of the star of the star of
-[baseline] step 7510 loss=1.39208 ms/step=40.5
-[baseline] step 7520 loss=1.18804 ms/step=22.2
-[baseline] step 7530 loss=1.64363 ms/step=23
-[baseline] step 7540 loss=1.26368 ms/step=22.6
-[baseline] step 7550 loss=1.40407 ms/step=22.5
-[baseline] sample:
-Hello world also stars a star of the solar wind and the solar wind and the solar wind and t
-[baseline] step 7560 loss=1.45685 ms/step=40.6
-[baseline] step 7570 loss=1.42813 ms/step=22.8
-[baseline] step 7580 loss=1.32251 ms/step=22.5
-[baseline] step 7590 loss=1.36089 ms/step=22.3
-[baseline] step 7600 loss=1.26748 ms/step=22.8
-[baseline] sample:
-Hello world be stars a significantly stars and the solar wind system is the solar wind syst
-[baseline] step 7610 loss=1.35386 ms/step=41.1
-[baseline] step 7620 loss=1.19024 ms/step=23.2
-[baseline] step 7630 loss=1.53435 ms/step=22.5
-[baseline] step 7640 loss=1.59241 ms/step=22.9
-[baseline] step 7650 loss=1.30046 ms/step=22.7
-[baseline] sample:
-Hello world be stars of the planets are solar wind and the planets are not detected by the
-[baseline] step 7660 loss=1.36426 ms/step=40
-[baseline] step 7670 loss=1.59624 ms/step=23.2
-[baseline] step 7680 loss=1.20007 ms/step=23.2
-[baseline] step 7690 loss=1.35288 ms/step=22.8
-[baseline] step 7700 loss=1.48767 ms/step=22.4
-[baseline] sample:
-Hello world be detected by the stellar system is a simple for the stellar mass and mass and
-[baseline] step 7710 loss=1.45952 ms/step=39.8
-[baseline] step 7720 loss=1.33351 ms/step=22.7
-[baseline] step 7730 loss=1.2991 ms/step=22.7
-[baseline] step 7740 loss=1.37129 ms/step=23.1
-[baseline] step 7750 loss=1.26906 ms/step=22.5
-[baseline] sample:
-Hello world be second to the solar wind model as the solar wind and a single compared to th
-[baseline] step 7760 loss=1.55787 ms/step=40.1
-[baseline] step 7770 loss=1.51572 ms/step=23
-[baseline] step 7780 loss=1.21238 ms/step=22.6
-[baseline] step 7790 loss=1.42146 ms/step=22.8
-[baseline] step 7800 loss=1.28799 ms/step=22.7
-[baseline] sample:
-Hello world be second generation of the star width the star in the star of the star width t
-[baseline] step 7810 loss=1.51867 ms/step=40.6
-[baseline] step 7820 loss=1.27732 ms/step=22.6
-[baseline] step 7830 loss=1.34725 ms/step=22.9
-[baseline] step 7840 loss=1.53293 ms/step=22.5
-[baseline] step 7850 loss=1.33178 ms/step=24.3
-[baseline] sample:
-Hello world be computed to the solar wind companion of the solar wind in the solar wind com
-[baseline] step 7860 loss=1.44226 ms/step=40.8
-[baseline] step 7870 loss=1.56172 ms/step=23
-[baseline] step 7880 loss=1.35397 ms/step=22.8
-[baseline] step 7890 loss=1.34039 ms/step=22.8
-[baseline] step 7900 loss=1.26371 ms/step=22.8
-[baseline] sample:
-Hello world be seen the stellar comparison in the stellar system in the stellar system is a
-[baseline] step 7910 loss=1.15309 ms/step=40.1
-[baseline] step 7920 loss=1.3369 ms/step=22.9
-[baseline] step 7930 loss=1.32855 ms/step=22.8
-[baseline] step 7940 loss=1.20876 ms/step=24.5
-[baseline] step 7950 loss=1.43251 ms/step=22.1
-[baseline] sample:
-Hello world constraints than the solar wind constraints the stars and the solar wind contri
-[baseline] step 7960 loss=1.49434 ms/step=40.1
-[baseline] step 7970 loss=1.57154 ms/step=22.6
-[baseline] step 7980 loss=1.44375 ms/step=22.6
-[baseline] step 7990 loss=1.19406 ms/step=23.3
-[baseline] step 8000 loss=1.58651 ms/step=22.9
-[baseline] sample:
-Hello world be considered in the same of the star with the solar wind in the same of the st
-[baseline] step 8010 loss=1.11015 ms/step=39.9
-[baseline] step 8020 loss=1.31505 ms/step=22.8
-[baseline] step 8030 loss=1.76054 ms/step=23.1
-[baseline] step 8040 loss=1.40373 ms/step=23.1
-[baseline] step 8050 loss=1.40319 ms/step=22.6
-[baseline] sample:
-Hello world be set of the solid line in the solar wind model of the star in the star in the
-[baseline] step 8060 loss=1.21982 ms/step=41.8
-[baseline] step 8070 loss=1.45606 ms/step=22.6
-[baseline] step 8080 loss=1.24438 ms/step=22.8
-[baseline] step 8090 loss=1.26423 ms/step=22.6
-[baseline] step 8100 loss=1.3225 ms/step=23.1
-[baseline] sample:
-Hello world to the star for the planet is the star for the stars are the stars are the star
-[baseline] step 8110 loss=1.18209 ms/step=40.8
-[baseline] step 8120 loss=1.30874 ms/step=22.6
-[baseline] step 8130 loss=1.4509 ms/step=22.8
-[baseline] step 8140 loss=1.28131 ms/step=22.6
-[baseline] step 8150 loss=1.26312 ms/step=22.6
-[baseline] sample:
-Hello world to the star with the star with the star of the star with the star with the star
-[baseline] step 8160 loss=1.29487 ms/step=40.9
-[baseline] step 8170 loss=1.62006 ms/step=23
-[baseline] step 8180 loss=1.17391 ms/step=22.9
-[baseline] step 8190 loss=1.4122 ms/step=23.7
-[baseline] step 8200 loss=1.51247 ms/step=22.7
-[baseline] sample:
-Hello world be seen the presence of the problem is the problem is the problem is the proble
-[baseline] step 8210 loss=1.29106 ms/step=40.8
-[baseline] step 8220 loss=1.32582 ms/step=22.4
-[baseline] step 8230 loss=1.22199 ms/step=22.9
-[baseline] step 8240 loss=1.30731 ms/step=23
-[baseline] step 8250 loss=1.2603 ms/step=23
-[baseline] sample:
-Hello world in the star of the star for which is the star for the star for in the star of t
-[baseline] step 8260 loss=1.20698 ms/step=40.4
-[baseline] step 8270 loss=1.21784 ms/step=23.2
-[baseline] step 8280 loss=1.65905 ms/step=23
-[baseline] step 8290 loss=1.21143 ms/step=23.5
-[baseline] step 8300 loss=1.14323 ms/step=22.9
-[baseline] sample:
-Hello world in the stellar component of the stellar parameters and the stellar radiative ve
-[baseline] step 8310 loss=1.33132 ms/step=41
-[baseline] step 8320 loss=1.312 ms/step=23
-[baseline] step 8330 loss=1.40164 ms/step=22.7
-[baseline] step 8340 loss=1.40064 ms/step=22.7
-[baseline] step 8350 loss=1.17217 ms/step=22.8
-[baseline] sample:
-Hello world explain the stellar comparast to the star and the star of the solar system is a
-[baseline] step 8360 loss=1.32234 ms/step=39.9
-[baseline] step 8370 loss=1.38092 ms/step=22.5
-[baseline] step 8380 loss=1.46349 ms/step=23.2
-[baseline] step 8390 loss=1.49828 ms/step=23.1
-[baseline] step 8400 loss=1.38765 ms/step=23.5
-[baseline] sample:
-Hello world be a present the present the present the present of the planets are not detecte
-[baseline] step 8410 loss=1.39878 ms/step=40.6
-[baseline] step 8420 loss=1.63125 ms/step=22.5
-[baseline] step 8430 loss=1.43625 ms/step=23.2
-[baseline] step 8440 loss=1.30066 ms/step=22.9
-[baseline] step 8450 loss=1.10023 ms/step=22.2
-[baseline] sample:
-Hello world be determined by the stellar parameters are not seed in the solar wind in the s
-[baseline] step 8460 loss=1.50624 ms/step=41.3
-[baseline] step 8470 loss=1.42612 ms/step=24.1
-[baseline] step 8480 loss=1.28859 ms/step=22.4
-[baseline] step 8490 loss=1.30941 ms/step=24.7
-[baseline] step 8500 loss=1.39632 ms/step=22.3
-[baseline] sample:
-Hello world be a section of the star for the star with a simple the star of the star and th
-[baseline] step 8510 loss=1.14187 ms/step=41.9
-[baseline] step 8520 loss=1.35723 ms/step=22.9
-[baseline] step 8530 loss=1.3352 ms/step=23.6
-[baseline] step 8540 loss=1.45108 ms/step=22.8
-[baseline] step 8550 loss=1.25092 ms/step=22.5
-[baseline] sample:
-Hello world be determined by the star in the star of the star in the star of the stars and
-[baseline] step 8560 loss=1.23441 ms/step=41.2
-[baseline] step 8570 loss=1.31009 ms/step=22.7
-[baseline] step 8580 loss=1.2906 ms/step=23.5
-[baseline] step 8590 loss=1.37737 ms/step=23.2
-[baseline] step 8600 loss=1.36828 ms/step=22.9
-[baseline] sample:
-Hello world be stars are the start of the star and the star and the star and the probabilit
-[baseline] step 8610 loss=1.4203 ms/step=42.2
-[baseline] step 8620 loss=1.43437 ms/step=22.3
-[baseline] step 8630 loss=1.43285 ms/step=22.9
-[baseline] step 8640 loss=1.60499 ms/step=22.9
-[baseline] step 8650 loss=1.68968 ms/step=23.2
-[baseline] sample:
-Hello world be solid considered to the solar system in the solar system is the solar system
-[baseline] step 8660 loss=1.25666 ms/step=40
-[baseline] step 8670 loss=1.5384 ms/step=22.9
-[baseline] step 8680 loss=1.44079 ms/step=22.4
-[baseline] step 8690 loss=1.4263 ms/step=23
-[baseline] step 8700 loss=1.27886 ms/step=22.9
-[baseline] sample:
-Hello world be determined by the stellar companion and the star with the stellar companion
-[baseline] step 8710 loss=1.52721 ms/step=39.7
-[baseline] step 8720 loss=1.44787 ms/step=23.4
-[baseline] step 8730 loss=1.4939 ms/step=22.7
-[baseline] step 8740 loss=1.16057 ms/step=23.5
-[baseline] step 8750 loss=1.3509 ms/step=23.1
-[baseline] sample:
-Hello world between the solar wind in the solar wind in the solar wind ions the star and th
-[baseline] step 8760 loss=1.4746 ms/step=40.1
-[baseline] step 8770 loss=1.22616 ms/step=22.7
-[baseline] step 8780 loss=1.25258 ms/step=23.2
-[baseline] step 8790 loss=1.38941 ms/step=22.8
-[baseline] step 8800 loss=1.27325 ms/step=22.5
-[baseline] sample:
-Hello world the star and the star and the stellar radiative velocity and the star and the s
-[baseline] step 8810 loss=1.51292 ms/step=40.5
-[baseline] step 8820 loss=1.18278 ms/step=23.9
-[baseline] step 8830 loss=1.30154 ms/step=22.6
-[baseline] step 8840 loss=1.35676 ms/step=25.4
-[baseline] step 8850 loss=1.28778 ms/step=25.5
-[baseline] sample:
-Hello world in the present of the same of the star and the star and the same of the same of
-[baseline] step 8860 loss=1.50348 ms/step=47.3
-[baseline] step 8870 loss=1.6462 ms/step=22.8
-[baseline] step 8880 loss=1.53311 ms/step=23.1
-[baseline] step 8890 loss=1.20847 ms/step=22.8
-[baseline] step 8900 loss=1.10002 ms/step=23.4
-[baseline] sample:
-Hello world the structure of the star is a function of the star in the star is a funnel flo
-[baseline] step 8910 loss=1.24382 ms/step=40.1
-[baseline] step 8920 loss=1.29475 ms/step=23.4
-[baseline] step 8930 loss=1.47318 ms/step=22.8
-[baseline] step 8940 loss=1.47162 ms/step=24.3
-[baseline] step 8950 loss=1.70753 ms/step=23.2
-[baseline] sample:
-Hello world as the solation of the solation of the solar system in the system of the solar
-[baseline] step 8960 loss=1.21929 ms/step=41.3
-[baseline] step 8970 loss=1.37427 ms/step=23.5
-[baseline] step 8980 loss=1.35227 ms/step=23.6
-[baseline] step 8990 loss=1.21006 ms/step=23
-[baseline] step 9000 loss=1.22273 ms/step=24
-[baseline] sample:
-Hello world in the star of the star in the star with orbital planets are the stars of the s
-[baseline] step 9010 loss=1.48713 ms/step=40.2
-[baseline] step 9020 loss=1.15699 ms/step=24.1
-[baseline] step 9030 loss=1.2389 ms/step=18.4
-[baseline] step 9040 loss=1.20167 ms/step=19.5
-[baseline] step 9050 loss=1.17127 ms/step=18.2
-[baseline] sample:
-Hello world and the star of the star in the star of the star and the star with the star of
-[baseline] step 9060 loss=1.35275 ms/step=35.9
-[baseline] step 9070 loss=1.43075 ms/step=17.5
-[baseline] step 9080 loss=1.1215 ms/step=16.7
-[baseline] step 9090 loss=1.36806 ms/step=16.7
-[baseline] step 9100 loss=1.21484 ms/step=17
-[baseline] sample:
-Hello world be second to the stellar mass of the stellar composition of the stellar mass of
-[baseline] step 9110 loss=1.25925 ms/step=35.1
-[baseline] step 9120 loss=1.314 ms/step=17
-[baseline] step 9130 loss=1.28031 ms/step=19.7
-[baseline] step 9140 loss=1.20138 ms/step=26.6
-[baseline] step 9150 loss=1.22064 ms/step=19.8
-[baseline] sample:
-Hello world be compacted by the stars of the stars are the strong the contributed by the st
-[baseline] step 9160 loss=1.20135 ms/step=45.7
-[baseline] step 9170 loss=1.49816 ms/step=24.7
-[baseline] step 9180 loss=1.31106 ms/step=27.2
-[baseline] step 9190 loss=1.3375 ms/step=23
-[baseline] step 9200 loss=1.44503 ms/step=24.2
-[baseline] sample:
-Hello world model in the planets and the protoplanetary disk process and the process and th
-[baseline] step 9210 loss=1.38482 ms/step=42
-[baseline] step 9220 loss=1.30196 ms/step=25.1
-[baseline] step 9230 loss=1.32788 ms/step=27.9
-[baseline] step 9240 loss=1.57321 ms/step=24.9
-[baseline] step 9250 loss=1.25078 ms/step=23.3
-[baseline] sample:
-Hello world model in the presence of the starting and the starting and the starting and the
-[baseline] step 9260 loss=1.22411 ms/step=40.1
-[baseline] step 9270 loss=1.21388 ms/step=23.3
-[baseline] step 9280 loss=1.47452 ms/step=23
-[baseline] step 9290 loss=1.33929 ms/step=22.8
-[baseline] step 9300 loss=1.20087 ms/step=23.5
-[baseline] sample:
-Hello world for the stars and the stars and the stars and the stars and the stars and the s
-[baseline] step 9310 loss=1.30278 ms/step=43.6
-[baseline] step 9320 loss=1.2118 ms/step=24
-[baseline] step 9330 loss=1.51512 ms/step=23.2
-[baseline] step 9340 loss=1.19393 ms/step=22.6
-[baseline] step 9350 loss=1.33397 ms/step=23.7
-[baseline] sample:
-Hello world be and the star and the star and the star and the star and the star and the sta
-[baseline] step 9360 loss=1.34628 ms/step=40.4
-[baseline] step 9370 loss=1.20174 ms/step=22.7
-[baseline] step 9380 loss=1.11276 ms/step=22.4
-[baseline] step 9390 loss=1.28113 ms/step=23.5
-[baseline] step 9400 loss=1.42176 ms/step=22.9
-[baseline] sample:
-Hello world be a similar to the star of the star and the star of the star and the star and
-[baseline] step 9410 loss=1.152 ms/step=40.2
-[baseline] step 9420 loss=1.48119 ms/step=22.9
-[baseline] step 9430 loss=1.30566 ms/step=23
-[baseline] step 9440 loss=1.23308 ms/step=22.7
-[baseline] step 9450 loss=1.22087 ms/step=23.3
-[baseline] sample:
-Hello world be a few of the stellar component or the planets are then the solar wind in the
-[baseline] step 9460 loss=1.33129 ms/step=40.2
-[baseline] step 9470 loss=1.61635 ms/step=23.1
-[baseline] step 9480 loss=1.3938 ms/step=22.3
-[baseline] step 9490 loss=1.17733 ms/step=22.9
-[baseline] step 9500 loss=1.26007 ms/step=23
-[baseline] sample:
-Hello world and the stellar properties of the stellar particle spectrum of the solar wind i
-[baseline] step 9510 loss=1.51813 ms/step=40.7
-[baseline] step 9520 loss=1.24171 ms/step=23
-[baseline] step 9530 loss=1.11993 ms/step=27.4
-[baseline] step 9540 loss=1.08488 ms/step=24.7
-[baseline] step 9550 loss=1.25163 ms/step=23.5
-[baseline] sample:
-Hello world be a significantly the solar wind in the solar system orbital period of the sol
-[baseline] step 9560 loss=1.24583 ms/step=39.1
-[baseline] step 9570 loss=1.42257 ms/step=22.2
-[baseline] step 9580 loss=1.27468 ms/step=20.8
-[baseline] step 9590 loss=1.38522 ms/step=21.4
-[baseline] step 9600 loss=1.18916 ms/step=20
-[baseline] sample:
-Hello world and the star of the star and the star and the star of the star of the star of t
-[baseline] step 9610 loss=1.67972 ms/step=34.9
-[baseline] step 9620 loss=1.25234 ms/step=18.1
-[baseline] step 9630 loss=1.35093 ms/step=15.8
-[baseline] step 9640 loss=1.12444 ms/step=16.1
-[baseline] step 9650 loss=1.47705 ms/step=16
-[baseline] sample:
-Hello world be a second generation planet a significant parameter space where the star and
-[baseline] step 9660 loss=1.30545 ms/step=31.9
-[baseline] step 9670 loss=1.3765 ms/step=15.4
-[baseline] step 9680 loss=1.36746 ms/step=15.8
-[baseline] step 9690 loss=1.13826 ms/step=15.5
-[baseline] step 9700 loss=1.45682 ms/step=15.7
-[baseline] sample:
-Hello world not and the solution of the solar system in the same as a function of the solar
-[baseline] step 9710 loss=1.51947 ms/step=32.5
-[baseline] step 9720 loss=1.44174 ms/step=16.5
-[baseline] step 9730 loss=1.37663 ms/step=15.5
-[baseline] step 9740 loss=1.06567 ms/step=15.6
-[baseline] step 9750 loss=1.50495 ms/step=16.1
-[baseline] sample:
-Hello worlds the solar wind ions and a secular resonance in the solar system is a compared
-[baseline] step 9760 loss=1.46452 ms/step=33.1
-[baseline] step 9770 loss=1.31982 ms/step=15.5
-[baseline] step 9780 loss=1.50467 ms/step=15.6
-[baseline] step 9790 loss=1.59015 ms/step=16.3
-[baseline] step 9800 loss=1.29813 ms/step=15.3
-[baseline] sample:
-Hello worlds of the solar system is and the solar system (see Fig. 1). The stellar companio
-[baseline] step 9810 loss=1.63028 ms/step=32.3
-[baseline] step 9820 loss=1.53206 ms/step=16
-[baseline] step 9830 loss=1.20491 ms/step=15.5
-[baseline] step 9840 loss=1.10959 ms/step=15.4
-[baseline] step 9850 loss=1.39329 ms/step=15.2
-[baseline] sample:
-Hello world in the solar wind structure of the solar wind in the solar wind in the solar wi
-[baseline] step 9860 loss=1.37988 ms/step=33.1
-[baseline] step 9870 loss=1.39507 ms/step=16.6
-[baseline] step 9880 loss=1.27678 ms/step=16.6
-[baseline] step 9890 loss=1.16259 ms/step=16
-[baseline] step 9900 loss=1.3335 ms/step=15.7
-[baseline] sample:
-Hello world and the stellar companion to the stellar companion the stellar companion to the
-[baseline] step 9910 loss=1.46148 ms/step=32.7
-[baseline] step 9920 loss=1.46631 ms/step=16.1
-[baseline] step 9930 loss=1.25804 ms/step=15.5
-[baseline] step 9940 loss=1.42782 ms/step=16.1
-[baseline] step 9950 loss=1.49547 ms/step=16
-[baseline] sample:
-Hello world consider the stellar considering the stellar considered in the solar wind in th
-[baseline] step 9960 loss=1.17987 ms/step=32.6
-[baseline] step 9970 loss=1.45816 ms/step=16.8
-[baseline] step 9980 loss=1.29117 ms/step=17.5
-[baseline] step 9990 loss=1.11591 ms/step=18.3
-[baseline] step 10000 loss=1.44486 ms/step=16.7
-[baseline] sample:
-Hello world in the solar wind in the solar wind model at the solar wind interaction of the
-[baseline] final sample:
-Hello world in the solar wind in the solar wind model at the solar wind interaction of the
+  grim_libtorch_baseline.vcxproj -> D:\G.R.I.M\Tools\libtorch_baseline\build\Release\grim_libtorch_baseline.exe  
+PS D:\G.R.I.M\Tools\libtorch_baseline\build> D:\G.R.I.M\Tools\libtorch_baseline\build\Release\grim_libtorch_baseline.exe --use_grmt 1 --grmt_path "D:\G.R.I.M\resources\models\GRIM-text\training\data\training_data.grmt" --vocab_path "D:\G.R.I.M\resources\models\GRIM-text\training\data\vocab.bin" --seq_len 1024 --batch_size 6 --n_layer 12 --n_head 12 --n_kv_head 4 --n_embd 768 --epochs 1 --lr 0.0003 --warmup_steps 0 --log_interval 1 --sample_interval
+ 100 --sample_tokens 80 --use_rmsnorm 1 --tie_weights 1 --seed 1 2>&1
+[STARTUP] Parsing arguments...
+[STARTUP] Applying config...
+[STARTUP] Config ready
+[STARTUP] Printing config summary...
+
+========================================
+LIBTORCH BASELINE (GRIM-text Feature Parity)
+========================================
+[Config] mode: GRMT (full vocab)
+[Config] vocab: D:\G.R.I.M\resources\models\GRIM-text\training\data\vocab.bin
+[Config] training: D:\G.R.I.M\resources\models\GRIM-text\training\data\training_data.grmt
+[Config] validation: resources/models/GRIM-text/training/data/validation_data.grmt
+[Config] seq_len=1024 batch_size=6 epochs=1
+
+[Features] Toggleable Settings:
+  grad_accumulation: ON (steps=1)
+  lr_warmup: ON (steps=0)
+  cosine_decay: ON
+  grad_clipping: ON (max_norm=1)
+  grad_metrics: ON
+  validation: ON (interval=100)
+  sampling: ON (interval=100)
+  focal_loss: OFF (gamma=1, alpha=1)
+  label_smoothing: OFF (eps=0.1)
+  auto_stop: OFF (patience=10)
+  telemetry: ON
+  weight_stats: OFF
+  optimizer_stats: OFF
+  xavier_init: ON
+  use_grmt: ON
+[GRIMVocab] Loading D:\G.R.I.M\resources\models\GRIM-text\training\data\vocab.bin
+[GRIMVocab] version=3 unigram_pieces=50103 total_vocab_size=50376
+[GRIMVocab] Loaded 50103 unigram pieces
+[STARTUP] Vocab loaded successfully, loading GRMT data...
+[STARTUP] Opening GRMT file...
+[GRMT] Opening file: D:\G.R.I.M\resources\models\GRIM-text\training\data\training_data.grmt
+[GRMT] Reading header...
+[GRMT] Header read complete
+[GRMT] Validating magic...
+[GRMT] Validating version...
+[GRMT] Printing header info...
+[GRMT] Loading D:\G.R.I.M\resources\models\GRIM-text\training\data\training_data.grmt
+[GRMT] version=5
+[GRMT] sequences=16258
+[GRMT] vocab_size=50376
+[GRMT] Pre-allocated token buffer
+[GRMT] Starting sequence loop...
+[GRMT] Reading first sequence length at offset 16
+[GRMT] First seq_len=1024, file.good()=1
+[GRMT] Allocating token_ids vector for 1024 tokens...
+[GRMT] Reading tokens from file...
+[GRMT] Tokens read, skipping v5 targets array...
+[GRMT] Skipping numeric_values...
+[GRMT] Skipping numeric_mask...
+[GRMT] Skipping text_features (32768 bytes)...
+[GRMT] Skipping text_mask...
+[GRMT] Appending tokens to all_tokens...
+[GRMT] Loaded 1000/16258 sequences, 472000 tokens
+[GRMT] Loaded 2000/16258 sequences, 944565 tokens
+[GRMT] Loaded 3000/16258 sequences, 1410335 tokens
+[GRMT] Loaded 4000/16258 sequences, 1868342 tokens
+[GRMT] Reached max_tokens limit (2000000)
+[GRMT] Done: 2000046 tokens loaded
+
+[Data] tokens loaded: 2000046
+[Model] device: cuda
+[Model] normalization: RMSNorm
+[Model] weight_tying: enabled
+[Model] attention: 12 Q heads, 4 KV heads (GQA 3:1)
+[Model] vocab_size: 50376
+[Model] total_params: 115062528
+========================================
+
+[Training] Starting training...
+[Training] batches_per_epoch=325 total_steps=325
+
+========================================
+Epoch 1/1
+========================================
+[Step 1] loss=10.8273 lr=3.00e-04 grad_norm=0.0023
+[Step 2] loss=10.8273 lr=3.00e-04 grad_norm=0.0023
+[Step 3] loss=10.8273 lr=3.00e-04 grad_norm=0.0028
+[Step 4] loss=10.8272 lr=3.00e-04 grad_norm=0.0043
+[Step 5] loss=10.8272 lr=3.00e-04 grad_norm=0.0070
+[Step 6] loss=10.8270 lr=3.00e-04 grad_norm=0.0120
+[Step 7] loss=10.8268 lr=3.00e-04 grad_norm=0.0178
+[Step 8] loss=10.8265 lr=3.00e-04 grad_norm=0.0254
+[Step 9] loss=10.8261 lr=3.00e-04 grad_norm=0.0327
+[Step 10] loss=10.8256 lr=2.99e-04 grad_norm=0.0411
+[GradTrace] COMPONENTS: emb=0.0018 head=0.0000 attn=0.0008 ffn=0.0006 ln=0.0410
+[Step 11] loss=10.8252 lr=2.99e-04 grad_norm=0.0463
+[Step 12] loss=10.8243 lr=2.99e-04 grad_norm=0.0575
+[Step 13] loss=10.8235 lr=2.99e-04 grad_norm=0.0651
+[Step 14] loss=10.8225 lr=2.99e-04 grad_norm=0.0734
+[Step 15] loss=10.8214 lr=2.99e-04 grad_norm=0.0825
+[Step 16] loss=10.8202 lr=2.98e-04 grad_norm=0.0907
+[Step 17] loss=10.8190 lr=2.98e-04 grad_norm=0.0976
+[Step 18] loss=10.8173 lr=2.98e-04 grad_norm=0.1087
+[Step 19] loss=10.8155 lr=2.98e-04 grad_norm=0.1198
+[Step 20] loss=10.8135 lr=2.98e-04 grad_norm=0.1303
+[GradTrace] COMPONENTS: emb=0.0044 head=0.0000 attn=0.0004 ffn=0.0003 ln=0.1302
+[Step 21] loss=10.8114 lr=2.97e-04 grad_norm=0.1415
+[Step 22] loss=10.8095 lr=2.97e-04 grad_norm=0.1491
+[Step 23] loss=10.8071 lr=2.97e-04 grad_norm=0.1594
+[Step 24] loss=10.8046 lr=2.96e-04 grad_norm=0.1697
+[Step 25] loss=10.8023 lr=2.96e-04 grad_norm=0.1767
+[Step 26] loss=10.7995 lr=2.96e-04 grad_norm=0.1866
+[Step 27] loss=10.7962 lr=2.95e-04 grad_norm=0.1983
+[Step 28] loss=10.7927 lr=2.95e-04 grad_norm=0.2102
+[Step 29] loss=10.7897 lr=2.95e-04 grad_norm=0.2178
+[Step 30] loss=10.7851 lr=2.94e-04 grad_norm=0.2336
+[GradTrace] COMPONENTS: emb=0.0074 head=0.0000 attn=0.0004 ffn=0.0003 ln=0.2335
+[Step 31] loss=10.7821 lr=2.94e-04 grad_norm=0.2396
+[Step 32] loss=10.7785 lr=2.94e-04 grad_norm=0.2488
+[Step 33] loss=10.7750 lr=2.93e-04 grad_norm=0.2560
+[Step 34] loss=10.7701 lr=2.93e-04 grad_norm=0.2695
+[Step 35] loss=10.7651 lr=2.92e-04 grad_norm=0.2823
+[Step 36] loss=10.7613 lr=2.92e-04 grad_norm=0.2890
+[Step 37] loss=10.7560 lr=2.91e-04 grad_norm=0.3014
+[Step 38] loss=10.7514 lr=2.91e-04 grad_norm=0.3096
+[Step 39] loss=10.7451 lr=2.90e-04 grad_norm=0.3244
+[Step 40] loss=10.7394 lr=2.90e-04 grad_norm=0.3358
+[GradTrace] COMPONENTS: emb=0.0111 head=0.0000 attn=0.0004 ffn=0.0003 ln=0.3356
+[Step 41] loss=10.7346 lr=2.89e-04 grad_norm=0.3431
+[Step 42] loss=10.7283 lr=2.89e-04 grad_norm=0.3556
+[Step 43] loss=10.7222 lr=2.88e-04 grad_norm=0.3666
+[Step 44] loss=10.7165 lr=2.88e-04 grad_norm=0.3754
+[Step 45] loss=10.7090 lr=2.87e-04 grad_norm=0.3897
+[Step 46] loss=10.7036 lr=2.86e-04 grad_norm=0.3962
+[Step 47] loss=10.6967 lr=2.86e-04 grad_norm=0.4073
+[Step 48] loss=10.6929 lr=2.85e-04 grad_norm=0.4079
+[Step 49] loss=10.6839 lr=2.85e-04 grad_norm=0.4242
+[Step 50] loss=10.6751 lr=2.84e-04 grad_norm=0.4394
+[GradTrace] COMPONENTS: emb=0.0129 head=0.0000 attn=0.0005 ffn=0.0004 ln=0.4393
+[Step 51] loss=10.6706 lr=2.83e-04 grad_norm=0.4415
+[Step 52] loss=10.6638 lr=2.83e-04 grad_norm=0.4499
+[Step 53] loss=10.6538 lr=2.82e-04 grad_norm=0.4663
+[Step 54] loss=10.6445 lr=2.81e-04 grad_norm=0.4803
+[Step 55] loss=10.6359 lr=2.81e-04 grad_norm=0.4918
+[Step 56] loss=10.6279 lr=2.80e-04 grad_norm=0.5012
+[Step 57] loss=10.6203 lr=2.79e-04 grad_norm=0.5091
+[Step 58] loss=10.6149 lr=2.79e-04 grad_norm=0.5115
+[Step 59] loss=10.6036 lr=2.78e-04 grad_norm=0.5278
+[Step 60] loss=10.5935 lr=2.77e-04 grad_norm=0.5407
+[GradTrace] COMPONENTS: emb=0.0164 head=0.0000 attn=0.0006 ffn=0.0004 ln=0.5404
+[Step 61] loss=10.5845 lr=2.76e-04 grad_norm=0.5504
+[Step 62] loss=10.5769 lr=2.76e-04 grad_norm=0.5568
+[Step 63] loss=10.5716 lr=2.75e-04 grad_norm=0.5577
+[Step 64] loss=10.5599 lr=2.74e-04 grad_norm=0.5725
+[Step 65] loss=10.5522 lr=2.73e-04 grad_norm=0.5782
+[Step 66] loss=10.5408 lr=2.72e-04 grad_norm=0.5916
+[Step 67] loss=10.5233 lr=2.71e-04 grad_norm=0.6168
+[Step 68] loss=10.5265 lr=2.71e-04 grad_norm=0.5993
+[Step 69] loss=10.5091 lr=2.70e-04 grad_norm=0.6235
+[Step 70] loss=10.5080 lr=2.69e-04 grad_norm=0.6151
+[GradTrace] COMPONENTS: emb=0.0174 head=0.0000 attn=0.0006 ffn=0.0004 ln=0.6148
+[Step 71] loss=10.4922 lr=2.68e-04 grad_norm=0.6352
+[Step 72] loss=10.4755 lr=2.67e-04 grad_norm=0.6564
+[Step 73] loss=10.4709 lr=2.66e-04 grad_norm=0.6542
+[Step 74] loss=10.4606 lr=2.65e-04 grad_norm=0.6626
+[Step 75] loss=10.4463 lr=2.64e-04 grad_norm=0.6780
+[Step 76] loss=10.4427 lr=2.64e-04 grad_norm=0.6738
+[Step 77] loss=10.4246 lr=2.63e-04 grad_norm=0.6954
+[Step 78] loss=10.4142 lr=2.62e-04 grad_norm=0.7029
+[Step 79] loss=10.3999 lr=2.61e-04 grad_norm=0.7168
+[Step 80] loss=10.3933 lr=2.60e-04 grad_norm=0.7172
+[GradTrace] COMPONENTS: emb=0.0209 head=0.0000 attn=0.0007 ffn=0.0004 ln=0.7169
+[Step 81] loss=10.3875 lr=2.59e-04 grad_norm=0.7165
+[Step 82] loss=10.3681 lr=2.58e-04 grad_norm=0.7382
+[Step 83] loss=10.3505 lr=2.57e-04 grad_norm=0.7564
+[Step 84] loss=10.3552 lr=2.56e-04 grad_norm=0.7377
+[Step 85] loss=10.3393 lr=2.55e-04 grad_norm=0.7527
+[Step 86] loss=10.3279 lr=2.54e-04 grad_norm=0.7603
+[Step 87] loss=10.3092 lr=2.53e-04 grad_norm=0.7792
+[Step 88] loss=10.2931 lr=2.52e-04 grad_norm=0.7936
+[Step 89] loss=10.2910 lr=2.51e-04 grad_norm=0.7860
+[Step 90] loss=10.2907 lr=2.50e-04 grad_norm=0.7757
+[GradTrace] COMPONENTS: emb=0.0222 head=0.0000 attn=0.0007 ffn=0.0004 ln=0.7754
+[Step 91] loss=10.2666 lr=2.49e-04 grad_norm=0.8015
+[Step 92] loss=10.2553 lr=2.47e-04 grad_norm=0.8077
+[Step 93] loss=10.2398 lr=2.46e-04 grad_norm=0.8199
+[Step 94] loss=10.2339 lr=2.45e-04 grad_norm=0.8181
+[Step 95] loss=10.2228 lr=2.44e-04 grad_norm=0.8236
+[Step 96] loss=10.1989 lr=2.43e-04 grad_norm=0.8471
+[Step 97] loss=10.2011 lr=2.42e-04 grad_norm=0.8334
+[Step 98] loss=10.1873 lr=2.41e-04 grad_norm=0.8424
+[Step 99] loss=10.1749 lr=2.40e-04 grad_norm=0.8493
+[Step 100] loss=10.1663 lr=2.39e-04 grad_norm=0.8506
+[GradTrace] COMPONENTS: emb=0.0256 head=0.0000 attn=0.0008 ffn=0.0005 ln=0.8502
+[Validation] loss=10.1535 ppl=25679.91
+[Sample] "Hello world of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the"
+[Step 101] loss=10.1458 lr=2.37e-04 grad_norm=0.8682
+[Step 102] loss=10.1399 lr=2.36e-04 grad_norm=0.8657
+[Step 103] loss=10.1316 lr=2.35e-04 grad_norm=0.8665
+[Step 104] loss=10.1019 lr=2.34e-04 grad_norm=0.8953
+[Step 105] loss=10.1106 lr=2.33e-04 grad_norm=0.8738
+[Step 106] loss=10.0941 lr=2.32e-04 grad_norm=0.8850
+[Step 107] loss=10.0763 lr=2.30e-04 grad_norm=0.8977
+[Step 108] loss=10.0672 lr=2.29e-04 grad_norm=0.8993
+[Step 109] loss=10.0889 lr=2.28e-04 grad_norm=0.8620
+[Step 110] loss=10.0423 lr=2.27e-04 grad_norm=0.9105
+[GradTrace] COMPONENTS: emb=0.0293 head=0.0000 attn=0.0008 ffn=0.0005 ln=0.9100
+[Step 111] loss=10.0391 lr=2.25e-04 grad_norm=0.9043
+[Step 112] loss=10.0251 lr=2.24e-04 grad_norm=0.9115
+[Step 113] loss=10.0016 lr=2.23e-04 grad_norm=0.9302
+[Step 114] loss=10.0007 lr=2.22e-04 grad_norm=0.9211
+[Step 115] loss=9.9920 lr=2.21e-04 grad_norm=0.9217
+[Step 116] loss=9.9676 lr=2.19e-04 grad_norm=0.9411
+[Step 117] loss=9.9534 lr=2.18e-04 grad_norm=0.9481
+[Step 118] loss=9.9505 lr=2.17e-04 grad_norm=0.9415
+[Step 119] loss=9.9365 lr=2.15e-04 grad_norm=0.9480
+[Step 120] loss=9.9194 lr=2.14e-04 grad_norm=0.9579
+[GradTrace] COMPONENTS: emb=0.0309 head=0.0000 attn=0.0008 ffn=0.0005 ln=0.9574
+[Step 121] loss=9.9235 lr=2.13e-04 grad_norm=0.9435
+[Step 122] loss=9.9117 lr=2.12e-04 grad_norm=0.9473
+[Step 123] loss=9.8866 lr=2.10e-04 grad_norm=0.9660
+[Step 124] loss=9.8858 lr=2.09e-04 grad_norm=0.9573
+[Step 125] loss=9.8726 lr=2.08e-04 grad_norm=0.9624
+[Step 126] loss=9.8492 lr=2.06e-04 grad_norm=0.9786
+[Step 127] loss=9.8476 lr=2.05e-04 grad_norm=0.9709
+[Step 128] loss=9.8373 lr=2.04e-04 grad_norm=0.9726
+[Step 129] loss=9.8143 lr=2.02e-04 grad_norm=0.9882
+[Step 130] loss=9.7997 lr=2.01e-04 grad_norm=0.9944
+[GradTrace] COMPONENTS: emb=0.0306 head=0.0000 attn=0.0008 ffn=0.0005 ln=0.9939
+[Step 131] loss=9.7947 lr=2.00e-04 grad_norm=0.9903
+[Step 132] loss=9.7797 lr=1.98e-04 grad_norm=0.9967
+[Step 133] loss=9.7995 lr=1.97e-04 grad_norm=0.9663
+[Step 134] loss=9.7660 lr=1.96e-04 grad_norm=0.9923
+[Step 135] loss=9.7610 lr=1.94e-04 grad_norm=0.9884
+[Step 136] loss=9.7477 lr=1.93e-04 grad_norm=0.9930
+[Step 137] loss=9.7184 lr=1.92e-04 grad_norm=1.0142 (clipped)
+[Step 138] loss=9.7212 lr=1.90e-04 grad_norm=1.0019 (clipped)
+[Step 139] loss=9.7202 lr=1.89e-04 grad_norm=0.9938
+[Step 140] loss=9.6920 lr=1.88e-04 grad_norm=1.0136 (clipped)
+[GradTrace] COMPONENTS: emb=0.0376 head=0.0000 attn=0.0008 ffn=0.0005 ln=1.0129
+[Step 141] loss=9.6991 lr=1.86e-04 grad_norm=0.9972
+[Step 142] loss=9.6753 lr=1.85e-04 grad_norm=1.0121 (clipped)
+[Step 143] loss=9.6721 lr=1.84e-04 grad_norm=1.0062 (clipped)
+[Step 144] loss=9.6608 lr=1.82e-04 grad_norm=1.0086 (clipped)
+[Step 145] loss=9.6552 lr=1.81e-04 grad_norm=1.0053 (clipped)
+[Step 146] loss=9.6440 lr=1.79e-04 grad_norm=1.0076 (clipped)
+[Step 147] loss=9.6290 lr=1.78e-04 grad_norm=1.0136 (clipped)
+[Step 148] loss=9.6369 lr=1.77e-04 grad_norm=0.9968
+[Step 149] loss=9.6034 lr=1.75e-04 grad_norm=1.0209 (clipped)
+[Step 150] loss=9.6191 lr=1.74e-04 grad_norm=0.9968
+[GradTrace] COMPONENTS: emb=0.0343 head=0.0000 attn=0.0008 ffn=0.0004 ln=0.9962
+[Step 151] loss=9.6204 lr=1.72e-04 grad_norm=0.9872
+[Step 152] loss=9.5717 lr=1.71e-04 grad_norm=1.0255 (clipped)
+[Step 153] loss=9.5687 lr=1.70e-04 grad_norm=1.0201 (clipped)
+[Step 154] loss=9.5581 lr=1.68e-04 grad_norm=1.0215 (clipped)
+[Step 155] loss=9.5323 lr=1.67e-04 grad_norm=1.0372 (clipped)
+[Step 156] loss=9.5627 lr=1.66e-04 grad_norm=1.0000 (clipped)
+[Step 157] loss=9.5571 lr=1.64e-04 grad_norm=0.9971
+[Step 158] loss=9.5397 lr=1.63e-04 grad_norm=1.0050 (clipped)
+[Step 159] loss=9.5199 lr=1.61e-04 grad_norm=1.0155 (clipped)
+[Step 160] loss=9.5303 lr=1.60e-04 grad_norm=0.9976
+[GradTrace] COMPONENTS: emb=0.0331 head=0.0000 attn=0.0007 ffn=0.0004 ln=0.9971
+[Step 161] loss=9.4870 lr=1.59e-04 grad_norm=1.0296 (clipped)
+[Step 162] loss=9.4864 lr=1.57e-04 grad_norm=1.0221 (clipped)
+[Step 163] loss=9.5046 lr=1.56e-04 grad_norm=0.9972
+[Step 164] loss=9.4920 lr=1.54e-04 grad_norm=1.0013 (clipped)
+[Step 165] loss=9.4599 lr=1.53e-04 grad_norm=1.0221 (clipped)
+[Step 166] loss=9.4495 lr=1.51e-04 grad_norm=1.0236 (clipped)
+[Step 167] loss=9.4467 lr=1.50e-04 grad_norm=1.0182 (clipped)
+[Step 168] loss=9.4309 lr=1.49e-04 grad_norm=1.0249 (clipped)
+[Step 169] loss=9.4307 lr=1.47e-04 grad_norm=1.0172 (clipped)
+[Step 170] loss=9.4353 lr=1.46e-04 grad_norm=1.0055 (clipped)
+[GradTrace] COMPONENTS: emb=0.0373 head=0.0000 attn=0.0009 ffn=0.0005 ln=1.0048
+[Step 171] loss=9.4411 lr=1.44e-04 grad_norm=0.9930
+[Step 172] loss=9.4336 lr=1.43e-04 grad_norm=0.9921
+[Step 173] loss=9.4215 lr=1.42e-04 grad_norm=0.9958
+[Step 174] loss=9.3903 lr=1.40e-04 grad_norm=1.0153 (clipped)
+[Step 175] loss=9.3857 lr=1.39e-04 grad_norm=1.0121 (clipped)
+[Step 176] loss=9.3933 lr=1.38e-04 grad_norm=0.9981
+[Step 177] loss=9.3950 lr=1.36e-04 grad_norm=0.9894
+[Step 178] loss=9.3537 lr=1.35e-04 grad_norm=1.0182 (clipped)
+[Step 179] loss=9.3628 lr=1.33e-04 grad_norm=1.0034 (clipped)
+[Step 180] loss=9.3646 lr=1.32e-04 grad_norm=0.9946
+[GradTrace] COMPONENTS: emb=0.0380 head=0.0000 attn=0.0008 ffn=0.0005 ln=0.9939
+[Step 181] loss=9.3292 lr=1.31e-04 grad_norm=1.0181 (clipped)
+[Step 182] loss=9.3298 lr=1.29e-04 grad_norm=1.0106 (clipped)
+[Step 183] loss=9.3336 lr=1.28e-04 grad_norm=1.0004 (clipped)
+[Step 184] loss=9.3349 lr=1.26e-04 grad_norm=0.9923
+[Step 185] loss=9.3108 lr=1.25e-04 grad_norm=1.0062 (clipped)
+[Step 186] loss=9.3067 lr=1.24e-04 grad_norm=1.0031 (clipped)
+[Step 187] loss=9.3233 lr=1.22e-04 grad_norm=0.9822
+[Step 188] loss=9.3049 lr=1.21e-04 grad_norm=0.9913
+[Step 189] loss=9.3186 lr=1.20e-04 grad_norm=0.9735
+[Step 190] loss=9.2892 lr=1.18e-04 grad_norm=0.9916
+[GradTrace] COMPONENTS: emb=0.0405 head=0.0000 attn=0.0008 ffn=0.0004 ln=0.9908
+[Step 191] loss=9.2459 lr=1.17e-04 grad_norm=1.0215 (clipped)
+[Step 192] loss=9.2867 lr=1.16e-04 grad_norm=0.9809
+[Step 193] loss=9.2805 lr=1.14e-04 grad_norm=0.9799
+[Step 194] loss=9.2810 lr=1.13e-04 grad_norm=0.9733
+[Step 195] loss=9.2558 lr=1.12e-04 grad_norm=0.9882
+[Step 196] loss=9.2576 lr=1.10e-04 grad_norm=0.9805
+[Step 197] loss=9.2256 lr=1.09e-04 grad_norm=1.0010 (clipped)
+[Step 198] loss=9.2633 lr=1.08e-04 grad_norm=0.9642
+[Step 199] loss=9.2282 lr=1.06e-04 grad_norm=0.9871
+[Step 200] loss=9.2499 lr=1.05e-04 grad_norm=0.9635
+[GradTrace] COMPONENTS: emb=0.0394 head=0.0000 attn=0.0007 ffn=0.0004 ln=0.9627
+[Validation] loss=9.2216 ppl=10113.55
+[Sample] "Hello world of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the"
+[Step 201] loss=9.2131 lr=1.04e-04 grad_norm=0.9878
+[Step 202] loss=9.2071 lr=1.02e-04 grad_norm=0.9870
+[Step 203] loss=9.1924 lr=1.01e-04 grad_norm=0.9933
+[Step 204] loss=9.2233 lr=9.97e-05 grad_norm=0.9626
+[Step 205] loss=9.2009 lr=9.84e-05 grad_norm=0.9753
+[Step 206] loss=9.1921 lr=9.71e-05 grad_norm=0.9769
+[Step 207] loss=9.1898 lr=9.58e-05 grad_norm=0.9734
+[Step 208] loss=9.1577 lr=9.45e-05 grad_norm=0.9942
+[Step 209] loss=9.1788 lr=9.33e-05 grad_norm=0.9717
+[Step 210] loss=9.1641 lr=9.20e-05 grad_norm=0.9783
+[GradTrace] COMPONENTS: emb=0.0398 head=0.0000 attn=0.0007 ffn=0.0004 ln=0.9775
+[Step 211] loss=9.1678 lr=9.07e-05 grad_norm=0.9703
+[Step 212] loss=9.1690 lr=8.95e-05 grad_norm=0.9644
+[Step 213] loss=9.1592 lr=8.82e-05 grad_norm=0.9672
+[Step 214] loss=9.1367 lr=8.70e-05 grad_norm=0.9802
+[Step 215] loss=9.1378 lr=8.58e-05 grad_norm=0.9745
+[Step 216] loss=9.1502 lr=8.45e-05 grad_norm=0.9600
+[Step 217] loss=9.1327 lr=8.33e-05 grad_norm=0.9689
+[Step 218] loss=9.1472 lr=8.21e-05 grad_norm=0.9528
+[Step 219] loss=9.1266 lr=8.09e-05 grad_norm=0.9646
+[Step 220] loss=9.0749 lr=7.97e-05 grad_norm=1.0006 (clipped)
+[GradTrace] COMPONENTS: emb=0.0454 head=0.0000 attn=0.0007 ffn=0.0004 ln=0.9996
+[Step 221] loss=9.1177 lr=7.85e-05 grad_norm=0.9625
+[Step 222] loss=9.1655 lr=7.73e-05 grad_norm=0.9209
+[Step 223] loss=9.1204 lr=7.61e-05 grad_norm=0.9517
+[Step 224] loss=9.1363 lr=7.50e-05 grad_norm=0.9351
+[Step 225] loss=9.1265 lr=7.38e-05 grad_norm=0.9386
+[Step 226] loss=9.0651 lr=7.26e-05 grad_norm=0.9823
+[Step 227] loss=9.1194 lr=7.15e-05 grad_norm=0.9360
+[Step 228] loss=9.1083 lr=7.03e-05 grad_norm=0.9405
+[Step 229] loss=9.0873 lr=6.92e-05 grad_norm=0.9529
+[Step 230] loss=9.0765 lr=6.81e-05 grad_norm=0.9574
+[GradTrace] COMPONENTS: emb=0.0443 head=0.0000 attn=0.0006 ffn=0.0003 ln=0.9564
+[Step 231] loss=9.1223 lr=6.70e-05 grad_norm=0.9182
+[Step 232] loss=9.0776 lr=6.59e-05 grad_norm=0.9487
+[Step 233] loss=9.0744 lr=6.48e-05 grad_norm=0.9476
+[Step 234] loss=9.1328 lr=6.37e-05 grad_norm=0.8990
+[Step 235] loss=9.0697 lr=6.26e-05 grad_norm=0.9440
+[Step 236] loss=9.0853 lr=6.15e-05 grad_norm=0.9286
+[Step 237] loss=9.0999 lr=6.04e-05 grad_norm=0.9142
+[Step 238] loss=9.0942 lr=5.94e-05 grad_norm=0.9151
+[Step 239] loss=9.0814 lr=5.83e-05 grad_norm=0.9218
+[Step 240] loss=9.0738 lr=5.73e-05 grad_norm=0.9240
+[GradTrace] COMPONENTS: emb=0.0392 head=0.0000 attn=0.0006 ffn=0.0003 ln=0.9231
+[Step 241] loss=9.0643 lr=5.63e-05 grad_norm=0.9281
+[Step 242] loss=9.0491 lr=5.52e-05 grad_norm=0.9365
+[Step 243] loss=9.0618 lr=5.42e-05 grad_norm=0.9236
+[Step 244] loss=9.0651 lr=5.32e-05 grad_norm=0.9182
+[Step 245] loss=9.0312 lr=5.22e-05 grad_norm=0.9409
+[Step 246] loss=9.0706 lr=5.12e-05 grad_norm=0.9081
+[Step 247] loss=9.0403 lr=5.03e-05 grad_norm=0.9281
+[Step 248] loss=9.0362 lr=4.93e-05 grad_norm=0.9284
+[Step 249] loss=9.0386 lr=4.83e-05 grad_norm=0.9238
+[Step 250] loss=9.0263 lr=4.74e-05 grad_norm=0.9303
+[GradTrace] COMPONENTS: emb=0.0423 head=0.0000 attn=0.0006 ffn=0.0003 ln=0.9293
+[Step 251] loss=9.0029 lr=4.65e-05 grad_norm=0.9454
+[Step 252] loss=9.0537 lr=4.55e-05 grad_norm=0.9044
+[Step 253] loss=9.0302 lr=4.46e-05 grad_norm=0.9196
+[Step 254] loss=9.0427 lr=4.37e-05 grad_norm=0.9076
+[Step 255] loss=9.0300 lr=4.28e-05 grad_norm=0.9147
+[Step 256] loss=9.0263 lr=4.19e-05 grad_norm=0.9152
+[Step 257] loss=9.0251 lr=4.11e-05 grad_norm=0.9136
+[Step 258] loss=9.0342 lr=4.02e-05 grad_norm=0.9052
+[Step 259] loss=9.0610 lr=3.94e-05 grad_norm=0.8822
+[Step 260] loss=9.0073 lr=3.85e-05 grad_norm=0.9200
+[GradTrace] COMPONENTS: emb=0.0416 head=0.0000 attn=0.0006 ffn=0.0003 ln=0.9191
+[Step 261] loss=9.0214 lr=3.77e-05 grad_norm=0.9076
+[Step 262] loss=9.0254 lr=3.69e-05 grad_norm=0.9021
+[Step 263] loss=8.9960 lr=3.61e-05 grad_norm=0.9220
+[Step 264] loss=9.0090 lr=3.53e-05 grad_norm=0.9104
+[Step 265] loss=9.0136 lr=3.45e-05 grad_norm=0.9049
+[Step 266] loss=9.0603 lr=3.37e-05 grad_norm=0.8681
+[Step 267] loss=9.0216 lr=3.29e-05 grad_norm=0.8951
+[Step 268] loss=8.9927 lr=3.22e-05 grad_norm=0.9147
+[Step 269] loss=9.0070 lr=3.15e-05 grad_norm=0.9023
+[Step 270] loss=8.9953 lr=3.07e-05 grad_norm=0.9094
+[GradTrace] COMPONENTS: emb=0.0467 head=0.0000 attn=0.0006 ffn=0.0003 ln=0.9082
+[Step 271] loss=8.9685 lr=3.00e-05 grad_norm=0.9273
+[Step 272] loss=9.0196 lr=2.93e-05 grad_norm=0.8881
+[Step 273] loss=8.9912 lr=2.86e-05 grad_norm=0.9072
+[Step 274] loss=8.9977 lr=2.79e-05 grad_norm=0.9008
+[Step 275] loss=8.9865 lr=2.73e-05 grad_norm=0.9074
+[Step 276] loss=8.9837 lr=2.66e-05 grad_norm=0.9080
+[Step 277] loss=8.9980 lr=2.60e-05 grad_norm=0.8958
+[Step 278] loss=8.9937 lr=2.53e-05 grad_norm=0.8975
+[Step 279] loss=9.0233 lr=2.47e-05 grad_norm=0.8743
+[Step 280] loss=8.9500 lr=2.41e-05 grad_norm=0.9269
+[GradTrace] COMPONENTS: emb=0.0432 head=0.0000 attn=0.0006 ffn=0.0003 ln=0.9259
+[Step 281] loss=8.9886 lr=2.35e-05 grad_norm=0.8971
+[Step 282] loss=8.9523 lr=2.29e-05 grad_norm=0.9226
+[Step 283] loss=8.9680 lr=2.23e-05 grad_norm=0.9098
+[Step 284] loss=8.9828 lr=2.18e-05 grad_norm=0.8977
+[Step 285] loss=9.0194 lr=2.12e-05 grad_norm=0.8692
+[Step 286] loss=8.9896 lr=2.07e-05 grad_norm=0.8899
+[Step 287] loss=8.9878 lr=2.02e-05 grad_norm=0.8901
+[Step 288] loss=8.9646 lr=1.97e-05 grad_norm=0.9061
+[Step 289] loss=8.9727 lr=1.92e-05 grad_norm=0.8989
+[Step 290] loss=8.9835 lr=1.87e-05 grad_norm=0.8899
+[GradTrace] COMPONENTS: emb=0.0420 head=0.0000 attn=0.0005 ffn=0.0003 ln=0.8889
+[Step 291] loss=9.0068 lr=1.82e-05 grad_norm=0.8718
+[Step 292] loss=8.9397 lr=1.78e-05 grad_norm=0.9202
+[Step 293] loss=8.9694 lr=1.73e-05 grad_norm=0.8973
+[Step 294] loss=8.9915 lr=1.69e-05 grad_norm=0.8800
+[Step 295] loss=9.0056 lr=1.65e-05 grad_norm=0.8689
+[Step 296] loss=8.9485 lr=1.61e-05 grad_norm=0.9097
+[Step 297] loss=8.9227 lr=1.57e-05 grad_norm=0.9277
+[Step 298] loss=8.9750 lr=1.53e-05 grad_norm=0.8885
+[Step 299] loss=8.9315 lr=1.49e-05 grad_norm=0.9195
+[Step 300] loss=8.9428 lr=1.46e-05 grad_norm=0.9103
+[GradTrace] COMPONENTS: emb=0.0444 head=0.0000 attn=0.0005 ffn=0.0003 ln=0.9093
+[Validation] loss=8.9822 ppl=7960.25
+[Sample] "Hello world of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the"
+[Step 301] loss=8.9497 lr=1.42e-05 grad_norm=0.9044
+[Step 302] loss=8.9403 lr=1.39e-05 grad_norm=0.9104
+[Step 303] loss=8.9898 lr=1.36e-05 grad_norm=0.8733
+[Step 304] loss=8.9830 lr=1.33e-05 grad_norm=0.8775
+[Step 305] loss=8.9603 lr=1.30e-05 grad_norm=0.8935
+[Step 306] loss=9.1077 lr=1.27e-05 grad_norm=0.7847
+[Step 307] loss=8.9523 lr=1.24e-05 grad_norm=0.8979
+[Step 308] loss=8.9610 lr=1.22e-05 grad_norm=0.8908
+[Step 309] loss=8.9770 lr=1.20e-05 grad_norm=0.8784
+[Step 310] loss=8.9640 lr=1.17e-05 grad_norm=0.8872
+[GradTrace] COMPONENTS: emb=0.0447 head=0.0000 attn=0.0005 ffn=0.0003 ln=0.8861
+[Step 311] loss=9.0061 lr=1.15e-05 grad_norm=0.8560
+[Step 312] loss=8.9733 lr=1.13e-05 grad_norm=0.8791
+[Step 313] loss=8.9526 lr=1.11e-05 grad_norm=0.8936
+[Step 314] loss=8.9631 lr=1.10e-05 grad_norm=0.8853
+[Step 315] loss=8.9418 lr=1.08e-05 grad_norm=0.9004
+[Step 316] loss=8.9556 lr=1.07e-05 grad_norm=0.8896
+[Step 317] loss=8.9272 lr=1.05e-05 grad_norm=0.9096
+[Step 318] loss=8.9585 lr=1.04e-05 grad_norm=0.8861
+[Step 319] loss=8.9913 lr=1.03e-05 grad_norm=0.8618
+[Step 320] loss=9.0114 lr=1.02e-05 grad_norm=0.8464
+[GradTrace] COMPONENTS: emb=0.0423 head=0.0000 attn=0.0005 ffn=0.0003 ln=0.8454
+[Step 321] loss=8.9430 lr=1.02e-05 grad_norm=0.8957
+[Step 322] loss=8.9710 lr=1.01e-05 grad_norm=0.8747
+[Step 323] loss=8.9594 lr=1.01e-05 grad_norm=0.8827
+[Step 324] loss=8.9340 lr=1.00e-05 grad_norm=0.9005
+[Step 325] loss=8.9600 lr=1.00e-05 grad_norm=0.8809
+
+[Epoch 1 Complete] avg_loss=9.7046 duration=875s
+
+========================================
+Training Complete
+========================================
+Total steps: 325
+Total time: 875s
+
+[Final Sample]
+Hello world of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the

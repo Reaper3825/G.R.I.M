@@ -2088,6 +2088,13 @@ BatchResult processBatch(
         printf("========================================\n\n");
         
         // ========================================================================
+        // TEXT DUMP: Export gradient values for comparison with PyTorch
+        // ========================================================================
+        if (batch_idx < 2) {
+            ctx.model->dumpGradientValues(batch_idx + 1, "D:/G.R.I.M/grim_gradients.txt");
+        }
+        
+        // ========================================================================
         // ROPE VERIFICATION: Print decisive test results after batch 1
         // ========================================================================
         // TODO: Remove after verifying FAIL LOUD works
@@ -2313,6 +2320,17 @@ BatchResult processBatch(
     
     // Skip clipping entirely if gradient_clip <= 0 in config (disabled)
     const bool clipping_enabled = (hp.grad_clip_norm > 0.0f);
+    
+    // DEBUG Issue #30: Log clipping decision values
+    if (batch_idx < 3) {
+        ctx.logging.logger->log("[ClipDebug] batch=" + std::to_string(batch_idx + 1) +
+                                " hp.grad_clip_norm=" + Internal::formatScalar(hp.grad_clip_norm, 4) +
+                                " clipping_enabled=" + std::to_string(clipping_enabled) +
+                                " grad_norm=" + Internal::formatScalar(result.normalized_grad_norm, 4) +
+                                " per_token_limit=" + Internal::formatScalar(clip_selection.per_token_limit, 4) +
+                                " effective_limit=" + Internal::formatScalar(effective_per_token_limit, 4) +
+                                " should_clip=" + std::to_string(result.normalized_grad_norm > effective_per_token_limit));
+    }
     
     if (clipping_enabled && result.normalized_grad_norm > effective_per_token_limit) {
         // FIXED: Scale DOWN to per_token_limit, not up to effective_clip_norm

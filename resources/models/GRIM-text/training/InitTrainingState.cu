@@ -224,12 +224,13 @@ void LanguageModel::initTrainingState() {
             training_state_.lm_head_weights_owned = false;  // Aliased to EmbeddingRuntime - don't free!
             std::cout << "🔗 LM head weights tied to embeddings at " << (void*)training_state_.lm_head_weights << std::endl;
             
-            // Initialize embeddings directly on GPU with proper scaling
-            // BUG FIX: Was using Xavier formula sqrt(2/(d_model+vocab_size)) = 0.00625 - WAY TOO SMALL!
-            // Embeddings are lookup tables, not dense layers. Each row is independent.
-            // PyTorch uses N(0, 1) by default, GPT-2 uses 0.02.
-            // We use 0.1 for stronger initial signal - can adjust if training unstable.
-            constexpr float embedding_stddev = 0.1f;  // Reasonable for embedding init
+            // Initialize embeddings directly on GPU with proper Xavier scaling
+            // Issue #29 FIX: The previous "fix" that used 0.1 was WRONG and caused training plateau!
+            // When embeddings are tied to LM head, logits = encoder_output @ embedding.T
+            // Large embeddings (stddev=0.1) cause logit spread of 35-46, saturating softmax
+            // Xavier stddev = sqrt(2/(fan_in+fan_out)) = sqrt(2/(768+50376)) = 0.0063
+            // This gives logit spread ~1.5, matching PyTorch baseline that trains successfully
+            const float embedding_stddev = std::sqrt(2.0f / static_cast<float>(cfg.d_model + cfg.vocab_size));
             std::cout << "🎲 Initializing embedding weights directly on GPU (stddev=" << embedding_stddev << ")" << std::endl;
             launchXavierInit(training_state_.lm_head_weights, lm_head_weight_size, embedding_stddev, 42, training_state_.stream_ctrl.getPrimaryStream());
             
@@ -261,9 +262,10 @@ void LanguageModel::initTrainingState() {
         }
         training_state_.lm_head_weights_owned = true;  // We allocated - must free!
         
-        // Initialize LM head weights with proper scaling (not Xavier - embeddings are lookup tables)
-        // BUG FIX: Was using sqrt(2/(d_model+vocab_size)) = 0.00625 - WAY TOO SMALL!
-        constexpr float embedding_stddev = 0.1f;  // Reasonable for embedding init
+        // Initialize LM head weights with proper Xavier scaling
+        // Issue #29 FIX: The previous "fix" that used 0.1 was WRONG and caused training plateau!
+        // See tied embeddings case above for detailed explanation.
+        const float embedding_stddev = std::sqrt(2.0f / static_cast<float>(cfg.d_model + cfg.vocab_size));
         std::cout << "🎲 Initializing LM head weights directly on GPU (stddev=" << embedding_stddev << ")" << std::endl;
         launchXavierInit(training_state_.lm_head_weights, lm_head_weight_size, embedding_stddev, 42, training_state_.stream_ctrl.getPrimaryStream());
         
