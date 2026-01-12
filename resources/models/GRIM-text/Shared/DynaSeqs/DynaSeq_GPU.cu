@@ -27,27 +27,42 @@ BatchPlan planBatches(const Catalog& catalog,
     });
 
     std::vector<uint32_t> current;
-    uint32_t current_tokens = 0;
+    uint32_t max_len_in_batch = 0;  // Track max sequence length for padding calculation
 
     auto flush = [&]() {
         if (!current.empty()) {
-            plan.total_tokens += current_tokens;
+            // Total tokens = max_seq_length × batch_size (accounts for padding)
+            const uint32_t batch_tokens = max_len_in_batch * static_cast<uint32_t>(current.size());
+            plan.total_tokens += batch_tokens;
             plan.batches.push_back(current);
             current.clear();
-            current_tokens = 0;
+            max_len_in_batch = 0;
         }
     };
 
     for (uint32_t id : ids) {
+        // Bounds check: seq_id must be valid index into entries
+        if (id >= catalog.entries().size()) {
+            continue;  // Skip invalid seq_id (could also throw per Rule 20)
+        }
+        
         const auto& meta = catalog.entries()[id];
-        const uint32_t tokens_if_added = current_tokens + meta.seq_length * static_cast<uint32_t>(current.size() + 1);
+        
+        // Calculate tokens if we add this sequence to current batch:
+        // Padded batch tokens = max(current_max_len, new_seq_len) × (batch_size + 1)
+        const uint32_t new_max_len = std::max(max_len_in_batch, meta.seq_length);
+        const uint32_t new_batch_size = static_cast<uint32_t>(current.size()) + 1;
+        const uint32_t tokens_if_added = new_max_len * new_batch_size;
+        
         const bool would_overflow_tokens = tokens_if_added > max_tokens_per_batch;
-        const bool would_overflow_batch = current.size() >= max_batch_size;
+        const bool would_overflow_batch = new_batch_size > max_batch_size;
+        
         if ((would_overflow_tokens || would_overflow_batch) && !current.empty()) {
             flush();
         }
+        
         current.push_back(id);
-        current_tokens = std::max(current_tokens, meta.seq_length * static_cast<uint32_t>(current.size()));
+        max_len_in_batch = std::max(max_len_in_batch, meta.seq_length);
     }
     flush();
 

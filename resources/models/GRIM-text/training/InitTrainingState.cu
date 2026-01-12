@@ -78,14 +78,13 @@ void LanguageModel::initPBM() {
     const auto& cfg = getConfig();
     const int head_dim = cfg.d_model / cfg.num_heads;
     
-    PBM::PBMConfig pbm_config{};
+    PBM::PBMConfig pbm_config{};  // Uses HyperParameters defaults
     pbm_config.num_heads = cfg.num_heads;
     pbm_config.num_kv_heads = cfg.num_kv_heads;
-    pbm_config.alibi_slope_exponent = -8.0f;  // Standard ALiBi decay
+    // alibi_slope_exponent uses default from HyperParameters::ALIBI_SLOPE_EXPONENT
     pbm_config.head_dim = head_dim;
-    pbm_config.rotary_dim = head_dim;         // Full rotation
-    pbm_config.rope_theta = 10000.0f;         // Standard RoPE base frequency
-    pbm_config.rope_scaling = 1.0f;
+    pbm_config.rotary_dim = head_dim;  // Full rotation
+    // rope_theta/rope_scaling use defaults from HyperParameters
     pbm_config.verbose = true;
     cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
     StreamController::fatalIfDefaultStream(primary_stream, "LanguageModel::initPBM");
@@ -155,14 +154,13 @@ void LanguageModel::initTrainingState() {
     if (!training_state_.pbm_initialized) {
         const int head_dim = cfg.d_model / cfg.num_heads;
         
-        PBM::PBMConfig pbm_config{};
+        PBM::PBMConfig pbm_config{};  // Uses HyperParameters defaults
         pbm_config.num_heads = cfg.num_heads;
         pbm_config.num_kv_heads = cfg.num_kv_heads;
-        pbm_config.alibi_slope_exponent = -8.0f;  // Standard ALiBi decay
+        // alibi_slope_exponent uses default from HyperParameters::ALIBI_SLOPE_EXPONENT
         pbm_config.head_dim = head_dim;
-        pbm_config.rotary_dim = head_dim;         // Full rotation
-        pbm_config.rope_theta = 10000.0f;         // Standard RoPE base frequency
-        pbm_config.rope_scaling = 1.0f;           // No NTK scaling
+        pbm_config.rotary_dim = head_dim;  // Full rotation
+        // rope_theta/rope_scaling use defaults from HyperParameters
         pbm_config.verbose = true;
         pbm_config.stream = training_state_.stream_ctrl.getPrimaryStream();
         

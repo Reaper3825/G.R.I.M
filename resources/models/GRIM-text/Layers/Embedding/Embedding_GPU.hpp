@@ -112,6 +112,27 @@ bool embeddingRuntimeForwardSingle(EmbeddingRuntime* runtime,
 //======================================================//
 
 /**
+ * @brief Validate token IDs and throw if any are invalid (Rule 20: Fail Loud)
+ * 
+ * Checks that all token IDs are in range [0, vocab_size).
+ * Negative token IDs or IDs >= vocab_size will cause a clear exception
+ * with the index and value of the first invalid token.
+ * 
+ * @param token_ids Device pointer to token IDs
+ * @param total_tokens Number of tokens to validate
+ * @param vocab_size Valid token range is [0, vocab_size)
+ * @param stream CUDA stream to use
+ * @throws std::runtime_error if any token ID is invalid
+ * 
+ * @note Call this before launchEmbeddingLookup() or launchEmbeddingBackward()
+ *       when debugging data pipeline issues. Enabled automatically in debug builds.
+ */
+void validateTokenIds(const int* token_ids,
+                      int total_tokens,
+                      int vocab_size,
+                      cudaStream_t stream);
+
+/**
  * @brief Launch embedding lookup kernel (forward pass)
  *
  * Rule 20: Throws on invalid input. Requires non-null stream.

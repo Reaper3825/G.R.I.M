@@ -79,8 +79,14 @@ void DynamicLRController::reset() {
     safety_upper_band_ = config_.band_ceiling;
     baseline_capture_remaining_ = std::max(config_.baseline_capture_steps, 0);
     baseline_ready_ = (baseline_capture_remaining_ == 0);
-    baseline_midpoint_ = 0.0f;
-    baseline_half_span_ = 0.0f;
+    // Issue #3 fix: Initialize baseline from config bands when capture_steps=0
+    if (baseline_ready_) {
+        baseline_midpoint_ = (config_.upper_grad_norm + config_.lower_grad_norm) * 0.5f;
+        baseline_half_span_ = (config_.upper_grad_norm - config_.lower_grad_norm) * 0.5f;
+    } else {
+        baseline_midpoint_ = 0.0f;
+        baseline_half_span_ = 0.0f;
+    }
     momentum_counter_ = 0;
     safety_counter_ = 0;
     momentum_score_ = 0.0f;
@@ -93,8 +99,9 @@ void DynamicLRController::reset() {
 }
 
 void DynamicLRController::setBaseLearningRate(float lr) {
-    if (lr > config_.max_learning_rate) {
-        config_.max_learning_rate = lr;
+    // Issue #6 fix: Modify runtime limit, not config (config_ should be immutable after init)
+    if (lr > runtime_max_lr_) {
+        runtime_max_lr_ = lr;
     }
     const float effective_min = std::min(runtime_min_lr_, runtime_max_lr_);
     const float effective_max = std::max(runtime_min_lr_, runtime_max_lr_);
@@ -168,9 +175,10 @@ float DynamicLRController::update(float grad_norm, float loss, float scheduled_l
     }
 
     if (lr_override_) {
+        // Issue #1 fix: Use runtime limits, not config limits (runtime can be adjusted dynamically)
         float proposed = std::clamp(*lr_override_,
-                                    config_.min_learning_rate,
-                                    config_.max_learning_rate);
+                                    runtime_min_lr_,
+                                    runtime_max_lr_);
         clampAndCommit(proposed, DynamicLRDiagnostics::AdjustmentReason::ManualOverride);
         diagnostics_.smoothed_grad_norm = smoothed_grad_norm_;
         diagnostics_.smoothed_loss = smoothed_loss_;
@@ -512,7 +520,9 @@ void DynamicLRController::updateBandScaling() {
             safety_upper_band_ = std::min(safety_upper_band_ + adjust, config_.band_ceiling);
             safety_lower_band_ = std::max(safety_lower_band_ - adjust, config_.band_floor);
             if (safety_lower_band_ >= safety_upper_band_) {
-                const float mid = baseline_midpoint_;
+                // Issue #5 fix: Use neutral midpoint if baseline not yet captured (baseline_midpoint_==0)
+                const float mid = (baseline_midpoint_ != 0.0f) ? baseline_midpoint_ 
+                    : (config_.upper_grad_norm + config_.lower_grad_norm) * 0.5f;
                 safety_lower_band_ = mid - span * config_.safety_scale;
                 safety_upper_band_ = mid + span * config_.safety_scale;
                 safety_lower_band_ = std::max(safety_lower_band_, config_.band_floor);

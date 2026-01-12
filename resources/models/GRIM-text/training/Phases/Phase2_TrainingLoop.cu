@@ -1936,9 +1936,10 @@ BatchResult processBatch(
     // Since we return average_loss = total_loss / valid_tokens, we MUST scale gradients by
     // 1/valid_tokens to maintain consistency: dL_avg/dz = (1/N) * dL_sum/dz
     //
-    // GRADIENT ACCUMULATION NOTE: Do NOT multiply by getScaleFactor() (1/accum_steps) here!
-    // With accumulation, each micro-batch adds its own gradients, and after N micro-batches
-    // the total gradient is N times larger. This is the desired behavior - we want the
+    // GRADIENT ACCUMULATION: Scaling by 1/accum_steps is done BEFORE the optimizer step
+    // (see Issue #27 fix below where should_step is true). This is standard practice
+    // matching PyTorch, HuggingFace, DeepSpeed - ensures configured LR = effective LR.
+    //
     // BUG FIX Issue #25 (Dec 24, 2025): DOUBLE PER-TOKEN NORMALIZATION!
     // Loss is already averaged per-token: loss = sum(token_losses) / num_tokens
     // Applying grad_scale = 1/num_tokens to gradients divides by num_tokens TWICE:
@@ -2537,6 +2538,20 @@ BatchResult processBatch(
         ctx.optimizer.grad_controller->beginOptimizerStep();
         const int micro_step_for_log = ctx.optimizer.grad_controller->controller().currentMicroStep();
         const int accum_steps_for_log = ctx.optimizer.grad_controller->controller().accumSteps();
+        
+        // GRADIENT ACCUMULATION SCALING (Issue #27 - Jan 11, 2026)
+        // Standard practice: scale accumulated gradients by 1/accum_steps before optimizer step.
+        // This ensures configured LR behaves consistently regardless of accumulation_steps.
+        // Without this: effective_lr = configured_lr * accum_steps (non-standard, misleading)
+        // With this:    effective_lr = configured_lr (matches PyTorch, HuggingFace, DeepSpeed)
+        if (accum_steps_for_log > 1) {
+            const float accum_scale = 1.0f / static_cast<float>(accum_steps_for_log);
+            ctx.model->scaleGradients(accum_scale);
+            ctx.logging.logger->log("[GradAccum] Scaled gradients by " + 
+                                    Internal::formatScalar(accum_scale, 6) + 
+                                    " for accum_steps=" + std::to_string(accum_steps_for_log));
+        }
+        
         ctx.model->updateWeights(result.learning_rate,
                                  &ctx.optimizer.optimizer_state,
                                  ctx.config.hyperparameters.weight_decay);

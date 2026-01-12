@@ -16,6 +16,15 @@
 #include <stdexcept>
 #include <algorithm>
 
+// cuBLAS error checking macro (Rule 20: fail loud)
+#define CUBLAS_CHECK(call) do { \
+    cublasStatus_t status = (call); \
+    if (status != CUBLAS_STATUS_SUCCESS) { \
+        throw std::runtime_error(std::string("cuBLAS error at ") + __FILE__ + ":" + \
+            std::to_string(__LINE__) + " - status=" + std::to_string(static_cast<int>(status))); \
+    } \
+} while(0)
+
 namespace GRIM {
 
 //======================================================//
@@ -117,9 +126,8 @@ void launchFFNBiasBackward(const float* grad_output, float* grad_bias,
 //  FeedForwardLayer Implementation
 //======================================================//
 
-FeedForwardLayer::FeedForwardLayer() {
-    initCublas();
-}
+// NOTE: Default constructor intentionally deleted (see header)
+// A valid FeedForwardConfig with cublas_handle is REQUIRED
 
 FeedForwardLayer::FeedForwardLayer(const FeedForwardConfig& config)
     : config_(config) {
@@ -152,8 +160,7 @@ FeedForwardLayer& FeedForwardLayer::operator=(FeedForwardLayer&& other) noexcept
     if (this != &other) {
         destroyCublas();
         Layer::operator=(std::move(other));
-        config_ = other.config_;
-        config_.cublas_handle = other.config_.cublas_handle;
+        config_ = other.config_;  // Full copy includes cublas_handle
         W1_ = std::move(other.W1_);
         b1_ = std::move(other.b1_);
         W2_ = std::move(other.W2_);
@@ -266,16 +273,19 @@ void FeedForwardLayer::forwardGPU(const float* d_input, float* d_output,
         post_gelu = post_gelu_buf_.ptr();
     }
 
+    // Ensure cuBLAS operations use the same stream as our kernels (Issue 2 fix)
+    CUBLAS_CHECK(cublasSetStream(config_.cublas_handle, stream));
+
     // Layer 1: pre_gelu = input @ W1^T + b1
     // [tokens, d_model] @ [d_ff, d_model]^T = [tokens, d_ff]
-    cublasSgemm(config_.cublas_handle,
+    CUBLAS_CHECK(cublasSgemm(config_.cublas_handle,
                 CUBLAS_OP_T, CUBLAS_OP_N,
                 config_.d_ff, total_tokens, config_.d_model,
                 &alpha,
                 W1_.ptr(), config_.d_model,
                 d_input, config_.d_model,
                 &beta,
-                pre_gelu, config_.d_ff);
+                pre_gelu, config_.d_ff));
 
     // Add bias b1
     launchFFNBiasAdd(pre_gelu, b1_.ptr(), total_tokens, config_.d_ff, stream);
@@ -290,14 +300,14 @@ void FeedForwardLayer::forwardGPU(const float* d_input, float* d_output,
 
     // Layer 2: output = post_gelu @ W2^T + b2
     // [tokens, d_ff] @ [d_model, d_ff]^T = [tokens, d_model]
-    cublasSgemm(config_.cublas_handle,
+    CUBLAS_CHECK(cublasSgemm(config_.cublas_handle,
                 CUBLAS_OP_T, CUBLAS_OP_N,
                 config_.d_model, total_tokens, config_.d_ff,
                 &alpha,
                 W2_.ptr(), config_.d_ff,
                 post_gelu, config_.d_ff,
                 &beta,
-                d_output, config_.d_model);
+                d_output, config_.d_model));
 
     // Add bias b2
     launchFFNBiasAdd(d_output, b2_.ptr(), total_tokens, config_.d_model, stream);

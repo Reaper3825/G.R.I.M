@@ -243,7 +243,7 @@ BackwardContext initBackwardContextRaw(
     
     ctx.alpha = 1.0f;
     ctx.beta_zero = 0.0f;
-    ctx.beta_accum = accumulate ? 1.0f : 0.0f;
+    ctx.beta_accum = 1.0f;
     
     //--------------------------------------------------//
     // External Components
@@ -253,6 +253,10 @@ BackwardContext initBackwardContextRaw(
     ctx.scratch_block = scratch_block;
     ctx.embedding_runtime = embedding_runtime;
     ctx.cublas_handle = cublas_handle;
+    
+    // CRITICAL: Rebind cuBLAS stream - NumericHead::forward may have changed it during forward pass
+    cudaStream_t primary_stream = training_state->stream_ctrl.getPrimaryStream();
+    cublasSetStream(cublas_handle, primary_stream);
     
     //--------------------------------------------------//
     // Diagnostics

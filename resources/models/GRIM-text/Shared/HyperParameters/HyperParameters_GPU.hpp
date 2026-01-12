@@ -175,6 +175,14 @@ constexpr bool QK_NORM_LEARNABLE_SCALE = true;
 constexpr float QK_NORM_ALPHA_INIT = 1.0f;  // Initial value for alpha_q and alpha_k
 
 //======================================================//
+// Positional Bias Method (PBM) Configuration
+// Hybrid ALiBi + RoPE for position encoding
+//======================================================//
+constexpr float ROPE_THETA = 10000.0f;        // RoPE base frequency (standard: 10000)
+constexpr float ROPE_SCALING = 1.0f;          // NTK scaling factor (1.0 = no scaling)
+constexpr float ALIBI_SLOPE_EXPONENT = -8.0f; // Controls ALiBi slope decay across heads
+
+//======================================================//
 // Grouped Query Attention (GQA) Configuration
 // GQA reduces memory/compute by sharing K,V heads across query groups
 // - MHA: num_kv_heads = num_heads (standard multi-head attention)

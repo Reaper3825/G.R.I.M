@@ -692,12 +692,8 @@ void releasePBM(PBMState& state);
 // Get view for Flash Attention
 PBMSpec getPBMSpec(const PBMState& state);
 
-// RoPE rotation (applied to Q, K before attention)
-void launchRoPERotation(float* Q, float* K, const float* inv_freq,
-                        int batch_size, int num_heads, int seq_len,
-                        int head_dim, int rotary_dim, cudaStream_t stream);
-
-// GQA-aware RoPE
+// GQA-aware RoPE rotation (applied to Q, K before attention)
+// NOTE: Use this for ALL cases - set num_q_heads == num_kv_heads for MHA
 void launchRoPERotationGQA(float* Q, float* K, const float* inv_freq,
                            int batch_size, int num_q_heads, int num_kv_heads,
                            int seq_len, int head_dim, int rotary_dim,

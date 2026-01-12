@@ -475,11 +475,12 @@ void EncodingLayer::forward(const EncodingForwardArgs& args) {
         
         launchGQAProjection(ln1_out, proj_weights, Q, K, V, proj_cfg);
     } else {
-        // Rule 20: MHA is deprecated/legacy - crash if not using GQA
-        throw std::runtime_error("EncodingLayer::forward: MHA mode is NOT SUPPORTED! "
-                                 "num_kv_heads MUST equal num_heads (use GQA). "
-                                 "Legacy MHA path DELETED per Rule 20 at " + 
-                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+        // Rule 20: MHA is deprecated/legacy - always use GQA path
+        throw std::runtime_error("EncodingLayer::forward: MHA fallback path DELETED! "
+                                 "GQA projection is required (num_kv_heads <= num_heads). "
+                                 "Got num_heads=" + std::to_string(num_heads) + 
+                                 ", num_kv_heads=" + std::to_string(num_kv_heads) + 
+                                 ". Verify config.isGQA() returns true.");
     }
     
     //--------------------------------------------------
@@ -491,10 +492,10 @@ void EncodingLayer::forward(const EncodingForwardArgs& args) {
     //--------------------------------------------------
     // 3b. Apply RoPE rotation to Q and K (CRITICAL for selective attention!)
     //     RoPE rotates Q/K vectors based on position, enabling position-aware dot products
-    //     PBM is always hybrid (ALiBi + RoPE) - just check if RoPE is configured
+    //     PBM is always hybrid (ALiBi + RoPE) - validate all PBM state
     //--------------------------------------------------
-    if (config_.pos_encoding && config_.pos_encoding->rope_inv_freq != nullptr && 
-        config_.pos_encoding->rotary_dim > 0) {
+    if (config_.pos_encoding && config_.pos_encoding->valid && 
+        config_.pos_encoding->rope_inv_freq != nullptr && config_.pos_encoding->rotary_dim > 0) {
         
         // Use GQA-aware RoPE rotation that handles Q and K with different head counts
         PBM::launchRoPERotationGQA(
@@ -563,11 +564,18 @@ void EncodingLayer::forward(const EncodingForwardArgs& args) {
         throw std::runtime_error("EncodingLayer::forward: BF16 scratch buffers too small for current batch");
     }
 
-    if (!config_.pos_encoding || !config_.pos_encoding->alibi_slopes) {
-        throw std::runtime_error("EncodingLayer::forward: ALiBi slopes are NULL - PBM hybrid requires ALiBi + RoPE");
+    if (!config_.pos_encoding || !config_.pos_encoding->valid || !config_.pos_encoding->alibi_slopes) {
+        throw std::runtime_error("EncodingLayer::forward: ALiBi slopes are NULL or PBM invalid - PBM hybrid requires ALiBi + RoPE");
     }
     if (config_.pos_encoding->num_heads != num_heads) {
-        throw std::runtime_error("EncodingLayer::forward: ALiBi num_heads mismatch with encoder heads");
+        throw std::runtime_error("EncodingLayer::forward: ALiBi num_heads mismatch: pbm_spec=" + 
+                                 std::to_string(config_.pos_encoding->num_heads) + 
+                                 " encoder=" + std::to_string(num_heads));
+    }
+    if (config_.pos_encoding->num_kv_heads != num_kv_heads) {
+        throw std::runtime_error("EncodingLayer::forward: ALiBi num_kv_heads mismatch: pbm_spec=" + 
+                                 std::to_string(config_.pos_encoding->num_kv_heads) + 
+                                 " encoder=" + std::to_string(num_kv_heads));
     }
 
     TensorConversion::convert_BHSD_to_BSHD_bf16(Q_bhsd, args.fa_q_bf16,
@@ -614,6 +622,9 @@ void EncodingLayer::forward(const EncodingForwardArgs& args) {
     //--------------------------------------------------
     const float alpha = 1.0f;
     const float beta = 0.0f;
+    
+    // CRITICAL: Always rebind stream before cuBLAS ops - NumericHead may have changed it
+    cublasSetStream(config_.cublas_handle, stream);
     
     // attn_out [tokens, d_model] @ W_o^T [d_model, d_model] -> ln2_out (temp)
     CUBLAS_CHECK(cublasSgemm(config_.cublas_handle,

@@ -52,13 +52,6 @@ struct FeedForwardForwardArgs {
     float* cache_post_gelu = nullptr;     // [total_tokens, d_ff] - post-GELU activations
 };
 
-//======================================================//
-//  NOTE: FeedForwardBackwardArgs DELETED per Rule 20
-//  
-//  Training backward uses BackwardPhase2_Encoder.cu::computeFFNBackward()
-//  which has its own argument handling via BackwardContext.
-//  This struct was dead code - never called by production training.
-//======================================================//
 
 //======================================================//
 //  FeedForwardLayer - CRTP Implementation
@@ -68,7 +61,8 @@ class FeedForwardLayer final : public Layer<FeedForwardLayer, float> {
 public:
     static constexpr LayerType layer_type = LayerType::kFeedForward;
 
-    FeedForwardLayer();
+    // Rule 20: Default constructor deleted - config with valid cublas_handle REQUIRED
+    FeedForwardLayer() = delete;
     explicit FeedForwardLayer(const FeedForwardConfig& config);
     FeedForwardLayer(const Dimensions& dims, const FeedForwardConfig& config);
     ~FeedForwardLayer();

@@ -569,6 +569,50 @@ target_include_directories(diagnostic_train_minimal PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../control
 )
 
+# ============================================================================
+# EMBEDDING DIAGNOSTIC TEST SUITE
+# Comprehensive tests for embedding layer: Xavier init, forward, backward,
+# weight tying, tokenizer integration, memory boundaries
+# ============================================================================
+add_executable(embedding_self_test
+    ../../Tests/embedding_self_test.cu
+    ../../Layers/Embedding/Embedding_GPU.cu
+    ../../Layers/LayernNorm/RMSNorm_Kernel_GPU.cu
+    ../../Shared/Activations/Xavier/Xavier.cu
+    ../../Shared/DataLoader/DataLoader.cu
+)
+
+set_target_properties(embedding_self_test PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    CUDA_ARCHITECTURES "86"
+    CUDA_RUNTIME_LIBRARY Shared
+)
+
+target_compile_options(embedding_self_test PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
+)
+
+target_compile_definitions(embedding_self_test PRIVATE
+    USE_CUDA
+)
+
+target_link_libraries(embedding_self_test PRIVATE
+    CUDA::cudart
+    CUDA::cublas
+    nlohmann_json::nlohmann_json
+    grim_unigrambyte_tokenizer
+)
+
+target_include_directories(embedding_self_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../..
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Layers
+)
+
 message(STATUS "TrainingLoop configured:")
 message(STATUS "  - train_gpu: GPU-accelerated training with comprehensive logging")
 message(STATUS "  - diagnostic_train_minimal: Barebones training for plateau debugging")
@@ -576,4 +620,5 @@ message(STATUS "  - tokenizer_self_test: deterministic tokenizer regression suit
 message(STATUS "  - unigrambyte_self_test: UnigramByte tokenizer test suite")
 message(STATUS "  - flash_attention_test: Flash Attention forward/backward test suite")
 message(STATUS "  - gradient_verification_test: Encoder gradient collapse debugging")
+message(STATUS "  - embedding_self_test: Embedding layer diagnostic test suite")
 message(STATUS "  - grim_unigrambyte_tokenizer: Unigram LM + Byte fallback + AtomTable")

@@ -109,6 +109,11 @@ void launchLMHeadForward(const LMHeadForwardParams& params) {
 		return;
 	}
 
+	// CRITICAL: Always rebind stream before cuBLAS ops - NumericHead may have changed it
+	if (params.stream) {
+		cublasSetStream(params.handle, params.stream);
+	}
+
 	const float alpha = 1.0f;
 	const float beta = 0.0f;
 
@@ -185,6 +190,11 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 	const int total_tokens = params.batch_size * params.seq_len;
 	if (total_tokens == 0) {
 		return;
+	}
+
+	// CRITICAL: Always rebind stream before cuBLAS ops - NumericHead may have changed it
+	if (params.stream) {
+		cublasSetStream(params.handle, params.stream);
 	}
 
 	const float alpha = 1.0f;

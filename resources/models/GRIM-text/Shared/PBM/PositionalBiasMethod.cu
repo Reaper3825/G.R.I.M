@@ -266,54 +266,8 @@ __device__ __forceinline__ void applyRotation(
     y = y_rot;
 }
 
-// Unfused RoPE kernel: Apply rotation to Q and K
-// Q, K are in BHSD format: [batch, num_heads, seq_len, head_dim]
-__global__ void ropeRotationKernel(
-    float* __restrict__ Q,
-    float* __restrict__ K,
-    const float* __restrict__ inv_freq,
-    int batch_size,
-    int num_heads,
-    int seq_len,
-    int head_dim,
-    int rotary_dim
-) {
-    const int pos_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    const int head_idx = blockIdx.y;
-    const int batch_idx = blockIdx.z;
-    
-    if (pos_idx >= seq_len || head_idx >= num_heads || batch_idx >= batch_size) return;
-    
-    // Calculate base offset for this [batch, head, position]
-    const int bhsd_offset = ((batch_idx * num_heads + head_idx) * seq_len + pos_idx) * head_dim;
-    
-    // Apply rotation to pairs of dimensions
-    const int num_pairs = rotary_dim / 2;
-    for (int pair_idx = 0; pair_idx < num_pairs; ++pair_idx) {
-        const int dim_i = pair_idx * 2;
-        const int dim_j = pair_idx * 2 + 1;
-        
-        // Compute cos and sin for this position and frequency
-        const float freq = inv_freq[pair_idx];
-        const float theta = static_cast<float>(pos_idx) * freq;
-        const float cos_val = cosf(theta);
-        const float sin_val = sinf(theta);
-        
-        // Rotate Q
-        float q_i = Q[bhsd_offset + dim_i];
-        float q_j = Q[bhsd_offset + dim_j];
-        applyRotation(q_i, q_j, cos_val, sin_val);
-        Q[bhsd_offset + dim_i] = q_i;
-        Q[bhsd_offset + dim_j] = q_j;
-        
-        // Rotate K
-        float k_i = K[bhsd_offset + dim_i];
-        float k_j = K[bhsd_offset + dim_j];
-        applyRotation(k_i, k_j, cos_val, sin_val);
-        K[bhsd_offset + dim_i] = k_i;
-        K[bhsd_offset + dim_j] = k_j;
-    }
-}
+// NOTE: ropeRotationKernel (non-GQA) was REMOVED - it was broken for GQA.
+// Use ropeRotationGQAKernel for ALL cases (set num_q_heads == num_kv_heads for MHA).
 
 // GQA-aware RoPE kernel: Separate Q and K with different head counts
 __global__ void ropeRotationGQAKernel(
@@ -427,44 +381,9 @@ __global__ void ropeRotationGQABackwardKernel(
 
 } // namespace
 
-void launchRoPERotation(
-    float* Q,
-    float* K,
-    const float* inv_freq,
-    int batch_size,
-    int num_heads,
-    int seq_len,
-    int head_dim,
-    int rotary_dim,
-    cudaStream_t stream
-) {
-    if (Q == nullptr || K == nullptr || inv_freq == nullptr) {
-        std::cerr << kTag << " ERROR: Null pointer passed to launchRoPERotation" << std::endl;
-        return;
-    }
-    
-    if (rotary_dim <= 0 || (rotary_dim & 1) != 0 || rotary_dim > head_dim) {
-        std::cerr << kTag << " ERROR: Invalid rotary_dim=" << rotary_dim 
-                  << " (head_dim=" << head_dim << ")" << std::endl;
-        return;
-    }
-    
-    const int threads_per_block = 256;
-    const int blocks_seq = (seq_len + threads_per_block - 1) / threads_per_block;
-    
-    dim3 grid(blocks_seq, num_heads, batch_size);
-    dim3 block(threads_per_block);
-    
-    ropeRotationKernel<<<grid, block, 0, stream>>>(
-        Q, K, inv_freq,
-        batch_size, num_heads, seq_len, head_dim, rotary_dim
-    );
-    
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        std::cerr << kTag << " Kernel launch error: " << cudaGetErrorString(err) << std::endl;
-    }
-}
+// NOTE: Non-GQA launchRoPERotation() was REMOVED (Rule 20: no backwards compatibility).
+// It was broken for GQA (assumed Q and K have same head count, causing memory corruption).
+// Use launchRoPERotationGQA() for ALL cases - set num_q_heads == num_kv_heads for MHA.
 
 void launchRoPERotationGQA(
     float* Q,
@@ -489,6 +408,13 @@ void launchRoPERotationGQA(
         return;
     }
     
+    // Validate GQA configuration: num_q_heads must be divisible by num_kv_heads
+    if (num_q_heads <= 0 || num_kv_heads <= 0 || (num_q_heads % num_kv_heads) != 0) {
+        std::cerr << kTag << " ERROR: Invalid GQA config - num_q_heads=" << num_q_heads
+                  << " must be divisible by num_kv_heads=" << num_kv_heads << std::endl;
+        return;
+    }
+    
     const int threads_per_block = 256;
     const int blocks_seq = (seq_len + threads_per_block - 1) / threads_per_block;
     
@@ -502,6 +428,13 @@ void launchRoPERotationGQA(
             batch_size, num_q_heads, num_kv_heads, seq_len, head_dim, rotary_dim,
             true  // Q pass
         );
+        
+        // Check Q kernel launch immediately (Rule: per-kernel error check)
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            std::cerr << kTag << " Q rotation kernel launch error: " << cudaGetErrorString(err) << std::endl;
+            return;
+        }
     }
     
     // Launch for K (with num_kv_heads)
@@ -514,11 +447,12 @@ void launchRoPERotationGQA(
             batch_size, num_q_heads, num_kv_heads, seq_len, head_dim, rotary_dim,
             false  // K pass
         );
-    }
-    
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        std::cerr << kTag << " GQA Kernel launch error: " << cudaGetErrorString(err) << std::endl;
+        
+        // Check K kernel launch immediately
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            std::cerr << kTag << " K rotation kernel launch error: " << cudaGetErrorString(err) << std::endl;
+        }
     }
 }
 
@@ -549,6 +483,13 @@ void launchRoPERotationGQA_backward(
         return;
     }
     
+    // Validate GQA configuration: num_q_heads must be divisible by num_kv_heads
+    if (num_q_heads <= 0 || num_kv_heads <= 0 || (num_q_heads % num_kv_heads) != 0) {
+        std::cerr << kTag << " ERROR: Invalid GQA config - num_q_heads=" << num_q_heads
+                  << " must be divisible by num_kv_heads=" << num_kv_heads << std::endl;
+        return;
+    }
+    
     const int threads_per_block = 256;
     const int blocks_seq = (seq_len + threads_per_block - 1) / threads_per_block;
     
@@ -562,6 +503,13 @@ void launchRoPERotationGQA_backward(
             batch_size, num_q_heads, num_kv_heads, seq_len, head_dim, rotary_dim,
             true  // grad_Q pass
         );
+        
+        // Check grad_Q kernel launch immediately (Rule: per-kernel error check)
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            std::cerr << kTag << " grad_Q backward kernel launch error: " << cudaGetErrorString(err) << std::endl;
+            return;
+        }
     }
     
     // Launch for grad_K (with num_kv_heads) - inverse rotation
@@ -574,11 +522,12 @@ void launchRoPERotationGQA_backward(
             batch_size, num_q_heads, num_kv_heads, seq_len, head_dim, rotary_dim,
             false  // grad_K pass
         );
-    }
-    
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        std::cerr << kTag << " GQA Backward Kernel launch error: " << cudaGetErrorString(err) << std::endl;
+        
+        // Check grad_K kernel launch immediately
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            std::cerr << kTag << " grad_K backward kernel launch error: " << cudaGetErrorString(err) << std::endl;
+        }
     }
 }
 

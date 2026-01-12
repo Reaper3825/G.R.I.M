@@ -16,6 +16,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "../HyperParameters/HyperParameters_GPU.hpp"
+
 namespace GRIM::PBM {
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -23,18 +25,18 @@ namespace GRIM::PBM {
 // ═══════════════════════════════════════════════════════════════════════════
 
 struct PBMConfig {
-    // ALiBi configuration
-    int num_heads = 12;
-    float alibi_slope_exponent = -8.0f;  // Controls slope decay across heads
+    // ALiBi configuration (defaults from HyperParameters)
+    int num_heads = GRIM::HyperParameters::DEFAULT_NUM_HEADS;
+    float alibi_slope_exponent = GRIM::HyperParameters::ALIBI_SLOPE_EXPONENT;
     
-    // RoPE configuration  
-    int head_dim = 64;
-    int rotary_dim = 64;                 // Dimensions to apply rotation (usually head_dim)
-    float rope_theta = 10000.0f;         // Base frequency (standard: 10000)
-    float rope_scaling = 1.0f;           // NTK scaling factor (1.0 = no scaling)
+    // RoPE configuration (defaults from HyperParameters)
+    int head_dim = GRIM::HyperParameters::DEFAULT_HEAD_DIM;
+    int rotary_dim = GRIM::HyperParameters::DEFAULT_HEAD_DIM;  // Usually same as head_dim
+    float rope_theta = GRIM::HyperParameters::ROPE_THETA;
+    float rope_scaling = GRIM::HyperParameters::ROPE_SCALING;
     
-    // GQA support (Grouped Query Attention)
-    int num_kv_heads = 4;                // For GQA: fewer KV heads than Q heads
+    // GQA support (defaults from HyperParameters)
+    int num_kv_heads = GRIM::HyperParameters::DEFAULT_NUM_KV_HEADS;
     
     // Runtime
     cudaStream_t stream = nullptr;
@@ -102,25 +104,14 @@ PBMSpec getPBMSpec(const PBMState& state);
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  RoPE Rotation Kernels (applied to Q,K before attention)
+//  NOTE: Only GQA versions are provided. For MHA (num_heads == num_kv_heads),
+//  call the GQA version with num_q_heads == num_kv_heads.
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Standard RoPE rotation (same head count for Q and K)
-// Q, K: [batch, num_heads, seq_len, head_dim] in BHSD format
-void launchRoPERotation(
-    float* Q,                           // Query tensor (in-place)
-    float* K,                           // Key tensor (in-place)
-    const float* inv_freq,              // Inverse frequencies [rotary_dim/2]
-    int batch_size,
-    int num_heads,
-    int seq_len,
-    int head_dim,
-    int rotary_dim,
-    cudaStream_t stream = nullptr
-);
-
-// GQA-aware RoPE rotation (different head counts for Q and K)
+// GQA-aware RoPE rotation (handles both GQA and MHA cases)
 // Q: [batch, num_q_heads, seq_len, head_dim]
 // K: [batch, num_kv_heads, seq_len, head_dim]
+// For MHA: set num_q_heads == num_kv_heads
 void launchRoPERotationGQA(
     float* Q,                           // Query tensor (in-place)
     float* K,                           // Key tensor (in-place)

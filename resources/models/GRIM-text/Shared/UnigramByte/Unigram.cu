@@ -198,8 +198,10 @@ namespace Tokenizer {
 //  CUDA Kernels
 //======================================================//
 
-// Kernel: Parallel Viterbi forward pass
-// Each thread processes one starting position
+// Kernel: Sequential Viterbi forward pass
+// CRITICAL: Viterbi has O(n) sequential dependency - each position depends on ALL previous.
+// Parallel execution would cause data races (reading viterbi_scores before they're computed).
+// We parallelize the TRIE SEARCH within each position, not across positions.
 __global__ void kernelViterbiForward(
     const char* __restrict__ text,
     size_t length,
@@ -215,18 +217,16 @@ __global__ void kernelViterbiForward(
     float unk_score,
     bool enable_byte_fallback
 ) {
-    // Grid-stride loop over positions
-    for (size_t pos = blockIdx.x * blockDim.x + threadIdx.x;
-         pos <= length;
-         pos += blockDim.x * gridDim.x) {
-        
-        if (pos == 0) {
-            viterbi_scores[0] = 0.0f;
-            viterbi_prev[0] = -1;
-            viterbi_tokens[0] = -1;
-            continue;
-        }
-        
+    // Single thread processes positions SEQUENTIALLY to maintain Viterbi invariants
+    if (threadIdx.x != 0 || blockIdx.x != 0) return;
+    
+    // Initialize position 0
+    viterbi_scores[0] = 0.0f;
+    viterbi_prev[0] = -1;
+    viterbi_tokens[0] = -1;
+    
+    // Process each position sequentially (required for correctness)
+    for (size_t pos = 1; pos <= length; ++pos) {
         float best_score = -1e30f;
         int best_prev = -1;
         int best_token = unk_id;
@@ -250,6 +250,7 @@ __global__ void kernelViterbiForward(
             int token_id = trie_token_ids[node];
             if (token_id >= 0) {
                 float piece_score = trie_scores[node];
+                // Safe: viterbi_scores[start - 1] was computed in previous iteration
                 float candidate_score = viterbi_scores[start - 1] + piece_score;
                 
                 if (candidate_score > best_score) {
@@ -267,7 +268,7 @@ __global__ void kernelViterbiForward(
             best_token = unk_id;
             best_score = viterbi_scores[pos - 1] + unk_score;
 
-            if (enable_byte_fallback && needs_fallback && pos > 0) {
+            if (enable_byte_fallback && needs_fallback) {
                 needs_fallback[pos - 1] = true;
             }
         }
@@ -284,7 +285,8 @@ __global__ void kernelViterbiBacktrack(
     const int* __restrict__ viterbi_prev,
     const int* __restrict__ viterbi_tokens,
     int* __restrict__ output_tokens,
-    int* __restrict__ output_count
+    int* __restrict__ output_count,
+    int max_tokens
 ) {
     // Single thread does backtracking
     if (threadIdx.x != 0 || blockIdx.x != 0) return;
@@ -295,6 +297,11 @@ __global__ void kernelViterbiBacktrack(
     while (pos > 0) {
         count++;
         pos = viterbi_prev[pos];
+    }
+    
+    // Clamp to max_tokens to prevent buffer overflow
+    if (count > max_tokens) {
+        count = max_tokens;
     }
     
     // Write tokens in reverse
@@ -511,6 +518,14 @@ bool UnigramLM::load(const std::string& vocab_path) {
     std::cout << "[UnigramLM] Clearing existing vocab..." << std::endl << std::flush;
     pieces_.clear();
     piece_to_id_.clear();
+    
+    // CRITICAL: Re-add special tokens with fixed IDs before loading user vocab.
+    // This ensures unk_id_=0, pad_id_=1, bos_id_=2, eos_id_=3 remain valid.
+    // If the file contains these tokens, addPiece will update scores but preserve IDs.
+    addPiece("<unk>", -10.0f, UNIGRAM_VOCAB_OFFSET + 0, true);
+    addPiece("<pad>", -10.0f, UNIGRAM_VOCAB_OFFSET + 1, true);
+    addPiece("<s>", -10.0f, UNIGRAM_VOCAB_OFFSET + 2, true);
+    addPiece("</s>", -10.0f, UNIGRAM_VOCAB_OFFSET + 3, true);
     
     std::cout << "[UnigramLM] Reading vocab pieces..." << std::endl << std::flush;
     std::string line;
@@ -1258,10 +1273,15 @@ void UnigramLM::capVocabSize(int max_size) {
     }
     
     // Sort pieces by score (descending) to keep most frequent
+    // But always keep user-defined tokens (special tokens) regardless of score
     std::vector<size_t> indices(pieces_.size());
     std::iota(indices.begin(), indices.end(), 0);
     
     std::stable_sort(indices.begin(), indices.end(), [this](size_t a, size_t b) {
+        // User-defined tokens always come first
+        if (pieces_[a].is_user_defined != pieces_[b].is_user_defined) {
+            return pieces_[a].is_user_defined;  // user-defined = true sorts before false
+        }
         return pieces_[a].score > pieces_[b].score;  // Higher score = more frequent
     });
     
@@ -1272,7 +1292,12 @@ void UnigramLM::capVocabSize(int max_size) {
     std::unordered_map<std::string, int> new_piece_to_id;
     
     for (int i = 0; i < max_size && i < static_cast<int>(indices.size()); ++i) {
-        const auto& piece = pieces_[indices[i]];
+        UnigramPiece piece = pieces_[indices[i]];
+        
+        // CRITICAL: Reassign token_id to maintain contiguous ID space
+        // Without this, getPiece(token_id) returns wrong pieces after pruning
+        piece.token_id = UNIGRAM_VOCAB_OFFSET + static_cast<int>(new_pieces.size());
+        
         new_piece_to_id[piece.text] = static_cast<int>(new_pieces.size());
         new_pieces.push_back(piece);
     }
@@ -1280,8 +1305,10 @@ void UnigramLM::capVocabSize(int max_size) {
     pieces_ = std::move(new_pieces);
     piece_to_id_ = std::move(new_piece_to_id);
     
-    // Rebuild trie for fast encoding
+    // Rebuild trie for fast encoding (uses new token_ids)
     buildTrie();
+    
+    std::cout << "[UnigramLM] Capped vocab to " << pieces_.size() << " pieces" << std::endl;
 }
 
 
@@ -1303,6 +1330,19 @@ bool UnigramLM::uploadTrieToGPU() {
     cudaError_t err;
     size_t num_nodes = trie_.size();
     
+    // Helper lambda for cleanup on failure
+    auto cleanup = [this]() {
+        if (gpu_->d_trie_children) { cudaFree(gpu_->d_trie_children); gpu_->d_trie_children = nullptr; }
+        if (gpu_->d_trie_token_ids) { cudaFree(gpu_->d_trie_token_ids); gpu_->d_trie_token_ids = nullptr; }
+        if (gpu_->d_trie_scores) { cudaFree(gpu_->d_trie_scores); gpu_->d_trie_scores = nullptr; }
+        if (gpu_->d_piece_data) { cudaFree(gpu_->d_piece_data); gpu_->d_piece_data = nullptr; }
+        if (gpu_->d_piece_offsets) { cudaFree(gpu_->d_piece_offsets); gpu_->d_piece_offsets = nullptr; }
+        if (gpu_->d_piece_lengths) { cudaFree(gpu_->d_piece_lengths); gpu_->d_piece_lengths = nullptr; }
+        if (gpu_->d_viterbi_scores) { cudaFree(gpu_->d_viterbi_scores); gpu_->d_viterbi_scores = nullptr; }
+        if (gpu_->d_viterbi_prev) { cudaFree(gpu_->d_viterbi_prev); gpu_->d_viterbi_prev = nullptr; }
+        if (gpu_->d_viterbi_tokens) { cudaFree(gpu_->d_viterbi_tokens); gpu_->d_viterbi_tokens = nullptr; }
+    };
+    
     // Allocate trie arrays
     err = cudaMalloc(&gpu_->d_trie_children, num_nodes * 256 * sizeof(int));
     if (err != cudaSuccess) {
@@ -1312,14 +1352,13 @@ bool UnigramLM::uploadTrieToGPU() {
     
     err = cudaMalloc(&gpu_->d_trie_token_ids, num_nodes * sizeof(int));
     if (err != cudaSuccess) {
-        cudaFree(gpu_->d_trie_children);
+        cleanup();
         return false;
     }
     
     err = cudaMalloc(&gpu_->d_trie_scores, num_nodes * sizeof(float));
     if (err != cudaSuccess) {
-        cudaFree(gpu_->d_trie_children);
-        cudaFree(gpu_->d_trie_token_ids);
+        cleanup();
         return false;
     }
     
@@ -1364,16 +1403,27 @@ bool UnigramLM::uploadTrieToGPU() {
         offset += pieces_[i].text.size();
     }
     
-    cudaMalloc(&gpu_->d_piece_data, total_piece_length);
-    cudaMalloc(&gpu_->d_piece_offsets, pieces_.size() * sizeof(int));
-    cudaMalloc(&gpu_->d_piece_lengths, pieces_.size() * sizeof(int));
+    err = cudaMalloc(&gpu_->d_piece_data, total_piece_length > 0 ? total_piece_length : 1);
+    if (err != cudaSuccess) { cleanup(); return false; }
+    
+    err = cudaMalloc(&gpu_->d_piece_offsets, pieces_.size() * sizeof(int));
+    if (err != cudaSuccess) { cleanup(); return false; }
+    
+    err = cudaMalloc(&gpu_->d_piece_lengths, pieces_.size() * sizeof(int));
+    if (err != cudaSuccess) { cleanup(); return false; }
     
     // Pre-allocate Viterbi workspace with fixed capacity
     constexpr size_t MAX_SEQUENCE_LENGTH = HyperParameters::UNIGRAM_MAX_SEQUENCE_LENGTH;
     gpu_->workspace_max_length = MAX_SEQUENCE_LENGTH;
-    cudaMalloc(&gpu_->d_viterbi_scores, (MAX_SEQUENCE_LENGTH + 1) * sizeof(float));
-    cudaMalloc(&gpu_->d_viterbi_prev, (MAX_SEQUENCE_LENGTH + 1) * sizeof(int));
-    cudaMalloc(&gpu_->d_viterbi_tokens, (MAX_SEQUENCE_LENGTH + 1) * sizeof(int));
+    
+    err = cudaMalloc(&gpu_->d_viterbi_scores, (MAX_SEQUENCE_LENGTH + 1) * sizeof(float));
+    if (err != cudaSuccess) { cleanup(); return false; }
+    
+    err = cudaMalloc(&gpu_->d_viterbi_prev, (MAX_SEQUENCE_LENGTH + 1) * sizeof(int));
+    if (err != cudaSuccess) { cleanup(); return false; }
+    
+    err = cudaMalloc(&gpu_->d_viterbi_tokens, (MAX_SEQUENCE_LENGTH + 1) * sizeof(int));
+    if (err != cudaSuccess) { cleanup(); return false; }
     
     cudaMemcpy(gpu_->d_piece_data, piece_data.data(), 
                total_piece_length, cudaMemcpyHostToDevice);
@@ -1412,14 +1462,11 @@ bool UnigramLM::encodeGPU(const char* d_text,
         cudaMemsetAsync(d_needs_byte_fallback, 0, length * sizeof(bool), nullptr);
     }
     
-    // Forward pass (reuse pre-allocated workspace)
-    size_t workspace_size = length + 1;
-    int threads = 256;
-    int blocks = (workspace_size + threads - 1) / threads;
-    
+    // Forward pass (single-threaded kernel due to Viterbi sequential dependency)
     bool* fallback_ptr = enable_fallback ? d_needs_byte_fallback : nullptr;
     // INTENTIONAL: Stream 0 for synchronous Viterbi forward pass (cudaMemcpy follows)
-    kernelViterbiForward<<<blocks, threads, 0, 0>>>(
+    // NOTE: Kernel runs single-threaded because Viterbi has O(n) sequential dependency
+    kernelViterbiForward<<<1, 1, 0, 0>>>(
         d_text, length,
         gpu_->d_trie_children, gpu_->d_trie_token_ids, gpu_->d_trie_scores,
         gpu_->num_nodes,
@@ -1431,11 +1478,12 @@ bool UnigramLM::encodeGPU(const char* d_text,
     );
     
     // INTENTIONAL: Stream 0 for synchronous Viterbi backtrack (result copied back immediately)
-    // Backtrack
+    // Backtrack with max_tokens to prevent buffer overflow
     kernelViterbiBacktrack<<<1, 1, 0, 0>>>(
         length,
         gpu_->d_viterbi_prev, gpu_->d_viterbi_tokens,
-        d_token_ids, d_token_count
+        d_token_ids, d_token_count,
+        max_tokens
     );
     
     return cudaGetLastError() == cudaSuccess;
@@ -1449,6 +1497,13 @@ bool UnigramLM::encodeBatchGPU(const char* const* d_texts,
                                 size_t batch_size) {
     if (batch_size == 0) return true;
     
+    // NOTE: Sequences are processed sequentially because:
+    // 1. Viterbi algorithm has inherent sequential dependency (each position depends on all previous)
+    // 2. The pre-allocated workspace (d_viterbi_scores/prev/tokens) is shared across all sequences
+    // True batch parallelization would require per-sequence workspace allocation, which trades
+    // memory for parallelism. For typical batch sizes (8-32), sequential processing is adequate
+    // since the bottleneck is usually elsewhere (embedding lookup, attention).
+    
     // Find max length to allocate fallback buffer once (avoid per-iteration malloc!)
     size_t max_len = 0;
     for (size_t i = 0; i < batch_size; ++i) {
@@ -1457,7 +1512,7 @@ bool UnigramLM::encodeBatchGPU(const char* const* d_texts,
     
     // Single allocation for entire batch
     bool* d_fallback = nullptr;
-    cudaError_t err = cudaMalloc(&d_fallback, max_len * sizeof(bool));
+    cudaError_t err = cudaMalloc(&d_fallback, max_len > 0 ? max_len * sizeof(bool) : sizeof(bool));
     if (err != cudaSuccess) {
         std::cerr << "[UnigramLM] Failed to allocate batch fallback buffer" << std::endl;
         return false;

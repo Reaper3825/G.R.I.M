@@ -63,6 +63,93 @@ __device__ inline int clampIndex(int value, int limit) {
 }
 
 //======================================================//
+// Token ID Validation Kernel (Rule 20: Fail Loud)
+//======================================================//
+
+/**
+ * @brief Validates token IDs and reports invalid entries
+ * 
+ * Sets error flags in device memory for host to check:
+ * - error_flags[0]: count of invalid token IDs
+ * - error_flags[1]: first invalid token index
+ * - error_flags[2]: first invalid token value
+ * 
+ * @note This kernel should be called in debug builds or when validation is explicitly enabled
+ */
+__global__ void ValidateTokenIdsKernel(const int* token_ids,
+                                       int total_tokens,
+                                       int vocab_size,
+                                       int* error_flags) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total_tokens) return;
+    
+    const int token_id = token_ids[idx];
+    
+    if (token_id < 0 || token_id >= vocab_size) {
+        // Atomically increment error count
+        int prev_count = atomicAdd(&error_flags[0], 1);
+        
+        // Record first invalid token (only if we're the first to find one)
+        if (prev_count == 0) {
+            error_flags[1] = idx;
+            error_flags[2] = token_id;
+        }
+    }
+}
+
+} // end anonymous namespace
+
+/**
+ * @brief Validates token IDs and throws if invalid tokens are found
+ * 
+ * Rule 20 (Fail Loud): Invalid token IDs should crash with clear error message
+ * rather than silently producing garbage output.
+ * 
+ * @param token_ids Device pointer to token IDs
+ * @param total_tokens Number of tokens to validate
+ * @param vocab_size Valid token range is [0, vocab_size)
+ * @param stream CUDA stream to use
+ * @throws std::runtime_error if any token ID is negative or >= vocab_size
+ */
+void validateTokenIds(const int* token_ids,
+                      int total_tokens,
+                      int vocab_size,
+                      cudaStream_t stream) {
+    if (!token_ids || total_tokens <= 0) return;
+    
+    // Allocate error flags on device: [count, first_idx, first_value]
+    int* d_error_flags = nullptr;
+    cudaMallocAsync(&d_error_flags, 3 * sizeof(int), stream);
+    cudaMemsetAsync(d_error_flags, 0, 3 * sizeof(int), stream);
+    
+    constexpr int kBlockSize = 256;
+    const int grid = (total_tokens + kBlockSize - 1) / kBlockSize;
+    
+    ValidateTokenIdsKernel<<<grid, kBlockSize, 0, stream>>>(
+        token_ids, total_tokens, vocab_size, d_error_flags);
+    
+    // Copy results back to host
+    int h_error_flags[3] = {0, 0, 0};
+    cudaMemcpyAsync(h_error_flags, d_error_flags, 3 * sizeof(int),
+                    cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    
+    cudaFreeAsync(d_error_flags, stream);
+    
+    if (h_error_flags[0] > 0) {
+        // Rule 20: Fail loud with detailed error message
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg),
+                 "validateTokenIds: Found %d invalid token ID(s). "
+                 "First invalid at index %d: token_id=%d (valid range: [0, %d))",
+                 h_error_flags[0], h_error_flags[1], h_error_flags[2], vocab_size);
+        throw std::runtime_error(error_msg);
+    }
+}
+
+namespace {
+
+//======================================================//
 // Forward Kernels
 //======================================================//
 
@@ -224,6 +311,14 @@ void launchEmbeddingLookup(const EmbeddingForwardArgs& args,
         throw std::runtime_error("launchEmbeddingLookup: stream is NULL");
     }
 
+    // Rule 20: Validate token IDs in debug builds to catch data pipeline bugs early
+    bool debug_tid_validation = true;
+    if (debug_tid_validation) {
+        validateTokenIds(args.token_ids, total_tokens, config.vocab_size, stream);
+    }
+
+
+
     const int seq_len = (args.seq_len > 0) ? args.seq_len : total_tokens;
     dim3 block(kEmbeddingBlockSize);
     dim3 grid(total_tokens);
@@ -282,6 +377,11 @@ void launchEmbeddingBackward(const float* grad_output,
     if (vocab_size <= 0) {
         throw std::runtime_error("launchEmbeddingBackward: vocab_size=" + std::to_string(vocab_size));
     }
+
+    // Rule 20: Validate token IDs in debug builds to catch data pipeline bugs early
+#ifndef NDEBUG
+    validateTokenIds(token_ids, total_tokens, vocab_size, stream);
+#endif
 
     constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
     const int grid = (total_tokens + kBlockSize - 1) / kBlockSize;

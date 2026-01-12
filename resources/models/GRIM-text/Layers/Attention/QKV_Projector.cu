@@ -180,7 +180,8 @@ void launchQkvProjection(const float* input,
     if (!handle) {
         throw std::runtime_error("[QKV_Projector] launchQkvProjection: config.handle is NULL - MUST pass training_state.cublas_handle per Rule 22");
     }
-    // REMOVED cublasSetStream - handle already bound to stream in InitTrainingState.cu
+    // CRITICAL: Always rebind stream before cuBLAS ops - NumericHead may have changed it
+    cublasSetStream(handle, config.stream);
 
     const float alpha = 1.0f;
     const float beta = 0.0f;
@@ -332,7 +333,8 @@ void launchGQAProjection(const float* input,
     if (!handle) {
         throw std::runtime_error("[GQAProjection] config.handle is NULL - MUST pass training_state.cublas_handle per Rule 22");
     }
-    // REMOVED cublasSetStream - handle already bound to stream in InitTrainingState.cu
+    // CRITICAL: Always rebind stream before cuBLAS ops - NumericHead may have changed it
+    cublasSetStream(handle, config.stream);
     
     const float alpha = 1.0f;
     const float beta = 0.0f;

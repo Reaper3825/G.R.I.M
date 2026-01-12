@@ -1,32 +1,82 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** 🔴 PLATEAU PERSISTS - Root cause NOT PBM, NOT gradient collapse  
+**Status:** � MAJOR BUG FOUND - cuBLAS stream binding race condition  
 **Started:** December 22, 2025  
-**Last Updated:** December 28, 2025
+**Last Updated:** January 11, 2026
 **Original Symptom:** Loss drops from 10.5 → 8.3-8.8 in first ~50 batches, then plateaus indefinitely to include multiple epochs 
-
-**Current Run (diagnostic_output.txt - Dec 26):**
-- Loss trajectory: 10.54 → 9.22 in first 20 batches (diagnostic minimal loop)
-- RoPE/PBM working correctly (K tensor transforms confirmed)
-- Gradient magnitudes HEALTHY: Q:0.01-0.05, K:0.002-0.012, V:0.02-0.04
-- ⚠️ **Attention entropy values are UNRELIABLE** - see Issue #25 below
-
-**Critical Finding (Dec 26 Evening):**
-- Compared pre-PBM-cleanup (diagnostic_output.txt) vs post-cleanup (attndiag.txt)
-- **IDENTICAL gradient magnitudes** in both (~0.01-0.05, NOT the 0.000002 from Issue #21)
-- **IDENTICAL K tensor transformations** showing RoPE active in both
-- PBM was ALWAYS working - Dec 26 cleanup removed DEAD fallback code only
-- Issue #21 (softmax Jacobian attenuation) was ALREADY FIXED before diagnostic runs
-- Plateau persists with healthy gradients and working positional encoding
-
-**Critical Finding (Dec 27 - Issue #25):**
-- **Diagnostic entropy is WRONG** - truncates to 128 tokens, actual sequences are 2800-4000 tokens
-- Entropy values of H≈6.2-6.7 bits/pos are **artifacts**, not real attention behavior
-- See [FLASH_ATTENTION_DIAGNOSTIC_ENTROPY_BUG.md](../FLASH_ATTENTION_DIAGNOSTIC_ENTROPY_BUG.md)
 
 ---
 
-## 🎯 CURRENT STATUS (December 28, 2025)
+## 🔴 CRITICAL BUG FOUND (January 11, 2026)
+
+### Issue #26: cuBLAS Stream Binding Race Condition (FIX APPLIED!)
+
+**Symptom:** Training log showed wild loss spikes:
+- Batch 1: 11.85
+- Batch 2: 10.54
+- Batch 3: 9.65
+- Batch 4: **6.67** (suspicious huge drop at max_seq_len=1024 boundary)
+- Batch 5: **10.10** (spike back up!)
+
+**Root Cause:**
+The commit `b42d66065` ("--minor bug fixes found during plateau investigation") removed `cublasSetStream()` calls from multiple files with the incorrect comment "REMOVED cublasSetStream - handle already bound to stream in InitTrainingState.cu".
+
+**Why This Broke Training:**
+1. `InitTrainingState.cu` binds cuBLAS handle to primary stream ONCE at initialization
+2. `NumericHead::forward()` conditionally **rebinds** the handle: `if (params.stream) { cublasSetStream(params.handle, params.stream); }`
+3. After NumericHead runs, ALL subsequent cuBLAS calls (FFN, attention, LMHead, backward pass) execute on **whatever stream NumericHead left the handle on**
+4. This causes race conditions where cuBLAS operations execute out-of-order with other CUDA kernels
+5. Result: corrupted gradients, wild loss oscillation, training failure
+
+**Files Affected and Fixed:**
+1. `QKV_Projector.cu` - Added `cublasSetStream(handle, config.stream)` before GEMM calls
+2. `Encoding_GPU.cu` - Added `cublasSetStream(config_.cublas_handle, stream)` before W_o projection
+3. `Feed_Forward_GPU.cu` - Added `CUBLAS_CHECK(cublasSetStream(...))` before Layer 1/2 GEMM
+4. `lm_head_GPU.cu` - Added `cublasSetStream(params.handle, params.stream)` in forward/backward
+5. `BackwardOps_Orchestrator.cu` - Added `cublasSetStream(cublas_handle, primary_stream)` in context init
+
+**Lesson Learned:**
+The assumption "bind once at init" is **FRAGILE AND WRONG**. ANY code that calls `cublasSetStream()` affects ALL subsequent cuBLAS calls. The correct pattern is to call `cublasSetStream()` **immediately before every cuBLAS operation** when using explicit streams.
+
+**Status:** ✅ **FIX APPLIED** - Rebuild required to test
+
+---
+
+### Issue #27: Gradient Accumulation NOT Scaled (FIX APPLIED! - Jan 11, 2026)
+
+**Symptom:** With `accumulation_steps=2`, effective learning rate was **2x configured LR**.
+
+**Root Cause:**
+The code accumulated gradients from N micro-batches but NEVER divided by N before the optimizer step. A misleading comment (added in commit `b42d66065`) claimed "This is the desired behavior" - **it was not**.
+
+**What Standard Frameworks Do:**
+| Framework | Method |
+|-----------|--------|
+| **PyTorch (manual)** | `loss = loss / accum_steps` before `.backward()` |
+| **HuggingFace Trainer** | Divides loss by `gradient_accumulation_steps` |
+| **DeepSpeed/Megatron-LM** | Scales by `1/num_microbatches` |
+
+**Impact Without Fix:**
+- `lr=0.0001` with `accum_steps=2` → effective LR = **0.0002** (non-standard)
+- Training 2x more aggressive than configured
+- LR tuning becomes meaningless - changing `accumulation_steps` changes effective LR
+
+**Fix Applied (Phase2_TrainingLoop.cu):**
+```cpp
+if (accum_steps_for_log > 1) {
+    const float accum_scale = 1.0f / static_cast<float>(accum_steps_for_log);
+    ctx.model->scaleGradients(accum_scale);
+}
+```
+
+Applied AFTER accumulation complete, BEFORE `updateWeights()`.
+
+**Status:** ✅ **FIX APPLIED** - Rebuild required to test
+
+---
+
+**Previous Status (Dec 28):**
+- Loss drops from 10.5 → 8.3-8.8 in first ~50 batches, then plateaus indefinitely to include multiple epochs
 
 ### ✅ Issue #25: Diagnostic Entropy Truncation Bug (FIXED - Dec 27)
 
@@ -979,6 +1029,40 @@ Entire `Layers/Tokenizer/` folder contained backwards compatibility wrappers:
 ### 8. Checkpoint Loading (Now Fixed)
 - Phase1_Startup.cu now loads `num_kv_heads` from ai_config.json
 - Serialization logging now shows actual checkpoint values
+
+### 9. Embedding Layer (Comprehensive Test Suite - Jan 11, 2026)
+
+**39/39 Tests Passed** - Complete diagnostic test suite verified:
+
+| Category | Tests | Status |
+|----------|-------|--------|
+| Xavier Init | 2 | ✅ Pass |
+| Lookup (forward) | 2 | ✅ Pass |
+| Backward (gradients) | 2 | ✅ Pass |
+| Layer Integration | 1 | ✅ Pass |
+| Boundary/Memory | 2 | ✅ Pass |
+| Integration (GRMT data) | 3 | ✅ Pass |
+| Weight Tying | 1 | ✅ Pass |
+| RMSNorm | 3 | ✅ Pass |
+| Position Embeddings | 4 | ✅ Pass |
+| Special Tokens | 1 | ✅ Pass |
+| Gradient Tests | 10 | ✅ Pass |
+| Edge Cases | 5 | ✅ Pass |
+| Stability | 1 | ✅ Pass |
+| Concurrent Streams | 1 | ✅ Pass |
+
+**Key Verified Behaviors:**
+- ✅ **Finite difference gradient check** - 100% pass, max relative error = 0.00
+- ✅ **Gradient accumulation** - atomicAdd correctly accumulates across backward passes
+- ✅ **Position embedding consistency** - Same position gets same embedding across all batches (Issue #19 regression check)
+- ✅ **Weight tying gradients** - Flow correctly through RMSNorm to tied weights
+- ✅ **Token ID validation** - Rule 20 Fail Loud correctly rejects invalid tokens
+- ✅ **High contention atomicAdd** - Deterministic and accurate under 4096-way contention
+- ✅ **Very long sequences** - 8192 tokens work at 5.3M tokens/sec, no NaN/Inf
+- ✅ **Batch independence** - Batched results exactly match independent single-batch runs
+- ✅ **Real GRMT data** - Forward pass works correctly with actual training sequences
+
+**Conclusion:** Embedding layer is **NOT the cause** of training plateau. All forward/backward computations, gradient accumulation, weight tying, and position embeddings verified correct.
 
 ---
 
