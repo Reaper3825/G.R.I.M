@@ -29,9 +29,11 @@ struct PBMConfig {
     int num_heads = GRIM::HyperParameters::DEFAULT_NUM_HEADS;
     float alibi_slope_exponent = GRIM::HyperParameters::ALIBI_SLOPE_EXPONENT;
     
-    // RoPE configuration (defaults from HyperParameters)
-    int head_dim = GRIM::HyperParameters::DEFAULT_HEAD_DIM;
-    int rotary_dim = GRIM::HyperParameters::DEFAULT_HEAD_DIM;  // Usually same as head_dim
+    // RoPE configuration
+    // head_dim: MUST be set from LanguageModelConfig.head_dim (= d_model / num_heads)
+    // DO NOT use DEFAULT_HEAD_DIM - it may not match actual model dimensions
+    int head_dim = 0;  // REQUIRED - set from config.head_dim
+    int rotary_dim = 0; // Usually same as head_dim, set from config.head_dim
     float rope_theta = GRIM::HyperParameters::ROPE_THETA;
     float rope_scaling = GRIM::HyperParameters::ROPE_SCALING;
     

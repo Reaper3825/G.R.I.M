@@ -76,7 +76,7 @@ void LanguageModel::initPBM() {
     }
     
     const auto& cfg = getConfig();
-    const int head_dim = cfg.d_model / cfg.num_heads;
+    const int head_dim = cfg.head_dim;  // Use pre-computed value from config
     
     PBM::PBMConfig pbm_config{};  // Uses HyperParameters defaults
     pbm_config.num_heads = cfg.num_heads;
@@ -152,7 +152,7 @@ void LanguageModel::initTrainingState() {
     //  Missing PBM causes position-blind attention → training plateau!
     // ═══════════════════════════════════════════════════════════════════════
     if (!training_state_.pbm_initialized) {
-        const int head_dim = cfg.d_model / cfg.num_heads;
+        const int head_dim = cfg.head_dim;  // Use pre-computed value from config
         
         PBM::PBMConfig pbm_config{};  // Uses HyperParameters defaults
         pbm_config.num_heads = cfg.num_heads;
@@ -383,7 +383,7 @@ void LanguageModel::initTrainingState() {
         // Q projection: [d_model, d_model] 
         // K projection: [kv_dim, d_model] where kv_dim = num_kv_heads * head_dim
         // V projection: [kv_dim, d_model]
-        const int head_dim = cfg.d_model / cfg.num_heads;
+        const int head_dim = cfg.head_dim;  // Use pre-computed value from config
         const int kv_dim = num_kv_heads * head_dim;
         const size_t q_weight_size = cfg.d_model * cfg.d_model;
         const size_t k_weight_size = kv_dim * cfg.d_model;
@@ -479,7 +479,7 @@ void LanguageModel::initTrainingState() {
     training_state_.cached_softmax_lse.resize(cfg.num_layers, nullptr);
     
     // GQA: K and V caches use num_kv_heads, Q uses num_heads
-    const int head_dim_cache = cfg.d_model / cfg.num_heads;
+    const int head_dim_cache = cfg.head_dim;  // Use pre-computed value from config
     const int kv_dim_cache = training_state_.num_kv_heads * head_dim_cache;
     
     const size_t softmax_lse_elems = static_cast<size_t>(max_batch_size) *
@@ -671,7 +671,7 @@ void LanguageModel::initTrainingState() {
     training_state_.encoder_workspace_size = workspace_bytes;
 
     // Allocate reusable backward temporaries (avoid per-layer cudaMalloc/free)
-    const int head_dim = cfg.d_model / cfg.num_heads;
+    const int head_dim = cfg.head_dim;  // Use pre-computed value from config
     const size_t qkv_elems = max_tokens * static_cast<size_t>(cfg.num_heads) * static_cast<size_t>(head_dim); // = max_tokens * d_model
     const size_t model_elems = max_tokens * static_cast<size_t>(cfg.d_model);
     const size_t ffn_elems = max_tokens * static_cast<size_t>(cfg.d_ff);

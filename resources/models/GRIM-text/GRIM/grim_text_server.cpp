@@ -152,6 +152,8 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
             config.use_flash_attention = hyperparams.use_flash_attention;
         }
 
+        config.computeDerivedValues();  // Compute head_dim = d_model / num_heads
+        
         g_model = std::make_unique<LanguageModel>(config);
         std::cout << "[GRIM-text] ✓ Model object created\n" << std::flush;
 

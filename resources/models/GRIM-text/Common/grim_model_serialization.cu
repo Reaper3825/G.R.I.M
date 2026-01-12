@@ -171,7 +171,7 @@ bool LanguageModel::save(const std::string& path) {
     const std::size_t d_ff = static_cast<std::size_t>(config_.d_ff);
     
     // GQA dimensions for W_qkv sizing (no fallback - num_kv_heads must be properly set)
-    const int head_dim = config_.d_model / config_.num_heads;
+    const int head_dim = config_.head_dim;  // Use pre-computed value from config
     const int kv_dim = config_.num_kv_heads * head_dim;
     const int total_qkv_dim = config_.d_model + 2 * kv_dim;  // Q + K + V with GQA
     const std::size_t qkv_weight_size = static_cast<std::size_t>(total_qkv_dim) * d_model;
@@ -305,7 +305,7 @@ bool LanguageModel::load(const std::string& path) {
     
     // GQA dimensions for W_qkv sizing - MUST match save() calculation!
     // BUG FIX Issue #24: load() was using MHA formula (d_model * 3) but save() uses GQA formula
-    const int head_dim = config_.d_model / config_.num_heads;
+    const int head_dim = config_.head_dim;  // Use pre-computed value from config
     const int kv_dim = config_.num_kv_heads * head_dim;
     const int total_qkv_dim = config_.d_model + 2 * kv_dim;  // Q + K + V with GQA
     const std::size_t qkv_weight_size = static_cast<std::size_t>(total_qkv_dim) * d_model;

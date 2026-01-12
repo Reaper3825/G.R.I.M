@@ -35,7 +35,7 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
 #endif
     
     // GQA dimensions
-    const int head_dim = cfg.d_model / cfg.num_heads;
+    const int head_dim = cfg.head_dim;  // Use pre-computed value from config
     const int kv_dim = ts.num_kv_heads * head_dim;
     const int total_qkv_dim = cfg.d_model + 2 * kv_dim;
     
@@ -152,7 +152,7 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
     
     // Grad Q/K/V are already zeroed per-layer in backward(), but register for completeness
     if (ts.grad_q) {
-        const int head_dim_qkv = cfg.d_model / cfg.num_heads;
+        const int head_dim_qkv = cfg.head_dim;  // Use pre-computed value from config
         const int q_size = ts.max_cached_tokens * cfg.num_heads * head_dim_qkv;
         controller_.registerGradientBuffer(
             "grad_q_temp",
@@ -161,7 +161,7 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
         );
     }
     if (ts.grad_k) {
-        const int head_dim_qkv = cfg.d_model / cfg.num_heads;
+        const int head_dim_qkv = cfg.head_dim;  // Use pre-computed value from config
         const int kv_size = ts.max_cached_tokens * ts.num_kv_heads * head_dim_qkv;
         controller_.registerGradientBuffer(
             "grad_k_temp",
@@ -170,7 +170,7 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
         );
     }
     if (ts.grad_v) {
-        const int head_dim_qkv = cfg.d_model / cfg.num_heads;
+        const int head_dim_qkv = cfg.head_dim;  // Use pre-computed value from config
         const int kv_size = ts.max_cached_tokens * ts.num_kv_heads * head_dim_qkv;
         controller_.registerGradientBuffer(
             "grad_v_temp",

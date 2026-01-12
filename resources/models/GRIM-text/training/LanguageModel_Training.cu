@@ -119,7 +119,7 @@ bool getGroupShape(const ParameterGroup& group,
         if (cfg.num_heads <= 0 || cfg.d_model <= 0 || num_kv_heads <= 0) {
             return false;
         }
-        const int head_dim = cfg.d_model / cfg.num_heads;
+        const int head_dim = cfg.head_dim;  // Use pre-computed value from config
         if (head_dim <= 0) {
             return false;
         }
@@ -238,7 +238,7 @@ void LanguageModel::zeroGrad() {
     const auto& cfg = config_;
     
     // GQA: Compute dimensions for gradient zeroing
-    const int head_dim = cfg.d_model / cfg.num_heads;
+    const int head_dim = cfg.head_dim;  // Use pre-computed value from config
     const int num_kv_heads = training_state_.num_kv_heads;
     const int kv_dim = num_kv_heads * head_dim;
     const int total_qkv_dim = cfg.d_model + 2 * kv_dim;
@@ -428,7 +428,7 @@ void LanguageModel::buildParameterGroups() {
     parameter_groups_.clear();
     
     const auto& cfg = config_;
-    const int head_dim = cfg.d_model / cfg.num_heads;
+    const int head_dim = cfg.head_dim;  // Use pre-computed value from config
     const int num_kv_heads = training_state_.num_kv_heads;
     const int kv_dim = num_kv_heads * head_dim;
     const int total_qkv_dim = cfg.d_model + 2 * kv_dim;

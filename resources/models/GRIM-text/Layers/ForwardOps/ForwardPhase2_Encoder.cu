@@ -188,7 +188,7 @@ ForwardStatus runIncrementalEncoder(ForwardContext& ctx) {
         FWD_FAIL_LOUD(ctx, ForwardStatus::INVALID_STATE, "d_model not divisible by num_heads", -1);
     }
 
-    const int d_head = cfg->d_model / num_heads;
+    const int d_head = cfg->head_dim;  // Use pre-computed value from config
     const int kv_dim = num_kv_heads * d_head;
     const int max_kv_len = ts->kv_cache_capacity;
     const int kv_len = ctx.query_pos + 1;

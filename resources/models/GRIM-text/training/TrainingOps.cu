@@ -267,7 +267,7 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
     // (this can happen during early initialization before initTrainingState)
     if (parameter_groups_.empty()) {
         const auto& cfg = config_;
-        const int head_dim = cfg.d_model / cfg.num_heads;
+        const int head_dim = cfg.head_dim;  // Use pre-computed value from config
         const int kv_dim = cfg.num_kv_heads * head_dim;
         const int total_qkv_dim = cfg.d_model + 2 * kv_dim;  // Q + K + V with GQA
         
@@ -298,7 +298,7 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
         // Debug assert: verify fallback formula matches actual allocations
         // This catches drift between buildParameterGroups and getModelStats formula
         const auto& cfg = config_;
-        const int head_dim = cfg.d_model / cfg.num_heads;
+        const int head_dim = cfg.head_dim;  // Use pre-computed value from config
         const int kv_dim = cfg.num_kv_heads * head_dim;
         const int total_qkv_dim = cfg.d_model + 2 * kv_dim;
         
@@ -526,6 +526,7 @@ void LanguageModel::initGPU() {
     enc_config.d_model = cfg.d_model;
     enc_config.num_heads = cfg.num_heads;
     enc_config.num_kv_heads = cfg.num_kv_heads;  // GQA support
+    enc_config.head_dim = cfg.head_dim;          // Use pre-computed value from LanguageModelConfig
     enc_config.d_ff = cfg.d_ff;
     enc_config.num_layers = cfg.num_layers;
     enc_config.dropout_rate = cfg.dropout_rate;
@@ -594,7 +595,7 @@ void LanguageModel::initGPU() {
             
             if (w_qkv_ptr && w_o_ptr) {
                 // GQA QKV dimension calculation using TensorContract
-                const int head_dim = cfg.d_model / cfg.num_heads;
+                const int head_dim = cfg.head_dim;  // Use pre-computed value from config
                 TensorContract::GQADims gqa_dims{cfg.num_heads, cfg.num_kv_heads, head_dim};
                 const int total_qkv_dim = gqa_dims.total_qkv_dim();
                 const size_t qkv_size = static_cast<size_t>(total_qkv_dim) * cfg.d_model;

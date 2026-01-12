@@ -298,6 +298,12 @@ void launchGQAProjection(const float* input,
                 ") must be divisible by num_heads (" + std::to_string(config.num_heads) + ")");
     }
     
+    // Rule 20: head_dim MUST be set explicitly - no fallback computation
+    if (config.head_dim <= 0) {
+        throw std::runtime_error("[GQAProjection] config.head_dim is " + std::to_string(config.head_dim) +
+                " - caller MUST set head_dim from LanguageModelConfig.head_dim");
+    }
+    
     const int num_kv_heads = config.getNumKVHeads();
     if (num_kv_heads > config.num_heads) {
         throw std::runtime_error("[GQAProjection] num_kv_heads (" + std::to_string(num_kv_heads) +
@@ -326,7 +332,7 @@ void launchGQAProjection(const float* input,
     const float* b_k = weights.b_k;
     const float* b_v = weights.b_v;
     
-    const int head_dim = d_model / config.num_heads;
+    const int head_dim = config.head_dim;  // Use pre-computed value from config
     const int kv_dim = num_kv_heads * head_dim;
     
     cublasHandle_t handle = config.handle;

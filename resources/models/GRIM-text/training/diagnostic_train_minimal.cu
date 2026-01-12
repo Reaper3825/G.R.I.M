@@ -134,7 +134,7 @@ void traceGradientComponents(GRIM::LanguageModel& model, int batch, cudaStream_t
         
         // Attention gradients
         if (layer < (int)ts.attn_qkv_weight_grads.size() && ts.attn_qkv_weight_grads[layer]) {
-            const int head_dim = config.d_model / config.num_heads;
+            const int head_dim = config.head_dim;  // Use pre-computed value from config
             const int kv_dim = ts.num_kv_heads * head_dim;
             const int total_qkv_dim = config.d_model + 2 * kv_dim;
             size_t qkv_size = static_cast<size_t>(total_qkv_dim) * config.d_model;
@@ -520,6 +520,7 @@ int main(int argc, char** argv) {
     lm_config.max_seq_len = max_seq_len;
     lm_config.use_bias = false;
     lm_config.execution_mode = GRIM::ModelExecutionMode::TRAINING;
+    lm_config.computeDerivedValues();  // Compute head_dim = d_model / num_heads
     
     std::cout << "  d_model=" << lm_config.d_model 
               << " layers=" << lm_config.num_layers
@@ -582,7 +583,7 @@ int main(int argc, char** argv) {
     
     // Count parameters for gradient size calculations (for info only)
     size_t emb_size = static_cast<size_t>(vocab_size) * lm_config.d_model;
-    const int head_dim = lm_config.d_model / lm_config.num_heads;
+    const int head_dim = lm_config.head_dim;  // Use pre-computed value from config
     const int kv_dim = lm_config.num_kv_heads * head_dim;
     const int total_qkv_dim = lm_config.d_model + 2 * kv_dim;  // GQA
     size_t qkv_size = static_cast<size_t>(total_qkv_dim) * lm_config.d_model;

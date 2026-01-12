@@ -10,6 +10,7 @@ struct QKVProjectionConfig {
     int d_model = 0;
     int num_heads = 0;
     int num_kv_heads = 0;  // GQA: K,V head count (0 = use num_heads for MHA mode)
+    int head_dim = 0;      // = d_model / num_heads (set from LanguageModelConfig.head_dim)
     int batch_size = 1;
     int seq_len = 0;
     cudaStream_t stream = nullptr;
@@ -27,8 +28,9 @@ struct QKVProjectionConfig {
     
     // Helper: Compute K or V projection size (reduced in GQA)
     int getKVProjectionSize() const {
-        int head_dim = (num_heads > 0) ? (d_model / num_heads) : 64;
-        return getNumKVHeads() * head_dim;
+        // Use stored head_dim if set, otherwise compute (legacy fallback)
+        int hd = (head_dim > 0) ? head_dim : ((num_heads > 0) ? (d_model / num_heads) : 64);
+        return getNumKVHeads() * hd;
     }
     
     // Helper: Check if GQA is active

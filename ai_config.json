@@ -86,7 +86,7 @@
             "batch_strategy": "RANDOM",
             "learning_rate": 0.0003,
             "weight_decay": 0.01,
-            "gradient_clip": 1.0,
+            "gradient_clip": 0.0,
             "per_token_grad_scale": true,
             "warmup_steps": 10,
             "max_seq_len": 1024,

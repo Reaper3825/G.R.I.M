@@ -789,6 +789,9 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.scratch_block_max_atoms = hp.scratch_block_reasoning_max_atoms;
     model_config.scratch_block_atom_scale = hp.scratch_block_reasoning_atom_scale;
     
+    // Compute derived values (head_dim = d_model / num_heads)
+    model_config.computeDerivedValues();
+    
     logger.log("ScratchBlock reasoning: enabled=" + std::string(model_config.use_scratch_block ? "true" : "false") +
               ", atom_embedding_dim=" + std::to_string(model_config.scratch_block_atom_embedding_dim) +
               ", max_atoms=" + std::to_string(model_config.scratch_block_max_atoms) +
@@ -962,7 +965,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
             float* w2 = enc->getFFNW2();
             
             // GQA dimension calculation using TensorContract
-            const int head_dim = cfg.d_model / cfg.num_heads;
+            const int head_dim = cfg.head_dim;  // Use pre-computed value from config
             TensorContract::GQADims gqa_dims{cfg.num_heads, cfg.num_kv_heads, head_dim};
             const int total_qkv_dim = gqa_dims.total_qkv_dim();
             const size_t qkv_size = static_cast<size_t>(total_qkv_dim) * cfg.d_model;

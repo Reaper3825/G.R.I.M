@@ -243,7 +243,10 @@ BackwardContext initBackwardContextRaw(
     
     ctx.alpha = 1.0f;
     ctx.beta_zero = 0.0f;
-    ctx.beta_accum = 1.0f;
+    // BUG FIX: beta_accum MUST be conditional on accumulate flag!
+    // First micro-batch (accumulate=false) -> beta=0.0 to OVERWRITE garbage
+    // Subsequent micro-batches (accumulate=true) -> beta=1.0 to ACCUMULATE
+    ctx.beta_accum = accumulate ? 1.0f : 0.0f;
     
     //--------------------------------------------------//
     // External Components

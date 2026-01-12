@@ -235,7 +235,7 @@ void LanguageModel::initInferenceState() {
         cache.v = training_state_.cached_V[layer];
     }
 
-    const int head_dim = cfg.d_model / cfg.num_heads;
+    const int head_dim = cfg.head_dim;  // Use pre-computed value from config
     const size_t fa_q_elems = static_cast<size_t>(max_batch_size) *
                               static_cast<size_t>(cfg.num_heads) *
                               static_cast<size_t>(max_seq_len_cache) *

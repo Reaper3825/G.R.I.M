@@ -754,7 +754,7 @@ BackwardStatus computeAttentionBackward(
     // GQA dimensions
     const int num_heads = cfg->num_heads;
     const int num_kv_heads = ts->num_kv_heads;
-    const int head_dim = cfg->d_model / num_heads;
+    const int head_dim = cfg->head_dim;  // Use pre-computed value from config
     
     P2_INFO("GQA config: num_heads=" << num_heads << " num_kv_heads=" << num_kv_heads << " head_dim=" << head_dim);
     

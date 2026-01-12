@@ -452,6 +452,7 @@ void EncodingLayer::forward(const EncodingForwardArgs& args) {
     proj_cfg.d_model = d_model;
     proj_cfg.num_heads = num_heads;
     proj_cfg.num_kv_heads = num_kv_heads;
+    proj_cfg.head_dim = head_dim;  // Use pre-computed value from config_.headDim()
     proj_cfg.batch_size = batch_size;
     proj_cfg.seq_len = seq_len;
     proj_cfg.stream = stream;

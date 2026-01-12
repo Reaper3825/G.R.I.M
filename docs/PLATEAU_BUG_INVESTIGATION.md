@@ -1,15 +1,52 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** � MAJOR BUG FOUND - cuBLAS stream binding race condition  
+**Status:** 🔴 MAJOR BUG FOUND - beta_accum hardcoded to 1.0 (gradient accumulation broken)  
 **Started:** December 22, 2025  
-**Last Updated:** January 11, 2026
+**Last Updated:** January 12, 2026
 **Original Symptom:** Loss drops from 10.5 → 8.3-8.8 in first ~50 batches, then plateaus indefinitely to include multiple epochs 
 
 ---
 
-## 🔴 CRITICAL BUG FOUND (January 11, 2026)
+## 🔴 CRITICAL BUG FOUND (January 12, 2026)
 
-### Issue #26: cuBLAS Stream Binding Race Condition (FIX APPLIED!)
+### Issue #28: beta_accum ALWAYS 1.0 - Gradient Accumulation Fundamentally Broken
+
+**Symptom:** Training cannot learn. PyTorch baseline learns fine on same data, GRIM-text cannot even overfit single batch.
+
+**Root Cause:**
+In `BackwardOps_Orchestrator.cu` line 246, `ctx.beta_accum` was **hardcoded to 1.0f** regardless of the `accumulate` flag!
+
+```cpp
+// BEFORE (BUG):
+ctx.accumulate = accumulate;  // Flag is stored...
+ctx.beta_accum = 1.0f;        // ...but NEVER USED! Always 1.0
+```
+
+**Why This Broke Training:**
+1. cuBLAS GEMM computes `C = alpha * A @ B + beta * C`
+2. When `beta=1.0`: result is **ADDED** to existing C (gradient accumulation)
+3. When `beta=0.0`: result **OVERWRITES** C (fresh gradient)
+4. **First micro-batch MUST use beta=0.0** to overwrite previous window's gradients
+5. With `beta=1.0` always, first micro-batch was adding to stale/garbage gradients
+6. This corrupted gradient direction from the very first backward pass
+
+**The Fix:**
+```cpp
+// AFTER (FIXED):
+ctx.accumulate = accumulate;
+ctx.beta_accum = accumulate ? 1.0f : 0.0f;  // CONDITIONAL!
+```
+
+**Why Previous "Fix" (Issue #22) Didn't Work:**
+Issue #22 correctly set `should_accumulate = currentMicroStep() > 0` and passed it to `backward()`.
+But `backward()` → `initBackwardContextRaw()` stored the flag but **hardcoded beta_accum=1.0f**.
+The fix was incomplete - we fixed the flag but not where it's actually used!
+
+**Status:** ✅ **FIX APPLIED** (Jan 12, 2026) - Rebuild required to test
+
+---
+
+## Previous Issues (Still Applied)
 
 **Symptom:** Training log showed wild loss spikes:
 - Batch 1: 11.85

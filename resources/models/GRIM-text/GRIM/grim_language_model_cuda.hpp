@@ -127,6 +127,7 @@ struct EncoderConfig {
     int d_model = 0;           // Use HyperParameters::DEFAULT_D_MODEL
     int num_heads = 0;         // Use HyperParameters::DEFAULT_NUM_HEADS
     int num_kv_heads = 0;      // Use HyperParameters::DEFAULT_NUM_KV_HEADS (GQA - Grouped Query Attention)
+    int head_dim = 0;          // = d_model / num_heads (set from LanguageModelConfig.head_dim)
     int d_ff = 0;              // Use HyperParameters::DEFAULT_D_FF
     int num_layers = 0;        // Use HyperParameters::DEFAULT_NUM_LAYERS
     int max_seq_len = 0;       // Use HyperParameters::DEFAULT_MAX_SEQ_LEN
@@ -226,6 +227,17 @@ struct LanguageModelConfig {
     float dropout_rate = 0.0f; // Use HyperParameters::DEFAULT_DROPOUT_RATE
     float attention_dropout = 0.0f; // Use HyperParameters::DEFAULT_ATTENTION_DROPOUT
     
+    // Derived values - computed from above, DO NOT set directly
+    // Call computeDerivedValues() after setting d_model/num_heads
+    int head_dim = 0;          // = d_model / num_heads (computed)
+    
+    // Compute derived values from primary values - MUST be called after setting d_model/num_heads
+    void computeDerivedValues() {
+        if (num_heads > 0 && d_model > 0) {
+            head_dim = d_model / num_heads;
+        }
+    }
+    
     // Cache limits
     int max_cached_batch = 4;
     int max_cached_seq_len = 8192;
@@ -294,10 +306,13 @@ private:
 
     PBM::PBMState pbm_state_{};   // Unified PBM state (both ALiBi + RoPE)
     int num_heads;                // Number of attention heads
+    int head_dim_;                // Dimension per head (= d_model / num_heads)
     bool initialized;             // Initialization status
     PositionalEncodingType type;  // Encoding type
 
 public:
+    // DEPRECATED: Use head_dim from LanguageModelConfig instead
+    // Kept for backwards compatibility during transition
     int d_head;                   // Dimension per head (for RoPE) - public for initialization
     
     ALiBiPositionalBias();

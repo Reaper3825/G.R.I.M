@@ -1956,6 +1956,14 @@ BatchResult processBatch(
         grad_scale = 1.0f / static_cast<float>(safe_tokens);
     }
     
+    // DIAGNOSTIC: Print config flag value (first 3 batches only)
+    if (batch_idx < 3) {
+        ctx.logging.logger->log("[GradScaleDiag] batch=" + std::to_string(batch_idx + 1) +
+                                " per_token_grad_scale=" + (per_token_grad_scale ? "TRUE" : "FALSE") +
+                                " valid_tokens=" + std::to_string(valid_tokens) +
+                                " computed_grad_scale=" + Internal::formatScalar(grad_scale, 8));
+    }
+    
     // PRE-BACKWARD log removed - adds no actionable information
     
     // Print RoPE verification diagnostics (step-by-step)
@@ -2065,7 +2073,7 @@ BatchResult processBatch(
             std::string prefix = "layer" + std::to_string(layer) + "_";
             
             size_t qkv_size = static_cast<size_t>((cfg.num_heads + 2*cfg.num_kv_heads) * 
-                              (cfg.d_model / cfg.num_heads)) * cfg.d_model;
+                              cfg.head_dim) * cfg.d_model;  // Use pre-computed head_dim
             exportBuffer((prefix + "qkv_grads").c_str(), ts.attn_qkv_weight_grads[layer], qkv_size);
             exportBuffer((prefix + "wo_grads").c_str(), ts.attn_out_weight_grads[layer], 
                          static_cast<size_t>(cfg.d_model) * cfg.d_model);
@@ -2842,40 +2850,29 @@ EpochResult runEpoch(
             ctx.logging.logger->log(msg.str());
         }
         
-        // BUG FIX: Process all micro-batches for gradient accumulation
-        // Previously: processBatch() called once per batch, only handled 1 micro-batch
-        // Now: Inner loop calls processBatch() accum_steps times for proper accumulation
-        ctx.logging.logger->log("[MicroBatch] Starting batch " + std::to_string(batch_idx + 1) + 
-                                " with " + std::to_string(accum_steps) + " micro-batches");
+        // BUG FIX Issue #28 (Jan 11, 2026): DOUBLE GRADIENT BUG - SAME BATCH PROCESSED TWICE!
+        // The previous code had an inner loop: for (int micro_idx = 0; micro_idx < accum_steps; ++micro_idx)
+        // that called processBatch() accum_steps times with THE SAME BATCH!
+        // This caused each batch to be processed twice, doubling gradients and leading to loss explosion.
+        //
+        // CORRECT BEHAVIOR: Each batch is processed ONCE. The GradAccumulationController
+        // internally tracks micro_step and decides when to run the optimizer step after
+        // accum_steps DIFFERENT batches have been processed.
+        //
+        // The inner loop was WRONG because:
+        //   - With accum_steps=2, batch 0 was processed twice → gradients for batch 0 doubled
+        //   - Then batch 1 was processed twice → gradients for batch 1 doubled
+        //   - Each "optimizer step" used gradients from ONE batch (counted twice), not TWO batches
+        //
+        // NOW: Process each batch once. After accum_steps consecutive batches (e.g., batch 0 then batch 1),
+        // the optimizer step runs with gradients accumulated from DIFFERENT batches as intended.
         
-        BatchResult batch_result{};
-        bool batch_skipped = false;
+        BatchResult batch_result = processBatch(ctx, state, batch, batch_idx, total_batches_to_run);
         
-        for (int micro_idx = 0; micro_idx < accum_steps; ++micro_idx) {
-            ctx.logging.logger->log("[MicroBatch] Processing batch " + std::to_string(batch_idx + 1) + 
-                                    " micro-batch " + std::to_string(micro_idx + 1) + "/" + std::to_string(accum_steps));
-            
-            batch_result = processBatch(ctx, state, batch, batch_idx, total_batches_to_run);
-            
-            ctx.logging.logger->log("[MicroBatch] Completed batch " + std::to_string(batch_idx + 1) + 
-                                    " micro-batch " + std::to_string(micro_idx + 1) + "/" + std::to_string(accum_steps) +
-                                    " loss=" + Internal::formatScalar(batch_result.loss) +
-                                    " skipped=" + (batch_result.skipped ? "true" : "false"));
-            
-            if (batch_result.skipped) {
-                result.batches_skipped++;
-                ctx.logging.logger->log("[Batch " + std::to_string(batch_idx + 1) + 
-                                        " micro=" + std::to_string(micro_idx + 1) + "/" + std::to_string(accum_steps) +
-                                        "] skipped (" + batch_result.skip_reason + ")");
-                batch_skipped = true;
-                break;
-            }
-        }
-        
-        ctx.logging.logger->log("[MicroBatch] Finished batch " + std::to_string(batch_idx + 1) + 
-                                " all micro-batches (skipped=" + (batch_skipped ? "true" : "false") + ")");
-        
-        if (batch_skipped) {
+        if (batch_result.skipped) {
+            result.batches_skipped++;
+            ctx.logging.logger->log("[Batch " + std::to_string(batch_idx + 1) + 
+                                    "] skipped (" + batch_result.skip_reason + ")");
             continue;
         }
         
