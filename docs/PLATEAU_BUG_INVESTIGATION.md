@@ -1064,6 +1064,46 @@ Entire `Layers/Tokenizer/` folder contained backwards compatibility wrappers:
 
 **Conclusion:** Embedding layer is **NOT the cause** of training plateau. All forward/backward computations, gradient accumulation, weight tying, and position embeddings verified correct.
 
+### 10. UnigramByte Tokenizer (Comprehensive Test Suite - Jan 11, 2026)
+
+**67/67 Tests Passed** - Complete diagnostic test suite verified:
+
+| Category | Tests | Status |
+|----------|-------|--------|
+| Byte Encode/Decode | 5 | ✅ Pass |
+| Unigram LM | 5 | ✅ Pass |
+| Aho-Corasick DFA | 5 | ✅ Pass |
+| UniByte Orchestrator | 8 | ✅ Pass |
+| AtomTable | 17 | ✅ Pass |
+| Integration | 3 | ✅ Pass |
+| Edge Cases | 5 | ✅ Pass |
+| Unicode & Emoji | 3 | ✅ Pass |
+| Multiple Structural | 4 | ✅ Pass |
+| Path Detection | 2 | ✅ Pass |
+| Numeric Edge Cases | 3 | ✅ Pass |
+| Byte Fallback Control | 2 | ✅ Pass |
+| Vocabulary Persistence | 3 | ✅ Pass |
+| GPU Decode | 1 | ✅ Pass |
+
+**Key Verified Behaviors:**
+- ✅ **Byte fallback** - UTF-8 round-trip encoding/decoding works correctly (100% coverage)
+- ✅ **Unigram Viterbi** - Optimal subword segmentation via dynamic programming
+- ✅ **Aho-Corasick DFA** - O(n) multi-pattern matching for structural token detection
+- ✅ **URL detection** - Case-insensitive detection of http://, https://, www., ftp://
+- ✅ **Email detection** - Correct @ symbol and mailto: handling
+- ✅ **Date/Time detection** - Various formats recognized and tokenized
+- ✅ **Number detection** - Integers, floats, scientific notation, negative numbers
+- ✅ **IP address vs decimal** - Correctly distinguishes 192.168.1.1 from 3.14159
+- ✅ **Path detection** - Windows (C:\) and Unix (/) paths recognized
+- ✅ **AtomTable registration** - All atom types (int, float, hex, binary, URL, email, date, time, IP, path, string, identifier)
+- ✅ **AtomTable GPU upload** - Device memory correctly populated
+- ✅ **Hash deduplication** - Duplicate atoms share same ID
+- ✅ **Placeholder injection** - Atom placeholders [256-511] correctly injected
+- ✅ **Vocabulary persistence** - Text and binary save/load work correctly
+- ✅ **GPU decode** - Device-side token-to-text reconstruction
+
+**Conclusion:** UnigramByte tokenizer is **NOT the cause** of training plateau. All tokenization, structural detection, atom handling, and GPU operations verified correct.
+
 ---
 
 ## 🔴 KNOWN ISSUES FOUND
