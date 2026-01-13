@@ -341,6 +341,29 @@ void logInferenceSample(TrainingContext& ctx, TrainingLoopState& state) {
             return;
         }
 
+        // DEBUG: Log raw token IDs to diagnose mode collapse
+        const auto& gen_tokens = outputs.front().token_ids;
+        const size_t prompt_len = prompt_tokens.size();
+        std::ostringstream token_debug;
+        token_debug << "[Sample] step=" << optimizer_step << " generated_tokens(first20): [";
+        for (size_t ti = prompt_len; ti < std::min(prompt_len + 20, gen_tokens.size()); ++ti) {
+            token_debug << gen_tokens[ti];
+            if (ti < std::min(prompt_len + 19, gen_tokens.size() - 1)) token_debug << ", ";
+        }
+        token_debug << "] total_generated=" << (gen_tokens.size() - prompt_len);
+        ctx.logging.logger->log(token_debug.str());
+        
+        // DEBUG: Decode individual token IDs to see what they map to
+        if (gen_tokens.size() > prompt_len) {
+            int first_gen_token = gen_tokens[prompt_len];
+            std::string first_decoded = ctx.tokenizer.decode({first_gen_token});
+            std::ostringstream tid_decode;
+            tid_decode << "[TokenDecode] token_id=" << first_gen_token 
+                       << " decodes_to=\"" << first_decoded << "\""
+                       << " (len=" << first_decoded.size() << " bytes)";
+            ctx.logging.logger->log(tid_decode.str());
+        }
+
         std::string decoded = decodeWithNumericSideChannel(ctx.tokenizer,
                                                            outputs.front().token_ids,
                                                            outputs.front().token_numeric_values,
@@ -548,6 +571,24 @@ GuessCacheScope::GuessCacheScope(::GRIM::TrainingState& training_state,
     grimts_buffers.capacity = training_state_.guess_cache_buffers.capacity;
     grimts_buffers.allocated = training_state_.guess_cache_buffers.allocated;
     
+    // Wire up GRIMTS logging to training log system
+    GRIMTS::Logging::RegisterLogCallback([](GRIMTS::Logging::LogLevel level, std::string_view message) {
+        // Convert GRIMTS log level to our module logging
+        switch (level) {
+            case GRIMTS::Logging::LogLevel::Error:
+                EmitModuleError(ModuleId::GuessCache, std::string(message), 0);
+                break;
+            case GRIMTS::Logging::LogLevel::Warning:
+                EmitModuleWarning(ModuleId::GuessCache, std::string(message), 0);
+                break;
+            case GRIMTS::Logging::LogLevel::Info:
+            case GRIMTS::Logging::LogLevel::Debug:
+            default:
+                EmitModuleInfo(ModuleId::GuessCache, std::string(message), 0);
+                break;
+        }
+    });
+    
     // Initialize GRIM-TS with pre-allocated buffers
     active_ = GRIMTS::InitializeGuessCache(config, grimts_buffers, primary_stream);
     if (active_) {
@@ -564,6 +605,8 @@ GuessCacheScope::~GuessCacheScope() {
         GRIMTS::ShutdownGuessCache();
         active_ = false;
     }
+    // Clear logging callbacks to avoid dangling references
+    GRIMTS::Logging::ClearLogCallbacks();
     // RULE 22: TrainingState owns the buffers, we allocated them so we free them
     if (buffers_allocated_) {
         training_state_.freeGuessCacheBuffers();
@@ -1676,6 +1719,59 @@ BatchResult processBatch(
             }
             pred_info << "]";
             EmitModuleInfo(ModuleId::ForwardPass, pred_info.str(), ctx.global_step);
+            
+            // === TOKEN 277 (SPACE) MODE COLLAPSE DIAGNOSTIC ===
+            // Track logit values for token 277 specifically to diagnose mode collapse
+            constexpr int SPACE_TOKEN_ID = 277;
+            if (vocab_size > SPACE_TOKEN_ID) {
+                // Sample first 10 positions to get logit stats for token 277
+                const int diag_positions = std::min(sample_positions, 10);
+                float space_logit_sum = 0.0f;
+                float space_logit_max = -1e30f;
+                float space_logit_min = 1e30f;
+                int space_is_argmax_count = 0;
+                
+                // Also track the overall max logit for comparison
+                float global_max_logit = -1e30f;
+                int global_argmax_token = -1;
+                
+                for (int pos = 0; pos < diag_positions; ++pos) {
+                    float space_logit = logit_sample[pos * vocab_size + SPACE_TOKEN_ID];
+                    space_logit_sum += space_logit;
+                    space_logit_max = std::max(space_logit_max, space_logit);
+                    space_logit_min = std::min(space_logit_min, space_logit);
+                    
+                    // Find argmax for this position
+                    float pos_max = -1e30f;
+                    int pos_argmax = 0;
+                    for (int v = 0; v < vocab_size; ++v) {
+                        float logit = logit_sample[pos * vocab_size + v];
+                        if (logit > pos_max) {
+                            pos_max = logit;
+                            pos_argmax = v;
+                        }
+                    }
+                    if (pos_argmax == SPACE_TOKEN_ID) space_is_argmax_count++;
+                    if (pos_max > global_max_logit) {
+                        global_max_logit = pos_max;
+                        global_argmax_token = pos_argmax;
+                    }
+                }
+                
+                float space_logit_mean = space_logit_sum / diag_positions;
+                
+                // Log token 277 diagnostic
+                std::ostringstream space_diag;
+                space_diag << std::fixed << std::setprecision(4);
+                space_diag << "[Token277Diag] batch=" << (batch_idx + 1)
+                           << " space_logit: mean=" << space_logit_mean
+                           << " min=" << space_logit_min
+                           << " max=" << space_logit_max
+                           << " is_argmax=" << space_is_argmax_count << "/" << diag_positions
+                           << " global_max_logit=" << global_max_logit
+                           << " global_argmax_token=" << global_argmax_token;
+                ctx.logging.logger->log(space_diag.str());
+            }
         }
     }
     
@@ -3030,13 +3126,16 @@ bool executePhase2(TrainingContext& ctx) {
     
     // Initialize guess cache (Rule 22: pass TrainingState for buffer allocation)
     std::unique_ptr<GuessCacheScope> guess_cache_scope;
+    fprintf(stderr, "[DEBUG] guess_aux_enabled=%d\n", ctx.config.hyperparameters.guess_aux_enabled ? 1 : 0);
     if (ctx.config.hyperparameters.guess_aux_enabled) {
+        fprintf(stderr, "[DEBUG] Attempting to create GuessCacheScope...\n");
         auto& training_state = ctx.model->getTrainingState();
         guess_cache_scope = std::make_unique<GuessCacheScope>(
             training_state,
             kDefaultGuessCacheCapacity,
             !ctx.config.cuda_exec.single_stream_mode);
         state.guess_cache_ready = guess_cache_scope->active();
+        fprintf(stderr, "[DEBUG] GuessCacheScope created, active=%d\n", state.guess_cache_ready ? 1 : 0);
     } else {
         state.guess_cache_ready = false;
     }

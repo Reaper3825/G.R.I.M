@@ -80,7 +80,7 @@
     "training": {
         "config": {
             "epochs": 1,
-            "seed": 1,
+            "seed": 2,
             "batch_size": 6,
             "gradient_accumulation_steps": 2,
             "batch_strategy": "RANDOM",
@@ -323,7 +323,7 @@
             "cuda_execution": {
                 "single_stream_mode": true,
                 "disable_async_frees": false,
-                "synchronize_after_kernels": true
+                "synchronize_after_kernels": false
             },
             
             "prediction_comparison": {
@@ -344,8 +344,8 @@
                 "enabled": true,
                 "default_level": "Info",
                 "modules": {
-                    "ForwardPass": "WARN",
-                    "BackwardPass": "WARN",
+                    "ForwardPass": "Info",
+                    "BackwardPass": "Info",
                     "Optimizer": "Info",
                     "Scheduler": "Info",
                     "Activations": "WARN",
@@ -378,7 +378,7 @@
             "tie_embeddings": true,
             "attention_dropout": 0.02,
             "dropout_rate": 0.1,
-            "force_rebuild_vocab": true,
+            "force_rebuild_vocab": false,
             "qk_normalization": {
                 "enabled": false,
                 "scale": 16.0

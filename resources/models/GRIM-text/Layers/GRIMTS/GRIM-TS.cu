@@ -1887,6 +1887,7 @@ void RegisterLogCallback(LogCallback callback) {
     if (!callback) return;
     std::lock_guard<std::mutex> lock(g_log_mutex);
     g_log_callbacks.push_back(std::move(callback));
+    fprintf(stderr, "[DEBUG] GRIMTS::Logging::RegisterLogCallback - now have %zu callbacks\n", g_log_callbacks.size());
 }
 
 void ClearLogCallbacks() {
@@ -1899,7 +1900,10 @@ void SetMinLogLevel(LogLevel level) {
 }
 
 void EmitLog(LogLevel level, std::string_view message) {
+    fprintf(stderr, "[DEBUG] GRIMTS::EmitLog called with level=%d, callbacks=%zu, msg=%.*s\n", 
+            static_cast<int>(level), g_log_callbacks.size(), (int)message.size(), message.data());
     if (static_cast<int>(level) < static_cast<int>(g_min_log_level)) {
+        fprintf(stderr, "[DEBUG] GRIMTS::EmitLog - filtered by level (min=%d)\n", static_cast<int>(g_min_log_level));
         return;
     }
     std::lock_guard<std::mutex> lock(g_log_mutex);

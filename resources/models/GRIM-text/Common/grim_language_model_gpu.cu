@@ -522,51 +522,6 @@ float GeneratedSequence::getNormalizedScore(float length_penalty) const {
 }
 
 //======================================================//
-//  PositionalEncoding Implementation
-//======================================================//
-
-PositionalEncoding::PositionalEncoding(int max_len, int dim)
-    : max_seq_len(max_len), d_model(dim)
-{
-    encodings.resize(max_len);
-    
-    // Generate sinusoidal positional encodings
-    for (int pos = 0; pos < max_len; ++pos) {
-        Vector encoding(dim);
-        for (int i = 0; i < dim; ++i) {
-            float angle = pos / std::pow(10000.0f, (2.0f * (i / 2)) / dim);
-            encoding[i] = (i % 2 == 0) ? std::sin(angle) : std::cos(angle);
-        }
-        encodings[pos] = encoding;
-    }
-    
-    // CRITICAL BUG FIX: Mean-center position embeddings to prevent bias accumulation.
-    // Sinusoidal encodings have non-zero mean (e.g., pos=0 has mean=0.5 from cos(0)=1).
-    // This positive bias propagates through the network and causes the model to favor
-    // tokens whose embedding rows happen to have positive sum (e.g., token 277 always
-    // gets max logit regardless of context). Mean-centering makes embeddings zero-mean.
-    for (int pos = 0; pos < max_len; ++pos) {
-        // Compute mean of this position's encoding
-        float mean = 0.0f;
-        for (int i = 0; i < dim; ++i) {
-            mean += encodings[pos][i];
-        }
-        mean /= static_cast<float>(dim);
-        
-        // Subtract mean to center at zero
-        for (int i = 0; i < dim; ++i) {
-            encodings[pos][i] -= mean;
-        }
-    }
-}
-
-Vector PositionalEncoding::getEncoding(int position) const {
-    if (position >= 0 && position < max_seq_len) {
-        return encodings[position];
-    }
-    return Vector(d_model, 0.0f);
-}
-
 //======================================================//
 //  ALiBiPositionalBias Implementation (Unified PBM)
 //======================================================//
@@ -702,8 +657,8 @@ GrimEmbeddingStack::GrimEmbeddingStack(int vocab_size, int d_model, int max_seq_
       max_seq_len_(max_seq_len)
 {
     token_embed = Matrix(vocab_size, d_model, 0.0f, true);
-    pos_encoding = PositionalEncoding(max_seq_len, d_model);
     rms_gamma = Vector(d_model, 1.0f);  // RMSNorm gamma
+    // NOTE: Position embeddings initialized directly on GPU in TrainingOps.cu
 }
 
 void GrimEmbeddingStack::enableALiBi(int num_heads, int num_kv_heads) {

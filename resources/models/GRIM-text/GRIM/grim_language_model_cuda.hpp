@@ -339,20 +339,8 @@ public:
     void cleanup();
 };
 
-
-class PositionalEncoding {
-public:
-    std::vector<Vector> encodings;
-    int max_seq_len;
-    int d_model;
-    
-    PositionalEncoding() = default;
-    PositionalEncoding(int max_len, int dim);
-    Vector getEncoding(int position) const;
-};
-
-
 // GrimEmbeddingStack - minimal interface
+// NOTE: Position embeddings are initialized directly on GPU in TrainingOps.cu
 class GrimEmbeddingStack {
 public:
     GrimEmbeddingStack(int vocab_size, int d_model, int max_seq_len);
@@ -362,15 +350,12 @@ public:
     void enableHybridPositionalEncoding(int num_heads, int d_head, int num_kv_heads);
     const ALiBiPositionalBias* getALiBiBias() const;
     const Matrix& getTokenEmbeddings() const;
-    std::vector<Vector> getBatchEmbeddings(const std::vector<int>& token_ids,
-                                           const std::vector<int>& positions,
-                                           const ContextState& ctx,
-                                           const std::vector<std::string>& tags);
+    // NOTE: getBatchEmbeddings removed - pure GPU training uses EmbeddingRuntime directly
     
     // Public members needed by GPU code
     Matrix token_embed;        // Token embedding matrix [vocab_size x d_model]
-    PositionalEncoding pos_encoding;  // Positional encoding
     Vector rms_gamma;          // RMSNorm gamma (scale)
+    // NOTE: Position embeddings are GPU-only (initialized in TrainingOps.cu)
     
 private:
     int vocab_size_;

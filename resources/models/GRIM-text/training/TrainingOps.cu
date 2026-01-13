@@ -486,20 +486,17 @@ void LanguageModel::initGPU() {
     }
     embedding_runtime->weights.position_embeddings = embedding_runtime->position_buffer;
     
-    std::vector<float> pos_data;
-    pos_data.reserve(pos_elements);
-    for (int i = 0; i < cfg.max_seq_len; ++i) {
-        Vector pos_vec = cpu_embedder.pos_encoding.getEncoding(i);
-        if (pos_vec.data.size() != static_cast<size_t>(cfg.d_model)) {
-            cleanup_runtime("❌ FATAL: Positional encoding size mismatch");
-        }
-        pos_data.insert(pos_data.end(), pos_vec.data.begin(), pos_vec.data.end());
-    }
-    cudaMemcpyAsync(embedding_runtime->position_buffer,
-                    pos_data.data(),
-                    pos_bytes,
-                    cudaMemcpyHostToDevice,
-                    embedding_runtime->stream);
+    // LEARNED POSITION EMBEDDINGS: Initialize directly on GPU with Xavier
+    // This matches PyTorch baseline (nn.Embedding) and token embedding initialization.
+    // Xavier stddev = sqrt(2/(max_seq_len + d_model)) for proper scale matching.
+    const float pos_embedding_stddev = std::sqrt(2.0f / static_cast<float>(cfg.max_seq_len + cfg.d_model));
+    std::cout << "🎲 Initializing position embeddings on GPU (stddev=" << pos_embedding_stddev 
+              << ", matches token emb scale)" << std::endl;
+    launchXavierInit(embedding_runtime->position_buffer, 
+                     static_cast<int>(pos_elements), 
+                     pos_embedding_stddev, 
+                     43,  // Different seed from token embeddings (42)
+                     embedding_runtime->stream);
     
     const size_t ln_bytes = static_cast<size_t>(cfg.d_model) * sizeof(float);
     if (cudaMalloc(&embedding_runtime->gamma_buffer, ln_bytes) != cudaSuccess) {
