@@ -210,10 +210,10 @@ private:
         
         vocab_size_ = vocab_size; // Store vocab size from file
         
-        // Accept v4 (creates targets at runtime) and v5 (reads targets from file)
-        if (version < 4 || version > 5) {
-            std::cerr << "[DataLoader] Unsupported GRMT version " << version
-                      << " (expected 4 or 5)" << std::endl;
+        // GRMT v5 required - targets stored in file
+        if (version != 5) {
+            std::cerr << "[DataLoader] FATAL: Unsupported GRMT version " << version
+                      << " (required: 5). Regenerate training data." << std::endl;
             return false;
         }
 
@@ -242,11 +242,9 @@ private:
             file.read(reinterpret_cast<char*>(seq.token_ids.data()),
                       seq_len * sizeof(int));
             
-            // GRMT v5: Read pre-computed targets immediately after token_ids
-            if (version >= 5) {
-                file.read(reinterpret_cast<char*>(seq.targets.data()),
-                          seq_len * sizeof(int));
-            }
+            // Read pre-computed targets immediately after token_ids
+            file.read(reinterpret_cast<char*>(seq.targets.data()),
+                      seq_len * sizeof(int));
             
             if (seq_len > 0) {
                 file.read(reinterpret_cast<char*>(seq.token_numeric_values.data()),
@@ -269,16 +267,6 @@ private:
                 if (seq_nonfinite > 0) {
                     nonfinite_total += seq_nonfinite;
                     nonfinite_sequences++;
-                }
-            }
-
-            // GRMT v4: Build next-token targets at runtime (v5 already read them)
-            if (version < 5) {
-                for (uint32_t j = 0; j < seq_len; ++j) {
-                    seq.targets[j] = (j + 1 < seq_len) ? seq.token_ids[j + 1] : -1;
-                }
-                if (seq_len > 0) {
-                    seq.targets[0] = -1;
                 }
             }
 

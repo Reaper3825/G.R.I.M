@@ -191,7 +191,7 @@
             },
             
             "telemetry_control": {
-                "enabled": false,
+                "enabled": true,
                 "spike_thresholds": {
                     "mild": 3.0,
                     "moderate": 5.0,
@@ -253,7 +253,7 @@
             
             "loss": {
                 "label_smoothing": {
-                    "enabled": false,
+                    "enabled": true,
                     "epsilon": 0.1
                 },
                 "focal": {
@@ -377,7 +377,7 @@
             "num_kv_heads": 4,
             "tie_embeddings": true,
             "attention_dropout": 0.02,
-            "dropout_rate": 0.01,
+            "dropout_rate": 0.1,
             "force_rebuild_vocab": false,
             "qk_normalization": {
                 "enabled": false,

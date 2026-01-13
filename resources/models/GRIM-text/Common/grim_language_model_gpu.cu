@@ -539,6 +539,25 @@ PositionalEncoding::PositionalEncoding(int max_len, int dim)
         }
         encodings[pos] = encoding;
     }
+    
+    // CRITICAL BUG FIX: Mean-center position embeddings to prevent bias accumulation.
+    // Sinusoidal encodings have non-zero mean (e.g., pos=0 has mean=0.5 from cos(0)=1).
+    // This positive bias propagates through the network and causes the model to favor
+    // tokens whose embedding rows happen to have positive sum (e.g., token 277 always
+    // gets max logit regardless of context). Mean-centering makes embeddings zero-mean.
+    for (int pos = 0; pos < max_len; ++pos) {
+        // Compute mean of this position's encoding
+        float mean = 0.0f;
+        for (int i = 0; i < dim; ++i) {
+            mean += encodings[pos][i];
+        }
+        mean /= static_cast<float>(dim);
+        
+        // Subtract mean to center at zero
+        for (int i = 0; i < dim; ++i) {
+            encodings[pos][i] -= mean;
+        }
+    }
 }
 
 Vector PositionalEncoding::getEncoding(int position) const {

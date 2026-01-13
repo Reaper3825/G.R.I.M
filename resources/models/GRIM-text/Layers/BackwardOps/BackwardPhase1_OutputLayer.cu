@@ -16,6 +16,7 @@
 #include "../../Shared/Loss/ComputeLoss/ComputeLossHost_GPU.hpp"
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../Layers/NumericHead/numeric_head_GPU.hpp"
+#include "../../Layers/LayernNorm/RMSNorm_Kernel_GPU.hpp"
 #include "../../Common/grim_scale_buffer.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/Gradients/GradStatsCollector.hpp"
@@ -100,6 +101,47 @@ BackwardStatus executePhase1_OutputLayer(BackwardContext& ctx) {
     BackwardStatus lm_status = computeLMHeadBackward(ctx);
     if (lm_status != BackwardStatus::SUCCESS) {
         return lm_status;
+    }
+    
+    //--------------------------------------------------//
+    // Step 3: Final RMSNorm Backward (Issue #33 fix)
+    //--------------------------------------------------//
+    
+    auto* ts = ctx.training_state;
+    const auto* cfg = ctx.config;
+    
+    if (ts->final_rms_gamma && ts->cached_final_rms_input && ts->final_rms_gamma_grads) {
+        P1_INFO("Computing final RMSNorm backward...");
+        
+        const float eps = 1e-5f;
+        
+        // grad_encoder_out currently holds gradient from LM head (w.r.t. normalized output)
+        // We need to backprop through RMSNorm:
+        //   - Update grad_encoder_out to be gradient w.r.t. PRE-normalized input
+        //   - Accumulate gamma gradients
+        launchRMSNormBackward(
+            ts->cached_final_rms_input,      // Input to RMSNorm (pre-norm)
+            ts->grad_encoder_out,             // Gradient from LM head (w.r.t. normalized output)
+            ts->final_rms_gamma,             // Gamma weights
+            ts->grad_encoder_out,             // Output: grad w.r.t. input (in-place OK)
+            ts->final_rms_gamma_grads,       // Output: grad w.r.t. gamma
+            ctx.total_tokens,
+            cfg->d_model,
+            eps,
+            ts->stream_ctrl.getPrimaryStream()
+        );
+        
+        if (ctx.enable_grad_checks) {
+            queueGradStats(
+                "final_rms_gamma_grads",
+                -1,
+                ts->final_rms_gamma_grads,
+                static_cast<size_t>(cfg->d_model),
+                ctx.explosion_threshold,
+                ts->stream_ctrl.getPrimaryStream());
+        }
+        
+        P1_INFO("Final RMSNorm backward complete");
     }
     
     //--------------------------------------------------//

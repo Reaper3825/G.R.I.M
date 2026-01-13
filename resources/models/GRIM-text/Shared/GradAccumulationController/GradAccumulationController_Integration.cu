@@ -122,6 +122,15 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
         );
     }
     
+    // Issue #33: Final RMSNorm gamma gradients (normalizes encoder output before LM head)
+    if (ts.final_rms_gamma_grads) {
+        controller_.registerGradientBuffer(
+            "final_rms_gamma_grads",
+            ts.final_rms_gamma_grads,
+            static_cast<std::size_t>(cfg.d_model)
+        );
+    }
+    
     // ========== Temporary Gradient Buffers (CRITICAL) ==========
     // These buffers are reused across layers during backward pass.
     // They MUST be registered so they're zeroed at window start,

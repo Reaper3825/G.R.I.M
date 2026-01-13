@@ -640,6 +640,23 @@ void LanguageModel::buildParameterGroups() {
                  << " total=" << (NUM_ATOM_TYPES * atom_embedding_dim + atom_embedding_dim * cfg.d_model + kTextFeatureDim * cfg.d_model));
     }
 
+    // Issue #33: Final RMSNorm layer (between encoder output and LM head)
+    // This normalizes encoder output variance to prevent logit scale explosion.
+    // Standard transformer architecture: embedding → encoder → FINAL_NORM → lm_head
+    // Without this, variance grows unboundedly through residual connections.
+    if (training_state_.final_rms_gamma && training_state_.final_rms_gamma_grads) {
+        ParameterGroup final_rms_group;
+        final_rms_group.name = "final_rms_gamma";
+        final_rms_group.weights = training_state_.final_rms_gamma;
+        final_rms_group.grads = training_state_.final_rms_gamma_grads;
+        final_rms_group.size = cfg.d_model;
+        final_rms_group.m_state = nullptr;
+        final_rms_group.v_state = nullptr;
+        final_rms_group.type = ParamGroupType::RMSNORM;
+        parameter_groups_.push_back(final_rms_group);
+        BWD_INFO("[buildParameterGroups] Registered final_rms_gamma: size=" << cfg.d_model);
+    }
+
     // Collect sizes for centralized optimizer state allocation
     std::vector<size_t> sizes;
     sizes.reserve(parameter_groups_.size());
@@ -1341,6 +1358,14 @@ void LanguageModel::scaleGradients(float scale) {
 
 //======================================================//
 //  setSequenceLossWeights / clearSequenceLossWeights
+//======================================================//
+// NOTE: Currently unused (sample_weight=1.0 always) but INTENTIONALLY KEPT
+// for future use cases:
+//   - Curriculum learning: weight easy examples higher early, hard examples later
+//   - Data quality weighting: upweight high-quality sources (academic papers, etc.)
+//   - Importance sampling: variance reduction via per-sample weights
+//   - Deduplication soft-weighting: downweight near-duplicate sequences
+// When count=0, loss kernel defaults to sample_weight=1.0f (standard LLM training)
 //======================================================//
 
 void LanguageModel::setSequenceLossWeights(const std::vector<float>& weights) {

@@ -127,7 +127,7 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
             FWD_DIAG_BUFFER_EXPECTED(buf,
                 encoder_output, layer_elements,
                 0.0f, expected_var,               // var≈1.0-1.2 after RMSNorm
-                -5.0f, 5.0f,                      // Bounded by RMSNorm
+                -6.0f, 6.0f,                      // ~6σ covers 99.9999% of normal dist
                 ctx.stream);
         }
         // === END DIAGNOSTIC ===
@@ -143,7 +143,7 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
         FWD_DIAG_BUFFER_EXPECTED("encoder_final_output",
             encoder_output, total_elements,
             0.0f, 1.5f,       // var≈1.2 after 12 layers with RMSNorm
-            -5.0f, 5.0f,      // Bounded by repeated RMSNorm
+            -6.0f, 6.0f,      // ~6σ covers 99.9999% of normal dist
             ctx.stream);
     }
     // === END DIAGNOSTIC ===

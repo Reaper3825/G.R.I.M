@@ -579,7 +579,7 @@ float LanguageModel::computeLossBatch(
 		fprintf(stderr, "[ForwardDiag] batch=%zu seq=%zu valid_tokens=%d\n", batch_size, seq_len, valid_tokens);
 		
 		// Compute and show logit stats
-		float logit_min = 1e30f, logit_max = -1e30f, logit_sum = 0.0f;
+		float logit_min = 1e30f, logit_max = -1e30f, logit_sum = 0.0f, logit_sq_sum = 0.0f;
 		int logit_nan = 0, logit_inf = 0;
 		for (size_t i = 0; i < logit_sample.size(); ++i) {
 			float v = logit_sample[i];
@@ -588,17 +588,39 @@ float LanguageModel::computeLossBatch(
 			logit_min = std::min(logit_min, v);
 			logit_max = std::max(logit_max, v);
 			logit_sum += v;
+			logit_sq_sum += v * v;
 		}
 		const size_t valid_logits = logit_sample.size() - logit_nan - logit_inf;
-		fprintf(stderr, "[ForwardDiag] Logits (sample): min=%.4f max=%.4f mean=%.4f nan=%d inf=%d\n",
-		        logit_min, logit_max, valid_logits > 0 ? logit_sum / valid_logits : 0.0f, logit_nan, logit_inf);
-		fprintf(stderr, "[ForwardDiag] EXPECTED: Logits should be in range [-20, 20], mean near 0\n");
+		const float logit_mean = valid_logits > 0 ? logit_sum / valid_logits : 0.0f;
+		const float logit_var = valid_logits > 0 ? (logit_sq_sum / valid_logits) - (logit_mean * logit_mean) : 0.0f;
+		const float logit_std = sqrtf(fmaxf(0.0f, logit_var));
+		fprintf(stderr, "[ForwardDiag] Logits (sample): min=%.4f max=%.4f mean=%.4f std=%.4f nan=%d inf=%d\n",
+		        logit_min, logit_max, logit_mean, logit_std, logit_nan, logit_inf);
+		fprintf(stderr, "[ForwardDiag] Logit range: %.4f (max-min), vocab_size=%d\n", logit_max - logit_min, cfg.vocab_size);
 		
-		// Show per-position details
-		fprintf(stderr, "[ForwardDiag] First %zu positions:\n", sample_tokens);
+		// Check for collapsed logits (all nearly the same = model not differentiating)
+		if (logit_std < 0.01f) {
+			fprintf(stderr, "[ForwardDiag] WARNING: Logits collapsed! std=%.6f < 0.01 → model outputs near-uniform distribution\n", logit_std);
+		}
+		
+		// Show per-position logit distribution analysis
+		fprintf(stderr, "[ForwardDiag] Per-position analysis (first %zu positions):\n", sample_tokens);
 		for (size_t pos = 0; pos < sample_tokens; ++pos) {
 			int target = target_sample[pos];
 			float* pos_logits = logit_sample.data() + pos * cfg.vocab_size;
+			
+			// Compute per-position stats
+			float pos_min = 1e30f, pos_max = -1e30f, pos_sum = 0.0f, pos_sq_sum = 0.0f;
+			for (int v = 0; v < cfg.vocab_size; ++v) {
+				float lv = pos_logits[v];
+				pos_min = std::min(pos_min, lv);
+				pos_max = std::max(pos_max, lv);
+				pos_sum += lv;
+				pos_sq_sum += lv * lv;
+			}
+			float pos_mean = pos_sum / cfg.vocab_size;
+			float pos_var = (pos_sq_sum / cfg.vocab_size) - (pos_mean * pos_mean);
+			float pos_std = sqrtf(fmaxf(0.0f, pos_var));
 			
 			// Find max logit and its index
 			float max_logit = -1e30f;
@@ -624,12 +646,21 @@ float LanguageModel::computeLossBatch(
 			                   : 0.0f;
 			float expected_loss = (target >= 0) ? -logf(target_prob + 1e-10f) : 0.0f;
 			
-			fprintf(stderr, "  pos=%zu: target=%d target_logit=%.3f max_logit=%.3f(tok=%d) p(target)=%.6f expected_loss=%.3f %s\n",
-			        pos, target, target_logit, max_logit, max_idx, target_prob, expected_loss,
+			// z-score of target logit: how many std devs above/below mean?
+			float target_zscore = (pos_std > 1e-6f && target >= 0) ? (target_logit - pos_mean) / pos_std : 0.0f;
+			
+			fprintf(stderr, "  pos=%zu: target=%d logit_range=[%.3f,%.3f] std=%.4f target_logit=%.3f(z=%.2f) max_logit=%.3f(tok=%d) p(target)=%.6f loss=%.3f %s\n",
+			        pos, target, pos_min, pos_max, pos_std, target_logit, target_zscore, max_logit, max_idx, target_prob, expected_loss,
 			        (target < 0) ? "[MASKED]" : "");
 		}
-		fprintf(stderr, "[ForwardDiag] EXPECTED: p(target) should INCREASE during training (loss decrease)\n");
-		fprintf(stderr, "[ForwardDiag] EXPECTED: Random init baseline loss ≈ ln(vocab_size) = %.2f\n", logf(cfg.vocab_size));
+		
+		// Summary expectations
+		fprintf(stderr, "[ForwardDiag] EXPECTATIONS:\n");
+		fprintf(stderr, "  - Logit std should be 0.5-2.0 (not collapsed <0.1, not exploded >10)\n");
+		fprintf(stderr, "  - Logit range (max-min) should grow during training as model differentiates\n");
+		fprintf(stderr, "  - Target z-score should be POSITIVE and INCREASING during training\n");
+		fprintf(stderr, "  - sum_exp ≈ vocab_size=50376 when logits uniform; < vocab_size when peaked\n");
+		fprintf(stderr, "  - Random init baseline loss ≈ ln(vocab_size) = %.2f\n", logf(cfg.vocab_size));
 		fprintf(stderr, "[ForwardDiag] ============================================\n\n");
 	}
 	// === END FORWARD DIAGNOSTIC ===

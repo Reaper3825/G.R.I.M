@@ -53,6 +53,14 @@ struct TrainingState {
 	float* numeric_head_weights = nullptr;  // [d_model]
 	float* numeric_head_bias = nullptr;     // [1]
 
+	// Final RMSNorm before LM head (Issue #33 fix: prevents activation variance explosion)
+	// Standard transformer architecture: embedding → encoder → **final_norm** → LM head
+	// Without this, encoder output variance grows unbounded (observed: 1.28 → 15.8+),
+	// causing logit scale explosion and token 277 collapse.
+	float* final_rms_gamma = nullptr;       // [d_model] - learnable scale (init to 1.0)
+	float* final_rms_gamma_grads = nullptr; // [d_model] - gradients
+	float* cached_final_rms_input = nullptr; // [max_cached_tokens * d_model] - for backward pass
+
 	// Encoder layer gradients (allocated per-layer)
 	std::vector<float*> rms1_gamma_grads;
 	std::vector<float*> rms2_gamma_grads;

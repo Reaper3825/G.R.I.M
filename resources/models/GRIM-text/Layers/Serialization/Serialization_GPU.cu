@@ -297,6 +297,20 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
                                             " atom_dim=", fb_scratch_block->atom_embedding_dim()));
     }
 
+    // Issue #33: Load final RMSNorm gamma (normalizes encoder output before LM head)
+    const auto* fb_final_rms_gamma = model_fb->final_rms_gamma();
+    if (fb_final_rms_gamma && request.final_rms_gamma.ptr) {
+        std::vector<float> final_rms_data(fb_final_rms_gamma->begin(), fb_final_rms_gamma->end());
+        if (!upload_device_vector(final_rms_data, request.final_rms_gamma, "final_rms_gamma")) {
+            return false;
+        }
+        GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[load] final_rms_gamma: size=", final_rms_data.size()));
+    } else if (request.final_rms_gamma.ptr && !fb_final_rms_gamma) {
+        // Checkpoint doesn't have final_rms_gamma but model expects it - initialize to 1.0
+        GRIM::Logging::EmitModuleInfo(kLogModule, 
+            "[load] final_rms_gamma not in checkpoint, using initialized values (gamma=1.0)");
+    }
+
     GRIM::Logging::EmitModuleInfo(kLogModule, "[load] Model loaded successfully");
     return true;
 }
@@ -576,6 +590,17 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         }
     }
 
+    // Issue #33: Save final RMSNorm gamma (normalizes encoder output before LM head)
+    flatbuffers::Offset<flatbuffers::Vector<float>> fb_final_rms_gamma = 0;
+    const auto& final_rms_view = request.sources.final_rms_gamma;
+    if (final_rms_view.ptr && final_rms_view.count > 0) {
+        auto final_rms_data = download_device_vector(final_rms_view, "final_rms_gamma");
+        if (!final_rms_data.empty()) {
+            fb_final_rms_gamma = builder.CreateVector(final_rms_data);
+            GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[save] final_rms_gamma: size=", final_rms_data.size()));
+        }
+    }
+
     const auto now = std::chrono::system_clock::now();
     const auto timestamp = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
@@ -606,6 +631,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         fb_lm_head,
         fb_numeric_head,
         fb_scratch_block,
+        fb_final_rms_gamma,  // Issue #33: Final RMSNorm gamma
         fb_metadata,
         0,
         0,

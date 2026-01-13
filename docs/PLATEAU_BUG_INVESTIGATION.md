@@ -1,15 +1,77 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** 🔴 CRITICAL BUG FOUND - sequence_rarity weighting scaling down ALL losses (Issue #31)  
+**Status:** � FIX IMPLEMENTED - Issue #33 Final RMSNorm Layer (January 16, 2026)  
 **Started:** December 22, 2025  
-**Last Updated:** January 15, 2026
-**Original Symptom:** Loss starts at ~6.8 instead of expected ~10.8 (ln(vocab_size)=10.83 for vocab=50376) 
+**Last Updated:** January 16, 2026
+**Original Symptom:** Model collapses to always predicting token 277 (EOS = `</s>`) regardless of context
 
 ---
 
-## 🔴 CRITICAL BUG FOUND (January 15, 2026)
+## 🟢 CRITICAL FIX IMPLEMENTED (January 16, 2026)
 
-### Issue #31: sequence_rarity Weighting Scaling Down ALL Losses by ~0.66x
+### Issue #35: EOS Token (277) Contamination in Training Data → Mode Collapse
+
+**Symptom:** Model always predicts token 277 at every position. ForwardDiag shows `max_logit=(tok=277)` at ALL positions regardless of actual target.
+
+**Discovery Process:**
+1. Token 277 was initially thought to be "na" (vocab line 277)
+2. Recalculated token layout: Bytes (0-255) + Atoms (256-273) + Unigram (274+)
+3. Token 277 = Unigram index 3 = **`</s>` (EOS token)!**
+4. Checked GRMT training data: **65 positions in first sequence alone have EOS as target**
+5. Decoded sequence context: `"...to a </s>ce th..."` - EOS appearing mid-sentence!
+
+**Root Cause Analysis:**
+
+The data pipeline added literal `<s>` and `</s>` markers to source text:
+```json
+{"content": "<s> The river was lower... to or not.</s>"}
+```
+
+When tokenized:
+1. `<s>` → BOS token (275)
+2. `</s>` → EOS token (277)
+
+But `DataLoader.cu::cleanText()` only stripped HTML tags/entities, **NOT the BOS/EOS markers**!
+
+Result:
+- EOS tokens scattered throughout sequences (65+ per 1024-token sequence)
+- Target generation: `targets[j] = token_ids[j+1]` → sets EOS as valid target
+- Old masking only handled EOS at sequence END, not mid-sequence
+- Model learned EOS is valid ~6% of predictions → mode collapse
+
+**Evidence from GRMT inspection:**
+```
+Sequence 0: length=1024
+Positions where target=277 (EOS):
+  pos 23: token=6405 target=277 (next_token=277)
+  pos 37: token=419 target=277 (next_token=277)
+  pos 56: token=284 target=277 (next_token=277)
+  ... (65 total positions!)
+```
+
+**The Fix (DataLoader.cu):**
+
+1. **Strip BOS/EOS markers from source text** - Added `stripBosEosMarkers()` function
+2. **Mask ALL BOS/EOS predictions** - Updated target generation loop to mask special tokens
+
+**Files Modified:**
+- `Shared/DataLoader/DataLoader.cu` - Added `stripBosEosMarkers()`, updated target masking
+
+**Required Actions After Fix:**
+1. Rebuild training executable
+2. **Delete existing GRMT files** to force regeneration:
+   ```powershell
+   Remove-Item D:\G.R.I.M\resources\models\GRIM-text\training\data\*.grmt
+   ```
+3. Retrain from scratch (old checkpoints trained on contaminated data)
+
+**Status:** ✅ **FIX IMPLEMENTED** (Jan 16, 2026)
+
+---
+
+## 🔵 HISTORICAL: Issue #33 (Final RMSNorm Layer) - Previously Applied
+
+### Missing Final RMSNorm Layer
 
 **Symptom:** Initial loss is ~6.8 instead of expected ~10.8 (random baseline should be ln(vocab_size)). Debug telemetry shows `sample_weight=0.665662` when it should be `1.0`.
 

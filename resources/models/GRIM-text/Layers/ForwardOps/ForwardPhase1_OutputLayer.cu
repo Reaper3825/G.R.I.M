@@ -3,6 +3,7 @@
 
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../Layers/NumericHead/numeric_head_GPU.hpp"
+#include "../../Layers/LayernNorm/RMSNorm_Kernel_GPU.hpp"
 
 namespace GRIM {
 namespace Forward {
@@ -36,6 +37,57 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
     FWD_CHECK_PTR(ctx, encoder_output, "encoder_output", -1);
     FWD_CHECK_PTR(ctx, logits_output, "logits_output", -1);
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  FINAL RMSNORM (Issue #33 fix: prevents variance explosion)
+    //  Standard architecture: embedding → encoder → **final_norm** → LM head
+    //  Cache the PRE-norm input for backward pass (grad w.r.t. gamma computation)
+    //
+    //  BUG FIX Issue #34: For LastToken mode, we must normalize the LAST token,
+    //  not the first token. The pointer offset must match what LM head reads.
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    // Compute pointer to the encoder output that LM head will use
+    float* encoder_for_lm_head;
+    int lm_head_batch_size;
+    int lm_head_seq_len;
+    
+    if (ctx.logits_target == ForwardLogitsTarget::FullSequence) {
+        encoder_for_lm_head = encoder_output;
+        lm_head_batch_size = ctx.batch_size;
+        lm_head_seq_len = ctx.seq_len;
+    } else {
+        // LastToken mode - we need the last token's encoder output
+        if (ctx.mode == ForwardMode::DecodeIncremental) {
+            // DecodeIncremental: encoder_output is already just the single new token
+            encoder_for_lm_head = encoder_output;
+        } else {
+            // Prefill/DecodeFull: encoder_output is the full sequence, we need the last token
+            if (ctx.seq_len <= 0) {
+                FWD_FAIL_LOUD(ctx, ForwardStatus::INVALID_STATE, "seq_len <= 0 for last-token logits", -1);
+            }
+            encoder_for_lm_head = encoder_output + static_cast<size_t>(ctx.seq_len - 1) * cfg->d_model;
+        }
+        lm_head_batch_size = 1;
+        lm_head_seq_len = 1;
+    }
+    
+    const int total_tokens = lm_head_batch_size * lm_head_seq_len;
+    
+    if (ts->final_rms_gamma && ts->cached_final_rms_input) {
+        // Cache pre-norm input for backward pass
+        // BUG FIX Issue #34: Cache and normalize encoder_for_lm_head, not encoder_output
+        cudaMemcpyAsync(ts->cached_final_rms_input, encoder_for_lm_head,
+                        static_cast<size_t>(total_tokens) * cfg->d_model * sizeof(float),
+                        cudaMemcpyDeviceToDevice, ctx.stream);
+        
+        // Apply final RMSNorm in-place to the encoder output that LM head will use
+        const float eps = 1e-5f;  // Standard epsilon for RMSNorm
+        launchRMSNormForward(ts->cached_final_rms_input, ts->final_rms_gamma, encoder_for_lm_head,
+                             total_tokens, cfg->d_model, eps, ctx.stream);
+        
+        FWD_INFO("[ForwardPhase1] Applied final RMSNorm (tokens=" << total_tokens << ")");
+    }
+
     LMHeadForwardParams lm_params{};
     lm_params.weights = ts->lm_head_weights;
     lm_params.bias = ts->lm_head_bias;
@@ -45,23 +97,9 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
     lm_params.handle = ctx.cublas_handle;
     lm_params.stream = ctx.stream;
     lm_params.logits = logits_output;
-
-    if (ctx.logits_target == ForwardLogitsTarget::FullSequence) {
-        lm_params.encoder_output = encoder_output;
-        lm_params.batch_size = ctx.batch_size;
-        lm_params.seq_len = ctx.seq_len;
-    } else {
-        if (ctx.mode == ForwardMode::DecodeIncremental) {
-            lm_params.encoder_output = encoder_output;
-        } else {
-            if (ctx.seq_len <= 0) {
-                FWD_FAIL_LOUD(ctx, ForwardStatus::INVALID_STATE, "seq_len <= 0 for last-token logits", -1);
-            }
-            lm_params.encoder_output = encoder_output + static_cast<size_t>(ctx.seq_len - 1) * cfg->d_model;
-        }
-        lm_params.batch_size = 1;
-        lm_params.seq_len = 1;
-    }
+    lm_params.encoder_output = encoder_for_lm_head;  // Already computed above
+    lm_params.batch_size = lm_head_batch_size;
+    lm_params.seq_len = lm_head_seq_len;
 
     try {
         launchLMHeadForward(lm_params);
@@ -70,8 +108,8 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
     }
 
     // === DIAGNOSTIC: Log encoder output and logits ===
-    // Expected encoder_output: After RMSNorm, should have mean≈0, rms≈1
-    // Expected logits: Should be in reasonable range [-15, 15], mean near 0 if well-initialized
+    // Expected encoder_output: After final RMSNorm, should have mean≈0, var≈1
+    // Expected logits: Should be in reasonable range [-2, 2] with final norm active
     {
         const size_t enc_elements = static_cast<size_t>(lm_params.batch_size) * 
                                     static_cast<size_t>(lm_params.seq_len) * 
@@ -83,7 +121,7 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
         FWD_DIAG_BUFFER_EXPECTED("encoder_output (LM head input)", 
             lm_params.encoder_output, enc_elements,
             0.0f, 1.5f,    // Expected mean≈0, var≈1-1.5 (grows slightly through layers)
-            -5.0f, 5.0f,   // Expected range after RMSNorm normalization
+            -6.0f, 6.0f,   // Expected range after RMSNorm: ~6σ covers 99.9999% of normal dist
             ctx.stream);
         
         // Logits = encoder_output @ lm_head_weights.T

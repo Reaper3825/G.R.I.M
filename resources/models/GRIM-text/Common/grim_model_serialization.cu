@@ -256,6 +256,14 @@ bool LanguageModel::save(const std::string& path) {
                        ", text_proj=" + std::to_string(request.sources.scratch_block.text_feature_projection.count) + ")");
     }
 
+    // Issue #33: Final RMSNorm gamma (normalizes encoder output before LM head)
+    if (training_state_.final_rms_gamma) {
+        request.sources.final_rms_gamma.ptr = training_state_.final_rms_gamma;
+        request.sources.final_rms_gamma.count = static_cast<std::size_t>(config_.d_model);
+        EmitModuleInfo(ModuleId::Checkpoint, "Processing final_rms_gamma (size=" + 
+                       std::to_string(config_.d_model) + ")");
+    }
+
     EmitModuleInfo(ModuleId::Checkpoint, "Calling SerializationLayer::save()");
     bool result = layer.save(request);
     EmitModuleInfo(ModuleId::Checkpoint, std::string("SerializationLayer::save() returned ") + (result ? "true" : "false"));
@@ -389,6 +397,13 @@ bool LanguageModel::load(const std::string& path) {
         
         request.scratch_block.num_atom_types = kNumAtomTypes;
         request.scratch_block.atom_embedding_dim = atom_emb_dim;
+    }
+
+    // Issue #33: Final RMSNorm gamma destination
+    if (training_state_.final_rms_gamma) {
+        assignWrite(request.final_rms_gamma,
+                    training_state_.final_rms_gamma,
+                    static_cast<std::size_t>(config_.d_model));
     }
 
     return layer.load(request);

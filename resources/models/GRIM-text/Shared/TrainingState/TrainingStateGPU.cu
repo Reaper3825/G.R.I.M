@@ -44,6 +44,11 @@ TrainingState::~TrainingState() {
 	if (numeric_head_weights) cudaFree(numeric_head_weights);
 	if (numeric_head_bias) cudaFree(numeric_head_bias);
 
+	// Issue #33: Final RMSNorm cleanup
+	if (final_rms_gamma) cudaFree(final_rms_gamma);
+	if (final_rms_gamma_grads) cudaFree(final_rms_gamma_grads);
+	if (cached_final_rms_input) cudaFree(cached_final_rms_input);
+
 	auto freeVector = [](std::vector<float*>& buffers) {
 		for (auto ptr : buffers) {
 			if (ptr) {

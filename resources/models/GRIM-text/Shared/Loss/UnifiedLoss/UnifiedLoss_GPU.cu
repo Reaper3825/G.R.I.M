@@ -453,6 +453,19 @@ UnifiedLossTelemetry UnifiedLossContext::compute(
                 host_telemetry.debug_ce_smooth,
                 host_telemetry.debug_sample_weight,
                 expected_loss);
+        
+        // Detailed CE breakdown: ce_smooth = -q_on * log_p_t - q_off * sum_log_p_off
+        // For standard training (no label smoothing): ce_smooth = -log(p_t) = -(target_logit - log_sum_exp)
+        // p_t = exp(target_logit) / sum(exp(logits)) = softmax probability of correct token
+        // log_p_t = target_logit - log_sum_exp
+        // Random baseline: p_t ≈ 1/vocab_size → ce ≈ ln(vocab_size) ≈ 10.83 for vocab=50376
+        fprintf(stderr, "  CE BREAKDOWN: ce_smooth=%.6f comes from:\n", host_telemetry.debug_ce_smooth);
+        fprintf(stderr, "    p_t=%.9f (probability model assigned to correct token)\n", host_telemetry.debug_p_t);
+        fprintf(stderr, "    -log(p_t)=%.6f (cross-entropy = negative log probability)\n", -logf(fmaxf(host_telemetry.debug_p_t, 1e-10f)));
+        fprintf(stderr, "    max_logit=%.6f sum_exp=%.6f (softmax normalization)\n",
+                host_telemetry.debug_max_logit, host_telemetry.debug_sum_exp);
+        fprintf(stderr, "    target_token=%d (1-indexed, 0=not set)\n", host_telemetry.debug_target);
+        
         fprintf(stderr, "  STORED loss=%.9f (should match computed)\n",
                 host_telemetry.debug_loss);
         const uint32_t debug_count = host_telemetry.debug_count;

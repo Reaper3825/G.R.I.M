@@ -62,10 +62,35 @@ namespace {
 		return result.substr(start, end - start + 1);
 	}
 	
+	// Strip literal BOS/EOS markers that may have been added during data collection
+	std::string stripBosEosMarkers(const std::string& text) {
+		std::string result = text;
+		
+		// Strip leading <s> (with optional trailing space)
+		if (result.substr(0, 4) == "<s> ") {
+			result = result.substr(4);
+		} else if (result.substr(0, 3) == "<s>") {
+			result = result.substr(3);
+		}
+		
+		// Strip trailing </s> (with optional leading space)
+		if (result.length() >= 5 && result.substr(result.length() - 5) == " </s>") {
+			result = result.substr(0, result.length() - 5);
+		} else if (result.length() >= 4 && result.substr(result.length() - 4) == "</s>") {
+			result = result.substr(0, result.length() - 4);
+		}
+		
+		return result;
+	}
+	
 	// Full cleaning pipeline
 	std::string cleanText(const std::string& text) {
 		std::string cleaned = stripHtmlTags(text);
 		cleaned = decodeHtmlEntities(cleaned);
+		// BUG FIX Issue #35: Strip literal <s> and </s> markers from source data
+		// These markers were added by data pipeline but should NOT be tokenized
+		// as they become BOS/EOS tokens mid-sequence, causing mode collapse to EOS
+		cleaned = stripBosEosMarkers(cleaned);
 		cleaned = normalizeWhitespace(cleaned);
 		return cleaned;
 	}
@@ -351,7 +376,14 @@ bool PrepareTrainingDataFromCache(
 			
 			for (size_t j = 0; j < seq_len; ++j) {
 				if (j + 1 < seq_len) {
-					seq.targets[j] = seq.token_ids[j + 1];
+					int next_token = seq.token_ids[j + 1];
+					// BUG FIX Issue #35: Never train to predict EOS (or BOS) mid-sequence
+					// This prevents mode collapse if EOS tokens somehow appear in data
+					if (next_token == eos_id || next_token == bos_id) {
+						seq.targets[j] = -1;  // Mask special token predictions
+					} else {
+						seq.targets[j] = next_token;
+					}
 				}
 			}
 			
@@ -360,11 +392,8 @@ bool PrepareTrainingDataFromCache(
 				seq.targets[0] = -1;
 			}
 			
-			// Mask second-to-last if sequence ends with EOS
-			// Prevents model from learning to predict EOS at arbitrary positions
-			if (seq_len > 1 && eos_id >= 0 && seq.token_ids.back() == eos_id) {
-				seq.targets[seq_len - 2] = -1;
-			}
+			// REMOVED: Old EOS masking only handled final position
+			// The loop above now masks ALL EOS predictions
 			
 			tokens.push_back(std::move(seq));
 		}

@@ -143,6 +143,7 @@ struct SerializationSaveSources {
 	SerializationLMHeadReadView lm_head;
 	SerializationNumericHeadReadView numeric_head;
 	SerializationScratchBlockReadView scratch_block;  // Optional ScratchBlock weights
+	DeviceReadView final_rms_gamma;  // Issue #33: Final RMSNorm gamma [d_model]
 };
 
 struct SerializationConfig {
@@ -166,6 +167,7 @@ struct SerializationLoadRequest {
 	SerializationLMHeadWriteView lm_head;
 	SerializationNumericHeadWriteView numeric_head;
 	SerializationScratchBlockWriteView scratch_block;  // Optional ScratchBlock weights
+	DeviceWriteView final_rms_gamma;  // Issue #33: Final RMSNorm gamma [d_model]
 };
 
 class SerializationLayer final : public Layer<SerializationLayer, float> {

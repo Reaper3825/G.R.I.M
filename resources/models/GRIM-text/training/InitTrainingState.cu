@@ -340,6 +340,37 @@ void LanguageModel::initTrainingState() {
         }
     }
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  FINAL RMSNORM (Issue #33 fix: prevents activation variance explosion)
+    //  Standard transformers have: embedding → encoder → final_norm → LM head
+    //  Without final norm, encoder output variance grows unbounded (1.28 → 15.8+)
+    //  causing token 277 (space) to always get max logit regardless of context.
+    // ═══════════════════════════════════════════════════════════════════════════
+    {
+        const size_t gamma_bytes = cfg.d_model * sizeof(float);
+        
+        // Allocate final RMSNorm gamma weights
+        err = cudaMalloc(&training_state_.final_rms_gamma, gamma_bytes);
+        if (err != cudaSuccess) {
+            std::cerr << "Failed to allocate final RMSNorm gamma: " << cudaGetErrorString(err) << std::endl;
+            return;
+        }
+        
+        // Allocate final RMSNorm gamma gradients
+        err = cudaMalloc(&training_state_.final_rms_gamma_grads, gamma_bytes);
+        if (err != cudaSuccess) {
+            std::cerr << "Failed to allocate final RMSNorm gamma gradients: " << cudaGetErrorString(err) << std::endl;
+            return;
+        }
+        
+        // Initialize gamma to 1.0 (identity at initialization)
+        std::vector<float> ones(cfg.d_model, 1.0f);
+        cudaMemcpyAsync(training_state_.final_rms_gamma, ones.data(), gamma_bytes,
+                        cudaMemcpyHostToDevice, training_state_.stream_ctrl.getPrimaryStream());
+        
+        std::cout << "✓ Final RMSNorm initialized (gamma=[1.0] × " << cfg.d_model << ")" << std::endl;
+    }
+    
     training_state_.rms1_gamma_grads.resize(cfg.num_layers, nullptr);
     training_state_.rms2_gamma_grads.resize(cfg.num_layers, nullptr);
     training_state_.attn_qkv_weight_grads.resize(cfg.num_layers, nullptr);
@@ -533,6 +564,14 @@ void LanguageModel::initTrainingState() {
     err = cudaMalloc(&training_state_.cached_encoder_outputs, max_tokens * cfg.d_model * sizeof(float));
     if (err != cudaSuccess) {
         std::cerr << "Failed to allocate encoder output cache: " << cudaGetErrorString(err) << std::endl;
+        return;
+    }
+    
+    // Issue #33: Final RMSNorm input cache for backward pass
+    // Stores encoder output BEFORE final norm (used to compute gamma gradients)
+    err = cudaMalloc(&training_state_.cached_final_rms_input, max_tokens * cfg.d_model * sizeof(float));
+    if (err != cudaSuccess) {
+        std::cerr << "Failed to allocate final RMSNorm input cache: " << cudaGetErrorString(err) << std::endl;
         return;
     }
     

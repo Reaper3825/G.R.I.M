@@ -1574,11 +1574,12 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_LM_HEAD = 12,
     VT_NUMERIC_HEAD = 14,
     VT_SCRATCH_BLOCK = 16,
-    VT_TRAINING_METADATA = 18,
-    VT_CHECKSUM_CRC32 = 20,
-    VT_CHECKSUM_XXHASH64 = 22,
-    VT_CREATION_TIMESTAMP = 24,
-    VT_LAST_MODIFIED_TIMESTAMP = 26
+    VT_FINAL_RMS_GAMMA = 18,
+    VT_TRAINING_METADATA = 20,
+    VT_CHECKSUM_CRC32 = 22,
+    VT_CHECKSUM_XXHASH64 = 24,
+    VT_CREATION_TIMESTAMP = 26,
+    VT_LAST_MODIFIED_TIMESTAMP = 28
   };
   uint32_t version() const {
     return GetField<uint32_t>(VT_VERSION, 0);
@@ -1600,6 +1601,9 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const GRIMTransformer::ScratchBlockWeights *scratch_block() const {
     return GetPointer<const GRIMTransformer::ScratchBlockWeights *>(VT_SCRATCH_BLOCK);
+  }
+  const ::flatbuffers::Vector<float> *final_rms_gamma() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_FINAL_RMS_GAMMA);
   }
   const GRIMTransformer::TrainingMetadata *training_metadata() const {
     return GetPointer<const GRIMTransformer::TrainingMetadata *>(VT_TRAINING_METADATA);
@@ -1632,6 +1636,8 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyTable(numeric_head()) &&
            VerifyOffset(verifier, VT_SCRATCH_BLOCK) &&
            verifier.VerifyTable(scratch_block()) &&
+           VerifyOffset(verifier, VT_FINAL_RMS_GAMMA) &&
+           verifier.VerifyVector(final_rms_gamma()) &&
            VerifyOffset(verifier, VT_TRAINING_METADATA) &&
            verifier.VerifyTable(training_metadata()) &&
            VerifyField<uint32_t>(verifier, VT_CHECKSUM_CRC32, 4) &&
@@ -1666,6 +1672,9 @@ struct TransformerModelBuilder {
   }
   void add_scratch_block(::flatbuffers::Offset<GRIMTransformer::ScratchBlockWeights> scratch_block) {
     fbb_.AddOffset(TransformerModel::VT_SCRATCH_BLOCK, scratch_block);
+  }
+  void add_final_rms_gamma(::flatbuffers::Offset<::flatbuffers::Vector<float>> final_rms_gamma) {
+    fbb_.AddOffset(TransformerModel::VT_FINAL_RMS_GAMMA, final_rms_gamma);
   }
   void add_training_metadata(::flatbuffers::Offset<GRIMTransformer::TrainingMetadata> training_metadata) {
     fbb_.AddOffset(TransformerModel::VT_TRAINING_METADATA, training_metadata);
@@ -1706,6 +1715,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(
     ::flatbuffers::Offset<GRIMTransformer::LMHeadWeights> lm_head = 0,
     ::flatbuffers::Offset<GRIMTransformer::NumericHeadWeights> numeric_head = 0,
     ::flatbuffers::Offset<GRIMTransformer::ScratchBlockWeights> scratch_block = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> final_rms_gamma = 0,
     ::flatbuffers::Offset<GRIMTransformer::TrainingMetadata> training_metadata = 0,
     uint32_t checksum_crc32 = 0,
     uint64_t checksum_xxhash64 = 0,
@@ -1717,6 +1727,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(
   builder_.add_checksum_xxhash64(checksum_xxhash64);
   builder_.add_checksum_crc32(checksum_crc32);
   builder_.add_training_metadata(training_metadata);
+  builder_.add_final_rms_gamma(final_rms_gamma);
   builder_.add_scratch_block(scratch_block);
   builder_.add_numeric_head(numeric_head);
   builder_.add_lm_head(lm_head);
@@ -1736,12 +1747,14 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
     ::flatbuffers::Offset<GRIMTransformer::LMHeadWeights> lm_head = 0,
     ::flatbuffers::Offset<GRIMTransformer::NumericHeadWeights> numeric_head = 0,
     ::flatbuffers::Offset<GRIMTransformer::ScratchBlockWeights> scratch_block = 0,
+    const std::vector<float> *final_rms_gamma = nullptr,
     ::flatbuffers::Offset<GRIMTransformer::TrainingMetadata> training_metadata = 0,
     uint32_t checksum_crc32 = 0,
     uint64_t checksum_xxhash64 = 0,
     uint64_t creation_timestamp = 0,
     uint64_t last_modified_timestamp = 0) {
   auto encoder_layers__ = encoder_layers ? _fbb.CreateVector<::flatbuffers::Offset<GRIMTransformer::EncoderLayerWeights>>(*encoder_layers) : 0;
+  auto final_rms_gamma__ = final_rms_gamma ? _fbb.CreateVector<float>(*final_rms_gamma) : 0;
   return GRIMTransformer::CreateTransformerModel(
       _fbb,
       version,
@@ -1751,6 +1764,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
       lm_head,
       numeric_head,
       scratch_block,
+      final_rms_gamma__,
       training_metadata,
       checksum_crc32,
       checksum_xxhash64,
