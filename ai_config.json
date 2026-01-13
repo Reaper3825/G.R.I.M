@@ -378,7 +378,7 @@
             "tie_embeddings": true,
             "attention_dropout": 0.02,
             "dropout_rate": 0.1,
-            "force_rebuild_vocab": false,
+            "force_rebuild_vocab": true,
             "qk_normalization": {
                 "enabled": false,
                 "scale": 16.0

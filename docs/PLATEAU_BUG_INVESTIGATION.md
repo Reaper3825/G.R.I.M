@@ -1,75 +1,95 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** � FIX IMPLEMENTED - Issue #33 Final RMSNorm Layer (January 16, 2026)  
+**Status:** 🔴 NEW BUG FOUND - Token 277 = SPACE, NOT EOS! (January 17, 2026)  
 **Started:** December 22, 2025  
-**Last Updated:** January 16, 2026
-**Original Symptom:** Model collapses to always predicting token 277 (EOS = `</s>`) regardless of context
+**Last Updated:** January 17, 2026
+**Current Symptom:** Model collapses to always predicting token 277 (SPACE character) after just 1-2 optimizer steps
 
 ---
 
-## 🟢 CRITICAL FIX IMPLEMENTED (January 16, 2026)
+## 🔴 CRITICAL BUG: Mode Collapse to SPACE Token (January 17, 2026)
 
-### Issue #35: EOS Token (277) Contamination in Training Data → Mode Collapse
+### Issue #36: Token 277 is SPACE, NOT EOS - Mode Collapse After 1 Step
 
-**Symptom:** Model always predicts token 277 at every position. ForwardDiag shows `max_logit=(tok=277)` at ALL positions regardless of actual target.
+**CORRECTION:** Previous analysis incorrectly identified token 277 as EOS. With the correct token layout:
 
-**Discovery Process:**
-1. Token 277 was initially thought to be "na" (vocab line 277)
-2. Recalculated token layout: Bytes (0-255) + Atoms (256-273) + Unigram (274+)
-3. Token 277 = Unigram index 3 = **`</s>` (EOS token)!**
-4. Checked GRMT training data: **65 positions in first sequence alone have EOS as target**
-5. Decoded sequence context: `"...to a </s>ce th..."` - EOS appearing mid-sentence!
-
-**Root Cause Analysis:**
-
-The data pipeline added literal `<s>` and `</s>` markers to source text:
-```json
-{"content": "<s> The river was lower... to or not.</s>"}
+**Token Layout (CORRECT):**
+```
+[0-255]   = Byte tokens (256 tokens)
+[256-272] = Atom tokens (17 types: ATOM_NONE through ATOM_EXPRESSION)
+[273+]    = Unigram vocabulary
 ```
 
-When tokenized:
-1. `<s>` → BOS token (275)
-2. `</s>` → EOS token (277)
+**Special Tokens:**
+- Token 273 = UNK (`<unk>`)
+- Token 274 = PAD (`<pad>`)
+- Token 275 = BOS (`<s>`)  
+- Token 276 = EOS (`</s>`)
+- **Token 277 = SPACE (` `)** ← This is what the model mode-collapses to!
 
-But `DataLoader.cu::cleanText()` only stripped HTML tags/entities, **NOT the BOS/EOS markers**!
-
-Result:
-- EOS tokens scattered throughout sequences (65+ per 1024-token sequence)
-- Target generation: `targets[j] = token_ids[j+1]` → sets EOS as valid target
-- Old masking only handled EOS at sequence END, not mid-sequence
-- Model learned EOS is valid ~6% of predictions → mode collapse
-
-**Evidence from GRMT inspection:**
+**Key Evidence:**
 ```
-Sequence 0: length=1024
-Positions where target=277 (EOS):
-  pos 23: token=6405 target=277 (next_token=277)
-  pos 37: token=419 target=277 (next_token=277)
-  pos 56: token=284 target=277 (next_token=277)
-  ... (65 total positions!)
+UNIGRAM_VOCAB_OFFSET = 256 + kAtomTypeCount = 256 + 17 = 273
+Token 277 = UNIGRAM_VOCAB_OFFSET + 4 = 273 + 4 = 277
+vocab.txt line 4 = " \t-1.76351" (SPACE character)
 ```
 
-**The Fix (DataLoader.cu):**
+**GRMT Analysis shows Token 277 (SPACE) is 11% of all tokens:**
+```
+=== Top 20 Most Common Tokens ===
+  Token   277:  18569 (11.00%) - SPACE character
+  Token   258:   7798 ( 4.62%) - ATOM(2)
+  Token   259:   2959 ( 1.75%) - ATOM(3)
+```
 
-1. **Strip BOS/EOS markers from source text** - Added `stripBosEosMarkers()` function
-2. **Mask ALL BOS/EOS predictions** - Updated target generation loop to mask special tokens
+**Training Log Evidence (training_17683287953155630.log):**
 
-**Files Modified:**
-- `Shared/DataLoader/DataLoader.cu` - Added `stripBosEosMarkers()`, updated target masking
+Step 1 (BEFORE optimizer step):
+```
+[Sample] Hello worldthe valthe valthe valwinwin sin i sin ises.tistical...
+```
+Output is gibberish but VARIED - expected for random weights.
 
-**Required Actions After Fix:**
-1. Rebuild training executable
-2. **Delete existing GRMT files** to force regeneration:
-   ```powershell
-   Remove-Item D:\G.R.I.M\resources\models\GRIM-text\training\data\*.grmt
-   ```
-3. Retrain from scratch (old checkpoints trained on contaminated data)
+Step 2 (AFTER just 1 optimizer step):
+```
+[Sample] Hello world                                                    
+```
+**COLLAPSED TO SPACES!** The model now predicts only spaces.
 
-**Status:** ✅ **FIX IMPLEMENTED** (Jan 16, 2026)
+**Gradient spike observed at collapse:**
+```
+Batch 4: total=12.6137 attn=8.5705 ffn=8.3678  ← MASSIVE gradient spike!
+```
+But gradients were clipped to 1.0, so clipping IS working.
+
+**Why SPACE Token Collapse is Attractive:**
+1. SPACE is 11% of all valid targets (most common token)
+2. Random baseline loss = ln(50377) ≈ 10.83
+3. If model always predicts SPACE: loss ≈ 4.1 (lower than random!)
+4. Optimizer finds this "shortcut" - predict most common token
+
+**Why This Shouldn't Happen:**
+- Normal transformers don't collapse this fast (usually takes epochs, not 1 step)
+- The collapse happened between step 1 and step 2
+- Weight updates were tiny (update_rms=0.00000026 vs param_rms=0.00846)
+- Something in the model is making SPACE extremely attractive
+
+**Investigation Needed:**
+1. Why does 1 optimizer step cause immediate collapse?
+2. Is the LM head bias getting set incorrectly?
+3. Is there a softmax temperature issue during generation?
+4. Check if this happens with sampling instead of greedy
+
+**Issue #35 Update:** The EOS contamination issue was INCORRECTLY DIAGNOSED.
+- Token 277 was thought to be EOS, but it's actually SPACE
+- The "fix" to mask EOS targets may still be useful, but it's NOT the root cause
+- SPACE appearing 11% of the time is NORMAL for text data
+
+**Status:** 🔴 **UNDER INVESTIGATION** (Jan 17, 2026)
 
 ---
 
-## 🔵 HISTORICAL: Issue #33 (Final RMSNorm Layer) - Previously Applied
+## 🔵 HISTORICAL: Issue #35 (Mislabeled as EOS Contamination)
 
 ### Missing Final RMSNorm Layer
 
