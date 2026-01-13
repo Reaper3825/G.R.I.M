@@ -202,6 +202,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/BackwardOps/BackwardPhase2_Encoder.cu
     ../../Layers/BackwardOps/BackwardPhase3_InputLayer.cu
     ../../Layers/BackwardOps/BackwardOps_Orchestrator.cu
+    ../../Layers/ForwardOps/ForwardDiagnostics.cu
     ../../Layers/ForwardOps/ForwardKernels.cu
     ../../Layers/ForwardOps/ForwardOps_Orchestrator.cu
     ../../Layers/ForwardOps/ForwardPhase1_OutputLayer.cu

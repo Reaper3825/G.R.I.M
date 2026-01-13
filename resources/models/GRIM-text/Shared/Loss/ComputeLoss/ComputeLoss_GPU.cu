@@ -71,7 +71,7 @@ LossBreakdown launchLossPipeline(const LossContext& ctx,
     unified_cfg.focal_gamma = cfg.focal.gamma;
     unified_cfg.smoothing_enabled = cfg.label_smoothing.enabled;
     unified_cfg.smoothing_epsilon = cfg.label_smoothing.epsilon;
-    unified_cfg.strict_mode = false;  // Disabled - sync causes 14s stall per batch
+    unified_cfg.strict_mode = false;  // Disabled - sync causes 14s stall per batch true=debugging
     
     //=========================================================================
     // BUILD UNIFIED INPUTS

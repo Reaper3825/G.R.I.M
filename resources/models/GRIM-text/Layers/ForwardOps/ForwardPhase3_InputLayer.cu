@@ -80,15 +80,18 @@ ForwardStatus executePhase3_InputLayer(ForwardContext& ctx) {
         FWD_CHECK_CUDA(ctx, cudaGetLastError(), "embeddingRuntimeForward", -1);
 
         // === DIAGNOSTIC: Log embedding output ===
-        // Expected: Xavier init means var ≈ 1/d_model, mean ≈ 0
-        // Position embeddings (RoPE+ALiBi) are added inside embedding layer
+        // Expected: Sinusoidal position embeddings DOMINATE with var≈0.5 (sin²/cos² average)
+        //           Token embeddings have Xavier stddev = sqrt(2/(d_model+vocab)) ≈ 0.006 → var≈0.00004
+        //           Combined variance ≈ 0.5 to 1.0 depending on position distribution
+        //           Mean can drift slightly positive due to position encoding bias
         {
             const size_t emb_elements = static_cast<size_t>(ctx.total_tokens) * static_cast<size_t>(cfg->d_model);
-            const float expected_var = 1.0f / cfg->d_model;  // Xavier init
+            // Position embeddings (sin/cos) have var≈0.5, token embeddings add ~0.0001
+            const float expected_var = 1.0f;  // Dominated by sinusoidal pos encoding
             FWD_DIAG_BUFFER_EXPECTED("embeddings (after lookup + position)",
                 ts->cached_embeddings, emb_elements,
-                0.0f, expected_var * 2,  // Some variance from position embeddings added
-                -1.0f, 1.0f,             // Should be small values
+                0.0f, expected_var,       // Sinusoidal dominates, expect var≈0.5-1.0
+                -2.0f, 2.0f,              // Sin/cos in [-1,1] + small token emb
                 ctx.stream);
         }
         // === END DIAGNOSTIC ===

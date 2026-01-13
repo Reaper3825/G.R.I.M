@@ -82,23 +82,29 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
         
         FWD_DIAG_BUFFER_EXPECTED("encoder_output (LM head input)", 
             lm_params.encoder_output, enc_elements,
-            0.0f, 1.0f,    // Expected mean≈0, var≈1 after RMSNorm
-            -10.0f, 10.0f, // Expected range
+            0.0f, 1.5f,    // Expected mean≈0, var≈1-1.5 (grows slightly through layers)
+            -5.0f, 5.0f,   // Expected range after RMSNorm normalization
             ctx.stream);
         
+        // Logits = encoder_output @ lm_head_weights.T
+        // logit_var ≈ d_model × encoder_var × weight_var = 768 × 1.2 × 0.00004 ≈ 0.037
+        // With vocab_size=50376, Xavier weight stddev = sqrt(2/(768+50376)) = 0.00625
         FWD_DIAG_BUFFER_EXPECTED("logits (LM head output)", 
             logits_output, logit_elements,
-            0.0f, 10.0f,      // Expected mean≈0, var depends on init
-            -20.0f, 20.0f,    // Expected range (can be larger for vocab projection)
+            0.0f, 0.05f,      // Expected var≈0.04 from matrix multiply math
+            -2.0f, 2.0f,      // Tight range due to tiny weight variance
             ctx.stream);
         
-        // Also log weight stats to verify initialization
+        // LM head weights: Xavier init with large fan_out (vocab_size)
+        // stddev = sqrt(2/(d_model+vocab_size)) = sqrt(2/(768+50376)) ≈ 0.00625
+        // variance ≈ 0.00004
         const size_t weight_elements = static_cast<size_t>(cfg->d_model) * 
                                        static_cast<size_t>(cfg->vocab_size);
+        const float xavier_weight_var = 2.0f / (cfg->d_model + cfg->vocab_size);  // ≈ 0.00004
         FWD_DIAG_BUFFER_EXPECTED("lm_head_weights",
             ts->lm_head_weights, weight_elements,
-            0.0f, 1.0f / cfg->d_model,  // Xavier: var = 1/d_model
-            -0.1f, 0.1f,                // Expected small values
+            0.0f, xavier_weight_var,    // Xavier: var = 2/(fan_in+fan_out)
+            -0.04f, 0.04f,              // ~6 stddev range
             ctx.stream);
     }
     // === END DIAGNOSTIC ===

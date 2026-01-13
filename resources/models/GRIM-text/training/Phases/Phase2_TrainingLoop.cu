@@ -870,21 +870,12 @@ void maybeRunMicroValidation(
             // GRMT v4: text features
             micro_text_features.push_back(ctx.data.val_views[sid]->token_text_features);
             micro_text_mask.push_back(ctx.data.val_views[sid]->token_text_mask);
-            if (!ctx.data.val_sequence_rarity.empty()) {
-                float weight = 1.0f;
-                if (sid < ctx.data.val_sequence_rarity.size()) {
-                    weight = ctx.data.val_sequence_rarity[sid];
-                }
-                micro_weights.push_back(weight);
-            }
+            // BUG FIX Issue #30: Removed val_sequence_rarity weighting
         }
         
         if (micro_inputs.empty()) continue;
-        if (!ctx.data.val_sequence_rarity.empty() && micro_weights.size() == micro_inputs.size()) {
-            ctx.model->setSequenceLossWeights(micro_weights);
-        } else {
-            ctx.model->clearSequenceLossWeights();
-        }
+        // BUG FIX Issue #30: Always clear sequence weights - no rarity weighting
+        ctx.model->clearSequenceLossWeights();
         float micro_batch_loss = ctx.model->computeLossBatch(
             micro_inputs,
             micro_targets,
@@ -1259,19 +1250,10 @@ ValidationResult runValidation(TrainingContext& ctx) {
             // GRMT v4: text features
             val_text_features.push_back(seq->token_text_features);
             val_text_mask.push_back(seq->token_text_mask);
-            if (!ctx.data.val_sequence_rarity.empty()) {
-                float weight = 1.0f;
-                if (sid < ctx.data.val_sequence_rarity.size()) {
-                    weight = ctx.data.val_sequence_rarity[sid];
-                }
-                val_weights.push_back(weight);
-            }
+            // BUG FIX Issue #30: Removed val_sequence_rarity weighting
         }
-        if (!ctx.data.val_sequence_rarity.empty() && val_weights.size() == val_inputs.size()) {
-            ctx.model->setSequenceLossWeights(val_weights);
-        } else {
-            ctx.model->clearSequenceLossWeights();
-        }
+        // BUG FIX Issue #30: Always clear sequence weights - no rarity weighting
+        ctx.model->clearSequenceLossWeights();
         float batch_val_loss = ctx.model->computeLossBatch(
             val_inputs,
             val_targets,
@@ -1634,20 +1616,12 @@ BatchResult processBatch(
         EmitModuleInfo(ModuleId::ForwardPass, target_info.str(), ctx.global_step);
     }
     
-    if (!ctx.data.sequence_rarity.empty()) {
-        std::vector<float> sequence_weights;
-        sequence_weights.reserve(filtered_seq_ids.size());
-        for (uint32_t sid : filtered_seq_ids) {
-            float weight = 1.0f;
-            if (sid < ctx.data.sequence_rarity.size()) {
-                weight = ctx.data.sequence_rarity[sid];
-            }
-            sequence_weights.push_back(weight);
-        }
-        ctx.model->setSequenceLossWeights(sequence_weights);
-    } else {
-        ctx.model->clearSequenceLossWeights();
-    }
+    // BUG FIX Issue #30: sequence_rarity was scaling down ALL losses by ~0.66x,
+    // causing initial loss to be ~6.8 instead of expected ~10.8 (ln(vocab_size)).
+    // This broke the loss baseline and made training plateau investigation misleading.
+    // REMOVE sequence_rarity weighting entirely - all sequences weighted equally.
+    ctx.model->clearSequenceLossWeights();
+    
     result.loss = ctx.model->computeLossBatch(
         batch_inputs,
         batch_targets,

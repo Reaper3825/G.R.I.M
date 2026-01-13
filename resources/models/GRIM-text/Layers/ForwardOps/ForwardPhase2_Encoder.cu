@@ -115,16 +115,19 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
         enc_layer->forward(args);
 
         // === DIAGNOSTIC: Log per-layer output ===
-        // Expected: After each layer, output should maintain reasonable scale
-        // RMSNorm should keep rms≈1, residual connections may increase variance slightly
+        // Expected: RMSNorm normalizes each token to rms≈1, so variance stays ~1.0
+        // Residual connections may cause slight variance growth but RMSNorm constrains it
+        // Actual observation: variance grows slowly from ~0.9 to ~1.2 across 12 layers
         {
             const size_t layer_elements = static_cast<size_t>(total_tokens) * static_cast<size_t>(cfg->d_model);
             char buf[128];
             snprintf(buf, sizeof(buf), "encoder_layer_%d_output", layer_idx);
+            // RMSNorm maintains var≈1.0, with slight growth due to residual accumulation
+            const float expected_var = 1.0f + 0.02f * layer_idx;  // ~1.0 to ~1.24 across 12 layers
             FWD_DIAG_BUFFER_EXPECTED(buf,
                 encoder_output, layer_elements,
-                0.0f, 1.0f + 0.2f * layer_idx,  // Variance may grow with depth
-                -10.0f, 10.0f,                   // Should stay bounded
+                0.0f, expected_var,               // var≈1.0-1.2 after RMSNorm
+                -5.0f, 5.0f,                      // Bounded by RMSNorm
                 ctx.stream);
         }
         // === END DIAGNOSTIC ===
@@ -134,12 +137,13 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
     }
 
     // === DIAGNOSTIC: Final encoder output ===
+    // Expected: After all 12 layers, variance should be ~1.2 (RMSNorm constrains growth)
     {
         const size_t total_elements = static_cast<size_t>(total_tokens) * static_cast<size_t>(cfg->d_model);
         FWD_DIAG_BUFFER_EXPECTED("encoder_final_output",
             encoder_output, total_elements,
-            0.0f, 2.0f,       // After all layers, some variance growth expected
-            -15.0f, 15.0f,    // Should remain bounded
+            0.0f, 1.5f,       // var≈1.2 after 12 layers with RMSNorm
+            -5.0f, 5.0f,      // Bounded by repeated RMSNorm
             ctx.stream);
     }
     // === END DIAGNOSTIC ===

@@ -559,6 +559,81 @@ float LanguageModel::computeLossBatch(
 	orderLog("computeLossBatch.loss_start",
 		batch_size, seq_len, total_tokens, valid_tokens);
 
+	// === FORWARD DIAGNOSTIC: Verify logits and targets before loss computation ===
+	// This helps trace the plateau bug by showing what values reach the loss function
+	{
+		cudaStreamSynchronize(training_state_.stream_ctrl.getPrimaryStream());
+		
+		// Sample first batch's logits to check
+		const size_t sample_tokens = std::min<size_t>(5, total_tokens);
+		const size_t sample_vocab = std::min<size_t>(10, static_cast<size_t>(cfg.vocab_size));
+		std::vector<float> logit_sample(sample_tokens * cfg.vocab_size);
+		std::vector<int> target_sample(sample_tokens);
+		
+		cudaMemcpy(logit_sample.data(), training_state_.cached_logits, 
+		           logit_sample.size() * sizeof(float), cudaMemcpyDeviceToHost);
+		cudaMemcpy(target_sample.data(), training_state_.cached_targets, 
+		           target_sample.size() * sizeof(int), cudaMemcpyDeviceToHost);
+		
+		fprintf(stderr, "\n[ForwardDiag] ========== PRE-LOSS CHECK ==========\n");
+		fprintf(stderr, "[ForwardDiag] batch=%zu seq=%zu valid_tokens=%d\n", batch_size, seq_len, valid_tokens);
+		
+		// Compute and show logit stats
+		float logit_min = 1e30f, logit_max = -1e30f, logit_sum = 0.0f;
+		int logit_nan = 0, logit_inf = 0;
+		for (size_t i = 0; i < logit_sample.size(); ++i) {
+			float v = logit_sample[i];
+			if (std::isnan(v)) { logit_nan++; continue; }
+			if (std::isinf(v)) { logit_inf++; continue; }
+			logit_min = std::min(logit_min, v);
+			logit_max = std::max(logit_max, v);
+			logit_sum += v;
+		}
+		const size_t valid_logits = logit_sample.size() - logit_nan - logit_inf;
+		fprintf(stderr, "[ForwardDiag] Logits (sample): min=%.4f max=%.4f mean=%.4f nan=%d inf=%d\n",
+		        logit_min, logit_max, valid_logits > 0 ? logit_sum / valid_logits : 0.0f, logit_nan, logit_inf);
+		fprintf(stderr, "[ForwardDiag] EXPECTED: Logits should be in range [-20, 20], mean near 0\n");
+		
+		// Show per-position details
+		fprintf(stderr, "[ForwardDiag] First %zu positions:\n", sample_tokens);
+		for (size_t pos = 0; pos < sample_tokens; ++pos) {
+			int target = target_sample[pos];
+			float* pos_logits = logit_sample.data() + pos * cfg.vocab_size;
+			
+			// Find max logit and its index
+			float max_logit = -1e30f;
+			int max_idx = 0;
+			float target_logit = 0.0f;
+			for (int v = 0; v < cfg.vocab_size; ++v) {
+				if (pos_logits[v] > max_logit) {
+					max_logit = pos_logits[v];
+					max_idx = v;
+				}
+				if (v == target && target >= 0) {
+					target_logit = pos_logits[v];
+				}
+			}
+			
+			// Compute softmax probability for target
+			float sum_exp = 0.0f;
+			for (int v = 0; v < cfg.vocab_size; ++v) {
+				sum_exp += expf(pos_logits[v] - max_logit);  // Numerically stable
+			}
+			float target_prob = (target >= 0 && target < cfg.vocab_size) 
+			                   ? expf(target_logit - max_logit) / sum_exp 
+			                   : 0.0f;
+			float expected_loss = (target >= 0) ? -logf(target_prob + 1e-10f) : 0.0f;
+			
+			fprintf(stderr, "  pos=%zu: target=%d target_logit=%.3f max_logit=%.3f(tok=%d) p(target)=%.6f expected_loss=%.3f %s\n",
+			        pos, target, target_logit, max_logit, max_idx, target_prob, expected_loss,
+			        (target < 0) ? "[MASKED]" : "");
+		}
+		fprintf(stderr, "[ForwardDiag] EXPECTED: p(target) should INCREASE during training (loss decrease)\n");
+		fprintf(stderr, "[ForwardDiag] EXPECTED: Random init baseline loss ≈ ln(vocab_size) = %.2f\n", logf(cfg.vocab_size));
+		fprintf(stderr, "[ForwardDiag] ============================================\n\n");
+	}
+	// === END FORWARD DIAGNOSTIC ===
+
 	const auto loss_result = computeLossHost(loss_inputs, scratch);
 	
 	// Loss pipeline already syncs for host-visible results.

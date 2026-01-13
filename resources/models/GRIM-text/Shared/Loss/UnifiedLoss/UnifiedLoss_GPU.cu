@@ -439,8 +439,9 @@ UnifiedLossTelemetry UnifiedLossContext::compute(
         }
     }
 
-    static bool logged_debug = false;  // DISABLED - cudaMemcpy causes 16s stall
+    static bool logged_debug = true;  // TEMPORARILY ENABLED for debugging
     if (logged_debug) {
+        logged_debug = true;  // Only print once
         const float expected_loss = host_telemetry.debug_focal_alpha *
             host_telemetry.debug_focal_weight *
             host_telemetry.debug_ce_smooth *

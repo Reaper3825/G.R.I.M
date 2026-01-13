@@ -1,13 +1,67 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** 🔴 CRITICAL BUG FOUND - gradient_clip accidentally disabled (Issue #30)  
+**Status:** 🔴 CRITICAL BUG FOUND - sequence_rarity weighting scaling down ALL losses (Issue #31)  
 **Started:** December 22, 2025  
-**Last Updated:** January 14, 2026
-**Original Symptom:** Loss drops from 10.5 → 8.3-8.8 in first ~50 batches, then plateaus indefinitely to include multiple epochs 
+**Last Updated:** January 15, 2026
+**Original Symptom:** Loss starts at ~6.8 instead of expected ~10.8 (ln(vocab_size)=10.83 for vocab=50376) 
 
 ---
 
-## 🔴 CRITICAL BUG FOUND (January 14, 2026)
+## 🔴 CRITICAL BUG FOUND (January 15, 2026)
+
+### Issue #31: sequence_rarity Weighting Scaling Down ALL Losses by ~0.66x
+
+**Symptom:** Initial loss is ~6.8 instead of expected ~10.8 (random baseline should be ln(vocab_size)). Debug telemetry shows `sample_weight=0.665662` when it should be `1.0`.
+
+**Evidence from training_run.txt:**
+```
+[UnifiedLoss] FIRST 10 ce_smooth = [10.938656, 11.142969, 10.702181, ...] ← CORRECT (~10.8)
+[UnifiedLoss] First 10 token_losses = [0.000000, 0.000000, 7.002846, ...]  ← WRONG (~7.0 instead of ~10.8)
+
+[UnifiedLoss] DEBUG debug_sample_weight=0.665662  ← SHOULD BE 1.0!
+```
+
+**Root Cause:**
+In `Phase2_TrainingLoop.cu` at line ~1637, sequence_rarity weights were being applied to ALL training batches:
+
+```cpp
+// BEFORE (BUG):
+if (!ctx.data.sequence_rarity.empty()) {
+    std::vector<float> sequence_weights;
+    for (uint32_t sid : filtered_seq_ids) {
+        float weight = ctx.data.sequence_rarity[sid];  // Values like 0.665662
+        sequence_weights.push_back(weight);
+    }
+    ctx.model->setSequenceLossWeights(sequence_weights);
+}
+```
+
+**Why This Broke Training:**
+1. `sequence_rarity` scores sequences based on token rarity (rare tokens → higher weight)
+2. Most sequences have rarity < 1.0 (e.g., 0.665662)
+3. Loss formula: `loss = focal_alpha * focal_weight * ce_smooth * sample_weight`
+4. With sample_weight=0.665662 instead of 1.0:
+   - ce_smooth = 10.8 (correct random baseline)
+   - actual_loss = 10.8 * 0.665662 = **7.2** (incorrect!)
+5. This made initial loss appear ~7.0 instead of ~10.8
+6. All training metrics were corrupted by this 0.66x scaling factor
+
+**The Fix (Phase2_TrainingLoop.cu):**
+```cpp
+// AFTER (FIXED): Always clear sequence weights - equal weighting for all sequences
+ctx.model->clearSequenceLossWeights();
+```
+
+Removed sequence_rarity weighting from:
+1. Training batch loss computation (line ~1637)
+2. Validation micro-batches (line ~873)
+3. Validation batches (line ~1262)
+
+**Status:** ✅ **FIX APPLIED** (Jan 15, 2026) - Rebuild required
+
+---
+
+## 🔴 PREVIOUS CRITICAL BUG (January 14, 2026)
 
 ### Issue #30: gradient_clip Accidentally Disabled - 150-950x Effective Learning Rate!
 
