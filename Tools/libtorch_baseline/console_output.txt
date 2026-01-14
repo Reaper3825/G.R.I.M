@@ -1,6 +1,3 @@
-  grim_libtorch_baseline.vcxproj -> D:\G.R.I.M\Tools\libtorch_baseline\build\Release\grim_libtorch_baseline.exe  
-PS D:\G.R.I.M\Tools\libtorch_baseline\build> D:\G.R.I.M\Tools\libtorch_baseline\build\Release\grim_libtorch_baseline.exe --use_grmt 1 --grmt_path "D:\G.R.I.M\resources\models\GRIM-text\training\data\training_data.grmt" --vocab_path "D:\G.R.I.M\resources\models\GRIM-text\training\data\vocab.bin" --seq_len 1024 --batch_size 6 --n_layer 12 --n_head 12 --n_kv_head 4 --n_embd 768 --epochs 1 --lr 0.0003 --warmup_steps 0 --log_interval 1 --sample_interval
- 100 --sample_tokens 80 --use_rmsnorm 1 --tie_weights 1 --seed 1 2>&1
 [STARTUP] Parsing arguments...
 [STARTUP] Applying config...
 [STARTUP] Config ready
@@ -10,19 +7,19 @@ PS D:\G.R.I.M\Tools\libtorch_baseline\build> D:\G.R.I.M\Tools\libtorch_baseline\
 LIBTORCH BASELINE (GRIM-text Feature Parity)
 ========================================
 [Config] mode: GRMT (full vocab)
-[Config] vocab: D:\G.R.I.M\resources\models\GRIM-text\training\data\vocab.bin
-[Config] training: D:\G.R.I.M\resources\models\GRIM-text\training\data\training_data.grmt
+[Config] vocab: resources/models/GRIM-text/training/data/vocab.bin
+[Config] training: resources/models/GRIM-text/training/data/training_data.grmt
 [Config] validation: resources/models/GRIM-text/training/data/validation_data.grmt
-[Config] seq_len=1024 batch_size=6 epochs=1
+[Config] seq_len=256 batch_size=8 epochs=3
 
 [Features] Toggleable Settings:
   grad_accumulation: ON (steps=1)
-  lr_warmup: ON (steps=0)
+  lr_warmup: ON (steps=100)
   cosine_decay: ON
   grad_clipping: ON (max_norm=1)
   grad_metrics: ON
   validation: ON (interval=100)
-  sampling: ON (interval=100)
+  sampling: ON (interval=200)
   focal_loss: OFF (gamma=1, alpha=1)
   label_smoothing: OFF (eps=0.1)
   auto_stop: OFF (patience=10)
@@ -31,21 +28,21 @@ LIBTORCH BASELINE (GRIM-text Feature Parity)
   optimizer_stats: OFF
   xavier_init: ON
   use_grmt: ON
-[GRIMVocab] Loading D:\G.R.I.M\resources\models\GRIM-text\training\data\vocab.bin
-[GRIMVocab] version=3 unigram_pieces=50103 total_vocab_size=50376
-[GRIMVocab] Loaded 50103 unigram pieces
+[GRIMVocab] Loading resources/models/GRIM-text/training/data/vocab.bin
+[GRIMVocab] version=3 unigram_pieces=50104 total_vocab_size=50377
+[GRIMVocab] Loaded 50104 unigram pieces
 [STARTUP] Vocab loaded successfully, loading GRMT data...
 [STARTUP] Opening GRMT file...
-[GRMT] Opening file: D:\G.R.I.M\resources\models\GRIM-text\training\data\training_data.grmt
+[GRMT] Opening file: resources/models/GRIM-text/training/data/training_data.grmt
 [GRMT] Reading header...
 [GRMT] Header read complete
 [GRMT] Validating magic...
 [GRMT] Validating version...
 [GRMT] Printing header info...
-[GRMT] Loading D:\G.R.I.M\resources\models\GRIM-text\training\data\training_data.grmt
+[GRMT] Loading resources/models/GRIM-text/training/data/training_data.grmt
 [GRMT] version=5
-[GRMT] sequences=16258
-[GRMT] vocab_size=50376
+[GRMT] sequences=17766
+[GRMT] vocab_size=50377
 [GRMT] Pre-allocated token buffer
 [GRMT] Starting sequence loop...
 [GRMT] Reading first sequence length at offset 16
@@ -58,399 +55,74 @@ LIBTORCH BASELINE (GRIM-text Feature Parity)
 [GRMT] Skipping text_features (32768 bytes)...
 [GRMT] Skipping text_mask...
 [GRMT] Appending tokens to all_tokens...
-[GRMT] Loaded 1000/16258 sequences, 472000 tokens
-[GRMT] Loaded 2000/16258 sequences, 944565 tokens
-[GRMT] Loaded 3000/16258 sequences, 1410335 tokens
-[GRMT] Loaded 4000/16258 sequences, 1868342 tokens
+[GRMT] Loaded 1000/17766 sequences, 493315 tokens
+[GRMT] Loaded 2000/17766 sequences, 987858 tokens
+[GRMT] Loaded 3000/17766 sequences, 1487739 tokens
+[GRMT] Loaded 4000/17766 sequences, 1968745 tokens
 [GRMT] Reached max_tokens limit (2000000)
-[GRMT] Done: 2000046 tokens loaded
+[GRMT] Done: 2000537 tokens loaded
 
-[Data] tokens loaded: 2000046
+[Data] tokens loaded: 2000537
 [Model] device: cuda
 [Model] normalization: RMSNorm
-[Model] weight_tying: enabled
-[Model] attention: 12 Q heads, 4 KV heads (GQA 3:1)
-[Model] vocab_size: 50376
-[Model] total_params: 115062528
+[Model] weight_tying: disabled
+[Model] attention: 8 Q heads, 8 KV heads (MHA)
+[Model] vocab_size: 50377
+[Model] total_params: 70625792
 ========================================
 
 [Training] Starting training...
-[Training] batches_per_epoch=325 total_steps=325
+[Training] batches_per_epoch=976 total_steps=2928
 
 ========================================
-Epoch 1/1
+Epoch 1/3
 ========================================
-[Step 1] loss=10.8273 lr=3.00e-04 grad_norm=0.0023
-[Step 2] loss=10.8273 lr=3.00e-04 grad_norm=0.0023
-[Step 3] loss=10.8273 lr=3.00e-04 grad_norm=0.0028
-[Step 4] loss=10.8272 lr=3.00e-04 grad_norm=0.0043
-[Step 5] loss=10.8272 lr=3.00e-04 grad_norm=0.0070
-[Step 6] loss=10.8270 lr=3.00e-04 grad_norm=0.0120
-[Step 7] loss=10.8268 lr=3.00e-04 grad_norm=0.0178
-[Step 8] loss=10.8265 lr=3.00e-04 grad_norm=0.0254
-[Step 9] loss=10.8261 lr=3.00e-04 grad_norm=0.0327
-[Step 10] loss=10.8256 lr=2.99e-04 grad_norm=0.0411
-[GradTrace] COMPONENTS: emb=0.0018 head=0.0000 attn=0.0008 ffn=0.0006 ln=0.0410
-[Step 11] loss=10.8252 lr=2.99e-04 grad_norm=0.0463
-[Step 12] loss=10.8243 lr=2.99e-04 grad_norm=0.0575
-[Step 13] loss=10.8235 lr=2.99e-04 grad_norm=0.0651
-[Step 14] loss=10.8225 lr=2.99e-04 grad_norm=0.0734
-[Step 15] loss=10.8214 lr=2.99e-04 grad_norm=0.0825
-[Step 16] loss=10.8202 lr=2.98e-04 grad_norm=0.0907
-[Step 17] loss=10.8190 lr=2.98e-04 grad_norm=0.0976
-[Step 18] loss=10.8173 lr=2.98e-04 grad_norm=0.1087
-[Step 19] loss=10.8155 lr=2.98e-04 grad_norm=0.1198
-[Step 20] loss=10.8135 lr=2.98e-04 grad_norm=0.1303
-[GradTrace] COMPONENTS: emb=0.0044 head=0.0000 attn=0.0004 ffn=0.0003 ln=0.1302
-[Step 21] loss=10.8114 lr=2.97e-04 grad_norm=0.1415
-[Step 22] loss=10.8095 lr=2.97e-04 grad_norm=0.1491
-[Step 23] loss=10.8071 lr=2.97e-04 grad_norm=0.1594
-[Step 24] loss=10.8046 lr=2.96e-04 grad_norm=0.1697
-[Step 25] loss=10.8023 lr=2.96e-04 grad_norm=0.1767
-[Step 26] loss=10.7995 lr=2.96e-04 grad_norm=0.1866
-[Step 27] loss=10.7962 lr=2.95e-04 grad_norm=0.1983
-[Step 28] loss=10.7927 lr=2.95e-04 grad_norm=0.2102
-[Step 29] loss=10.7897 lr=2.95e-04 grad_norm=0.2178
-[Step 30] loss=10.7851 lr=2.94e-04 grad_norm=0.2336
-[GradTrace] COMPONENTS: emb=0.0074 head=0.0000 attn=0.0004 ffn=0.0003 ln=0.2335
-[Step 31] loss=10.7821 lr=2.94e-04 grad_norm=0.2396
-[Step 32] loss=10.7785 lr=2.94e-04 grad_norm=0.2488
-[Step 33] loss=10.7750 lr=2.93e-04 grad_norm=0.2560
-[Step 34] loss=10.7701 lr=2.93e-04 grad_norm=0.2695
-[Step 35] loss=10.7651 lr=2.92e-04 grad_norm=0.2823
-[Step 36] loss=10.7613 lr=2.92e-04 grad_norm=0.2890
-[Step 37] loss=10.7560 lr=2.91e-04 grad_norm=0.3014
-[Step 38] loss=10.7514 lr=2.91e-04 grad_norm=0.3096
-[Step 39] loss=10.7451 lr=2.90e-04 grad_norm=0.3244
-[Step 40] loss=10.7394 lr=2.90e-04 grad_norm=0.3358
-[GradTrace] COMPONENTS: emb=0.0111 head=0.0000 attn=0.0004 ffn=0.0003 ln=0.3356
-[Step 41] loss=10.7346 lr=2.89e-04 grad_norm=0.3431
-[Step 42] loss=10.7283 lr=2.89e-04 grad_norm=0.3556
-[Step 43] loss=10.7222 lr=2.88e-04 grad_norm=0.3666
-[Step 44] loss=10.7165 lr=2.88e-04 grad_norm=0.3754
-[Step 45] loss=10.7090 lr=2.87e-04 grad_norm=0.3897
-[Step 46] loss=10.7036 lr=2.86e-04 grad_norm=0.3962
-[Step 47] loss=10.6967 lr=2.86e-04 grad_norm=0.4073
-[Step 48] loss=10.6929 lr=2.85e-04 grad_norm=0.4079
-[Step 49] loss=10.6839 lr=2.85e-04 grad_norm=0.4242
-[Step 50] loss=10.6751 lr=2.84e-04 grad_norm=0.4394
-[GradTrace] COMPONENTS: emb=0.0129 head=0.0000 attn=0.0005 ffn=0.0004 ln=0.4393
-[Step 51] loss=10.6706 lr=2.83e-04 grad_norm=0.4415
-[Step 52] loss=10.6638 lr=2.83e-04 grad_norm=0.4499
-[Step 53] loss=10.6538 lr=2.82e-04 grad_norm=0.4663
-[Step 54] loss=10.6445 lr=2.81e-04 grad_norm=0.4803
-[Step 55] loss=10.6359 lr=2.81e-04 grad_norm=0.4918
-[Step 56] loss=10.6279 lr=2.80e-04 grad_norm=0.5012
-[Step 57] loss=10.6203 lr=2.79e-04 grad_norm=0.5091
-[Step 58] loss=10.6149 lr=2.79e-04 grad_norm=0.5115
-[Step 59] loss=10.6036 lr=2.78e-04 grad_norm=0.5278
-[Step 60] loss=10.5935 lr=2.77e-04 grad_norm=0.5407
-[GradTrace] COMPONENTS: emb=0.0164 head=0.0000 attn=0.0006 ffn=0.0004 ln=0.5404
-[Step 61] loss=10.5845 lr=2.76e-04 grad_norm=0.5504
-[Step 62] loss=10.5769 lr=2.76e-04 grad_norm=0.5568
-[Step 63] loss=10.5716 lr=2.75e-04 grad_norm=0.5577
-[Step 64] loss=10.5599 lr=2.74e-04 grad_norm=0.5725
-[Step 65] loss=10.5522 lr=2.73e-04 grad_norm=0.5782
-[Step 66] loss=10.5408 lr=2.72e-04 grad_norm=0.5916
-[Step 67] loss=10.5233 lr=2.71e-04 grad_norm=0.6168
-[Step 68] loss=10.5265 lr=2.71e-04 grad_norm=0.5993
-[Step 69] loss=10.5091 lr=2.70e-04 grad_norm=0.6235
-[Step 70] loss=10.5080 lr=2.69e-04 grad_norm=0.6151
-[GradTrace] COMPONENTS: emb=0.0174 head=0.0000 attn=0.0006 ffn=0.0004 ln=0.6148
-[Step 71] loss=10.4922 lr=2.68e-04 grad_norm=0.6352
-[Step 72] loss=10.4755 lr=2.67e-04 grad_norm=0.6564
-[Step 73] loss=10.4709 lr=2.66e-04 grad_norm=0.6542
-[Step 74] loss=10.4606 lr=2.65e-04 grad_norm=0.6626
-[Step 75] loss=10.4463 lr=2.64e-04 grad_norm=0.6780
-[Step 76] loss=10.4427 lr=2.64e-04 grad_norm=0.6738
-[Step 77] loss=10.4246 lr=2.63e-04 grad_norm=0.6954
-[Step 78] loss=10.4142 lr=2.62e-04 grad_norm=0.7029
-[Step 79] loss=10.3999 lr=2.61e-04 grad_norm=0.7168
-[Step 80] loss=10.3933 lr=2.60e-04 grad_norm=0.7172
-[GradTrace] COMPONENTS: emb=0.0209 head=0.0000 attn=0.0007 ffn=0.0004 ln=0.7169
-[Step 81] loss=10.3875 lr=2.59e-04 grad_norm=0.7165
-[Step 82] loss=10.3681 lr=2.58e-04 grad_norm=0.7382
-[Step 83] loss=10.3505 lr=2.57e-04 grad_norm=0.7564
-[Step 84] loss=10.3552 lr=2.56e-04 grad_norm=0.7377
-[Step 85] loss=10.3393 lr=2.55e-04 grad_norm=0.7527
-[Step 86] loss=10.3279 lr=2.54e-04 grad_norm=0.7603
-[Step 87] loss=10.3092 lr=2.53e-04 grad_norm=0.7792
-[Step 88] loss=10.2931 lr=2.52e-04 grad_norm=0.7936
-[Step 89] loss=10.2910 lr=2.51e-04 grad_norm=0.7860
-[Step 90] loss=10.2907 lr=2.50e-04 grad_norm=0.7757
-[GradTrace] COMPONENTS: emb=0.0222 head=0.0000 attn=0.0007 ffn=0.0004 ln=0.7754
-[Step 91] loss=10.2666 lr=2.49e-04 grad_norm=0.8015
-[Step 92] loss=10.2553 lr=2.47e-04 grad_norm=0.8077
-[Step 93] loss=10.2398 lr=2.46e-04 grad_norm=0.8199
-[Step 94] loss=10.2339 lr=2.45e-04 grad_norm=0.8181
-[Step 95] loss=10.2228 lr=2.44e-04 grad_norm=0.8236
-[Step 96] loss=10.1989 lr=2.43e-04 grad_norm=0.8471
-[Step 97] loss=10.2011 lr=2.42e-04 grad_norm=0.8334
-[Step 98] loss=10.1873 lr=2.41e-04 grad_norm=0.8424
-[Step 99] loss=10.1749 lr=2.40e-04 grad_norm=0.8493
-[Step 100] loss=10.1663 lr=2.39e-04 grad_norm=0.8506
-[GradTrace] COMPONENTS: emb=0.0256 head=0.0000 attn=0.0008 ffn=0.0005 ln=0.8502
-[Validation] loss=10.1535 ppl=25679.91
-[Sample] "Hello world of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the"
-[Step 101] loss=10.1458 lr=2.37e-04 grad_norm=0.8682
-[Step 102] loss=10.1399 lr=2.36e-04 grad_norm=0.8657
-[Step 103] loss=10.1316 lr=2.35e-04 grad_norm=0.8665
-[Step 104] loss=10.1019 lr=2.34e-04 grad_norm=0.8953
-[Step 105] loss=10.1106 lr=2.33e-04 grad_norm=0.8738
-[Step 106] loss=10.0941 lr=2.32e-04 grad_norm=0.8850
-[Step 107] loss=10.0763 lr=2.30e-04 grad_norm=0.8977
-[Step 108] loss=10.0672 lr=2.29e-04 grad_norm=0.8993
-[Step 109] loss=10.0889 lr=2.28e-04 grad_norm=0.8620
-[Step 110] loss=10.0423 lr=2.27e-04 grad_norm=0.9105
-[GradTrace] COMPONENTS: emb=0.0293 head=0.0000 attn=0.0008 ffn=0.0005 ln=0.9100
-[Step 111] loss=10.0391 lr=2.25e-04 grad_norm=0.9043
-[Step 112] loss=10.0251 lr=2.24e-04 grad_norm=0.9115
-[Step 113] loss=10.0016 lr=2.23e-04 grad_norm=0.9302
-[Step 114] loss=10.0007 lr=2.22e-04 grad_norm=0.9211
-[Step 115] loss=9.9920 lr=2.21e-04 grad_norm=0.9217
-[Step 116] loss=9.9676 lr=2.19e-04 grad_norm=0.9411
-[Step 117] loss=9.9534 lr=2.18e-04 grad_norm=0.9481
-[Step 118] loss=9.9505 lr=2.17e-04 grad_norm=0.9415
-[Step 119] loss=9.9365 lr=2.15e-04 grad_norm=0.9480
-[Step 120] loss=9.9194 lr=2.14e-04 grad_norm=0.9579
-[GradTrace] COMPONENTS: emb=0.0309 head=0.0000 attn=0.0008 ffn=0.0005 ln=0.9574
-[Step 121] loss=9.9235 lr=2.13e-04 grad_norm=0.9435
-[Step 122] loss=9.9117 lr=2.12e-04 grad_norm=0.9473
-[Step 123] loss=9.8866 lr=2.10e-04 grad_norm=0.9660
-[Step 124] loss=9.8858 lr=2.09e-04 grad_norm=0.9573
-[Step 125] loss=9.8726 lr=2.08e-04 grad_norm=0.9624
-[Step 126] loss=9.8492 lr=2.06e-04 grad_norm=0.9786
-[Step 127] loss=9.8476 lr=2.05e-04 grad_norm=0.9709
-[Step 128] loss=9.8373 lr=2.04e-04 grad_norm=0.9726
-[Step 129] loss=9.8143 lr=2.02e-04 grad_norm=0.9882
-[Step 130] loss=9.7997 lr=2.01e-04 grad_norm=0.9944
-[GradTrace] COMPONENTS: emb=0.0306 head=0.0000 attn=0.0008 ffn=0.0005 ln=0.9939
-[Step 131] loss=9.7947 lr=2.00e-04 grad_norm=0.9903
-[Step 132] loss=9.7797 lr=1.98e-04 grad_norm=0.9967
-[Step 133] loss=9.7995 lr=1.97e-04 grad_norm=0.9663
-[Step 134] loss=9.7660 lr=1.96e-04 grad_norm=0.9923
-[Step 135] loss=9.7610 lr=1.94e-04 grad_norm=0.9884
-[Step 136] loss=9.7477 lr=1.93e-04 grad_norm=0.9930
-[Step 137] loss=9.7184 lr=1.92e-04 grad_norm=1.0142 (clipped)
-[Step 138] loss=9.7212 lr=1.90e-04 grad_norm=1.0019 (clipped)
-[Step 139] loss=9.7202 lr=1.89e-04 grad_norm=0.9938
-[Step 140] loss=9.6920 lr=1.88e-04 grad_norm=1.0136 (clipped)
-[GradTrace] COMPONENTS: emb=0.0376 head=0.0000 attn=0.0008 ffn=0.0005 ln=1.0129
-[Step 141] loss=9.6991 lr=1.86e-04 grad_norm=0.9972
-[Step 142] loss=9.6753 lr=1.85e-04 grad_norm=1.0121 (clipped)
-[Step 143] loss=9.6721 lr=1.84e-04 grad_norm=1.0062 (clipped)
-[Step 144] loss=9.6608 lr=1.82e-04 grad_norm=1.0086 (clipped)
-[Step 145] loss=9.6552 lr=1.81e-04 grad_norm=1.0053 (clipped)
-[Step 146] loss=9.6440 lr=1.79e-04 grad_norm=1.0076 (clipped)
-[Step 147] loss=9.6290 lr=1.78e-04 grad_norm=1.0136 (clipped)
-[Step 148] loss=9.6369 lr=1.77e-04 grad_norm=0.9968
-[Step 149] loss=9.6034 lr=1.75e-04 grad_norm=1.0209 (clipped)
-[Step 150] loss=9.6191 lr=1.74e-04 grad_norm=0.9968
-[GradTrace] COMPONENTS: emb=0.0343 head=0.0000 attn=0.0008 ffn=0.0004 ln=0.9962
-[Step 151] loss=9.6204 lr=1.72e-04 grad_norm=0.9872
-[Step 152] loss=9.5717 lr=1.71e-04 grad_norm=1.0255 (clipped)
-[Step 153] loss=9.5687 lr=1.70e-04 grad_norm=1.0201 (clipped)
-[Step 154] loss=9.5581 lr=1.68e-04 grad_norm=1.0215 (clipped)
-[Step 155] loss=9.5323 lr=1.67e-04 grad_norm=1.0372 (clipped)
-[Step 156] loss=9.5627 lr=1.66e-04 grad_norm=1.0000 (clipped)
-[Step 157] loss=9.5571 lr=1.64e-04 grad_norm=0.9971
-[Step 158] loss=9.5397 lr=1.63e-04 grad_norm=1.0050 (clipped)
-[Step 159] loss=9.5199 lr=1.61e-04 grad_norm=1.0155 (clipped)
-[Step 160] loss=9.5303 lr=1.60e-04 grad_norm=0.9976
-[GradTrace] COMPONENTS: emb=0.0331 head=0.0000 attn=0.0007 ffn=0.0004 ln=0.9971
-[Step 161] loss=9.4870 lr=1.59e-04 grad_norm=1.0296 (clipped)
-[Step 162] loss=9.4864 lr=1.57e-04 grad_norm=1.0221 (clipped)
-[Step 163] loss=9.5046 lr=1.56e-04 grad_norm=0.9972
-[Step 164] loss=9.4920 lr=1.54e-04 grad_norm=1.0013 (clipped)
-[Step 165] loss=9.4599 lr=1.53e-04 grad_norm=1.0221 (clipped)
-[Step 166] loss=9.4495 lr=1.51e-04 grad_norm=1.0236 (clipped)
-[Step 167] loss=9.4467 lr=1.50e-04 grad_norm=1.0182 (clipped)
-[Step 168] loss=9.4309 lr=1.49e-04 grad_norm=1.0249 (clipped)
-[Step 169] loss=9.4307 lr=1.47e-04 grad_norm=1.0172 (clipped)
-[Step 170] loss=9.4353 lr=1.46e-04 grad_norm=1.0055 (clipped)
-[GradTrace] COMPONENTS: emb=0.0373 head=0.0000 attn=0.0009 ffn=0.0005 ln=1.0048
-[Step 171] loss=9.4411 lr=1.44e-04 grad_norm=0.9930
-[Step 172] loss=9.4336 lr=1.43e-04 grad_norm=0.9921
-[Step 173] loss=9.4215 lr=1.42e-04 grad_norm=0.9958
-[Step 174] loss=9.3903 lr=1.40e-04 grad_norm=1.0153 (clipped)
-[Step 175] loss=9.3857 lr=1.39e-04 grad_norm=1.0121 (clipped)
-[Step 176] loss=9.3933 lr=1.38e-04 grad_norm=0.9981
-[Step 177] loss=9.3950 lr=1.36e-04 grad_norm=0.9894
-[Step 178] loss=9.3537 lr=1.35e-04 grad_norm=1.0182 (clipped)
-[Step 179] loss=9.3628 lr=1.33e-04 grad_norm=1.0034 (clipped)
-[Step 180] loss=9.3646 lr=1.32e-04 grad_norm=0.9946
-[GradTrace] COMPONENTS: emb=0.0380 head=0.0000 attn=0.0008 ffn=0.0005 ln=0.9939
-[Step 181] loss=9.3292 lr=1.31e-04 grad_norm=1.0181 (clipped)
-[Step 182] loss=9.3298 lr=1.29e-04 grad_norm=1.0106 (clipped)
-[Step 183] loss=9.3336 lr=1.28e-04 grad_norm=1.0004 (clipped)
-[Step 184] loss=9.3349 lr=1.26e-04 grad_norm=0.9923
-[Step 185] loss=9.3108 lr=1.25e-04 grad_norm=1.0062 (clipped)
-[Step 186] loss=9.3067 lr=1.24e-04 grad_norm=1.0031 (clipped)
-[Step 187] loss=9.3233 lr=1.22e-04 grad_norm=0.9822
-[Step 188] loss=9.3049 lr=1.21e-04 grad_norm=0.9913
-[Step 189] loss=9.3186 lr=1.20e-04 grad_norm=0.9735
-[Step 190] loss=9.2892 lr=1.18e-04 grad_norm=0.9916
-[GradTrace] COMPONENTS: emb=0.0405 head=0.0000 attn=0.0008 ffn=0.0004 ln=0.9908
-[Step 191] loss=9.2459 lr=1.17e-04 grad_norm=1.0215 (clipped)
-[Step 192] loss=9.2867 lr=1.16e-04 grad_norm=0.9809
-[Step 193] loss=9.2805 lr=1.14e-04 grad_norm=0.9799
-[Step 194] loss=9.2810 lr=1.13e-04 grad_norm=0.9733
-[Step 195] loss=9.2558 lr=1.12e-04 grad_norm=0.9882
-[Step 196] loss=9.2576 lr=1.10e-04 grad_norm=0.9805
-[Step 197] loss=9.2256 lr=1.09e-04 grad_norm=1.0010 (clipped)
-[Step 198] loss=9.2633 lr=1.08e-04 grad_norm=0.9642
-[Step 199] loss=9.2282 lr=1.06e-04 grad_norm=0.9871
-[Step 200] loss=9.2499 lr=1.05e-04 grad_norm=0.9635
-[GradTrace] COMPONENTS: emb=0.0394 head=0.0000 attn=0.0007 ffn=0.0004 ln=0.9627
-[Validation] loss=9.2216 ppl=10113.55
-[Sample] "Hello world of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the"
-[Step 201] loss=9.2131 lr=1.04e-04 grad_norm=0.9878
-[Step 202] loss=9.2071 lr=1.02e-04 grad_norm=0.9870
-[Step 203] loss=9.1924 lr=1.01e-04 grad_norm=0.9933
-[Step 204] loss=9.2233 lr=9.97e-05 grad_norm=0.9626
-[Step 205] loss=9.2009 lr=9.84e-05 grad_norm=0.9753
-[Step 206] loss=9.1921 lr=9.71e-05 grad_norm=0.9769
-[Step 207] loss=9.1898 lr=9.58e-05 grad_norm=0.9734
-[Step 208] loss=9.1577 lr=9.45e-05 grad_norm=0.9942
-[Step 209] loss=9.1788 lr=9.33e-05 grad_norm=0.9717
-[Step 210] loss=9.1641 lr=9.20e-05 grad_norm=0.9783
-[GradTrace] COMPONENTS: emb=0.0398 head=0.0000 attn=0.0007 ffn=0.0004 ln=0.9775
-[Step 211] loss=9.1678 lr=9.07e-05 grad_norm=0.9703
-[Step 212] loss=9.1690 lr=8.95e-05 grad_norm=0.9644
-[Step 213] loss=9.1592 lr=8.82e-05 grad_norm=0.9672
-[Step 214] loss=9.1367 lr=8.70e-05 grad_norm=0.9802
-[Step 215] loss=9.1378 lr=8.58e-05 grad_norm=0.9745
-[Step 216] loss=9.1502 lr=8.45e-05 grad_norm=0.9600
-[Step 217] loss=9.1327 lr=8.33e-05 grad_norm=0.9689
-[Step 218] loss=9.1472 lr=8.21e-05 grad_norm=0.9528
-[Step 219] loss=9.1266 lr=8.09e-05 grad_norm=0.9646
-[Step 220] loss=9.0749 lr=7.97e-05 grad_norm=1.0006 (clipped)
-[GradTrace] COMPONENTS: emb=0.0454 head=0.0000 attn=0.0007 ffn=0.0004 ln=0.9996
-[Step 221] loss=9.1177 lr=7.85e-05 grad_norm=0.9625
-[Step 222] loss=9.1655 lr=7.73e-05 grad_norm=0.9209
-[Step 223] loss=9.1204 lr=7.61e-05 grad_norm=0.9517
-[Step 224] loss=9.1363 lr=7.50e-05 grad_norm=0.9351
-[Step 225] loss=9.1265 lr=7.38e-05 grad_norm=0.9386
-[Step 226] loss=9.0651 lr=7.26e-05 grad_norm=0.9823
-[Step 227] loss=9.1194 lr=7.15e-05 grad_norm=0.9360
-[Step 228] loss=9.1083 lr=7.03e-05 grad_norm=0.9405
-[Step 229] loss=9.0873 lr=6.92e-05 grad_norm=0.9529
-[Step 230] loss=9.0765 lr=6.81e-05 grad_norm=0.9574
-[GradTrace] COMPONENTS: emb=0.0443 head=0.0000 attn=0.0006 ffn=0.0003 ln=0.9564
-[Step 231] loss=9.1223 lr=6.70e-05 grad_norm=0.9182
-[Step 232] loss=9.0776 lr=6.59e-05 grad_norm=0.9487
-[Step 233] loss=9.0744 lr=6.48e-05 grad_norm=0.9476
-[Step 234] loss=9.1328 lr=6.37e-05 grad_norm=0.8990
-[Step 235] loss=9.0697 lr=6.26e-05 grad_norm=0.9440
-[Step 236] loss=9.0853 lr=6.15e-05 grad_norm=0.9286
-[Step 237] loss=9.0999 lr=6.04e-05 grad_norm=0.9142
-[Step 238] loss=9.0942 lr=5.94e-05 grad_norm=0.9151
-[Step 239] loss=9.0814 lr=5.83e-05 grad_norm=0.9218
-[Step 240] loss=9.0738 lr=5.73e-05 grad_norm=0.9240
-[GradTrace] COMPONENTS: emb=0.0392 head=0.0000 attn=0.0006 ffn=0.0003 ln=0.9231
-[Step 241] loss=9.0643 lr=5.63e-05 grad_norm=0.9281
-[Step 242] loss=9.0491 lr=5.52e-05 grad_norm=0.9365
-[Step 243] loss=9.0618 lr=5.42e-05 grad_norm=0.9236
-[Step 244] loss=9.0651 lr=5.32e-05 grad_norm=0.9182
-[Step 245] loss=9.0312 lr=5.22e-05 grad_norm=0.9409
-[Step 246] loss=9.0706 lr=5.12e-05 grad_norm=0.9081
-[Step 247] loss=9.0403 lr=5.03e-05 grad_norm=0.9281
-[Step 248] loss=9.0362 lr=4.93e-05 grad_norm=0.9284
-[Step 249] loss=9.0386 lr=4.83e-05 grad_norm=0.9238
-[Step 250] loss=9.0263 lr=4.74e-05 grad_norm=0.9303
-[GradTrace] COMPONENTS: emb=0.0423 head=0.0000 attn=0.0006 ffn=0.0003 ln=0.9293
-[Step 251] loss=9.0029 lr=4.65e-05 grad_norm=0.9454
-[Step 252] loss=9.0537 lr=4.55e-05 grad_norm=0.9044
-[Step 253] loss=9.0302 lr=4.46e-05 grad_norm=0.9196
-[Step 254] loss=9.0427 lr=4.37e-05 grad_norm=0.9076
-[Step 255] loss=9.0300 lr=4.28e-05 grad_norm=0.9147
-[Step 256] loss=9.0263 lr=4.19e-05 grad_norm=0.9152
-[Step 257] loss=9.0251 lr=4.11e-05 grad_norm=0.9136
-[Step 258] loss=9.0342 lr=4.02e-05 grad_norm=0.9052
-[Step 259] loss=9.0610 lr=3.94e-05 grad_norm=0.8822
-[Step 260] loss=9.0073 lr=3.85e-05 grad_norm=0.9200
-[GradTrace] COMPONENTS: emb=0.0416 head=0.0000 attn=0.0006 ffn=0.0003 ln=0.9191
-[Step 261] loss=9.0214 lr=3.77e-05 grad_norm=0.9076
-[Step 262] loss=9.0254 lr=3.69e-05 grad_norm=0.9021
-[Step 263] loss=8.9960 lr=3.61e-05 grad_norm=0.9220
-[Step 264] loss=9.0090 lr=3.53e-05 grad_norm=0.9104
-[Step 265] loss=9.0136 lr=3.45e-05 grad_norm=0.9049
-[Step 266] loss=9.0603 lr=3.37e-05 grad_norm=0.8681
-[Step 267] loss=9.0216 lr=3.29e-05 grad_norm=0.8951
-[Step 268] loss=8.9927 lr=3.22e-05 grad_norm=0.9147
-[Step 269] loss=9.0070 lr=3.15e-05 grad_norm=0.9023
-[Step 270] loss=8.9953 lr=3.07e-05 grad_norm=0.9094
-[GradTrace] COMPONENTS: emb=0.0467 head=0.0000 attn=0.0006 ffn=0.0003 ln=0.9082
-[Step 271] loss=8.9685 lr=3.00e-05 grad_norm=0.9273
-[Step 272] loss=9.0196 lr=2.93e-05 grad_norm=0.8881
-[Step 273] loss=8.9912 lr=2.86e-05 grad_norm=0.9072
-[Step 274] loss=8.9977 lr=2.79e-05 grad_norm=0.9008
-[Step 275] loss=8.9865 lr=2.73e-05 grad_norm=0.9074
-[Step 276] loss=8.9837 lr=2.66e-05 grad_norm=0.9080
-[Step 277] loss=8.9980 lr=2.60e-05 grad_norm=0.8958
-[Step 278] loss=8.9937 lr=2.53e-05 grad_norm=0.8975
-[Step 279] loss=9.0233 lr=2.47e-05 grad_norm=0.8743
-[Step 280] loss=8.9500 lr=2.41e-05 grad_norm=0.9269
-[GradTrace] COMPONENTS: emb=0.0432 head=0.0000 attn=0.0006 ffn=0.0003 ln=0.9259
-[Step 281] loss=8.9886 lr=2.35e-05 grad_norm=0.8971
-[Step 282] loss=8.9523 lr=2.29e-05 grad_norm=0.9226
-[Step 283] loss=8.9680 lr=2.23e-05 grad_norm=0.9098
-[Step 284] loss=8.9828 lr=2.18e-05 grad_norm=0.8977
-[Step 285] loss=9.0194 lr=2.12e-05 grad_norm=0.8692
-[Step 286] loss=8.9896 lr=2.07e-05 grad_norm=0.8899
-[Step 287] loss=8.9878 lr=2.02e-05 grad_norm=0.8901
-[Step 288] loss=8.9646 lr=1.97e-05 grad_norm=0.9061
-[Step 289] loss=8.9727 lr=1.92e-05 grad_norm=0.8989
-[Step 290] loss=8.9835 lr=1.87e-05 grad_norm=0.8899
-[GradTrace] COMPONENTS: emb=0.0420 head=0.0000 attn=0.0005 ffn=0.0003 ln=0.8889
-[Step 291] loss=9.0068 lr=1.82e-05 grad_norm=0.8718
-[Step 292] loss=8.9397 lr=1.78e-05 grad_norm=0.9202
-[Step 293] loss=8.9694 lr=1.73e-05 grad_norm=0.8973
-[Step 294] loss=8.9915 lr=1.69e-05 grad_norm=0.8800
-[Step 295] loss=9.0056 lr=1.65e-05 grad_norm=0.8689
-[Step 296] loss=8.9485 lr=1.61e-05 grad_norm=0.9097
-[Step 297] loss=8.9227 lr=1.57e-05 grad_norm=0.9277
-[Step 298] loss=8.9750 lr=1.53e-05 grad_norm=0.8885
-[Step 299] loss=8.9315 lr=1.49e-05 grad_norm=0.9195
-[Step 300] loss=8.9428 lr=1.46e-05 grad_norm=0.9103
-[GradTrace] COMPONENTS: emb=0.0444 head=0.0000 attn=0.0005 ffn=0.0003 ln=0.9093
-[Validation] loss=8.9822 ppl=7960.25
-[Sample] "Hello world of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the"
-[Step 301] loss=8.9497 lr=1.42e-05 grad_norm=0.9044
-[Step 302] loss=8.9403 lr=1.39e-05 grad_norm=0.9104
-[Step 303] loss=8.9898 lr=1.36e-05 grad_norm=0.8733
-[Step 304] loss=8.9830 lr=1.33e-05 grad_norm=0.8775
-[Step 305] loss=8.9603 lr=1.30e-05 grad_norm=0.8935
-[Step 306] loss=9.1077 lr=1.27e-05 grad_norm=0.7847
-[Step 307] loss=8.9523 lr=1.24e-05 grad_norm=0.8979
-[Step 308] loss=8.9610 lr=1.22e-05 grad_norm=0.8908
-[Step 309] loss=8.9770 lr=1.20e-05 grad_norm=0.8784
-[Step 310] loss=8.9640 lr=1.17e-05 grad_norm=0.8872
-[GradTrace] COMPONENTS: emb=0.0447 head=0.0000 attn=0.0005 ffn=0.0003 ln=0.8861
-[Step 311] loss=9.0061 lr=1.15e-05 grad_norm=0.8560
-[Step 312] loss=8.9733 lr=1.13e-05 grad_norm=0.8791
-[Step 313] loss=8.9526 lr=1.11e-05 grad_norm=0.8936
-[Step 314] loss=8.9631 lr=1.10e-05 grad_norm=0.8853
-[Step 315] loss=8.9418 lr=1.08e-05 grad_norm=0.9004
-[Step 316] loss=8.9556 lr=1.07e-05 grad_norm=0.8896
-[Step 317] loss=8.9272 lr=1.05e-05 grad_norm=0.9096
-[Step 318] loss=8.9585 lr=1.04e-05 grad_norm=0.8861
-[Step 319] loss=8.9913 lr=1.03e-05 grad_norm=0.8618
-[Step 320] loss=9.0114 lr=1.02e-05 grad_norm=0.8464
-[GradTrace] COMPONENTS: emb=0.0423 head=0.0000 attn=0.0005 ffn=0.0003 ln=0.8454
-[Step 321] loss=8.9430 lr=1.02e-05 grad_norm=0.8957
-[Step 322] loss=8.9710 lr=1.01e-05 grad_norm=0.8747
-[Step 323] loss=8.9594 lr=1.01e-05 grad_norm=0.8827
-[Step 324] loss=8.9340 lr=1.00e-05 grad_norm=0.9005
-[Step 325] loss=8.9600 lr=1.00e-05 grad_norm=0.8809
-
-[Epoch 1 Complete] avg_loss=9.7046 duration=875s
-
-========================================
-Training Complete
-========================================
-Total steps: 325
-Total time: 875s
-
-[Final Sample]
-Hello world of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the
+[Step 10] loss=10.8273 lr=3.00e-05 grad_norm=0.0030
+[PTorchDiag] p_t=0.000019850 -log(p_t)=10.827297 p_277=0.000019850 -log(p_277)=10.827284 max_logit=0.000029 sum_exp=50375.589233 target_token=18376 target_token_1based=18377 debug_index=0
+[Step 20] loss=10.8273 lr=6.00e-05 grad_norm=0.0033
+[PTorchDiag] p_t=0.000019851 -log(p_t)=10.827270 p_277=0.000019851 -log(p_277)=10.827278 max_logit=0.000094 sum_exp=50372.221052 target_token=38285 target_token_1based=38286 debug_index=0
+[Step 30] loss=10.8273 lr=9.00e-05 grad_norm=0.0057
+[PTorchDiag] p_t=0.000019851 -log(p_t)=10.827274 p_277=0.000019850 -log(p_277)=10.827322 max_logit=0.000249 sum_exp=50364.206335 target_token=15449 target_token_1based=15450 debug_index=0
+[Step 40] loss=10.8270 lr=1.20e-04 grad_norm=0.0185
+[PTorchDiag] p_t=0.000019855 -log(p_t)=10.827069 p_277=0.000019848 -log(p_277)=10.827418 max_logit=0.001179 sum_exp=50312.601101 target_token=3991 target_token_1based=3992 debug_index=0
+[Step 50] loss=10.8257 lr=1.50e-04 grad_norm=0.0512
+[PTorchDiag] p_t=0.000019898 -log(p_t)=10.824876 p_277=0.000019844 -log(p_277)=10.827618 max_logit=0.004053 sum_exp=50134.105553 target_token=1536 target_token_1based=1537 debug_index=0
+[Step 60] loss=10.8218 lr=1.80e-04 grad_norm=0.0957
+[PTorchDiag] p_t=0.000019960 -log(p_t)=10.821791 p_277=0.000019833 -log(p_277)=10.828160 max_logit=0.009964 sum_exp=49725.800234 target_token=3672 target_token_1based=3673 debug_index=0
+[Step 70] loss=10.8133 lr=2.10e-04 grad_norm=0.1490
+[PTorchDiag] p_t=0.000020013 -log(p_t)=10.819143 p_277=0.000019812 -log(p_277)=10.829201 max_logit=0.020240 sum_exp=48970.353350 target_token=2033 target_token_1based=2034 debug_index=0
+[Step 80] loss=10.7979 lr=2.40e-04 grad_norm=0.2128
+[PTorchDiag] p_t=0.000020324 -log(p_t)=10.803709 p_277=0.000019771 -log(p_277)=10.831305 max_logit=0.036676 sum_exp=47727.575876 target_token=2152 target_token_1based=2153 debug_index=0
+[Step 90] loss=10.7745 lr=2.70e-04 grad_norm=0.2775
+[PTorchDiag] p_t=0.000020343 -log(p_t)=10.802776 p_277=0.000019700 -log(p_277)=10.834868 max_logit=0.061442 sum_exp=45855.139100 target_token=34782 target_token_1based=34783 debug_index=0
+[Step 100] loss=10.7357 lr=3.00e-04 grad_norm=0.3658
+[PTorchDiag] p_t=0.000019598 -log(p_t)=10.840080 p_277=0.000019589 -log(p_277)=10.840535 max_logit=0.096705 sum_exp=43253.869225 target_token=47419 target_token_1based=47420 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0000 head=0.0128 attn=0.0002 ffn=0.0002 ln=0.3656
+[Validation] loss=10.7327 ppl=45829.98
+[Step 110] loss=10.6882 lr=3.00e-04 grad_norm=0.4403
+[PTorchDiag] p_t=0.000022884 -log(p_t)=10.685069 p_277=0.000019434 -log(p_277)=10.848510 max_logit=0.143353 sum_exp=40005.152461 target_token=16249 target_token_1based=16250 debug_index=0
+[Step 120] loss=10.6226 lr=3.00e-04 grad_norm=0.5346
+[PTorchDiag] p_t=0.000026803 -log(p_t)=10.527000 p_277=0.000019230 -log(p_277)=10.859043 max_logit=0.198974 sum_exp=36417.985295 target_token=2349 target_token_1based=2350 debug_index=0
+[Step 130] loss=10.5541 lr=3.00e-04 grad_norm=0.6049
+[PTorchDiag] p_t=0.000028793 -log(p_t)=10.455383 p_277=0.000018978 -log(p_277)=10.872217 max_logit=0.264434 sum_exp=32613.331956 target_token=1613 target_token_1based=1614 debug_index=0
+[Step 140] loss=10.4715 lr=3.00e-04 grad_norm=0.6820
+[PTorchDiag] p_t=0.000028308 -log(p_t)=10.472352 p_277=0.000018676 -log(p_277)=10.888268 max_logit=0.340051 sum_exp=28734.930526 target_token=37384 target_token_1based=37385 debug_index=0
+[Step 150] loss=10.3835 lr=3.00e-04 grad_norm=0.7473
+[PTorchDiag] p_t=0.000031683 -log(p_t)=10.359737 p_277=0.000018318 -log(p_277)=10.907619 max_logit=0.423744 sum_exp=24975.664276 target_token=1827 target_token_1based=1828 debug_index=0
+[Step 160] loss=10.2762 lr=3.00e-04 grad_norm=0.8253
+[PTorchDiag] p_t=0.000031764 -log(p_t)=10.357178 p_277=0.000017900 -log(p_277)=10.930685 max_logit=0.515520 sum_exp=21425.711708 target_token=25947 target_token_1based=25948 debug_index=0
+[Step 170] loss=10.1728 lr=3.00e-04 grad_norm=0.8788
+[PTorchDiag] p_t=0.000047546 -log(p_t)=9.953817 p_277=0.000017418 -log(p_277)=10.958005 max_logit=0.615455 sum_exp=18154.806640 target_token=3975 target_token_1based=3976 debug_index=0
+[Step 180] loss=10.0385 lr=2.99e-04 grad_norm=0.9578
+[PTorchDiag] p_t=0.000053060 -log(p_t)=9.844079 p_277=0.000016863 -log(p_277)=10.990389 max_logit=0.724135 sum_exp=15197.920365 target_token=4132 target_token_1based=4133 debug_index=0
+[Step 190] loss=9.9309 lr=2.99e-04 grad_norm=0.9853
+[PTorchDiag] p_t=0.000061802 -log(p_t)=9.691582 p_277=0.000016235 -log(p_277)=11.028343 max_logit=0.841881 sum_exp=12576.219600 target_token=2433 target_token_1based=2434 debug_index=0
+[Step 200] loss=9.8150 lr=2.99e-04 grad_norm=1.0107 (clipped)
+[PTorchDiag] p_t=0.000080124 -log(p_t)=9.431932 p_277=0.000015526 -log(p_277)=11.072984 max_logit=0.967402 sum_exp=10310.717223 target_token=2215 target_token_1based=2216 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0000 head=0.0406 attn=0.0006 ffn=0.0004 ln=1.0099
+[Validation] loss=9.7966 ppl=17972.03
+[Sample] "Hello world of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the"
+[Step 210] loss=9.7003 lr=2.99e-04 grad_norm=1.0230 (clipped)
+[PTorchDiag] p_t=0.000058496 -log(p_t)=9.746557 p_277=0.000014742 -log(p_277)=11.124807 max_logit=1.101589 sum_exp=8378.819279 target_token=27795 target_token_1based=27796 debug_index=0
+[Step 220] loss=9.5717 lr=2.99e-04 grad_norm=1.0382 (clipped)
+[PTorchDiag] p_t=0.000035637 -log(p_t)=10.242138 p_277=0.000013887 -log(p_277)=11.184567 max_logit=1.240292 sum_exp=6785.373018 target_token=19051 target_token_1based=19052 debug_index=0

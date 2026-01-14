@@ -1005,6 +1005,20 @@ if (ts->pbm_spec.num_kv_heads != num_kv_heads) {
     float* cached_V = ts->cached_V[layer];
     float* cached_softmax_lse = ts->cached_softmax_lse[layer];
     
+    // DIAGNOSTIC Issue #36: Verify cache contents at backward time
+    static int bwd_read_count = 0;
+    bwd_read_count++;
+    if (bwd_read_count <= 24) {  // First 2 backward passes * 12 layers
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        std::vector<float> h_q(q_size);
+        CUDA_CHECK(cudaMemcpy(h_q.data(), cached_Q, q_size * sizeof(float), cudaMemcpyDeviceToHost));
+        double sum_sq = 0.0;
+        for (std::size_t i = 0; i < q_size; ++i) sum_sq += h_q[i] * h_q[i];
+        float rms = static_cast<float>(std::sqrt(sum_sq / q_size));
+        fprintf(stderr, "[BWD_CACHE_READ_VERIFY] count=%d layer=%d cached_Q_rms=%.6f ptr=%p\n",
+                bwd_read_count, layer, rms, (void*)cached_Q);
+    }
+    
     BWD_CHECK_PTR(ctx, cached_Q, "cached_Q", layer);
     BWD_CHECK_PTR(ctx, cached_K, "cached_K", layer);
     BWD_CHECK_PTR(ctx, cached_V, "cached_V", layer);

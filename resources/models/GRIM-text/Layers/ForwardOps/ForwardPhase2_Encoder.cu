@@ -81,6 +81,15 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
             args.cache_q = ts->cached_Q[layer_idx];
             args.cache_k = ts->cached_K[layer_idx];
             args.cache_v = ts->cached_V[layer_idx];
+            // DIAGNOSTIC: Issue #36 - verify cache pointers are wired
+            if (layer_idx == 0) {
+                fprintf(stderr, "[FWD_CACHE_WIRE] layer=0 args.cache_q=%p ts->cached_Q[0]=%p\n",
+                        (void*)args.cache_q, (void*)ts->cached_Q[0]);
+            }
+        } else {
+            // DIAGNOSTIC: Issue #36 - log if condition fails!
+            fprintf(stderr, "[FWD_CACHE_WIRE] CONDITION FAILED! Q.empty=%d K.empty=%d V.empty=%d\n",
+                    ts->cached_Q.empty(), ts->cached_K.empty(), ts->cached_V.empty());
         }
 
         // Wire layer activation caches for backward pass

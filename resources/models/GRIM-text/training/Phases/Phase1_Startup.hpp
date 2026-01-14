@@ -193,6 +193,7 @@ struct LoggingContext {
     std::unique_ptr<GRIM::Logging::ModuleLogSink> stream_controller_sink;
     std::unique_ptr<GRIM::Logging::ModuleLogSink> checkpoint_sink;
     std::unique_ptr<GRIM::Logging::ModuleLogSink> activations_sink;
+    std::unique_ptr<GRIM::Logging::ModuleLogSink> guess_cache_sink;
 };
 
 /**

@@ -30,7 +30,7 @@ struct TrainConfig {
     std::string device = "cuda";
     
     // GRMT data format support (full GRIM-text vocab)
-    bool use_grmt = false;
+    bool use_grmt = true;
     std::string grmt_path = "resources/models/GRIM-text/training/data/training_data.grmt";
     std::string grmt_val_path = "resources/models/GRIM-text/training/data/validation_data.grmt";
     std::string vocab_path = "resources/models/GRIM-text/training/data/vocab.bin";
@@ -132,6 +132,7 @@ struct GPTConfig {
 };
 
 static constexpr int64_t kEosToken = 256;
+static constexpr int64_t kDebugToken277 = 277;
 
 static void replace_all(std::string & value, const std::string & from, const std::string & to) {
     if (from.empty()) {
@@ -932,6 +933,69 @@ static torch::Tensor compute_focal_loss(
 }
 
 //======================================================//
+//  Token Probability Diagnostics (p_277 vs p_t)
+//======================================================//
+
+struct TokenProbDiag {
+    double p_t = 0.0;
+    double p_277 = -1.0;
+    double max_logit = 0.0;
+    double sum_exp = 0.0;
+    int64_t target = -1;
+    int64_t debug_index = -1;
+};
+
+static bool compute_token_prob_diag(
+    const torch::Tensor& logits,
+    const torch::Tensor& targets,
+    int64_t vocab_size,
+    int64_t token_id,
+    TokenProbDiag& out) {
+
+    if (!logits.defined() || !targets.defined() || vocab_size <= 0) {
+        return false;
+    }
+
+    auto logits_flat = logits.view({-1, vocab_size});
+    auto targets_flat = targets.view({-1}).to(torch::kCPU);
+    auto* t_ptr = targets_flat.data_ptr<int64_t>();
+    const int64_t total = targets_flat.numel();
+    int64_t debug_idx = -1;
+    int64_t target = -1;
+    for (int64_t i = 0; i < total; ++i) {
+        const int64_t t = t_ptr[i];
+        if (t >= 0 && t < vocab_size) {
+            debug_idx = i;
+            target = t;
+            break;
+        }
+    }
+    if (debug_idx < 0) {
+        return false;
+    }
+
+    torch::NoGradGuard no_grad;
+    auto logits_row = logits_flat[debug_idx];
+    const double max_logit = logits_row.max().item<double>();
+    const double logsumexp = torch::logsumexp(logits_row, 0).item<double>();
+    const double sum_exp = std::exp(logsumexp - max_logit);
+    auto log_probs = torch::log_softmax(logits_row, 0);
+    const double p_t = log_probs.index({target}).exp().item<double>();
+    double p_277 = -1.0;
+    if (token_id >= 0 && token_id < vocab_size) {
+        p_277 = log_probs.index({token_id}).exp().item<double>();
+    }
+
+    out.p_t = p_t;
+    out.p_277 = p_277;
+    out.max_logit = max_logit;
+    out.sum_exp = sum_exp;
+    out.target = target;
+    out.debug_index = debug_idx;
+    return true;
+}
+
+//======================================================//
 //  Weight Statistics (matches GRIM-text sampleWeightStats)
 //======================================================//
 
@@ -1545,6 +1609,27 @@ int main(int argc, char ** argv) {
                         if (was_clipped) std::cout << " (clipped)";
                     }
                     std::cout << "\n";
+
+                    TokenProbDiag prob_diag;
+                    if (compute_token_prob_diag(logits, batch.y, model_cfg.vocab_size, kDebugToken277, prob_diag)) {
+                        std::ostringstream diag;
+                        diag << "[PTorchDiag] p_t=" << std::fixed << std::setprecision(9) << prob_diag.p_t
+                             << " -log(p_t)=" << std::setprecision(6)
+                             << -std::log(std::max(prob_diag.p_t, 1e-10));
+                        if (prob_diag.p_277 >= 0.0) {
+                            diag << " p_277=" << std::setprecision(9) << prob_diag.p_277
+                                 << " -log(p_277)=" << std::setprecision(6)
+                                 << -std::log(std::max(prob_diag.p_277, 1e-10));
+                        } else {
+                            diag << " p_277=N/A";
+                        }
+                        diag << " max_logit=" << std::setprecision(6) << prob_diag.max_logit
+                             << " sum_exp=" << prob_diag.sum_exp
+                             << " target_token=" << prob_diag.target
+                             << " target_token_1based=" << (prob_diag.target + 1)
+                             << " debug_index=" << prob_diag.debug_index;
+                        std::cout << diag.str() << "\n";
+                    }
                     
                     // Detailed gradient breakdown
                     if (cfg.enable_grad_metrics && global_step % (cfg.log_interval * 10) == 0) {

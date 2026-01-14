@@ -158,6 +158,7 @@ struct DeviceTelemetryAccum {
     float debug_max_logit;
     float debug_sum_exp;
     float debug_p_t;
+    float debug_p_277;
     float debug_ce_smooth;
     float debug_focal_weight;
     float debug_sample_weight;

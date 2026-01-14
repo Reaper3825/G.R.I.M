@@ -37,6 +37,8 @@
 
 namespace GRIMText::Training {
 
+class GuessCacheBatchBuffers;
+
 //======================================================//
 //  Training Constants
 //======================================================//
@@ -124,6 +126,7 @@ struct TrainingLoopState {
     // GuessCache state
     bool guess_cache_ready = false;
     bool guess_cache_faulted = false;
+    std::unique_ptr<GuessCacheBatchBuffers> guess_cache_buffers;
     
     // Shuffle tracking
     bool shuffle_window_exhausted_notified = false;
@@ -140,6 +143,8 @@ struct TrainingLoopState {
 
     // Last optimizer step that emitted a sample
     int last_sample_step = -1;
+
+    ~TrainingLoopState();
 };
 
 //======================================================//
@@ -182,7 +187,8 @@ BatchResult processBatch(
     TrainingLoopState& state,
     const GRIM::Batching::BatchAssignment& batch,
     int batch_idx,
-    int total_batches);
+    int total_batches,
+    int epoch_idx);
 
 /**
  * @brief Run validation after an epoch

@@ -253,7 +253,7 @@
             
             "loss": {
                 "label_smoothing": {
-                    "enabled": true,
+                    "enabled": false,
                     "epsilon": 0.1
                 },
                 "focal": {
@@ -333,6 +333,11 @@
                 "max_positions": 8,
                 "log_path": "resources/models/GRIM-text/training/prediction_comparison.log"
             },
+
+            "logit_update_trace": {
+                "enabled": true,
+                "interval": 1
+            },
             
             "attention_diagnostics": {
                 "enabled": false,
@@ -384,7 +389,7 @@
                 "scale": 16.0
             },
             "guess_cache": {
-                "enabled": true,
+                "enabled": false,
                 "initial_capacity": 16384,
                 "min_capacity": 4096,
                 "max_capacity": 262144,

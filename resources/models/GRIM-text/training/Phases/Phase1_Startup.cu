@@ -916,6 +916,15 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     logger.log("Initializing TrainingState (grad buffers, requires embedder from initGPU)...");
     model->initTrainingState();
     logger.log("✓ TrainingState fully initialized");
+
+    if (config.hyperparameters.logit_update_trace_enabled) {
+        const bool tied = model->getConfig().tie_embeddings;
+        const std::string group = tied ? "embedding_lm_head_tied" : "lm_head_weight";
+        model->configureUpdateProbe(group);
+        logger.log("[LogitTrace] update_probe enabled group='" + group + "'");
+    } else {
+        model->disableUpdateProbe();
+    }
     
     // Configure scratch blocks
     if (model->isScratchPoolInitialized()) {
@@ -1390,6 +1399,23 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     };
     if (!ctx->logging.activations_sink->bind("Activations", activations_formatter)) {
         ctx->logging.logger->log("[WARNING] Failed to bind Activations module logger - Flash Attention diagnostics may not appear in logs");
+    }
+
+    // Forward GuessCache module logs to training logger (GRIM-TS cache diagnostics)
+    ctx->logging.guess_cache_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
+    auto guess_cache_formatter = [logger = ctx->logging.logger.get()](const GRIM::Logging::ModuleLogEvent& evt) {
+        const char* level = "INFO";
+        switch (evt.level) {
+            case GRIM::Logging::ModuleLogLevel::Warning: level = "WARN"; break;
+            case GRIM::Logging::ModuleLogLevel::Error: level = "ERR"; break;
+            default: break;
+        }
+        std::ostringstream msg;
+        msg << "[" << evt.module << "][" << level << "] " << evt.message;
+        logger->log(msg.str());
+    };
+    if (!ctx->logging.guess_cache_sink->bind("GuessCache", guess_cache_formatter)) {
+        ctx->logging.logger->log("[WARNING] Failed to bind GuessCache module logger - cache diagnostics may not appear in logs");
     }
     
     // 2b. Auto-prepare training data/vocab from merged cache when needed.

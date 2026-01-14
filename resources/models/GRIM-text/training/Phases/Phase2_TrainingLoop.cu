@@ -53,6 +53,8 @@ using GRIM::Logging::EmitModuleError;
 
 namespace GRIMText::Training {
 
+TrainingLoopState::~TrainingLoopState() = default;
+
 //======================================================//
 //  String Utilities
 //======================================================//
@@ -140,6 +142,18 @@ std::string decodeWithNumericSideChannel(const GRIM::Tokenizer::UniByte& tokeniz
 bool shouldSyncDiagnostics(const TrainingContext& ctx, std::size_t batch_idx) {
     const int default_interval = ctx.config.hyperparameters.log_interval;
     const int interval = readEnvInt("GRIM_SYNC_INTERVAL", default_interval);
+    if (interval <= 0) {
+        return false;
+    }
+    return ((batch_idx + 1) % static_cast<std::size_t>(interval)) == 0;
+}
+
+bool shouldLogLogitTrace(const TrainingContext& ctx, std::size_t batch_idx) {
+    const auto& hp = ctx.config.hyperparameters;
+    if (!hp.logit_update_trace_enabled) {
+        return false;
+    }
+    const int interval = readEnvInt("GRIM_LOGIT_TRACE_INTERVAL", hp.logit_update_trace_interval);
     if (interval <= 0) {
         return false;
     }
@@ -1332,12 +1346,15 @@ BatchResult processBatch(
     TrainingLoopState& state,
     const GRIM::Batching::BatchAssignment& batch,
     int batch_idx,
-    int total_batches) {
+    int total_batches,
+    int epoch_idx) {
     
     BatchResult result;
     result.batch_idx = batch_idx;
     
     const auto& hp = ctx.config.hyperparameters;
+    const bool logit_trace_enabled = shouldLogLogitTrace(ctx, batch_idx);
+    const std::uint64_t batch_step = ctx.global_step;
     
     // Construct batch inputs
     std::vector<std::vector<int>> batch_inputs;
@@ -1673,6 +1690,198 @@ BatchResult processBatch(
         batch_text_features,
         batch_text_mask);
     ctx.model->clearSequenceLossWeights();
+
+    if (std::isfinite(result.loss) &&
+        ctx.config.hyperparameters.guess_aux_enabled &&
+        state.guess_cache_ready && !state.guess_cache_faulted) {
+        if (!state.guess_cache_buffers) {
+            state.guess_cache_buffers = std::make_unique<GuessCacheBatchBuffers>();
+        }
+
+        const std::size_t guess_count = batch_inputs.size();
+        if (guess_count > 0 && state.guess_cache_buffers) {
+            auto& buffers = *state.guess_cache_buffers;
+            auto& training_state = ctx.model->getTrainingState();
+            cudaStream_t stream = training_state.stream_ctrl.isInitialized()
+                ? training_state.stream_ctrl.getPrimaryStream()
+                : nullptr;
+            if (!stream) {
+                state.guess_cache_faulted = true;
+                EmitModuleError(ModuleId::GuessCache,
+                                "Guess cache update failed: stream controller not initialized",
+                                ctx.global_step);
+            } else if (!training_state.cached_logits ||
+                       training_state.cached_batch_size != static_cast<int>(guess_count) ||
+                       training_state.cached_seq_len <= 0) {
+                EmitModuleWarning(ModuleId::GuessCache,
+                                  "Guess cache skipped: cached logits not ready for prediction-based pass",
+                                  ctx.global_step);
+            } else {
+                const int batch_size = static_cast<int>(guess_count);
+                const int vocab_size = ctx.config.actual_vocab_size;
+                const int cached_seq_len = training_state.cached_seq_len;
+                std::vector<int> guess_positions(batch_size, -1);
+                for (int i = 0; i < batch_size; ++i) {
+                    if (batch_targets[i].empty() || batch_inputs[i].empty()) {
+                        continue;
+                    }
+                    int pos = static_cast<int>(batch_targets[i].size()) - 1;
+                    while (pos >= 0 && batch_targets[i][pos] < 0) {
+                        --pos;
+                    }
+                    if (pos >= 0 && pos < cached_seq_len) {
+                        guess_positions[i] = pos;
+                    }
+                }
+
+                std::vector<float> pred_logits;
+                pred_logits.resize(static_cast<std::size_t>(batch_size) * vocab_size);
+                cudaError_t err = cudaSuccess;
+                for (int i = 0; i < batch_size; ++i) {
+                    const int pos = guess_positions[i];
+                    if (pos < 0) {
+                        continue;
+                    }
+                    const std::size_t offset =
+                        (static_cast<std::size_t>(i) * cached_seq_len + pos) * vocab_size;
+                    err = cudaMemcpyAsync(pred_logits.data() + static_cast<std::size_t>(i) * vocab_size,
+                                          training_state.cached_logits + offset,
+                                          static_cast<std::size_t>(vocab_size) * sizeof(float),
+                                          cudaMemcpyDeviceToHost, stream);
+                    if (err != cudaSuccess) {
+                        break;
+                    }
+                }
+                if (err == cudaSuccess) {
+                    err = cudaStreamSynchronize(stream);
+                }
+                if (err != cudaSuccess) {
+                    state.guess_cache_faulted = true;
+                    EmitModuleError(ModuleId::GuessCache,
+                                    std::string("Guess cache logit sync failed: ") +
+                                        cudaGetErrorString(err),
+                                    ctx.global_step);
+                } else {
+                    std::vector<GRIMTS::GuessMetadata> pred_metadata;
+                    std::vector<GRIMTS::GuessMetadata> reward_metadata;
+                    std::vector<float> rewards;
+                    pred_metadata.reserve(guess_count);
+                    reward_metadata.reserve(guess_count);
+                    rewards.reserve(guess_count);
+
+                    const float reward = 1.0f / (1.0f + result.loss);
+                    for (int i = 0; i < batch_size; ++i) {
+                        const int pos = guess_positions[i];
+                        if (pos < 0) {
+                            continue;
+                        }
+                        const int target_token = batch_targets[i][pos];
+                        if (target_token < 0 || target_token >= vocab_size) {
+                            continue;
+                        }
+                        const float* logits = pred_logits.data() + static_cast<std::size_t>(i) * vocab_size;
+                        float top1 = -1e30f;
+                        float top2 = -1e30f;
+                        int pred_token = 0;
+                        for (int v = 0; v < vocab_size; ++v) {
+                            const float logit = logits[v];
+                            if (logit > top1) {
+                                top2 = top1;
+                                top1 = logit;
+                                pred_token = v;
+                            } else if (logit > top2) {
+                                top2 = logit;
+                            }
+                        }
+
+                        const float margin = top1 - top2;
+                        const float confidence = 1.0f / (1.0f + std::exp(-margin));
+                        const float clamped_confidence = std::min(1.0f, std::max(0.0f, confidence));
+                        const std::uint64_t prompt_hash = GRIMTS::HashSignature(
+                            batch_inputs[i].data(),
+                            batch_inputs[i].size() * sizeof(int));
+
+                        GRIMTS::GuessMetadata pred_meta{};
+                        pred_meta.prompt_hash = prompt_hash;
+                        pred_meta.guess_hash = GRIMTS::HashSignature(&pred_token, sizeof(int));
+                        pred_meta.confidence = clamped_confidence;
+                        pred_meta.sequence_length = static_cast<std::uint16_t>(
+                            std::min<std::size_t>(batch_targets[i].size(),
+                                                  std::numeric_limits<std::uint16_t>::max()));
+                        pred_meta.prompt_length = static_cast<std::uint16_t>(
+                            std::min<std::size_t>(batch_inputs[i].size(),
+                                                  std::numeric_limits<std::uint16_t>::max()));
+                        pred_meta.epoch = static_cast<std::uint32_t>(epoch_idx + 1);
+                        pred_metadata.push_back(pred_meta);
+
+                        GRIMTS::GuessMetadata reward_meta = pred_meta;
+                        reward_meta.guess_hash = GRIMTS::HashSignature(&target_token, sizeof(int));
+                        reward_metadata.push_back(reward_meta);
+                        rewards.push_back(reward);
+                    }
+
+                    if (!pred_metadata.empty()) {
+                        err = buffers.ensure(pred_metadata.size());
+                        if (err != cudaSuccess) {
+                            state.guess_cache_faulted = true;
+                            EmitModuleError(ModuleId::GuessCache,
+                                            std::string("Guess cache buffer allocation failed: ") +
+                                                cudaGetErrorString(err),
+                                            ctx.global_step);
+                        } else {
+                            err = cudaMemcpyAsync(buffers.metadata(), pred_metadata.data(),
+                                                  pred_metadata.size() * sizeof(GRIMTS::GuessMetadata),
+                                                  cudaMemcpyHostToDevice, stream);
+                            if (err == cudaSuccess) {
+                                err = GRIMTS::CacheGuessBatchGPU(
+                                    buffers.metadata(),
+                                    pred_metadata.size(),
+                                    stream);
+                            }
+                            if (err != cudaSuccess) {
+                                state.guess_cache_faulted = true;
+                                EmitModuleError(ModuleId::GuessCache,
+                                                std::string("Guess cache insert failed: ") +
+                                                    cudaGetErrorString(err),
+                                                ctx.global_step);
+                            } else {
+                                err = cudaMemcpyAsync(buffers.metadata(), reward_metadata.data(),
+                                                      reward_metadata.size() * sizeof(GRIMTS::GuessMetadata),
+                                                      cudaMemcpyHostToDevice, stream);
+                                if (err == cudaSuccess) {
+                                    err = cudaMemcpyAsync(buffers.rewards(), rewards.data(),
+                                                          rewards.size() * sizeof(float),
+                                                          cudaMemcpyHostToDevice, stream);
+                                }
+                                if (err != cudaSuccess) {
+                                    state.guess_cache_faulted = true;
+                                    EmitModuleError(ModuleId::GuessCache,
+                                                    std::string("Guess cache H2D copy failed: ") +
+                                                        cudaGetErrorString(err),
+                                                    ctx.global_step);
+                                } else {
+                                    err = GRIMTS::ApplyRewardBatchGPU(
+                                        buffers.metadata(),
+                                        buffers.rewards(),
+                                        reward_metadata.size(),
+                                        kGuessRewardMomentum,
+                                        buffers.stats(),
+                                        stream);
+                                    if (err != cudaSuccess) {
+                                        state.guess_cache_faulted = true;
+                                        EmitModuleError(ModuleId::GuessCache,
+                                                        std::string("Guess cache reward update failed: ") +
+                                                            cudaGetErrorString(err),
+                                                        ctx.global_step);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     
     // Log model predictions (what it predicts vs targets) - uses ForwardPass module for filtering
     {
@@ -1719,6 +1928,90 @@ BatchResult processBatch(
             }
             pred_info << "]";
             EmitModuleInfo(ModuleId::ForwardPass, pred_info.str(), ctx.global_step);
+
+            if (logit_trace_enabled && sample_positions > 0) {
+                constexpr int kDebugTokenId = 277;
+                int debug_pos = -1;
+                int debug_b = -1;
+                int debug_t = -1;
+                int target_token = -1;
+                for (int pos = 0; pos < sample_positions; ++pos) {
+                    const int b = pos / ts.cached_seq_len;
+                    const int t = pos % ts.cached_seq_len;
+                    if (b < static_cast<int>(batch_targets.size()) &&
+                        t < static_cast<int>(batch_targets[b].size())) {
+                        const int candidate = batch_targets[b][t];
+                        if (candidate >= 0 && candidate < vocab_size) {
+                            debug_pos = pos;
+                            debug_b = b;
+                            debug_t = t;
+                            target_token = candidate;
+                            break;
+                        }
+                    }
+                }
+                if (debug_pos < 0) {
+                    debug_pos = 0;
+                    debug_b = 0;
+                    debug_t = 0;
+                    if (!batch_targets.empty() && !batch_targets[0].empty()) {
+                        target_token = batch_targets[0][0];
+                    }
+                }
+
+                const float* logits = logit_sample.data() + debug_pos * vocab_size;
+                float max_logit = -1e30f;
+                int argmax = 0;
+                for (int v = 0; v < vocab_size; ++v) {
+                    const float logit = logits[v];
+                    if (logit > max_logit) {
+                        max_logit = logit;
+                        argmax = v;
+                    }
+                }
+
+                double sum_exp = 0.0;
+                for (int v = 0; v < vocab_size; ++v) {
+                    sum_exp += std::exp(static_cast<double>(logits[v] - max_logit));
+                }
+                if (sum_exp <= 0.0) {
+                    sum_exp = 1.0;
+                }
+
+                double p_t = -1.0;
+                if (target_token >= 0 && target_token < vocab_size) {
+                    p_t = std::exp(static_cast<double>(logits[target_token] - max_logit)) / sum_exp;
+                }
+                double p_277 = -1.0;
+                if (vocab_size > kDebugTokenId) {
+                    p_277 = std::exp(static_cast<double>(logits[kDebugTokenId] - max_logit)) / sum_exp;
+                }
+
+                std::ostringstream trace_msg;
+                trace_msg << std::fixed << std::setprecision(6);
+                trace_msg << "[LogitTrace][PostLoss] source=cached_logits"
+                          << " batch=" << (batch_idx + 1)
+                          << " step=" << batch_step
+                          << " pos=" << debug_pos
+                          << " b=" << debug_b
+                          << " t=" << debug_t
+                          << " target=" << target_token;
+                if (p_t >= 0.0) {
+                    trace_msg << " p_t=" << p_t;
+                } else {
+                    trace_msg << " p_t=N/A";
+                }
+                if (p_277 >= 0.0) {
+                    trace_msg << " p_277=" << p_277;
+                } else {
+                    trace_msg << " p_277=N/A";
+                }
+                trace_msg << " max_logit=" << max_logit
+                          << " argmax=" << argmax
+                          << " sum_exp=" << sum_exp
+                          << " loss=" << Internal::formatScalar(result.loss, 4);
+                ctx.logging.logger->log(trace_msg.str());
+            }
             
             // === TOKEN 277 (SPACE) MODE COLLAPSE DIAGNOSTIC ===
             // Track logit values for token 277 specifically to diagnose mode collapse
@@ -2272,6 +2565,22 @@ BatchResult processBatch(
                                         " != total=" + Internal::formatScalar(gm.total_norm) +
                                         " diff=" + Internal::formatScalar(rel_diff) +
                                         " threshold=" + Internal::formatScalar(threshold));
+            }
+
+            if (logit_trace_enabled) {
+                std::ostringstream trace_msg;
+                trace_msg << "[LogitTrace][PostBackward] source=grad_metrics"
+                          << " batch=" << (batch_idx + 1)
+                          << " step=" << batch_step
+                          << " preclip_grad_norm=" << Internal::formatScalar(preclip_grad_norm, 6)
+                          << " total_norm=" << Internal::formatScalar(gm.total_norm, 6)
+                          << " lm_head_norm=" << Internal::formatScalar(gm.lm_head_norm, 6)
+                          << " embedding_norm=" << Internal::formatScalar(gm.embedding_norm, 6)
+                          << " attention_norm=" << Internal::formatScalar(gm.attention_norm, 6)
+                          << " ffn_norm=" << Internal::formatScalar(gm.ffn_norm, 6)
+                          << " rmsnorm_norm=" << Internal::formatScalar(gm.rmsnorm_norm, 6)
+                          << " numeric_head_norm=" << Internal::formatScalar(gm.numeric_head_norm, 6);
+                ctx.logging.logger->log(trace_msg.str());
             }
         } else {
             ctx.logging.logger->log("[GradTrace] WARNING: grad_metrics not ready after computeGradNorm!");
@@ -2827,6 +3136,22 @@ BatchResult processBatch(
                 ctx.logging.logger->log(delta_msg.str());
             }
         }
+        if (logit_trace_enabled) {
+            std::ostringstream trace_msg;
+            trace_msg << "[LogitTrace][PostOptimizer] source=update_probe"
+                      << " batch=" << (batch_idx + 1)
+                      << " step=" << batch_step
+                      << " group=" << probe.group_name
+                      << " upd_rms=" << std::fixed << std::setprecision(6) << probe.update_rms
+                      << " grad_rms=" << std::fixed << std::setprecision(6) << probe.grad_rms
+                      << " param_rms=" << std::fixed << std::setprecision(6) << probe.parameter_rms
+                      << " rel=" << std::fixed << std::setprecision(5) << probe.relative_update
+                      << " max_abs=" << std::scientific << std::setprecision(3) << probe.max_abs_update
+                      << " lr=" << std::scientific << std::setprecision(6) << probe.learning_rate
+                      << " opt_step=" << probe.optimizer_step
+                      << " n=" << probe.sample_size;
+            ctx.logging.logger->log(trace_msg.str());
+        }
         ctx.model->clearUpdateProbeFlag();
     }
     
@@ -2955,7 +3280,7 @@ EpochResult runEpoch(
         // NOW: Process each batch once. After accum_steps consecutive batches (e.g., batch 0 then batch 1),
         // the optimizer step runs with gradients accumulated from DIFFERENT batches as intended.
         
-        BatchResult batch_result = processBatch(ctx, state, batch, batch_idx, total_batches_to_run);
+        BatchResult batch_result = processBatch(ctx, state, batch, batch_idx, total_batches_to_run, epoch_idx);
         
         if (batch_result.skipped) {
             result.batches_skipped++;
@@ -2974,6 +3299,17 @@ EpochResult runEpoch(
             ctx.logging.logger->log("[Step " + std::to_string(ctx.global_step) + "] " +
                                     Internal::formatMetric("loss", batch_result.loss) + " " +
                                     Internal::formatMetric("lr", batch_result.learning_rate, 8));
+            if (ctx.config.hyperparameters.guess_aux_enabled &&
+                state.guess_cache_ready && !state.guess_cache_faulted) {
+                const GRIMTS::GuessCacheTelemetry telemetry = GRIMTS::GetCacheTelemetry(false);
+                std::ostringstream cache_msg;
+                cache_msg << "Telemetry: fill=" << (telemetry.fill_ratio * 100.0f) << "%"
+                          << " records=" << telemetry.total_records
+                          << " hits=" << telemetry.trends.total_hits
+                          << " misses=" << telemetry.trends.total_misses
+                          << " health=" << (telemetry.is_healthy ? "OK" : "DEGRADED");
+                EmitModuleInfo(ModuleId::GuessCache, cache_msg.str(), ctx.global_step);
+            }
         }
 
         logInferenceSample(ctx, state);
@@ -3143,6 +3479,7 @@ bool executePhase2(TrainingContext& ctx) {
     if (state.guess_cache_ready) {
         EmitModuleInfo(ModuleId::GuessCache, 
             std::string("GPU cache ready (capacity=") + std::to_string(kDefaultGuessCacheCapacity) + ")", ctx.global_step);
+        state.guess_cache_buffers = std::make_unique<GuessCacheBatchBuffers>();
     } else if (!ctx.config.hyperparameters.guess_aux_enabled) {
         EmitModuleInfo(ModuleId::GuessCache, "Guess cache disabled (guess_aux.enabled=false)", ctx.global_step);
     }

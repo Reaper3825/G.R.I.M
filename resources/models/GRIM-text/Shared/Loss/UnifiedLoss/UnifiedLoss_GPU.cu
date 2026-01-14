@@ -25,6 +25,7 @@ namespace {
 constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
 constexpr float kEpsilon = HyperParameters::EPSILON_LOG_PROB;
 constexpr int kDebugSamples = 10;
+constexpr int kDebugTokenId = 277;
 
 __device__ __forceinline__ float clampProb(float value) {
     return fminf(fmaxf(value, kEpsilon), 1.0f - kEpsilon);
@@ -129,12 +130,16 @@ for (int i = 1; i < vocab_size; ++i) {
 
     float sum_exp = 0.0f;
     float exp_target = 0.0f;
+    float exp_token_277 = 0.0f;
     for (int i = 0; i < vocab_size; ++i) {
         const float ex = expf(token_logits[i] - max_logit);
         token_grads[i] = ex;  // temporary storage for exp(logit - max)
         sum_exp += ex;
         if (i == target) {
             exp_target = ex;
+        }
+        if (i == kDebugTokenId) {
+            exp_token_277 = ex;
         }
     }
 
@@ -154,6 +159,11 @@ for (int i = 1; i < vocab_size; ++i) {
 
     float p_t = exp_target * inv_sum_exp;
     p_t = clampProb(p_t);
+    float p_277 = -1.0f;
+    if (kDebugTokenId >= 0 && kDebugTokenId < vocab_size) {
+        p_277 = exp_token_277 * inv_sum_exp;
+        p_277 = clampProb(p_277);
+    }
 
     const float log_p_t = target_logit - log_sum_exp;
     const float one_minus_p_t = 1.0f - p_t;
@@ -201,6 +211,7 @@ float ce_smooth = -q_on * log_p_t;
         telemetry->debug_max_logit = max_logit;
         telemetry->debug_sum_exp = sum_exp;
         telemetry->debug_p_t = p_t;
+        telemetry->debug_p_277 = p_277;
         telemetry->debug_ce_smooth = ce_smooth;
         telemetry->debug_focal_weight = focal_weight;
         telemetry->debug_sample_weight = sample_weight;
@@ -462,6 +473,12 @@ UnifiedLossTelemetry UnifiedLossContext::compute(
         fprintf(stderr, "  CE BREAKDOWN: ce_smooth=%.6f comes from:\n", host_telemetry.debug_ce_smooth);
         fprintf(stderr, "    p_t=%.9f (probability model assigned to correct token)\n", host_telemetry.debug_p_t);
         fprintf(stderr, "    -log(p_t)=%.6f (cross-entropy = negative log probability)\n", -logf(fmaxf(host_telemetry.debug_p_t, 1e-10f)));
+        if (host_telemetry.debug_p_277 >= 0.0f) {
+            fprintf(stderr, "    p_277=%.9f (probability model assigned to token 277)\n", host_telemetry.debug_p_277);
+            fprintf(stderr, "    -log(p_277)=%.6f (cross-entropy if target=277)\n", -logf(fmaxf(host_telemetry.debug_p_277, 1e-10f)));
+        } else {
+            fprintf(stderr, "    p_277=N/A (token 277 out of range for vocab)\n");
+        }
         fprintf(stderr, "    max_logit=%.6f sum_exp=%.6f (softmax normalization)\n",
                 host_telemetry.debug_max_logit, host_telemetry.debug_sum_exp);
         fprintf(stderr, "    target_token=%d (1-indexed, 0=not set)\n", host_telemetry.debug_target);

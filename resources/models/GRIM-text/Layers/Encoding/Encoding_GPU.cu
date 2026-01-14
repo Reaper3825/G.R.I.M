@@ -515,10 +515,49 @@ void EncodingLayer::forward(const EncodingForwardArgs& args) {
     }
     
     // Cache Q, K, V in BHSD format for backward
+    // DIAGNOSTIC Issue #36: Verify cache write actually works
+    static int cache_write_count = 0;
+    const std::size_t q_size = static_cast<std::size_t>(batch_size) * num_heads * seq_len * head_dim;
+    
     if (args.cache_q) {
-        CUDA_CHECK(cudaMemcpyAsync(args.cache_q, Q_bhsd,
-                                    batch_size * num_heads * seq_len * head_dim * sizeof(float),
-                                    cudaMemcpyDeviceToDevice, stream));
+        // SYNC before write to ensure Q_bhsd is computed
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        
+        // Check Q_bhsd RMS BEFORE copy
+        float pre_rms = 0.0f;
+        {
+            std::vector<float> h_q(q_size);
+            CUDA_CHECK(cudaMemcpy(h_q.data(), Q_bhsd, q_size * sizeof(float), cudaMemcpyDeviceToHost));
+            double sum_sq = 0.0;
+            for (std::size_t i = 0; i < q_size; ++i) sum_sq += h_q[i] * h_q[i];
+            pre_rms = static_cast<float>(std::sqrt(sum_sq / q_size));
+        }
+        
+        // Do the actual copy
+        CUDA_CHECK(cudaMemcpyAsync(args.cache_q, Q_bhsd, q_size * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+        
+        // SYNC after write
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        
+        // Check cache RMS AFTER copy
+        float post_rms = 0.0f;
+        {
+            std::vector<float> h_cache(q_size);
+            CUDA_CHECK(cudaMemcpy(h_cache.data(), args.cache_q, q_size * sizeof(float), cudaMemcpyDeviceToHost));
+            double sum_sq = 0.0;
+            for (std::size_t i = 0; i < q_size; ++i) sum_sq += h_cache[i] * h_cache[i];
+            post_rms = static_cast<float>(std::sqrt(sum_sq / q_size));
+        }
+        
+        cache_write_count++;
+        if (cache_write_count <= 24) {  // First 2 batches * 12 layers
+            fprintf(stderr, "[CACHE_WRITE_VERIFY] count=%d Q_bhsd_rms=%.6f cache_q_rms=%.6f match=%s\n",
+                    cache_write_count, pre_rms, post_rms, 
+                    (std::abs(pre_rms - post_rms) < 1e-5f) ? "YES" : "NO");
+        }
+    } else {
+        // DIAGNOSTIC: Issue #36 - why is cache_q null?
+        fprintf(stderr, "[CACHE_WRITE] WARNING: args.cache_q is NULL - cache not written!\n");
     }
     if (args.cache_k) {
         CUDA_CHECK(cudaMemcpyAsync(args.cache_k, K_bhsd,

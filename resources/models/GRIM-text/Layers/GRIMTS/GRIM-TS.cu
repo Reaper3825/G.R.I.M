@@ -362,7 +362,8 @@ __device__ inline void NotifyEviction(GuessRecord& record,
 
 __device__ void ApplyRewardInPlace(GuessRecord& record, float reward, float momentum,
                                     float staleness_grace, float staleness_decay,
-                                    float momentum_floor, float momentum_ceiling) {
+                                    float momentum_floor, float momentum_ceiling,
+                                    bool is_hit) {
     auto& stats = record.stats;
     stats.total_attempts++;
     if (reward >= 0.0f) {
@@ -391,7 +392,7 @@ __device__ void ApplyRewardInPlace(GuessRecord& record, float reward, float mome
     }
     stats.last_updated_ts = now;
 
-    AccumulateCacheTelemetry(record, reward, stale_event, true);
+    AccumulateCacheTelemetry(record, reward, stale_event, is_hit);
 
     if (d_cache_reward_delegate.Count() > 0) {
         d_cache_reward_delegate.Broadcast(&record, reward, stats.normalized_last);
@@ -746,9 +747,10 @@ __global__ void ApplyRewardKernel(const GuessMetadata* metadata_batch,
         NotifyMutation(record, slot.index, CacheEvents::CacheMutationKind::kReplaced);
     }
 
+    const bool is_hit = slot.existing;
     ApplyRewardInPlace(record, reward_batch[tid], momentum,
                        cfg.staleness_grace_period, cfg.staleness_decay_rate,
-                       cfg.momentum_floor, cfg.momentum_ceiling);
+                       cfg.momentum_floor, cfg.momentum_ceiling, is_hit);
     
     if (out_stats) {
         out_stats[tid] = record.stats;

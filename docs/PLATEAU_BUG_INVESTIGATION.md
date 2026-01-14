@@ -80,6 +80,11 @@ But gradients were clipped to 1.0, so clipping IS working.
 3. Is there a softmax temperature issue during generation?
 4. Check if this happens with sampling instead of greedy
 
+**PyTorch Baseline Finding (Jan 13, 2026):**
+- ✅ PyTorch baseline works correctly when `tie_embeddings=true` (p_277 DECREASES)
+- ❌ PyTorch baseline ALSO plateaus when `tie_embeddings=false`
+- **Conclusion:** Weight tying is NOT the root cause. The bug is elsewhere.
+
 **Issue #35 Update:** The EOS contamination issue was INCORRECTLY DIAGNOSED.
 - Token 277 was thought to be EOS, but it's actually SPACE
 - The "fix" to mask EOS targets may still be useful, but it's NOT the root cause

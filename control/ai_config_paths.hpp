@@ -336,6 +336,10 @@ struct TrainingHyperparameters {
     int prediction_comparison_max_positions;
     std::string prediction_comparison_log_path;
     
+    // Logit update trace - NO DEFAULTS
+    bool logit_update_trace_enabled;
+    int logit_update_trace_interval;
+    
     // Attention diagnostics - NO DEFAULTS
     bool attention_diag_enabled;
     int attention_diag_layer;
@@ -634,6 +638,9 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "prediction_comparison.enabled", "prediction_comparison.interval",
         "prediction_comparison.top_k", "prediction_comparison.max_positions",
         "prediction_comparison.log_path",
+        
+        // Logit update trace
+        "logit_update_trace.enabled", "logit_update_trace.interval",
         
         // Attention diagnostics
         "attention_diagnostics.enabled", "attention_diagnostics.layer", "attention_diagnostics.head",
@@ -1098,6 +1105,17 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         params.prediction_comparison_top_k = pred_cmp.value("top_k", params.prediction_comparison_top_k);
         params.prediction_comparison_max_positions = pred_cmp.value("max_positions", params.prediction_comparison_max_positions);
         params.prediction_comparison_log_path = pred_cmp.value("log_path", params.prediction_comparison_log_path);
+    }
+
+    // Logit update trace configuration
+    if (auto it = trainConfig.find("logit_update_trace"); it != trainConfig.end()) {
+        const auto& trace = *it;
+        if (trace.is_boolean()) {
+            params.logit_update_trace_enabled = trace.get<bool>();
+        } else if (trace.is_object()) {
+            params.logit_update_trace_enabled = trace.value("enabled", params.logit_update_trace_enabled);
+            params.logit_update_trace_interval = trace.value("interval", params.logit_update_trace_interval);
+        }
     }
     
     // Load attention diagnostics configuration
