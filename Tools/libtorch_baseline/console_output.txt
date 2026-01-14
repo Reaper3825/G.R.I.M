@@ -1,128 +1,656 @@
-[STARTUP] Parsing arguments...
-[STARTUP] Applying config...
-[STARTUP] Config ready
-[STARTUP] Printing config summary...
-
-========================================
-LIBTORCH BASELINE (GRIM-text Feature Parity)
-========================================
-[Config] mode: GRMT (full vocab)
-[Config] vocab: resources/models/GRIM-text/training/data/vocab.bin
-[Config] training: resources/models/GRIM-text/training/data/training_data.grmt
-[Config] validation: resources/models/GRIM-text/training/data/validation_data.grmt
-[Config] seq_len=256 batch_size=8 epochs=3
-
-[Features] Toggleable Settings:
-  grad_accumulation: ON (steps=1)
-  lr_warmup: ON (steps=100)
-  cosine_decay: ON
-  grad_clipping: ON (max_norm=1)
-  grad_metrics: ON
-  validation: ON (interval=100)
-  sampling: ON (interval=200)
-  focal_loss: OFF (gamma=1, alpha=1)
-  label_smoothing: OFF (eps=0.1)
-  auto_stop: OFF (patience=10)
-  telemetry: ON
-  weight_stats: OFF
-  optimizer_stats: OFF
-  xavier_init: ON
-  use_grmt: ON
-[GRIMVocab] Loading resources/models/GRIM-text/training/data/vocab.bin
-[GRIMVocab] version=3 unigram_pieces=50104 total_vocab_size=50377
-[GRIMVocab] Loaded 50104 unigram pieces
-[STARTUP] Vocab loaded successfully, loading GRMT data...
-[STARTUP] Opening GRMT file...
-[GRMT] Opening file: resources/models/GRIM-text/training/data/training_data.grmt
-[GRMT] Reading header...
-[GRMT] Header read complete
-[GRMT] Validating magic...
-[GRMT] Validating version...
-[GRMT] Printing header info...
-[GRMT] Loading resources/models/GRIM-text/training/data/training_data.grmt
-[GRMT] version=5
-[GRMT] sequences=17766
-[GRMT] vocab_size=50377
-[GRMT] Pre-allocated token buffer
-[GRMT] Starting sequence loop...
-[GRMT] Reading first sequence length at offset 16
-[GRMT] First seq_len=1024, file.good()=1
-[GRMT] Allocating token_ids vector for 1024 tokens...
-[GRMT] Reading tokens from file...
-[GRMT] Tokens read, skipping v5 targets array...
-[GRMT] Skipping numeric_values...
-[GRMT] Skipping numeric_mask...
-[GRMT] Skipping text_features (32768 bytes)...
-[GRMT] Skipping text_mask...
-[GRMT] Appending tokens to all_tokens...
-[GRMT] Loaded 1000/17766 sequences, 493315 tokens
-[GRMT] Loaded 2000/17766 sequences, 987858 tokens
-[GRMT] Loaded 3000/17766 sequences, 1487739 tokens
-[GRMT] Loaded 4000/17766 sequences, 1968745 tokens
-[GRMT] Reached max_tokens limit (2000000)
-[GRMT] Done: 2000537 tokens loaded
-
-[Data] tokens loaded: 2000537
-[Model] device: cuda
-[Model] normalization: RMSNorm
-[Model] weight_tying: disabled
-[Model] attention: 8 Q heads, 8 KV heads (MHA)
-[Model] vocab_size: 50377
-[Model] total_params: 70625792
-========================================
-
-[Training] Starting training...
-[Training] batches_per_epoch=976 total_steps=2928
-
-========================================
-Epoch 1/3
-========================================
-[Step 10] loss=10.8273 lr=3.00e-05 grad_norm=0.0030
-[PTorchDiag] p_t=0.000019850 -log(p_t)=10.827297 p_277=0.000019850 -log(p_277)=10.827284 max_logit=0.000029 sum_exp=50375.589233 target_token=18376 target_token_1based=18377 debug_index=0
-[Step 20] loss=10.8273 lr=6.00e-05 grad_norm=0.0033
-[PTorchDiag] p_t=0.000019851 -log(p_t)=10.827270 p_277=0.000019851 -log(p_277)=10.827278 max_logit=0.000094 sum_exp=50372.221052 target_token=38285 target_token_1based=38286 debug_index=0
-[Step 30] loss=10.8273 lr=9.00e-05 grad_norm=0.0057
-[PTorchDiag] p_t=0.000019851 -log(p_t)=10.827274 p_277=0.000019850 -log(p_277)=10.827322 max_logit=0.000249 sum_exp=50364.206335 target_token=15449 target_token_1based=15450 debug_index=0
-[Step 40] loss=10.8270 lr=1.20e-04 grad_norm=0.0185
-[PTorchDiag] p_t=0.000019855 -log(p_t)=10.827069 p_277=0.000019848 -log(p_277)=10.827418 max_logit=0.001179 sum_exp=50312.601101 target_token=3991 target_token_1based=3992 debug_index=0
-[Step 50] loss=10.8257 lr=1.50e-04 grad_norm=0.0512
-[PTorchDiag] p_t=0.000019898 -log(p_t)=10.824876 p_277=0.000019844 -log(p_277)=10.827618 max_logit=0.004053 sum_exp=50134.105553 target_token=1536 target_token_1based=1537 debug_index=0
-[Step 60] loss=10.8218 lr=1.80e-04 grad_norm=0.0957
-[PTorchDiag] p_t=0.000019960 -log(p_t)=10.821791 p_277=0.000019833 -log(p_277)=10.828160 max_logit=0.009964 sum_exp=49725.800234 target_token=3672 target_token_1based=3673 debug_index=0
-[Step 70] loss=10.8133 lr=2.10e-04 grad_norm=0.1490
-[PTorchDiag] p_t=0.000020013 -log(p_t)=10.819143 p_277=0.000019812 -log(p_277)=10.829201 max_logit=0.020240 sum_exp=48970.353350 target_token=2033 target_token_1based=2034 debug_index=0
-[Step 80] loss=10.7979 lr=2.40e-04 grad_norm=0.2128
-[PTorchDiag] p_t=0.000020324 -log(p_t)=10.803709 p_277=0.000019771 -log(p_277)=10.831305 max_logit=0.036676 sum_exp=47727.575876 target_token=2152 target_token_1based=2153 debug_index=0
-[Step 90] loss=10.7745 lr=2.70e-04 grad_norm=0.2775
-[PTorchDiag] p_t=0.000020343 -log(p_t)=10.802776 p_277=0.000019700 -log(p_277)=10.834868 max_logit=0.061442 sum_exp=45855.139100 target_token=34782 target_token_1based=34783 debug_index=0
-[Step 100] loss=10.7357 lr=3.00e-04 grad_norm=0.3658
-[PTorchDiag] p_t=0.000019598 -log(p_t)=10.840080 p_277=0.000019589 -log(p_277)=10.840535 max_logit=0.096705 sum_exp=43253.869225 target_token=47419 target_token_1based=47420 debug_index=0
-[GradTrace] COMPONENTS: emb=0.0000 head=0.0128 attn=0.0002 ffn=0.0002 ln=0.3656
-[Validation] loss=10.7327 ppl=45829.98
-[Step 110] loss=10.6882 lr=3.00e-04 grad_norm=0.4403
-[PTorchDiag] p_t=0.000022884 -log(p_t)=10.685069 p_277=0.000019434 -log(p_277)=10.848510 max_logit=0.143353 sum_exp=40005.152461 target_token=16249 target_token_1based=16250 debug_index=0
-[Step 120] loss=10.6226 lr=3.00e-04 grad_norm=0.5346
-[PTorchDiag] p_t=0.000026803 -log(p_t)=10.527000 p_277=0.000019230 -log(p_277)=10.859043 max_logit=0.198974 sum_exp=36417.985295 target_token=2349 target_token_1based=2350 debug_index=0
-[Step 130] loss=10.5541 lr=3.00e-04 grad_norm=0.6049
-[PTorchDiag] p_t=0.000028793 -log(p_t)=10.455383 p_277=0.000018978 -log(p_277)=10.872217 max_logit=0.264434 sum_exp=32613.331956 target_token=1613 target_token_1based=1614 debug_index=0
-[Step 140] loss=10.4715 lr=3.00e-04 grad_norm=0.6820
-[PTorchDiag] p_t=0.000028308 -log(p_t)=10.472352 p_277=0.000018676 -log(p_277)=10.888268 max_logit=0.340051 sum_exp=28734.930526 target_token=37384 target_token_1based=37385 debug_index=0
-[Step 150] loss=10.3835 lr=3.00e-04 grad_norm=0.7473
-[PTorchDiag] p_t=0.000031683 -log(p_t)=10.359737 p_277=0.000018318 -log(p_277)=10.907619 max_logit=0.423744 sum_exp=24975.664276 target_token=1827 target_token_1based=1828 debug_index=0
-[Step 160] loss=10.2762 lr=3.00e-04 grad_norm=0.8253
-[PTorchDiag] p_t=0.000031764 -log(p_t)=10.357178 p_277=0.000017900 -log(p_277)=10.930685 max_logit=0.515520 sum_exp=21425.711708 target_token=25947 target_token_1based=25948 debug_index=0
-[Step 170] loss=10.1728 lr=3.00e-04 grad_norm=0.8788
-[PTorchDiag] p_t=0.000047546 -log(p_t)=9.953817 p_277=0.000017418 -log(p_277)=10.958005 max_logit=0.615455 sum_exp=18154.806640 target_token=3975 target_token_1based=3976 debug_index=0
-[Step 180] loss=10.0385 lr=2.99e-04 grad_norm=0.9578
-[PTorchDiag] p_t=0.000053060 -log(p_t)=9.844079 p_277=0.000016863 -log(p_277)=10.990389 max_logit=0.724135 sum_exp=15197.920365 target_token=4132 target_token_1based=4133 debug_index=0
-[Step 190] loss=9.9309 lr=2.99e-04 grad_norm=0.9853
-[PTorchDiag] p_t=0.000061802 -log(p_t)=9.691582 p_277=0.000016235 -log(p_277)=11.028343 max_logit=0.841881 sum_exp=12576.219600 target_token=2433 target_token_1based=2434 debug_index=0
-[Step 200] loss=9.8150 lr=2.99e-04 grad_norm=1.0107 (clipped)
-[PTorchDiag] p_t=0.000080124 -log(p_t)=9.431932 p_277=0.000015526 -log(p_277)=11.072984 max_logit=0.967402 sum_exp=10310.717223 target_token=2215 target_token_1based=2216 debug_index=0
-[GradTrace] COMPONENTS: emb=0.0000 head=0.0406 attn=0.0006 ffn=0.0004 ln=1.0099
-[Validation] loss=9.7966 ppl=17972.03
+et_token=16824 target_token_1based=16825 debug_index=0
+[Step 120] loss=8.4376 lr=3.00e-04 grad_norm=1.0725 (clipped)
+[PTorchDiag] p_t=0.000000479 -log(p_t)=14.552069 p_277=0.000000190 -log(p_277)=15.477304 max_logit=4.966087 sum_exp=82.502842 target_token=9680 target_token_1based=9681 debug_index=0
+[Step 130] loss=8.4199 lr=3.00e-04 grad_norm=0.9396
+[PTorchDiag] p_t=0.000038317 -log(p_t)=10.169622 p_277=0.000000246 -log(p_277)=15.219718 max_logit=4.238580 sum_exp=152.302606 target_token=14449 target_token_1based=14450 debug_index=0
+[Step 140] loss=8.3128 lr=3.00e-04 grad_norm=0.8703
+[PTorchDiag] p_t=0.001243407 -log(p_t)=6.689900 p_277=0.000000169 -log(p_277)=15.590933 max_logit=4.703095 sum_exp=93.267742 target_token=3352 target_token_1based=3353 debug_index=0
+[Step 150] loss=8.3468 lr=3.00e-04 grad_norm=0.8150
+[PTorchDiag] p_t=0.000003142 -log(p_t)=12.670544 p_277=0.000000043 -log(p_277)=16.960077 max_logit=13.056618 sum_exp=1.021931 target_token=28099 target_token_1based=28100 debug_index=0
+[Step 160] loss=8.3612 lr=3.00e-04 grad_norm=0.9225
+[PTorchDiag] p_t=0.000208635 -log(p_t)=8.474922 p_277=0.000000165 -log(p_277)=15.614793 max_logit=4.153360 sum_exp=136.184362 target_token=37631 target_token_1based=37632 debug_index=0
+[Step 170] loss=8.3715 lr=3.00e-04 grad_norm=1.5080 (clipped)
+[PTorchDiag] p_t=0.001343732 -log(p_t)=6.612305 p_277=0.000000173 -log(p_277)=15.569627 max_logit=4.247126 sum_exp=117.332836 target_token=2364 target_token_1based=2365 debug_index=0
+[Step 180] loss=8.4676 lr=2.99e-04 grad_norm=0.8728
+[PTorchDiag] p_t=0.000126537 -log(p_t)=8.974979 p_277=0.000000101 -log(p_277)=16.107735 max_logit=4.061755 sum_exp=137.165779 target_token=32582 target_token_1based=32583 debug_index=0
+[Step 190] loss=8.3769 lr=2.99e-04 grad_norm=0.8988
+[PTorchDiag] p_t=0.000118994 -log(p_t)=9.036441 p_277=0.000000071 -log(p_277)=16.467197 max_logit=3.954860 sum_exp=143.509446 target_token=2860 target_token_1based=2861 debug_index=0
+[Step 200] loss=8.4413 lr=2.99e-04 grad_norm=0.8819
+[PTorchDiag] p_t=0.000223903 -log(p_t)=8.404296 p_277=0.000000121 -log(p_277)=15.926397 max_logit=4.832391 sum_exp=58.901115 target_token=33420 target_token_1based=33421 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0013 head=0.8764 attn=0.0586 ffn=0.0693 ln=0.0374
+[Validation] loss=8.3016 ppl=4030.12
 [Sample] "Hello world of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the of the"
-[Step 210] loss=9.7003 lr=2.99e-04 grad_norm=1.0230 (clipped)
-[PTorchDiag] p_t=0.000058496 -log(p_t)=9.746557 p_277=0.000014742 -log(p_277)=11.124807 max_logit=1.101589 sum_exp=8378.819279 target_token=27795 target_token_1based=27796 debug_index=0
-[Step 220] loss=9.5717 lr=2.99e-04 grad_norm=1.0382 (clipped)
-[PTorchDiag] p_t=0.000035637 -log(p_t)=10.242138 p_277=0.000013887 -log(p_277)=11.184567 max_logit=1.240292 sum_exp=6785.373018 target_token=19051 target_token_1based=19052 debug_index=0
+[Step 210] loss=8.3264 lr=2.99e-04 grad_norm=1.0239 (clipped)
+[PTorchDiag] p_t=0.000176143 -log(p_t)=8.644214 p_277=0.000000044 -log(p_277)=16.945688 max_logit=4.386142 sum_exp=86.603558 target_token=46685 target_token_1based=46686 debug_index=0
+[Step 220] loss=8.3656 lr=2.99e-04 grad_norm=0.9783
+[PTorchDiag] p_t=0.000367790 -log(p_t)=7.907998 p_277=0.000000037 -log(p_277)=17.101492 max_logit=3.856373 sum_exp=138.645827 target_token=956 target_token_1based=957 debug_index=0
+[Step 230] loss=8.2591 lr=2.99e-04 grad_norm=0.9110
+[PTorchDiag] p_t=0.000087315 -log(p_t)=9.345993 p_277=0.000000017 -log(p_277)=17.891748 max_logit=4.243309 sum_exp=93.855122 target_token=4583 target_token_1based=4584 debug_index=0
+[Step 240] loss=8.2919 lr=2.98e-04 grad_norm=0.9698
+[PTorchDiag] p_t=0.000049680 -log(p_t)=9.909901 p_277=0.000000053 -log(p_277)=16.750393 max_logit=3.586160 sum_exp=168.822374 target_token=1557 target_token_1based=1558 debug_index=0
+[Step 250] loss=8.3469 lr=2.98e-04 grad_norm=0.9060
+[PTorchDiag] p_t=0.000427124 -log(p_t)=7.758437 p_277=0.000000077 -log(p_277)=16.376350 max_logit=3.602793 sum_exp=161.342852 target_token=3132 target_token_1based=3133 debug_index=0
+[Step 260] loss=8.3258 lr=2.98e-04 grad_norm=0.8234
+[PTorchDiag] p_t=0.000145865 -log(p_t)=8.832827 p_277=0.000000066 -log(p_277)=16.528496 max_logit=3.688733 sum_exp=151.454915 target_token=5323 target_token_1based=5324 debug_index=0
+[Step 270] loss=8.0657 lr=2.97e-04 grad_norm=1.1120 (clipped)
+[PTorchDiag] p_t=0.000156428 -log(p_t)=8.762917 p_277=0.000000035 -log(p_277)=17.168961 max_logit=3.831722 sum_exp=133.979904 target_token=4369 target_token_1based=4370 debug_index=0
+[Step 280] loss=8.2185 lr=2.97e-04 grad_norm=0.8563
+[PTorchDiag] p_t=0.000146828 -log(p_t)=8.826252 p_277=0.000000016 -log(p_277)=17.934424 max_logit=3.638625 sum_exp=155.432118 target_token=44462 target_token_1based=44463 debug_index=0
+[Step 290] loss=8.2138 lr=2.97e-04 grad_norm=0.8927
+[PTorchDiag] p_t=0.000675113 -log(p_t)=7.300630 p_277=0.000000046 -log(p_277)=16.894646 max_logit=4.029557 sum_exp=107.613484 target_token=8385 target_token_1based=8386 debug_index=0
+[Step 300] loss=8.1860 lr=2.96e-04 grad_norm=0.8513
+[PTorchDiag] p_t=0.000015293 -log(p_t)=11.088123 p_277=0.000000064 -log(p_277)=16.563820 max_logit=7.900143 sum_exp=4.051107 target_token=26045 target_token_1based=26046 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0117 head=0.8107 attn=0.1679 ffn=0.1872 ln=0.0634
+[Validation] loss=8.0762 ppl=3216.83
+[Step 310] loss=8.0053 lr=2.96e-04 grad_norm=0.9276
+[PTorchDiag] p_t=0.000921522 -log(p_t)=6.989484 p_277=0.000000030 -log(p_277)=17.335653 max_logit=4.351490 sum_exp=70.902610 target_token=7398 target_token_1based=7399 debug_index=0
+[Step 320] loss=7.8795 lr=2.96e-04 grad_norm=1.3611 (clipped)
+[PTorchDiag] p_t=0.000011538 -log(p_t)=11.369846 p_277=0.000000052 -log(p_277)=16.765686 max_logit=4.402080 sum_exp=70.713599 target_token=17851 target_token_1based=17852 debug_index=0
+[Step 330] loss=7.7112 lr=2.95e-04 grad_norm=0.8838
+[PTorchDiag] p_t=0.000503414 -log(p_t)=7.594097 p_277=0.000000156 -log(p_277)=15.674462 max_logit=3.650661 sum_exp=156.653167 target_token=8520 target_token_1based=8521 debug_index=0
+[Step 340] loss=8.1124 lr=2.95e-04 grad_norm=0.8449
+[PTorchDiag] p_t=0.006522675 -log(p_t)=5.032471 p_277=0.000000028 -log(p_277)=17.398674 max_logit=4.382236 sum_exp=68.860509 target_token=523 target_token_1based=524 debug_index=0
+[Step 350] loss=7.8424 lr=2.94e-04 grad_norm=0.8608
+[PTorchDiag] p_t=0.000460482 -log(p_t)=7.683236 p_277=0.000000017 -log(p_277)=17.890736 max_logit=4.029915 sum_exp=104.628641 target_token=8464 target_token_1based=8465 debug_index=0
+[Step 360] loss=7.8565 lr=2.94e-04 grad_norm=0.9014
+[PTorchDiag] p_t=0.000027525 -log(p_t)=10.500416 p_277=0.000000418 -log(p_277)=14.688171 max_logit=3.788972 sum_exp=131.862051 target_token=50218 target_token_1based=50219 debug_index=0
+[Step 370] loss=7.7436 lr=2.94e-04 grad_norm=0.8319
+[PTorchDiag] p_t=0.000736667 -log(p_t)=7.213374 p_277=0.000000104 -log(p_277)=16.082495 max_logit=3.807529 sum_exp=123.492800 target_token=627 target_token_1based=628 debug_index=0
+[Step 380] loss=7.6445 lr=2.93e-04 grad_norm=0.9309
+[PTorchDiag] p_t=0.004974232 -log(p_t)=5.303484 p_277=0.000000057 -log(p_277)=16.683302 max_logit=6.366459 sum_exp=20.965588 target_token=781 target_token_1based=782 debug_index=0
+[Step 390] loss=7.9915 lr=2.93e-04 grad_norm=0.8470
+[PTorchDiag] p_t=0.000670106 -log(p_t)=7.308074 p_277=0.000000064 -log(p_277)=16.562294 max_logit=3.647902 sum_exp=131.936864 target_token=9145 target_token_1based=9146 debug_index=0
+[Step 400] loss=7.5978 lr=2.92e-04 grad_norm=0.8473
+[PTorchDiag] p_t=0.002214693 -log(p_t)=6.112641 p_277=0.000000034 -log(p_277)=17.199440 max_logit=3.907398 sum_exp=100.161737 target_token=1064 target_token_1based=1065 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0159 head=0.7499 attn=0.1774 ffn=0.3497 ln=0.0381
+[Validation] loss=7.6700 ppl=2143.05
+[Sample] "Hello worlding the time of the transit duration with time for different planet in the disk isothermalies with different planet in the disk isothermal disk isothermal is setup isothermal disk isothermal star is still of the gas disk isothermal disk isothermal disk isothermal for different planet in the disk isothermal disk is still disk is still disk isothermal disk isothermal disk isothermal disk isothermal disk is still isothermal disk is still is still isothermal isothermal disk isothermally isothermal star isothermal disk isothermally isothermal disk is still of the initial disk isothermal is still isothermally isothermallow of the gas disk"
+[Step 410] loss=7.8633 lr=2.92e-04 grad_norm=0.8191
+[PTorchDiag] p_t=0.000169817 -log(p_t)=8.680791 p_277=0.000000105 -log(p_277)=16.065937 max_logit=4.474184 sum_exp=63.241802 target_token=7046 target_token_1based=7047 debug_index=0
+[Step 420] loss=7.8929 lr=2.91e-04 grad_norm=0.7618
+[PTorchDiag] p_t=0.000292165 -log(p_t)=8.138192 p_277=0.000000016 -log(p_277)=17.968546 max_logit=6.111145 sum_exp=25.824489 target_token=37327 target_token_1based=37328 debug_index=0
+[Step 430] loss=7.3701 lr=2.90e-04 grad_norm=0.8196
+[PTorchDiag] p_t=0.000965763 -log(p_t)=6.942593 p_277=0.000000012 -log(p_277)=18.232689 max_logit=4.870566 sum_exp=43.675770 target_token=5383 target_token_1based=5384 debug_index=0
+[Step 440] loss=7.5291 lr=2.90e-04 grad_norm=0.8326
+[PTorchDiag] p_t=0.000080495 -log(p_t)=9.427312 p_277=0.000000029 -log(p_277)=17.339661 max_logit=3.847114 sum_exp=102.813282 target_token=11142 target_token_1based=11143 debug_index=0
+[Step 450] loss=7.6761 lr=2.89e-04 grad_norm=0.8414
+[PTorchDiag] p_t=0.000278092 -log(p_t)=8.187559 p_277=0.000000010 -log(p_277)=18.413895 max_logit=4.452798 sum_exp=55.540540 target_token=2793 target_token_1based=2794 debug_index=0
+[Step 460] loss=7.6302 lr=2.89e-04 grad_norm=0.8549
+[PTorchDiag] p_t=0.000020019 -log(p_t)=10.818828 p_277=0.000000015 -log(p_277)=17.990389 max_logit=4.347731 sum_exp=62.477330 target_token=7351 target_token_1based=7352 debug_index=0
+[Step 470] loss=7.6219 lr=2.88e-04 grad_norm=0.7944
+[PTorchDiag] p_t=0.000086788 -log(p_t)=9.352045 p_277=0.000000025 -log(p_277)=17.507936 max_logit=4.412570 sum_exp=53.846063 target_token=31486 target_token_1based=31487 debug_index=0
+[Step 480] loss=7.4377 lr=2.87e-04 grad_norm=0.8766
+[PTorchDiag] p_t=0.000207705 -log(p_t)=8.479394 p_277=0.000000064 -log(p_277)=16.556972 max_logit=3.174411 sum_exp=199.670171 target_token=2744 target_token_1based=2745 debug_index=0
+[Step 490] loss=7.3460 lr=2.87e-04 grad_norm=0.8436
+[PTorchDiag] p_t=0.001228947 -log(p_t)=6.701597 p_277=0.000000145 -log(p_277)=15.747316 max_logit=3.806170 sum_exp=128.019107 target_token=2476 target_token_1based=2477 debug_index=0
+[Step 500] loss=7.4121 lr=2.86e-04 grad_norm=0.8101
+[PTorchDiag] p_t=0.002341067 -log(p_t)=6.057148 p_277=0.000000047 -log(p_277)=16.866304 max_logit=4.639224 sum_exp=46.905614 target_token=47530 target_token_1based=47531 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0182 head=0.6850 attn=0.1650 ffn=0.3969 ln=0.0450
+[Validation] loss=7.4799 ppl=1772.12
+[Step 510] loss=7.2022 lr=2.85e-04 grad_norm=0.8094
+[PTorchDiag] p_t=0.000005182 -log(p_t)=12.170280 p_277=0.000000060 -log(p_277)=16.626701 max_logit=3.982780 sum_exp=88.093168 target_token=36185 target_token_1based=36186 debug_index=0
+[Step 520] loss=7.4527 lr=2.85e-04 grad_norm=0.8703
+[PTorchDiag] p_t=0.000149830 -log(p_t)=8.806009 p_277=0.000000015 -log(p_277)=18.014645 max_logit=3.605218 sum_exp=123.148767 target_token=34445 target_token_1based=34446 debug_index=0
+[Step 530] loss=7.4217 lr=2.84e-04 grad_norm=0.8941
+[PTorchDiag] p_t=0.000125757 -log(p_t)=8.981155 p_277=0.000000020 -log(p_277)=17.729458 max_logit=3.722240 sum_exp=101.384172 target_token=41972 target_token_1based=41973 debug_index=0
+[Step 540] loss=7.5409 lr=2.83e-04 grad_norm=0.8499
+[PTorchDiag] p_t=0.000887182 -log(p_t)=7.027460 p_277=0.000000029 -log(p_277)=17.372936 max_logit=4.177701 sum_exp=66.187336 target_token=32993 target_token_1based=32994 debug_index=0
+[Step 550] loss=7.0595 lr=2.82e-04 grad_norm=1.0000 (clipped)
+[PTorchDiag] p_t=0.000126596 -log(p_t)=8.974508 p_277=0.000000015 -log(p_277)=18.005812 max_logit=5.975545 sum_exp=26.020059 target_token=10004 target_token_1based=10005 debug_index=0
+[Step 560] loss=7.5509 lr=2.82e-04 grad_norm=0.9922
+[PTorchDiag] p_t=0.000787768 -log(p_t)=7.146306 p_277=0.000000011 -log(p_277)=18.330927 max_logit=4.983875 sum_exp=30.784755 target_token=660 target_token_1based=661 debug_index=0
+[Step 570] loss=7.1488 lr=2.81e-04 grad_norm=0.9143
+[PTorchDiag] p_t=0.014175551 -log(p_t)=4.256237 p_277=0.000000019 -log(p_277)=17.797829 max_logit=6.204868 sum_exp=25.438499 target_token=3114 target_token_1based=3115 debug_index=0
+[Step 580] loss=7.2297 lr=2.80e-04 grad_norm=0.8652
+[PTorchDiag] p_t=0.000000052 -log(p_t)=16.774906 p_277=0.000000055 -log(p_277)=16.718655 max_logit=3.844859 sum_exp=90.230585 target_token=30268 target_token_1based=30269 debug_index=0
+[Step 590] loss=7.4381 lr=2.79e-04 grad_norm=0.8460
+[PTorchDiag] p_t=0.000352222 -log(p_t)=7.951250 p_277=0.000000051 -log(p_277)=16.787764 max_logit=3.856600 sum_exp=108.788661 target_token=40577 target_token_1based=40578 debug_index=0
+[Step 600] loss=7.0588 lr=2.78e-04 grad_norm=0.8647
+[PTorchDiag] p_t=0.001451472 -log(p_t)=6.535177 p_277=0.000000011 -log(p_277)=18.287231 max_logit=4.610866 sum_exp=52.595284 target_token=13021 target_token_1based=13022 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0188 head=0.7327 attn=0.1867 ffn=0.4167 ln=0.0456
+[Validation] loss=7.2479 ppl=1405.13
+[Sample] "Hello worldlytropic disk with time scale height we see that can also not affected by thisless, the torque is consistent with torque is much more massive disc with different torque is consistent with energy of the dust flux density profile of the dust particles are consistent with torque is still also also also can occur in the disc with different torque is still is still also more massive disc with different torque is much more massive disc with time scale height of the dust emission from the dust emission from the dust emission from the dust flux density profile of the dust emission of the dust flux density profile of the dust emission from the dust flux density profile of the dust flux density profile of the dust emission from the dust flux density profile of the"
+[Step 610] loss=7.3419 lr=2.77e-04 grad_norm=0.9139
+[PTorchDiag] p_t=0.002448711 -log(p_t)=6.012194 p_277=0.000000074 -log(p_277)=16.425081 max_logit=4.548523 sum_exp=63.274469 target_token=22805 target_token_1based=22806 debug_index=0
+[Step 620] loss=7.2588 lr=2.77e-04 grad_norm=0.8994
+[PTorchDiag] p_t=0.000252034 -log(p_t)=8.285946 p_277=0.000000087 -log(p_277)=16.254850 max_logit=4.093226 sum_exp=101.997618 target_token=634 target_token_1based=635 debug_index=0
+[Step 630] loss=7.3913 lr=2.76e-04 grad_norm=0.8506
+[PTorchDiag] p_t=0.000011928 -log(p_t)=11.336618 p_277=0.000000013 -log(p_277)=18.189297 max_logit=4.414983 sum_exp=53.889986 target_token=48603 target_token_1based=48604 debug_index=0
+[Step 640] loss=7.5467 lr=2.75e-04 grad_norm=0.9913
+[PTorchDiag] p_t=0.000982604 -log(p_t)=6.925305 p_277=0.000000111 -log(p_277)=16.012003 max_logit=3.146122 sum_exp=179.162928 target_token=3518 target_token_1based=3519 debug_index=0
+[Step 650] loss=7.2192 lr=2.74e-04 grad_norm=0.8644
+[PTorchDiag] p_t=0.000264356 -log(p_t)=8.238213 p_277=0.000000042 -log(p_277)=16.976635 max_logit=3.970234 sum_exp=74.548169 target_token=37879 target_token_1based=37880 debug_index=0
+[Step 660] loss=7.4364 lr=2.73e-04 grad_norm=0.8722
+[PTorchDiag] p_t=0.002115195 -log(p_t)=6.158608 p_277=0.000000002 -log(p_277)=19.963551 max_logit=4.174464 sum_exp=66.406539 target_token=5525 target_token_1based=5526 debug_index=0
+[Step 670] loss=6.9433 lr=2.72e-04 grad_norm=0.9926
+[PTorchDiag] p_t=0.000090706 -log(p_t)=9.307882 p_277=0.000000005 -log(p_277)=19.168840 max_logit=3.843905 sum_exp=76.995365 target_token=25852 target_token_1based=25853 debug_index=0
+[Step 680] loss=7.1164 lr=2.71e-04 grad_norm=0.8875
+[PTorchDiag] p_t=0.056724284 -log(p_t)=2.869553 p_277=0.000000034 -log(p_277)=17.185783 max_logit=5.644960 sum_exp=17.629138 target_token=525 target_token_1based=526 debug_index=0
+[Step 690] loss=6.8671 lr=2.70e-04 grad_norm=0.8881
+[PTorchDiag] p_t=0.000826241 -log(p_t)=7.098625 p_277=0.000000018 -log(p_277)=17.842474 max_logit=4.132389 sum_exp=69.512201 target_token=3757 target_token_1based=3758 debug_index=0
+[Step 700] loss=6.9106 lr=2.69e-04 grad_norm=0.9569
+[PTorchDiag] p_t=0.000296626 -log(p_t)=8.123039 p_277=0.000000027 -log(p_277)=17.437819 max_logit=4.261298 sum_exp=53.705620 target_token=15851 target_token_1based=15852 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0224 head=0.7462 attn=0.3375 ffn=0.4821 ln=0.1090
+[Validation] loss=7.0129 ppl=1110.85
+[Step 710] loss=7.0053 lr=2.68e-04 grad_norm=0.8343
+[PTorchDiag] p_t=0.000822714 -log(p_t)=7.102902 p_277=0.000000016 -log(p_277)=17.980810 max_logit=3.830750 sum_exp=109.490155 target_token=18818 target_token_1based=18819 debug_index=0
+[Step 720] loss=7.1749 lr=2.67e-04 grad_norm=0.8499
+[PTorchDiag] p_t=0.000086617 -log(p_t)=9.354015 p_277=0.000000003 -log(p_277)=19.503090 max_logit=5.038661 sum_exp=29.578994 target_token=9920 target_token_1based=9921 debug_index=0
+[Step 730] loss=6.3590 lr=2.66e-04 grad_norm=0.9268
+[PTorchDiag] p_t=0.000102332 -log(p_t)=9.187291 p_277=0.000000076 -log(p_277)=16.398407 max_logit=4.796498 sum_exp=44.850734 target_token=16995 target_token_1based=16996 debug_index=0
+[Step 740] loss=6.9417 lr=2.65e-04 grad_norm=0.9270
+[PTorchDiag] p_t=0.000685814 -log(p_t)=7.284904 p_277=0.000000025 -log(p_277)=17.494671 max_logit=5.952500 sum_exp=20.425842 target_token=9714 target_token_1based=9715 debug_index=0
+[Step 750] loss=7.0553 lr=2.64e-04 grad_norm=0.8703
+[PTorchDiag] p_t=0.000569267 -log(p_t)=7.471161 p_277=0.000000051 -log(p_277)=16.788780 max_logit=3.517372 sum_exp=114.157694 target_token=17922 target_token_1based=17923 debug_index=0
+[Step 760] loss=7.0291 lr=2.63e-04 grad_norm=0.9126
+[PTorchDiag] p_t=0.000013674 -log(p_t)=11.200029 p_277=0.000000056 -log(p_277)=16.695259 max_logit=3.924714 sum_exp=74.935732 target_token=24344 target_token_1based=24345 debug_index=0
+[Step 770] loss=7.1479 lr=2.62e-04 grad_norm=0.9157
+[PTorchDiag] p_t=0.000052600 -log(p_t)=9.852800 p_277=0.000000037 -log(p_277)=17.104523 max_logit=4.344313 sum_exp=49.382199 target_token=38103 target_token_1based=38104 debug_index=0
+[Step 780] loss=6.9645 lr=2.61e-04 grad_norm=0.8656
+[PTorchDiag] p_t=0.053889416 -log(p_t)=2.920821 p_277=0.000000009 -log(p_277)=18.560436 max_logit=5.359024 sum_exp=18.556511 target_token=11499 target_token_1based=11500 debug_index=0
+[Step 790] loss=6.3466 lr=2.60e-04 grad_norm=0.9065
+[PTorchDiag] p_t=0.000220246 -log(p_t)=8.420765 p_277=0.000000013 -log(p_277)=18.194981 max_logit=5.576657 sum_exp=15.674843 target_token=18476 target_token_1based=18477 debug_index=0
+[Step 800] loss=6.8487 lr=2.58e-04 grad_norm=0.9232
+[PTorchDiag] p_t=0.005566141 -log(p_t)=5.191053 p_277=0.000000021 -log(p_277)=17.668096 max_logit=4.423258 sum_exp=47.357904 target_token=521 target_token_1based=522 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0215 head=0.7398 attn=0.2961 ffn=0.4582 ln=0.0829
+[Validation] loss=7.0276 ppl=1127.35
+[Sample] "Hello worldly well known planets that planets in the planets can occur in the planets can occur in the planets in the planets can occur in the planets in the planets can occur in the planets in the planets in the planets in the planets in the planets in the planets in the planets can occur in the planets in the planets in the planets in the planets can occur in the planets will increase in the planets in the planets in the planets in the planets can occur in the planets in the planets in the planets can occur in the planets in the planets in the planets in the planets is possible planets in the planets will increase in the planets will increase in the planets will have notably planets in the planets in the planets in the planets in the planets in the planets in the planets in the planets in the planets can occur in the planets"
+[Step 810] loss=7.0850 lr=2.57e-04 grad_norm=0.8707
+[PTorchDiag] p_t=0.002643295 -log(p_t)=5.935729 p_277=0.000000007 -log(p_277)=18.833914 max_logit=3.881285 sum_exp=70.966165 target_token=5706 target_token_1based=5707 debug_index=0
+[Step 820] loss=7.1669 lr=2.56e-04 grad_norm=1.0902 (clipped)
+[PTorchDiag] p_t=0.000622394 -log(p_t)=7.381938 p_277=0.000000023 -log(p_277)=17.598360 max_logit=3.636045 sum_exp=113.634257 target_token=21564 target_token_1based=21565 debug_index=0
+[Step 830] loss=7.0439 lr=2.55e-04 grad_norm=0.9133
+[PTorchDiag] p_t=0.014059798 -log(p_t)=4.264436 p_277=0.000000061 -log(p_277)=16.617785 max_logit=5.040037 sum_exp=27.901954 target_token=1808 target_token_1based=1809 debug_index=0
+[Step 840] loss=6.8107 lr=2.54e-04 grad_norm=0.9333
+[PTorchDiag] p_t=0.000589369 -log(p_t)=7.436459 p_277=0.000000019 -log(p_277)=17.753908 max_logit=4.520872 sum_exp=43.264092 target_token=3382 target_token_1based=3383 debug_index=0
+[Step 850] loss=6.5617 lr=2.53e-04 grad_norm=1.0173 (clipped)
+[PTorchDiag] p_t=0.000111912 -log(p_t)=9.097797 p_277=0.000000005 -log(p_277)=19.182465 max_logit=4.051158 sum_exp=64.632254 target_token=7170 target_token_1based=7171 debug_index=0
+[Step 860] loss=6.9351 lr=2.51e-04 grad_norm=0.9125
+[PTorchDiag] p_t=0.000256519 -log(p_t)=8.268308 p_277=0.000000081 -log(p_277)=16.326557 max_logit=4.263649 sum_exp=117.731138 target_token=1116 target_token_1based=1117 debug_index=0
+[Step 870] loss=6.9379 lr=2.50e-04 grad_norm=0.8819
+[PTorchDiag] p_t=0.009317758 -log(p_t)=4.675833 p_277=0.000000022 -log(p_277)=17.628567 max_logit=3.883537 sum_exp=107.321928 target_token=49016 target_token_1based=49017 debug_index=0
+[Step 880] loss=6.8408 lr=2.49e-04 grad_norm=0.9043
+[PTorchDiag] p_t=0.000042606 -log(p_t)=10.063511 p_277=0.000000021 -log(p_277)=17.675648 max_logit=4.032732 sum_exp=67.436403 target_token=32188 target_token_1based=32189 debug_index=0
+[Step 890] loss=6.9289 lr=2.48e-04 grad_norm=0.9272
+[PTorchDiag] p_t=0.001133217 -log(p_t)=6.782695 p_277=0.000000055 -log(p_277)=16.709934 max_logit=5.452332 sum_exp=23.234239 target_token=26941 target_token_1based=26942 debug_index=0
+[Step 900] loss=6.4928 lr=2.47e-04 grad_norm=0.9557
+[PTorchDiag] p_t=0.003285945 -log(p_t)=5.718101 p_277=0.000000007 -log(p_277)=18.743200 max_logit=4.832429 sum_exp=28.580878 target_token=1027 target_token_1based=1028 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0203 head=0.7721 attn=0.2985 ffn=0.4667 ln=0.0993
+[Validation] loss=6.8156 ppl=911.98
+[Step 910] loss=6.8993 lr=2.45e-04 grad_norm=0.9299
+[PTorchDiag] p_t=0.005920719 -log(p_t)=5.129297 p_277=0.000000034 -log(p_277)=17.188833 max_logit=6.115148 sum_exp=24.226916 target_token=1853 target_token_1based=1854 debug_index=0
+[Step 920] loss=6.7992 lr=2.44e-04 grad_norm=0.9402
+[PTorchDiag] p_t=0.002770264 -log(p_t)=5.888813 p_277=0.000000012 -log(p_277)=18.250061 max_logit=5.864733 sum_exp=27.633370 target_token=10420 target_token_1based=10421 debug_index=0
+[Step 930] loss=6.7548 lr=2.43e-04 grad_norm=0.9252
+[PTorchDiag] p_t=0.000377704 -log(p_t)=7.881399 p_277=0.000000016 -log(p_277)=17.962549 max_logit=4.089921 sum_exp=68.170508 target_token=6152 target_token_1based=6153 debug_index=0
+[Step 940] loss=6.9913 lr=2.41e-04 grad_norm=0.9112
+[PTorchDiag] p_t=0.000573558 -log(p_t)=7.463652 p_277=0.000000015 -log(p_277)=18.018993 max_logit=3.757922 sum_exp=106.471510 target_token=8165 target_token_1based=8166 debug_index=0
+[Step 950] loss=6.9253 lr=2.40e-04 grad_norm=0.8679
+[PTorchDiag] p_t=0.000108214 -log(p_t)=9.131395 p_277=0.000000016 -log(p_277)=17.956062 max_logit=6.609637 sum_exp=24.887460 target_token=14494 target_token_1based=14495 debug_index=0
+[Step 960] loss=6.8456 lr=2.39e-04 grad_norm=0.9827
+[PTorchDiag] p_t=0.002003572 -log(p_t)=6.212824 p_277=0.000000010 -log(p_277)=18.464884 max_logit=5.451509 sum_exp=17.106793 target_token=3812 target_token_1based=3813 debug_index=0
+[Step 970] loss=6.5671 lr=2.38e-04 grad_norm=0.8667
+[PTorchDiag] p_t=0.007405341 -log(p_t)=4.905554 p_277=0.000000024 -log(p_277)=17.561935 max_logit=4.205325 sum_exp=53.445477 target_token=10090 target_token_1based=10091 debug_index=0
+
+[Epoch 1 Complete] avg_loss=7.6618 duration=174s
+
+========================================
+Epoch 2/3
+========================================
+[Step 980] loss=6.8404 lr=2.36e-04 grad_norm=0.9004
+[PTorchDiag] p_t=0.126743704 -log(p_t)=2.065588 p_277=0.000000026 -log(p_277)=17.455278 max_logit=6.863522 sum_exp=7.889940 target_token=685 target_token_1based=686 debug_index=0
+[Step 990] loss=6.9053 lr=2.35e-04 grad_norm=0.9022
+[PTorchDiag] p_t=0.000132314 -log(p_t)=8.930336 p_277=0.000000050 -log(p_277)=16.803558 max_logit=4.268757 sum_exp=51.410073 target_token=12446 target_token_1based=12447 debug_index=0
+[Step 1000] loss=6.4867 lr=2.34e-04 grad_norm=0.9369
+[PTorchDiag] p_t=0.000989484 -log(p_t)=6.918327 p_277=0.000000030 -log(p_277)=17.323990 max_logit=3.583523 sum_exp=140.237637 target_token=22064 target_token_1based=22065 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0200 head=0.7730 attn=0.2604 ffn=0.4569 ln=0.0582
+[Validation] loss=6.6355 ppl=761.63
+[Sample] "Hello world that can lead to largely thickness of the atmosphere is much more complex atmosphereThe atmosphere isothermal atmosphere isothermal atmosphere is much more complex atmosphere is much higher than in the atmosphere is much higher than in the atmosphere isothermal atmosphere isothermal atmosphere is much more complex atmosphere is much more complex atmosphere is much more complex atmosphere is much more complex atmosphereThe atmosphere isothermal atmosphere isothermal atmosphere is much more complex atmosphere is much more complex atmosphereThe atmosphere is much higher than in the atmosphere isothermal atmosphere is much higher than in the atmosphere is much more complex atmosphere is much more complex atmosphere is much higher than in the atmosphere is much higher than"
+[Step 1010] loss=6.6564 lr=2.32e-04 grad_norm=0.9645
+[PTorchDiag] p_t=0.000084664 -log(p_t)=9.376821 p_277=0.000000008 -log(p_277)=18.622011 max_logit=3.627969 sum_exp=100.667964 target_token=11827 target_token_1based=11828 debug_index=0
+[Step 1020] loss=6.4746 lr=2.31e-04 grad_norm=1.0191 (clipped)
+[PTorchDiag] p_t=0.000111703 -log(p_t)=9.099668 p_277=0.000000022 -log(p_277)=17.610201 max_logit=4.520109 sum_exp=42.220811 target_token=32216 target_token_1based=32217 debug_index=0
+[Step 1030] loss=6.6855 lr=2.29e-04 grad_norm=1.0568 (clipped)
+[PTorchDiag] p_t=0.000146278 -log(p_t)=8.830002 p_277=0.000000013 -log(p_277)=18.123024 max_logit=5.434852 sum_exp=21.185088 target_token=23933 target_token_1based=23934 debug_index=0
+[Step 1040] loss=6.5454 lr=2.28e-04 grad_norm=1.0053 (clipped)
+[PTorchDiag] p_t=0.000072781 -log(p_t)=9.528058 p_277=0.000000020 -log(p_277)=17.709873 max_logit=4.907981 sum_exp=52.597215 target_token=13612 target_token_1based=13613 debug_index=0
+[Step 1050] loss=6.8760 lr=2.27e-04 grad_norm=0.9183
+[PTorchDiag] p_t=0.000063726 -log(p_t)=9.660912 p_277=0.000000023 -log(p_277)=17.567419 max_logit=4.240209 sum_exp=55.485984 target_token=36783 target_token_1based=36784 debug_index=0
+[Step 1060] loss=6.8372 lr=2.25e-04 grad_norm=0.8946
+[PTorchDiag] p_t=0.000093966 -log(p_t)=9.272578 p_277=0.000000040 -log(p_277)=17.032288 max_logit=5.826171 sum_exp=16.232934 target_token=48827 target_token_1based=48828 debug_index=0
+[Step 1070] loss=6.8458 lr=2.24e-04 grad_norm=0.9791
+[PTorchDiag] p_t=0.000083665 -log(p_t)=9.388692 p_277=0.000000067 -log(p_277)=16.513405 max_logit=5.490729 sum_exp=40.508038 target_token=38773 target_token_1based=38774 debug_index=0
+[Step 1080] loss=6.5650 lr=2.22e-04 grad_norm=0.8933
+[PTorchDiag] p_t=0.000020497 -log(p_t)=10.795249 p_277=0.000000015 -log(p_277)=18.018328 max_logit=5.966099 sum_exp=27.448621 target_token=36746 target_token_1based=36747 debug_index=0
+[Step 1090] loss=6.7478 lr=2.21e-04 grad_norm=1.0020 (clipped)
+[PTorchDiag] p_t=0.003316681 -log(p_t)=5.708791 p_277=0.000000006 -log(p_277)=18.974653 max_logit=4.552041 sum_exp=36.830493 target_token=736 target_token_1based=737 debug_index=0
+[Step 1100] loss=6.6569 lr=2.20e-04 grad_norm=0.9298
+[PTorchDiag] p_t=0.000448003 -log(p_t)=7.710710 p_277=0.000000020 -log(p_277)=17.711485 max_logit=3.914058 sum_exp=68.810355 target_token=6487 target_token_1based=6488 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0215 head=0.7250 attn=0.3205 ffn=0.4779 ln=0.0854
+[Validation] loss=6.5046 ppl=668.22
+[Step 1110] loss=6.8343 lr=2.18e-04 grad_norm=1.0023 (clipped)
+[PTorchDiag] p_t=0.000936144 -log(p_t)=6.973742 p_277=0.000000006 -log(p_277)=18.943359 max_logit=4.971659 sum_exp=30.530071 target_token=21564 target_token_1based=21565 debug_index=0
+[Step 1120] loss=6.5267 lr=2.17e-04 grad_norm=0.9156
+[PTorchDiag] p_t=0.001198309 -log(p_t)=6.726844 p_277=0.000000009 -log(p_277)=18.520605 max_logit=8.694069 sum_exp=1.830708 target_token=834 target_token_1based=835 debug_index=0
+[Step 1130] loss=6.8932 lr=2.15e-04 grad_norm=0.9647
+[PTorchDiag] p_t=0.005189812 -log(p_t)=5.261058 p_277=0.000000020 -log(p_277)=17.743341 max_logit=4.675822 sum_exp=38.416776 target_token=793 target_token_1based=794 debug_index=0
+[Step 1140] loss=6.8109 lr=2.14e-04 grad_norm=0.9219
+[PTorchDiag] p_t=0.000215248 -log(p_t)=8.443718 p_277=0.000000003 -log(p_277)=19.588221 max_logit=6.291003 sum_exp=8.320973 target_token=49260 target_token_1based=49261 debug_index=0
+[Step 1150] loss=6.6325 lr=2.12e-04 grad_norm=0.9330
+[PTorchDiag] p_t=0.000588620 -log(p_t)=7.437729 p_277=0.000000035 -log(p_277)=17.156542 max_logit=3.182674 sum_exp=141.951857 target_token=1380 target_token_1based=1381 debug_index=0
+[Step 1160] loss=6.5550 lr=2.11e-04 grad_norm=0.9593
+[PTorchDiag] p_t=0.000013817 -log(p_t)=11.189584 p_277=0.000000034 -log(p_277)=17.200066 max_logit=3.962813 sum_exp=87.781155 target_token=31711 target_token_1based=31712 debug_index=0
+[Step 1170] loss=6.4068 lr=2.09e-04 grad_norm=0.9074
+[PTorchDiag] p_t=0.002143261 -log(p_t)=6.145427 p_277=0.000000037 -log(p_277)=17.125299 max_logit=4.239297 sum_exp=48.557729 target_token=12183 target_token_1based=12184 debug_index=0
+[Step 1180] loss=6.6666 lr=2.08e-04 grad_norm=0.9063
+[PTorchDiag] p_t=0.000522440 -log(p_t)=7.557001 p_277=0.000000022 -log(p_277)=17.615078 max_logit=4.229673 sum_exp=44.285932 target_token=10443 target_token_1based=10444 debug_index=0
+[Step 1190] loss=6.4456 lr=2.06e-04 grad_norm=0.9722
+[PTorchDiag] p_t=0.006416356 -log(p_t)=5.048905 p_277=0.000000014 -log(p_277)=18.078508 max_logit=5.404616 sum_exp=22.355521 target_token=21511 target_token_1based=21512 debug_index=0
+[Step 1200] loss=6.6018 lr=2.05e-04 grad_norm=1.0122 (clipped)
+[PTorchDiag] p_t=0.000274782 -log(p_t)=8.199532 p_277=0.000000003 -log(p_277)=19.477375 max_logit=4.641550 sum_exp=33.151285 target_token=46527 target_token_1based=46528 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0209 head=0.8339 attn=0.2787 ffn=0.4974 ln=0.0594
+[Validation] loss=6.4952 ppl=661.94
+[Sample] "Hello worldly isothermal disc with increasing disc with increasing disc with increasing disc model with increasing disc model with increasing disc model with increasing disc modelling disc model with increasing disc model with increasing disc model with increasing disc model with increasing disc model with different models are more efficiently isothermal disc model with increasing disc model with increasing disc model with increasing disc model with increasing disc model with increasing disc model with increasing disc model with increasing disc model with increasing disc model with increasing disc model with increasing disc model with increasing disc model with increasing disc model with increasing disc model with increasing disc model with increasing disc model with increasing disc model"
+[Step 1210] loss=6.4226 lr=2.03e-04 grad_norm=1.0320 (clipped)
+[PTorchDiag] p_t=0.002138039 -log(p_t)=6.147866 p_277=0.000000013 -log(p_277)=18.134455 max_logit=5.377844 sum_exp=16.862606 target_token=3803 target_token_1based=3804 debug_index=0
+[Step 1220] loss=6.6604 lr=2.02e-04 grad_norm=0.8964
+[PTorchDiag] p_t=0.000926515 -log(p_t)=6.984080 p_277=0.000000041 -log(p_277)=17.005533 max_logit=4.872001 sum_exp=111.554292 target_token=2792 target_token_1based=2793 debug_index=0
+[Step 1230] loss=6.4926 lr=2.00e-04 grad_norm=1.0238 (clipped)
+[PTorchDiag] p_t=0.000078178 -log(p_t)=9.456523 p_277=0.000000019 -log(p_277)=17.774286 max_logit=4.263280 sum_exp=45.987259 target_token=1265 target_token_1based=1266 debug_index=0
+[Step 1240] loss=6.5003 lr=1.99e-04 grad_norm=0.9062
+[PTorchDiag] p_t=0.001034061 -log(p_t)=6.874261 p_277=0.000000014 -log(p_277)=18.068312 max_logit=6.522536 sum_exp=7.958152 target_token=3998 target_token_1based=3999 debug_index=0
+[Step 1250] loss=6.3511 lr=1.97e-04 grad_norm=1.0253 (clipped)
+[PTorchDiag] p_t=0.006760668 -log(p_t)=4.996634 p_277=0.000000003 -log(p_277)=19.708603 max_logit=5.180680 sum_exp=22.490026 target_token=9127 target_token_1based=9128 debug_index=0
+[Step 1260] loss=6.5559 lr=1.96e-04 grad_norm=0.9134
+[PTorchDiag] p_t=0.000045270 -log(p_t)=10.002859 p_277=0.000000028 -log(p_277)=17.399151 max_logit=3.743838 sum_exp=99.028126 target_token=45110 target_token_1based=45111 debug_index=0
+[Step 1270] loss=6.5366 lr=1.94e-04 grad_norm=0.8850
+[PTorchDiag] p_t=0.002989119 -log(p_t)=5.812777 p_277=0.000000007 -log(p_277)=18.816479 max_logit=4.457376 sum_exp=42.506040 target_token=3382 target_token_1based=3383 debug_index=0
+[Step 1280] loss=6.5497 lr=1.92e-04 grad_norm=0.9470
+[PTorchDiag] p_t=0.000716991 -log(p_t)=7.240447 p_277=0.000000006 -log(p_277)=18.898796 max_logit=4.163005 sum_exp=54.614867 target_token=30559 target_token_1based=30560 debug_index=0
+[Step 1290] loss=6.1216 lr=1.91e-04 grad_norm=1.0767 (clipped)
+[PTorchDiag] p_t=0.001418188 -log(p_t)=6.558375 p_277=0.000000052 -log(p_277)=16.771732 max_logit=6.034866 sum_exp=15.487395 target_token=1027 target_token_1based=1028 debug_index=0
+[Step 1300] loss=6.5016 lr=1.89e-04 grad_norm=0.9429
+[PTorchDiag] p_t=0.199752793 -log(p_t)=1.610675 p_277=0.000000008 -log(p_277)=18.590830 max_logit=6.850672 sum_exp=5.006191 target_token=5247 target_token_1based=5248 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0202 head=0.7496 attn=0.3084 ffn=0.4776 ln=0.0591
+[Validation] loss=6.3636 ppl=580.35
+[Step 1310] loss=6.4877 lr=1.88e-04 grad_norm=0.9768
+[PTorchDiag] p_t=0.004398982 -log(p_t)=5.426382 p_277=0.000000011 -log(p_277)=18.346132 max_logit=4.504424 sum_exp=40.194431 target_token=9052 target_token_1based=9053 debug_index=0
+[Step 1320] loss=6.4054 lr=1.86e-04 grad_norm=0.9439
+[PTorchDiag] p_t=0.000035993 -log(p_t)=10.232176 p_277=0.000000015 -log(p_277)=18.038946 max_logit=3.988181 sum_exp=64.786440 target_token=3631 target_token_1based=3632 debug_index=0
+[Step 1330] loss=6.6328 lr=1.85e-04 grad_norm=0.9048
+[PTorchDiag] p_t=0.006997983 -log(p_t)=4.962133 p_277=0.000000024 -log(p_277)=17.548025 max_logit=5.138429 sum_exp=23.679211 target_token=2554 target_token_1based=2555 debug_index=0
+[Step 1340] loss=6.5466 lr=1.83e-04 grad_norm=0.9363
+[PTorchDiag] p_t=0.000636486 -log(p_t)=7.359548 p_277=0.000000004 -log(p_277)=19.408794 max_logit=6.501390 sum_exp=6.373207 target_token=16797 target_token_1based=16798 debug_index=0
+[Step 1350] loss=6.3279 lr=1.81e-04 grad_norm=0.9458
+[PTorchDiag] p_t=0.003272973 -log(p_t)=5.722056 p_277=0.000000023 -log(p_277)=17.572309 max_logit=6.835124 sum_exp=6.550959 target_token=33101 target_token_1based=33102 debug_index=0
+[Step 1360] loss=6.4018 lr=1.80e-04 grad_norm=0.9657
+[PTorchDiag] p_t=0.000129789 -log(p_t)=8.949603 p_277=0.000000016 -log(p_277)=17.927362 max_logit=4.699166 sum_exp=54.387937 target_token=2979 target_token_1based=2980 debug_index=0
+[Step 1370] loss=6.6438 lr=1.78e-04 grad_norm=0.9727
+[PTorchDiag] p_t=0.000016673 -log(p_t)=11.001701 p_277=0.000000005 -log(p_277)=19.202604 max_logit=5.210281 sum_exp=16.590034 target_token=48995 target_token_1based=48996 debug_index=0
+[Step 1380] loss=6.4336 lr=1.77e-04 grad_norm=0.9579
+[PTorchDiag] p_t=0.000095396 -log(p_t)=9.257477 p_277=0.000000016 -log(p_277)=17.950279 max_logit=3.415329 sum_exp=105.482420 target_token=10012 target_token_1based=10013 debug_index=0
+[Step 1390] loss=6.2122 lr=1.75e-04 grad_norm=0.9443
+[PTorchDiag] p_t=0.068415307 -log(p_t)=2.682159 p_277=0.000000060 -log(p_277)=16.628332 max_logit=5.503880 sum_exp=14.616616 target_token=3202 target_token_1based=3203 debug_index=0
+[Step 1400] loss=6.3677 lr=1.73e-04 grad_norm=1.0246 (clipped)
+[PTorchDiag] p_t=0.052157421 -log(p_t)=2.953489 p_277=0.000000023 -log(p_277)=17.573269 max_logit=5.210716 sum_exp=19.172737 target_token=560 target_token_1based=561 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0200 head=0.8445 attn=0.3000 ffn=0.4919 ln=0.0653
+[Validation] loss=6.3563 ppl=576.08
+[Sample] "Hello worldusoidly is much higher than the gas drag force on the gas drag forces on the gas drag force on the gas drag force on the gas drag forces on the gas drag force that gas drag force on the gas drag force on the gas drag force on the gas drag force on the gas drag force on the gas drag force on the gas drag force isothermal gas drag forces on the gas drag forces on the gas drag forces on the gas drag force on the gas drag force on the gas drag force that gas drag force that gas drag force on the gas drag forces on the gas drag force on the gas drag force on the gas drag force on the gas drag forces on the gas drag forces on the gas drag forces on the"
+[Step 1410] loss=6.2270 lr=1.72e-04 grad_norm=0.9432
+[PTorchDiag] p_t=0.000117672 -log(p_t)=9.047608 p_277=0.000000013 -log(p_277)=18.121901 max_logit=6.337138 sum_exp=6.398499 target_token=47863 target_token_1based=47864 debug_index=0
+[Step 1420] loss=6.4681 lr=1.70e-04 grad_norm=0.9871
+[PTorchDiag] p_t=0.001859795 -log(p_t)=6.287289 p_277=0.000000038 -log(p_277)=17.073582 max_logit=5.471579 sum_exp=23.847434 target_token=19442 target_token_1based=19443 debug_index=0
+[Step 1430] loss=6.4359 lr=1.69e-04 grad_norm=0.9370
+[PTorchDiag] p_t=0.013215808 -log(p_t)=4.326342 p_277=0.000000013 -log(p_277)=18.162315 max_logit=4.257547 sum_exp=55.653662 target_token=24434 target_token_1based=24435 debug_index=0
+[Step 1440] loss=6.1192 lr=1.67e-04 grad_norm=0.9566
+[PTorchDiag] p_t=0.000550189 -log(p_t)=7.505248 p_277=0.000000001 -log(p_277)=20.615044 max_logit=4.526497 sum_exp=28.149582 target_token=7820 target_token_1based=7821 debug_index=0
+[Step 1450] loss=6.1881 lr=1.65e-04 grad_norm=0.9886
+[PTorchDiag] p_t=0.007226102 -log(p_t)=4.930056 p_277=0.000000010 -log(p_277)=18.455074 max_logit=6.700717 sum_exp=11.702072 target_token=531 target_token_1based=532 debug_index=0
+[Step 1460] loss=6.3809 lr=1.64e-04 grad_norm=0.9562
+[PTorchDiag] p_t=0.001488905 -log(p_t)=6.509714 p_277=0.000000019 -log(p_277)=17.789726 max_logit=4.701488 sum_exp=32.208716 target_token=832 target_token_1based=833 debug_index=0
+[Step 1470] loss=6.3546 lr=1.62e-04 grad_norm=0.9729
+[PTorchDiag] p_t=0.000129389 -log(p_t)=8.952686 p_277=0.000000060 -log(p_277)=16.625267 max_logit=5.042655 sum_exp=31.247038 target_token=15183 target_token_1based=15184 debug_index=0
+[Step 1480] loss=6.3522 lr=1.61e-04 grad_norm=0.9600
+[PTorchDiag] p_t=0.000003072 -log(p_t)=12.693306 p_277=0.000000057 -log(p_277)=16.675003 max_logit=2.794090 sum_exp=236.989461 target_token=47423 target_token_1based=47424 debug_index=0
+[Step 1490] loss=5.8978 lr=1.59e-04 grad_norm=0.9558
+[PTorchDiag] p_t=0.000041155 -log(p_t)=10.098167 p_277=0.000000032 -log(p_277)=17.261738 max_logit=6.286508 sum_exp=21.667383 target_token=19662 target_token_1based=19663 debug_index=0
+[Step 1500] loss=6.3723 lr=1.57e-04 grad_norm=0.9270
+[PTorchDiag] p_t=0.184994757 -log(p_t)=1.687428 p_277=0.000000050 -log(p_277)=16.808985 max_logit=6.890025 sum_exp=5.405560 target_token=20928 target_token_1based=20929 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0203 head=0.7437 attn=0.2564 ffn=0.4880 ln=0.0443
+[Validation] loss=6.3252 ppl=558.49
+[Step 1510] loss=6.3257 lr=1.56e-04 grad_norm=0.9785
+[PTorchDiag] p_t=0.001254523 -log(p_t)=6.681000 p_277=0.000000205 -log(p_277)=15.399639 max_logit=5.470339 sum_exp=82.328905 target_token=35731 target_token_1based=35732 debug_index=0
+[Step 1520] loss=6.4878 lr=1.54e-04 grad_norm=0.9756
+[PTorchDiag] p_t=0.025652651 -log(p_t)=3.663108 p_277=0.000000028 -log(p_277)=17.403175 max_logit=4.751032 sum_exp=25.291293 target_token=5421 target_token_1based=5422 debug_index=0
+[Step 1530] loss=6.5269 lr=1.53e-04 grad_norm=1.0061 (clipped)
+[PTorchDiag] p_t=0.001122173 -log(p_t)=6.792489 p_277=0.000000058 -log(p_277)=16.664753 max_logit=4.203210 sum_exp=41.792705 target_token=5294 target_token_1based=5295 debug_index=0
+[Step 1540] loss=6.1450 lr=1.51e-04 grad_norm=0.9508
+[PTorchDiag] p_t=0.000073695 -log(p_t)=9.515572 p_277=0.000000008 -log(p_277)=18.626211 max_logit=4.251692 sum_exp=46.700295 target_token=1385 target_token_1based=1386 debug_index=0
+[Step 1550] loss=6.3636 lr=1.49e-04 grad_norm=1.0531 (clipped)
+[PTorchDiag] p_t=0.000892882 -log(p_t)=7.021056 p_277=0.000000000 -log(p_277)=21.876776 max_logit=6.582797 sum_exp=7.329149 target_token=17513 target_token_1based=17514 debug_index=0
+[Step 1560] loss=6.0516 lr=1.48e-04 grad_norm=0.9141
+[PTorchDiag] p_t=0.000016733 -log(p_t)=10.998150 p_277=0.000000013 -log(p_277)=18.165251 max_logit=4.625986 sum_exp=45.271162 target_token=17801 target_token_1based=17802 debug_index=0
+[Step 1570] loss=5.8468 lr=1.46e-04 grad_norm=0.9839
+[PTorchDiag] p_t=0.001462578 -log(p_t)=6.527555 p_277=0.000000012 -log(p_277)=18.276768 max_logit=5.698743 sum_exp=12.496598 target_token=7938 target_token_1based=7939 debug_index=0
+[Step 1580] loss=6.1113 lr=1.45e-04 grad_norm=0.9155
+[PTorchDiag] p_t=0.000821074 -log(p_t)=7.104898 p_277=0.000000086 -log(p_277)=16.271030 max_logit=5.144587 sum_exp=36.066152 target_token=637 target_token_1based=638 debug_index=0
+[Step 1590] loss=6.2016 lr=1.43e-04 grad_norm=0.9400
+[PTorchDiag] p_t=0.142283797 -log(p_t)=1.949932 p_277=0.000000020 -log(p_277)=17.740137 max_logit=6.233199 sum_exp=7.028207 target_token=521 target_token_1based=522 debug_index=0
+[Step 1600] loss=6.1270 lr=1.41e-04 grad_norm=0.9527
+[PTorchDiag] p_t=0.000158688 -log(p_t)=8.748571 p_277=0.000000081 -log(p_277)=16.329786 max_logit=4.518768 sum_exp=46.392805 target_token=27007 target_token_1based=27008 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0206 head=0.7528 attn=0.2965 ffn=0.4996 ln=0.0552
+[Validation] loss=6.2078 ppl=496.59
+[Sample] "Hello worldly significant effect on the nightsides of the two bodies are also not only one can also be more detail by a factor of that could have significant effect on the basically in the range from one can also be more detailThe initial conditions are also possible that the two bodies are also possible that the dynamically is much more detail by a factor of of the bodies in the outer planetesimal formation of the giant planets in the solar system giant planets may have formed in the solar system giant planets in the outer planetesimal formation of the giant planets in the solar system giant planets in the solar system giant planets may have formed giant planets may have formed giant planets in the solar system giant planets may have their eccentricities inclinations of the giant planets in the solar system giant planets may have formed giant planets in the solar system giant planets in the solar system giant planets in the solar system giant planets"
+[Step 1610] loss=6.3322 lr=1.40e-04 grad_norm=1.0673 (clipped)
+[PTorchDiag] p_t=0.000122965 -log(p_t)=9.003610 p_277=0.000000018 -log(p_277)=17.826778 max_logit=5.452639 sum_exp=17.337287 target_token=27516 target_token_1based=27517 debug_index=0
+[Step 1620] loss=6.6278 lr=1.38e-04 grad_norm=0.9710
+[PTorchDiag] p_t=0.000806279 -log(p_t)=7.123080 p_277=0.000000018 -log(p_277)=17.837093 max_logit=4.908164 sum_exp=35.681698 target_token=665 target_token_1based=666 debug_index=0
+[Step 1630] loss=6.1554 lr=1.37e-04 grad_norm=0.9925
+[PTorchDiag] p_t=0.015427102 -log(p_t)=4.171629 p_277=0.000000006 -log(p_277)=18.872698 max_logit=4.611764 sum_exp=25.922164 target_token=1328 target_token_1based=1329 debug_index=0
+[Step 1640] loss=6.8260 lr=1.35e-04 grad_norm=0.9291
+[PTorchDiag] p_t=0.000875665 -log(p_t)=7.040527 p_277=0.000000021 -log(p_277)=17.658638 max_logit=5.188195 sum_exp=24.875607 target_token=7751 target_token_1based=7752 debug_index=0
+[Step 1650] loss=6.0650 lr=1.33e-04 grad_norm=0.9415
+[PTorchDiag] p_t=0.000143904 -log(p_t)=8.846361 p_277=0.000000027 -log(p_277)=17.437372 max_logit=3.531078 sum_exp=77.389821 target_token=8978 target_token_1based=8979 debug_index=0
+[Step 1660] loss=5.8807 lr=1.32e-04 grad_norm=0.9627
+[PTorchDiag] p_t=0.000026707 -log(p_t)=10.530591 p_277=0.000000007 -log(p_277)=18.845343 max_logit=8.685025 sum_exp=1.916337 target_token=3051 target_token_1based=3052 debug_index=0
+[Step 1670] loss=6.1666 lr=1.30e-04 grad_norm=0.9849
+[PTorchDiag] p_t=0.709999502 -log(p_t)=0.342491 p_277=0.000000013 -log(p_277)=18.155968 max_logit=8.935305 sum_exp=1.408452 target_token=28073 target_token_1based=28074 debug_index=0
+[Step 1680] loss=5.7238 lr=1.29e-04 grad_norm=1.0569 (clipped)
+[PTorchDiag] p_t=0.000550316 -log(p_t)=7.505019 p_277=0.000000053 -log(p_277)=16.752136 max_logit=6.149375 sum_exp=18.052503 target_token=752 target_token_1based=753 debug_index=0
+[Step 1690] loss=6.1816 lr=1.27e-04 grad_norm=0.9164
+[PTorchDiag] p_t=0.004221905 -log(p_t)=5.467469 p_277=0.000000045 -log(p_277)=16.917971 max_logit=4.841078 sum_exp=45.502907 target_token=45426 target_token_1based=45427 debug_index=0
+[Step 1700] loss=6.3100 lr=1.25e-04 grad_norm=0.9692
+[PTorchDiag] p_t=0.000081702 -log(p_t)=9.412436 p_277=0.000000005 -log(p_277)=19.164040 max_logit=6.464031 sum_exp=6.774006 target_token=22526 target_token_1based=22527 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0204 head=0.7698 attn=0.2914 ffn=0.5092 ln=0.0465
+[Validation] loss=6.0866 ppl=439.91
+[Step 1710] loss=6.0023 lr=1.24e-04 grad_norm=1.0427 (clipped)
+[PTorchDiag] p_t=0.003204949 -log(p_t)=5.743059 p_277=0.000000007 -log(p_277)=18.830961 max_logit=4.253021 sum_exp=120.523338 target_token=5554 target_token_1based=5555 debug_index=0
+[Step 1720] loss=5.9599 lr=1.22e-04 grad_norm=0.9893
+[PTorchDiag] p_t=0.000181705 -log(p_t)=8.613126 p_277=0.000000018 -log(p_277)=17.839762 max_logit=5.235497 sum_exp=19.156507 target_token=33574 target_token_1based=33575 debug_index=0
+[Step 1730] loss=6.1045 lr=1.21e-04 grad_norm=0.9977
+[PTorchDiag] p_t=0.000140152 -log(p_t)=8.872782 p_277=0.000000014 -log(p_277)=18.112547 max_logit=4.316085 sum_exp=39.138257 target_token=39297 target_token_1based=39298 debug_index=0
+[Step 1740] loss=6.4183 lr=1.19e-04 grad_norm=0.9799
+[PTorchDiag] p_t=0.000180290 -log(p_t)=8.620942 p_277=0.000000017 -log(p_277)=17.869976 max_logit=4.202510 sum_exp=43.360521 target_token=3657 target_token_1based=3658 debug_index=0
+[Step 1750] loss=5.8908 lr=1.18e-04 grad_norm=1.0463 (clipped)
+[PTorchDiag] p_t=0.000831729 -log(p_t)=7.092004 p_277=0.000000028 -log(p_277)=17.386084 max_logit=4.126867 sum_exp=55.675241 target_token=22919 target_token_1based=22920 debug_index=0
+[Step 1760] loss=6.3174 lr=1.16e-04 grad_norm=1.0406 (clipped)
+[PTorchDiag] p_t=0.000175346 -log(p_t)=8.648748 p_277=0.000000115 -log(p_277)=15.974752 max_logit=5.400457 sum_exp=39.050306 target_token=840 target_token_1based=841 debug_index=0
+[Step 1770] loss=6.2348 lr=1.14e-04 grad_norm=0.9966
+[PTorchDiag] p_t=0.000218453 -log(p_t)=8.428939 p_277=0.000000035 -log(p_277)=17.154701 max_logit=4.473551 sum_exp=48.838214 target_token=11231 target_token_1based=11232 debug_index=0
+[Step 1780] loss=6.1504 lr=1.13e-04 grad_norm=0.9733
+[PTorchDiag] p_t=0.000388119 -log(p_t)=7.854199 p_277=0.000000019 -log(p_277)=17.771248 max_logit=4.891836 sum_exp=26.937748 target_token=46815 target_token_1based=46816 debug_index=0
+[Step 1790] loss=6.1241 lr=1.11e-04 grad_norm=1.0340 (clipped)
+[PTorchDiag] p_t=0.000843172 -log(p_t)=7.078340 p_277=0.000000004 -log(p_277)=19.336733 max_logit=4.767213 sum_exp=29.622256 target_token=17362 target_token_1based=17363 debug_index=0
+[Step 1800] loss=6.2198 lr=1.10e-04 grad_norm=1.0282 (clipped)
+[PTorchDiag] p_t=0.002763837 -log(p_t)=5.891135 p_277=0.000000065 -log(p_277)=16.544495 max_logit=4.546517 sum_exp=40.466839 target_token=7327 target_token_1based=7328 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0196 head=0.8385 attn=0.3170 ffn=0.5008 ln=0.0483
+[Validation] loss=6.1971 ppl=491.34
+[Sample] "Hello worldtive optics (). Thelatter isothermal equation isothermal equation isothermal equation state isothermal equation isothermal equation state isothermal equation state isothermal equation state isothermal equation state isothermal equation isothermal equation state isothermal equation state isothermal equation isothermal equation state isothermal equation isothermal equation state isothermal equation state isothermal equation state isothermal equation state isothermal equation stateThe first order of magnitude smaller than that of the two different values of The first order of magnitude smaller than that of the two different values of The first order of magnitudeThe difference isothermal equation isothermal equation state isothermal equation isothermal equation state isothermal equation is"
+[Step 1810] loss=6.3950 lr=1.08e-04 grad_norm=1.0284 (clipped)
+[PTorchDiag] p_t=0.001556821 -log(p_t)=6.465109 p_277=0.000000010 -log(p_277)=18.422619 max_logit=4.634775 sum_exp=51.870514 target_token=4987 target_token_1based=4988 debug_index=0
+[Step 1820] loss=6.3665 lr=1.07e-04 grad_norm=0.9901
+[PTorchDiag] p_t=0.002818904 -log(p_t)=5.871407 p_277=0.000000121 -log(p_277)=15.924279 max_logit=6.095966 sum_exp=16.780774 target_token=26020 target_token_1based=26021 debug_index=0
+[Step 1830] loss=5.7346 lr=1.05e-04 grad_norm=0.9970
+[PTorchDiag] p_t=0.000315670 -log(p_t)=8.060814 p_277=0.000000011 -log(p_277)=18.321384 max_logit=3.582399 sum_exp=73.522585 target_token=6224 target_token_1based=6225 debug_index=0
+[Step 1840] loss=6.1964 lr=1.04e-04 grad_norm=0.9720
+[PTorchDiag] p_t=0.000885732 -log(p_t)=7.029097 p_277=0.000000015 -log(p_277)=18.018454 max_logit=4.831908 sum_exp=36.369741 target_token=37824 target_token_1based=37825 debug_index=0
+[Step 1850] loss=6.0161 lr=1.02e-04 grad_norm=1.0586 (clipped)
+[PTorchDiag] p_t=0.000082674 -log(p_t)=9.400610 p_277=0.000000022 -log(p_277)=17.637642 max_logit=7.459958 sum_exp=7.148750 target_token=42459 target_token_1based=42460 debug_index=0
+[Step 1860] loss=6.2673 lr=1.01e-04 grad_norm=0.9453
+[PTorchDiag] p_t=0.001691990 -log(p_t)=6.381850 p_277=0.000000007 -log(p_277)=18.763121 max_logit=6.201005 sum_exp=8.594845 target_token=15619 target_token_1based=15620 debug_index=0
+[Step 1870] loss=6.0963 lr=9.93e-05 grad_norm=1.0159 (clipped)
+[PTorchDiag] p_t=0.011816605 -log(p_t)=4.438250 p_277=0.000000085 -log(p_277)=16.279530 max_logit=7.838834 sum_exp=3.014275 target_token=29599 target_token_1based=29600 debug_index=0
+[Step 1880] loss=5.9301 lr=9.78e-05 grad_norm=0.9757
+[PTorchDiag] p_t=0.000032753 -log(p_t)=10.326511 p_277=0.000000002 -log(p_277)=20.245811 max_logit=8.485827 sum_exp=2.178981 target_token=2180 target_token_1based=2181 debug_index=0
+[Step 1890] loss=6.1668 lr=9.63e-05 grad_norm=0.9654
+[PTorchDiag] p_t=0.006272948 -log(p_t)=5.071509 p_277=0.000000038 -log(p_277)=17.097317 max_logit=7.082194 sum_exp=11.031012 target_token=1027 target_token_1based=1028 debug_index=0
+[Step 1900] loss=6.1803 lr=9.49e-05 grad_norm=0.9418
+[PTorchDiag] p_t=0.000412414 -log(p_t)=7.793483 p_277=0.000000018 -log(p_277)=17.808147 max_logit=3.867697 sum_exp=52.552428 target_token=41430 target_token_1based=41431 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0204 head=0.7361 attn=0.2802 ffn=0.5132 ln=0.0534
+[Validation] loss=6.0536 ppl=425.65
+[Step 1910] loss=6.1630 lr=9.34e-05 grad_norm=1.0209 (clipped)
+[PTorchDiag] p_t=0.000427227 -log(p_t)=7.758195 p_277=0.000000016 -log(p_277)=17.942512 max_logit=4.753066 sum_exp=36.811109 target_token=42726 target_token_1based=42727 debug_index=0
+[Step 1920] loss=6.5025 lr=9.19e-05 grad_norm=0.9519
+[PTorchDiag] p_t=0.000333223 -log(p_t)=8.006699 p_277=0.000000087 -log(p_277)=16.260590 max_logit=4.279230 sum_exp=80.531585 target_token=3396 target_token_1based=3397 debug_index=0
+[Step 1930] loss=6.1044 lr=9.05e-05 grad_norm=1.0328 (clipped)
+[PTorchDiag] p_t=0.000074053 -log(p_t)=9.510724 p_277=0.000000002 -log(p_277)=20.027542 max_logit=6.212643 sum_exp=8.762190 target_token=23910 target_token_1based=23911 debug_index=0
+[Step 1940] loss=6.1953 lr=8.91e-05 grad_norm=0.9805
+[PTorchDiag] p_t=0.000040322 -log(p_t)=10.118613 p_277=0.000000061 -log(p_277)=16.611675 max_logit=4.977472 sum_exp=60.556982 target_token=24262 target_token_1based=24263 debug_index=0
+[Step 1950] loss=6.1001 lr=8.76e-05 grad_norm=0.9624
+[PTorchDiag] p_t=0.001662702 -log(p_t)=6.399311 p_277=0.000000013 -log(p_277)=18.194059 max_logit=6.111531 sum_exp=14.159474 target_token=665 target_token_1based=666 debug_index=0
+
+[Epoch 2 Complete] avg_loss=6.3376 duration=176s
+
+========================================
+Epoch 3/3
+========================================
+[Step 1960] loss=6.1454 lr=8.62e-05 grad_norm=0.9531
+[PTorchDiag] p_t=0.004628234 -log(p_t)=5.375580 p_277=0.000000022 -log(p_277)=17.637840 max_logit=4.042255 sum_exp=42.404758 target_token=9224 target_token_1based=9225 debug_index=0
+[Step 1970] loss=6.0288 lr=8.48e-05 grad_norm=0.9641
+[PTorchDiag] p_t=0.026210947 -log(p_t)=3.641578 p_277=0.000000060 -log(p_277)=16.624130 max_logit=6.483639 sum_exp=11.612340 target_token=1196 target_token_1based=1197 debug_index=0
+[Step 1980] loss=6.3885 lr=8.34e-05 grad_norm=0.9829
+[PTorchDiag] p_t=0.000072608 -log(p_t)=9.530434 p_277=0.000000064 -log(p_277)=16.557119 max_logit=3.324013 sum_exp=112.854163 target_token=49593 target_token_1based=49594 debug_index=0
+[Step 1990] loss=6.4162 lr=8.20e-05 grad_norm=0.9734
+[PTorchDiag] p_t=0.000127595 -log(p_t)=8.966646 p_277=0.000000045 -log(p_277)=16.915766 max_logit=4.881207 sum_exp=25.981575 target_token=5792 target_token_1based=5793 debug_index=0
+[Step 2000] loss=6.0347 lr=8.06e-05 grad_norm=0.9734
+[PTorchDiag] p_t=0.000344299 -log(p_t)=7.974001 p_277=0.000000011 -log(p_277)=18.308279 max_logit=4.477756 sum_exp=25.118406 target_token=14220 target_token_1based=14221 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0198 head=0.7707 attn=0.3057 ffn=0.5071 ln=0.0507
+[Validation] loss=6.0974 ppl=444.68
+[Sample] "Hello worldusidal variations in the atmosphere is much more massive than that these models with different models with the same as that of the atmosphere is much more massive than that these models are more massive than that these models with different models with different models are more massive than that could have shown that could have significant differences between the atmosphere is much more massive than that could have formed in the atmosphere is much more massive than that could have significant differences between the atmosphere is much more massive than that could have significant differences between the atmosphere is much more massive than that could have notable for different models that these models that could have significant differences between the atmosphere is much more massive"
+[Step 2010] loss=5.5601 lr=7.92e-05 grad_norm=0.9829
+[PTorchDiag] p_t=0.004049772 -log(p_t)=5.509095 p_277=0.000000092 -log(p_277)=16.198168 max_logit=6.055700 sum_exp=14.857424 target_token=4399 target_token_1based=4400 debug_index=0
+[Step 2020] loss=6.1920 lr=7.79e-05 grad_norm=1.0146 (clipped)
+[PTorchDiag] p_t=0.000178474 -log(p_t)=8.631065 p_277=0.000000007 -log(p_277)=18.777779 max_logit=4.650700 sum_exp=36.462380 target_token=5847 target_token_1based=5848 debug_index=0
+[Step 2030] loss=6.3971 lr=7.65e-05 grad_norm=1.0963 (clipped)
+[PTorchDiag] p_t=0.000405171 -log(p_t)=7.811200 p_277=0.000000028 -log(p_277)=17.374676 max_logit=5.151547 sum_exp=23.241397 target_token=8404 target_token_1based=8405 debug_index=0
+[Step 2040] loss=6.1206 lr=7.51e-05 grad_norm=1.0063 (clipped)
+[PTorchDiag] p_t=0.004347571 -log(p_t)=5.438138 p_277=0.000000021 -log(p_277)=17.658176 max_logit=3.099894 sum_exp=100.820847 target_token=18344 target_token_1based=18345 debug_index=0
+[Step 2050] loss=6.1772 lr=7.38e-05 grad_norm=1.0032 (clipped)
+[PTorchDiag] p_t=0.000176471 -log(p_t)=8.642355 p_277=0.000000027 -log(p_277)=17.425062 max_logit=4.396056 sum_exp=47.250918 target_token=4160 target_token_1based=4161 debug_index=0
+[Step 2060] loss=6.1233 lr=7.25e-05 grad_norm=0.9620
+[PTorchDiag] p_t=0.146045387 -log(p_t)=1.923838 p_277=0.000000041 -log(p_277)=17.008982 max_logit=6.603621 sum_exp=6.847189 target_token=793 target_token_1based=794 debug_index=0
+[Step 2070] loss=6.1365 lr=7.12e-05 grad_norm=0.9979
+[PTorchDiag] p_t=0.000246700 -log(p_t)=8.307338 p_277=0.000000051 -log(p_277)=16.796396 max_logit=6.785140 sum_exp=9.010830 target_token=38076 target_token_1based=38077 debug_index=0
+[Step 2080] loss=5.9501 lr=6.98e-05 grad_norm=1.0099 (clipped)
+[PTorchDiag] p_t=0.007839947 -log(p_t)=4.848523 p_277=0.000000008 -log(p_277)=18.674397 max_logit=4.093791 sum_exp=60.322446 target_token=8581 target_token_1based=8582 debug_index=0
+[Step 2090] loss=6.0618 lr=6.86e-05 grad_norm=1.0403 (clipped)
+[PTorchDiag] p_t=0.011198160 -log(p_t)=4.492006 p_277=0.000000003 -log(p_277)=19.712492 max_logit=5.213509 sum_exp=21.112781 target_token=11567 target_token_1based=11568 debug_index=0
+[Step 2100] loss=6.2037 lr=6.73e-05 grad_norm=1.0324 (clipped)
+[PTorchDiag] p_t=0.004437177 -log(p_t)=5.417737 p_277=0.000000007 -log(p_277)=18.784679 max_logit=5.073005 sum_exp=15.482647 target_token=3693 target_token_1based=3694 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0218 head=0.7895 attn=0.3358 ffn=0.5675 ln=0.0848
+[Validation] loss=6.0476 ppl=423.09
+[Step 2110] loss=5.9690 lr=6.60e-05 grad_norm=1.0080 (clipped)
+[PTorchDiag] p_t=0.000932349 -log(p_t)=6.977804 p_277=0.000000006 -log(p_277)=19.000336 max_logit=5.432234 sum_exp=16.959687 target_token=19906 target_token_1based=19907 debug_index=0
+[Step 2120] loss=5.9135 lr=6.47e-05 grad_norm=1.0820 (clipped)
+[PTorchDiag] p_t=0.009167830 -log(p_t)=4.692055 p_277=0.000000014 -log(p_277)=18.102766 max_logit=6.599816 sum_exp=20.418646 target_token=10749 target_token_1based=10750 debug_index=0
+[Step 2130] loss=5.9992 lr=6.35e-05 grad_norm=1.0022 (clipped)
+[PTorchDiag] p_t=0.003429276 -log(p_t)=5.675406 p_277=0.000000025 -log(p_277)=17.516087 max_logit=5.001540 sum_exp=16.067962 target_token=4074 target_token_1based=4075 debug_index=0
+[Step 2140] loss=5.7829 lr=6.22e-05 grad_norm=0.9379
+[PTorchDiag] p_t=0.000096055 -log(p_t)=9.250587 p_277=0.000000023 -log(p_277)=17.592463 max_logit=4.492112 sum_exp=92.136448 target_token=15510 target_token_1based=15511 debug_index=0
+[Step 2150] loss=6.1442 lr=6.10e-05 grad_norm=0.9723
+[PTorchDiag] p_t=0.006500382 -log(p_t)=5.035894 p_277=0.000000015 -log(p_277)=17.988092 max_logit=7.519337 sum_exp=6.424926 target_token=18637 target_token_1based=18638 debug_index=0
+[Step 2160] loss=6.1084 lr=5.98e-05 grad_norm=1.0518 (clipped)
+[PTorchDiag] p_t=0.010020486 -log(p_t)=4.603124 p_277=0.000000067 -log(p_277)=16.512392 max_logit=4.577067 sum_exp=48.680624 target_token=2947 target_token_1based=2948 debug_index=0
+[Step 2170] loss=5.9235 lr=5.86e-05 grad_norm=0.9759
+[PTorchDiag] p_t=0.000698690 -log(p_t)=7.266303 p_277=0.000000012 -log(p_277)=18.245710 max_logit=5.231997 sum_exp=18.385809 target_token=4271 target_token_1based=4272 debug_index=0
+[Step 2180] loss=5.8511 lr=5.74e-05 grad_norm=1.0031 (clipped)
+[PTorchDiag] p_t=0.060493972 -log(p_t)=2.805212 p_277=0.000000003 -log(p_277)=19.657318 max_logit=5.511395 sum_exp=16.530580 target_token=2349 target_token_1based=2350 debug_index=0
+[Step 2190] loss=6.4852 lr=5.62e-05 grad_norm=0.9998
+[PTorchDiag] p_t=0.000305169 -log(p_t)=8.094646 p_277=0.000000011 -log(p_277)=18.291405 max_logit=6.745566 sum_exp=4.443018 target_token=34599 target_token_1based=34600 debug_index=0
+[Step 2200] loss=5.9325 lr=5.50e-05 grad_norm=0.9978
+[PTorchDiag] p_t=0.003150345 -log(p_t)=5.760243 p_277=0.000000021 -log(p_277)=17.664930 max_logit=6.145889 sum_exp=9.145122 target_token=3352 target_token_1based=3353 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0208 head=0.7716 attn=0.3245 ffn=0.5395 ln=0.0589
+[Validation] loss=5.9899 ppl=399.39
+[Sample] "Hello world bodyThelatter is only one can only one can only one canical variables. In particularly is only one canical variables (i.e., the relative velocity field isothermal equation motion of the field isothermal equation motion of the field isothermal equation motion of the field isothermal equation motion of the field isothermal equation motion of the field isothermal equation motion of the field isothermal equation motion of the field isothermal equation motion of the field isothermal equation motion of the field isothermal equation motion of the field isothermal equation motion of the field isothermal equation motion of the field isothermal equation motion of the field isothermal equation isothermal equation motion of the field isothermal"
+[Step 2210] loss=5.6956 lr=5.38e-05 grad_norm=0.9605
+[PTorchDiag] p_t=0.019008411 -log(p_t)=3.962874 p_277=0.000000062 -log(p_277)=16.593821 max_logit=6.991322 sum_exp=6.893212 target_token=15642 target_token_1based=15643 debug_index=0
+[Step 2220] loss=5.7558 lr=5.27e-05 grad_norm=0.9753
+[PTorchDiag] p_t=0.014476309 -log(p_t)=4.235242 p_277=0.000000082 -log(p_277)=16.313848 max_logit=6.417041 sum_exp=10.036531 target_token=1730 target_token_1based=1731 debug_index=0
+[Step 2230] loss=5.4282 lr=5.16e-05 grad_norm=0.9592
+[PTorchDiag] p_t=0.000293691 -log(p_t)=8.132983 p_277=0.000000017 -log(p_277)=17.889091 max_logit=4.602516 sum_exp=29.813288 target_token=11301 target_token_1based=11302 debug_index=0
+[Step 2240] loss=5.5515 lr=5.04e-05 grad_norm=1.0580 (clipped)
+[PTorchDiag] p_t=0.000063641 -log(p_t)=9.662254 p_277=0.000000027 -log(p_277)=17.434147 max_logit=7.142682 sum_exp=4.048660 target_token=17727 target_token_1based=17728 debug_index=0
+[Step 2250] loss=6.1662 lr=4.93e-05 grad_norm=0.9970
+[PTorchDiag] p_t=0.000126207 -log(p_t)=8.977587 p_277=0.000000016 -log(p_277)=17.965063 max_logit=5.235099 sum_exp=17.371869 target_token=22419 target_token_1based=22420 debug_index=0
+[Step 2260] loss=5.8507 lr=4.82e-05 grad_norm=0.9814
+[PTorchDiag] p_t=0.000798234 -log(p_t)=7.133108 p_277=0.000000014 -log(p_277)=18.106407 max_logit=3.556990 sum_exp=66.097418 target_token=24017 target_token_1based=24018 debug_index=0
+[Step 2270] loss=6.0204 lr=4.72e-05 grad_norm=0.9638
+[PTorchDiag] p_t=0.002267390 -log(p_t)=6.089126 p_277=0.000000039 -log(p_277)=17.066494 max_logit=3.805018 sum_exp=51.678897 target_token=2105 target_token_1based=2106 debug_index=0
+[Step 2280] loss=6.0553 lr=4.61e-05 grad_norm=1.0147 (clipped)
+[PTorchDiag] p_t=0.000153929 -log(p_t)=8.779018 p_277=0.000000037 -log(p_277)=17.115427 max_logit=3.539851 sum_exp=102.639340 target_token=1292 target_token_1based=1293 debug_index=0
+[Step 2290] loss=5.5894 lr=4.50e-05 grad_norm=0.9875
+[PTorchDiag] p_t=0.008110218 -log(p_t)=4.814631 p_277=0.000000070 -log(p_277)=16.480829 max_logit=4.133136 sum_exp=47.862070 target_token=4234 target_token_1based=4235 debug_index=0
+[Step 2300] loss=5.8543 lr=4.40e-05 grad_norm=0.9617
+[PTorchDiag] p_t=0.053735841 -log(p_t)=2.923675 p_277=0.000000026 -log(p_277)=17.484287 max_logit=5.183697 sum_exp=18.609553 target_token=46900 target_token_1based=46901 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0203 head=0.7537 attn=0.2795 ffn=0.5254 ln=0.0475
+[Validation] loss=5.9276 ppl=375.26
+[Step 2310] loss=6.0446 lr=4.30e-05 grad_norm=0.9756
+[PTorchDiag] p_t=0.004062221 -log(p_t)=5.506025 p_277=0.000000018 -log(p_277)=17.835770 max_logit=7.304442 sum_exp=18.150002 target_token=1213 target_token_1based=1214 debug_index=0
+[Step 2320] loss=6.3461 lr=4.19e-05 grad_norm=0.9849
+[PTorchDiag] p_t=0.000211865 -log(p_t)=8.459561 p_277=0.000000031 -log(p_277)=17.278700 max_logit=5.825370 sum_exp=10.967105 target_token=9750 target_token_1based=9751 debug_index=0
+[Step 2330] loss=5.9745 lr=4.09e-05 grad_norm=0.9863
+[PTorchDiag] p_t=0.001641129 -log(p_t)=6.412371 p_277=0.000000010 -log(p_277)=18.439516 max_logit=8.478378 sum_exp=2.230626 target_token=15332 target_token_1based=15333 debug_index=0
+[Step 2340] loss=6.1667 lr=3.99e-05 grad_norm=1.0260 (clipped)
+[PTorchDiag] p_t=0.000065387 -log(p_t)=9.635187 p_277=0.000000052 -log(p_277)=16.764067 max_logit=7.591238 sum_exp=7.242619 target_token=19421 target_token_1based=19422 debug_index=0
+[Step 2350] loss=5.9610 lr=3.90e-05 grad_norm=1.0555 (clipped)
+[PTorchDiag] p_t=0.000780761 -log(p_t)=7.155242 p_277=0.000000012 -log(p_277)=18.200958 max_logit=4.016368 sum_exp=32.741227 target_token=39985 target_token_1based=39986 debug_index=0
+[Step 2360] loss=6.1290 lr=3.80e-05 grad_norm=1.1250 (clipped)
+[PTorchDiag] p_t=0.001704817 -log(p_t)=6.374298 p_277=0.000000050 -log(p_277)=16.805206 max_logit=4.331872 sum_exp=52.213638 target_token=3205 target_token_1based=3206 debug_index=0
+[Step 2370] loss=5.6008 lr=3.71e-05 grad_norm=0.9626
+[PTorchDiag] p_t=0.000664882 -log(p_t)=7.315901 p_277=0.000000280 -log(p_277)=15.087570 max_logit=2.889148 sum_exp=153.640472 target_token=44462 target_token_1based=44463 debug_index=0
+[Step 2380] loss=5.9293 lr=3.61e-05 grad_norm=0.9798
+[PTorchDiag] p_t=0.000244610 -log(p_t)=8.315845 p_277=0.000000108 -log(p_277)=16.037868 max_logit=5.627534 sum_exp=15.926675 target_token=1871 target_token_1based=1872 debug_index=0
+[Step 2390] loss=5.9746 lr=3.52e-05 grad_norm=1.0383 (clipped)
+[PTorchDiag] p_t=0.000314754 -log(p_t)=8.063721 p_277=0.000000037 -log(p_277)=17.107960 max_logit=4.165552 sum_exp=139.793853 target_token=28045 target_token_1based=28046 debug_index=0
+[Step 2400] loss=5.6433 lr=3.43e-05 grad_norm=0.9966
+[PTorchDiag] p_t=0.001393087 -log(p_t)=6.576233 p_277=0.000000022 -log(p_277)=17.644375 max_logit=4.837209 sum_exp=25.903209 target_token=9494 target_token_1based=9495 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0210 head=0.7643 attn=0.3228 ffn=0.5484 ln=0.0612
+[Validation] loss=5.9906 ppl=399.64
+[Sample] "Hello worldlynomialsify this reasons. The first time series is only one can only one another one can only one canical variables. We canical variables. We can only beeve that these effects on the time series We can see thatour analysis We can see thatour analysis We can see thatour analysis We can also possible that the time series thatour numerical integration time series We can see thatour analysis we will not only one another one another one more detail we will not only one another one another one another one another one another one another one can see thatour analysis We can see thatour analysis we will"
+[Step 2410] loss=5.9038 lr=3.34e-05 grad_norm=1.0077 (clipped)
+[PTorchDiag] p_t=0.153510198 -log(p_t)=1.873988 p_277=0.000000012 -log(p_277)=18.229307 max_logit=9.053108 sum_exp=1.938536 target_token=2252 target_token_1based=2253 debug_index=0
+[Step 2420] loss=5.8690 lr=3.26e-05 grad_norm=0.9632
+[PTorchDiag] p_t=0.257647544 -log(p_t)=1.356163 p_277=0.000000069 -log(p_277)=16.492165 max_logit=8.201505 sum_exp=3.881272 target_token=10723 target_token_1based=10724 debug_index=0
+[Step 2430] loss=6.3706 lr=3.17e-05 grad_norm=0.9732
+[PTorchDiag] p_t=0.000309520 -log(p_t)=8.080489 p_277=0.000000046 -log(p_277)=16.901146 max_logit=3.446135 sum_exp=81.861775 target_token=7868 target_token_1based=7869 debug_index=0
+[Step 2440] loss=6.0830 lr=3.09e-05 grad_norm=1.0411 (clipped)
+[PTorchDiag] p_t=0.167702824 -log(p_t)=1.785562 p_277=0.000000134 -log(p_277)=15.822780 max_logit=6.499462 sum_exp=5.962930 target_token=8477 target_token_1based=8478 debug_index=0
+[Step 2450] loss=6.0990 lr=3.00e-05 grad_norm=0.9903
+[PTorchDiag] p_t=0.000484470 -log(p_t)=7.632455 p_277=0.000000020 -log(p_277)=17.711475 max_logit=5.722233 sum_exp=40.946426 target_token=689 target_token_1based=690 debug_index=0
+[Step 2460] loss=5.9188 lr=2.92e-05 grad_norm=1.0267 (clipped)
+[PTorchDiag] p_t=0.001646028 -log(p_t)=6.409390 p_277=0.000000023 -log(p_277)=17.600924 max_logit=4.068345 sum_exp=54.700222 target_token=3722 target_token_1based=3723 debug_index=0
+[Step 2470] loss=6.0237 lr=2.84e-05 grad_norm=1.0701 (clipped)
+[PTorchDiag] p_t=0.007861705 -log(p_t)=4.845752 p_277=0.000000013 -log(p_277)=18.154495 max_logit=3.555516 sum_exp=63.726554 target_token=7938 target_token_1based=7939 debug_index=0
+[Step 2480] loss=5.7925 lr=2.77e-05 grad_norm=0.9904
+[PTorchDiag] p_t=0.007381797 -log(p_t)=4.908738 p_277=0.000000014 -log(p_277)=18.079122 max_logit=8.713511 sum_exp=2.073396 target_token=35868 target_token_1based=35869 debug_index=0
+[Step 2490] loss=5.3068 lr=2.69e-05 grad_norm=0.9866
+[PTorchDiag] p_t=0.020445036 -log(p_t)=3.890015 p_277=0.000000022 -log(p_277)=17.641064 max_logit=4.621361 sum_exp=48.911626 target_token=49165 target_token_1based=49166 debug_index=0
+[Step 2500] loss=6.0246 lr=2.62e-05 grad_norm=1.0428 (clipped)
+[PTorchDiag] p_t=0.020286130 -log(p_t)=3.897818 p_277=0.000000017 -log(p_277)=17.866302 max_logit=4.330814 sum_exp=40.286150 target_token=2018 target_token_1based=2019 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0208 head=0.8193 attn=0.3343 ffn=0.5494 ln=0.0485
+[Validation] loss=5.8041 ppl=331.67
+[Step 2510] loss=5.8160 lr=2.54e-05 grad_norm=1.0686 (clipped)
+[PTorchDiag] p_t=0.000131033 -log(p_t)=8.940062 p_277=0.000000016 -log(p_277)=17.976744 max_logit=5.027111 sum_exp=21.557741 target_token=39299 target_token_1based=39300 debug_index=0
+[Step 2520] loss=6.0839 lr=2.47e-05 grad_norm=1.0058 (clipped)
+[PTorchDiag] p_t=0.104043283 -log(p_t)=2.262948 p_277=0.000000013 -log(p_277)=18.165909 max_logit=6.064631 sum_exp=9.611382 target_token=4108 target_token_1based=4109 debug_index=0
+[Step 2530] loss=5.7779 lr=2.40e-05 grad_norm=0.9804
+[PTorchDiag] p_t=0.008984757 -log(p_t)=4.712226 p_277=0.000000021 -log(p_277)=17.663235 max_logit=3.924447 sum_exp=48.739434 target_token=48565 target_token_1based=48566 debug_index=0
+[Step 2540] loss=5.9567 lr=2.33e-05 grad_norm=0.9942
+[PTorchDiag] p_t=0.002275193 -log(p_t)=6.085690 p_277=0.000000012 -log(p_277)=18.216345 max_logit=3.544587 sum_exp=59.654930 target_token=30052 target_token_1based=30053 debug_index=0
+[Step 2550] loss=5.3738 lr=2.27e-05 grad_norm=1.0296 (clipped)
+[PTorchDiag] p_t=0.001151897 -log(p_t)=6.766345 p_277=0.000000081 -log(p_277)=16.326176 max_logit=3.896349 sum_exp=52.662527 target_token=4132 target_token_1based=4133 debug_index=0
+[Step 2560] loss=6.0454 lr=2.20e-05 grad_norm=0.9692
+[PTorchDiag] p_t=0.000361555 -log(p_t)=7.925097 p_277=0.000000028 -log(p_277)=17.380356 max_logit=4.306156 sum_exp=44.227940 target_token=1548 target_token_1based=1549 debug_index=0
+[Step 2570] loss=6.0221 lr=2.14e-05 grad_norm=0.9781
+[PTorchDiag] p_t=0.003455680 -log(p_t)=5.667736 p_277=0.000000011 -log(p_277)=18.322514 max_logit=5.626470 sum_exp=12.223289 target_token=40433 target_token_1based=40434 debug_index=0
+[Step 2580] loss=5.8761 lr=2.08e-05 grad_norm=0.9914
+[PTorchDiag] p_t=0.003167414 -log(p_t)=5.754840 p_277=0.000000025 -log(p_277)=17.494919 max_logit=4.396681 sum_exp=43.449539 target_token=3087 target_token_1based=3088 debug_index=0
+[Step 2590] loss=6.1303 lr=2.02e-05 grad_norm=0.9750
+[PTorchDiag] p_t=0.000377795 -log(p_t)=7.881158 p_277=0.000000017 -log(p_277)=17.900896 max_logit=4.513219 sum_exp=41.153265 target_token=5858 target_token_1based=5859 debug_index=0
+[Step 2600] loss=5.7552 lr=1.96e-05 grad_norm=0.9670
+[PTorchDiag] p_t=0.006856562 -log(p_t)=4.982549 p_277=0.000000010 -log(p_277)=18.466831 max_logit=3.872051 sum_exp=56.553954 target_token=8165 target_token_1based=8166 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0198 head=0.7636 attn=0.2775 ffn=0.5220 ln=0.0472
+[Validation] loss=6.0276 ppl=414.73
+[Sample] "Hello world body isothermal equation state of the body isothermal equation state of the body isothermal equation motion of the body isothermal equation state of the body isothermal equation motion of the body isothermal equation motion of the body isothermal equation motion of the body isothermal equation motion of the body isothermal equation motion of the body isothermal equation motion of the body isothermal equation motion of the body isothermal equation motion of the body isothermal equation motion of the body isothermal equation motion of the body isothermal equation motion of the body isothermal equation motion of the body isothermal equation motion of the body isothermal equation motion of the body isothermal equation motion of the body isothermal equation motion of the"
+[Step 2610] loss=6.0668 lr=1.90e-05 grad_norm=1.0085 (clipped)
+[PTorchDiag] p_t=0.000101529 -log(p_t)=9.195166 p_277=0.000000040 -log(p_277)=17.025314 max_logit=2.921380 sum_exp=144.588046 target_token=7533 target_token_1based=7534 debug_index=0
+[Step 2620] loss=6.0117 lr=1.85e-05 grad_norm=1.0436 (clipped)
+[PTorchDiag] p_t=0.000077490 -log(p_t)=9.465366 p_277=0.000000024 -log(p_277)=17.535835 max_logit=3.704795 sum_exp=66.885005 target_token=1428 target_token_1based=1429 debug_index=0
+[Step 2630] loss=5.2506 lr=1.79e-05 grad_norm=0.9658
+[PTorchDiag] p_t=0.000692010 -log(p_t)=7.275910 p_277=0.000000020 -log(p_277)=17.748184 max_logit=4.721571 sum_exp=28.135076 target_token=12279 target_token_1based=12280 debug_index=0
+[Step 2640] loss=6.0497 lr=1.74e-05 grad_norm=1.0041 (clipped)
+[PTorchDiag] p_t=0.000499340 -log(p_t)=7.602223 p_277=0.000000047 -log(p_277)=16.866592 max_logit=4.449721 sum_exp=25.235349 target_token=19122 target_token_1based=19123 debug_index=0
+[Step 2650] loss=6.1906 lr=1.69e-05 grad_norm=0.9989
+[PTorchDiag] p_t=0.000124679 -log(p_t)=8.989770 p_277=0.000000076 -log(p_277)=16.388962 max_logit=4.277872 sum_exp=51.349827 target_token=5782 target_token_1based=5783 debug_index=0
+[Step 2660] loss=5.8045 lr=1.64e-05 grad_norm=1.0093 (clipped)
+[PTorchDiag] p_t=0.256582558 -log(p_t)=1.360305 p_277=0.000000020 -log(p_277)=17.734066 max_logit=7.237450 sum_exp=3.897381 target_token=2869 target_token_1based=2870 debug_index=0
+[Step 2670] loss=5.7991 lr=1.60e-05 grad_norm=1.0390 (clipped)
+[PTorchDiag] p_t=0.039388765 -log(p_t)=3.234275 p_277=0.000000028 -log(p_277)=17.392542 max_logit=4.880369 sum_exp=25.387943 target_token=657 target_token_1based=658 debug_index=0
+[Step 2680] loss=6.0250 lr=1.55e-05 grad_norm=0.9687
+[PTorchDiag] p_t=0.000789396 -log(p_t)=7.144242 p_277=0.000000022 -log(p_277)=17.649666 max_logit=3.618882 sum_exp=76.475547 target_token=15850 target_token_1based=15851 debug_index=0
+[Step 2690] loss=6.1252 lr=1.51e-05 grad_norm=1.0239 (clipped)
+[PTorchDiag] p_t=0.000316940 -log(p_t)=8.056799 p_277=0.000000024 -log(p_277)=17.530043 max_logit=4.812685 sum_exp=28.772301 target_token=10783 target_token_1based=10784 debug_index=0
+[Step 2700] loss=5.7005 lr=1.47e-05 grad_norm=1.0151 (clipped)
+[PTorchDiag] p_t=0.000278501 -log(p_t)=8.186089 p_277=0.000000048 -log(p_277)=16.842712 max_logit=3.115691 sum_exp=155.979610 target_token=37106 target_token_1based=37107 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0204 head=0.7938 attn=0.3275 ffn=0.5384 ln=0.0527
+[Validation] loss=5.9026 ppl=365.98
+[Step 2710] loss=5.8795 lr=1.43e-05 grad_norm=0.9937
+[PTorchDiag] p_t=0.000240769 -log(p_t)=8.331671 p_277=0.000000016 -log(p_277)=17.957178 max_logit=7.425944 sum_exp=4.808350 target_token=11430 target_token_1based=11431 debug_index=0
+[Step 2720] loss=5.6443 lr=1.39e-05 grad_norm=1.0267 (clipped)
+[PTorchDiag] p_t=0.001222421 -log(p_t)=6.706922 p_277=0.000000014 -log(p_277)=18.078470 max_logit=4.631965 sum_exp=31.252536 target_token=19769 target_token_1based=19770 debug_index=0
+[Step 2730] loss=5.9243 lr=1.35e-05 grad_norm=0.9584
+[PTorchDiag] p_t=0.006207140 -log(p_t)=5.082055 p_277=0.000000003 -log(p_277)=19.760530 max_logit=7.195957 sum_exp=4.058143 target_token=3912 target_token_1based=3913 debug_index=0
+[Step 2740] loss=5.7974 lr=1.32e-05 grad_norm=1.0621 (clipped)
+[PTorchDiag] p_t=0.001450120 -log(p_t)=6.536109 p_277=0.000000008 -log(p_277)=18.607910 max_logit=3.976507 sum_exp=61.594529 target_token=4346 target_token_1based=4347 debug_index=0
+[Step 2750] loss=5.5799 lr=1.29e-05 grad_norm=1.0094 (clipped)
+[PTorchDiag] p_t=0.000058141 -log(p_t)=9.752641 p_277=0.000000062 -log(p_277)=16.597675 max_logit=7.306387 sum_exp=5.663344 target_token=15350 target_token_1based=15351 debug_index=0
+[Step 2760] loss=5.9960 lr=1.25e-05 grad_norm=0.9943
+[PTorchDiag] p_t=0.000865178 -log(p_t)=7.052575 p_277=0.000000045 -log(p_277)=16.926014 max_logit=4.406808 sum_exp=31.916978 target_token=5189 target_token_1based=5190 debug_index=0
+[Step 2770] loss=6.4530 lr=1.23e-05 grad_norm=1.0074 (clipped)
+[PTorchDiag] p_t=0.000427335 -log(p_t)=7.757942 p_277=0.000000116 -log(p_277)=15.971900 max_logit=5.409618 sum_exp=17.804484 target_token=1209 target_token_1based=1210 debug_index=0
+[Step 2780] loss=5.8693 lr=1.20e-05 grad_norm=0.9956
+[PTorchDiag] p_t=0.109309703 -log(p_t)=2.213570 p_277=0.000000011 -log(p_277)=18.367731 max_logit=5.789122 sum_exp=9.148314 target_token=44235 target_token_1based=44236 debug_index=0
+[Step 2790] loss=5.6459 lr=1.17e-05 grad_norm=0.9977
+[PTorchDiag] p_t=0.005145222 -log(p_t)=5.269687 p_277=0.000000018 -log(p_277)=17.835089 max_logit=6.332033 sum_exp=8.027318 target_token=46241 target_token_1based=46242 debug_index=0
+[Step 2800] loss=6.0907 lr=1.15e-05 grad_norm=0.9668
+[PTorchDiag] p_t=0.000012576 -log(p_t)=11.283737 p_277=0.000000032 -log(p_277)=17.267895 max_logit=4.147974 sum_exp=60.791444 target_token=18015 target_token_1based=18016 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0210 head=0.7371 attn=0.2979 ffn=0.5472 ln=0.0539
+[Validation] loss=5.8714 ppl=354.76
+[Sample] "Hello worldtive optics (). The first order of magnitude smaller than that of the outer edge of the outer edge of the outer edge of the outer edge of the outer edge of the outer edge of the inner edge of the inner edge of the outer edge of the outer edge of the outer edge of the outer edge of the outer edge of the outer edge of the outer edge of the inner edge of the outer edge of the outer edge of the outer edge of the outer edge of the outer edge of the inner edge of the outer edge of the outer edge of the outer edge of the outer edge of the outer edge of the outer edge of the outer edge of the outer edge of the outer edge of the outer edge of the outer edge of the inner edge of the outer edge of the outer edge of the outer"
+[Step 2810] loss=5.8484 lr=1.13e-05 grad_norm=1.0268 (clipped)
+[PTorchDiag] p_t=0.027473465 -log(p_t)=3.594535 p_277=0.000000031 -log(p_277)=17.297400 max_logit=5.275624 sum_exp=36.398749 target_token=1258 target_token_1based=1259 debug_index=0
+[Step 2820] loss=6.0190 lr=1.11e-05 grad_norm=0.9979
+[PTorchDiag] p_t=0.000046021 -log(p_t)=9.986408 p_277=0.000000056 -log(p_277)=16.700478 max_logit=5.992997 sum_exp=14.089322 target_token=19458 target_token_1based=19459 debug_index=0
+[Step 2830] loss=5.4147 lr=1.09e-05 grad_norm=1.0677 (clipped)
+[PTorchDiag] p_t=0.002046029 -log(p_t)=6.191855 p_277=0.000000033 -log(p_277)=17.218124 max_logit=3.647897 sum_exp=64.367522 target_token=21403 target_token_1based=21404 debug_index=0
+[Step 2840] loss=5.6855 lr=1.07e-05 grad_norm=1.2238 (clipped)
+[PTorchDiag] p_t=0.013175318 -log(p_t)=4.329410 p_277=0.000000034 -log(p_277)=17.200281 max_logit=5.130772 sum_exp=27.363443 target_token=1585 target_token_1based=1586 debug_index=0
+[Step 2850] loss=5.9531 lr=1.06e-05 grad_norm=1.0120 (clipped)
+[PTorchDiag] p_t=0.000181456 -log(p_t)=8.614498 p_277=0.000000023 -log(p_277)=17.572775 max_logit=5.449453 sum_exp=33.895396 target_token=40668 target_token_1based=40669 debug_index=0
+[Step 2860] loss=5.8050 lr=1.04e-05 grad_norm=1.0057 (clipped)
+[PTorchDiag] p_t=0.000020281 -log(p_t)=10.805840 p_277=0.000000211 -log(p_277)=15.372747 max_logit=6.104348 sum_exp=53.939449 target_token=27776 target_token_1based=27777 debug_index=0
+[Step 2870] loss=5.8531 lr=1.03e-05 grad_norm=0.9608
+[PTorchDiag] p_t=0.001608008 -log(p_t)=6.432759 p_277=0.000000179 -log(p_277)=15.535909 max_logit=3.033542 sum_exp=187.921376 target_token=10350 target_token_1based=10351 debug_index=0
+[Step 2880] loss=6.0829 lr=1.02e-05 grad_norm=1.0799 (clipped)
+[PTorchDiag] p_t=0.007269887 -log(p_t)=4.924015 p_277=0.000000020 -log(p_277)=17.749359 max_logit=4.266071 sum_exp=41.649090 target_token=2919 target_token_1based=2920 debug_index=0
+[Step 2890] loss=6.1396 lr=1.01e-05 grad_norm=0.9982
+[PTorchDiag] p_t=0.348918557 -log(p_t)=1.052917 p_277=0.000000004 -log(p_277)=19.393194 max_logit=8.252477 sum_exp=2.865998 target_token=2548 target_token_1based=2549 debug_index=0
+[Step 2900] loss=5.6742 lr=1.01e-05 grad_norm=0.9793
+[PTorchDiag] p_t=0.015344033 -log(p_t)=4.177029 p_277=0.000000059 -log(p_277)=16.643061 max_logit=4.398688 sum_exp=58.542678 target_token=819 target_token_1based=820 debug_index=0
+[GradTrace] COMPONENTS: emb=0.0201 head=0.7606 attn=0.3089 ffn=0.5305 ln=0.0568
+[Validation] loss=5.8553 ppl=349.08
+[Step 2910] loss=5.6574 lr=1.00e-05 grad_norm=1.0822 (clipped)
+[PTorchDiag] p_t=0.005944182 -log(p_t)=5.125342 p_277=0.000000014 -log(p_277)=18.086096 max_logit=5.867655 sum_exp=11.998261 target_token=781 target_token_1based=782 debug_index=0
+[Step 2920] loss=6.1481 lr=1.00e-05 grad_norm=0.9987
+[PTorchDiag] p_t=0.000005939 -log(p_t)=12.034049 p_277=0.000000009 -log(p_277)=18.489704 max_logit=4.802813 sum_exp=24.726068 target_token=43029 target_token_1based=43030 debug_index=0
+
+[Epoch 3 Complete] avg_loss=5.9566 duration=175s
+
+========================================
+Training Complete
+========================================
+Total steps: 2928
+Total time: 527s
+
+[Final Sample]
+Hello worldtive optics (). The first order of magnitude smaller than that of the two different values of  are also showing the observed by a factor of in the range from that of the two different values of  are also shown that there is no evidence of a planet mass of the mass of the mass of the mass M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M M

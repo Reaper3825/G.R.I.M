@@ -381,6 +381,11 @@
             "num_heads": 12,
             "num_kv_heads": 4,
             "tie_embeddings": true,
+            "positional_encoding": {
+                "use_learned": true,
+                "use_rope": true,
+                "use_alibi": true
+            },
             "attention_dropout": 0.02,
             "dropout_rate": 0.1,
             "force_rebuild_vocab": false,

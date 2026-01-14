@@ -1,15 +1,119 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** 🔴 NEW BUG FOUND - Token 277 = SPACE, NOT EOS! (January 17, 2026)  
+**Status:** 🔴 UNDER INVESTIGATION - Hidden State Alignment with W[277] (January 14, 2026)  
 **Started:** December 22, 2025  
-**Last Updated:** January 17, 2026
-**Current Symptom:** Model collapses to always predicting token 277 (SPACE character) after just 1-2 optimizer steps
+**Last Updated:** January 14, 2026
+**Current Symptom:** Model collapses to always predicting token 277 (SPACE character) - logit_277 increases from 0.13 → 10.4 even though gradient is NEGATIVE
 
 ---
 
-## 🔴 CRITICAL BUG: Mode Collapse to SPACE Token (January 17, 2026)
+## 🔴 CRITICAL FINDING: Hidden State Alignment (January 14, 2026)
 
-### Issue #36: Token 277 is SPACE, NOT EOS - Mode Collapse After 1 Step
+### Issue #37: Encoder Output Aligns with W[277] Regardless of Gradient
+
+**DISCOVERY:** Token 277 diagnostic logging reveals a PARADOX:
+
+| Batch | grad_sum (row 277) | Gradient Direction | Weight Norm Delta | Logit_277 |
+|-------|-------------------|-------------------|-------------------|-----------|
+| 1 | +0.128 | ⚠️ POSITIVE | - | 0.13 |
+| 2 | +0.223 | ⚠️ POSITIVE | +0.00004 | 0.13 |
+| 3 | -0.415 | ✓ NEGATIVE | - | 0.28 |
+| 4 | -0.421 | ✓ NEGATIVE | **+0.00033** ❌ | 0.30 |
+| 5 | -0.135 | ✓ NEGATIVE | - | 0.83 |
+| 6 | -0.704 | ✓ NEGATIVE | **+0.00116** ❌ | 0.83 (6/10 argmax) |
+| 7 | - | - | - | **1.68 (10/10 argmax)** COLLAPSED |
+| 10 | -0.329 | ✓ NEGATIVE | **+0.00360** ❌ | 2.66 |
+| 250 | - | - | -0.00050 | 10.4 |
+
+**THE PARADOX:**
+- Gradient for W[277] is often **NEGATIVE** → optimizer should DECREASE the weight
+- Weight norm sometimes **INCREASES anyway** (batches 4, 6, 8, 10)
+- Even when weight norm finally decreases (batch 250: -0.0005), logit_277 is still **10.4** and argmax!
+
+**ROOT CAUSE:**
+`logit[277] = hidden_state @ W[277]^T`
+
+Even if `W[277]` decreases, if `hidden_state` learns to align with `W[277]` direction, the dot product **INCREASES**.
+
+**The encoder is learning to produce hidden states that strongly project onto W[277], regardless of input.**
+
+**Log Evidence:**
+```
+[Token277Diag] batch=1 space_logit: mean=0.1258 is_argmax=1/10  ← Normal
+[Token277Diag] batch=6 space_logit: mean=0.8296 is_argmax=6/10  ← TIPPING POINT
+[Token277Diag] batch=7 space_logit: mean=1.6827 is_argmax=10/10 ← COLLAPSED (2x jump!)
+[Token277Diag] batch=250 space_logit: mean=10.4156 is_argmax=10/10 ← Still collapsed
+```
+
+**DISPROVEN HYPOTHESES:**
+- ❌ Position embeddings frozen (Issue #36) - FIXED, still collapses
+- ❌ RoPE causing bias - Disproving tested
+- ❌ ALiBi causing bias - Just added with learned pos_emb, not the cause
+- ❌ W[277] weight increasing - It often DECREASES but logit still climbs
+
+**NEXT INVESTIGATION:**
+1. Log hidden state statistics in forward pass:
+   - Hidden state norm per position
+   - Hidden state-W[277] cosine similarity
+   - Hidden state variance across positions (are they collapsing to same vector?)
+2. Check if attention is collapsing (all positions attending to same content)
+3. Compare encoder output between GRIM and PyTorch baseline
+
+---
+
+## ✅ APPLIED: Position Embeddings Now Trainable (January 14, 2026)
+
+### Issue #36 Root Cause: Position Embeddings Had NO Backward Pass
+
+**DISCOVERY:** PyTorch baseline uses learned position embeddings that receive gradients and get updated. GRIM had position embeddings in forward pass but:
+
+1. ❌ NO gradient buffer allocated (`position_embedding_grads` didn't exist)
+2. ❌ NO backward kernel implemented
+3. ❌ NOT registered with optimizer
+4. ❌ Position embeddings were FROZEN at random Xavier initialization!
+
+**PyTorch Baseline (CORRECT):**
+```cpp
+// main.cpp lines 735-736
+tok_emb(register_module("tok_emb", torch::nn::Embedding(cfg.vocab_size, cfg.n_embd))),
+pos_emb(register_module("pos_emb", torch::nn::Embedding(cfg.seq_len, cfg.n_embd)));
+
+// pytorch_gradients.txt shows pos_emb gets trained:
+[pos_emb.weight] shape=[1024, 768] numel=786432 norm=1.953592e-05 has_grad=YES
+```
+
+**GRIM Before Fix (BROKEN):**
+```cpp
+// TrainingOps.cu - allocated and initialized position embeddings
+embedding_runtime->weights.position_embeddings = embedding_runtime->position_buffer;
+launchXavierInit(embedding_runtime->position_buffer, ...);  // Random init
+
+// BUT: No gradient buffer, no backward pass, not in optimizer → FROZEN!
+```
+
+**FIX APPLIED (5 files changed):**
+
+1. **TrainingState_GPU.hpp**: Added `position_embedding_grads` field
+2. **InitTrainingState.cu**: Allocate gradient buffer for position embeddings
+3. **Embedding_GPU.cu**: Added `launchPositionEmbeddingBackward()` kernel
+4. **BackwardPhase3_InputLayer.cu**: Call position embedding backward in backward pass
+5. **LanguageModel_Training.cu**: Register position embeddings with optimizer
+6. **TrainingStateGPU.cu**: Free position embedding gradients in destructor
+
+**Why This Caused Collapse:**
+- Position embeddings contribute to embedding output: `output = tok_emb[token] + pos_emb[position]`
+- Random init means positions add noise that can't be corrected
+- Model can't learn position-dependent patterns (sentence structure, etc.)
+- Forces model to rely on token identity alone → collapses to most frequent token
+
+**Test Required:** Rebuild and verify:
+1. Position embedding gradients are non-zero after backward pass
+2. Position embeddings change after optimizer step
+3. Model no longer collapses to SPACE token
+
+---
+
+## 🔵 HISTORICAL: Issue #36 Original Analysis (Before Root Cause Found)
 
 **CORRECTION:** Previous analysis incorrectly identified token 277 as EOS. With the correct token layout:
 
@@ -82,8 +186,8 @@ But gradients were clipped to 1.0, so clipping IS working.
 
 **PyTorch Baseline Finding (Jan 13, 2026):**
 - ✅ PyTorch baseline works correctly when `tie_embeddings=true` (p_277 DECREASES)
-- ❌ PyTorch baseline ALSO plateaus when `tie_embeddings=false`
-- **Conclusion:** Weight tying is NOT the root cause. The bug is elsewhere.
+- ✅ PyTorch baseline ALSO works correctly when `tie_embeddings=false` (p_277 DECREASES from 0.000019850 → 0.000000353)
+- **Conclusion:** PyTorch baseline trains correctly in BOTH configurations. The bug is specific to GRIM-text.
 
 **Issue #35 Update:** The EOS contamination issue was INCORRECTLY DIAGNOSED.
 - Token 277 was thought to be EOS, but it's actually SPACE

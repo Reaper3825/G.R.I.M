@@ -159,6 +159,24 @@ void launchEmbeddingBackward(const float* grad_output,
                              int vocab_size,
                              cudaStream_t stream);
 
+/**
+ * @brief Launch position embedding backward kernel (gradient accumulation)
+ *
+ * Issue #36 FIX: Position embeddings MUST be trainable to match PyTorch baseline.
+ * Uses atomicAdd to scatter-add gradients to position embedding table.
+ * For each position in [0, seq_len), accumulates gradients from all batch elements.
+ *
+ * @param grad_output Gradient from downstream [batch_size * seq_len, d_model]
+ * @param grad_position_embeddings Gradient accumulator [max_seq_len, d_model]
+ */
+void launchPositionEmbeddingBackward(const float* grad_output,
+                                     float* grad_position_embeddings,
+                                     int batch_size,
+                                     int seq_len,
+                                     int d_model,
+                                     int max_seq_len,
+                                     cudaStream_t stream);
+
 //======================================================//
 // EmbeddingLayer: Stateless forward-only class
 //======================================================//

@@ -39,6 +39,11 @@ struct TrainingState {
 	float* embedding_grads = nullptr;
 	size_t embedding_grad_size = 0;
 
+	// Position embedding gradients [max_seq_len, d_model]
+	// Issue #36 FIX: Position embeddings MUST be trainable to match PyTorch baseline
+	float* position_embedding_grads = nullptr;
+	size_t position_embedding_grad_size = 0;
+
 	float* lm_head_weight_grads = nullptr;
 	float* lm_head_bias_grads = nullptr;
 	float* numeric_head_weight_grads = nullptr;

@@ -212,6 +212,27 @@ BackwardStatus computeEmbeddingBackward(BackwardContext& ctx) {
     BWD_CHECK_CUDA(ctx, cudaGetLastError(), "Embedding backward", -1);
     
     //--------------------------------------------------//
+    // Issue #36 FIX: Position embedding backward
+    // PyTorch baseline uses trainable position embeddings (nn.Embedding).
+    // GRIM was missing this backward pass → position embeddings were frozen!
+    // This scatters gradients to position_embedding_grads[position] for each token.
+    //--------------------------------------------------//
+    
+    if (ts->position_embedding_grads && cfg->max_seq_len > 0) {
+        launchPositionEmbeddingBackward(
+            ctx.current_grad,
+            ts->position_embedding_grads,
+            ctx.batch_size,
+            ctx.seq_len,
+            cfg->d_model,
+            cfg->max_seq_len,
+            ctx.training_state->stream_ctrl.getPrimaryStream());
+        
+        BWD_CHECK_CUDA(ctx, cudaGetLastError(), "Position embedding backward", -1);
+        P3_INFO("Position embedding gradients computed (Issue #36 FIX)");
+    }
+    
+    //--------------------------------------------------//
     // Handle tie_embeddings: merge embedding grads with LM head grads
     // ONLY if they are separate buffers! When tie_embeddings=true,
     // embedding_grads == lm_head_weight_grads (aliased) so embedding

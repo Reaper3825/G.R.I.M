@@ -213,6 +213,22 @@ void LanguageModel::initTrainingState() {
         std::cout << "📦 Separate embedding grads at " << (void*)training_state_.embedding_grads << std::endl;
     }
     
+    // ==========================================================================
+    // Issue #36 FIX: Position embedding gradients
+    // PyTorch baseline uses nn.Embedding for positions which are TRAINABLE.
+    // GRIM previously had position embeddings but NO gradients → frozen at init.
+    // Now we allocate gradient buffer and register with optimizer.
+    // ==========================================================================
+    training_state_.position_embedding_grad_size = static_cast<size_t>(cfg.max_seq_len) * cfg.d_model;
+    err = cudaMalloc(&training_state_.position_embedding_grads, 
+                     training_state_.position_embedding_grad_size * sizeof(float));
+    if (err != cudaSuccess) {
+        std::cerr << "Failed to allocate position embedding gradients: " << cudaGetErrorString(err) << std::endl;
+        return;
+    }
+    std::cout << "📦 Position embedding grads allocated at " << (void*)training_state_.position_embedding_grads
+              << " size=" << training_state_.position_embedding_grad_size << " (Issue #36 FIX)" << std::endl;
+    
     // CRITICAL: When tie_embeddings=true, LM head shares embedding buffer
     // NOTE: Embeddings are initialized DIRECTLY on GPU via launchXavierInit() to avoid CPU->GPU copy overhead.
     // The embedding buffer may already contain weights from checkpoint loading (via Serialization_GPU.cu),

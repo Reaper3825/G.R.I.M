@@ -395,6 +395,79 @@ void launchEmbeddingBackward(const float* grad_output,
 }
 
 //======================================================//
+// Position Embedding Backward Kernel (Issue #36 FIX)
+//======================================================//
+
+/**
+ * Position embedding backward: accumulates gradients from all batch elements
+ * for each position index. Unlike token embedding backward (which scatters by 
+ * token_id), this scatters by position index (0 to seq_len-1).
+ *
+ * For position p in batch element b:
+ *   grad_position_embeddings[p] += grad_output[b * seq_len + p]
+ *
+ * This matches PyTorch nn.Embedding behavior for position embeddings.
+ */
+__global__ void PositionEmbeddingBackwardKernel(const float* __restrict__ grad_output,
+                                                float* __restrict__ grad_position_embeddings,
+                                                int total_tokens,
+                                                int seq_len,
+                                                int d_model,
+                                                int max_seq_len) {
+    const int token_index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (token_index >= total_tokens) return;
+
+    // Compute position index within sequence (0 to seq_len-1)
+    const int pos_id = token_index % seq_len;
+    if (pos_id < 0 || pos_id >= max_seq_len) return;
+
+    const float* grad_src = grad_output + static_cast<size_t>(token_index) * d_model;
+    float* grad_dst = grad_position_embeddings + static_cast<size_t>(pos_id) * d_model;
+
+    for (int i = 0; i < d_model; ++i) {
+        atomicAdd(&grad_dst[i], grad_src[i]);
+    }
+}
+
+void launchPositionEmbeddingBackward(const float* grad_output,
+                                     float* grad_position_embeddings,
+                                     int batch_size,
+                                     int seq_len,
+                                     int d_model,
+                                     int max_seq_len,
+                                     cudaStream_t stream) {
+    // Rule 20: Crash on invalid input
+    if (!grad_output) {
+        throw std::runtime_error("launchPositionEmbeddingBackward: grad_output is NULL");
+    }
+    if (!grad_position_embeddings) {
+        throw std::runtime_error("launchPositionEmbeddingBackward: grad_position_embeddings is NULL");
+    }
+
+    const int total_tokens = batch_size * seq_len;
+    if (total_tokens <= 0) {
+        throw std::runtime_error("launchPositionEmbeddingBackward: total_tokens=" + std::to_string(total_tokens));
+    }
+    if (d_model <= 0) {
+        throw std::runtime_error("launchPositionEmbeddingBackward: d_model=" + std::to_string(d_model));
+    }
+    if (seq_len <= 0 || seq_len > max_seq_len) {
+        throw std::runtime_error("launchPositionEmbeddingBackward: seq_len=" + std::to_string(seq_len) 
+                                 + " max_seq_len=" + std::to_string(max_seq_len));
+    }
+
+    constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
+    const int grid = (total_tokens + kBlockSize - 1) / kBlockSize;
+    PositionEmbeddingBackwardKernel<<<grid, kBlockSize, 0, stream>>>(
+        grad_output, grad_position_embeddings, total_tokens, seq_len, d_model, max_seq_len);
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        throw std::runtime_error("PositionEmbeddingBackward kernel failed: " + std::string(cudaGetErrorString(err)));
+    }
+}
+
+//======================================================//
 // EmbeddingLayer
 //======================================================//
 

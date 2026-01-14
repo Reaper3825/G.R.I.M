@@ -250,6 +250,13 @@ void LanguageModel::zeroGrad() {
                        training_state_.stream_ctrl.getPrimaryStream());
     }
     
+    // Issue #36 FIX: Zero position embedding gradients
+    if (training_state_.position_embedding_grads) {
+        cudaMemsetAsync(training_state_.position_embedding_grads, 0,
+                       training_state_.position_embedding_grad_size * sizeof(float),
+                       training_state_.stream_ctrl.getPrimaryStream());
+    }
+    
     // Zero LM head gradients
     if (training_state_.lm_head_weight_grads) {
         cudaMemsetAsync(training_state_.lm_head_weight_grads, 0,
@@ -466,6 +473,24 @@ void LanguageModel::buildParameterGroups() {
         parameter_groups_.push_back(emb_group);
     }
 
+    // ==========================================================================
+    // Issue #36 FIX: Position embeddings MUST be trainable to match PyTorch
+    // PyTorch baseline: pos_emb = nn.Embedding(seq_len, d_model) - gets gradients
+    // GRIM was missing this → position embeddings were FROZEN at random init!
+    // ==========================================================================
+    if (training_state_.position_embedding_grads && embedding_runtime && embedding_runtime->position_buffer) {
+        ParameterGroup pos_emb_group;
+        pos_emb_group.name = "position_embedding";
+        pos_emb_group.weights = embedding_runtime->position_buffer;
+        pos_emb_group.grads = training_state_.position_embedding_grads;
+        pos_emb_group.size = training_state_.position_embedding_grad_size;
+        pos_emb_group.m_state = nullptr;
+        pos_emb_group.v_state = nullptr;
+        pos_emb_group.type = ParamGroupType::EMBEDDING;  // Same treatment as token embeddings
+        parameter_groups_.push_back(pos_emb_group);
+        std::cout << "✅ Position embeddings registered with optimizer (Issue #36 FIX)" << std::endl;
+    }
+
     // LM head weights (includes tied embedding grads when tie_embeddings=true)
     if (training_state_.lm_head_weight_grads && training_state_.lm_head_weights) {
         ParameterGroup lm_group;
@@ -478,6 +503,7 @@ void LanguageModel::buildParameterGroups() {
         // When tie_embeddings=true: This buffer serves as BOTH lm_head AND embedding weights
         //   - Receives dense gradients from LM head backward pass (output layer)
         //   - Receives sparse gradients from embedding backward pass (input layer, accumulated)
+        //   - Gradient norm reported under LM_HEAD type (physical buffer name)
         //   - Gradient norm reported under LM_HEAD type (physical buffer name)
         // When tie_embeddings=false: This buffer is ONLY the lm_head projection weights
         //   - Embedding weights are separate and registered as EMBEDDING type above

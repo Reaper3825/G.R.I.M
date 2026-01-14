@@ -337,8 +337,10 @@ static std::pair<std::vector<int64_t>, uint32_t> load_grmt(const std::string& pa
         // Skip text_mask (uint8 array)
         file.seekg(seq_len * sizeof(uint8_t), std::ios::cur);
         
-        if (seq_idx == 0) {
-            std::cout << "[GRMT] Appending tokens to all_tokens...\n";
+        // Log progress for ALL sequences to see where it hangs
+        if ((seq_idx + 1) % 10 == 0 || seq_idx < 5) {
+            std::cout << "[GRMT] seq=" << (seq_idx+1) << " len=" << seq_len 
+                      << " total=" << all_tokens.size() << "\n";
             std::cout.flush();
         }
         
@@ -357,17 +359,20 @@ static std::pair<std::vector<int64_t>, uint32_t> load_grmt(const std::string& pa
         // Check max_tokens limit
         if (max_tokens > 0 && static_cast<int64_t>(all_tokens.size()) >= max_tokens) {
             std::cout << "[GRMT] Reached max_tokens limit (" << max_tokens << ")\n";
+            std::cout.flush();
             break;
         }
         
-        // Progress logging
+        // Progress logging (keep old 1000-batch logging too)
         if ((seq_idx + 1) % 1000 == 0) {
             std::cout << "[GRMT] Loaded " << (seq_idx + 1) << "/" << header.num_sequences 
                       << " sequences, " << all_tokens.size() << " tokens\n";
+            std::cout.flush();
         }
     }
     
     std::cout << "[GRMT] Done: " << all_tokens.size() << " tokens loaded\n";
+    std::cout.flush();
     return {all_tokens, header.vocab_size};
 }
 
@@ -1411,10 +1416,12 @@ int main(int argc, char ** argv) {
     std::mt19937 rng(static_cast<uint32_t>(cfg.seed));
     
     if (data.size() < static_cast<std::size_t>(cfg.seq_len + 1)) {
-        std::cerr << "[ERROR] dataset too small for seq_len\n";
+        std::cerr << "[ERROR] dataset too small for seq_len (data.size=" << data.size() 
+                  << ", need " << (cfg.seq_len + 1) << ")\n";
         return 1;
     }
-    std::cout << "\n[Data] tokens loaded: " << data.size() << "\n";
+    std::cout << "[DEBUG] Passed data size check\n" << std::flush;
+    std::cout << "\n[Data] tokens loaded: " << data.size() << "\n" << std::flush;
 
     torch::Device device(torch::kCPU);
     if (cfg.device == "cuda" && torch::cuda::is_available()) {

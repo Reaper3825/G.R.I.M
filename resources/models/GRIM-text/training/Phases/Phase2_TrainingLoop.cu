@@ -519,6 +519,132 @@ GradAccumSample sampleGradAccumRms(const GRIM::ModelGradAccumulationController& 
     return sample;
 }
 
+//======================================================//
+//  Token 277 Mode Collapse Diagnostic (Issue #36+)
+//  Tracks WHY token 277 (SPACE) becomes dominant
+//======================================================//
+
+constexpr int kToken277 = 277;  // SPACE token ID
+
+struct Token277Diagnostic {
+    bool valid = false;
+    
+    // Gradient info for embedding row 277
+    float grad_row_norm = 0.0f;      // L2 norm of gradient for row 277
+    float grad_row_sum = 0.0f;       // Sum of gradient for row 277 (sign indicates direction)
+    float grad_row_mean = 0.0f;      // Mean of gradient elements
+    
+    // Weight info for embedding row 277
+    float weight_row_norm = 0.0f;    // L2 norm of embedding row 277
+    float weight_row_mean = 0.0f;    // Mean of embedding row 277
+    
+    // LM head output projection analysis (for weight-tied case)
+    // When logits = x @ W_emb^T, row 277 of W_emb affects ALL output logits
+    // A positive update to row 277 increases dot product for ANY x
+    
+    // Target statistics in current batch
+    int target_277_count = 0;        // How many times 277 was the target
+    int total_valid_targets = 0;     // Total valid (non-padding) targets
+    float target_277_ratio = 0.0f;   // Ratio of 277 in targets
+};
+
+Token277Diagnostic computeToken277Diagnostic(
+    const GRIM::TrainingState& ts,
+    const std::vector<int>& targets,  // Batch targets (flattened)
+    int d_model,
+    cudaStream_t stream
+) {
+    Token277Diagnostic diag{};
+    
+    // Count how many times token 277 appears as a TARGET in this batch
+    const int PAD_ID = 274;  // PAD token
+    for (int target : targets) {
+        if (target >= 0 && target != PAD_ID) {
+            diag.total_valid_targets++;
+            if (target == kToken277) {
+                diag.target_277_count++;
+            }
+        }
+    }
+    diag.target_277_ratio = (diag.total_valid_targets > 0) 
+        ? static_cast<float>(diag.target_277_count) / diag.total_valid_targets 
+        : 0.0f;
+    
+    // Get gradient and weight info for row 277
+    // Row 277 starts at offset 277 * d_model
+    const size_t row_offset = static_cast<size_t>(kToken277) * d_model;
+    const size_t row_bytes = d_model * sizeof(float);
+    
+    std::vector<float> grad_row(d_model, 0.0f);
+    std::vector<float> weight_row(d_model, 0.0f);
+    
+    // Copy gradient row (if embedding_grads is aliased to lm_head_weight_grads for tied weights)
+    // The gradient buffer contains BOTH embedding backward + LM head backward contributions
+    if (ts.embedding_grads) {
+        cudaMemcpyAsync(grad_row.data(), ts.embedding_grads + row_offset,
+                        row_bytes, cudaMemcpyDeviceToHost, stream);
+    }
+    
+    // Copy weight row from actual embeddings
+    if (ts.lm_head_weights) {
+        cudaMemcpyAsync(weight_row.data(), ts.lm_head_weights + row_offset,
+                        row_bytes, cudaMemcpyDeviceToHost, stream);
+    }
+    
+    cudaStreamSynchronize(stream);
+    
+    // Compute gradient statistics
+    double grad_sum = 0.0, grad_sum_sq = 0.0;
+    for (int i = 0; i < d_model; ++i) {
+        grad_sum += grad_row[i];
+        grad_sum_sq += static_cast<double>(grad_row[i]) * grad_row[i];
+    }
+    diag.grad_row_sum = static_cast<float>(grad_sum);
+    diag.grad_row_mean = static_cast<float>(grad_sum / d_model);
+    diag.grad_row_norm = static_cast<float>(std::sqrt(grad_sum_sq));
+    
+    // Compute weight statistics
+    double weight_sum = 0.0, weight_sum_sq = 0.0;
+    for (int i = 0; i < d_model; ++i) {
+        weight_sum += weight_row[i];
+        weight_sum_sq += static_cast<double>(weight_row[i]) * weight_row[i];
+    }
+    diag.weight_row_norm = static_cast<float>(std::sqrt(weight_sum_sq));
+    diag.weight_row_mean = static_cast<float>(weight_sum / d_model);
+    
+    diag.valid = true;
+    return diag;
+}
+
+std::string formatToken277Diagnostic(const Token277Diagnostic& diag, int batch_idx) {
+    if (!diag.valid) {
+        return "[Token277Trace] batch=" + std::to_string(batch_idx + 1) + " INVALID";
+    }
+    
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(6);
+    oss << "[Token277Trace] batch=" << (batch_idx + 1)
+        << " grad_row277: norm=" << diag.grad_row_norm
+        << " sum=" << diag.grad_row_sum
+        << " mean=" << diag.grad_row_mean
+        << " | weight_row277: norm=" << diag.weight_row_norm
+        << " mean=" << diag.weight_row_mean
+        << " | targets: 277_count=" << diag.target_277_count
+        << "/" << diag.total_valid_targets
+        << " ratio=" << std::setprecision(4) << (diag.target_277_ratio * 100.0f) << "%";
+    
+    // CRITICAL FLAG: If gradient sum is positive, row 277 weight will INCREASE
+    // For weight-tied model: logit[277] = x @ W[277].T
+    // If W[277] increases (positive gradient update), logit[277] increases for ALL x
+    if (diag.grad_row_sum > 0.0f) {
+        oss << " ⚠️ POSITIVE_GRAD (will increase weight → increase logit_277)";
+    } else if (diag.grad_row_sum < 0.0f) {
+        oss << " ✓ NEGATIVE_GRAD (will decrease weight → decrease logit_277)";
+    }
+    
+    return oss.str();
+}
+
 } // anonymous namespace
 
 //======================================================//
@@ -2389,6 +2515,27 @@ BatchResult processBatch(
                             );
     
     // ========================================================================
+    // DIAGNOSTIC: Token 277 (SPACE) gradient analysis - Issue #36.5
+    // Track WHY p_277 increases: if grad_sum > 0, weight row increases
+    // For tied weights: logit[277] = x @ W[277].T, so larger W[277] → larger logit_277
+    // ========================================================================
+    {
+        const auto& ts = ctx.model->getTrainingState();
+        const auto& cfg = ctx.model->getConfig();
+        cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
+        
+        // Flatten batch_targets for analysis
+        std::vector<int> flat_targets;
+        for (const auto& seq_targets : batch_targets) {
+            flat_targets.insert(flat_targets.end(), seq_targets.begin(), seq_targets.end());
+        }
+        
+        Token277Diagnostic tok277 = computeToken277Diagnostic(
+            ts, flat_targets, cfg.d_model, stream);
+        ctx.logging.logger->log(formatToken277Diagnostic(tok277, batch_idx));
+    }
+    
+    // ========================================================================
     // DIAGNOSTIC: Export gradients for PyTorch comparison (EVERY batch)
     // ========================================================================
     static bool exported_grads = false;
@@ -2957,6 +3104,35 @@ BatchResult processBatch(
                                     " for accum_steps=" + std::to_string(accum_steps_for_log));
         }
         
+        // ========================================================================
+        // PRE-OPTIMIZER Token 277 Weight Snapshot (Issue #36.5)
+        // Log weight row 277 BEFORE optimizer step to track delta
+        // ========================================================================
+        float pre_w277_norm = 0.0f;
+        float pre_w277_mean = 0.0f;
+        {
+            const auto& ts = ctx.model->getTrainingState();
+            const auto& cfg = ctx.model->getConfig();
+            cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
+            
+            if (ts.lm_head_weights && kToken277 < cfg.vocab_size) {
+                std::vector<float> w277_row(static_cast<size_t>(cfg.d_model));
+                const float* w277_ptr = ts.lm_head_weights + static_cast<size_t>(kToken277) * cfg.d_model;
+                cudaMemcpyAsync(w277_row.data(), w277_ptr, 
+                                static_cast<size_t>(cfg.d_model) * sizeof(float),
+                                cudaMemcpyDeviceToHost, stream);
+                cudaStreamSynchronize(stream);
+                
+                float sum = 0.0f, sq_sum = 0.0f;
+                for (size_t i = 0; i < w277_row.size(); ++i) {
+                    sum += w277_row[i];
+                    sq_sum += w277_row[i] * w277_row[i];
+                }
+                pre_w277_norm = std::sqrt(sq_sum);
+                pre_w277_mean = sum / static_cast<float>(cfg.d_model);
+            }
+        }
+        
         ctx.model->updateWeights(result.learning_rate,
                                  &ctx.optimizer.optimizer_state,
                                  ctx.config.hyperparameters.weight_decay);
@@ -2987,6 +3163,54 @@ BatchResult processBatch(
                                 " step=" + std::to_string(ctx.optimizer.optimizer_state.step) +
                                 " t=" + std::to_string(ctx.optimizer.optimizer_state.step) +
                                 " " + post_weights);
+        
+        // ========================================================================
+        // POST-OPTIMIZER Token 277 Weight Delta (Issue #36.5)
+        // Track how much weight row 277 changed after optimizer step
+        // ========================================================================
+        {
+            const auto& ts = ctx.model->getTrainingState();
+            const auto& cfg = ctx.model->getConfig();
+            cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
+            
+            if (ts.lm_head_weights && kToken277 < cfg.vocab_size) {
+                std::vector<float> w277_row(static_cast<size_t>(cfg.d_model));
+                const float* w277_ptr = ts.lm_head_weights + static_cast<size_t>(kToken277) * cfg.d_model;
+                cudaMemcpyAsync(w277_row.data(), w277_ptr, 
+                                static_cast<size_t>(cfg.d_model) * sizeof(float),
+                                cudaMemcpyDeviceToHost, stream);
+                cudaStreamSynchronize(stream);
+                
+                float sum = 0.0f, sq_sum = 0.0f;
+                for (size_t i = 0; i < w277_row.size(); ++i) {
+                    sum += w277_row[i];
+                    sq_sum += w277_row[i] * w277_row[i];
+                }
+                float post_w277_norm = std::sqrt(sq_sum);
+                float post_w277_mean = sum / static_cast<float>(cfg.d_model);
+                
+                float delta_norm = post_w277_norm - pre_w277_norm;
+                float delta_mean = post_w277_mean - pre_w277_mean;
+                
+                std::ostringstream msg;
+                msg << std::fixed << std::setprecision(8);
+                msg << "[Token277] POST-OPT batch=" << (batch_idx + 1);
+                msg << " pre_norm=" << pre_w277_norm;
+                msg << " post_norm=" << post_w277_norm;
+                msg << " delta_norm=" << delta_norm;
+                msg << " delta_mean=" << delta_mean;
+                
+                // WARNING FLAGS
+                if (delta_norm > 0.0001f) {
+                    msg << " ⚠️ NORM_INCREASED";  // Weight row getting larger!
+                }
+                if (delta_mean > 0.0001f) {
+                    msg << " ⚠️ MEAN_INCREASED";  // Weight values drifting positive!
+                }
+                
+                ctx.logging.logger->log(msg.str());
+            }
+        }
         
         if (pre_sample.valid && post_sample.valid) {
             const float update_rms = computeUpdateRms(pre_sample, post_sample);

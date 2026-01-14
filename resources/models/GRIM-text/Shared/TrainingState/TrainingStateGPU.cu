@@ -31,6 +31,9 @@ TrainingState::~TrainingState() {
 		if (lm_head_weight_grads) cudaFree(lm_head_weight_grads);
 	}
 	
+	// Issue #36 FIX: Free position embedding gradients
+	if (position_embedding_grads) cudaFree(position_embedding_grads);
+	
 	if (lm_head_bias_grads) cudaFree(lm_head_bias_grads);
 	if (numeric_head_weight_grads) cudaFree(numeric_head_weight_grads);
 	if (numeric_head_bias_grads) cudaFree(numeric_head_bias_grads);
