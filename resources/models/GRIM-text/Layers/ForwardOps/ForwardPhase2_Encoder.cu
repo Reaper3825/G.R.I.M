@@ -55,6 +55,12 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
     const int total_tokens = ctx.total_tokens;
     const int num_layers = ctx.gpu_encoder->getNumLayers();
 
+    // Issue #37 DIAGNOSTIC: Set W[277] reference for hidden state alignment tracking
+    if (ts->lm_head_weights) {
+        setEncoderW277Reference(ts->lm_head_weights, cfg->vocab_size, cfg->d_model, ctx.stream);
+        resetEncoderDiagCount();
+    }
+
     for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
 
         // Get the encoder layer
@@ -138,6 +144,16 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
                 0.0f, expected_var,               // var≈1.0-1.2 after RMSNorm
                 -6.0f, 6.0f,                      // ~6σ covers 99.9999% of normal dist
                 ctx.stream);
+            
+            // Issue #37: Track W[277] alignment after each encoder layer
+            constexpr int kToken277 = 277;  // SPACE token
+            if (ts->lm_head_weights && kToken277 < cfg->vocab_size) {
+                const float* w277 = ts->lm_head_weights + static_cast<size_t>(kToken277) * cfg->d_model;
+                char align_buf[128];
+                snprintf(align_buf, sizeof(align_buf), "after_encoder_layer_%d", layer_idx);
+                FWD_DIAG_TOKEN277_ALIGNMENT(align_buf, 
+                    encoder_output, w277, total_tokens, cfg->d_model, ctx.stream);
+            }
         }
         // === END DIAGNOSTIC ===
 

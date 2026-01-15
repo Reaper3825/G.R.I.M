@@ -20,6 +20,83 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <vector>
+#include <cmath>
+
+//======================================================//
+//  Issue #37 DIAGNOSTIC: Hidden State Alignment Tracker
+//  Logs how hidden states align with W[277] at each stage
+//======================================================//
+namespace {
+    // Shared W[277] reference - set once per forward pass
+    static const float* s_w277_ref = nullptr;
+    static int s_w277_d_model = 0;
+    static float s_w277_norm = 0.0f;
+    static int s_layer_diag_count = 0;
+    static constexpr int kMaxDiagLogs = 24;  // First 2 batches * 12 layers
+    
+    void setW277Reference(const float* lm_weights, int vocab_size, int d_model, cudaStream_t stream) {
+        constexpr int kToken277 = 277;
+        if (!lm_weights || kToken277 >= vocab_size) {
+            s_w277_ref = nullptr;
+            return;
+        }
+        // Copy W[277] row to static host buffer
+        static std::vector<float> h_w277;
+        h_w277.resize(d_model);
+        s_w277_d_model = d_model;
+        
+        cudaStreamSynchronize(stream);
+        cudaMemcpy(h_w277.data(), lm_weights + static_cast<size_t>(kToken277) * d_model,
+                   d_model * sizeof(float), cudaMemcpyDeviceToHost);
+        
+        // Compute norm
+        double sum_sq = 0.0;
+        for (int i = 0; i < d_model; ++i) sum_sq += h_w277[i] * h_w277[i];
+        s_w277_norm = static_cast<float>(std::sqrt(sum_sq));
+        s_w277_ref = h_w277.data();
+    }
+    
+    void logHiddenStateAlignment(const char* stage, int layer_idx, 
+                                  const float* d_hidden, int total_tokens, int d_model,
+                                  cudaStream_t stream) {
+        if (!s_w277_ref || s_w277_d_model != d_model || s_layer_diag_count >= kMaxDiagLogs) return;
+        
+        cudaStreamSynchronize(stream);
+        
+        // Sample first 5 tokens
+        const int num_sample = std::min(5, total_tokens);
+        std::vector<float> h_hidden(static_cast<size_t>(num_sample) * d_model);
+        cudaMemcpy(h_hidden.data(), d_hidden, h_hidden.size() * sizeof(float), cudaMemcpyDeviceToHost);
+        
+        // Compute alignment for each sampled token
+        float total_dot = 0.0f, total_cos = 0.0f, total_h_norm = 0.0f;
+        for (int t = 0; t < num_sample; ++t) {
+            const float* h = h_hidden.data() + t * d_model;
+            double dot = 0.0, h_norm_sq = 0.0;
+            for (int i = 0; i < d_model; ++i) {
+                dot += h[i] * s_w277_ref[i];
+                h_norm_sq += h[i] * h[i];
+            }
+            float h_norm = static_cast<float>(std::sqrt(h_norm_sq));
+            float cos_sim = (h_norm > 1e-8f && s_w277_norm > 1e-8f) 
+                           ? static_cast<float>(dot) / (h_norm * s_w277_norm) : 0.0f;
+            total_dot += static_cast<float>(dot);
+            total_cos += cos_sim;
+            total_h_norm += h_norm;
+        }
+        
+        fprintf(stderr, "[HiddenAlign] layer=%d stage=%s tokens=%d | "
+                "mean_dot=%.4f mean_cos=%.4f mean_h_norm=%.4f w277_norm=%.4f\n",
+                layer_idx, stage, total_tokens,
+                total_dot / num_sample, total_cos / num_sample, 
+                total_h_norm / num_sample, s_w277_norm);
+    }
+    
+    void resetLayerDiagCount() { s_layer_diag_count = 0; }
+    void incrementLayerDiagCount() { ++s_layer_diag_count; }
+}
+//======================================================// 
 
 // External kernel declaration (global scope - defined in BackwardKernels.cu)
 void launchBiasSumGradient(const float* grad_output, float* grad_bias,
@@ -690,6 +767,10 @@ void EncodingLayer::forward(const EncodingForwardArgs& args) {
     //--------------------------------------------------
     launchResidualAdd(args.input, ln2_out, residual1, total_tokens * d_model, stream);
     
+    // === Issue #37 DIAGNOSTIC: Track alignment AFTER attention ===
+    static int s_attn_layer = 0;
+    logHiddenStateAlignment("after_attn", s_attn_layer, residual1, total_tokens, d_model, stream);
+    
     if (args.cache_residual1) {
         CUDA_CHECK(cudaMemcpyAsync(args.cache_residual1, residual1,
                                     total_tokens * d_model * sizeof(float),
@@ -735,12 +816,28 @@ void EncodingLayer::forward(const EncodingForwardArgs& args) {
     //--------------------------------------------------
     launchResidualAdd(residual1, ffn_out, args.output, total_tokens * d_model, stream);
     
+    // === Issue #37 DIAGNOSTIC: Track alignment AFTER FFN (layer output) ===
+    logHiddenStateAlignment("after_ffn", s_attn_layer, args.output, total_tokens, d_model, stream);
+    s_attn_layer = (s_attn_layer + 1) % 12;  // Cycle through layers
+    incrementLayerDiagCount();
+    
     // Cache layer output for backward pass (used as layer_input in next layer's backward)
     if (args.cache_layer_output) {
         CUDA_CHECK(cudaMemcpyAsync(args.cache_layer_output, args.output,
                                     total_tokens * d_model * sizeof(float),
                                     cudaMemcpyDeviceToDevice, stream));
     }
+}
+
+//======================================================//
+// Issue #37 DIAGNOSTIC: Public wrappers for alignment tracking
+//======================================================//
+void setEncoderW277Reference(const float* lm_weights, int vocab_size, int d_model, cudaStream_t stream) {
+    setW277Reference(lm_weights, vocab_size, d_model, stream);
+}
+
+void resetEncoderDiagCount() {
+    resetLayerDiagCount();
 }
 
 } // namespace GRIM

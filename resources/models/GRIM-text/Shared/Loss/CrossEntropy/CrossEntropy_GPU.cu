@@ -244,6 +244,58 @@ void computeCrossEntropyGradient(const LossContext& ctx,
 		throw std::runtime_error(std::string("[CrossEntropy::computeGradient] kernel failed: ") +
 			cudaGetErrorString(err));
 	}
+	
+	// === TOKEN 277 GRADIENT DIAGNOSTIC ===
+	// Log the gradient values for token 277 across first few positions
+	// This shows how the loss is trying to adjust logit[277]
+	static int s_grad_diag_count = 0;
+	constexpr int kToken277 = 277;
+	if (++s_grad_diag_count <= 20 && kToken277 < ctx.vocab_size) {
+		cudaStreamSynchronize(ctx.stream);
+		
+		const int num_sample = std::min(10, total_tokens);
+		std::vector<float> grad_277_samples(num_sample);
+		std::vector<int> target_samples(num_sample);
+		
+		// Read grad[t, 277] for first few positions
+		for (int t = 0; t < num_sample; ++t) {
+			cudaMemcpy(&grad_277_samples[t], 
+					   buffers.grad_logits + static_cast<size_t>(t) * ctx.vocab_size + kToken277,
+					   sizeof(float), cudaMemcpyDeviceToHost);
+		}
+		// Read targets
+		cudaMemcpy(target_samples.data(), ctx.targets, num_sample * sizeof(int), cudaMemcpyDeviceToHost);
+		
+		// Compute sum of grad[277] across ALL tokens
+		float grad_277_sum = 0.0f;
+		std::vector<float> all_grad_277(total_tokens);
+		for (int t = 0; t < total_tokens; ++t) {
+			cudaMemcpy(&all_grad_277[t],
+					   buffers.grad_logits + static_cast<size_t>(t) * ctx.vocab_size + kToken277,
+					   sizeof(float), cudaMemcpyDeviceToHost);
+			grad_277_sum += all_grad_277[t];
+		}
+		
+		// Count how many positions have target=277
+		int target_277_count = 0;
+		for (int t = 0; t < total_tokens; ++t) {
+			int target;
+			cudaMemcpy(&target, ctx.targets + t, sizeof(int), cudaMemcpyDeviceToHost);
+			if (target == kToken277) target_277_count++;
+		}
+		
+		fprintf(stderr, "[Token277Grad] call=%d total_tokens=%d target_277_count=%d grad_277_sum=%.6f\n",
+				s_grad_diag_count, total_tokens, target_277_count, grad_277_sum);
+		fprintf(stderr, "[Token277Grad] first_%d: grad_277=[", num_sample);
+		for (int t = 0; t < num_sample; ++t) {
+			fprintf(stderr, "%.4f%s", grad_277_samples[t], t < num_sample - 1 ? ", " : "");
+		}
+		fprintf(stderr, "] targets=[");
+		for (int t = 0; t < num_sample; ++t) {
+			fprintf(stderr, "%d%s", target_samples[t], t < num_sample - 1 ? ", " : "");
+		}
+		fprintf(stderr, "]\n");
+	}
 }
 
 } // namespace GRIM::Loss

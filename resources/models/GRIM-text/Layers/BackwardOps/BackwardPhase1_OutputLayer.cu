@@ -277,6 +277,12 @@ BackwardStatus computeLMHeadBackward(BackwardContext& ctx) {
     lm_params.handle = ctx.cublas_handle;
     lm_params.stream = ctx.training_state->stream_ctrl.getPrimaryStream();
     
+    // Issue #37 FIX: Use centered encoder output for grad_weight computation
+    // MUST match forward pass centering to ensure correct gradient!
+    // We use encoder_workspace as scratch (same as forward) and recompute centering
+    lm_params.centered_encoder = ts->encoder_workspace;
+    lm_params.use_centering = true;
+    
     //--------------------------------------------------//
     // Execute LM Head backward (throws on error)
     //--------------------------------------------------//

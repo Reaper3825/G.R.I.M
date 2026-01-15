@@ -319,4 +319,12 @@ private:
     std::size_t workspace_bytes_ = 0;
 };
 
+//======================================================//
+// Issue #37 DIAGNOSTIC: Hidden State Alignment Tracker
+// Call setEncoderW277Reference() before forward pass iteration
+// to enable per-layer alignment tracking with W[277]
+//======================================================//
+void setEncoderW277Reference(const float* lm_weights, int vocab_size, int d_model, cudaStream_t stream);
+void resetEncoderDiagCount();
+
 } // namespace GRIM

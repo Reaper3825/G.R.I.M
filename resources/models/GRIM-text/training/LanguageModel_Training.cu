@@ -766,6 +766,97 @@ void LanguageModel::recordGradientClip(float clip_threshold, bool clipped) {
 }
 
 //======================================================//
+//  Token 277 (SPACE) Weight Tracking Diagnostic
+//  Tracks the W[277] row in embedding/LM head weights before/after optimizer
+//======================================================//
+static int s_token277_track_count = 0;
+
+static void logToken277WeightUpdate(
+    const float* weights_gpu,     // embedding/LM head weights on GPU
+    const float* grads_gpu,       // gradients for the weights
+    const float* m_state_gpu,     // AdamW first moment
+    const float* v_state_gpu,     // AdamW second moment
+    int d_model,
+    int vocab_size,
+    int optimizer_step,
+    const char* phase,            // "BEFORE" or "AFTER"
+    cudaStream_t stream
+) {
+    constexpr int kToken277 = 277;
+    if (kToken277 >= vocab_size) return;
+    
+    ++s_token277_track_count;
+    // Only log first 30 calls per run
+    if (s_token277_track_count > 30) return;
+    
+    cudaStreamSynchronize(stream);
+    
+    // W[277] is at offset kToken277 * d_model in the weight matrix
+    // Weight layout: [vocab_size, d_model] row-major
+    const size_t row_offset = static_cast<size_t>(kToken277) * d_model;
+    
+    std::vector<float> w277(d_model);
+    std::vector<float> g277(d_model);
+    std::vector<float> m277(d_model);
+    std::vector<float> v277(d_model);
+    
+    cudaMemcpy(w277.data(), weights_gpu + row_offset, d_model * sizeof(float), cudaMemcpyDeviceToHost);
+    if (grads_gpu) {
+        cudaMemcpy(g277.data(), grads_gpu + row_offset, d_model * sizeof(float), cudaMemcpyDeviceToHost);
+    }
+    if (m_state_gpu) {
+        cudaMemcpy(m277.data(), m_state_gpu + row_offset, d_model * sizeof(float), cudaMemcpyDeviceToHost);
+    }
+    if (v_state_gpu) {
+        cudaMemcpy(v277.data(), v_state_gpu + row_offset, d_model * sizeof(float), cudaMemcpyDeviceToHost);
+    }
+    
+    // Compute statistics for W[277]
+    float w_sum = 0, w_sq = 0, w_min = w277[0], w_max = w277[0];
+    float g_sum = 0, g_sq = 0;
+    float m_sum = 0, v_sum = 0;
+    
+    for (int i = 0; i < d_model; ++i) {
+        w_sum += w277[i];
+        w_sq += w277[i] * w277[i];
+        w_min = std::min(w_min, w277[i]);
+        w_max = std::max(w_max, w277[i]);
+        g_sum += g277[i];
+        g_sq += g277[i] * g277[i];
+        m_sum += m277[i];
+        v_sum += v277[i];
+    }
+    
+    float w_norm = std::sqrt(w_sq);
+    float w_mean = w_sum / d_model;
+    float g_norm = std::sqrt(g_sq);
+    float g_mean = g_sum / d_model;
+    float m_mean = m_sum / d_model;
+    float v_mean = v_sum / d_model;
+    
+    fprintf(stderr, "[Token277Weight] %s step=%d W[277]: norm=%.6f mean=%.6f min=%.6f max=%.6f\n",
+            phase, optimizer_step, w_norm, w_mean, w_min, w_max);
+    fprintf(stderr, "[Token277Weight] %s step=%d G[277]: norm=%.6f mean=%.6f (grad sum=%.6f)\n",
+            phase, optimizer_step, g_norm, g_mean, g_sum);
+    if (m_state_gpu && v_state_gpu) {
+        fprintf(stderr, "[Token277Weight] %s step=%d M[277]_mean=%.6f V[277]_mean=%.6f\n",
+                phase, optimizer_step, m_mean, v_mean);
+    }
+    
+    // Log first 10 values for detailed inspection
+    fprintf(stderr, "[Token277Weight] %s W[277][0:10]=[", phase);
+    for (int i = 0; i < std::min(10, d_model); ++i) {
+        fprintf(stderr, "%.4f%s", w277[i], (i < 9) ? ", " : "");
+    }
+    fprintf(stderr, "]\n");
+    fprintf(stderr, "[Token277Weight] %s G[277][0:10]=[", phase);
+    for (int i = 0; i < std::min(10, d_model); ++i) {
+        fprintf(stderr, "%.4f%s", g277[i], (i < 9) ? ", " : "");
+    }
+    fprintf(stderr, "]\n");
+}
+
+//======================================================//
 //  updateWeights - AdamW Optimizer Step
 //======================================================//
 
@@ -830,6 +921,15 @@ void LanguageModel::updateWeights(float learning_rate,
             std::abort();
         }
         
+        // === TOKEN 277 TRACKING: Log W[277] BEFORE optimizer for LM head group ===
+        const bool is_lm_head_group = (group.type == ParamGroupType::LM_HEAD);
+        if (is_lm_head_group) {
+            logToken277WeightUpdate(
+                group.weights, group.grads, group.m_state, group.v_state,
+                config_.d_model, config_.vocab_size, optimizer_state->step,
+                "BEFORE", stream);
+        }
+        
         if (!logged_optimizer_io) {
             sample_count = std::min(kOptimizerIoSample, static_cast<size_t>(group.size));
             sample_group_name = group.name;
@@ -864,6 +964,14 @@ void LanguageModel::updateWeights(float learning_rate,
             optimizer_state->step,
             stream
         );
+        
+        // === TOKEN 277 TRACKING: Log W[277] AFTER optimizer for LM head group ===
+        if (is_lm_head_group) {
+            logToken277WeightUpdate(
+                group.weights, group.grads, group.m_state, group.v_state,
+                config_.d_model, config_.vocab_size, optimizer_state->step,
+                "AFTER", stream);
+        }
 
         if (!logged_optimizer_io && sample_count > 0) {
             cudaMemcpyAsync(w_after.data(), group.weights,

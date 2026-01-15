@@ -457,7 +457,9 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
   - Add both to parameter_groups_ (double optimizer update)
   - Free both in destructor (double-free crash)
   - The ownership flags `lm_head_weights_owned` and pointer comparison `embedding_grads == lm_head_weight_grads` track aliasing.
-  - LM head backward (cuBLAS, beta=0) writes first, embedding backward (atomicAdd) accumulates on top.
+  - **CRITICAL (Issue #38)**: LM head backward writes CENTERED gradient (mean=0), then embedding backward was SKIPPED to avoid polluting with non-centered encoder gradients.
+
+38. **Embedding Backward SKIPPED for Weight-Tied Models (Issue #38, Jan 2026)**: When `tie_embeddings=true`, `BackwardPhase3_InputLayer.cu` SKIPS `launchEmbeddingBackward()`. Reason: LM head backward computes centered gradient (Issue #37); embedding backward would atomicAdd NON-CENTERED gradients from encoder output, corrupting the gradient and causing mode collapse. Evidence: `Token277GradW` showed mean=0.000000 (correct), but `Token277Trace` (after embedding backward) showed mean=0.000009 (polluted!). Solution: Only use LM head gradient for tied weights.
 
 22. **Centralized Controller Pattern - MANDATORY**: All GPU resource management MUST go through centralized controllers in TrainingState. VIOLATIONS ARE BUGS:
   - **CUDA Streams**: Use `training_state.stream_ctrl.getPrimaryStream()` - NEVER create raw `cudaStream_t` locals or store in other structs

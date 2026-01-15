@@ -168,6 +168,11 @@ struct DeviceTelemetryAccum {
     uint32_t debug_count;
     float debug_p_t_10[10];
     float debug_ce_smooth_10[10];
+    // Token 277 gradient breakdown
+    float grad_277_sum;          // Sum of grad_logit[277] across all positions
+    float grad_277_sum_target;   // Sum where target==277 (should be negative)
+    float grad_277_sum_nontarget;// Sum where target!=277 (will be positive when p_277 high)
+    uint32_t target_277_count;   // Count of positions where target==277
 };
 
 //=============================================================================

@@ -252,6 +252,16 @@ float ce_smooth = -q_on * log_p_t;
 
     const float grad_norm = sqrtf(grad_norm_sq);
 
+    // Track grad_logit[277] breakdown by whether this position targets 277
+    const float grad_277 = token_grads[kDebugTokenId];
+    atomicAdd(&telemetry->grad_277_sum, grad_277);
+    if (target == kDebugTokenId) {
+        atomicAdd(&telemetry->grad_277_sum_target, grad_277);  // Should be negative (p_277 - 1)
+        atomicAdd(&telemetry->target_277_count, 1u);
+    } else {
+        atomicAdd(&telemetry->grad_277_sum_nontarget, grad_277);  // Will be positive (p_277)
+    }
+
     atomicAdd(&telemetry->loss_sum, loss);
     atomicAdd(&telemetry->loss_sq_sum, loss * loss);
     atomicMaxFloat(&telemetry->loss_max, loss);
@@ -512,6 +522,14 @@ UnifiedLossTelemetry UnifiedLossContext::compute(
         }
         logged_debug = true;
     }
+    
+    // Log grad_logit[277] breakdown - KEY DIAGNOSTIC for mode collapse
+    fprintf(stderr, "[Grad277Trace] grad_277_sum=%.6f target_sum=%.6f nontarget_sum=%.6f target_count=%u\n",
+            host_telemetry.grad_277_sum,
+            host_telemetry.grad_277_sum_target,      // Should be negative (model penalized for overpredicting)
+            host_telemetry.grad_277_sum_nontarget,   // Will be positive (p_277 for non-277 targets)
+            host_telemetry.target_277_count);
+    
     const uint32_t valid = host_telemetry.valid_count;
     const uint32_t masked = host_telemetry.masked_count;
 

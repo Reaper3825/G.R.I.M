@@ -15,11 +15,13 @@ struct LMHeadForwardParams {
 	float* logits = nullptr;                 // [total_tokens, vocab_size]
 	const float* weights = nullptr;          // [vocab_size, d_model] row-major
 	const float* bias = nullptr;             // [vocab_size]
+	float* centered_scratch = nullptr;       // [total_tokens, d_model] - scratch for zero-mean centering (Issue #37)
 	int batch_size = 0;
 	int seq_len = 0;
 	int d_model = 0;
 	int vocab_size = 0;
 	bool use_bias = false;
+	bool use_centering = true;               // Enable zero-mean centering before projection (Issue #37 fix)
 	cublasHandle_t handle = nullptr;
 	cudaStream_t stream = nullptr;
 };
@@ -27,6 +29,7 @@ struct LMHeadForwardParams {
 struct LMHeadBackwardParams {
 	const float* grad_logits = nullptr;      // [total_tokens, vocab_size]
 	const float* encoder_output = nullptr;   // [total_tokens, d_model]
+	const float* centered_encoder = nullptr; // [total_tokens, d_model] - centered hidden states (Issue #37)
 	float* grad_encoder = nullptr;           // [total_tokens, d_model]
 	float* grad_weight = nullptr;            // [vocab_size, d_model]
 	float* grad_bias = nullptr;              // [vocab_size]
@@ -37,6 +40,7 @@ struct LMHeadBackwardParams {
 	int vocab_size = 0;
 	bool accumulate = false;
 	bool use_bias = false;
+	bool use_centering = true;               // Whether centering was applied in forward (Issue #37)
 	cublasHandle_t handle = nullptr;
 	cudaStream_t stream = nullptr;
 };

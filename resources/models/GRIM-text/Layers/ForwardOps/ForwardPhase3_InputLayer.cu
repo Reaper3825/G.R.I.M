@@ -93,6 +93,22 @@ ForwardStatus executePhase3_InputLayer(ForwardContext& ctx) {
                 0.0f, expected_var,       // Sinusoidal dominates, expect var≈0.5-1.0
                 -2.0f, 2.0f,              // Sin/cos in [-1,1] + small token emb
                 ctx.stream);
+            
+            // Issue #37: Track W[277] alignment after embedding
+            constexpr int kToken277 = 277;  // SPACE token
+            {
+                char dbg[256];
+                snprintf(dbg, sizeof(dbg), "[Token277Align] DEBUG: ts->lm_head_weights=%p vocab_size=%d",
+                        (void*)ts->lm_head_weights, cfg->vocab_size);
+                GRIM::Logging::EmitModuleInfo("ForwardDiagnostics", dbg);
+            }
+            if (ts->lm_head_weights && kToken277 < cfg->vocab_size) {
+                const float* w277 = ts->lm_head_weights + static_cast<size_t>(kToken277) * cfg->d_model;
+                FWD_DIAG_TOKEN277_ALIGNMENT("after_embedding", 
+                    ts->cached_embeddings, w277, ctx.total_tokens, cfg->d_model, ctx.stream);
+            } else {
+                GRIM::Logging::EmitModuleInfo("ForwardDiagnostics", "[Token277Align] SKIPPED: lm_head_weights is NULL or vocab too small");
+            }
         }
         // === END DIAGNOSTIC ===
 
@@ -152,6 +168,15 @@ ForwardStatus executePhase3_InputLayer(ForwardContext& ctx) {
 
             ctx.scratch_block->forward(sb_args);
             FWD_CHECK_CUDA(ctx, cudaGetLastError(), "ScratchBlock forward", -1);
+            
+            // Issue #37: Track W[277] alignment after ScratchBlock
+            constexpr int kToken277 = 277;  // SPACE token
+            if (ts->lm_head_weights && kToken277 < cfg->vocab_size) {
+                const float* w277 = ts->lm_head_weights + static_cast<size_t>(kToken277) * cfg->d_model;
+                FWD_DIAG_TOKEN277_ALIGNMENT("after_scratchblock", 
+                    ts->cached_embeddings, w277, ctx.total_tokens, cfg->d_model, ctx.stream);
+            }
+            
             if (g_order_log_enabled) {
                 fprintf(stderr, "[ORDER] ForwardPhase3.scratch_done batch=%d seq=%d tokens=%d\n",
                         ctx.batch_size, ctx.seq_len, ctx.total_tokens);

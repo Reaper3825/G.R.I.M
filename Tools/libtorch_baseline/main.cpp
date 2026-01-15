@@ -67,7 +67,7 @@ struct TrainConfig {
     double dropout = 0.0;
     
     bool use_rmsnorm = true;
-    bool tie_weights = false;
+    bool tie_weights = true;
     
     //======================================================//
     //  TOGGLEABLE FEATURES (matching GRIM-text)

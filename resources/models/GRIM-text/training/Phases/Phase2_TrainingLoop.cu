@@ -645,6 +645,187 @@ std::string formatToken277Diagnostic(const Token277Diagnostic& diag, int batch_i
     return oss.str();
 }
 
+//======================================================//
+//  Hidden State Analysis for Token 277 (Issue #37)
+//  Understand WHY grad_W[277].sum() is positive despite
+//  the raw gradient signal being negative
+//  grad_W[277] = Σ_t (hidden[t] × grad_logits[t, 277])
+//======================================================//
+
+struct HiddenState277Analysis {
+    bool valid = false;
+    
+    // Hidden state statistics
+    float hidden_mean = 0.0f;         // Mean of all hidden states
+    float hidden_norm_mean = 0.0f;    // Mean L2 norm per position
+    float hidden_std = 0.0f;          // Std dev of hidden values
+    
+    // Split by target type
+    float hidden_277_mean = 0.0f;     // Mean hidden at positions targeting 277
+    float hidden_277_norm = 0.0f;     // Mean norm at positions targeting 277
+    float hidden_other_mean = 0.0f;   // Mean hidden at positions targeting other
+    float hidden_other_norm = 0.0f;   // Mean norm at positions targeting other
+    
+    // Gradient logits for token 277
+    float grad_277_at_277_targets = 0.0f;    // Sum of grad_logits[t,277] where target=277 (should be negative)
+    float grad_277_at_other_targets = 0.0f;  // Sum of grad_logits[t,277] where target≠277 (should be positive but tiny)
+    
+    // The key: dot product contributions to grad_W[277]
+    float contribution_from_277_targets = 0.0f;   // hidden @ grad when target=277
+    float contribution_from_other_targets = 0.0f; // hidden @ grad when target≠277
+    
+    // Counts
+    int count_277_targets = 0;
+    int count_other_targets = 0;
+};
+
+HiddenState277Analysis computeHiddenState277Analysis(
+    const GRIM::TrainingState& ts,
+    const std::vector<int>& targets,  // Batch targets (flattened)
+    int d_model,
+    int vocab_size,
+    cudaStream_t stream
+) {
+    HiddenState277Analysis analysis{};
+    
+    const int total_tokens = static_cast<int>(targets.size());
+    if (total_tokens == 0 || !ts.cached_encoder_outputs || !ts.grad_logits) {
+        return analysis;
+    }
+    
+    // Copy encoder output (hidden states) and grad_logits to host
+    const size_t hidden_size = static_cast<size_t>(total_tokens) * d_model;
+    const size_t grad_logits_size = static_cast<size_t>(total_tokens) * vocab_size;
+    
+    std::vector<float> h_hidden(hidden_size);
+    std::vector<float> h_grad_logits(grad_logits_size);
+    
+    cudaMemcpyAsync(h_hidden.data(), ts.cached_encoder_outputs, 
+                    hidden_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
+    cudaMemcpyAsync(h_grad_logits.data(), ts.grad_logits,
+                    grad_logits_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    
+    // Also get W[277] for contribution analysis
+    std::vector<float> w277(d_model);
+    if (ts.lm_head_weights) {
+        cudaMemcpyAsync(w277.data(), ts.lm_head_weights + static_cast<size_t>(kToken277) * d_model,
+                        d_model * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+    }
+    
+    // Analyze per-position
+    double sum_hidden = 0.0, sum_hidden_sq = 0.0;
+    double sum_norm = 0.0;
+    double sum_hidden_277 = 0.0, sum_norm_277 = 0.0;
+    double sum_hidden_other = 0.0, sum_norm_other = 0.0;
+    double sum_grad_277_at_277 = 0.0, sum_grad_277_at_other = 0.0;
+    double contribution_277 = 0.0, contribution_other = 0.0;
+    
+    const int PAD_ID = 274;
+    
+    for (int t = 0; t < total_tokens; ++t) {
+        const int target = targets[t];
+        if (target < 0 || target == PAD_ID) continue;
+        
+        // Hidden state at position t
+        const float* hidden_t = &h_hidden[static_cast<size_t>(t) * d_model];
+        
+        // Compute hidden norm and stats
+        double norm_sq = 0.0;
+        for (int i = 0; i < d_model; ++i) {
+            sum_hidden += hidden_t[i];
+            sum_hidden_sq += hidden_t[i] * hidden_t[i];
+            norm_sq += hidden_t[i] * hidden_t[i];
+        }
+        double norm = std::sqrt(norm_sq);
+        sum_norm += norm;
+        
+        // Grad_logits[t, 277]
+        const float grad_277_t = h_grad_logits[static_cast<size_t>(t) * vocab_size + kToken277];
+        
+        // Contribution to grad_W[277] = hidden[t] · grad_277_t (scalar for the row sum)
+        // Full formula: grad_W[277,i] = Σ_t (hidden[t,i] * grad_logits[t,277])
+        // Sum contribution: Σ_i grad_W[277,i] = Σ_t (Σ_i hidden[t,i] * grad_277_t) = Σ_t (hidden_sum[t] * grad_277_t)
+        double hidden_sum_t = 0.0;
+        for (int i = 0; i < d_model; ++i) {
+            hidden_sum_t += hidden_t[i];
+        }
+        double contribution_t = hidden_sum_t * grad_277_t;
+        
+        if (target == kToken277) {
+            analysis.count_277_targets++;
+            sum_hidden_277 += hidden_sum_t;
+            sum_norm_277 += norm;
+            sum_grad_277_at_277 += grad_277_t;
+            contribution_277 += contribution_t;
+        } else {
+            analysis.count_other_targets++;
+            sum_hidden_other += hidden_sum_t;
+            sum_norm_other += norm;
+            sum_grad_277_at_other += grad_277_t;
+            contribution_other += contribution_t;
+        }
+    }
+    
+    const int total_valid = analysis.count_277_targets + analysis.count_other_targets;
+    if (total_valid == 0) return analysis;
+    
+    analysis.valid = true;
+    analysis.hidden_mean = static_cast<float>(sum_hidden / (total_valid * d_model));
+    analysis.hidden_norm_mean = static_cast<float>(sum_norm / total_valid);
+    analysis.hidden_std = static_cast<float>(std::sqrt(
+        sum_hidden_sq / (total_valid * d_model) - analysis.hidden_mean * analysis.hidden_mean));
+    
+    if (analysis.count_277_targets > 0) {
+        analysis.hidden_277_mean = static_cast<float>(sum_hidden_277 / (analysis.count_277_targets * d_model));
+        analysis.hidden_277_norm = static_cast<float>(sum_norm_277 / analysis.count_277_targets);
+    }
+    if (analysis.count_other_targets > 0) {
+        analysis.hidden_other_mean = static_cast<float>(sum_hidden_other / (analysis.count_other_targets * d_model));
+        analysis.hidden_other_norm = static_cast<float>(sum_norm_other / analysis.count_other_targets);
+    }
+    
+    analysis.grad_277_at_277_targets = static_cast<float>(sum_grad_277_at_277);
+    analysis.grad_277_at_other_targets = static_cast<float>(sum_grad_277_at_other);
+    analysis.contribution_from_277_targets = static_cast<float>(contribution_277);
+    analysis.contribution_from_other_targets = static_cast<float>(contribution_other);
+    
+    return analysis;
+}
+
+std::string formatHiddenState277Analysis(const HiddenState277Analysis& a, int batch_idx) {
+    if (!a.valid) {
+        return "[HiddenState277] batch=" + std::to_string(batch_idx + 1) + " INVALID (no cached encoder output)";
+    }
+    
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(6);
+    oss << "[HiddenState277] batch=" << (batch_idx + 1)
+        << " hidden: mean=" << a.hidden_mean
+        << " norm=" << a.hidden_norm_mean
+        << " std=" << a.hidden_std
+        << " | at_277_targets(n=" << a.count_277_targets << "): mean=" << a.hidden_277_mean
+        << " norm=" << a.hidden_277_norm
+        << " | at_other_targets(n=" << a.count_other_targets << "): mean=" << a.hidden_other_mean
+        << " norm=" << a.hidden_other_norm;
+    
+    oss << "\n[HiddenState277] batch=" << (batch_idx + 1)
+        << " grad_logits[277]: at_277=" << a.grad_277_at_277_targets << " (should be negative)"
+        << " at_other=" << a.grad_277_at_other_targets << " (p_277 * N_other)"
+        << " | contribution to grad_W[277].sum: from_277=" << a.contribution_from_277_targets
+        << " from_other=" << a.contribution_from_other_targets
+        << " TOTAL=" << (a.contribution_from_277_targets + a.contribution_from_other_targets);
+    
+    // Flag if contribution from other targets dominates (causing positive gradient)
+    float total = a.contribution_from_277_targets + a.contribution_from_other_targets;
+    if (total > 0 && a.contribution_from_277_targets < 0) {
+        oss << " ⚠️ OTHER_DOMINATES (hidden states at non-277 positions cause positive W[277] update!)";
+    }
+    
+    return oss.str();
+}
+
 } // anonymous namespace
 
 //======================================================//
@@ -2533,6 +2714,12 @@ BatchResult processBatch(
         Token277Diagnostic tok277 = computeToken277Diagnostic(
             ts, flat_targets, cfg.d_model, stream);
         ctx.logging.logger->log(formatToken277Diagnostic(tok277, batch_idx));
+        
+        // Issue #37: Hidden state analysis - understand WHY grad_W[277].sum is positive
+        // even when the expected behavior is negative
+        HiddenState277Analysis hidden277 = computeHiddenState277Analysis(
+            ts, flat_targets, cfg.d_model, cfg.vocab_size, stream);
+        ctx.logging.logger->log(formatHiddenState277Analysis(hidden277, batch_idx));
     }
     
     // ========================================================================

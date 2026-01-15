@@ -1,13 +1,72 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** 🔴 UNDER INVESTIGATION - Hidden State Alignment with W[277] (January 14, 2026)  
+**Status:** � **FIX APPLIED** - Issue #37 Zero-Mean Centering (January 17, 2026)  
 **Started:** December 22, 2025  
-**Last Updated:** January 14, 2026
-**Current Symptom:** Model collapses to always predicting token 277 (SPACE character) - logit_277 increases from 0.13 → 10.4 even though gradient is NEGATIVE
+**Last Updated:** January 17, 2026
+**Previous Symptom:** Model collapsed to always predicting token 277 (SPACE character)
 
 ---
 
-## 🔴 CRITICAL FINDING: Hidden State Alignment (January 14, 2026)
+## ✅ FIXED: Issue #37 - Hidden State Non-Zero Mean Causes Gradient Sign Flip
+
+### Root Cause Discovered (January 17, 2026)
+
+**THE PROBLEM:** RMSNorm normalizes variance but NOT mean! Hidden states had small non-zero mean (~-0.001).
+
+With d_model=768: `hidden_sum = 768 × (-0.001) = -0.768`
+
+The LM head weight gradient is:
+```
+grad_W[277,i] = Σ_t (hidden[t,i] × grad_logits[t, 277])
+```
+
+Summed over all dimensions:
+```
+grad_W[277]_sum = Σ_t (hidden_sum[t] × grad[t,277])
+```
+
+**When hidden_sum is NEGATIVE and grad is NEGATIVE: product is POSITIVE!**
+
+This caused the gradient to push W[277] in the WRONG direction, leading to mode collapse.
+
+### Evidence from HiddenState277 Diagnostic
+
+| Batch | hidden_277_mean | grad_277 | contribution_277 | Expected Sign |
+|-------|-----------------|----------|------------------|---------------|
+| 1 | **-0.001004** | -0.153 | **+0.118** ❌ | Should be - |
+| 3 | +0.003513 | -0.144 | -0.390 ✅ | Correct |
+
+### Fix Applied (lm_head_GPU.cu)
+
+**Zero-mean centering before LM head projection:**
+
+```cuda
+// centerHiddenStatesKernel() - Centers each hidden state to have zero mean
+// y[i] = x[i] - mean(x)
+// This ensures hidden_sum = 0 for all positions
+
+// Applied in forward:
+if (params.use_centering && params.centered_scratch) {
+    centerHiddenStates(encoder_output, centered_scratch, d_model, total_tokens, stream);
+    projection_input = centered_scratch;
+}
+
+// Applied in backward (both for grad_weight and grad_encoder):
+// 1. grad_weight uses centered hidden states
+// 2. grad_encoder has centering backward applied: grad_x = grad_y - mean(grad_y)
+```
+
+**Files Modified:**
+1. `lm_head_GPU.hpp`: Added `centered_scratch`, `centered_encoder`, `use_centering` fields
+2. `lm_head_GPU.cu`: Added `centerHiddenStatesKernel()`, centering in forward/backward
+3. `ForwardPhase1_OutputLayer.cu`: Pass `encoder_workspace` as scratch buffer
+4. `BackwardPhase1_OutputLayer.cu`: Pass `encoder_workspace` for backward centering
+
+**Status:** ✅ Rebuild and test required
+
+---
+
+## 🔵 HISTORICAL: Issue #37 Original Analysis (Before Root Cause Found)
 
 ### Issue #37: Encoder Output Aligns with W[277] Regardless of Gradient
 

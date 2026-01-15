@@ -17,6 +17,8 @@
 #include <cstdio>
 #include <cmath>
 #include <cfloat>
+#include <string>
+#include "../../Shared/LogRecorder/LogRecorder.hpp"
 
 namespace GRIM {
 namespace Forward {
@@ -106,6 +108,59 @@ inline void logBufferWithExpected(
         if (FORWARD_DIAGNOSTICS_ENABLED && (buffer) && (elements) > 0) { \
             GRIM::Forward::logBufferWithExpected(name, (buffer), (elements), \
                 (exp_mean), (exp_var), (exp_min), (exp_max), (stream)); \
+        } \
+    } while(0)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TOKEN 277 ALIGNMENT DIAGNOSTIC (Issue #37)
+// Tracks how hidden states align with W[277] (SPACE token) throughout forward pass
+// Key insight: logit[277] = hidden_state @ W[277]^T
+// If hidden states learn to align with W[277] direction, logit_277 increases
+// even if W[277] norm decreases
+// ═══════════════════════════════════════════════════════════════════════════
+
+struct Token277AlignmentStats {
+    float dot_product_mean;      // Mean of hidden @ W[277]^T across all tokens
+    float dot_product_max;       // Max alignment (worst case)
+    float cosine_sim_mean;       // Mean cosine similarity (normalized alignment)
+    float cosine_sim_max;        // Max cosine similarity
+    float hidden_norm_mean;      // Mean hidden state norm
+    float w277_norm;             // Norm of W[277] row
+    int num_tokens;
+    
+    void print(const char* stage_name) const {
+        char buf[512];
+        snprintf(buf, sizeof(buf), 
+                "[Token277Align] %s: dot_mean=%.4f dot_max=%.4f cos_mean=%.4f cos_max=%.4f h_norm=%.4f w277_norm=%.4f",
+                stage_name, dot_product_mean, dot_product_max, 
+                cosine_sim_mean, cosine_sim_max,
+                hidden_norm_mean, w277_norm);
+        GRIM::Logging::EmitModuleInfo("ForwardDiagnostics", std::string(buf));
+    }
+};
+
+// Compute alignment between hidden states and W[277]
+// hidden: [total_tokens, d_model] - row-major hidden states
+// w277: [d_model] - the W[277] weight row from LM head (token 277 embedding)
+Token277AlignmentStats computeToken277Alignment(
+    const float* d_hidden,
+    const float* d_w277,
+    int total_tokens,
+    int d_model,
+    cudaStream_t stream
+);
+
+// Macro for easy insertion at each forward pass stage
+#define FWD_DIAG_TOKEN277_ALIGNMENT(stage_name, hidden, w277, tokens, d_model, stream) \
+    do { \
+        GRIM::Logging::EmitModuleInfo("ForwardDiagnostics", "[Token277Align] MACRO_REACHED stage=" + std::string(stage_name) + \
+                " enabled=" + std::to_string(FORWARD_DIAGNOSTICS_ENABLED) + \
+                " hidden=" + std::to_string((unsigned long long)(void*)(hidden)) + \
+                " w277=" + std::to_string((unsigned long long)(void*)(w277)) + \
+                " tokens=" + std::to_string(tokens)); \
+        if (FORWARD_DIAGNOSTICS_ENABLED && (hidden) && (w277) && (tokens) > 0) { \
+            auto _align = GRIM::Forward::computeToken277Alignment((hidden), (w277), (tokens), (d_model), (stream)); \
+            _align.print(stage_name); \
         } \
     } while(0)
 
