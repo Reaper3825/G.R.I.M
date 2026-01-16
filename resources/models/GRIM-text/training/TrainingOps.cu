@@ -155,6 +155,26 @@ float LanguageModel::computeLoss(const std::vector<int>& input_ids,
                                 ? training_state_.sequence_weights
                                 : nullptr;
     loss_ctx.sequence_weight_count = training_state_.sequence_weight_count;
+    // Issue #38 FIX: Per-token class weighting to prevent mode collapse
+    // Weight indexed by TARGET token ID - frequent tokens get lower weight
+    loss_ctx.token_weights = (training_state_.token_weights_count > 0)
+                             ? training_state_.token_weights
+                             : nullptr;
+    // Issue #39 FIX: Output logit bias correction to prevent mode collapse
+    // Subtracts running EMA of mean logit per token BEFORE softmax
+    static int s_issue39_diag = 0;
+    if (++s_issue39_diag <= 3) {
+        fprintf(stderr, "[Issue39-TrainingOps] batch=%d logit_bias_count=%d logit_bias=%p logit_bias_update=%p\n",
+                s_issue39_diag, training_state_.logit_bias_count, 
+                training_state_.logit_bias, training_state_.logit_bias_update);
+    }
+    loss_ctx.logit_bias = (training_state_.logit_bias_count > 0)
+                          ? training_state_.logit_bias
+                          : nullptr;
+    loss_ctx.logit_bias_update = (training_state_.logit_bias_count > 0)
+                                 ? training_state_.logit_bias_update
+                                 : nullptr;
+    loss_ctx.logit_bias_ema_alpha = 0.05f;  // 5% new data per batch - slow adaptation
     loss_ctx.stream = training_state_.stream_ctrl.getPrimaryStream();
 
     loss_inputs.context = loss_ctx;

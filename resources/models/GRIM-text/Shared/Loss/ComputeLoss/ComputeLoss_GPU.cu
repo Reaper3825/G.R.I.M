@@ -72,6 +72,9 @@ LossBreakdown launchLossPipeline(const LossContext& ctx,
     unified_cfg.smoothing_enabled = cfg.label_smoothing.enabled;
     unified_cfg.smoothing_epsilon = cfg.label_smoothing.epsilon;
     unified_cfg.strict_mode = false;  // Disabled - sync causes 14s stall per batch true=debugging
+    // Issue #44 FIX: Entropy regularization to prevent mode collapse
+    unified_cfg.entropy_reg_enabled = cfg.entropy_reg.enabled;
+    unified_cfg.entropy_reg_lambda = cfg.entropy_reg.lambda;
     
     //=========================================================================
     // BUILD UNIFIED INPUTS
@@ -85,6 +88,10 @@ LossBreakdown launchLossPipeline(const LossContext& ctx,
     unified_inputs.vocab_size = ctx.vocab_size;
     unified_inputs.sequence_weights = ctx.sequence_weights;
     unified_inputs.weight_count = ctx.sequence_weight_count;
+    unified_inputs.token_weights = ctx.token_weights;  // Issue #38: Per-token class weighting
+    unified_inputs.logit_bias = ctx.logit_bias;        // Issue #39: Output logit bias correction
+    unified_inputs.logit_bias_update = ctx.logit_bias_update;  // Issue #39: scratch for EMA update
+    unified_inputs.logit_bias_ema_alpha = ctx.logit_bias_ema_alpha;  // Issue #39: EMA decay rate
     unified_inputs.stream = ctx.stream;
     
     //=========================================================================

@@ -28,6 +28,9 @@
 #include "../ScratchBlock/ScratchBlock_GPU.hpp"
 #include "../FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
+#include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+
+using GRIM::Tensor;
 
 namespace GRIM {
 
@@ -83,53 +86,60 @@ void LanguageModel::initInferenceState() {
     training_state_.num_heads = cfg.num_heads;
     training_state_.num_kv_heads = num_kv_heads;
     
+    // TensorContract shape helpers
+    using TC = TensorContract::TensorShape;
+    
     // 2. Setup LM head weights (tied to embeddings for inference)
+    // Tensor API: Use from_ptr for tied embeddings, zeros for separate allocation
     if (cfg.tie_embeddings) {
         auto* embedding_runtime = &getGpuEmbedder();
         if (embedding_runtime && embedding_runtime->token_buffer) {
-            training_state_.lm_head_weights = embedding_runtime->token_buffer;
-            std::cout << "  ✓ LM head weights tied to embeddings" << std::endl;
+            // Use from_ptr: doesn't own the data, just wraps the embedding buffer
+            training_state_.lm_head_weights = Tensor::from_ptr(
+                embedding_runtime->token_buffer,
+                TC::make_BSM(cfg.vocab_size, cfg.d_model),
+                false,  // doesn't own data
+                false   // no grad for inference
+            );
+            std::cout << "  ✓ LM head weights tied to embeddings (Tensor API)" << std::endl;
         } else {
             std::cerr << "[InitInferenceState] ERROR: Cannot tie embeddings, buffer not available" << std::endl;
             return;
         }
     } else {
         // Allocate separate LM head weights (will be loaded from model file)
-        size_t lm_head_weight_size = cfg.vocab_size * cfg.d_model;
-        err = cudaMalloc(&training_state_.lm_head_weights, lm_head_weight_size * sizeof(float));
-        if (err != cudaSuccess) {
-            std::cerr << "[InitInferenceState] Failed to allocate LM head weights: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
-        std::cout << "  ✓ Allocated LM head weights" << std::endl;
+        training_state_.lm_head_weights = Tensor::zeros(
+            TC::make_BSM(cfg.vocab_size, cfg.d_model),
+            false,  // no grad for inference
+            primary_stream
+        );
+        std::cout << "  ✓ Allocated LM head weights (Tensor API)" << std::endl;
     }
     
     // Optional: LM head bias
     if (cfg.use_bias) {
-        err = cudaMalloc(&training_state_.lm_head_bias, cfg.vocab_size * sizeof(float));
-        if (err != cudaSuccess) {
-            std::cerr << "[InitInferenceState] Failed to allocate LM head bias: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
-        cudaMemsetAsync(training_state_.lm_head_bias, 0, cfg.vocab_size * sizeof(float), primary_stream);
-        std::cout << "  ✓ Allocated LM head bias" << std::endl;
+        training_state_.lm_head_bias = Tensor::zeros(
+            TC::make_BSM(1, cfg.vocab_size),
+            false,  // no grad for inference
+            primary_stream
+        );
+        std::cout << "  ✓ Allocated LM head bias (Tensor API)" << std::endl;
     }
 
     if (cfg.numeric_head_enabled) {
-        err = cudaMalloc(&training_state_.numeric_head_weights, cfg.d_model * sizeof(float));
-        if (err != cudaSuccess) {
-            std::cerr << "[InitInferenceState] Failed to allocate numeric head weights: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
+        training_state_.numeric_head_weights = Tensor::zeros(
+            TC::make_BSM(1, cfg.d_model),
+            false,  // no grad for inference
+            primary_stream
+        );
         if (cfg.use_bias) {
-            err = cudaMalloc(&training_state_.numeric_head_bias, sizeof(float));
-            if (err != cudaSuccess) {
-                std::cerr << "[InitInferenceState] Failed to allocate numeric head bias: " << cudaGetErrorString(err) << std::endl;
-                return;
-            }
-            cudaMemsetAsync(training_state_.numeric_head_bias, 0, sizeof(float), primary_stream);
+            training_state_.numeric_head_bias = Tensor::zeros(
+                TC::make_BSM(1, 1),
+                false,  // no grad for inference
+                primary_stream
+            );
         }
-        std::cout << "  ✓ Allocated numeric head weights" << std::endl;
+        std::cout << "  ✓ Allocated numeric head weights (Tensor API)" << std::endl;
     }
     
     // 3. Allocate minimal activation caches

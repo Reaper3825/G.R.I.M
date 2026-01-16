@@ -27,6 +27,11 @@ struct LossOptions {
 
     bool masking_enabled = HyperParameters::DEFAULT_LOSS_MASKING_ENABLED;
     std::string masking_tag{};
+    
+    // Issue #44 FIX: Entropy regularization to prevent mode collapse
+    // reg = λ * Σ_v p_v² (penalizes logit concentration)
+    bool entropy_reg_enabled = false;
+    float entropy_reg_lambda = 0.0f;
 };
 
 struct TensorViews {

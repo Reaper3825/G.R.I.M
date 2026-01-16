@@ -180,213 +180,115 @@ void LanguageModel::initTrainingState() {
                   << ", theta=10000" << std::endl;
     }
 
-    training_state_.cached_num_layers = cfg.num_layers;
+     training_state_.cached_num_layers = cfg.num_layers;
+    cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
     
-    // WEIGHT TYING FIX: When tie_embeddings=true, both embedding and LM head share
-    // the SAME grad buffer. This ensures:
-    // 1. LM head backward writes dense grads (cublasSgemm with beta=0)
-    // 2. Embedding backward accumulates sparse grads (atomicAdd)
-    // 3. Single optimizer state (m, v) for tied weights
-    // 4. Weight decay applied once, not twice
+    // ═══════════════════════════════════════════════════════════════
+    // PARAMETER TENSORS: Preallocate once, reuse throughout training
+    // ═══════════════════════════════════════════════════════════════
+    // Using GRIM::Tensor with requires_grad=true allocates both data and grad buffers.
+    // Weight tying: When tie_embeddings=true, lm_head_weights.data points to embedding buffer
+    // but lm_head_weights.grad is shared with embedding_weights.grad.
     
-    training_state_.embedding_grad_size = static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
-    size_t lm_head_weight_size = training_state_.embedding_grad_size;
+    const size_t embedding_size = static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
+    const size_t position_size = static_cast<size_t>(cfg.max_seq_len) * cfg.d_model;
+    using TC = TensorContract::TensorShape;
     
-    // Always allocate ONE grad buffer for the tied embedding/LM head
-    cudaError_t err = cudaMalloc(&training_state_.lm_head_weight_grads, lm_head_weight_size * sizeof(float));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate LM head weight gradients: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    // Position embeddings [max_seq_len, d_model] - Issue #36 FIX: Must be trainable
+    training_state_.position_embedding_weights = Tensor::zeros(
+        TC::make_BSM(cfg.max_seq_len, cfg.d_model), true, primary_stream);
+    training_state_.position_embedding_weights.ensure_grad();  // Allocate grad buffer NOW
+    std::cout << "📦 Position embeddings allocated: " << position_size << " elements (Issue #36 FIX)" << std::endl;
     
+    // Embedding and LM head weight handling depends on tie_embeddings
     if (cfg.tie_embeddings) {
-        // TIED: embedding_grads is an alias to lm_head_weight_grads
-        training_state_.embedding_grads = training_state_.lm_head_weight_grads;
-        std::cout << "🔗 Embedding grads tied to LM head grads at " << (void*)training_state_.embedding_grads << std::endl;
-    } else {
-        // UNTIED: separate grad buffers
-        err = cudaMalloc(&training_state_.embedding_grads, training_state_.embedding_grad_size * sizeof(float));
-        if (err != cudaSuccess) {
-            std::cerr << "Failed to allocate embedding gradients: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
-        std::cout << "📦 Separate embedding grads at " << (void*)training_state_.embedding_grads << std::endl;
-    }
-    
-    // ==========================================================================
-    // Issue #36 FIX: Position embedding gradients
-    // PyTorch baseline uses nn.Embedding for positions which are TRAINABLE.
-    // GRIM previously had position embeddings but NO gradients → frozen at init.
-    // Now we allocate gradient buffer and register with optimizer.
-    // ==========================================================================
-    training_state_.position_embedding_grad_size = static_cast<size_t>(cfg.max_seq_len) * cfg.d_model;
-    err = cudaMalloc(&training_state_.position_embedding_grads, 
-                     training_state_.position_embedding_grad_size * sizeof(float));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate position embedding gradients: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
-    std::cout << "📦 Position embedding grads allocated at " << (void*)training_state_.position_embedding_grads
-              << " size=" << training_state_.position_embedding_grad_size << " (Issue #36 FIX)" << std::endl;
-    
-    // CRITICAL: When tie_embeddings=true, LM head shares embedding buffer
-    // NOTE: Embeddings are initialized DIRECTLY on GPU via launchXavierInit() to avoid CPU->GPU copy overhead.
-    // The embedding buffer may already contain weights from checkpoint loading (via Serialization_GPU.cu),
-    // but we reinitialize to ensure proper Xavier scaling for training stability.
-    if (cfg.tie_embeddings) {
+        // TIED: Both share the same underlying buffer from EmbeddingRuntime
         auto* embedding_runtime = &getGpuEmbedder();
-        if (embedding_runtime && embedding_runtime->token_buffer) {
-            training_state_.lm_head_weights = embedding_runtime->token_buffer;
-            training_state_.lm_head_weights_owned = false;  // Aliased to EmbeddingRuntime - don't free!
-            std::cout << "🔗 LM head weights tied to embeddings at " << (void*)training_state_.lm_head_weights << std::endl;
-            
-            // Initialize embeddings directly on GPU with proper Xavier scaling
-            // Issue #29 FIX: The previous "fix" that used 0.1 was WRONG and caused training plateau!
-            // When embeddings are tied to LM head, logits = encoder_output @ embedding.T
-            // Large embeddings (stddev=0.1) cause logit spread of 35-46, saturating softmax
-            // Xavier stddev = sqrt(2/(fan_in+fan_out)) = sqrt(2/(768+50376)) = 0.0063
-            // This gives logit spread ~1.5, matching PyTorch baseline that trains successfully
-            const float embedding_stddev = std::sqrt(2.0f / static_cast<float>(cfg.d_model + cfg.vocab_size));
-            std::cout << "🎲 Initializing embedding weights directly on GPU (stddev=" << embedding_stddev << ")" << std::endl;
-            launchXavierInit(training_state_.lm_head_weights, lm_head_weight_size, embedding_stddev, 42, training_state_.stream_ctrl.getPrimaryStream());
-            
-            cudaStreamSynchronize(training_state_.stream_ctrl.getPrimaryStream());
-            
-            // Verify initialization quality
-            std::vector<float> sample_weights(std::min<size_t>(100, lm_head_weight_size));
-            cudaMemcpy(sample_weights.data(), training_state_.lm_head_weights,
-                       sample_weights.size() * sizeof(float), cudaMemcpyDeviceToHost);
-            float weight_sum_sq = 0.0f;
-            float weight_max = 0.0f;
-            for (float w : sample_weights) {
-                weight_sum_sq += w * w;
-                weight_max = std::max(weight_max, std::abs(w));
-            }
-            float weight_norm = std::sqrt(weight_sum_sq / sample_weights.size());
-            std::cout << "✓ Embedding weights initialized on GPU: avg_norm=" << weight_norm
-                      << ", max_abs=" << weight_max << " (expected ~" << embedding_stddev << ")" << std::endl;
-        } else {
-            std::cerr << "ERROR: tie_embeddings=true but embedding buffer not available!" << std::endl;
-            return;
+        if (!embedding_runtime || !embedding_runtime->token_buffer) {
+            throw std::runtime_error("tie_embeddings=true but embedding buffer not available!");
         }
-    } else {
-        // Untied embeddings: allocate separate LM head weights on GPU
-        err = cudaMalloc(&training_state_.lm_head_weights, lm_head_weight_size * sizeof(float));
-        if (err != cudaSuccess) {
-            std::cerr << "Failed to allocate LM head weights: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
-        training_state_.lm_head_weights_owned = true;  // We allocated - must free!
         
-        // Initialize LM head weights with proper Xavier scaling
-        // Issue #29 FIX: The previous "fix" that used 0.1 was WRONG and caused training plateau!
-        // See tied embeddings case above for detailed explanation.
+        // Create Tensor that wraps existing embedding buffer (doesn't own data)
+        training_state_.embedding_weights = Tensor::from_ptr(
+            embedding_runtime->token_buffer,
+            TC::make_BSM(cfg.vocab_size, cfg.d_model),
+            false,  // doesn't take ownership
+            true);  // requires_grad
+        training_state_.embedding_weights.ensure_grad();  // Allocate grad buffer NOW
+        
+        // LM head shares the same data AND grad buffers (AFTER ensure_grad!)
+        training_state_.lm_head_weights.data = training_state_.embedding_weights.data;
+        training_state_.lm_head_weights.grad = training_state_.embedding_weights.grad;
+        training_state_.lm_head_weights.shape = training_state_.embedding_weights.shape;
+        training_state_.lm_head_weights.owns_data = false;  // Aliased
+        training_state_.lm_head_weights.owns_grad = false;  // Aliased
+        
+        std::cout << "🔗 Embedding/LM head tied at data=" << (void*)training_state_.embedding_weights.data
+                  << " grad=" << (void*)training_state_.embedding_weights.grad << std::endl;
+        
+        // Initialize embeddings with Xavier scaling
         const float embedding_stddev = std::sqrt(2.0f / static_cast<float>(cfg.d_model + cfg.vocab_size));
-        std::cout << "🎲 Initializing LM head weights directly on GPU (stddev=" << embedding_stddev << ")" << std::endl;
-        launchXavierInit(training_state_.lm_head_weights, lm_head_weight_size, embedding_stddev, 42, training_state_.stream_ctrl.getPrimaryStream());
+        launchXavierInit(training_state_.embedding_weights.data, embedding_size, 
+                         embedding_stddev, 42, primary_stream);
+        cudaStreamSynchronize(primary_stream);
+        std::cout << "🎲 Tied embeddings initialized (stddev=" << embedding_stddev << ")" << std::endl;
         
-        cudaStreamSynchronize(training_state_.stream_ctrl.getPrimaryStream());
+    } else {
+        // UNTIED: Separate embedding and LM head buffers
+        training_state_.embedding_weights = Tensor::zeros(
+            TC::make_BSM(cfg.vocab_size, cfg.d_model), true, primary_stream);
+        training_state_.embedding_weights.ensure_grad();  // Allocate grad buffer NOW
+        training_state_.lm_head_weights = Tensor::zeros(
+            TC::make_BSM(cfg.vocab_size, cfg.d_model), true, primary_stream);
+        training_state_.lm_head_weights.ensure_grad();  // Allocate grad buffer NOW
         
-        // Verify initialization quality
-        std::vector<float> sample_weights(std::min<size_t>(100, lm_head_weight_size));
-        cudaMemcpy(sample_weights.data(), training_state_.lm_head_weights,
-                   sample_weights.size() * sizeof(float), cudaMemcpyDeviceToHost);
-        float weight_sum_sq = 0.0f;
-        float weight_max = 0.0f;
-        for (float w : sample_weights) {
-            weight_sum_sq += w * w;
-            weight_max = std::max(weight_max, std::abs(w));
-        }
-        float weight_norm = std::sqrt(weight_sum_sq / sample_weights.size());
-        std::cout << "✓ LM head weights initialized on GPU: avg_norm=" << weight_norm
-                  << ", max_abs=" << weight_max << " (expected ~" << embedding_stddev << ")" << std::endl;
+        // Initialize both with Xavier scaling
+        const float embedding_stddev = std::sqrt(2.0f / static_cast<float>(cfg.d_model + cfg.vocab_size));
+        launchXavierInit(training_state_.embedding_weights.data, embedding_size, 
+                         embedding_stddev, 42, primary_stream);
+        launchXavierInit(training_state_.lm_head_weights.data, embedding_size, 
+                         embedding_stddev, 43, primary_stream);  // Different seed
+        cudaStreamSynchronize(primary_stream);
+        std::cout << "📦 Separate embedding/LM head allocated (stddev=" << embedding_stddev << ")" << std::endl;
     }
     
+    // LM head bias [vocab_size] - optional
     if (cfg.use_bias) {
-        err = cudaMalloc(&training_state_.lm_head_bias_grads, cfg.vocab_size * sizeof(float));
-        if (err != cudaSuccess) {
-            std::cerr << "Failed to allocate LM head bias gradients: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
-        
-        err = cudaMalloc(&training_state_.lm_head_bias, cfg.vocab_size * sizeof(float));
-        if (err != cudaSuccess) {
-            std::cerr << "Failed to allocate LM head bias: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
-        // Use centralized stream per Rule 22
-        cudaMemsetAsync(training_state_.lm_head_bias, 0, cfg.vocab_size * sizeof(float),
-                        training_state_.stream_ctrl.getPrimaryStream());
+        training_state_.lm_head_bias = Tensor::zeros(
+            TC::make_BSM(1, cfg.vocab_size), true, primary_stream);
+        training_state_.lm_head_bias.ensure_grad();  // Allocate grad buffer NOW
+        std::cout << "📦 LM head bias allocated: " << cfg.vocab_size << " elements" << std::endl;
     }
-
+    
+    // Numeric head [d_model] - optional
     if (cfg.numeric_head_enabled) {
-        err = cudaMalloc(&training_state_.numeric_head_weight_grads, cfg.d_model * sizeof(float));
-        if (err != cudaSuccess) {
-            std::cerr << "Failed to allocate numeric head weight gradients: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
-        err = cudaMalloc(&training_state_.numeric_head_weights, cfg.d_model * sizeof(float));
-        if (err != cudaSuccess) {
-            std::cerr << "Failed to allocate numeric head weights: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
-
-        const float xavier_stddev = std::sqrt(2.0f / (cfg.d_model + 1.0f));
-        std::cout << "🎲 Initializing numeric head weights on GPU with Xavier (stddev="
-                  << xavier_stddev << ")" << std::endl;
-        launchXavierInit(training_state_.numeric_head_weights,
-                         cfg.d_model,
-                         xavier_stddev,
-                         1337,
-                         training_state_.stream_ctrl.getPrimaryStream());
-
-        if (cfg.use_bias) {
-            err = cudaMalloc(&training_state_.numeric_head_bias_grads, sizeof(float));
-            if (err != cudaSuccess) {
-                std::cerr << "Failed to allocate numeric head bias gradients: " << cudaGetErrorString(err) << std::endl;
-                return;
-            }
-            err = cudaMalloc(&training_state_.numeric_head_bias, sizeof(float));
-            if (err != cudaSuccess) {
-                std::cerr << "Failed to allocate numeric head bias: " << cudaGetErrorString(err) << std::endl;
-                return;
-            }
-            cudaMemsetAsync(training_state_.numeric_head_bias, 0, sizeof(float),
-                            training_state_.stream_ctrl.getPrimaryStream());
-        }
+        training_state_.numeric_head_weights = Tensor::zeros(
+            TC::make_BSM(1, cfg.d_model), true, primary_stream);
+        training_state_.numeric_head_weights.ensure_grad();  // Allocate grad buffer NOW
+        training_state_.numeric_head_bias = Tensor::zeros(
+            TC::make_BSM(1, 1), true, primary_stream);
+        training_state_.numeric_head_bias.ensure_grad();  // Allocate grad buffer NOW
+        
+        // Initialize numeric head with Xavier
+        const float numeric_stddev = std::sqrt(2.0f / static_cast<float>(cfg.d_model + 1));
+        launchXavierInit(training_state_.numeric_head_weights.data, cfg.d_model,
+                         numeric_stddev, 44, primary_stream);
+        std::cout << "📦 Numeric head allocated (stddev=" << numeric_stddev << ")" << std::endl;
     }
     
-    // ═══════════════════════════════════════════════════════════════════════════
-    //  FINAL RMSNORM (Issue #33 fix: prevents activation variance explosion)
-    //  Standard transformers have: embedding → encoder → final_norm → LM head
-    //  Without final norm, encoder output variance grows unbounded (1.28 → 15.8+)
-    //  causing token 277 (space) to always get max logit regardless of context.
-    // ═══════════════════════════════════════════════════════════════════════════
-    {
-        const size_t gamma_bytes = cfg.d_model * sizeof(float);
-        
-        // Allocate final RMSNorm gamma weights
-        err = cudaMalloc(&training_state_.final_rms_gamma, gamma_bytes);
-        if (err != cudaSuccess) {
-            std::cerr << "Failed to allocate final RMSNorm gamma: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
-        
-        // Allocate final RMSNorm gamma gradients
-        err = cudaMalloc(&training_state_.final_rms_gamma_grads, gamma_bytes);
-        if (err != cudaSuccess) {
-            std::cerr << "Failed to allocate final RMSNorm gamma gradients: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
-        
-        // Initialize gamma to 1.0 (identity at initialization)
-        std::vector<float> ones(cfg.d_model, 1.0f);
-        cudaMemcpyAsync(training_state_.final_rms_gamma, ones.data(), gamma_bytes,
-                        cudaMemcpyHostToDevice, training_state_.stream_ctrl.getPrimaryStream());
-        
-        std::cout << "✓ Final RMSNorm initialized (gamma=[1.0] × " << cfg.d_model << ")" << std::endl;
-    }
+    // Final RMSNorm gamma [d_model] - Issue #33 FIX
+    training_state_.final_rms_gamma = Tensor::zeros(
+        TC::make_BSM(1, cfg.d_model), true, primary_stream);
+    training_state_.final_rms_gamma.ensure_grad();  // Allocate grad buffer NOW
+    // Initialize gamma to 1.0 (standard for RMSNorm)
+    std::vector<float> ones(cfg.d_model, 1.0f);
+    cudaMemcpyAsync(training_state_.final_rms_gamma.data, ones.data(),
+                    cfg.d_model * sizeof(float), cudaMemcpyHostToDevice, primary_stream);
+    std::cout << "📦 Final RMSNorm gamma allocated: " << cfg.d_model << " elements" << std::endl;
     
+    // ═══════════════════════════════════════════════════════════════
+    // PER-LAYER GRADIENT VECTORS (legacy - still used by backward pass)
+    // ═══════════════════════════════════════════════════════════════
     training_state_.rms1_gamma_grads.resize(cfg.num_layers, nullptr);
     training_state_.rms2_gamma_grads.resize(cfg.num_layers, nullptr);
     training_state_.attn_qkv_weight_grads.resize(cfg.num_layers, nullptr);
@@ -492,6 +394,7 @@ void LanguageModel::initTrainingState() {
     // BUG FIX: Allocate single-token inference buffers for training-time sampling
     // These are required by forwardInit() for incremental generation during training
     // Rule 20: Fail loud if allocation fails - no silent fallbacks
+    cudaError_t err;  // Error tracking for remaining legacy allocations
     err = cudaMalloc(&training_state_.single_token_hidden, cfg.d_model * sizeof(float));
     if (err != cudaSuccess) {
         throw std::runtime_error("Failed to allocate single_token_hidden: " + std::string(cudaGetErrorString(err)));
@@ -756,6 +659,13 @@ void LanguageModel::initTrainingState() {
     // DEDICATED scratch buffer for attention output BSM conversion (W_o gradient computation)
     // CRITICAL: Do NOT reuse grad_qkv_input - prevents temporal aliasing bugs
     if (!alloc_or_fail(&training_state_.grad_attn_bsm_scratch, model_elems, "grad_attn_bsm_scratch")) return;
+    
+    // Issue #43 FIX: Centering scratch buffer for encoder weight gradients
+    // Size: max(model_elems, ffn_elems) to handle both d_model and d_ff width activations
+    const size_t centering_scratch_elems = std::max(model_elems, ffn_elems);
+    if (!alloc_or_fail(&training_state_.centered_activation_scratch, centering_scratch_elems, "centered_activation_scratch")) return;
+    training_state_.centered_activation_scratch_elems = centering_scratch_elems;
+    std::cout << "📐 Issue #43: Allocated centering scratch buffer (" << (centering_scratch_elems * sizeof(float) / (1024*1024)) << " MB)" << std::endl;
 
     training_state_.fa_dq_accum_bytes = flash_attn_dq_accum_bytes(
         static_cast<int>(max_batch_size),

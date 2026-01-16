@@ -76,7 +76,8 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
     
     const int total_tokens = lm_head_batch_size * lm_head_seq_len;
     
-    if (ts->final_rms_gamma && ts->cached_final_rms_input) {
+    // Tensor API: check .data field for final_rms_gamma
+    if (ts->final_rms_gamma.data && ts->cached_final_rms_input) {
         // Cache pre-norm input for backward pass
         // BUG FIX Issue #34: Cache and normalize encoder_for_lm_head, not encoder_output
         cudaMemcpyAsync(ts->cached_final_rms_input, encoder_for_lm_head,
@@ -85,26 +86,27 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
         
         // Apply final RMSNorm in-place to the encoder output that LM head will use
         const float eps = 1e-5f;  // Standard epsilon for RMSNorm
-        launchRMSNormForward(ts->cached_final_rms_input, ts->final_rms_gamma, encoder_for_lm_head,
+        launchRMSNormForward(ts->cached_final_rms_input, ts->final_rms_gamma.data, encoder_for_lm_head,
                              total_tokens, cfg->d_model, eps, ctx.stream);
         
         FWD_INFO("[ForwardPhase1] Applied final RMSNorm (tokens=" << total_tokens << ")");
         
         // Issue #37: Track W[277] alignment after final RMSNorm (just before LM head)
         constexpr int kToken277 = 277;  // SPACE token
-        if (ts->lm_head_weights && kToken277 < cfg->vocab_size) {
-            const float* w277 = ts->lm_head_weights + static_cast<size_t>(kToken277) * cfg->d_model;
+        // Tensor API: check .data field for lm_head_weights
+        if (ts->lm_head_weights.data && kToken277 < cfg->vocab_size) {
+            const float* w277 = ts->lm_head_weights.data + static_cast<size_t>(kToken277) * cfg->d_model;
             FWD_DIAG_TOKEN277_ALIGNMENT("after_final_rmsnorm", 
                 encoder_for_lm_head, w277, total_tokens, cfg->d_model, ctx.stream);
         }
     }
 
     LMHeadForwardParams lm_params{};
-    lm_params.weights = ts->lm_head_weights;
-    lm_params.bias = ts->lm_head_bias;
+    lm_params.weights = ts->lm_head_weights.data;  // Tensor API
+    lm_params.bias = ts->lm_head_bias.data;        // Tensor API
     lm_params.d_model = cfg->d_model;
     lm_params.vocab_size = cfg->vocab_size;
-    lm_params.use_bias = cfg->use_bias && ts->lm_head_bias != nullptr;
+    lm_params.use_bias = cfg->use_bias && ts->lm_head_bias.data != nullptr;
     lm_params.handle = ctx.cublas_handle;
     lm_params.stream = ctx.stream;
     lm_params.logits = logits_output;
@@ -114,8 +116,9 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
     
     // Issue #37 FIX: Use encoder_workspace as scratch for zero-mean centering
     // encoder_workspace is used by Phase2_Encoder but free during Phase1_OutputLayer
+    // NOW CONFIGURABLE via ai_config.json -> lm_head_centering
     lm_params.centered_scratch = ts->encoder_workspace;
-    lm_params.use_centering = true;  // Enable zero-mean hidden state centering
+    lm_params.use_centering = cfg->lm_head_center_hidden_states;
 
     try {
         launchLMHeadForward(lm_params);
@@ -156,7 +159,7 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
                                        static_cast<size_t>(cfg->vocab_size);
         const float xavier_weight_var = 2.0f / (cfg->d_model + cfg->vocab_size);  // ≈ 0.00004
         FWD_DIAG_BUFFER_EXPECTED("lm_head_weights",
-            ts->lm_head_weights, weight_elements,
+            ts->lm_head_weights.data, weight_elements,  // Tensor API
             0.0f, xavier_weight_var,    // Xavier: var = 2/(fan_in+fan_out)
             -0.04f, 0.04f,              // ~6 stddev range
             ctx.stream);
@@ -206,16 +209,17 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
     // === END DIAGNOSTIC ===
 
     if (cfg->numeric_head_enabled) {
-        if (!ts->numeric_head_weights || !ts->cached_numeric_predictions) {
+        // Tensor API: check .data field
+        if (!ts->numeric_head_weights.data || !ts->cached_numeric_predictions) {
             FWD_FAIL_LOUD(ctx, ForwardStatus::NULL_POINTER,
                           "numeric head enabled but weights/predictions buffer missing", -1);
         }
 
         NumericHeadForwardParams num_params{};
-        num_params.weights = ts->numeric_head_weights;
-        num_params.bias = ts->numeric_head_bias;
+        num_params.weights = ts->numeric_head_weights.data;  // Tensor API
+        num_params.bias = ts->numeric_head_bias.data;        // Tensor API
         num_params.d_model = cfg->d_model;
-        num_params.use_bias = cfg->use_bias && ts->numeric_head_bias != nullptr;
+        num_params.use_bias = cfg->use_bias && ts->numeric_head_bias.data != nullptr;
         num_params.handle = ctx.cublas_handle;
         num_params.stream = ctx.stream;
 

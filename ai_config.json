@@ -80,12 +80,12 @@
     "training": {
         "config": {
             "epochs": 1,
-            "seed": 2,
+            "seed": 1,
             "batch_size": 6,
             "gradient_accumulation_steps": 2,
             "batch_strategy": "RANDOM",
             "learning_rate": 0.0003,
-            "weight_decay": 0.01,
+            "weight_decay": 0.1,
             "gradient_clip": 1.0,
             "per_token_grad_scale": true,
             "warmup_steps": 10,
@@ -261,6 +261,10 @@
                     "gamma": 1.05,
                     "alpha": 1.0
                 },
+                "entropy_reg": {
+                    "enabled": true,
+                    "lambda": 0.01
+                },
                 "preference": {
                     "enabled": false,
                     "beta": 0.1
@@ -349,8 +353,8 @@
                 "enabled": true,
                 "default_level": "Info",
                 "modules": {
-                    "ForwardPass": "Info",
-                    "BackwardPass": "Info",
+                    "ForwardPass": "WARN",
+                    "BackwardPass": "WARN",
                     "Optimizer": "Info",
                     "Scheduler": "Info",
                     "Activations": "WARN",
@@ -386,12 +390,17 @@
                 "use_rope": true,
                 "use_alibi": true
             },
-            "attention_dropout": 0.02,
+            "attention_dropout": 0.1,
             "dropout_rate": 0.1,
             "force_rebuild_vocab": false,
             "qk_normalization": {
                 "enabled": false,
                 "scale": 16.0
+            },
+            "lm_head_centering": {
+                "enabled": true,
+                "center_hidden_states": true,
+                "recenter_gradients": true
             },
             "guess_cache": {
                 "enabled": false,
@@ -408,7 +417,7 @@
                 "frequency_weight": 0.2,
                 "diversity_weight": 0.25,
                 "recency_weight": 0.25,
-                "enable_diversity_tracking": true,
+                "enable_diversity_tracking": false,
                 "diversity_bloom_bits": 65536,
                 "diversity_hash_functions": 4,
                 "diversity_penalty": 0.15,
@@ -418,10 +427,10 @@
                 "momentum_floor": 0.55,
                 "momentum_ceiling": 0.995,
                 "staleness_grace_period": 0.25,
-                "enable_async_transfers": true,
+                "enable_async_transfers": false,
                 "pinned_buffer_size": 8192,
                 "num_streams": 2,
-                "enable_histograms": true,
+                "enable_histograms": false,
                 "histogram_bins": 32,
                 "telemetry_sample_interval": 1
             }

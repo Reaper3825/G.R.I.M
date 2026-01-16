@@ -9,6 +9,8 @@
 #include <cublas_v2.h>
 #include <cmath>
 #include <algorithm>
+#include <vector>
+#include <cstdio>
 
 namespace GRIM {
 namespace Forward {
@@ -56,8 +58,9 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
     const int num_layers = ctx.gpu_encoder->getNumLayers();
 
     // Issue #37 DIAGNOSTIC: Set W[277] reference for hidden state alignment tracking
-    if (ts->lm_head_weights) {
-        setEncoderW277Reference(ts->lm_head_weights, cfg->vocab_size, cfg->d_model, ctx.stream);
+    // Tensor API: use .data field
+    if (ts->lm_head_weights.data) {
+        setEncoderW277Reference(ts->lm_head_weights.data, cfg->vocab_size, cfg->d_model, ctx.stream);
         resetEncoderDiagCount();
     }
 
@@ -129,26 +132,50 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
         enc_layer->setWorkspace(ws.data, ws.bytes);
         enc_layer->forward(args);
 
-        // === DIAGNOSTIC: Log per-layer output ===
-        // Expected: RMSNorm normalizes each token to rms≈1, so variance stays ~1.0
-        // Residual connections may cause slight variance growth but RMSNorm constrains it
-        // Actual observation: variance grows slowly from ~0.9 to ~1.2 across 12 layers
-        {
-            const size_t layer_elements = static_cast<size_t>(total_tokens) * static_cast<size_t>(cfg->d_model);
-            char buf[128];
-            snprintf(buf, sizeof(buf), "encoder_layer_%d_output", layer_idx);
-            // RMSNorm maintains var≈1.0, with slight growth due to residual accumulation
-            const float expected_var = 1.0f + 0.02f * layer_idx;  // ~1.0 to ~1.24 across 12 layers
-            FWD_DIAG_BUFFER_EXPECTED(buf,
-                encoder_output, layer_elements,
-                0.0f, expected_var,               // var≈1.0-1.2 after RMSNorm
-                -6.0f, 6.0f,                      // ~6σ covers 99.9999% of normal dist
-                ctx.stream);
+        // === DIAGNOSTIC: Log per-layer h values ===
+        // LOG THE ACTUAL h VALUES for debugging mode collapse
+        constexpr bool kEnableHiddenStateDiag = false;  // Set true to enable [h_LOG] / [Token277Align] logs
+        if constexpr (kEnableHiddenStateDiag) {
+            const int d_model = cfg->d_model;
+            
+            // Copy first few h vectors to host for logging
+            constexpr int kLogPositions = 5;  // Log first 5 positions
+            const int positions_to_log = std::min(kLogPositions, total_tokens);
+            std::vector<float> h_sample(positions_to_log * d_model);
+            cudaMemcpyAsync(h_sample.data(), encoder_output, 
+                           positions_to_log * d_model * sizeof(float),
+                           cudaMemcpyDeviceToHost, ctx.stream);
+            cudaStreamSynchronize(ctx.stream);
+            
+            // Compute h_sum (sum across d_model) for each position
+            for (int t = 0; t < positions_to_log; ++t) {
+                const float* h_t = &h_sample[t * d_model];
+                double h_sum = 0.0, h_sq_sum = 0.0;
+                float h_min = h_t[0], h_max = h_t[0];
+                for (int i = 0; i < d_model; ++i) {
+                    h_sum += h_t[i];
+                    h_sq_sum += h_t[i] * h_t[i];
+                    h_min = std::min(h_min, h_t[i]);
+                    h_max = std::max(h_max, h_t[i]);
+                }
+                double h_mean = h_sum / d_model;
+                double h_norm = std::sqrt(h_sq_sum);
+                
+                // Log first 8 and last 4 values of h
+                fprintf(stderr, "[h_LOG] layer=%d pos=%d h_sum=%.6f h_mean=%.6f h_norm=%.4f min=%.4f max=%.4f\n",
+                        layer_idx, t, h_sum, h_mean, h_norm, h_min, h_max);
+                fprintf(stderr, "[h_LOG] layer=%d pos=%d h[0:7]=[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]\n",
+                        layer_idx, t, h_t[0], h_t[1], h_t[2], h_t[3], h_t[4], h_t[5], h_t[6], h_t[7]);
+                fprintf(stderr, "[h_LOG] layer=%d pos=%d h[%d:%d]=[%.4f,%.4f,%.4f,%.4f]\n",
+                        layer_idx, t, d_model-4, d_model-1,
+                        h_t[d_model-4], h_t[d_model-3], h_t[d_model-2], h_t[d_model-1]);
+            }
             
             // Issue #37: Track W[277] alignment after each encoder layer
+            // Tensor API: use .data field
             constexpr int kToken277 = 277;  // SPACE token
-            if (ts->lm_head_weights && kToken277 < cfg->vocab_size) {
-                const float* w277 = ts->lm_head_weights + static_cast<size_t>(kToken277) * cfg->d_model;
+            if (ts->lm_head_weights.data && kToken277 < cfg->vocab_size) {
+                const float* w277 = ts->lm_head_weights.data + static_cast<size_t>(kToken277) * cfg->d_model;
                 char align_buf[128];
                 snprintf(align_buf, sizeof(align_buf), "after_encoder_layer_%d", layer_idx);
                 FWD_DIAG_TOKEN277_ALIGNMENT(align_buf, 

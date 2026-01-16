@@ -290,6 +290,18 @@ struct TrainingHyperparameters {
     float loss_numeric_head_huber_delta;
     bool loss_numeric_head_log_scale;
     
+    // Issue #44 FIX: Entropy regularization to prevent mode collapse
+    // reg = λ * Σ_v p_v² (penalizes logit concentration)
+    bool loss_entropy_reg_enabled;
+    float loss_entropy_reg_lambda;
+    
+    // LM Head centering (Issue #37 / #40) - NO DEFAULTS
+    // When enabled, centers hidden states and recenters gradients.
+    // Set to false for standard PyTorch-style implementation.
+    bool lm_head_centering_enabled;
+    bool lm_head_center_hidden_states;
+    bool lm_head_recenter_gradients;
+    
     // Stability overrides - NO DEFAULTS
     bool stability_overrides_enabled;
     int stability_override_batch_size;
@@ -991,6 +1003,17 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
             }
         }
         
+        // Issue #44 FIX: Entropy regularization to prevent mode collapse
+        if (auto er_it = loss_cfg.find("entropy_reg"); er_it != loss_cfg.end()) {
+            const auto& er = *er_it;
+            if (er.is_boolean()) {
+                params.loss_entropy_reg_enabled = er.get<bool>();
+            } else if (er.is_object()) {
+                params.loss_entropy_reg_enabled = er.value("enabled", params.loss_entropy_reg_enabled);
+                params.loss_entropy_reg_lambda = er.value("lambda", params.loss_entropy_reg_lambda);
+            }
+        }
+        
         if (auto pref_it = loss_cfg.find("preference"); pref_it != loss_cfg.end()) {
             const auto& pref = *pref_it;
             if (pref.is_boolean()) {
@@ -1036,6 +1059,19 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
                 params.loss_numeric_head_log_scale = num.value("log_scale", params.loss_numeric_head_log_scale);
             }
         }
+    }
+    
+    // LM Head centering configuration (Issue #37 / #40)
+    // When enabled, centers hidden states before LM head projection.
+    // Set to false for standard PyTorch-style implementation.
+    params.lm_head_centering_enabled = false;  // Default to disabled (standard implementation)
+    params.lm_head_center_hidden_states = false;
+    params.lm_head_recenter_gradients = false;
+    if (auto it = trainConfig.find("lm_head_centering"); it != trainConfig.end() && it->is_object()) {
+        const auto& lmc = *it;
+        params.lm_head_centering_enabled = lmc.value("enabled", false);
+        params.lm_head_center_hidden_states = lmc.value("center_hidden_states", false);
+        params.lm_head_recenter_gradients = lmc.value("recenter_gradients", false);
     }
     
     // Load stability overrides - ALWAYS parse values even if disabled

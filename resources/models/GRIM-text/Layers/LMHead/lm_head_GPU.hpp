@@ -41,6 +41,7 @@ struct LMHeadBackwardParams {
 	bool accumulate = false;
 	bool use_bias = false;
 	bool use_centering = true;               // Whether centering was applied in forward (Issue #37)
+	bool recenter_gradients = true;          // Whether to recenter grad rows after GEMM (Issue #40)
 	cublasHandle_t handle = nullptr;
 	cudaStream_t stream = nullptr;
 };

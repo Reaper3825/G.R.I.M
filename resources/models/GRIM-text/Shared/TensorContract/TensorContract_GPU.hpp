@@ -1,13 +1,17 @@
 #pragma once
 //======================================================//
 //  TensorContract_GPU.hpp
-//  Type-safe tensor abstraction layer for CUDA operations
+//  Type-safe tensor abstraction + Native Autograd for CUDA
 //======================================================//
 //
 //  PURPOSE
 //  =======
-//  This module provides a type-safe abstraction for tensor operations,
-//  eliminating the need to reason about layout, stride, transpose, and
+//  This module provides:
+//  1. Type-safe tensor abstraction with layout metadata
+//  2. Native autograd system (PyTorch-style gradient tracking)
+//  3. Parameter group management for optimizer integration
+//
+//  Eliminates the need to reason about layout, stride, transpose, and
 //  storage order simultaneously. All tensor metadata is encapsulated
 //  in TensorView, and conversion/validation is handled by the API.
 //
@@ -20,6 +24,7 @@
 //  4. ZERO-COPY WHERE POSSIBLE: Views are lightweight, conversions only when needed
 //  5. CUDA-FIRST: All operations are GPU-accelerated
 //  6. FAIL CLOSED: Unsafe operations throw, not return false silently
+//  7. AUTOGRAD: Gradient tracking via computation graph (GradFn nodes)
 //
 //  TENSOR LAYOUTS
 //  ==============
@@ -58,6 +63,9 @@
 #include <cstdint>
 #include <cstddef>
 #include <stdexcept>
+#include <string>
+#include <vector>
+#include <functional>
 #include <string>
 #include <algorithm>  // for std::max in merge_qkv_grads_gqa
 
@@ -591,3 +599,428 @@ inline bool debug_check_finite(const TensorView&, cudaStream_t = nullptr) { retu
 #endif
 
 }  // namespace TensorContract
+
+
+//======================================================//
+//======================================================//
+//  GRIM NATIVE AUTOGRAD SYSTEM
+//======================================================//
+//======================================================//
+//
+//  This section provides PyTorch-style automatic differentiation
+//  for GRIM-text training. Key components:
+//
+//  1. ParamGroupType - Categories for parameter groups (for optimizer)
+//  2. ParameterGroup - Weights + gradients + Adam state
+//  3. GradFn - Base class for backward function nodes
+//  4. Tensor - Autograd-aware tensor with gradient tracking
+//
+//  Unlike PyTorch, this is CUDA-first and contiguous-only.
+//
+//======================================================//
+
+namespace GRIM {
+
+//======================================================//
+//  Parameter Group Type (for optimizer categorization)
+//======================================================//
+
+/**
+ * @brief Category of parameters for optimizer and gradient analysis
+ * 
+ * Used to:
+ * - Compute per-component gradient norms (for debugging)
+ * - Apply different learning rates or weight decay per group
+ * - Track training dynamics by component type
+ */
+enum class ParamGroupType : uint8_t {
+    EMBEDDING = 0,      ///< Token embeddings
+    LM_HEAD = 1,        ///< Language model head (output projection)
+    NUMERIC_HEAD = 2,   ///< Numeric prediction head
+    ATTENTION = 3,      ///< Attention weights (W_qkv, W_o)
+    FFN = 4,            ///< Feed-forward network weights (W1, W2)
+    RMSNORM = 5,        ///< RMSNorm gamma parameters
+    SCRATCHBLOCK = 6,   ///< Atom type embeddings + projection
+    COUNT = 7           ///< Number of parameter group types
+};
+
+//======================================================//
+//  Parameter Group (Weights + Gradients + Optimizer State)
+//======================================================//
+
+/**
+ * @brief A group of parameters with associated gradient and optimizer state
+ * 
+ * This struct holds pointers to GPU memory for:
+ * - weights:  The actual model parameters [size elements]
+ * - grads:    Accumulated gradients [size elements]
+ * - m_state:  Adam first moment (momentum) [size elements]
+ * - v_state:  Adam second moment (variance) [size elements]
+ * 
+ * OWNERSHIP: ParameterGroup does NOT own the memory. The TrainingState
+ * or LanguageModel that creates it owns the underlying buffers.
+ * 
+ * WEIGHT TYING: When tie_embeddings=true, embedding and LM head share
+ * the same weights/grads pointers (aliased). The optimizer must NOT
+ * update aliased parameters twice.
+ */
+struct ParameterGroup {
+    std::string name;        ///< Human-readable name (e.g., "layer0_attn_W_qkv")
+    float* weights;          ///< Pointer to GPU weights [size elements]
+    float* grads;            ///< Pointer to GPU gradients [size elements]
+    size_t size;             ///< Number of elements (not bytes)
+    float* m_state;          ///< Adam first moment (can be nullptr until optimizer init)
+    float* v_state;          ///< Adam second moment (can be nullptr until optimizer init)
+    ParamGroupType type;     ///< Category for optimizer and analysis
+    
+    // Convenience accessors
+    size_t size_bytes() const { return size * sizeof(float); }
+    bool has_optimizer_state() const { return m_state != nullptr && v_state != nullptr; }
+};
+
+//======================================================//
+//  GradFn - Backward Function Node (Computation Graph)
+//======================================================//
+
+// Forward declaration
+struct Tensor;
+
+/**
+ * @brief Base class for backward computation nodes
+ * 
+ * Each differentiable operation creates a GradFn that knows how to compute
+ * gradients with respect to its inputs. When backward() is called on a
+ * tensor, the graph is traversed and each GradFn::apply() is invoked.
+ * 
+ * SAVED TENSORS: Operations save input tensors needed for gradient computation.
+ * For example, matmul saves A and B to compute:
+ *   grad_A = grad_output @ B^T
+ *   grad_B = A^T @ grad_output
+ * 
+ * OWNERSHIP: GradFn owns saved tensor data (copies are made during forward).
+ * The tensor's grad_fn pointer is a raw pointer; the Tensor owns the GradFn.
+ */
+struct GradFn {
+    //--------------------------------------------------//
+    // Saved State
+    //--------------------------------------------------//
+    
+    std::vector<Tensor*> saved_tensors;  ///< Inputs saved for backward (owned copies)
+    std::vector<TensorContract::TensorView> saved_views;  ///< Lightweight views (non-owning)
+    
+    //--------------------------------------------------//
+    // Operation Metadata
+    //--------------------------------------------------//
+    
+    const char* op_name = nullptr;  ///< Operation name ("matmul", "gelu", "add", etc.)
+    int call_id = 0;                ///< Unique call ID for deterministic replay
+    
+    //--------------------------------------------------//
+    // Virtual Interface
+    //--------------------------------------------------//
+    
+    virtual ~GradFn() = default;
+    
+    /**
+     * @brief Execute the backward pass for this node
+     * 
+     * @param grad_output Gradient of loss with respect to this operation's output
+     * @param stream CUDA stream for async execution
+     */
+    virtual void apply(const Tensor& grad_output, cudaStream_t stream) = 0;
+    
+    /**
+     * @brief Release saved tensors (called after backward to free memory)
+     */
+    virtual void release_saved() {
+        saved_tensors.clear();
+        saved_views.clear();
+    }
+};
+
+//======================================================//
+//  Autograd Tensor
+//======================================================//
+
+/**
+ * @brief GPU tensor with automatic differentiation support
+ * 
+ * This extends TensorBuffer with autograd tracking:
+ * - data:          GPU memory for tensor values
+ * - grad:          GPU memory for accumulated gradients (lazy-allocated)
+ * - grad_fn:       Backward function if tensor resulted from an operation
+ * - requires_grad: Whether to track this tensor in the compute graph
+ * - is_leaf:       True if created by user (not from an operation)
+ * 
+ * MEMORY MODEL (CUDA-first):
+ * - All data lives on GPU
+ * - Gradients are lazy-allocated on first backward
+ * - Contiguous storage only (no strides)
+ * 
+ * LEAF vs NON-LEAF:
+ * - Leaf tensors: Created directly (parameters, inputs). Gradients accumulated.
+ * - Non-leaf tensors: Results of operations. Gradients computed but not stored
+ *   unless retain_grad=true.
+ * 
+ * GRADIENT ACCUMULATION:
+ * When multiple operations depend on the same tensor, gradients are accumulated
+ * via accumulate_grad(). This is equivalent to PyTorch's in-place +=.
+ */
+struct Tensor {
+    //--------------------------------------------------//
+    // Data Storage
+    //--------------------------------------------------//
+    
+    float* data = nullptr;              ///< GPU memory for values
+    TensorContract::TensorShape shape;  ///< Layout-aware shape (2D or 4D)
+    bool owns_data = false;             ///< RAII ownership flag for data
+    
+    //--------------------------------------------------//
+    // Autograd Fields
+    //--------------------------------------------------//
+    
+    float* grad = nullptr;              ///< GPU memory for gradients (lazy-allocated)
+    bool owns_grad = false;             ///< RAII ownership flag for grad
+    
+    GradFn* grad_fn = nullptr;          ///< Backward function (null for leaf tensors)
+    bool requires_grad = false;         ///< Track in compute graph?
+    bool is_leaf = true;                ///< Created by user (not from operation)?
+    bool retain_grad = false;           ///< Keep grad even if non-leaf?
+    
+    //--------------------------------------------------//
+    // Execution Context
+    //--------------------------------------------------//
+    
+    cudaStream_t stream = nullptr;      ///< Associated CUDA stream
+    int device_id = 0;                  ///< GPU device ID
+    
+    //--------------------------------------------------//
+    // Debug/Telemetry
+    //--------------------------------------------------//
+    
+    const char* name = nullptr;         ///< Optional debug name
+    uint64_t version = 0;               ///< Incremented on each in-place modification
+    
+    //--------------------------------------------------//
+    // Constructors / Destructor
+    //--------------------------------------------------//
+    
+    Tensor() = default;
+    ~Tensor() { release(); }
+    
+    // Non-copyable (GPU memory is expensive to copy)
+    Tensor(const Tensor&) = delete;
+    Tensor& operator=(const Tensor&) = delete;
+    
+    // Movable
+    Tensor(Tensor&& other) noexcept;
+    Tensor& operator=(Tensor&& other) noexcept;
+    
+    //--------------------------------------------------//
+    // Factory Methods
+    //--------------------------------------------------//
+    
+    /// Create zero-initialized tensor with explicit layout
+    static Tensor zeros(TensorContract::TensorShape shape, 
+                        bool requires_grad = false,
+                        cudaStream_t stream = nullptr);
+    
+    /// Create zero-initialized tensor with raw dimensions (convenience)
+    /// 1D: treated as [1, dim] BSM
+    /// 2D: treated as BSM [tokens, features]
+    /// 4D: treated as BHSD [batch, heads, seq, head_dim]
+    static Tensor zeros(std::initializer_list<int> dims,
+                        cudaStream_t stream = nullptr);
+    
+    /// Create uninitialized tensor (values undefined)
+    static Tensor empty(TensorContract::TensorShape shape,
+                        bool requires_grad = false,
+                        cudaStream_t stream = nullptr);
+    
+    /// Wrap existing GPU pointer (takes ownership if specified)
+    static Tensor from_ptr(float* ptr, 
+                           TensorContract::TensorShape shape,
+                           bool takes_ownership = false,
+                           bool requires_grad = false);
+    
+    /// Wrap existing GPU pointer with raw dimensions (convenience)
+    static Tensor from_ptr(float* ptr,
+                           std::initializer_list<int> dims,
+                           cudaStream_t stream = nullptr);
+    
+    /// Xavier uniform initialization (for weights)
+    static Tensor xavier_uniform(TensorContract::TensorShape shape,
+                                 bool requires_grad = true,
+                                 cudaStream_t stream = nullptr);
+    
+    /// In-place Xavier uniform initialization
+    static void xavier_uniform_(Tensor& t, cudaStream_t stream = nullptr);
+    
+    //--------------------------------------------------//
+    // Gradient Management
+    //--------------------------------------------------//
+    
+    /// Enable gradient tracking (PyTorch-style)
+    Tensor& requires_grad_(bool enable = true) {
+        requires_grad = enable;
+        return *this;
+    }
+    
+    /// Lazy-allocate gradient buffer (zeros it)
+    void ensure_grad();
+    
+    /// Zero gradient buffer (async on stream)
+    void zero_grad(cudaStream_t stream = nullptr);
+    
+    /// Accumulate incoming gradient (for multi-use tensors)
+    void accumulate_grad(const float* incoming_grad, 
+                         size_t count,
+                         float scale = 1.0f,
+                         cudaStream_t stream = nullptr);
+    
+    /// Detach from compute graph (returns view with requires_grad=false)
+    Tensor detach() const;
+    
+    //--------------------------------------------------//
+    // Backward Pass
+    //--------------------------------------------------//
+    
+    /**
+     * @brief Trigger backward pass from this tensor
+     * 
+     * Typically called on the loss tensor. Walks the compute graph
+     * backward, calling each GradFn::apply().
+     * 
+     * @param grad_output Initial gradient (default: scalar 1.0)
+     */
+    void backward(const Tensor* grad_output = nullptr);
+    
+    //--------------------------------------------------//
+    // View Conversion (for compatibility with existing code)
+    //--------------------------------------------------//
+    
+    /// Get a non-owning view of data
+    TensorContract::TensorView view() const {
+        return TensorContract::TensorView(data, shape, name);
+    }
+    
+    /// Get a non-owning view of gradient
+    TensorContract::TensorView grad_view() const {
+        return TensorContract::TensorView(grad, shape, name);
+    }
+    
+    //--------------------------------------------------//
+    // Size Queries
+    //--------------------------------------------------//
+    
+    size_t numel() const { return shape.total_elements(); }
+    size_t size_bytes() const { return numel() * sizeof(float); }
+    TensorContract::Layout layout() const { return shape.layout; }
+    bool is_contiguous() const { return true; }  // Always true (no stride support)
+    
+    //--------------------------------------------------//
+    // Memory Management
+    //--------------------------------------------------//
+    
+    void release() {
+        if (owns_data && data) { cudaFree(data); }
+        if (owns_grad && grad) { cudaFree(grad); }
+        if (grad_fn) { delete grad_fn; }
+        data = nullptr;
+        grad = nullptr;
+        grad_fn = nullptr;
+    }
+};
+
+}  // namespace GRIM (temporarily close for cuBLAS forward decl)
+
+//======================================================//
+//  Autograd Operations (create computation graph nodes)
+//======================================================//
+
+// Forward declarations for cuBLAS types (must be in global namespace)
+struct cublasContext;
+typedef cublasContext* cublasHandle_t;
+
+namespace GRIM {  // reopen namespace
+
+namespace autograd {
+
+/**
+ * Set/get the cuBLAS handle for autograd matmul operations.
+ * Must be called before using matmul() function.
+ * Thread-local: each thread can have its own handle.
+ */
+void set_autograd_cublas_handle(cublasHandle_t handle);
+cublasHandle_t get_autograd_cublas_handle();
+
+/**
+ * Matrix multiplication: C = A @ B
+ * Creates MatMulGradFn node if either input requires_grad
+ * Requires: call set_autograd_cublas_handle() first
+ */
+Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
+
+/**
+ * Element-wise addition: C = A + B
+ */
+Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
+
+/**
+ * GELU activation: y = x * 0.5 * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+ */
+Tensor gelu(const Tensor& x, cudaStream_t stream = nullptr);
+
+/**
+ * RMSNorm: y = x / rms(x) * gamma
+ */
+Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps = 1e-5f, 
+                cudaStream_t stream = nullptr);
+
+/**
+ * Softmax cross-entropy loss (fused for numerical stability)
+ */
+Tensor cross_entropy(const Tensor& logits, const int* targets, 
+                     int num_tokens, int vocab_size,
+                     cudaStream_t stream = nullptr);
+
+/**
+ * Embedding lookup: output[i] = weight[token_ids[i]]
+ */
+Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens,
+                 cudaStream_t stream = nullptr);
+
+/**
+ * Softmax: y[i] = exp(x[i] - max(x)) / sum(exp(x - max(x)))
+ * Input: [tokens, dim] - softmax computed along dim axis
+ */
+Tensor softmax(const Tensor& x, cudaStream_t stream = nullptr);
+
+/**
+ * Dropout: y = x * mask / (1 - p), where mask is binary
+ * @param x Input tensor
+ * @param p Dropout probability (fraction to drop, e.g., 0.1)
+ * @param training If false, no dropout is applied
+ * @param mask External binary mask (nullptr to generate internally - not yet supported)
+ */
+Tensor dropout(const Tensor& x, float p, bool training = true,
+               const uint8_t* mask = nullptr, cudaStream_t stream = nullptr);
+
+/**
+ * Residual/skip connection add: y = x + residual
+ * Optimized backward: both inputs receive the unmodified gradient
+ */
+Tensor residual_add(const Tensor& x, const Tensor& residual,
+                    cudaStream_t stream = nullptr);
+
+/**
+ * Scaled dot-product attention with optional mask
+ */
+Tensor scaled_dot_product_attention(
+    const Tensor& q, const Tensor& k, const Tensor& v,
+    const Tensor* mask = nullptr, float scale = 0.0f,
+    cudaStream_t stream = nullptr);
+
+}  // namespace autograd
+
+}  // namespace GRIM

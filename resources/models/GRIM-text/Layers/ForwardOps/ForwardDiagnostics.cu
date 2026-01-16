@@ -283,11 +283,18 @@ Token277AlignmentStats computeToken277Alignment(
     int d_model,
     cudaStream_t stream
 ) {
-    fprintf(stderr, "[Token277Align] ENTRY: d_hidden=%p d_w277=%p tokens=%d d_model=%d\n",
-            (void*)d_hidden, (void*)d_w277, total_tokens, d_model);
+    // DISABLED - set to true to enable [Token277Align] logs
+    constexpr bool kEnableToken277AlignDiag = false;
     
     Token277AlignmentStats stats = {};
     stats.num_tokens = total_tokens;
+    
+    if constexpr (!kEnableToken277AlignDiag) {
+        return stats;
+    }
+    
+    fprintf(stderr, "[Token277Align] ENTRY: d_hidden=%p d_w277=%p tokens=%d d_model=%d\n",
+            (void*)d_hidden, (void*)d_w277, total_tokens, d_model);
     
     if (!d_hidden || !d_w277 || total_tokens <= 0 || d_model <= 0) {
         fprintf(stderr, "[Token277Align] EARLY_EXIT: null or zero params\n");

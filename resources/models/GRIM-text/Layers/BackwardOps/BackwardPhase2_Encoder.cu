@@ -62,6 +62,83 @@ static_assert(GRIM::HyperParameters::SOFTMAX_TEMPERATURE == 1.0f,
               "FlashAttention v2 backward requires softmax_temperature=1.0f.");
 
 //======================================================//
+//  Issue #43 FIX: Activation Centering for Weight Gradients
+//======================================================//
+// Encoder weight gradients use cached activations (ln1_output, ffn_input, etc.)
+// that have NON-ZERO MEAN. This creates systematic gradient bias:
+//   grad_W[i,j] = Σ_t (activation[t,i] × grad[t,j])
+//              = Σ_t ((centered[t,i] + mean_t) × grad[t,j])
+//              = Σ_t (centered[t,i] × grad[t,j]) + mean × Σ_t grad[t,j]
+//                                                  ^^^^^^^^^^^^^^^^^^^
+//                                                  BIAS TERM (non-zero!)
+// This bias causes encoder to output hidden states aligned with W[277] → collapse
+//
+// FIX: Center activations BEFORE using them in weight gradient GEMMs.
+//======================================================//
+
+__global__ void centerActivationsKernel(
+    const float* __restrict__ input,   // [total_tokens, dim]
+    float* __restrict__ output,        // [total_tokens, dim]
+    int dim,
+    int total_tokens
+) {
+    const int token_idx = blockIdx.x;
+    if (token_idx >= total_tokens) return;
+    
+    const float* in_row = input + static_cast<size_t>(token_idx) * dim;
+    float* out_row = output + static_cast<size_t>(token_idx) * dim;
+    
+    // Compute mean using all threads in block via reduction
+    __shared__ float s_sum;
+    if (threadIdx.x == 0) s_sum = 0.0f;
+    __syncthreads();
+    
+    // Each thread sums a subset of elements
+    float local_sum = 0.0f;
+    for (int i = threadIdx.x; i < dim; i += blockDim.x) {
+        local_sum += in_row[i];
+    }
+    
+    // Warp reduction
+    for (int offset = warpSize / 2; offset > 0; offset /= 2) {
+        local_sum += __shfl_down_sync(0xffffffff, local_sum, offset);
+    }
+    
+    // First thread in each warp adds to shared memory
+    if ((threadIdx.x & (warpSize - 1)) == 0) {
+        atomicAdd(&s_sum, local_sum);
+    }
+    __syncthreads();
+    
+    const float mean = s_sum / static_cast<float>(dim);
+    
+    // Subtract mean from each element
+    for (int i = threadIdx.x; i < dim; i += blockDim.x) {
+        out_row[i] = in_row[i] - mean;
+    }
+}
+
+inline void centerActivations(
+    const float* input,
+    float* output,
+    int dim,
+    int total_tokens,
+    cudaStream_t stream
+) {
+    if (total_tokens == 0 || dim == 0) return;
+    
+    constexpr int kBlockSize = 256;
+    centerActivationsKernel<<<total_tokens, kBlockSize, 0, stream>>>(
+        input, output, dim, total_tokens);
+    
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("[Issue43-centerActivations] kernel launch failed: ") + 
+                                 cudaGetErrorString(err));
+    }
+}
+
+//======================================================//
 //  Logging Setup
 //======================================================//
 
@@ -564,8 +641,23 @@ BackwardStatus computeFFNBackward(
     const float beta_accum = ctx.beta_accum;
     
     //--------------------------------------------------//
+    // Issue #43 FIX: Get centering scratch buffer
+    //--------------------------------------------------//
+    float* centered_scratch = ts->centered_activation_scratch;
+    BWD_CHECK_PTR(ctx, centered_scratch, "centered_activation_scratch", layer);
+    
+    //--------------------------------------------------//
     // Step 4.1: Compute grad_W2 = ffn_hidden^T @ grad_ffn_output
     //--------------------------------------------------//
+    
+    // Issue #43 FIX: Center cached_ffn_hidden before weight gradient GEMM
+    // This eliminates systematic bias from non-zero mean activations
+    centerActivations(
+        cached_ffn_hidden,
+        centered_scratch,  // Output: centered activations
+        cfg->d_ff,
+        total_tokens,
+        ctx.training_state->stream_ctrl.getPrimaryStream());
     
     // ffn_hidden (post_gelu): [total_tokens, d_ff] row-major
     // grad_ffn_output: [total_tokens, d_model] row-major
@@ -586,7 +678,7 @@ BackwardStatus computeFFNBackward(
         CUBLAS_OP_N, CUBLAS_OP_T,
         cfg->d_ff, cfg->d_model, total_tokens,  // FIXED: swapped d_model <-> d_ff
         &alpha,
-        cached_ffn_hidden, cfg->d_ff,           // FIXED: A = post_gelu [d_ff, tokens] col-major
+        centered_scratch, cfg->d_ff,            // Issue #43 FIX: use CENTERED activation
         grad_ffn_output, cfg->d_model,          // FIXED: B = grad_output [d_model, tokens] col-major
         &beta_accum,
         ts->ffn_w2_grads[layer], cfg->d_ff),    // FIXED: ldc = d_ff
@@ -664,6 +756,15 @@ BackwardStatus computeFFNBackward(
     // Step 4.5: Compute grad_W1 = ffn_input^T @ grad_ffn_hidden
     //--------------------------------------------------//
     
+    // Issue #43 FIX: Center cached_ffn_input before weight gradient GEMM
+    // Reuse centered_scratch - it's large enough for d_model dimensions too
+    centerActivations(
+        cached_ffn_input,
+        centered_scratch,  // Output: centered activations (reusing buffer)
+        cfg->d_model,
+        total_tokens,
+        ctx.training_state->stream_ctrl.getPrimaryStream());
+    
     // ln2_output (ffn_input): [total_tokens, d_model] row-major
     // grad_ffn_hidden: [total_tokens, d_ff] row-major
     // W1: stored as [d_ff, d_model] row-major
@@ -678,7 +779,7 @@ BackwardStatus computeFFNBackward(
         CUBLAS_OP_N, CUBLAS_OP_T,
         cfg->d_model, cfg->d_ff, total_tokens,  // FIXED: swapped d_ff <-> d_model
         &alpha,
-        cached_ffn_input, cfg->d_model,         // FIXED: A = input [d_model, tokens] col-major
+        centered_scratch, cfg->d_model,         // Issue #43 FIX: use CENTERED activation
         grad_ffn_hidden, cfg->d_ff,             // FIXED: B = grad_hidden [d_ff, tokens] col-major
         &beta_accum,
         ts->ffn_w1_grads[layer], cfg->d_model), // FIXED: ldc = d_model
@@ -818,6 +919,19 @@ BackwardStatus computeAttentionBackward(
         P2_INFO("After BWD_CHECK_CUDA");
     }
     
+    //--------------------------------------------------//
+    // Issue #43 FIX: Center cached attention output before W_o weight gradient
+    //--------------------------------------------------//
+    float* centered_scratch = ts->centered_activation_scratch;
+    BWD_CHECK_PTR(ctx, centered_scratch, "centered_activation_scratch", layer);
+    
+    centerActivations(
+        grad_attn_out_flat,     // Input: cached attention output (flattened)
+        centered_scratch,        // Output: centered activation
+        cfg->d_model,
+        total_tokens,
+        ctx.training_state->stream_ctrl.getPrimaryStream());
+    
     P2_INFO("Before W_o weight gradient GEMM");
     
     // W_o: [d_model, d_model] row-major
@@ -882,8 +996,8 @@ BackwardStatus computeAttentionBackward(
         CUBLAS_OP_N, CUBLAS_OP_T,
         cfg->d_model, cfg->d_model, total_tokens,
         &alpha,
-        grad_attn_out_flat, cfg->d_model,   // A = cached attention output (activation)
-        grad_attn_output, cfg->d_model,      // B = gradient from layer above
+        centered_scratch, cfg->d_model,          // Issue #43 FIX: use CENTERED activation
+        grad_attn_output, cfg->d_model,          // B = gradient from layer above
         &beta_accum,
         ts->attn_out_weight_grads[layer], cfg->d_model),
         "W_o backward weight grad", layer);
@@ -1234,6 +1348,40 @@ if (ts->pbm_spec.num_kv_heads != num_kv_heads) {
                                                 batch_size, seq_len, num_kv_heads, head_dim, stream);
     P2_INFO("BF16->FP32 conversions COMPLETED");
     
+    // Issue #42 DIAGNOSTIC: Log dQ/dK/dV gradient statistics after Flash Attention backward
+    // These are the raw gradients that will flow to encoder weights via W_qkv backward
+    {
+        cudaStreamSynchronize(stream);  // Ensure conversions complete
+        
+        std::vector<float> dq_host(q_size);
+        std::vector<float> dk_host(kv_size);
+        std::vector<float> dv_host(kv_size);
+        
+        cudaMemcpy(dq_host.data(), grad_Q, q_size * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(dk_host.data(), grad_K, kv_size * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(dv_host.data(), grad_V, kv_size * sizeof(float), cudaMemcpyDeviceToHost);
+        
+        // Compute RMS and mean for each gradient
+        auto computeStats = [layer](const std::vector<float>& v, const char* name) {
+            double sum = 0.0, sum_sq = 0.0;
+            float max_abs = 0.0f;
+            for (float val : v) {
+                sum += val;
+                sum_sq += val * val;
+                max_abs = std::max(max_abs, std::fabsf(val));
+            }
+            float mean = static_cast<float>(sum / v.size());
+            float rms = static_cast<float>(std::sqrt(sum_sq / v.size()));
+            P2_INFO("[FlashAttnGrad] layer=" << layer << " " << name 
+                    << ": size=" << v.size() << " mean=" << mean 
+                    << " rms=" << rms << " max_abs=" << max_abs);
+        };
+        
+        computeStats(dq_host, "dQ");
+        computeStats(dk_host, "dK");
+        computeStats(dv_host, "dV");
+    }
+    
     //--------------------------------------------------//
     // Step 7.3b: CRITICAL - RoPE Backward (inverse rotation)
     //
@@ -1303,12 +1451,21 @@ if (ts->pbm_spec.num_kv_heads != num_kv_heads) {
     // grad_W_qkv = grad_qkv^T @ ln1_output
     //--------------------------------------------------//
     
+    // Issue #43 FIX: Center cached_ln1_output before weight gradient GEMM
+    // Note: centered_scratch is already declared earlier in computeAttentionBackward
+    centerActivations(
+        cached_ln1_output,
+        centered_scratch,        // Output: centered activation
+        cfg->d_model,
+        total_tokens,
+        ctx.training_state->stream_ctrl.getPrimaryStream());
+    
     BWD_CHECK_CUBLAS(ctx, cublasSgemm(
         ctx.cublas_handle,
         CUBLAS_OP_N, CUBLAS_OP_T,
         cfg->d_model, total_qkv_dim, total_tokens,
         &alpha,
-        cached_ln1_output, cfg->d_model,
+        centered_scratch, cfg->d_model,          // Issue #43 FIX: use CENTERED activation
         grad_qkv_concat, total_qkv_dim,
         &beta_accum,
         ts->attn_qkv_weight_grads[layer], cfg->d_model),

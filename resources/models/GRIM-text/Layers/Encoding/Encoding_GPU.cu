@@ -26,8 +26,11 @@
 //======================================================//
 //  Issue #37 DIAGNOSTIC: Hidden State Alignment Tracker
 //  Logs how hidden states align with W[277] at each stage
+//  DISABLED by default - set kEnableHiddenAlignDiag = true to enable
 //======================================================//
 namespace {
+    constexpr bool kEnableHiddenAlignDiag = false;  // Set true to enable [HiddenAlign] logs
+    
     // Shared W[277] reference - set once per forward pass
     static const float* s_w277_ref = nullptr;
     static int s_w277_d_model = 0;
@@ -36,6 +39,7 @@ namespace {
     static constexpr int kMaxDiagLogs = 24;  // First 2 batches * 12 layers
     
     void setW277Reference(const float* lm_weights, int vocab_size, int d_model, cudaStream_t stream) {
+        if constexpr (!kEnableHiddenAlignDiag) return;
         constexpr int kToken277 = 277;
         if (!lm_weights || kToken277 >= vocab_size) {
             s_w277_ref = nullptr;
@@ -60,6 +64,7 @@ namespace {
     void logHiddenStateAlignment(const char* stage, int layer_idx, 
                                   const float* d_hidden, int total_tokens, int d_model,
                                   cudaStream_t stream) {
+        if constexpr (!kEnableHiddenAlignDiag) return;
         if (!s_w277_ref || s_w277_d_model != d_model || s_layer_diag_count >= kMaxDiagLogs) return;
         
         cudaStreamSynchronize(stream);

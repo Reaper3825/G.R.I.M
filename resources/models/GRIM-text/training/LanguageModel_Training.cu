@@ -243,39 +243,40 @@ void LanguageModel::zeroGrad() {
     const int kv_dim = num_kv_heads * head_dim;
     const int total_qkv_dim = cfg.d_model + 2 * kv_dim;
     
-    // Zero embedding gradients
-    if (training_state_.embedding_grads) {
-        cudaMemsetAsync(training_state_.embedding_grads, 0, 
-                       training_state_.embedding_grad_size * sizeof(float),
+    // Zero embedding gradients (Tensor API - grad buffer via accessor)
+    if (float* emb_grad = training_state_.embedding_grads()) {
+        cudaMemsetAsync(emb_grad, 0, 
+                       cfg.vocab_size * cfg.d_model * sizeof(float),
                        training_state_.stream_ctrl.getPrimaryStream());
     }
     
     // Issue #36 FIX: Zero position embedding gradients
-    if (training_state_.position_embedding_grads) {
-        cudaMemsetAsync(training_state_.position_embedding_grads, 0,
-                       training_state_.position_embedding_grad_size * sizeof(float),
+    if (float* pos_grad = training_state_.position_embedding_grads()) {
+        cudaMemsetAsync(pos_grad, 0,
+                       cfg.max_seq_len * cfg.d_model * sizeof(float),
                        training_state_.stream_ctrl.getPrimaryStream());
     }
     
-    // Zero LM head gradients
-    if (training_state_.lm_head_weight_grads) {
-        cudaMemsetAsync(training_state_.lm_head_weight_grads, 0,
+    // Zero LM head gradients (Tensor API)
+    if (float* lm_weight_grad = training_state_.lm_head_weight_grads()) {
+        cudaMemsetAsync(lm_weight_grad, 0,
                        cfg.vocab_size * cfg.d_model * sizeof(float),
                        training_state_.stream_ctrl.getPrimaryStream());
     }
-    if (training_state_.lm_head_bias_grads) {
-        cudaMemsetAsync(training_state_.lm_head_bias_grads, 0,
+    if (float* lm_bias_grad = training_state_.lm_head_bias.grad) {
+        cudaMemsetAsync(lm_bias_grad, 0,
                        cfg.vocab_size * sizeof(float),
                        training_state_.stream_ctrl.getPrimaryStream());
     }
 
-    if (training_state_.numeric_head_weight_grads) {
-        cudaMemsetAsync(training_state_.numeric_head_weight_grads, 0,
+    // Zero numeric head gradients (Tensor API)
+    if (float* num_weight_grad = training_state_.numeric_head_weights.grad) {
+        cudaMemsetAsync(num_weight_grad, 0,
                        cfg.d_model * sizeof(float),
                        training_state_.stream_ctrl.getPrimaryStream());
     }
-    if (training_state_.numeric_head_bias_grads) {
-        cudaMemsetAsync(training_state_.numeric_head_bias_grads, 0,
+    if (float* num_bias_grad = training_state_.numeric_head_bias.grad) {
+        cudaMemsetAsync(num_bias_grad, 0,
                        sizeof(float),
                        training_state_.stream_ctrl.getPrimaryStream());
     }
@@ -461,12 +462,13 @@ void LanguageModel::buildParameterGroups() {
     // When tie_embeddings=true, embedding_grads == lm_head_weight_grads (same pointer)
     // Registering both would double-count gradients and corrupt optimizer state
     EmbeddingRuntime* embedding_runtime = &getGpuEmbedder();
-    if (!cfg.tie_embeddings && training_state_.embedding_grads && embedding_runtime) {
+    float* emb_grads = training_state_.embedding_grads();
+    if (!cfg.tie_embeddings && emb_grads && embedding_runtime) {
         ParameterGroup emb_group;
         emb_group.name = "embedding";
         emb_group.weights = embedding_runtime->token_buffer;
-        emb_group.grads = training_state_.embedding_grads;
-        emb_group.size = training_state_.embedding_grad_size;
+        emb_group.grads = emb_grads;
+        emb_group.size = cfg.vocab_size * cfg.d_model;  // Tensor API - use config directly
         emb_group.m_state = nullptr;
         emb_group.v_state = nullptr;
         emb_group.type = ParamGroupType::EMBEDDING;
@@ -478,12 +480,13 @@ void LanguageModel::buildParameterGroups() {
     // PyTorch baseline: pos_emb = nn.Embedding(seq_len, d_model) - gets gradients
     // GRIM was missing this → position embeddings were FROZEN at random init!
     // ==========================================================================
-    if (training_state_.position_embedding_grads && embedding_runtime && embedding_runtime->position_buffer) {
+    float* pos_emb_grads = training_state_.position_embedding_grads();
+    if (pos_emb_grads && embedding_runtime && embedding_runtime->position_buffer) {
         ParameterGroup pos_emb_group;
         pos_emb_group.name = "position_embedding";
         pos_emb_group.weights = embedding_runtime->position_buffer;
-        pos_emb_group.grads = training_state_.position_embedding_grads;
-        pos_emb_group.size = training_state_.position_embedding_grad_size;
+        pos_emb_group.grads = pos_emb_grads;
+        pos_emb_group.size = cfg.max_seq_len * cfg.d_model;  // Tensor API - use config directly
         pos_emb_group.m_state = nullptr;
         pos_emb_group.v_state = nullptr;
         pos_emb_group.type = ParamGroupType::EMBEDDING;  // Same treatment as token embeddings
@@ -492,11 +495,12 @@ void LanguageModel::buildParameterGroups() {
     }
 
     // LM head weights (includes tied embedding grads when tie_embeddings=true)
-    if (training_state_.lm_head_weight_grads && training_state_.lm_head_weights) {
+    float* lm_weight_grads = training_state_.lm_head_weight_grads();
+    if (lm_weight_grads && training_state_.lm_head_weights.data) {
         ParameterGroup lm_group;
         lm_group.name = cfg.tie_embeddings ? "embedding_lm_head_tied" : "lm_head_weight";
-        lm_group.weights = training_state_.lm_head_weights;
-        lm_group.grads = training_state_.lm_head_weight_grads;
+        lm_group.weights = training_state_.lm_head_weights.data;  // Tensor API
+        lm_group.grads = lm_weight_grads;
         lm_group.size = cfg.vocab_size * cfg.d_model;
         lm_group.m_state = nullptr;
         lm_group.v_state = nullptr;
@@ -511,12 +515,13 @@ void LanguageModel::buildParameterGroups() {
         parameter_groups_.push_back(lm_group);
     }
 
-    if (cfg.numeric_head_enabled && training_state_.numeric_head_weight_grads &&
-        training_state_.numeric_head_weights) {
+    // Numeric head weights (Tensor API)
+    if (cfg.numeric_head_enabled && training_state_.numeric_head_weights.grad &&
+        training_state_.numeric_head_weights.data) {
         ParameterGroup numeric_group;
         numeric_group.name = "numeric_head_weight";
-        numeric_group.weights = training_state_.numeric_head_weights;
-        numeric_group.grads = training_state_.numeric_head_weight_grads;
+        numeric_group.weights = training_state_.numeric_head_weights.data;  // Tensor API
+        numeric_group.grads = training_state_.numeric_head_weights.grad;    // Tensor API
         numeric_group.size = cfg.d_model;
         numeric_group.m_state = nullptr;
         numeric_group.v_state = nullptr;
@@ -670,11 +675,12 @@ void LanguageModel::buildParameterGroups() {
     // This normalizes encoder output variance to prevent logit scale explosion.
     // Standard transformer architecture: embedding → encoder → FINAL_NORM → lm_head
     // Without this, variance grows unboundedly through residual connections.
-    if (training_state_.final_rms_gamma && training_state_.final_rms_gamma_grads) {
+    float* final_rms_grads = training_state_.final_rms_gamma_grads();
+    if (training_state_.final_rms_gamma.data && final_rms_grads) {
         ParameterGroup final_rms_group;
         final_rms_group.name = "final_rms_gamma";
-        final_rms_group.weights = training_state_.final_rms_gamma;
-        final_rms_group.grads = training_state_.final_rms_gamma_grads;
+        final_rms_group.weights = training_state_.final_rms_gamma.data;  // Tensor API
+        final_rms_group.grads = final_rms_grads;                         // Tensor API accessor
         final_rms_group.size = cfg.d_model;
         final_rms_group.m_state = nullptr;
         final_rms_group.v_state = nullptr;

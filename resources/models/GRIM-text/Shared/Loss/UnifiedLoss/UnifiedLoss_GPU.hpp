@@ -47,6 +47,12 @@ struct UnifiedLossConfig {
     float smoothing_epsilon = 0.1f; // Target smoothing (0 = hard targets)
     bool  smoothing_enabled = false; // If false, epsilon=0
     
+    // Issue #44 FIX: Entropy regularization to prevent mode collapse
+    // reg = λ * Σ_v p_v²  (penalizes concentration, encourages diversity)
+    // This is equivalent to negative entropy: high when one token dominates
+    float entropy_reg_lambda = 0.0f;  // Regularization strength (0 = disabled, try 0.1-1.0)
+    bool  entropy_reg_enabled = false; // If false, no entropy penalty
+    
     // Validation
     bool  strict_mode = true;       // FATAL on any NaN/Inf (recommended)
 };
@@ -68,6 +74,18 @@ struct UnifiedLossInputs {
     // Optional weighting
     const float* sequence_weights;  // [batch] - Per-sequence weight (nullptr = 1.0)
     int weight_count;               // Number of weights (0 = use batch_size)
+    
+    // Issue #38 FIX: Per-token class weighting to prevent mode collapse on frequent tokens
+    // weight[token_id] = inverse frequency based weight (frequent tokens get lower weight)
+    // This prevents SPACE token (277) from dominating due to being 15-22% of all targets
+    const float* token_weights;     // [vocab_size] - Per-token weight (nullptr = 1.0 for all)
+    
+    // Issue #39 FIX: Output logit bias correction to prevent mode collapse
+    // Subtracts running EMA of mean logit per token BEFORE softmax.
+    // This prevents tokens like SPACE from having systematically higher logits.
+    const float* logit_bias;        // [vocab_size] - EMA of per-token mean logit (nullptr = no correction)
+    float* logit_bias_update;       // [vocab_size] - OUTPUT: batch mean logit per token (nullptr = don't update)
+    float logit_bias_ema_alpha;     // EMA decay rate (0.01 = slow adapt, 0.1 = fast adapt)
     
     // CUDA
     cudaStream_t stream;

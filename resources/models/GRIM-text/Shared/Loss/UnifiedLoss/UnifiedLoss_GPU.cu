@@ -27,6 +27,9 @@ constexpr float kEpsilon = HyperParameters::EPSILON_LOG_PROB;
 constexpr int kDebugSamples = 10;
 constexpr int kDebugTokenId = 277;
 
+// Issue #39: EMA parameters for logit bias correction
+constexpr float kDefaultLogitBiasEmaAlpha = 0.05f;  // 5% new data, 95% history per update
+
 __device__ __forceinline__ float clampProb(float value) {
     return fminf(fmaxf(value, kEpsilon), 1.0f - kEpsilon);
 }
@@ -63,6 +66,8 @@ __global__ void unifiedLossKernelV2(
     const float* __restrict__ logits,
     const int* __restrict__ targets,
     const float* __restrict__ sequence_weights,
+    const float* __restrict__ token_weights,  // Issue #38: Per-token class weighting
+    const float* __restrict__ logit_bias,     // Issue #39: Per-token logit bias to subtract
     float* __restrict__ token_losses,
     float* __restrict__ grad_logits,
     float* __restrict__ loss_sum,
@@ -74,6 +79,7 @@ __global__ void unifiedLossKernelV2(
     float focal_alpha,
     float focal_gamma,
     float smoothing_epsilon,
+    float entropy_reg_lambda,  // Issue #44: Entropy regularization strength
     bool strict_mode
 ) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -97,6 +103,13 @@ __global__ void unifiedLossKernelV2(
         return;
     }
 
+// Issue #38 FIX: Apply per-token class weight based on target token frequency
+// Frequent tokens (like SPACE=277) get lower weight to prevent mode collapse
+float token_class_weight = 1.0f;
+if (token_weights) {
+    token_class_weight = token_weights[target];
+}
+
 float sample_weight = 1.0f;
 
 if (sequence_weights) {
@@ -106,16 +119,20 @@ if (sequence_weights) {
     }
 }
 
+// Combine sequence weight and token class weight
+const float total_weight = sample_weight * token_class_weight;
 
     const float* token_logits = logits + offset;
     float* token_grads = grad_logits + offset;
 
-    float max_logit = token_logits[0];
-for (int i = 1; i < vocab_size; ++i) {
-    max_logit = fmaxf(max_logit, token_logits[i]);
-}
-
-  
+    // Issue #39: Find max of CORRECTED logits (logit - bias) for numerical stability
+    // The bias correction prevents tokens like SPACE from having systematically higher
+    // pre-softmax activations due to hidden state alignment patterns.
+    float max_logit = token_logits[0] - (logit_bias ? logit_bias[0] : 0.0f);
+    for (int i = 1; i < vocab_size; ++i) {
+        const float corrected = token_logits[i] - (logit_bias ? logit_bias[i] : 0.0f);
+        max_logit = fmaxf(max_logit, corrected);
+    }
 
 
     if (!isfinite(max_logit)) {
@@ -128,12 +145,15 @@ for (int i = 1; i < vocab_size; ++i) {
         return;
     }
 
+    // Issue #39: Use CORRECTED logits for softmax computation
+    // corrected_logit[i] = raw_logit[i] - logit_bias[i]
     float sum_exp = 0.0f;
     float exp_target = 0.0f;
     float exp_token_277 = 0.0f;
     for (int i = 0; i < vocab_size; ++i) {
-        const float ex = expf(token_logits[i] - max_logit);
-        token_grads[i] = ex;  // temporary storage for exp(logit - max)
+        const float corrected = token_logits[i] - (logit_bias ? logit_bias[i] : 0.0f);
+        const float ex = expf(corrected - max_logit);
+        token_grads[i] = ex;  // temporary storage for exp(corrected_logit - max)
         sum_exp += ex;
         if (i == target) {
             exp_target = ex;
@@ -155,7 +175,8 @@ for (int i = 1; i < vocab_size; ++i) {
 
     const float inv_sum_exp = 1.0f / sum_exp;
     const float log_sum_exp = logf(sum_exp) + max_logit;
-    const float target_logit = token_logits[target];
+    // Issue #39: Use corrected target logit for CE computation
+    const float target_logit_corrected = token_logits[target] - (logit_bias ? logit_bias[target] : 0.0f);
 
     float p_t = exp_target * inv_sum_exp;
     p_t = clampProb(p_t);
@@ -165,7 +186,8 @@ for (int i = 1; i < vocab_size; ++i) {
         p_277 = clampProb(p_277);
     }
 
-    const float log_p_t = target_logit - log_sum_exp;
+    // Issue #39: log_p_t uses corrected logit
+    const float log_p_t = target_logit_corrected - log_sum_exp;
     const float one_minus_p_t = 1.0f - p_t;
 
     float q_on = 1.0f;
@@ -177,10 +199,12 @@ for (int i = 1; i < vocab_size; ++i) {
 
 float ce_smooth = -q_on * log_p_t;
     if (vocab_size > 1 && smoothing_epsilon > 0.0f) {
+        // Issue #39: Use corrected logits for label smoothing term
         float sum_log_p_off = 0.0f;
         for (int i = 0; i < vocab_size; ++i) {
             if (i != target) {
-                sum_log_p_off += (token_logits[i] - log_sum_exp);
+                const float corrected_i = token_logits[i] - (logit_bias ? logit_bias[i] : 0.0f);
+                sum_log_p_off += (corrected_i - log_sum_exp);
             }
         }
         ce_smooth -= q_off * sum_log_p_off;
@@ -191,7 +215,35 @@ float ce_smooth = -q_on * log_p_t;
         focal_weight = powf(one_minus_p_t, focal_gamma);
     }
 
-    const float loss = focal_alpha * focal_weight * ce_smooth * sample_weight;
+    // =========================================================================
+    // Issue #44 FIX: Entropy regularization to prevent mode collapse
+    // =========================================================================
+    // Issue #44 FIX: TRUE ENTROPY REGULARIZATION
+    // penalty = -λ * H = λ * Σ_v p_v * log(p_v)
+    // where H = -Σ p log p is the entropy (maximized at uniform distribution)
+    // 
+    // At uniform: H = log(V), penalty = -λ * log(V) (negative = bonus)
+    // At collapse: H = 0, penalty = 0 (no bonus)
+    // 
+    // TRUE ENTROPY has stronger gradients than p² because:
+    // - log(p) is unbounded as p→0, so small probabilities get stronger push up
+    // - Gradient = λ * p_i * (log(p_i) + H) spreads probability more aggressively
+    // =========================================================================
+    float neg_entropy = 0.0f;  // This is Σ p log p = -H (always ≤ 0)
+    if (entropy_reg_lambda > 0.0f) {
+        for (int i = 0; i < vocab_size; ++i) {
+            const float p_i = token_grads[i] * inv_sum_exp;  // token_grads[i] = exp(z_i - max)
+            if (p_i > 1e-10f) {  // Avoid log(0)
+                neg_entropy += p_i * logf(p_i);  // p log p is negative for p < 1
+            }
+        }
+    }
+    const float entropy = -neg_entropy;  // H = -Σ p log p (always ≥ 0)
+    const float entropy_reg_loss = -entropy_reg_lambda * entropy;  // Penalize LOW entropy
+
+    // Issue #38: Use total_weight which combines sequence_weight and token_class_weight
+    const float ce_loss = focal_alpha * focal_weight * ce_smooth * total_weight;
+    const float loss = ce_loss + entropy_reg_loss;  // Issue #44: Add entropy penalty
     if (!isfinite(loss)) {
         if (strict_mode) {
             atomicAdd(&telemetry->nan_count, 1u);
@@ -245,7 +297,27 @@ float ce_smooth = -q_on * log_p_t;
         } else {
             grad = focal_alpha * ce_grad;
         }
-        grad *= sample_weight;
+        grad *= total_weight;  // Issue #38: Use combined weight
+        
+        // =====================================================================
+        // Issue #44 FIX: TRUE ENTROPY REGULARIZATION gradient
+        // For penalty = -λ * H = λ * Σ_v p_v * log(p_v)
+        // ∂/∂z_i = λ * p_i * (log(p_i) + H)
+        // 
+        // At collapse (p_277 ≈ 1): grad_277 ≈ λ * 1 * (0 + 0) = 0 (weak)
+        // At p_277 = 0.9: grad_277 = λ * 0.9 * (-0.1 + 0.33) = 0.2λ (pushes DOWN)
+        // For small p_i: grad_i = λ * p_i * (very_negative + H) → negative (pushes UP)
+        // 
+        // Key insight: log(p) gradient is stronger for small p than p² gradient
+        // =====================================================================
+        if (entropy_reg_lambda > 0.0f) {
+            // Gradient: λ * p_i * (log(p_i) + H)
+            // Note: entropy = H, neg_entropy = -H = Σ p log p
+            const float log_p_i = (p_i > 1e-10f) ? logf(p_i) : -23.0f;  // Clamp to avoid -inf
+            const float entropy_grad = entropy_reg_lambda * p_i * (log_p_i + entropy);
+            grad += entropy_grad;
+        }
+        
         token_grads[i] = grad;
         grad_norm_sq += grad * grad;
     }
@@ -273,6 +345,50 @@ float ce_smooth = -q_on * log_p_t;
     if (p_t < 0.5f) {
         atomicAdd(&telemetry->hard_example_count, 1u);
     }
+}
+
+// ============================================================================
+// Issue #39: Logit Bias EMA Update Kernel
+// Computes mean logit per vocabulary token across the batch and updates EMA.
+// 
+// Phase 1: Accumulate sum of logits per vocab token (atomic adds)
+// Phase 2: Divide by total_tokens to get mean, then EMA update
+// 
+// Formula: bias[v] = (1-α)*bias[v] + α*mean_logit[v]
+// ============================================================================
+
+__global__ void computeLogitMeanKernel(
+    const float* __restrict__ logits,      // [total_tokens, vocab_size]
+    float* __restrict__ logit_sum,         // [vocab_size] - output sum (pre-zeroed)
+    int total_tokens,
+    int vocab_size
+) {
+    // Each thread handles one vocab position across all tokens
+    const int vocab_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (vocab_idx >= vocab_size) return;
+    
+    float sum = 0.0f;
+    for (int t = 0; t < total_tokens; ++t) {
+        sum += logits[static_cast<size_t>(t) * vocab_size + vocab_idx];
+    }
+    logit_sum[vocab_idx] = sum;
+}
+
+__global__ void updateLogitBiasEmaKernel(
+    float* __restrict__ logit_bias,        // [vocab_size] - EMA of mean logit (in-place update)
+    const float* __restrict__ logit_sum,   // [vocab_size] - sum of logits from batch
+    int vocab_size,
+    int total_tokens,
+    float ema_alpha                        // EMA decay rate (0.05 = slow, 0.2 = fast)
+) {
+    const int vocab_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (vocab_idx >= vocab_size) return;
+    
+    const float batch_mean = logit_sum[vocab_idx] / static_cast<float>(total_tokens);
+    const float old_bias = logit_bias[vocab_idx];
+    
+    // EMA update: new_bias = (1-α)*old_bias + α*batch_mean
+    logit_bias[vocab_idx] = (1.0f - ema_alpha) * old_bias + ema_alpha * batch_mean;
 }
 
 inline dim3 launchGrid(int total_threads) {
@@ -409,6 +525,8 @@ UnifiedLossTelemetry UnifiedLossContext::compute(
     const float smoothing_epsilon = config.smoothing_enabled
         ? fminf(fmaxf(config.smoothing_epsilon, 0.0f), 0.5f)
         : 0.0f;
+    // Issue #44: Entropy regularization lambda (0 = disabled)
+    const float entropy_reg_lambda = config.entropy_reg_enabled ? config.entropy_reg_lambda : 0.0f;
 
     DeviceTelemetryAccum init_telemetry = {};
     init_telemetry.loss_max = -FLT_MAX;
@@ -424,6 +542,8 @@ UnifiedLossTelemetry UnifiedLossContext::compute(
         inputs.logits,
         inputs.targets,
         inputs.sequence_weights,
+        inputs.token_weights,  // Issue #38: Per-token class weighting
+        inputs.logit_bias,     // Issue #39: Output logit bias correction
         outputs.token_losses,
         outputs.grad_logits,
         outputs.loss_sum,
@@ -435,6 +555,7 @@ UnifiedLossTelemetry UnifiedLossContext::compute(
         focal_alpha,
         focal_gamma,
         smoothing_epsilon,
+        entropy_reg_lambda,  // Issue #44: Entropy regularization
         config.strict_mode
     );
 
@@ -444,6 +565,62 @@ UnifiedLossTelemetry UnifiedLossContext::compute(
         fprintf(stderr, "[UnifiedLoss] Kernel launch failed: %s\n",
                 cudaGetErrorString(err));
         return result;
+    }
+
+    // =========================================================================
+    // Issue #39: Update Logit Bias EMA (after main loss computation)
+    // This tracks the running mean logit per token for bias correction.
+    // =========================================================================
+    static int s_issue39_diag_count = 0;
+    if (++s_issue39_diag_count <= 5) {
+        fprintf(stderr, "[Issue39-DIAG] batch=%d logit_bias=%p logit_bias_update=%p ema_alpha=%.4f\n",
+                s_issue39_diag_count, inputs.logit_bias, inputs.logit_bias_update, 
+                inputs.logit_bias_ema_alpha);
+    }
+    
+    if (inputs.logit_bias && inputs.logit_bias_update) {
+        const float ema_alpha = (inputs.logit_bias_ema_alpha > 0.0f) 
+            ? inputs.logit_bias_ema_alpha : kDefaultLogitBiasEmaAlpha;
+        
+        // Phase 1: Compute sum of logits per vocab token
+        cudaMemsetAsync(inputs.logit_bias_update, 0, 
+                        inputs.vocab_size * sizeof(float), inputs.stream);
+        
+        computeLogitMeanKernel<<<launchGrid(inputs.vocab_size), kBlockSize, 0, inputs.stream>>>(
+            inputs.logits,
+            inputs.logit_bias_update,
+            total_tokens,
+            inputs.vocab_size
+        );
+        
+        // Phase 2: Update EMA with batch mean
+        // Note: logit_bias is passed as const in UnifiedLossInputs but we cast away const
+        // for the update since caller explicitly requested an update
+        updateLogitBiasEmaKernel<<<launchGrid(inputs.vocab_size), kBlockSize, 0, inputs.stream>>>(
+            const_cast<float*>(inputs.logit_bias),
+            inputs.logit_bias_update,
+            inputs.vocab_size,
+            total_tokens,
+            ema_alpha
+        );
+        
+        err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[UnifiedLoss] WARNING: Logit bias EMA update failed: %s\n",
+                    cudaGetErrorString(err));
+            // Don't fail the whole loss computation, just warn
+        }
+        
+        // Diagnostic: Log token 277 bias (first 20 batches only)
+        static int s_bias_diag_count = 0;
+        if (++s_bias_diag_count <= 20 && kDebugTokenId < inputs.vocab_size) {
+            float bias_277 = 0.0f;
+            cudaMemcpyAsync(&bias_277, inputs.logit_bias + kDebugTokenId, 
+                           sizeof(float), cudaMemcpyDeviceToHost, inputs.stream);
+            cudaStreamSynchronize(inputs.stream);
+            fprintf(stderr, "[Issue39-LogitBias] batch=%d token_277_bias=%.6f ema_alpha=%.4f\n",
+                    s_bias_diag_count, bias_277, ema_alpha);
+        }
     }
 
     DeviceTelemetryAccum host_telemetry;

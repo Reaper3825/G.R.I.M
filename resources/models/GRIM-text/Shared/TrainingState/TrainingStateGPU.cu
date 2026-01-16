@@ -4,6 +4,7 @@
 //======================================================//
 
 #include "TrainingState_GPU.hpp"
+#include "TrainingTensors.hpp"  // Autograd tensor system
 #include "../../GRIM/grim_language_model_cuda.hpp"
 
 #include <stdexcept>
@@ -16,42 +17,16 @@ namespace GRIM {
 TrainingState::TrainingState() = default;
 
 TrainingState::~TrainingState() {
-	// WEIGHT TYING: When tied, embedding_grads == lm_head_weight_grads (same pointer)
-	// Only free ONCE to avoid double-free crash
-	const bool grads_are_tied = (embedding_grads == lm_head_weight_grads) && 
-	                            (embedding_grads != nullptr);
+	// ═══════════════════════════════════════════════════════════════
+	// TENSOR-MANAGED MEMORY (embedding_weights, lm_head_weights, etc.)
+	// ═══════════════════════════════════════════════════════════════
+	// Tensor members (embedding_weights, position_embedding_weights, lm_head_weights, etc.)
+	// are automatically destroyed and call their own release() method.
+	// DO NOT manually cudaFree these - they own their data/grad memory.
 	
-	if (grads_are_tied) {
-		// Tied: free once via lm_head_weight_grads, null out embedding_grads
-		if (lm_head_weight_grads) cudaFree(lm_head_weight_grads);
-		// Don't free embedding_grads - it's the same pointer!
-	} else {
-		// Untied: free both separately
-		if (embedding_grads) cudaFree(embedding_grads);
-		if (lm_head_weight_grads) cudaFree(lm_head_weight_grads);
-	}
-	
-	// Issue #36 FIX: Free position embedding gradients
-	if (position_embedding_grads) cudaFree(position_embedding_grads);
-	
-	if (lm_head_bias_grads) cudaFree(lm_head_bias_grads);
-	if (numeric_head_weight_grads) cudaFree(numeric_head_weight_grads);
-	if (numeric_head_bias_grads) cudaFree(numeric_head_bias_grads);
-	
-	// Only free lm_head_weights if we own it (allocated separately)
-	// When tie_embeddings=true, it points to EmbeddingRuntime::token_buffer
-	if (lm_head_weights_owned && lm_head_weights) {
-		cudaFree(lm_head_weights);
-	}
-	if (lm_head_bias) cudaFree(lm_head_bias);
-	if (numeric_head_weights) cudaFree(numeric_head_weights);
-	if (numeric_head_bias) cudaFree(numeric_head_bias);
-
-	// Issue #33: Final RMSNorm cleanup
-	if (final_rms_gamma) cudaFree(final_rms_gamma);
-	if (final_rms_gamma_grads) cudaFree(final_rms_gamma_grads);
-	if (cached_final_rms_input) cudaFree(cached_final_rms_input);
-
+	// ═══════════════════════════════════════════════════════════════
+	// LEGACY PER-LAYER GRADIENT VECTORS (still raw float*)
+	// ═══════════════════════════════════════════════════════════════
 	auto freeVector = [](std::vector<float*>& buffers) {
 		for (auto ptr : buffers) {
 			if (ptr) {
@@ -70,8 +45,13 @@ TrainingState::~TrainingState() {
 	freeVector(ffn_b1_grads);
 	freeVector(ffn_w2_grads);
 	freeVector(ffn_b2_grads);
-
+	
+	// ═══════════════════════════════════════════════════════════════
+	// ACTIVATION CACHES (raw float* buffers for backward pass)
+	// ═══════════════════════════════════════════════════════════════
 	if (cached_embeddings) cudaFree(cached_embeddings);
+	if (cached_final_rms_input) cudaFree(cached_final_rms_input);
+	
 	freeVector(cached_ln1_outputs);
 	freeVector(cached_attn_outputs);
 	freeVector(cached_residual1_outputs);
@@ -104,6 +84,11 @@ TrainingState::~TrainingState() {
 	if (cached_token_text_features) cudaFree(cached_token_text_features);
 	if (cached_token_text_mask) cudaFree(cached_token_text_mask);
 	if (sequence_weights) cudaFree(sequence_weights);
+	// Issue #38 FIX: Per-token class weights
+	if (token_weights) cudaFree(token_weights);
+	// Issue #39 FIX: Output logit bias correction buffers
+	if (logit_bias) cudaFree(logit_bias);
+	if (logit_bias_update) cudaFree(logit_bias_update);
 	if (grad_logits) cudaFree(grad_logits);
 	if (grad_numeric_predictions) cudaFree(grad_numeric_predictions);
 	if (grad_encoder_out) cudaFree(grad_encoder_out);
@@ -118,6 +103,20 @@ TrainingState::~TrainingState() {
 	if (fa_dk_bf16) cudaFree(fa_dk_bf16);
 	if (fa_dv_bf16) cudaFree(fa_dv_bf16);
 	if (encoder_workspace) cudaFree(encoder_workspace);
+	// Issue #43 FIX: Free centering scratch buffer
+	if (centered_activation_scratch) cudaFree(centered_activation_scratch);
+	// Backward temporaries (reusable)
+	if (grad_ffn_input) cudaFree(grad_ffn_input);
+	if (grad_ffn_hidden) cudaFree(grad_ffn_hidden);
+	if (grad_attn_input) cudaFree(grad_attn_input);
+	if (grad_attn_out_before_proj) cudaFree(grad_attn_out_before_proj);
+	if (grad_attn_out_reshaped) cudaFree(grad_attn_out_reshaped);
+	if (grad_q) cudaFree(grad_q);
+	if (grad_k) cudaFree(grad_k);
+	if (grad_v) cudaFree(grad_v);
+	if (grad_qkv_concat) cudaFree(grad_qkv_concat);
+	if (grad_qkv_input) cudaFree(grad_qkv_input);
+	if (grad_attn_bsm_scratch) cudaFree(grad_attn_bsm_scratch);
 	if (d_loss_scratch) cudaFree(d_loss_scratch);
 	if (d_loss_sum_scratch) cudaFree(d_loss_sum_scratch);
 	if (d_numeric_loss_sum) cudaFree(d_numeric_loss_sum);
@@ -127,7 +126,7 @@ TrainingState::~TrainingState() {
 	TeacherLogits::release(reference_logits);
 	
 	// Free optimizer states
-	freeOptimizerStates();
+	freeOptimizerStates();;
 	
 	// Free guess cache buffers (GRIM-TS)
 	freeGuessCacheBuffers();
@@ -355,7 +354,36 @@ void TrainingState::freeGuessCacheBuffers() {
 	guess_cache_buffers.allocated = false;
 }
 
+//======================================================//
+//  Autograd Tensor System (GRIM::Tensor migration)
+//======================================================//
+
+void TrainingState::initializeAutogradTensors(
+	int vocab_sz, int d_mod, int d_ffn,
+	int n_layers, int n_heads, int n_kv_heads,
+	int max_seq, bool tie_emb, bool bias,
+	cudaStream_t stream
+) {
+	// Rule 20: Fail loud if already initialized
+	if (tensors_) {
+		throw std::runtime_error("[TrainingState::initializeAutogradTensors] already initialized! "
+			"tensors_ is not null");
+	}
+	
+	// Create TrainingTensors instance
+	tensors_ = std::make_unique<TrainingTensors>();
+	
+	// Initialize all parameter tensors (embeddings, attention, FFN, etc.)
+	tensors_->initializeParams(vocab_sz, d_mod, d_ffn, n_layers, n_heads, n_kv_heads,
+	                           max_seq, tie_emb, bias, stream);
+	
+	use_autograd_tensors = true;
+	
+	fprintf(stdout, "[INFO] TrainingState: Autograd tensors initialized. vocab=%d, d_model=%d, "
+	        "layers=%d, heads=%d, kv_heads=%d\n",
+	        vocab_sz, d_mod, n_layers, n_heads, n_kv_heads);
+}
+
 } // namespace GRIM
 
 #endif  // USE_CUDA
-

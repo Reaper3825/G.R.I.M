@@ -26,6 +26,10 @@ Loss::LossConfig BuildLossConfig(const LossOptions& opts, bool emit_log) {
 
     cfg.masking.enabled = opts.masking_enabled;
     cfg.masking.tag = opts.masking_tag;
+    
+    // Issue #44 FIX: Entropy regularization to prevent mode collapse
+    cfg.entropy_reg.enabled = opts.entropy_reg_enabled;
+    cfg.entropy_reg.lambda = opts.entropy_reg_lambda;
 
     if (emit_log) {
         std::ostringstream oss;
@@ -39,7 +43,9 @@ Loss::LossConfig BuildLossConfig(const LossOptions& opts, bool emit_log) {
             << " distill=" << (cfg.distillation.enabled ? "on" : "off")
             << " T=" << cfg.distillation.temperature
             << " lambda=" << cfg.distillation.lambda
-            << " mask=" << (cfg.masking.enabled ? cfg.masking.tag : "off");
+            << " mask=" << (cfg.masking.enabled ? cfg.masking.tag : "off")
+            << " entropy_reg=" << (cfg.entropy_reg.enabled ? "on" : "off")  // Issue #44
+            << " ent_lambda=" << cfg.entropy_reg.lambda;
         GRIM::Logging::EmitModuleInfo(kLossModule, oss.str());
     }
 

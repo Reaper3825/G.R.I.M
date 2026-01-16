@@ -36,6 +36,8 @@
 
 #include <cuda_runtime.h>
 #include <sstream>
+#include <iomanip>
+#include <vector>
 
 // Direct kernel declaration (grim_language_model_gpu.cu implementation)
 extern "C" {
@@ -152,7 +154,7 @@ BackwardStatus computeScratchBlockBackward(BackwardContext& ctx) {
     sb_args.cache_atom_types = ts->cached_scratch_block_types;
     sb_args.cache_num_atoms = ts->cached_scratch_block_num_atoms;
     
-    //--------------------------------------------------//
+    //--------------------------------------------------// 
     // Execute ScratchBlock backward
     //--------------------------------------------------//
     
@@ -190,7 +192,7 @@ BackwardStatus computeEmbeddingBackward(BackwardContext& ctx) {
     
     BWD_CHECK_PTR(ctx, ctx.embedding_runtime, "embedding_runtime", -1);
     BWD_CHECK_PTR(ctx, ts->cached_token_ids, "cached_token_ids", -1);
-    BWD_CHECK_PTR(ctx, ts->embedding_grads, "embedding_grads", -1);
+    BWD_CHECK_PTR(ctx, ts->embedding_grads(), "embedding_grads", -1);
     
     //--------------------------------------------------//
     // Gradient validation before embedding backward
@@ -234,7 +236,7 @@ BackwardStatus computeEmbeddingBackward(BackwardContext& ctx) {
         launchEmbeddingBackward(
             ctx.current_grad,
             ts->cached_token_ids,
-            ts->embedding_grads,
+            ts->embedding_grads(),
             ctx.batch_size,
             ctx.seq_len,
             cfg->d_model,
@@ -251,10 +253,10 @@ BackwardStatus computeEmbeddingBackward(BackwardContext& ctx) {
     // This scatters gradients to position_embedding_grads[position] for each token.
     //--------------------------------------------------//
     
-    if (ts->position_embedding_grads && cfg->max_seq_len > 0) {
+    if (ts->position_embedding_grads() && cfg->max_seq_len > 0) {
         launchPositionEmbeddingBackward(
             ctx.current_grad,
-            ts->position_embedding_grads,
+            ts->position_embedding_grads(),
             ctx.batch_size,
             ctx.seq_len,
             cfg->d_model,
@@ -289,16 +291,34 @@ BackwardStatus computeEmbeddingBackward(BackwardContext& ctx) {
         P3_INFO("Issue #38: Using centered LM head gradient for tied embeddings (no merge needed)");
     }
     
+    // === ISSUE #39 DIAGNOSTIC: Check grad_W[277] at END of Phase3 ===
+    // This verifies nothing else corrupted the gradient after LM head backward
+    {
+        static int s_p3_diag = 0;
+        constexpr int kToken277 = 277;
+        if (++s_p3_diag <= 10 && ts->embedding_grads()) {
+            cudaStreamSynchronize(ctx.training_state->stream_ctrl.getPrimaryStream());
+            const size_t row_offset = static_cast<size_t>(kToken277) * cfg->d_model;
+            std::vector<float> grad_row(cfg->d_model);
+            cudaMemcpy(grad_row.data(), ts->embedding_grads() + row_offset,
+                       cfg->d_model * sizeof(float), cudaMemcpyDeviceToHost);
+            double sum = 0.0;
+            for (int i = 0; i < cfg->d_model; ++i) sum += grad_row[i];
+            P3_INFO("[Issue39-P3-DIAG] END of Phase3 call=" << s_p3_diag 
+                    << " embedding_grads[277].sum=" << std::fixed << std::setprecision(9) << sum);
+        }
+    }
+    
     //--------------------------------------------------//
     // Final gradient validation (deferred to batch flush)
     //--------------------------------------------------//
     
-    if (ctx.enable_grad_checks && ts->embedding_grads && ts->embedding_grad_size > 0) {
+    if (ctx.enable_grad_checks && ts->embedding_grads()) {
         queueGradStats(
             "embedding_grads",
             -1,
-            ts->embedding_grads,
-            static_cast<size_t>(ts->embedding_grad_size),
+            ts->embedding_grads(),
+            ts->embedding_weights.numel(),
             ctx.explosion_threshold,
             ctx.training_state->stream_ctrl.getPrimaryStream());
     }

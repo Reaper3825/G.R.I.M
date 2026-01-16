@@ -199,25 +199,25 @@ bool LanguageModel::save(const std::string& path) {
         assignRead(view.rms2_gamma, enc->getRMS2Gamma(), d_model);
     }
 
-    EmitModuleInfo(ModuleId::Checkpoint, "Processing LM head (projection=" + std::string(training_state_.lm_head_weights ? "yes" : "no") + ", bias=" + std::string(training_state_.lm_head_bias ? "yes" : "no") + ")");
-    request.sources.lm_head.has_projection = (training_state_.lm_head_weights != nullptr);
-    request.sources.lm_head.projection.ptr = training_state_.lm_head_weights;
-    request.sources.lm_head.projection.count = training_state_.lm_head_weights ? embeddingElementCount(config_) : 0;
-    request.sources.lm_head.has_bias = (training_state_.lm_head_bias != nullptr);
-    request.sources.lm_head.bias.ptr = training_state_.lm_head_bias;
-    request.sources.lm_head.bias.count = training_state_.lm_head_bias ? static_cast<std::size_t>(config_.vocab_size) : 0;
+    EmitModuleInfo(ModuleId::Checkpoint, "Processing LM head (projection=" + std::string(training_state_.lm_head_weights.data ? "yes" : "no") + ", bias=" + std::string(training_state_.lm_head_bias.data ? "yes" : "no") + ")");
+    request.sources.lm_head.has_projection = (training_state_.lm_head_weights.data != nullptr);
+    request.sources.lm_head.projection.ptr = training_state_.lm_head_weights.data;
+    request.sources.lm_head.projection.count = training_state_.lm_head_weights.data ? embeddingElementCount(config_) : 0;
+    request.sources.lm_head.has_bias = (training_state_.lm_head_bias.data != nullptr);
+    request.sources.lm_head.bias.ptr = training_state_.lm_head_bias.data;
+    request.sources.lm_head.bias.count = training_state_.lm_head_bias.data ? static_cast<std::size_t>(config_.vocab_size) : 0;
 
     EmitModuleInfo(ModuleId::Checkpoint, "Processing numeric head (enabled=" +
                    std::string(config_.numeric_head_enabled ? "yes" : "no") + ")");
     request.sources.numeric_head.enabled = config_.numeric_head_enabled;
-    request.sources.numeric_head.has_projection = (training_state_.numeric_head_weights != nullptr);
-    request.sources.numeric_head.projection.ptr = training_state_.numeric_head_weights;
-    request.sources.numeric_head.projection.count = training_state_.numeric_head_weights
+    request.sources.numeric_head.has_projection = (training_state_.numeric_head_weights.data != nullptr);
+    request.sources.numeric_head.projection.ptr = training_state_.numeric_head_weights.data;
+    request.sources.numeric_head.projection.count = training_state_.numeric_head_weights.data
         ? static_cast<std::size_t>(config_.d_model)
         : 0;
-    request.sources.numeric_head.has_bias = (training_state_.numeric_head_bias != nullptr);
-    request.sources.numeric_head.bias.ptr = training_state_.numeric_head_bias;
-    request.sources.numeric_head.bias.count = training_state_.numeric_head_bias ? 1u : 0u;
+    request.sources.numeric_head.has_bias = (training_state_.numeric_head_bias.data != nullptr);
+    request.sources.numeric_head.bias.ptr = training_state_.numeric_head_bias.data;
+    request.sources.numeric_head.bias.count = training_state_.numeric_head_bias.data ? 1u : 0u;
 
     // Process ScratchBlock weights (if enabled)
     if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
@@ -257,8 +257,8 @@ bool LanguageModel::save(const std::string& path) {
     }
 
     // Issue #33: Final RMSNorm gamma (normalizes encoder output before LM head)
-    if (training_state_.final_rms_gamma) {
-        request.sources.final_rms_gamma.ptr = training_state_.final_rms_gamma;
+    if (training_state_.final_rms_gamma.data) {
+        request.sources.final_rms_gamma.ptr = training_state_.final_rms_gamma.data;
         request.sources.final_rms_gamma.count = static_cast<std::size_t>(config_.d_model);
         EmitModuleInfo(ModuleId::Checkpoint, "Processing final_rms_gamma (size=" + 
                        std::to_string(config_.d_model) + ")");
@@ -345,27 +345,27 @@ bool LanguageModel::load(const std::string& path) {
             initInferenceState();
         }
     }
-    if (training_state_.lm_head_weights) {
+    if (training_state_.lm_head_weights.data) {
         assignWrite(request.lm_head.projection,
-                    training_state_.lm_head_weights,
+                    training_state_.lm_head_weights.data,
                     embeddingElementCount(config_));
     }
-    if (training_state_.lm_head_bias) {
+    if (training_state_.lm_head_bias.data) {
         assignWrite(request.lm_head.bias,
-                    training_state_.lm_head_bias,
+                    training_state_.lm_head_bias.data,
                     static_cast<std::size_t>(config_.vocab_size));
     }
     request.lm_head.expect_bias = config_.use_bias;
 
     request.numeric_head.enabled = config_.numeric_head_enabled;
-    if (training_state_.numeric_head_weights) {
+    if (training_state_.numeric_head_weights.data) {
         assignWrite(request.numeric_head.projection,
-                    training_state_.numeric_head_weights,
+                    training_state_.numeric_head_weights.data,
                     static_cast<std::size_t>(config_.d_model));
     }
-    if (training_state_.numeric_head_bias) {
+    if (training_state_.numeric_head_bias.data) {
         assignWrite(request.numeric_head.bias,
-                    training_state_.numeric_head_bias,
+                    training_state_.numeric_head_bias.data,
                     1u);
     }
     request.numeric_head.expect_bias = config_.use_bias;
@@ -400,9 +400,9 @@ bool LanguageModel::load(const std::string& path) {
     }
 
     // Issue #33: Final RMSNorm gamma destination
-    if (training_state_.final_rms_gamma) {
+    if (training_state_.final_rms_gamma.data) {
         assignWrite(request.final_rms_gamma,
-                    training_state_.final_rms_gamma,
+                    training_state_.final_rms_gamma.data,
                     static_cast<std::size_t>(config_.d_model));
     }
 

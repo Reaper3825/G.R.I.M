@@ -1,13 +1,342 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** � **FIX APPLIED** - Issue #37 Zero-Mean Centering (January 17, 2026)  
+**Status:** � **IN PROGRESS** - Issue #43 Encoder Weight Gradient Centering (January 2026)  
 **Started:** December 22, 2025  
-**Last Updated:** January 17, 2026
+**Last Updated:** January 2026
 **Previous Symptom:** Model collapsed to always predicting token 277 (SPACE character)
 
 ---
 
-## ✅ FIXED: Issue #37 - Hidden State Non-Zero Mean Causes Gradient Sign Flip
+## 🔴 ACTIVE: Issue #43 - Encoder Weight Gradients Computed with Un-Centered Activations
+
+### Discovery (January 2026)
+
+While Issue #37/40/42 fixed centering in the **LM head backward**, the **encoder backward** still uses **UN-CENTERED cached activations** for weight gradient computation!
+
+### Root Cause
+
+Encoder weight gradients are computed as:
+```
+grad_W_qkv = cached_ln1_output^T @ grad_qkv        (uses un-centered ln1_output!)
+grad_W_o   = cached_attn_output^T @ grad_attn_out  (uses un-centered attn_output!)
+grad_W1    = cached_ffn_input^T @ grad_ffn_hidden  (uses un-centered ffn_input!)
+grad_W2    = cached_ffn_hidden^T @ grad_ffn_output (uses un-centered ffn_hidden!)
+```
+
+Each cached activation has **NON-ZERO MEAN**. This creates systematic gradient bias:
+```
+grad_W[i,j] = Σ_t (activation[t,i] × grad[t,j])
+            = Σ_t ((centered[t,i] + mean_t) × grad[t,j])
+            = Σ_t (centered[t,i] × grad[t,j]) + mean × Σ_t grad[t,j]
+                                                ^^^^^^^^^^^^^^^^^^^
+                                                BIAS TERM (non-zero!)
+```
+
+### Why This Causes Encoder to Output Hidden States Aligned with W[277]
+
+1. LM head backward computes `grad_encoder_output` which flows to encoder
+2. Encoder backward computes weight gradients using un-centered activations
+3. The non-zero mean creates systematic bias in all encoder weight updates
+4. This bias teaches encoder layers to output hidden states with a particular direction
+5. That direction happens to align with W[277] because:
+   - SPACE (token 277) is 11% of training data
+   - grad_logits[277] is consistently negative (model over-predicts SPACE)
+   - The bias term `mean × Σ_t grad[t,j]` has consistent sign for common tokens
+6. Result: Encoder learns to output hidden states that align with W[277] → mode collapse
+
+### Evidence from Training Log
+
+```
+[Issue42-HiddenState277] batch=1 call=1 grad·W=+0.00170 cosine=+0.0162 h_mean=-0.001004
+[Issue42-HiddenState277] batch=1 call=2 grad·W=+0.00165 cosine=+0.0133 h_mean=-0.001004
+  -- After optimizer step --
+[Issue42-HiddenState277] batch=1 call=3 grad·W=-0.0311 cosine=-0.1992  ← FLIPPED!
+[Issue42-HiddenState277] batch=1 call=4 grad·W=-0.0544 cosine=-0.1993  ← Encoder outputting aligned h!
+```
+
+The hidden states flip from **ANTI-ALIGNED** to **ALIGNED** with W[277] after the optimizer step.
+This proves the encoder is learning to output aligned hidden states due to biased weight gradients.
+
+### Fix Applied (BackwardPhase2_Encoder.cu)
+
+Added `centerActivationsKernel` to center cached activations BEFORE weight gradient GEMMs:
+
+```cuda
+// Added centering scratch buffer to TrainingState
+float* centered_activation_scratch;  // [max(total_tokens * d_model, total_tokens * d_ff)]
+
+// Center activation before each weight gradient GEMM:
+centerActivations(cached_ffn_hidden, centered_scratch, d_ff, total_tokens, stream);
+// Then: grad_W2 = centered_scratch^T @ grad_ffn_output
+
+centerActivations(cached_ffn_input, centered_scratch, d_model, total_tokens, stream);
+// Then: grad_W1 = centered_scratch^T @ grad_ffn_hidden
+
+centerActivations(cached_attn_output, centered_scratch, d_model, total_tokens, stream);
+// Then: grad_W_o = centered_scratch^T @ grad_attn_output
+
+centerActivations(cached_ln1_output, centered_scratch, d_model, total_tokens, stream);
+// Then: grad_W_qkv = centered_scratch^T @ grad_qkv
+```
+
+### Files Modified
+
+1. **TrainingState_GPU.hpp**: Added `centered_activation_scratch` buffer declaration
+2. **InitTrainingState.cu**: Allocate centering scratch buffer (max of model/FFN sizes)
+3. **TrainingStateGPU.cu**: Free centering scratch buffer in destructor
+4. **BackwardPhase2_Encoder.cu**: 
+   - Added `centerActivationsKernel` (copy of pattern from lm_head_GPU.cu)
+   - Apply centering before grad_W2 GEMM
+   - Apply centering before grad_W1 GEMM  
+   - Apply centering before grad_W_o GEMM
+   - Apply centering before grad_W_qkv GEMM
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔵 HISTORICAL: Issue #42 - Centering Fixes Were DISABLED in Config!
+
+### Discovery (January 15, 2026)
+
+The Issue #37 (hidden state centering) and Issue #40 (gradient re-centering) fixes were **implemented in code but DISABLED in ai_config.json**!
+
+Training log showed:
+```
+[2026-01-15 17:38:23] LM Head centering: center_hidden_states=false, recenter_gradients=false
+```
+
+### Evidence of Sign Flip Positive Feedback Loop
+
+From training log `training_17685166990989488.log`:
+
+| Call | grad·W | cosine | W[277].norm | Prediction |
+|------|--------|--------|-------------|------------|
+| 1 | +0.00170 | +0.0162 | 0.165421 | DECREASE (wrong!) |
+| 2 | +0.00165 | +0.0133 | 0.165421 | DECREASE (wrong!) |
+| **After step=0** | | | **0.165461** | **INCREASED!** |
+| 3 | **-0.0311** | **-0.1992** | 0.165461 | INCREASE |
+| 4 | -0.0544 | -0.1993 | 0.165461 | INCREASE |
+| **After step=1** | | | **0.165799** | **INCREASED!** |
+| 5-8 | -0.069 to -0.23 | -0.55 to -0.71 | 0.169+ | INCREASE |
+
+**Pattern:**
+1. Before optimizer step: gradient slightly aligned with W (cosine +0.01)
+2. After optimizer step: encoder learns to produce h aligned with W[277]
+3. Gradient = h * grad_logits ≈ h * (-1) ≈ -W (anti-aligned!)
+4. AdamW: W_new = W - (-W) = 2W → norm doubles!
+5. Repeat → mode collapse
+
+### Why Centering Fixes the Loop
+
+With `center_hidden_states=true`:
+- Each hidden state h[t] has `sum(h[t,:]) ≈ 0`
+- `grad_W[v,:] = Σ_t h[t,:] * grad_logits[t,v]`
+- `sum(grad_W[v,:]) = Σ_t sum(h[t,:]) * grad_logits[t,v] = 0 * ... = 0`
+- The gradient cannot systematically align/anti-align with W!
+
+With `recenter_gradients=true`:
+- GEMM FP32 errors accumulate and destroy the zero-sum property
+- Re-centering restores `sum(grad_W[v,:]) = 0` after GEMM
+
+### Fix Applied (ai_config.json)
+
+```json
+"lm_head_centering": {
+    "enabled": true,
+    "center_hidden_states": true,
+    "recenter_gradients": true
+}
+```
+
+**Status:** ✅ **FIX ENABLED** - Rebuild and test required
+
+---
+
+## 🔵 HISTORICAL: Issue #40 - FP32 GEMM Numerical Error (ROOT CAUSE FIX)
+
+### The Actual Root Cause
+
+After extensive diagnostic tracing, the TRUE root cause of mode collapse was identified:
+
+**cuBLAS SGEMM accumulates FP32 rounding errors that destroy the zero-sum property of centered gradients.**
+
+### Mathematical Analysis
+
+With Issue #37's hidden state centering, each hidden state h[t] has sum(h[t,:]) ≈ 0.
+Therefore, grad_W[v,d] = Σ_t h[t,d] * g[t,v] should mathematically have:
+```
+sum(grad_W[v,:]) = Σ_d Σ_t h[t,d] * g[t,v] = Σ_t (Σ_d h[t,d]) * g[t,v] = Σ_t 0 * g[t,v] = 0
+```
+
+**BUT:** cuBLAS SGEMM computes this using FP32 with K=720 (tokens) accumulation steps.
+Each step introduces ~1e-7 rounding error. These errors accumulate SYSTEMATICALLY:
+- **Expected row sum:** 0.0
+- **Actual GEMM row sum:** 6.4e-5 (positive bias!)
+- **Magnitude:** 2000x larger than mathematically correct value
+
+### Evidence (Diagnostic Output)
+
+```
+[Issue40-PTR-VERIFY] GEMM_ROW_SUM=6.41397837e-05 MANUAL_SUM=-3.06617482e-08 DIFF=6.41704455e-05
+[Issue39-VERIFY] MANUAL[277,0]=0.0174734509 | GEMM[277,0]=0.0174690336
+```
+
+Key observations:
+1. **Individual elements match** (MANUAL vs GEMM differ by ~1e-5) - the GEMM formula is CORRECT
+2. **Row sums don't match** - 768 small errors accumulate to 6e-5 positive bias
+3. **Error is SYSTEMATIC** - always positive, driving W[277] in wrong direction
+
+### Why This Causes Mode Collapse
+
+1. Token 277 (SPACE) is 11% of training data - most common token
+2. grad_W[277] should have negative updates to reduce its prediction
+3. FP32 error adds +6e-5 positive bias to EVERY element of row 277
+4. AdamW update: `W[277] -= lr * (grad + weight_decay*W) ≈ W[277] - lr*grad`
+5. The +6e-5 bias makes the gradient LESS negative (or even positive)
+6. Result: W[277] doesn't decrease enough → logit[277] stays high → mode collapse
+
+### The Fix (lm_head_GPU.cu)
+
+**Re-center each row of grad_weight AFTER the GEMM to eliminate accumulated FP32 error:**
+
+```cuda
+__global__ void recenterGradientRowsKernel(
+    float* __restrict__ grad_weight,   // [vocab_size, d_model] row-major
+    int d_model,
+    int vocab_size
+) {
+    const int vocab_idx = blockIdx.x;
+    if (vocab_idx >= vocab_size) return;
+    
+    float* row = grad_weight + static_cast<size_t>(vocab_idx) * d_model;
+    
+    // Compute row mean
+    __shared__ float s_sum;
+    if (threadIdx.x == 0) s_sum = 0.0f;
+    __syncthreads();
+    
+    float local_sum = 0.0f;
+    for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
+        local_sum += row[i];
+    }
+    // ... warp reduction ...
+    
+    // Subtract mean to restore zero-sum property
+    const float mean = s_sum / static_cast<float>(d_model);
+    for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
+        row[i] -= mean;
+    }
+}
+```
+
+**Called immediately after GEMM:**
+```cuda
+status = cublasSgemm(...);  // Compute grad_weight
+
+// ISSUE #40 FIX: Re-center gradient rows to eliminate FP32 GEMM error
+recenterGradientRows(
+    params.grad_weight,
+    params.d_model,
+    params.vocab_size,
+    params.stream
+);
+```
+
+### Why This Fix Is Correct
+
+1. **Preserves gradient direction** - only removes the constant bias, not the signal
+2. **Restores mathematical property** - row sums become ~0 as they should be
+3. **Affects ALL tokens equally** - not a band-aid for token 277, fixes the root cause
+4. **Minimal overhead** - one kernel launch with vocab_size blocks, 256 threads each
+5. **No hyperparameter tuning** - pure mathematical correction
+
+### Files Modified
+
+1. `lm_head_GPU.cu`: Added `recenterGradientRowsKernel` and `recenterGradientRows()` wrapper
+2. Call site: Immediately after `cublasSgemm` for grad_weight computation
+
+**Status:** ✅ **IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔵 HISTORICAL: Issue #39 - Output Logit Bias Correction (January 17, 2026)
+
+### Why Previous Fixes Were Insufficient
+
+**Issue #37** (centering) fixed the gradient sign flip, but collapse still occurred because:
+- The LM head weight `W[277]` still receives gradient updates from ALL positions
+- When grad_logits[t, 277] is computed for position t with target != 277, it still flows to W[277]
+- Over time, SPACE (being 11% of tokens) accumulates more positive bias in its logit
+
+**Issue #38** (per-token class weighting) only weights the loss contribution of target=277 positions.
+- But grad_logits[277] is computed for ALL positions via softmax backward
+- Weighting doesn't prevent the systematic bias accumulation
+
+### Issue #39 Approach: Output Logit Bias Correction
+
+**THE FIX:** Track exponential moving average (EMA) of each token's mean logit across training.
+Before softmax, subtract this bias to ensure no token has systematically higher pre-softmax activation.
+
+**Mathematical Formulation:**
+```
+// EMA update (after each batch)
+logit_bias[v] = (1 - α) * logit_bias[v] + α * batch_mean_logit[v]
+
+// Correction in forward pass (before softmax)
+corrected_logit[t, v] = raw_logit[t, v] - logit_bias[v]
+softmax_input = corrected_logit
+```
+
+Where `α = 0.05` (slow adaptation - 5% new data per batch)
+
+**Why This Works:**
+- If SPACE systematically gets higher logits, its bias will grow
+- Subtracting the bias normalizes its pre-softmax activation
+- The model must learn to discriminate tokens via relative differences, not absolute magnitude
+- This is similar to batch normalization's centering but applied to output logits
+
+### Implementation Details (UnifiedLoss_GPU.cu)
+
+**1. Track batch mean logit per token:**
+```cuda
+// computeLogitMeanKernel - reduces logits across positions per token
+// For each vocab token v: mean[v] = sum(logit[t, v]) / num_positions
+```
+
+**2. EMA update after loss computation:**
+```cuda
+// updateLogitBiasEmaKernel
+logit_bias[v] = (1.0f - alpha) * logit_bias[v] + alpha * batch_mean[v]
+```
+
+**3. Apply correction before softmax:**
+```cuda
+// In unifiedLossKernelV2, during softmax computation:
+const float corrected = token_logits[i] - (logit_bias ? logit_bias[i] : 0.0f);
+sum_exp += expf(corrected - max_logit);
+```
+
+**Files Modified:**
+1. `TrainingState_GPU.hpp`: Added `logit_bias`, `logit_bias_update`, `logit_bias_count` fields
+2. `UnifiedLoss_GPU.hpp`: Added logit_bias fields to `UnifiedLossInputs`
+3. `UnifiedLoss_GPU.cu`: Added correction in softmax, EMA update kernels
+4. `Loss.hpp`: Added logit_bias fields to `LossContext`
+5. `ComputeLoss_GPU.cu`: Threading logit_bias through to UnifiedLoss
+6. `Phase1_Startup.cu`: Allocation and zero-initialization of buffers
+7. `TrainingOps.cu`: Pass logit_bias from TrainingState to LossContext
+8. `TrainingStateGPU.cu`: Destructor cleanup of buffers
+
+**Diagnostic Logging:**
+```
+[Issue39-LogitBias] step=N token_277_bias=X.XXXX max_bias_token=Y max_bias=Z.ZZZZ
+```
+
+**Status:** ✅ Implementation complete - rebuild and test required
+
+---
+
+## ✅ PREVIOUS: Issue #37 - Hidden State Non-Zero Mean Causes Gradient Sign Flip
 
 ### Root Cause Discovered (January 17, 2026)
 

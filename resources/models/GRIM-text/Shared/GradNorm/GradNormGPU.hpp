@@ -45,13 +45,13 @@
 #include <cstddef>
 #include <cstdint>
 
+// Include TensorContract for ParamGroupType (now defined there)
+#include "../TensorContract/TensorContract_GPU.hpp"
+
 //=============================================================================
 // FORWARD DECLARATIONS (outside GradNorm namespace)
+// ParamGroupType is now defined in TensorContract_GPU.hpp (GRIM namespace)
 //=============================================================================
-
-namespace GRIM {
-    enum class ParamGroupType : uint8_t;
-}
 
 namespace GRIM::GradNorm {
 

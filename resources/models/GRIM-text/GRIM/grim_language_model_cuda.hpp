@@ -21,6 +21,9 @@
 // HyperParameters - Single source of truth for model configuration
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
 
+// TensorContract - Autograd system (includes ParamGroupType, ParameterGroup, Tensor)
+#include "../Shared/TensorContract/TensorContract_GPU.hpp"
+
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -275,6 +278,13 @@ struct LanguageModelConfig {
     float numeric_head_huber_delta = 1.0f;
     bool numeric_head_log_scale = true;
     
+    // LM Head centering config (Issue #37 / #40 fixes)
+    // When enabled, centers hidden states before LM head projection and recenters
+    // gradients after GEMM to compensate for FP32 precision loss.
+    // Set to false to use standard (PyTorch-style) implementation.
+    bool lm_head_center_hidden_states = false;  // Center encoder output before projection
+    bool lm_head_recenter_gradients = false;    // Recenter grad_weight rows after GEMM
+    
     GenerationConfig generation;
     ActivationQuantizationConfig activation_quantization;
 };
@@ -445,28 +455,10 @@ namespace LossContext {
 
 //======================================================//
 //  Parameter Group for Training
+//  (Defined in TensorContract_GPU.hpp - included above)
 //======================================================//
-
-enum class ParamGroupType : uint8_t {
-    EMBEDDING = 0,
-    LM_HEAD = 1,
-    NUMERIC_HEAD = 2,
-    ATTENTION = 3,
-    FFN = 4,
-    RMSNORM = 5,
-    SCRATCHBLOCK = 6,  // Atom type embeddings + projection
-    COUNT = 7
-};
-
-struct ParameterGroup {
-    std::string name;
-    float* weights;      // Pointer to actual weights on GPU
-    float* grads;        // Pointer to gradients on GPU
-    size_t size;         // Number of elements
-    float* m_state;      // Adam first moment
-    float* v_state;      // Adam second moment
-    ParamGroupType type; // Category for fast classification
-};
+// ParamGroupType and ParameterGroup are now part of the
+// unified autograd system in TensorContract_GPU.hpp
 
 // Forward declare TokenBufferView for method signatures
 struct TokenBufferView;

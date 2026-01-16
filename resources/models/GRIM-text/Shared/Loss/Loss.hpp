@@ -60,6 +60,14 @@ struct LimitsConfig {
 	std::size_t max_tokens = 0;
 };
 
+// Issue #44 FIX: Entropy regularization to prevent mode collapse
+// Penalizes logit concentration: reg = λ * Σ_v p_v² (where p = softmax(z))
+// This directly attacks the mode collapse by penalizing when one token dominates.
+struct EntropyRegConfig {
+	bool enabled = false;
+	float lambda = 0.0f;  // Regularization strength (try 0.1-1.0)
+};
+
 struct LossConfig {
 	LabelSmoothingConfig label_smoothing{};
 	DistillationConfig distillation{};
@@ -68,6 +76,7 @@ struct LossConfig {
 	MaskConfig masking{};
 	GuessFeedbackConfig guess_feedback{};
 	LimitsConfig limits{};
+	EntropyRegConfig entropy_reg{};  // Issue #44: Entropy regularization
 };
 
 struct LossContext {
@@ -78,6 +87,15 @@ struct LossContext {
 	const float* token_mask = nullptr;
 	const float* sequence_weights = nullptr;
 	int sequence_weight_count = 0;
+	// Issue #38 FIX: Per-token class weighting to prevent mode collapse on frequent tokens
+	// weight[token_id] = inverse frequency based weight (frequent tokens get lower weight)
+	const float* token_weights = nullptr;  // [vocab_size] - Per-token weight (nullptr = 1.0 for all)
+	// Issue #39 FIX: Output logit bias correction to prevent mode collapse
+	// Subtracts running EMA of mean logit per token BEFORE softmax.
+	// This prevents tokens like SPACE from having systematically higher logits.
+	float* logit_bias = nullptr;           // [vocab_size] - EMA of per-token mean logit (mutable for update)
+	float* logit_bias_update = nullptr;    // [vocab_size] - scratch for batch mean computation
+	float logit_bias_ema_alpha = 0.05f;    // EMA decay rate (0.05 = slow adapt)
 	int valid_tokens = 0; // optional override for valid tokens (excludes masked/padded)
 	int batch_size = 0;
 	int seq_len = 0;

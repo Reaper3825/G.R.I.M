@@ -121,9 +121,9 @@ void traceGradientComponents(GRIM::LanguageModel& model, int batch, cudaStream_t
     auto* gpu_encoder = &model.getGpuEncoder();
     
     // 1. LM Head gradients (output layer - should be largest)
-    if (ts.lm_head_weight_grads) {
+    if (ts.lm_head_weight_grads()) {
         size_t lm_size = static_cast<size_t>(config.vocab_size) * config.d_model;
-        float lm_head_norm = computeGradNormSync(ts.lm_head_weight_grads, lm_size, stream);
+        float lm_head_norm = computeGradNormSync(ts.lm_head_weight_grads(), lm_size, stream);
         std::cout << "  LM_HEAD: " << std::scientific << std::setprecision(4) << lm_head_norm 
                   << " (should be largest - closest to loss)" << std::endl;
     }
@@ -190,8 +190,9 @@ void traceGradientComponents(GRIM::LanguageModel& model, int batch, cudaStream_t
     }
     
     // 3. Embedding gradients (input layer - should be attenuated from output)
-    if (ts.embedding_grads) {
-        float emb_norm = computeGradNormSync(ts.embedding_grads, ts.embedding_grad_size, stream);
+    if (ts.embedding_grads()) {
+        const size_t embedding_grad_size = config.vocab_size * config.d_model;
+        float emb_norm = computeGradNormSync(ts.embedding_grads(), embedding_grad_size, stream);
         std::cout << "  EMBEDDING: " << emb_norm 
                   << " (most attenuated - farthest from loss)" << std::endl;
     }

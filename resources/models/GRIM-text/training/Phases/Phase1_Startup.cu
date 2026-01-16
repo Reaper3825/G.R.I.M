@@ -277,6 +277,9 @@ StartupConfig loadConfiguration(int argc, char** argv) {
     config.loss_options.distillation_lambda = config.hyperparameters.loss_distillation_lambda;
     config.loss_options.masking_enabled = config.hyperparameters.loss_masking_enabled;
     config.loss_options.masking_tag = config.hyperparameters.loss_masking_tag;
+    // Issue #44 FIX: Entropy regularization to prevent mode collapse
+    config.loss_options.entropy_reg_enabled = config.hyperparameters.loss_entropy_reg_enabled;
+    config.loss_options.entropy_reg_lambda = config.hyperparameters.loss_entropy_reg_lambda;
     
     // Map stability overrides
     config.stability.enabled = config.hyperparameters.stability_overrides_enabled;
@@ -347,13 +350,11 @@ StartupConfig loadConfiguration(int argc, char** argv) {
     config.sliding_window_stride = std::max(1, config.max_seq_len / 2);
     
     // Apply stability overrides to batch size and LR (only if stability mode enabled)
-    if (config.stability.enabled && config.stability.batch_size > 0) {
+    if (config.stability.enabled) {
         config.hyperparameters.batch_size = config.stability.batch_size;
-    }
-    if (config.stability.enabled && config.stability.lr_min > 0.0f) {
         config.hyperparameters.dynamic_lr_min = config.stability.lr_min;
     }
-    
+ 
     // Parse command line arguments
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -803,6 +804,13 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
               ", huber_delta=" + std::to_string(model_config.numeric_head_huber_delta) +
               ", log_scale=" + std::string(model_config.numeric_head_log_scale ? "true" : "false"));
     
+    // LM Head centering configuration (Issue #37 / #40)
+    model_config.lm_head_center_hidden_states = hp.lm_head_center_hidden_states;
+    model_config.lm_head_recenter_gradients = hp.lm_head_recenter_gradients;
+    
+    logger.log("LM Head centering: center_hidden_states=" + std::string(model_config.lm_head_center_hidden_states ? "true" : "false") +
+              ", recenter_gradients=" + std::string(model_config.lm_head_recenter_gradients ? "true" : "false"));
+    
     // Cache sizing - Use configured batch_size directly (stability override if enabled)
     // Rule 20: No backwards derivation from token budgets - we KNOW the batch size from config
     const int actual_batch_size = config.stability.enabled 
@@ -944,6 +952,8 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
               << " focal=" << (config.loss_options.focal_enabled ? "ON" : "off")
               << " distill=" << (config.loss_options.distillation_enabled ? "ON" : "off")
               << " pref=" << (config.loss_options.preference_enabled ? "ON" : "off")
+              << " entropy_reg=" << (config.loss_options.entropy_reg_enabled ? "ON" : "off")
+              << " ent_lambda=" << config.loss_options.entropy_reg_lambda
               << std::endl;
     
 #ifdef USE_CUDA
@@ -1108,9 +1118,9 @@ OptimizerContext initializeOptimizer(
             << " (offset from model: "
             << (reinterpret_cast<const char*>(&ts) - reinterpret_cast<const char*>(&model))
             << " bytes)\n"
-            << "  embedding_grads=" << static_cast<const void*>(ts.embedding_grads) << "\n"
-            << "  lm_head_weight_grads=" << static_cast<const void*>(ts.lm_head_weight_grads) << "\n"
-            << "  embedding_grad_size=" << ts.embedding_grad_size << "\n"
+            << "  embedding_grads=" << static_cast<const void*>(ts.embedding_grads()) << "\n"
+            << "  lm_head_weight_grads=" << static_cast<const void*>(ts.lm_head_weight_grads()) << "\n"
+            << "  embedding_grad_size=" << (static_cast<std::size_t>(model.getConfig().vocab_size) * model.getConfig().d_model) << "\n"
             << "  tie_embeddings=" << (model.getConfig().tie_embeddings ? "TRUE" : "FALSE");
         EmitModuleInfo(ModuleId::Training, oss.str());
     }
@@ -1214,6 +1224,121 @@ std::vector<float> computeRareTokenScores(
     }
     
     return sequence_rarity;
+}
+
+// Issue #38 FIX: Compute per-token class weights to prevent mode collapse on frequent tokens
+// Returns GPU-allocated buffer with weights indexed by token ID
+// Frequent tokens (like SPACE=277) get LOWER weight to reduce their gradient contribution
+float* computeAndUploadTokenWeights(
+    const std::vector<TrainingSequence*>& train_views,
+    uint32_t vocab_size,
+    cudaStream_t stream,
+    TrainingLogger& logger) {
+    
+    if (vocab_size == 0) {
+        throw std::runtime_error("computeAndUploadTokenWeights: vocab_size must be > 0");
+    }
+    
+    logger.log("[Issue38Fix] Computing per-token class weights to prevent mode collapse...");
+    
+    // Step 1: Count token frequencies
+    std::vector<uint64_t> token_counts(vocab_size, 0);
+    uint64_t total_tokens = 0;
+    for (const auto* seq : train_views) {
+        if (!seq) continue;
+        for (int token_id : seq->token_ids) {
+            if (token_id >= 0 && static_cast<uint32_t>(token_id) < vocab_size) {
+                token_counts[static_cast<size_t>(token_id)]++;
+                total_tokens++;
+            }
+        }
+    }
+    
+    if (total_tokens == 0) {
+        logger.log("  ⚠ WARNING: No tokens found in training data, skipping token weights");
+        return nullptr;
+    }
+    
+    // Step 2: Compute inverse frequency weights
+    // Formula: weight[t] = sqrt(total_tokens / (vocab_size * freq[t] + smoothing))
+    // This gives lower weight to frequent tokens, higher weight to rare tokens
+    // The sqrt prevents extreme weights while still providing meaningful differentiation
+    const float smoothing = 1.0f;  // Prevent division by zero
+    std::vector<float> host_weights(vocab_size);
+    
+    float min_weight = FLT_MAX;
+    float max_weight = 0.0f;
+    uint32_t token_277_count = token_counts[277];
+    float token_277_weight = 0.0f;
+    
+    for (uint32_t t = 0; t < vocab_size; ++t) {
+        float freq = static_cast<float>(token_counts[t]);
+        // Inverse frequency with sqrt dampening
+        float weight = sqrtf(static_cast<float>(total_tokens) / 
+                            (static_cast<float>(vocab_size) * freq + smoothing));
+        // Cap weights to prevent extreme values
+        weight = std::min(weight, 10.0f);  // Max 10x boost for very rare tokens
+        weight = std::max(weight, 0.1f);   // Min 0.1x for very frequent tokens
+        host_weights[t] = weight;
+        
+        min_weight = std::min(min_weight, weight);
+        max_weight = std::max(max_weight, weight);
+        
+        if (t == 277) {
+            token_277_weight = weight;
+        }
+    }
+    
+    // Normalize so mean weight = 1.0 (preserves overall gradient scale)
+    float mean_weight = 0.0f;
+    for (float w : host_weights) {
+        mean_weight += w;
+    }
+    mean_weight /= static_cast<float>(vocab_size);
+    
+    for (float& w : host_weights) {
+        w /= mean_weight;
+    }
+    token_277_weight /= mean_weight;
+    min_weight /= mean_weight;
+    max_weight /= mean_weight;
+    
+    // Log statistics
+    {
+        std::ostringstream msg;
+        float token_277_freq_pct = 100.0f * static_cast<float>(token_277_count) / static_cast<float>(total_tokens);
+        msg << "[Issue38Fix] Token weight stats:\n"
+            << "  Total tokens: " << total_tokens << "\n"
+            << "  Token 277 (SPACE): count=" << token_277_count 
+            << " (" << std::fixed << std::setprecision(2) << token_277_freq_pct << "% of all tokens)\n"
+            << "  Token 277 weight: " << std::setprecision(4) << token_277_weight 
+            << " (lower = less gradient contribution)\n"
+            << "  Weight range: [" << min_weight << ", " << max_weight << "]";
+        logger.log(msg.str());
+    }
+    
+    // Step 3: Upload to GPU
+    float* d_token_weights = nullptr;
+    size_t weights_bytes = vocab_size * sizeof(float);
+    
+    cudaError_t err = cudaMalloc(&d_token_weights, weights_bytes);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("cudaMalloc failed for token_weights: ") + 
+                                 cudaGetErrorString(err));
+    }
+    
+    err = cudaMemcpyAsync(d_token_weights, host_weights.data(), weights_bytes,
+                          cudaMemcpyHostToDevice, stream);
+    if (err != cudaSuccess) {
+        cudaFree(d_token_weights);
+        throw std::runtime_error(std::string("cudaMemcpy failed for token_weights: ") + 
+                                 cudaGetErrorString(err));
+    }
+    
+    logger.log("✓ Token weights uploaded to GPU (" + 
+               std::to_string(weights_bytes / 1024) + " KB)");
+    
+    return d_token_weights;
 }
 
 RNGContext initializeRNG(
@@ -1583,6 +1708,60 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     // 10. Initialize optimizer
     ctx->optimizer = Internal::initializeOptimizer(*ctx->model, ctx->config, *ctx->logging.logger);
     
+    // 10b. Issue #38 FIX: Compute and upload per-token class weights to prevent mode collapse
+    // This must happen AFTER model init (needs training state) but BEFORE training loop
+    {
+        auto& ts = ctx->model->getTrainingState();
+        ts.token_weights = Internal::computeAndUploadTokenWeights(
+            ctx->data.train_views,
+            ctx->config.actual_vocab_size,
+            ts.stream_ctrl.getPrimaryStream(),
+            *ctx->logging.logger);
+        ts.token_weights_count = (ts.token_weights != nullptr) 
+                                 ? static_cast<int>(ctx->config.actual_vocab_size) 
+                                 : 0;
+    }
+    
+    // 10c. Issue #39 FIX: Allocate and initialize logit bias buffer for output bias correction
+    // This prevents tokens like SPACE from having systematically higher pre-softmax activations.
+    // The bias tracks EMA of mean logit per token and is subtracted before softmax.
+    {
+        auto& ts = ctx->model->getTrainingState();
+        const int vocab_size = static_cast<int>(ctx->config.actual_vocab_size);
+        const size_t bias_bytes = vocab_size * sizeof(float);
+        
+        // Allocate main bias buffer (stores running EMA)
+        cudaError_t err = cudaMalloc(&ts.logit_bias, bias_bytes);
+        if (err != cudaSuccess) {
+            throw std::runtime_error(std::string("cudaMalloc failed for logit_bias: ") + 
+                                     cudaGetErrorString(err));
+        }
+        // Initialize to zero (no bias correction initially - let EMA build up)
+        err = cudaMemsetAsync(ts.logit_bias, 0, bias_bytes, ts.stream_ctrl.getPrimaryStream());
+        if (err != cudaSuccess) {
+            cudaFree(ts.logit_bias);
+            ts.logit_bias = nullptr;
+            throw std::runtime_error(std::string("cudaMemset failed for logit_bias: ") + 
+                                     cudaGetErrorString(err));
+        }
+        
+        // Allocate scratch buffer for batch mean computation
+        err = cudaMalloc(&ts.logit_bias_update, bias_bytes);
+        if (err != cudaSuccess) {
+            cudaFree(ts.logit_bias);
+            ts.logit_bias = nullptr;
+            throw std::runtime_error(std::string("cudaMalloc failed for logit_bias_update: ") + 
+                                     cudaGetErrorString(err));
+        }
+        
+        ts.logit_bias_count = vocab_size;
+        ts.logit_bias_update_step = 0;
+        
+        ctx->logging.logger->log("✓ Logit bias buffer allocated: " + 
+                                 std::to_string(2 * bias_bytes / 1024) + " KB total (EMA + scratch)");
+        ctx->logging.logger->log("  Issue #39: Output logit bias correction ENABLED");
+    }
+    
     // 11. Initialize telemetry lattice
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing telemetry lattice...", 0);
     ctx->telemetry.config.num_levels = 8;  // k ∈ [0,7]: strides [1,2,4,8,16,32,64,128]
@@ -1696,10 +1875,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     // Initialize timing
     ctx->start_time = std::chrono::steady_clock::now();
     
-    EmitModuleInfo(ModuleId::Training, "========================================", 0);
-    EmitModuleInfo(ModuleId::Training, "  Phase 1 Complete - Ready for Training", 0);
-    EmitModuleInfo(ModuleId::Training, "========================================", 0);
-    
+
     return ctx;  // Heap-allocated, no move
 }
 

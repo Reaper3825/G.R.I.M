@@ -29,9 +29,9 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
     oss_debug << "bindToModel Entry:\n"
               << "  model address=" << &model << "\n"
               << "  training_state offset=" << (reinterpret_cast<const char*>(&ts) - reinterpret_cast<const char*>(&model)) << " bytes\n"
-              << "  embedding_grads=" << ts.embedding_grads << "\n"
-              << "  lm_head_weight_grads=" << ts.lm_head_weight_grads << "\n"
-              << "  embedding_grad_size=" << ts.embedding_grad_size;
+              << "  embedding_grads=" << ts.embedding_grads() << "\n"
+              << "  lm_head_weight_grads=" << ts.lm_head_weight_grads() << "\n"
+              << "  embedding_grad_size=" << (cfg.vocab_size * cfg.d_model);
     GRIM::Logging::EmitModuleInfo(kModuleGradBind, oss_debug.str());
 #endif
     
@@ -45,88 +45,95 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
     
     // ========== Global Gradients ==========
     
-    // WEIGHT TYING: When tie_embeddings=true, embedding_grads == lm_head_weight_grads
+    // WEIGHT TYING: When tie_embeddings=true, embedding_weights.grad == lm_head_weights.grad
     // (same pointer). Only register ONCE to avoid double-zeroing and corruption.
     const bool grads_are_tied = cfg.tie_embeddings;
     
+    // Get the grad pointers via accessor methods
+    float* emb_grads = ts.embedding_grads();
+    float* lm_grads = ts.lm_head_weight_grads();
+    
     if (grads_are_tied) {
         // VALIDATION: Verify pointer aliasing was set up correctly by initTrainingState
-        if (ts.embedding_grads != ts.lm_head_weight_grads) {
+        if (emb_grads != lm_grads) {
             std::ostringstream oss;
             oss << "FATAL: cfg.tie_embeddings=true but pointers are NOT aliased!\n"
-                << "  embedding_grads=" << ts.embedding_grads << "\n"
-                << "  lm_head_weight_grads=" << ts.lm_head_weight_grads << "\n"
+                << "  embedding_grads=" << emb_grads << "\n"
+                << "  lm_head_weight_grads=" << lm_grads << "\n"
                 << "  This indicates initTrainingState() was not called before bindToModel().";
             GRIM::Logging::EmitModuleError(kModuleGradBind, oss.str());
             std::exit(1);
         }
         
         // Tied: register single combined buffer
-        if (ts.lm_head_weight_grads) {
+        if (lm_grads) {
             controller_.registerGradientBuffer(
                 "embedding_lm_head_tied_grads",
-                ts.lm_head_weight_grads,
+                lm_grads,
                 static_cast<std::size_t>(cfg.vocab_size) * cfg.d_model
             );
         }
     } else {
         // VALIDATION: Verify pointers are NOT aliased when tying is disabled
-        if (ts.embedding_grads == ts.lm_head_weight_grads && ts.embedding_grads != nullptr) {
+        if (emb_grads == lm_grads && emb_grads != nullptr) {
             std::ostringstream oss;
             oss << "FATAL: cfg.tie_embeddings=false but pointers ARE aliased!\n"
-                << "  embedding_grads=" << ts.embedding_grads << "\n"
-                << "  lm_head_weight_grads=" << ts.lm_head_weight_grads << "\n"
+                << "  embedding_grads=" << emb_grads << "\n"
+                << "  lm_head_weight_grads=" << lm_grads << "\n"
                 << "  Configuration mismatch detected.";
             GRIM::Logging::EmitModuleError(kModuleGradBind, oss.str());
             std::exit(1);
         }
         
         // Untied: register both separately
-        if (ts.embedding_grads && ts.embedding_grad_size > 0) {
+        const std::size_t embedding_grad_size = static_cast<std::size_t>(cfg.vocab_size) * cfg.d_model;
+        if (emb_grads && embedding_grad_size > 0) {
             controller_.registerGradientBuffer(
                 "embedding_grads",
-                ts.embedding_grads,
-                ts.embedding_grad_size
+                emb_grads,
+                embedding_grad_size
             );
         }
         
-        if (ts.lm_head_weight_grads) {
+        if (lm_grads) {
             controller_.registerGradientBuffer(
                 "lm_head_weight_grads",
-                ts.lm_head_weight_grads,
+                lm_grads,
                 static_cast<std::size_t>(cfg.vocab_size) * cfg.d_model
             );
         }
     }
     
-    if (ts.lm_head_bias_grads) {
+    // LM head bias grads (Tensor member access)
+    if (ts.lm_head_bias.grad) {
         controller_.registerGradientBuffer(
             "lm_head_bias_grads",
-            ts.lm_head_bias_grads,
+            ts.lm_head_bias.grad,
             static_cast<std::size_t>(cfg.vocab_size)
         );
     }
 
-    if (ts.numeric_head_weight_grads) {
+    // Numeric head grads (Tensor member access)
+    if (ts.numeric_head_weights.grad) {
         controller_.registerGradientBuffer(
             "numeric_head_weight_grads",
-            ts.numeric_head_weight_grads,
+            ts.numeric_head_weights.grad,
             static_cast<std::size_t>(cfg.d_model)
         );
     }
-    if (ts.numeric_head_bias_grads) {
+    if (ts.numeric_head_bias.grad) {
         controller_.registerGradientBuffer(
             "numeric_head_bias_grads",
-            ts.numeric_head_bias_grads,
+            ts.numeric_head_bias.grad,
             static_cast<std::size_t>(1)
         );
     }
     
     // Issue #33: Final RMSNorm gamma gradients (normalizes encoder output before LM head)
-    if (ts.final_rms_gamma_grads) {
+    if (ts.final_rms_gamma_grads()) {
         controller_.registerGradientBuffer(
             "final_rms_gamma_grads",
-            ts.final_rms_gamma_grads,
+            ts.final_rms_gamma_grads(),
             static_cast<std::size_t>(cfg.d_model)
         );
     }

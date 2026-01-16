@@ -39,6 +39,9 @@
 #include <cstdlib>
 #include <cstdint>
 #include <memory>
+#include <thread>
+#include <future>
+#include <atomic>
 
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
@@ -223,7 +226,7 @@ struct WeightSample {
 
 WeightSample sampleWeightStats(const GRIM::TrainingState& ts, bool sync_for_host = false) {
     WeightSample sample{};
-    if (!ts.lm_head_weights) {
+    if (!ts.lm_head_weights.data) {
         return sample;
     }
 
@@ -235,7 +238,7 @@ WeightSample sampleWeightStats(const GRIM::TrainingState& ts, bool sync_for_host
     cudaDeviceSynchronize();
 
     cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
-    cudaMemcpyAsync(sample.values, ts.lm_head_weights,
+    cudaMemcpyAsync(sample.values, ts.lm_head_weights.data,
                     kWeightSampleSize * sizeof(float),
                     cudaMemcpyDeviceToHost, stream);
     // Need a sync point to read the values, but only for this small copy
@@ -580,14 +583,15 @@ Token277Diagnostic computeToken277Diagnostic(
     
     // Copy gradient row (if embedding_grads is aliased to lm_head_weight_grads for tied weights)
     // The gradient buffer contains BOTH embedding backward + LM head backward contributions
-    if (ts.embedding_grads) {
-        cudaMemcpyAsync(grad_row.data(), ts.embedding_grads + row_offset,
+    float* emb_grads_ptr = const_cast<GRIM::TrainingState&>(ts).embedding_grads();
+    if (emb_grads_ptr) {
+        cudaMemcpyAsync(grad_row.data(), emb_grads_ptr + row_offset,
                         row_bytes, cudaMemcpyDeviceToHost, stream);
     }
     
     // Copy weight row from actual embeddings
-    if (ts.lm_head_weights) {
-        cudaMemcpyAsync(weight_row.data(), ts.lm_head_weights + row_offset,
+    if (ts.lm_head_weights.data) {
+        cudaMemcpyAsync(weight_row.data(), ts.lm_head_weights.data + row_offset,
                         row_bytes, cudaMemcpyDeviceToHost, stream);
     }
     
@@ -708,8 +712,8 @@ HiddenState277Analysis computeHiddenState277Analysis(
     
     // Also get W[277] for contribution analysis
     std::vector<float> w277(d_model);
-    if (ts.lm_head_weights) {
-        cudaMemcpyAsync(w277.data(), ts.lm_head_weights + static_cast<size_t>(kToken277) * d_model,
+    if (ts.lm_head_weights.data) {
+        cudaMemcpyAsync(w277.data(), ts.lm_head_weights.data + static_cast<size_t>(kToken277) * d_model,
                         d_model * sizeof(float), cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
     }
@@ -1437,8 +1441,8 @@ NumericalGradCheckResult performNumericalGradientCheck(
     
     // Choose a parameter to check - use embedding weight at a specific index
     // This is a good choice because it's directly involved in both forward and backward
-    float* weight_ptr = ts.lm_head_weights;  // [vocab_size, d_model]
-    float* grad_ptr = ts.lm_head_weight_grads;
+    float* weight_ptr = ts.lm_head_weights.data;  // [vocab_size, d_model]
+    float* grad_ptr = const_cast<GRIM::TrainingState&>(ts).lm_head_weight_grads();
     
     if (!weight_ptr || !grad_ptr) {
         ctx.logging.logger->log("[NumGradCheck] ERROR: lm_head weights or grads not available");
@@ -2700,7 +2704,9 @@ BatchResult processBatch(
     // Track WHY p_277 increases: if grad_sum > 0, weight row increases
     // For tied weights: logit[277] = x @ W[277].T, so larger W[277] → larger logit_277
     // ========================================================================
-    {
+    constexpr bool kToken277DiagEnabled = false;  // Set to true to enable [Token277Trace] / [HiddenState277] logs
+    
+    if constexpr (kToken277DiagEnabled) {
         const auto& ts = ctx.model->getTrainingState();
         const auto& cfg = ctx.model->getConfig();
         cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
@@ -2716,7 +2722,7 @@ BatchResult processBatch(
         ctx.logging.logger->log(formatToken277Diagnostic(tok277, batch_idx));
         
         // Issue #37: Hidden state analysis - understand WHY grad_W[277].sum is positive
-        // even when the expected behavior is negative
+        // Run async to avoid blocking training (expensive D2H copy)
         HiddenState277Analysis hidden277 = computeHiddenState277Analysis(
             ts, flat_targets, cfg.d_model, cfg.vocab_size, stream);
         ctx.logging.logger->log(formatHiddenState277Analysis(hidden277, batch_idx));
@@ -2762,7 +2768,7 @@ BatchResult processBatch(
         printf("========================================\n");
         
         // Embedding grads
-        exportBuffer("embedding_grads", ts.embedding_grads, 
+        exportBuffer("embedding_grads", const_cast<GRIM::TrainingState&>(ts).embedding_grads(), 
                      static_cast<size_t>(cfg.vocab_size) * cfg.d_model);
         
         // Per-layer gradients
@@ -3145,10 +3151,10 @@ BatchResult processBatch(
                 size_t total_params_perturbed = 0;
                 
                 // Inject into LM head weights (always accessible via TrainingState)
-                if (training_state.lm_head_weights) {
+                if (training_state.lm_head_weights.data) {
                     size_t lm_size = static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
                     GRIM::Telemetry::launchPlateauNoiseInjection(
-                        training_state.lm_head_weights,
+                        training_state.lm_head_weights.data,
                         lm_size,
                         tc_cfg.plateau_noise_std,
                         tc_cfg.plateau_noise_proportional,
@@ -3161,9 +3167,9 @@ BatchResult processBatch(
                 }
                 
                 // Inject into LM head bias if present
-                if (training_state.lm_head_bias) {
+                if (training_state.lm_head_bias.data) {
                     GRIM::Telemetry::launchPlateauNoiseInjection(
-                        training_state.lm_head_bias,
+                        training_state.lm_head_bias.data,
                         static_cast<size_t>(cfg.vocab_size),
                         tc_cfg.plateau_noise_std,
                         tc_cfg.plateau_noise_proportional,
@@ -3302,9 +3308,9 @@ BatchResult processBatch(
             const auto& cfg = ctx.model->getConfig();
             cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
             
-            if (ts.lm_head_weights && kToken277 < cfg.vocab_size) {
+            if (ts.lm_head_weights.data && kToken277 < cfg.vocab_size) {
                 std::vector<float> w277_row(static_cast<size_t>(cfg.d_model));
-                const float* w277_ptr = ts.lm_head_weights + static_cast<size_t>(kToken277) * cfg.d_model;
+                const float* w277_ptr = ts.lm_head_weights.data + static_cast<size_t>(kToken277) * cfg.d_model;
                 cudaMemcpyAsync(w277_row.data(), w277_ptr, 
                                 static_cast<size_t>(cfg.d_model) * sizeof(float),
                                 cudaMemcpyDeviceToHost, stream);
@@ -3360,9 +3366,9 @@ BatchResult processBatch(
             const auto& cfg = ctx.model->getConfig();
             cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
             
-            if (ts.lm_head_weights && kToken277 < cfg.vocab_size) {
+            if (ts.lm_head_weights.data && kToken277 < cfg.vocab_size) {
                 std::vector<float> w277_row(static_cast<size_t>(cfg.d_model));
-                const float* w277_ptr = ts.lm_head_weights + static_cast<size_t>(kToken277) * cfg.d_model;
+                const float* w277_ptr = ts.lm_head_weights.data + static_cast<size_t>(kToken277) * cfg.d_model;
                 cudaMemcpyAsync(w277_row.data(), w277_ptr, 
                                 static_cast<size_t>(cfg.d_model) * sizeof(float),
                                 cudaMemcpyDeviceToHost, stream);

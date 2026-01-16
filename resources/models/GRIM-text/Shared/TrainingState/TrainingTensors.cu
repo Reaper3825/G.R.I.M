@@ -1,0 +1,347 @@
+//======================================================//
+//  TrainingTensors.cu
+//  Implementation of autograd-enabled tensor storage
+//======================================================//
+
+#include "TrainingTensors.hpp"
+#include <stdexcept>
+#include <cmath>
+
+#ifdef USE_CUDA
+
+namespace GRIM {
+
+void TrainingTensors::initializeParams(
+    int vocab_sz, int d_mod, int d_ffn,
+    int n_layers, int n_heads, int n_kv_heads,
+    int max_seq, bool tie_emb, bool bias,
+    cudaStream_t stream
+) {
+    // Store config
+    vocab_size = vocab_sz;
+    d_model = d_mod;
+    d_ff = d_ffn;
+    num_layers = n_layers;
+    num_heads = n_heads;
+    num_kv_heads = n_kv_heads;
+    head_dim = d_model / num_heads;
+    max_seq_len = max_seq;
+    tie_embeddings = tie_emb;
+    use_bias = bias;
+    
+    // GQA dimensions
+    const int kv_dim = num_kv_heads * head_dim;
+    const int total_qkv_dim = d_model + 2 * kv_dim;  // Q + K + V
+    
+    //==================================================//
+    //  EMBEDDING LAYER
+    //==================================================//
+    
+    // Token embeddings [vocab_size, d_model]
+    embedding_weights = Tensor::zeros({vocab_size, d_model}, stream);
+    embedding_weights.requires_grad_();
+    Tensor::xavier_uniform_(embedding_weights, stream);
+    
+    // Position embeddings [max_seq_len, d_model]
+    position_embedding_weights = Tensor::zeros({max_seq_len, d_model}, stream);
+    position_embedding_weights.requires_grad_();
+    Tensor::xavier_uniform_(position_embedding_weights, stream);
+    
+    //==================================================//
+    //  LM HEAD
+    //==================================================//
+    
+    if (tie_embeddings) {
+        // Shared weights - LM head points to same data as embedding
+        lm_head_weights = Tensor::from_ptr(
+            embedding_weights.data,
+            {vocab_size, d_model},
+            stream
+        );
+        lm_head_weights.requires_grad_();
+        // NOTE: lm_head_weights.grad will be separate from embedding_weights.grad
+        // During optimizer step, need to accumulate both
+    } else {
+        // Separate LM head weights
+        lm_head_weights = Tensor::zeros({vocab_size, d_model}, stream);
+        lm_head_weights.requires_grad_();
+        Tensor::xavier_uniform_(lm_head_weights, stream);
+    }
+    
+    if (use_bias) {
+        lm_head_bias = Tensor::zeros({vocab_size}, stream);
+        lm_head_bias.requires_grad_();
+    }
+    
+    //==================================================//
+    //  NUMERIC HEAD (optional)
+    //==================================================//
+    
+    numeric_head_weights = Tensor::zeros({d_model}, stream);
+    numeric_head_weights.requires_grad_();
+    // Initialize with small values
+    const float numeric_scale = 1.0f / std::sqrt(static_cast<float>(d_model));
+    // TODO: Fill with uniform(-scale, scale)
+    
+    numeric_head_bias = Tensor::zeros({1}, stream);
+    numeric_head_bias.requires_grad_();
+    
+    //==================================================//
+    //  FINAL RMSNORM
+    //==================================================//
+    
+    final_rms_gamma = Tensor::zeros({d_model}, stream);
+    final_rms_gamma.requires_grad_();
+    // Initialize to 1.0
+    {
+        std::vector<float> ones(d_model, 1.0f);
+        cudaMemcpyAsync(final_rms_gamma.data, ones.data(),
+                        d_model * sizeof(float),
+                        cudaMemcpyHostToDevice, stream);
+    }
+    
+    //==================================================//
+    //  ENCODER LAYERS
+    //==================================================//
+    
+    encoder_layers.resize(n_layers);
+    
+    for (int layer = 0; layer < n_layers; ++layer) {
+        EncoderLayerParams& params = encoder_layers[layer];
+        
+        // RMSNorm gammas initialized to 1.0
+        params.rms1_gamma = Tensor::zeros({d_model}, stream);
+        params.rms1_gamma.requires_grad_();
+        
+        params.rms2_gamma = Tensor::zeros({d_model}, stream);
+        params.rms2_gamma.requires_grad_();
+        
+        // Fill with 1.0
+        {
+            std::vector<float> ones(d_model, 1.0f);
+            cudaMemcpyAsync(params.rms1_gamma.data, ones.data(),
+                            d_model * sizeof(float),
+                            cudaMemcpyHostToDevice, stream);
+            cudaMemcpyAsync(params.rms2_gamma.data, ones.data(),
+                            d_model * sizeof(float),
+                            cudaMemcpyHostToDevice, stream);
+        }
+        
+        // Attention QKV projection [total_qkv_dim, d_model]
+        params.attn_qkv_weight = Tensor::zeros({total_qkv_dim, d_model}, stream);
+        params.attn_qkv_weight.requires_grad_();
+        Tensor::xavier_uniform_(params.attn_qkv_weight, stream);
+        
+        if (use_bias) {
+            params.attn_qkv_bias = Tensor::zeros({total_qkv_dim}, stream);
+            params.attn_qkv_bias.requires_grad_();
+        }
+        
+        // Attention output projection [d_model, d_model]
+        params.attn_out_weight = Tensor::zeros({d_model, d_model}, stream);
+        params.attn_out_weight.requires_grad_();
+        Tensor::xavier_uniform_(params.attn_out_weight, stream);
+        
+        if (use_bias) {
+            params.attn_out_bias = Tensor::zeros({d_model}, stream);
+            params.attn_out_bias.requires_grad_();
+        }
+        
+        // QK-norm learned scales (nGPT)
+        params.alpha_q = Tensor::zeros({num_heads}, stream);
+        params.alpha_q.requires_grad_();
+        // Initialize to 1.0
+        {
+            std::vector<float> ones(num_heads, 1.0f);
+            cudaMemcpyAsync(params.alpha_q.data, ones.data(),
+                            num_heads * sizeof(float),
+                            cudaMemcpyHostToDevice, stream);
+        }
+        
+        params.alpha_k = Tensor::zeros({num_kv_heads}, stream);
+        params.alpha_k.requires_grad_();
+        {
+            std::vector<float> ones(num_kv_heads, 1.0f);
+            cudaMemcpyAsync(params.alpha_k.data, ones.data(),
+                            num_kv_heads * sizeof(float),
+                            cudaMemcpyHostToDevice, stream);
+        }
+        
+        // FFN W1 [d_ff, d_model] - up-projection
+        params.ffn_w1 = Tensor::zeros({d_ff, d_model}, stream);
+        params.ffn_w1.requires_grad_();
+        Tensor::xavier_uniform_(params.ffn_w1, stream);
+        
+        if (use_bias) {
+            params.ffn_b1 = Tensor::zeros({d_ff}, stream);
+            params.ffn_b1.requires_grad_();
+        }
+        
+        // FFN W2 [d_model, d_ff] - down-projection
+        params.ffn_w2 = Tensor::zeros({d_model, d_ff}, stream);
+        params.ffn_w2.requires_grad_();
+        Tensor::xavier_uniform_(params.ffn_w2, stream);
+        
+        if (use_bias) {
+            params.ffn_b2 = Tensor::zeros({d_model}, stream);
+            params.ffn_b2.requires_grad_();
+        }
+    }
+    
+    initialized_ = true;
+    
+    // Sync to ensure all initialization is complete
+    if (stream) {
+        cudaStreamSynchronize(stream);
+    }
+}
+
+
+void TrainingTensors::allocateCaches(int batch_size, int seq_len, cudaStream_t stream) {
+    if (!initialized_) {
+        throw std::runtime_error("TrainingTensors::allocateCaches: params not initialized");
+    }
+    
+    const int total_tokens = batch_size * seq_len;
+    const int kv_dim = num_kv_heads * head_dim;
+    
+    //==================================================//
+    //  INPUT LAYER CACHES
+    //==================================================//
+    
+    cached_embeddings = Tensor::zeros({total_tokens, d_model}, stream);
+    
+    //==================================================//
+    //  ENCODER LAYER CACHES
+    //==================================================//
+    
+    encoder_caches.resize(num_layers);
+    
+    for (int layer = 0; layer < num_layers; ++layer) {
+        EncoderLayerCache& cache = encoder_caches[layer];
+        
+        cache.ln1_output = Tensor::zeros({total_tokens, d_model}, stream);
+        cache.attn_output = Tensor::zeros({total_tokens, d_model}, stream);
+        cache.residual1_output = Tensor::zeros({total_tokens, d_model}, stream);
+        cache.ln2_output = Tensor::zeros({total_tokens, d_model}, stream);
+        cache.ffn_pre_gelu = Tensor::zeros({total_tokens, d_ff}, stream);
+        cache.ffn_output = Tensor::zeros({total_tokens, d_model}, stream);
+        cache.layer_output = Tensor::zeros({total_tokens, d_model}, stream);
+        
+        // QKV caches in BHSD format
+        cache.Q = Tensor::zeros({batch_size, num_heads, seq_len, head_dim}, stream);
+        cache.K = Tensor::zeros({batch_size, num_kv_heads, seq_len, head_dim}, stream);
+        cache.V = Tensor::zeros({batch_size, num_kv_heads, seq_len, head_dim}, stream);
+        cache.attn_input = Tensor::zeros({total_tokens, d_model}, stream);
+        cache.attn_bhsd = Tensor::zeros({batch_size, num_heads, seq_len, head_dim}, stream);
+        
+        // Softmax LSE for FlashAttention
+        cache.softmax_lse = Tensor::zeros({batch_size, num_heads, seq_len}, stream);
+    }
+    
+    //==================================================//
+    //  OUTPUT LAYER CACHES
+    //==================================================//
+    
+    cached_encoder_output = Tensor::zeros({total_tokens, d_model}, stream);
+    cached_logits = Tensor::zeros({total_tokens, vocab_size}, stream);
+    cached_final_rms_input = Tensor::zeros({total_tokens, d_model}, stream);
+    
+    //==================================================//
+    //  GRADIENT TEMPORARIES
+    //==================================================//
+    
+    grad_logits = Tensor::zeros({total_tokens, vocab_size}, stream);
+    grad_encoder_out = Tensor::zeros({total_tokens, d_model}, stream);
+    
+    grad_ffn_input = Tensor::zeros({total_tokens, d_model}, stream);
+    grad_ffn_hidden = Tensor::zeros({total_tokens, d_ff}, stream);
+    grad_attn_input = Tensor::zeros({total_tokens, d_model}, stream);
+    grad_attn_out_before_proj = Tensor::zeros({total_tokens, d_model}, stream);
+    grad_attn_out_reshaped = Tensor::zeros({batch_size, num_heads, seq_len, head_dim}, stream);
+    grad_q = Tensor::zeros({batch_size, num_heads, seq_len, head_dim}, stream);
+    grad_k = Tensor::zeros({batch_size, num_kv_heads, seq_len, head_dim}, stream);
+    grad_v = Tensor::zeros({batch_size, num_kv_heads, seq_len, head_dim}, stream);
+    
+    const int total_qkv_dim = d_model + 2 * kv_dim;
+    grad_qkv_concat = Tensor::zeros({total_tokens, total_qkv_dim}, stream);
+    grad_qkv_input = Tensor::zeros({total_tokens, d_model}, stream);
+    grad_attn_bsm_scratch = Tensor::zeros({batch_size, seq_len, d_model}, stream);
+    
+    // Issue #43 centering scratch (max of d_model and d_ff)
+    const int scratch_dim = (d_ff > d_model) ? d_ff : d_model;
+    centered_activation_scratch = Tensor::zeros({total_tokens, scratch_dim}, stream);
+}
+
+
+void TrainingTensors::zeroGrad(cudaStream_t stream) {
+    if (!initialized_) return;
+    
+    // Zero embedding grads
+    embedding_weights.zero_grad(stream);
+    position_embedding_weights.zero_grad(stream);
+    
+    // Zero LM head grads
+    if (!tie_embeddings) {
+        lm_head_weights.zero_grad(stream);
+    }
+    if (lm_head_bias.data) {
+        lm_head_bias.zero_grad(stream);
+    }
+    
+    // Zero numeric head grads
+    numeric_head_weights.zero_grad(stream);
+    numeric_head_bias.zero_grad(stream);
+    
+    // Zero final RMSNorm grad
+    final_rms_gamma.zero_grad(stream);
+    
+    // Zero encoder layer grads
+    for (auto& layer : encoder_layers) {
+        layer.rms1_gamma.zero_grad(stream);
+        layer.rms2_gamma.zero_grad(stream);
+        layer.attn_qkv_weight.zero_grad(stream);
+        if (layer.attn_qkv_bias.data) layer.attn_qkv_bias.zero_grad(stream);
+        layer.attn_out_weight.zero_grad(stream);
+        if (layer.attn_out_bias.data) layer.attn_out_bias.zero_grad(stream);
+        layer.alpha_q.zero_grad(stream);
+        layer.alpha_k.zero_grad(stream);
+        layer.ffn_w1.zero_grad(stream);
+        if (layer.ffn_b1.data) layer.ffn_b1.zero_grad(stream);
+        layer.ffn_w2.zero_grad(stream);
+        if (layer.ffn_b2.data) layer.ffn_b2.zero_grad(stream);
+    }
+}
+
+
+float* TrainingTensors::getParamData(const std::string& name) {
+    // Legacy compatibility - map name to tensor
+    if (name == "embedding_weights") return embedding_weights.data;
+    if (name == "position_embedding_weights") return position_embedding_weights.data;
+    if (name == "lm_head_weights") return lm_head_weights.data;
+    if (name == "lm_head_bias") return lm_head_bias.data;
+    if (name == "numeric_head_weights") return numeric_head_weights.data;
+    if (name == "numeric_head_bias") return numeric_head_bias.data;
+    if (name == "final_rms_gamma") return final_rms_gamma.data;
+    
+    // For per-layer params, use getLayerParamData(name, layer)
+    throw std::runtime_error("TrainingTensors::getParamData: unknown param '" + name + "'");
+}
+
+
+float* TrainingTensors::getGradData(const std::string& name) {
+    // Legacy compatibility - map name to gradient
+    if (name == "embedding_weights") return embedding_weights.grad;
+    if (name == "position_embedding_weights") return position_embedding_weights.grad;
+    if (name == "lm_head_weights") return lm_head_weights.grad;
+    if (name == "lm_head_bias") return lm_head_bias.grad;
+    if (name == "numeric_head_weights") return numeric_head_weights.grad;
+    if (name == "numeric_head_bias") return numeric_head_bias.grad;
+    if (name == "final_rms_gamma") return final_rms_gamma.grad;
+    
+    throw std::runtime_error("TrainingTensors::getGradData: unknown param '" + name + "'");
+}
+
+}  // namespace GRIM
+
+#endif  // USE_CUDA

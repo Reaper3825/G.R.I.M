@@ -8,6 +8,7 @@
 #include <vector>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
@@ -20,6 +21,12 @@
 #include "../GradAccumulationController/GradAccumulationController_Integration.hpp"
 #include "../GradNorm/GradNormGPU.hpp"
 #include "../PBM/PositionalBiasMethod.hpp"
+#include "../TensorContract/TensorContract_GPU.hpp"
+
+// Forward declaration for autograd tensor system
+namespace GRIM {
+    struct TrainingTensors;
+}
 
 namespace GRIM {
 
@@ -34,39 +41,52 @@ struct TrainingState {
 	TrainingState(TrainingState&&) = delete;
 	TrainingState& operator=(TrainingState&&) = delete;
 
-	// Gradient buffers for parameters
-	// NOTE: When tie_embeddings=true, embedding_grads == lm_head_weight_grads (aliased)
-	float* embedding_grads = nullptr;
-	size_t embedding_grad_size = 0;
-
-	// Position embedding gradients [max_seq_len, d_model]
+	//======================================================//
+	//  PARAMETER TENSORS (weights + gradients via autograd)
+	//======================================================//
+	// Rule 20: NO raw float* for gradients - use GRIM::Tensor with autograd
+	
+	// Embedding weights [vocab_size, d_model]
+	// NOTE: When tie_embeddings=true, lm_head_weights shares data with embedding_weights
+	Tensor embedding_weights;
+	
+	// Position embedding weights [max_seq_len, d_model]
 	// Issue #36 FIX: Position embeddings MUST be trainable to match PyTorch baseline
-	float* position_embedding_grads = nullptr;
-	size_t position_embedding_grad_size = 0;
+	Tensor position_embedding_weights;
 
-	float* lm_head_weight_grads = nullptr;
-	float* lm_head_bias_grads = nullptr;
-	float* numeric_head_weight_grads = nullptr;
-	float* numeric_head_bias_grads = nullptr;
+	// LM head weights [vocab_size, d_model] and optional bias [vocab_size]
+	Tensor lm_head_weights;
+	Tensor lm_head_bias;
+	
+	// Numeric head for number prediction
+	Tensor numeric_head_weights;  // [d_model]
+	Tensor numeric_head_bias;     // [1]
 
-	// LM head weights (actual parameters on GPU)
-	// NOTE: When tie_embeddings=true, lm_head_weights points to EmbeddingRuntime::token_buffer
-	// (NOT owned by TrainingState - don't free!)
-	float* lm_head_weights = nullptr;  // [vocab_size, d_model]
-	float* lm_head_bias = nullptr;     // [vocab_size]
-	bool lm_head_weights_owned = false; // True if we allocated, false if aliased
-	float* numeric_head_weights = nullptr;  // [d_model]
-	float* numeric_head_bias = nullptr;     // [1]
-
-	// Final RMSNorm before LM head (Issue #33 fix: prevents activation variance explosion)
-	// Standard transformer architecture: embedding → encoder → **final_norm** → LM head
-	// Without this, encoder output variance grows unbounded (observed: 1.28 → 15.8+),
-	// causing logit scale explosion and token 277 collapse.
-	float* final_rms_gamma = nullptr;       // [d_model] - learnable scale (init to 1.0)
-	float* final_rms_gamma_grads = nullptr; // [d_model] - gradients
-	float* cached_final_rms_input = nullptr; // [max_cached_tokens * d_model] - for backward pass
-
-	// Encoder layer gradients (allocated per-layer)
+	// Final RMSNorm before LM head (Issue #33 fix)
+	Tensor final_rms_gamma;  // [d_model]
+	
+	// Per-layer encoder parameters
+	struct EncoderLayerTensors {
+		Tensor rms1_gamma;        // [d_model]
+		Tensor rms2_gamma;        // [d_model]
+		Tensor attn_qkv_weight;   // [total_qkv_dim, d_model]
+		Tensor attn_qkv_bias;     // [total_qkv_dim] - optional
+		Tensor attn_out_weight;   // [d_model, d_model]
+		Tensor attn_out_bias;     // [d_model] - optional
+		Tensor alpha_q;           // [num_heads] - QK-norm scale
+		Tensor alpha_k;           // [num_kv_heads] - QK-norm scale
+		Tensor ffn_w1;            // [d_ff, d_model]
+		Tensor ffn_b1;            // [d_ff] - optional
+		Tensor ffn_w2;            // [d_model, d_ff]
+		Tensor ffn_b2;            // [d_model] - optional
+	};
+	std::vector<EncoderLayerTensors> encoder_layers;
+	
+	// ═══════════════════════════════════════════════════════════════
+	// LEGACY PER-LAYER GRADIENT VECTORS (being migrated to Tensor)
+	// ═══════════════════════════════════════════════════════════════
+	// These raw pointer vectors are still used by backward pass code.
+	// TODO: Migrate BackwardPhase2_Encoder.cu to use encoder_layers[i].*.grad
 	std::vector<float*> rms1_gamma_grads;
 	std::vector<float*> rms2_gamma_grads;
 	std::vector<float*> attn_qkv_weight_grads;
@@ -78,14 +98,17 @@ struct TrainingState {
 	std::vector<float*> ffn_w2_grads;
 	std::vector<float*> ffn_b2_grads;
 	
-	// Learnable QK-norm scales (nGPT-style) - per layer, per head
-	// alpha_q[layer][head], alpha_k[layer][head]
-	// Forward: q̂ = alpha_q * (q / ||q||), buffers the 1/||q|| division
-	// GQA: alpha_q has num_heads entries, alpha_k has num_kv_heads entries
-	std::vector<float*> attn_alpha_q;        // [num_layers] arrays of [num_heads]
-	std::vector<float*> attn_alpha_k;        // [num_layers] arrays of [num_kv_heads]
-	std::vector<float*> attn_alpha_q_grads;  // Gradients for alpha_q [num_heads]
-	std::vector<float*> attn_alpha_k_grads;  // Gradients for alpha_k [num_kv_heads]
+	// QK-norm learned scales (nGPT-style) - weights and gradients
+	std::vector<float*> attn_alpha_q;       // [num_heads] per layer
+	std::vector<float*> attn_alpha_k;       // [num_kv_heads] per layer
+	std::vector<float*> attn_alpha_q_grads;
+	std::vector<float*> attn_alpha_k_grads;
+	
+	// Helpers to access raw gradient pointers for legacy code (during migration)
+	float* embedding_grads() { return embedding_weights.grad; }
+	float* position_embedding_grads() { return position_embedding_weights.grad; }
+	float* lm_head_weight_grads() { return lm_head_weights.grad; }
+	float* final_rms_gamma_grads() { return final_rms_gamma.grad; }
 	
 	// GQA configuration (stored for cache sizing)
 	int num_heads = 0;           // Q heads
@@ -115,6 +138,7 @@ struct TrainingState {
 	std::vector<float*> cached_softmax_lse;        // [batch, num_heads, seq] FP32 (dense, no padding)
 
 	float* cached_encoder_outputs = nullptr;  // Final encoder output
+	float* cached_final_rms_input = nullptr;  // Issue #33: Input to final RMSNorm (for backward gamma gradients)
 	float* cached_logits = nullptr;
 	float* cached_numeric_predictions = nullptr;  // [max_cached_tokens]
 	int* cached_targets = nullptr;
@@ -158,6 +182,23 @@ struct TrainingState {
 	float* sequence_weights = nullptr;
 	int sequence_weight_count = 0;
 	int sequence_weight_capacity = 0;
+	
+	// Issue #38 FIX: Per-token class weighting to prevent mode collapse on frequent tokens
+	// Weight indexed by TOKEN ID (not position) - frequent tokens like SPACE get lower weight
+	// Computed from inverse token frequency in training corpus
+	float* token_weights = nullptr;       // [vocab_size] - on GPU
+	int token_weights_count = 0;          // Should equal vocab_size when set
+
+	// Issue #39 FIX: Output logit bias correction to prevent mode collapse
+	// Tracks EMA of mean logit per vocabulary token across training batches.
+	// Subtracted from logits BEFORE softmax to prevent any token from having
+	// systematically higher pre-softmax activation (e.g., SPACE token 277).
+	// Formula: corrected_logit[v] = raw_logit[v] - logit_bias[v]
+	// EMA update: logit_bias[v] = (1-α)*logit_bias[v] + α*batch_mean_logit[v]
+	float* logit_bias = nullptr;          // [vocab_size] - EMA of per-token mean logit
+	float* logit_bias_update = nullptr;   // [vocab_size] - scratch for batch mean computation
+	int logit_bias_count = 0;             // Should equal vocab_size when set
+	uint64_t logit_bias_update_step = 0;  // Number of EMA updates (for warm-up)
 
 	// Intermediate gradient buffers
 	float* grad_logits = nullptr;
@@ -197,6 +238,19 @@ struct TrainingState {
 	// CRITICAL: Do NOT reuse grad_qkv_input - that buffer is needed later in the same backward pass.
 	// This prevents temporal aliasing bugs when operations are parallelized or refactored.
 	float* grad_attn_bsm_scratch = nullptr;
+
+	// ═══════════════════════════════════════════════════════════════
+	//  Issue #43 FIX: Encoder Weight Gradient Centering Scratch Buffer
+	// ═══════════════════════════════════════════════════════════════
+	// Encoder backward uses cached activations (ln1_output, ffn_input, etc.) to compute
+	// weight gradients. These activations have NON-ZERO MEAN which causes systematic
+	// gradient bias, leading the encoder to output hidden states aligned with W[277].
+	// 
+	// FIX: Center cached activations before GEMM for weight gradients.
+	// This scratch buffer holds the centered version during each weight gradient computation.
+	// Size: max(model_elems, ffn_elems) to handle both d_model and d_ff width activations.
+	float* centered_activation_scratch = nullptr;
+	size_t centered_activation_scratch_elems = 0;
 
 	// Scratch buffers for loss computation (pre-allocated to avoid malloc/free per sequence)
 	float* d_loss_scratch = nullptr;      // Per-token losses
@@ -249,6 +303,22 @@ struct TrainingState {
 	int* cached_scratch_block_positions = nullptr;     // [max_atoms] - atom token positions
 	int* cached_scratch_block_types = nullptr;         // [max_atoms] - atom type for each atom
 	int* cached_scratch_block_num_atoms = nullptr;     // Scalar
+
+	// ═══════════════════════════════════════════════════════════════
+	//  AUTOGRAD TENSOR SYSTEM (TrainingTensors)
+	// ═══════════════════════════════════════════════════════════════
+	// NEW: Gradual migration from raw float* to GRIM::Tensor with autograd
+	// During transition period, both raw pointers and tensors_ may be active.
+	// Eventually, tensors_ replaces all gradient/activation storage above.
+	// Use: ts->tensors_->embedding_weights.backward() for autograd
+	std::unique_ptr<TrainingTensors> tensors_;
+	bool use_autograd_tensors = false;  // Set true to enable new system
+	
+	// Initialize autograd tensor system (call AFTER raw buffer allocation)
+	void initializeAutogradTensors(int vocab_size, int d_model, int d_ff,
+	                               int num_layers, int num_heads, int num_kv_heads,
+	                               int max_seq_len, bool tie_embeddings, bool use_bias,
+	                               cudaStream_t stream = nullptr);
 
 	// ═══════════════════════════════════════════════════════════════
 	//  OPTIMIZER STATE BUFFERS (AdamW momentum/velocity)
