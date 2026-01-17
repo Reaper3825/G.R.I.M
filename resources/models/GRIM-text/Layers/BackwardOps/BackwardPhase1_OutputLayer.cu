@@ -196,6 +196,20 @@ BackwardStatus computeCrossEntropyGradient(BackwardContext& ctx) {
                       "grad_logits buffer is NULL - forward pass did not compute gradients", -1);
     }
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  LOGITS LAYOUT VALIDATION (TensorContract Integration)
+    //  Verify grad_logits has the expected LOGITS layout [tokens x vocab_size]
+    // ═══════════════════════════════════════════════════════════════════════════
+    {
+        auto grad_logits_view = TensorContract::TensorView::make_LOGITS(
+            ts->grad_logits,
+            ctx.total_tokens,
+            cfg->vocab_size,
+            "grad_logits"
+        );
+        P1_INFO("grad_logits validated: " << grad_logits_view.to_string());
+    }
+    
     // Clear sequence weights after use (they were already applied in forward)
     ts->sequence_weight_count = 0;
     

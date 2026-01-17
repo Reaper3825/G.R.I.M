@@ -280,7 +280,7 @@
                 },
                 "numeric_head": {
                     "enabled": true,
-                    "weight": 1.0,
+                    "weight": 0.75,
                     "huber_delta": 1.0,
                     "log_scale": true
                 }
@@ -321,7 +321,7 @@
                 "clip_min": -127.0,
                 "clip_max": 127.0,
                 "zero_point": 0,
-                "symmetric": true
+                "symmetric": false
             },
             
             "cuda_execution": {

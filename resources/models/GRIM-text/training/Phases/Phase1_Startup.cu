@@ -1708,19 +1708,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     // 10. Initialize optimizer
     ctx->optimizer = Internal::initializeOptimizer(*ctx->model, ctx->config, *ctx->logging.logger);
     
-    // 10b. Issue #38 FIX: Compute and upload per-token class weights to prevent mode collapse
-    // This must happen AFTER model init (needs training state) but BEFORE training loop
-    {
-        auto& ts = ctx->model->getTrainingState();
-        ts.token_weights = Internal::computeAndUploadTokenWeights(
-            ctx->data.train_views,
-            ctx->config.actual_vocab_size,
-            ts.stream_ctrl.getPrimaryStream(),
-            *ctx->logging.logger);
-        ts.token_weights_count = (ts.token_weights != nullptr) 
-                                 ? static_cast<int>(ctx->config.actual_vocab_size) 
-                                 : 0;
-    }
+    // Token weighting removed - standard transformers use uniform loss weights
     
     // 10c. Issue #39 FIX: Allocate and initialize logit bias buffer for output bias correction
     // This prevents tokens like SPACE from having systematically higher pre-softmax activations.

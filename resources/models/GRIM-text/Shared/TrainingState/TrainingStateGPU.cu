@@ -84,8 +84,6 @@ TrainingState::~TrainingState() {
 	if (cached_token_text_features) cudaFree(cached_token_text_features);
 	if (cached_token_text_mask) cudaFree(cached_token_text_mask);
 	if (sequence_weights) cudaFree(sequence_weights);
-	// Issue #38 FIX: Per-token class weights
-	if (token_weights) cudaFree(token_weights);
 	// Issue #39 FIX: Output logit bias correction buffers
 	if (logit_bias) cudaFree(logit_bias);
 	if (logit_bias_update) cudaFree(logit_bias_update);

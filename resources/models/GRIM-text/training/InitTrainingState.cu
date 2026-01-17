@@ -494,11 +494,13 @@ void LanguageModel::initTrainingState() {
         return;
     }
     
+    // Allocate logits cache with LOGITS layout tracking (TensorContract integration)
     err = cudaMalloc(&training_state_.cached_logits, max_logit_tokens * cfg.vocab_size * sizeof(float));
     if (err != cudaSuccess) {
         std::cerr << "Failed to allocate logits cache: " << cudaGetErrorString(err) << std::endl;
         return;
     }
+    std::cout << "✓ Allocated cached_logits [" << max_logit_tokens << " x " << cfg.vocab_size << "] LOGITS layout" << std::endl;
 
     if (cfg.numeric_head_enabled) {
         err = cudaMalloc(&training_state_.cached_numeric_predictions, max_logit_tokens * sizeof(float));
@@ -580,11 +582,13 @@ void LanguageModel::initTrainingState() {
     training_state_.sequence_weight_capacity = static_cast<int>(max_batch_size);
     training_state_.sequence_weight_count = 0;
     
+    // Allocate gradient buffer with LOGITS layout tracking (TensorContract integration)
     err = cudaMalloc(&training_state_.grad_logits, max_logit_tokens * cfg.vocab_size * sizeof(float));
     if (err != cudaSuccess) {
         std::cerr << "Failed to allocate logits gradient buffer: " << cudaGetErrorString(err) << std::endl;
         return;
     }
+    std::cout << "✓ Allocated grad_logits [" << max_logit_tokens << " x " << cfg.vocab_size << "] LOGITS layout" << std::endl;
 
     if (cfg.numeric_head_enabled) {
         err = cudaMalloc(&training_state_.grad_numeric_predictions, max_logit_tokens * sizeof(float));

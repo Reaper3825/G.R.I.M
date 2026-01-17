@@ -66,7 +66,6 @@ __global__ void unifiedLossKernelV2(
     const float* __restrict__ logits,
     const int* __restrict__ targets,
     const float* __restrict__ sequence_weights,
-    const float* __restrict__ token_weights,  // Issue #38: Per-token class weighting
     const float* __restrict__ logit_bias,     // Issue #39: Per-token logit bias to subtract
     float* __restrict__ token_losses,
     float* __restrict__ grad_logits,
@@ -103,13 +102,6 @@ __global__ void unifiedLossKernelV2(
         return;
     }
 
-// Issue #38 FIX: Apply per-token class weight based on target token frequency
-// Frequent tokens (like SPACE=277) get lower weight to prevent mode collapse
-float token_class_weight = 1.0f;
-if (token_weights) {
-    token_class_weight = token_weights[target];
-}
-
 float sample_weight = 1.0f;
 
 if (sequence_weights) {
@@ -119,8 +111,7 @@ if (sequence_weights) {
     }
 }
 
-// Combine sequence weight and token class weight
-const float total_weight = sample_weight * token_class_weight;
+const float total_weight = sample_weight;
 
     const float* token_logits = logits + offset;
     float* token_grads = grad_logits + offset;
@@ -542,7 +533,6 @@ UnifiedLossTelemetry UnifiedLossContext::compute(
         inputs.logits,
         inputs.targets,
         inputs.sequence_weights,
-        inputs.token_weights,  // Issue #38: Per-token class weighting
         inputs.logit_bias,     // Issue #39: Output logit bias correction
         outputs.token_losses,
         outputs.grad_logits,

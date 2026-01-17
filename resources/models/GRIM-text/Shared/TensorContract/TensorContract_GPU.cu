@@ -168,6 +168,7 @@ const char* layout_name(Layout layout) {
         case Layout::BHDS:      return "BHDS";
         case Layout::BSHD:      return "BSHD";
         case Layout::QKV_FUSED: return "QKV_FUSED";
+        case Layout::LOGITS:    return "LOGITS";
         case Layout::UNKNOWN:   return "UNKNOWN";
         default:                return "INVALID";
     }

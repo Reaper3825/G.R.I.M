@@ -4,6 +4,7 @@
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../Layers/NumericHead/numeric_head_GPU.hpp"
 #include "../../Layers/LayernNorm/RMSNorm_Kernel_GPU.hpp"
+#include "../../Shared/TensorContract/TensorContract_GPU.hpp"  // LOGITS layout validation
 
 #include <vector>
 #include <algorithm>
@@ -124,6 +125,20 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
         launchLMHeadForward(lm_params);
     } catch (const std::exception& ex) {
         FWD_FAIL_LOUD(ctx, ForwardStatus::INVALID_STATE, ex.what(), -1);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  LOGITS LAYOUT VALIDATION (TensorContract Integration)
+    //  Create a TensorView to track the logits buffer with proper layout typing.
+    //  This enables compile-time layout safety and runtime dimension validation.
+    // ═══════════════════════════════════════════════════════════════════════════
+    {
+        auto logits_view = TensorContract::TensorView::make_LOGITS(
+            logits_output,
+            total_tokens,
+            cfg->vocab_size
+        );
+        FWD_INFO("[ForwardPhase1] Logits tensor validated: " << logits_view.to_string());
     }
 
     // === DIAGNOSTIC: Log encoder output and logits ===

@@ -155,11 +155,6 @@ float LanguageModel::computeLoss(const std::vector<int>& input_ids,
                                 ? training_state_.sequence_weights
                                 : nullptr;
     loss_ctx.sequence_weight_count = training_state_.sequence_weight_count;
-    // Issue #38 FIX: Per-token class weighting to prevent mode collapse
-    // Weight indexed by TARGET token ID - frequent tokens get lower weight
-    loss_ctx.token_weights = (training_state_.token_weights_count > 0)
-                             ? training_state_.token_weights
-                             : nullptr;
     // Issue #39 FIX: Output logit bias correction to prevent mode collapse
     // Subtracts running EMA of mean logit per token BEFORE softmax
     static int s_issue39_diag = 0;

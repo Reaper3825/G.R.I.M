@@ -79,6 +79,7 @@ enum class Layout : uint8_t {
     // 2D formats (flat tensors) - use Shape2D
     BSM,               // [tokens, d_model] - Collapsed activation format
     QKV_FUSED,         // [tokens, total_qkv_dim] - Fused QKV projection output
+    LOGITS,            // [tokens, vocab_size] - Language model logits (output projections)
     
     // 4D formats (attention tensors) - use Shape4D
     BHSD,              // [batch, heads, seq, head_dim] - Standard attention format
@@ -93,7 +94,7 @@ enum class Layout : uint8_t {
  * Check if a layout is 2D (flat) or 4D (multi-dimensional)
  */
 constexpr bool is_flat_layout(Layout l) {
-    return l == Layout::BSM || l == Layout::QKV_FUSED;
+    return l == Layout::BSM || l == Layout::QKV_FUSED || l == Layout::LOGITS;
 }
 
 constexpr bool is_4d_layout(Layout l) {
@@ -239,6 +240,10 @@ struct TensorShape {
         return TensorShape(Layout::QKV_FUSED, Shape2D{tokens, total_qkv_dim});
     }
     
+    static TensorShape make_LOGITS(int tokens, int vocab_size) {
+        return TensorShape(Layout::LOGITS, Shape2D{tokens, vocab_size});
+    }
+    
     static TensorShape make_BHSD(int batch, int heads, int seq, int head_dim) {
         return TensorShape(Layout::BHSD, Shape4D{batch, heads, seq, head_dim});
     }
@@ -289,6 +294,10 @@ struct TensorView {
     
     static TensorView make_QKV_FUSED(float* p, int tokens, int total_qkv_dim, const char* n = nullptr) {
         return TensorView(p, TensorShape::make_QKV_FUSED(tokens, total_qkv_dim), n);
+    }
+    
+    static TensorView make_LOGITS(float* p, int tokens, int vocab_size, const char* n = nullptr) {
+        return TensorView(p, TensorShape::make_LOGITS(tokens, vocab_size), n);
     }
     
     static TensorView make_BHSD(float* p, int batch, int heads, int seq, int head_dim, const char* n = nullptr) {
@@ -979,10 +988,48 @@ Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps = 1e-5f,
 
 /**
  * Softmax cross-entropy loss (fused for numerical stability)
+ * Automatically creates CrossEntropyGradFn in computation graph
+ * @param logits Input logits [tokens, vocab_size] - MUST have Layout::LOGITS
+ * @param targets Target token IDs [tokens]
+ * @param num_tokens Number of tokens
+ * @param vocab_size Vocabulary size
+ * @return scalar loss tensor with backward graph attached
  */
 Tensor cross_entropy(const Tensor& logits, const int* targets, 
                      int num_tokens, int vocab_size,
                      cudaStream_t stream = nullptr);
+
+/**
+ * Focal loss with automatic gradient tracking
+ * Focal loss formula: L = α(1-p_t)^γ * CE
+ * @param logits Input logits [tokens, vocab_size] - MUST have Layout::LOGITS
+ * @param targets Target token IDs [tokens]
+ * @param focal_alpha Weighting factor for positive class (default 1.0)
+ * @param focal_gamma Focusing parameter (default 2.0, higher = more focus on hard examples)
+ * @return scalar loss tensor with backward graph attached
+ */
+Tensor focal_loss(const Tensor& logits, const int* targets,
+                  int num_tokens, int vocab_size,
+                  float focal_alpha = 1.0f,
+                  float focal_gamma = 2.0f,
+                  cudaStream_t stream = nullptr);
+
+/**
+ * Unified loss: focal + label smoothing with automatic gradient tracking
+ * Combines focal loss weighting with label smoothing regularization
+ * @param logits Input logits [tokens, vocab_size] - MUST have Layout::LOGITS
+ * @param targets Target token IDs [tokens]
+ * @param focal_alpha Focal loss alpha parameter
+ * @param focal_gamma Focal loss gamma parameter
+ * @param smoothing Label smoothing epsilon (fraction of probability mass to spread)
+ * @return scalar loss tensor with backward graph attached
+ */
+Tensor unified_loss(const Tensor& logits, const int* targets,
+                    int num_tokens, int vocab_size,
+                    float focal_alpha = 1.0f,
+                    float focal_gamma = 2.0f,
+                    float smoothing = 0.1f,
+                    cudaStream_t stream = nullptr);
 
 /**
  * Embedding lookup: output[i] = weight[token_ids[i]]
