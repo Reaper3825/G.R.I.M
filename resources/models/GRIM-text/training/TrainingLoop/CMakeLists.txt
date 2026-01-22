@@ -155,7 +155,6 @@ add_library(grim_cuda_kernels OBJECT
     ../../Layers/Attention/QKV_Projector.cu
     # Embedding_GPU.cu removed - compiled in grim_training_kernels to avoid duplicate symbols
     ../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.cu
-    ../../Shared/Optimizers/AdamW/AdamW_gpu.cu
 
     ../../Layers/LayernNorm/RMSNorm_Kernel_GPU.cu
 )
@@ -209,6 +208,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/ForwardOps/ForwardPhase1_OutputLayer.cu
     ../../Layers/ForwardOps/ForwardPhase2_Encoder.cu
     ../../Layers/ForwardOps/ForwardPhase3_InputLayer.cu
+    ../../Layers/HardcodedStates/HardcodedStates_GPU.cu
     ../../Layers/LMHead/lm_head_GPU.cu
     ../../Layers/NumericHead/numeric_head_GPU.cu
     ../../Layers/Quantization/Quantization_GPU.cu
@@ -216,7 +216,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Batching/Batching_GPU.cu
     ../../Shared/Loss/NumericLoss/NumericLoss_GPU.cu
     ../../Layers/Encoding/Encoding_GPU.cu
-    ../../Layers/LayernNorm/RMSNorm_GPU.cu
     ../../Layers/ScratchBlock/ScratchBlock_GPU.cu
     ../../Shared/ScratchBlock/ScratchBlock_GPU.cu
     ../IncrementalGeneration_GPU.cu
@@ -226,6 +225,8 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/FeedForward/Feed_Forward_GPU.cu
     ../../Shared/Activations/GELU/GELU.cu
     ../../Shared/StreamController/StreamController_GPU.cu
+    ../../Shared/Loss/ComputeLoss/AutogradLoss.cu
+    # ../Autograd/AutogradTraining.cu  # DISABLED: Dead code, replaced by HYBRID approach in LanguageModel_Training.cu
 )
 set_target_properties(grim_language_model_gpu_impl PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
@@ -484,6 +485,7 @@ add_executable(gradient_verification_test
     ../../Shared/Activations/GELU/GELU.cu
     ../../Shared/TensorConversion/TensorConversion.cu
     ../../Shared/StreamController/StreamController_GPU.cu
+    ../../Shared/TensorContract/TensorContract_GPU.cu
 )
 
 set_target_properties(gradient_verification_test PROPERTIES
@@ -572,41 +574,43 @@ target_include_directories(diagnostic_train_minimal PRIVATE
 )
 
 # ============================================================================
-# EMBEDDING DIAGNOSTIC TEST SUITE
-# Comprehensive tests for embedding layer: Xavier init, forward, backward,
-# weight tying, tokenizer integration, memory boundaries
+# EMBEDDING AUTOGRAD TEST SUITE
+# Autograd-enabled embedding tests using TensorContract system
+# Tests: forward/backward with Tensors, gradient verification, TrainingState integration
 # ============================================================================
-add_executable(embedding_self_test
-    ../../Tests/embedding_self_test.cu
+add_executable(embedding_autograd_test
+    ../../Tests/embedding_autograd_test.cu
     ../../Layers/Embedding/Embedding_GPU.cu
     ../../Layers/LayernNorm/RMSNorm_Kernel_GPU.cu
     ../../Shared/Activations/Xavier/Xavier.cu
     ../../Shared/DataLoader/DataLoader.cu
+    # ../../Shared/TrainingState/TrainingStateGPU.cu  # Disabled - test 4 is disabled
+    # ../../Shared/TrainingState/TrainingTensors.cu  # Disabled - test 4 is disabled
 )
 
-set_target_properties(embedding_self_test PROPERTIES
+set_target_properties(embedding_autograd_test PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
     CUDA_ARCHITECTURES "86"
     CUDA_RUNTIME_LIBRARY Shared
 )
 
-target_compile_options(embedding_self_test PRIVATE
+target_compile_options(embedding_autograd_test PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
 )
 
-target_compile_definitions(embedding_self_test PRIVATE
+target_compile_definitions(embedding_autograd_test PRIVATE
     USE_CUDA
 )
 
-target_link_libraries(embedding_self_test PRIVATE
+target_link_libraries(embedding_autograd_test PRIVATE
     CUDA::cudart
     CUDA::cublas
     nlohmann_json::nlohmann_json
     grim_unigrambyte_tokenizer
 )
 
-target_include_directories(embedding_self_test PRIVATE
+target_include_directories(embedding_autograd_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../..
     ${CMAKE_CURRENT_SOURCE_DIR}/../..
     ${CMAKE_CURRENT_SOURCE_DIR}/..
@@ -622,5 +626,5 @@ message(STATUS "  - tokenizer_self_test: deterministic tokenizer regression suit
 message(STATUS "  - unigrambyte_self_test: UnigramByte tokenizer test suite")
 message(STATUS "  - flash_attention_test: Flash Attention forward/backward test suite")
 message(STATUS "  - gradient_verification_test: Encoder gradient collapse debugging")
-message(STATUS "  - embedding_self_test: Embedding layer diagnostic test suite")
+message(STATUS "  - embedding_autograd_test: Autograd-enabled embedding test suite")
 message(STATUS "  - grim_unigrambyte_tokenizer: Unigram LM + Byte fallback + AtomTable")

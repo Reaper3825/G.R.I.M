@@ -231,6 +231,23 @@ struct TensorShape {
         return false;
     }
     
+    // RULE 20: Fail loud - throws if shape is invalid
+    const TensorShape& require(const char* context) const {
+        if (layout == Layout::UNKNOWN) {
+            throw std::runtime_error(std::string(context) + ": TensorShape has UNKNOWN layout");
+        }
+        if (is_flat() && !flat.is_valid()) {
+            throw std::runtime_error(std::string(context) + ": TensorShape 2D is invalid (rows=" + 
+                                     std::to_string(flat.rows) + ", cols=" + std::to_string(flat.cols) + ")");
+        }
+        if (is_4d() && !multi.is_valid()) {
+            throw std::runtime_error(std::string(context) + ": TensorShape 4D is invalid (batch=" + 
+                                     std::to_string(multi.batch) + ", heads=" + std::to_string(multi.heads) +
+                                     ", seq=" + std::to_string(multi.seq) + ", head_dim=" + std::to_string(multi.head_dim) + ")");
+        }
+        return *this;
+    }
+    
     // Factory methods with explicit layout binding
     static TensorShape make_BSM(int tokens, int d_model) {
         return TensorShape(Layout::BSM, Shape2D{tokens, d_model});
@@ -312,6 +329,26 @@ struct TensorView {
     // Validation
     bool is_valid() const {
         return ptr != nullptr && shape.is_valid();
+    }
+    
+    // RULE 20: Fail loud - throws if view is invalid
+    const TensorView& require(const char* context) const {
+        if (!ptr) {
+            throw std::runtime_error(std::string(context) + ": TensorView has NULL pointer" +
+                                     (name ? std::string(" (name=") + name + ")" : ""));
+        }
+        shape.require(context);
+        return *this;
+    }
+    
+    // RULE 20: Returns mutable reference, throws if invalid
+    TensorView& require_mut(const char* context) {
+        if (!ptr) {
+            throw std::runtime_error(std::string(context) + ": TensorView has NULL pointer" +
+                                     (name ? std::string(" (name=") + name + ")" : ""));
+        }
+        shape.require(context);
+        return *this;
     }
     
     // Size in bytes (layout-aware)
@@ -535,6 +572,24 @@ struct GQADims {
                num_heads >= num_kv_heads && (num_heads % num_kv_heads) == 0;
     }
     
+    // RULE 20: Fail loud - throws if dimensions are invalid
+    const GQADims& require(const char* context) const {
+        if (num_heads <= 0 || num_kv_heads <= 0 || head_dim <= 0) {
+            throw std::runtime_error(std::string(context) + ": GQADims has invalid dimensions (num_heads=" +
+                                     std::to_string(num_heads) + ", num_kv_heads=" + std::to_string(num_kv_heads) +
+                                     ", head_dim=" + std::to_string(head_dim) + ")");
+        }
+        if (num_heads < num_kv_heads) {
+            throw std::runtime_error(std::string(context) + ": GQADims num_heads (" + std::to_string(num_heads) +
+                                     ") must be >= num_kv_heads (" + std::to_string(num_kv_heads) + ")");
+        }
+        if (num_heads % num_kv_heads != 0) {
+            throw std::runtime_error(std::string(context) + ": GQADims num_heads (" + std::to_string(num_heads) +
+                                     ") must be divisible by num_kv_heads (" + std::to_string(num_kv_heads) + ")");
+        }
+        return *this;
+    }
+    
     bool is_mha() const { return num_heads == num_kv_heads; }  // Multi-head attention
     bool is_gqa() const { return num_heads > num_kv_heads; }   // Grouped query attention
 };
@@ -681,6 +736,8 @@ struct ParameterGroup {
     float* m_state;          ///< Adam first moment (can be nullptr until optimizer init)
     float* v_state;          ///< Adam second moment (can be nullptr until optimizer init)
     ParamGroupType type;     ///< Category for optimizer and analysis
+    int layer_index = -1;    ///< Encoder layer index (0-based), -1 for non-layer params
+    float upsilon = 1.0f;    ///< Depth-aware regularization scale: Υ_l = 0.1 * sqrt(L_ref / L)
     
     // Convenience accessors
     size_t size_bytes() const { return size * sizeof(float); }
@@ -928,6 +985,49 @@ struct Tensor {
     bool is_contiguous() const { return true; }  // Always true (no stride support)
     
     //--------------------------------------------------//
+    // RULE 20: Validation Methods (Fail Loud)
+    //--------------------------------------------------//
+    
+    /// Returns true if tensor has valid data pointer and shape
+    bool is_valid() const {
+        return data != nullptr && shape.is_valid();
+    }
+    
+    /// RULE 20: Throws if tensor is invalid - returns self for chaining
+    const Tensor& require(const char* context) const {
+        if (!data) {
+            throw std::runtime_error(std::string(context) + ": Tensor has NULL data pointer" +
+                                     (name ? std::string(" (name=") + name + ")" : ""));
+        }
+        shape.require(context);
+        return *this;
+    }
+    
+    /// RULE 20: Throws if tensor is invalid - returns mutable self for chaining
+    Tensor& require_mut(const char* context) {
+        if (!data) {
+            throw std::runtime_error(std::string(context) + ": Tensor has NULL data pointer" +
+                                     (name ? std::string(" (name=") + name + ")" : ""));
+        }
+        shape.require(context);
+        return *this;
+    }
+    
+    /// RULE 20: Throws if gradient is not available
+    const Tensor& require_grad(const char* context) const {
+        require(context);
+        if (!requires_grad) {
+            throw std::runtime_error(std::string(context) + ": Tensor does not require grad" +
+                                     (name ? std::string(" (name=") + name + ")" : ""));
+        }
+        if (!grad) {
+            throw std::runtime_error(std::string(context) + ": Tensor grad buffer is NULL" +
+                                     (name ? std::string(" (name=") + name + ")" : ""));
+        }
+        return *this;
+    }
+    
+    //--------------------------------------------------//
     // Memory Management
     //--------------------------------------------------//
     
@@ -964,11 +1064,20 @@ void set_autograd_cublas_handle(cublasHandle_t handle);
 cublasHandle_t get_autograd_cublas_handle();
 
 /**
- * Matrix multiplication: C = A @ B
+ * Matrix multiplication: C = A @ B  (or C = A @ B^T if transpose_b=true)
  * Creates MatMulGradFn node if either input requires_grad
  * Requires: call set_autograd_cublas_handle() first
+ *
+ * TAPE-BASED: Uses external cache pointers for backward pass.
+ * If a_cache/b_cache is nullptr, uses tensor data directly (assumes it persists).
+ * 
+ * @param a_cache External cache for A (needed if B requires grad)
+ * @param b_cache External cache for B (needed if A requires grad)
+ * @param transpose_b If true, computes A @ B^T instead of A @ B
  */
-Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
+Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr,
+              const float* a_cache = nullptr, const float* b_cache = nullptr,
+              bool transpose_b = false);
 
 /**
  * Element-wise addition: C = A + B
@@ -977,14 +1086,25 @@ Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
 
 /**
  * GELU activation: y = x * 0.5 * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+ *
+ * TAPE-BASED: Uses external cache pointer for backward pass.
+ * If input_cache is nullptr, uses tensor data directly (assumes it persists).
+ * 
+ * @param input_cache External cache for input (needed for backward)
  */
-Tensor gelu(const Tensor& x, cudaStream_t stream = nullptr);
+Tensor gelu(const Tensor& x, cudaStream_t stream = nullptr, 
+            const float* input_cache = nullptr);
 
 /**
  * RMSNorm: y = x / rms(x) * gamma
+ *
+ * TAPE-BASED: Uses external cache pointer for backward pass.
+ * If input_cache is nullptr, uses tensor data directly (assumes it persists).
+ *
+ * @param input_cache External cache for input (needed for backward)
  */
 Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps = 1e-5f, 
-                cudaStream_t stream = nullptr);
+                cudaStream_t stream = nullptr, const float* input_cache = nullptr);
 
 /**
  * Softmax cross-entropy loss (fused for numerical stability)
@@ -1061,12 +1181,17 @@ Tensor residual_add(const Tensor& x, const Tensor& residual,
                     cudaStream_t stream = nullptr);
 
 /**
- * Scaled dot-product attention with optional mask
+ * Scaled dot-product attention with optional mask and ALiBi
+ * 
+ * @param cache_softmax_lse If provided, the softmax LSE values will be copied here
+ *                          for use by legacy backward passes. Must have size
+ *                          [batch, num_heads, seq] (fp32).
  */
 Tensor scaled_dot_product_attention(
     const Tensor& q, const Tensor& k, const Tensor& v,
-    const Tensor* mask = nullptr, float scale = 0.0f,
-    cudaStream_t stream = nullptr);
+    const float* alibi_slopes = nullptr, float scale = 0.0f,
+    cudaStream_t stream = nullptr,
+    float* cache_softmax_lse = nullptr);
 
 }  // namespace autograd
 

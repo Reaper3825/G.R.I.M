@@ -34,6 +34,7 @@
 #include "../FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/PBM/PositionalBiasMethod.hpp"
+#include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 namespace GRIM {
 
@@ -106,87 +107,13 @@ struct EncodingConfig {
 };
 
 //======================================================//
-//  Forward Arguments
+//  NOTE: EncodingForwardArgs DELETED per Rule 20
+//  
+//  Autograd forward takes Tensor directly:
+//    Tensor forward(const Tensor& input, int seq_len, cudaStream_t stream);
+//  
+//  Autograd tape handles all caching for backward pass automatically.
 //======================================================//
-
-struct EncodingForwardArgs {
-    // Required I/O - NULL pointers will throw
-    const float* input = nullptr;   // [total_tokens, d_model]
-    float* output = nullptr;        // [total_tokens, d_model]
-    
-    // Dimensions - MUST be specified
-    int total_tokens = 0;           // batch * seq_len
-    int seq_len = 0;                // Sequence length (batch = total_tokens / seq_len)
-    
-    // Execution - REQUIRED (Rule 20: no fallbacks)
-    cudaStream_t stream = nullptr;  // Caller MUST provide valid stream, nullptr will throw
-    
-    // Optional entropy output for attention diagnostics
-    // Size: [batch_size * num_heads] floats (batch_size = total_tokens / seq_len)
-    // Flash Attention forward kernel computes mean entropy per (batch, head)
-    float* entropy_output = nullptr;  // nullptr = don't compute entropy (zero overhead)
-
-    // Flash Attention BF16 scratch buffers (required for FA v2)
-    __nv_bfloat16* fa_q_bf16 = nullptr;
-    __nv_bfloat16* fa_k_bf16 = nullptr;
-    __nv_bfloat16* fa_v_bf16 = nullptr;
-    __nv_bfloat16* fa_out_bf16 = nullptr;
-    size_t fa_q_bf16_elems = 0;
-    size_t fa_kv_bf16_elems = 0;
-    
-    // Optional caches for backward pass (all nullptr = inference mode)
-    // These names MUST match EncoderLayerCache in grim_language_model_cuda.hpp!
-    
-    // RMSNorm caches
-    float* cache_ln1_input = nullptr;    // [total_tokens, d_model] - input to RMS1 (layer input)
-    float* cache_ln1_out = nullptr;       // [total_tokens, d_model] - RMS1 output (matches ln1_output)
-    float* cache_attn_input = nullptr;    // [total_tokens, d_model] - input to attention (same as ln1_out)
-    float* cache_ln2_input = nullptr;     // [total_tokens, d_model] - input to RMS2 (residual1)
-    float* cache_ln2_out = nullptr;       // [total_tokens, d_model] - RMS2 output (matches ln2_output)
-    
-    // Attention caches (BHSD format for Flash Attention backward)
-    float* cache_q = nullptr;             // [batch, num_heads, seq, head_dim]
-    float* cache_k = nullptr;             // [batch, num_kv_heads, seq, head_dim]
-    float* cache_v = nullptr;             // [batch, num_kv_heads, seq, head_dim]
-    float* cache_attn_bhsd = nullptr;     // [batch, num_heads, seq, head_dim] - attn out before W_o
-    float* cache_softmax_lse = nullptr;   // [batch, num_heads, seq] - FP32 dense LSE
-    float* cache_attn_out = nullptr;      // [batch, num_heads, seq, head_dim] - alias for cache_attn_bhsd
-    float* cache_attn_output = nullptr;   // [total_tokens, d_model] - after W_o projection
-    
-    // FFN caches
-    float* cache_ffn_input = nullptr;     // [total_tokens, d_model] - FFN input (same as ln2_out)
-    float* cache_ffn_pre_gelu = nullptr;  // [total_tokens, d_ff]
-    float* cache_ffn_output = nullptr;    // [total_tokens, d_ff]
-    
-    // Residual caches
-    float* cache_residual1 = nullptr;     // [total_tokens, d_model]
-    float* cache_layer_output = nullptr;  // [total_tokens, d_model] - final layer output
-    
-    // Validation
-    void validate(const char* context) const {
-        if (!input) {
-            throw std::invalid_argument(std::string(context) + ": input MUST NOT be null");
-        }
-        if (!output) {
-            throw std::invalid_argument(std::string(context) + ": output MUST NOT be null");
-        }
-        if (total_tokens <= 0) {
-            throw std::invalid_argument(std::string(context) + 
-                ": total_tokens MUST be > 0, got " + std::to_string(total_tokens));
-        }
-        if (seq_len <= 0) {
-            throw std::invalid_argument(std::string(context) + 
-                ": seq_len MUST be > 0, got " + std::to_string(seq_len));
-        }
-        if (total_tokens % seq_len != 0) {
-            throw std::invalid_argument(std::string(context) + 
-                ": total_tokens (" + std::to_string(total_tokens) + 
-                ") must be divisible by seq_len (" + std::to_string(seq_len) + ")");
-        }
-    }
-    
-    int batchSize() const { return (seq_len > 0) ? (total_tokens / seq_len) : 0; }
-};
 
 //======================================================//
 //  NOTE: EncodingBackwardArgs DELETED per Rule 20
@@ -226,10 +153,27 @@ public:
     const EncodingConfig& config() const noexcept { return config_; }
     
     //--------------------------------------------------
-    // Forward Pass
-    // NOTE: backward() DELETED per Rule 20 - use BackwardPhase2_Encoder.cu
+    // Forward Pass - Autograd
+    // NOTE: backward() handled by autograd via output.backward()
+    //       OR by legacy BackwardPhase2_Encoder.cu via cached buffers
     //--------------------------------------------------
-    void forward(const EncodingForwardArgs& args);
+    /**
+     * Encoder forward with autograd tracking:
+     *   ln1 = RMSNorm(input)
+     *   attn_out = Attention(ln1) + input  (residual)
+     *   ln2 = RMSNorm(attn_out)
+     *   output = FFN(ln2) + attn_out  (residual)
+     * 
+     * Builds compute graph for automatic backward().
+     * 
+     * @param input [total_tokens, d_model] - encoder input (from embedding or prev layer)
+     * @param seq_len sequence length (for attention masking)
+     * @param stream CUDA stream for execution
+     * @param cache (optional) EncoderLayerCache to populate for legacy backward
+     * @return output [total_tokens, d_model] with grad_fn attached
+     */
+    Tensor forward(const Tensor& input, int seq_len, cudaStream_t stream,
+                   struct EncoderLayerCache* cache = nullptr);
     
     //--------------------------------------------------
     // Weight Management
@@ -237,35 +181,85 @@ public:
     void allocateWeights();  // Call once after setConfig
     void ensureWeightStorage() { allocateWeights(); }  // Alias for compatibility
     bool weightsAllocated() const noexcept { return weights_allocated_; }
+    bool usingExternalWeights() const noexcept { return using_external_weights_; }
     
-    // RMSNorm weights (gamma only - NO BETA, this is RMSNorm not LayerNorm!)
-    float* getRMS1Gamma() { return rms1_gamma_; }
-    float* getRMS2Gamma() { return rms2_gamma_; }
-    float* getRMS1GammaGrad() { return rms1_gamma_grad_; }
-    float* getRMS2GammaGrad() { return rms2_gamma_grad_; }
+    /**
+     * Use external weight Tensors from TrainingState instead of allocating own.
+     * 
+     * CRITICAL for autograd: When this is called, the EncodingLayer's internal
+     * Tensor objects (W_qkv_, rms1_gamma_, etc.) become VIEWS of the TrainingState
+     * weight Tensors. This means:
+     *   - autograd backward writes gradients directly to TrainingState buffers
+     *   - optimizer sees correct gradients without any copying
+     *   - weight updates apply to the single shared copy
+     * 
+     * This MUST be called before forward() if using autograd training.
+     * Calling allocateWeights() after this will throw (prevents confusion).
+     * 
+     * @param rms1_gamma [d_model] - pre-attention RMSNorm gamma
+     * @param rms2_gamma [d_model] - pre-FFN RMSNorm gamma  
+     * @param qkv_weight [(d_model + 2*kv_dim), d_model] - QKV projection weights
+     * @param qkv_bias [d_model + 2*kv_dim] - QKV projection bias (can be empty)
+     * @param out_weight [d_model, d_model] - output projection weights
+     * @param out_bias [d_model] - output projection bias (can be empty)
+     * @param ffn_w1 [d_ff, d_model] - FFN up-projection
+     * @param ffn_b1 [d_ff] - FFN bias 1 (can be empty)
+     * @param ffn_w2 [d_model, d_ff] - FFN down-projection
+     * @param ffn_b2 [d_model] - FFN bias 2 (can be empty)
+     */
+    void useExternalWeights(
+        Tensor& rms1_gamma,
+        Tensor& rms2_gamma,
+        Tensor& qkv_weight,
+        Tensor& qkv_bias,
+        Tensor& out_weight,
+        Tensor& out_bias,
+        Tensor& ffn_w1,
+        Tensor& ffn_b1,
+        Tensor& ffn_w2,
+        Tensor& ffn_b2
+    );
     
-    // Attention weights
-    // W_qkv layout: [W_q: d_model x d_model][W_k: kv_dim x d_model][W_v: kv_dim x d_model]
-    // Total size: (d_model + 2*kv_dim) * d_model
-    float* getAttnWqkv() { return W_qkv_; }
-    float* getAttnBqkv() { return b_qkv_; }
-    float* getAttnWo() { return W_o_; }
-    float* getAttnBo() { return b_o_; }
+    // Tensor weight accessors (for autograd)
+    Tensor& rms1Gamma() { return rms1_gamma_; }
+    Tensor& rms2Gamma() { return rms2_gamma_; }
+    Tensor& attnWqkv() { return W_qkv_; }
+    Tensor& attnBqkv() { return b_qkv_; }
+    Tensor& attnWo() { return W_o_; }
+    Tensor& attnBo() { return b_o_; }
     
-    // Attention weight gradients
-    float* getAttnWqkvGrad() { return W_qkv_grad_; }
-    float* getAttnBqkvGrad() { return b_qkv_grad_; }
-    float* getAttnWoGrad() { return W_o_grad_; }
-    float* getAttnBoGrad() { return b_o_grad_; }
+    // Raw data accessors (for serialization - returns Tensor.data)
+    float* getRMS1Gamma() { return rms1_gamma_.data; }
+    float* getRMS2Gamma() { return rms2_gamma_.data; }
+    float* getRMS1GammaGrad() { return rms1_gamma_.grad; }
+    float* getRMS2GammaGrad() { return rms2_gamma_.grad; }
     
-    // FFN weights (owned by FeedForwardLayer)
-    float* getFFNW1() { return ffn_ ? ffn_->getW1() : nullptr; }
-    float* getFFNB1() { return ffn_ ? ffn_->getB1() : nullptr; }
-    float* getFFNW2() { return ffn_ ? ffn_->getW2() : nullptr; }
-    float* getFFNB2() { return ffn_ ? ffn_->getB2() : nullptr; }
+    // Attention weights - raw data (for serialization)
+    float* getAttnWqkv() { return W_qkv_.data; }
+    float* getAttnBqkv() { return b_qkv_.data; }
+    float* getAttnWo() { return W_o_.data; }
+    float* getAttnBo() { return b_o_.data; }
     
-    // NOTE: FFN gradient buffers are managed by TrainingState, not EncodingLayer
-    // Use TrainingState::ffn_w1_grads[layer], ffn_b1_grads[layer], etc.
+    // Attention weight gradients (from Tensor.grad)
+    float* getAttnWqkvGrad() { return W_qkv_.grad; }
+    float* getAttnBqkvGrad() { return b_qkv_.grad; }
+    float* getAttnWoGrad() { return W_o_.grad; }
+    float* getAttnBoGrad() { return b_o_.grad; }
+    
+    // FFN weight raw data (for serialization, owned by FeedForwardLayer's Tensors)
+    float* getFFNW1() { return ffn_ ? ffn_->W1().data : nullptr; }
+    float* getFFNB1() { return ffn_ ? ffn_->b1().data : nullptr; }
+    float* getFFNW2() { return ffn_ ? ffn_->W2().data : nullptr; }
+    float* getFFNB2() { return ffn_ ? ffn_->b2().data : nullptr; }
+    
+    // FFN gradient raw data (from Tensor.grad)
+    float* getFFNW1Grad() { return ffn_ ? ffn_->W1().grad : nullptr; }
+    float* getFFNB1Grad() { return ffn_ ? ffn_->b1().grad : nullptr; }
+    float* getFFNW2Grad() { return ffn_ ? ffn_->W2().grad : nullptr; }
+    float* getFFNB2Grad() { return ffn_ ? ffn_->b2().grad : nullptr; }
+    
+    // Direct access to FFN layer (for autograd forward)
+    FeedForwardLayer* getFfnLayer() { return ffn_.get(); }
     
     //--------------------------------------------------
     // Flash Attention Control
@@ -282,7 +276,8 @@ public:
     void setWorkspace(float* workspace, std::size_t bytes);
     
     // NOTE: CRTP interface (forwardImpl, backwardImpl, applyGradientsImpl) DELETED per Rule 20
-    // Use forward(EncodingForwardArgs&) directly. Training uses BackwardPhase2_Encoder.cu.
+    // Use Tensor forward(const Tensor& input, int seq_len, cudaStream_t) directly.
+    // Training backward uses BackwardPhase2_Encoder.cu.
     
 private:
     void freeWeights();
@@ -290,28 +285,22 @@ private:
     
     EncodingConfig config_{};
     bool weights_allocated_ = false;
+    bool using_external_weights_ = false;  // True if weights are views of external Tensors
     
     // NOTE: cuBLAS handle is in config_.cublas_handle (NOT owned - Rule 22)
     
-    // RMSNorm weights (gamma only!)
-    float* rms1_gamma_ = nullptr;
-    float* rms2_gamma_ = nullptr;
-    float* rms1_gamma_grad_ = nullptr;
-    float* rms2_gamma_grad_ = nullptr;
+    // RMSNorm weights (Tensor with requires_grad=true)
+    Tensor rms1_gamma_;    // [d_model]
+    Tensor rms2_gamma_;    // [d_model]
     
-    // Attention weights
-    float* W_qkv_ = nullptr;        // [(d_model + 2*kv_dim), d_model]
-    float* b_qkv_ = nullptr;        // [d_model + 2*kv_dim]
-    float* W_o_ = nullptr;          // [d_model, d_model]
-    float* b_o_ = nullptr;          // [d_model]
+    // Attention weights (Tensor with requires_grad=true)
+    // W_qkv layout: [W_q: d_model x d_model][W_k: kv_dim x d_model][W_v: kv_dim x d_model]
+    Tensor W_qkv_;         // [(d_model + 2*kv_dim), d_model]
+    Tensor b_qkv_;         // [d_model + 2*kv_dim]
+    Tensor W_o_;           // [d_model, d_model]
+    Tensor b_o_;           // [d_model]
     
-    // Attention weight gradients
-    float* W_qkv_grad_ = nullptr;
-    float* b_qkv_grad_ = nullptr;
-    float* W_o_grad_ = nullptr;
-    float* b_o_grad_ = nullptr;
-    
-    // FFN layer (owns its own weights)
+    // FFN layer (owns its own weights as Tensors)
     std::unique_ptr<FeedForwardLayer> ffn_;
     
     // Workspace (NOT owned - provided by caller)

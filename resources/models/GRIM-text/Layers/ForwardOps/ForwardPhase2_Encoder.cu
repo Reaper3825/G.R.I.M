@@ -57,80 +57,76 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
     const int total_tokens = ctx.total_tokens;
     const int num_layers = ctx.gpu_encoder->getNumLayers();
 
+    fprintf(stderr, "[PHASE_TIMING] Phase2 (Encoder) START: num_layers=%d total_tokens=%d\n", num_layers, total_tokens);
+
     // Issue #37 DIAGNOSTIC: Set W[277] reference for hidden state alignment tracking
     // Tensor API: use .data field
     if (ts->lm_head_weights.data) {
         setEncoderW277Reference(ts->lm_head_weights.data, cfg->vocab_size, cfg->d_model, ctx.stream);
         resetEncoderDiagCount();
     }
+    fprintf(stderr, "[PHASE_TIMING] Phase2: W277 reference set, entering layer loop\n");
 
     for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
+        fprintf(stderr, "[PHASE_TIMING] Phase2: Layer %d/%d START\n", layer_idx, num_layers);
 
         // Get the encoder layer
         auto* enc_layer = ctx.gpu_encoder->getLayer(layer_idx);
         if (!enc_layer) {
             FWD_FAIL_LOUD(ctx, ForwardStatus::NULL_POINTER, "encoder layer is null", layer_idx);
         }
+        
+        // Guarded verbose layer timing logs (set true to debug layer execution)
+        constexpr bool kEnableVerboseLayerTiming = false;
+        if constexpr (kEnableVerboseLayerTiming) {
+            fprintf(stderr, "[PHASE_TIMING] Phase2: Layer %d: got encoder layer, setting workspace\n", layer_idx);
+        }
 
         // Setup workspace
         LayerWorkspace<float> ws{};
         ws.data = ts->encoder_workspace;
         ws.bytes = enc_layer->requiredWorkspaceBytes(total_tokens, ctx.seq_len);
-
-        // Build EncodingForwardArgs - using ctx.stream (centralized)
-        EncodingForwardArgs args{};
-        args.input = d_layer_input;
-        args.output = encoder_output;
-        args.total_tokens = total_tokens;
-        args.seq_len = ctx.seq_len;
-        args.stream = ctx.stream;  // Use ForwardContext stream (centralized controller)
-
-        // Wire QKV caches
-        if (!ts->cached_Q.empty() && !ts->cached_K.empty() && !ts->cached_V.empty()) {
-            args.cache_q = ts->cached_Q[layer_idx];
-            args.cache_k = ts->cached_K[layer_idx];
-            args.cache_v = ts->cached_V[layer_idx];
-            // DIAGNOSTIC: Issue #36 - verify cache pointers are wired
-            if (layer_idx == 0) {
-                fprintf(stderr, "[FWD_CACHE_WIRE] layer=0 args.cache_q=%p ts->cached_Q[0]=%p\n",
-                        (void*)args.cache_q, (void*)ts->cached_Q[0]);
-            }
-        } else {
-            // DIAGNOSTIC: Issue #36 - log if condition fails!
-            fprintf(stderr, "[FWD_CACHE_WIRE] CONDITION FAILED! Q.empty=%d K.empty=%d V.empty=%d\n",
-                    ts->cached_Q.empty(), ts->cached_K.empty(), ts->cached_V.empty());
-        }
-
-        // Wire layer activation caches for backward pass
-        if (ctx.layer_caches && layer_idx < ctx.layer_cache_count) {
-            args.cache_ln1_out = ctx.layer_caches[layer_idx].ln1_output;
-            args.cache_attn_input = ctx.layer_caches[layer_idx].attn_input;
-            args.cache_attn_bhsd = ctx.layer_caches[layer_idx].attn_bhsd;
-            args.cache_softmax_lse = ctx.layer_caches[layer_idx].softmax_lse;
-            args.cache_attn_output = ctx.layer_caches[layer_idx].attn_output;
-            args.cache_residual1 = ctx.layer_caches[layer_idx].residual1;
-            args.cache_ln2_out = ctx.layer_caches[layer_idx].ln2_output;
-            args.cache_ffn_pre_gelu = ctx.layer_caches[layer_idx].ffn_pre_gelu;
-            args.cache_ffn_output = ctx.layer_caches[layer_idx].ffn_output;
-            args.cache_layer_output = ctx.layer_caches[layer_idx].layer_output;
-        }
-
-        // Wire Flash Attention BF16 scratch
-        args.fa_q_bf16 = fa_scratch.q;
-        args.fa_k_bf16 = fa_scratch.k;
-        args.fa_v_bf16 = fa_scratch.v;
-        args.fa_out_bf16 = fa_scratch.out;
-        args.fa_q_bf16_elems = fa_scratch.q_elems;
-        args.fa_kv_bf16_elems = fa_scratch.kv_elems;
-
-        // Wire entropy output (per-layer: batch_size * num_heads)
-        if (ctx.enable_entropy_output && ts->d_entropy_output) {
-            args.entropy_output = ts->d_entropy_output + (layer_idx * ctx.batch_size * cfg->num_heads);
-        }
-
-        // Execute layer forward
         enc_layer->setWorkspace(ws.data, ws.bytes);
-        enc_layer->forward(args);
+        
+        if constexpr (kEnableVerboseLayerTiming) {
+            fprintf(stderr, "[PHASE_TIMING] Phase2: Layer %d: workspace set (%zu bytes), creating input tensor\n", layer_idx, ws.bytes);
+        }
+
+        // Wrap input as Tensor (non-owning view)
+        TensorContract::TensorShape input_shape = TensorContract::TensorShape::make_BSM(total_tokens, cfg->d_model);
+        Tensor input_tensor = Tensor::from_ptr(
+            const_cast<float*>(d_layer_input), input_shape, false, false);  // not owned, no grad
+        
+        if constexpr (kEnableVerboseLayerTiming) {
+            fprintf(stderr, "[PHASE_TIMING] Phase2: Layer %d: calling forward()...\n", layer_idx);
+        }
+        
+        // HYBRID FIX: Get the layer cache for legacy backward pass
+        // Pass cache pointer so forward() populates cached activations
+        EncoderLayerCache* layer_cache = nullptr;
+        if (ctx.layer_caches && layer_idx < ctx.layer_cache_count) {
+            layer_cache = &ctx.layer_caches[layer_idx];
+            if constexpr (kEnableVerboseLayerTiming) {
+                fprintf(stderr, "[PHASE_TIMING] Phase2: Layer %d: using layer cache at %p\n", 
+                        layer_idx, (void*)layer_cache);
+            }
+        }
+        
+        // Execute layer forward - returns Tensor, optionally populates cache
+        Tensor output_tensor = enc_layer->forward(input_tensor, ctx.seq_len, ctx.stream, layer_cache);
+        
+        if constexpr (kEnableVerboseLayerTiming) {
+            fprintf(stderr, "[PHASE_TIMING] Phase2: Layer %d: forward() returned\n", layer_idx);
+        }
+        
+        // Copy output to encoder_output buffer for next layer / final output
+        cudaMemcpyAsync(encoder_output, output_tensor.data,
+                        static_cast<size_t>(total_tokens) * cfg->d_model * sizeof(float),
+                        cudaMemcpyDeviceToDevice, ctx.stream);
+        
+        if constexpr (kEnableVerboseLayerTiming) {
+            fprintf(stderr, "[PHASE_TIMING] Phase2: Layer %d COMPLETE\n", layer_idx);
+        }
 
         // === DIAGNOSTIC: Log per-layer h values ===
         // LOG THE ACTUAL h VALUES for debugging mode collapse
@@ -187,6 +183,7 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
         // Next layer's input is this layer's output
         d_layer_input = encoder_output;
     }
+    fprintf(stderr, "[PHASE_TIMING] Phase2: All %d layers complete, running diagnostics\n", num_layers);
 
     // === DIAGNOSTIC: Final encoder output ===
     // Expected: After all 12 layers, variance should be ~1.2 (RMSNorm constrains growth)
@@ -199,8 +196,10 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
             ctx.stream);
     }
     // === END DIAGNOSTIC ===
+    fprintf(stderr, "[PHASE_TIMING] Phase2: Diagnostics complete, checking CUDA errors\n");
 
     FWD_CHECK_CUDA(ctx, cudaGetLastError(), "encoder layer forward", -1);
+    fprintf(stderr, "[PHASE_TIMING] Phase2: CUDA error check passed\n");
 
     if (ctx.enable_activation_quantization && cfg->activation_quantization.enabled) {
         const size_t tokens = static_cast<size_t>(ctx.total_tokens);
@@ -248,6 +247,7 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
             quantize_buffer(encoder_output, elements);
         }
     }
+    fprintf(stderr, "[PHASE_TIMING] Phase2 (Encoder) COMPLETE\n");
 
     return ForwardStatus::SUCCESS;
 }

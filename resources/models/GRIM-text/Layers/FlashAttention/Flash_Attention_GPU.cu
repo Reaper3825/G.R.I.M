@@ -248,21 +248,6 @@ void FlashAttentionLayer::backward(const FlashAttentionBackwardArgs& args,
     fa_fwd_valid_ = false;
 }
 
-void FlashAttentionLayer::onConfigure(const Dimensions& dims) {
-    config_.seq_len = dims.input;
-    config_.head_dim = dims.output;
-}
-
-void FlashAttentionLayer::forwardImpl(const LayerIO<float>&,
-                                      LayerWorkspace<float>*) {
-    throw std::runtime_error("[FlashAttn] forwardImpl is deprecated; call forward() with BHSD Q/K/V");
-}
-
-void FlashAttentionLayer::backwardImpl(const LayerIO<float>&,
-                                       LayerWorkspace<float>*) {
-    throw std::runtime_error("[FlashAttn] backwardImpl is deprecated; call backward() with BHSD Q/K/V");
-}
-
 FlashAttentionConfig FlashAttentionLayer::makeConfig(
     const FlashAttentionForwardArgs& args) const {
     if (args.batch_size == 0) {

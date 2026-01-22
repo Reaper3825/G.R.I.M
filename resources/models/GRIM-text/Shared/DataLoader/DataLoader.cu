@@ -136,7 +136,7 @@ bool PrepareTrainingDataFromCache(
 		// Read vocab size from GRMT file
 		std::ifstream grmt_file(out_training_data_path, std::ios::binary);
 		if (grmt_file.is_open()) {
-			constexpr uint32_t kExpectedGrmtVersion = 4;  // GRMT v4: adds text features
+			constexpr uint32_t kExpectedGrmtVersion = 6;  // GRMT v6: adds per-token byte_lengths
 			uint32_t magic = 0, version = 0, num_sequences = 0, grmt_vocab_size = 0;
 			grmt_file.read(reinterpret_cast<char*>(&magic), 4);
 			grmt_file.read(reinterpret_cast<char*>(&version), 4);
@@ -344,6 +344,7 @@ bool PrepareTrainingDataFromCache(
 		std::vector<uint8_t> numeric_mask;
 		std::vector<uint16_t> text_features;  // [tokens * kTextFeatureDim] FP16
 		std::vector<uint8_t> text_feature_mask;  // Per-token mask
+		std::vector<uint16_t> byte_lengths;  // GRMT v6: per-token byte length of original text
 	};
 
 	// Get BOS/EOS IDs for target masking
@@ -362,10 +363,12 @@ bool PrepareTrainingDataFromCache(
 			seq.numeric_mask = std::move(result.token_numeric_mask);
 			seq.text_features = std::move(result.token_text_features);
 			seq.text_feature_mask = std::move(result.token_text_mask);
+			seq.byte_lengths = std::move(result.token_byte_lengths);  // GRMT v6: byte lengths
 			if (seq.numeric_values.size() != seq.token_ids.size() ||
 				seq.numeric_mask.size() != seq.token_ids.size() ||
 				seq.text_features.size() != seq.token_ids.size() * GRIM::Tokenizer::kTextFeatureDim ||
-				seq.text_feature_mask.size() != seq.token_ids.size()) {
+				seq.text_feature_mask.size() != seq.token_ids.size() ||
+				seq.byte_lengths.size() != seq.token_ids.size()) {
 				throw std::runtime_error("[DataLoader] Token/numeric side-channel length mismatch");
 			}
 			
@@ -480,6 +483,10 @@ bool PrepareTrainingDataFromCache(
 			chunk.targets.assign(seq.targets.begin() + start,
 								 seq.targets.begin() + end);
 			
+			// GRMT v6: Copy byte_lengths for this chunk
+			chunk.byte_lengths.assign(seq.byte_lengths.begin() + start,
+									  seq.byte_lengths.begin() + end);
+			
 			// Mask the last target in each chunk (can't predict across chunk boundary)
 			if (!chunk.targets.empty()) {
 				chunk.targets.back() = -1;
@@ -535,7 +542,7 @@ bool PrepareTrainingDataFromCache(
 		}
 
 		uint32_t magic = 0x474D5254; // "GRMT"
-		uint32_t version = 5;  // GRMT v5: adds pre-computed targets
+		uint32_t version = 6;  // GRMT v6: adds per-token byte_lengths for loss weighting
 		uint32_t num_sequences = static_cast<uint32_t>(chunked_data.size());
 		// CRITICAL: Use totalVocabSize() to include byte (256) + atom (256) + unigram tokens
 		// vocabSize() only returns unigram count, but token IDs go up to (512 + unigram_count - 1)
@@ -563,6 +570,9 @@ bool PrepareTrainingDataFromCache(
 					len * GRIM::Tokenizer::kTextFeatureDim * sizeof(uint16_t));
 			file.write(reinterpret_cast<const char*>(seq.text_feature_mask.data()),
 					len * sizeof(uint8_t));
+			// GRMT v6: Per-token byte lengths for loss weighting
+			file.write(reinterpret_cast<const char*>(seq.byte_lengths.data()),
+					len * sizeof(uint16_t));
 		}
 		return file.good();
 	};

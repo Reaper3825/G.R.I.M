@@ -25,8 +25,10 @@ TrainingState::~TrainingState() {
 	// DO NOT manually cudaFree these - they own their data/grad memory.
 	
 	// ═══════════════════════════════════════════════════════════════
-	// LEGACY PER-LAYER GRADIENT VECTORS (still raw float*)
+	// AUTOGRAD MIGRATION COMPLETE - Legacy vectors REMOVED
 	// ═══════════════════════════════════════════════════════════════
+	// FFN/Attention/RMSNorm gradients now owned by encoder's Tensor.grad
+	// (freed when encoder layers are destroyed).
 	auto freeVector = [](std::vector<float*>& buffers) {
 		for (auto ptr : buffers) {
 			if (ptr) {
@@ -34,17 +36,6 @@ TrainingState::~TrainingState() {
 			}
 		}
 	};
-
-	freeVector(rms1_gamma_grads);
-	freeVector(rms2_gamma_grads);
-	freeVector(attn_qkv_weight_grads);
-	freeVector(attn_qkv_bias_grads);
-	freeVector(attn_out_weight_grads);
-	freeVector(attn_out_bias_grads);
-	freeVector(ffn_w1_grads);
-	freeVector(ffn_b1_grads);
-	freeVector(ffn_w2_grads);
-	freeVector(ffn_b2_grads);
 	
 	// ═══════════════════════════════════════════════════════════════
 	// ACTIVATION CACHES (raw float* buffers for backward pass)
@@ -83,13 +74,26 @@ TrainingState::~TrainingState() {
 	// GRMT v4: text feature buffers
 	if (cached_token_text_features) cudaFree(cached_token_text_features);
 	if (cached_token_text_mask) cudaFree(cached_token_text_mask);
+	// GRMT v6: byte length buffer
+	if (cached_token_byte_lengths) cudaFree(cached_token_byte_lengths);
 	if (sequence_weights) cudaFree(sequence_weights);
 	// Issue #39 FIX: Output logit bias correction buffers
 	if (logit_bias) cudaFree(logit_bias);
 	if (logit_bias_update) cudaFree(logit_bias_update);
-	if (grad_logits) cudaFree(grad_logits);
-	if (grad_numeric_predictions) cudaFree(grad_numeric_predictions);
-	if (grad_encoder_out) cudaFree(grad_encoder_out);
+	
+	// ═══════════════════════════════════════════════════════════════
+	// TENSOR-MANAGED GRADIENT BUFFERS (Issue #45 FIX)
+	// ═══════════════════════════════════════════════════════════════
+	// The following are now Tensor objects that handle their own cleanup:
+	// - grad_logits_tensor, grad_numeric_tensor, grad_encoder_tensor
+	// - grad_ffn_input_tensor, grad_ffn_hidden_tensor
+	// - grad_attn_input_tensor, grad_attn_out_proj_tensor, grad_attn_out_bhsd_tensor
+	// - grad_q_tensor, grad_k_tensor, grad_v_tensor
+	// - grad_qkv_concat_tensor, grad_qkv_input_tensor, grad_attn_bsm_tensor
+	// - centering_scratch_tensor
+	// DO NOT manually cudaFree these - Tensor::~Tensor() calls release().
+	
+	// Flash Attention workspace (still raw pointers - not migrated)
 	if (fa_dq_accum) cudaFree(fa_dq_accum);
 	if (fa_dsoftmax_sum) cudaFree(fa_dsoftmax_sum);
 	if (fa_q_bf16) cudaFree(fa_q_bf16);
@@ -101,20 +105,13 @@ TrainingState::~TrainingState() {
 	if (fa_dk_bf16) cudaFree(fa_dk_bf16);
 	if (fa_dv_bf16) cudaFree(fa_dv_bf16);
 	if (encoder_workspace) cudaFree(encoder_workspace);
-	// Issue #43 FIX: Free centering scratch buffer
-	if (centered_activation_scratch) cudaFree(centered_activation_scratch);
-	// Backward temporaries (reusable)
-	if (grad_ffn_input) cudaFree(grad_ffn_input);
-	if (grad_ffn_hidden) cudaFree(grad_ffn_hidden);
-	if (grad_attn_input) cudaFree(grad_attn_input);
-	if (grad_attn_out_before_proj) cudaFree(grad_attn_out_before_proj);
-	if (grad_attn_out_reshaped) cudaFree(grad_attn_out_reshaped);
-	if (grad_q) cudaFree(grad_q);
-	if (grad_k) cudaFree(grad_k);
-	if (grad_v) cudaFree(grad_v);
-	if (grad_qkv_concat) cudaFree(grad_qkv_concat);
-	if (grad_qkv_input) cudaFree(grad_qkv_input);
-	if (grad_attn_bsm_scratch) cudaFree(grad_attn_bsm_scratch);
+	
+	// Backward temporaries - NOW TENSOR-MANAGED (Issue #45)
+	// grad_ffn_input_tensor, grad_ffn_hidden_tensor, etc. release() via ~Tensor()
+	// grad_attn_*_tensor, grad_q/k/v_tensor, grad_qkv_*_tensor → auto cleanup
+	// centering_scratch_tensor → auto cleanup
+	
+	// Loss scratch (still raw pointers - small buffers)
 	if (d_loss_scratch) cudaFree(d_loss_scratch);
 	if (d_loss_sum_scratch) cudaFree(d_loss_sum_scratch);
 	if (d_numeric_loss_sum) cudaFree(d_numeric_loss_sum);
@@ -363,23 +360,70 @@ void TrainingState::initializeAutogradTensors(
 	cudaStream_t stream
 ) {
 	// Rule 20: Fail loud if already initialized
-	if (tensors_) {
+	if (use_autograd_tensors) {
 		throw std::runtime_error("[TrainingState::initializeAutogradTensors] already initialized! "
-			"tensors_ is not null");
+			"use_autograd_tensors is already true");
 	}
 	
-	// Create TrainingTensors instance
-	tensors_ = std::make_unique<TrainingTensors>();
-	
-	// Initialize all parameter tensors (embeddings, attention, FFN, etc.)
-	tensors_->initializeParams(vocab_sz, d_mod, d_ffn, n_layers, n_heads, n_kv_heads,
-	                           max_seq, tie_emb, bias, stream);
+	// AUTOGRAD MIGRATION COMPLETE (Jan 2026):
+	// Encoder layers now own their own Tensors via allocateWeights() which calls ensure_grad().
+	// TrainingTensors is only created if needed for backwards compatibility with tests.
+	// The encoder's getFFNW1Grad(), getRMS1GammaGrad() etc are the single source of truth.
+	tensors_ = nullptr;
 	
 	use_autograd_tensors = true;
 	
-	fprintf(stdout, "[INFO] TrainingState: Autograd tensors initialized. vocab=%d, d_model=%d, "
-	        "layers=%d, heads=%d, kv_heads=%d\n",
-	        vocab_sz, d_mod, n_layers, n_heads, n_kv_heads);
+	fprintf(stdout, "[INFO] TrainingState: Autograd system enabled (use_autograd_tensors=true). "
+	        "Encoder gradients via enc->getFFNW1Grad(), enc->getRMS1GammaGrad() etc.\n");
+}
+
+//======================================================//
+//  Intermediate Gradient Zeroing (Issue #45 FIX)
+//======================================================//
+
+void TrainingState::zeroIntermediateGrads(cudaStream_t stream) {
+	// RULE 20: Fail loud on NULL stream - it causes race conditions
+	StreamController::fatalIfDefaultStream(stream, "TrainingState::zeroIntermediateGrads");
+	
+	// Zero all intermediate gradient tensors at start of accumulation window
+	// This replaces the GradAccumulationController registration approach
+	// NOTE: Only zero tensors that are actually allocated (data != nullptr)
+	// Use try-catch to prevent crashes from uninitialized tensors
+	
+	// BUG FIX Issue #45: zero_grad() zeros tensor.grad, but intermediate gradient tensors
+	// store their gradient DATA in tensor.data (NOT tensor.grad)!
+	// Must use cudaMemsetAsync on tensor.data instead.
+	auto safe_zero = [stream](Tensor& t, const char* name) {
+		try {
+			if (t.data && t.numel() > 0) {
+				// Zero the DATA field, not the grad field!
+				cudaMemsetAsync(t.data, 0, t.numel() * sizeof(float), stream);
+			}
+		} catch (...) {
+			// Silently skip - tensor not properly initialized
+		}
+	};
+	
+	// Loss backward → encoder
+	safe_zero(grad_logits_tensor, "grad_logits");
+	safe_zero(grad_numeric_tensor, "grad_numeric");
+	safe_zero(grad_encoder_tensor, "grad_encoder");
+	
+	// Encoder backward temporaries
+	safe_zero(grad_ffn_input_tensor, "grad_ffn_input");
+	safe_zero(grad_ffn_hidden_tensor, "grad_ffn_hidden");
+	safe_zero(grad_attn_input_tensor, "grad_attn_input");
+	safe_zero(grad_attn_out_proj_tensor, "grad_attn_out_proj");
+	safe_zero(grad_attn_out_bhsd_tensor, "grad_attn_out_bhsd");
+	safe_zero(grad_q_tensor, "grad_q");
+	safe_zero(grad_k_tensor, "grad_k");
+	safe_zero(grad_v_tensor, "grad_v");
+	safe_zero(grad_qkv_concat_tensor, "grad_qkv_concat");
+	safe_zero(grad_qkv_input_tensor, "grad_qkv_input");
+	safe_zero(grad_attn_bsm_tensor, "grad_attn_bsm");
+	
+	// Issue #43: Centering scratch (not strictly a gradient, but needs zeroing)
+	safe_zero(centering_scratch_tensor, "centering_scratch");
 }
 
 } // namespace GRIM

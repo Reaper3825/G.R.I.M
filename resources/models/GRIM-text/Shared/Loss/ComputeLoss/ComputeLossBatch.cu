@@ -16,6 +16,7 @@
 #include "../../Layers/ForwardOps/ForwardOps_Orchestrator.hpp"
 #include "../../Layers/ForwardOps/ForwardOps_Logging.hpp"
 #include "ComputeLossHost_GPU.hpp"
+#include "AutogradLoss.hpp"  // Issue #46: Unified autograd loss system
 #include "../LossContext/LossContext.hpp"
 #include "../NumericLoss/NumericLoss_GPU.hpp"
 #include "../../TeacherLogits/TeacherLogits_GPU.hpp"
@@ -57,6 +58,7 @@ BatchPreparationResult prepareLossBatchInputs(
 	const std::vector<std::vector<uint8_t>>& batch_numeric_mask,
 	const std::vector<std::vector<uint16_t>>& batch_text_features,
 	const std::vector<std::vector<uint8_t>>& batch_text_mask,
+	const std::vector<std::vector<uint16_t>>& batch_byte_lengths,
 	size_t max_cached_batch,
 	size_t max_cached_seq_len)
 {
@@ -92,6 +94,7 @@ BatchPreparationResult prepareLossBatchInputs(
 		training_state.batch_prep_numeric_mask.resize(total_tokens);
 		training_state.batch_prep_text_features.resize(text_feat_size);
 		training_state.batch_prep_text_mask.resize(total_tokens);
+		training_state.batch_prep_byte_lengths.resize(total_tokens);  // GRMT v6
 		training_state.batch_prep_sequence_lengths.resize(result.batch_size);
 		training_state.batch_prep_capacity = total_tokens;
 	}
@@ -103,6 +106,7 @@ BatchPreparationResult prepareLossBatchInputs(
 	std::fill(training_state.batch_prep_numeric_mask.begin(), training_state.batch_prep_numeric_mask.begin() + total_tokens, 0);
 	std::fill(training_state.batch_prep_text_features.begin(), training_state.batch_prep_text_features.begin() + text_feat_size, 0);
 	std::fill(training_state.batch_prep_text_mask.begin(), training_state.batch_prep_text_mask.begin() + total_tokens, 0);
+	std::fill(training_state.batch_prep_byte_lengths.begin(), training_state.batch_prep_byte_lengths.begin() + total_tokens, 0);  // GRMT v6
 	
 	// Assign result to reference cached buffers
 	result.padded_input_ids = training_state.batch_prep_input_ids;
@@ -111,6 +115,7 @@ BatchPreparationResult prepareLossBatchInputs(
 	result.padded_numeric_mask = training_state.batch_prep_numeric_mask;
 	result.padded_text_features = training_state.batch_prep_text_features;
 	result.padded_text_mask = training_state.batch_prep_text_mask;
+	result.padded_byte_lengths = training_state.batch_prep_byte_lengths;  // GRMT v6
 	
 	// BUG FIX: Reuse TrainingState buffer instead of creating new local vector
 	// Previously: result.sequence_lengths.resize(result.batch_size, 0);
@@ -173,6 +178,14 @@ BatchPreparationResult prepareLossBatchInputs(
 				result.padded_text_mask[b * result.max_seq_len + t] = batch_text_mask[b][t];
 			}
 		}
+		// GRMT v6: copy per-token byte lengths
+		if (b < batch_byte_lengths.size()) {
+			const size_t byte_len_count = batch_byte_lengths[b].size();
+			const size_t copy_len = std::min(byte_len_count, seq_len);
+			for (size_t t = 0; t < copy_len; ++t) {
+				result.padded_byte_lengths[b * result.max_seq_len + t] = batch_byte_lengths[b][t];
+			}
+		}
 
 		if (b < batch_target_ids.size()) {
 			for (size_t t = 0; t < target_len; ++t) {
@@ -194,7 +207,8 @@ float LanguageModel::computeLossBatch(
 	const std::vector<std::vector<float>>& batch_numeric_values,
 	const std::vector<std::vector<uint8_t>>& batch_numeric_mask,
 	const std::vector<std::vector<uint16_t>>& batch_text_features,
-	const std::vector<std::vector<uint8_t>>& batch_text_mask)
+	const std::vector<std::vector<uint8_t>>& batch_text_mask,
+	const std::vector<std::vector<uint16_t>>& batch_byte_lengths)
 {
 	orderLog("computeLossBatch.enter",
 		batch_input_ids.size(), 0, 0, 0);
@@ -255,6 +269,7 @@ float LanguageModel::computeLossBatch(
 		batch_numeric_mask,
 		batch_text_features,
 		batch_text_mask,
+		batch_byte_lengths,
 		cache_batch_limit,
 		cache_seq_limit);
 	auto prep_end = std::chrono::high_resolution_clock::now();
@@ -337,12 +352,12 @@ float LanguageModel::computeLossBatch(
 	        training_state_.cached_token_ids,
 	        prep.padded_input_ids.data(),
 	        total_tokens * sizeof(int));
-	cudaMemcpyAsync(
+	CUDA_CHECK(cudaMemcpyAsync(
 		training_state_.cached_token_ids,
 		prep.padded_input_ids.data(),
 		total_tokens * sizeof(int),
 		cudaMemcpyHostToDevice,
-		training_state_.stream_ctrl.getPrimaryStream());
+		training_state_.stream_ctrl.getPrimaryStream()));
 	fprintf(stderr, "[GPU_COPY] token_ids copy initiated\n");
 
 	orderLog("computeLossBatch.copy_targets",
@@ -351,12 +366,12 @@ float LanguageModel::computeLossBatch(
 	        training_state_.cached_targets,
 	        prep.padded_target_ids.data(),
 	        total_tokens * sizeof(int));
-	cudaMemcpyAsync(
+	CUDA_CHECK(cudaMemcpyAsync(
 		training_state_.cached_targets,
 		prep.padded_target_ids.data(),
 		total_tokens * sizeof(int),
 		cudaMemcpyHostToDevice,
-		training_state_.stream_ctrl.getPrimaryStream());
+		training_state_.stream_ctrl.getPrimaryStream()));
 	fprintf(stderr, "[GPU_COPY] targets copy initiated\n");
 
 	orderLog("computeLossBatch.copy_numeric",
@@ -371,24 +386,24 @@ float LanguageModel::computeLossBatch(
 	        training_state_.cached_token_numeric_values,
 	        prep.padded_numeric_values.data(),
 	        total_tokens * sizeof(float));
-	cudaMemcpyAsync(
+	CUDA_CHECK(cudaMemcpyAsync(
 		training_state_.cached_token_numeric_values,
 		prep.padded_numeric_values.data(),
 		total_tokens * sizeof(float),
 		cudaMemcpyHostToDevice,
-		training_state_.stream_ctrl.getPrimaryStream());
+		training_state_.stream_ctrl.getPrimaryStream()));
 	fprintf(stderr, "[GPU_COPY] numeric_values copy initiated\n");
 	
 	fprintf(stderr, "[GPU_COPY] Copying numeric_mask: dst=%p src=%p size=%zu bytes\n",
 	        training_state_.cached_token_numeric_mask,
 	        prep.padded_numeric_mask.data(),
 	        total_tokens * sizeof(uint8_t));
-	cudaMemcpyAsync(
+	CUDA_CHECK(cudaMemcpyAsync(
 		training_state_.cached_token_numeric_mask,
 		prep.padded_numeric_mask.data(),
 		total_tokens * sizeof(uint8_t),
 		cudaMemcpyHostToDevice,
-		training_state_.stream_ctrl.getPrimaryStream());
+		training_state_.stream_ctrl.getPrimaryStream()));
 	fprintf(stderr, "[GPU_COPY] numeric_mask copy initiated\n");
 
 	// GRMT v4: copy text features
@@ -401,25 +416,39 @@ float LanguageModel::computeLossBatch(
 		        training_state_.cached_token_text_features,
 		        prep.padded_text_features.data(),
 		        total_tokens * kTextFeatureDim * sizeof(uint16_t));
-		cudaMemcpyAsync(
+		CUDA_CHECK(cudaMemcpyAsync(
 			training_state_.cached_token_text_features,
 			prep.padded_text_features.data(),
 			total_tokens * kTextFeatureDim * sizeof(uint16_t),
 			cudaMemcpyHostToDevice,
-			training_state_.stream_ctrl.getPrimaryStream());
+			training_state_.stream_ctrl.getPrimaryStream()));
 		fprintf(stderr, "[GPU_COPY] text_features copy initiated\n");
 		
 		fprintf(stderr, "[GPU_COPY] Copying text_mask: dst=%p src=%p size=%zu bytes\n",
 		        training_state_.cached_token_text_mask,
 		        prep.padded_text_mask.data(),
 		        total_tokens * sizeof(uint8_t));
-		cudaMemcpyAsync(
+		CUDA_CHECK(cudaMemcpyAsync(
 			training_state_.cached_token_text_mask,
 			prep.padded_text_mask.data(),
 			total_tokens * sizeof(uint8_t),
 			cudaMemcpyHostToDevice,
-			training_state_.stream_ctrl.getPrimaryStream());
+			training_state_.stream_ctrl.getPrimaryStream()));
 		fprintf(stderr, "[GPU_COPY] text_mask copy initiated\n");
+	}
+	// GRMT v6: copy byte lengths for per-position loss weighting
+	if (training_state_.cached_token_byte_lengths && !prep.padded_byte_lengths.empty()) {
+		fprintf(stderr, "[GPU_COPY] Copying byte_lengths: dst=%p src=%p size=%zu bytes\n",
+		        training_state_.cached_token_byte_lengths,
+		        prep.padded_byte_lengths.data(),
+		        total_tokens * sizeof(uint16_t));
+		CUDA_CHECK(cudaMemcpyAsync(
+			training_state_.cached_token_byte_lengths,
+			prep.padded_byte_lengths.data(),
+			total_tokens * sizeof(uint16_t),
+			cudaMemcpyHostToDevice,
+			training_state_.stream_ctrl.getPrimaryStream()));
+		fprintf(stderr, "[GPU_COPY] byte_lengths copy initiated\n");
 	}
 	auto copy_end = std::chrono::high_resolution_clock::now();
 	auto copy_ms = std::chrono::duration<double, std::milli>(copy_end - copy_start).count();
@@ -492,12 +521,14 @@ float LanguageModel::computeLossBatch(
 	                            ? training_state_.sequence_weights 
 	                            : nullptr;
 	ctx_views.sequence_weight_count = training_state_.sequence_weight_count;
+	// GRMT v6: Per-position byte length for loss weighting
+	ctx_views.position_byte_lengths = training_state_.cached_token_byte_lengths;
 	ctx_views.stream = training_state_.stream_ctrl.getPrimaryStream();
 
 	LossComputationInputs loss_inputs{};
 	loss_inputs.context = LossContext::MakeContext(ctx_views);
 	loss_inputs.config = LossContext::BuildLossConfig(loss_options_, false);
-	loss_inputs.grad_logits = training_state_.grad_logits;  // Pass pre-allocated buffer
+	loss_inputs.grad_logits = training_state_.grad_logits_tensor.data;  // Pass pre-allocated buffer
 	// If distillation/preference are enabled and no teacher/reference logits are present,
 	// mirror the current logits into the teacher/reference buffers. This keeps the call
 	// sites simple; a real teacher model can overwrite these buffers before loss compute.
@@ -665,16 +696,64 @@ float LanguageModel::computeLossBatch(
 	}
 	// === END FORWARD DIAGNOSTIC ===
 
-	const auto loss_result = computeLossHost(loss_inputs, scratch);
-	
-	// Loss pipeline already syncs for host-visible results.
+	// ═══════════════════════════════════════════════════════════════════════════
+	// Issue #46 FIX: UNIFIED AUTOGRAD LOSS SYSTEM
+	// ═══════════════════════════════════════════════════════════════════════════
+	// Use autograd::cross_entropy_loss() for BOTH:
+	//   1. Forward: Compute loss value (returned for logging)
+	//   2. Backward: grad_fn attached to loss_tensor enables backward()
+	// This replaces the OLD dual-system approach where:
+	//   - UnifiedLoss computed loss in forward
+	//   - Autograd computed gradients in backward (by recreating the loss computation!)
+	// Now loss is computed ONCE and the grad_fn is cached for backward.
+	// ═══════════════════════════════════════════════════════════════════════════
 
-	// DIAGNOSTIC: If loss is suspiciously high, dump detailed diagnostics
-	if (loss_result.average_loss > 20.0f) {
+	cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
+	
+	// Setup logits tensor wrapping cached_logits (doesn't allocate new memory)
+	training_state_.logits_tensor.data = training_state_.cached_logits;
+	training_state_.logits_tensor.shape = TensorContract::TensorShape::make_BSM(
+		static_cast<int>(total_tokens), cfg.vocab_size);
+	training_state_.logits_tensor.requires_grad = true;
+	training_state_.logits_tensor.is_leaf = false;  // Has parent operations (LM head projection)
+	training_state_.logits_tensor.stream = stream;
+	training_state_.logits_tensor.owns_data = false;  // Memory owned by training_state_.cached_logits
+	
+	// Setup gradient buffer for logits
+	if (!training_state_.grad_logits_tensor.data) {
+		throw std::runtime_error("[ComputeLossBatch] grad_logits_tensor.data not allocated!");
+	}
+	training_state_.logits_tensor.grad = training_state_.grad_logits_tensor.data;
+	training_state_.logits_tensor.owns_grad = false;  // TrainingState owns this buffer
+	
+	// Compute loss using AUTOGRAD - this attaches grad_fn for backward pass
+	training_state_.loss_tensor = autograd::cross_entropy_loss(
+		training_state_.logits_tensor,
+		training_state_.cached_targets,
+		nullptr,  // valid_mask (nullptr = all valid, padding handled by target=-1)
+		static_cast<int>(total_tokens),
+		cfg.vocab_size,
+		stream
+	);
+	
+	// Read scalar loss value to host (needed for return value and diagnostics)
+	float autograd_loss = 0.0f;
+	if (training_state_.loss_tensor.data) {
+		cudaMemcpyAsync(&autograd_loss, training_state_.loss_tensor.data, sizeof(float), 
+		                cudaMemcpyDeviceToHost, stream);
+		cudaStreamSynchronize(stream);
+	}
+	training_state_.cached_loss_value = autograd_loss;
+	
+	fprintf(stderr, "[ComputeLossBatch] AUTOGRAD loss=%.6f (valid_tokens=%d)\n", 
+	        autograd_loss, valid_tokens);
+	
+	// Diagnostic: If loss is suspiciously high, dump detailed diagnostics
+	if (autograd_loss > 20.0f) {
 		cudaStreamSynchronize(training_state_.stream_ctrl.getPrimaryStream());
 		fprintf(stderr, "\n[SPIKE_DIAG] ========== LOSS SPIKE DETECTED ==========\n");
 		fprintf(stderr, "[SPIKE_DIAG] Loss=%.4f batch_size=%zu seq_len=%zu total_tokens=%zu valid_tokens=%d\n",
-		        loss_result.average_loss, batch_size, seq_len, total_tokens, valid_tokens);
+		        autograd_loss, batch_size, seq_len, total_tokens, valid_tokens);
 		
 		// Sample encoder outputs
 		const size_t enc_sample_size = std::min<size_t>(1000, total_tokens * cfg.d_model);
@@ -745,13 +824,16 @@ float LanguageModel::computeLossBatch(
 		fprintf(stderr, "[SPIKE_DIAG] ========================================\n\n");
 	}
 	
-	if (!loss_result.success) {
-		fprintf(stderr, "ERROR: computeLossHost failed. Breaking instead of fallback.\n");
+	// Autograd loss computation doesn't have a "success" flag - if it didn't throw, it succeeded.
+	// Validate the loss value is finite
+	if (!std::isfinite(autograd_loss)) {
+		fprintf(stderr, "ERROR: autograd loss is non-finite (%.6f). Breaking.\n", autograd_loss);
 		orderLog("computeLossBatch.loss_fail",
 			batch_size, seq_len, total_tokens, valid_tokens);
-		throw std::runtime_error("computeLossHost failed: fallback disabled");
+		throw std::runtime_error("autograd loss is non-finite");
 	}
 
+	// Update scratch tracking (kept for numeric head if enabled)
 	training_state_.d_loss_scratch = scratch.loss_values;
 	training_state_.d_loss_sum_scratch = scratch.loss_accumulator;
 	training_state_.loss_scratch_capacity = scratch.capacity;
@@ -764,7 +846,7 @@ float LanguageModel::computeLossBatch(
 	int numeric_loss_count = 0;
 	if (cfg.numeric_head_enabled) {
 		if (!training_state_.cached_numeric_predictions ||
-		    !training_state_.grad_numeric_predictions ||
+		    !training_state_.grad_numeric_tensor.data ||
 		    !training_state_.d_numeric_loss_sum ||
 		    !training_state_.d_numeric_loss_count) {
 			throw std::runtime_error("computeLossBatch: numeric head enabled but buffers missing");
@@ -783,7 +865,7 @@ float LanguageModel::computeLossBatch(
 		NumericLossOutputs num_outputs{};
 		num_outputs.loss_sum = training_state_.d_numeric_loss_sum;
 		num_outputs.count = training_state_.d_numeric_loss_count;
-		num_outputs.grad_predictions = training_state_.grad_numeric_predictions;
+		num_outputs.grad_predictions = training_state_.grad_numeric_tensor.data;
 
 		if (!launchNumericLoss(num_inputs, num_outputs, training_state_.stream_ctrl.getPrimaryStream())) {
 			throw std::runtime_error("computeLossBatch: numeric loss kernel launch failed");
@@ -802,13 +884,15 @@ float LanguageModel::computeLossBatch(
 		}
 	}
 
-	const float weighted_numeric_loss = (numeric_loss_count > 0)
-		? cfg.numeric_head_loss_weight * numeric_loss_sum
+	// Issue #46: autograd_loss is already the MEAN loss (computed in cross_entropy_loss)
+	// Numeric loss needs to be added as weighted average
+	const float weighted_numeric_loss_avg = (numeric_loss_count > 0)
+		? cfg.numeric_head_loss_weight * (numeric_loss_sum / numeric_loss_count)
 		: 0.0f;
-	const float avg_loss = (loss_result.total_loss + weighted_numeric_loss) /
-		static_cast<float>(valid_tokens);
+	const float avg_loss = autograd_loss + weighted_numeric_loss_avg;
 	if (!std::isfinite(avg_loss)) {
-		fprintf(stderr, "[ComputeLossBatch] FATAL: avg_loss is non-finite\n");
+		fprintf(stderr, "[ComputeLossBatch] FATAL: avg_loss is non-finite (autograd=%.6f, numeric=%.6f)\n",
+		        autograd_loss, weighted_numeric_loss_avg);
 		throw std::runtime_error("computeLossBatch: avg_loss is non-finite");
 	}
 	return avg_loss;

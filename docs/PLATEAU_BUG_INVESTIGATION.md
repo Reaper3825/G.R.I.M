@@ -1,13 +1,181 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** � **IN PROGRESS** - Issue #43 Encoder Weight Gradient Centering (January 2026)  
+**Status:** 🔴 **IN PROGRESS** - Issue #45 grad_encoder_out Not Zeroed (January 21, 2026)  
 **Started:** December 22, 2025  
-**Last Updated:** January 2026
-**Previous Symptom:** Model collapsed to always predicting token 277 (SPACE character)
+**Last Updated:** January 21, 2026
+**Current Symptom:** Gradient explosion to infinity during accumulation (micro_step 2 has 6-10x larger gradients than micro_step 1)
 
 ---
 
-## 🔴 ACTIVE: Issue #43 - Encoder Weight Gradients Computed with Un-Centered Activations
+## 🔴 ACTIVE: Issue #45 - grad_encoder_out NOT REGISTERED with GradAccumulationController (CRITICAL!)
+
+### Discovery (January 21, 2026)
+
+Training log showed **exponential gradient growth** during accumulation:
+```
+Batch 2434 (micro_step 1/2): preclip_grad_norm = 4.24e17
+Batch 2435 (micro_step 2/2): preclip_grad_norm = 5.56e18  ← 13x increase!
+...
+Batch 2449 (micro_step 2/2): preclip_grad_norm = inf
+```
+
+Key observation: **Loss stayed stable (~9.7)** while gradients exploded. Forward pass was fine.
+
+### Root Cause: grad_encoder_out Buffer Never Zeroed
+
+The `grad_encoder_out` buffer was **NOT registered** with `GradAccumulationController`, so it was **NEVER zeroed** at the start of each accumulation window.
+
+During gradient accumulation with `accumulation_steps=2`:
+1. **micro_step 1**: Backward pass writes gradients to `grad_encoder_out`
+2. **micro_step 2**: Backward pass runs again, but `grad_encoder_out` **still contains stale values** from micro_step 1
+3. Since encoder backward **reads from** `grad_encoder_out` (via `ctx.current_grad`) while simultaneously **writing to** it, stale values get incorporated into new computations
+4. This creates a **positive feedback loop** where gradients multiply exponentially
+
+### Evidence from Training Log
+
+| Batch | micro_step | preclip_grad_norm | Ratio to previous |
+|-------|------------|-------------------|-------------------|
+| 2434 | 1/2 | 4.24e17 | - |
+| 2435 | 2/2 | 5.56e18 | **13.1x** |
+| 2436 | 1/2 | 1.52e17 | - |
+| 2437 | 2/2 | 2.20e18 | **14.5x** |
+
+The micro_step 2 gradients are consistently 6-15x larger than micro_step 1 - classic symptom of buffer contamination.
+
+### Fix Applied (GradAccumulationController_Integration.cu)
+
+**Registered the missing buffers:**
+
+```cuda
+// ========== Issue #45 FIX: grad_encoder_out and grad_logits (CRITICAL!) ==========
+// These buffers were NOT registered, causing gradient explosion during accumulation!
+// grad_encoder_out is used as ctx.current_grad throughout encoder backward pass.
+// Without zeroing at window start, micro_step 2 reads stale gradients from micro_step 1,
+// creating a multiplicative feedback loop that causes exponential gradient growth.
+
+if (ts.grad_encoder_out) {
+    controller_.registerGradientBuffer(
+        "grad_encoder_out_temp",
+        ts.grad_encoder_out,
+        static_cast<std::size_t>(ts.max_cached_tokens) * cfg.d_model
+    );
+}
+
+if (ts.grad_logits) {
+    controller_.registerGradientBuffer(
+        "grad_logits_temp",
+        ts.grad_logits,
+        static_cast<std::size_t>(ts.max_cached_tokens) * cfg.vocab_size
+    );
+}
+```
+
+### Why This Wasn't Caught Earlier
+
+- With `accumulation_steps=1`, each backward pass starts fresh (gradients zeroed before backward)
+- The bug only manifests with `accumulation_steps > 1` where the buffer persists between micro-steps
+- Previous testing may have used single-step accumulation
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔵 HISTORICAL: Issue #44 - Embedding Backward Was COMPLETELY SKIPPED (January 20, 2026)
+
+### Discovery (January 20, 2026)
+
+Training log showed **IDENTICAL weights** across 8 batches:
+```
+Batch 1 PRE-OPTIMIZER:  lm_w[0:5]=[0.001213,0.013516,-0.001076,0.005309,-0.012034]
+Batch 2 POST-OPTIMIZER: lm_w[0:5]=[0.001213,0.013516,-0.001076,0.005309,-0.012034]  ← IDENTICAL!
+...
+Batch 8 POST-OPTIMIZER: lm_w[0:5]=[0.001213,0.013515,-0.001076,0.005309,-0.012033]  ← 6th decimal change only!
+```
+
+Gradient norms showed the problem:
+```
+GRIM:    emb_lm_tied=0.0003 to 0.0005
+PyTorch: emb_lm_tied=5.5469
+                      ^^^^^^^ 11,000x LARGER!
+```
+
+### Root Cause: Issue #38 "Fix" Was WRONG
+
+The Issue #38 "fix" in `BackwardPhase3_InputLayer.cu` **SKIPPED embedding backward entirely** when `tie_embeddings=true`:
+
+```cuda
+if (cfg->tie_embeddings) {
+    // SKIP embedding backward - LM head gradient is already correct and centered!
+    P3_INFO("Issue #38: Skipping embedding backward...");
+} else {
+    launchEmbeddingBackward(...);  // Only for untied weights!
+}
+```
+
+**This was FUNDAMENTALLY WRONG.** Here's why:
+
+In a transformer with tied weights, there are TWO different gradient sources:
+1. **LM head backward (GEMM)**: `grad_W = h_centered.T @ grad_logits`
+   - This computes gradient based on which OUTPUT predictions were wrong
+   - Updates embedding rows for tokens the model PREDICTED
+
+2. **Embedding backward (scatter-add)**: `grad_E[token_id] += grad_encoder_output[position]`
+   - This computes gradient based on which INPUT tokens contributed to errors
+   - Updates embedding rows for tokens that APPEARED IN INPUT
+
+**These are COMPLETELY DIFFERENT gradients!** Both must be computed for proper training.
+
+### Why Issue #38 Broke Training
+
+- LM head GEMM gradient: tiny (~0.0003) - only reflects output projection errors
+- Embedding scatter-add gradient: large (~5.5) - reflects all input token learning
+
+By skipping embedding backward, we removed **~99.99% of the gradient signal**.
+
+Result:
+- `update_rms = 0.00000005` to `0.00000020` (microscopic updates)
+- Weights changed by ~0.000001 per step (essentially FROZEN)
+- Model generation identical across optimizer steps
+
+### The "Centering" Concern Was a Red Herring
+
+Issue #38 claimed embedding backward would "pollute centered gradients" from LM head.
+This was WRONG because:
+
+1. Embedding backward uses `atomicAdd` to ACCUMULATE into the buffer
+2. LM head GEMM OVERWRITES with fresh computation (beta=0 for first write)
+3. The gradients from different sources SHOULD combine - that's mathematically correct!
+4. The "centering" in LM head is about the GEMM computation, not about whether other gradients should exist
+
+### Fix Applied (BackwardPhase3_InputLayer.cu)
+
+**REVERTED Issue #38 - Always run embedding backward:**
+
+```cuda
+// ALWAYS run embedding backward (for both tied and untied weights)
+launchEmbeddingBackward(
+    ctx.current_grad,
+    ts->cached_token_ids,
+    ts->embedding_grads(),
+    ctx.batch_size,
+    ctx.seq_len,
+    cfg->d_model,
+    cfg->vocab_size,
+    ctx.training_state->stream_ctrl.getPrimaryStream());
+```
+
+### Expected Results After Fix
+
+- `emb_lm_tied` gradient norm: ~5.5 (matching PyTorch baseline)
+- `update_rms`: ~0.0001 to 0.001 (meaningful updates)
+- Weights visibly changing after each optimizer step
+- Model generation changing as training progresses
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔵 HISTORICAL: Issue #43 - Encoder Weight Gradient Centering (January 2026)
 
 ### Discovery (January 2026)
 

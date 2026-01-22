@@ -102,122 +102,67 @@ GELULayer::GELULayer(const Dimensions& dims, const GELUConfig& config)
     : Layer(dims), config_(config) {}
 
 void GELULayer::forward(const GELUForwardArgs& args, LayerWorkspace<float>* /*workspace*/) {
-    config_ = makeConfig(args);
-    last_input_ = args.input;  // Store for backward pass
+    args.validate("GELULayer::forward");
+    
+    GELUConfig cfg = config_;
+    cfg.elements = args.elements();
+    cfg.stream = args.stream;
+    config_ = cfg;
+    
+    last_input_ = args.input.ptr;  // Store for backward pass
     launchGeluForward(args);
 }
 
 void GELULayer::backward(const GELUBackwardArgs& args, LayerWorkspace<float>* /*workspace*/) {
+    args.validate("GELULayer::backward");
     launchGeluBackward(args);
-}
-
-void GELULayer::onConfigure(const Dimensions& dims) {
-    config_.elements = static_cast<std::size_t>(dims.output);
-}
-
-void GELULayer::forwardImpl(const LayerIO<float>& io, LayerWorkspace<float>* /*workspace*/) {
-    GELUForwardArgs args{};
-    args.input = io.input;
-    args.output = io.output;
-    args.elements = io.tokens ? io.tokens : config_.elements;
-    args.stream = config_.stream;
-    forward(args);
-}
-
-void GELULayer::backwardImpl(const LayerIO<float>& io, LayerWorkspace<float>* /*workspace*/) {
-    if (!io.input || !io.output || !last_input_) {
-        return;
-    }
-
-    GELUBackwardArgs args{};
-    args.input = last_input_;    // Original forward input
-    args.grad_output = io.input;  // Gradient from next layer
-    args.grad_input = io.output;  // Output gradient for prev layer
-    args.elements = io.tokens ? io.tokens : config_.elements;
-    args.stream = config_.stream;
-    backward(args);
 }
 
 GELUConfig GELULayer::makeConfig(const GELUForwardArgs& args) const {
     GELUConfig cfg = config_;
-    if (args.elements) {
-        cfg.elements = args.elements;
-    }
-    if (args.stream) {
-        cfg.stream = args.stream;
-    }
+    cfg.elements = args.elements();
+    cfg.stream = args.stream;
     return cfg;
 }
 
 GELUConfig GELULayer::makeConfig(const GELUBackwardArgs& args) const {
     GELUConfig cfg = config_;
-    if (args.elements) {
-        cfg.elements = args.elements;
-    }
-    if (args.stream) {
-        cfg.stream = args.stream;
-    }
+    cfg.elements = args.elements();
+    cfg.stream = args.stream;
     return cfg;
 }
 
 void launchGeluForward(const GELUForwardArgs& args) {
-    // ========== Parameter Validation ==========
-    if (!args.input) {
-        fprintf(stderr, "[GELU] ERROR: input buffer is null\n");
-        return;
-    }
-    if (!args.output) {
-        fprintf(stderr, "[GELU] ERROR: output buffer is null\n");
-        return;
-    }
-    if (args.elements == 0) {
-        fprintf(stderr, "[GELU] ERROR: elements is 0\n");
-        return;
-    }
-    if (args.input == args.output) {
-        fprintf(stderr, "[GELU] WARNING: in-place operation (input == output) not recommended\n");
-    }
+    // RULE 20: Fail loud validation
+    args.validate("launchGeluForward");
 
-    const int grid = computeGridSize(args.elements, kGeluBlockSize);
+    const std::size_t elements = args.elements();
+    const int grid = computeGridSize(elements, kGeluBlockSize);
     GeluForwardKernel<<<grid, kGeluBlockSize, 0, args.stream ? args.stream : nullptr>>>(
-        args.input, args.output, args.elements);
+        args.input.ptr, args.output.ptr, elements);
     
     // Check for kernel launch errors
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        fprintf(stderr, "[GELU] GeluForwardKernel launch failed: %s\n",
-                cudaGetErrorString(err));
+        throw std::runtime_error(std::string("[GELU] GeluForwardKernel launch failed: ") +
+                                cudaGetErrorString(err));
     }
 }
 
 void launchGeluBackward(const GELUBackwardArgs& args) {
-    // ========== Parameter Validation ==========
-    if (!args.input) {
-        fprintf(stderr, "[GELU] ERROR: input buffer is null (required for derivative)\n");
-        return;
-    }
-    if (!args.grad_output) {
-        fprintf(stderr, "[GELU] ERROR: grad_output buffer is null\n");
-        return;
-    }
-    if (!args.grad_input) {
-        fprintf(stderr, "[GELU] ERROR: grad_input buffer is null\n");
-        return;
-    }
-    if (args.elements == 0) {
-        fprintf(stderr, "[GELU] ERROR: elements is 0\n");
-        return;
-    }
+    // RULE 20: Fail loud validation
+    args.validate("launchGeluBackward");
 
-    const int grid = computeGridSize(args.elements, kGeluBlockSize);
+    const std::size_t elements = args.elements();
+    const int grid = computeGridSize(elements, kGeluBlockSize);
     GeluBackwardKernel<<<grid, kGeluBlockSize, 0, args.stream ? args.stream : nullptr>>>(
-        args.input, args.grad_output, args.grad_input, args.elements);
+        args.input.ptr, args.grad_output.ptr, args.grad_input.ptr, elements);
     
     // Check for kernel launch errors
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        fprintf(stderr, "[GELU] GeluBackwardKernel launch failed: %s\n",
-                cudaGetErrorString(err));
+        throw std::runtime_error(std::string("[GELU] GeluBackwardKernel launch failed: ") +
+                                cudaGetErrorString(err));
     }
 }
 

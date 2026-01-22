@@ -129,6 +129,13 @@ constexpr float ADAMW_BETA2 = 0.95f;              // Matched to baseline (was 0.
 constexpr float ADAMW_EPSILON = 1e-8f;
 constexpr float ADAMW_WEIGHT_DECAY = 0.1f;        // Matched to baseline (was 0.01)
 
+// Depth-Aware Upsilon (Υ) Regularization
+// Formula: Υ_l = UPSILON_BASE * sqrt(L_ref / L)
+// L_ref = reference layer count, L = current layer (1-indexed)
+// Deeper layers get LESS regularization (smaller Υ)
+constexpr float UPSILON_BASE = 0.1f;              // Base upsilon coefficient
+constexpr int UPSILON_REFERENCE_LAYERS = 12;      // Reference layer count (L_ref)
+
 //======================================================//
 // Tokenizer / Atom Token Configuration
 // Token ranges for byte fallback and atom types

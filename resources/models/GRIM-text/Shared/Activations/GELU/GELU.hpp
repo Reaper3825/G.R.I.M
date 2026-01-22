@@ -9,13 +9,16 @@
  * exact erf-based formula while maintaining high accuracy.
  *
  * MEMORY LAYOUT:
- * - Input/output tensors are treated as flat 1D arrays
+ * - Input/output tensors use TensorContract::TensorView with BSM layout
  * - Element-wise operation: output[i] = GELU(input[i])
- * - No in-place operation support (input != output required)
+ * - In-place operation supported for backward (grad_output == grad_input)
  *
  * USAGE:
  * Forward: launchGeluForward() for inference
  * Backward: launchGeluBackward() for training (requires original input)
+ *
+ * REFACTORED: Uses TensorContract::TensorView instead of raw float*
+ * All tensor views validated via require() (Rule 20: Fail Loud)
  */
 
 #pragma once
@@ -24,6 +27,7 @@
 #include <cuda_runtime.h>
 
 #include "../../../Layers/grim_layer_gpu.hpp"
+#include "../../TensorContract/TensorContract_GPU.hpp"
 
 namespace GRIM {
 
@@ -37,34 +41,82 @@ struct GELUConfig {
     cudaStream_t stream = nullptr;
 };
 
+//======================================================//
+//  GELUForwardArgs - Type-safe tensor views
+//======================================================//
 /**
- * @brief Arguments for GELU forward pass
- * @param input Input tensor [elements] (device memory)
- * @param output Output tensor [elements] (device memory, must differ from input)
- * @param elements Number of elements to process
- * @param stream CUDA stream for async execution
+ * @brief Arguments for GELU forward pass using TensorView
+ * 
+ * RULE 20: All views validated via require() - fail loud on NULL/invalid
  */
 struct GELUForwardArgs {
-    const float* input = nullptr;
-    float* output = nullptr;
-    std::size_t elements = 0;
+    // Input tensors (const view)
+    TensorContract::TensorView input;    // [elements] BSM layout (rows=1, cols=elements or rows=tokens, cols=d)
+    
+    // Output tensors (mutable view) - must differ from input
+    TensorContract::TensorView output;   // [elements] same shape as input
+    
+    // Execution context
     cudaStream_t stream = nullptr;
+    
+    // RULE 20: Fail loud validation
+    void validate(const char* context) const {
+        input.require(context);
+        output.require(context);
+        
+        if (input.size_elements() != output.size_elements()) {
+            throw std::runtime_error(std::string(context) + 
+                ": input/output element count mismatch (input=" + 
+                std::to_string(input.size_elements()) + ", output=" + 
+                std::to_string(output.size_elements()) + ")");
+        }
+        if (input.ptr == output.ptr) {
+            throw std::runtime_error(std::string(context) + 
+                ": GELU forward does not support in-place operation (input == output)");
+        }
+    }
+    
+    // Convenience: extract element count from tensor
+    std::size_t elements() const { return input.size_elements(); }
 };
 
+//======================================================//
+//  GELUBackwardArgs - Type-safe tensor views
+//======================================================//
 /**
- * @brief Arguments for GELU backward pass
- * @param input Original forward pass input [elements] (device memory, required for derivative)
- * @param grad_output Gradient from next layer [elements] (device memory)
- * @param grad_input Computed gradient for previous layer [elements] (device memory)
- * @param elements Number of elements to process
- * @param stream CUDA stream for async execution
+ * @brief Arguments for GELU backward pass using TensorView
+ * 
+ * RULE 20: All views validated via require() - fail loud on NULL/invalid
  */
 struct GELUBackwardArgs {
-    const float* input = nullptr;
-    const float* grad_output = nullptr;
-    float* grad_input = nullptr;
-    std::size_t elements = 0;
+    // Input tensors (const views)
+    TensorContract::TensorView input;        // Original forward input (required for derivative)
+    TensorContract::TensorView grad_output;  // Gradient from next layer
+    
+    // Output tensors (mutable view)
+    TensorContract::TensorView grad_input;   // Computed gradient (may be same as grad_output for in-place)
+    
+    // Execution context
     cudaStream_t stream = nullptr;
+    
+    // RULE 20: Fail loud validation
+    void validate(const char* context) const {
+        input.require(context);
+        grad_output.require(context);
+        grad_input.require(context);
+        
+        if (input.size_elements() != grad_output.size_elements()) {
+            throw std::runtime_error(std::string(context) + 
+                ": input/grad_output element count mismatch");
+        }
+        if (grad_output.size_elements() != grad_input.size_elements()) {
+            throw std::runtime_error(std::string(context) + 
+                ": grad_output/grad_input element count mismatch");
+        }
+    }
+    
+    // Convenience: extract element count from tensor
+    std::size_t elements() const { return input.size_elements(); }
 };
 
 class GELULayer final : public Layer<GELULayer, float> {
@@ -82,12 +134,6 @@ public:
                  LayerWorkspace<float>* workspace = nullptr);
     void backward(const GELUBackwardArgs& args,
                   LayerWorkspace<float>* workspace = nullptr);
-
-    // Layer interface hooks
-    void onConfigure(const Dimensions& dims);
-    void forwardImpl(const LayerIO<float>& io, LayerWorkspace<float>* workspace);
-    void backwardImpl(const LayerIO<float>& io, LayerWorkspace<float>* workspace);
-    void applyGradientsImpl(value_type) {}
 
 private:
     GELUConfig config_{};

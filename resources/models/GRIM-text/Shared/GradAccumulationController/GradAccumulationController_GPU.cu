@@ -820,6 +820,13 @@ void GradAccumulationController::zeroGradientsInternal(const char* phase) {
     stats_.total_zero_ops += buffers_zeroed;
     stats_.total_bytes_zeroed += bytes_zeroed;
     
+    // Issue #45: Call additional zero callback for Tensor-managed intermediate gradients
+    // These buffers were migrated from raw float* to TensorContract::Tensor, which provides
+    // proper zero_grad() functionality. The callback zeros them via TrainingState::zeroIntermediateGrads().
+    if (additional_zero_callback_) {
+        additional_zero_callback_(config_.stream);
+    }
+    
     // Optional validation (EXPENSIVE - only enable for debugging)
     // Validates gradient buffers are actually zeroed after memset
     // Cost: cudaStreamSync + 50 D2H memcopies per batch = ~80% performance loss

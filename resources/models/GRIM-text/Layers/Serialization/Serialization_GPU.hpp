@@ -183,11 +183,6 @@ public:
 	bool save(const SerializationSaveRequest& request);
 	bool load(const SerializationLoadRequest& request);
 
-	void onConfigure(const Dimensions& dims);
-	void forwardImpl(const LayerIO<float>& io, LayerWorkspace<float>* workspace);
-	void backwardImpl(const LayerIO<float>& io, LayerWorkspace<float>* workspace);
-	void applyGradientsImpl(value_type learning_rate);
-
 private:
 	SerializationConfig config_{};
 };

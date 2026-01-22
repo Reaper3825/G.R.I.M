@@ -31,7 +31,7 @@ void TrainingTensors::initializeParams(
     
     // GQA dimensions
     const int kv_dim = num_kv_heads * head_dim;
-    const int total_qkv_dim = d_model + 2 * kv_dim;  // Q + K + V
+    const int total_qkv_dim = d_model + (2 * kv_dim);  // Q + K + V
     
     //==================================================//
     //  EMBEDDING LAYER
@@ -190,10 +190,45 @@ void TrainingTensors::initializeParams(
     
     initialized_ = true;
     
+    // PRE-ALLOCATE ALL GRADIENT BUFFERS
+    // This is required because GradAccumulationController::bindToModel() reads
+    // the .grad pointers at startup, and lazy allocation won't have happened yet.
+    allocateAllGradients();
+    
     // Sync to ensure all initialization is complete
     if (stream) {
         cudaStreamSynchronize(stream);
     }
+}
+
+void TrainingTensors::allocateAllGradients() {
+    // Global tensors
+    embedding_weights.ensure_grad();
+    position_embedding_weights.ensure_grad();
+    lm_head_weights.ensure_grad();
+    if (lm_head_bias.data) lm_head_bias.ensure_grad();
+    if (numeric_head_weights.data) numeric_head_weights.ensure_grad();
+    if (numeric_head_bias.data) numeric_head_bias.ensure_grad();
+    if (final_rms_gamma.data) final_rms_gamma.ensure_grad();
+    
+    // Encoder layer tensors
+    for (auto& layer : encoder_layers) {
+        layer.rms1_gamma.ensure_grad();
+        layer.rms2_gamma.ensure_grad();
+        layer.attn_qkv_weight.ensure_grad();
+        if (layer.attn_qkv_bias.data) layer.attn_qkv_bias.ensure_grad();
+        layer.attn_out_weight.ensure_grad();
+        if (layer.attn_out_bias.data) layer.attn_out_bias.ensure_grad();
+        layer.alpha_q.ensure_grad();
+        layer.alpha_k.ensure_grad();
+        layer.ffn_w1.ensure_grad();
+        if (layer.ffn_b1.data) layer.ffn_b1.ensure_grad();
+        layer.ffn_w2.ensure_grad();
+        if (layer.ffn_b2.data) layer.ffn_b2.ensure_grad();
+    }
+    
+    fprintf(stdout, "[INFO] TrainingTensors: Pre-allocated gradient buffers for %zu encoder layers\n",
+            encoder_layers.size());
 }
 
 

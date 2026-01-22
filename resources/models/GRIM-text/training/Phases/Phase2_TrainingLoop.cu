@@ -693,7 +693,7 @@ HiddenState277Analysis computeHiddenState277Analysis(
     HiddenState277Analysis analysis{};
     
     const int total_tokens = static_cast<int>(targets.size());
-    if (total_tokens == 0 || !ts.cached_encoder_outputs || !ts.grad_logits) {
+    if (total_tokens == 0 || !ts.cached_encoder_outputs || !ts.grad_logits_tensor.data) {
         return analysis;
     }
     
@@ -706,7 +706,7 @@ HiddenState277Analysis computeHiddenState277Analysis(
     
     cudaMemcpyAsync(h_hidden.data(), ts.cached_encoder_outputs, 
                     hidden_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
-    cudaMemcpyAsync(h_grad_logits.data(), ts.grad_logits,
+    cudaMemcpyAsync(h_grad_logits.data(), ts.grad_logits_tensor.data,
                     grad_logits_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
     cudaStreamSynchronize(stream);
     
@@ -1206,6 +1206,8 @@ void maybeRunMicroValidation(
     // GRMT v4: text features for validation (optional)
     std::vector<std::vector<uint16_t>> micro_text_features;
     std::vector<std::vector<uint8_t>> micro_text_mask;
+    // GRMT v6: byte lengths for loss weighting
+    std::vector<std::vector<uint16_t>> micro_byte_lengths;
     std::vector<float> micro_weights;
     
     for (int i = 0; i < batches_to_eval; ++i) {
@@ -1220,12 +1222,14 @@ void maybeRunMicroValidation(
         micro_numeric_mask.clear();
         micro_text_features.clear();
         micro_text_mask.clear();
+        micro_byte_lengths.clear();
         micro_inputs.reserve(dyn_batch.seq_ids.size());
         micro_targets.reserve(dyn_batch.seq_ids.size());
         micro_numeric_values.reserve(dyn_batch.seq_ids.size());
         micro_numeric_mask.reserve(dyn_batch.seq_ids.size());
         micro_text_features.reserve(dyn_batch.seq_ids.size());
         micro_text_mask.reserve(dyn_batch.seq_ids.size());
+        micro_byte_lengths.reserve(dyn_batch.seq_ids.size());
         micro_weights.clear();
         micro_weights.reserve(dyn_batch.seq_ids.size());
         
@@ -1238,6 +1242,8 @@ void maybeRunMicroValidation(
             // GRMT v4: text features
             micro_text_features.push_back(ctx.data.val_views[sid]->token_text_features);
             micro_text_mask.push_back(ctx.data.val_views[sid]->token_text_mask);
+            // GRMT v6: byte lengths
+            micro_byte_lengths.push_back(ctx.data.val_views[sid]->token_byte_lengths);
             // BUG FIX Issue #30: Removed val_sequence_rarity weighting
         }
         
@@ -1250,7 +1256,8 @@ void maybeRunMicroValidation(
             micro_numeric_values,
             micro_numeric_mask,
             micro_text_features,
-            micro_text_mask);
+            micro_text_mask,
+            micro_byte_lengths);
         ctx.model->clearSequenceLossWeights();
         // NOTE: No device sync here - computeLossBatch returns synchronously
         // Loss value is already on CPU after the call returns
@@ -1598,6 +1605,8 @@ ValidationResult runValidation(TrainingContext& ctx) {
     // GRMT v4: text features for validation
     std::vector<std::vector<uint16_t>> val_text_features;
     std::vector<std::vector<uint8_t>> val_text_mask;
+    // GRMT v6: byte lengths for validation
+    std::vector<std::vector<uint16_t>> val_byte_lengths;
     std::vector<float> val_weights;
     
     for (const auto& val_batch : val_schedule.batches) {
@@ -1607,6 +1616,7 @@ ValidationResult runValidation(TrainingContext& ctx) {
         val_numeric_mask.clear();
         val_text_features.clear();
         val_text_mask.clear();
+        val_byte_lengths.clear();
         val_weights.clear();
         
         for (uint32_t sid : val_batch.seq_ids) {
@@ -1618,6 +1628,8 @@ ValidationResult runValidation(TrainingContext& ctx) {
             // GRMT v4: text features
             val_text_features.push_back(seq->token_text_features);
             val_text_mask.push_back(seq->token_text_mask);
+            // GRMT v6: byte lengths
+            val_byte_lengths.push_back(seq->token_byte_lengths);
             // BUG FIX Issue #30: Removed val_sequence_rarity weighting
         }
         // BUG FIX Issue #30: Always clear sequence weights - no rarity weighting
@@ -1628,7 +1640,8 @@ ValidationResult runValidation(TrainingContext& ctx) {
             val_numeric_values,
             val_numeric_mask,
             val_text_features,
-            val_text_mask);
+            val_text_mask,
+            val_byte_lengths);
         ctx.model->clearSequenceLossWeights();
         
         val_loss += batch_val_loss * static_cast<int>(val_batch.seq_ids.size());
@@ -1675,6 +1688,8 @@ BatchResult processBatch(
     // GRMT v4: text features
     std::vector<std::vector<uint16_t>> batch_text_features;
     std::vector<std::vector<uint8_t>> batch_text_mask;
+    // GRMT v6: byte lengths
+    std::vector<std::vector<uint16_t>> batch_byte_lengths;
     std::vector<uint32_t> filtered_seq_ids;
     
     for (uint32_t sid : batch.seq_ids) {
@@ -1686,6 +1701,8 @@ BatchResult processBatch(
         // GRMT v4: get text features from view
         batch_text_features.push_back(seq->token_text_features);
         batch_text_mask.push_back(seq->token_text_mask);
+        // GRMT v6: byte lengths for loss weighting
+        batch_byte_lengths.push_back(seq->token_byte_lengths);
         filtered_seq_ids.push_back(sid);
         
         // DIAGNOSTIC: Validate targets for invalid token IDs (root cause of loss=165)
@@ -1999,7 +2016,8 @@ BatchResult processBatch(
         batch_numeric_values,
         batch_numeric_mask,
         batch_text_features,
-        batch_text_mask);
+        batch_text_mask,
+        batch_byte_lengths);
     ctx.model->clearSequenceLossWeights();
 
     if (std::isfinite(result.loss) &&
@@ -2625,10 +2643,12 @@ BatchResult processBatch(
     const int valid_tokens = (ts.cached_valid_tokens > 0) ? ts.cached_valid_tokens : clip_selection.stats.total_tokens;
     const bool per_token_grad_scale = ctx.config.hyperparameters.per_token_grad_scale;
     float grad_scale = 1.0f;
-    if (per_token_grad_scale) {
-        const int safe_tokens = std::max(valid_tokens, 1);
-        grad_scale = 1.0f / static_cast<float>(safe_tokens);
-    }
+    // Issue verified: 1/N scaling attenuates gradients to near zero (0.000000 update rms).
+    // Disabling scaling to restore gradient flow per user request ("scaling it down... fix that").
+    // if (per_token_grad_scale) {
+    //     const int safe_tokens = std::max(valid_tokens, 1);
+    //     grad_scale = 1.0f / static_cast<float>(safe_tokens);
+    // }
     
     // DIAGNOSTIC: Print config flag value (first 3 batches only)
     if (batch_idx < 3) {
@@ -2771,19 +2791,25 @@ BatchResult processBatch(
         exportBuffer("embedding_grads", const_cast<GRIM::TrainingState&>(ts).embedding_grads(), 
                      static_cast<size_t>(cfg.vocab_size) * cfg.d_model);
         
-        // Per-layer gradients
+        // Per-layer gradients (via encoder's Tensor.grad per AUTOGRAD MIGRATION)
+        auto* gpu_encoder = &ctx.model->getGpuEncoder();
         for (int layer = 0; layer < cfg.num_layers; ++layer) {
             std::string prefix = "layer" + std::to_string(layer) + "_";
+            auto* enc = gpu_encoder ? gpu_encoder->getLayer(layer) : nullptr;
             
-            size_t qkv_size = static_cast<size_t>((cfg.num_heads + 2*cfg.num_kv_heads) * 
-                              cfg.head_dim) * cfg.d_model;  // Use pre-computed head_dim
-            exportBuffer((prefix + "qkv_grads").c_str(), ts.attn_qkv_weight_grads[layer], qkv_size);
-            exportBuffer((prefix + "wo_grads").c_str(), ts.attn_out_weight_grads[layer], 
-                         static_cast<size_t>(cfg.d_model) * cfg.d_model);
-            exportBuffer((prefix + "ffn_w1_grads").c_str(), ts.ffn_w1_grads[layer],
-                         static_cast<size_t>(cfg.d_model) * cfg.d_ff);
-            exportBuffer((prefix + "ffn_w2_grads").c_str(), ts.ffn_w2_grads[layer],
-                         static_cast<size_t>(cfg.d_ff) * cfg.d_model);
+            if (enc) {
+                size_t qkv_size = static_cast<size_t>((cfg.num_heads + 2*cfg.num_kv_heads) * 
+                                  cfg.head_dim) * cfg.d_model;  // Use pre-computed head_dim
+                exportBuffer((prefix + "qkv_grads").c_str(), enc->getAttnWqkvGrad(), qkv_size);
+                exportBuffer((prefix + "wo_grads").c_str(), enc->getAttnWoGrad(), 
+                             static_cast<size_t>(cfg.d_model) * cfg.d_model);
+                exportBuffer((prefix + "ffn_w1_grads").c_str(), enc->getFFNW1Grad(),
+                             static_cast<size_t>(cfg.d_model) * cfg.d_ff);
+                exportBuffer((prefix + "ffn_w2_grads").c_str(), enc->getFFNW2Grad(),
+                             static_cast<size_t>(cfg.d_ff) * cfg.d_model);
+            } else {
+                printf("[GradExport] SKIP layer %d: encoder layer is null\n", layer);
+            }
         }
         
         printf("========================================\n");
@@ -2821,7 +2847,9 @@ BatchResult processBatch(
     // ========================================================================
     const int current_micro_step = ctx.optimizer.grad_controller->controller().currentMicroStep();
     const int total_accum_steps = ctx.optimizer.grad_controller->controller().accumSteps();
-    const bool is_last_micro_batch = (current_micro_step + 1 >= total_accum_steps);
+    // Logic fix: current_micro_step is the count of COMPLETED steps (1-based effective progress)
+    // So if current_micro_step == total_accum_steps, we are done.
+    const bool is_last_micro_batch = (current_micro_step >= total_accum_steps);
     
     // DEBUG: Log gradient check decision
     ctx.logging.logger->log("[GradCheckDebug] batch=" + std::to_string(batch_idx + 1) + 
@@ -3241,7 +3269,7 @@ BatchResult processBatch(
                             " step=" + std::to_string(ctx.optimizer.optimizer_state.step) +
                             " " + pre_weights);
 
-    {
+    if (sync_diag) {
         auto& training_state = ctx.model->getTrainingState();
         const auto flush_result = GRIM::GradStats::flushAndLog(
             training_state.stream_ctrl.getPrimaryStream(),

@@ -146,8 +146,8 @@ struct TrainingTensors {
     int head_dim = 0;
     int vocab_size = 0;
     int max_seq_len = 0;
-    bool tie_embeddings = false;
-    bool use_bias = false;
+    bool tie_embeddings = true;
+    bool use_bias = true;
     
     //======================================================//
     //  INITIALIZATION
@@ -162,6 +162,13 @@ struct TrainingTensors {
                           int num_layers, int num_heads, int num_kv_heads,
                           int max_seq_len, bool tie_embeddings, bool use_bias,
                           cudaStream_t stream = nullptr);
+    
+    /**
+     * Pre-allocate all gradient buffers
+     * Called automatically by initializeParams() - needed so GradAccumulationController
+     * can register the buffers at startup (before first backward pass)
+     */
+    void allocateAllGradients();
     
     /**
      * Allocate activation cache tensors for given batch/sequence dimensions

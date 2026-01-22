@@ -15,6 +15,15 @@
 #include <cmath>
 #include <algorithm>
 
+// DEBUG LOGGING - set to 1 to enable verbose tensor operation logging
+#define TENSOR_VERBOSE_DEBUG 0
+
+#if TENSOR_VERBOSE_DEBUG
+#define TENSOR_LOG(...) fprintf(stderr, __VA_ARGS__)
+#else
+#define TENSOR_LOG(...) ((void)0)
+#endif
+
 namespace TensorContract {
 
 //======================================================//
@@ -196,13 +205,6 @@ bool is_conversion_supported(Layout from, Layout to) {
 //======================================================//
 //  CUDA Kernels - Basic Operations
 //======================================================//
-
-__global__ void kernel_zero(float* dst, size_t n) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) {
-        dst[idx] = 0.0f;
-    }
-}
 
 __global__ void kernel_add(const float* __restrict__ a, 
                            const float* __restrict__ b,
@@ -570,6 +572,17 @@ __global__ void kernel_merge_qkv_grads_gqa(
 }
 
 //======================================================//
+//  CUDA Kernels - Basic Operations (for TensorContract API)
+//======================================================//
+
+__global__ void kernel_zero(float* dst, size_t n) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        dst[idx] = 0.0f;
+    }
+}
+
+//======================================================//
 //  Host API Implementation - Basic Operations
 //======================================================//
 
@@ -913,15 +926,15 @@ namespace GRIM {
 //  CUDA Kernels for Tensor Operations
 //======================================================//
 
-namespace {
-
-// Kernel: Zero-initialize tensor
-__global__ void kernel_zero(float* data, size_t count) {
+// Kernel: Zero-initialize tensor (outside anonymous namespace so visible everywhere in GRIM)
+__global__ void kernel_zero_autograd(float* data, size_t count) {
     const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (idx < count) {
         data[idx] = 0.0f;
     }
 }
+
+namespace {
 
 // Kernel: Xavier uniform initialization (uses curand-free LCG for reproducibility)
 __global__ void kernel_xavier_uniform(float* data, size_t count, float scale, uint64_t seed) {
@@ -1014,6 +1027,11 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
 //======================================================//
 
 Tensor Tensor::zeros(TensorContract::TensorShape shape, bool requires_grad, cudaStream_t stream) {
+    // RULE 20: Fail loud on invalid stream - default stream causes race conditions
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("Tensor::zeros: stream is NULL - caller MUST provide valid stream");
+    }
+    
     if (!shape.is_valid()) {
         throw std::invalid_argument("Tensor::zeros: invalid shape");
     }
@@ -1035,7 +1053,15 @@ Tensor Tensor::zeros(TensorContract::TensorShape shape, bool requires_grad, cuda
     
     // Zero-initialize
     const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    kernel_zero<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count);
+    kernel_zero_autograd<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count);
+    
+    cudaError_t kernelErr = cudaGetLastError();
+    
+    if (kernelErr != cudaSuccess) {
+        throw std::runtime_error(std::string("Tensor::zeros: kernel launch failed: ") + cudaGetErrorString(kernelErr));
+    }
+    
+    // NOTE: Don't sync here - let caller control sync point
     
     return t;
 }
@@ -1066,6 +1092,11 @@ Tensor Tensor::zeros(std::initializer_list<int> dims, cudaStream_t stream) {
 }
 
 Tensor Tensor::empty(TensorContract::TensorShape shape, bool requires_grad, cudaStream_t stream) {
+    // RULE 20: Fail loud on invalid stream - default stream causes race conditions
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("Tensor::empty: stream is NULL - caller MUST provide valid stream");
+    }
+    
     if (!shape.is_valid()) {
         throw std::invalid_argument("Tensor::empty: invalid shape");
     }
@@ -1227,7 +1258,7 @@ void Tensor::ensure_grad() {
     
     // Zero-initialize gradient
     const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    kernel_zero<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(grad, count);
+    kernel_zero_autograd<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(grad, count);
 }
 
 void Tensor::zero_grad(cudaStream_t exec_stream) {
@@ -1238,7 +1269,7 @@ void Tensor::zero_grad(cudaStream_t exec_stream) {
     cudaStream_t s = exec_stream ? exec_stream : stream;
     const size_t count = shape.total_elements();
     const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    kernel_zero<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, s>>>(grad, count);
+    kernel_zero_autograd<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, s>>>(grad, count);
 }
 
 void Tensor::accumulate_grad(const float* incoming_grad, size_t count, float scale, cudaStream_t exec_stream) {
@@ -1398,16 +1429,17 @@ __global__ void kernel_rmsnorm_forward(
     }
     __syncthreads();
     
-    if (threadIdx.x < blockDim.x / 32) {
-        local_sum_sq = shared[threadIdx.x];
-        for (int offset = blockDim.x / 64; offset > 0; offset >>= 1) {
-            local_sum_sq += __shfl_down_sync(0xffffffff, local_sum_sq, offset);
-        }
-    }
-    
+    // Final reduction: only first few threads participate
+    // With blockDim.x=256, we have 8 warps, so 8 values to reduce
+    // Use thread 0 to do sequential reduction (safe, no warp sync issues)
     __shared__ float s_inv_rms;
     if (threadIdx.x == 0) {
-        float rms_sq = local_sum_sq / d_model + eps;
+        float total = 0.0f;
+        const int num_warps = blockDim.x / 32;
+        for (int i = 0; i < num_warps; i++) {
+            total += shared[i];
+        }
+        float rms_sq = total / d_model + eps;
         s_inv_rms = rsqrtf(rms_sq);
     }
     __syncthreads();
@@ -1644,6 +1676,27 @@ __global__ void kernel_cross_entropy_backward(
     }
 }
 
+// Embedding forward: gather from embedding table
+__global__ void kernel_embedding_forward(
+    const int* token_ids,       // [tokens]
+    const float* weight,        // [vocab_size, d_model]
+    float* output,              // [tokens, d_model]
+    int tokens,
+    int d_model
+) {
+    const int token_idx = blockIdx.x;
+    if (token_idx >= tokens) return;
+    
+    const int token_id = token_ids[token_idx];
+    const float* weight_row = weight + static_cast<size_t>(token_id) * d_model;
+    float* output_row = output + static_cast<size_t>(token_idx) * d_model;
+    
+    // Gather: output[token_idx] = weight[token_id]
+    for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
+        output_row[i] = weight_row[i];
+    }
+}
+
 // Embedding backward: scatter-add gradients to embedding table
 __global__ void kernel_embedding_backward(
     const float* grad_output,   // [tokens, d_model]
@@ -1766,60 +1819,57 @@ struct AddGradFn : public GradFn {
 };
 
 /**
- * GeluGradFn - Backward for GELU activation
+ * GeluGradFn - Backward for GELU activation (TAPE-BASED)
  * Forward: y = gelu(x)
  * Backward: grad_x = grad_y * gelu'(x)
+ * 
+ * TAPE-BASED: Does NOT allocate or copy. References external cache from TrainingState.
  */
 struct GeluGradFn : public GradFn {
-    Tensor* input = nullptr;    // Non-owning pointer
-    float* saved_input = nullptr;  // Owned copy of input data
-    size_t saved_size = 0;
+    Tensor* input = nullptr;           // Non-owning pointer to input tensor
+    const float* cached_input = nullptr;  // Non-owning pointer to external cache (TrainingState)
+    size_t cached_size = 0;
     
     GeluGradFn() { op_name = "gelu"; }
     
-    ~GeluGradFn() override {
-        if (saved_input) {
-            cudaFree(saved_input);
-            saved_input = nullptr;
-        }
-    }
+    // No destructor needed - we don't own the cache
     
-    void save_input(const Tensor& x, cudaStream_t stream) {
-        saved_size = x.numel();
-        cudaMalloc(&saved_input, saved_size * sizeof(float));
-        cudaMemcpyAsync(saved_input, x.data, saved_size * sizeof(float),
-                        cudaMemcpyDeviceToDevice, stream);
+    // TAPE-BASED: Just store pointer to external cache, no allocation
+    void set_cache(const float* external_cache, size_t size) {
+        if (!external_cache) {
+            throw std::runtime_error("GeluGradFn::set_cache: external_cache is NULL - caller MUST provide cache");
+        }
+        cached_input = external_cache;
+        cached_size = size;
     }
     
     void apply(const Tensor& grad_output, cudaStream_t stream) override {
-        if (!input || !input->requires_grad || !saved_input) return;
+        if (!input || !input->requires_grad) {
+            throw std::runtime_error("GeluGradFn::apply: input is NULL or doesn't require grad");
+        }
+        if (!cached_input) {
+            throw std::runtime_error("GeluGradFn::apply: cached_input is NULL - set_cache() must be called first");
+        }
         
         input->ensure_grad();
         
         const size_t count = grad_output.numel();
+        if (count != cached_size) {
+            throw std::runtime_error("GeluGradFn::apply: size mismatch - grad_output.numel()=" + 
+                                     std::to_string(count) + " cached_size=" + std::to_string(cached_size));
+        }
         const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
         
-        // Allocate temp buffer for local grad computation
-        float* grad_temp = nullptr;
-        cudaMalloc(&grad_temp, count * sizeof(float));
-        
+        // TAPE-BASED: Write directly to input's grad buffer (no temp allocation)
         kernel_gelu_backward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-            grad_output.data, saved_input, grad_temp, count);
-        
-        // Accumulate to input's gradient
-        input->accumulate_grad(grad_temp, count, 1.0f, stream);
-        
-        // Must sync before freeing - kernel runs async on stream
-        cudaStreamSynchronize(stream);
-        cudaFree(grad_temp);
+            grad_output.data, cached_input, input->grad, count);
     }
     
     void release_saved() override {
         GradFn::release_saved();
-        if (saved_input) {
-            cudaFree(saved_input);
-            saved_input = nullptr;
-        }
+        // TAPE-BASED: Don't free - we don't own the cache
+        cached_input = nullptr;
+        cached_size = 0;
     }
 };
 
@@ -1828,36 +1878,45 @@ struct GeluGradFn : public GradFn {
  * Forward: y = x / rms(x) * gamma
  * Backward: Complex chain rule through normalization
  */
+/**
+ * RMSNormGradFn - Backward for RMS Normalization (TAPE-BASED)
+ * Forward: y = (x / rms(x)) * gamma
+ * Backward: Computes grad_x and grad_gamma
+ *
+ * TAPE-BASED: Does NOT allocate or copy. References external cache from TrainingState.
+ */
 struct RMSNormGradFn : public GradFn {
     Tensor* input = nullptr;
     Tensor* gamma = nullptr;
-    float* saved_input = nullptr;
-    size_t saved_size = 0;
+    const float* cached_input = nullptr;  // Non-owning pointer to external cache
+    size_t cached_size = 0;
     int d_model = 0;
     float eps = 1e-5f;
     
     RMSNormGradFn() { op_name = "rms_norm"; }
     
-    ~RMSNormGradFn() override {
-        if (saved_input) {
-            cudaFree(saved_input);
-            saved_input = nullptr;
-        }
-    }
+    // No destructor needed - we don't own the cache
     
-    void save_input(const Tensor& x, int d, float e, cudaStream_t stream) {
+    // TAPE-BASED: Just store pointer to external cache, no allocation
+    void set_cache(const float* external_cache, size_t size, int d, float e) {
+        if (!external_cache) {
+            throw std::runtime_error("RMSNormGradFn::set_cache: external_cache is NULL - caller MUST provide cache");
+        }
+        cached_input = external_cache;
+        cached_size = size;
         d_model = d;
         eps = e;
-        saved_size = x.numel();
-        cudaMalloc(&saved_input, saved_size * sizeof(float));
-        cudaMemcpyAsync(saved_input, x.data, saved_size * sizeof(float),
-                        cudaMemcpyDeviceToDevice, stream);
     }
     
     void apply(const Tensor& grad_output, cudaStream_t stream) override {
-        if (!saved_input || d_model <= 0) return;
+        if (!cached_input) {
+            throw std::runtime_error("RMSNormGradFn::apply: cached_input is NULL - set_cache() must be called first");
+        }
+        if (d_model <= 0) {
+            throw std::runtime_error("RMSNormGradFn::apply: d_model is " + std::to_string(d_model) + " - must be > 0");
+        }
         
-        const int tokens = static_cast<int>(saved_size / d_model);
+        const int tokens = static_cast<int>(cached_size / d_model);
         const int shared_mem = (AUTOGRAD_BLOCK_SIZE / 32 + 1) * sizeof(float);
         
         if (input && input->requires_grad) {
@@ -1868,7 +1927,7 @@ struct RMSNormGradFn : public GradFn {
             if (gamma && gamma->requires_grad) gamma->ensure_grad();
             
             kernel_rmsnorm_backward<<<tokens, AUTOGRAD_BLOCK_SIZE, shared_mem, stream>>>(
-                grad_output.data, saved_input, gamma ? gamma->data : nullptr,
+                grad_output.data, cached_input, gamma ? gamma->data : nullptr,
                 input->grad, gamma_grad,
                 tokens, d_model, eps);
         }
@@ -1876,10 +1935,9 @@ struct RMSNormGradFn : public GradFn {
     
     void release_saved() override {
         GradFn::release_saved();
-        if (saved_input) {
-            cudaFree(saved_input);
-            saved_input = nullptr;
-        }
+        // TAPE-BASED: Don't free - we don't own the cache
+        cached_input = nullptr;
+        cached_size = 0;
     }
 };
 
@@ -2144,7 +2202,24 @@ Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream) {
     return result;
 }
 
-Tensor gelu(const Tensor& x, cudaStream_t stream) {
+/**
+ * autograd::gelu - GELU activation with automatic differentiation
+ *
+ * TAPE-BASED: Requires caller to provide cache pointer from TrainingState.
+ * Does NOT allocate internal copy of input.
+ *
+ * @param x Input tensor
+ * @param stream CUDA stream
+ * @param input_cache External cache pointer for input (needed for backward).
+ *                    Must point to valid memory until backward() is called.
+ * @return Output tensor with GELU applied
+ */
+Tensor gelu(const Tensor& x, cudaStream_t stream, const float* input_cache) {
+    // RULE 20: Fail loud on invalid stream - default stream causes race conditions
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("autograd::gelu: stream is NULL - caller MUST provide valid stream");
+    }
+    
     Tensor result = Tensor::empty(x.shape, x.requires_grad, stream);
     
     // Forward: y = gelu(x)
@@ -2155,19 +2230,42 @@ Tensor gelu(const Tensor& x, cudaStream_t stream) {
     // Launch GELU forward kernel
     kernel_gelu_forward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(x.data, result.data, count);
     
-    // Set up backward
+    // Set up backward (TAPE-BASED)
     if (x.requires_grad) {
         result.is_leaf = false;
         auto* grad_fn = new GeluGradFn();
         grad_fn->input = const_cast<Tensor*>(&x);
-        grad_fn->save_input(x, stream);
+        
+        // TAPE-BASED: Use external cache or the tensor data directly
+        const float* effective_cache = input_cache ? input_cache : x.data;
+        grad_fn->set_cache(effective_cache, count);
         result.grad_fn = grad_fn;
     }
     
     return result;
 }
 
-Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, cudaStream_t stream) {
+/**
+ * autograd::rms_norm - RMS Normalization with automatic differentiation
+ *
+ * TAPE-BASED: Requires caller to provide cache pointer from TrainingState.
+ * Does NOT allocate internal copy of input.
+ *
+ * @param x Input tensor [tokens, d_model]
+ * @param gamma Scale parameter [d_model]
+ * @param eps Epsilon for numerical stability
+ * @param stream CUDA stream
+ * @param input_cache External cache pointer for input (needed for backward).
+ *                    Must point to valid memory until backward() is called.
+ * @return Output tensor with RMSNorm applied
+ */
+Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, cudaStream_t stream,
+                const float* input_cache) {
+    // RULE 20: Fail loud on invalid stream - default stream causes race conditions
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("autograd::rms_norm: stream is NULL - caller MUST provide valid stream");
+    }
+    
     if (!x.shape.is_flat()) {
         throw std::invalid_argument("autograd::rms_norm: input must be 2D (BSM)");
     }
@@ -2175,21 +2273,26 @@ Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, cudaStream_t st
     const auto& dims = x.shape.as_2d();
     const int tokens = dims.rows;
     const int d_model = dims.cols;
+    
     Tensor result = Tensor::empty(x.shape, x.requires_grad || gamma.requires_grad, stream);
     
     // Forward: y = x / rms(x) * gamma
     // Shared memory: one float per warp for reduction
     const int shared_mem = (AUTOGRAD_BLOCK_SIZE / 32 + 1) * sizeof(float);
+    
     kernel_rmsnorm_forward<<<tokens, AUTOGRAD_BLOCK_SIZE, shared_mem, stream>>>(
         x.data, gamma.data, result.data, tokens, d_model, eps);
     
-    // Set up backward
+    // Set up backward (TAPE-BASED)
     if (result.requires_grad) {
         result.is_leaf = false;
         auto* grad_fn = new RMSNormGradFn();
         grad_fn->input = const_cast<Tensor*>(&x);
         grad_fn->gamma = const_cast<Tensor*>(&gamma);
-        grad_fn->save_input(x, d_model, eps, stream);
+        
+        // TAPE-BASED: Use external cache or the tensor data directly
+        const float* effective_cache = input_cache ? input_cache : x.data;
+        grad_fn->set_cache(effective_cache, static_cast<size_t>(tokens) * d_model, d_model, eps);
         result.grad_fn = grad_fn;
     }
     
@@ -2220,13 +2323,23 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cud
     if (!weight.shape.is_flat()) {
         throw std::invalid_argument("autograd::embedding: weight must be 2D [vocab_size, d_model]");
     }
+    if (!token_ids) {
+        throw std::invalid_argument("autograd::embedding: token_ids is NULL");
+    }
+    if (num_tokens <= 0) {
+        throw std::invalid_argument("autograd::embedding: num_tokens must be > 0");
+    }
+    if (!weight.data) {
+        throw std::invalid_argument("autograd::embedding: weight.data is NULL");
+    }
     
     const int d_model = weight.shape.as_2d().cols;
     auto output_shape = TensorContract::TensorShape::make_BSM(num_tokens, d_model);
     Tensor result = Tensor::empty(output_shape, weight.requires_grad, stream);
     
-    // Forward: gather from weight table (would use existing embedding kernel)
-    // Placeholder
+    // Forward: gather from weight table
+    kernel_embedding_forward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        token_ids, weight.data, result.data, num_tokens, d_model);
     
     // Set up backward
     if (weight.requires_grad) {
@@ -2342,126 +2455,153 @@ Tensor residual_add(const Tensor& x, const Tensor& residual, cudaStream_t stream
  * For row-major C = A @ B, we compute as C^T = B^T @ A^T
  * So cublasSgemm(B^T, A^T) gives us C in row-major
  */
+/**
+ * MatMulGradFn - Backward for matrix multiplication (TAPE-BASED)
+ * Forward: C = A @ B  [M,K] @ [K,N] = [M,N]
+ * Backward:
+ *   grad_A = grad_C @ B^T  [M,N] @ [N,K] = [M,K]
+ *   grad_B = A^T @ grad_C  [K,M] @ [M,N] = [K,N]
+ *
+ * TAPE-BASED: Does NOT allocate. References external caches and writes directly to grad buffers.
+ */
 struct MatMulGradFn : public GradFn {
     Tensor* input_a = nullptr;
     Tensor* input_b = nullptr;
-    float* saved_a = nullptr;  // Saved copy of A
-    float* saved_b = nullptr;  // Saved copy of B
+    const float* cached_a = nullptr;  // Non-owning pointer to A cache (needed for grad_B)
+    const float* cached_b = nullptr;  // Non-owning pointer to B cache (needed for grad_A)
     int M = 0, K = 0, N = 0;   // Dimensions
     cublasHandle_t cublas_handle = nullptr;
+    bool transpose_b = false;  // Was B transposed in forward?
     
     MatMulGradFn() { op_name = "matmul"; }
     
-    ~MatMulGradFn() override {
-        if (saved_a) { cudaFree(saved_a); saved_a = nullptr; }
-        if (saved_b) { cudaFree(saved_b); saved_b = nullptr; }
-    }
+    // No destructor needed - we don't own the caches
     
-    void save(const Tensor& a, const Tensor& b, int m, int k, int n, 
-              cublasHandle_t handle, cudaStream_t stream) {
+    // TAPE-BASED: Store pointers to external caches, no allocation
+    void set_cache(const float* a_cache, const float* b_cache, int m, int k, int n, 
+                   cublasHandle_t handle, bool transB = false) {
+        transpose_b = transB;
         M = m; K = k; N = n;
         cublas_handle = handle;
         
-        // Save A if B requires grad (needed for grad_B = A^T @ grad_C)
-        if (input_b && input_b->requires_grad) {
-            size_t a_bytes = static_cast<size_t>(M) * K * sizeof(float);
-            cudaMalloc(&saved_a, a_bytes);
-            cudaMemcpyAsync(saved_a, a.data, a_bytes, cudaMemcpyDeviceToDevice, stream);
-        }
-        
-        // Save B if A requires grad (needed for grad_A = grad_C @ B^T)
+        // Only store cache if the corresponding input requires grad
         if (input_a && input_a->requires_grad) {
-            size_t b_bytes = static_cast<size_t>(K) * N * sizeof(float);
-            cudaMalloc(&saved_b, b_bytes);
-            cudaMemcpyAsync(saved_b, b.data, b_bytes, cudaMemcpyDeviceToDevice, stream);
+            if (!b_cache) {
+                throw std::runtime_error("MatMulGradFn::set_cache: b_cache is NULL but input_a requires grad");
+            }
+            cached_b = b_cache;
+        }
+        if (input_b && input_b->requires_grad) {
+            if (!a_cache) {
+                throw std::runtime_error("MatMulGradFn::set_cache: a_cache is NULL but input_b requires grad");
+            }
+            cached_a = a_cache;
         }
     }
     
     void apply(const Tensor& grad_output, cudaStream_t stream) override {
-        if (!cublas_handle) return;
+        if (!cublas_handle) {
+            throw std::runtime_error("MatMulGradFn::apply: cublas_handle is NULL");
+        }
         
         const float alpha = 1.0f;
         const float beta_accum = 1.0f;  // Accumulate to existing gradient
         
         cublasSetStream(cublas_handle, stream);
         
-        // grad_A = grad_C @ B^T  [M, N] @ [N, K] = [M, K]
-        // Row-major: grad_A = grad_C @ B^T
-        // cuBLAS (col-major): grad_A^T = B @ grad_C^T
-        // cublasSgemm(CUBLAS_OP_N, CUBLAS_OP_N, K, M, N, alpha, B, K, grad_C, N, beta, grad_A, K)
-        if (input_a && input_a->requires_grad && saved_b) {
+        // Without transpose_b: Forward was C = A @ B, where A[M,K], B[K,N], C[M,N]
+        //   grad_A = grad_C @ B^T   [M,N] @ [N,K] = [M,K]
+        //   grad_B = A^T @ grad_C   [K,M] @ [M,N] = [K,N]
+        //
+        // With transpose_b: Forward was C = A @ B^T, where A[M,K], B[N,K], C[M,N]
+        //   grad_A = grad_C @ B     [M,N] @ [N,K] = [M,K]  (B, not B^T)
+        //   grad_B = grad_C^T @ A   [N,M] @ [M,K] = [N,K]  (gradient w.r.t. B before transpose)
+        
+        // TAPE-BASED: Write directly to input_a->grad (no temp allocation)
+        if (input_a && input_a->requires_grad) {
+            if (!cached_b) {
+                throw std::runtime_error("MatMulGradFn::apply: cached_b is NULL but input_a requires grad");
+            }
             input_a->ensure_grad();
             
-            // Allocate temp buffer for this gradient computation
-            float* grad_a_temp = nullptr;
-            cudaMalloc(&grad_a_temp, static_cast<size_t>(M) * K * sizeof(float));
-            cudaMemsetAsync(grad_a_temp, 0, static_cast<size_t>(M) * K * sizeof(float), stream);
-            
-            // C = grad_C [M, N] row-major
-            // B = saved_b [K, N] row-major  -> B^T is [N, K]
-            // We want grad_A [M, K] = grad_C @ B^T
-            // In cuBLAS col-major: C_col = B^T_col @ A_col
-            // grad_A_col [K, M] = B_col [N, K]^T @ grad_C_col [N, M]
-            // = B_col^T [K, N] @ grad_C_col [N, M] -- but B is row-major [K,N] so B_col is [N,K]
-            // Simpler: use CUBLAS_OP_T on appropriate matrices
-            
-            // For row-major: C[M,K] = A[M,N] @ B[N,K]
-            // cuBLAS: C^T[K,M] = B^T[K,N] @ A^T[N,M]
-            // Here A=grad_C[M,N], B=saved_b^T[N,K], C=grad_A[M,K]
-            // So: grad_A^T[K,M] = saved_b[K,N] @ grad_C^T[N,M]
-            cublasSgemm(cublas_handle,
-                CUBLAS_OP_N,    // saved_b is [K,N] row-major = [N,K] col-major, no transpose
-                CUBLAS_OP_T,    // grad_C is [M,N] row-major, we want grad_C^T
-                K, M, N,        // C is [K,M] col-major = [M,K] row-major (grad_A)
-                &alpha,
-                saved_b, N,     // B: [K,N] row-major -> ldb = N
-                grad_output.data, N,  // grad_C: [M,N] row-major -> lda = N
-                &beta_accum,
-                grad_a_temp, K  // grad_A: [M,K] row-major -> ldc = K
-            );
-            
-            input_a->accumulate_grad(grad_a_temp, static_cast<size_t>(M) * K, 1.0f, stream);
-            // Must sync before freeing - GEMM runs async on stream
-            cudaStreamSynchronize(stream);
-            cudaFree(grad_a_temp);
+            if (transpose_b) {
+                // grad_A = grad_C @ B  where B is [N, K]
+                // Row-major: grad_A[M,K] = grad_C[M,N] @ B[N,K]
+                // For cuBLAS (col-major), we compute grad_A^T = B^T @ grad_C^T
+                // B[N,K] row-major = [K,N] col-major, B^T = [N,K] col-major (use CUBLAS_OP_T)
+                // grad_C[M,N] row-major = [N,M] col-major, grad_C^T = [M,N] col-major (use CUBLAS_OP_T)
+                // Result: [K,M] col-major = grad_A^T, so grad_A is [M,K] row-major
+                cublasSgemm(cublas_handle,
+                    CUBLAS_OP_T,    // Transpose B: [K,N] col -> [N,K] col = B[N,K] row
+                    CUBLAS_OP_T,    // Transpose grad_C: [N,M] col -> [M,N] col
+                    K, M, N,        // m=K, n=M, k=N. Result is [K,M] col = [M,K] row
+                    &alpha,
+                    cached_b, N,          // B: [N,K] row-major, lda=N (leading dim of [K,N] col)
+                    grad_output.data, N,  // grad_C: [M,N] row-major, ldb=N (leading dim of [N,M] col)
+                    &beta_accum,
+                    input_a->grad, K      // grad_A: [M,K] row-major, ldc=K
+                );
+            } else {
+                // grad_A = grad_C @ B^T  where B is [K, N]
+                // Row-major: grad_A[M,K] = grad_C[M,N] @ B^T[N,K]
+                // cuBLAS (col-major): grad_A^T[K,M] = B[K,N] @ grad_C^T[N,M]
+                cublasSgemm(cublas_handle,
+                    CUBLAS_OP_N,    // cached_b is [K,N] row-major = [N,K] col-major, no transpose
+                    CUBLAS_OP_T,    // grad_C is [M,N] row-major, we want grad_C^T
+                    K, M, N,        // C is [K,M] col-major = [M,K] row-major (grad_A)
+                    &alpha,
+                    cached_b, N,     // B: [K,N] row-major -> ldb = N
+                    grad_output.data, N,  // grad_C: [M,N] row-major -> lda = N
+                    &beta_accum,
+                    input_a->grad, K  // TAPE-BASED: Write directly to grad buffer
+                );
+            }
         }
         
-        // grad_B = A^T @ grad_C  [K, M] @ [M, N] = [K, N]
-        // Row-major: grad_B = A^T @ grad_C
-        // cuBLAS (col-major): grad_B^T = grad_C^T @ A
-        if (input_b && input_b->requires_grad && saved_a) {
+        // TAPE-BASED: Write directly to input_b->grad (no temp allocation)
+        if (input_b && input_b->requires_grad) {
+            if (!cached_a) {
+                throw std::runtime_error("MatMulGradFn::apply: cached_a is NULL but input_b requires grad");
+            }
             input_b->ensure_grad();
             
-            float* grad_b_temp = nullptr;
-            cudaMalloc(&grad_b_temp, static_cast<size_t>(K) * N * sizeof(float));
-            cudaMemsetAsync(grad_b_temp, 0, static_cast<size_t>(K) * N * sizeof(float), stream);
-            
-            // For row-major: C[K,N] = A[K,M] @ B[M,N]
-            // Here A=saved_a^T[K,M], B=grad_C[M,N], C=grad_B[K,N]
-            // saved_a is [M,K] so saved_a^T is [K,M]
-            // cuBLAS: C^T[N,K] = B^T[N,M] @ A^T^T[M,K] = grad_C^T @ saved_a
-            cublasSgemm(cublas_handle,
-                CUBLAS_OP_N,    // grad_C^T: grad_C is [M,N] row-major, transposed = [N,M] col-major
-                CUBLAS_OP_N,    // saved_a: [M,K] row-major = [K,M] col-major
-                N, K, M,        // C is [N,K] col-major = [K,N] row-major (grad_B)
-                &alpha,
-                grad_output.data, N,  // grad_C: [M,N] row-major -> ld = N
-                saved_a, K,           // saved_a: [M,K] row-major -> ld = K
-                &beta_accum,
-                grad_b_temp, N        // grad_B: [K,N] row-major -> ld = N
-            );
-            
-            input_b->accumulate_grad(grad_b_temp, static_cast<size_t>(K) * N, 1.0f, stream);
-            // Must sync before freeing - GEMM runs async on stream
-            cudaStreamSynchronize(stream);
-            cudaFree(grad_b_temp);
+            if (transpose_b) {
+                // grad_B = grad_C^T @ A  where A is [M, K], result is [N, K]
+                // Row-major: grad_B[N,K] = grad_C^T[N,M] @ A[M,K]
+                // cuBLAS (col-major): grad_B^T[K,N] = A^T[K,M] @ grad_C[M,N]
+                cublasSgemm(cublas_handle,
+                    CUBLAS_OP_T,    // A^T: cached_a is [M,K] row-major
+                    CUBLAS_OP_N,    // grad_C: [M,N] row-major = [N,M] col-major
+                    K, N, M,        // Result is [K,N] col-major = [N,K] row-major
+                    &alpha,
+                    cached_a, K,          // A: [M,K] row-major -> ld = K
+                    grad_output.data, N,  // grad_C: [M,N] row-major -> ld = N
+                    &beta_accum,
+                    input_b->grad, K      // grad_B: [N,K] row-major -> ld = K
+                );
+            } else {
+                // grad_B = A^T @ grad_C  where A is [M, K], result is [K, N]
+                // Row-major: grad_B[K,N] = A^T[K,M] @ grad_C[M,N]
+                // cuBLAS: C^T[N,K] = B^T[N,M] @ A^T^T[M,K] = grad_C^T @ cached_a
+                cublasSgemm(cublas_handle,
+                    CUBLAS_OP_N,    // grad_C^T: grad_C is [M,N] row-major, transposed = [N,M] col-major
+                    CUBLAS_OP_N,    // cached_a: [M,K] row-major = [K,M] col-major
+                    N, K, M,        // C is [N,K] col-major = [K,N] row-major (grad_B)
+                    &alpha,
+                    grad_output.data, N,  // grad_C: [M,N] row-major -> ld = N
+                    cached_a, K,          // cached_a: [M,K] row-major -> ld = K
+                    &beta_accum,
+                    input_b->grad, N      // TAPE-BASED: Write directly to grad buffer
+                );
+            }
         }
     }
     
     void release_saved() override {
         GradFn::release_saved();
-        if (saved_a) { cudaFree(saved_a); saved_a = nullptr; }
-        if (saved_b) { cudaFree(saved_b); saved_b = nullptr; }
+        // TAPE-BASED: Don't free - we don't own the caches
+        cached_a = nullptr;
+        cached_b = nullptr;
     }
 };
 
@@ -2476,7 +2616,28 @@ cublasHandle_t get_autograd_cublas_handle() {
     return s_autograd_cublas_handle;
 }
 
-Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream) {
+/**
+ * autograd::matmul - Matrix multiplication with automatic differentiation
+ * 
+ * TAPE-BASED: Requires caller to provide cache pointers from TrainingState.
+ * Does NOT allocate internal copies of A or B.
+ *
+ * @param a Input tensor A [M, K]
+ * @param b Input tensor B [K, N]
+ * @param stream CUDA stream
+ * @param a_cache External cache pointer for A (needed if B requires grad). 
+ *                Pass nullptr if A is a weight tensor that persists.
+ * @param b_cache External cache pointer for B (needed if A requires grad).
+ *                Pass nullptr if B is a weight tensor that persists.
+ * @return Output tensor C [M, N]
+ */
+Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
+              const float* a_cache, const float* b_cache, bool transpose_b) {
+    // RULE 20: Fail loud on invalid stream - default stream causes race conditions
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("autograd::matmul: stream is NULL - caller MUST provide valid stream");
+    }
+    
     // Validate inputs are 2D
     if (!a.shape.is_flat() || !b.shape.is_flat()) {
         throw std::invalid_argument("autograd::matmul: inputs must be 2D (BSM layout)");
@@ -2485,17 +2646,20 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream) {
     const auto& a_shape = a.shape.as_2d();
     const auto& b_shape = b.shape.as_2d();
     
-    const int M = a_shape.rows;   // A is [M, K]
+    // A is [M, K]
+    // B is [K, N] if !transpose_b, or [N, K] if transpose_b (so B^T is [K, N])
+    const int M = a_shape.rows;
     const int K = a_shape.cols;
-    const int K2 = b_shape.rows;  // B is [K, N]
-    const int N = b_shape.cols;
+    const int K2 = transpose_b ? b_shape.cols : b_shape.rows;
+    const int N = transpose_b ? b_shape.rows : b_shape.cols;
     
     if (K != K2) {
-        throw std::invalid_argument("autograd::matmul: inner dimensions must match");
+        throw std::invalid_argument("autograd::matmul: inner dimensions must match (K=" + std::to_string(K) + " vs K2=" + std::to_string(K2) + ")");
     }
     
     // Get cuBLAS handle
     cublasHandle_t handle = get_autograd_cublas_handle();
+    
     if (!handle) {
         throw std::runtime_error("autograd::matmul: cuBLAS handle not set. Call set_autograd_cublas_handle() first.");
     }
@@ -2504,34 +2668,83 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream) {
     auto output_shape = TensorContract::TensorShape::make_BSM(M, N);
     Tensor result = Tensor::zeros(output_shape, a.requires_grad || b.requires_grad, stream);
     
-    // Forward: C = A @ B
-    // Row-major: for cuBLAS we compute C^T = B^T @ A^T
-    // cublasSgemm(CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, alpha, B, N, A, K, beta, C, N)
+    // Forward: C = A @ B  (or C = A @ B^T if transpose_b)
+    // Row-major storage: for cuBLAS we compute C^T = B^T @ A^T (or C^T = B @ A^T if transpose_b)
+    // 
+    // Without transpose_b: B is [K, N], we want B^T for cuBLAS
+    //   cublasSgemm(CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, alpha, B, N, A, K, beta, C, N)
+    //
+    // With transpose_b: B is [N, K], we want B (no transpose) for cuBLAS since B^T is [K, N]
+    //   cublasSgemm(CUBLAS_OP_T, CUBLAS_OP_N, N, M, K, alpha, B, K, A, K, beta, C, N)
     const float alpha = 1.0f;
     const float beta = 0.0f;
     
     cublasSetStream(handle, stream);
-    cublasStatus_t status = cublasSgemm(handle,
-        CUBLAS_OP_N, CUBLAS_OP_N,
-        N, M, K,
-        &alpha,
-        b.data, N,    // B: [K, N] row-major
-        a.data, K,    // A: [M, K] row-major
-        &beta,
-        result.data, N  // C: [M, N] row-major
-    );
+    
+    cublasStatus_t status;
+    if (transpose_b) {
+        // B is [N, K] row-major, we want A @ B^T = C[M,N]
+        // Row-major A[M,K] @ (B[N,K])^T = C[M,N]
+        // 
+        // For cuBLAS (column-major), we compute C^T = (A @ B^T)^T = B @ A^T
+        // C^T[N,M] = B[N,K] @ A[M,K]^T = B[N,K] @ A^T[K,M]
+        //
+        // Row-major to col-major mapping:
+        // - B[N,K] row-major: element [i,j] at B + i*K + j, row stride = K
+        //   cuBLAS sees as [K,N] col-major (transpose). To get [N,K], use CUBLAS_OP_T.
+        //   lda = K (leading dim of stored [K,N] matrix = K)
+        //
+        // - A[M,K] row-major: element [i,j] at A + i*K + j, row stride = K  
+        //   cuBLAS sees as [K,M] col-major (= A^T). We want A^T, so use CUBLAS_OP_N.
+        //   ldb = K (leading dim of stored [K,M] matrix = K)
+        //
+        // - C[M,N] row-major: element [i,j] at C + i*N + j, row stride = N
+        //   cuBLAS sees as [N,M] col-major (= C^T). ldc = N.
+        //
+        // cublasSgemm(op_A, op_B, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc)
+        // computes C[m,n] = op(A)[m,k] @ op(B)[k,n]
+        // We want C^T[N,M] = B[N,K] @ A^T[K,M]
+        // So m=N, n=M, k=K, op(A)=CUBLAS_OP_T(B_stored), op(B)=CUBLAS_OP_N(A_stored)
+        
+        status = cublasSgemm(handle,
+            CUBLAS_OP_T, CUBLAS_OP_N,
+            N, M, K,
+            &alpha,
+            b.data, K,    // B: [N,K] row-major stored as [K,N] col-major, lda=K
+            a.data, K,    // A: [M,K] row-major stored as [K,M] col-major, ldb=K
+            &beta,
+            result.data, N  // C: [M,N] row-major stored as [N,M] col-major, ldc=N
+        );
+    } else {
+        // B is [K, N] row-major
+        status = cublasSgemm(handle,
+            CUBLAS_OP_N, CUBLAS_OP_N,
+            N, M, K,
+            &alpha,
+            b.data, N,    // B: [K, N] row-major
+            a.data, K,    // A: [M, K] row-major
+            &beta,
+            result.data, N  // C: [M, N] row-major
+        );
+    }
     
     if (status != CUBLAS_STATUS_SUCCESS) {
         throw std::runtime_error("autograd::matmul: cuBLAS sgemm failed");
     }
     
-    // Set up backward
+    // Set up backward (TAPE-BASED)
     if (result.requires_grad) {
         result.is_leaf = false;
         auto* grad_fn = new MatMulGradFn();
         grad_fn->input_a = const_cast<Tensor*>(&a);
         grad_fn->input_b = const_cast<Tensor*>(&b);
-        grad_fn->save(a, b, M, K, N, handle, stream);
+        
+        // TAPE-BASED: Use external caches or the tensor data directly
+        // If cache not provided, assume the tensor data persists (e.g., weights)
+        const float* effective_a_cache = a_cache ? a_cache : a.data;
+        const float* effective_b_cache = b_cache ? b_cache : b.data;
+        
+        grad_fn->set_cache(effective_a_cache, effective_b_cache, M, K, N, handle, transpose_b);
         result.grad_fn = grad_fn;
     }
     
@@ -2646,6 +2859,9 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
     int head_dim = 0;
     bool causal = true;
     
+    // ALiBi slopes (pointer to device memory, not owned - do NOT free)
+    const float* alibi_slopes = nullptr;
+    
     ScaledDotProductAttentionGradFn() { op_name = "scaled_dot_product_attention"; }
     
     ~ScaledDotProductAttentionGradFn() override {
@@ -2654,13 +2870,14 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
     
     void save(const Tensor& q, const Tensor& k, const Tensor& v, const Tensor& out,
               int b, int s, int nh, int nkv, int hd, bool is_causal,
-              cudaStream_t stream) {
+              const float* alibi_slopes_ptr, cudaStream_t stream) {
         batch_size = b;
         seq_len = s;
         num_heads = nh;
         num_kv_heads = nkv;
         head_dim = hd;
         causal = is_causal;
+        alibi_slopes = alibi_slopes_ptr;  // Save pointer (not owned)
         
         const size_t q_elems = static_cast<size_t>(b) * s * nh * hd;
         const size_t kv_elems = static_cast<size_t>(b) * s * nkv * hd;
@@ -2730,7 +2947,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             saved_out_bf16,    // O  [B, S, H, D] bf16
             dout_bf16,         // dO [B, S, H, D] bf16
             saved_softmax_lse, // LSE [B, H, S] fp32
-            nullptr,           // alibi_slopes (not used)
+            alibi_slopes,      // ALiBi slopes [num_heads] (saved from forward)
             dq_bf16,           // dQ output
             dk_bf16,           // dK output
             dv_bf16,           // dV output
@@ -2796,7 +3013,8 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
 
 Tensor scaled_dot_product_attention(
     const Tensor& q, const Tensor& k, const Tensor& v,
-    const Tensor* mask, float scale, cudaStream_t stream
+    const float* alibi_slopes, float scale, cudaStream_t stream,
+    float* cache_softmax_lse  // NEW: Optional cache for legacy backward
 ) {
     // Validate inputs are 4D BHSD layout
     if (!q.shape.is_4d() || !k.shape.is_4d() || !v.shape.is_4d()) {
@@ -2875,7 +3093,7 @@ Tensor scaled_dot_product_attention(
         v_bf16,      // V  [B, S, Hkv, D] bf16
         out_bf16,    // O  [B, S, H, D] bf16
         softmax_lse, // LSE [B, H, S] fp32
-        nullptr,     // alibi_slopes
+        alibi_slopes, // ALiBi slopes [num_heads]
         batch_size,
         seq_len,
         num_heads,
@@ -2889,6 +3107,15 @@ Tensor scaled_dot_product_attention(
     // Convert BF16 BSHD -> FP32 BHSD for output
     kernel_BSHD_bf16_to_BHSD_fp32<<<q_blocks, block_size, 0, stream>>>(
         out_bf16, result.data, batch_size, num_heads, seq_len, head_dim);
+    
+    // HYBRID FIX: Copy softmax_lse to cache if provided
+    // This is needed because the legacy backward (BackwardPhase2_Encoder.cu)
+    // reads from ts->cached_softmax_lse[layer] which is NOT populated by autograd
+    if (cache_softmax_lse) {
+        cudaMemcpyAsync(cache_softmax_lse, softmax_lse, 
+                        lse_elems * sizeof(float),
+                        cudaMemcpyDeviceToDevice, stream);
+    }
     
     // Set up backward if needed
     if (requires_grad) {
@@ -2910,6 +3137,7 @@ Tensor scaled_dot_product_attention(
         grad_fn->num_kv_heads = num_kv_heads;
         grad_fn->head_dim = head_dim;
         grad_fn->causal = true;
+        grad_fn->alibi_slopes = alibi_slopes;  // Save for backward pass (not owned)
         
         // Allocate backward workspace
         const size_t dq_accum_bytes = flash_attn_dq_accum_bytes(batch_size, seq_len, num_heads, head_dim);

@@ -44,7 +44,7 @@ constexpr auto kModule = GRIM::Logging::ModuleId::BackwardPass;
 #define P1_ERROR(msg) do { std::ostringstream _oss; _oss << "[Phase1] " << msg; GRIM::Logging::EmitModuleError(kModule, _oss.str()); } while (0)
 
 // Diagnostic flag (can be disabled for production)
-constexpr bool kEnableLayerDiagnostics = true;
+constexpr bool kEnableLayerDiagnostics = false;
 
 inline void queueGradStats(const char* name,
     int layer,
@@ -80,8 +80,8 @@ BackwardStatus executePhase1_OutputLayer(BackwardContext& ctx) {
     }
     
     // Validate required pointers
-    BWD_CHECK_PTR(ctx, ctx.training_state->grad_logits, "grad_logits", -1);
-    BWD_CHECK_PTR(ctx, ctx.training_state->grad_encoder_out, "grad_encoder_out", -1);
+    BWD_CHECK_PTR(ctx, ctx.training_state->grad_logits_tensor.data, "grad_logits", -1);
+    BWD_CHECK_PTR(ctx, ctx.training_state->grad_encoder_tensor.data, "grad_encoder_out", -1);
     BWD_CHECK_PTR(ctx, ctx.training_state->cached_logits, "cached_logits", -1);
     BWD_CHECK_PTR(ctx, ctx.training_state->cached_targets, "cached_targets", -1);
     BWD_CHECK_PTR(ctx, ctx.training_state->cached_encoder_outputs, "cached_encoder_outputs", -1);
@@ -121,17 +121,21 @@ BackwardStatus executePhase1_OutputLayer(BackwardContext& ctx) {
         // We need to backprop through RMSNorm:
         //   - Update grad_encoder_out to be gradient w.r.t. PRE-normalized input
         //   - Accumulate gamma gradients
-        launchRMSNormBackward(
-            ts->cached_final_rms_input,      // Input to RMSNorm (pre-norm)
-            ts->grad_encoder_out,             // Gradient from LM head (w.r.t. normalized output)
-            ts->final_rms_gamma.data,        // Gamma weights
-            ts->grad_encoder_out,             // Output: grad w.r.t. input (in-place OK)
-            ts->final_rms_gamma_grads(),     // Output: grad w.r.t. gamma
-            ctx.total_tokens,
-            cfg->d_model,
-            eps,
-            ts->stream_ctrl.getPrimaryStream()
-        );
+        RMSNormBackwardParams rms_params{};
+        rms_params.input = TensorContract::TensorView::make_BSM(
+            ts->cached_final_rms_input, ctx.total_tokens, cfg->d_model, "cached_final_rms_input");
+        rms_params.grad_output = TensorContract::TensorView::make_BSM(
+            ts->grad_encoder_tensor.data, ctx.total_tokens, cfg->d_model, "grad_encoder_out");
+        rms_params.gamma = TensorContract::TensorView::make_BSM(
+            ts->final_rms_gamma.data, 1, cfg->d_model, "final_rms_gamma");
+        rms_params.grad_input = TensorContract::TensorView::make_BSM(
+            ts->grad_encoder_tensor.data, ctx.total_tokens, cfg->d_model, "grad_encoder_out_inplace");
+        rms_params.grad_gamma = TensorContract::TensorView::make_BSM(
+            ts->final_rms_gamma_grads(), 1, cfg->d_model, "final_rms_gamma_grads");
+        rms_params.epsilon = eps;
+        rms_params.stream = ts->stream_ctrl.getPrimaryStream();
+        
+        launchRMSNormBackward(rms_params);
         
         if (ctx.enable_grad_checks) {
             queueGradStats(
@@ -150,7 +154,7 @@ BackwardStatus executePhase1_OutputLayer(BackwardContext& ctx) {
     // Set output for Phase 2
     //--------------------------------------------------//
     
-    ctx.current_grad = ctx.training_state->grad_encoder_out;
+    ctx.current_grad = ctx.training_state->grad_encoder_tensor.data;
     ctx.phase1_status = BackwardStatus::SUCCESS;
     
     // DIAGNOSTIC: Queue grad_encoder_out stats before passing to Phase 2 (no sync)
@@ -158,7 +162,7 @@ BackwardStatus executePhase1_OutputLayer(BackwardContext& ctx) {
         queueGradStats(
             "phase1_grad_encoder_out",
             -1,
-            ctx.training_state->grad_encoder_out,
+            ctx.training_state->grad_encoder_tensor.data,
             static_cast<size_t>(ctx.total_tokens) * ctx.config->d_model,
             ctx.explosion_threshold,
             ctx.training_state->stream_ctrl.getPrimaryStream());
@@ -191,7 +195,7 @@ BackwardStatus computeCrossEntropyGradient(BackwardContext& ctx) {
     P1_INFO("Skipping gradient recomputation - UnifiedLoss already computed grad_logits");
     
     // Validate that grad_logits buffer exists (it should, from forward pass)
-    if (!ts->grad_logits) {
+    if (!ts->grad_logits_tensor.data) {
         BWD_FAIL_LOUD(ctx, BackwardStatus::FATAL_ERROR, 
                       "grad_logits buffer is NULL - forward pass did not compute gradients", -1);
     }
@@ -202,7 +206,7 @@ BackwardStatus computeCrossEntropyGradient(BackwardContext& ctx) {
     // ═══════════════════════════════════════════════════════════════════════════
     {
         auto grad_logits_view = TensorContract::TensorView::make_LOGITS(
-            ts->grad_logits,
+            ts->grad_logits_tensor.data,
             ctx.total_tokens,
             cfg->vocab_size,
             "grad_logits"
@@ -221,15 +225,15 @@ BackwardStatus computeCrossEntropyGradient(BackwardContext& ctx) {
         P1_INFO("Scaling grad_logits by " << ctx.grad_scale);
         
         scaleDeviceBuffer(
-            ts->grad_logits,
+            ts->grad_logits_tensor.data,
             static_cast<size_t>(ctx.total_tokens) * static_cast<size_t>(cfg->vocab_size),
             ctx.grad_scale,
             ctx.training_state->stream_ctrl.getPrimaryStream()
         );
 
-        if (cfg->numeric_head_enabled && ts->grad_numeric_predictions) {
+        if (cfg->numeric_head_enabled && ts->grad_numeric_tensor.data) {
             scaleDeviceBuffer(
-                ts->grad_numeric_predictions,
+                ts->grad_numeric_tensor.data,
                 static_cast<size_t>(ctx.total_tokens),
                 ctx.grad_scale,
                 ctx.training_state->stream_ctrl.getPrimaryStream());
@@ -244,7 +248,7 @@ BackwardStatus computeCrossEntropyGradient(BackwardContext& ctx) {
         queueGradStats(
             "grad_logits",
             -1,
-            ts->grad_logits,
+            ts->grad_logits_tensor.data,
             static_cast<size_t>(ctx.total_tokens) * cfg->vocab_size,
             ctx.explosion_threshold,
             ctx.training_state->stream_ctrl.getPrimaryStream());
@@ -268,38 +272,83 @@ BackwardStatus computeLMHeadBackward(BackwardContext& ctx) {
     //--------------------------------------------------//
     
     auto encoder_out_view = TensorContract::TensorView::make_BSM(
-        ts->grad_encoder_out, 
+        ts->grad_encoder_tensor.data, 
         ctx.total_tokens, 
         cfg->d_model, 
         "grad_encoder_out");
     
     //--------------------------------------------------//
-    // Prepare LM Head backward params
+    // Prepare LM Head backward params using TensorViews
     //--------------------------------------------------//
     
     LMHeadBackwardParams lm_params{};
-    lm_params.grad_logits = ts->grad_logits;
-    lm_params.encoder_output = ts->cached_encoder_outputs;
-    lm_params.grad_encoder = ts->grad_encoder_out;
-    lm_params.grad_weight = ts->lm_head_weight_grads();
-    lm_params.grad_bias = ts->lm_head_bias.grad;
-    lm_params.weights = ts->lm_head_weights.data;
-    lm_params.batch_size = ctx.batch_size;
-    lm_params.seq_len = ctx.seq_len;
-    lm_params.d_model = cfg->d_model;
-    lm_params.vocab_size = cfg->vocab_size;
+    
+    // Input tensor views (read-only during backward)
+    lm_params.grad_logits = TensorContract::TensorView::make_LOGITS(
+        ts->grad_logits_tensor.data, 
+        ctx.total_tokens, 
+        cfg->vocab_size,
+        "lm_backward_grad_logits"
+    );
+    
+    lm_params.encoder_output = TensorContract::TensorView::make_BSM(
+        ts->cached_encoder_outputs, 
+        ctx.total_tokens, 
+        cfg->d_model,
+        "lm_backward_encoder_output"
+    );
+    
+    lm_params.weights = TensorContract::TensorView::make_BSM(
+        ts->lm_head_weights.data, 
+        cfg->vocab_size, 
+        cfg->d_model,
+        "lm_backward_weights"
+    );
+    
+    // Output tensor views (mutable during backward)
+    lm_params.grad_encoder = TensorContract::TensorView::make_BSM(
+        ts->grad_encoder_tensor.data, 
+        ctx.total_tokens, 
+        cfg->d_model,
+        "lm_backward_grad_encoder"
+    );
+    
+    lm_params.grad_weight = TensorContract::TensorView::make_BSM(
+        ts->lm_head_weight_grads(), 
+        cfg->vocab_size, 
+        cfg->d_model,
+        "lm_backward_grad_weight"
+    );
+    
+    // Optional bias gradient
+    if (cfg->use_bias && ts->lm_head_bias.grad) {
+        lm_params.grad_bias = TensorContract::TensorView::make_BSM(
+            ts->lm_head_bias.grad, 
+            cfg->vocab_size, 
+            1,
+            "lm_backward_grad_bias"
+        );
+    }
+    
+    // Centered encoder scratch for Issue #37 / #40 fix
+    if (ts->encoder_workspace) {
+        lm_params.centered_encoder = TensorContract::TensorView::make_BSM(
+            ts->encoder_workspace, 
+            ctx.total_tokens, 
+            cfg->d_model,
+            "lm_backward_centered_encoder"
+        );
+    }
+    
+    // Operation flags
     lm_params.accumulate = ctx.accumulate;
     lm_params.use_bias = cfg->use_bias && ts->lm_head_bias.grad != nullptr;
-    lm_params.handle = ctx.cublas_handle;
-    lm_params.stream = ctx.training_state->stream_ctrl.getPrimaryStream();
-    
-    // Issue #37 / #40 FIX: Use centered encoder output for grad_weight computation
-    // MUST match forward pass centering to ensure correct gradient!
-    // We use encoder_workspace as scratch (same as forward) and recompute centering
-    // NOW CONFIGURABLE via ai_config.json -> lm_head_centering
-    lm_params.centered_encoder = ts->encoder_workspace;
     lm_params.use_centering = cfg->lm_head_center_hidden_states;
     lm_params.recenter_gradients = cfg->lm_head_recenter_gradients;
+    
+    // Execution context
+    lm_params.handle = ctx.cublas_handle;
+    lm_params.stream = ts->stream_ctrl.getPrimaryStream();
     
     //--------------------------------------------------//
     // ISSUE #42 DIAGNOSTIC: Log grad_logits and encoder_output BEFORE LM head backward
@@ -308,14 +357,14 @@ BackwardStatus computeLMHeadBackward(BackwardContext& ctx) {
     {
         static int s_issue42_diag = 0;
         constexpr int kToken277 = 277;
-        if (++s_issue42_diag <= 5) {
+        if (false && ++s_issue42_diag <= 5) { // DISABLED
             cudaStreamSynchronize(lm_params.stream);
             
             // Read grad_logits[t, 277] for first 10 tokens
             std::vector<float> grad_logits_277(std::min(10, ctx.total_tokens));
             for (int t = 0; t < static_cast<int>(grad_logits_277.size()); ++t) {
                 const size_t offset = static_cast<size_t>(t) * cfg->vocab_size + kToken277;
-                cudaMemcpy(&grad_logits_277[t], ts->grad_logits + offset, sizeof(float), cudaMemcpyDeviceToHost);
+                cudaMemcpy(&grad_logits_277[t], ts->grad_logits_tensor.data + offset, sizeof(float), cudaMemcpyDeviceToHost);
             }
             
             // Read encoder_output[t, 0:3] for first 5 tokens (to see h values)
@@ -330,7 +379,7 @@ BackwardStatus computeLMHeadBackward(BackwardContext& ctx) {
             std::vector<float> all_grad_277(ctx.total_tokens);
             for (int t = 0; t < ctx.total_tokens; ++t) {
                 const size_t offset = static_cast<size_t>(t) * cfg->vocab_size + kToken277;
-                cudaMemcpy(&all_grad_277[t], ts->grad_logits + offset, sizeof(float), cudaMemcpyDeviceToHost);
+                cudaMemcpy(&all_grad_277[t], ts->grad_logits_tensor.data + offset, sizeof(float), cudaMemcpyDeviceToHost);
                 grad_logits_277_sum += all_grad_277[t];
             }
             
@@ -380,7 +429,7 @@ BackwardStatus computeLMHeadBackward(BackwardContext& ctx) {
     {
         static int s_p1_diag = 0;
         constexpr int kToken277 = 277;
-        if (++s_p1_diag <= 10 && ts->lm_head_weight_grads()) {
+        if (false && ++s_p1_diag <= 10 && ts->lm_head_weight_grads()) { // DISABLED
             cudaStreamSynchronize(lm_params.stream);
             const size_t row_offset = static_cast<size_t>(kToken277) * cfg->d_model;
             std::vector<float> grad_row(cfg->d_model);
@@ -395,24 +444,65 @@ BackwardStatus computeLMHeadBackward(BackwardContext& ctx) {
 
     if (cfg->numeric_head_enabled) {
         // Tensor API: check .data and .grad fields instead of raw pointers
-        if (!ts->grad_numeric_predictions || !ts->numeric_head_weights.data) {
+        if (!ts->grad_numeric_tensor.data || !ts->numeric_head_weights.data) {
             BWD_FAIL_LOUD(ctx, BackwardStatus::FATAL_ERROR,
                           "numeric head enabled but grad_predictions/weights missing", -1);
         }
 
         NumericHeadBackwardParams num_params{};
-        num_params.grad_predictions = ts->grad_numeric_predictions;
-        num_params.encoder_output = ts->cached_encoder_outputs;
-        num_params.grad_encoder = ts->grad_encoder_out;
-        num_params.grad_weight = ts->numeric_head_weights.grad;
-        num_params.grad_bias = ts->numeric_head_bias.grad;
-        num_params.weights = ts->numeric_head_weights.data;
-        num_params.total_tokens = ctx.total_tokens;
-        num_params.d_model = cfg->d_model;
+        
+        // Input tensors
+        num_params.grad_predictions = TensorContract::TensorView::make_BSM(
+            ts->grad_numeric_tensor.data,
+            ctx.total_tokens,
+            1,
+            "numeric_bwd_grad_predictions"
+        );
+        
+        num_params.encoder_output = TensorContract::TensorView::make_BSM(
+            ts->cached_encoder_outputs,
+            ctx.total_tokens,
+            cfg->d_model,
+            "numeric_bwd_encoder_output"
+        );
+        
+        num_params.weights = TensorContract::TensorView::make_BSM(
+            ts->numeric_head_weights.data,
+            cfg->d_model,
+            1,
+            "numeric_bwd_weights"
+        );
+        
+        // Output tensors
+        num_params.grad_encoder = TensorContract::TensorView::make_BSM(
+            ts->grad_encoder_tensor.data,
+            ctx.total_tokens,
+            cfg->d_model,
+            "numeric_bwd_grad_encoder"
+        );
+        
+        num_params.grad_weight = TensorContract::TensorView::make_BSM(
+            ts->numeric_head_weights.grad,
+            cfg->d_model,
+            1,
+            "numeric_bwd_grad_weight"
+        );
+        
+        // Optional bias gradient
+        if (cfg->use_bias && ts->numeric_head_bias.grad) {
+            num_params.grad_bias = TensorContract::TensorView::make_BSM(
+                ts->numeric_head_bias.grad,
+                1,
+                1,
+                "numeric_bwd_grad_bias"
+            );
+            num_params.use_bias = true;
+        }
+        
+        // Operation flags and execution context
         num_params.accumulate = ctx.accumulate;
-        num_params.use_bias = cfg->use_bias && ts->numeric_head_bias.grad != nullptr;
         num_params.handle = ctx.cublas_handle;
-        num_params.stream = ctx.training_state->stream_ctrl.getPrimaryStream();
+        num_params.stream = ts->stream_ctrl.getPrimaryStream();
 
         launchNumericHeadBackward(num_params);
     }
@@ -432,7 +522,7 @@ BackwardStatus computeLMHeadBackward(BackwardContext& ctx) {
         queueGradStats(
             "grad_encoder_out",
             -1,
-            ts->grad_encoder_out,
+            ts->grad_encoder_tensor.data,
             static_cast<size_t>(ctx.total_tokens) * cfg->d_model,
             ctx.explosion_threshold,
             ctx.training_state->stream_ctrl.getPrimaryStream());

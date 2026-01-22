@@ -14,6 +14,7 @@
  */
 
 #include <cuda_runtime.h>
+#include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 namespace GRIM {
 
@@ -30,20 +31,88 @@ struct EmbeddingConfig {
     cudaStream_t stream = nullptr;
 };
 
+/**
+ * @brief Embedding weight tensors
+ * 
+ * All tensors use BSM layout (2D row-major format).
+ * 
+ * @note token_embeddings: [vocab_size, d_model] - REQUIRED
+ * @note position_embeddings: [max_position, d_model] - Optional (can be null)
+ * @note gamma: [1, d_model] - RMSNorm scale parameters - Optional (can be null)
+ * 
+ * Rule 20 (Fail Loud): Use validate() to check tensors before use.
+ */
 struct EmbeddingWeights {
-    const float* token_embeddings = nullptr;      // [vocab_size, d_model]
-    const float* position_embeddings = nullptr;   // [max_position, d_model]
-    const float* gamma = nullptr;                 // RMSNorm gamma [d_model]
+    TensorContract::TensorView token_embeddings;      // [vocab_size, d_model]
+    TensorContract::TensorView position_embeddings;   // [max_position, d_model] (optional)
+    TensorContract::TensorView gamma;                 // [1, d_model] RMSNorm (optional)
+    
+    /**
+     * Validate all tensors (Rule 20: Fail Loud)
+     * @throws std::runtime_error if token_embeddings is invalid
+     */
+    void validate(const char* context) const {
+        token_embeddings.require(context);
+        
+        // position_embeddings and gamma are optional
+        if (position_embeddings.ptr) {
+            position_embeddings.require(context);
+        }
+        if (gamma.ptr) {
+            gamma.require(context);
+        }
+    }
+    
+    // Convenience accessors
+    int vocab_size() const { return token_embeddings.shape.as_2d().rows; }
+    int d_model() const { return token_embeddings.shape.as_2d().cols; }
+    int max_position() const { 
+        return position_embeddings.ptr ? position_embeddings.shape.as_2d().rows : 0; 
+    }
 };
 
+/**
+ * @brief Arguments for embedding forward pass
+ * 
+ * @note token_ids: device int array [batch * seq_len] - index array (not a tensor)
+ * @note positions: device int array [batch * seq_len] - optional position indices
+ * @note output: BSM layout [batch * seq_len, d_model] - will be written
+ * @note weights: embedding tables (TensorView-based)
+ * 
+ * Rule 20 (Fail Loud): Use validate() to check all tensors before use.
+ */
 struct EmbeddingForwardArgs {
-    const int* token_ids = nullptr;   // [batch * seq_len]
-    const int* positions = nullptr;   // [batch * seq_len] or nullptr for auto
+    const int* token_ids = nullptr;   // [batch * seq_len] - index array
+    const int* positions = nullptr;   // [batch * seq_len] - optional
     int batch_size = 0;
     int seq_len = 0;
-    float* output = nullptr;          // [batch * seq_len, d_model]
+    TensorContract::TensorView output;           // [batch * seq_len, d_model] BSM
     const EmbeddingWeights* weights = nullptr;
     cudaStream_t stream = nullptr;
+    
+    /**
+     * Validate all tensors (Rule 20: Fail Loud)
+     * @throws std::runtime_error if token_ids is null, output is invalid, or weights is null
+     */
+    void validate(const char* context) const {
+        if (!token_ids) {
+            throw std::runtime_error(std::string(context) + ": token_ids is NULL");
+        }
+        output.require(context);
+        if (!weights) {
+            throw std::runtime_error(std::string(context) + ": weights is NULL");
+        }
+        weights->validate(context);
+        
+        // Layout validation
+        if (output.layout() != TensorContract::Layout::BSM) {
+            throw std::runtime_error(std::string(context) + ": output must have BSM layout");
+        }
+    }
+    
+    // Convenience accessors
+    int total_tokens() const { return output.shape.as_2d().rows; }
+    int d_model() const { return output.shape.as_2d().cols; }
 };
 
 //======================================================//

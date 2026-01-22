@@ -61,6 +61,7 @@ Loss::LossContext MakeContext(const TensorViews& views) {
     ctx.token_mask = views.token_mask;
     ctx.sequence_weights = views.sequence_weights;
     ctx.sequence_weight_count = views.sequence_weight_count;
+    ctx.position_byte_lengths = views.position_byte_lengths;  // GRMT v6
     ctx.valid_tokens = views.valid_tokens;
     ctx.batch_size = views.batch_size;
     ctx.seq_len = views.seq_len;

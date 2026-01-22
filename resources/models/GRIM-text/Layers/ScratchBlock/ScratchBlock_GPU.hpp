@@ -36,6 +36,7 @@
 
 #include "../grim_layer_gpu.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
+#include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 namespace GRIM {
 
@@ -59,8 +60,9 @@ struct ScratchBlockConfig {
 //======================================================//
 struct ScratchBlockForwardArgs {
     // Input/Output (passthrough when disabled)
-    const float* input = nullptr;   // [total_tokens, d_model]
-    float* output = nullptr;        // [total_tokens, d_model]
+    // TensorView: [total_tokens, d_model] BSM layout
+    TensorContract::TensorView input;    // const - read only
+    TensorContract::TensorView output;   // mutable - write output
     int total_tokens = 0;
     int seq_len = 0;                // Optional (if 0, assume batch=1)
     
@@ -68,7 +70,7 @@ struct ScratchBlockForwardArgs {
     const int* token_ids = nullptr; // [total_tokens] - to detect atom placeholders
     
     // Per-token numeric side channel (aligned to token_ids)
-    const float* token_numeric_values = nullptr;  // [total_tokens]
+    const float* token_numeric_values = nullptr;  // [total_tokens] - 1D, not TensorView
     const uint8_t* token_numeric_mask = nullptr;  // [total_tokens]
     
     // Per-token text features (GRMT v4)
@@ -79,10 +81,23 @@ struct ScratchBlockForwardArgs {
     cudaStream_t stream = nullptr;
     
     // Activation cache (optional, for backward pass)
-    float* cache_atom_embeddings = nullptr;  // [num_atoms, atom_embedding_dim]
+    // TensorView: [num_atoms, atom_embedding_dim] BSM layout
+    TensorContract::TensorView cache_atom_embeddings;
     int* cache_atom_positions = nullptr;     // [num_atoms] - which tokens have atoms
     int* cache_atom_types = nullptr;         // [num_atoms] - atom type index for each atom
     int* cache_num_atoms = nullptr;          // Scalar - count of atoms in sequence
+    
+    // RULE 20: Validate required fields - throws on NULL pointers
+    void validate(const char* context) const {
+        input.require(context);
+        output.require(context);
+        if (!token_ids) {
+            throw std::runtime_error(std::string(context) + ": token_ids is NULL");
+        }
+        if (!stream) {
+            throw std::runtime_error(std::string(context) + ": stream is NULL");
+        }
+    }
 };
 
 //======================================================//
@@ -131,8 +146,6 @@ public:
 
     // Layer interface implementation
     void onConfigure(const Dimensions& dims);
-    void forwardImpl(const LayerIO<float>& io, LayerWorkspace<float>* workspace);
-    void backwardImpl(const LayerIO<float>& io, LayerWorkspace<float>* workspace);
 
     //--------------------------------------------------//
     // Memory

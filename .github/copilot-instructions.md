@@ -457,11 +457,11 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
   - Add both to parameter_groups_ (double optimizer update)
   - Free both in destructor (double-free crash)
   - The ownership flags `lm_head_weights_owned` and pointer comparison `embedding_grads == lm_head_weight_grads` track aliasing.
-  - **CRITICAL (Issue #38)**: LM head backward writes CENTERED gradient (mean=0), then embedding backward was SKIPPED to avoid polluting with non-centered encoder gradients.
+  - **NOTE**: Both LM head backward (GEMM) AND embedding backward (atomicAdd) write to this shared buffer - this is CORRECT. They are different gradient sources that combine naturally.
 
 44. **per_token_grad_scale is REQUIRED (NOT a bug)**: When loss is averaged (`loss_mean = sum(losses) / valid_tokens`), the backward pass gradient is already scaled by `1/valid_tokens`. The `per_token_grad_scale=true` setting in `ai_config.json` is MANDATORY to ensure gradients match this scaling. DO NOT disable this thinking "tiny gradients" is a bug - gradient RMS of ~1e-6 is CORRECT when `valid_tokens ~ 3000`. The tiny gradients combine correctly in AdamW. Disabling this causes gradient magnitude explosion (effective LR becomes 3000x larger).
 
-38. **Embedding Backward SKIPPED for Weight-Tied Models (Issue #38, Jan 2026)**: When `tie_embeddings=true`, `BackwardPhase3_InputLayer.cu` SKIPS `launchEmbeddingBackward()`. Reason: LM head backward computes centered gradient (Issue #37); embedding backward would atomicAdd NON-CENTERED gradients from encoder output, corrupting the gradient and causing mode collapse. Evidence: `Token277GradW` showed mean=0.000000 (correct), but `Token277Trace` (after embedding backward) showed mean=0.000009 (polluted!). Solution: Only use LM head gradient for tied weights.
+38. **Issue #38 WAS WRONG - REVERTED (Jan 20, 2026)**: The previous "fix" that SKIPPED embedding backward for weight-tied models was **FUNDAMENTALLY INCORRECT**. It removed ~99.99% of gradient signal, causing weights to be essentially frozen (changed by 0.000001 per step). The LM head GEMM (`grad_W = h.T @ grad_logits`) and embedding scatter-add (`grad_E[token_id] += grad`) are DIFFERENT gradients - both MUST run. The "centering pollution" concern was a red herring. Fix: Always run embedding backward.
 
 43. **Encoder Weight Gradient Centering (Issue #43, Jan 2026)**: Encoder backward uses cached activations (`cached_ln1_output`, `cached_ffn_input`, `cached_ffn_hidden`, `cached_attn_output`) for weight gradient GEMMs. These activations have NON-ZERO MEAN, creating systematic gradient bias: `grad_W[i,j] = Σ_t ((centered[t,i] + mean_t) × grad[t,j])` - the mean term doesn't cancel. Fix in `BackwardPhase2_Encoder.cu`: Added `centerActivationsKernel` to center each cached activation BEFORE weight gradient GEMMs (grad_W_qkv, grad_W_o, grad_W1, grad_W2). Uses `centered_activation_scratch` buffer allocated in TrainingState. This matches the Issue #37 pattern applied to LM head.
 
@@ -474,10 +474,6 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
   - Rationale: Prevents memory leaks, double-frees, stream synchronization bugs, and makes resource lifetime explicit.
 
 25. **FFN Post-GELU Cache CRITICAL (Fixed Dec 2025)**: EncodingLayer::forward() MUST write post-GELU activations to `args.cache_ffn_output`. Bug history: field existed in `EncodingForwardArgs` but was NEVER written, causing `cached_ffn_outputs[]` to contain garbage. Backward pass then used garbage for `grad_W2 = ffn_hidden^T @ grad_output`, corrupting W2 weight gradients. Symptom: FFN gradient norm was 4.3x smaller than expected. Fix: Added cudaMemcpyAsync after ffn_->forward() to copy `post_gelu` to `args.cache_ffn_output`. If you add new forward caches, VERIFY they're actually written!
-  - **Optimizer States**: Use `training_state.optimizer_m_states/optimizer_v_states` - ParameterGroup holds pointers, does NOT allocate
-  - **cuBLAS**: Use `training_state.cublas_handle` - NEVER create separate handles
-  - Pattern: Structs store pointers only. TrainingState owns allocations. Lifecycle methods (`allocate*`/`free*`) are centralized.
-  - Rationale: Prevents memory leaks, double-frees, stream synchronization bugs, and makes resource lifetime explicit.
 
 23. **GRIM-text vs G.R.I.M Delegate Systems - CRITICAL SEPARATION**: GRIM-text is a SEPARATE PROGRAM from G.R.I.M and MUST NOT depend on G.R.I.M's core libraries:
   - **WRONG**: `#include "../../../../core/delegate.hpp"` in GRIM-text files - this is G.R.I.M's main program delegate system

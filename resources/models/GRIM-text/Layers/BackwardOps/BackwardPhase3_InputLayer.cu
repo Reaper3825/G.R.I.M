@@ -4,25 +4,33 @@
  *
  * This is the final phase of the backward pass, handling:
  * 1. ScratchBlock backward (if enabled)
- * 2. Embedding backward (scatter-add to vocab buffer) - ONLY when tie_embeddings=false
+ * 2. Embedding backward (scatter-add to vocab buffer)
  * 3. Position embedding backward (Issue #36 fix)
  *
  * After this phase, all gradients are computed and ready for the optimizer.
  *
- * ISSUE #38 FIX (Jan 2026):
- * When tie_embeddings=true, we SKIP embedding backward entirely!
- * 
- * Reason: With weight tying, embedding_grads and lm_head_weight_grads are aliased
- * (same pointer). The LM head backward (Phase 1) computes the correct gradient using
- * CENTERED hidden states (Issue #37 fix). If we ran embedding backward, it would
- * atomicAdd NON-CENTERED gradients from encoder output, corrupting the centered
- * gradient and causing the gradient sign flip bug (mode collapse to token 277).
- * 
- * Evidence:
- *   Token277GradW (after LM head backward): mean=0.000000 ✅
- *   Token277Trace (after embedding backward): mean=0.000009 ⚠️ POLLUTED!
+ * ISSUE #38 REVERT (Jan 20, 2026):
+ * The previous "fix" SKIPPED embedding backward when tie_embeddings=true.
+ * THIS WAS WRONG and caused ~11,000x smaller gradients!
  *
- * EMBEDDING BACKWARD (only when tie_embeddings=false):
+ * Root cause of the confusion:
+ * - LM head backward (Phase 1) computes: grad_W = h_centered.T @ grad_logits
+ *   This is the OUTPUT projection gradient based on which predictions were wrong.
+ * - Embedding backward computes: grad_E[token_id] += grad_encoder_output[position]
+ *   This is the INPUT embedding gradient based on which input tokens contributed.
+ *
+ * These are DIFFERENT gradients that BOTH contribute to the tied weight update!
+ * Skipping embedding backward removes ~99% of the gradient signal.
+ *
+ * Evidence after fix:
+ *   PyTorch baseline emb_lm_tied norm: ~5.5
+ *   GRIM before fix: ~0.0005 (11,000x smaller!)
+ *   GRIM after fix: should match PyTorch baseline
+ *
+ * The "centering" concern was a red herring - embedding backward uses atomicAdd
+ * which ACCUMULATES into the buffer, properly combining both gradient sources.
+ *
+ * EMBEDDING BACKWARD (always runs):
  * - Uses atomic scatter-add: grad_embeddings[token_id] += grad_position
  * - This accumulates gradients for tokens that appear multiple times
  */
@@ -139,8 +147,11 @@ BackwardStatus computeScratchBlockBackward(BackwardContext& ctx) {
     //--------------------------------------------------//
     
     ScratchBlockForwardArgs sb_args{};
-    sb_args.input = ts->cached_embeddings;
-    sb_args.output = ts->cached_embeddings;  // Same buffer (in-place in forward)
+    // TensorView: [total_tokens, d_model] BSM layout - in-place operation
+    sb_args.input = TensorContract::TensorView::make_BSM(
+        ts->cached_embeddings, ctx.total_tokens, ctx.config->d_model, "sb_bwd_input");
+    sb_args.output = TensorContract::TensorView::make_BSM(
+        ts->cached_embeddings, ctx.total_tokens, ctx.config->d_model, "sb_bwd_output");
     sb_args.total_tokens = ctx.total_tokens;
     sb_args.seq_len = ctx.seq_len;
     sb_args.token_ids = ts->cached_token_ids;
@@ -148,8 +159,14 @@ BackwardStatus computeScratchBlockBackward(BackwardContext& ctx) {
     sb_args.token_numeric_mask = ts->cached_token_numeric_mask;
     sb_args.stream = ctx.training_state->stream_ctrl.getPrimaryStream();
     
-    // Cached atom information from forward pass
-    sb_args.cache_atom_embeddings = ts->cached_scratch_block_embeddings;
+    // Cached atom information from forward pass - TensorView for cache
+    if (ts->cached_scratch_block_embeddings) {
+        sb_args.cache_atom_embeddings = TensorContract::TensorView::make_BSM(
+            ts->cached_scratch_block_embeddings,
+            ctx.scratch_block->config().max_atoms,
+            ctx.scratch_block->config().atom_embedding_dim,
+            "sb_cache_embeddings");
+    }
     sb_args.cache_atom_positions = ts->cached_scratch_block_positions;
     sb_args.cache_atom_types = ts->cached_scratch_block_types;
     sb_args.cache_num_atoms = ts->cached_scratch_block_num_atoms;
@@ -212,39 +229,35 @@ BackwardStatus computeEmbeddingBackward(BackwardContext& ctx) {
     // Launch embedding backward kernel
     // Uses atomic scatter-add: embedding_grads[token_id] += grad
     //
-    // ISSUE #38 FIX: When tie_embeddings=true, SKIP embedding backward!
+    // ISSUE #38 REVERT (Jan 20, 2026):
+    // The previous "fix" SKIPPED embedding backward for tied weights.
+    // THIS WAS COMPLETELY WRONG - it removed ~99% of the gradient signal!
     //
-    // Reason: With weight tying, embedding_grads == lm_head_weight_grads (aliased).
-    // The LM head backward (Phase 1) already computes the correct gradient using
-    // CENTERED hidden states (Issue #37 fix). If we run embedding backward here,
-    // it would atomicAdd NON-CENTERED gradients to the same buffer, corrupting
-    // the centered gradient and causing the gradient sign flip bug.
+    // In a transformer with weight tying:
+    // - LM head backward: grad_W = h.T @ grad_logits (OUTPUT projection gradient)
+    // - Embedding backward: grad_E[token_id] += grad (INPUT token gradient)
     //
-    // Evidence from training logs:
-    //   Token277GradW (LM head backward): mean=0.000000 ✅ (centered, correct)
-    //   Token277Trace (after embedding backward): mean=0.000009 ⚠️ (polluted!)
+    // Both gradients are DIFFERENT and must BOTH be computed!
+    // atomicAdd naturally combines them in the shared buffer.
     //
-    // Solution: Only run embedding backward when NOT using weight tying.
-    // When tie_embeddings=true, the LM head gradient IS the embedding gradient.
+    // Evidence of the bug:
+    //   PyTorch emb_lm_tied norm: ~5.5
+    //   GRIM with skip: ~0.0005 (11,000x smaller!)
+    //   Weights were essentially FROZEN (changed by 0.000001 per step)
     //--------------------------------------------------//
     
-    if (cfg->tie_embeddings) {
-        // SKIP embedding backward - LM head gradient is already correct and centered!
-        P3_INFO("Issue #38: Skipping embedding backward (tie_embeddings=true, using centered LM head gradient)");
-    } else {
-        // Run embedding backward only when weights are NOT tied
-        launchEmbeddingBackward(
-            ctx.current_grad,
-            ts->cached_token_ids,
-            ts->embedding_grads(),
-            ctx.batch_size,
-            ctx.seq_len,
-            cfg->d_model,
-            cfg->vocab_size,
-            ctx.training_state->stream_ctrl.getPrimaryStream());
-        
-        BWD_CHECK_CUDA(ctx, cudaGetLastError(), "Embedding backward", -1);
-    }
+    // ALWAYS run embedding backward (for both tied and untied weights)
+    launchEmbeddingBackward(
+        ctx.current_grad,
+        ts->cached_token_ids,
+        ts->embedding_grads(),
+        ctx.batch_size,
+        ctx.seq_len,
+        cfg->d_model,
+        cfg->vocab_size,
+        ctx.training_state->stream_ctrl.getPrimaryStream());
+    
+    BWD_CHECK_CUDA(ctx, cudaGetLastError(), "Embedding backward", -1);
     
     //--------------------------------------------------//
     // Issue #36 FIX: Position embedding backward
@@ -268,27 +281,19 @@ BackwardStatus computeEmbeddingBackward(BackwardContext& ctx) {
     }
     
     //--------------------------------------------------//
-    // Handle tie_embeddings gradient path
+    // Gradient combination for tied weights
     //
-    // ISSUE #38: With the fix above (skipping embedding backward for tied weights),
-    // we no longer need to merge buffers. The gradient flow is now:
+    // With tie_embeddings=true, embedding_grads == lm_head_weight_grads (aliased).
+    // After this point, the buffer contains the SUM of:
+    //   1. LM head GEMM gradient: grad_W = h_centered.T @ grad_logits
+    //   2. Embedding scatter-add gradient: grad_E[token_id] += grad[position]
     //
-    // tie_embeddings=true:
-    //   - LM head backward computes grad_W using CENTERED hidden states
-    //   - Embedding backward is SKIPPED (would pollute with non-centered grad)
-    //   - No merge needed - lm_head_weight_grads IS the final gradient
-    //
-    // tie_embeddings=false:
-    //   - LM head backward computes grad_W for separate lm_head_weight_grads
-    //   - Embedding backward computes grad for separate embedding_grads
-    //   - Both are used independently by optimizer
+    // Both gradients are important and should combine naturally via atomicAdd.
+    // No explicit merge is needed - they write to the same buffer.
     //--------------------------------------------------//
     
     if (cfg->tie_embeddings) {
-        // With Issue #38 fix, embedding backward was skipped.
-        // The lm_head_weight_grads (aliased to embedding_grads) contains
-        // the correct centered gradient from LM head backward.
-        P3_INFO("Issue #38: Using centered LM head gradient for tied embeddings (no merge needed)");
+        P3_INFO("Tied embeddings: combined LM head + embedding gradients in shared buffer");
     }
     
     // === ISSUE #39 DIAGNOSTIC: Check grad_W[277] at END of Phase3 ===
@@ -296,7 +301,7 @@ BackwardStatus computeEmbeddingBackward(BackwardContext& ctx) {
     {
         static int s_p3_diag = 0;
         constexpr int kToken277 = 277;
-        if (++s_p3_diag <= 10 && ts->embedding_grads()) {
+        if (false && ++s_p3_diag <= 10 && ts->embedding_grads()) { // DISABLED
             cudaStreamSynchronize(ctx.training_state->stream_ctrl.getPrimaryStream());
             const size_t row_offset = static_cast<size_t>(kToken277) * cfg->d_model;
             std::vector<float> grad_row(cfg->d_model);

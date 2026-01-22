@@ -120,7 +120,7 @@ void launchRoPERotationGQA(
     const float* inv_freq,              // Inverse frequencies [rotary_dim/2]
     int batch_size,
     int num_q_heads,                    // Q head count (larger in GQA)
-    int num_kv_heads,                   // K head count (smaller in GQA)
+    int num_kv_heads,                   // KV head count (smaller in GQA)
     int seq_len,
     int head_dim,
     int rotary_dim,
@@ -148,7 +148,7 @@ void launchRoPERotationGQA_backward(
     const float* inv_freq,              // Inverse frequencies [rotary_dim/2]
     int batch_size,
     int num_q_heads,                    // Q head count (larger in GQA)
-    int num_kv_heads,                   // K head count (smaller in GQA)
+    int num_kv_heads,                   // KV head count (smaller in GQA)
     int seq_len,
     int head_dim,
     int rotary_dim,

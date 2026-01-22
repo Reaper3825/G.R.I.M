@@ -69,12 +69,6 @@ public:
     void backward(const FlashAttentionBackwardArgs& args,
                   LayerWorkspace<float>* workspace = nullptr);
 
-    // Layer interface hooks
-    void onConfigure(const Dimensions& dims);
-    void forwardImpl(const LayerIO<float>& io, LayerWorkspace<float>* workspace);
-    void backwardImpl(const LayerIO<float>& io, LayerWorkspace<float>* workspace);
-    void applyGradientsImpl(value_type) {}
-
 private:
     FlashAttentionConfig config_{};
     void* fa_q_bf16_ = nullptr;

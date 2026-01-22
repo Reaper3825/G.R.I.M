@@ -5225,7 +5225,7 @@ bool testRMSNormZeroVariance(std::string& message) {
     
     cudaMemset(d_input, 0, static_cast<size_t>(total_tokens) * d_model * sizeof(float));
     
-    GRIM::launchRMSNormForward(d_input, d_gamma, d_output, total_tokens, d_model, epsilon, stream);
+    GRIM::launchRMSNorm(d_input, d_output, d_gamma, total_tokens, d_model, epsilon, stream);
     cudaStreamSynchronize(stream);
     
     std::vector<float> h_output(static_cast<size_t>(total_tokens) * d_model);
@@ -5254,7 +5254,7 @@ bool testRMSNormZeroVariance(std::string& message) {
     std::vector<float> h_constant(static_cast<size_t>(total_tokens) * d_model, 5.0f);
     cudaMemcpy(d_input, h_constant.data(), h_constant.size() * sizeof(float), cudaMemcpyHostToDevice);
     
-    GRIM::launchRMSNormForward(d_input, d_gamma, d_output, total_tokens, d_model, epsilon, stream);
+    GRIM::launchRMSNorm(d_input, d_output, d_gamma, total_tokens, d_model, epsilon, stream);
     cudaStreamSynchronize(stream);
     
     cudaMemcpy(h_output.data(), d_output, h_output.size() * sizeof(float), cudaMemcpyDeviceToHost);
@@ -5283,7 +5283,7 @@ bool testRMSNormZeroVariance(std::string& message) {
     std::vector<float> h_tiny(static_cast<size_t>(total_tokens) * d_model, 1e-30f);
     cudaMemcpy(d_input, h_tiny.data(), h_tiny.size() * sizeof(float), cudaMemcpyHostToDevice);
     
-    GRIM::launchRMSNormForward(d_input, d_gamma, d_output, total_tokens, d_model, epsilon, stream);
+    GRIM::launchRMSNorm(d_input, d_output, d_gamma, total_tokens, d_model, epsilon, stream);
     cudaStreamSynchronize(stream);
     
     cudaMemcpy(h_output.data(), d_output, h_output.size() * sizeof(float), cudaMemcpyDeviceToHost);
@@ -5310,7 +5310,7 @@ bool testRMSNormZeroVariance(std::string& message) {
     }
     cudaMemcpy(d_input, h_sparse.data(), h_sparse.size() * sizeof(float), cudaMemcpyHostToDevice);
     
-    GRIM::launchRMSNormForward(d_input, d_gamma, d_output, total_tokens, d_model, epsilon, stream);
+    GRIM::launchRMSNorm(d_input, d_output, d_gamma, total_tokens, d_model, epsilon, stream);
     cudaStreamSynchronize(stream);
     
     cudaMemcpy(h_output.data(), d_output, h_output.size() * sizeof(float), cudaMemcpyDeviceToHost);
@@ -5856,7 +5856,7 @@ bool testGradientFlowTiedRMSNorm(std::string& message) {
     // Forward: RMSNorm
     std::cout << "[DIAG] Forward pass: RMSNorm\n";
     
-    GRIM::launchRMSNormForward(d_embedded, d_gamma, d_normalized, seq_len, d_model, epsilon, stream);
+    GRIM::launchRMSNorm(d_embedded, d_normalized, d_gamma, seq_len, d_model, epsilon, stream);
     cudaStreamSynchronize(stream);
     
     // Setup gradient for backward (from "LM head")
@@ -5867,7 +5867,7 @@ bool testGradientFlowTiedRMSNorm(std::string& message) {
     // Backward: RMSNorm
     std::cout << "[DIAG] Backward pass: RMSNorm\n";
     
-    GRIM::launchRMSNormBackward(d_embedded, d_grad_output, d_gamma, d_grad_normalized,
+    GRIM::launchRMSNormBackwardLegacy(d_embedded, d_grad_output, d_gamma, d_grad_normalized,
                                nullptr, seq_len, d_model, epsilon, stream);
     
     // Backward: Embedding

@@ -302,6 +302,13 @@ struct TrainingHyperparameters {
     bool lm_head_center_hidden_states;
     bool lm_head_recenter_gradients;
     
+    // Hardcoded Hidden States Diagnostic (Issue #42) - NO DEFAULTS
+    // When enabled, replaces encoder output with synthetic patterns to isolate
+    // whether mode collapse is caused by encoder or LM head/gradient system.
+    // Requires including grim_language_model_cuda.hpp for HardcodedPattern enum.
+    int hardcoded_hidden_pattern;  // 0=DISABLED, 1=RANDOM_CENTERED, 2=ORTHOGONAL_W277, etc.
+    int hardcoded_log_every_n_batches;
+    
     // Stability overrides - NO DEFAULTS
     bool stability_overrides_enabled;
     int stability_override_batch_size;
@@ -1072,6 +1079,28 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         params.lm_head_centering_enabled = lmc.value("enabled", false);
         params.lm_head_center_hidden_states = lmc.value("center_hidden_states", false);
         params.lm_head_recenter_gradients = lmc.value("recenter_gradients", false);
+    }
+    
+    // Hardcoded Hidden States Diagnostic (Issue #42)
+    params.hardcoded_hidden_pattern = 0;  // 0 = DISABLED
+    params.hardcoded_log_every_n_batches = 1;
+    if (auto it = trainConfig.find("hardcoded_hidden_states"); it != trainConfig.end() && it->is_object()) {
+        const auto& hcs = *it;
+        if (hcs.value("enabled", false)) {
+            std::string pattern_str = hcs.value("pattern", "random_centered");
+            if (pattern_str == "random_centered") {
+                params.hardcoded_hidden_pattern = 1;  // RANDOM_CENTERED
+            } else if (pattern_str == "orthogonal_w277") {
+                params.hardcoded_hidden_pattern = 2;  // ORTHOGONAL_W277
+            } else if (pattern_str == "aligned_w277") {
+                params.hardcoded_hidden_pattern = 3;  // ALIGNED_W277
+            } else if (pattern_str == "constant_uniform") {
+                params.hardcoded_hidden_pattern = 4;  // CONSTANT_UNIFORM
+            } else if (pattern_str == "zero_mean_sine") {
+                params.hardcoded_hidden_pattern = 5;  // ZERO_MEAN_SINE
+            }
+            params.hardcoded_log_every_n_batches = hcs.value("log_every_n_batches", 1);
+        }
     }
     
     // Load stability overrides - ALWAYS parse values even if disabled

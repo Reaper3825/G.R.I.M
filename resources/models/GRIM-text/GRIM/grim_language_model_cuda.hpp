@@ -285,6 +285,20 @@ struct LanguageModelConfig {
     bool lm_head_center_hidden_states = false;  // Center encoder output before projection
     bool lm_head_recenter_gradients = false;    // Recenter grad_weight rows after GEMM
     
+    // Hardcoded Hidden States Diagnostic (Issue #42)
+    // When enabled, replaces encoder output with synthetic patterns to isolate
+    // whether mode collapse is caused by encoder or LM head/gradient system.
+    enum class HardcodedPattern {
+        DISABLED,
+        RANDOM_CENTERED,      // Random normal with mean=0 (tests Issue #37)
+        ORTHOGONAL_W277,      // Orthogonal to W[277] (should give logit[277]≈0)
+        ALIGNED_W277,         // Aligned with W[277] (tests collapse mechanism)
+        CONSTANT_UNIFORM,     // Constant [1/√768] (tests Issue #40 row sum bias)
+        ZERO_MEAN_SINE        // Sine wave with zero mean (centering robustness)
+    };
+    HardcodedPattern hardcoded_hidden_pattern = HardcodedPattern::DISABLED;
+    int hardcoded_log_every_n_batches = 1;
+    
     GenerationConfig generation;
     ActivationQuantizationConfig activation_quantization;
 };
@@ -482,6 +496,7 @@ public:
     struct ModelStats {
         size_t total_params = 0;
         size_t embedding_params = 0;
+        size_t position_embedding_params = 0;  // Position embeddings (max_seq_len * d_model)
         size_t encoder_params = 0;
         size_t lm_head_params = 0;
         size_t numeric_head_params = 0;
@@ -547,7 +562,8 @@ public:
                            const std::vector<std::vector<float>>& batch_numeric_values,
                            const std::vector<std::vector<uint8_t>>& batch_numeric_mask,
                            const std::vector<std::vector<uint16_t>>& batch_text_features = {},
-                           const std::vector<std::vector<uint8_t>>& batch_text_mask = {});  // Batched training
+                           const std::vector<std::vector<uint8_t>>& batch_text_mask = {},
+                           const std::vector<std::vector<uint16_t>>& batch_byte_lengths = {});  // GRMT v6
     Vector forwardWithCache(const std::vector<int>& token_ids,
                             const std::vector<float>& token_numeric_values,
                             const std::vector<uint8_t>& token_numeric_mask,
@@ -725,6 +741,7 @@ private:
     std::string update_probe_group_name_;
     size_t update_probe_group_index_ = static_cast<size_t>(-1);
     size_t update_probe_sample_elems_ = 0;
+    size_t update_probe_sample_offset_ = 0;  // Offset into buffer to sample from (token 277 for embedding/LM head)
     std::vector<float> update_probe_weights_before_;
     std::vector<float> update_probe_weights_after_;
     std::vector<float> update_probe_grad_sample_;

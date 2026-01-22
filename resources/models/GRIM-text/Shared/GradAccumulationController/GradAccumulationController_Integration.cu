@@ -138,63 +138,20 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
         );
     }
     
-    // ========== Temporary Gradient Buffers (CRITICAL) ==========
-    // These buffers are reused across layers during backward pass.
-    // They MUST be registered so they're zeroed at window start,
-    // otherwise they accumulate indefinitely causing gradient explosion!
-    
-    if (ts.grad_ffn_input) {
-        controller_.registerGradientBuffer(
-            "grad_ffn_input_temp",
-            ts.grad_ffn_input,
-            static_cast<std::size_t>(ts.max_cached_tokens) * cfg.d_model
-        );
-    }
-    
-    if (ts.grad_ffn_hidden) {
-        controller_.registerGradientBuffer(
-            "grad_ffn_hidden_temp",
-            ts.grad_ffn_hidden,
-            static_cast<std::size_t>(ts.max_cached_tokens) * cfg.d_ff
-        );
-    }
-    
-    if (ts.grad_attn_input) {
-        controller_.registerGradientBuffer(
-            "grad_attn_input_temp",
-            ts.grad_attn_input,
-            static_cast<std::size_t>(ts.max_cached_tokens) * cfg.d_model
-        );
-    }
-    
-    // Grad Q/K/V are already zeroed per-layer in backward(), but register for completeness
-    if (ts.grad_q) {
-        const int head_dim_qkv = cfg.head_dim;  // Use pre-computed value from config
-        const int q_size = ts.max_cached_tokens * cfg.num_heads * head_dim_qkv;
-        controller_.registerGradientBuffer(
-            "grad_q_temp",
-            ts.grad_q,
-            static_cast<std::size_t>(q_size)
-        );
-    }
-    if (ts.grad_k) {
-        const int head_dim_qkv = cfg.head_dim;  // Use pre-computed value from config
-        const int kv_size = ts.max_cached_tokens * ts.num_kv_heads * head_dim_qkv;
-        controller_.registerGradientBuffer(
-            "grad_k_temp",
-            ts.grad_k,
-            static_cast<std::size_t>(kv_size)
-        );
-    }
-    if (ts.grad_v) {
-        const int head_dim_qkv = cfg.head_dim;  // Use pre-computed value from config
-        const int kv_size = ts.max_cached_tokens * ts.num_kv_heads * head_dim_qkv;
-        controller_.registerGradientBuffer(
-            "grad_v_temp",
-            ts.grad_v,
-            static_cast<std::size_t>(kv_size)
-        );
-    }
+    // ========== MIGRATED TO TENSOR SYSTEM ==========
+    // Issue #45 fix: The following intermediate gradient buffers are now managed by the
+    // Tensor system in TrainingState_GPU.hpp. Zeroing is handled by zeroIntermediateGrads()
+    // which is called at the start of each accumulation window.
+    //
+    // Migrated buffers (NO LONGER registered here):
+    // - grad_ffn_input, grad_ffn_hidden, grad_attn_input
+    // - grad_q, grad_k, grad_v
+    // - grad_encoder_out, grad_logits
+    // - position_embedding_grads
+    //
+    // The Tensor::zero_grad(stream) method provides proper CUDA stream synchronization
+    // and eliminates the gradient explosion bug that occurred when these buffers
+    // were not zeroed between accumulation micro-steps.
     
     // ========== Per-Layer Gradients ==========
     
@@ -227,65 +184,69 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
         }
         
         // Attention QKV weight/bias gradients (GQA-aware)
-        if (layer < static_cast<int>(ts.attn_qkv_weight_grads.size()) && ts.attn_qkv_weight_grads[layer]) {
+        // AUTOGRAD MIGRATION: Use encoder's Tensor.grad instead of TrainingState raw pointers
+        if (enc && enc->getAttnWqkvGrad()) {
             controller_.registerGradientBuffer(
                 prefix + "attn_qkv_weight",
-                ts.attn_qkv_weight_grads[layer],
+                enc->getAttnWqkvGrad(),
                 static_cast<std::size_t>(total_qkv_dim) * cfg.d_model
             );
         }
-        if (layer < static_cast<int>(ts.attn_qkv_bias_grads.size()) && ts.attn_qkv_bias_grads[layer]) {
+        if (enc && enc->getAttnBqkvGrad()) {
             controller_.registerGradientBuffer(
                 prefix + "attn_qkv_bias",
-                ts.attn_qkv_bias_grads[layer],
+                enc->getAttnBqkvGrad(),
                 static_cast<std::size_t>(total_qkv_dim)
             );
         }
         
         // Attention output projection gradients
-        if (layer < static_cast<int>(ts.attn_out_weight_grads.size()) && ts.attn_out_weight_grads[layer]) {
+        // AUTOGRAD MIGRATION: Use encoder's Tensor.grad
+        if (enc && enc->getAttnWoGrad()) {
             controller_.registerGradientBuffer(
                 prefix + "attn_o_weight",
-                ts.attn_out_weight_grads[layer],
+                enc->getAttnWoGrad(),
                 static_cast<std::size_t>(cfg.d_model) * cfg.d_model
             );
         }
-        if (layer < static_cast<int>(ts.attn_out_bias_grads.size()) && ts.attn_out_bias_grads[layer]) {
+        if (enc && enc->getAttnBoGrad()) {
             controller_.registerGradientBuffer(
                 prefix + "attn_o_bias",
-                ts.attn_out_bias_grads[layer],
+                enc->getAttnBoGrad(),
                 static_cast<std::size_t>(cfg.d_model)
             );
         }
         
         // FFN W1 gradients
-        if (layer < static_cast<int>(ts.ffn_w1_grads.size()) && ts.ffn_w1_grads[layer]) {
+        // AUTOGRAD MIGRATION: Use encoder's Tensor.grad
+        if (enc && enc->getFFNW1Grad()) {
             controller_.registerGradientBuffer(
                 prefix + "ffn_w1_weight",
-                ts.ffn_w1_grads[layer],
+                enc->getFFNW1Grad(),
                 static_cast<std::size_t>(cfg.d_ff) * cfg.d_model
             );
         }
-        if (layer < static_cast<int>(ts.ffn_b1_grads.size()) && ts.ffn_b1_grads[layer]) {
+        if (enc && enc->getFFNB1Grad()) {
             controller_.registerGradientBuffer(
                 prefix + "ffn_w1_bias",
-                ts.ffn_b1_grads[layer],
+                enc->getFFNB1Grad(),
                 static_cast<std::size_t>(cfg.d_ff)
             );
         }
         
         // FFN W2 gradients
-        if (layer < static_cast<int>(ts.ffn_w2_grads.size()) && ts.ffn_w2_grads[layer]) {
+        // AUTOGRAD MIGRATION: Use encoder's Tensor.grad
+        if (enc && enc->getFFNW2Grad()) {
             controller_.registerGradientBuffer(
                 prefix + "ffn_w2_weight",
-                ts.ffn_w2_grads[layer],
+                enc->getFFNW2Grad(),
                 static_cast<std::size_t>(cfg.d_model) * cfg.d_ff
             );
         }
-        if (layer < static_cast<int>(ts.ffn_b2_grads.size()) && ts.ffn_b2_grads[layer]) {
+        if (enc && enc->getFFNB2Grad()) {
             controller_.registerGradientBuffer(
                 prefix + "ffn_w2_bias",
-                ts.ffn_b2_grads[layer],
+                enc->getFFNB2Grad(),
                 static_cast<std::size_t>(cfg.d_model)
             );
         }
@@ -328,6 +289,14 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
             );
         }
     }
+    
+    // Issue #45 FIX: Set up callback to zero Tensor-managed intermediate gradients
+    // These buffers were migrated from raw float* registrations to TensorContract::Tensor.
+    // The callback invokes TrainingState::zeroIntermediateGrads() which calls zero_grad()
+    // on all intermediate gradient tensors, fixing the gradient explosion bug.
+    controller_.setAdditionalZeroCallback([&ts](cudaStream_t stream) {
+        ts.zeroIntermediateGrads(stream);
+    });
     
     // Store model reference for later use
     model_ = &model;

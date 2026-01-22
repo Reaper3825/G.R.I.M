@@ -489,8 +489,8 @@ void testRMSNorm() {
                            TOTAL_TOKENS, D_MODEL, EPSILON);
     
     // ===== GPU Actual: Forward (ACTUAL KERNEL) =====
-    GRIM::launchRMSNormForward(d_input, d_gamma, d_output, 
-                               TOTAL_TOKENS, D_MODEL, EPSILON, stream);
+    GRIM::launchRMSNorm(d_input, d_output, d_gamma,
+                        TOTAL_TOKENS, D_MODEL, EPSILON, stream);
     CUDA_CHECK(cudaStreamSynchronize(stream));
     
     printf("\n===== FORWARD PASS =====\n");
@@ -504,7 +504,7 @@ void testRMSNorm() {
                             TOTAL_TOKENS, D_MODEL, EPSILON);
     
     // ===== GPU Actual: Backward (ACTUAL KERNEL) =====
-    GRIM::launchRMSNormBackward(d_input, d_grad_output, d_gamma,
+    GRIM::launchRMSNormBackwardLegacy(d_input, d_grad_output, d_gamma,
                                 d_grad_input, d_grad_gamma,
                                 TOTAL_TOKENS, D_MODEL, EPSILON, stream);
     CUDA_CHECK(cudaStreamSynchronize(stream));

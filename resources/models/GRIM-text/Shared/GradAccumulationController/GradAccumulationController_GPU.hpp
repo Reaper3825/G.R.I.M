@@ -393,12 +393,18 @@ public:
     
     using StateCallback = std::function<void(GradControllerState from, GradControllerState to)>;
     using GradientCallback = std::function<void(const std::string& buffer_name, float rms)>;
+    using ZeroCallback = std::function<void(cudaStream_t stream)>;
     
     /// Called on state transitions
     void setStateTransitionCallback(StateCallback cb) { state_callback_ = std::move(cb); }
     
     /// Called when gradient explosion detected
     void setExplosionCallback(GradientCallback cb) { explosion_callback_ = std::move(cb); }
+    
+    /// Called during gradient zeroing phase to zero additional Tensor-managed buffers
+    /// This callback is used by the Tensor migration (Issue #45) to zero intermediate
+    /// gradient buffers that are now managed by Tensor::zero_grad() instead of raw registration.
+    void setAdditionalZeroCallback(ZeroCallback cb) { additional_zero_callback_ = std::move(cb); }
     
     //--------------------------------------------------//
     //  Statistics & Debugging
@@ -454,6 +460,7 @@ private:
     // Callbacks
     StateCallback state_callback_;
     GradientCallback explosion_callback_;
+    ZeroCallback additional_zero_callback_;  // Issue #45: For Tensor-managed intermediate grads
     
     // Device memory for RMS computation (allocated lazily)
     mutable float* d_rms_scratch_ = nullptr;

@@ -655,6 +655,9 @@ SequenceData loadTrainingData(
                     seq.token_text_features.begin() + end * GRIM::Tokenizer::kTextFeatureDim);
                 window.token_text_mask.assign(seq.token_text_mask.begin() + start,
                                               seq.token_text_mask.begin() + end);
+                // GRMT v6: slice byte lengths
+                window.token_byte_lengths.assign(seq.token_byte_lengths.begin() + start,
+                                                 seq.token_byte_lengths.begin() + end);
                 if (mask_window_last_token && !window.targets.empty()) {
                     window.targets.back() = -1;
                 }
@@ -810,6 +813,16 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     
     logger.log("LM Head centering: center_hidden_states=" + std::string(model_config.lm_head_center_hidden_states ? "true" : "false") +
               ", recenter_gradients=" + std::string(model_config.lm_head_recenter_gradients ? "true" : "false"));
+    
+    // Hardcoded Hidden States Diagnostic (Issue #42)
+    model_config.hardcoded_hidden_pattern = static_cast<GRIM::LanguageModelConfig::HardcodedPattern>(hp.hardcoded_hidden_pattern);
+    model_config.hardcoded_log_every_n_batches = hp.hardcoded_log_every_n_batches;
+    
+    if (model_config.hardcoded_hidden_pattern != GRIM::LanguageModelConfig::HardcodedPattern::DISABLED) {
+        logger.log("⚠️  HARDCODED HIDDEN STATES DIAGNOSTIC ENABLED: pattern=" + std::to_string(static_cast<int>(model_config.hardcoded_hidden_pattern)) +
+                  ", log_every_n=" + std::to_string(model_config.hardcoded_log_every_n_batches));
+        logger.log("⚠️  Encoder output will be REPLACED with synthetic patterns - this is a DIAGNOSTIC MODE ONLY!");
+    }
     
     // Cache sizing - Use configured batch_size directly (stability override if enabled)
     // Rule 20: No backwards derivation from token budgets - we KNOW the batch size from config

@@ -644,6 +644,9 @@ void ScratchBlockLayer::forward(const ScratchBlockForwardArgs& args) {
         return;
     }
     
+    // RULE 20: Validate args when active
+    args.validate("ScratchBlockLayer::forward");
+    
     // ENABLED: Active atom detection and injection
     forwardActive(args);
     stats_.active_calls++;
@@ -659,8 +662,12 @@ void ScratchBlockLayer::forward(const ScratchBlockForwardArgs& args) {
 }
 
 void ScratchBlockLayer::forwardPassthrough(const ScratchBlockForwardArgs& args) {
+    // Extract raw pointers from TensorViews
+    const float* input_ptr = args.input.ptr;
+    float* output_ptr = args.output.ptr;
+    
     // Just copy input to output (or do nothing if same pointer)
-    if (args.input == args.output) {
+    if (input_ptr == output_ptr) {
         return;  // In-place, nothing to do
     }
     
@@ -671,16 +678,20 @@ void ScratchBlockLayer::forwardPassthrough(const ScratchBlockForwardArgs& args) 
     const int grid_size = (total_elements + block_size - 1) / block_size;
     
     kernelPassthrough<<<grid_size, block_size, 0, stream>>>(
-        args.input, args.output, total_elements);
+        input_ptr, output_ptr, total_elements);
 }
 
 void ScratchBlockLayer::forwardActive(const ScratchBlockForwardArgs& args) {
     cudaStream_t stream = args.stream ? args.stream : config_.stream;
     
+    // Extract raw pointers from TensorViews
+    const float* input_ptr = args.input.ptr;
+    float* output_ptr = args.output.ptr;
+    
     // Step 1: Copy input to output (we'll modify output in-place)
-    if (args.input != args.output) {
+    if (input_ptr != output_ptr) {
         const size_t bytes = args.total_tokens * config_.d_model * sizeof(float);
-        cudaMemcpyAsync(args.output, args.input, bytes, cudaMemcpyDeviceToDevice, stream);
+        cudaMemcpyAsync(output_ptr, input_ptr, bytes, cudaMemcpyDeviceToDevice, stream);
     }
     
     // Step 2: Detect atom tokens (if token IDs provided)
@@ -732,7 +743,7 @@ void ScratchBlockLayer::forwardActive(const ScratchBlockForwardArgs& args) {
     
     // Step 4: Project and inject atom type embeddings into hidden states
     kernelInjectAtomEmbeddings<<<atom_blocks, config_.d_model, 0, stream>>>(
-        args.output,
+        output_ptr,
         d_atom_positions_,
         d_num_atoms_,
         max_atoms,
@@ -746,7 +757,7 @@ void ScratchBlockLayer::forwardActive(const ScratchBlockForwardArgs& args) {
     // This is the primary value injection path - text_features encode atom semantics
     if (args.token_text_features && args.token_text_mask) {
         kernelInjectTextFeatures<<<args.total_tokens, config_.d_model, 0, stream>>>(
-            args.output,
+            output_ptr,
             args.token_text_features,
             args.token_text_mask,
             d_text_feature_projection_,
@@ -764,8 +775,8 @@ void ScratchBlockLayer::forwardActive(const ScratchBlockForwardArgs& args) {
         cudaMemcpyAsync(args.cache_num_atoms, d_num_atoms_, sizeof(int),
                         cudaMemcpyDeviceToDevice, stream);
     }
-    if (args.cache_atom_embeddings) {
-        cudaMemcpyAsync(args.cache_atom_embeddings, d_atom_embeddings_,
+    if (args.cache_atom_embeddings.ptr) {
+        cudaMemcpyAsync(args.cache_atom_embeddings.ptr, d_atom_embeddings_,
                         static_cast<size_t>(atom_blocks) * config_.atom_embedding_dim * sizeof(float),
                         cudaMemcpyDeviceToDevice, stream);
     }
@@ -829,7 +840,7 @@ void ScratchBlockLayer::backward(const ScratchBlockForwardArgs& args,
         args.cache_atom_positions,
         args.cache_num_atoms,
         max_atoms,
-        args.cache_atom_embeddings,
+        args.cache_atom_embeddings.ptr,  // Extract raw pointer from TensorView
         d_atom_projection_,
         d_atom_projection_grad_,
         d_grad_atom_embeddings_temp,
@@ -875,22 +886,8 @@ void ScratchBlockLayer::onConfigure(const Dimensions& dims) {
     config_.d_model = dims.input;
 }
 
-void ScratchBlockLayer::forwardImpl(const LayerIO<float>& io, LayerWorkspace<float>* workspace) {
-    ScratchBlockForwardArgs args;
-    args.input = io.input;
-    args.output = io.output;
-    args.total_tokens = static_cast<int>(io.tokens);
-    args.token_ids = nullptr;  // Not available through generic interface
-    args.token_numeric_values = nullptr;
-    args.token_numeric_mask = nullptr;
-    args.stream = config_.stream;
-    
-    forward(args);
-}
-
-void ScratchBlockLayer::backwardImpl(const LayerIO<float>& io, LayerWorkspace<float>* workspace) {
-    // Generic backward - pass through
-}
+// NOTE: forwardImpl/backwardImpl deleted - dead code from unused LayerIO abstraction
+// ScratchBlock uses forward(ScratchBlockForwardArgs) with TensorView directly
 
 std::size_t ScratchBlockLayer::requiredWorkspaceBytes(int total_tokens) const {
     if (!config_.enabled) {

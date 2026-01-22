@@ -25,8 +25,13 @@ namespace GRIM {
 static int s_lm_head_call_count = 0;
 
 static void logToken277Inputs(const LMHeadForwardParams& params) {
+    // Extract dimensions from TensorViews
+    const int d_model = params.d_model();
+    const int vocab_size = params.vocab_size();
+    const int total_tokens = params.total_tokens();
+    
     constexpr int kToken277 = 277;
-    if (kToken277 >= params.vocab_size) return;
+    if (kToken277 >= vocab_size) return;
     
     ++s_lm_head_call_count;
     
@@ -35,15 +40,17 @@ static void logToken277Inputs(const LMHeadForwardParams& params) {
     
     cudaStreamSynchronize(params.stream);
     
-    const int d_model = params.d_model;
-    const int total_tokens = params.batch_size * params.seq_len;
     const int num_sample = std::min(5, total_tokens);
+    
+    // Extract raw pointers from TensorViews
+    const float* weights_ptr = params.weights.ptr;
+    const float* encoder_output_ptr = params.encoder_output.ptr;
     
     // Read W[277] row (the weight row for token 277)
     // Weights are [vocab_size, d_model] row-major, so W[277] starts at offset 277*d_model
     std::vector<float> w277(d_model);
     cudaMemcpy(w277.data(), 
-               params.weights + static_cast<size_t>(kToken277) * d_model,
+               weights_ptr + static_cast<size_t>(kToken277) * d_model,
                d_model * sizeof(float), cudaMemcpyDeviceToHost);
     
     // Compute W[277] statistics
@@ -64,7 +71,7 @@ static void logToken277Inputs(const LMHeadForwardParams& params) {
     
     // Read first few hidden states and compute their dot product with W[277]
     std::vector<float> hidden_sample(num_sample * d_model);
-    cudaMemcpy(hidden_sample.data(), params.encoder_output,
+    cudaMemcpy(hidden_sample.data(), encoder_output_ptr,
                num_sample * d_model * sizeof(float), cudaMemcpyDeviceToHost);
     
     fprintf(stderr, "[Token277Input] call=%d Hidden states for %d tokens:\n", s_lm_head_call_count, num_sample);
@@ -103,10 +110,10 @@ static void logToken277Inputs(const LMHeadForwardParams& params) {
     constexpr int kCompareTokens[] = {0, 100, 500, 1000};  // Compare with other tokens
     fprintf(stderr, "[Token277Input] call=%d Weight row norms for comparison:\n", s_lm_head_call_count);
     for (int tok : kCompareTokens) {
-        if (tok >= params.vocab_size) continue;
+        if (tok >= vocab_size) continue;
         std::vector<float> w_other(d_model);
         cudaMemcpy(w_other.data(),
-                   params.weights + static_cast<size_t>(tok) * d_model,
+                   weights_ptr + static_cast<size_t>(tok) * d_model,
                    d_model * sizeof(float), cudaMemcpyDeviceToHost);
         float norm = 0.0f;
         for (int i = 0; i < d_model; ++i) norm += w_other[i] * w_other[i];
@@ -321,48 +328,31 @@ inline void recenterGradientRows(
 } // namespace
 
 void launchLMHeadForward(const LMHeadForwardParams& params) {
-	if (!validateCommonDims(params.batch_size, params.seq_len,
-							params.d_model, params.vocab_size)) {
-		std::ostringstream oss;
-		oss << "[LMHead::forward] Invalid dimensions: batch_size=" << params.batch_size
-		    << " seq_len=" << params.seq_len << " d_model=" << params.d_model
-		    << " vocab_size=" << params.vocab_size << " (all must be > 0)";
-		throw std::runtime_error(oss.str());
-	}
-
-	if (!params.handle) {
-		throw std::runtime_error("[LMHead::forward] cuBLAS handle is NULL");
-	}
-	if (!params.encoder_output) {
-		throw std::runtime_error("[LMHead::forward] encoder_output is NULL");
-	}
-	if (!params.weights) {
-		throw std::runtime_error("[LMHead::forward] weights is NULL");
-	}
-	if (!params.logits) {
-		throw std::runtime_error("[LMHead::forward] logits output buffer is NULL");
-	}
-	if (!isDevicePtr(params.encoder_output)) {
-		throw std::runtime_error("[LMHead::forward] encoder_output must be device pointer");
-	}
-	if (!isDevicePtr(params.weights)) {
-		throw std::runtime_error("[LMHead::forward] weights must be device pointer");
-	}
-	if (!isDevicePtr(params.logits)) {
-		throw std::runtime_error("[LMHead::forward] logits must be device pointer");
-	}
-
-	const int total_tokens = params.batch_size * params.seq_len;
+	// RULE 20: Fail loud - validate all tensor views upfront
+	params.validate("LMHead::forward");
+	
+	const int total_tokens = params.total_tokens();
+	const int d_model = params.d_model();
+	const int vocab_size = params.vocab_size();
+	
 	if (total_tokens == 0) {
 		return;
 	}
 
-	// === TOKEN 277 DIAGNOSTIC: Log inputs BEFORE computing logits ===
-	logToken277Inputs(params);
+	// Extract raw pointers from TensorViews for CUDA kernels and cuBLAS
+	const float* encoder_output_ptr = params.encoder_output.ptr;
+	const float* weights_ptr = params.weights.ptr;
+	float* logits_ptr = params.logits.ptr;
+	float* centered_scratch_ptr = params.centered_scratch.is_valid() ? params.centered_scratch.ptr : nullptr;
+	const float* bias_ptr = params.bias.is_valid() ? params.bias.ptr : nullptr;
+	
+	// Extract execution context
+	cublasHandle_t handle = params.handle;
+	cudaStream_t stream = params.stream;
 
 	// CRITICAL: Always rebind stream before cuBLAS ops - NumericHead may have changed it
-	if (params.stream) {
-		cublasSetStream(params.handle, params.stream);
+	if (stream) {
+		cublasSetStream(handle, stream);
 	}
 
 	// === Issue #37 FIX: Zero-mean centering before projection ===
@@ -371,35 +361,35 @@ void launchLMHeadForward(const LMHeadForwardParams& params) {
 	// If hidden_sum has same sign as grad, the contribution is wrong!
 	// With centering: hidden_sum = 0 for each position, so gradients depend
 	// only on hidden state direction, not offset.
-	const float* projection_input = params.encoder_output;
+	const float* projection_input = encoder_output_ptr;
 	
-	if (params.use_centering && params.centered_scratch) {
+	if (params.use_centering && centered_scratch_ptr) {
 		centerHiddenStates(
-			params.encoder_output,
-			params.centered_scratch,
-			params.d_model,
+			encoder_output_ptr,
+			centered_scratch_ptr,
+			d_model,
 			total_tokens,
-			params.stream
+			stream
 		);
-		projection_input = params.centered_scratch;
+		projection_input = centered_scratch_ptr;
 		
 		// Diagnostic: Verify centering worked (first 5 calls only)
 		static int s_centering_diag_count = 0;
 		if (++s_centering_diag_count <= 5) {
-			cudaStreamSynchronize(params.stream);
+			cudaStreamSynchronize(stream);
 			
 			// Sample position 0
-			std::vector<float> orig(params.d_model), centered(params.d_model);
-			cudaMemcpy(orig.data(), params.encoder_output, params.d_model * sizeof(float), cudaMemcpyDeviceToHost);
-			cudaMemcpy(centered.data(), params.centered_scratch, params.d_model * sizeof(float), cudaMemcpyDeviceToHost);
+			std::vector<float> orig(d_model), centered(d_model);
+			cudaMemcpy(orig.data(), encoder_output_ptr, d_model * sizeof(float), cudaMemcpyDeviceToHost);
+			cudaMemcpy(centered.data(), centered_scratch_ptr, d_model * sizeof(float), cudaMemcpyDeviceToHost);
 			
 			float orig_sum = 0, centered_sum = 0;
-			for (int i = 0; i < params.d_model; ++i) {
+			for (int i = 0; i < d_model; ++i) {
 				orig_sum += orig[i];
 				centered_sum += centered[i];
 			}
-			float orig_mean = orig_sum / params.d_model;
-			float centered_mean = centered_sum / params.d_model;
+			float orig_mean = orig_sum / d_model;
+			float centered_mean = centered_sum / d_model;
 			
 			fprintf(stderr, "[Issue37-Centering] call=%d tokens=%d pos0: orig_mean=%.6f centered_mean=%.6f (should be ~0)\n",
 					s_centering_diag_count, total_tokens, orig_mean, centered_mean);
@@ -410,83 +400,62 @@ void launchLMHeadForward(const LMHeadForwardParams& params) {
 	const float beta = 0.0f;
 
 	cublasStatus_t status = cublasSgemm(
-		params.handle,
+		handle,
 		CUBLAS_OP_T,               // weights: row-major [vocab, d_model] -> transpose for GEMM
 		CUBLAS_OP_N,               // encoder: row-major [tokens, d_model]
-		params.vocab_size,         // m
+		vocab_size,                // m
 		total_tokens,              // n
-		params.d_model,            // k
+		d_model,                   // k
 		&alpha,
-		params.weights,
-		params.d_model,            // lda
+		weights_ptr,
+		d_model,                   // lda
 		projection_input,          // Use centered hidden states (Issue #37)
-		params.d_model,            // ldb
+		d_model,                   // ldb
 		&beta,
-		params.logits,
-		params.vocab_size);        // ldc
+		logits_ptr,
+		vocab_size);               // ldc
 
 	if (status != CUBLAS_STATUS_SUCCESS) {
 		std::ostringstream oss;
 		oss << "[LMHead::forward] cublasSgemm failed status=" << status
-		    << " m=" << params.vocab_size << " n=" << total_tokens
-		    << " k=" << params.d_model;
+		    << " m=" << vocab_size << " n=" << total_tokens
+		    << " k=" << d_model;
 		throw std::runtime_error(oss.str());
 	}
 
-	if (params.use_bias && params.bias) {
-		addBias(params.logits, params.bias, params.vocab_size, total_tokens, params.stream);
+	if (params.use_bias && bias_ptr) {
+		addBias(logits_ptr, bias_ptr, vocab_size, total_tokens, stream);
 	}
 }
 
 void launchLMHeadBackward(const LMHeadBackwardParams& params) {
-	if (!validateCommonDims(params.batch_size, params.seq_len,
-							params.d_model, params.vocab_size)) {
-		std::ostringstream oss;
-		oss << "[LMHead::backward] Invalid dimensions: batch_size=" << params.batch_size
-		    << " seq_len=" << params.seq_len << " d_model=" << params.d_model
-		    << " vocab_size=" << params.vocab_size << " (all must be > 0)";
-		throw std::runtime_error(oss.str());
-	}
-
-	if (!params.handle) {
-		throw std::runtime_error("[LMHead::backward] cuBLAS handle is NULL");
-	}
-	if (!params.grad_logits) {
-		throw std::runtime_error("[LMHead::backward] grad_logits is NULL");
-	}
-	if (!params.grad_encoder) {
-		throw std::runtime_error("[LMHead::backward] grad_encoder is NULL");
-	}
-	if (!params.weights) {
-		throw std::runtime_error("[LMHead::backward] weights is NULL");
-	}
-	if (!isDevicePtr(params.grad_logits)) {
-		throw std::runtime_error("[LMHead::backward] grad_logits must be device pointer");
-	}
-	if (!isDevicePtr(params.grad_encoder)) {
-		throw std::runtime_error("[LMHead::backward] grad_encoder must be device pointer");
-	}
-	if (!isDevicePtr(params.weights)) {
-		throw std::runtime_error("[LMHead::backward] weights must be device pointer");
-	}
-	if (params.grad_weight && !isDevicePtr(params.grad_weight)) {
-		throw std::runtime_error("[LMHead::backward] grad_weight must be device pointer");
-	}
-	if (params.grad_bias && !isDevicePtr(params.grad_bias)) {
-		throw std::runtime_error("[LMHead::backward] grad_bias must be device pointer");
-	}
-	if (params.encoder_output && !isDevicePtr(params.encoder_output)) {
-		throw std::runtime_error("[LMHead::backward] encoder_output must be device pointer");
-	}
-
-	const int total_tokens = params.batch_size * params.seq_len;
+	// RULE 20: Fail loud - validate all tensor views upfront
+	params.validate("LMHead::backward");
+	
+	const int total_tokens = params.total_tokens();
+	const int d_model = params.d_model();
+	const int vocab_size = params.vocab_size();
+	
 	if (total_tokens == 0) {
 		return;
 	}
 
+	// Extract raw pointers from TensorViews for CUDA kernels and cuBLAS
+	const float* grad_logits_ptr = params.grad_logits.ptr;
+	const float* encoder_output_ptr = params.encoder_output.ptr;
+	float* centered_encoder_ptr = params.centered_encoder.is_valid() ? params.centered_encoder.ptr : nullptr;
+	float* grad_encoder_ptr = params.grad_encoder.ptr;
+	float* grad_weight_ptr = params.grad_weight.ptr;
+	float* grad_bias_ptr = params.grad_bias.is_valid() ? params.grad_bias.ptr : nullptr;
+	const float* weights_ptr = params.weights.ptr;
+	
+	// Extract execution context
+	cublasHandle_t handle = params.handle;
+	cudaStream_t stream = params.stream;
+
 	// CRITICAL: Always rebind stream before cuBLAS ops - NumericHead may have changed it
-	if (params.stream) {
-		cublasSetStream(params.handle, params.stream);
+	if (stream) {
+		cublasSetStream(handle, stream);
 	}
 
 	const float alpha = 1.0f;
@@ -496,20 +465,20 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 	// NOTE: If centering was applied in forward, this gives us grad w.r.t. CENTERED hidden states.
 	//       We need to backprop through the centering operation to get true grad_encoder.
 	cublasStatus_t status = cublasSgemm(
-		params.handle,
+		handle,
 		CUBLAS_OP_N,              // weights: [d_model, vocab]
 		CUBLAS_OP_N,              // grad_logits: [vocab, tokens]
-		params.d_model,           // m
+		d_model,                  // m
 		total_tokens,             // n
-		params.vocab_size,        // k
+		vocab_size,               // k
 		&alpha,
-		params.weights,
-		params.d_model,           // lda
-		params.grad_logits,
-		params.vocab_size,        // ldb
+		weights_ptr,
+		d_model,                  // lda
+		grad_logits_ptr,
+		vocab_size,               // ldb
 		&beta,
-		params.grad_encoder,
-		params.d_model);          // ldc
+		grad_encoder_ptr,
+		d_model);                 // ldc
 
 	if (status != CUBLAS_STATUS_SUCCESS) {
 		std::ostringstream oss;
@@ -526,16 +495,16 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 		// Actually, we need to center grad_encoder in-place. The centering function
 		// can do in-place if we pass same src/dst... but our kernel doesn't support that.
 		// Let's use a two-step: copy to scratch, center back to grad_encoder
-		if (params.centered_encoder) {
-			cudaMemcpyAsync(const_cast<float*>(params.centered_encoder), params.grad_encoder,
-				static_cast<size_t>(total_tokens) * params.d_model * sizeof(float),
-				cudaMemcpyDeviceToDevice, params.stream);
+		if (centered_encoder_ptr) {
+			cudaMemcpyAsync(centered_encoder_ptr, grad_encoder_ptr,
+				static_cast<size_t>(total_tokens) * d_model * sizeof(float),
+				cudaMemcpyDeviceToDevice, stream);
 			centerHiddenStates(
-				params.centered_encoder,
-				params.grad_encoder,  // Output back to grad_encoder
-				params.d_model,
+				centered_encoder_ptr,
+				grad_encoder_ptr,  // Output back to grad_encoder
+				d_model,
 				total_tokens,
-				params.stream
+				stream
 			);
 		}
 	}
@@ -545,39 +514,39 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 	// If we centered hidden states in forward (h_centered = h - mean(h)),
 	// then grad_weight must be computed against the centered hidden states!
 	// grad_W[i,j] = sum_t(h_centered[t,j] * grad_logits[t,i])
-	const float* encoder_for_grad_weight = params.encoder_output;
-	if (params.use_centering && params.centered_encoder && params.encoder_output) {
+	const float* encoder_for_grad_weight = encoder_output_ptr;
+	if (params.use_centering && centered_encoder_ptr && encoder_output_ptr) {
 		// Re-compute centering (matches forward pass)
 		centerHiddenStates(
-			params.encoder_output,
-			const_cast<float*>(params.centered_encoder),  // Scratch buffer
-			params.d_model,
+			encoder_output_ptr,
+			centered_encoder_ptr,  // Scratch buffer
+			d_model,
 			total_tokens,
-			params.stream
+			stream
 		);
-		encoder_for_grad_weight = params.centered_encoder;
+		encoder_for_grad_weight = centered_encoder_ptr;
 		
 		// === DIAGNOSTIC: Verify centering worked and compute expected grad_W[277] sum ===
 		static int s_bwd_center_diag = 0;
 		constexpr int kToken277_diag = 277;
 		if (++s_bwd_center_diag <= 10) {
-			cudaStreamSynchronize(params.stream);
+			cudaStreamSynchronize(stream);
 			
 			// Read centered hidden states and grad_logits for verification
-			std::vector<float> h_centered(static_cast<size_t>(total_tokens) * params.d_model);
-			std::vector<float> h_grad_logits(static_cast<size_t>(total_tokens) * params.vocab_size);
+			std::vector<float> h_centered(static_cast<size_t>(total_tokens) * d_model);
+			std::vector<float> h_grad_logits(static_cast<size_t>(total_tokens) * vocab_size);
 			
-			cudaMemcpy(h_centered.data(), params.centered_encoder,
+			cudaMemcpy(h_centered.data(), centered_encoder_ptr,
 					   h_centered.size() * sizeof(float), cudaMemcpyDeviceToHost);
-			cudaMemcpy(h_grad_logits.data(), params.grad_logits,
+			cudaMemcpy(h_grad_logits.data(), grad_logits_ptr,
 					   h_grad_logits.size() * sizeof(float), cudaMemcpyDeviceToHost);
 			
 			// Verify centering: each row should sum to ~0
 			double max_row_sum = 0.0, total_row_sum = 0.0;
 			for (int t = 0; t < total_tokens; ++t) {
 				double row_sum = 0.0;
-				for (int j = 0; j < params.d_model; ++j) {
-					row_sum += h_centered[static_cast<size_t>(t) * params.d_model + j];
+				for (int j = 0; j < d_model; ++j) {
+					row_sum += h_centered[static_cast<size_t>(t) * d_model + j];
 				}
 				if (std::abs(row_sum) > std::abs(max_row_sum)) {
 					max_row_sum = row_sum;
@@ -592,10 +561,10 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 			double expected_grad_sum = 0.0;
 			for (int t = 0; t < total_tokens; ++t) {
 				double row_sum = 0.0;
-				for (int j = 0; j < params.d_model; ++j) {
-					row_sum += h_centered[static_cast<size_t>(t) * params.d_model + j];
+				for (int j = 0; j < d_model; ++j) {
+					row_sum += h_centered[static_cast<size_t>(t) * d_model + j];
 				}
-				float grad_277_t = h_grad_logits[static_cast<size_t>(t) * params.vocab_size + kToken277_diag];
+				float grad_277_t = h_grad_logits[static_cast<size_t>(t) * vocab_size + kToken277_diag];
 				expected_grad_sum += row_sum * grad_277_t;
 			}
 			
@@ -604,11 +573,11 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 			// Sum all j: Σ_j grad_W[277,j] = Σ_t Σ_j h_centered[t,j] * grad_logits[t,277]
 			double cpu_grad_w277_sum = 0.0;
 			double grad_277_sum = 0.0;  // Sum of all grad_logits[t, 277]
-			for (int j = 0; j < params.d_model; ++j) {
+			for (int j = 0; j < d_model; ++j) {
 				double col_sum = 0.0;
 				for (int t = 0; t < total_tokens; ++t) {
-					float h_tj = h_centered[static_cast<size_t>(t) * params.d_model + j];
-					float g_t277 = h_grad_logits[static_cast<size_t>(t) * params.vocab_size + kToken277_diag];
+					float h_tj = h_centered[static_cast<size_t>(t) * d_model + j];
+					float g_t277 = h_grad_logits[static_cast<size_t>(t) * vocab_size + kToken277_diag];
 					col_sum += h_tj * g_t277;
 					if (j == 0) grad_277_sum += g_t277;  // Only count once
 				}
@@ -617,12 +586,12 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 			
 			// Sanity: Compute what UNCENTERED would give
 			double uncentered_grad_sum = 0.0;
-			for (int j = 0; j < params.d_model; ++j) {
+			for (int j = 0; j < d_model; ++j) {
 				for (int t = 0; t < total_tokens; ++t) {
 					// Read from ORIGINAL encoder_output, not centered
 					float h_tj_orig = 0.0f;  // We don't have it here, estimate from centered + mean
-					float g_t277 = h_grad_logits[static_cast<size_t>(t) * params.vocab_size + kToken277_diag];
-					uncentered_grad_sum += h_centered[static_cast<size_t>(t) * params.d_model + j] * g_t277;
+					float g_t277 = h_grad_logits[static_cast<size_t>(t) * vocab_size + kToken277_diag];
+					uncentered_grad_sum += h_centered[static_cast<size_t>(t) * d_model + j] * g_t277;
 				}
 			}
 			
@@ -646,7 +615,7 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 					<< " g[0,278]=" << h_grad_logits[278]
 					<< " | Row0 sum=" << std::setprecision(9);
 				double row0_sum = 0;
-				for (int j = 0; j < params.d_model; ++j) row0_sum += h_centered[j];
+				for (int j = 0; j < d_model; ++j) row0_sum += h_centered[j];
 				oss << row0_sum;
 				GRIM::Logging::EmitModuleInfo("BackwardPass", oss.str());
 			}
@@ -780,16 +749,16 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 	// Try: C = B @ A^T with A=h, B=g? That's C = g @ h^T
 	// g_colmaj[vocab,tokens] @ h_colmaj^T[tokens,d_model] = [vocab, d_model] ✓
 	// CUBLAS: M=vocab, N=d_model, K=tokens, A=g(OP_N), B=h(OP_T)
-	if (params.grad_weight && encoder_for_grad_weight) {
+	if (grad_weight_ptr && encoder_for_grad_weight) {
 		static int s_ptr_check = 0;
 		if (++s_ptr_check <= 5) {
-			const char* which_data = (encoder_for_grad_weight == params.centered_encoder) ? "CENTERED" :
-			                         (encoder_for_grad_weight == params.encoder_output) ? "UN-CENTERED" : "UNKNOWN";
+			const char* which_data = (encoder_for_grad_weight == centered_encoder_ptr) ? "CENTERED" :
+			                         (encoder_for_grad_weight == encoder_output_ptr) ? "UN-CENTERED" : "UNKNOWN";
 			std::ostringstream oss;
 			oss << "[Issue39-GEMM-PTR] call=" << s_ptr_check 
 				<< " encoder_for_grad_weight=" << (void*)encoder_for_grad_weight
-				<< " centered_encoder=" << (void*)params.centered_encoder
-				<< " encoder_output=" << (void*)params.encoder_output
+				<< " centered_encoder=" << (void*)centered_encoder_ptr
+				<< " encoder_output=" << (void*)encoder_output_ptr
 				<< " USING: " << which_data;
 			GRIM::Logging::EmitModuleInfo("BackwardPass", oss.str());
 		}
@@ -846,20 +815,20 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 		// THE FORMULA IS CORRECT! The bug must be in the diagnostic code reading the result.
 		// Let me check the diagnostic that reads grad_W[277]...
 		status = cublasSgemm(
-			params.handle,
+			handle,
 			CUBLAS_OP_N,           // hidden: [d_model, tokens] col-major, no transpose
 			CUBLAS_OP_T,           // grad_logits: [vocab, tokens] col-major, transpose to [tokens, vocab]
-			params.d_model,        // m (rows of result)
-			params.vocab_size,     // n (cols of result)
+			d_model,               // m (rows of result)
+			vocab_size,            // n (cols of result)
 			total_tokens,          // k (inner dimension)
 			&alpha,
 			encoder_for_grad_weight, // A: centered hidden states [d_model, tokens]
-			params.d_model,        // lda
-			params.grad_logits,    // B: grad_logits [vocab, tokens]
-			params.vocab_size,     // ldb
+			d_model,               // lda
+			grad_logits_ptr,       // B: grad_logits [vocab, tokens]
+			vocab_size,            // ldb
 			&beta,
-			params.grad_weight,    // C: grad_weight [d_model, vocab] col-major = [vocab, d_model] row-major
-			params.d_model);       // ldc
+			grad_weight_ptr,       // C: grad_weight [d_model, vocab] col-major = [vocab, d_model] row-major
+			d_model);              // ldc
 
 		if (status != CUBLAS_STATUS_SUCCESS) {
 			std::ostringstream oss;
@@ -873,26 +842,26 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 		{
 			static int s_gemm_diag = 0;
 			if (++s_gemm_diag <= 3) {
-				cudaStreamSynchronize(params.stream);
+				cudaStreamSynchronize(stream);
 				
 				// Read inputs
-				std::vector<float> h_enc(static_cast<size_t>(total_tokens) * params.d_model);
-				std::vector<float> h_grad(static_cast<size_t>(total_tokens) * params.vocab_size);
+				std::vector<float> h_enc(static_cast<size_t>(total_tokens) * d_model);
+				std::vector<float> h_grad(static_cast<size_t>(total_tokens) * vocab_size);
 				cudaMemcpy(h_enc.data(), encoder_for_grad_weight, h_enc.size() * sizeof(float), cudaMemcpyDeviceToHost);
-				cudaMemcpy(h_grad.data(), params.grad_logits, h_grad.size() * sizeof(float), cudaMemcpyDeviceToHost);
+				cudaMemcpy(h_grad.data(), grad_logits_ptr, h_grad.size() * sizeof(float), cudaMemcpyDeviceToHost);
 				
 				// Read GEMM output (BEFORE recentering)
-				const size_t row277_offset = static_cast<size_t>(277) * params.d_model;
-				std::vector<float> gemm_row(params.d_model);
-				cudaMemcpy(gemm_row.data(), params.grad_weight + row277_offset, params.d_model * sizeof(float), cudaMemcpyDeviceToHost);
+				const size_t row277_offset = static_cast<size_t>(277) * d_model;
+				std::vector<float> gemm_row(d_model);
+				cudaMemcpy(gemm_row.data(), grad_weight_ptr + row277_offset, d_model * sizeof(float), cudaMemcpyDeviceToHost);
 				
 				// Manual computation: grad_W[277,d] = Σ_t h[t,d] * g[t,277]
-				std::vector<double> manual_row(params.d_model, 0.0);
-				for (int d = 0; d < params.d_model; ++d) {
+				std::vector<double> manual_row(d_model, 0.0);
+				for (int i = 0; i < d_model; ++i) {
 					for (int t = 0; t < total_tokens; ++t) {
-						float h_td = h_enc[static_cast<size_t>(t) * params.d_model + d];
-						float g_t277 = h_grad[static_cast<size_t>(t) * params.vocab_size + 277];
-						manual_row[d] += h_td * g_t277;
+						float h_td = h_enc[static_cast<size_t>(t) * d_model + i];
+						float g_t277 = h_grad[static_cast<size_t>(t) * vocab_size + 277];
+						manual_row[i] += h_td * g_t277;
 					}
 				}
 				
@@ -908,7 +877,7 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 				
 				// Sum comparison
 				double gemm_sum = 0, manual_sum = 0;
-				for (int i = 0; i < params.d_model; ++i) {
+				for (int i = 0; i < d_model; ++i) {
 					gemm_sum += gemm_row[i];
 					manual_sum += manual_row[i];
 				}
@@ -916,7 +885,7 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 				
 				// Sample input values
 				oss << "\n  h_enc[0,0..2]: " << h_enc[0] << " " << h_enc[1] << " " << h_enc[2];
-				oss << "\n  g_grad[0,277]: " << h_grad[277] << " g_grad[1,277]: " << h_grad[params.vocab_size + 277];
+				oss << "\n  g_grad[0,277]: " << h_grad[277] << " g_grad[1,277]: " << h_grad[vocab_size + 277];
 				
 				GRIM::Logging::EmitModuleInfo("BackwardPass", oss.str());
 			}
@@ -935,10 +904,10 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 		// =====================================================================
 		if (params.use_centering && params.recenter_gradients) {
 			recenterGradientRows(
-				params.grad_weight,
-				params.d_model,
-				params.vocab_size,
-				params.stream
+				grad_weight_ptr,
+				d_model,
+				vocab_size,
+				stream
 			);
 		}
 		
@@ -947,50 +916,50 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 		// This shows the aggregated gradient update direction for row 277
 		static int s_grad_w277_count = 0;
 		constexpr int kToken277 = 277;
-		if (++s_grad_w277_count <= 20 && kToken277 < params.vocab_size) {
-			cudaStreamSynchronize(params.stream);
+		if (++s_grad_w277_count <= 20 && kToken277 < vocab_size) {
+			cudaStreamSynchronize(stream);
 			
 			// === Issue #39: DETAILED GEMM OUTPUT VERIFICATION ===
 			// C is [d_model, vocab] col-major = [vocab, d_model] row-major
 			// Row 277 row-major = Column 277 col-major
 			// Row 277 starts at offset 277 * d_model (both interpretations agree!)
-			const size_t row_offset = static_cast<size_t>(kToken277) * params.d_model;
-			std::vector<float> grad_w277(params.d_model);
-			cudaMemcpy(grad_w277.data(), params.grad_weight + row_offset,
-					   params.d_model * sizeof(float), cudaMemcpyDeviceToHost);
+			const size_t row_offset = static_cast<size_t>(kToken277) * d_model;
+			std::vector<float> grad_w277(d_model);
+			cudaMemcpy(grad_w277.data(), grad_weight_ptr + row_offset,
+					   d_model * sizeof(float), cudaMemcpyDeviceToHost);
 			
 			// Also read a few random elements to verify GEMM output structure
 			// Element [d,v] in col-major at offset d + v*d_model
 			// Element [v,d] in row-major at offset v*d_model + d (SAME as above!)
 			float elem_277_0, elem_277_1, elem_0_277, elem_1_277;
 			// grad_W[277, 0] row-major = grad_W_colmaj[0, 277] at offset 0 + 277*d_model
-			cudaMemcpy(&elem_277_0, params.grad_weight + 0 + 277*params.d_model, sizeof(float), cudaMemcpyDeviceToHost);
+			cudaMemcpy(&elem_277_0, grad_weight_ptr + 0 + 277*d_model, sizeof(float), cudaMemcpyDeviceToHost);
 			// grad_W[277, 1] row-major at offset 277*d_model + 1
-			cudaMemcpy(&elem_277_1, params.grad_weight + 277*params.d_model + 1, sizeof(float), cudaMemcpyDeviceToHost);
+			cudaMemcpy(&elem_277_1, grad_weight_ptr + 277*d_model + 1, sizeof(float), cudaMemcpyDeviceToHost);
 			// grad_W[0, 277] row-major at offset 0*d_model + 277 = 277
-			cudaMemcpy(&elem_0_277, params.grad_weight + 277, sizeof(float), cudaMemcpyDeviceToHost);
+			cudaMemcpy(&elem_0_277, grad_weight_ptr + 277, sizeof(float), cudaMemcpyDeviceToHost);
 			// grad_W[1, 277] row-major at offset 1*d_model + 277
-			cudaMemcpy(&elem_1_277, params.grad_weight + params.d_model + 277, sizeof(float), cudaMemcpyDeviceToHost);
+			cudaMemcpy(&elem_1_277, grad_weight_ptr + d_model + 277, sizeof(float), cudaMemcpyDeviceToHost);
 			
 			// Compute norm and mean of grad_W[277]
 			float norm_sq = 0.0f, sum = 0.0f;
-			for (int i = 0; i < params.d_model; ++i) {
+			for (int i = 0; i < d_model; ++i) {
 				norm_sq += grad_w277[i] * grad_w277[i];
 				sum += grad_w277[i];
 			}
 			float norm = std::sqrt(norm_sq);
-			float mean = sum / params.d_model;
+			float mean = sum / d_model;
 			
 			// === Issue #40: COMPUTE GRADIENT-WEIGHT ALIGNMENT ===
 			// If grad dot W > 0, AdamW will push W further in its current direction!
 			// AdamW: W_new = W - lr * (adam_update + wd * W)
 			// adam_update direction ≈ sign(grad), so if grad·W > 0, update reinforces W
-			std::vector<float> w277(params.d_model);
-			cudaMemcpy(w277.data(), params.weights + row_offset,
-					   params.d_model * sizeof(float), cudaMemcpyDeviceToHost);
+			std::vector<float> w277(d_model);
+			cudaMemcpy(w277.data(), weights_ptr + row_offset,
+					   d_model * sizeof(float), cudaMemcpyDeviceToHost);
 			
 			float w_norm_sq = 0.0f, dot_product = 0.0f;
-			for (int i = 0; i < params.d_model; ++i) {
+			for (int i = 0; i < d_model; ++i) {
 				w_norm_sq += w277[i] * w277[i];
 				dot_product += grad_w277[i] * w277[i];
 			}
@@ -1032,41 +1001,41 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 				// MANUAL COMPUTATION of grad_W[277, 0]
 				// Formula: grad_W[v,d] = Σ_t h[t,d] * g[t,v]
 				// grad_W[277, 0] = Σ_t h[t, 0] * g[t, 277]
-				std::vector<float> h_data(static_cast<size_t>(total_tokens) * params.d_model);
-				std::vector<float> g_data(static_cast<size_t>(total_tokens) * params.vocab_size);
+				std::vector<float> h_data(static_cast<size_t>(total_tokens) * d_model);
+				std::vector<float> g_data(static_cast<size_t>(total_tokens) * vocab_size);
 				cudaMemcpy(h_data.data(), encoder_for_grad_weight, h_data.size() * sizeof(float), cudaMemcpyDeviceToHost);
-				cudaMemcpy(g_data.data(), params.grad_logits, g_data.size() * sizeof(float), cudaMemcpyDeviceToHost);
+				cudaMemcpy(g_data.data(), grad_logits_ptr, g_data.size() * sizeof(float), cudaMemcpyDeviceToHost);
 				
 				// Compute FULL manual sum across all 768 dimensions
 				double manual_full_sum = 0.0;
 				double manual_277_0 = 0.0;
 				double manual_277_1 = 0.0;
-				for (int d = 0; d < params.d_model; ++d) {
+				for (int dd = 0; dd < d_model; ++dd) {
 					double col_sum = 0.0;
 					for (int t = 0; t < total_tokens; ++t) {
-						float h_t_d = h_data[static_cast<size_t>(t) * params.d_model + d];
-						float g_t_277 = g_data[static_cast<size_t>(t) * params.vocab_size + 277];
+						float h_t_d = h_data[static_cast<size_t>(t) * d_model + dd];
+						float g_t_277 = g_data[static_cast<size_t>(t) * vocab_size + 277];
 						col_sum += h_t_d * g_t_277;
 					}
 					manual_full_sum += col_sum;
-					if (d == 0) manual_277_0 = col_sum;
-					if (d == 1) manual_277_1 = col_sum;
+					if (dd == 0) manual_277_0 = col_sum;
+					if (dd == 1) manual_277_1 = col_sum;
 				}
 				
 				// Issue #40: ALSO read grad_weight row 277 and sum it (same as Token277GradW does)
 				// This verifies we're reading from the same memory the GEMM wrote to
-				std::vector<float> gemm_row277(params.d_model);
-				const size_t row277_offset = static_cast<size_t>(277) * params.d_model;
-				cudaMemcpy(gemm_row277.data(), params.grad_weight + row277_offset,
-				           params.d_model * sizeof(float), cudaMemcpyDeviceToHost);
+				std::vector<float> gemm_row277(d_model);
+				const size_t row277_offset = static_cast<size_t>(277) * d_model;
+				cudaMemcpy(gemm_row277.data(), grad_weight_ptr + row277_offset,
+				           d_model * sizeof(float), cudaMemcpyDeviceToHost);
 				double gemm_row_sum = 0.0;
-				for (int d = 0; d < params.d_model; ++d) {
-					gemm_row_sum += gemm_row277[d];
+				for (int dd = 0; dd < d_model; ++dd) {
+					gemm_row_sum += gemm_row277[dd];
 				}
 				// Print pointer addresses for verification
 				std::ostringstream ptr_oss;
-				ptr_oss << "[Issue40-PTR-VERIFY] grad_weight=" << (void*)params.grad_weight
-				        << " row277_at=" << (void*)(params.grad_weight + row277_offset)
+				ptr_oss << "[Issue40-PTR-VERIFY] grad_weight=" << (void*)grad_weight_ptr
+				        << " row277_at=" << (void*)(grad_weight_ptr + row277_offset)
 				        << " encoder_for_grad=" << (void*)encoder_for_grad_weight
 				        << " | GEMM_ROW_SUM=" << std::setprecision(9) << gemm_row_sum
 				        << " MANUAL_SUM=" << manual_full_sum
@@ -1075,8 +1044,8 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 				
 				// Also verify h_data row sums (should be ~0 if centered)
 				double h_row0_sum = 0.0;
-				for (int d = 0; d < params.d_model; ++d) {
-					h_row0_sum += h_data[d];  // h[0, d]
+				for (int dd = 0; dd < d_model; ++dd) {
+					h_row0_sum += h_data[dd];  // h[0, d]
 				}
 				
 				std::ostringstream oss;
@@ -1092,13 +1061,14 @@ void launchLMHeadBackward(const LMHeadBackwardParams& params) {
 		}
 	}
 
-	if (params.use_bias && params.grad_bias) {
+	// Bias gradient computation
+	if (params.use_bias && grad_bias_ptr) {
 		launchBiasSumGradient(
-			params.grad_logits,
-			params.grad_bias,
+			grad_logits_ptr,
+			grad_bias_ptr,
 			total_tokens,
-			params.vocab_size,
-			params.stream);
+			vocab_size,
+			stream);
 	}
 }
 

@@ -150,7 +150,7 @@ constexpr auto kModule = GRIM::Logging::ModuleId::BackwardPass;
 #define P2_ERROR(msg) do { std::ostringstream _oss; _oss << "[Phase2] " << msg; GRIM::Logging::EmitModuleError(kModule, _oss.str()); } while (0)
 
 // Diagnostic flag (can be disabled for production)
-constexpr bool kEnableLayerDiagnostics = false;
+constexpr bool kEnableLayerDiagnostics = false;  // DISABLED for production performance
 
 //======================================================//
 //  GPU-side Gradient Statistics (deferred, batch flush)
@@ -331,10 +331,10 @@ BackwardStatus executeLayerBackward(BackwardContext& ctx, int layer) {
     BWD_CHECK_PTR(ctx, attn_output, "cached_attn_output", layer);
     BWD_CHECK_PTR(ctx, layer_input, "layer_input", layer);
     
-    // Get temp buffers for intermediate gradients
-    float* grad_ffn_input = ts->grad_ffn_input;
-    float* grad_ffn_hidden = ts->grad_ffn_hidden;
-    float* grad_attn_input = ts->grad_attn_input;
+    // Get temp buffers for intermediate gradients (from Tensor objects)
+    float* grad_ffn_input = ts->grad_ffn_input_tensor.data;
+    float* grad_ffn_hidden = ts->grad_ffn_hidden_tensor.data;
+    float* grad_attn_input = ts->grad_attn_input_tensor.data;
     
     BWD_CHECK_PTR(ctx, grad_ffn_input, "grad_ffn_input", layer);
     BWD_CHECK_PTR(ctx, grad_ffn_hidden, "grad_ffn_hidden", layer);
@@ -412,7 +412,7 @@ BackwardStatus executeLayerBackward(BackwardContext& ctx, int layer) {
     // CRITICAL DEBUG: Synchronize stream after RMSNorm2 to isolate crash location
     // If crash happens before this log, it's in RMSNorm2 kernel
     // If crash happens after, it's in ResidualAdd or cudaMemcpyAsync
-    cudaStreamSynchronize(ctx.training_state->stream_ctrl.getPrimaryStream());
+    // DISABLED for performance: cudaStreamSynchronize(ctx.training_state->stream_ctrl.getPrimaryStream());
     P2_INFO("RMSNorm2 layer" << layer << " kernel completed successfully");
     
     // Log RMSNorm2 layer stats (deferred to batch flush)
@@ -471,7 +471,7 @@ BackwardStatus executeLayerBackward(BackwardContext& ctx, int layer) {
     
     // Log Attention layer stats (deferred to batch flush)
     // DISABLED: if (ctx.enable_layer_logging && false) {
-    //     float* grad_qkv_input = ts->grad_qkv_input;
+    //     float* grad_qkv_input = ts->grad_qkv_input_tensor.data;
     //     if (grad_qkv_input) {
     //         queueGradStats(
     //             "attn_bwd_post_attn",
@@ -488,7 +488,7 @@ BackwardStatus executeLayerBackward(BackwardContext& ctx, int layer) {
     //--------------------------------------------------//
     
     // grad_qkv_input contains gradient from attention (w.r.t. RMSNorm1 output)
-    float* grad_qkv_input = ts->grad_qkv_input;
+    float* grad_qkv_input = ts->grad_qkv_input_tensor.data;
     BWD_CHECK_PTR(ctx, grad_qkv_input, "grad_qkv_input", layer);
     
     BackwardStatus rms1_status = computeRMSNormBackward(
@@ -571,15 +571,26 @@ BackwardStatus computeRMSNormBackward(
             ctx.training_state->stream_ctrl.getPrimaryStream());
     }
     
-    // Launch RMSNorm backward kernel
-    launchRMSNormBackward(
-        cached_input,
-        grad_output,
-        gamma,
-        grad_input,
-        grad_gamma,  // May be nullptr if not tracking gamma gradients
-        total_tokens, cfg->d_model, eps,
-        ctx.training_state->stream_ctrl.getPrimaryStream());
+    // Launch RMSNorm backward kernel with TensorView
+    RMSNormBackwardParams rms_params{};
+    rms_params.input = TensorContract::TensorView::make_BSM(
+        const_cast<float*>(cached_input), total_tokens, cfg->d_model, "rms_cached_input");
+    rms_params.grad_output = TensorContract::TensorView::make_BSM(
+        const_cast<float*>(grad_output), total_tokens, cfg->d_model, "rms_grad_output");
+    rms_params.gamma = TensorContract::TensorView::make_BSM(
+        const_cast<float*>(gamma), 1, cfg->d_model, "rms_gamma");
+    rms_params.grad_input = TensorContract::TensorView::make_BSM(
+        grad_input, total_tokens, cfg->d_model, "rms_grad_input");
+    // grad_gamma may be nullptr - create empty view or valid view based on pointer
+    if (grad_gamma) {
+        rms_params.grad_gamma = TensorContract::TensorView::make_BSM(
+            grad_gamma, 1, cfg->d_model, "rms_grad_gamma");
+    }
+    // else: grad_gamma stays default (invalid view, which is fine - validate() checks this)
+    rms_params.epsilon = eps;
+    rms_params.stream = ctx.training_state->stream_ctrl.getPrimaryStream();
+    
+    launchRMSNormBackward(rms_params);
     
     // CUDA error check (non-blocking)
     BWD_CHECK_CUDA(ctx, cudaPeekAtLastError(), 
@@ -627,8 +638,8 @@ BackwardStatus computeFFNBackward(
     auto* enc = ctx.gpu_encoder->getLayer(layer);
     BWD_CHECK_PTR(ctx, enc, "encoder_layer_ffn", layer);
     
-    float* grad_ffn_hidden = ts->grad_ffn_hidden;
-    float* grad_ffn_input_out = ts->grad_ffn_input;
+    float* grad_ffn_hidden = ts->grad_ffn_hidden_tensor.data;
+    float* grad_ffn_input_out = ts->grad_ffn_input_tensor.data;
     
     // Get FFN weight pointers
     float* W1 = enc->getFFNW1();
@@ -643,7 +654,7 @@ BackwardStatus computeFFNBackward(
     //--------------------------------------------------//
     // Issue #43 FIX: Get centering scratch buffer
     //--------------------------------------------------//
-    float* centered_scratch = ts->centered_activation_scratch;
+    float* centered_scratch = ts->centered_activation_scratch();
     BWD_CHECK_PTR(ctx, centered_scratch, "centered_activation_scratch", layer);
     
     //--------------------------------------------------//
@@ -673,6 +684,10 @@ BackwardStatus computeFFNBackward(
     // M=d_ff, N=d_model, K=tokens
     // C[d_ff, d_model] col-major = [d_model, d_ff] row-major (matches W2!)
     
+    // AUTOGRAD MIGRATION: Write to encoder's Tensor.grad instead of legacy ts->ffn_w2_grads
+    float* grad_W2 = enc->getFFNW2Grad();
+    BWD_CHECK_PTR(ctx, grad_W2, "FFN_W2_grad (Tensor.grad)", layer);
+    
     BWD_CHECK_CUBLAS(ctx, cublasSgemm(
         ctx.cublas_handle,
         CUBLAS_OP_N, CUBLAS_OP_T,
@@ -681,17 +696,19 @@ BackwardStatus computeFFNBackward(
         centered_scratch, cfg->d_ff,            // Issue #43 FIX: use CENTERED activation
         grad_ffn_output, cfg->d_model,          // FIXED: B = grad_output [d_model, tokens] col-major
         &beta_accum,
-        ts->ffn_w2_grads[layer], cfg->d_ff),    // FIXED: ldc = d_ff
+        grad_W2, cfg->d_ff),                    // AUTOGRAD: Use Tensor.grad
         "grad_W2 computation", layer);
     
     //--------------------------------------------------//
     // Step 4.2: Compute grad_b2 (if using bias)
     //--------------------------------------------------//
     
-    if (ts->ffn_b2_grads[layer]) {
+    // AUTOGRAD MIGRATION: Use encoder's Tensor.grad for bias
+    float* grad_b2 = enc->getFFNB2Grad();
+    if (grad_b2) {
         launchBiasSumGradient(
             const_cast<float*>(grad_ffn_output),
-            ts->ffn_b2_grads[layer],
+            grad_b2,
             total_tokens, cfg->d_model,
             ctx.training_state->stream_ctrl.getPrimaryStream());
     }
@@ -732,10 +749,12 @@ BackwardStatus computeFFNBackward(
     BWD_CHECK_PTR(ctx, ffn_pre_gelu, "ffn_pre_gelu", layer);
     
     GELUBackwardArgs gelu_args{};
-    gelu_args.input = ffn_pre_gelu;
-    gelu_args.grad_output = grad_ffn_hidden;
-    gelu_args.grad_input = grad_ffn_hidden;  // In-place
-    gelu_args.elements = static_cast<size_t>(total_tokens) * cfg->d_ff;
+    gelu_args.input = TensorContract::TensorView::make_BSM(
+        ffn_pre_gelu, total_tokens, cfg->d_ff, "ffn_pre_gelu");
+    gelu_args.grad_output = TensorContract::TensorView::make_BSM(
+        grad_ffn_hidden, total_tokens, cfg->d_ff, "grad_ffn_hidden");
+    gelu_args.grad_input = TensorContract::TensorView::make_BSM(
+        grad_ffn_hidden, total_tokens, cfg->d_ff, "grad_input_inplace");  // In-place
     gelu_args.stream = ctx.training_state->stream_ctrl.getPrimaryStream();
     
     launchGeluBackward(gelu_args);
@@ -774,6 +793,10 @@ BackwardStatus computeFFNBackward(
     // M=d_model, N=d_ff, K=tokens
     // C[d_model, d_ff] col-major = [d_ff, d_model] row-major (matches W1!)
     
+    // AUTOGRAD MIGRATION: Write to encoder's Tensor.grad instead of legacy ts->ffn_w1_grads
+    float* grad_W1 = enc->getFFNW1Grad();
+    BWD_CHECK_PTR(ctx, grad_W1, "FFN_W1_grad (Tensor.grad)", layer);
+    
     BWD_CHECK_CUBLAS(ctx, cublasSgemm(
         ctx.cublas_handle,
         CUBLAS_OP_N, CUBLAS_OP_T,
@@ -782,17 +805,19 @@ BackwardStatus computeFFNBackward(
         centered_scratch, cfg->d_model,         // Issue #43 FIX: use CENTERED activation
         grad_ffn_hidden, cfg->d_ff,             // FIXED: B = grad_hidden [d_ff, tokens] col-major
         &beta_accum,
-        ts->ffn_w1_grads[layer], cfg->d_model), // FIXED: ldc = d_model
+        grad_W1, cfg->d_model),                 // AUTOGRAD: Use Tensor.grad
         "grad_W1 computation", layer);
     
     //--------------------------------------------------//
     // Step 4.6: Compute grad_b1 (if using bias)
     //--------------------------------------------------//
     
-    if (ts->ffn_b1_grads[layer]) {
+    // AUTOGRAD MIGRATION: Use encoder's Tensor.grad for bias
+    float* grad_b1 = enc->getFFNB1Grad();
+    if (grad_b1) {
         launchBiasSumGradient(
             grad_ffn_hidden,
-            ts->ffn_b1_grads[layer],
+            grad_b1,
             total_tokens, cfg->d_ff,
             ctx.training_state->stream_ctrl.getPrimaryStream());
     }
@@ -898,7 +923,7 @@ BackwardStatus computeAttentionBackward(
     BWD_CHECK_PTR(ctx, W_o, "W_o", layer);
     
     // Get temp buffer for attention output gradient
-    float* grad_attn_out_flat = ts->grad_attn_out_before_proj;
+    float* grad_attn_out_flat = ts->grad_attn_out_proj_tensor.data;
     BWD_CHECK_PTR(ctx, grad_attn_out_flat, "grad_attn_out_before_proj", layer);
     
     P2_INFO("Temp buffers: grad_attn_out_flat=" << (void*)grad_attn_out_flat << " W_o=" << (void*)W_o);
@@ -922,7 +947,7 @@ BackwardStatus computeAttentionBackward(
     //--------------------------------------------------//
     // Issue #43 FIX: Center cached attention output before W_o weight gradient
     //--------------------------------------------------//
-    float* centered_scratch = ts->centered_activation_scratch;
+    float* centered_scratch = ts->centered_activation_scratch();
     BWD_CHECK_PTR(ctx, centered_scratch, "centered_activation_scratch", layer);
     
     centerActivations(
@@ -966,7 +991,10 @@ BackwardStatus computeAttentionBackward(
     }
     
     P2_INFO("About to call cublasSgemm for W_o weight gradient");
-    P2_INFO("Grad buffer pointer check: attn_out_weight_grads[" << layer << "]=" << (void*)ts->attn_out_weight_grads[layer]);
+    
+    // AUTOGRAD MIGRATION: Use encoder's Tensor.grad instead of legacy ts->attn_out_weight_grads
+    float* grad_W_o = enc_attn->getAttnWoGrad();
+    P2_INFO("Grad buffer pointer check: enc->getAttnWoGrad()=" << (void*)grad_W_o);
     
     // Validate ALL buffer pointers before GEMM
     P2_INFO("Validating input buffers:");
@@ -974,8 +1002,8 @@ BackwardStatus computeAttentionBackward(
     P2_INFO("  grad_attn_output=" << (void*)grad_attn_output);
     P2_INFO("  W_o=" << (void*)W_o);
     
-    if (!ts->attn_out_weight_grads[layer]) {
-        BWD_FAIL_LOUD(ctx, BackwardStatus::INVALID_STATE, "attn_out_weight_grads is NULL", layer);
+    if (!grad_W_o) {
+        BWD_FAIL_LOUD(ctx, BackwardStatus::INVALID_STATE, "enc->getAttnWoGrad() is NULL (Tensor.grad not allocated)", layer);
     }
     if (!grad_attn_out_flat) {
         BWD_FAIL_LOUD(ctx, BackwardStatus::INVALID_STATE, "grad_attn_out_flat is NULL", layer);
@@ -999,7 +1027,7 @@ BackwardStatus computeAttentionBackward(
         centered_scratch, cfg->d_model,          // Issue #43 FIX: use CENTERED activation
         grad_attn_output, cfg->d_model,          // B = gradient from layer above
         &beta_accum,
-        ts->attn_out_weight_grads[layer], cfg->d_model),
+        grad_W_o, cfg->d_model),                 // AUTOGRAD: Use Tensor.grad
         "W_o backward weight grad", layer);
     
     P2_INFO("cublasSgemm for W_o weight gradient COMPLETED successfully");
@@ -1024,11 +1052,13 @@ BackwardStatus computeAttentionBackward(
     P2_INFO("W_o input gradient GEMM COMPLETED successfully");
     
     // W_o bias gradient (if using bias)
-    if (ts->attn_out_bias_grads[layer]) {
+    // AUTOGRAD MIGRATION: Use encoder's Tensor.grad for bias
+    float* grad_b_o = enc_attn->getAttnBoGrad();
+    if (grad_b_o) {
         P2_INFO("Computing W_o bias gradient...");
         launchBiasSumGradient(
             const_cast<float*>(grad_attn_output),
-            ts->attn_out_bias_grads[layer],
+            grad_b_o,
             total_tokens, cfg->d_model,
             ctx.training_state->stream_ctrl.getPrimaryStream());
         P2_INFO("W_o bias gradient COMPLETED");
@@ -1042,7 +1072,7 @@ BackwardStatus computeAttentionBackward(
     //--------------------------------------------------//
     
     P2_INFO("Starting reshape for Flash Attention backward");
-    float* grad_attn_out_reshaped = ts->grad_attn_out_reshaped;
+    float* grad_attn_out_reshaped = ts->grad_attn_out_bhsd_tensor.data;
     BWD_CHECK_PTR(ctx, grad_attn_out_reshaped, "grad_attn_out_reshaped", layer);
     
     P2_INFO("Creating TensorContract views...");
@@ -1106,9 +1136,9 @@ if (ts->pbm_spec.num_kv_heads != num_kv_heads) {
 
     cudaStream_t stream = ctx.training_state->stream_ctrl.getPrimaryStream();
 
-    float* grad_Q = ts->grad_q;
-    float* grad_K = ts->grad_k;
-    float* grad_V = ts->grad_v;
+    float* grad_Q = ts->grad_q_tensor.data;
+    float* grad_K = ts->grad_k_tensor.data;
+    float* grad_V = ts->grad_v_tensor.data;
     
     BWD_CHECK_PTR(ctx, grad_Q, "grad_Q", layer);
     BWD_CHECK_PTR(ctx, grad_K, "grad_K", layer);
@@ -1122,7 +1152,7 @@ if (ts->pbm_spec.num_kv_heads != num_kv_heads) {
     // DIAGNOSTIC Issue #36: Verify cache contents at backward time
     static int bwd_read_count = 0;
     bwd_read_count++;
-    if (bwd_read_count <= 24) {  // First 2 backward passes * 12 layers
+    if (false) {  // DISABLED for production speed - was (bwd_read_count <= 24)
         CUDA_CHECK(cudaStreamSynchronize(stream));
         std::vector<float> h_q(q_size);
         CUDA_CHECK(cudaMemcpy(h_q.data(), cached_Q, q_size * sizeof(float), cudaMemcpyDeviceToHost));
@@ -1350,7 +1380,7 @@ if (ts->pbm_spec.num_kv_heads != num_kv_heads) {
     
     // Issue #42 DIAGNOSTIC: Log dQ/dK/dV gradient statistics after Flash Attention backward
     // These are the raw gradients that will flow to encoder weights via W_qkv backward
-    {
+    if (false) { // DISABLED for performance
         cudaStreamSynchronize(stream);  // Ensure conversions complete
         
         std::vector<float> dq_host(q_size);
@@ -1425,7 +1455,7 @@ if (ts->pbm_spec.num_kv_heads != num_kv_heads) {
     // Step 7.4: Merge Q, K, V gradients into fused format
     //--------------------------------------------------//
     
-    float* grad_qkv_concat = ts->grad_qkv_concat;
+    float* grad_qkv_concat = ts->grad_qkv_concat_tensor.data;
     BWD_CHECK_PTR(ctx, grad_qkv_concat, "grad_qkv_concat", layer);
     
     // Use existing gqa_dims from line 646 (already validated)
@@ -1460,6 +1490,10 @@ if (ts->pbm_spec.num_kv_heads != num_kv_heads) {
         total_tokens,
         ctx.training_state->stream_ctrl.getPrimaryStream());
     
+    // AUTOGRAD MIGRATION: Use encoder's Tensor.grad instead of legacy ts->attn_qkv_weight_grads
+    float* grad_W_qkv = enc_attn->getAttnWqkvGrad();
+    BWD_CHECK_PTR(ctx, grad_W_qkv, "Attn_W_qkv_grad (Tensor.grad)", layer);
+    
     BWD_CHECK_CUBLAS(ctx, cublasSgemm(
         ctx.cublas_handle,
         CUBLAS_OP_N, CUBLAS_OP_T,
@@ -1468,17 +1502,19 @@ if (ts->pbm_spec.num_kv_heads != num_kv_heads) {
         centered_scratch, cfg->d_model,          // Issue #43 FIX: use CENTERED activation
         grad_qkv_concat, total_qkv_dim,
         &beta_accum,
-        ts->attn_qkv_weight_grads[layer], cfg->d_model),
+        grad_W_qkv, cfg->d_model),               // AUTOGRAD: Use Tensor.grad
         "QKV weight gradient", layer);
     
     //--------------------------------------------------//
     // Step 7.6: QKV Bias Gradient (if using bias)
     //--------------------------------------------------//
     
-    if (ts->attn_qkv_bias_grads[layer]) {
+    // AUTOGRAD MIGRATION: Use encoder's Tensor.grad for bias
+    float* grad_b_qkv = enc_attn->getAttnBqkvGrad();
+    if (grad_b_qkv) {
         launchBiasSumGradient(
             grad_qkv_concat,
-            ts->attn_qkv_bias_grads[layer],
+            grad_b_qkv,
             total_tokens, total_qkv_dim,
             ctx.training_state->stream_ctrl.getPrimaryStream());
     }
@@ -1491,7 +1527,7 @@ if (ts->pbm_spec.num_kv_heads != num_kv_heads) {
     float* W_qkv = enc_attn->getAttnWqkv();
     BWD_CHECK_PTR(ctx, W_qkv, "W_qkv", layer);
     
-    float* grad_qkv_input = ts->grad_qkv_input;
+    float* grad_qkv_input = ts->grad_qkv_input_tensor.data;
     BWD_CHECK_PTR(ctx, grad_qkv_input, "grad_qkv_input", layer);
     
     // W_qkv: [total_qkv_dim, d_model] row-major

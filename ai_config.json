@@ -81,24 +81,24 @@
         "config": {
             "epochs": 1,
             "seed": 1,
-            "batch_size": 6,
+            "batch_size": 7,
             "gradient_accumulation_steps": 2,
             "batch_strategy": "RANDOM",
             "learning_rate": 0.0003,
-            "weight_decay": 0.1,
+            "weight_decay": 0.01,
             "gradient_clip": 1.0,
             "per_token_grad_scale": true,
             "warmup_steps": 10,
             "max_seq_len": 1024,
             "min_seq_valid_tokens": 10,
-            "log_interval": 1,
+            "log_interval": 10,
             "atom_stats_interval": 10,
             "atom_stats_max_seqs": 16,
             "validation_interval": 100,
             "checkpoint_interval": 1000,
             "use_gpu": true,
             "use_flash_attention": true,
-            
+            "use_mixed_precision": true,
             "single_batch": {
                 "enabled": false,
                 "max_steps": 1000
@@ -263,7 +263,7 @@
                 },
                 "entropy_reg": {
                     "enabled": true,
-                    "lambda": 0.01
+                    "lambda": 0.1
                 },
                 "preference": {
                     "enabled": false,
@@ -280,7 +280,7 @@
                 },
                 "numeric_head": {
                     "enabled": true,
-                    "weight": 0.75,
+                    "weight": 1.0,
                     "huber_delta": 1.0,
                     "log_scale": true
                 }
@@ -398,12 +398,24 @@
                 "scale": 16.0
             },
             "lm_head_centering": {
-                "enabled": true,
+                "enabled": false,
                 "center_hidden_states": true,
                 "recenter_gradients": true
             },
-            "guess_cache": {
+            "hardcoded_hidden_states": {
                 "enabled": false,
+                "pattern": "random_centered",
+                "log_every_n_batches": 1,
+                "patterns": {
+                    "random_centered": "Random normal with mean=0 (tests Issue #37 fix)",
+                    "orthogonal_w277": "Orthogonal to W[277] (should give logit[277]≈0)",
+                    "aligned_w277": "Aligned with W[277] (should give high logit[277])",
+                    "constant_uniform": "Constant [1/√768] (tests row sum bias Issue #40)",
+                    "zero_mean_sine": "Sine wave with zero mean (tests centering robustness)"
+                }
+            },
+            "guess_cache": {
+                "enabled": true,
                 "initial_capacity": 16384,
                 "min_capacity": 4096,
                 "max_capacity": 262144,
@@ -417,7 +429,7 @@
                 "frequency_weight": 0.2,
                 "diversity_weight": 0.25,
                 "recency_weight": 0.25,
-                "enable_diversity_tracking": false,
+                "enable_diversity_tracking": true,
                 "diversity_bloom_bits": 65536,
                 "diversity_hash_functions": 4,
                 "diversity_penalty": 0.15,
@@ -427,7 +439,7 @@
                 "momentum_floor": 0.55,
                 "momentum_ceiling": 0.995,
                 "staleness_grace_period": 0.25,
-                "enable_async_transfers": false,
+                "enable_async_transfers": true,
                 "pinned_buffer_size": 8192,
                 "num_streams": 2,
                 "enable_histograms": false,

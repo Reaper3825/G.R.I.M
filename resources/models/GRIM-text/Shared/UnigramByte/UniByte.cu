@@ -751,13 +751,19 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
             return;
         }
         std::string segment = text.substr(start, end - start);
-        auto segment_tokens = unigram_.encode(segment);
+        // Use encodeWithPieces to get piece text for byte length calculation
+        auto segment_pieces = unigram_.encodeWithPieces(segment);
         
-        for (int tid : segment_tokens) {
+        for (const auto& piece : segment_pieces) {
+            int tid = piece.token_id;
             result.token_ids.push_back(tid);
             result.token_numeric_values.push_back(0.0f);
             result.token_numeric_mask.push_back(0);
             appendZeroTextFeatures();  // Non-atom tokens get zero text features
+            
+            // Store byte length of this token's text representation
+            uint16_t byte_len = static_cast<uint16_t>(std::min(piece.text.size(), size_t(65535)));
+            result.token_byte_lengths.push_back(byte_len);
             
             if (tid < BYTE_VOCAB_SIZE) {
                 result.is_byte_fallback.push_back(true);
@@ -825,6 +831,13 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
             result.is_byte_fallback.push_back(false);
             result.token_numeric_values.push_back(numeric_value);
             result.token_numeric_mask.push_back(numeric_mask);
+            
+            // Store byte length of the atom's original content (NOT 0!)
+            // This is CRITICAL for loss weighting - atoms must "cost" what they represent
+            uint16_t atom_byte_len = static_cast<uint16_t>(std::min(
+                static_cast<size_t>(span.content_length), 
+                size_t(65535)));
+            result.token_byte_lengths.push_back(atom_byte_len);
             
             // Encode text features for atom token
             uint16_t text_features[kTextFeatureDim];

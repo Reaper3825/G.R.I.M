@@ -694,22 +694,4 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
     return true;
 }
 
-void SerializationLayer::onConfigure(const Dimensions& dims) {
-    setDimensions(dims);
-}
-
-void SerializationLayer::forwardImpl(const LayerIO<float>& io, LayerWorkspace<float>* workspace) {
-    (void)io;
-    (void)workspace;
-}
-
-void SerializationLayer::backwardImpl(const LayerIO<float>& io, LayerWorkspace<float>* workspace) {
-    (void)io;
-    (void)workspace;
-}
-
-void SerializationLayer::applyGradientsImpl(value_type learning_rate) {
-    (void)learning_rate;
-}
-
 } // namespace GRIM

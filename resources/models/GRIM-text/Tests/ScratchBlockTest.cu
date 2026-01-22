@@ -236,8 +236,8 @@ bool testPassthroughCopy(std::string& message) {
     
     // Forward pass
     ScratchBlockForwardArgs args;
-    args.input = d_input;
-    args.output = d_output;
+    args.input = TensorContract::TensorView::make_BSM(d_input, total_tokens, d_model, "test_input");
+    args.output = TensorContract::TensorView::make_BSM(d_output, total_tokens, d_model, "test_output");
     args.total_tokens = total_tokens;
     args.token_ids = nullptr;
     args.stream = nullptr;
@@ -281,10 +281,10 @@ bool testPassthroughInPlace(std::string& message) {
     
     cudaMemcpy(d_data, h_data.data(), total_elements * sizeof(float), cudaMemcpyHostToDevice);
     
-    // In-place forward
+    // In-place forward - TensorViews wrap same pointer
     ScratchBlockForwardArgs args;
-    args.input = d_data;
-    args.output = d_data;  // Same pointer
+    args.input = TensorContract::TensorView::make_BSM(d_data, total_tokens, d_model, "test_inplace_input");
+    args.output = TensorContract::TensorView::make_BSM(d_data, total_tokens, d_model, "test_inplace_output");  // Same pointer
     args.total_tokens = total_tokens;
     args.token_ids = nullptr;
     args.stream = nullptr;
@@ -386,8 +386,8 @@ bool testForwardWithNoAtoms(std::string& message) {
     cudaMemcpy(d_tokens, h_tokens.data(), total_tokens * sizeof(int), cudaMemcpyHostToDevice);
     
     ScratchBlockForwardArgs args;
-    args.input = d_input;
-    args.output = d_output;
+    args.input = TensorContract::TensorView::make_BSM(d_input, total_tokens, d_model, "test_input");
+    args.output = TensorContract::TensorView::make_BSM(d_output, total_tokens, d_model, "test_output");
     args.total_tokens = total_tokens;
     args.token_ids = d_tokens;
     args.stream = nullptr;
@@ -455,8 +455,8 @@ bool testForwardWithAtoms(std::string& message) {
     cudaMemcpy(d_tokens, h_tokens.data(), total_tokens * sizeof(int), cudaMemcpyHostToDevice);
     
     ScratchBlockForwardArgs args;
-    args.input = d_input;
-    args.output = d_output;
+    args.input = TensorContract::TensorView::make_BSM(d_input, total_tokens, d_model, "test_input");
+    args.output = TensorContract::TensorView::make_BSM(d_output, total_tokens, d_model, "test_output");
     args.total_tokens = total_tokens;
     args.token_ids = d_tokens;
     args.stream = nullptr;
@@ -519,8 +519,8 @@ bool testStatsTracking(std::string& message) {
     cudaMalloc(&d_data, total_elements * sizeof(float));
     
     ScratchBlockForwardArgs args;
-    args.input = d_data;
-    args.output = d_data;
+    args.input = TensorContract::TensorView::make_BSM(d_data, total_tokens, config.d_model, "test_data_in");
+    args.output = TensorContract::TensorView::make_BSM(d_data, total_tokens, config.d_model, "test_data_out");
     args.total_tokens = total_tokens;
     args.stream = nullptr;
     
@@ -551,8 +551,8 @@ bool testStatsReset(std::string& message) {
     cudaMalloc(&d_data, total_elements * sizeof(float));
     
     ScratchBlockForwardArgs args;
-    args.input = d_data;
-    args.output = d_data;
+    args.input = TensorContract::TensorView::make_BSM(d_data, total_tokens, config.d_model, "test_data_in");
+    args.output = TensorContract::TensorView::make_BSM(d_data, total_tokens, config.d_model, "test_data_out");
     args.total_tokens = total_tokens;
     args.stream = nullptr;
     
@@ -651,8 +651,8 @@ bool testBackwardPassthrough(std::string& message) {
     cudaMemcpy(d_grad_out, h_grad_out.data(), total_elements * sizeof(float), cudaMemcpyHostToDevice);
     
     ScratchBlockForwardArgs args;
-    args.input = d_input;
-    args.output = d_output;
+    args.input = TensorContract::TensorView::make_BSM(d_input, total_tokens, d_model, "test_input");
+    args.output = TensorContract::TensorView::make_BSM(d_output, total_tokens, d_model, "test_output");
     args.total_tokens = total_tokens;
     args.stream = nullptr;
     
@@ -792,8 +792,8 @@ bool testIntegerEmbeddingVariance(std::string& message) {
     cudaMemcpy(d_tokens, h_tokens.data(), total_tokens * sizeof(int), cudaMemcpyHostToDevice);
     
     ScratchBlockForwardArgs args;
-    args.input = d_input;
-    args.output = d_output;
+    args.input = TensorContract::TensorView::make_BSM(d_input, total_tokens, d_model, "test_input");
+    args.output = TensorContract::TensorView::make_BSM(d_output, total_tokens, d_model, "test_output");
     args.total_tokens = total_tokens;
     args.token_ids = d_tokens;
     args.stream = nullptr;
@@ -962,8 +962,8 @@ bool testStringConsistentEmbeddings(std::string& message) {
     cudaMemcpy(d_tokens, h_tokens.data(), total_tokens * sizeof(int), cudaMemcpyHostToDevice);
     
     ScratchBlockForwardArgs args;
-    args.input = d_input;
-    args.output = d_output;
+    args.input = TensorContract::TensorView::make_BSM(d_input, total_tokens, d_model, "test_input");
+    args.output = TensorContract::TensorView::make_BSM(d_output, total_tokens, d_model, "test_output");
     args.total_tokens = total_tokens;
     args.token_ids = d_tokens;
     args.stream = nullptr;
@@ -1052,8 +1052,8 @@ bool testAtomSemanticReasoning(std::string& message) {
     cudaMemcpy(d_tokens, h_tokens.data(), total_tokens * sizeof(int), cudaMemcpyHostToDevice);
     
     ScratchBlockForwardArgs args;
-    args.input = d_input;
-    args.output = d_output;
+    args.input = TensorContract::TensorView::make_BSM(d_input, total_tokens, d_model, "test_input");
+    args.output = TensorContract::TensorView::make_BSM(d_output, total_tokens, d_model, "test_output");
     args.total_tokens = total_tokens;
     args.token_ids = d_tokens;
     args.stream = nullptr;
@@ -1245,8 +1245,8 @@ bool testLoggingForwardDiagnostics(std::string& message) {
     cudaMemcpy(d_tokens, h_tokens.data(), total_tokens * sizeof(int), cudaMemcpyHostToDevice);
     
     ScratchBlockForwardArgs args;
-    args.input = d_data;
-    args.output = d_data;
+    args.input = TensorContract::TensorView::make_BSM(d_data, total_tokens, config.d_model, "test_data_in");
+    args.output = TensorContract::TensorView::make_BSM(d_data, total_tokens, config.d_model, "test_data_out");
     args.total_tokens = total_tokens;
     args.token_ids = d_tokens;
     args.stream = nullptr;

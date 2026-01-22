@@ -47,6 +47,8 @@
 #include "../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
 #include "../../../control/ai_config_paths.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../Shared/Loss/ComputeLoss/AutogradLoss.hpp"  // Autograd cross-entropy loss
+// NOTE: AutogradTraining.hpp removed - using HYBRID approach with AutogradLoss directly
 
 extern "C" {
     void launchXavierInit(float* weights, int size, float stddev,
@@ -281,50 +283,47 @@ void LanguageModel::zeroGrad() {
                        training_state_.stream_ctrl.getPrimaryStream());
     }
     
-    // Zero encoder layer gradients
+    // Zero encoder layer gradients (using encoder's Tensor.grad per AUTOGRAD MIGRATION)
+    GPUGrimEncoder* gpu_encoder = &getGpuEncoder();
     for (int layer = 0; layer < cfg.num_layers; ++layer) {
-        GPUGrimEncoder* gpu_encoder = &getGpuEncoder();
         GPUEncoderLayer* enc = gpu_encoder ? gpu_encoder->getLayer(layer) : nullptr;
-        if (enc && enc->getRMS1GammaGrad()) {
-            cudaMemsetAsync(enc->getRMS1GammaGrad(), 0, cfg.d_model * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
+        if (!enc) continue;
+        
+        // RMSNorm gamma gradients
+        if (float* grad = enc->getRMS1GammaGrad()) {
+            cudaMemsetAsync(grad, 0, cfg.d_model * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
         }
-        if (enc && enc->getRMS2GammaGrad()) {
-            cudaMemsetAsync(enc->getRMS2GammaGrad(), 0, cfg.d_model * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
+        if (float* grad = enc->getRMS2GammaGrad()) {
+            cudaMemsetAsync(grad, 0, cfg.d_model * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
         }
         
-        // GQA: QKV weight grad size is total_qkv_dim * d_model
-        if (training_state_.attn_qkv_weight_grads[layer]) {
+        // Attention weight/bias gradients (via encoder's Tensor.grad)
+        if (float* grad = enc->getAttnWqkvGrad()) {
             size_t qkv_weight_size = static_cast<size_t>(total_qkv_dim) * cfg.d_model;
-            cudaMemsetAsync(training_state_.attn_qkv_weight_grads[layer], 0,
-                           qkv_weight_size * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
+            cudaMemsetAsync(grad, 0, qkv_weight_size * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
         }
-        if (training_state_.attn_qkv_bias_grads[layer]) {
-            cudaMemsetAsync(training_state_.attn_qkv_bias_grads[layer], 0,
-                           total_qkv_dim * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
+        if (float* grad = enc->getAttnBqkvGrad()) {
+            cudaMemsetAsync(grad, 0, total_qkv_dim * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
         }
-        if (training_state_.attn_out_weight_grads[layer]) {
-            cudaMemsetAsync(training_state_.attn_out_weight_grads[layer], 0,
-                           cfg.d_model * cfg.d_model * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
+        if (float* grad = enc->getAttnWoGrad()) {
+            cudaMemsetAsync(grad, 0, cfg.d_model * cfg.d_model * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
         }
-        if (training_state_.attn_out_bias_grads[layer]) {
-            cudaMemsetAsync(training_state_.attn_out_bias_grads[layer], 0,
-                           cfg.d_model * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
+        if (float* grad = enc->getAttnBoGrad()) {
+            cudaMemsetAsync(grad, 0, cfg.d_model * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
         }
-        if (training_state_.ffn_w1_grads[layer]) {
-            cudaMemsetAsync(training_state_.ffn_w1_grads[layer], 0,
-                           cfg.d_model * cfg.d_ff * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
+        
+        // FFN weight/bias gradients (via encoder's Tensor.grad)
+        if (float* grad = enc->getFFNW1Grad()) {
+            cudaMemsetAsync(grad, 0, cfg.d_model * cfg.d_ff * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
         }
-        if (training_state_.ffn_b1_grads[layer]) {
-            cudaMemsetAsync(training_state_.ffn_b1_grads[layer], 0,
-                           cfg.d_ff * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
+        if (float* grad = enc->getFFNB1Grad()) {
+            cudaMemsetAsync(grad, 0, cfg.d_ff * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
         }
-        if (training_state_.ffn_w2_grads[layer]) {
-            cudaMemsetAsync(training_state_.ffn_w2_grads[layer], 0,
-                           cfg.d_ff * cfg.d_model * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
+        if (float* grad = enc->getFFNW2Grad()) {
+            cudaMemsetAsync(grad, 0, cfg.d_ff * cfg.d_model * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
         }
-        if (training_state_.ffn_b2_grads[layer]) {
-            cudaMemsetAsync(training_state_.ffn_b2_grads[layer], 0,
-                           cfg.d_model * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
+        if (float* grad = enc->getFFNB2Grad()) {
+            cudaMemsetAsync(grad, 0, cfg.d_model * sizeof(float), training_state_.stream_ctrl.getPrimaryStream());
         }
     }
     
@@ -382,6 +381,141 @@ void LanguageModel::backward(float loss, bool accumulate, float grad_scale, uint
         BWD_ERROR("[backward] FATAL: Invalid batch dimensions: batch_size=" << batch_size << " seq_len=" << seq_len);
         return;
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  AUTOGRAD BACKWARD PATH (NEW - January 2026)
+    //  
+    //  When use_autograd_tensors is enabled, we use autograd to compute the loss
+    //  gradient w.r.t. logits, then use legacy backward for encoder gradients.
+    //  
+    //  This HYBRID approach fixes the NaN gradient issue caused by the legacy
+    //  backward reading from cached_* buffers that were never populated by the
+    //  autograd forward.
+    //  
+    //  Flow:
+    //  1. Use loss_tensor cached from computeLossBatch() (already has grad_fn attached!)
+    //  2. Call loss.backward() to compute grad_logits via autograd
+    //  3. Use legacy backward to propagate grad_logits through encoder
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (training_state_.use_autograd_tensors) {
+        BWD_INFO("[backward] Using AUTOGRAD HYBRID backward path");
+        
+        const int total_tokens = batch_size * seq_len;
+        const int vocab_size = config_.vocab_size;
+        cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
+        
+        // ═══════════════════════════════════════════════════════════════════════
+        // Issue #46 FIX: Use CACHED loss_tensor from computeLossBatch()
+        // ═══════════════════════════════════════════════════════════════════════
+        // Before: Recreated loss_tensor here by calling autograd::cross_entropy_loss()
+        //         This was WASTEFUL (computed loss twice!) and created INCORRECT gradient magnitude
+        // After:  Use loss_tensor cached in training_state_.loss_tensor
+        //         The grad_fn is already attached from forward pass!
+        // ═══════════════════════════════════════════════════════════════════════
+        
+        // Verify loss tensor exists from forward pass (computeLossBatch)
+        if (!training_state_.loss_tensor.grad_fn) {
+            BWD_ERROR("[backward] loss_tensor.grad_fn is NULL - forward pass (computeLossBatch) not run?");
+            return;
+        }
+        
+        // Verify logits tensor is setup correctly
+        if (!training_state_.logits_tensor.data || !training_state_.logits_tensor.grad) {
+            BWD_ERROR("[backward] logits_tensor not properly setup - forward pass error?");
+            return;
+        }
+        
+        // Zero gradients if not accumulating
+        if (!accumulate) {
+            cudaMemsetAsync(training_state_.grad_logits_tensor.data, 0, 
+                           static_cast<size_t>(total_tokens) * vocab_size * sizeof(float), stream);
+        }
+        
+        // Call backward on the CACHED loss tensor from forward pass
+        // The grad_fn (CrossEntropyLossGradFn) is already attached!
+        // This computes grad_logits = softmax(logits) - one_hot(targets)
+        training_state_.loss_tensor.backward(nullptr);
+
+        // DEBUG: Verify Autograd Output
+        {
+            float h_grad_check[5] = {0};
+            int h_target_check[5] = {0};
+            cudaMemcpyAsync(h_grad_check, training_state_.grad_logits_tensor.data, 5 * sizeof(float), cudaMemcpyDeviceToHost, stream);
+            cudaMemcpyAsync(h_target_check, training_state_.cached_targets, 5 * sizeof(int), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+            
+            std::ostringstream dmsg;
+            dmsg << "[AutogradCheck] Targets[0..4]=[" 
+                 << h_target_check[0] << "," << h_target_check[1] << "," 
+                 << h_target_check[2] << "," << h_target_check[3] << "," << h_target_check[4] 
+                 << "] GradLogits[0..4]=[" 
+                 << h_grad_check[0] << "," << h_grad_check[1] << "," 
+                 << h_grad_check[2] << "," << h_grad_check[3] << "," << h_grad_check[4] << "]";
+            
+            // Log to both standard logger and stderr to ensure visibility
+            BWD_INFO(dmsg.str());
+            fprintf(stderr, "%s\n", dmsg.str().c_str());
+        }
+        
+        BWD_INFO("[backward] Autograd loss backward complete, now running encoder backward");
+        
+        // Now use legacy backward to propagate grad_logits through encoder
+        // This uses the existing 3-phase backward which reads from cached_* buffers
+        // BUT now grad_logits is properly populated by autograd!
+        
+        GPUGrimEncoder* gpu_encoder = &getGpuEncoder();
+        if (!gpu_encoder) {
+            BWD_ERROR("[backward] CRITICAL: GPU encoder is nullptr!");
+            return;
+        }
+
+        EmbeddingRuntime* embedding_runtime = &getGpuEmbedder();
+
+        Backward::BackwardContext ctx = Backward::initBackwardContextRaw(
+            &config_,
+            &training_state_,
+            gpu_encoder,
+            scratch_block_layer_.get(),
+            embedding_runtime,
+            training_state_.cublas_handle,
+            stream,
+            batch_size,
+            seq_len,
+            accumulate,
+            grad_scale,
+            step
+        );
+
+        // Execute 3-phase backward pass (starts from grad_logits, propagates through encoder)
+        Backward::BackwardStatus status = Backward::executeBackward(ctx);
+
+        // ALWAYS clear sequence weights after a backward attempt
+        training_state_.sequence_weight_count = 0;
+
+        if (status != Backward::BackwardStatus::SUCCESS) {
+            BWD_ERROR("[backward] Encoder backward FAILED: " << Backward::statusToString(status));
+            BWD_ERROR("  Error: " << ctx.error_message);
+            if (ctx.error_layer >= 0) {
+                BWD_ERROR("  Error layer: " << ctx.error_layer);
+            }
+            BWD_ERROR(Backward::getBackwardErrorReport(ctx));
+            return;
+        }
+        
+        BWD_INFO("[backward] AUTOGRAD HYBRID COMPLETE");
+        return;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  LEGACY 3-PHASE BACKWARD PATH
+    //  
+    //  This is the original backward implementation that reads from cached_*
+    //  buffers. It requires the forward pass to populate these buffers, which
+    //  the current autograd-enabled forward does NOT do.
+    //  
+    //  DEPRECATION WARNING: This path will be removed once autograd is stable.
+    // ═══════════════════════════════════════════════════════════════════════════
+    BWD_INFO("[backward] Using LEGACY 3-phase backward path");
 
     // Initialize backward context for 3-phase orchestrator
     GPUGrimEncoder* gpu_encoder = &getGpuEncoder();
@@ -534,55 +668,68 @@ void LanguageModel::buildParameterGroups() {
         GPUEncoderLayer* enc = gpu_encoder->getLayer(layer);
         if (!enc) continue;
 
-        // QKV weights
-        if (training_state_.attn_qkv_weight_grads[layer] && enc->getAttnWqkv()) {
+        // QKV weights - uses encoder's Tensor.grad (autograd migration)
+        if (enc->getAttnWqkvGrad() && enc->getAttnWqkv()) {
             ParameterGroup qkv_group;
             qkv_group.name = "layer" + std::to_string(layer) + "_qkv_weight";
             qkv_group.weights = enc->getAttnWqkv();
-            qkv_group.grads = training_state_.attn_qkv_weight_grads[layer];
+            qkv_group.grads = enc->getAttnWqkvGrad();
             qkv_group.size = total_qkv_dim * cfg.d_model;
             qkv_group.m_state = nullptr;
             qkv_group.v_state = nullptr;
             qkv_group.type = ParamGroupType::ATTENTION;
+            // Depth-aware upsilon: Υ_l = 0.1 * sqrt(L_ref / L) where L is 1-indexed
+            qkv_group.layer_index = layer;
+            qkv_group.upsilon = HyperParameters::UPSILON_BASE * 
+                sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
             parameter_groups_.push_back(qkv_group);
         }
 
-        // Wo weights
-        if (training_state_.attn_out_weight_grads[layer] && enc->getAttnWo()) {
+        // Wo weights - uses encoder's Tensor.grad (autograd migration)
+        if (enc->getAttnWoGrad() && enc->getAttnWo()) {
             ParameterGroup wo_group;
             wo_group.name = "layer" + std::to_string(layer) + "_wo_weight";
             wo_group.weights = enc->getAttnWo();
-            wo_group.grads = training_state_.attn_out_weight_grads[layer];
+            wo_group.grads = enc->getAttnWoGrad();
             wo_group.size = cfg.d_model * cfg.d_model;
             wo_group.m_state = nullptr;
             wo_group.v_state = nullptr;
             wo_group.type = ParamGroupType::ATTENTION;
+            wo_group.layer_index = layer;
+            wo_group.upsilon = HyperParameters::UPSILON_BASE * 
+                sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
             parameter_groups_.push_back(wo_group);
         }
 
-        // FFN W1
-        if (training_state_.ffn_w1_grads[layer] && enc->getFFNW1()) {
+        // FFN W1 - uses encoder's Tensor.grad (autograd migration)
+        if (enc->getFFNW1Grad() && enc->getFFNW1()) {
             ParameterGroup w1_group;
             w1_group.name = "layer" + std::to_string(layer) + "_ffn_w1";
             w1_group.weights = enc->getFFNW1();
-            w1_group.grads = training_state_.ffn_w1_grads[layer];
+            w1_group.grads = enc->getFFNW1Grad();
             w1_group.size = cfg.d_model * cfg.d_ff;
             w1_group.m_state = nullptr;
             w1_group.v_state = nullptr;
             w1_group.type = ParamGroupType::FFN;
+            w1_group.layer_index = layer;
+            w1_group.upsilon = HyperParameters::UPSILON_BASE * 
+                sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
             parameter_groups_.push_back(w1_group);
         }
 
-        // FFN W2
-        if (training_state_.ffn_w2_grads[layer] && enc->getFFNW2()) {
+        // FFN W2 - uses encoder's Tensor.grad (autograd migration)
+        if (enc->getFFNW2Grad() && enc->getFFNW2()) {
             ParameterGroup w2_group;
             w2_group.name = "layer" + std::to_string(layer) + "_ffn_w2";
             w2_group.weights = enc->getFFNW2();
-            w2_group.grads = training_state_.ffn_w2_grads[layer];
+            w2_group.grads = enc->getFFNW2Grad();
             w2_group.size = cfg.d_ff * cfg.d_model;
             w2_group.m_state = nullptr;
             w2_group.v_state = nullptr;
             w2_group.type = ParamGroupType::FFN;
+            w2_group.layer_index = layer;
+            w2_group.upsilon = HyperParameters::UPSILON_BASE * 
+                sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
             parameter_groups_.push_back(w2_group);
         }
 
@@ -596,6 +743,9 @@ void LanguageModel::buildParameterGroups() {
             rms1_group.m_state = nullptr;
             rms1_group.v_state = nullptr;
             rms1_group.type = ParamGroupType::RMSNORM;
+            rms1_group.layer_index = layer;
+            rms1_group.upsilon = HyperParameters::UPSILON_BASE * 
+                sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
             parameter_groups_.push_back(rms1_group);
         }
 
@@ -609,6 +759,9 @@ void LanguageModel::buildParameterGroups() {
             rms2_group.m_state = nullptr;  // Will be set after TrainingState allocation
             rms2_group.v_state = nullptr;
             rms2_group.type = ParamGroupType::RMSNORM;
+            rms2_group.layer_index = layer;
+            rms2_group.upsilon = HyperParameters::UPSILON_BASE * 
+                sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
             parameter_groups_.push_back(rms2_group);
         }
     }
@@ -720,6 +873,11 @@ void LanguageModel::configureUpdateProbe(const std::string& group_name, size_t s
     update_probe_sample_elems_ = sample_elems;
     update_probe_ready_ = false;
     
+    // Ensure parameter groups are built before configuring probe
+    if (parameter_groups_.empty()) {
+        buildParameterGroups();
+    }
+    
     if (parameter_groups_.empty()) {
         update_probe_group_index_ = static_cast<size_t>(-1);
         update_probe_weights_before_.clear();
@@ -789,6 +947,9 @@ static void logToken277WeightUpdate(
     cudaStream_t stream
 ) {
     constexpr int kToken277 = 277;
+    // DISABLED for performance (User request to remove printf syncs)
+    return;
+    
     if (kToken277 >= vocab_size) return;
     
     ++s_token277_track_count;
@@ -901,14 +1062,36 @@ void LanguageModel::updateWeights(float learning_rate,
     std::array<float, kOptimizerIoSample> v_after{};
     
     // Sample weights before update (for update probe)
+    // BUG FIX: Sample from token 277 (SPACE, ~11% of training data) instead of token 0-2
+    // Token 0-2 are BYTE TOKENS which rarely appear, causing grad_rms=0.000000 artifacts
+    // Token 277 is guaranteed to have meaningful gradients in every batch
     if (update_probe_group_index_ != static_cast<size_t>(-1) && 
         update_probe_group_index_ < parameter_groups_.size()) {
         const auto& probe_group = parameter_groups_[update_probe_group_index_];
         if (probe_group.weights && update_probe_sample_elems_ > 0) {
+            // For embedding/LM head buffers [vocab_size, d_model], sample from token 277 row
+            // Token 277 offset = 277 * d_model = 277 * 768 = 212736
+            constexpr size_t kToken277Offset = 277 * 768;  // Token 277 (SPACE) row start
+            const size_t sample_offset = (probe_group.type == ParamGroupType::LM_HEAD || 
+                                          probe_group.type == ParamGroupType::EMBEDDING)
+                                         ? std::min(kToken277Offset, 
+                                                    static_cast<size_t>(probe_group.size) - update_probe_sample_elems_)
+                                         : 0;
+            
             cudaMemcpyAsync(update_probe_weights_before_.data(), 
-                          probe_group.weights, 
+                          probe_group.weights + sample_offset, 
                           update_probe_sample_elems_ * sizeof(float),
                           cudaMemcpyDeviceToHost, training_state_.stream_ctrl.getPrimaryStream());
+            
+            // Store offset for consistent sampling in post-update copy
+            update_probe_sample_offset_ = sample_offset;
+            
+            // One-time log to verify token 277 sampling (only first step)
+            if (optimizer_state->step == 0) {
+                BWD_INFO("[UpdateProbe] Sampling from offset " << sample_offset 
+                         << " (token " << (sample_offset / 768) << " of vocab_size=" 
+                         << probe_group.size / 768 << ") for group '" << probe_group.name << "'");
+            }
         }
     }
     
@@ -959,6 +1142,11 @@ void LanguageModel::updateWeights(float learning_rate,
             }
         }
 
+        // Apply depth-aware upsilon (Υ) regularization to weight decay
+        // Formula: Υ_l = 0.1 * sqrt(L_ref / L) where L is 1-indexed layer
+        // Deeper layers get LESS regularization (smaller effective weight_decay)
+        const float effective_weight_decay = weight_decay * group.upsilon;
+        
         launchAdamWKernel(
             group.weights,
             group.grads,
@@ -966,7 +1154,7 @@ void LanguageModel::updateWeights(float learning_rate,
             group.v_state,
             group.size,
             learning_rate,
-            weight_decay,
+            effective_weight_decay,
             optimizer_state->step,
             stream
         );
@@ -1073,15 +1261,15 @@ void LanguageModel::updateWeights(float learning_rate,
         const auto& probe_group = parameter_groups_[update_probe_group_index_];
         
         if (probe_group.weights && probe_group.grads && update_probe_sample_elems_ > 0) {
-            // Copy weights after update
+            // Copy weights after update (use same offset as pre-update copy)
             cudaMemcpy(update_probe_weights_after_.data(), 
-                      probe_group.weights, 
+                      probe_group.weights + update_probe_sample_offset_, 
                       update_probe_sample_elems_ * sizeof(float),
                       cudaMemcpyDeviceToHost);
             
-            // Copy gradient sample
+            // Copy gradient sample (use same offset to sample from token 277 region)
             cudaMemcpy(update_probe_grad_sample_.data(), 
-                      probe_group.grads, 
+                      probe_group.grads + update_probe_sample_offset_, 
                       update_probe_sample_elems_ * sizeof(float),
                       cudaMemcpyDeviceToHost);
 

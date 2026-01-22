@@ -26,6 +26,7 @@ struct TrainingSequence {
     std::vector<uint8_t> token_numeric_mask;
     std::vector<uint16_t> token_text_features;  // [tokens * kTextFeatureDim] FP16
     std::vector<uint8_t> token_text_mask;       // Per-token text feature mask
+    std::vector<uint16_t> token_byte_lengths;   // GRMT v6: per-token byte length of original text
 };
 
 //======================================================//
@@ -39,6 +40,7 @@ struct TrainingSampleView {
     const std::vector<uint8_t>* token_numeric_mask;
     const std::vector<uint16_t>* token_text_features;
     const std::vector<uint8_t>* token_text_mask;
+    const std::vector<uint16_t>* token_byte_lengths;  // GRMT v6
 };
 
 //======================================================//
@@ -140,7 +142,8 @@ bool load(const std::string& path) {
                                   &sequences_[seq_id].token_numeric_values,
                                   &sequences_[seq_id].token_numeric_mask,
                                   &sequences_[seq_id].token_text_features,
-                                  &sequences_[seq_id].token_text_mask};
+                                  &sequences_[seq_id].token_text_mask,
+                                  &sequences_[seq_id].token_byte_lengths};
     }
     
 private:
@@ -210,10 +213,10 @@ private:
         
         vocab_size_ = vocab_size; // Store vocab size from file
         
-        // GRMT v5 required - targets stored in file
-        if (version != 5) {
+        // GRMT v6 required - byte_lengths stored in file
+        if (version != 6) {
             std::cerr << "[DataLoader] FATAL: Unsupported GRMT version " << version
-                      << " (required: 5). Regenerate training data." << std::endl;
+                      << " (required: 6). Regenerate training data." << std::endl;
             return false;
         }
 
@@ -231,12 +234,13 @@ private:
         file.read(reinterpret_cast<char*>(&seq_len), 4);
             
     TrainingSequence seq;
-      seq.token_ids.resize(seq_len);
+            seq.token_ids.resize(seq_len);
             seq.targets.resize(seq_len);
             seq.token_numeric_values.resize(seq_len);
             seq.token_numeric_mask.resize(seq_len);
             seq.token_text_features.resize(seq_len * GRIM::Tokenizer::kTextFeatureDim);
             seq.token_text_mask.resize(seq_len);
+            seq.token_byte_lengths.resize(seq_len);  // GRMT v6
   
             // Bulk read token_ids (written as int array by DataLoader.cu)
             file.read(reinterpret_cast<char*>(seq.token_ids.data()),
@@ -256,6 +260,9 @@ private:
                           seq_len * GRIM::Tokenizer::kTextFeatureDim * sizeof(uint16_t));
                 file.read(reinterpret_cast<char*>(seq.token_text_mask.data()),
                           seq_len * sizeof(uint8_t));
+                // GRMT v6: Read per-token byte lengths
+                file.read(reinterpret_cast<char*>(seq.token_byte_lengths.data()),
+                          seq_len * sizeof(uint16_t));
                 size_t seq_nonfinite = 0;
                 for (uint32_t j = 0; j < seq_len; ++j) {
                     if (seq.token_numeric_mask[j] && !std::isfinite(seq.token_numeric_values[j])) {

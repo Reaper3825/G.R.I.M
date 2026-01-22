@@ -83,95 +83,7 @@ ForwardStatus executePhase3_InputLayer(ForwardContext& ctx) {
         fprintf(stderr, "[VOCAB_TIMING] Phase3: Embedding lookup complete: %.2f ms\n", emb_ms);
         FWD_CHECK_CUDA(ctx, cudaGetLastError(), "embeddingRuntimeForward", -1);
 
-        // === DIAGNOSTIC: Log h = tok_emb[token_id] + pos_emb[pos] components ===
-        {
-            const int d_model = cfg->d_model;
-            const int seq_len = ctx.seq_len;
-            
-            // Get the embedding weights from runtime
-            const float* d_tok_emb = ctx.embedding_runtime->weights.token_embeddings;
-            const float* d_pos_emb = ctx.embedding_runtime->weights.position_embeddings;
-            
-            // Copy token IDs
-            constexpr int kLogPositions = 5;
-            const int positions_to_log = std::min(kLogPositions, ctx.total_tokens);
-            std::vector<int> h_token_ids(positions_to_log);
-            cudaMemcpyAsync(h_token_ids.data(), ts->cached_token_ids,
-                           positions_to_log * sizeof(int),
-                           cudaMemcpyDeviceToHost, ctx.stream);
-            
-            // Copy the final h (output)
-            std::vector<float> h_final(positions_to_log * d_model);
-            cudaMemcpyAsync(h_final.data(), ts->cached_embeddings, 
-                           positions_to_log * d_model * sizeof(float),
-                           cudaMemcpyDeviceToHost, ctx.stream);
-            cudaStreamSynchronize(ctx.stream);
-            
-            fprintf(stderr, "[h_COMPONENTS] === h = tok_emb[token_id] + pos_emb[pos] ===\n");
-            
-            for (int t = 0; t < positions_to_log; ++t) {
-                const int token_id = h_token_ids[t];
-                const int pos = t % seq_len;  // Position within sequence
-                
-                // Copy tok_emb[token_id] and pos_emb[pos] to host
-                std::vector<float> tok_vec(d_model), pos_vec(d_model);
-                cudaMemcpyAsync(tok_vec.data(), d_tok_emb + static_cast<size_t>(token_id) * d_model,
-                               d_model * sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
-                cudaMemcpyAsync(pos_vec.data(), d_pos_emb + static_cast<size_t>(pos) * d_model,
-                               d_model * sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
-                cudaStreamSynchronize(ctx.stream);
-                
-                // Compute stats for each component
-                double tok_sum = 0.0, pos_sum = 0.0, h_sum = 0.0;
-                for (int i = 0; i < d_model; ++i) {
-                    tok_sum += tok_vec[i];
-                    pos_sum += pos_vec[i];
-                    h_sum += h_final[t * d_model + i];
-                }
-                double tok_mean = tok_sum / d_model;
-                double pos_mean = pos_sum / d_model;
-                double h_mean = h_sum / d_model;
-                
-                // Compute raw_h = tok + pos (BEFORE RMSNorm)
-                std::vector<float> raw_h(d_model);
-                double raw_sq_sum = 0.0;
-                for (int i = 0; i < d_model; ++i) {
-                    raw_h[i] = tok_vec[i] + pos_vec[i];
-                    raw_sq_sum += raw_h[i] * raw_h[i];
-                }
-                double raw_rms = std::sqrt(raw_sq_sum / d_model);
-                double inv_rms = 1.0 / (raw_rms + 1e-5);  // Match GPU kernel eps=1e-5f
-                
-                // Compute expected normalized (what RMSNorm SHOULD produce)
-                std::vector<float> expected_norm(d_model);
-                double expected_sum = 0.0;
-                for (int i = 0; i < d_model; ++i) {
-                    expected_norm[i] = raw_h[i] * inv_rms;
-                    expected_sum += expected_norm[i];
-                }
-                
-                fprintf(stderr, "[h_COMPONENTS] pos=%d token_id=%d\n", t, token_id);
-                fprintf(stderr, "[h_COMPONENTS]   tok_emb[%d]: sum=%.6f mean=%.9f\n", token_id, tok_sum, tok_mean);
-                fprintf(stderr, "[h_COMPONENTS]   pos_emb[%d]: sum=%.6f mean=%.9f\n", pos, pos_sum, pos_mean);
-                fprintf(stderr, "[h_COMPONENTS]   raw_h (tok+pos BEFORE RMSNorm): sum=%.6f rms=%.6f inv_rms=%.6f\n", 
-                        tok_sum + pos_sum, raw_rms, inv_rms);
-                fprintf(stderr, "[h_COMPONENTS]   expected_norm (raw_h * inv_rms): sum=%.6f\n", expected_sum);
-                fprintf(stderr, "[h_COMPONENTS]   h_final (AFTER RMSNorm):         sum=%.6f mean=%.9f\n", h_sum, h_mean);
-                fprintf(stderr, "[h_COMPONENTS]   VERIFY: expected_norm_sum=%.6f vs h_sum=%.6f diff=%.9f\n", 
-                        expected_sum, h_sum, expected_sum - h_sum);
-                fprintf(stderr, "[h_COMPONENTS]   tok_emb[0:3]=[%.6f,%.6f,%.6f,%.6f]\n",
-                        tok_vec[0], tok_vec[1], tok_vec[2], tok_vec[3]);
-                fprintf(stderr, "[h_COMPONENTS]   pos_emb[0:3]=[%.6f,%.6f,%.6f,%.6f]\n",
-                        pos_vec[0], pos_vec[1], pos_vec[2], pos_vec[3]);
-                fprintf(stderr, "[h_COMPONENTS]   raw_h[0:3]=[%.6f,%.6f,%.6f,%.6f]\n",
-                        raw_h[0], raw_h[1], raw_h[2], raw_h[3]);
-                fprintf(stderr, "[h_COMPONENTS]   expected[0:3]=[%.6f,%.6f,%.6f,%.6f]\n",
-                        expected_norm[0], expected_norm[1], expected_norm[2], expected_norm[3]);
-                fprintf(stderr, "[h_COMPONENTS]   h_final[0:3]=[%.6f,%.6f,%.6f,%.6f]\n",
-                        h_final[t*d_model+0], h_final[t*d_model+1], h_final[t*d_model+2], h_final[t*d_model+3]);
-            }
-        }
-        // === END DIAGNOSTIC ===
+
 
         if (g_order_log_enabled) {
             fprintf(stderr, "[ORDER] ForwardPhase3.embedding_done batch=%d seq=%d tokens=%d\n",
@@ -211,8 +123,11 @@ ForwardStatus executePhase3_InputLayer(ForwardContext& ctx) {
                         ctx.batch_size, ctx.seq_len, ctx.total_tokens);
             }
             ScratchBlockForwardArgs sb_args{};
-            sb_args.input = ts->cached_embeddings;
-            sb_args.output = ts->cached_embeddings;
+            // TensorView: [total_tokens, d_model] BSM layout - in-place operation
+            sb_args.input = TensorContract::TensorView::make_BSM(
+                ts->cached_embeddings, ctx.total_tokens, cfg->d_model, "sb_input");
+            sb_args.output = TensorContract::TensorView::make_BSM(
+                ts->cached_embeddings, ctx.total_tokens, cfg->d_model, "sb_output");
             sb_args.total_tokens = ctx.total_tokens;
             sb_args.seq_len = ctx.seq_len;
             sb_args.token_ids = ts->cached_token_ids;
@@ -222,7 +137,14 @@ ForwardStatus executePhase3_InputLayer(ForwardContext& ctx) {
             sb_args.token_text_features = ctx.token_text_features;
             sb_args.token_text_mask = ctx.token_text_mask;
             sb_args.stream = stream;
-            sb_args.cache_atom_embeddings = ts->cached_scratch_block_embeddings;
+            // TensorView for cache (atom_embedding_dim determined by scratch_block config)
+            if (ts->cached_scratch_block_embeddings) {
+                sb_args.cache_atom_embeddings = TensorContract::TensorView::make_BSM(
+                    ts->cached_scratch_block_embeddings, 
+                    ctx.scratch_block->config().max_atoms,
+                    ctx.scratch_block->config().atom_embedding_dim,
+                    "sb_cache_embeddings");
+            }
             sb_args.cache_atom_positions = ts->cached_scratch_block_positions;
             sb_args.cache_atom_types = ts->cached_scratch_block_types;
             sb_args.cache_num_atoms = ts->cached_scratch_block_num_atoms;

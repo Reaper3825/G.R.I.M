@@ -44,13 +44,13 @@ struct UnifiedLossConfig {
     bool  focal_enabled = false;    // If false, gamma=0 (standard CE)
     
     // Label Smoothing parameters
-    float smoothing_epsilon = 0.1f; // Target smoothing (0 = hard targets)
+    float smoothing_epsilon = 0.0f; // Target smoothing (0 = hard targets)
     bool  smoothing_enabled = false; // If false, epsilon=0
     
     // Issue #44 FIX: Entropy regularization to prevent mode collapse
     // reg = λ * Σ_v p_v²  (penalizes concentration, encourages diversity)
     // This is equivalent to negative entropy: high when one token dominates
-    float entropy_reg_lambda = 0.0f;  // Regularization strength (0 = disabled, try 0.1-1.0)
+    float entropy_reg_lambda = 1.0f;  // Regularization strength (0 = disabled, try 0.1-1.0)
     bool  entropy_reg_enabled = false; // If false, no entropy penalty
     
     // Validation
@@ -79,6 +79,11 @@ struct UnifiedLossInputs {
     // weight[token_id] = inverse frequency based weight (frequent tokens get lower weight)
     // This prevents SPACE token (277) from dominating due to being 15-22% of all targets
     const float* token_weights;     // [vocab_size] - Per-token weight (nullptr = 1.0 for all)
+    
+    // GRMT v6: Per-position byte length weights to prevent atom tokens from being "free"
+    // Atoms represent multiple bytes but cost 1 position - weight by byte length so
+    // learning signal is proportional to information content.
+    const uint16_t* position_byte_lengths;  // [batch * seq] - Byte length per position (nullptr = 1)
     
     // Issue #39 FIX: Output logit bias correction to prevent mode collapse
     // Subtracts running EMA of mean logit per token BEFORE softmax.

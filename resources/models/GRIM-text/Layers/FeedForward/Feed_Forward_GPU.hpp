@@ -1,13 +1,9 @@
 //======================================================//
 //  Feed_Forward_GPU.hpp
-//  GPU-accelerated FeedForward layer with CRTP design
+//  GPU-accelerated FeedForward layer using autograd
 //  
 //  Two-layer MLP: Linear -> GELU -> Linear
-//  Uses cuBLAS for matrix operations
-//  
-//  Uses shared components:
-//    - Shared/Activations/GELU for activation
-//    - Shared/GPUBuffer for memory management
+//  Uses autograd::matmul and autograd::gelu for automatic differentiation
 //======================================================//
 
 #pragma once
@@ -19,9 +15,7 @@
 #include <cstddef>
 #include <memory>
 
-#include "../grim_layer_gpu.hpp"
-#include "../../Shared/GPUBuffer/GPUBuffer.hpp"
-#include "../../Shared/Activations/GELU/GELU.hpp"
+#include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 namespace GRIM {
 
@@ -30,44 +24,25 @@ namespace GRIM {
 //======================================================//
 
 struct FeedForwardConfig {
-    int d_model = 768;           // Input/output dimension
-    int d_ff = 3072;             // Hidden (intermediate) dimension
-    float dropout_rate = 0.0f;   // Dropout probability (currently unused) Note : Should be used already need to verify
+    int d_model = 0;           // Input/output dimension debug was 768
+    int d_ff = 0;             // Hidden (intermediate) dimension debug was 3072
+    float dropout_rate = 0.1f;   // Dropout probability
     cudaStream_t stream = nullptr;
     cublasHandle_t cublas_handle = nullptr;  // Rule 22: MUST be training_state.cublas_handle
 };
 
 //======================================================//
-//  Forward/Backward Arguments
+//  FeedForwardLayer - Autograd Implementation
 //======================================================//
 
-struct FeedForwardForwardArgs {
-    const float* input = nullptr;         // [total_tokens, d_model]
-    float* output = nullptr;              // [total_tokens, d_model]
-    int total_tokens = 0;
-    cudaStream_t stream = nullptr;
-    
-    // Optional caches for training backward pass
-    float* cache_pre_gelu = nullptr;      // [total_tokens, d_ff] - pre-GELU activations
-    float* cache_post_gelu = nullptr;     // [total_tokens, d_ff] - post-GELU activations
-};
-
-
-//======================================================//
-//  FeedForwardLayer - CRTP Implementation
-//======================================================//
-
-class FeedForwardLayer final : public Layer<FeedForwardLayer, float> {
+class FeedForwardLayer {
 public:
-    static constexpr LayerType layer_type = LayerType::kFeedForward;
-
     // Rule 20: Default constructor deleted - config with valid cublas_handle REQUIRED
     FeedForwardLayer() = delete;
     explicit FeedForwardLayer(const FeedForwardConfig& config);
-    FeedForwardLayer(const Dimensions& dims, const FeedForwardConfig& config);
     ~FeedForwardLayer();
 
-    // Prevent copy (cuBLAS handle)
+    // Prevent copy (cuBLAS handle, Tensor ownership)
     FeedForwardLayer(const FeedForwardLayer&) = delete;
     FeedForwardLayer& operator=(const FeedForwardLayer&) = delete;
 
@@ -86,66 +61,63 @@ public:
     //--------------------------------------------------
     void ensureWeightStorage();
     
-    // Direct GPU weight accessors (for training integration)
-    float* getW1() { return W1_.ptr(); }
-    float* getB1() { return b1_.ptr(); }
-    float* getW2() { return W2_.ptr(); }
-    float* getB2() { return b2_.ptr(); }
-    const float* getW1() const { return W1_.ptr(); }
-    const float* getB1() const { return b1_.ptr(); }
-    const float* getW2() const { return W2_.ptr(); }
-    const float* getB2() const { return b2_.ptr(); }
-
-    //--------------------------------------------------
-    // Forward Pass
-    //--------------------------------------------------
-    // Primary GPU-native forward
-    void forward(const FeedForwardForwardArgs& args,
-                 LayerWorkspace<float>* workspace = nullptr);
+    /**
+     * Use external weight Tensors from TrainingState instead of allocating own.
+     * 
+     * Similar to EncodingLayer::useExternalWeights(), this makes the FFN layer
+     * use TrainingState's weight buffers directly for autograd compatibility.
+     * 
+     * @param w1 [d_ff, d_model] - up-projection weights
+     * @param b1 [d_ff] - up-projection bias (can be empty Tensor if no bias)
+     * @param w2 [d_model, d_ff] - down-projection weights
+     * @param b2 [d_model] - down-projection bias (can be empty Tensor if no bias)
+     */
+    void useExternalWeights(Tensor& w1, Tensor& b1, Tensor& w2, Tensor& b2);
     
-    // Convenience: forwardGPU matching GPUFeedForwardNetwork interface
-    void forwardGPU(const float* d_input, float* d_output, int total_tokens,
-                    float* d_pre_gelu_cache, float* d_post_gelu_workspace);
+    // Tensor weight accessors (for training/serialization)
+    Tensor& W1() { return W1_; }
+    Tensor& b1() { return b1_; }
+    Tensor& W2() { return W2_; }
+    Tensor& b2() { return b2_; }
+    const Tensor& W1() const { return W1_; }
+    const Tensor& b1() const { return b1_; }
+    const Tensor& W2() const { return W2_; }
+    const Tensor& b2() const { return b2_; }
 
     //--------------------------------------------------
-    // NOTE: Backward Pass DELETED - Rule 20
-    // Training uses BackwardPhase2_Encoder.cu::computeFFNBackward()
+    // Forward Pass - Autograd
     //--------------------------------------------------
+    /**
+     * FFN forward with autograd tracking:
+     *   hidden = GELU(input @ W1^T + b1)
+     *   output = hidden @ W2^T + b2
+     * 
+     * Builds compute graph for automatic backward().
+     * 
+     * @param input [total_tokens, d_model] - MUST have requires_grad if training
+     * @param cache_pre_gelu (optional) buffer to copy pre-GELU activations [tokens, d_ff]
+     *                       for legacy backward pass compatibility
+     * @return output [total_tokens, d_model] with grad_fn attached
+     */
+    Tensor forward(const Tensor& input, float* cache_pre_gelu = nullptr);
 
     //--------------------------------------------------
-    // NOTE: CRTP Interface DELETED - Rule 20
-    // Use forward(FeedForwardForwardArgs&) directly.
-    // Training backward uses BackwardPhase2_Encoder.cu.
+    // NOTE: Backward Pass handled by autograd
+    // Call output.backward() after loss computation
     //--------------------------------------------------
-
-    //--------------------------------------------------
-    // Workspace
-    //--------------------------------------------------
-    std::size_t requiredWorkspaceBytes(int total_tokens) const;
 
 private:
-    void initCublas();
-    void destroyCublas();
-    // DELETED: resolveStream() - Rule 20 (no stream fallback)
-
     FeedForwardConfig config_{};
-    // Rule 22: Use config_.cublas_handle, do NOT store local copy
 
-    // Weight buffers [GPU memory]
-    GPUBuffer<float> W1_;    // [d_ff, d_model]
-    GPUBuffer<float> b1_;    // [d_ff]
-    GPUBuffer<float> W2_;    // [d_model, d_ff]
-    GPUBuffer<float> b2_;    // [d_model]
-
-    // Internal workspace buffers (allocated on demand)
-    GPUBuffer<float> pre_gelu_buf_;     // [tokens, d_ff]
-    GPUBuffer<float> post_gelu_buf_;    // [tokens, d_ff]
-    // DELETED: grad_hidden_buf_ - only needed for backward (now in BackwardPhase2)
+    // Weight Tensors with autograd (requires_grad=true)
+    Tensor W1_;    // [d_ff, d_model]
+    Tensor b1_;    // [d_ff]
+    Tensor W2_;    // [d_model, d_ff]
+    Tensor b2_;    // [d_model]
 };
 
 //======================================================//
-//  FFN-specific kernel declarations
-//  (Bias add/backward - not covered by GELU module)
+//  FFN-specific kernel declarations (bias ops)
 //======================================================//
 
 // Bias addition: tensor[i] += bias[i % features]

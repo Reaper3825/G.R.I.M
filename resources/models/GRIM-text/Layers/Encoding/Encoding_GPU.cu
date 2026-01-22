@@ -11,8 +11,10 @@
 //======================================================//
 
 #include "Encoding_GPU.hpp"
+#include "../../GRIM/grim_language_model_cuda.hpp"  // EncoderLayerCache definition
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../FlashAttention/Flash_Attention_Kernal.hpp"
+#include "../FeedForward/Feed_Forward_GPU.hpp"
 #include "../../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/TensorConversion/TensorConversion.hpp"
@@ -30,13 +32,14 @@
 //======================================================//
 namespace {
     constexpr bool kEnableHiddenAlignDiag = false;  // Set true to enable [HiddenAlign] logs
+    constexpr bool kEnableEncoderStepLogs = false;  // Set true to enable [EncoderFwd] step logs
     
     // Shared W[277] reference - set once per forward pass
     static const float* s_w277_ref = nullptr;
     static int s_w277_d_model = 0;
     static float s_w277_norm = 0.0f;
     static int s_layer_diag_count = 0;
-    static constexpr int kMaxDiagLogs = 24;  // First 2 batches * 12 layers
+    static constexpr int kMaxDiagLogs = 120;  // First 2 batches * 12 layers
     
     void setW277Reference(const float* lm_weights, int vocab_size, int d_model, cudaStream_t stream) {
         if constexpr (!kEnableHiddenAlignDiag) return;
@@ -189,15 +192,9 @@ static void launchAddBias(float* data, const float* bias, int tokens, int dim,
 //  RMSNorm Forward/Backward (calls into RMSNorm_Kernel_GPU.cu)
 //======================================================//
 
-// Declared in RMSNorm_Kernel_GPU.cu
-extern void launchRMSNormForward(const float* input, const float* gamma,
-                                  float* output, int tokens, int hidden_dim,
-                                  float epsilon, cudaStream_t stream);
-
-extern void launchRMSNormBackward(const float* grad_output, const float* input,
-                                   const float* gamma, float* grad_input,
-                                   float* grad_gamma, int tokens, int hidden_dim,
-                                   float epsilon, cudaStream_t stream);
+// NOTE: RMSNorm forward/backward are declared in RMSNorm_Kernel_GPU.hpp
+// Include that header if needed. The extern declarations below are REMOVED
+// as backward pass is now handled via TensorView-based RMSNormBackwardParams.
 
 //======================================================//
 //  EncodingLayer Implementation
@@ -216,37 +213,21 @@ EncodingLayer::~EncodingLayer() {
 EncodingLayer::EncodingLayer(EncodingLayer&& other) noexcept
     : config_(other.config_)
     , weights_allocated_(other.weights_allocated_)
-    , rms1_gamma_(other.rms1_gamma_)
-    , rms2_gamma_(other.rms2_gamma_)
-    , rms1_gamma_grad_(other.rms1_gamma_grad_)
-    , rms2_gamma_grad_(other.rms2_gamma_grad_)
-    , W_qkv_(other.W_qkv_)
-    , b_qkv_(other.b_qkv_)
-    , W_o_(other.W_o_)
-    , b_o_(other.b_o_)
-    , W_qkv_grad_(other.W_qkv_grad_)
-    , b_qkv_grad_(other.b_qkv_grad_)
-    , W_o_grad_(other.W_o_grad_)
-    , b_o_grad_(other.b_o_grad_)
+    , rms1_gamma_(std::move(other.rms1_gamma_))
+    , rms2_gamma_(std::move(other.rms2_gamma_))
+    , W_qkv_(std::move(other.W_qkv_))
+    , b_qkv_(std::move(other.b_qkv_))
+    , W_o_(std::move(other.W_o_))
+    , b_o_(std::move(other.b_o_))
     , ffn_(std::move(other.ffn_))
     , workspace_(other.workspace_)
     , workspace_bytes_(other.workspace_bytes_)
 {
     // Null out the moved-from object
     other.config_.cublas_handle = nullptr;
-    other.rms1_gamma_ = nullptr;
-    other.rms2_gamma_ = nullptr;
-    other.rms1_gamma_grad_ = nullptr;
-    other.rms2_gamma_grad_ = nullptr;
-    other.W_qkv_ = nullptr;
-    other.b_qkv_ = nullptr;
-    other.W_o_ = nullptr;
-    other.b_o_ = nullptr;
-    other.W_qkv_grad_ = nullptr;
-    other.b_qkv_grad_ = nullptr;
-    other.W_o_grad_ = nullptr;
-    other.b_o_grad_ = nullptr;
     other.weights_allocated_ = false;
+    other.workspace_ = nullptr;
+    other.workspace_bytes_ = 0;
 }
 
 EncodingLayer& EncodingLayer::operator=(EncodingLayer&& other) noexcept {
@@ -257,36 +238,20 @@ EncodingLayer& EncodingLayer::operator=(EncodingLayer&& other) noexcept {
         config_ = other.config_;
         weights_allocated_ = other.weights_allocated_;
         config_.cublas_handle = other.config_.cublas_handle;
-        rms1_gamma_ = other.rms1_gamma_;
-        rms2_gamma_ = other.rms2_gamma_;
-        rms1_gamma_grad_ = other.rms1_gamma_grad_;
-        rms2_gamma_grad_ = other.rms2_gamma_grad_;
-        W_qkv_ = other.W_qkv_;
-        b_qkv_ = other.b_qkv_;
-        W_o_ = other.W_o_;
-        b_o_ = other.b_o_;
-        W_qkv_grad_ = other.W_qkv_grad_;
-        b_qkv_grad_ = other.b_qkv_grad_;
-        W_o_grad_ = other.W_o_grad_;
-        b_o_grad_ = other.b_o_grad_;
+        rms1_gamma_ = std::move(other.rms1_gamma_);
+        rms2_gamma_ = std::move(other.rms2_gamma_);
+        W_qkv_ = std::move(other.W_qkv_);
+        b_qkv_ = std::move(other.b_qkv_);
+        W_o_ = std::move(other.W_o_);
+        b_o_ = std::move(other.b_o_);
         ffn_ = std::move(other.ffn_);
         workspace_ = other.workspace_;
         workspace_bytes_ = other.workspace_bytes_;
         
         other.config_.cublas_handle = nullptr;
-        other.rms1_gamma_ = nullptr;
-        other.rms2_gamma_ = nullptr;
-        other.rms1_gamma_grad_ = nullptr;
-        other.rms2_gamma_grad_ = nullptr;
-        other.W_qkv_ = nullptr;
-        other.b_qkv_ = nullptr;
-        other.W_o_ = nullptr;
-        other.b_o_ = nullptr;
-        other.W_qkv_grad_ = nullptr;
-        other.b_qkv_grad_ = nullptr;
-        other.W_o_grad_ = nullptr;
-        other.b_o_grad_ = nullptr;
         other.weights_allocated_ = false;
+        other.workspace_ = nullptr;
+        other.workspace_bytes_ = 0;
     }
     return *this;
 }
@@ -297,18 +262,14 @@ void EncodingLayer::setConfig(const EncodingConfig& cfg) {
 }
 
 void EncodingLayer::freeWeights() {
-    if (rms1_gamma_) { cudaFree(rms1_gamma_); rms1_gamma_ = nullptr; }
-    if (rms2_gamma_) { cudaFree(rms2_gamma_); rms2_gamma_ = nullptr; }
-    if (rms1_gamma_grad_) { cudaFree(rms1_gamma_grad_); rms1_gamma_grad_ = nullptr; }
-    if (rms2_gamma_grad_) { cudaFree(rms2_gamma_grad_); rms2_gamma_grad_ = nullptr; }
-    if (W_qkv_) { cudaFree(W_qkv_); W_qkv_ = nullptr; }
-    if (b_qkv_) { cudaFree(b_qkv_); b_qkv_ = nullptr; }
-    if (W_o_) { cudaFree(W_o_); W_o_ = nullptr; }
-    if (b_o_) { cudaFree(b_o_); b_o_ = nullptr; }
-    if (W_qkv_grad_) { cudaFree(W_qkv_grad_); W_qkv_grad_ = nullptr; }
-    if (b_qkv_grad_) { cudaFree(b_qkv_grad_); b_qkv_grad_ = nullptr; }
-    if (W_o_grad_) { cudaFree(W_o_grad_); W_o_grad_ = nullptr; }
-    if (b_o_grad_) { cudaFree(b_o_grad_); b_o_grad_ = nullptr; }
+    // Tensor handles its own memory cleanup via destructor
+    // Reset to empty tensors
+    rms1_gamma_ = Tensor();
+    rms2_gamma_ = Tensor();
+    W_qkv_ = Tensor();
+    b_qkv_ = Tensor();
+    W_o_ = Tensor();
+    b_o_ = Tensor();
     ffn_.reset();
     weights_allocated_ = false;
 }
@@ -340,50 +301,40 @@ void EncodingLayer::allocateWeights() {
     StreamController::fatalIfDefaultStream(config_.stream, "EncodingLayer::allocateWeights");
     // Rule 20: Don't store copy of handle, use config_.cublas_handle directly
     
-    // RMSNorm gamma (NO BETA - this is RMSNorm!)
-    CUDA_CHECK(cudaMalloc(&rms1_gamma_, d_model * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&rms2_gamma_, d_model * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&rms1_gamma_grad_, d_model * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&rms2_gamma_grad_, d_model * sizeof(float)));
-    
-    // Initialize gamma to 1.0, gradients to 0.0
-    int threads = 256;
-    int blocks = (d_model + threads - 1) / threads;
-    fillOnesKernel<<<blocks, threads, 0, config_.stream>>>(rms1_gamma_, d_model);
-    fillOnesKernel<<<blocks, threads, 0, config_.stream>>>(rms2_gamma_, d_model);
-    CUDA_CHECK(cudaMemsetAsync(rms1_gamma_grad_, 0, d_model * sizeof(float), config_.stream));
-    CUDA_CHECK(cudaMemsetAsync(rms2_gamma_grad_, 0, d_model * sizeof(float), config_.stream));
+    // Create shapes for weight tensors
+    // RMSNorm gamma: 1D vector stored as [1, d_model] BSM
+    TensorContract::Shape2D gamma_2d{1, d_model};
+    TensorContract::TensorShape gamma_shape(TensorContract::Layout::BSM, gamma_2d);
     
     // Attention weights
-    // W_qkv: [d_model + 2*kv_dim, d_model] for GQA-aware projection
-    // For MHA (kv_dim = d_model): [3*d_model, d_model]
-    // For GQA (kv_dim < d_model): smaller K,V projections
-    const size_t qkv_weight_size = static_cast<size_t>(d_model + 2 * kv_dim) * d_model;
-    const size_t qkv_bias_size = d_model + 2 * kv_dim;
-    const size_t o_weight_size = static_cast<size_t>(d_model) * d_model;
+    const int qkv_out_dim = d_model + 2 * kv_dim;
+    TensorContract::Shape2D qkv_weight_2d{qkv_out_dim, d_model};
+    TensorContract::Shape2D qkv_bias_2d{1, qkv_out_dim};
+    TensorContract::Shape2D o_weight_2d{d_model, d_model};
+    TensorContract::Shape2D o_bias_2d{1, d_model};
     
-    CUDA_CHECK(cudaMalloc(&W_qkv_, qkv_weight_size * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&b_qkv_, qkv_bias_size * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&W_o_, o_weight_size * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&b_o_, d_model * sizeof(float)));
+    TensorContract::TensorShape qkv_weight_shape(TensorContract::Layout::BSM, qkv_weight_2d);
+    TensorContract::TensorShape qkv_bias_shape(TensorContract::Layout::BSM, qkv_bias_2d);
+    TensorContract::TensorShape o_weight_shape(TensorContract::Layout::BSM, o_weight_2d);
+    TensorContract::TensorShape o_bias_shape(TensorContract::Layout::BSM, o_bias_2d);
     
-    CUDA_CHECK(cudaMalloc(&W_qkv_grad_, qkv_weight_size * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&b_qkv_grad_, qkv_bias_size * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&W_o_grad_, o_weight_size * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&b_o_grad_, d_model * sizeof(float)));
+    // RMSNorm gamma - initialized to 1.0, then set requires_grad
+    rms1_gamma_ = Tensor::zeros(gamma_shape, true, config_.stream);
+    rms2_gamma_ = Tensor::zeros(gamma_shape, true, config_.stream);
     
-    // Initialize attention weights to small random values (caller should re-initialize)
-    // For now, zero them so any use without init is obvious
-    CUDA_CHECK(cudaMemsetAsync(W_qkv_, 0, qkv_weight_size * sizeof(float), config_.stream));
-    CUDA_CHECK(cudaMemsetAsync(b_qkv_, 0, qkv_bias_size * sizeof(float), config_.stream));
-    CUDA_CHECK(cudaMemsetAsync(W_o_, 0, o_weight_size * sizeof(float), config_.stream));
-    CUDA_CHECK(cudaMemsetAsync(b_o_, 0, d_model * sizeof(float), config_.stream));
+    // Fill gamma with ones via kernel
+    int threads = 256;
+    int blocks = (d_model + threads - 1) / threads;
+    fillOnesKernel<<<blocks, threads, 0, config_.stream>>>(rms1_gamma_.data, d_model);
+    fillOnesKernel<<<blocks, threads, 0, config_.stream>>>(rms2_gamma_.data, d_model);
     
-    // Zero gradients
-    CUDA_CHECK(cudaMemsetAsync(W_qkv_grad_, 0, qkv_weight_size * sizeof(float), config_.stream));
-    CUDA_CHECK(cudaMemsetAsync(b_qkv_grad_, 0, qkv_bias_size * sizeof(float), config_.stream));
-    CUDA_CHECK(cudaMemsetAsync(W_o_grad_, 0, o_weight_size * sizeof(float), config_.stream));
-    CUDA_CHECK(cudaMemsetAsync(b_o_grad_, 0, d_model * sizeof(float), config_.stream));
+    // Xavier initialization for attention weights
+    W_qkv_ = Tensor::xavier_uniform(qkv_weight_shape, true, config_.stream);
+    b_qkv_ = Tensor::zeros(qkv_bias_shape, true, config_.stream);
+    
+    // W_o: [d_model, d_model] output projection
+    W_o_ = Tensor::xavier_uniform(o_weight_shape, true, config_.stream);
+    b_o_ = Tensor::zeros(o_bias_shape, true, config_.stream);
     
     // FFN layer
     FeedForwardConfig ffn_cfg;
@@ -394,7 +345,124 @@ void EncodingLayer::allocateWeights() {
     ffn_ = std::make_unique<FeedForwardLayer>(ffn_cfg);
     ffn_->ensureWeightStorage();
     
+    // AUTOGRAD MIGRATION: Allocate gradient buffers for all trainable tensors
+    // This replaces the legacy cudaMalloc in InitTrainingState.cu
+    rms1_gamma_.ensure_grad();
+    rms2_gamma_.ensure_grad();
+    W_qkv_.ensure_grad();
+    b_qkv_.ensure_grad();
+    W_o_.ensure_grad();
+    b_o_.ensure_grad();
+    // FFN gradients allocated via ffn_->ensureWeightStorage() -> FFN's own ensure_grad() calls
+    
     weights_allocated_ = true;
+}
+
+void EncodingLayer::useExternalWeights(
+    Tensor& rms1_gamma,
+    Tensor& rms2_gamma,
+    Tensor& qkv_weight,
+    Tensor& qkv_bias,
+    Tensor& out_weight,
+    Tensor& out_bias,
+    Tensor& ffn_w1,
+    Tensor& ffn_b1,
+    Tensor& ffn_w2,
+    Tensor& ffn_b2
+) {
+    // Rule 20: Fail loud if already allocated own weights (prevents confusion)
+    if (weights_allocated_ && !using_external_weights_) {
+        throw std::runtime_error("EncodingLayer::useExternalWeights: Cannot switch to external weights "
+                                 "after allocating own weights. Use freeWeights() first or never call allocateWeights().");
+    }
+    
+    config_.validate("EncodingLayer::useExternalWeights");
+    
+    const int d_model = config_.d_model;
+    const int kv_dim = config_.kvDim();
+    const int d_ff = config_.d_ff;
+    const int qkv_out_dim = d_model + 2 * kv_dim;
+    
+    // Validate shapes
+    if (rms1_gamma.numel() != d_model) {
+        throw std::invalid_argument("useExternalWeights: rms1_gamma size mismatch. Expected " + 
+                                    std::to_string(d_model) + ", got " + std::to_string(rms1_gamma.numel()));
+    }
+    if (rms2_gamma.numel() != d_model) {
+        throw std::invalid_argument("useExternalWeights: rms2_gamma size mismatch");
+    }
+    if (qkv_weight.numel() != static_cast<std::size_t>(qkv_out_dim) * d_model) {
+        throw std::invalid_argument("useExternalWeights: qkv_weight size mismatch. Expected " +
+                                    std::to_string(static_cast<std::size_t>(qkv_out_dim) * d_model) + 
+                                    ", got " + std::to_string(qkv_weight.numel()));
+    }
+    if (out_weight.numel() != static_cast<std::size_t>(d_model) * d_model) {
+        throw std::invalid_argument("useExternalWeights: out_weight size mismatch");
+    }
+    if (ffn_w1.numel() != static_cast<std::size_t>(d_ff) * d_model) {
+        throw std::invalid_argument("useExternalWeights: ffn_w1 size mismatch");
+    }
+    if (ffn_w2.numel() != static_cast<std::size_t>(d_model) * d_ff) {
+        throw std::invalid_argument("useExternalWeights: ffn_w2 size mismatch");
+    }
+    
+    // Create view Tensors that reference the external buffers
+    // NOTE: These Tensors do NOT own the data (owns_data=false)
+    // The grad pointers also come from the external Tensors
+    
+    // RMSNorm gammas
+    rms1_gamma_ = Tensor::from_ptr(rms1_gamma.data, rms1_gamma.shape, false, true);
+    rms1_gamma_.grad = rms1_gamma.grad;
+    rms1_gamma_.owns_data = false;
+    rms1_gamma_.owns_grad = false;
+    
+    rms2_gamma_ = Tensor::from_ptr(rms2_gamma.data, rms2_gamma.shape, false, true);
+    rms2_gamma_.grad = rms2_gamma.grad;
+    rms2_gamma_.owns_data = false;
+    rms2_gamma_.owns_grad = false;
+    
+    // QKV projection
+    W_qkv_ = Tensor::from_ptr(qkv_weight.data, qkv_weight.shape, false, true);
+    W_qkv_.grad = qkv_weight.grad;
+    W_qkv_.owns_data = false;
+    W_qkv_.owns_grad = false;
+    
+    if (qkv_bias.data) {
+        b_qkv_ = Tensor::from_ptr(qkv_bias.data, qkv_bias.shape, false, true);
+        b_qkv_.grad = qkv_bias.grad;
+        b_qkv_.owns_data = false;
+        b_qkv_.owns_grad = false;
+    }
+    
+    // Output projection
+    W_o_ = Tensor::from_ptr(out_weight.data, out_weight.shape, false, true);
+    W_o_.grad = out_weight.grad;
+    W_o_.owns_data = false;
+    W_o_.owns_grad = false;
+    
+    if (out_bias.data) {
+        b_o_ = Tensor::from_ptr(out_bias.data, out_bias.shape, false, true);
+        b_o_.grad = out_bias.grad;
+        b_o_.owns_data = false;
+        b_o_.owns_grad = false;
+    }
+    
+    // FFN - need to create the layer and set its external weights
+    if (!ffn_) {
+        FeedForwardConfig ffn_cfg;
+        ffn_cfg.d_model = d_model;
+        ffn_cfg.d_ff = d_ff;
+        ffn_cfg.stream = config_.stream;
+        ffn_cfg.cublas_handle = config_.cublas_handle;
+        ffn_ = std::make_unique<FeedForwardLayer>(ffn_cfg);
+    }
+    ffn_->useExternalWeights(ffn_w1, ffn_b1, ffn_w2, ffn_b2);
+    
+    weights_allocated_ = true;
+    using_external_weights_ = true;
+    
+    fprintf(stderr, "[EncodingLayer] Using external weights: qkv=[%zu], W_o=[%zu], ffn_w1=[%zu], ffn_w2=[%zu]\n",
+            W_qkv_.numel(), W_o_.numel(), ffn_w1.numel(), ffn_w2.numel());
 }
 
 void EncodingLayer::validateReady(const char* context) const {
@@ -462,376 +530,299 @@ void EncodingLayer::setWorkspace(float* workspace, std::size_t bytes) {
 }
 
 //======================================================//
-//  Forward Pass
+//  Forward Pass - Autograd Implementation
 //======================================================//
 
-void EncodingLayer::forward(const EncodingForwardArgs& args) {
-    args.validate("EncodingLayer::forward");
+Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t stream,
+                               EncoderLayerCache* cache) {
+    if constexpr (kEnableEncoderStepLogs) {
+        fprintf(stderr, "[EncoderFwd] START total_tokens=%d seq_len=%d cache=%p\n", 
+                input.shape.flat.rows, seq_len, (void*)cache);
+    }
     validateReady("EncodingLayer::forward");
     
-    const int total_tokens = args.total_tokens;
-    const int seq_len = args.seq_len;
-    const int batch_size = args.batchSize();
+    // CRITICAL: Set autograd cuBLAS handle before any autograd::matmul calls
+    // The handle must be set per-call since it's thread_local
+    autograd::set_autograd_cublas_handle(config_.cublas_handle);
+    if constexpr (kEnableEncoderStepLogs) {
+        fprintf(stderr, "[EncoderFwd] autograd cuBLAS handle set: %p\n", (void*)config_.cublas_handle);
+    }
+    
+    // Validate input
+    if (!input.data) {
+        throw std::runtime_error("EncodingLayer::forward: input.data is NULL");
+    }
+    if (!stream) {
+        throw std::runtime_error("EncodingLayer::forward: stream is NULL");
+    }
+    
+    const int total_tokens = input.shape.flat.rows;
     const int d_model = config_.d_model;
-    const int kv_dim = config_.kvDim();
+    
+    if (input.shape.flat.cols != d_model) {
+        throw std::runtime_error("EncodingLayer::forward: input d_model mismatch. "
+                                 "Expected " + std::to_string(d_model) + 
+                                 ", got " + std::to_string(input.shape.flat.cols));
+    }
+    if (total_tokens % seq_len != 0) {
+        throw std::runtime_error("EncodingLayer::forward: total_tokens not divisible by seq_len");
+    }
+    
+    const int batch_size = total_tokens / seq_len;
     const int num_heads = config_.num_heads;
     const int num_kv_heads = config_.effectiveKVHeads();
     const int head_dim = config_.headDim();
-    
-    if (!args.stream) {
-        throw std::runtime_error("EncodingLayer::forward: stream is NULL");
+    if constexpr (kEnableEncoderStepLogs) {
+        fprintf(stderr, "[EncoderFwd] validated: batch=%d heads=%d kv_heads=%d head_dim=%d\n", 
+                batch_size, num_heads, num_kv_heads, head_dim);
     }
-    cudaStream_t stream = args.stream;
-    
-    // Validate workspace
-    const std::size_t required = requiredWorkspaceBytes(total_tokens, seq_len);
-    if (!workspace_ || workspace_bytes_ < required) {
-        throw std::runtime_error("EncodingLayer::forward: insufficient workspace. "
-                                 "Required: " + std::to_string(required) + 
-                                 " bytes, provided: " + std::to_string(workspace_bytes_));
-    }
-    
-    // Carve up workspace
-    float* ptr = workspace_;
-    auto bump = [&ptr](std::size_t count) -> float* {
-        float* out = ptr;
-        ptr += count;
-        return out;
-    };
-    
-    float* ln1_out = bump(total_tokens * d_model);
-    float* ln2_out = bump(total_tokens * d_model);
-    float* Q = bump(total_tokens * d_model);
-    float* K = bump(total_tokens * kv_dim);
-    float* V = bump(total_tokens * kv_dim);
-    float* Q_bhsd = bump(batch_size * num_heads * seq_len * head_dim);
-    float* K_bhsd = bump(batch_size * num_kv_heads * seq_len * head_dim);
-    float* V_bhsd = bump(batch_size * num_kv_heads * seq_len * head_dim);
-    float* attn_out_bhsd = bump(batch_size * num_heads * seq_len * head_dim);
-    float* attn_out = bump(total_tokens * d_model);
-    float* residual1 = bump(total_tokens * d_model);
-    float* pre_gelu = bump(total_tokens * config_.d_ff);
-    float* post_gelu = bump(total_tokens * config_.d_ff);
-    float* ffn_out = bump(total_tokens * d_model);
     
     //--------------------------------------------------
     // 1. RMSNorm1: input -> ln1_out
     //--------------------------------------------------
-    launchRMSNormForward(args.input, rms1_gamma_, ln1_out,
-                         total_tokens, d_model, config_.rms_epsilon, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 1: RMSNorm1...\n");
+    Tensor ln1_out = autograd::rms_norm(input, rms1_gamma_, config_.rms_epsilon, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 1: RMSNorm1 DONE\n");
     
-    // REMOVED cache_ln1_input copy - backward uses layer input from previous layer's cache (redundant!)
-    if (args.cache_ln1_out) {
-        CUDA_CHECK(cudaMemcpyAsync(args.cache_ln1_out, ln1_out,
-                                    total_tokens * d_model * sizeof(float),
-                                    cudaMemcpyDeviceToDevice, stream));
+    // HYBRID FIX: Cache ln1_output for legacy backward
+    if (cache && cache->ln1_output) {
+        CUDA_CHECK(cudaMemcpyAsync(cache->ln1_output, ln1_out.data,
+                                   static_cast<size_t>(total_tokens) * d_model * sizeof(float),
+                                   cudaMemcpyDeviceToDevice, stream));
+    };
+    
+    //--------------------------------------------------
+    // 2. QKV Projection: ln1_out @ W_qkv^T + b_qkv
+    //    W_qkv is [total_qkv_dim, d_model] so we compute ln1_out @ W_qkv^T
+    //--------------------------------------------------
+    if constexpr (kEnableEncoderStepLogs) {
+        fprintf(stderr, "[EncoderFwd] Step 2: QKV matmul...\n");
+        fprintf(stderr, "[EncoderFwd] Step 2: ln1_out.data=%p shape=[%d,%d] W_qkv.data=%p shape=[%d,%d]\n",
+                (void*)ln1_out.data, ln1_out.shape.flat.rows, ln1_out.shape.flat.cols,
+                (void*)W_qkv_.data, W_qkv_.shape.flat.rows, W_qkv_.shape.flat.cols);
+        fflush(stderr);
     }
+    // Use transpose_b=true since W_qkv is [qkv_dim, d_model] and we need [tokens, d_model] @ [d_model, qkv_dim]
+    Tensor qkv_out = autograd::matmul(ln1_out, W_qkv_, stream, nullptr, nullptr, true);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 2: QKV matmul DONE, adding bias...\n");
+    // Add bias: qkv_out = qkv_out + b_qkv (broadcast)
+    // TODO: Need autograd::bias_add for proper gradient tracking
+    launchFFNBiasAdd(qkv_out.data, b_qkv_.data, total_tokens, 
+                     config_.d_model + 2 * config_.kvDim(), stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 2: QKV bias DONE\n");
     
     //--------------------------------------------------
-    // 2. QKV Projection: ln1_out -> Q, K, V
+    // 3. Split QKV and reshape to BHSD for attention
+    //    qkv_out is [total_tokens, d_model + 2*kv_dim]
+    //    Q: [total_tokens, 0:d_model]
+    //    K: [total_tokens, d_model:d_model+kv_dim]  
+    //    V: [total_tokens, d_model+kv_dim:end]
     //--------------------------------------------------
-    QKVProjectionConfig proj_cfg;
-    proj_cfg.d_model = d_model;
-    proj_cfg.num_heads = num_heads;
-    proj_cfg.num_kv_heads = num_kv_heads;
-    proj_cfg.head_dim = head_dim;  // Use pre-computed value from config_.headDim()
-    proj_cfg.batch_size = batch_size;
-    proj_cfg.seq_len = seq_len;
-    proj_cfg.stream = stream;
-    proj_cfg.handle = config_.cublas_handle;
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 3: Split QKV...\n");
+    const int kv_dim = config_.kvDim();
     
-    QKVProjectionWeights proj_weights;
-    proj_weights.W_qkv = W_qkv_;
-    proj_weights.b_qkv = b_qkv_;
+    // Create Tensor views for Q, K, V (slices of qkv_out)
+    Tensor Q = Tensor::empty(TensorContract::TensorShape::make_BSM(total_tokens, d_model), true, stream);
+    Tensor K = Tensor::empty(TensorContract::TensorShape::make_BSM(total_tokens, kv_dim), true, stream);
+    Tensor V = Tensor::empty(TensorContract::TensorShape::make_BSM(total_tokens, kv_dim), true, stream);
     
-    if (config_.isGQA()) {
-        // GQA: separate projections
-        const size_t q_weight_size = static_cast<size_t>(d_model) * d_model;
-        const size_t k_weight_size = static_cast<size_t>(kv_dim) * d_model;
-        
-        proj_weights.W_q = W_qkv_;
-        proj_weights.W_k = W_qkv_ + q_weight_size;
-        proj_weights.W_v = W_qkv_ + q_weight_size + k_weight_size;
-        proj_weights.b_q = b_qkv_;
-        proj_weights.b_k = b_qkv_ + d_model;
-        proj_weights.b_v = b_qkv_ + d_model + kv_dim;
-        
-        launchGQAProjection(ln1_out, proj_weights, Q, K, V, proj_cfg);
-    } else {
-        // Rule 20: MHA is deprecated/legacy - always use GQA path
-        throw std::runtime_error("EncodingLayer::forward: MHA fallback path DELETED! "
-                                 "GQA projection is required (num_kv_heads <= num_heads). "
-                                 "Got num_heads=" + std::to_string(num_heads) + 
-                                 ", num_kv_heads=" + std::to_string(num_kv_heads) + 
-                                 ". Verify config.isGQA() returns true.");
+    // Extract Q, K, V from fused QKV output using TensorConvert
+    // For GQA: qkv_out is [tokens, d_model + 2*kv_dim], not [tokens, 3*d_model]
+    // We need a custom split that handles different Q vs K/V sizes
+    {
+        // Q is first d_model columns
+        // K is next kv_dim columns  
+        // V is final kv_dim columns
+        const int total_qkv_dim = d_model + 2 * kv_dim;
+        const float* src = qkv_out.data;
+        // Manual split via cudaMemcpy2D (row-major slicing)
+        // Q: copy d_model elements starting at offset 0
+        CUDA_CHECK(cudaMemcpy2DAsync(
+            Q.data, d_model * sizeof(float),          // dst, dpitch
+            src, total_qkv_dim * sizeof(float),       // src, spitch
+            d_model * sizeof(float), total_tokens,    // width, height
+            cudaMemcpyDeviceToDevice, stream));
+        // K: copy kv_dim elements starting at offset d_model
+        CUDA_CHECK(cudaMemcpy2DAsync(
+            K.data, kv_dim * sizeof(float),
+            src + d_model, total_qkv_dim * sizeof(float),
+            kv_dim * sizeof(float), total_tokens,
+            cudaMemcpyDeviceToDevice, stream));
+        // V: copy kv_dim elements starting at offset d_model + kv_dim
+        CUDA_CHECK(cudaMemcpy2DAsync(
+            V.data, kv_dim * sizeof(float),
+            src + d_model + kv_dim, total_qkv_dim * sizeof(float),
+            kv_dim * sizeof(float), total_tokens,
+            cudaMemcpyDeviceToDevice, stream));
     }
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 3: Split QKV DONE, reshaping to BHSD...\n");
     
-    //--------------------------------------------------
-    // 3. Reshape QKV to BHSD for Flash Attention
-    //--------------------------------------------------
-    launchQKVReshapeToBHSD(Q, K, V, Q_bhsd, K_bhsd, V_bhsd,
+    // Reshape to BHSD for Flash Attention
+    Tensor Q_bhsd = Tensor::empty(TensorContract::TensorShape::make_BHSD(batch_size, num_heads, seq_len, head_dim), true, stream);
+    Tensor K_bhsd = Tensor::empty(TensorContract::TensorShape::make_BHSD(batch_size, num_kv_heads, seq_len, head_dim), true, stream);
+    Tensor V_bhsd = Tensor::empty(TensorContract::TensorShape::make_BHSD(batch_size, num_kv_heads, seq_len, head_dim), true, stream);
+    
+    launchQKVReshapeToBHSD(Q.data, K.data, V.data, 
+                           Q_bhsd.data, K_bhsd.data, V_bhsd.data,
                            batch_size, seq_len, num_heads, num_kv_heads, head_dim, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 3b: Reshape to BHSD DONE\n");
+    
+    // HYBRID FIX: Cache Q, K, V for legacy backward (BEFORE RoPE rotation!)
+    // Note: Backward expects post-RoPE values, so we'll cache after RoPE below;
     
     //--------------------------------------------------
-    // 3b. Apply RoPE rotation to Q and K (CRITICAL for selective attention!)
-    //     RoPE rotates Q/K vectors based on position, enabling position-aware dot products
-    //     PBM is always hybrid (ALiBi + RoPE) - validate all PBM state
+    // 3b. Apply RoPE rotation to Q and K
     //--------------------------------------------------
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 3c: RoPE rotation...\n");
     if (config_.pos_encoding && config_.pos_encoding->valid && 
         config_.pos_encoding->rope_inv_freq != nullptr && config_.pos_encoding->rotary_dim > 0) {
-        
-        // Use GQA-aware RoPE rotation that handles Q and K with different head counts
         PBM::launchRoPERotationGQA(
-            Q_bhsd, K_bhsd,  // In-place rotation
+            Q_bhsd.data, K_bhsd.data,
             config_.pos_encoding->rope_inv_freq,
-            batch_size,
-            num_heads,       // Q head count
-            num_kv_heads,    // K head count (fewer in GQA)
-            seq_len,
-            head_dim,
-            config_.pos_encoding->rotary_dim,
-            stream
-        );
+            batch_size, num_heads, num_kv_heads, seq_len, head_dim,
+            config_.pos_encoding->rotary_dim, stream);
     } else {
-        throw std::runtime_error("EncodingLayer::forward: RoPE not initialized - model requires positional encoding");
+        throw std::runtime_error("EncodingLayer::forward: RoPE not initialized");
     }
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 3c: RoPE DONE\n");
     
-    // Cache Q, K, V in BHSD format for backward
-    // DIAGNOSTIC Issue #36: Verify cache write actually works
-    static int cache_write_count = 0;
-    const std::size_t q_size = static_cast<std::size_t>(batch_size) * num_heads * seq_len * head_dim;
-    
-    if (args.cache_q) {
-        // SYNC before write to ensure Q_bhsd is computed
-        CUDA_CHECK(cudaStreamSynchronize(stream));
-        
-        // Check Q_bhsd RMS BEFORE copy
-        float pre_rms = 0.0f;
-        {
-            std::vector<float> h_q(q_size);
-            CUDA_CHECK(cudaMemcpy(h_q.data(), Q_bhsd, q_size * sizeof(float), cudaMemcpyDeviceToHost));
-            double sum_sq = 0.0;
-            for (std::size_t i = 0; i < q_size; ++i) sum_sq += h_q[i] * h_q[i];
-            pre_rms = static_cast<float>(std::sqrt(sum_sq / q_size));
+    // HYBRID FIX: Cache Q, K, V in BHSD format (after RoPE) for legacy backward
+    if (cache) {
+        const size_t q_elems = static_cast<size_t>(batch_size) * num_heads * seq_len * head_dim;
+        const size_t kv_elems = static_cast<size_t>(batch_size) * num_kv_heads * seq_len * head_dim;
+        if (cache->q) {
+            CUDA_CHECK(cudaMemcpyAsync(cache->q, Q_bhsd.data, q_elems * sizeof(float),
+                                       cudaMemcpyDeviceToDevice, stream));
         }
-        
-        // Do the actual copy
-        CUDA_CHECK(cudaMemcpyAsync(args.cache_q, Q_bhsd, q_size * sizeof(float), cudaMemcpyDeviceToDevice, stream));
-        
-        // SYNC after write
-        CUDA_CHECK(cudaStreamSynchronize(stream));
-        
-        // Check cache RMS AFTER copy
-        float post_rms = 0.0f;
-        {
-            std::vector<float> h_cache(q_size);
-            CUDA_CHECK(cudaMemcpy(h_cache.data(), args.cache_q, q_size * sizeof(float), cudaMemcpyDeviceToHost));
-            double sum_sq = 0.0;
-            for (std::size_t i = 0; i < q_size; ++i) sum_sq += h_cache[i] * h_cache[i];
-            post_rms = static_cast<float>(std::sqrt(sum_sq / q_size));
+        if (cache->k) {
+            CUDA_CHECK(cudaMemcpyAsync(cache->k, K_bhsd.data, kv_elems * sizeof(float),
+                                       cudaMemcpyDeviceToDevice, stream));
         }
-        
-        cache_write_count++;
-        if (cache_write_count <= 24) {  // First 2 batches * 12 layers
-            fprintf(stderr, "[CACHE_WRITE_VERIFY] count=%d Q_bhsd_rms=%.6f cache_q_rms=%.6f match=%s\n",
-                    cache_write_count, pre_rms, post_rms, 
-                    (std::abs(pre_rms - post_rms) < 1e-5f) ? "YES" : "NO");
+        if (cache->v) {
+            CUDA_CHECK(cudaMemcpyAsync(cache->v, V_bhsd.data, kv_elems * sizeof(float),
+                                       cudaMemcpyDeviceToDevice, stream));
         }
-    } else {
-        // DIAGNOSTIC: Issue #36 - why is cache_q null?
-        fprintf(stderr, "[CACHE_WRITE] WARNING: args.cache_q is NULL - cache not written!\n");
-    }
-    if (args.cache_k) {
-        CUDA_CHECK(cudaMemcpyAsync(args.cache_k, K_bhsd,
-                                    batch_size * num_kv_heads * seq_len * head_dim * sizeof(float),
-                                    cudaMemcpyDeviceToDevice, stream));
-    }
-    if (args.cache_v) {
-        CUDA_CHECK(cudaMemcpyAsync(args.cache_v, V_bhsd,
-                                    batch_size * num_kv_heads * seq_len * head_dim * sizeof(float),
-                                    cudaMemcpyDeviceToDevice, stream));
-    }
+    };
     
     //--------------------------------------------------
-    // 4. Flash Attention v2: Q/K/V -> attn_out (BF16 path)
+    // 4. Flash Attention: Q, K, V -> attn_out
+    //    CRITICAL: Pass ALiBi slopes from PBM for hybrid positional encoding
     //--------------------------------------------------
-    if (!config_.use_flash_attention) {
-        throw std::runtime_error("EncodingLayer::forward: Flash Attention disabled - no fallback path available");
-    }
-    if (config_.qk_norm_enabled || config_.softmax_temperature != 1.0f) {
-        throw std::runtime_error("EncodingLayer::forward: QK-norm/softmax temperature unsupported in FA v2 path");
-    }
-    if (head_dim != 32 && head_dim != 64) {
-        throw std::runtime_error("EncodingLayer::forward: FlashAttention v2 requires head_dim=32 or 64");
-    }
-    if (num_heads <= 0 || num_kv_heads <= 0 || (num_heads % num_kv_heads) != 0) {
-        throw std::runtime_error("EncodingLayer::forward: invalid head configuration for FlashAttention v2");
-    }
-    if (!args.cache_softmax_lse) {
-        throw std::runtime_error("EncodingLayer::forward: softmax_lse buffer is NULL (required for FA v2)");
-    }
-    if (!args.fa_q_bf16 || !args.fa_k_bf16 || !args.fa_v_bf16 || !args.fa_out_bf16) {
-        throw std::runtime_error("EncodingLayer::forward: BF16 scratch buffers are NULL (required for FA v2)");
-    }
-
-    const size_t q_elems = static_cast<size_t>(batch_size) *
-                           static_cast<size_t>(num_heads) *
-                           static_cast<size_t>(seq_len) *
-                           static_cast<size_t>(head_dim);
-    const size_t kv_elems = static_cast<size_t>(batch_size) *
-                            static_cast<size_t>(num_kv_heads) *
-                            static_cast<size_t>(seq_len) *
-                            static_cast<size_t>(head_dim);
-    if (args.fa_q_bf16_elems < q_elems || args.fa_kv_bf16_elems < kv_elems) {
-        throw std::runtime_error("EncodingLayer::forward: BF16 scratch buffers too small for current batch");
-    }
-
-    if (!config_.pos_encoding || !config_.pos_encoding->valid || !config_.pos_encoding->alibi_slopes) {
-        throw std::runtime_error("EncodingLayer::forward: ALiBi slopes are NULL or PBM invalid - PBM hybrid requires ALiBi + RoPE");
-    }
-    if (config_.pos_encoding->num_heads != num_heads) {
-        throw std::runtime_error("EncodingLayer::forward: ALiBi num_heads mismatch: pbm_spec=" + 
-                                 std::to_string(config_.pos_encoding->num_heads) + 
-                                 " encoder=" + std::to_string(num_heads));
-    }
-    if (config_.pos_encoding->num_kv_heads != num_kv_heads) {
-        throw std::runtime_error("EncodingLayer::forward: ALiBi num_kv_heads mismatch: pbm_spec=" + 
-                                 std::to_string(config_.pos_encoding->num_kv_heads) + 
-                                 " encoder=" + std::to_string(num_kv_heads));
-    }
-
-    TensorConversion::convert_BHSD_to_BSHD_bf16(Q_bhsd, args.fa_q_bf16,
-                                                batch_size, num_heads, seq_len, head_dim, stream);
-    TensorConversion::convert_BHSD_to_BSHD_bf16(K_bhsd, args.fa_k_bf16,
-                                                batch_size, num_kv_heads, seq_len, head_dim, stream);
-    TensorConversion::convert_BHSD_to_BSHD_bf16(V_bhsd, args.fa_v_bf16,
-                                                batch_size, num_kv_heads, seq_len, head_dim, stream);
-
-    flash_attn_fwd_ex(
-        args.fa_q_bf16,
-        args.fa_k_bf16,
-        args.fa_v_bf16,
-        args.fa_out_bf16,
-        args.cache_softmax_lse,
-        config_.pos_encoding->alibi_slopes,
-        batch_size,
-        seq_len,
-        num_heads,
-        num_kv_heads,
-        head_dim,
-        config_.causal_mask,
-        true,
-        stream);
-
-    TensorConversion::convert_BSHD_bf16_to_BHSD(args.fa_out_bf16, attn_out_bhsd,
-                                                batch_size, seq_len, num_heads, head_dim, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 4: Flash Attention...\n");
     
-    // Cache attention output BHSD for backward (cache_attn_bhsd and cache_attn_out are aliases)
-    if (args.cache_attn_bhsd) {
-        CUDA_CHECK(cudaMemcpyAsync(args.cache_attn_bhsd, attn_out_bhsd,
-                                    batch_size * num_heads * seq_len * head_dim * sizeof(float),
-                                    cudaMemcpyDeviceToDevice, stream));
+    // RULE 20: Fail loud if pos_encoding is NULL - GRIM requires hybrid PBM
+    if (!config_.pos_encoding) {
+        throw std::runtime_error(
+            "EncodingLayer::forward: config_.pos_encoding is NULL - "
+            "GRIM requires PBM (ALiBi+RoPE) for positional encoding");
+    }
+    if (!config_.pos_encoding->alibi_slopes) {
+        throw std::runtime_error(
+            "EncodingLayer::forward: config_.pos_encoding->alibi_slopes is NULL - "
+            "PBM ALiBi slopes not initialized");
+    }
+    
+    // HYBRID FIX: Pass cache->softmax_lse so it gets populated for legacy backward
+    // The legacy BackwardPhase2_Encoder.cu reads ts->cached_softmax_lse[layer]
+    float* cache_lse = (cache && cache->softmax_lse) ? cache->softmax_lse : nullptr;
+    Tensor attn_out_bhsd = autograd::scaled_dot_product_attention(
+        Q_bhsd, K_bhsd, V_bhsd, config_.pos_encoding->alibi_slopes, 0.0f, stream, cache_lse);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 4: Flash Attention DONE\n");
+    
+    // HYBRID FIX: Cache attn_bhsd for legacy backward (before W_o projection)
+    if (cache && cache->attn_bhsd) {
+        const size_t attn_bhsd_elems = static_cast<size_t>(batch_size) * num_heads * seq_len * head_dim;
+        CUDA_CHECK(cudaMemcpyAsync(cache->attn_bhsd, attn_out_bhsd.data, 
+                                   attn_bhsd_elems * sizeof(float),
+                                   cudaMemcpyDeviceToDevice, stream));
     }
     
     //--------------------------------------------------
     // 5. Reshape attention output: BHSD -> [tokens, d_model]
     //--------------------------------------------------
-    launchReshapeFromBHSD(attn_out_bhsd, attn_out, batch_size, seq_len, num_heads, head_dim, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 5: Reshape from BHSD...\n");
+    Tensor attn_out = Tensor::empty(TensorContract::TensorShape::make_BSM(total_tokens, d_model), true, stream);
+    launchReshapeFromBHSD(attn_out_bhsd.data, attn_out.data, 
+                          batch_size, seq_len, num_heads, head_dim, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 5: Reshape DONE\n");
     
     //--------------------------------------------------
     // 6. Output projection: attn_out @ W_o^T + b_o
-    //    Use ln2_out as temp to avoid GEMM input/output aliasing (UB in cuBLAS)
     //--------------------------------------------------
-    const float alpha = 1.0f;
-    const float beta = 0.0f;
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 6: Output projection...\n");
+    // W_o is [d_model, d_model], so W_o^T is also [d_model, d_model]
+    // Use transpose_b=true to compute attn_out @ W_o^T
+    Tensor proj_out = autograd::matmul(attn_out, W_o_, stream, nullptr, nullptr, true);
+    launchFFNBiasAdd(proj_out.data, b_o_.data, total_tokens, d_model, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 6: Output projection DONE\n");
     
-    // CRITICAL: Always rebind stream before cuBLAS ops - NumericHead may have changed it
-    cublasSetStream(config_.cublas_handle, stream);
-    
-    // attn_out [tokens, d_model] @ W_o^T [d_model, d_model] -> ln2_out (temp)
-    CUBLAS_CHECK(cublasSgemm(config_.cublas_handle,
-                             CUBLAS_OP_T, CUBLAS_OP_N,
-                             d_model, total_tokens, d_model,
-                             &alpha,
-                             W_o_, d_model,
-                             attn_out, d_model,
-                             &beta,
-                             ln2_out, d_model));  // Output to temp buffer
-    
-    launchAddBias(ln2_out, b_o_, total_tokens, d_model, stream);
-
-    // Cache attention output after W_o projection for backward (BSM layout).
-    if (args.cache_attn_output) {
-        CUDA_CHECK(cudaMemcpyAsync(args.cache_attn_output, ln2_out,
-                                    static_cast<std::size_t>(total_tokens) * d_model * sizeof(float),
-                                    cudaMemcpyDeviceToDevice, stream));
+    // HYBRID FIX: Cache attn_output (after W_o projection) for legacy backward
+    if (cache && cache->attn_output) {
+        CUDA_CHECK(cudaMemcpyAsync(cache->attn_output, proj_out.data,
+                                   static_cast<size_t>(total_tokens) * d_model * sizeof(float),
+                                   cudaMemcpyDeviceToDevice, stream));
     }
     
     //--------------------------------------------------
     // 7. Residual1: input + proj_out -> residual1
     //--------------------------------------------------
-    launchResidualAdd(args.input, ln2_out, residual1, total_tokens * d_model, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1...\n");
+    Tensor residual1 = autograd::add(input, proj_out, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 DONE\n");
     
-    // === Issue #37 DIAGNOSTIC: Track alignment AFTER attention ===
-    static int s_attn_layer = 0;
-    logHiddenStateAlignment("after_attn", s_attn_layer, residual1, total_tokens, d_model, stream);
-    
-    if (args.cache_residual1) {
-        CUDA_CHECK(cudaMemcpyAsync(args.cache_residual1, residual1,
-                                    total_tokens * d_model * sizeof(float),
-                                    cudaMemcpyDeviceToDevice, stream));
+    // HYBRID FIX: Cache residual1 for legacy backward
+    if (cache && cache->residual1) {
+        CUDA_CHECK(cudaMemcpyAsync(cache->residual1, residual1.data,
+                                   static_cast<size_t>(total_tokens) * d_model * sizeof(float),
+                                   cudaMemcpyDeviceToDevice, stream));
     }
     
     //--------------------------------------------------
     // 8. RMSNorm2: residual1 -> ln2_out
     //--------------------------------------------------
-    launchRMSNormForward(residual1, rms2_gamma_, ln2_out,
-                         total_tokens, d_model, config_.rms_epsilon, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 8: RMSNorm2...\n");
+    Tensor ln2_out = autograd::rms_norm(residual1, rms2_gamma_, config_.rms_epsilon, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 8: RMSNorm2 DONE\n");
     
-    if (args.cache_ln2_out) {
-        CUDA_CHECK(cudaMemcpyAsync(args.cache_ln2_out, ln2_out,
-                                    total_tokens * d_model * sizeof(float),
-                                    cudaMemcpyDeviceToDevice, stream));
+    // HYBRID FIX: Cache ln2_output for legacy backward
+    if (cache && cache->ln2_output) {
+        CUDA_CHECK(cudaMemcpyAsync(cache->ln2_output, ln2_out.data,
+                                   static_cast<size_t>(total_tokens) * d_model * sizeof(float),
+                                   cudaMemcpyDeviceToDevice, stream));
     }
     
     //--------------------------------------------------
-    // 9. FFN: ln2_out -> ffn_out
+    // 9. FFN: ln2_out -> ffn_out (already using autograd)
     //--------------------------------------------------
-    FeedForwardForwardArgs ffn_args;
-    ffn_args.input = ln2_out;
-    ffn_args.output = ffn_out;
-    ffn_args.total_tokens = total_tokens;
-    ffn_args.stream = stream;
-    // Rule 20: No fallback - if caller wants pre_gelu cached, they MUST provide buffer
-    // If they don't provide buffer, we pass nullptr (FFN will decide if that's valid)
-    ffn_args.cache_pre_gelu = args.cache_ffn_pre_gelu;
-    ffn_args.cache_post_gelu = post_gelu;
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN...\n");
+    // HYBRID FIX: Pass ffn_pre_gelu cache buffer to FFN forward
+    float* ffn_pre_gelu_cache = (cache && cache->ffn_pre_gelu) ? cache->ffn_pre_gelu : nullptr;
+    Tensor ffn_out = ffn_->forward(ln2_out, ffn_pre_gelu_cache);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN DONE\n");
     
-    ffn_->forward(ffn_args, nullptr);
-    
-    // Cache post-GELU output for backward pass (required for grad_W2 computation)
-    if (args.cache_ffn_output) {
-        CUDA_CHECK(cudaMemcpyAsync(args.cache_ffn_output, post_gelu,
-                                    static_cast<std::size_t>(total_tokens) * config_.d_ff * sizeof(float),
-                                    cudaMemcpyDeviceToDevice, stream));
+    // HYBRID FIX: Cache ffn_output (post-W2, before residual) for legacy backward
+    if (cache && cache->ffn_output) {
+        // ffn_out is [total_tokens, d_model] (after W2)
+        CUDA_CHECK(cudaMemcpyAsync(cache->ffn_output, ffn_out.data,
+                                   static_cast<size_t>(total_tokens) * d_model * sizeof(float),
+                                   cudaMemcpyDeviceToDevice, stream));
     }
     
     //--------------------------------------------------
     // 10. Residual2: residual1 + ffn_out -> output
     //--------------------------------------------------
-    launchResidualAdd(residual1, ffn_out, args.output, total_tokens * d_model, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2...\n");
+    Tensor output = autograd::add(residual1, ffn_out, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2 DONE - layer COMPLETE\n");
     
-    // === Issue #37 DIAGNOSTIC: Track alignment AFTER FFN (layer output) ===
-    logHiddenStateAlignment("after_ffn", s_attn_layer, args.output, total_tokens, d_model, stream);
-    s_attn_layer = (s_attn_layer + 1) % 12;  // Cycle through layers
-    incrementLayerDiagCount();
-    
-    // Cache layer output for backward pass (used as layer_input in next layer's backward)
-    if (args.cache_layer_output) {
-        CUDA_CHECK(cudaMemcpyAsync(args.cache_layer_output, args.output,
-                                    total_tokens * d_model * sizeof(float),
-                                    cudaMemcpyDeviceToDevice, stream));
+    // HYBRID FIX: Cache layer_output for legacy backward
+    if (cache && cache->layer_output) {
+        CUDA_CHECK(cudaMemcpyAsync(cache->layer_output, output.data,
+                                   static_cast<size_t>(total_tokens) * d_model * sizeof(float),
+                                   cudaMemcpyDeviceToDevice, stream));
     }
+    
+    return output;
 }
 
 //======================================================//

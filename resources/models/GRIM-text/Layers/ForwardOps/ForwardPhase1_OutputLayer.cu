@@ -5,6 +5,7 @@
 #include "../../Layers/NumericHead/numeric_head_GPU.hpp"
 #include "../../Layers/LayernNorm/RMSNorm_Kernel_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"  // LOGITS layout validation
+#include "../../Layers/HardcodedStates/HardcodedStates_GPU.hpp"  // Issue #42 diagnostic
 
 #include <vector>
 #include <algorithm>
@@ -77,6 +78,33 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
     
     const int total_tokens = lm_head_batch_size * lm_head_seq_len;
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  HARDCODED HIDDEN STATES DIAGNOSTIC (Issue #42)
+    //  When enabled, replaces encoder output with synthetic patterns to isolate
+    //  whether mode collapse originates from encoder or LM head/gradient system.
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (cfg->hardcoded_hidden_pattern != GRIM::LanguageModelConfig::HardcodedPattern::DISABLED) {
+        static int s_batch_counter = 0;  // Track batch number for logging
+        ++s_batch_counter;
+        
+        FWD_INFO("[ForwardPhase1] HARDCODED HIDDEN STATES: Replacing encoder output with pattern "
+                 << static_cast<int>(cfg->hardcoded_hidden_pattern));
+        
+        GRIM::generateHardcodedStates(
+            encoder_for_lm_head,                  // Overwrite the encoder output
+            ts->lm_head_weights.data,             // For W[277]-based patterns
+            static_cast<GRIM::HardcodedPattern>(cfg->hardcoded_hidden_pattern),
+            total_tokens,
+            cfg->d_model,
+            cfg->vocab_size,
+            s_batch_counter,
+            ctx.stream
+        );
+        
+        // Skip final RMSNorm when using hardcoded states (patterns already normalized)
+        goto skip_final_rmsnorm;
+    }
+    
     // Tensor API: check .data field for final_rms_gamma
     if (ts->final_rms_gamma.data && ts->cached_final_rms_input) {
         // Cache pre-norm input for backward pass
@@ -86,9 +114,17 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
                         cudaMemcpyDeviceToDevice, ctx.stream);
         
         // Apply final RMSNorm in-place to the encoder output that LM head will use
-        const float eps = 1e-5f;  // Standard epsilon for RMSNorm
-        launchRMSNormForward(ts->cached_final_rms_input, ts->final_rms_gamma.data, encoder_for_lm_head,
-                             total_tokens, cfg->d_model, eps, ctx.stream);
+        // REFACTORED: Use TensorView-based RMSNormForwardParams (Rule 20: Fail Loud)
+        RMSNormForwardParams rms_fwd_params{};
+        rms_fwd_params.input = TensorContract::TensorView::make_BSM(
+            ts->cached_final_rms_input, total_tokens, cfg->d_model, "final_rms_input");
+        rms_fwd_params.gamma = TensorContract::TensorView::make_BSM(
+            ts->final_rms_gamma.data, 1, cfg->d_model, "final_rms_gamma");
+        rms_fwd_params.output = TensorContract::TensorView::make_BSM(
+            encoder_for_lm_head, total_tokens, cfg->d_model, "final_rms_output");
+        rms_fwd_params.epsilon = 1e-5f;
+        rms_fwd_params.stream = ctx.stream;
+        launchRMSNormForward(rms_fwd_params);
         
         FWD_INFO("[ForwardPhase1] Applied final RMSNorm (tokens=" << total_tokens << ")");
         
@@ -102,29 +138,94 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
         }
     }
 
+skip_final_rmsnorm:
+
+    // Construct TensorViews for LMHead parameters (Rule 20: Fail Loud type safety)
     LMHeadForwardParams lm_params{};
-    lm_params.weights = ts->lm_head_weights.data;  // Tensor API
-    lm_params.bias = ts->lm_head_bias.data;        // Tensor API
-    lm_params.d_model = cfg->d_model;
-    lm_params.vocab_size = cfg->vocab_size;
-    lm_params.use_bias = cfg->use_bias && ts->lm_head_bias.data != nullptr;
-    lm_params.handle = ctx.cublas_handle;
-    lm_params.stream = ctx.stream;
-    lm_params.logits = logits_output;
-    lm_params.encoder_output = encoder_for_lm_head;  // Already computed above
-    lm_params.batch_size = lm_head_batch_size;
-    lm_params.seq_len = lm_head_seq_len;
+    
+    // Input tensors - BSM layout [total_tokens, d_model] for encoder output
+    lm_params.encoder_output = TensorContract::TensorView::make_BSM(
+        encoder_for_lm_head,
+        total_tokens,
+        cfg->d_model,
+        "encoder_for_lm_head"
+    );
+    
+    // Weights - BSM layout [vocab_size, d_model] for weight matrix
+    lm_params.weights = TensorContract::TensorView::make_BSM(
+        ts->lm_head_weights.data,
+        cfg->vocab_size,
+        cfg->d_model,
+        "lm_head_weights"
+    );
+    
+    // Output - LOGITS layout [total_tokens, vocab_size]
+    lm_params.logits = TensorContract::TensorView::make_LOGITS(
+        logits_output,
+        total_tokens,
+        cfg->vocab_size,
+        "lm_head_logits_output"
+    );
+    
+    // Optional bias - BSM layout [vocab_size, 1] (conceptually a column vector)
+    if (cfg->use_bias && ts->lm_head_bias.data) {
+        lm_params.bias = TensorContract::TensorView::make_BSM(
+            ts->lm_head_bias.data,
+            cfg->vocab_size,
+            1,
+            "lm_head_bias"
+        );
+        lm_params.use_bias = true;
+    } else {
+        lm_params.use_bias = false;
+    }
     
     // Issue #37 FIX: Use encoder_workspace as scratch for zero-mean centering
     // encoder_workspace is used by Phase2_Encoder but free during Phase1_OutputLayer
     // NOW CONFIGURABLE via ai_config.json -> lm_head_centering
-    lm_params.centered_scratch = ts->encoder_workspace;
-    lm_params.use_centering = cfg->lm_head_center_hidden_states;
+    if (cfg->lm_head_center_hidden_states && ts->encoder_workspace) {
+        lm_params.centered_scratch = TensorContract::TensorView::make_BSM(
+            ts->encoder_workspace,
+            total_tokens,
+            cfg->d_model,
+            "centered_scratch"
+        );
+        lm_params.use_centering = true;
+    } else {
+        lm_params.use_centering = false;
+    }
+    
+    // Execution context
+    lm_params.handle = ctx.cublas_handle;
+    lm_params.stream = ctx.stream;
 
     try {
         launchLMHeadForward(lm_params);
     } catch (const std::exception& ex) {
         FWD_FAIL_LOUD(ctx, ForwardStatus::INVALID_STATE, ex.what(), -1);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  HARDCODED HIDDEN STATES DIAGNOSTIC LOGGING (Issue #42)
+    //  Log detailed diagnostics when using hardcoded patterns
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (cfg->hardcoded_hidden_pattern != GRIM::LanguageModelConfig::HardcodedPattern::DISABLED) {
+        static int s_log_batch_counter = 0;
+        ++s_log_batch_counter;
+        
+        if ((s_log_batch_counter % cfg->hardcoded_log_every_n_batches) == 0) {
+            GRIM::logHardcodedStateDiagnostics(
+                encoder_for_lm_head,               // The hardcoded hidden states (raw pointer)
+                ts->lm_head_weights.data,          // For W[277] analysis
+                logits_output,                     // Resulting logits
+                static_cast<GRIM::HardcodedPattern>(cfg->hardcoded_hidden_pattern),
+                total_tokens,
+                cfg->d_model,
+                cfg->vocab_size,
+                s_log_batch_counter,
+                ctx.stream
+            );
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -145,15 +246,13 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
     // Expected encoder_output: After final RMSNorm, should have mean≈0, var≈1
     // Expected logits: Should be in reasonable range [-2, 2] with final norm active
     {
-        const size_t enc_elements = static_cast<size_t>(lm_params.batch_size) * 
-                                    static_cast<size_t>(lm_params.seq_len) * 
+        const size_t enc_elements = static_cast<size_t>(total_tokens) * 
                                     static_cast<size_t>(cfg->d_model);
-        const size_t logit_elements = static_cast<size_t>(lm_params.batch_size) * 
-                                      static_cast<size_t>(lm_params.seq_len) * 
+        const size_t logit_elements = static_cast<size_t>(total_tokens) * 
                                       static_cast<size_t>(cfg->vocab_size);
         
         FWD_DIAG_BUFFER_EXPECTED("encoder_output (LM head input)", 
-            lm_params.encoder_output, enc_elements,
+            encoder_for_lm_head, enc_elements,
             0.0f, 1.5f,    // Expected mean≈0, var≈1-1.5 (grows slightly through layers)
             -6.0f, 6.0f,   // Expected range after RMSNorm: ~6σ covers 99.9999% of normal dist
             ctx.stream);
@@ -182,9 +281,9 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
         // Issue #37: Log actual logit[277] values after LM head
         // This is the FINAL value that determines if model predicts SPACE
         constexpr int kToken277 = 277;
-        if (kToken277 < cfg->vocab_size && lm_params.batch_size > 0 && lm_params.seq_len > 0) {
+        if (kToken277 < cfg->vocab_size && total_tokens > 0) {
             // Read logit[277] for first few tokens to see actual prediction strength
-            const int num_sample_tokens = std::min(10, lm_params.batch_size * lm_params.seq_len);
+            const int num_sample_tokens = std::min(10, total_tokens);
             std::vector<float> sample_logits(num_sample_tokens);
             
             // Each token's logits are vocab_size apart
@@ -231,27 +330,68 @@ ForwardStatus executePhase1_OutputLayer(ForwardContext& ctx) {
         }
 
         NumericHeadForwardParams num_params{};
-        num_params.weights = ts->numeric_head_weights.data;  // Tensor API
-        num_params.bias = ts->numeric_head_bias.data;        // Tensor API
-        num_params.d_model = cfg->d_model;
-        num_params.use_bias = cfg->use_bias && ts->numeric_head_bias.data != nullptr;
+        
+        // Weights: [d_model, 1] column vector
+        num_params.weights = TensorContract::TensorView::make_BSM(
+            ts->numeric_head_weights.data,
+            cfg->d_model,
+            1,
+            "numeric_fwd_weights"
+        );
+        
+        // Optional bias: [1, 1] scalar
+        if (cfg->use_bias && ts->numeric_head_bias.data) {
+            num_params.bias = TensorContract::TensorView::make_BSM(
+                ts->numeric_head_bias.data,
+                1,
+                1,
+                "numeric_fwd_bias"
+            );
+            num_params.use_bias = true;
+        }
+        
+        // Execution context
         num_params.handle = ctx.cublas_handle;
         num_params.stream = ctx.stream;
 
         if (ctx.logits_target == ForwardLogitsTarget::FullSequence) {
-            num_params.encoder_output = encoder_output;
-            num_params.predictions = ts->cached_numeric_predictions;
-            num_params.total_tokens = ctx.total_tokens;
+            // Encoder output: [total_tokens, d_model]
+            num_params.encoder_output = TensorContract::TensorView::make_BSM(
+                encoder_output,
+                ctx.total_tokens,
+                cfg->d_model,
+                "numeric_fwd_encoder_output"
+            );
+            // Predictions: [total_tokens, 1]
+            num_params.predictions = TensorContract::TensorView::make_BSM(
+                ts->cached_numeric_predictions,
+                ctx.total_tokens,
+                1,
+                "numeric_fwd_predictions"
+            );
         } else {
             if (ctx.seq_len <= 0) {
                 FWD_FAIL_LOUD(ctx, ForwardStatus::INVALID_STATE, "seq_len <= 0 for numeric head", -1);
             }
             const int last_index = ctx.seq_len - 1;
-            num_params.encoder_output = (ctx.mode == ForwardMode::DecodeIncremental)
+            float* last_encoder_output = (ctx.mode == ForwardMode::DecodeIncremental)
                 ? encoder_output
                 : encoder_output + static_cast<size_t>(last_index) * cfg->d_model;
-            num_params.predictions = ts->cached_numeric_predictions + last_index;
-            num_params.total_tokens = 1;
+            
+            // Last token encoder output: [1, d_model]
+            num_params.encoder_output = TensorContract::TensorView::make_BSM(
+                last_encoder_output,
+                1,
+                cfg->d_model,
+                "numeric_fwd_encoder_output_last"
+            );
+            // Single prediction: [1, 1]
+            num_params.predictions = TensorContract::TensorView::make_BSM(
+                ts->cached_numeric_predictions + last_index,
+                1,
+                1,
+                "numeric_fwd_predictions_last"
+            );
         }
 
         try {

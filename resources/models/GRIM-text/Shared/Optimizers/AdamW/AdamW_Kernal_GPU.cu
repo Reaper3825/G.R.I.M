@@ -7,6 +7,7 @@
 #include "../../HyperParameters/HyperParameters_GPU.hpp"
 
 #include <cuda_runtime.h>
+#include <cstdio>
 
 namespace GRIM {
 
@@ -44,6 +45,7 @@ __global__ void AdamWKernel(float* __restrict__ params,
 
 		// AdamW update: decoupled weight decay + Adam step
 		const float adam_update = m_hat * rsqrtf(v_hat + HyperParameters::ADAMW_EPSILON);
+
 		params[i] = param - learning_rate * (adam_update + weight_decay * param);
 		moments1[i] = m_new;
 		moments2[i] = v_new;

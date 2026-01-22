@@ -89,6 +89,7 @@ LossBreakdown launchLossPipeline(const LossContext& ctx,
     unified_inputs.vocab_size = ctx.vocab_size;
     unified_inputs.sequence_weights = ctx.sequence_weights;
     unified_inputs.weight_count = ctx.sequence_weight_count;
+    unified_inputs.position_byte_lengths = ctx.position_byte_lengths;  // GRMT v6
     unified_inputs.logit_bias = ctx.logit_bias;        // Issue #39: Output logit bias correction
     unified_inputs.logit_bias_update = ctx.logit_bias_update;  // Issue #39: scratch for EMA update
     unified_inputs.logit_bias_ema_alpha = ctx.logit_bias_ema_alpha;  // Issue #39: EMA decay rate

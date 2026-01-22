@@ -25,10 +25,6 @@ __global__ void addScalarBiasKernel(float* predictions,
 	predictions[idx] += bias[0];
 }
 
-inline bool validateDims(int total_tokens, int d_model) {
-	return total_tokens > 0 && d_model > 0;
-}
-
 inline bool isDevicePtr(const void* ptr) {
 	cudaPointerAttributes attr{};
 	return ptr &&
@@ -57,36 +53,31 @@ inline void addScalarBias(float* predictions,
 } // namespace
 
 void launchNumericHeadForward(const NumericHeadForwardParams& params) {
-	if (!validateDims(params.total_tokens, params.d_model)) {
-		std::ostringstream oss;
-		oss << "[NumericHead::forward] Invalid dimensions: total_tokens=" << params.total_tokens
-		    << " d_model=" << params.d_model << " (must be > 0)";
-		throw std::runtime_error(oss.str());
-	}
-	if (!params.handle) {
-		throw std::runtime_error("[NumericHead::forward] cuBLAS handle is NULL");
-	}
-	if (!params.encoder_output) {
-		throw std::runtime_error("[NumericHead::forward] encoder_output is NULL");
-	}
-	if (!params.weights) {
-		throw std::runtime_error("[NumericHead::forward] weights is NULL");
-	}
-	if (!params.predictions) {
-		throw std::runtime_error("[NumericHead::forward] predictions is NULL");
-	}
-	if (!isDevicePtr(params.encoder_output)) {
+	// Rule 20: Fail loud validation
+	params.validate("NumericHead::forward");
+	
+	// Extract dimensions and raw pointers from TensorViews
+	const int total_tokens = params.total_tokens();
+	const int d_model = params.d_model();
+	const float* encoder_output = params.encoder_output.ptr;
+	const float* weights = params.weights.ptr;
+	float* predictions = params.predictions.ptr;
+	cublasHandle_t handle = params.handle;
+	cudaStream_t stream = params.stream;
+
+	// Validate device pointers (Rule 20: crash if not device memory)
+	if (!isDevicePtr(encoder_output)) {
 		throw std::runtime_error("[NumericHead::forward] encoder_output must be device pointer");
 	}
-	if (!isDevicePtr(params.weights)) {
+	if (!isDevicePtr(weights)) {
 		throw std::runtime_error("[NumericHead::forward] weights must be device pointer");
 	}
-	if (!isDevicePtr(params.predictions)) {
+	if (!isDevicePtr(predictions)) {
 		throw std::runtime_error("[NumericHead::forward] predictions must be device pointer");
 	}
 
-	if (params.stream) {
-		cublasSetStream(params.handle, params.stream);
+	if (stream) {
+		cublasSetStream(handle, stream);
 	}
 
 	const float alpha = 1.0f;
@@ -94,132 +85,125 @@ void launchNumericHeadForward(const NumericHeadForwardParams& params) {
 
 	// Treat encoder_output as column-major [d_model, total_tokens]
 	const cublasStatus_t status = cublasSgemv(
-		params.handle,
+		handle,
 		CUBLAS_OP_T,
-		params.d_model,
-		params.total_tokens,
+		d_model,
+		total_tokens,
 		&alpha,
-		params.encoder_output,
-		params.d_model,
-		params.weights,
+		encoder_output,
+		d_model,
+		weights,
 		1,
 		&beta,
-		params.predictions,
+		predictions,
 		1);
 
 	if (status != CUBLAS_STATUS_SUCCESS) {
 		std::ostringstream oss;
 		oss << "[NumericHead::forward] cublasSgemv failed status=" << status
-		    << " m=" << params.d_model
-		    << " n=" << params.total_tokens
-		    << " lda=" << params.d_model;
+		    << " m=" << d_model
+		    << " n=" << total_tokens
+		    << " lda=" << d_model;
 		throw std::runtime_error(oss.str());
 	}
 
-	if (params.use_bias && params.bias) {
-		addScalarBias(params.predictions, params.bias, params.total_tokens, params.stream);
+	if (params.use_bias && params.bias.is_valid()) {
+		addScalarBias(predictions, params.bias.ptr, total_tokens, stream);
 	}
 }
 
 void launchNumericHeadBackward(const NumericHeadBackwardParams& params) {
-	if (!validateDims(params.total_tokens, params.d_model)) {
-		std::ostringstream oss;
-		oss << "[NumericHead::backward] Invalid dimensions: total_tokens=" << params.total_tokens
-		    << " d_model=" << params.d_model << " (must be > 0)";
-		throw std::runtime_error(oss.str());
-	}
-	if (!params.handle) {
-		throw std::runtime_error("[NumericHead::backward] cuBLAS handle is NULL");
-	}
-	if (!params.grad_predictions) {
-		throw std::runtime_error("[NumericHead::backward] grad_predictions is NULL");
-	}
-	if (!params.grad_encoder) {
-		throw std::runtime_error("[NumericHead::backward] grad_encoder is NULL");
-	}
-	if (!params.weights) {
-		throw std::runtime_error("[NumericHead::backward] weights is NULL");
-	}
-	if (!isDevicePtr(params.grad_predictions)) {
+	// Rule 20: Fail loud validation
+	params.validate("NumericHead::backward");
+	
+	// Extract dimensions and raw pointers from TensorViews
+	const int total_tokens = params.total_tokens();
+	const int d_model = params.d_model();
+	const float* grad_predictions = params.grad_predictions.ptr;
+	const float* encoder_output = params.encoder_output.ptr;
+	const float* weights = params.weights.ptr;
+	float* grad_encoder = params.grad_encoder.ptr;
+	float* grad_weight = params.grad_weight.ptr;
+	cublasHandle_t handle = params.handle;
+	cudaStream_t stream = params.stream;
+	
+	// Validate device pointers (Rule 20: crash if not device memory)
+	if (!isDevicePtr(grad_predictions)) {
 		throw std::runtime_error("[NumericHead::backward] grad_predictions must be device pointer");
 	}
-	if (!isDevicePtr(params.grad_encoder)) {
+	if (!isDevicePtr(grad_encoder)) {
 		throw std::runtime_error("[NumericHead::backward] grad_encoder must be device pointer");
 	}
-	if (!isDevicePtr(params.weights)) {
+	if (!isDevicePtr(weights)) {
 		throw std::runtime_error("[NumericHead::backward] weights must be device pointer");
 	}
-	if (params.grad_weight && !isDevicePtr(params.grad_weight)) {
+	if (!isDevicePtr(grad_weight)) {
 		throw std::runtime_error("[NumericHead::backward] grad_weight must be device pointer");
 	}
-	if (params.grad_bias && !isDevicePtr(params.grad_bias)) {
-		throw std::runtime_error("[NumericHead::backward] grad_bias must be device pointer");
-	}
-	if (params.encoder_output && !isDevicePtr(params.encoder_output)) {
+	if (!isDevicePtr(encoder_output)) {
 		throw std::runtime_error("[NumericHead::backward] encoder_output must be device pointer");
 	}
-
-	// REMOVED cublasSetStream - handle already bound to stream in InitTrainingState.cu
+	if (params.use_bias && params.grad_bias.is_valid() && !isDevicePtr(params.grad_bias.ptr)) {
+		throw std::runtime_error("[NumericHead::backward] grad_bias must be device pointer");
+	}
 
 	const float alpha = 1.0f;
 	const float beta = params.accumulate ? 1.0f : 0.0f;
 
-	if (params.grad_weight && params.encoder_output) {
-		// grad_weight = encoder_output^T * grad_predictions
-		const cublasStatus_t w_status = cublasSgemv(
-			params.handle,
-			CUBLAS_OP_N,
-			params.d_model,
-			params.total_tokens,
-			&alpha,
-			params.encoder_output,
-			params.d_model,
-			params.grad_predictions,
-			1,
-			&beta,
-			params.grad_weight,
-			1);
+	// grad_weight = encoder_output^T * grad_predictions
+	const cublasStatus_t w_status = cublasSgemv(
+		handle,
+		CUBLAS_OP_N,
+		d_model,
+		total_tokens,
+		&alpha,
+		encoder_output,
+		d_model,
+		grad_predictions,
+		1,
+		&beta,
+		grad_weight,
+		1);
 
-		if (w_status != CUBLAS_STATUS_SUCCESS) {
-			std::ostringstream oss;
-			oss << "[NumericHead::backward] cublasSgemv grad_weight failed status=" << w_status
-			    << " m=" << params.d_model
-			    << " n=" << params.total_tokens
-			    << " lda=" << params.d_model;
-			throw std::runtime_error(oss.str());
-		}
+	if (w_status != CUBLAS_STATUS_SUCCESS) {
+		std::ostringstream oss;
+		oss << "[NumericHead::backward] cublasSgemv grad_weight failed status=" << w_status
+		    << " m=" << d_model
+		    << " n=" << total_tokens
+		    << " lda=" << d_model;
+		throw std::runtime_error(oss.str());
 	}
 
 	// grad_encoder += weights * grad_predictions^T
 	const cublasStatus_t enc_status = cublasSger(
-		params.handle,
-		params.d_model,
-		params.total_tokens,
+		handle,
+		d_model,
+		total_tokens,
 		&alpha,
-		params.weights,
+		weights,
 		1,
-		params.grad_predictions,
+		grad_predictions,
 		1,
-		params.grad_encoder,
-		params.d_model);
+		grad_encoder,
+		d_model);
 	if (enc_status != CUBLAS_STATUS_SUCCESS) {
 		std::ostringstream oss;
 		oss << "[NumericHead::backward] cublasSger grad_encoder failed status=" << enc_status
-		    << " m=" << params.d_model
-		    << " n=" << params.total_tokens
-		    << " lda=" << params.d_model;
+		    << " m=" << d_model
+		    << " n=" << total_tokens
+		    << " lda=" << d_model;
 		throw std::runtime_error(oss.str());
 	}
 
-	if (params.use_bias && params.grad_bias) {
+	if (params.use_bias && params.grad_bias.is_valid()) {
 		if (!params.accumulate) {
-			cudaMemsetAsync(params.grad_bias, 0, sizeof(float), params.stream);
+			cudaMemsetAsync(params.grad_bias.ptr, 0, sizeof(float), stream);
 		}
-		launchBiasSumGradient(params.grad_predictions,
-		                      params.grad_bias,
-		                      params.total_tokens,
+		launchBiasSumGradient(grad_predictions,
+		                      params.grad_bias.ptr,
+		                      total_tokens,
 		                      1,
-		                      params.stream);
+		                      stream);
 	}
 }
 

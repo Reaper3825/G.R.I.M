@@ -83,20 +83,13 @@ struct TrainingState {
 	std::vector<EncoderLayerTensors> encoder_layers;
 	
 	// ═══════════════════════════════════════════════════════════════
-	// LEGACY PER-LAYER GRADIENT VECTORS (being migrated to Tensor)
+	// AUTOGRAD MIGRATION COMPLETE - Legacy vectors REMOVED
 	// ═══════════════════════════════════════════════════════════════
-	// These raw pointer vectors are still used by backward pass code.
-	// TODO: Migrate BackwardPhase2_Encoder.cu to use encoder_layers[i].*.grad
-	std::vector<float*> rms1_gamma_grads;
-	std::vector<float*> rms2_gamma_grads;
-	std::vector<float*> attn_qkv_weight_grads;
-	std::vector<float*> attn_qkv_bias_grads;
-	std::vector<float*> attn_out_weight_grads;
-	std::vector<float*> attn_out_bias_grads;
-	std::vector<float*> ffn_w1_grads;
-	std::vector<float*> ffn_b1_grads;
-	std::vector<float*> ffn_w2_grads;
-	std::vector<float*> ffn_b2_grads;
+	// FFN/Attention/RMSNorm gradients now use encoder's Tensor.grad:
+	//   - enc->getFFNW1Grad(), enc->getFFNW2Grad()
+	//   - enc->getAttnWqkvGrad(), enc->getAttnWoGrad()
+	//   - enc->getRMS1GammaGrad(), enc->getRMS2GammaGrad()
+	// See BackwardPhase2_Encoder.cu for usage.
 	
 	// QK-norm learned scales (nGPT-style) - weights and gradients
 	std::vector<float*> attn_alpha_q;       // [num_heads] per layer
@@ -148,6 +141,8 @@ struct TrainingState {
 	// GRMT v4: text features for ScratchBlock
 	uint16_t* cached_token_text_features = nullptr;  // [max_cached_tokens * kTextFeatureDim] FP16
 	uint8_t* cached_token_text_mask = nullptr;       // [max_cached_tokens]
+	// GRMT v6: per-token byte lengths for loss weighting (atoms cost what they represent)
+	uint16_t* cached_token_byte_lengths = nullptr;   // [max_cached_tokens]
 	int cached_batch_size = 0;
 	int cached_seq_len = 0;
 	int cached_valid_tokens = 0;
@@ -200,21 +195,43 @@ struct TrainingState {
 	int logit_bias_count = 0;             // Should equal vocab_size when set
 	uint64_t logit_bias_update_step = 0;  // Number of EMA updates (for warm-up)
 
-	// Intermediate gradient buffers
-	float* grad_logits = nullptr;
-	float* grad_numeric_predictions = nullptr;  // [max_logit_tokens]
-	float* grad_encoder_out = nullptr;
-	// Reusable backward temporaries (allocated once at init)
-	float* grad_ffn_input = nullptr;
-	float* grad_ffn_hidden = nullptr;
-	float* grad_attn_input = nullptr;
-	float* grad_attn_out_before_proj = nullptr;
-	float* grad_attn_out_reshaped = nullptr;
-	float* grad_q = nullptr;
-	float* grad_k = nullptr;
-	float* grad_v = nullptr;
-	float* grad_qkv_concat = nullptr;
-	float* grad_qkv_input = nullptr;
+	// ═══════════════════════════════════════════════════════════════
+	//  AUTOGRAD LOSS TENSOR (Issue #46 FIX: Unified loss/gradient system)
+	// ═══════════════════════════════════════════════════════════════
+	// The loss tensor computed during forward pass. Stores:
+	// - Scalar loss value (for logging)
+	// - grad_fn (CrossEntropyLossGradFn) for backward pass
+	// This unifies loss computation and gradient calculation into one system.
+	// Forward: computeLossBatch() computes loss and attaches grad_fn
+	// Backward: backward() calls loss_tensor.backward() → grad_fn->apply()
+	Tensor loss_tensor;                   // Scalar [1] - loss value + grad_fn
+	Tensor logits_tensor;                 // [total_tokens, vocab_size] - wraps cached_logits
+	float cached_loss_value = 0.0f;       // Host copy of loss (for return value)
+
+	// ═══════════════════════════════════════════════════════════════
+	//  INTERMEDIATE GRADIENT TENSORS (Issue #45 FIX: Proper autograd)
+	// ═══════════════════════════════════════════════════════════════
+	// Memory is owned by Tensor objects. Use tensor.data to access raw pointer.
+	// Tensors provide zero_grad(stream) for proper gradient zeroing.
+	// Rule 20: NO BACKWARDS COMPATIBILITY - use tensor.data directly.
+	
+	Tensor grad_logits_tensor;            // [max_logit_tokens, vocab_size] LOGITS layout
+	Tensor grad_numeric_tensor;           // [max_logit_tokens] for numeric head
+	Tensor grad_encoder_tensor;           // [max_tokens, d_model] encoder output grad
+	Tensor grad_ffn_input_tensor;         // [max_tokens, d_model]
+	Tensor grad_ffn_hidden_tensor;        // [max_tokens, d_ff]
+	Tensor grad_attn_input_tensor;        // [max_tokens, d_model]
+	Tensor grad_attn_out_proj_tensor;     // [max_tokens, d_model] pre-W_o
+	Tensor grad_attn_out_bhsd_tensor;     // [max_tokens, d_model] reshaped BHSD
+	Tensor grad_q_tensor;                 // [batch, heads, seq, head_dim]
+	Tensor grad_k_tensor;                 // [batch, kv_heads, seq, head_dim]
+	Tensor grad_v_tensor;                 // [batch, kv_heads, seq, head_dim]
+	Tensor grad_qkv_concat_tensor;        // [max_tokens, 3*d_model]
+	Tensor grad_qkv_input_tensor;         // [max_tokens, d_model]
+	Tensor grad_attn_bsm_tensor;          // [max_tokens, d_model] BSM scratch
+	
+	/// Zero all intermediate gradient tensors (call at start of accumulation window)
+	void zeroIntermediateGrads(cudaStream_t stream);
 	// Flash Attention backward workspace (per-step scratch, fp32)
 	float* fa_dq_accum = nullptr;
 	float* fa_dsoftmax_sum = nullptr;
@@ -234,23 +251,14 @@ struct TrainingState {
 	size_t fa_q_bf16_elems = 0;
 	size_t fa_kv_bf16_elems = 0;
 	
-	// DEDICATED scratch buffer for attention output BSM conversion (W_o gradient computation)
-	// CRITICAL: Do NOT reuse grad_qkv_input - that buffer is needed later in the same backward pass.
-	// This prevents temporal aliasing bugs when operations are parallelized or refactored.
-	float* grad_attn_bsm_scratch = nullptr;
-
 	// ═══════════════════════════════════════════════════════════════
 	//  Issue #43 FIX: Encoder Weight Gradient Centering Scratch Buffer
 	// ═══════════════════════════════════════════════════════════════
-	// Encoder backward uses cached activations (ln1_output, ffn_input, etc.) to compute
-	// weight gradients. These activations have NON-ZERO MEAN which causes systematic
-	// gradient bias, leading the encoder to output hidden states aligned with W[277].
-	// 
-	// FIX: Center cached activations before GEMM for weight gradients.
-	// This scratch buffer holds the centered version during each weight gradient computation.
-	// Size: max(model_elems, ffn_elems) to handle both d_model and d_ff width activations.
-	float* centered_activation_scratch = nullptr;
-	size_t centered_activation_scratch_elems = 0;
+	// Migrated to Tensor: centering_scratch_tensor
+	// See grad_attn_bsm_tensor (already defined above in INTERMEDIATE GRADIENT TENSORS section)
+	Tensor centering_scratch_tensor;      // max(d_model, d_ff) width for Issue #43
+	size_t centering_scratch_elems() const { return centering_scratch_tensor.numel(); }
+	float* centered_activation_scratch() const { return centering_scratch_tensor.data; }
 
 	// Scratch buffers for loss computation (pre-allocated to avoid malloc/free per sequence)
 	float* d_loss_scratch = nullptr;      // Per-token losses
@@ -305,16 +313,17 @@ struct TrainingState {
 	int* cached_scratch_block_num_atoms = nullptr;     // Scalar
 
 	// ═══════════════════════════════════════════════════════════════
-	//  AUTOGRAD TENSOR SYSTEM (TrainingTensors)
+	//  AUTOGRAD SYSTEM (Migration Complete - Jan 2026)
 	// ═══════════════════════════════════════════════════════════════
-	// NEW: Gradual migration from raw float* to GRIM::Tensor with autograd
-	// During transition period, both raw pointers and tensors_ may be active.
-	// Eventually, tensors_ replaces all gradient/activation storage above.
-	// Use: ts->tensors_->embedding_weights.backward() for autograd
-	std::unique_ptr<TrainingTensors> tensors_;
-	bool use_autograd_tensors = false;  // Set true to enable new system
+	// Encoder gradients now use encoder's own Tensors via:
+	//   enc->getFFNW1Grad(), enc->getAttnWqkvGrad(), etc.
+	// 
+	// tensors_ is DEPRECATED and set to nullptr - encoder owns all gradients.
+	// use_autograd_tensors enables the autograd hybrid backward path.
+	std::unique_ptr<TrainingTensors> tensors_;  // DEPRECATED - always nullptr
+	bool use_autograd_tensors = false;  // Initialized by initializeAutogradTensors()
 	
-	// Initialize autograd tensor system (call AFTER raw buffer allocation)
+	// Initialize autograd system (just sets use_autograd_tensors = true)
 	void initializeAutogradTensors(int vocab_size, int d_model, int d_ff,
 	                               int num_layers, int num_heads, int num_kv_heads,
 	                               int max_seq_len, bool tie_embeddings, bool use_bias,
@@ -394,6 +403,7 @@ struct TrainingState {
 	std::vector<uint8_t> batch_prep_numeric_mask;
 	std::vector<uint16_t> batch_prep_text_features;
 	std::vector<uint8_t> batch_prep_text_mask;
+	std::vector<uint16_t> batch_prep_byte_lengths;  // GRMT v6
 	std::vector<int> batch_prep_sequence_lengths;
 	size_t batch_prep_capacity = 0;  // Track total_tokens capacity
 };

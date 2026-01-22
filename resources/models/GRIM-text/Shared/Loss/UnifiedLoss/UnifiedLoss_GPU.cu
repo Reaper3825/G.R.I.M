@@ -67,6 +67,7 @@ __global__ void unifiedLossKernelV2(
     const int* __restrict__ targets,
     const float* __restrict__ sequence_weights,
     const float* __restrict__ logit_bias,     // Issue #39: Per-token logit bias to subtract
+    const uint16_t* __restrict__ position_byte_lengths,  // GRMT v6: Per-position byte length
     float* __restrict__ token_losses,
     float* __restrict__ grad_logits,
     float* __restrict__ loss_sum,
@@ -111,6 +112,7 @@ if (sequence_weights) {
     }
 }
 
+// All tokens weighted equally - byte_length is stored for data integrity, not loss weighting
 const float total_weight = sample_weight;
 
     const float* token_logits = logits + offset;
@@ -267,70 +269,17 @@ float ce_smooth = -q_on * log_p_t;
     atomicAdd(loss_sum, loss);
     atomicAdd(&telemetry->exit_success, 1u);
 
+    // Issue #46: REMOVED gradient computation from UnifiedLoss!
+    // Autograd handles gradients in backward pass via CrossEntropyLossGradFn.
+    // UnifiedLoss only computes loss for forward pass.
+    // Zero out the temp storage (was used for exp values) to avoid stale data.
+    zeroVector(token_grads, vocab_size);
 
-    float grad_norm_sq = 0.0f;
-    float focal_base = focal_alpha;
-    if (focal_gamma > 0.0f) {
-        const float denom = fmaxf(one_minus_p_t, kEpsilon);
-        focal_base = focal_alpha * (focal_weight / denom);
-    }
-    const float focal_ce_term = focal_gamma * p_t * ce_smooth;
-
-    for (int i = 0; i < vocab_size; ++i) {
-        const float p_i = token_grads[i] * inv_sum_exp;
-        const float q_i = (i == target) ? q_on : q_off;
-        const float delta_it = (i == target) ? 1.0f : 0.0f;
-        const float ce_grad = p_i - q_i;
-
-        float grad;
-        if (focal_gamma > 0.0f) {
-            grad = focal_base * (one_minus_p_t * ce_grad + focal_ce_term * (p_i - delta_it));
-        } else {
-            grad = focal_alpha * ce_grad;
-        }
-        grad *= total_weight;  // Issue #38: Use combined weight
-        
-        // =====================================================================
-        // Issue #44 FIX: TRUE ENTROPY REGULARIZATION gradient
-        // For penalty = -λ * H = λ * Σ_v p_v * log(p_v)
-        // ∂/∂z_i = λ * p_i * (log(p_i) + H)
-        // 
-        // At collapse (p_277 ≈ 1): grad_277 ≈ λ * 1 * (0 + 0) = 0 (weak)
-        // At p_277 = 0.9: grad_277 = λ * 0.9 * (-0.1 + 0.33) = 0.2λ (pushes DOWN)
-        // For small p_i: grad_i = λ * p_i * (very_negative + H) → negative (pushes UP)
-        // 
-        // Key insight: log(p) gradient is stronger for small p than p² gradient
-        // =====================================================================
-        if (entropy_reg_lambda > 0.0f) {
-            // Gradient: λ * p_i * (log(p_i) + H)
-            // Note: entropy = H, neg_entropy = -H = Σ p log p
-            const float log_p_i = (p_i > 1e-10f) ? logf(p_i) : -23.0f;  // Clamp to avoid -inf
-            const float entropy_grad = entropy_reg_lambda * p_i * (log_p_i + entropy);
-            grad += entropy_grad;
-        }
-        
-        token_grads[i] = grad;
-        grad_norm_sq += grad * grad;
-    }
-
-    const float grad_norm = sqrtf(grad_norm_sq);
-
-    // Track grad_logit[277] breakdown by whether this position targets 277
-    const float grad_277 = token_grads[kDebugTokenId];
-    atomicAdd(&telemetry->grad_277_sum, grad_277);
-    if (target == kDebugTokenId) {
-        atomicAdd(&telemetry->grad_277_sum_target, grad_277);  // Should be negative (p_277 - 1)
-        atomicAdd(&telemetry->target_277_count, 1u);
-    } else {
-        atomicAdd(&telemetry->grad_277_sum_nontarget, grad_277);  // Will be positive (p_277)
-    }
-
+    // Telemetry (loss-only, no gradient metrics)
     atomicAdd(&telemetry->loss_sum, loss);
     atomicAdd(&telemetry->loss_sq_sum, loss * loss);
     atomicMaxFloat(&telemetry->loss_max, loss);
     atomicMinFloat(&telemetry->loss_min, loss);
-    atomicAdd(&telemetry->grad_norm_sum, grad_norm);
-    atomicMaxFloat(&telemetry->grad_norm_max, grad_norm);
     atomicAdd(&telemetry->focal_weight_sum, focal_weight);
     atomicAdd(&telemetry->valid_count, 1u);
     if (p_t < 0.5f) {
@@ -534,6 +483,7 @@ UnifiedLossTelemetry UnifiedLossContext::compute(
         inputs.targets,
         inputs.sequence_weights,
         inputs.logit_bias,     // Issue #39: Output logit bias correction
+        inputs.position_byte_lengths,  // GRMT v6: Per-position byte length
         outputs.token_losses,
         outputs.grad_logits,
         outputs.loss_sum,
@@ -627,9 +577,14 @@ UnifiedLossTelemetry UnifiedLossContext::compute(
         }
     }
 
-    static bool logged_debug = true;  // TEMPORARILY ENABLED for debugging
+    // Race condition fix: Must sync before reading host_telemetry which was copied async
+    // (Previously the blocking cudaMemcpy inside logged_debug was accidentally providing this sync)
+    cudaStreamSynchronize(inputs.stream);
+
+    // TEMPORARILY DISABLED for performance (User request)
+    static bool logged_debug = false; 
     if (logged_debug) {
-        logged_debug = true;  // Only print once
+        logged_debug = false;  // Only print once
         const float expected_loss = host_telemetry.debug_focal_alpha *
             host_telemetry.debug_focal_weight *
             host_telemetry.debug_ce_smooth *
@@ -687,15 +642,16 @@ UnifiedLossTelemetry UnifiedLossContext::compute(
                     first_losses[0], first_losses[1], first_losses[2], first_losses[3], first_losses[4],
                     first_losses[5], first_losses[6], first_losses[7], first_losses[8], first_losses[9]);
         }
-        logged_debug = true;
     }
     
+    /*
     // Log grad_logit[277] breakdown - KEY DIAGNOSTIC for mode collapse
     fprintf(stderr, "[Grad277Trace] grad_277_sum=%.6f target_sum=%.6f nontarget_sum=%.6f target_count=%u\n",
             host_telemetry.grad_277_sum,
             host_telemetry.grad_277_sum_target,      // Should be negative (model penalized for overpredicting)
             host_telemetry.grad_277_sum_nontarget,   // Will be positive (p_277 for non-277 targets)
             host_telemetry.target_277_count);
+    */
     
     const uint32_t valid = host_telemetry.valid_count;
     const uint32_t masked = host_telemetry.masked_count;

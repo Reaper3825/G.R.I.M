@@ -270,7 +270,14 @@ BackwardContext initBackwardContextRaw(
     ctx.backward_call_id = ++s_backward_call_counter;
     
     ctx.step = step;  // Set training step for layer logging
-    ctx.enable_grad_checks = true;  // Deferred GPU stats; no per-kernel syncs.
+    
+    // Performance Optimization: Only enable gradient checks periodically
+    // This prevents filling the stats queue every step, allowing Phase2
+    // to skip strict synchronization (flushAndLog) on most steps.
+    const char* env_interval = std::getenv("GRIM_SYNC_INTERVAL");
+    const int log_interval = env_interval ? std::atoi(env_interval) : 100;
+    ctx.enable_grad_checks = (step % log_interval == 0); 
+
     ctx.enable_layer_logging = false;  // Keep layer logging off unless needed.
     ctx.explosion_threshold = 1e6f; // Gradient norm threshold
     

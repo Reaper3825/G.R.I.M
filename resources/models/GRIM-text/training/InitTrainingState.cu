@@ -287,18 +287,13 @@ void LanguageModel::initTrainingState() {
     std::cout << "📦 Final RMSNorm gamma allocated: " << cfg.d_model << " elements" << std::endl;
     
     // ═══════════════════════════════════════════════════════════════
-    // PER-LAYER GRADIENT VECTORS (legacy - still used by backward pass)
+    // AUTOGRAD MIGRATION COMPLETE - Legacy vectors REMOVED
     // ═══════════════════════════════════════════════════════════════
-    training_state_.rms1_gamma_grads.resize(cfg.num_layers, nullptr);
-    training_state_.rms2_gamma_grads.resize(cfg.num_layers, nullptr);
-    training_state_.attn_qkv_weight_grads.resize(cfg.num_layers, nullptr);
-    training_state_.attn_qkv_bias_grads.resize(cfg.num_layers, nullptr);
-    training_state_.attn_out_weight_grads.resize(cfg.num_layers, nullptr);
-    training_state_.attn_out_bias_grads.resize(cfg.num_layers, nullptr);
-    training_state_.ffn_w1_grads.resize(cfg.num_layers, nullptr);
-    training_state_.ffn_b1_grads.resize(cfg.num_layers, nullptr);
-    training_state_.ffn_w2_grads.resize(cfg.num_layers, nullptr);
-    training_state_.ffn_b2_grads.resize(cfg.num_layers, nullptr);
+    // FFN/Attention/RMSNorm gradients now use encoder's Tensor.grad:
+    //   - enc->getFFNW1Grad(), enc->getFFNW2Grad()
+    //   - enc->getAttnWqkvGrad(), enc->getAttnWoGrad()
+    //   - enc->getRMS1GammaGrad(), enc->getRMS2GammaGrad()
+    // Allocated via ensure_grad() in encoder's allocateWeights().
     
     // Learnable QK-norm scales (nGPT-style)
     training_state_.attn_alpha_q.resize(cfg.num_layers, nullptr);
@@ -327,30 +322,8 @@ void LanguageModel::initTrainingState() {
               << " (heads_per_kv_group=" << (cfg.num_heads / num_kv_heads) << ")" << std::endl;
     
     for (int layer = 0; layer < cfg.num_layers; ++layer) {
-        cudaMalloc(&training_state_.rms1_gamma_grads[layer], cfg.d_model * sizeof(float));
-        cudaMalloc(&training_state_.rms2_gamma_grads[layer], cfg.d_model * sizeof(float));
-        
-        // GQA: QKV weight size changes
-        // Q projection: [d_model, d_model] 
-        // K projection: [kv_dim, d_model] where kv_dim = num_kv_heads * head_dim
-        // V projection: [kv_dim, d_model]
-        const int head_dim = cfg.head_dim;  // Use pre-computed value from config
-        const int kv_dim = num_kv_heads * head_dim;
-        const size_t q_weight_size = cfg.d_model * cfg.d_model;
-        const size_t k_weight_size = kv_dim * cfg.d_model;
-        const size_t v_weight_size = kv_dim * cfg.d_model;
-        const size_t qkv_weight_size = q_weight_size + k_weight_size + v_weight_size;
-        const size_t qkv_bias_size = cfg.d_model + kv_dim + kv_dim;
-        
-        cudaMalloc(&training_state_.attn_qkv_weight_grads[layer], qkv_weight_size * sizeof(float));
-        cudaMalloc(&training_state_.attn_qkv_bias_grads[layer], qkv_bias_size * sizeof(float));
-        cudaMalloc(&training_state_.attn_out_weight_grads[layer], cfg.d_model * cfg.d_model * sizeof(float));
-        cudaMalloc(&training_state_.attn_out_bias_grads[layer], cfg.d_model * sizeof(float));
-        
-        cudaMalloc(&training_state_.ffn_w1_grads[layer], cfg.d_model * cfg.d_ff * sizeof(float));
-        cudaMalloc(&training_state_.ffn_b1_grads[layer], cfg.d_ff * sizeof(float));
-        cudaMalloc(&training_state_.ffn_w2_grads[layer], cfg.d_ff * cfg.d_model * sizeof(float));
-        cudaMalloc(&training_state_.ffn_b2_grads[layer], cfg.d_model * sizeof(float));
+        // AUTOGRAD MIGRATION COMPLETE: All encoder layer gradients now use encoder's Tensor.grad
+        // (allocated via ensure_grad() in encoder's allocateWeights())
         
         // Allocate and initialize learnable QK-norm scales
         // GQA: alpha_q has num_heads entries, alpha_k has num_kv_heads entries
@@ -555,8 +528,15 @@ void LanguageModel::initTrainingState() {
         return;
     }
     
-    std::cout << "✓ Allocated numeric/text feature buffers (" 
-              << (max_tokens * (sizeof(float) + sizeof(uint8_t) + kTextFeatureDim * sizeof(uint16_t) + sizeof(uint8_t)) / 1024 / 1024) 
+    // GRMT v6: Allocate byte length buffer for loss weighting
+    err = cudaMalloc(&training_state_.cached_token_byte_lengths, max_tokens * sizeof(uint16_t));
+    if (err != cudaSuccess) {
+        std::cerr << "Failed to allocate token byte length cache: " << cudaGetErrorString(err) << std::endl;
+        return;
+    }
+    
+    std::cout << "✓ Allocated numeric/text/byte_length feature buffers (" 
+              << (max_tokens * (sizeof(float) + sizeof(uint8_t) + kTextFeatureDim * sizeof(uint16_t) + sizeof(uint8_t) + sizeof(uint16_t)) / 1024 / 1024) 
               << " MB)" << std::endl;
 
     // Allocate entropy output buffer (per-layer, per-batch, per-head)
@@ -582,27 +562,34 @@ void LanguageModel::initTrainingState() {
     training_state_.sequence_weight_capacity = static_cast<int>(max_batch_size);
     training_state_.sequence_weight_count = 0;
     
-    // Allocate gradient buffer with LOGITS layout tracking (TensorContract integration)
-    err = cudaMalloc(&training_state_.grad_logits, max_logit_tokens * cfg.vocab_size * sizeof(float));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate logits gradient buffer: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
-    std::cout << "✓ Allocated grad_logits [" << max_logit_tokens << " x " << cfg.vocab_size << "] LOGITS layout" << std::endl;
+    // ═══════════════════════════════════════════════════════════════
+    //  INTERMEDIATE GRADIENT TENSORS (Issue #45 FIX: Proper autograd)
+    // ═══════════════════════════════════════════════════════════════
+    // Using Tensor::zeros() instead of raw cudaMalloc for proper lifecycle management.
+    // Tensors own their memory and provide zero_grad(stream) for gradient zeroing.
+    
+    cudaStream_t grad_stream = training_state_.stream_ctrl.getPrimaryStream();
+    
+    // grad_logits: [max_logit_tokens, vocab_size] LOGITS layout
+    training_state_.grad_logits_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_LOGITS(static_cast<int>(max_logit_tokens), cfg.vocab_size),
+        false, grad_stream);
+    training_state_.grad_logits_tensor.name = "grad_logits";
+    std::cout << "✓ Allocated grad_logits_tensor [" << max_logit_tokens << " x " << cfg.vocab_size << "] LOGITS layout" << std::endl;
 
+    // grad_numeric: [max_logit_tokens] for numeric head
     if (cfg.numeric_head_enabled) {
-        err = cudaMalloc(&training_state_.grad_numeric_predictions, max_logit_tokens * sizeof(float));
-        if (err != cudaSuccess) {
-            std::cerr << "Failed to allocate numeric prediction gradient buffer: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
+        training_state_.grad_numeric_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(static_cast<int>(max_logit_tokens), 1),
+            false, grad_stream);
+        training_state_.grad_numeric_tensor.name = "grad_numeric";
     }
     
-    err = cudaMalloc(&training_state_.grad_encoder_out, max_tokens * cfg.d_model * sizeof(float));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate encoder gradient buffer: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    // grad_encoder: [max_tokens, d_model]
+    training_state_.grad_encoder_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(static_cast<int>(max_tokens), cfg.d_model),
+        false, grad_stream);
+    training_state_.grad_encoder_tensor.name = "grad_encoder_out";
     
     const size_t tokens_per_batch = max_batch_size * max_seq_len_cache;
     EncodingConfig enc_cfg{};
@@ -612,7 +599,7 @@ void LanguageModel::initTrainingState() {
     enc_cfg.d_ff = cfg.d_ff;  // Use actual d_ff from config
     enc_cfg.rms_epsilon = 1e-5f;
     enc_cfg.causal_mask = cfg.causal_mask;
-    enc_cfg.use_flash_attention = false;
+    enc_cfg.use_flash_attention = true;
     enc_cfg.stream = training_state_.stream_ctrl.getPrimaryStream();
     enc_cfg.cublas_handle = training_state_.cublas_handle;  // Rule 22: centralized handle
     EncodingLayer enc_layer(enc_cfg);
@@ -634,42 +621,86 @@ void LanguageModel::initTrainingState() {
     }
     training_state_.encoder_workspace_size = workspace_bytes;
 
-    // Allocate reusable backward temporaries (avoid per-layer cudaMalloc/free)
+    // ═══════════════════════════════════════════════════════════════
+    //  ENCODER BACKWARD TEMPORARIES (Issue #45 FIX: Tensor allocation)
+    // ═══════════════════════════════════════════════════════════════
     const int head_dim = cfg.head_dim;  // Use pre-computed value from config
-    const size_t qkv_elems = max_tokens * static_cast<size_t>(cfg.num_heads) * static_cast<size_t>(head_dim); // = max_tokens * d_model
-    const size_t model_elems = max_tokens * static_cast<size_t>(cfg.d_model);
-    const size_t ffn_elems = max_tokens * static_cast<size_t>(cfg.d_ff);
-    const size_t qkv_concat_elems = max_tokens * static_cast<size_t>(3 * cfg.d_model);
-
-    auto alloc_or_fail = [&](float** ptr, size_t elems, const char* label) -> bool {
-        cudaError_t aerr = cudaMalloc(ptr, elems * sizeof(float));
-        if (aerr != cudaSuccess) {
-            std::cerr << "Failed to allocate " << label << ": " << cudaGetErrorString(aerr) << std::endl;
-            return false;
-        }
-        return true;
-    };
-
-    if (!alloc_or_fail(&training_state_.grad_ffn_input, model_elems, "grad_ffn_input")) return;
-    if (!alloc_or_fail(&training_state_.grad_ffn_hidden, ffn_elems, "grad_ffn_hidden")) return;
-    if (!alloc_or_fail(&training_state_.grad_attn_input, model_elems, "grad_attn_input")) return;
-    if (!alloc_or_fail(&training_state_.grad_attn_out_before_proj, model_elems, "grad_attn_out_before_proj")) return;
-    if (!alloc_or_fail(&training_state_.grad_attn_out_reshaped, qkv_elems, "grad_attn_out_reshaped")) return;
-    if (!alloc_or_fail(&training_state_.grad_q, qkv_elems, "grad_Q")) return;
-    if (!alloc_or_fail(&training_state_.grad_k, qkv_elems, "grad_K")) return;
-    if (!alloc_or_fail(&training_state_.grad_v, qkv_elems, "grad_V")) return;
-    if (!alloc_or_fail(&training_state_.grad_qkv_concat, qkv_concat_elems, "grad_qkv_concat")) return;
-    if (!alloc_or_fail(&training_state_.grad_qkv_input, model_elems, "grad_qkv_input")) return;
+    const int max_tokens_int = static_cast<int>(max_tokens);
+    
+    // FFN backward temporaries
+    training_state_.grad_ffn_input_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
+        false, grad_stream);
+    training_state_.grad_ffn_input_tensor.name = "grad_ffn_input";
+    
+    training_state_.grad_ffn_hidden_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_ff),
+        false, grad_stream);
+    training_state_.grad_ffn_hidden_tensor.name = "grad_ffn_hidden";
+    
+    // Attention backward temporaries (model-width)
+    training_state_.grad_attn_input_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
+        false, grad_stream);
+    training_state_.grad_attn_input_tensor.name = "grad_attn_input";
+    
+    training_state_.grad_attn_out_proj_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
+        false, grad_stream);
+    training_state_.grad_attn_out_proj_tensor.name = "grad_attn_out_before_proj";
+    
+    training_state_.grad_attn_out_bhsd_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
+        false, grad_stream);
+    training_state_.grad_attn_out_bhsd_tensor.name = "grad_attn_out_reshaped";
+    
+    // QKV gradients (need 4D shape for attention, but stored flat for now)
+    // Full shape: [batch, heads, seq, head_dim] - using BSM as [tokens, d_model]
+    training_state_.grad_q_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
+        false, grad_stream);
+    training_state_.grad_q_tensor.name = "grad_Q";
+    
+    training_state_.grad_k_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
+        false, grad_stream);
+    training_state_.grad_k_tensor.name = "grad_K";
+    
+    training_state_.grad_v_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
+        false, grad_stream);
+    training_state_.grad_v_tensor.name = "grad_V";
+    
+    // QKV fused [tokens, 3*d_model]
+    training_state_.grad_qkv_concat_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_QKV_FUSED(max_tokens_int, 3 * cfg.d_model),
+        false, grad_stream);
+    training_state_.grad_qkv_concat_tensor.name = "grad_qkv_concat";
+    
+    training_state_.grad_qkv_input_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
+        false, grad_stream);
+    training_state_.grad_qkv_input_tensor.name = "grad_qkv_input";
+    
     // DEDICATED scratch buffer for attention output BSM conversion (W_o gradient computation)
     // CRITICAL: Do NOT reuse grad_qkv_input - prevents temporal aliasing bugs
-    if (!alloc_or_fail(&training_state_.grad_attn_bsm_scratch, model_elems, "grad_attn_bsm_scratch")) return;
+    training_state_.grad_attn_bsm_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
+        false, grad_stream);
+    training_state_.grad_attn_bsm_tensor.name = "grad_attn_bsm_scratch";
     
     // Issue #43 FIX: Centering scratch buffer for encoder weight gradients
-    // Size: max(model_elems, ffn_elems) to handle both d_model and d_ff width activations
-    const size_t centering_scratch_elems = std::max(model_elems, ffn_elems);
-    if (!alloc_or_fail(&training_state_.centered_activation_scratch, centering_scratch_elems, "centered_activation_scratch")) return;
-    training_state_.centered_activation_scratch_elems = centering_scratch_elems;
-    std::cout << "📐 Issue #43: Allocated centering scratch buffer (" << (centering_scratch_elems * sizeof(float) / (1024*1024)) << " MB)" << std::endl;
+    // Size: max(d_model, d_ff) to handle both model and FFN width activations
+    const int centering_width = std::max(cfg.d_model, cfg.d_ff);
+    training_state_.centering_scratch_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(max_tokens_int, centering_width),
+        false, grad_stream);
+    training_state_.centering_scratch_tensor.name = "centered_activation_scratch";
+    std::cout << "📐 Issue #43: Allocated centering scratch tensor (" 
+              << (training_state_.centering_scratch_tensor.numel() * sizeof(float) / (1024*1024)) << " MB)" << std::endl;
+
+    // Rule 20: NO BACKWARDS COMPATIBILITY - callers must use tensor.data directly
+    // Removed raw pointer alias assignments
 
     training_state_.fa_dq_accum_bytes = flash_attn_dq_accum_bytes(
         static_cast<int>(max_batch_size),
@@ -829,6 +860,28 @@ void LanguageModel::initTrainingState() {
         std::cout << "ℹ ScratchBlock reasoning layer disabled" << std::endl;
         scratch_block_layer_ = nullptr;
     }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  STEP FINAL: Enable Autograd Tensor System
+    //  This sets use_autograd_tensors = true, which switches the backward pass
+    //  from the legacy 3-phase system to autograd-based gradient propagation.
+    //  
+    //  WHY: The legacy backward reads from cached_* buffers that are never populated
+    //  by the autograd forward pass, causing size=0 gradients and NaN crashes.
+    // ═══════════════════════════════════════════════════════════════════════════
+    training_state_.initializeAutogradTensors(
+        cfg.vocab_size,
+        cfg.d_model,
+        cfg.d_ff,
+        cfg.num_layers,
+        cfg.num_heads,
+        training_state_.num_kv_heads,  // Use calculated GQA value
+        cfg.max_seq_len,
+        cfg.tie_embeddings,
+        cfg.use_bias,
+        primary_stream
+    );
+    std::cout << "✓ Autograd tensor system enabled (use_autograd_tensors=true)" << std::endl;
     
     training_state_.initialized = true;
     std::cout << "✓ Training state initialized with full gradient buffers" << std::endl;

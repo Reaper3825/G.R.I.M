@@ -284,12 +284,13 @@ __global__ void EmbeddingBackwardKernel(const float* __restrict__ grad_output,
 void launchEmbeddingLookup(const EmbeddingForwardArgs& args,
                            const EmbeddingConfig& config) {
     // Rule 20: Crash on invalid input
-    if (!args.output) {
-        throw std::runtime_error("launchEmbeddingLookup: output is NULL");
-    }
-    if (!args.weights || !args.weights->token_embeddings) {
-        throw std::runtime_error("launchEmbeddingLookup: weights or token_embeddings is NULL");
-    }
+    args.validate("launchEmbeddingLookup");
+    
+    // Extract pointers from TensorViews
+    float* output_ptr = args.output.ptr;
+    const float* token_embeddings_ptr = args.weights->token_embeddings.ptr;
+    const float* position_embeddings_ptr = args.weights->position_embeddings.ptr;
+    const float* gamma_ptr = args.weights->gamma.ptr;
 
     const int total_tokens = args.batch_size * args.seq_len;
     if (total_tokens <= 0) {
@@ -301,7 +302,7 @@ void launchEmbeddingLookup(const EmbeddingForwardArgs& args,
     if (config.vocab_size <= 0) {
         throw std::runtime_error("launchEmbeddingLookup: vocab_size=" + std::to_string(config.vocab_size));
     }
-    if (config.max_position <= 0 && args.weights->position_embeddings) {
+    if (config.max_position <= 0 && position_embeddings_ptr) {
         throw std::runtime_error("launchEmbeddingLookup: position_embeddings provided but max_position=0");
     }
 
@@ -323,18 +324,18 @@ void launchEmbeddingLookup(const EmbeddingForwardArgs& args,
     dim3 block(kEmbeddingBlockSize);
     dim3 grid(total_tokens);
 
-    if (config.apply_rms_norm && args.weights->gamma) {
+    if (config.apply_rms_norm && gamma_ptr) {
         EmbeddingRMSNormKernel<<<grid, block, 0, stream>>>(
             args.token_ids, args.positions,
-            args.weights->token_embeddings, args.weights->position_embeddings,
-            args.weights->gamma, args.output,
+            token_embeddings_ptr, position_embeddings_ptr,
+            gamma_ptr, output_ptr,
             total_tokens, seq_len, config.d_model,
             config.vocab_size, config.max_position, config.rms_epsilon);
     } else {
         EmbeddingLookupKernel<<<grid, block, 0, stream>>>(
             args.token_ids, args.positions,
-            args.weights->token_embeddings, args.weights->position_embeddings,
-            args.output, total_tokens, seq_len, config.d_model,
+            token_embeddings_ptr, position_embeddings_ptr,
+            output_ptr, total_tokens, seq_len, config.d_model,
             config.vocab_size, config.max_position);
     }
 
@@ -494,7 +495,7 @@ static bool validateRuntime(const EmbeddingRuntime* runtime, const char* caller)
         fprintf(stderr, "[%s] ERROR: EmbeddingRuntime is null\n", caller);
         return false;
     }
-    if (!runtime->weights.token_embeddings) {
+    if (!runtime->weights.token_embeddings.ptr) {
         fprintf(stderr, "[%s] ERROR: token_embeddings is null\n", caller);
         return false;
     }
@@ -555,17 +556,22 @@ bool embeddingRuntimeForward(EmbeddingRuntime* runtime,
     if (!validateRuntime(runtime, "embeddingRuntimeForward")) return false;
     if (!validateForwardArgs(batch_size, seq_len, output, "embeddingRuntimeForward")) return false;
 
-    if (seq_len > runtime->config.max_position && runtime->weights.position_embeddings) {
+    if (seq_len > runtime->config.max_position && runtime->weights.position_embeddings.ptr) {
         fprintf(stderr, "[embeddingRuntimeForward] WARNING: seq_len=%d > max_position=%d\n",
                 seq_len, runtime->config.max_position);
     }
+
+    // Construct TensorView for output (BSM layout)
+    const int total_tokens = batch_size * seq_len;
+    TensorContract::TensorView output_view = TensorContract::TensorView::make_BSM(
+        output, total_tokens, runtime->config.d_model, "embedding_output");
 
     EmbeddingForwardArgs args{};
     args.token_ids = token_ids;
     args.positions = positions;
     args.batch_size = batch_size;
     args.seq_len = seq_len;
-    args.output = output;
+    args.output = output_view;
     args.weights = &runtime->weights;
     args.stream = runtime->stream;
 
@@ -603,7 +609,7 @@ bool embeddingRuntimeForwardSingle(EmbeddingRuntime* runtime,
         fprintf(stderr, "[embeddingRuntimeForwardSingle] ERROR: position=%d negative\n", position);
         return false;
     }
-    if (position >= runtime->config.max_position && runtime->weights.position_embeddings) {
+    if (position >= runtime->config.max_position && runtime->weights.position_embeddings.ptr) {
         fprintf(stderr, "[embeddingRuntimeForwardSingle] WARNING: position=%d >= max_position=%d\n",
                 position, runtime->config.max_position);
     }
@@ -613,12 +619,16 @@ bool embeddingRuntimeForwardSingle(EmbeddingRuntime* runtime,
     cudaMemcpyAsync(runtime->single_position, &position, sizeof(int),
                     cudaMemcpyHostToDevice, runtime->stream);
 
+    // Construct TensorView for single-token output (BSM layout [1, d_model])
+    TensorContract::TensorView output_view = TensorContract::TensorView::make_BSM(
+        output, 1, runtime->config.d_model, "embedding_single_output");
+
     EmbeddingForwardArgs args{};
     args.token_ids = runtime->single_token_id;
     args.positions = runtime->single_position;
     args.batch_size = 1;
     args.seq_len = 1;
-    args.output = output;
+    args.output = output_view;
     args.weights = &runtime->weights;
     args.stream = runtime->stream;
 

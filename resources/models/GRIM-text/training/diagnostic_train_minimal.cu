@@ -129,44 +129,48 @@ void traceGradientComponents(GRIM::LanguageModel& model, int batch, cudaStream_t
     }
     
     // 2. Per-layer gradients (show gradient flow through encoder)
+    // AUTOGRAD MIGRATION: Use encoder's Tensor.grad instead of legacy TrainingState vectors
     for (int layer = config.num_layers - 1; layer >= 0; --layer) {
         std::cout << "  Layer " << layer << ":" << std::endl;
         
-        // Attention gradients
-        if (layer < (int)ts.attn_qkv_weight_grads.size() && ts.attn_qkv_weight_grads[layer]) {
+        auto* enc = gpu_encoder ? gpu_encoder->getLayer(layer) : nullptr;
+        if (!enc) {
+            std::cout << "    SKIP: encoder layer is null" << std::endl;
+            continue;
+        }
+        
+        // Attention gradients (via encoder's Tensor.grad)
+        if (float* grad = enc->getAttnWqkvGrad()) {
             const int head_dim = config.head_dim;  // Use pre-computed value from config
             const int kv_dim = ts.num_kv_heads * head_dim;
             const int total_qkv_dim = config.d_model + 2 * kv_dim;
             size_t qkv_size = static_cast<size_t>(total_qkv_dim) * config.d_model;
             
-            float qkv_norm = computeGradNormSync(ts.attn_qkv_weight_grads[layer], qkv_size, stream);
+            float qkv_norm = computeGradNormSync(grad, qkv_size, stream);
             std::cout << "    QKV: " << std::scientific << std::setprecision(4) << qkv_norm;
         }
         
         // W_o (output projection)
-        if (layer < (int)ts.attn_out_weight_grads.size() && ts.attn_out_weight_grads[layer]) {
+        if (float* grad = enc->getAttnWoGrad()) {
             size_t wo_size = static_cast<size_t>(config.d_model) * config.d_model;
-            float wo_norm = computeGradNormSync(ts.attn_out_weight_grads[layer], wo_size, stream);
+            float wo_norm = computeGradNormSync(grad, wo_size, stream);
             std::cout << "  W_o: " << wo_norm;
         }
         
-        // FFN gradients
-        if (layer < (int)ts.ffn_w1_grads.size() && ts.ffn_w1_grads[layer]) {
+        // FFN gradients (via encoder's Tensor.grad)
+        if (float* grad = enc->getFFNW1Grad()) {
             size_t w1_size = static_cast<size_t>(config.d_model) * config.d_ff;
-            float w1_norm = computeGradNormSync(ts.ffn_w1_grads[layer], w1_size, stream);
+            float w1_norm = computeGradNormSync(grad, w1_size, stream);
             std::cout << "  FFN_W1: " << w1_norm;
         }
         
-        if (layer < (int)ts.ffn_w2_grads.size() && ts.ffn_w2_grads[layer]) {
+        if (float* grad = enc->getFFNW2Grad()) {
             size_t w2_size = static_cast<size_t>(config.d_ff) * config.d_model;
-            float w2_norm = computeGradNormSync(ts.ffn_w2_grads[layer], w2_size, stream);
+            float w2_norm = computeGradNormSync(grad, w2_size, stream);
             std::cout << "  FFN_W2: " << w2_norm << std::endl;
         }
         
         // RMSNorm gradients (should be smallest)
-        // BUG FIX Issue #26: Read from EncodingLayer buffers (where backward writes),
-        // NOT from ts.rms1_gamma_grads (which are separate unused allocations)
-        auto* enc = gpu_encoder ? gpu_encoder->getLayer(layer) : nullptr;
         if (enc) {
             float* rms1_grad = enc->getRMS1GammaGrad();
             float* rms2_grad = enc->getRMS2GammaGrad();

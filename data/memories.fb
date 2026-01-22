@@ -35,8 +35,8 @@
       "context": "monitor",
       "id": "",
       "intent": "inform",
-      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: OM administrator: windows Pow X = + v — a x\nFPs N/A WIA | LAT N/A | FGOVR N/A, N/A | SROVR NIA, N/A | RROVR NIA, NIA\n\n[2025-12-21 19:24:09] [DEBUG] [Voice] Launching Coqui XTTS v2 bridge and waiting up to 120s for model load...\n[2025-12-21 19:24:11] [DEBUG] [Voice/Bridge/Stderr] [Coqui XTTS] Patched torch.load to use weights_only=False\n[2025-12-21 19:24:13] [DEBUG] [Voice/Bridge/Stderr] D:\\G.R.I.M\\.venv\\Lib\\site-packages\\librosa\\core\\intervals.py:8: UserWarning: pkg_resources is deprecated as ... (4936 total chars)\n",
-      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: OM administrator: windows Pow X = + v — a x\nFPs N/A WIA | LAT N/A | FGOVR N/A, N/A | SROVR NIA, N/A | RROVR NIA, NIA\n\n[2025-12-21 19:24:09] [DEBUG] [Voice] Launching Coqui XTTS v2 bridge and waiting up to 120s for model load...\n[2025-12-21 19:24:11] [DEBUG] [Voice/Bridge/Stderr] [Coqui XTTS] Patched torch.load to use weights_only=False\n[2025-12-21 19:24:13] [DEBUG] [Voice/Bridge/Stderr] D:\\G.R.I.M\\.venv\\Lib\\site-packages\\librosa\\core\\intervals.py:8: UserWarning: pkg_resources is deprecated as ... (4936 total chars)\n",
+      "normalized": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: Om administrator: Windows Pow X = + - @ x\n\n[2026-01-17 21:34:18] [DEBUG][Plugin] [Plugin: Network Test Plugin] Network Test Plugin initial\nizing...\n\n[2026-01-17 21:34:18] [DEBUG] [PluginAPI] Command registered: networktest\n\n[2026-01-17 21:34:18] [DEBUG] [PluginAPI] Command registered: networktest_stop\n\n[2026-01-17 21:34:18] [DEBUG][Plugin] [Plugin: Network Test Plugin] Network Test Plugin loaded\nsuccessfully\n\n[2026-01-17 21:34:18] [DEBUG] [PluginManager] Loaded plugin: Network Test Plugin\n\n[2026... (1877 total chars)\n",
+      "raw": "Significant screen change detected (100% change)\n\nScreen 1920x1080 (Monitor 1 of 3)\nActive: Administrator: Windows PowerShell (WindowsTerminal.exe)\nScene: Terminal/Console | Theme: Dark\nText: Om administrator: Windows Pow X = + - @ x\n\n[2026-01-17 21:34:18] [DEBUG][Plugin] [Plugin: Network Test Plugin] Network Test Plugin initial\nizing...\n\n[2026-01-17 21:34:18] [DEBUG] [PluginAPI] Command registered: networktest\n\n[2026-01-17 21:34:18] [DEBUG] [PluginAPI] Command registered: networktest_stop\n\n[2026-01-17 21:34:18] [DEBUG][Plugin] [Plugin: Network Test Plugin] Network Test Plugin loaded\nsuccessfully\n\n[2026-01-17 21:34:18] [DEBUG] [PluginManager] Loaded plugin: Network Test Plugin\n\n[2026... (1877 total chars)\n",
       "source": "grim.internal",
       "tags": [
         "visual-context",
@@ -45,7 +45,7 @@
         "WindowsTerminal.exe",
         "monitor-1"
       ],
-      "timestamp": 1766363089,
+      "timestamp": 1768703678,
       "type": "event"
     }
   ]
