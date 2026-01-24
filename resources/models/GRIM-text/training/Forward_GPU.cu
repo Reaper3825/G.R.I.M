@@ -7,7 +7,9 @@
 
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
-#include "../Layers/ForwardOps/ForwardOps_Logging.hpp"
+
+// Simple logging macros (legacy ForwardOps_Logging deleted per Rule 20)
+#define FWD_ERROR(msg) do { std::cerr << msg << std::endl; } while(0)
 
 namespace GRIM {
 
@@ -15,7 +17,7 @@ namespace GRIM {
 
 //======================================================//
 // GPUGrimEncoder::Impl - Layer Container
-// Owns the encoder layers; forward pass logic is in ForwardPhase2_Encoder.cu
+// Owns the encoder layers; forward pass uses autograd in AutogradTraining.cu
 //======================================================//
 struct GPUGrimEncoder::Impl {
     EncoderConfig config_;

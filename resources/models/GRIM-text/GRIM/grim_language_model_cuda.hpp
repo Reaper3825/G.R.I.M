@@ -554,10 +554,8 @@ public:
                                      const GenerationConfig* gen_config = nullptr);
     
     // Training
-    float computeLoss(const std::vector<int>& input_ids,
-                      const std::vector<int>& target_ids,
-                      const std::vector<float>& token_numeric_values,
-                      const std::vector<uint8_t>& token_numeric_mask);
+    // Legacy computeLoss() single-sequence function DELETED per Rule 20.
+    // Production code uses computeLossBatch() which supports batching and uses autograd.
     float computeLossBatch(const std::vector<std::vector<int>>& batch_input_ids,
                            const std::vector<std::vector<int>>& batch_target_ids,
                            const std::vector<std::vector<float>>& batch_numeric_values,

@@ -54,9 +54,6 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})               # TrainingLoop/
 # GPU training kernels library (from parent directory)
 add_library(grim_training_kernels STATIC 
     ../../Layers/Embedding/Embedding_GPU.cu
-    ../../Shared/Loss/UnifiedLoss/UnifiedLoss_GPU.cu
-    ../../Shared/Loss/ComputeLoss/ComputeLoss_GPU.cu
-    ../../Shared/Loss/ComputeLoss/ComputeLossHost_GPU.cu
     ../../Shared/Loss/CrossEntropy/CrossEntropy_GPU.cu
     ../../Shared/Gradients/GradientCC_GPU.cu
     ../../Shared/Gradients/GradientCC_Host_GPU.cu
@@ -186,7 +183,7 @@ target_link_libraries(grim_cuda_kernels PUBLIC
 add_library(grim_language_model_gpu_impl OBJECT
     ../../Common/grim_language_model_gpu.cu
     ../../Common/ScaleBuffer.cu
-    ../ForwardWithCache_GPU.cu
+    ../Inference_GPU.cu
     ../Forward_GPU.cu
     ../InitTrainingState.cu
     ../TrainingOps.cu
@@ -198,14 +195,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Dropout/Dropout_GPU.cu
     ../LanguageModel_Training.cu
     ../../Shared/Gradients/GradStatsCollector.cu
-    # BackwardOps DELETED - replaced by pure autograd in Autograd/AutogradTraining.cu
     ../Autograd/AutogradTraining.cu
-    ../../Layers/ForwardOps/ForwardDiagnostics.cu
-    ../../Layers/ForwardOps/ForwardKernels.cu
-    ../../Layers/ForwardOps/ForwardOps_Orchestrator.cu
-    ../../Layers/ForwardOps/ForwardPhase1_OutputLayer.cu
-    ../../Layers/ForwardOps/ForwardPhase2_Encoder.cu
-    ../../Layers/ForwardOps/ForwardPhase3_InputLayer.cu
     ../../Layers/HardcodedStates/HardcodedStates_GPU.cu
     ../../Layers/LMHead/lm_head_GPU.cu
     ../../Layers/NumericHead/numeric_head_GPU.cu
@@ -216,7 +206,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/Encoding/Encoding_GPU.cu
     ../../Layers/ScratchBlock/ScratchBlock_GPU.cu
     ../../Shared/ScratchBlock/ScratchBlock_GPU.cu
-    ../IncrementalGeneration_GPU.cu
     ../../Layers/InitInferenceState/InitinferenceState.cu
     ../../Shared/TensorConversion/TensorConversion.cu
     ../../Shared/TensorContract/TensorContract_GPU.cu

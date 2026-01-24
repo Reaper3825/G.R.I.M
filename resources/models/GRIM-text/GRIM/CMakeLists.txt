@@ -64,11 +64,11 @@ file(GLOB COMMON_CU_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../Common/*.cu")
 
 # Training folder (only specific files needed for inference)
 set(TRAINING_CU_FILES
-    ${CMAKE_CURRENT_SOURCE_DIR}/../training/ForwardWithCache_GPU.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Inference_GPU.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Forward_GPU.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/InitTrainingState.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/TrainingOps.cu
-    ${CMAKE_CURRENT_SOURCE_DIR}/../training/IncrementalGeneration_GPU.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Autograd/AutogradTraining.cu
 )
 
 # Combine all .cu files

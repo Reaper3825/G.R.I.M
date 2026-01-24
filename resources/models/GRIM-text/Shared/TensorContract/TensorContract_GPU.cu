@@ -43,7 +43,7 @@ bool g_autograd_verbose = false;  // PRODUCTION: Disable verbose AG_TRACE loggin
 float* g_debug_lm_head_only_grad = nullptr;   // Where to copy LM head backward contribution
 float* g_debug_embedding_only_grad = nullptr; // Where to copy embedding backward contribution
 size_t g_debug_grad_buffer_size = 0;          // Size in elements (vocab_size * d_model)
-bool g_debug_capture_enabled = false;         // Enable/disable capturing
+bool g_debug_capture_enabled = true;         // Enable/disable capturing
 
 // ISSUE #60 ROOT CAUSE FIX: Skip embedding backward when weights are tied
 // PyTorch with tied weights does: logits = x @ embedding.weight.T

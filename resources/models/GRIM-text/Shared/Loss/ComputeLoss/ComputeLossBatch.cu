@@ -13,9 +13,6 @@
 #include <cuda_runtime.h>
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
-#include "../../Layers/ForwardOps/ForwardOps_Orchestrator.hpp"
-#include "../../Layers/ForwardOps/ForwardOps_Logging.hpp"
-#include "ComputeLossHost_GPU.hpp"
 #include "AutogradLoss.hpp"  // Issue #46: Unified autograd loss system
 #include "../LossContext/LossContext.hpp"
 #include "../NumericLoss/NumericLoss_GPU.hpp"
@@ -304,8 +301,6 @@ float LanguageModel::computeLossBatch(
 		initTrainingState();
 	}
 
-	GRIM::ForwardOps::LogUnexpectedGradState(training_state_, "computeLossBatch");
-
 	GPUGrimEncoder* gpu_encoder = nullptr;
 	EmbeddingRuntime* embedding_runtime = nullptr;
 	try {
@@ -587,10 +582,7 @@ float LanguageModel::computeLossBatch(
 	orderLog("computeLossBatch.forward_done",
 		batch_size, seq_len, total_tokens, valid_tokens);
 
-	LossScratch scratch{
-		training_state_.d_loss_scratch,
-		training_state_.d_loss_sum_scratch,
-		training_state_.loss_scratch_capacity};
+	// LossScratch struct deleted - scratch buffers managed directly in training_state_
 
 	LossContext::TensorViews ctx_views{};
 	ctx_views.logits = training_state_.cached_logits;
@@ -611,14 +603,14 @@ float LanguageModel::computeLossBatch(
 	ctx_views.position_byte_lengths = training_state_.cached_token_byte_lengths;
 	ctx_views.stream = training_state_.stream_ctrl.getPrimaryStream();
 
-	LossComputationInputs loss_inputs{};
-	loss_inputs.context = LossContext::MakeContext(ctx_views);
-	loss_inputs.config = LossContext::BuildLossConfig(loss_options_, false);
-	loss_inputs.grad_logits = training_state_.grad_logits_tensor.data;  // Pass pre-allocated buffer
+	// Legacy LossComputationInputs struct deleted - use variables directly
+	Loss::LossContext loss_context = LossContext::MakeContext(ctx_views);
+	Loss::LossConfig loss_config = LossContext::BuildLossConfig(loss_options_, false);
+	float* grad_logits_ptr = training_state_.grad_logits_tensor.data;  // Pass pre-allocated buffer
 	// If distillation/preference are enabled and no teacher/reference logits are present,
 	// mirror the current logits into the teacher/reference buffers. This keeps the call
 	// sites simple; a real teacher model can overwrite these buffers before loss compute.
-	if (loss_inputs.config.distillation.enabled) {
+	if (loss_config.distillation.enabled) {
 		orderLog("computeLossBatch.distill_copy",
 			batch_size, seq_len, total_tokens, valid_tokens);
 		if (!TeacherLogits::copyFromDevice(training_state_.teacher_logits,
@@ -630,7 +622,7 @@ float LanguageModel::computeLossBatch(
 			throw std::runtime_error("computeLossBatch: distillation enabled without teacher logits");
 		}
 	}
-	if (loss_inputs.config.preference.enabled) {
+	if (loss_config.preference.enabled) {
 		orderLog("computeLossBatch.preference_copy",
 			batch_size, seq_len, total_tokens, valid_tokens);
 		if (!TeacherLogits::copyFromDevice(training_state_.reference_logits,
@@ -647,22 +639,22 @@ float LanguageModel::computeLossBatch(
 	// Disable distillation/preference if teacher/reference logits are unavailable.
 	static bool logged_teacher_warn = false;
 	static bool logged_ref_warn = false;
-	if (loss_inputs.config.distillation.enabled && !training_state_.teacher_logits.device) {
+	if (loss_config.distillation.enabled && !training_state_.teacher_logits.device) {
 		if (!logged_teacher_warn) {
 			GRIM::Logging::EmitModuleError("Loss", "[LossConfig] distillation enabled but teacher_logits missing; aborting");
 			logged_teacher_warn = true;
 		}
 		throw std::runtime_error("computeLossBatch: distillation enabled without teacher logits");
 	}
-	if (loss_inputs.config.preference.enabled && !training_state_.reference_logits.device) {
+	if (loss_config.preference.enabled && !training_state_.reference_logits.device) {
 		if (!logged_ref_warn) {
 			GRIM::Logging::EmitModuleError("Loss", "[LossConfig] preference KL enabled but reference_logits missing; aborting");
 			logged_ref_warn = true;
 		}
 		throw std::runtime_error("computeLossBatch: preference enabled without reference logits");
 	}
-	loss_inputs.config.limits.max_tokens = logit_limit;
-	loss_inputs.valid_token_count = static_cast<size_t>(valid_tokens);
+	loss_config.limits.max_tokens = logit_limit;
+	size_t valid_token_count = static_cast<size_t>(valid_tokens);
 
 	static int loss_call_count = 0;
 	++loss_call_count;
@@ -831,7 +823,7 @@ float LanguageModel::computeLossBatch(
 	// Compute loss using AUTOGRAD - this attaches grad_fn for backward pass
 	// Build autograd LossConfig from the full LossConfig
 	autograd::LossConfig ag_loss_config;
-	const auto& full_loss_cfg = loss_inputs.config;
+	const auto& full_loss_cfg = loss_config;
 	ag_loss_config.focal_alpha = full_loss_cfg.focal.enabled ? full_loss_cfg.focal.alpha : 1.0f;
 	ag_loss_config.focal_gamma = full_loss_cfg.focal.enabled ? full_loss_cfg.focal.gamma : 0.0f;
 	ag_loss_config.smoothing_epsilon = full_loss_cfg.label_smoothing.enabled ? full_loss_cfg.label_smoothing.epsilon : 0.0f;
@@ -941,10 +933,7 @@ float LanguageModel::computeLossBatch(
 		throw std::runtime_error("autograd loss is non-finite");
 	}
 
-	// Update scratch tracking (kept for numeric head if enabled)
-	training_state_.d_loss_scratch = scratch.loss_values;
-	training_state_.d_loss_sum_scratch = scratch.loss_accumulator;
-	training_state_.loss_scratch_capacity = scratch.capacity;
+	// Scratch buffers remain in training_state_ (no need to update - they're already there)
 	training_state_.cached_valid_tokens = valid_tokens;
 
 	orderLog("computeLossBatch.loss_done",
