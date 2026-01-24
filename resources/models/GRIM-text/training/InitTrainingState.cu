@@ -144,6 +144,8 @@ void LanguageModel::initTrainingState() {
     }
     std::cout << "✓ Using pre-initialized cuBLAS handle" << std::endl;
     
+    std::cout << "[DEBUG-INIT-1] After cuBLAS, before PBM check" << std::endl << std::flush;
+    
     // ═══════════════════════════════════════════════════════════════════════
     //  STEP 3: Initialize PBM (Unified ALiBi+RoPE Hybrid)
     //  CRITICAL: Without positional encoding, attention has no position info!
@@ -183,6 +185,8 @@ void LanguageModel::initTrainingState() {
      training_state_.cached_num_layers = cfg.num_layers;
     cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
     
+    std::cout << "[DEBUG-INIT-2] After PBM, before tensors check. tensors_=" << (void*)training_state_.tensors_.get() << std::endl << std::flush;
+    
     // ═══════════════════════════════════════════════════════════════
     // PARAMETER TENSORS: Preallocate once, reuse throughout training
     // ═══════════════════════════════════════════════════════════════
@@ -194,62 +198,73 @@ void LanguageModel::initTrainingState() {
     const size_t position_size = static_cast<size_t>(cfg.max_seq_len) * cfg.d_model;
     using TC = TensorContract::TensorShape;
     
-    // Position embeddings [max_seq_len, d_model] - Issue #36 FIX: Must be trainable
-    training_state_.position_embedding_weights = Tensor::zeros(
-        TC::make_BSM(cfg.max_seq_len, cfg.d_model), true, primary_stream);
-    training_state_.position_embedding_weights.ensure_grad();  // Allocate grad buffer NOW
-    std::cout << "📦 Position embeddings allocated: " << position_size << " elements (Issue #36 FIX)" << std::endl;
+    // ═══════════════════════════════════════════════════════════════
+    // RULE 20: NO BACKWARDS COMPATIBILITY - TrainingTensors MUST be initialized
+    // ═══════════════════════════════════════════════════════════════
+    // Phase1_Startup step 2.75 calls initializeAutogradTensors() which creates
+    // TrainingTensors. If not set, it's a bug - fail loud!
     
-    // Embedding and LM head weight handling depends on tie_embeddings
+    if (!training_state_.tensors_) {
+        std::cout << "[DEBUG-INIT-3] tensors_ is NULL - about to throw" << std::endl << std::flush;
+        throw std::runtime_error(
+            "[InitTrainingState] FATAL: TrainingTensors not initialized!\n"
+            "Phase1_Startup must call initializeAutogradTensors() in step 2.75 before initTrainingState().\n"
+            "Legacy wrapping code has been DELETED per Rule 20 - no backwards compatibility.");
+    }
+    
+    // TrainingTensors owns the memory - tensors already set up by initializeAutogradTensors()
+    std::cout << "[DEBUG-INIT-4] tensors_ is SET, checking pointers..." << std::endl << std::flush;
+    
+    // CRASH DEBUG: Step-by-step pointer access to find exact crash point
+    // ISSUE #59: Use grad_data() accessor
+    std::cout << "[DEBUG-INIT-4a] About to read embedding_weights.data..." << std::endl << std::flush;
+    float* emb_data = training_state_.embedding_weights.data;
+    std::cout << "[DEBUG-INIT-4b] emb_data=" << (void*)emb_data << std::endl << std::flush;
+    
+    std::cout << "[DEBUG-INIT-4c] About to read embedding_weights.grad_data()..." << std::endl << std::flush;
+    float* emb_grad = training_state_.embedding_weights.grad_data();
+    std::cout << "[DEBUG-INIT-4d] emb_grad=" << (void*)emb_grad << std::endl << std::flush;
+    
+    std::cout << "[DEBUG-INIT-4e] About to read position_embedding_weights.data..." << std::endl << std::flush;
+    float* pos_data = training_state_.position_embedding_weights.data;
+    std::cout << "[DEBUG-INIT-4f] pos_data=" << (void*)pos_data << std::endl << std::flush;
+    
+    std::cout << "[DEBUG-INIT-4g] About to read position_embedding_weights.grad_data()..." << std::endl << std::flush;
+    float* pos_grad = training_state_.position_embedding_weights.grad_data();
+    std::cout << "[DEBUG-INIT-4h] pos_grad=" << (void*)pos_grad << std::endl << std::flush;
+    
+    std::cout << "[DEBUG-INIT-4i] About to read lm_head_weights.data..." << std::endl << std::flush;
+    float* lm_data = training_state_.lm_head_weights.data;
+    std::cout << "[DEBUG-INIT-4j] lm_data=" << (void*)lm_data << std::endl << std::flush;
+    
+    std::cout << "[DEBUG-INIT-4k] About to read lm_head_weights.grad_data()..." << std::endl << std::flush;
+    float* lm_grad = training_state_.lm_head_weights.grad_data();
+    std::cout << "[DEBUG-INIT-4l] lm_grad=" << (void*)lm_grad << std::endl << std::flush;
+    
+    std::cout << "✓ Embeddings initialized via TrainingTensors (proper ownership)\n";
+    std::cout << "  embedding_weights.data=" << (void*)emb_data
+              << " grad=" << (void*)emb_grad << "\n";
+    std::cout << "  position_embedding_weights.data=" << (void*)pos_data
+              << " grad=" << (void*)pos_grad << "\n";
+    std::cout << "  lm_head_weights.data=" << (void*)lm_data
+              << " grad=" << (void*)lm_grad << "\n";
+    
+    // Verify weight tying aliasing if enabled
+    // ISSUE #59: Use grad_data() accessor
     if (cfg.tie_embeddings) {
-        // TIED: Both share the same underlying buffer from EmbeddingRuntime
-        auto* embedding_runtime = &getGpuEmbedder();
-        if (!embedding_runtime || !embedding_runtime->token_buffer) {
-            throw std::runtime_error("tie_embeddings=true but embedding buffer not available!");
+        if (training_state_.embedding_weights.data != training_state_.lm_head_weights.data) {
+            throw std::runtime_error(
+                "[InitTrainingState] FATAL: tie_embeddings=true but data pointers NOT aliased!\n"
+                "embedding_weights.data=" + std::to_string(reinterpret_cast<uintptr_t>(training_state_.embedding_weights.data)) +
+                " lm_head_weights.data=" + std::to_string(reinterpret_cast<uintptr_t>(training_state_.lm_head_weights.data)));
         }
-        
-        // Create Tensor that wraps existing embedding buffer (doesn't own data)
-        training_state_.embedding_weights = Tensor::from_ptr(
-            embedding_runtime->token_buffer,
-            TC::make_BSM(cfg.vocab_size, cfg.d_model),
-            false,  // doesn't take ownership
-            true);  // requires_grad
-        training_state_.embedding_weights.ensure_grad();  // Allocate grad buffer NOW
-        
-        // LM head shares the same data AND grad buffers (AFTER ensure_grad!)
-        training_state_.lm_head_weights.data = training_state_.embedding_weights.data;
-        training_state_.lm_head_weights.grad = training_state_.embedding_weights.grad;
-        training_state_.lm_head_weights.shape = training_state_.embedding_weights.shape;
-        training_state_.lm_head_weights.owns_data = false;  // Aliased
-        training_state_.lm_head_weights.owns_grad = false;  // Aliased
-        
-        std::cout << "🔗 Embedding/LM head tied at data=" << (void*)training_state_.embedding_weights.data
-                  << " grad=" << (void*)training_state_.embedding_weights.grad << std::endl;
-        
-        // Initialize embeddings with Xavier scaling
-        const float embedding_stddev = std::sqrt(2.0f / static_cast<float>(cfg.d_model + cfg.vocab_size));
-        launchXavierInit(training_state_.embedding_weights.data, embedding_size, 
-                         embedding_stddev, 42, primary_stream);
-        cudaStreamSynchronize(primary_stream);
-        std::cout << "🎲 Tied embeddings initialized (stddev=" << embedding_stddev << ")" << std::endl;
-        
-    } else {
-        // UNTIED: Separate embedding and LM head buffers
-        training_state_.embedding_weights = Tensor::zeros(
-            TC::make_BSM(cfg.vocab_size, cfg.d_model), true, primary_stream);
-        training_state_.embedding_weights.ensure_grad();  // Allocate grad buffer NOW
-        training_state_.lm_head_weights = Tensor::zeros(
-            TC::make_BSM(cfg.vocab_size, cfg.d_model), true, primary_stream);
-        training_state_.lm_head_weights.ensure_grad();  // Allocate grad buffer NOW
-        
-        // Initialize both with Xavier scaling
-        const float embedding_stddev = std::sqrt(2.0f / static_cast<float>(cfg.d_model + cfg.vocab_size));
-        launchXavierInit(training_state_.embedding_weights.data, embedding_size, 
-                         embedding_stddev, 42, primary_stream);
-        launchXavierInit(training_state_.lm_head_weights.data, embedding_size, 
-                         embedding_stddev, 43, primary_stream);  // Different seed
-        cudaStreamSynchronize(primary_stream);
-        std::cout << "📦 Separate embedding/LM head allocated (stddev=" << embedding_stddev << ")" << std::endl;
+        if (training_state_.embedding_weights.grad_data() != training_state_.lm_head_weights.grad_data()) {
+            throw std::runtime_error(
+                "[InitTrainingState] FATAL: tie_embeddings=true but grad pointers NOT aliased!\n"
+                "embedding_weights.grad=" + std::to_string(reinterpret_cast<uintptr_t>(training_state_.embedding_weights.grad_data())) +
+                " lm_head_weights.grad=" + std::to_string(reinterpret_cast<uintptr_t>(training_state_.lm_head_weights.grad_data())));
+        }
+        std::cout << "✓ Weight tying verified: embedding and lm_head share data AND grad pointers\n";
     }
     
     // LM head bias [vocab_size] - optional
@@ -862,26 +877,23 @@ void LanguageModel::initTrainingState() {
     }
     
     // ═══════════════════════════════════════════════════════════════════════════
-    //  STEP FINAL: Enable Autograd Tensor System
-    //  This sets use_autograd_tensors = true, which switches the backward pass
-    //  from the legacy 3-phase system to autograd-based gradient propagation.
+    //  STEP FINAL: Verify Autograd Tensors were initialized
+    //  Phase1_Startup (step 2.75) already called initializeAutogradTensors() to
+    //  set up TrainingTensors with proper memory ownership. Here we just verify
+    //  the flag is set and print confirmation.
     //  
-    //  WHY: The legacy backward reads from cached_* buffers that are never populated
-    //  by the autograd forward pass, causing size=0 gradients and NaN crashes.
+    //  WHY THIS MOVED: Previously called initializeAutogradTensors() here, but
+    //  that caused problems because EmbeddingRuntime already allocated memory.
+    //  Now tensors_ OWNS memory BEFORE initGPU(), so no duplicate allocation.
     // ═══════════════════════════════════════════════════════════════════════════
-    training_state_.initializeAutogradTensors(
-        cfg.vocab_size,
-        cfg.d_model,
-        cfg.d_ff,
-        cfg.num_layers,
-        cfg.num_heads,
-        training_state_.num_kv_heads,  // Use calculated GQA value
-        cfg.max_seq_len,
-        cfg.tie_embeddings,
-        cfg.use_bias,
-        primary_stream
-    );
-    std::cout << "✓ Autograd tensor system enabled (use_autograd_tensors=true)" << std::endl;
+    if (!training_state_.use_autograd_tensors || !training_state_.tensors_) {
+        throw std::runtime_error(
+            "[InitTrainingState] FATAL: use_autograd_tensors not enabled! "
+            "Phase1_Startup should have called initializeAutogradTensors() in step 2.75. "
+            "This indicates incorrect initialization order."
+        );
+    }
+    std::cout << "✓ Verified: Autograd tensor system already enabled (from Phase1_Startup)" << std::endl;
     
     training_state_.initialized = true;
     std::cout << "✓ Training state initialized with full gradient buffers" << std::endl;

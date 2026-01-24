@@ -928,13 +928,39 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model->initPBM();
     logger.log("✓ RoPE initialized");
     
+    // ═══════════════════════════════════════════════════════════════
+    // STEP 2.75: Initialize TrainingTensors (PROPER OWNERSHIP FIX)
+    // TrainingTensors creates Tensors that OWN GPU memory via Tensor::zeros().
+    // This MUST happen BEFORE initGPU() so embeddings are allocated properly.
+    // initGPU() will detect tensors_ exists and use its buffers instead of
+    // creating duplicate EmbeddingRuntime allocations.
+    // ═══════════════════════════════════════════════════════════════
+    {
+        logger.log("Initializing TrainingTensors (proper memory ownership)...");
+        const auto& cfg = model->getConfig();
+        cudaStream_t stream = model->getTrainingState().stream_ctrl.getPrimaryStream();
+        
+        // Calculate num_kv_heads (same logic as InitTrainingState.cu)
+        int num_kv_heads = cfg.num_kv_heads;
+
+        model->getTrainingState().initializeAutogradTensors(
+            cfg.vocab_size, cfg.d_model, cfg.d_ff,
+            cfg.num_layers, cfg.num_heads, num_kv_heads,
+            cfg.max_seq_len, cfg.tie_embeddings, cfg.use_bias,
+            stream
+        );
+        logger.log("✓ TrainingTensors initialized (Tensors OWN memory)");
+    }
+    
     // STEP 3: Initialize GPU encoder (uses cuBLAS handle from step 2, RoPE from step 2.5)
+    // NOTE: initGPU() now uses TrainingTensors for embedding buffers instead of allocating new ones
     logger.log("Initializing GPU encoder...");
     model->initGPU();
     logger.log("✓ GPU encoder fully initialized");
     
-    // STEP 4: Finish TrainingState initialization (grad buffers, requires embedder from initGPU)
-    logger.log("Initializing TrainingState (grad buffers, requires embedder from initGPU)...");
+    // STEP 4: Finish TrainingState initialization (grad buffers, activation caches)
+    // NOTE: Embeddings already set up in step 2.75, this just does the rest
+    logger.log("Initializing TrainingState (grad buffers, activation caches)...");
     model->initTrainingState();
     logger.log("✓ TrainingState fully initialized");
 
@@ -968,12 +994,16 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
               << " entropy_reg=" << (config.loss_options.entropy_reg_enabled ? "ON" : "off")
               << " ent_lambda=" << config.loss_options.entropy_reg_lambda
               << std::endl;
+    std::cout << std::flush;  // DEBUG: ensure output before crash
     
 #ifdef USE_CUDA
     // Xavier initialization for encoder weights if needed
+    std::cout << "[DEBUG] Entering Xavier check section..." << std::endl << std::flush;
     {
         auto* gpu_encoder = &model->getGpuEncoder();
+        std::cout << "[DEBUG] Got GPU encoder: " << gpu_encoder << std::endl << std::flush;
         const auto& cfg = model->getConfig();
+        std::cout << "[DEBUG] Got config, num_layers=" << cfg.num_layers << std::endl << std::flush;
         auto sample_rms = [&](float* ptr, size_t count) -> float {
             if (!ptr || count == 0) return 0.0f;
             std::vector<float> sample(std::min<size_t>(32, count), 0.0f);
@@ -983,20 +1013,31 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
             return std::sqrt(sum_sq / static_cast<float>(sample.size()));
         };
         
+        std::cout << "[DEBUG] Starting layer loop..." << std::endl << std::flush;
         for (int layer = 0; layer < cfg.num_layers; ++layer) {
+            std::cout << "[DEBUG] Layer " << layer << " - getting enc pointer..." << std::endl << std::flush;
             auto* enc = gpu_encoder->getLayer(layer);
+            std::cout << "[DEBUG] Layer " << layer << " - enc=" << enc << std::endl << std::flush;
             if (!enc) continue;
             
+            std::cout << "[DEBUG] Layer " << layer << " - getting weight pointers..." << std::endl << std::flush;
             float* w_qkv = enc->getAttnWqkv();
+            std::cout << "[DEBUG] Layer " << layer << " - w_qkv=" << w_qkv << std::endl << std::flush;
             float* w_o = enc->getAttnWo();
             float* w1 = enc->getFFNW1();
             float* w2 = enc->getFFNW2();
+            std::cout << "[DEBUG] Layer " << layer << " - got all weight pointers" << std::endl << std::flush;
             
             // GQA dimension calculation using TensorContract
+            std::cout << "[DEBUG] Layer " << layer << " - calculating GQA dims..." << std::endl << std::flush;
             const int head_dim = cfg.head_dim;  // Use pre-computed value from config
+            std::cout << "[DEBUG] Layer " << layer << " - head_dim=" << head_dim << std::endl << std::flush;
             TensorContract::GQADims gqa_dims{cfg.num_heads, cfg.num_kv_heads, head_dim};
+            std::cout << "[DEBUG] Layer " << layer << " - created gqa_dims" << std::endl << std::flush;
             const int total_qkv_dim = gqa_dims.total_qkv_dim();
+            std::cout << "[DEBUG] Layer " << layer << " - total_qkv_dim=" << total_qkv_dim << std::endl << std::flush;
             const size_t qkv_size = static_cast<size_t>(total_qkv_dim) * cfg.d_model;
+            std::cout << "[DEBUG] Layer " << layer << " - qkv_size=" << qkv_size << std::endl << std::flush;
             
             const float qkv_std = std::sqrt(2.0f / (cfg.d_model + static_cast<float>(total_qkv_dim)));
             const float wo_std = std::sqrt(2.0f / (2.0f * cfg.d_model));
@@ -1024,15 +1065,19 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
                 logger.log("[EncoderInit] Layer " + std::to_string(layer) + " reseeded with Xavier");
             }
         }
+        std::cout << "[DEBUG] Xavier loop completed, exiting scope..." << std::endl << std::flush;
     }
+    std::cout << "[DEBUG] Xavier check section done!" << std::endl << std::flush;
 #endif
     
-
-    logger.log("Update probe DISABLED for performance");
+    std::cout << "[DEBUG-A] About to check checkpoint..." << std::endl << std::flush;
     
     // Try to load checkpoint
     std::string latest_checkpoint = config.paths.checkpoint_dir + "/checkpoint_epoch_1.bin";
+    std::cout << "[DEBUG-B] checkpoint_dir=" << config.paths.checkpoint_dir << std::endl << std::flush;
+    std::cout << "[DEBUG-C] Checking if checkpoint exists..." << std::endl << std::flush;
     if (fs::exists(latest_checkpoint)) {
+        std::cout << "[DEBUG-D] Found checkpoint, loading..." << std::endl << std::flush;
         logger.log("Found checkpoint: " + latest_checkpoint);
         if (model->load(latest_checkpoint)) {
             logger.log("✓ Loaded weights from checkpoint");
@@ -1040,10 +1085,13 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
             logger.log("⚠ Failed to load checkpoint, starting fresh");
         }
     } else {
+        std::cout << "[DEBUG-E] No checkpoint found" << std::endl << std::flush;
         logger.log("No checkpoint found, starting fresh");
     }
     
+    std::cout << "[DEBUG-F] About to log 'Model initialized'" << std::endl << std::flush;
     logger.log("✓ Model initialized");
+    std::cout << "[DEBUG-G] Returning model from initializeModel" << std::endl << std::flush;
     return model;
 }
 
@@ -1052,14 +1100,19 @@ OptimizerContext initializeOptimizer(
     const StartupConfig& config,
     TrainingLogger& logger) {
     
+    std::cout << "[DEBUG-H] ENTERED initializeOptimizer" << std::endl << std::flush;
+    
     OptimizerContext ctx;
     const auto& hp = config.hyperparameters;
     
+    std::cout << "[DEBUG-I] About to log 'Initializing optimizer state'" << std::endl << std::flush;
     logger.log("Initializing optimizer state...");
+    std::cout << "[DEBUG-J] Logged successfully" << std::endl << std::flush;
     
     // Optimizer state (AdamW hyperparameters are defined as constants in AdamW_Kernal_GPU.cu)
     ctx.optimizer_state.step = 0;
     
+    std::cout << "[DEBUG-K] Setting up SoftRestart controller..." << std::endl << std::flush;
     // Soft restart controller
     GRIM::SoftRestart::SoftRestartConfig sr_cfg;
     sr_cfg.loss_increase_threshold = hp.soft_restart_loss_increase_threshold;
@@ -1067,6 +1120,7 @@ OptimizerContext initializeOptimizer(
     sr_cfg.cooldown_steps = hp.soft_restart_cooldown_steps;
     ctx.soft_restart_controller = GRIM::SoftRestart::SoftRestartController(sr_cfg);
     
+    std::cout << "[DEBUG-L] Setting up DynamicLR controller..." << std::endl << std::flush;
     // Dynamic LR controller
     GRIM::DynamicLR::DynamicLRConfig lr_cfg;
     lr_cfg.base_learning_rate = hp.learning_rate;
@@ -1113,16 +1167,21 @@ OptimizerContext initializeOptimizer(
     lr_cfg.safety_gain = hp.dynamic_lr_safety_gain;
     lr_cfg.safety_scale = hp.dynamic_lr_safety_scale;
     
+    std::cout << "[DEBUG-M] Creating DynamicLRController..." << std::endl << std::flush;
     ctx.dynamic_lr_controller = GRIM::DynamicLR::DynamicLRController(lr_cfg);
+    std::cout << "[DEBUG-N] Setting runtime limits..." << std::endl << std::flush;
     ctx.dynamic_lr_controller.setRuntimeLimits(hp.dynamic_lr_min, hp.dynamic_lr_max);
     ctx.dynamic_lr_controller.setEnabled(hp.dynamic_lr_enabled);
     
+    std::cout << "[DEBUG-O] Creating GradAccumulationController..." << std::endl << std::flush;
     // Gradient accumulation controller
     logger.log("Initializing GradAccumulationController...");
     ctx.grad_controller = std::make_unique<GRIM::ModelGradAccumulationController>();
     
+    std::cout << "[DEBUG-P] Getting TrainingState reference..." << std::endl << std::flush;
     // DEBUG: Verify pointer integrity before bindToModel
     auto& ts = model.getTrainingState();
+    std::cout << "[DEBUG-Q] Got TrainingState, embedding_grads=" << ts.embedding_grads() << std::endl << std::flush;
     {
         std::ostringstream oss;
         oss << "[DEBUG Phase1] Before bindToModel:\n"
@@ -1138,18 +1197,23 @@ OptimizerContext initializeOptimizer(
         EmitModuleInfo(ModuleId::Training, oss.str());
     }
     
+    std::cout << "[DEBUG-R] Calling bindToModel..." << std::endl << std::flush;
     ctx.grad_controller->bindToModel(model);
+    std::cout << "[DEBUG-S] bindToModel completed" << std::endl << std::flush;
     
+    std::cout << "[DEBUG-T] Configuring GradAccumulationConfig..." << std::endl << std::flush;
     GRIM::GradAccumulationConfig grad_cfg;
     grad_cfg.accum_steps = std::max(1, hp.gradient_accumulation_steps);  // Load from config, minimum 1
     grad_cfg.stream = model.getTrainingState().stream_ctrl.getPrimaryStream();  // Use StreamController's primary stream!
     
+    std::cout << "[DEBUG-U] Checking stream validity..." << std::endl << std::flush;
     // CRITICAL: Verify stream is valid before configuring controller
     if (!grad_cfg.stream) {
         EmitModuleError(ModuleId::Training,
                         "[FATAL] GradAccumulationController: getPrimaryStream() returned nullptr! StreamController may not be initialized yet.");
         throw std::runtime_error("GradAccumulationController: primary stream is null");
     }
+    std::cout << "[DEBUG-V] Stream is valid: " << grad_cfg.stream << std::endl << std::flush;
     logger.log("✓ GradAccumulationController stream validated: " + 
                std::to_string(reinterpret_cast<uintptr_t>(grad_cfg.stream)));
     grad_cfg.zero_on_window_start = true;
@@ -1160,9 +1224,12 @@ OptimizerContext initializeOptimizer(
     // Disable per-buffer RMS monitoring by default (expensive: sync per buffer).
     grad_cfg.monitor_gradients = false;
     grad_cfg.gradient_explosion_threshold = 1e6f;
+    std::cout << "[DEBUG-W] Calling configure..." << std::endl << std::flush;
     ctx.grad_controller->configure(grad_cfg);
+    std::cout << "[DEBUG-X] configure completed" << std::endl << std::flush;
     
     // BUG FIX: Verify ALL encoder layers initialized BEFORE bindToModel was called
+    std::cout << "[DEBUG-Y] Verifying encoder layers..." << std::endl << std::flush;
     // If layers 4-5 are missing, they'll be lazily initialized during forward pass,
     // causing GradController registration during execution → crash
     auto* gpu_encoder = &model.getGpuEncoder();
@@ -1175,12 +1242,14 @@ OptimizerContext initializeOptimizer(
             throw std::runtime_error("Encoder layer " + std::to_string(layer) + " not initialized");
         }
     }
+    std::cout << "[DEBUG-Z] All encoder layers verified" << std::endl << std::flush;
     
     logger.log("✓ GradAccumulationController configured:");
     logger.log("  - Accumulation steps: " + std::to_string(grad_cfg.accum_steps) + 
                " (effective batch = " + std::to_string(hp.batch_size * grad_cfg.accum_steps) + ")");
     logger.log("  - Registered " + std::to_string(ctx.grad_controller->controller().bufferCount()) + " gradient buffers");
     logger.log("  - Total memory: " + std::to_string(ctx.grad_controller->controller().totalGradientBytes() / (1024.0 * 1024.0)) + " MB");
+    std::cout << "[DEBUG-AA] GradAccumController fully configured" << std::endl << std::flush;
     
     logger.log("✓ Optimizer state initialized");
     return ctx;
@@ -1761,6 +1830,52 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         ctx->logging.logger->log("✓ Logit bias buffer allocated: " + 
                                  std::to_string(2 * bias_bytes / 1024) + " KB total (EMA + scratch)");
         ctx->logging.logger->log("  Issue #39: Output logit bias correction ENABLED");
+    }
+    
+    // 10d. Issue #60 DEBUG: Allocate gradient attribution buffers if enabled
+    // This lets us separately track LM head vs embedding backward contributions
+    // to debug the positive feedback loop causing mode collapse to token 277
+    {
+        auto& ts = ctx->model->getTrainingState();
+        const auto& model_cfg = ctx->model->getConfig();
+        
+        // PRODUCTION: Disable debug gradient attribution (causes GPU sync + D2H copies)
+        // Set to true only when debugging tied embedding gradient issues
+        ts.debug_gradient_attribution = false;
+        
+        if (ts.debug_gradient_attribution) {
+            const int vocab_size = static_cast<int>(model_cfg.vocab_size);
+            const int d_model = model_cfg.d_model;
+            
+            ts.allocateDebugGradBuffers(vocab_size, d_model);
+            
+            // Set global hooks for gradient capture
+            g_debug_lm_head_only_grad = ts.debug_lm_head_only_grad;
+            g_debug_embedding_only_grad = ts.debug_embedding_only_grad;
+            g_debug_grad_buffer_size = ts.debug_grad_buffer_size;
+            g_debug_capture_enabled = true;
+            
+            ctx->logging.logger->log("✓ Issue #60 DEBUG: Gradient attribution buffers allocated");
+            ctx->logging.logger->log("  LM_HEAD_ONLY buffer: " + std::to_string(ts.debug_grad_buffer_size * sizeof(float) / (1024*1024)) + " MB");
+            ctx->logging.logger->log("  Will log TOKEN_277 gradient sources after each backward pass");
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════════════
+        // ISSUE #60 FIX: Allocate PCGrad buffer for tied weights
+        // ═══════════════════════════════════════════════════════════════════════════
+        // When tie_embeddings=true, LM head backward and embedding backward produce
+        // OPPOSITE gradients! PCGrad fixes this by projecting out the conflicting 
+        // component, preserving the LM head signal + orthogonal embedding info.
+        if (model_cfg.tie_embeddings) {
+            const int vocab_size = static_cast<int>(model_cfg.vocab_size);
+            const int d_model = model_cfg.d_model;
+            
+            ts.allocatePCGradBuffer(vocab_size, d_model);
+            
+            ctx->logging.logger->log("✓ Issue #60 FIX: PCGrad buffer allocated for tied weights");
+            ctx->logging.logger->log("  Formula: g_final = g_lm + (g_emb - proj(g_emb onto g_lm))");
+            ctx->logging.logger->log("  This prevents LM head and embedding gradients from canceling!");
+        }
     }
     
     // 11. Initialize telemetry lattice

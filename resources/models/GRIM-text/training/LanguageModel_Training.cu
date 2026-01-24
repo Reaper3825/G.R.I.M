@@ -37,8 +37,6 @@
 
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
-#include "../Layers/BackwardOps/BackwardOps_Orchestrator.hpp"
-#include "../Layers/BackwardOps/BackwardContext.hpp"
 #include "../Layers/Embedding/Embedding_GPU.hpp"
 #include "../Shared/GradNorm/GradNormGPU.hpp"
 #include "../Common/grim_scale_buffer.hpp"
@@ -47,8 +45,8 @@
 #include "../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
 #include "../../../control/ai_config_paths.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
-#include "../Shared/Loss/ComputeLoss/AutogradLoss.hpp"  // Autograd cross-entropy loss
-// NOTE: AutogradTraining.hpp removed - using HYBRID approach with AutogradLoss directly
+#include "../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
+#include "Autograd/AutogradTraining.hpp"  // Pure autograd backward - replaces legacy 3-phase system
 
 extern "C" {
     void launchXavierInit(float* weights, int size, float stddev,
@@ -265,19 +263,21 @@ void LanguageModel::zeroGrad() {
                        cfg.vocab_size * cfg.d_model * sizeof(float),
                        training_state_.stream_ctrl.getPrimaryStream());
     }
-    if (float* lm_bias_grad = training_state_.lm_head_bias.grad) {
+    // ISSUE #59: Use grad_data() accessor
+    if (float* lm_bias_grad = training_state_.lm_head_bias.grad_data()) {
         cudaMemsetAsync(lm_bias_grad, 0,
                        cfg.vocab_size * sizeof(float),
                        training_state_.stream_ctrl.getPrimaryStream());
     }
 
     // Zero numeric head gradients (Tensor API)
-    if (float* num_weight_grad = training_state_.numeric_head_weights.grad) {
+    // ISSUE #59: Use grad_data() accessor
+    if (float* num_weight_grad = training_state_.numeric_head_weights.grad_data()) {
         cudaMemsetAsync(num_weight_grad, 0,
                        cfg.d_model * sizeof(float),
                        training_state_.stream_ctrl.getPrimaryStream());
     }
-    if (float* num_bias_grad = training_state_.numeric_head_bias.grad) {
+    if (float* num_bias_grad = training_state_.numeric_head_bias.grad_data()) {
         cudaMemsetAsync(num_bias_grad, 0,
                        sizeof(float),
                        training_state_.stream_ctrl.getPrimaryStream());
@@ -366,8 +366,6 @@ void LanguageModel::backward(float loss, bool accumulate, float grad_scale, uint
 
     ++backward_call_count_;
     last_grad_scale_ = (grad_scale > 0.0f) ? grad_scale : 1.0f;
-    // BUGFIX: Don't reset grad_metrics_ready_ here - it should persist until next sync
-    // Old code: grad_metrics_ready_ = false;  // This caused cached grad_norm to always return 0.0f
     
     const auto& cfg = config_;
     const int batch_size = training_state_.cached_batch_size;
@@ -383,181 +381,80 @@ void LanguageModel::backward(float loss, bool accumulate, float grad_scale, uint
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //  AUTOGRAD BACKWARD PATH (NEW - January 2026)
+    //  PURE AUTOGRAD BACKWARD (January 2026)
     //  
-    //  When use_autograd_tensors is enabled, we use autograd to compute the loss
-    //  gradient w.r.t. logits, then use legacy backward for encoder gradients.
+    //  Uses TensorContract autograd for ENTIRE backward pass:
+    //  - loss.backward() propagates through entire computation graph
+    //  - Gradients automatically flow to all parameter Tensors
+    //  - No raw float* gradient manipulation required
     //  
-    //  This HYBRID approach fixes the NaN gradient issue caused by the legacy
-    //  backward reading from cached_* buffers that were never populated by the
-    //  autograd forward.
-    //  
-    //  Flow:
-    //  1. Use loss_tensor cached from computeLossBatch() (already has grad_fn attached!)
-    //  2. Call loss.backward() to compute grad_logits via autograd
-    //  3. Use legacy backward to propagate grad_logits through encoder
+    //  The legacy 3-phase backward system has been DELETED.
     // ═══════════════════════════════════════════════════════════════════════════
-    if (training_state_.use_autograd_tensors) {
-        BWD_INFO("[backward] Using AUTOGRAD HYBRID backward path");
+    
+    cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
+    
+    // RULE 20: Fail loud - loss tensor MUST have grad_fn from forward pass
+    if (!training_state_.loss_tensor.grad_fn) {
+        throw std::runtime_error("[backward] loss_tensor.grad_fn is NULL - forward pass (computeLossBatch) MUST be called first!");
+    }
+    
+    BWD_INFO("[backward] Executing pure autograd backward pass");
+    
+    // Zero gradients if not accumulating
+    // The autograd system's executeAutogradBackward handles this, but we also need to zero
+    // any raw gradient buffers that might still be referenced by the optimizer
+    if (!accumulate) {
+        // Autograd will zero Tensor.grad fields, but we also zero legacy buffers
+        // for any code paths that still expect them
+        zeroGrad();  
+    }
+    
+    // Call backward on the loss tensor from forward pass
+    // The grad_fn chain is already attached - this propagates through entire graph:
+    // loss → logits → encoder_output → encoder_layers → embeddings
+    training_state_.loss_tensor.backward(nullptr);
+    
+    // Issue #60 DEBUG: Log gradient attribution for debugging token 277 mode collapse
+    // This shows LM head vs embedding backward contributions separately
+    if (training_state_.debug_gradient_attribution) {
+        training_state_.logGradientAttribution(static_cast<int>(step), stream);
+    }
+    
+    // Apply gradient scaling if needed
+    if (grad_scale != 1.0f) {
+        // Scale all parameter gradients by grad_scale
+        const float scale = grad_scale;
+        auto* ts = &training_state_;
         
-        const int total_tokens = batch_size * seq_len;
-        const int vocab_size = config_.vocab_size;
-        cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
-        
-        // ═══════════════════════════════════════════════════════════════════════
-        // Issue #46 FIX: Use CACHED loss_tensor from computeLossBatch()
-        // ═══════════════════════════════════════════════════════════════════════
-        // Before: Recreated loss_tensor here by calling autograd::cross_entropy_loss()
-        //         This was WASTEFUL (computed loss twice!) and created INCORRECT gradient magnitude
-        // After:  Use loss_tensor cached in training_state_.loss_tensor
-        //         The grad_fn is already attached from forward pass!
-        // ═══════════════════════════════════════════════════════════════════════
-        
-        // Verify loss tensor exists from forward pass (computeLossBatch)
-        if (!training_state_.loss_tensor.grad_fn) {
-            BWD_ERROR("[backward] loss_tensor.grad_fn is NULL - forward pass (computeLossBatch) not run?");
-            return;
-        }
-        
-        // Verify logits tensor is setup correctly
-        if (!training_state_.logits_tensor.data || !training_state_.logits_tensor.grad) {
-            BWD_ERROR("[backward] logits_tensor not properly setup - forward pass error?");
-            return;
-        }
-        
-        // Zero gradients if not accumulating
-        if (!accumulate) {
-            cudaMemsetAsync(training_state_.grad_logits_tensor.data, 0, 
-                           static_cast<size_t>(total_tokens) * vocab_size * sizeof(float), stream);
-        }
-        
-        // Call backward on the CACHED loss tensor from forward pass
-        // The grad_fn (CrossEntropyLossGradFn) is already attached!
-        // This computes grad_logits = softmax(logits) - one_hot(targets)
-        training_state_.loss_tensor.backward(nullptr);
-
-        // DEBUG: Verify Autograd Output
-        {
-            float h_grad_check[5] = {0};
-            int h_target_check[5] = {0};
-            cudaMemcpyAsync(h_grad_check, training_state_.grad_logits_tensor.data, 5 * sizeof(float), cudaMemcpyDeviceToHost, stream);
-            cudaMemcpyAsync(h_target_check, training_state_.cached_targets, 5 * sizeof(int), cudaMemcpyDeviceToHost, stream);
-            cudaStreamSynchronize(stream);
-            
-            std::ostringstream dmsg;
-            dmsg << "[AutogradCheck] Targets[0..4]=[" 
-                 << h_target_check[0] << "," << h_target_check[1] << "," 
-                 << h_target_check[2] << "," << h_target_check[3] << "," << h_target_check[4] 
-                 << "] GradLogits[0..4]=[" 
-                 << h_grad_check[0] << "," << h_grad_check[1] << "," 
-                 << h_grad_check[2] << "," << h_grad_check[3] << "," << h_grad_check[4] << "]";
-            
-            // Log to both standard logger and stderr to ensure visibility
-            BWD_INFO(dmsg.str());
-            fprintf(stderr, "%s\n", dmsg.str().c_str());
-        }
-        
-        BWD_INFO("[backward] Autograd loss backward complete, now running encoder backward");
-        
-        // Now use legacy backward to propagate grad_logits through encoder
-        // This uses the existing 3-phase backward which reads from cached_* buffers
-        // BUT now grad_logits is properly populated by autograd!
-        
-        GPUGrimEncoder* gpu_encoder = &getGpuEncoder();
-        if (!gpu_encoder) {
-            BWD_ERROR("[backward] CRITICAL: GPU encoder is nullptr!");
-            return;
-        }
-
-        EmbeddingRuntime* embedding_runtime = &getGpuEmbedder();
-
-        Backward::BackwardContext ctx = Backward::initBackwardContextRaw(
-            &config_,
-            &training_state_,
-            gpu_encoder,
-            scratch_block_layer_.get(),
-            embedding_runtime,
-            training_state_.cublas_handle,
-            stream,
-            batch_size,
-            seq_len,
-            accumulate,
-            grad_scale,
-            step
-        );
-
-        // Execute 3-phase backward pass (starts from grad_logits, propagates through encoder)
-        Backward::BackwardStatus status = Backward::executeBackward(ctx);
-
-        // ALWAYS clear sequence weights after a backward attempt
-        training_state_.sequence_weight_count = 0;
-
-        if (status != Backward::BackwardStatus::SUCCESS) {
-            BWD_ERROR("[backward] Encoder backward FAILED: " << Backward::statusToString(status));
-            BWD_ERROR("  Error: " << ctx.error_message);
-            if (ctx.error_layer >= 0) {
-                BWD_ERROR("  Error layer: " << ctx.error_layer);
+        // Helper lambda to scale a Tensor's gradient
+        // ISSUE #59: Use has_grad() and grad_data() accessors
+        auto scaleGrad = [stream, scale](Tensor& t) {
+            if (t.has_grad() && t.numel() > 0) {
+                GRIM::scaleDeviceBuffer(t.grad_data(), t.numel(), scale, stream);
             }
-            BWD_ERROR(Backward::getBackwardErrorReport(ctx));
-            return;
-        }
+        };
         
-        BWD_INFO("[backward] AUTOGRAD HYBRID COMPLETE");
-        return;
+        scaleGrad(ts->embedding_weights);
+        scaleGrad(ts->position_embedding_weights);
+        scaleGrad(ts->lm_head_weights);
+        scaleGrad(ts->lm_head_bias);
+        scaleGrad(ts->final_rms_gamma);
+        
+        // NOTE: Encoder layer gradients are in encoder's internal Tensors.
+        // The optimizer accesses them via enc->getAttnWqkvGrad() etc.
+        // Gradient scaling for encoder is handled by the autograd system.
     }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    //  LEGACY 3-PHASE BACKWARD PATH
-    //  
-    //  This is the original backward implementation that reads from cached_*
-    //  buffers. It requires the forward pass to populate these buffers, which
-    //  the current autograd-enabled forward does NOT do.
-    //  
-    //  DEPRECATION WARNING: This path will be removed once autograd is stable.
-    // ═══════════════════════════════════════════════════════════════════════════
-    BWD_INFO("[backward] Using LEGACY 3-phase backward path");
-
-    // Initialize backward context for 3-phase orchestrator
-    GPUGrimEncoder* gpu_encoder = &getGpuEncoder();
-    if (!gpu_encoder) {
-        BWD_ERROR("[backward] CRITICAL: GPU encoder is nullptr!");
-        return;
-    }
-
-    EmbeddingRuntime* embedding_runtime = &getGpuEmbedder();
-
-    Backward::BackwardContext ctx = Backward::initBackwardContextRaw(
-        &config_,
-        &training_state_,
-        gpu_encoder,
-        scratch_block_layer_.get(),
-        embedding_runtime,
-        training_state_.cublas_handle,
-        training_state_.stream_ctrl.getPrimaryStream(),
-        batch_size,
-        seq_len,
-        accumulate,
-        grad_scale,
-        step
-    );
-
-    // Execute 3-phase backward pass
-    Backward::BackwardStatus status = Backward::executeBackward(ctx);
-
-    // ALWAYS clear sequence weights after a backward attempt
+    
+    // ALWAYS clear sequence weights after backward
     training_state_.sequence_weight_count = 0;
-
-    if (status != Backward::BackwardStatus::SUCCESS) {
-        BWD_ERROR("[backward] 3-phase backward FAILED: " << Backward::statusToString(status));
-        BWD_ERROR("  Error: " << ctx.error_message);
-        if (ctx.error_layer >= 0) {
-            BWD_ERROR("  Error layer: " << ctx.error_layer);
-        }
-        BWD_ERROR(Backward::getBackwardErrorReport(ctx));
-        return;
+    
+    // Issue #47: Clear autograd context to free GPU memory from intermediate tensors
+    // The next computeLossBatch() will create a new context anyway
+    if (training_state_.autograd_ctx) {
+        training_state_.autograd_ctx->clearIntermediates();
     }
-
-    BWD_INFO("[backward] COMPLETE");
+    
+    BWD_INFO("[backward] AUTOGRAD COMPLETE");
 }
 
 
@@ -650,12 +547,13 @@ void LanguageModel::buildParameterGroups() {
     }
 
     // Numeric head weights (Tensor API)
-    if (cfg.numeric_head_enabled && training_state_.numeric_head_weights.grad &&
+    // ISSUE #59: Use has_grad() and grad_data() accessors
+    if (cfg.numeric_head_enabled && training_state_.numeric_head_weights.has_grad() &&
         training_state_.numeric_head_weights.data) {
         ParameterGroup numeric_group;
         numeric_group.name = "numeric_head_weight";
         numeric_group.weights = training_state_.numeric_head_weights.data;  // Tensor API
-        numeric_group.grads = training_state_.numeric_head_weights.grad;    // Tensor API
+        numeric_group.grads = training_state_.numeric_head_weights.grad_data();    // Tensor API
         numeric_group.size = cfg.d_model;
         numeric_group.m_state = nullptr;
         numeric_group.v_state = nullptr;

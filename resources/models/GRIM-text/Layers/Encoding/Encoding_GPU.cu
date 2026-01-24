@@ -409,42 +409,37 @@ void EncodingLayer::useExternalWeights(
     // Create view Tensors that reference the external buffers
     // NOTE: These Tensors do NOT own the data (owns_data=false)
     // The grad pointers also come from the external Tensors
+    // ISSUE #59: Use share_grad() for proper shared_ptr semantics
     
     // RMSNorm gammas
     rms1_gamma_ = Tensor::from_ptr(rms1_gamma.data, rms1_gamma.shape, false, true);
-    rms1_gamma_.grad = rms1_gamma.grad;
+    rms1_gamma_.share_grad(rms1_gamma);
     rms1_gamma_.owns_data = false;
-    rms1_gamma_.owns_grad = false;
     
     rms2_gamma_ = Tensor::from_ptr(rms2_gamma.data, rms2_gamma.shape, false, true);
-    rms2_gamma_.grad = rms2_gamma.grad;
+    rms2_gamma_.share_grad(rms2_gamma);
     rms2_gamma_.owns_data = false;
-    rms2_gamma_.owns_grad = false;
     
     // QKV projection
     W_qkv_ = Tensor::from_ptr(qkv_weight.data, qkv_weight.shape, false, true);
-    W_qkv_.grad = qkv_weight.grad;
+    W_qkv_.share_grad(qkv_weight);
     W_qkv_.owns_data = false;
-    W_qkv_.owns_grad = false;
     
     if (qkv_bias.data) {
         b_qkv_ = Tensor::from_ptr(qkv_bias.data, qkv_bias.shape, false, true);
-        b_qkv_.grad = qkv_bias.grad;
+        b_qkv_.share_grad(qkv_bias);
         b_qkv_.owns_data = false;
-        b_qkv_.owns_grad = false;
     }
     
     // Output projection
     W_o_ = Tensor::from_ptr(out_weight.data, out_weight.shape, false, true);
-    W_o_.grad = out_weight.grad;
+    W_o_.share_grad(out_weight);
     W_o_.owns_data = false;
-    W_o_.owns_grad = false;
     
     if (out_bias.data) {
         b_o_ = Tensor::from_ptr(out_bias.data, out_bias.shape, false, true);
-        b_o_.grad = out_bias.grad;
+        b_o_.share_grad(out_bias);
         b_o_.owns_data = false;
-        b_o_.owns_grad = false;
     }
     
     // FFN - need to create the layer and set its external weights
@@ -530,14 +525,14 @@ void EncodingLayer::setWorkspace(float* workspace, std::size_t bytes) {
 }
 
 //======================================================//
-//  Forward Pass - Autograd Implementation
+//  Forward Pass - Autograd Implementation with ForwardIntermediates (Issue #56 Fix)
 //======================================================//
 
 Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t stream,
-                               EncoderLayerCache* cache) {
+                               ForwardIntermediates& intermediates) {
     if constexpr (kEnableEncoderStepLogs) {
-        fprintf(stderr, "[EncoderFwd] START total_tokens=%d seq_len=%d cache=%p\n", 
-                input.shape.flat.rows, seq_len, (void*)cache);
+        fprintf(stderr, "[EncoderFwd] START total_tokens=%d seq_len=%d\n", 
+                input.shape.flat.rows, seq_len);
     }
     validateReady("EncodingLayer::forward");
     
@@ -579,35 +574,30 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     
     //--------------------------------------------------
     // 1. RMSNorm1: input -> ln1_out
+    // Issue #56: Store in intermediates to keep autograd graph alive
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 1: RMSNorm1...\n");
-    Tensor ln1_out = autograd::rms_norm(input, rms1_gamma_, config_.rms_epsilon, stream);
+    intermediates.ln1_out = autograd::rms_norm(input, rms1_gamma_, config_.rms_epsilon, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 1: RMSNorm1 DONE\n");
-    
-    // HYBRID FIX: Cache ln1_output for legacy backward
-    if (cache && cache->ln1_output) {
-        CUDA_CHECK(cudaMemcpyAsync(cache->ln1_output, ln1_out.data,
-                                   static_cast<size_t>(total_tokens) * d_model * sizeof(float),
-                                   cudaMemcpyDeviceToDevice, stream));
-    };
     
     //--------------------------------------------------
     // 2. QKV Projection: ln1_out @ W_qkv^T + b_qkv
     //    W_qkv is [total_qkv_dim, d_model] so we compute ln1_out @ W_qkv^T
+    // Issue #56: Store in intermediates to keep autograd graph alive
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) {
         fprintf(stderr, "[EncoderFwd] Step 2: QKV matmul...\n");
         fprintf(stderr, "[EncoderFwd] Step 2: ln1_out.data=%p shape=[%d,%d] W_qkv.data=%p shape=[%d,%d]\n",
-                (void*)ln1_out.data, ln1_out.shape.flat.rows, ln1_out.shape.flat.cols,
+                (void*)intermediates.ln1_out.data, intermediates.ln1_out.shape.flat.rows, intermediates.ln1_out.shape.flat.cols,
                 (void*)W_qkv_.data, W_qkv_.shape.flat.rows, W_qkv_.shape.flat.cols);
         fflush(stderr);
     }
     // Use transpose_b=true since W_qkv is [qkv_dim, d_model] and we need [tokens, d_model] @ [d_model, qkv_dim]
-    Tensor qkv_out = autograd::matmul(ln1_out, W_qkv_, stream, nullptr, nullptr, true);
+    intermediates.qkv_out = autograd::matmul(intermediates.ln1_out, W_qkv_, stream, nullptr, nullptr, true);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 2: QKV matmul DONE, adding bias...\n");
     // Add bias: qkv_out = qkv_out + b_qkv (broadcast)
     // TODO: Need autograd::bias_add for proper gradient tracking
-    launchFFNBiasAdd(qkv_out.data, b_qkv_.data, total_tokens, 
+    launchFFNBiasAdd(intermediates.qkv_out.data, b_qkv_.data, total_tokens, 
                      config_.d_model + 2 * config_.kvDim(), stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 2: QKV bias DONE\n");
     
@@ -617,14 +607,15 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     //    Q: [total_tokens, 0:d_model]
     //    K: [total_tokens, d_model:d_model+kv_dim]  
     //    V: [total_tokens, d_model+kv_dim:end]
+    // Issue #56: Store Q, K, V in intermediates
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 3: Split QKV...\n");
     const int kv_dim = config_.kvDim();
     
     // Create Tensor views for Q, K, V (slices of qkv_out)
-    Tensor Q = Tensor::empty(TensorContract::TensorShape::make_BSM(total_tokens, d_model), true, stream);
-    Tensor K = Tensor::empty(TensorContract::TensorShape::make_BSM(total_tokens, kv_dim), true, stream);
-    Tensor V = Tensor::empty(TensorContract::TensorShape::make_BSM(total_tokens, kv_dim), true, stream);
+    intermediates.Q = Tensor::empty(TensorContract::TensorShape::make_BSM(total_tokens, d_model), true, stream);
+    intermediates.K = Tensor::empty(TensorContract::TensorShape::make_BSM(total_tokens, kv_dim), true, stream);
+    intermediates.V = Tensor::empty(TensorContract::TensorShape::make_BSM(total_tokens, kv_dim), true, stream);
     
     // Extract Q, K, V from fused QKV output using TensorConvert
     // For GQA: qkv_out is [tokens, d_model + 2*kv_dim], not [tokens, 3*d_model]
@@ -634,23 +625,23 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         // K is next kv_dim columns  
         // V is final kv_dim columns
         const int total_qkv_dim = d_model + 2 * kv_dim;
-        const float* src = qkv_out.data;
+        const float* src = intermediates.qkv_out.data;
         // Manual split via cudaMemcpy2D (row-major slicing)
         // Q: copy d_model elements starting at offset 0
         CUDA_CHECK(cudaMemcpy2DAsync(
-            Q.data, d_model * sizeof(float),          // dst, dpitch
+            intermediates.Q.data, d_model * sizeof(float),          // dst, dpitch
             src, total_qkv_dim * sizeof(float),       // src, spitch
             d_model * sizeof(float), total_tokens,    // width, height
             cudaMemcpyDeviceToDevice, stream));
         // K: copy kv_dim elements starting at offset d_model
         CUDA_CHECK(cudaMemcpy2DAsync(
-            K.data, kv_dim * sizeof(float),
+            intermediates.K.data, kv_dim * sizeof(float),
             src + d_model, total_qkv_dim * sizeof(float),
             kv_dim * sizeof(float), total_tokens,
             cudaMemcpyDeviceToDevice, stream));
         // V: copy kv_dim elements starting at offset d_model + kv_dim
         CUDA_CHECK(cudaMemcpy2DAsync(
-            V.data, kv_dim * sizeof(float),
+            intermediates.V.data, kv_dim * sizeof(float),
             src + d_model + kv_dim, total_qkv_dim * sizeof(float),
             kv_dim * sizeof(float), total_tokens,
             cudaMemcpyDeviceToDevice, stream));
@@ -658,17 +649,15 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 3: Split QKV DONE, reshaping to BHSD...\n");
     
     // Reshape to BHSD for Flash Attention
-    Tensor Q_bhsd = Tensor::empty(TensorContract::TensorShape::make_BHSD(batch_size, num_heads, seq_len, head_dim), true, stream);
-    Tensor K_bhsd = Tensor::empty(TensorContract::TensorShape::make_BHSD(batch_size, num_kv_heads, seq_len, head_dim), true, stream);
-    Tensor V_bhsd = Tensor::empty(TensorContract::TensorShape::make_BHSD(batch_size, num_kv_heads, seq_len, head_dim), true, stream);
+    // Issue #56: Store in intermediates
+    intermediates.Q_bhsd = Tensor::empty(TensorContract::TensorShape::make_BHSD(batch_size, num_heads, seq_len, head_dim), true, stream);
+    intermediates.K_bhsd = Tensor::empty(TensorContract::TensorShape::make_BHSD(batch_size, num_kv_heads, seq_len, head_dim), true, stream);
+    intermediates.V_bhsd = Tensor::empty(TensorContract::TensorShape::make_BHSD(batch_size, num_kv_heads, seq_len, head_dim), true, stream);
     
-    launchQKVReshapeToBHSD(Q.data, K.data, V.data, 
-                           Q_bhsd.data, K_bhsd.data, V_bhsd.data,
+    launchQKVReshapeToBHSD(intermediates.Q.data, intermediates.K.data, intermediates.V.data, 
+                           intermediates.Q_bhsd.data, intermediates.K_bhsd.data, intermediates.V_bhsd.data,
                            batch_size, seq_len, num_heads, num_kv_heads, head_dim, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 3b: Reshape to BHSD DONE\n");
-    
-    // HYBRID FIX: Cache Q, K, V for legacy backward (BEFORE RoPE rotation!)
-    // Note: Backward expects post-RoPE values, so we'll cache after RoPE below;
     
     //--------------------------------------------------
     // 3b. Apply RoPE rotation to Q and K
@@ -677,7 +666,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     if (config_.pos_encoding && config_.pos_encoding->valid && 
         config_.pos_encoding->rope_inv_freq != nullptr && config_.pos_encoding->rotary_dim > 0) {
         PBM::launchRoPERotationGQA(
-            Q_bhsd.data, K_bhsd.data,
+            intermediates.Q_bhsd.data, intermediates.K_bhsd.data,
             config_.pos_encoding->rope_inv_freq,
             batch_size, num_heads, num_kv_heads, seq_len, head_dim,
             config_.pos_encoding->rotary_dim, stream);
@@ -686,27 +675,8 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     }
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 3c: RoPE DONE\n");
     
-    // HYBRID FIX: Cache Q, K, V in BHSD format (after RoPE) for legacy backward
-    if (cache) {
-        const size_t q_elems = static_cast<size_t>(batch_size) * num_heads * seq_len * head_dim;
-        const size_t kv_elems = static_cast<size_t>(batch_size) * num_kv_heads * seq_len * head_dim;
-        if (cache->q) {
-            CUDA_CHECK(cudaMemcpyAsync(cache->q, Q_bhsd.data, q_elems * sizeof(float),
-                                       cudaMemcpyDeviceToDevice, stream));
-        }
-        if (cache->k) {
-            CUDA_CHECK(cudaMemcpyAsync(cache->k, K_bhsd.data, kv_elems * sizeof(float),
-                                       cudaMemcpyDeviceToDevice, stream));
-        }
-        if (cache->v) {
-            CUDA_CHECK(cudaMemcpyAsync(cache->v, V_bhsd.data, kv_elems * sizeof(float),
-                                       cudaMemcpyDeviceToDevice, stream));
-        }
-    };
-    
     //--------------------------------------------------
     // 4. Flash Attention: Q, K, V -> attn_out
-    //    CRITICAL: Pass ALiBi slopes from PBM for hybrid positional encoding
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 4: Flash Attention...\n");
     
@@ -722,107 +692,81 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
             "PBM ALiBi slopes not initialized");
     }
     
-    // HYBRID FIX: Pass cache->softmax_lse so it gets populated for legacy backward
-    // The legacy BackwardPhase2_Encoder.cu reads ts->cached_softmax_lse[layer]
-    float* cache_lse = (cache && cache->softmax_lse) ? cache->softmax_lse : nullptr;
-    Tensor attn_out_bhsd = autograd::scaled_dot_product_attention(
-        Q_bhsd, K_bhsd, V_bhsd, config_.pos_encoding->alibi_slopes, 0.0f, stream, cache_lse);
+    // Issue #56: Store attention output in intermediates
+    intermediates.attn_out_bhsd = autograd::scaled_dot_product_attention(
+        intermediates.Q_bhsd, intermediates.K_bhsd, intermediates.V_bhsd, 
+        config_.pos_encoding->alibi_slopes, 0.0f, stream, nullptr);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 4: Flash Attention DONE\n");
-    
-    // HYBRID FIX: Cache attn_bhsd for legacy backward (before W_o projection)
-    if (cache && cache->attn_bhsd) {
-        const size_t attn_bhsd_elems = static_cast<size_t>(batch_size) * num_heads * seq_len * head_dim;
-        CUDA_CHECK(cudaMemcpyAsync(cache->attn_bhsd, attn_out_bhsd.data, 
-                                   attn_bhsd_elems * sizeof(float),
-                                   cudaMemcpyDeviceToDevice, stream));
-    }
     
     //--------------------------------------------------
     // 5. Reshape attention output: BHSD -> [tokens, d_model]
+    // Issue #56: Store in intermediates
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 5: Reshape from BHSD...\n");
-    Tensor attn_out = Tensor::empty(TensorContract::TensorShape::make_BSM(total_tokens, d_model), true, stream);
-    launchReshapeFromBHSD(attn_out_bhsd.data, attn_out.data, 
+    intermediates.attn_out = Tensor::empty(TensorContract::TensorShape::make_BSM(total_tokens, d_model), true, stream);
+    launchReshapeFromBHSD(intermediates.attn_out_bhsd.data, intermediates.attn_out.data, 
                           batch_size, seq_len, num_heads, head_dim, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 5: Reshape DONE\n");
     
     //--------------------------------------------------
     // 6. Output projection: attn_out @ W_o^T + b_o
+    // Issue #56: Store in intermediates
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 6: Output projection...\n");
     // W_o is [d_model, d_model], so W_o^T is also [d_model, d_model]
     // Use transpose_b=true to compute attn_out @ W_o^T
-    Tensor proj_out = autograd::matmul(attn_out, W_o_, stream, nullptr, nullptr, true);
-    launchFFNBiasAdd(proj_out.data, b_o_.data, total_tokens, d_model, stream);
+    intermediates.proj_out = autograd::matmul(intermediates.attn_out, W_o_, stream, nullptr, nullptr, true);
+    launchFFNBiasAdd(intermediates.proj_out.data, b_o_.data, total_tokens, d_model, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 6: Output projection DONE\n");
-    
-    // HYBRID FIX: Cache attn_output (after W_o projection) for legacy backward
-    if (cache && cache->attn_output) {
-        CUDA_CHECK(cudaMemcpyAsync(cache->attn_output, proj_out.data,
-                                   static_cast<size_t>(total_tokens) * d_model * sizeof(float),
-                                   cudaMemcpyDeviceToDevice, stream));
-    }
     
     //--------------------------------------------------
     // 7. Residual1: input + proj_out -> residual1
+    // Issue #56: Store in intermediates
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1...\n");
-    Tensor residual1 = autograd::add(input, proj_out, stream);
+    intermediates.residual1 = autograd::add(input, intermediates.proj_out, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 DONE\n");
-    
-    // HYBRID FIX: Cache residual1 for legacy backward
-    if (cache && cache->residual1) {
-        CUDA_CHECK(cudaMemcpyAsync(cache->residual1, residual1.data,
-                                   static_cast<size_t>(total_tokens) * d_model * sizeof(float),
-                                   cudaMemcpyDeviceToDevice, stream));
-    }
     
     //--------------------------------------------------
     // 8. RMSNorm2: residual1 -> ln2_out
+    // Issue #56: Store in intermediates
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 8: RMSNorm2...\n");
-    Tensor ln2_out = autograd::rms_norm(residual1, rms2_gamma_, config_.rms_epsilon, stream);
+    intermediates.ln2_out = autograd::rms_norm(intermediates.residual1, rms2_gamma_, config_.rms_epsilon, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 8: RMSNorm2 DONE\n");
-    
-    // HYBRID FIX: Cache ln2_output for legacy backward
-    if (cache && cache->ln2_output) {
-        CUDA_CHECK(cudaMemcpyAsync(cache->ln2_output, ln2_out.data,
-                                   static_cast<size_t>(total_tokens) * d_model * sizeof(float),
-                                   cudaMemcpyDeviceToDevice, stream));
-    }
     
     //--------------------------------------------------
     // 9. FFN: ln2_out -> ffn_out (already using autograd)
+    // Issue #56: FFN also stores its intermediates in this same ForwardIntermediates
+    // (ffn_linear1_out, ffn_gelu_out are written by FFN forward)
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN...\n");
-    // HYBRID FIX: Pass ffn_pre_gelu cache buffer to FFN forward
-    float* ffn_pre_gelu_cache = (cache && cache->ffn_pre_gelu) ? cache->ffn_pre_gelu : nullptr;
-    Tensor ffn_out = ffn_->forward(ln2_out, ffn_pre_gelu_cache);
+    intermediates.ffn_out = ffn_->forward(intermediates.ln2_out, intermediates);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN DONE\n");
-    
-    // HYBRID FIX: Cache ffn_output (post-W2, before residual) for legacy backward
-    if (cache && cache->ffn_output) {
-        // ffn_out is [total_tokens, d_model] (after W2)
-        CUDA_CHECK(cudaMemcpyAsync(cache->ffn_output, ffn_out.data,
-                                   static_cast<size_t>(total_tokens) * d_model * sizeof(float),
-                                   cudaMemcpyDeviceToDevice, stream));
-    }
     
     //--------------------------------------------------
     // 10. Residual2: residual1 + ffn_out -> output
+    // Issue #56: The final output IS stored in intermediates too
+    // for consistency, but we also return it
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2...\n");
-    Tensor output = autograd::add(residual1, ffn_out, stream);
+    intermediates.output = autograd::add(intermediates.residual1, intermediates.ffn_out, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2 DONE - layer COMPLETE\n");
     
-    // HYBRID FIX: Cache layer_output for legacy backward
-    if (cache && cache->layer_output) {
-        CUDA_CHECK(cudaMemcpyAsync(cache->layer_output, output.data,
-                                   static_cast<size_t>(total_tokens) * d_model * sizeof(float),
-                                   cudaMemcpyDeviceToDevice, stream));
-    }
+    // Return a non-owning view of the output
+    // The actual Tensor lives in intermediates and stays alive until backward completes
+    Tensor result = Tensor::from_ptr(
+        intermediates.output.data,
+        intermediates.output.shape,
+        false,  // doesn't own data - intermediates.output owns it
+        true    // requires_grad
+    );
+    result.is_leaf = false;
+    result.grad_fn = intermediates.output.grad_fn;
+    result.owns_grad_fn = false;  // Borrowed, intermediates.output owns it
+    result.stream = stream;
     
-    return output;
+    return result;
 }
 
 //======================================================//

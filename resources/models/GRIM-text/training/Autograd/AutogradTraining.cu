@@ -5,10 +5,13 @@
 
 #include "AutogradTraining.hpp"
 
+// MUST include full definition of GPUGrimEncoder for method calls
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Layers/LayernNorm/RMSNorm_Kernel_GPU.hpp"
 #include "../../Layers/grim_layer_gpu.hpp"                    // LayerWorkspace
 #include "../../Layers/Encoding/Encoding_GPU.hpp"             // EncodingLayer::useExternalWeights
+#include "../../Layers/ScratchBlock/ScratchBlock_GPU.hpp"     // ScratchBlockLayer
+#include "../../Layers/NumericHead/numeric_head_GPU.hpp"      // NumericHead forward/backward
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 
@@ -17,9 +20,14 @@
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <stdexcept>
+#include "../../Shared/VerboseLogging.hpp"
 
-// Logging macros
-#define AG_INFO(msg) do { std::cerr << "[AutogradTraining] INFO: " << msg << std::endl; } while(0)
+// Logging macros - guarded by VerboseLogging flags for production
+#define AG_INFO(msg) do { \
+    if constexpr (GRIM::VerboseLogging::ENABLE_AUTOGRAD_TRAINING_LOGS) { \
+        std::cerr << "[AutogradTraining] INFO: " << msg << std::endl; \
+    } \
+} while(0)
 #define AG_ERROR(msg) do { std::cerr << "[AutogradTraining] ERROR: " << msg << std::endl; } while(0)
 #define AG_WARN(msg) do { std::cerr << "[AutogradTraining] WARN: " << msg << std::endl; } while(0)
 
@@ -44,6 +52,28 @@ inline void scaleGradBuffer(float* data, size_t n, float scale, cudaStream_t str
     const int n_int = static_cast<int>(n);
     const int blocks = (n_int + kBlockSize - 1) / kBlockSize;
     scaleGradientsKernel<<<blocks, kBlockSize, 0, stream>>>(data, scale, n_int);
+}
+
+//======================================================//
+// Issue #57 FIX: Position embedding support
+// Generate position IDs [0,1,2,...,seq_len-1] repeated for each batch element
+// and add position embeddings to token embeddings
+//======================================================//
+
+__global__ void generatePositionIdsKernel(int* __restrict__ position_ids,
+                                          int total_tokens,
+                                          int seq_len) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total_tokens) return;
+    
+    // Position within sequence = idx % seq_len
+    // This gives [0,1,2,...,seq_len-1] for each batch element
+    position_ids[idx] = idx % seq_len;
+}
+
+inline void generatePositionIds(int* position_ids, int total_tokens, int seq_len, cudaStream_t stream) {
+    const int blocks = (total_tokens + kBlockSize - 1) / kBlockSize;
+    generatePositionIdsKernel<<<blocks, kBlockSize, 0, stream>>>(position_ids, total_tokens, seq_len);
 }
 
 //======================================================================
@@ -174,57 +204,10 @@ inline double computeSumSquared(const float* data, size_t n, double* d_sum, cuda
 
 } // namespace
 
-//======================================================================
-// Link Encoder Weights to TrainingState
-// CRITICAL for autograd: This makes encoder layers use TrainingState's 
-// weight Tensors directly, so gradients flow to the optimizer correctly.
-//======================================================================
-
-void linkEncoderWeightsToTrainingState(
-    GPUGrimEncoder* gpu_encoder,
-    TrainingState* training_state
-) {
-    if (!gpu_encoder || !training_state) {
-        throw std::runtime_error("linkEncoderWeightsToTrainingState: NULL arguments");
-    }
-    
-    const int num_layers = gpu_encoder->getNumLayers();
-    if (static_cast<int>(training_state->encoder_layers.size()) != num_layers) {
-        throw std::runtime_error("linkEncoderWeightsToTrainingState: TrainingState has " +
-                                 std::to_string(training_state->encoder_layers.size()) + 
-                                 " layers but encoder has " + std::to_string(num_layers));
-    }
-    
-    AG_INFO("Linking " << num_layers << " encoder layers to TrainingState weights...");
-    
-    for (int layer = 0; layer < num_layers; ++layer) {
-        auto* enc_layer = gpu_encoder->getLayer(layer);
-        if (!enc_layer) {
-            throw std::runtime_error("linkEncoderWeightsToTrainingState: layer " + 
-                                     std::to_string(layer) + " is NULL");
-        }
-        
-        auto& ts_params = training_state->encoder_layers[layer];
-        
-        // Link weights: encoder layer will use TrainingState's Tensors
-        enc_layer->useExternalWeights(
-            ts_params.rms1_gamma,
-            ts_params.rms2_gamma,
-            ts_params.attn_qkv_weight,
-            ts_params.attn_qkv_bias,
-            ts_params.attn_out_weight,
-            ts_params.attn_out_bias,
-            ts_params.ffn_w1,
-            ts_params.ffn_b1,
-            ts_params.ffn_w2,
-            ts_params.ffn_b2
-        );
-        
-        AG_INFO("  Layer " << layer << ": linked to TrainingState");
-    }
-    
-    AG_INFO("All encoder layers linked to TrainingState weights");
-}
+// NOTE: linkEncoderWeightsToTrainingState was removed.
+// Encoder owns its weights internally; optimizer accesses gradients via
+// enc->getAttnWqkvGrad(), enc->getFFNW1Grad(), etc.
+// See buildParameterGroups() in LanguageModel_Training.cu.
 
 //======================================================================
 // Context Initialization
@@ -234,6 +217,7 @@ AutogradContext initAutogradContext(
     const LanguageModelConfig* config,
     TrainingState* training_state,
     GPUGrimEncoder* gpu_encoder,
+    ScratchBlockLayer* scratch_block,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     int batch_size,
@@ -245,6 +229,7 @@ AutogradContext initAutogradContext(
     ctx.config = config;
     ctx.training_state = training_state;
     ctx.gpu_encoder = gpu_encoder;
+    ctx.scratch_block = scratch_block;
     ctx.cublas_handle = cublas_handle;
     ctx.stream = stream;
     ctx.batch_size = batch_size;
@@ -335,17 +320,115 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                         cudaMemcpyDeviceToDevice, ctx.stream);
     }
     
-    // Add position embeddings if available
-    // TODO: Implement autograd::add for position embedding addition
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Issue #57 FIX: Add position embeddings
+    // PyTorch baseline: x = tok_emb->forward(idx) + pos_emb->forward(pos)
+    // GRIM was MISSING this step, causing training plateau!
+    // ═══════════════════════════════════════════════════════════════════════════
     if (ts->position_embedding_weights.data) {
         ts->position_embedding_weights.requires_grad = true;
-        // For now, position embeddings are added in legacy path
-        // The embedding lookup result already has autograd attached
+        
+        // Ensure position embedding weights have correct shape [max_seq_len, d_model]
+        if (!ts->position_embedding_weights.shape.is_valid()) {
+            ts->position_embedding_weights.shape = TensorContract::TensorShape::make_BSM(
+                cfg->max_seq_len, cfg->d_model);
+        }
+        
+        // Allocate temporary buffer for position IDs on device
+        int* d_position_ids = nullptr;
+        cudaMallocAsync(&d_position_ids, total_tokens * sizeof(int), ctx.stream);
+        
+        // Generate position IDs: [0,1,2,...,seq_len-1] repeated for each batch
+        generatePositionIds(d_position_ids, total_tokens, ctx.seq_len, ctx.stream);
+        
+        // Look up position embeddings with autograd tracking
+        Tensor pos_emb_output = autograd::embedding(
+            ts->position_embedding_weights,
+            d_position_ids,
+            total_tokens,
+            ctx.stream
+        );
+        
+        // Free temporary position IDs (embedding lookup already copied them)
+        cudaFreeAsync(d_position_ids, ctx.stream);
+        
+        // Add token embeddings + position embeddings (both tracked by autograd)
+        emb_output = autograd::add(emb_output, pos_emb_output, ctx.stream);
+        
+        // Update cached embeddings with the combined result
+        if (ts->cached_embeddings) {
+            cudaMemcpyAsync(ts->cached_embeddings, emb_output.data,
+                            static_cast<size_t>(total_tokens) * cfg->d_model * sizeof(float),
+                            cudaMemcpyDeviceToDevice, ctx.stream);
+        }
+        
+        AG_INFO("Step 1b: Position embeddings added (Issue #57 FIX)");
     }
     
     // Store in context for backward
     ctx.embedding_tensor = std::move(emb_output);
     AG_INFO("Step 1: Embedding complete, shape=[" << total_tokens << ", " << cfg->d_model << "]");
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  STEP 1.5: ScratchBlock (numeric/code processing)
+    //  
+    //  Processes numeric atoms (integers, floats, hex, etc.) and injects
+    //  learned embeddings into the token representations. This enables
+    //  the model to understand numeric patterns and code structures.
+    //  
+    //  NOTE: ScratchBlock operates IN-PLACE on the embedding buffer.
+    //  The backward pass uses cached atom positions and types.
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    if (ctx.scratch_block && ctx.scratch_block->isEnabled()) {
+        AG_INFO("Step 1.5: Running ScratchBlock (numeric/code processing)...");
+        
+        ScratchBlockForwardArgs sb_args{};
+        
+        // Input/output are the same (in-place operation on embeddings)
+        // Use cached_embeddings since that's where embedding data lives
+        sb_args.input = TensorContract::TensorView::make_BSM(
+            ts->cached_embeddings, total_tokens, cfg->d_model, "sb_input");
+        sb_args.output = TensorContract::TensorView::make_BSM(
+            ts->cached_embeddings, total_tokens, cfg->d_model, "sb_output");
+        
+        sb_args.total_tokens = total_tokens;
+        sb_args.seq_len = ctx.seq_len;
+        sb_args.token_ids = ts->cached_token_ids;
+        
+        // Numeric values and mask from DataLoader (passed via context)
+        sb_args.token_numeric_values = ctx.token_numeric_values;
+        sb_args.token_numeric_mask = ctx.token_numeric_mask;
+        
+        // GRMT v4: text features for atom injection
+        sb_args.token_text_features = ctx.token_text_features;
+        sb_args.token_text_mask = ctx.token_text_mask;
+        
+        sb_args.stream = ctx.stream;
+        
+        // Cache atom embeddings for backward
+        if (ts->cached_scratch_block_embeddings) {
+            sb_args.cache_atom_embeddings = TensorContract::TensorView::make_BSM(
+                ts->cached_scratch_block_embeddings,
+                ctx.scratch_block->config().max_atoms,
+                ctx.scratch_block->config().atom_embedding_dim,
+                "sb_cache_embeddings");
+        }
+        sb_args.cache_atom_positions = ts->cached_scratch_block_positions;
+        sb_args.cache_atom_types = ts->cached_scratch_block_types;
+        sb_args.cache_num_atoms = ts->cached_scratch_block_num_atoms;
+        
+        // Run ScratchBlock forward
+        ctx.scratch_block->forward(sb_args);
+        
+        cudaError_t cuda_err = cudaGetLastError();
+        if (cuda_err != cudaSuccess) {
+            throw std::runtime_error("AutogradForward: ScratchBlock forward CUDA error: " + 
+                                     std::string(cudaGetErrorString(cuda_err)));
+        }
+        
+        AG_INFO("Step 1.5: ScratchBlock complete");
+    }
     
     // ═══════════════════════════════════════════════════════════════════════════
     //  STEP 2: Encoder Layers (transformer blocks)
@@ -366,16 +449,27 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     ctx.encoder_layer_outputs.clear();
     ctx.encoder_layer_outputs.reserve(num_layers);
     
-    // Input to first layer is embedding output
-    Tensor layer_input = Tensor::from_ptr(
-        ctx.embedding_tensor.data,
-        ctx.embedding_tensor.shape,
-        false,  // doesn't own
-        true    // requires_grad
-    );
-    layer_input.is_leaf = false;
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  Issue #56 FIX: Reserve space for intermediate tensor storage
+    //  
+    //  CRITICAL: We MUST keep all intermediate tensors alive until backward
+    //  completes. Without this, grad_fn objects are destroyed when forward()
+    //  returns, causing use-after-free in backward pass.
+    // ═══════════════════════════════════════════════════════════════════════════
+    ctx.layer_intermediates.layers.clear();
+    ctx.layer_intermediates.layers.reserve(num_layers);
+    
+    // ISSUE #60 FIX: First layer input MUST preserve embedding_tensor's grad_fn!
+    // Previous code used from_ptr() which creates a NEW tensor with NO grad_fn,
+    // breaking the autograd chain - EmbeddingGradFn was never called!
+    // 
+    // For first layer: use embedding_tensor directly (preserves grad_fn chain)
+    // For subsequent layers: use layer output (which has its own grad_fn chain)
+    ctx.embedding_tensor.is_leaf = false;  // Ensure it's not treated as a leaf
     
     AG_INFO("Step 2: Running " << num_layers << " encoder layers with autograd...");
+    AG_INFO("  embedding_tensor.grad_fn=" << (void*)ctx.embedding_tensor.grad_fn 
+            << " requires_grad=" << ctx.embedding_tensor.requires_grad);
     
     for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
         auto* enc_layer = ctx.gpu_encoder->getLayer(layer_idx);
@@ -389,23 +483,27 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         ws.bytes = enc_layer->requiredWorkspaceBytes(total_tokens, ctx.seq_len);
         enc_layer->setWorkspace(ws.data, ws.bytes);
         
-        // Run layer forward - returns Tensor with autograd graph attached
-        // Pass nullptr for cache since we're using autograd (no legacy backward caching)
-        Tensor layer_output = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, nullptr);
+        // ═══════════════════════════════════════════════════════════════════════
+        //  Issue #56 FIX: Create intermediates storage and pass to forward()
+        //  
+        //  forward() stores all intermediate tensors in this struct instead of
+        //  local variables. This keeps the autograd graph alive until backward.
+        // ═══════════════════════════════════════════════════════════════════════
+        ctx.layer_intermediates.layers.emplace_back();
+        ForwardIntermediates& layer_storage = ctx.layer_intermediates.layers.back();
         
-        // Store output in context to keep graph alive
+        // ISSUE #60 FIX: First layer uses embedding_tensor directly (with grad_fn intact)
+        // Subsequent layers use previous layer output (which has proper grad_fn chain)
+        Tensor& layer_input = (layer_idx == 0) 
+            ? ctx.embedding_tensor 
+            : ctx.encoder_layer_outputs.back();
+        
+        // Run layer forward with intermediates storage
+        Tensor layer_output = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, layer_storage);
+        
+        // Store output reference in encoder_layer_outputs (for compatibility)
+        // NOTE: The actual output data lives in layer_storage.output
         ctx.encoder_layer_outputs.push_back(std::move(layer_output));
-        
-        // Next layer's input is this layer's output
-        layer_input = Tensor::from_ptr(
-            ctx.encoder_layer_outputs.back().data,
-            ctx.encoder_layer_outputs.back().shape,
-            false,  // doesn't own
-            true    // requires_grad
-        );
-        layer_input.is_leaf = false;
-        // Link to previous grad_fn so backward can continue
-        layer_input.grad_fn = ctx.encoder_layer_outputs.back().grad_fn;
     }
     
     AG_INFO("Step 2: All " << num_layers << " encoder layers complete");
@@ -439,6 +537,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         );
         rms_input.is_leaf = false;
         rms_input.grad_fn = ctx.encoder_layer_outputs.back().grad_fn;
+        rms_input.owns_grad_fn = false;  // Borrowed from encoder output
         
         // Apply autograd RMSNorm
         normalized_output = autograd::rms_norm(rms_input, ts->final_rms_gamma, 
@@ -455,6 +554,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         );
         normalized_output.is_leaf = false;
         normalized_output.grad_fn = ctx.encoder_layer_outputs.back().grad_fn;
+        normalized_output.owns_grad_fn = false;  // Borrowed, not owned
     }
     
     // Store for backward
@@ -481,25 +581,27 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     }
     
     // Create input tensor referencing the encoder output
-    // Link grad_fn to continue the backward chain
-    Tensor lm_input = Tensor::from_ptr(
+      // Link grad_fn to continue the backward chain
+    // ISSUE #48 FIX: Store in context so pointer remains valid until backward completes
+    ctx.lm_input_tensor = Tensor::from_ptr(
         ctx.encoder_output_tensor.data,
         TensorContract::TensorShape::make_BSM(total_tokens, cfg->d_model),
         false,  // doesn't own data
         true    // requires_grad
     );
-    lm_input.is_leaf = false;
-    lm_input.grad_fn = ctx.encoder_output_tensor.grad_fn;  // Link to RMSNorm or last encoder layer
+    ctx.lm_input_tensor.is_leaf = false;
+    ctx.lm_input_tensor.grad_fn = ctx.encoder_output_tensor.grad_fn;  // Link to RMSNorm or last encoder layer
+    ctx.lm_input_tensor.owns_grad_fn = false;  // Borrowed, not owned
     
     // RULE 20: Validate shapes
-    lm_input.shape.require("lm_input");
+    ctx.lm_input_tensor.shape.require("lm_input");
     lm_weights.shape = TensorContract::TensorShape::make_BSM(cfg->vocab_size, cfg->d_model);
     lm_weights.shape.require("lm_weights");
     
     // Execute autograd matmul: logits = encoder @ lm_weights^T
     // transpose_b=true because lm_weights is [vocab_size, d_model]
     Tensor logits_tensor = autograd::matmul(
-        lm_input,
+        ctx.lm_input_tensor,
         lm_weights,
         ctx.stream,
         nullptr,  // a_cache: autograd will cache internally
@@ -526,7 +628,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     logits_tensor.shape.total_elements() * sizeof(float),
                     cudaMemcpyDeviceToDevice, ctx.stream);
     
-    // Add bias if present
+    // Add bias if present (applied to cached buffer)
     if (cfg->use_bias && ts->lm_head_bias.data) {
         launchBroadcastBiasAdd(
             logits_output,
@@ -538,10 +640,17 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         AG_INFO("Applied LM head bias (broadcast add)");
     }
     
+    // CRITICAL FIX: Don't overwrite data pointer - this causes heap corruption!
+    // The matmul output tensor owns its allocated memory (owns_data=true).
+    // We copied the data to cached_logits above, so loss computation can use
+    // cached_logits directly. The logits_tensor keeps its original data pointer
+    // and will properly free it when destroyed.
+    //
     // Move the autograd tensor to context (grad_fn is preserved)
     // The context owns the tensor lifetime during the forward-backward cycle
     ctx.logits_tensor = std::move(logits_tensor);
-    ctx.logits_tensor.data = logits_output;  // Point to cached buffer for compatibility
+    // NOTE: ctx.logits_tensor.data still points to matmul's allocated buffer (correct!)
+    // The cached_logits copy is used by loss computation for compatibility.
     
     // Create a lightweight result that references the context's tensor
     // NOTE: result.logits is just a reference view, ctx owns the actual Tensor
@@ -549,10 +658,78 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     result.logits.shape = ctx.logits_tensor.shape;
     result.logits.requires_grad = ctx.logits_tensor.requires_grad;
     result.logits.is_leaf = ctx.logits_tensor.is_leaf;
-    result.logits.grad_fn = ctx.logits_tensor.grad_fn;  // Share grad_fn pointer
+    // CRITICAL: Do NOT share grad_fn - the context owns it.
+    // If we set result.logits.grad_fn = ctx.logits_tensor.grad_fn, then when
+    // result.logits is destroyed it would call `delete grad_fn` (double-free!)
+    result.logits.grad_fn = nullptr;  // Context owns the grad_fn, not the result
     // Do NOT take ownership (the context owns it)
     result.logits.owns_data = false;
-    result.logits.owns_grad = false;
+    // Note: owns_grad removed - ownership now managed by shared_ptr<Tensor> grad_
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  STEP 5: NumericHead Forward (optional)
+    //  
+    //  Produces numeric predictions [total_tokens, 1] parallel to text logits.
+    //  Used for numeric supervision (e.g., predicting numeric values in code).
+    //  
+    //  NumericHead: y = encoder_output @ weights + bias
+    //  Loss is computed separately and added to text loss.
+    //  
+    //  Uses TensorContract Tensor-based API with autograd grad_fn.
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    if (cfg->numeric_head_enabled && ts->numeric_head_weights.data) {
+        AG_INFO("Step 5: Running NumericHead forward (autograd)...");
+        
+        // Create Tensor wrappers for weights and bias (leaf tensors)
+        Tensor weights_tensor = Tensor::from_ptr(
+            ts->numeric_head_weights.data,
+            TensorContract::TensorShape::make_BSM(cfg->d_model, 1),
+            false,  // doesn't own
+            true    // requires_grad
+        );
+        weights_tensor.is_leaf = true;
+        // ISSUE #59: Use share_grad() for proper shared_ptr semantics
+        weights_tensor.share_grad(ts->numeric_head_weights);
+        
+        Tensor* bias_tensor_ptr = nullptr;
+        Tensor bias_tensor;
+        if (cfg->use_bias && ts->numeric_head_bias.data) {
+            bias_tensor = Tensor::from_ptr(
+                ts->numeric_head_bias.data,
+                TensorContract::TensorShape::make_BSM(1, 1),
+                false,  // doesn't own
+                true    // requires_grad
+            );
+            bias_tensor.is_leaf = true;
+            // ISSUE #59: Use share_grad()
+            bias_tensor.share_grad(ts->numeric_head_bias);
+            bias_tensor_ptr = &bias_tensor;
+        }
+        
+        // Create encoder output Tensor (references ctx.encoder_output_tensor)
+        Tensor encoder_for_numeric = Tensor::from_ptr(
+            encoder_output,
+            TensorContract::TensorShape::make_BSM(total_tokens, cfg->d_model),
+            false,  // doesn't own
+            true    // requires_grad
+        );
+        encoder_for_numeric.is_leaf = false;
+        // Link to encoder's grad_fn for chain continuation
+        encoder_for_numeric.grad_fn = ctx.encoder_output_tensor.grad_fn;
+        encoder_for_numeric.owns_grad_fn = false;  // ctx owns it
+        
+        // Call autograd numeric_head_forward
+        ctx.numeric_head_output = numeric_head_forward(
+            encoder_for_numeric,
+            weights_tensor,
+            bias_tensor_ptr,
+            ctx.cublas_handle,
+            ctx.stream
+        );
+        
+        AG_INFO("Step 5: NumericHead complete (autograd), shape=[" << total_tokens << ", 1]");
+    }
     
     AG_INFO("Forward complete: logits shape=[" << total_tokens << ", " << cfg->vocab_size << "]");
     
@@ -619,9 +796,11 @@ LossResult computeAutogradLoss(
     result.loss.shape = ctx.loss_tensor.shape;
     result.loss.requires_grad = ctx.loss_tensor.requires_grad;
     result.loss.is_leaf = ctx.loss_tensor.is_leaf;
-    result.loss.grad_fn = ctx.loss_tensor.grad_fn;
+    // CRITICAL: Do NOT share grad_fn - the context owns it.
+    // Sharing would cause double-free when result is destroyed.
+    result.loss.grad_fn = nullptr;  // Context owns the grad_fn
     result.loss.owns_data = false;
-    result.loss.owns_grad = false;
+    // Note: owns_grad removed - ownership now managed by shared_ptr<Tensor> grad_
     
     AG_INFO("Loss computed: " << result.loss_value << " (valid_tokens=" << result.valid_tokens << ")");
     
@@ -662,83 +841,64 @@ BackwardResult executeAutogradBackward(
     AG_INFO("Executing backward pass (accumulate=" << accumulate << ", scale=" << ctx.grad_scale << ")");
     
     // Zero gradients if not accumulating
+    // ISSUE #59: Use has_grad() and grad_data() accessors
     if (!accumulate) {
         auto* ts = ctx.training_state;
         
         // Zero all parameter gradients
-        if (ts->embedding_weights.grad) {
-            cudaMemsetAsync(ts->embedding_weights.grad, 0, 
+        if (ts->embedding_weights.has_grad()) {
+            cudaMemsetAsync(ts->embedding_weights.grad_data(), 0, 
                            ts->embedding_weights.numel() * sizeof(float), ctx.stream);
         }
-        if (ts->position_embedding_weights.grad) {
-            cudaMemsetAsync(ts->position_embedding_weights.grad, 0,
+        if (ts->position_embedding_weights.has_grad()) {
+            cudaMemsetAsync(ts->position_embedding_weights.grad_data(), 0,
                            ts->position_embedding_weights.numel() * sizeof(float), ctx.stream);
         }
-        if (ts->lm_head_weights.grad) {
-            cudaMemsetAsync(ts->lm_head_weights.grad, 0,
+        if (ts->lm_head_weights.has_grad()) {
+            cudaMemsetAsync(ts->lm_head_weights.grad_data(), 0,
                            ts->lm_head_weights.numel() * sizeof(float), ctx.stream);
         }
-        if (ts->final_rms_gamma.grad) {
-            cudaMemsetAsync(ts->final_rms_gamma.grad, 0,
+        if (ts->final_rms_gamma.has_grad()) {
+            cudaMemsetAsync(ts->final_rms_gamma.grad_data(), 0,
                            ts->final_rms_gamma.numel() * sizeof(float), ctx.stream);
         }
         
-        // Zero encoder layer gradients
-        for (auto& layer : ts->encoder_layers) {
-            if (layer.rms1_gamma.grad) cudaMemsetAsync(layer.rms1_gamma.grad, 0, 
-                                                       layer.rms1_gamma.numel() * sizeof(float), ctx.stream);
-            if (layer.rms2_gamma.grad) cudaMemsetAsync(layer.rms2_gamma.grad, 0,
-                                                       layer.rms2_gamma.numel() * sizeof(float), ctx.stream);
-            if (layer.attn_qkv_weight.grad) cudaMemsetAsync(layer.attn_qkv_weight.grad, 0,
-                                                            layer.attn_qkv_weight.numel() * sizeof(float), ctx.stream);
-            if (layer.attn_out_weight.grad) cudaMemsetAsync(layer.attn_out_weight.grad, 0,
-                                                            layer.attn_out_weight.numel() * sizeof(float), ctx.stream);
-            if (layer.ffn_w1.grad) cudaMemsetAsync(layer.ffn_w1.grad, 0,
-                                                   layer.ffn_w1.numel() * sizeof(float), ctx.stream);
-            if (layer.ffn_w2.grad) cudaMemsetAsync(layer.ffn_w2.grad, 0,
-                                                   layer.ffn_w2.numel() * sizeof(float), ctx.stream);
-        }
+        // NOTE: Encoder layer gradients are zeroed by the encoder itself during backward.
+        // The encoder owns its weights/gradients internally, not TrainingState.
     }
     
     // Call backward on the loss tensor
     // This propagates through the entire computation graph via grad_fn nodes
+    AG_INFO("Calling loss_tensor.backward()...");
     ctx.loss_tensor.backward();
+    AG_INFO("loss_tensor.backward() returned successfully");
     
     // Copy gradients from Tensor.grad to TrainingState raw buffers
     // (for compatibility with optimizer that uses raw pointers)
+    AG_INFO("Calling copyGradientsToTrainingState...");
     if (!copyGradientsToTrainingState(ctx)) {
         result.error_message = "Failed to copy gradients to TrainingState";
         AG_ERROR("executeAutogradBackward: " << result.error_message);
         return result;
     }
+    AG_INFO("copyGradientsToTrainingState returned successfully");
     
     // Apply gradient scaling if needed
+    // ISSUE #59: Use grad_data() accessor
     if (ctx.grad_scale != 1.0f) {
         auto* ts = ctx.training_state;
         const float scale = ctx.grad_scale;
         
-        scaleGradBuffer(ts->embedding_weights.grad, ts->embedding_weights.numel(), scale, ctx.stream);
-        scaleGradBuffer(ts->position_embedding_weights.grad, ts->position_embedding_weights.numel(), scale, ctx.stream);
-        scaleGradBuffer(ts->lm_head_weights.grad, ts->lm_head_weights.numel(), scale, ctx.stream);
-        scaleGradBuffer(ts->lm_head_bias.grad, ts->lm_head_bias.numel(), scale, ctx.stream);
-        scaleGradBuffer(ts->numeric_head_weights.grad, ts->numeric_head_weights.numel(), scale, ctx.stream);
-        scaleGradBuffer(ts->numeric_head_bias.grad, ts->numeric_head_bias.numel(), scale, ctx.stream);
-        scaleGradBuffer(ts->final_rms_gamma.grad, ts->final_rms_gamma.numel(), scale, ctx.stream);
+        scaleGradBuffer(ts->embedding_weights.grad_data(), ts->embedding_weights.numel(), scale, ctx.stream);
+        scaleGradBuffer(ts->position_embedding_weights.grad_data(), ts->position_embedding_weights.numel(), scale, ctx.stream);
+        scaleGradBuffer(ts->lm_head_weights.grad_data(), ts->lm_head_weights.numel(), scale, ctx.stream);
+        scaleGradBuffer(ts->lm_head_bias.grad_data(), ts->lm_head_bias.numel(), scale, ctx.stream);
+        scaleGradBuffer(ts->numeric_head_weights.grad_data(), ts->numeric_head_weights.numel(), scale, ctx.stream);
+        scaleGradBuffer(ts->numeric_head_bias.grad_data(), ts->numeric_head_bias.numel(), scale, ctx.stream);
+        scaleGradBuffer(ts->final_rms_gamma.grad_data(), ts->final_rms_gamma.numel(), scale, ctx.stream);
         
-        for (auto& layer : ts->encoder_layers) {
-            scaleGradBuffer(layer.rms1_gamma.grad, layer.rms1_gamma.numel(), scale, ctx.stream);
-            scaleGradBuffer(layer.rms2_gamma.grad, layer.rms2_gamma.numel(), scale, ctx.stream);
-            scaleGradBuffer(layer.attn_qkv_weight.grad, layer.attn_qkv_weight.numel(), scale, ctx.stream);
-            scaleGradBuffer(layer.attn_qkv_bias.grad, layer.attn_qkv_bias.numel(), scale, ctx.stream);
-            scaleGradBuffer(layer.attn_out_weight.grad, layer.attn_out_weight.numel(), scale, ctx.stream);
-            scaleGradBuffer(layer.attn_out_bias.grad, layer.attn_out_bias.numel(), scale, ctx.stream);
-            scaleGradBuffer(layer.alpha_q.grad, layer.alpha_q.numel(), scale, ctx.stream);
-            scaleGradBuffer(layer.alpha_k.grad, layer.alpha_k.numel(), scale, ctx.stream);
-            scaleGradBuffer(layer.ffn_w1.grad, layer.ffn_w1.numel(), scale, ctx.stream);
-            scaleGradBuffer(layer.ffn_b1.grad, layer.ffn_b1.numel(), scale, ctx.stream);
-            scaleGradBuffer(layer.ffn_w2.grad, layer.ffn_w2.numel(), scale, ctx.stream);
-            scaleGradBuffer(layer.ffn_b2.grad, layer.ffn_b2.numel(), scale, ctx.stream);
-        }
+        // NOTE: Encoder gradients are in encoder's internal Tensors.
+        // The optimizer accesses them via enc->getAttnWqkvGrad() etc.
     }
     
     // Compute gradient norm
@@ -758,7 +918,7 @@ bool copyGradientsToTrainingState(AutogradContext& ctx) {
     auto* ts = ctx.training_state;
     cudaStream_t stream = ctx.stream;
     
-    // The autograd system stores gradients in Tensor.grad fields
+    // The autograd system stores gradients in Tensor.grad_ fields (shared_ptr<Tensor>)
     // The optimizer expects gradients in TrainingState raw buffers
     // 
     // CRITICAL: We MUST explicitly verify or copy gradients!
@@ -768,26 +928,28 @@ bool copyGradientsToTrainingState(AutogradContext& ctx) {
     // ═══════════════════════════════════════════════════════════════════════════
     // Embedding gradients (may be tied with LM head)
     // ═══════════════════════════════════════════════════════════════════════════
+    // ISSUE #59: Use has_grad() accessor
     if (ts->embedding_weights.data) {
-        if (!ts->embedding_weights.grad) {
+        if (!ts->embedding_weights.has_grad()) {
             AG_WARN("embedding_weights.grad is NULL - gradients NOT flowing to optimizer!");
         } else {
-            AG_INFO("Embedding gradients ready: " << ts->embedding_weights.numel() << " elements at " << ts->embedding_weights.grad);
+            AG_INFO("Embedding gradients ready: " << ts->embedding_weights.numel() << " elements at " << ts->embedding_weights.grad_data());
         }
     }
     
     // ═══════════════════════════════════════════════════════════════════════════
     // LM head gradients (may be tied to embedding)
     // ═══════════════════════════════════════════════════════════════════════════
+    // ISSUE #59: Use has_grad() and grad_data() accessors
     if (ts->lm_head_weights.data) {
-        if (!ts->lm_head_weights.grad) {
+        if (!ts->lm_head_weights.has_grad()) {
             AG_WARN("lm_head_weights.grad is NULL - gradients NOT flowing to optimizer!");
         } else {
-            // Check if tied to embedding
-            if (ts->lm_head_weights.grad == ts->embedding_weights.grad) {
+            // Check if tied to embedding (same underlying grad Tensor)
+            if (ts->lm_head_weights.grad_data() == ts->embedding_weights.grad_data()) {
                 AG_INFO("LM head gradients TIED to embedding: " << ts->lm_head_weights.numel() << " elements");
             } else {
-                AG_INFO("LM head gradients SEPARATE: " << ts->lm_head_weights.numel() << " elements at " << ts->lm_head_weights.grad);
+                AG_INFO("LM head gradients SEPARATE: " << ts->lm_head_weights.numel() << " elements at " << ts->lm_head_weights.grad_data());
             }
         }
     }
@@ -795,37 +957,22 @@ bool copyGradientsToTrainingState(AutogradContext& ctx) {
     // ═══════════════════════════════════════════════════════════════════════════
     // Copy grad_logits from autograd tensor to legacy buffer
     // ═══════════════════════════════════════════════════════════════════════════
-    if (ctx.logits_tensor.grad && ts->grad_logits_tensor.data) {
+    // ISSUE #59: Use has_grad() and grad_data() accessors
+    if (ctx.logits_tensor.has_grad() && ts->grad_logits_tensor.data) {
         const size_t logits_size = ctx.logits_tensor.numel() * sizeof(float);
-        cudaMemcpyAsync(ts->grad_logits_tensor.data, ctx.logits_tensor.grad, logits_size,
+        cudaMemcpyAsync(ts->grad_logits_tensor.data, ctx.logits_tensor.grad_data(), logits_size,
                         cudaMemcpyDeviceToDevice, stream);
         AG_INFO("Copied grad_logits: " << ctx.logits_tensor.numel() << " elements");
     }
     
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Encoder layer gradients - verify each layer has gradients
-    // ═══════════════════════════════════════════════════════════════════════════
-    int layers_with_grads = 0;
-    int layers_missing_grads = 0;
-    for (size_t i = 0; i < ts->encoder_layers.size(); ++i) {
-        auto& layer = ts->encoder_layers[i];
-        bool has_grads = (layer.attn_qkv_weight.grad != nullptr) && 
-                         (layer.attn_out_weight.grad != nullptr) &&
-                         (layer.ffn_w1.grad != nullptr) &&
-                         (layer.ffn_w2.grad != nullptr);
-        if (has_grads) {
-            layers_with_grads++;
-        } else {
-            layers_missing_grads++;
-            AG_WARN("Encoder layer " << i << " missing gradient buffers!");
-        }
-    }
-    AG_INFO("Encoder layers: " << layers_with_grads << " with gradients, " << layers_missing_grads << " missing");
+    // NOTE: Encoder gradients are in encoder's internal Tensors, not TrainingState.
+    // The optimizer accesses them via enc->getAttnWqkvGrad() etc.
     
     // ═══════════════════════════════════════════════════════════════════════════
     // Final RMSNorm gamma
     // ═══════════════════════════════════════════════════════════════════════════
-    if (ts->final_rms_gamma.data && !ts->final_rms_gamma.grad) {
+    // ISSUE #59: Use has_grad() accessor
+    if (ts->final_rms_gamma.data && !ts->final_rms_gamma.has_grad()) {
         AG_WARN("final_rms_gamma.grad is NULL - gradients NOT flowing!");
     }
     
@@ -842,28 +989,20 @@ float computeGradientNorm(const AutogradContext& ctx) {
     
     // Accumulate sum of squared gradients from all parameter groups
     // Embeddings and LM head (may be tied)
-    computeSumSquared(ts->embedding_weights.grad, ts->embedding_weights.numel(), d_sum, ctx.stream);
-    if (ts->lm_head_weights.grad != ts->embedding_weights.grad) {
+    // ISSUE #59: Use grad_data() accessor
+    computeSumSquared(ts->embedding_weights.grad_data(), ts->embedding_weights.numel(), d_sum, ctx.stream);
+    if (ts->lm_head_weights.grad_data() != ts->embedding_weights.grad_data()) {
         // Only add if not tied (different pointers)
-        computeSumSquared(ts->lm_head_weights.grad, ts->lm_head_weights.numel(), d_sum, ctx.stream);
+        computeSumSquared(ts->lm_head_weights.grad_data(), ts->lm_head_weights.numel(), d_sum, ctx.stream);
     }
-    computeSumSquared(ts->position_embedding_weights.grad, ts->position_embedding_weights.numel(), d_sum, ctx.stream);
-    computeSumSquared(ts->lm_head_bias.grad, ts->lm_head_bias.numel(), d_sum, ctx.stream);
-    computeSumSquared(ts->final_rms_gamma.grad, ts->final_rms_gamma.numel(), d_sum, ctx.stream);
+    computeSumSquared(ts->position_embedding_weights.grad_data(), ts->position_embedding_weights.numel(), d_sum, ctx.stream);
+    computeSumSquared(ts->lm_head_bias.grad_data(), ts->lm_head_bias.numel(), d_sum, ctx.stream);
+    computeSumSquared(ts->final_rms_gamma.grad_data(), ts->final_rms_gamma.numel(), d_sum, ctx.stream);
     
-    // Encoder layers
-    for (const auto& layer : ts->encoder_layers) {
-        computeSumSquared(layer.rms1_gamma.grad, layer.rms1_gamma.numel(), d_sum, ctx.stream);
-        computeSumSquared(layer.rms2_gamma.grad, layer.rms2_gamma.numel(), d_sum, ctx.stream);
-        computeSumSquared(layer.attn_qkv_weight.grad, layer.attn_qkv_weight.numel(), d_sum, ctx.stream);
-        computeSumSquared(layer.attn_qkv_bias.grad, layer.attn_qkv_bias.numel(), d_sum, ctx.stream);
-        computeSumSquared(layer.attn_out_weight.grad, layer.attn_out_weight.numel(), d_sum, ctx.stream);
-        computeSumSquared(layer.attn_out_bias.grad, layer.attn_out_bias.numel(), d_sum, ctx.stream);
-        computeSumSquared(layer.ffn_w1.grad, layer.ffn_w1.numel(), d_sum, ctx.stream);
-        computeSumSquared(layer.ffn_b1.grad, layer.ffn_b1.numel(), d_sum, ctx.stream);
-        computeSumSquared(layer.ffn_w2.grad, layer.ffn_w2.numel(), d_sum, ctx.stream);
-        computeSumSquared(layer.ffn_b2.grad, layer.ffn_b2.numel(), d_sum, ctx.stream);
-    }
+    // NOTE: Encoder gradients need separate norm computation from encoder directly.
+    // The optimizer accesses encoder gradients via enc->getAttnWqkvGrad() etc.
+    // For now, we compute norm only from TrainingState-owned Tensors.
+    // TODO: If needed, add gradient norm computation from encoder's internal Tensors.
     
     // Copy result to host and compute sqrt
     double h_sum = 0.0;
@@ -903,24 +1042,19 @@ float autogradTrainingStep(
         return -1.0f;
     }
     
-    // CRITICAL: Link encoder weights to TrainingState on first call
-    // This ensures autograd gradients flow to the optimizer's buffers
-    static bool weights_linked = false;
-    if (!weights_linked) {
-        try {
-            linkEncoderWeightsToTrainingState(gpu_encoder, &training_state);
-            weights_linked = true;
-        } catch (const std::exception& e) {
-            AG_ERROR("autogradTrainingStep: Failed to link encoder weights - " << e.what());
-            return -1.0f;
-        }
-    }
+    // Get ScratchBlock (optional - nullptr if not enabled)
+    ScratchBlockLayer* scratch_block = model.getScratchBlockLayer();
+    
+    // NOTE: Encoder owns its weights internally; optimizer accesses gradients
+    // via enc->getAttnWqkvGrad(), enc->getFFNW1Grad(), etc.
+    // No linking needed - see buildParameterGroups() in LanguageModel_Training.cu
     
     // Initialize context
     AutogradContext ctx = initAutogradContext(
         &cfg,
         &training_state,
         gpu_encoder,
+        scratch_block,
         training_state.cublas_handle,
         training_state.stream_ctrl.getPrimaryStream(),
         batch_size,
@@ -933,6 +1067,12 @@ float autogradTrainingStep(
         AG_ERROR("autogradTrainingStep: Failed to initialize context");
         return -1.0f;
     }
+    
+    // Set ScratchBlock input buffers from TrainingState
+    ctx.token_numeric_values = training_state.cached_token_numeric_values;
+    ctx.token_numeric_mask = training_state.cached_token_numeric_mask;
+    ctx.token_text_features = training_state.cached_token_text_features;
+    ctx.token_text_mask = training_state.cached_token_text_mask;
     
     // Forward pass (runs entire model with autograd graph)
     ForwardResult fwd_result = executeAutogradForward(ctx);

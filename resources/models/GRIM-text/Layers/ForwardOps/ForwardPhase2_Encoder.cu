@@ -4,6 +4,7 @@
 
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../../Shared/TensorContract/ForwardIntermediates.hpp"
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -67,6 +68,16 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
     }
     fprintf(stderr, "[PHASE_TIMING] Phase2: W277 reference set, entering layer loop\n");
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  Issue #56 FIX: Allocate ForwardIntermediates storage for all layers
+    //  
+    //  Even in inference, we must provide storage since the forward() signature
+    //  changed. Per Rule 20, there's no backwards-compatible nullptr path.
+    //  The intermediates will simply be discarded after forward completes since
+    //  inference doesn't need gradients.
+    // ═══════════════════════════════════════════════════════════════════════════
+    std::vector<ForwardIntermediates> inference_intermediates;
+    inference_intermediates.reserve(num_layers);
     for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
         fprintf(stderr, "[PHASE_TIMING] Phase2: Layer %d/%d START\n", layer_idx, num_layers);
 
@@ -101,19 +112,13 @@ ForwardStatus runFullEncoder(ForwardContext& ctx) {
             fprintf(stderr, "[PHASE_TIMING] Phase2: Layer %d: calling forward()...\n", layer_idx);
         }
         
-        // HYBRID FIX: Get the layer cache for legacy backward pass
-        // Pass cache pointer so forward() populates cached activations
-        EncoderLayerCache* layer_cache = nullptr;
-        if (ctx.layer_caches && layer_idx < ctx.layer_cache_count) {
-            layer_cache = &ctx.layer_caches[layer_idx];
-            if constexpr (kEnableVerboseLayerTiming) {
-                fprintf(stderr, "[PHASE_TIMING] Phase2: Layer %d: using layer cache at %p\n", 
-                        layer_idx, (void*)layer_cache);
-            }
-        }
+        // Issue #56 FIX: Provide ForwardIntermediates storage for forward()
+        // Per Rule 20, no backwards compatibility - all callers must provide storage
+        inference_intermediates.emplace_back();
+        ForwardIntermediates& layer_intermediates = inference_intermediates.back();
         
-        // Execute layer forward - returns Tensor, optionally populates cache
-        Tensor output_tensor = enc_layer->forward(input_tensor, ctx.seq_len, ctx.stream, layer_cache);
+        // Execute layer forward with intermediates storage
+        Tensor output_tensor = enc_layer->forward(input_tensor, ctx.seq_len, ctx.stream, layer_intermediates);
         
         if constexpr (kEnableVerboseLayerTiming) {
             fprintf(stderr, "[PHASE_TIMING] Phase2: Layer %d: forward() returned\n", layer_idx);

@@ -20,8 +20,11 @@ constexpr auto kModuleGradBind = GRIM::Logging::ModuleId::Optimizer;
 namespace GRIM {
 
 void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
+    std::cout << "[BIND-A] bindToModel ENTER" << std::endl << std::flush;
     const auto& cfg = model.getConfig();
+    std::cout << "[BIND-B] Got config, vocab_size=" << cfg.vocab_size << " d_model=" << cfg.d_model << std::endl << std::flush;
     auto& ts = model.getTrainingState();
+    std::cout << "[BIND-C] Got TrainingState ref" << std::endl << std::flush;
     
 #ifdef DEBUG_GRAD_BINDING
     // DEBUG: Verify pointer integrity at entry to bindToModel
@@ -36,24 +39,34 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
 #endif
     
     // GQA dimensions
+    std::cout << "[BIND-D] Computing GQA dimensions..." << std::endl << std::flush;
     const int head_dim = cfg.head_dim;  // Use pre-computed value from config
     const int kv_dim = ts.num_kv_heads * head_dim;
     const int total_qkv_dim = cfg.d_model + 2 * kv_dim;
+    std::cout << "[BIND-E] GQA: head_dim=" << head_dim << " kv_dim=" << kv_dim << " total_qkv_dim=" << total_qkv_dim << std::endl << std::flush;
     
     // Clear any existing buffers
+    std::cout << "[BIND-F] Clearing existing buffers..." << std::endl << std::flush;
     controller_.clearBuffers();
+    std::cout << "[BIND-G] Buffers cleared" << std::endl << std::flush;
     
     // ========== Global Gradients ==========
     
     // WEIGHT TYING: When tie_embeddings=true, embedding_weights.grad == lm_head_weights.grad
     // (same pointer). Only register ONCE to avoid double-zeroing and corruption.
     const bool grads_are_tied = cfg.tie_embeddings;
+    std::cout << "[BIND-H] tie_embeddings=" << (grads_are_tied ? "true" : "false") << std::endl << std::flush;
     
     // Get the grad pointers via accessor methods
+    std::cout << "[BIND-I] Getting embedding_grads pointer..." << std::endl << std::flush;
     float* emb_grads = ts.embedding_grads();
+    std::cout << "[BIND-J] emb_grads=" << emb_grads << std::endl << std::flush;
+    std::cout << "[BIND-K] Getting lm_head_weight_grads pointer..." << std::endl << std::flush;
     float* lm_grads = ts.lm_head_weight_grads();
+    std::cout << "[BIND-L] lm_grads=" << lm_grads << std::endl << std::flush;
     
     if (grads_are_tied) {
+        std::cout << "[BIND-M] Tied path: checking pointer aliasing..." << std::endl << std::flush;
         // VALIDATION: Verify pointer aliasing was set up correctly by initTrainingState
         if (emb_grads != lm_grads) {
             std::ostringstream oss;
@@ -65,6 +78,7 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
             std::exit(1);
         }
         
+        std::cout << "[BIND-N] Pointers aliased correctly, registering tied buffer..." << std::endl << std::flush;
         // Tied: register single combined buffer
         if (lm_grads) {
             controller_.registerGradientBuffer(
@@ -72,8 +86,10 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
                 lm_grads,
                 static_cast<std::size_t>(cfg.vocab_size) * cfg.d_model
             );
+            std::cout << "[BIND-O] Registered tied embedding/lm_head buffer" << std::endl << std::flush;
         }
     } else {
+        std::cout << "[BIND-M2] Untied path: checking NOT aliased..." << std::endl << std::flush;
         // VALIDATION: Verify pointers are NOT aliased when tying is disabled
         if (emb_grads == lm_grads && emb_grads != nullptr) {
             std::ostringstream oss;
@@ -85,6 +101,7 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
             std::exit(1);
         }
         
+        std::cout << "[BIND-N2] Registering separate embedding buffer..." << std::endl << std::flush;
         // Untied: register both separately
         const std::size_t embedding_grad_size = static_cast<std::size_t>(cfg.vocab_size) * cfg.d_model;
         if (emb_grads && embedding_grad_size > 0) {
@@ -93,50 +110,66 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
                 emb_grads,
                 embedding_grad_size
             );
+            std::cout << "[BIND-O2] Registered embedding_grads" << std::endl << std::flush;
         }
         
+        std::cout << "[BIND-P2] Registering separate lm_head buffer..." << std::endl << std::flush;
         if (lm_grads) {
             controller_.registerGradientBuffer(
                 "lm_head_weight_grads",
                 lm_grads,
                 static_cast<std::size_t>(cfg.vocab_size) * cfg.d_model
             );
+            std::cout << "[BIND-Q2] Registered lm_head_weight_grads" << std::endl << std::flush;
         }
     }
     
+    std::cout << "[BIND-P] Checking lm_head_bias..." << std::endl << std::flush;
     // LM head bias grads (Tensor member access)
-    if (ts.lm_head_bias.grad) {
+    // ISSUE #59: Use has_grad() and grad_data() accessors
+    if (ts.lm_head_bias.has_grad()) {
+        std::cout << "[BIND-Q] Registering lm_head_bias_grads=" << ts.lm_head_bias.grad_data() << std::endl << std::flush;
         controller_.registerGradientBuffer(
             "lm_head_bias_grads",
-            ts.lm_head_bias.grad,
+            ts.lm_head_bias.grad_data(),
             static_cast<std::size_t>(cfg.vocab_size)
         );
     }
 
+    std::cout << "[BIND-R] Checking numeric_head_weights..." << std::endl << std::flush;
     // Numeric head grads (Tensor member access)
-    if (ts.numeric_head_weights.grad) {
+    // ISSUE #59: Use has_grad() and grad_data() accessors
+    if (ts.numeric_head_weights.has_grad()) {
+        std::cout << "[BIND-S] Registering numeric_head_weight_grads=" << ts.numeric_head_weights.grad_data() << std::endl << std::flush;
         controller_.registerGradientBuffer(
             "numeric_head_weight_grads",
-            ts.numeric_head_weights.grad,
+            ts.numeric_head_weights.grad_data(),
             static_cast<std::size_t>(cfg.d_model)
         );
     }
-    if (ts.numeric_head_bias.grad) {
+    std::cout << "[BIND-T] Checking numeric_head_bias..." << std::endl << std::flush;
+    // ISSUE #59: Use has_grad() and grad_data() accessors
+    if (ts.numeric_head_bias.has_grad()) {
+        std::cout << "[BIND-U] Registering numeric_head_bias_grads=" << ts.numeric_head_bias.grad_data() << std::endl << std::flush;
         controller_.registerGradientBuffer(
             "numeric_head_bias_grads",
-            ts.numeric_head_bias.grad,
+            ts.numeric_head_bias.grad_data(),
             static_cast<std::size_t>(1)
         );
     }
     
+    std::cout << "[BIND-V] Checking final_rms_gamma_grads..." << std::endl << std::flush;
     // Issue #33: Final RMSNorm gamma gradients (normalizes encoder output before LM head)
     if (ts.final_rms_gamma_grads()) {
+        std::cout << "[BIND-W] Registering final_rms_gamma_grads=" << ts.final_rms_gamma_grads() << std::endl << std::flush;
         controller_.registerGradientBuffer(
             "final_rms_gamma_grads",
             ts.final_rms_gamma_grads(),
             static_cast<std::size_t>(cfg.d_model)
         );
     }
+    
+    std::cout << "[BIND-X] Global gradients done, starting per-layer..." << std::endl << std::flush;
     
     // ========== MIGRATED TO TENSOR SYSTEM ==========
     // Issue #45 fix: The following intermediate gradient buffers are now managed by the
@@ -159,23 +192,31 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
     // IMPORTANT: The encoder owns its own gamma_grad buffers which are different
     // from TrainingState's rms1_gamma_grads/rms2_gamma_grads vectors!
     // We must register the encoder's actual buffers so they get zeroed properly.
+    std::cout << "[BIND-Y] Getting GPU encoder..." << std::endl << std::flush;
     auto* gpu_encoder = &model.getGpuEncoder();
+    std::cout << "[BIND-Z] gpu_encoder=" << gpu_encoder << std::endl << std::flush;
     
     for (int layer = 0; layer < cfg.num_layers; ++layer) {
+        std::cout << "[BIND-LAYER-" << layer << "] Processing layer " << layer << std::endl << std::flush;
         std::string prefix = "layer" + std::to_string(layer) + "_";
         
         // RMSNorm gamma gradients - use encoder's actual buffers!
         // The encoder's getRMS1GammaGrad()/getRMS2GammaGrad() are what backward() writes to,
         // NOT the TrainingState vectors (which are a separate unused allocation).
         auto* enc = gpu_encoder ? gpu_encoder->getLayer(layer) : nullptr;
-        if (enc && enc->getRMS1GammaGrad()) {
+        if (!enc) {
+            std::cout << "[BIND-LAYER-" << layer << "] WARNING: enc is nullptr!" << std::endl << std::flush;
+            continue;
+        }
+        
+        if (enc->getRMS1GammaGrad()) {
             controller_.registerGradientBuffer(
                 prefix + "rms1_gamma",
                 enc->getRMS1GammaGrad(),
                 static_cast<std::size_t>(cfg.d_model)
             );
         }
-        if (enc && enc->getRMS2GammaGrad()) {
+        if (enc->getRMS2GammaGrad()) {
             controller_.registerGradientBuffer(
                 prefix + "rms2_gamma",
                 enc->getRMS2GammaGrad(),
@@ -185,14 +226,14 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
         
         // Attention QKV weight/bias gradients (GQA-aware)
         // AUTOGRAD MIGRATION: Use encoder's Tensor.grad instead of TrainingState raw pointers
-        if (enc && enc->getAttnWqkvGrad()) {
+        if (enc->getAttnWqkvGrad()) {
             controller_.registerGradientBuffer(
                 prefix + "attn_qkv_weight",
                 enc->getAttnWqkvGrad(),
                 static_cast<std::size_t>(total_qkv_dim) * cfg.d_model
             );
         }
-        if (enc && enc->getAttnBqkvGrad()) {
+        if (enc->getAttnBqkvGrad()) {
             controller_.registerGradientBuffer(
                 prefix + "attn_qkv_bias",
                 enc->getAttnBqkvGrad(),
@@ -250,14 +291,19 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
                 static_cast<std::size_t>(cfg.d_model)
             );
         }
+        std::cout << "[BIND-LAYER-" << layer << "] Done" << std::endl << std::flush;
     }
+    std::cout << "[BIND-LAYERS-DONE] All " << cfg.num_layers << " layers processed" << std::endl << std::flush;
     
     // ========== ScratchBlock Gradients (Issue #29: CRITICAL FIX) ==========
     // These buffers were NOT registered previously, causing infinite gradient
     // accumulation and explosion after ~490 batches!
+    std::cout << "[BIND-SB-A] Getting ScratchBlock..." << std::endl << std::flush;
     auto* scratch_block = model.getScratchBlockLayer();
+    std::cout << "[BIND-SB-B] scratch_block=" << scratch_block << " use_scratch_block=" << cfg.use_scratch_block << std::endl << std::flush;
     if (scratch_block && cfg.use_scratch_block) {
         const auto& sb_config = scratch_block->getConfig();
+        std::cout << "[BIND-SB-C] Got ScratchBlock config" << std::endl << std::flush;
         
         // Atom type embeddings gradients: [NUM_ATOM_TYPES, atom_embedding_dim]
         if (scratch_block->getAtomTypeEmbeddingsGrad()) {
@@ -288,8 +334,10 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
                 static_cast<std::size_t>(text_feature_dim) * cfg.d_model
             );
         }
+        std::cout << "[BIND-SB-D] ScratchBlock grads registered" << std::endl << std::flush;
     }
     
+    std::cout << "[BIND-CALLBACK] Setting up zeroIntermediateGrads callback..." << std::endl << std::flush;
     // Issue #45 FIX: Set up callback to zero Tensor-managed intermediate gradients
     // These buffers were migrated from raw float* registrations to TensorContract::Tensor.
     // The callback invokes TrainingState::zeroIntermediateGrads() which calls zero_grad()
@@ -297,9 +345,12 @@ void ModelGradAccumulationController::bindToModel(LanguageModel& model) {
     controller_.setAdditionalZeroCallback([&ts](cudaStream_t stream) {
         ts.zeroIntermediateGrads(stream);
     });
+    std::cout << "[BIND-CALLBACK-DONE] Callback set" << std::endl << std::flush;
     
     // Store model reference for later use
+    std::cout << "[BIND-STORE] Storing model pointer..." << std::endl << std::flush;
     model_ = &model;
+    std::cout << "[BIND-EXIT] bindToModel complete" << std::endl << std::flush;
 }
 
 } // namespace GRIM

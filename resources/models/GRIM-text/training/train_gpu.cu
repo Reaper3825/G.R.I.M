@@ -74,6 +74,9 @@ void printPhaseHeader(int phase, const char* description) {
 
 } // anonymous namespace
 
+// Import autograd verbose flag
+extern bool g_autograd_verbose;
+
 //======================================================//
 //  Main Entry Point
 //======================================================//
@@ -82,6 +85,14 @@ int main(int argc, char** argv) {
     // Initialize LogRecorder for modular logging
     GRIM::Logging::SetDefaultModuleLogLevel(GRIM::Logging::ModuleLogLevel::Info);
     
+    // Check for --autograd-verbose flag to enable detailed autograd tracing
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--autograd-verbose") {
+            g_autograd_verbose = true;
+            fprintf(stderr, "[train_gpu] Autograd verbose logging ENABLED\n");
+        }
+    }
+
     printBanner();
     
     int exit_code = 0;

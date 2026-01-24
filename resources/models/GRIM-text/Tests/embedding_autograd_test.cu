@@ -92,14 +92,17 @@ Tensor createTensorFromBuffer(
     Tensor t;
     t.data = data;
     t.requires_grad = requires_grad;
-    t.grad = nullptr;
     
     // Allocate gradient buffer if needed
+    // ISSUE #59: Use ensure_grad() with proper shape first
     if (requires_grad) {
         size_t num_elements = 1;
         for (int dim : shape) num_elements *= dim;
-        cudaMalloc(&t.grad, num_elements * sizeof(float));
-        cudaMemsetAsync(t.grad, 0, num_elements * sizeof(float), stream);
+        // Create external gradient buffer and wrap it
+        float* grad_buffer = nullptr;
+        cudaMalloc(&grad_buffer, num_elements * sizeof(float));
+        cudaMemsetAsync(grad_buffer, 0, num_elements * sizeof(float), stream);
+        t.set_grad_from_external(grad_buffer, true);  // Tensor will own and free this buffer
     }
     
     return t;
@@ -267,8 +270,8 @@ bool testAutogradForwardBasic(std::string& message) {
     std::cout << "✓ Autograd forward pass successful, output is non-zero\n";
     
     // Cleanup
-    cudaFree(embedding_tensor.grad);
-    cudaFree(output_tensor.grad);
+    // ISSUE #59: Gradient buffers are now owned by Tensor (via set_grad_from_external with owns_memory=true)
+    // The Tensor destructor will free them automatically
     cudaFree(d_embeddings);
     cudaFree(d_tokens);
     cudaFree(d_output);
@@ -557,14 +560,15 @@ bool testTrainingStateIntegration(std::string& message) {
     AG_TEST_ASSERT_TRUE(ts.tensors_->embedding_weights.requires_grad, 
         "Embedding weights should require gradients");
     
-    AG_TEST_ASSERT_TRUE(ts.tensors_->embedding_weights.grad != nullptr,
+    // ISSUE #59: Use has_grad() accessor
+    AG_TEST_ASSERT_TRUE(ts.tensors_->embedding_weights.has_grad(),
         "Embedding weights gradient buffer should be allocated");
     
     std::cout << "✓ TrainingState autograd tensors initialized correctly\n";
     std::cout << "  embedding_weights.requires_grad = " 
               << ts.tensors_->embedding_weights.requires_grad << "\n";
     std::cout << "  embedding_weights.grad allocated = " 
-              << (ts.tensors_->embedding_weights.grad != nullptr) << "\n";
+              << ts.tensors_->embedding_weights.has_grad() << "\n";
     
     cudaStreamDestroy(stream);
     return true;

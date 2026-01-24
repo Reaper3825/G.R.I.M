@@ -26,6 +26,43 @@
 //  6. FAIL CLOSED: Unsafe operations throw, not return false silently
 //  7. AUTOGRAD: Gradient tracking via computation graph (GradFn nodes)
 //
+//  AUTOGRAD DEBUG TOGGLE
+//  =====================
+//  Set g_autograd_verbose = true to trace autograd chain execution
+//  (defined in TensorContract_GPU.cu)
+extern bool g_autograd_verbose;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ISSUE #60: DEBUG GRADIENT ATTRIBUTION
+// Global hooks for capturing gradient sources separately (tied-weight debugging)
+// Set these from TrainingState to enable gradient attribution logging
+// ═══════════════════════════════════════════════════════════════════════════
+extern float* g_debug_lm_head_only_grad;   // Buffer to capture LM head backward contribution
+extern float* g_debug_embedding_only_grad; // Buffer to capture embedding backward contribution  
+extern size_t g_debug_grad_buffer_size;    // Size in elements (vocab_size * d_model)
+extern bool g_debug_capture_enabled;       // Set to true to enable capturing
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ISSUE #60 FIX: PCGrad (Projecting Conflicting Gradients) for Tied Weights
+// ═══════════════════════════════════════════════════════════════════════════
+// When tie_embeddings=true, embedding backward produces OPPOSITE gradient to LM head!
+// Instead of skipping (loses information) or canceling (current bug), use PCGrad:
+//   g_final = g_W + (g_E - proj_{g_W}(g_E))
+//           = g_W + orthogonal_component(g_E)
+//
+// This preserves the LM head gradient direction while adding any NOVEL information
+// from the embedding gradient that isn't redundant or conflicting.
+//
+// Set g_pcgrad_temp_buffer to a [vocab_size * d_model] buffer for PCGrad computation.
+// When NULL, falls back to skip behavior. When set, uses PCGrad.
+extern float* g_pcgrad_temp_buffer;     // Temporary buffer for embedding grad before projection
+extern size_t g_pcgrad_buffer_size;     // Size in elements
+extern bool g_skip_embedding_backward_for_tied_weights;  // Fallback: skip entirely if true AND no PCGrad buffer
+
+// Call these to capture gradient sources (called internally by GradFn::apply)
+void debugCaptureLMHeadGrad(float* grad_ptr, size_t size, cudaStream_t stream);
+void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream);
+
 //  TENSOR LAYOUTS
 //  ==============
 //  2D LAYOUTS (flat tensors):
@@ -68,6 +105,38 @@
 #include <functional>
 #include <string>
 #include <algorithm>  // for std::max in merge_qkv_grads_gqa
+#include <memory>     // for std::shared_ptr (ISSUE #59: grad as Tensor)
+
+//======================================================//
+//  ISSUE #53 FIX: Deferred GPU Memory Cleanup (GLOBAL SCOPE)
+//  
+//  Call flushDeferredCleanup() after cudaStreamSynchronize() to 
+//  free GPU memory that was queued by shared_ptr deleters.
+//  This prevents cudaFree from blocking when called during 
+//  destructor chains while the GPU is still busy.
+//  
+//  NOTE: In global scope so lambdas in shared_ptr deleters can access them.
+//======================================================//
+
+/**
+ * Queue a GPU pointer for deferred cleanup.
+ * Called from shared_ptr deleters instead of cudaFree() directly.
+ */
+void queueForDeferredCleanup(void* ptr);
+
+/**
+ * Flush the deferred GPU memory cleanup queue.
+ * Call this AFTER cudaStreamSynchronize() when it's safe to free GPU memory.
+ */
+void flushDeferredCleanup();
+
+/**
+ * RULE 20 Error Context: Track current GradFn operation for detailed error messages.
+ * Call at start of each GradFn::apply() to record which operation is executing.
+ */
+void setCurrentGradFnOp(const char* op_name, void* gradfn_ptr);
+void clearCurrentGradFnOp();
+std::string getCurrentGradFnContext();
 
 namespace TensorContract {
 
@@ -780,6 +849,8 @@ struct GradFn {
     
     const char* op_name = nullptr;  ///< Operation name ("matmul", "gelu", "add", etc.)
     int call_id = 0;                ///< Unique call ID for deterministic replay
+    bool applied = false;           ///< ISSUE #49: Prevent infinite loops when grad_fn is shared
+    bool released_ = false;         ///< ISSUE #50: Prevent double release_saved calls
     
     //--------------------------------------------------//
     // Virtual Interface
@@ -799,6 +870,8 @@ struct GradFn {
      * @brief Release saved tensors (called after backward to free memory)
      */
     virtual void release_saved() {
+        if (released_) return;  // ISSUE #50: Prevent double release
+        released_ = true;
         saved_tensors.clear();
         saved_views.clear();
     }
@@ -845,10 +918,15 @@ struct Tensor {
     // Autograd Fields
     //--------------------------------------------------//
     
-    float* grad = nullptr;              ///< GPU memory for gradients (lazy-allocated)
-    bool owns_grad = false;             ///< RAII ownership flag for grad
+    // ISSUE #59: Gradient is now a full Tensor object (via shared_ptr)
+    // - shared_ptr enables weight tying: multiple tensors share same grad Tensor
+    // - Gradient Tensor has same shape as parameter, holds GPU buffer
+    // - Use grad_data() to access raw float* for CUDA kernels
+    // - Use grad() to access Tensor* for autograd operations
+    std::shared_ptr<Tensor> grad_ = nullptr;  ///< Gradient tensor (lazy-allocated, shared for weight tying)
     
     GradFn* grad_fn = nullptr;          ///< Backward function (null for leaf tensors)
+    bool owns_grad_fn = true;           ///< RAII ownership flag for grad_fn (default true for backward compat)
     bool requires_grad = false;         ///< Track in compute graph?
     bool is_leaf = true;                ///< Created by user (not from operation)?
     bool retain_grad = false;           ///< Keep grad even if non-leaf?
@@ -932,8 +1010,47 @@ struct Tensor {
         return *this;
     }
     
-    /// Lazy-allocate gradient buffer (zeros it)
+    /// Lazy-allocate gradient Tensor (zeros it)
     void ensure_grad();
+    
+    /// Get gradient Tensor pointer (nullptr if not allocated)
+    Tensor* grad() { return grad_.get(); }
+    const Tensor* grad() const { return grad_.get(); }
+    
+    /// Get raw gradient data pointer (nullptr if grad not allocated)
+    /// Use this for CUDA kernel launches
+    float* grad_data() { return grad_ ? grad_->data : nullptr; }
+    const float* grad_data() const { return grad_ ? grad_->data : nullptr; }
+    
+    /// Check if gradient is allocated
+    bool has_grad() const { return grad_ != nullptr && grad_->data != nullptr; }
+    
+    /// Share gradient storage with another tensor (for weight tying)
+    /// This tensor's grad will point to other's grad Tensor
+    void share_grad(Tensor& other) {
+        if (!other.grad_) {
+            throw std::runtime_error("share_grad: other tensor has no grad to share");
+        }
+        grad_ = other.grad_;  // shared_ptr copy = shared ownership
+    }
+    
+    /// Set gradient from external buffer (for compatibility with legacy code)
+    /// Creates a non-owning Tensor that wraps the external buffer
+    /// @param external_grad Raw pointer to gradient buffer (must stay valid)
+    /// @param owns_memory If true, the Tensor will free this memory on destruction
+    void set_grad_from_external(float* external_grad, bool owns_memory = false) {
+        if (!external_grad) {
+            grad_.reset();
+            return;
+        }
+        // Create a new Tensor that wraps the external buffer
+        grad_ = std::make_shared<Tensor>();
+        grad_->data = external_grad;
+        grad_->shape = shape;  // Gradient has same shape as data
+        grad_->owns_data = owns_memory;
+        grad_->requires_grad = false;  // Gradients don't themselves need gradients
+        grad_->is_leaf = true;
+    }
     
     /// Zero gradient buffer (async on stream)
     void zero_grad(cudaStream_t stream = nullptr);
@@ -970,9 +1087,10 @@ struct Tensor {
         return TensorContract::TensorView(data, shape, name);
     }
     
-    /// Get a non-owning view of gradient
+    /// Get a non-owning view of gradient data
+    /// Note: Returns mutable view even from const Tensor (gradient is logically separate)
     TensorContract::TensorView grad_view() const {
-        return TensorContract::TensorView(grad, shape, name);
+        return TensorContract::TensorView(grad_ ? grad_->data : nullptr, shape, name);
     }
     
     //--------------------------------------------------//
@@ -1014,13 +1132,13 @@ struct Tensor {
     }
     
     /// RULE 20: Throws if gradient is not available
-    const Tensor& require_grad(const char* context) const {
+    const Tensor& require_grad_present(const char* context) const {
         require(context);
         if (!requires_grad) {
             throw std::runtime_error(std::string(context) + ": Tensor does not require grad" +
                                      (name ? std::string(" (name=") + name + ")" : ""));
         }
-        if (!grad) {
+        if (!has_grad()) {
             throw std::runtime_error(std::string(context) + ": Tensor grad buffer is NULL" +
                                      (name ? std::string(" (name=") + name + ")" : ""));
         }
@@ -1033,11 +1151,12 @@ struct Tensor {
     
     void release() {
         if (owns_data && data) { cudaFree(data); }
-        if (owns_grad && grad) { cudaFree(grad); }
-        if (grad_fn) { delete grad_fn; }
+        // grad_ is shared_ptr - will auto-release when ref count drops to 0
+        grad_.reset();
+        if (owns_grad_fn && grad_fn) { delete grad_fn; }
         data = nullptr;
-        grad = nullptr;
         grad_fn = nullptr;
+        owns_grad_fn = false;  // Prevent double-delete on repeated release()
     }
 };
 
@@ -1106,18 +1225,8 @@ Tensor gelu(const Tensor& x, cudaStream_t stream = nullptr,
 Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps = 1e-5f, 
                 cudaStream_t stream = nullptr, const float* input_cache = nullptr);
 
-/**
- * Softmax cross-entropy loss (fused for numerical stability)
- * Automatically creates CrossEntropyGradFn in computation graph
- * @param logits Input logits [tokens, vocab_size] - MUST have Layout::LOGITS
- * @param targets Target token IDs [tokens]
- * @param num_tokens Number of tokens
- * @param vocab_size Vocabulary size
- * @return scalar loss tensor with backward graph attached
- */
-Tensor cross_entropy(const Tensor& logits, const int* targets, 
-                     int num_tokens, int vocab_size,
-                     cudaStream_t stream = nullptr);
+// NOTE: cross_entropy() removed - use autograd::cross_entropy_loss() from AutogradLoss.hpp
+// See: #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 
 /**
  * Focal loss with automatic gradient tracking

@@ -24,6 +24,7 @@
 #include "../Shared/StreamController/StreamController_GPU.hpp"
 #include "../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../Shared/Activations/Xavier/Xavier.hpp"
+#include "../Shared/TrainingState/TrainingTensors.hpp"  // For proper memory ownership
 #include "module_logger.hpp"
 
 // External kernel declaration (C++ linkage - can throw exceptions)
@@ -567,17 +568,36 @@ void LanguageModel::initGPU() {
 
         const GrimEmbeddingStack& cpu_embedder = *getEmbedderPtr();
 
+        // ═══════════════════════════════════════════════════════════════
+        // PROPER OWNERSHIP FIX: Use TrainingTensors if already initialized
+        // ═══════════════════════════════════════════════════════════════
+        // TrainingTensors owns GPU memory via Tensor::zeros().
+        // EmbeddingRuntime now just POINTS to that memory (doesn't own it).
+        // This eliminates the Tensor::from_ptr() wrapping pattern.
+        
+        const bool use_training_tensors = (training_state_.tensors_ != nullptr);
+        
         // --- Token embeddings ---
         const size_t token_elements = static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
         const size_t token_bytes = token_elements * sizeof(float);
 
-        if (cudaMalloc(&embedding_runtime->token_buffer, token_bytes) != cudaSuccess) {
-            fail_embedding("❌ FATAL: Failed to allocate GPU memory for token embeddings");
+        if (use_training_tensors) {
+            // TrainingTensors owns the memory - just point to it (no ownership)
+            embedding_runtime->token_buffer = training_state_.tensors_->embedding_weights.data;
+            embedding_runtime->owns_token_buffer = false;  // CRITICAL: Don't free on destroy!
+            std::cout << "✓ Token embeddings using TrainingTensors memory (no duplicate allocation)\n";
+        } else {
+            // Legacy path: allocate new memory (takes ownership)
+            embedding_runtime->owns_token_buffer = true;
+            if (cudaMalloc(&embedding_runtime->token_buffer, token_bytes) != cudaSuccess) {
+                fail_embedding("❌ FATAL: Failed to allocate GPU memory for token embeddings");
+            }
         }
 
         embedding_runtime->weights.token_embeddings = TensorContract::TensorView::make_BSM(
             embedding_runtime->token_buffer, cfg.vocab_size, cfg.d_model, "token_embeddings");
 
+        // Load CPU embedder data into the buffer (whether owned by TrainingTensors or self)
         std::vector<float> token_data;
         token_data.reserve(token_elements);
         for (int i = 0; i < cfg.vocab_size; ++i) {
@@ -599,8 +619,19 @@ void LanguageModel::initGPU() {
         const size_t pos_elements = static_cast<size_t>(cfg.max_seq_len) * cfg.d_model;
         const size_t pos_bytes = pos_elements * sizeof(float);
 
-        if (cudaMalloc(&embedding_runtime->position_buffer, pos_bytes) != cudaSuccess) {
-            fail_embedding("❌ FATAL: Failed to allocate GPU memory for positional encodings");
+        if (use_training_tensors) {
+            // TrainingTensors owns the memory - just point to it (no ownership)
+            embedding_runtime->position_buffer = training_state_.tensors_->position_embedding_weights.data;
+            embedding_runtime->owns_position_buffer = false;  // CRITICAL: Don't free on destroy!
+            std::cout << "✓ Position embeddings using TrainingTensors memory (no duplicate allocation)\n";
+            
+            // NOTE: TrainingTensors already did Xavier init, but we still do it here for consistency
+            // This overwrites the TrainingTensors Xavier init with the same algorithm
+        } else {
+            embedding_runtime->owns_position_buffer = true;
+            if (cudaMalloc(&embedding_runtime->position_buffer, pos_bytes) != cudaSuccess) {
+                fail_embedding("❌ FATAL: Failed to allocate GPU memory for positional encodings");
+            }
         }
 
         embedding_runtime->weights.position_embeddings = TensorContract::TensorView::make_BSM(
@@ -622,8 +653,16 @@ void LanguageModel::initGPU() {
         // --- RMSNorm gamma ---
         const size_t ln_bytes = static_cast<size_t>(cfg.d_model) * sizeof(float);
 
-        if (cudaMalloc(&embedding_runtime->gamma_buffer, ln_bytes) != cudaSuccess) {
-            fail_embedding("❌ FATAL: Failed to allocate GPU memory for RMSNorm gamma");
+        if (use_training_tensors && training_state_.tensors_->final_rms_gamma.data) {
+            // TrainingTensors owns the memory (no ownership)
+            embedding_runtime->gamma_buffer = training_state_.tensors_->final_rms_gamma.data;
+            embedding_runtime->owns_gamma_buffer = false;  // CRITICAL: Don't free on destroy!
+            std::cout << "✓ RMSNorm gamma using TrainingTensors memory (no duplicate allocation)\n";
+        } else {
+            embedding_runtime->owns_gamma_buffer = true;
+            if (cudaMalloc(&embedding_runtime->gamma_buffer, ln_bytes) != cudaSuccess) {
+                fail_embedding("❌ FATAL: Failed to allocate GPU memory for RMSNorm gamma");
+            }
         }
 
         embedding_runtime->weights.gamma = TensorContract::TensorView::make_BSM(

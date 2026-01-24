@@ -1,13 +1,533 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** 🔴 **IN PROGRESS** - Issue #45 grad_encoder_out Not Zeroed (January 21, 2026)  
+**Status:** 🔄 **IN PROGRESS** - Issue #59: Unified Loss System Refactor  
 **Started:** December 22, 2025  
-**Last Updated:** January 21, 2026
-**Current Symptom:** Gradient explosion to infinity during accumulation (micro_step 2 has 6-10x larger gradients than micro_step 1)
+**Last Updated:** January 24, 2026
+**Latest Issue:** Loss computation was using plain CE without focal loss, label smoothing, or entropy regularization. The autograd migration (Issue #46) accidentally removed all loss components! Refactored to `unified_loss()` with full config support.
 
 ---
 
-## 🔴 ACTIVE: Issue #45 - grad_encoder_out NOT REGISTERED with GradAccumulationController (CRITICAL!)
+## 🔴 NEW: Issue #59 - Loss Logging Does Not Match Training Loss (ARCHITECTURE BUG!)
+
+### Discovery (January 24, 2026)
+
+Investigating why training wasn't improving despite correct gradient flow. Found that:
+- **Log message `[GradTrace] POST-FORWARD loss=X.XXXX`** comes from Phase2_TrainingLoop.cu line 2410
+- **Loss is computed via** `autograd::cross_entropy_loss()` in ComputeLossBatch.cu line 790
+- **BUT**: `cross_entropy_loss()` only computes **PLAIN CE** - no focal loss, no label smoothing, no entropy regularization!
+
+The Issue #46 autograd migration deleted the connection to `UnifiedLoss_GPU.cu` which had all the loss components. Training was using config with `focal_gamma=1.0`, `label_smoothing.epsilon=0.1`, etc. but the actual loss computation ignored ALL of these!
+
+### Root Cause: Two Competing Loss Systems
+
+**Before migration:**
+- `UnifiedLoss_GPU.cu` computed loss with focal + smoothing + entropy
+- A separate autograd path computed gradients
+
+**After Issue #46 migration:**
+- `autograd::cross_entropy_loss()` computes loss AND provides grad_fn
+- BUT it was written with **plain CE only** - the focal/smoothing/entropy code was never ported!
+
+### Impact
+
+- Config says: `focal_gamma=1.0, label_smoothing.epsilon=0.1, entropy_reg.lambda=0.01`
+- Actually used: `focal_gamma=0.0, smoothing_epsilon=0.0, entropy_reg_lambda=0.0`
+- **100% of loss configuration was being IGNORED!**
+
+### Fix Applied
+
+**1. New unified_loss() function in AutogradLoss.cu:**
+```cpp
+Tensor unified_loss(
+    Tensor& logits,
+    const int* targets,
+    const float* valid_mask,
+    int num_tokens,
+    int vocab_size,
+    const LossConfig& config,  // NOW ACCEPTS CONFIG!
+    cudaStream_t stream
+);
+```
+
+**2. New forward kernel with ALL loss components:**
+```cuda
+// Unified loss: L = α * (1-p_t)^γ * CE_smooth + λ * neg_entropy
+float ce_smooth = compute_label_smoothed_ce(...);
+float focal_weight = powf(1.0f - p_t, focal_gamma);
+float entropy_loss = entropy_reg_lambda * neg_entropy;
+float total_loss = focal_alpha * focal_weight * ce_smooth + entropy_loss;
+```
+
+**3. Updated ComputeLossBatch.cu call site:**
+```cpp
+autograd::LossConfig ag_loss_config;
+ag_loss_config.focal_alpha = full_loss_cfg.focal.enabled ? full_loss_cfg.focal.alpha : 1.0f;
+ag_loss_config.focal_gamma = full_loss_cfg.focal.enabled ? full_loss_cfg.focal.gamma : 0.0f;
+ag_loss_config.smoothing_epsilon = full_loss_cfg.label_smoothing.enabled ? ... : 0.0f;
+ag_loss_config.entropy_reg_lambda = full_loss_cfg.entropy_reg.enabled ? ... : 0.0f;
+
+training_state_.loss_tensor = autograd::unified_loss(
+    training_state_.logits_tensor,
+    training_state_.cached_targets,
+    nullptr,
+    total_tokens,
+    cfg.vocab_size,
+    ag_loss_config,
+    stream
+);
+```
+
+**4. Legacy wrapper preserved:**
+```cpp
+Tensor cross_entropy_loss(...) {
+    LossConfig plain_ce;  // All zeros = plain CE
+    return unified_loss(..., plain_ce, ...);
+}
+```
+
+### Files Modified
+
+1. **AutogradLoss.hpp**: Added `LossConfig` struct and `unified_loss()` declaration
+2. **AutogradLoss.cu**: Rewrote forward kernel with focal + smoothing + entropy; added `UnifiedLossGradFn`
+3. **ComputeLossBatch.cu**: Updated to build `LossConfig` and call `unified_loss()`
+4. **copilot-instructions.md**: Updated unified loss system documentation
+
+### DELETED Files
+
+- `UnifiedLoss_GPU.cu` / `UnifiedLoss_GPU.hpp` - Old disconnected loss system
+- `ComputeLoss_GPU.cu` / `ComputeLoss_GPU.hpp` - Old orchestrator (now inlined in ComputeLossBatch)
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔴 PREVIOUS: Issue #58 - Cross-Entropy Backward Missing Mean Reduction Scaling (ROOT CAUSE!)
+
+### Discovery (January 24, 2026)
+
+Comparing gradient magnitudes between GRIM and PyTorch:
+- **GRIM pre-clip gradient norm:** 10,000 - 28,000
+- **PyTorch gradient norm:** 0.1 - 1.0
+- **Ratio:** ~100,000x difference!
+
+Investigating further, found that `AutogradLoss.cu` had an **incorrect "fix"** at lines 276-278:
+
+**BROKEN CODE (Issue #46 "FIX" was WRONG):**
+```cuda
+// Issue #46 FIX: Pass 1.0f instead of 1/valid_count
+// Standard CE gradient is (softmax - one_hot), no per-token normalization.
+const float scale = 1.0f;  // Was: 1.0f / valid_count (WRONG!)
+```
+
+This comment claims that `1/valid_count` was wrong, but **THAT IS BACKWARDS**!
+
+### Mathematical Proof
+
+When using **mean reduction** (which GRIM does for loss):
+- `loss = sum(ce_per_token) / N`
+- By chain rule: `grad = d(loss)/d(logits) = (softmax - one_hot) / N`
+
+Verified with PyTorch:
+```python
+>>> F.cross_entropy(logits, targets, reduction='mean').backward()
+>>> grad_mean = logits.grad.clone()
+>>> logits.grad.zero_()
+>>> F.cross_entropy(logits, targets, reduction='sum').backward()
+>>> grad_sum = logits.grad.clone()
+>>> grad_sum / grad_mean  # = exactly N (number of tokens)
+```
+
+With `N = 3500` tokens per batch, GRIM's gradients were **3500x too large**!
+
+### Why This Caused Mode Collapse
+
+1. **Massive gradients:** 3500x larger than PyTorch
+2. **Gradient clipping:** Clips to norm=1.0, but direction is already corrupted by magnitude
+3. **Effective LR:** After clipping, the gradient direction is dominated by noise/outliers
+4. **Positive feedback:** Most common token (SPACE=277) gets largest absolute gradient
+5. **Mode collapse:** Model learns to predict only SPACE
+
+### Fix Applied (AutogradLoss.cu)
+
+**1. Launch function (line ~276):**
+```cuda
+// Issue #58 FIX: MUST divide by valid_count to match PyTorch's mean reduction!
+const float scale = (valid_count > 0) ? (1.0f / static_cast<float>(valid_count)) : 1.0f;
+```
+
+**2. Optimized kernel (line ~232):**
+```cuda
+// Issue #58 FIX: Apply inv_valid_count to match PyTorch mean reduction!
+grad_row[v] = (prob - one_hot) * inv_valid_count;
+```
+
+### Expected Results After Fix
+
+- Pre-clip gradient norms: ~3-10 (matching PyTorch scale)
+- No immediate mode collapse
+- Training should now learn like PyTorch baseline
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔵 HISTORICAL: Issue #57 - Position Embeddings Not Added (FIXED!)
+
+### Discovery (January 24, 2026)
+
+Comparing GRIM training loop to libtorch baseline to understand why GRIM doesn't learn while PyTorch does. Found that position embeddings are **ALLOCATED** and **INITIALIZED** but **NEVER ADDED** to token embeddings!
+
+**PyTorch Baseline (CORRECT):**
+```cpp
+// Tools/libtorch_baseline/main.cpp line 780
+auto x = tok_emb->forward(idx) + pos_emb->forward(pos);  // ✅ ADDS POSITION EMBEDDINGS
+```
+
+**GRIM Before Fix (BROKEN):**
+```cpp
+// AutogradTraining.cu lines 297-302
+// Add position embeddings if available
+// TODO: Implement autograd::add for position embedding addition
+if (ts->position_embedding_weights.data) {
+    ts->position_embedding_weights.requires_grad = true;
+    // For now, position embeddings are added in legacy path  ❌ LEGACY PATH WAS DELETED!
+    // The embedding lookup result already has autograd attached
+}
+```
+
+**ADDITIONAL BUG:** `training_state_.position_embedding_weights` was created with `Tensor::zeros()` in InitTrainingState.cu, but the ACTUAL weights are in `embedding_runtime->position_buffer` (Xavier-initialized in TrainingOps.cu). These were TWO SEPARATE BUFFERS - optimizer was updating the wrong one!
+
+### Impact
+
+Without position embeddings:
+- Model has NO position information during training
+- Every token at every position looks identical
+- Model cannot learn sequence structure (which word comes first/last)
+- Training collapses because positional relationships cannot be learned
+
+### Fixes Applied
+
+**1. AutogradTraining.cu - Add position embeddings to token embeddings:**
+```cpp
+// Issue #57 FIX: Add position embeddings
+if (ts->position_embedding_weights.data) {
+    ts->position_embedding_weights.requires_grad = true;
+    
+    // Generate position IDs: [0,1,2,...,seq_len-1] repeated for each batch
+    int* d_position_ids = nullptr;
+    cudaMallocAsync(&d_position_ids, total_tokens * sizeof(int), ctx.stream);
+    generatePositionIds(d_position_ids, total_tokens, ctx.seq_len, ctx.stream);
+    
+    // Look up position embeddings with autograd tracking
+    Tensor pos_emb_output = autograd::embedding(
+        ts->position_embedding_weights, d_position_ids, total_tokens, ctx.stream);
+    
+    cudaFreeAsync(d_position_ids, ctx.stream);
+    
+    // Add token embeddings + position embeddings (both tracked by autograd)
+    emb_output = autograd::add(emb_output, pos_emb_output, ctx.stream);
+}
+```
+
+**2. InitTrainingState.cu - Wrap existing position buffer instead of creating new one:**
+```cpp
+// Issue #57 FIX: Position embeddings MUST wrap existing buffer, NOT create new one!
+auto* embedding_runtime = &getGpuEmbedder();
+training_state_.position_embedding_weights = Tensor::from_ptr(
+    embedding_runtime->position_buffer,           // Use SAME buffer as optimizer
+    TC::make_BSM(cfg.max_seq_len, cfg.d_model),
+    false,  // doesn't take ownership
+    true);  // requires_grad
+training_state_.position_embedding_weights.ensure_grad();  // Allocate grad buffer
+```
+
+**3. Added generatePositionIdsKernel:**
+```cpp
+__global__ void generatePositionIdsKernel(int* position_ids, int total_tokens, int seq_len) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total_tokens) return;
+    position_ids[idx] = idx % seq_len;  // [0,1,2,...,seq_len-1] per batch
+}
+```
+
+### Files Modified
+
+1. `AutogradTraining.cu`: Added position embedding lookup, add, and kernel
+2. `InitTrainingState.cu`: Changed `Tensor::zeros()` to `Tensor::from_ptr()` wrapping actual buffer
+
+### Expected Results After Fix
+
+- Position embeddings now added to token embeddings (matches PyTorch)
+- Gradients flow through BOTH token and position embeddings via autograd
+- Optimizer updates BOTH embedding matrices
+- Model can learn positional relationships
+- Training should no longer collapse to token 277
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## ✅ RESOLVED: Issue #56 - Autograd Tensor Use-After-Free (ROOT CAUSE FOUND!)
+
+### Discovery (January 23, 2026)
+
+Training crash at KERNEL #80 (`kernel_gelu_backward`) with "illegal memory access":
+```
+[KERNEL #80] kernel_gelu_backward
+CUDA Error: 700 (illegal memory access was encountered)
+```
+
+**Critical Evidence from Training Log:**
+```
+128: [AutogradTraining] INFO: Step 2: Running 12 encoder layers with autograd...
+129: [MatMulGradFn::~MatMulGradFn] ENTER this=000002B6167BF190 owns_a=1 owns_b=0
+130: [MatMulGradFn::~MatMulGradFn] Deleting a_grad_fn=000002B5DEA0DE50
+```
+
+**THE BUG:** Autograd `GradFn` destructors are running **DURING** the forward pass (line 129) immediately after "Running 12 encoder layers" message (line 128). This frees GPU memory that later backward pass still needs → crash.
+
+### ROOT CAUSE FOUND: Missing Return Statement in FFN::forward()
+
+The `FeedForwardLayer::forward()` function in `Feed_Forward_GPU.cu` was **declared to return a Tensor but had NO return statement!**
+
+```cpp
+// BEFORE (BUG):
+Tensor FeedForwardLayer::forward(Tensor& input, ForwardIntermediates& intermediates, cudaStream_t stream) {
+    // ... build autograd graph ...
+    Tensor output = autograd::matmul(...);
+    launchFFNBiasAdd(output.data, ...);
+    // MISSING: return output;
+}  // <-- output destroyed here, triggers grad_fn chain destruction!
+```
+
+**Why This Caused the Crash:**
+1. `output` is a local `Tensor` with `owns_grad_fn=true`
+2. When function exits without return, `output` destructor runs
+3. `~Tensor()` sees `owns_grad_fn=true` and deletes `grad_fn`
+4. That `grad_fn` (MatMulGradFn) has `owns_a_grad_fn=true`, so it deletes its upstream `a_grad_fn`
+5. CASCADE: The entire autograd graph is destroyed DURING the forward pass!
+6. Later backward tries to use freed `grad_fn` pointers → "illegal memory access"
+
+### Fix Applied (Feed_Forward_GPU.cu)
+
+```cpp
+// AFTER (FIXED):
+Tensor FeedForwardLayer::forward(Tensor& input, ForwardIntermediates& intermediates, cudaStream_t stream) {
+    // ... build autograd graph ...
+    Tensor output = autograd::matmul(intermediates.ffn_gelu_out, W2_, stream,
+                                     intermediates.ffn_gelu_out.data, nullptr);
+    
+    // Add bias b2 (broadcasted)
+    launchFFNBiasAdd(output.data, b2_.data, total_tokens, config_.d_model, stream);
+    
+    // CRITICAL (Issue #56 root cause fix): Return the output tensor!
+    // Without this return statement, `output` is destroyed at function end,
+    // which triggers destruction of its grad_fn chain, destroying the entire
+    // autograd graph DURING the forward pass!
+    return output;
+}
+```
+
+### Why This Wasn't Caught By Compiler
+
+C++ compilers often don't warn about missing return statements in functions returning non-void types (undefined behavior). The function was returning "garbage" - whatever happened to be in the return register. Since the caller immediately stored the result in `ForwardIntermediates.ffn_out`, the uninitialized Tensor seemed to work until backward needed the destroyed grad_fn.
+
+### Files Modified
+
+1. `Feed_Forward_GPU.cu`: Added missing `return output;` statement
+
+### Debug Logging Cleanup (Same Session)
+
+Removed extensive debug logging added during investigation:
+- `TensorContract_GPU.cu`: Removed ~50 fprintf calls from GradFn destructors, deleters, apply() methods
+- `Tensor::backward()`: Cleaned up verbose polling/sync logging
+- Preserved error-path logging (RULE 20: Fail Loud)
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔵 HISTORICAL: Issue #55 - __shfl_down_sync with Partial Warp Causes GPU Hang (FIXED!)
+
+### Discovery (January 23, 2026)
+
+Training log showed GPU stream stuck waiting for `kernel_rmsnorm_backward`:
+```
+[Tensor::backward] Stream query before sync: NOT_READY (stream=000001FA6D2AAA70)
+[Tensor::backward] Synchronizing stream before cleanup...
+[Tensor::backward] Still waiting for stream (poll #1000000)...
+[KERNEL CHECK] Last kernel 'kernel_rmsnorm_backward' (#99) status: PENDING
+...
+[Tensor::backward] TIMEOUT: Stream stuck after 100M polls! Checking for errors...
+[Tensor::backward] cudaGetLastError: SUCCESS
+```
+
+Key observation: **cudaGetLastError returned SUCCESS** but kernel never completed - classic sign of GPU deadlock.
+
+### Root Cause: __shfl_down_sync with 0xffffffff Mask on Partial Warp
+
+The `kernel_rmsnorm_backward` in `TensorContract_GPU.cu` had a **critical CUDA programming bug**:
+
+```cuda
+// BUGGY CODE:
+if (threadIdx.x < blockDim.x / 32) {  // Only 8 threads active (with 256 threads)
+    local_sum_sq = s_sum_sq[threadIdx.x];
+    for (int offset = blockDim.x / 64; offset > 0; offset >>= 1) {
+        local_sum_sq += __shfl_down_sync(0xffffffff, local_sum_sq, offset);  // BUG!
+    }
+}
+```
+
+**Why This Hangs:**
+1. `blockDim.x = 256` (AUTOGRAD_BLOCK_SIZE), so `blockDim.x / 32 = 8` warps
+2. The block reduction only has **8 active threads** (threadIdx.x < 8)
+3. `__shfl_down_sync(0xffffffff, ...)` uses mask `0xffffffff` = **all 32 threads must participate**
+4. Only 8 threads call the shuffle, but mask says wait for 32 → **deadlock**
+5. GPU hangs indefinitely waiting for threads that never participate
+
+### Evidence from Training Log
+
+```
+[KERNEL #99] kernel_rmsnorm_backward - launched OK
+[RMSNormGradFn] Continuing chain via input_grad_fn=000001FA315661B0 (op=add)
+[AddGradFn] apply() SKIPPED (already applied)
+[RMSNormGradFn] input_grad_fn->apply() returned
+...
+[Tensor::backward] Stream query before sync: NOT_READY
+[Tensor::backward] Still waiting for stream (poll #100000000)...
+[Tensor::backward] TIMEOUT: Stream stuck after 100M polls!
+```
+
+The kernel launched successfully but never completed - threads stuck in `__shfl_down_sync`.
+
+### Fix Applied (TensorContract_GPU.cu)
+
+**Replaced partial-warp shuffle with sequential reduction in thread 0:**
+
+```cuda
+// FIXED CODE (Issue #55):
+// Write warp results to shared memory
+if (threadIdx.x % 32 == 0) {
+    s_warp_vals[threadIdx.x / 32] = local_sum_sq;
+}
+__syncthreads();
+
+// Use sequential reduction in thread 0 (safe for any warp count)
+__shared__ float s_rms_sq, s_inv_rms;
+if (threadIdx.x == 0) {
+    float total = 0.0f;
+    for (int i = 0; i < num_warps; i++) {
+        total += s_warp_vals[i];
+    }
+    s_rms_sq = total / d_model + eps;
+    s_inv_rms = rsqrtf(s_rms_sq);
+}
+__syncthreads();
+```
+
+### Why Sequential Reduction is Safe
+
+1. **No warp synchronization issues** - only thread 0 reads/writes
+2. **Works for any blockDim.x** - no assumptions about warp count
+3. **Minimal overhead** - only 8 reads in thread 0 (negligible vs memory bandwidth)
+4. **Same algorithmic complexity** - O(num_warps) vs O(log(num_warps)) is trivial for 8 warps
+
+### Files Modified
+
+1. `TensorContract_GPU.cu`: Fixed `kernel_rmsnorm_backward` block reduction
+
+### CUDA Best Practice Reminder
+
+**NEVER use `__shfl_*_sync(0xffffffff, ...)` with fewer than 32 active threads!**
+
+Valid patterns:
+- ✅ Full warp (all 32 threads) with mask `0xffffffff`
+- ✅ Partial warp with **correct mask** computed from active threads
+- ✅ Sequential reduction for cross-warp aggregation (always safe)
+
+Invalid pattern (causes GPU hang):
+- ❌ `if (threadIdx.x < N) { __shfl_down_sync(0xffffffff, ...); }` where N < 32
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔵 HISTORICAL: Issue #46 - Autograd Chain Broken in CrossEntropyLossGradFn (January 21, 2026)
+
+### Discovery (January 21, 2026)
+
+Training log showed **ALL gradients ZERO** from the very first batch:
+```
+[GradTrace] batch=1 micro=1/2 valid_tokens=1376
+           gradients[0:10]=[0.000e+00,0.000e+00,0.000e+00,...]
+           COMPUTED COMPONENTS: total=0.0000 emb_lm_tied=0.0000 num=0.0000 attn=0.0000 ffn=0.0000 rms=0.0000
+[ACCUM_BUG] WARNING: preclip=0.0000 which is impossibly low
+[FATAL] Gradient accumulation appears broken - stopping training
+```
+
+Key observation: **Loss was computed correctly (~10.2)** but gradients never reached parameters.
+
+### Root Cause: Autograd Chain STOPS at Loss Computation
+
+The `CrossEntropyLossGradFn::apply()` in `AutogradLoss.cu` was computing `grad_logits` correctly but **NEVER CONTINUING THE BACKWARD CHAIN**!
+
+The Issue #45 fix migrated to a pure autograd system:
+1. `LanguageModel_Training.cu` calls `training_state_.loss_tensor.backward(nullptr)`
+2. `Tensor::backward()` calls `grad_fn->apply()` expecting it to recursively continue
+3. `CrossEntropyLossGradFn::apply()` writes to `logits_tensor_ptr->grad` but **NEVER calls `logits_tensor_ptr->grad_fn->apply()`**
+4. The backward chain STOPS - no gradients reach encoder layers, embeddings, or any parameters
+
+### Evidence from Code (BEFORE Fix)
+
+```cpp
+__host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    if (logits_tensor_ptr) {
+        logits_tensor_ptr->ensure_grad();
+        launchCrossEntropyBackward(..., logits_tensor_ptr->grad, ...);
+    }
+    // MISSING: Call to continue backward chain!
+    // Should be: logits_tensor_ptr->grad_fn->apply(logits_grad, stream);
+}
+```
+
+### Fix Applied (AutogradLoss.cu)
+
+**Added recursive backward chain continuation:**
+
+```cpp
+__host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
+    if (logits_tensor_ptr) {
+        logits_tensor_ptr->ensure_grad();
+        launchCrossEntropyBackward(..., logits_tensor_ptr->grad, ...);
+        
+        // ================================================================
+        // BUG FIX Issue #46: CONTINUE AUTOGRAD CHAIN!
+        // ================================================================
+        if (logits_tensor_ptr->grad_fn) {
+            Tensor logits_grad;
+            logits_grad.data = logits_tensor_ptr->grad;
+            logits_grad.shape = logits_tensor_ptr->shape;
+            logits_grad.owns_data = false;
+            logits_grad.stream = stream;
+            
+            logits_tensor_ptr->grad_fn->apply(logits_grad, stream);
+            logits_tensor_ptr->grad_fn->release_saved();
+        }
+    }
+}
+```
+
+### Why This Wasn't Caught Earlier
+
+- Issue #45 fix DELETED the legacy 3-phase backward system and replaced with pure autograd
+- The autograd system was incomplete - `cross_entropy_loss` was the first loss function converted
+- Testing focused on gradient zeroing (Issue #45's symptom) not autograd chain completion
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔵 HISTORICAL: Issue #45 - grad_encoder_out NOT REGISTERED with GradAccumulationController
 
 ### Discovery (January 21, 2026)
 

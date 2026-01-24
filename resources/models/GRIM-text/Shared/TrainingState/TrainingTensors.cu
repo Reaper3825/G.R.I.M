@@ -40,27 +40,43 @@ void TrainingTensors::initializeParams(
     // Token embeddings [vocab_size, d_model]
     embedding_weights = Tensor::zeros({vocab_size, d_model}, stream);
     embedding_weights.requires_grad_();
+    embedding_weights.ensure_grad();  // Allocate grad NOW so share_grad() works
     Tensor::xavier_uniform_(embedding_weights, stream);
     
     // Position embeddings [max_seq_len, d_model]
     position_embedding_weights = Tensor::zeros({max_seq_len, d_model}, stream);
     position_embedding_weights.requires_grad_();
+    position_embedding_weights.ensure_grad();  // Allocate grad NOW
     Tensor::xavier_uniform_(position_embedding_weights, stream);
     
-    //==================================================//
+    //==================================================//        
     //  LM HEAD
     //==================================================//
     
     if (tie_embeddings) {
-        // Shared weights - LM head points to same data as embedding
+        // WEIGHT TYING: LM head shares BOTH data AND grad with embedding
+        // This is critical - both must be aliased for:
+        // 1. Forward: lm_head_weights.data == embedding_weights.data (shared projection)
+        // 2. Backward: lm_head_weights.grad == embedding_weights.grad (accumulates both gradients)
+        // 3. Optimizer: Only one buffer to update
         lm_head_weights = Tensor::from_ptr(
             embedding_weights.data,
             {vocab_size, d_model},
             stream
         );
-        lm_head_weights.requires_grad_();
-        // NOTE: lm_head_weights.grad will be separate from embedding_weights.grad
-        // During optimizer step, need to accumulate both
+        // CRITICAL: Share the grad Tensor object, NOT separate allocation!
+        // ISSUE #59: Use share_grad() for proper shared_ptr semantics
+        lm_head_weights.share_grad(embedding_weights);
+        lm_head_weights.owns_data = false;  // embedding_weights owns it
+        lm_head_weights.requires_grad = true;
+        
+        // Debug: Verify weight tying is correct at source
+        fprintf(stdout, "[TrainingTensors] Weight tying: emb.data=%p lm.data=%p (same=%s)\n",
+                (void*)embedding_weights.data, (void*)lm_head_weights.data,
+                (embedding_weights.data == lm_head_weights.data) ? "YES" : "NO");
+        fprintf(stdout, "[TrainingTensors] Weight tying: emb.grad=%p lm.grad=%p (same=%s)\n",
+                (void*)embedding_weights.grad_data(), (void*)lm_head_weights.grad_data(),
+                (embedding_weights.grad_data() == lm_head_weights.grad_data()) ? "YES" : "NO");
     } else {
         // Separate LM head weights
         lm_head_weights = Tensor::zeros({vocab_size, d_model}, stream);
@@ -366,13 +382,14 @@ float* TrainingTensors::getParamData(const std::string& name) {
 
 float* TrainingTensors::getGradData(const std::string& name) {
     // Legacy compatibility - map name to gradient
-    if (name == "embedding_weights") return embedding_weights.grad;
-    if (name == "position_embedding_weights") return position_embedding_weights.grad;
-    if (name == "lm_head_weights") return lm_head_weights.grad;
-    if (name == "lm_head_bias") return lm_head_bias.grad;
-    if (name == "numeric_head_weights") return numeric_head_weights.grad;
-    if (name == "numeric_head_bias") return numeric_head_bias.grad;
-    if (name == "final_rms_gamma") return final_rms_gamma.grad;
+    // ISSUE #59: Use grad_data() accessor
+    if (name == "embedding_weights") return embedding_weights.grad_data();
+    if (name == "position_embedding_weights") return position_embedding_weights.grad_data();
+    if (name == "lm_head_weights") return lm_head_weights.grad_data();
+    if (name == "lm_head_bias") return lm_head_bias.grad_data();
+    if (name == "numeric_head_weights") return numeric_head_weights.grad_data();
+    if (name == "numeric_head_bias") return numeric_head_bias.grad_data();
+    if (name == "final_rms_gamma") return final_rms_gamma.grad_data();
     
     throw std::runtime_error("TrainingTensors::getGradData: unknown param '" + name + "'");
 }

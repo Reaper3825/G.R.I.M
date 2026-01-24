@@ -6,10 +6,7 @@
 
 #include <stdexcept>
 #include <sstream>
-
-// External kernel declaration (C++ linkage - can throw exceptions)
-void launchBiasSumGradient(const float* grad_output, float* grad_bias,
-                          int total_tokens, int hidden_dim, cudaStream_t stream);
+#include <memory>
 
 namespace GRIM {
 
@@ -25,6 +22,32 @@ __global__ void addScalarBiasKernel(float* predictions,
 	predictions[idx] += bias[0];
 }
 
+__global__ void sumGradBiasKernel(const float* grad_output, float* grad_bias, int total_tokens) {
+	__shared__ float shared[256];
+	const int tid = threadIdx.x;
+	const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+	
+	// Load and accumulate
+	float sum = 0.0f;
+	for (int i = idx; i < total_tokens; i += blockDim.x * gridDim.x) {
+		sum += grad_output[i];
+	}
+	shared[tid] = sum;
+	__syncthreads();
+	
+	// Warp reduction
+	for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+		if (tid < s) {
+			shared[tid] += shared[tid + s];
+		}
+		__syncthreads();
+	}
+	
+	if (tid == 0) {
+		atomicAdd(grad_bias, shared[0]);
+	}
+}
+
 inline bool isDevicePtr(const void* ptr) {
 	cudaPointerAttributes attr{};
 	return ptr &&
@@ -32,179 +55,283 @@ inline bool isDevicePtr(const void* ptr) {
 	       attr.type == cudaMemoryTypeDevice;
 }
 
-inline void addScalarBias(float* predictions,
-                          const float* bias,
-                          int total_tokens,
-                          cudaStream_t stream) {
-	if (!predictions) {
-		throw std::runtime_error("[NumericHead::addBias] predictions is NULL");
+// Helper to queue GPU memory for deferred cleanup (avoid destroying in destructor)
+void queueForDeferredNumericHeadCleanup(float* ptr) {
+	if (ptr) {
+		cudaFree(ptr);  // Simple sync free - can be improved with stream-ordered allocator
 	}
-	if (!bias) {
-		throw std::runtime_error("[NumericHead::addBias] bias is NULL");
-	}
-	if (total_tokens <= 0) {
-		throw std::runtime_error("[NumericHead::addBias] total_tokens must be > 0");
-	}
-	constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
-	const int grid = (total_tokens + kBlockSize - 1) / kBlockSize;
-	addScalarBiasKernel<<<grid, kBlockSize, 0, stream>>>(predictions, bias, total_tokens);
 }
 
 } // namespace
 
-void launchNumericHeadForward(const NumericHeadForwardParams& params) {
-	// Rule 20: Fail loud validation
-	params.validate("NumericHead::forward");
+//======================================================//
+//  NumericHeadGradFn - Autograd backward node
+//======================================================//
+
+struct NumericHeadGradFn : public GradFn {
+	// Cached data for backward
+	std::shared_ptr<float> owned_cache_encoder;   // Copy of encoder_output for grad_weight
+	const float* cached_encoder = nullptr;
 	
-	// Extract dimensions and raw pointers from TensorViews
-	const int total_tokens = params.total_tokens();
-	const int d_model = params.d_model();
-	const float* encoder_output = params.encoder_output.ptr;
-	const float* weights = params.weights.ptr;
-	float* predictions = params.predictions.ptr;
-	cublasHandle_t handle = params.handle;
-	cudaStream_t stream = params.stream;
+	// Weight tensor data (for grad_encoder computation)
+	const float* weights_data = nullptr;
+	TensorContract::TensorShape weights_shape;
+	
+	// Grad buffers
+	std::shared_ptr<float> owned_grad_encoder;
+	float* grad_encoder = nullptr;
+	float* grad_weight = nullptr;   // Points to leaf tensor's grad buffer
+	float* grad_bias = nullptr;     // Points to leaf tensor's grad buffer (optional)
+	
+	// Chain continuation
+	GradFn* encoder_grad_fn = nullptr;
+	bool owns_encoder_grad_fn = false;
+	TensorContract::TensorShape encoder_shape;
+	
+	// Dimensions
+	int total_tokens = 0;
+	int d_model = 0;
+	bool use_bias = false;
+	
+	// Execution context
+	cublasHandle_t cublas_handle = nullptr;
+	cudaStream_t stream = nullptr;
+	
+	NumericHeadGradFn() { op_name = "numeric_head"; }
+	
+	~NumericHeadGradFn() {
+		if (owns_encoder_grad_fn && encoder_grad_fn) {
+			delete encoder_grad_fn;
+			encoder_grad_fn = nullptr;
+		}
+	}
+	
+	void capture_inputs(
+		Tensor& encoder_output,
+		Tensor& weights,
+		Tensor* bias,
+		cublasHandle_t handle,
+		cudaStream_t str
+	) {
+		total_tokens = encoder_output.shape.as_2d().rows;
+		d_model = encoder_output.shape.as_2d().cols;
+		encoder_shape = encoder_output.shape;
+		weights_shape = weights.shape;
+		cublas_handle = handle;
+		stream = str;
+		use_bias = (bias != nullptr);
+		
+		// Cache encoder output (need for grad_weight = encoder^T @ grad_pred)
+		const size_t encoder_numel = static_cast<size_t>(total_tokens) * d_model;
+		float* cache_buf = nullptr;
+		cudaMalloc(&cache_buf, encoder_numel * sizeof(float));
+		cudaMemcpyAsync(cache_buf, encoder_output.data, encoder_numel * sizeof(float),
+		                cudaMemcpyDeviceToDevice, stream);
+		owned_cache_encoder = std::shared_ptr<float>(cache_buf, [](float* p) {
+			queueForDeferredNumericHeadCleanup(p);
+		});
+		cached_encoder = owned_cache_encoder.get();
+		
+		// Store weights pointer (weights is leaf, persists)
+		weights_data = weights.data;
+		
+		// Allocate grad buffer for encoder (non-leaf intermediate)
+		if (encoder_output.requires_grad) {
+			float* grad_enc_buf = nullptr;
+			cudaMalloc(&grad_enc_buf, encoder_numel * sizeof(float));
+			cudaMemsetAsync(grad_enc_buf, 0, encoder_numel * sizeof(float), stream);
+			owned_grad_encoder = std::shared_ptr<float>(grad_enc_buf, [](float* p) {
+				queueForDeferredNumericHeadCleanup(p);
+			});
+			grad_encoder = owned_grad_encoder.get();
+		}
+		
+		// Grad buffers for leaf weights/bias (persistent, use directly)
+		// ISSUE #59: Use grad_data() accessor
+		weights.ensure_grad();
+		grad_weight = weights.grad_data();
+		
+		if (bias) {
+			bias->ensure_grad();
+			grad_bias = bias->grad_data();
+		}
+		
+		// Capture encoder's grad_fn for chain continuation
+		encoder_grad_fn = encoder_output.grad_fn;
+		if (encoder_output.grad_fn && encoder_output.owns_grad_fn) {
+			owns_encoder_grad_fn = true;
+			encoder_output.owns_grad_fn = false;
+		}
+	}
+	
+	void apply(const Tensor& grad_output, cudaStream_t str) override {
+		if (applied) return;
+		applied = true;
+		
+		cudaStream_t use_stream = str ? str : stream;
+		if (use_stream) {
+			cublasSetStream(cublas_handle, use_stream);
+		}
+		
+		const float* grad_pred = grad_output.data;
+		const float alpha = 1.0f;
+		const float beta = 0.0f;  // Overwrite (first micro-batch) - accumulation handled by caller
+		
+		// grad_weight = encoder^T @ grad_predictions
+		// cublasSgemv: y = alpha * A * x + beta * y
+		// We want: grad_weight[d_model] = encoder[total_tokens, d_model]^T @ grad_pred[total_tokens]
+		cublasStatus_t w_status = cublasSgemv(
+			cublas_handle,
+			CUBLAS_OP_N,      // No transpose (row-major encoder becomes col-major)
+			d_model,          // M
+			total_tokens,     // N
+			&alpha,
+			cached_encoder,
+			d_model,          // lda
+			grad_pred,
+			1,
+			&beta,
+			grad_weight,
+			1);
+		
+		if (w_status != CUBLAS_STATUS_SUCCESS) {
+			throw std::runtime_error("[NumericHeadGradFn] cublasSgemv grad_weight failed");
+		}
+		
+		// grad_encoder = weights @ grad_predictions^T (outer product broadcast)
+		// Each row i of grad_encoder gets: grad_encoder[i,:] = weights * grad_pred[i]
+		// cublasSger: A = alpha * x * y^T + A
+		if (grad_encoder) {
+			cudaMemsetAsync(grad_encoder, 0, static_cast<size_t>(total_tokens) * d_model * sizeof(float), use_stream);
+			
+			cublasStatus_t enc_status = cublasSger(
+				cublas_handle,
+				d_model,          // M
+				total_tokens,     // N
+				&alpha,
+				weights_data,     // x [d_model]
+				1,
+				grad_pred,        // y [total_tokens]
+				1,
+				grad_encoder,     // A [d_model, total_tokens] col-major = [total_tokens, d_model] row-major
+				d_model);
+			
+			if (enc_status != CUBLAS_STATUS_SUCCESS) {
+				throw std::runtime_error("[NumericHeadGradFn] cublasSger grad_encoder failed");
+			}
+		}
+		
+		// grad_bias = sum(grad_predictions)
+		if (use_bias && grad_bias) {
+			cudaMemsetAsync(grad_bias, 0, sizeof(float), use_stream);
+			constexpr int kBlockSize = 256;
+			const int grid = (total_tokens + kBlockSize - 1) / kBlockSize;
+			sumGradBiasKernel<<<grid, kBlockSize, 0, use_stream>>>(grad_pred, grad_bias, total_tokens);
+		}
+		
+		// Continue autograd chain through encoder
+		if (encoder_grad_fn && grad_encoder) {
+			Tensor grad_enc_tensor;
+			grad_enc_tensor.data = grad_encoder;
+			grad_enc_tensor.shape = encoder_shape;
+			grad_enc_tensor.owns_data = false;
+			grad_enc_tensor.stream = use_stream;
+			
+			encoder_grad_fn->apply(grad_enc_tensor, use_stream);
+			encoder_grad_fn->release_saved();
+		}
+	}
+	
+	void release_saved() override {
+		if (released_) return;
+		released_ = true;
+		owned_cache_encoder.reset();
+		cached_encoder = nullptr;
+	}
+};
 
-	// Validate device pointers (Rule 20: crash if not device memory)
-	if (!isDevicePtr(encoder_output)) {
-		throw std::runtime_error("[NumericHead::forward] encoder_output must be device pointer");
-	}
-	if (!isDevicePtr(weights)) {
-		throw std::runtime_error("[NumericHead::forward] weights must be device pointer");
-	}
-	if (!isDevicePtr(predictions)) {
-		throw std::runtime_error("[NumericHead::forward] predictions must be device pointer");
-	}
+//======================================================//
+//  Autograd NumericHead Forward
+//======================================================//
 
+Tensor numeric_head_forward(
+    Tensor& encoder_output,
+    Tensor& weights,
+    Tensor* bias,
+    cublasHandle_t handle,
+    cudaStream_t stream
+) {
+	// Rule 20: Fail loud validation
+	if (!encoder_output.data) {
+		throw std::runtime_error("[numeric_head_forward] encoder_output.data is NULL");
+	}
+	if (!weights.data) {
+		throw std::runtime_error("[numeric_head_forward] weights.data is NULL");
+	}
+	if (!handle) {
+		throw std::runtime_error("[numeric_head_forward] cuBLAS handle is NULL");
+	}
+	
+	const int total_tokens = encoder_output.shape.as_2d().rows;
+	const int d_model = encoder_output.shape.as_2d().cols;
+	
+	// Allocate output tensor
+	float* pred_data = nullptr;
+	cudaMalloc(&pred_data, static_cast<size_t>(total_tokens) * sizeof(float));
+	
+	Tensor predictions;
+	predictions.data = pred_data;
+	predictions.shape = TensorContract::TensorShape::make_BSM(total_tokens, 1);
+	predictions.owns_data = true;
+	predictions.requires_grad = encoder_output.requires_grad || weights.requires_grad;
+	predictions.is_leaf = false;
+	predictions.stream = stream;
+	
+	// Forward: predictions = encoder_output @ weights
 	if (stream) {
 		cublasSetStream(handle, stream);
 	}
-
+	
 	const float alpha = 1.0f;
 	const float beta = 0.0f;
-
-	// Treat encoder_output as column-major [d_model, total_tokens]
-	const cublasStatus_t status = cublasSgemv(
+	
+	// cublasSgemv: y = alpha * A^T * x + beta * y
+	// encoder_output[total_tokens, d_model] @ weights[d_model, 1] -> predictions[total_tokens, 1]
+	cublasStatus_t status = cublasSgemv(
 		handle,
-		CUBLAS_OP_T,
-		d_model,
-		total_tokens,
+		CUBLAS_OP_T,       // Transpose A
+		d_model,           // M (rows of A)
+		total_tokens,      // N (cols of A in row-major = rows in col-major after transpose)
 		&alpha,
-		encoder_output,
-		d_model,
-		weights,
+		encoder_output.data,
+		d_model,           // lda
+		weights.data,
 		1,
 		&beta,
-		predictions,
+		predictions.data,
 		1);
-
+	
 	if (status != CUBLAS_STATUS_SUCCESS) {
-		std::ostringstream oss;
-		oss << "[NumericHead::forward] cublasSgemv failed status=" << status
-		    << " m=" << d_model
-		    << " n=" << total_tokens
-		    << " lda=" << d_model;
-		throw std::runtime_error(oss.str());
+		cudaFree(pred_data);
+		throw std::runtime_error("[numeric_head_forward] cublasSgemv failed");
 	}
-
-	if (params.use_bias && params.bias.is_valid()) {
-		addScalarBias(predictions, params.bias.ptr, total_tokens, stream);
-	}
-}
-
-void launchNumericHeadBackward(const NumericHeadBackwardParams& params) {
-	// Rule 20: Fail loud validation
-	params.validate("NumericHead::backward");
 	
-	// Extract dimensions and raw pointers from TensorViews
-	const int total_tokens = params.total_tokens();
-	const int d_model = params.d_model();
-	const float* grad_predictions = params.grad_predictions.ptr;
-	const float* encoder_output = params.encoder_output.ptr;
-	const float* weights = params.weights.ptr;
-	float* grad_encoder = params.grad_encoder.ptr;
-	float* grad_weight = params.grad_weight.ptr;
-	cublasHandle_t handle = params.handle;
-	cudaStream_t stream = params.stream;
+	// Add bias if present
+	if (bias && bias->data) {
+		constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
+		const int grid = (total_tokens + kBlockSize - 1) / kBlockSize;
+		addScalarBiasKernel<<<grid, kBlockSize, 0, stream>>>(predictions.data, bias->data, total_tokens);
+	}
 	
-	// Validate device pointers (Rule 20: crash if not device memory)
-	if (!isDevicePtr(grad_predictions)) {
-		throw std::runtime_error("[NumericHead::backward] grad_predictions must be device pointer");
+	// Setup autograd if needed
+	if (predictions.requires_grad) {
+		auto* grad_fn = new NumericHeadGradFn();
+		grad_fn->capture_inputs(encoder_output, weights, bias, handle, stream);
+		predictions.grad_fn = grad_fn;
+		predictions.owns_grad_fn = true;
 	}
-	if (!isDevicePtr(grad_encoder)) {
-		throw std::runtime_error("[NumericHead::backward] grad_encoder must be device pointer");
-	}
-	if (!isDevicePtr(weights)) {
-		throw std::runtime_error("[NumericHead::backward] weights must be device pointer");
-	}
-	if (!isDevicePtr(grad_weight)) {
-		throw std::runtime_error("[NumericHead::backward] grad_weight must be device pointer");
-	}
-	if (!isDevicePtr(encoder_output)) {
-		throw std::runtime_error("[NumericHead::backward] encoder_output must be device pointer");
-	}
-	if (params.use_bias && params.grad_bias.is_valid() && !isDevicePtr(params.grad_bias.ptr)) {
-		throw std::runtime_error("[NumericHead::backward] grad_bias must be device pointer");
-	}
-
-	const float alpha = 1.0f;
-	const float beta = params.accumulate ? 1.0f : 0.0f;
-
-	// grad_weight = encoder_output^T * grad_predictions
-	const cublasStatus_t w_status = cublasSgemv(
-		handle,
-		CUBLAS_OP_N,
-		d_model,
-		total_tokens,
-		&alpha,
-		encoder_output,
-		d_model,
-		grad_predictions,
-		1,
-		&beta,
-		grad_weight,
-		1);
-
-	if (w_status != CUBLAS_STATUS_SUCCESS) {
-		std::ostringstream oss;
-		oss << "[NumericHead::backward] cublasSgemv grad_weight failed status=" << w_status
-		    << " m=" << d_model
-		    << " n=" << total_tokens
-		    << " lda=" << d_model;
-		throw std::runtime_error(oss.str());
-	}
-
-	// grad_encoder += weights * grad_predictions^T
-	const cublasStatus_t enc_status = cublasSger(
-		handle,
-		d_model,
-		total_tokens,
-		&alpha,
-		weights,
-		1,
-		grad_predictions,
-		1,
-		grad_encoder,
-		d_model);
-	if (enc_status != CUBLAS_STATUS_SUCCESS) {
-		std::ostringstream oss;
-		oss << "[NumericHead::backward] cublasSger grad_encoder failed status=" << enc_status
-		    << " m=" << d_model
-		    << " n=" << total_tokens
-		    << " lda=" << d_model;
-		throw std::runtime_error(oss.str());
-	}
-
-	if (params.use_bias && params.grad_bias.is_valid()) {
-		if (!params.accumulate) {
-			cudaMemsetAsync(params.grad_bias.ptr, 0, sizeof(float), stream);
-		}
-		launchBiasSumGradient(grad_predictions,
-		                      params.grad_bias.ptr,
-		                      total_tokens,
-		                      1,
-		                      stream);
-	}
+	
+	return predictions;
 }
 
 } // namespace GRIM

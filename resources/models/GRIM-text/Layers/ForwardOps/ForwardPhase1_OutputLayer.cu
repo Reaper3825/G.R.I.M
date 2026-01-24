@@ -329,46 +329,51 @@ skip_final_rmsnorm:
                           "numeric head enabled but weights/predictions buffer missing", -1);
         }
 
-        NumericHeadForwardParams num_params{};
-        
-        // Weights: [d_model, 1] column vector
-        num_params.weights = TensorContract::TensorView::make_BSM(
+        // Create Tensor wrappers for weights (inference - no grad needed)
+        Tensor weights_tensor = Tensor::from_ptr(
             ts->numeric_head_weights.data,
-            cfg->d_model,
-            1,
-            "numeric_fwd_weights"
+            TensorContract::TensorShape::make_BSM(cfg->d_model, 1),
+            false,  // doesn't own
+            false   // no grad for inference
         );
+        weights_tensor.is_leaf = true;
         
-        // Optional bias: [1, 1] scalar
+        Tensor* bias_tensor_ptr = nullptr;
+        Tensor bias_tensor;
         if (cfg->use_bias && ts->numeric_head_bias.data) {
-            num_params.bias = TensorContract::TensorView::make_BSM(
+            bias_tensor = Tensor::from_ptr(
                 ts->numeric_head_bias.data,
-                1,
-                1,
-                "numeric_fwd_bias"
+                TensorContract::TensorShape::make_BSM(1, 1),
+                false,  // doesn't own
+                false   // no grad for inference
             );
-            num_params.use_bias = true;
+            bias_tensor.is_leaf = true;
+            bias_tensor_ptr = &bias_tensor;
         }
-        
-        // Execution context
-        num_params.handle = ctx.cublas_handle;
-        num_params.stream = ctx.stream;
 
         if (ctx.logits_target == ForwardLogitsTarget::FullSequence) {
             // Encoder output: [total_tokens, d_model]
-            num_params.encoder_output = TensorContract::TensorView::make_BSM(
+            Tensor encoder_tensor = Tensor::from_ptr(
                 encoder_output,
-                ctx.total_tokens,
-                cfg->d_model,
-                "numeric_fwd_encoder_output"
+                TensorContract::TensorShape::make_BSM(ctx.total_tokens, cfg->d_model),
+                false,  // doesn't own
+                false   // no grad for inference
             );
-            // Predictions: [total_tokens, 1]
-            num_params.predictions = TensorContract::TensorView::make_BSM(
-                ts->cached_numeric_predictions,
-                ctx.total_tokens,
-                1,
-                "numeric_fwd_predictions"
-            );
+            
+            try {
+                Tensor predictions = numeric_head_forward(
+                    encoder_tensor, weights_tensor, bias_tensor_ptr,
+                    ctx.cublas_handle, ctx.stream
+                );
+                // Copy to cached buffer
+                cudaMemcpyAsync(
+                    ts->cached_numeric_predictions, predictions.data,
+                    static_cast<size_t>(ctx.total_tokens) * sizeof(float),
+                    cudaMemcpyDeviceToDevice, ctx.stream
+                );
+            } catch (const std::exception& ex) {
+                FWD_FAIL_LOUD(ctx, ForwardStatus::INVALID_STATE, ex.what(), -1);
+            }
         } else {
             if (ctx.seq_len <= 0) {
                 FWD_FAIL_LOUD(ctx, ForwardStatus::INVALID_STATE, "seq_len <= 0 for numeric head", -1);
@@ -379,25 +384,26 @@ skip_final_rmsnorm:
                 : encoder_output + static_cast<size_t>(last_index) * cfg->d_model;
             
             // Last token encoder output: [1, d_model]
-            num_params.encoder_output = TensorContract::TensorView::make_BSM(
+            Tensor encoder_tensor = Tensor::from_ptr(
                 last_encoder_output,
-                1,
-                cfg->d_model,
-                "numeric_fwd_encoder_output_last"
+                TensorContract::TensorShape::make_BSM(1, cfg->d_model),
+                false,  // doesn't own
+                false   // no grad for inference
             );
-            // Single prediction: [1, 1]
-            num_params.predictions = TensorContract::TensorView::make_BSM(
-                ts->cached_numeric_predictions + last_index,
-                1,
-                1,
-                "numeric_fwd_predictions_last"
-            );
-        }
-
-        try {
-            launchNumericHeadForward(num_params);
-        } catch (const std::exception& ex) {
-            FWD_FAIL_LOUD(ctx, ForwardStatus::INVALID_STATE, ex.what(), -1);
+            
+            try {
+                Tensor predictions = numeric_head_forward(
+                    encoder_tensor, weights_tensor, bias_tensor_ptr,
+                    ctx.cublas_handle, ctx.stream
+                );
+                // Copy to cached buffer at correct position
+                cudaMemcpyAsync(
+                    ts->cached_numeric_predictions + last_index, predictions.data,
+                    sizeof(float), cudaMemcpyDeviceToDevice, ctx.stream
+                );
+            } catch (const std::exception& ex) {
+                FWD_FAIL_LOUD(ctx, ForwardStatus::INVALID_STATE, ex.what(), -1);
+            }
         }
     }
 

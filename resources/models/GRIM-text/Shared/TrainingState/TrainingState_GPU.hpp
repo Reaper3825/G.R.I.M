@@ -26,6 +26,9 @@
 // Forward declaration for autograd tensor system
 namespace GRIM {
     struct TrainingTensors;
+    namespace Autograd {
+        struct AutogradContext;  // Issue #47: Forward context persists for backward
+    }
 }
 
 namespace GRIM {
@@ -65,22 +68,9 @@ struct TrainingState {
 	// Final RMSNorm before LM head (Issue #33 fix)
 	Tensor final_rms_gamma;  // [d_model]
 	
-	// Per-layer encoder parameters
-	struct EncoderLayerTensors {
-		Tensor rms1_gamma;        // [d_model]
-		Tensor rms2_gamma;        // [d_model]
-		Tensor attn_qkv_weight;   // [total_qkv_dim, d_model]
-		Tensor attn_qkv_bias;     // [total_qkv_dim] - optional
-		Tensor attn_out_weight;   // [d_model, d_model]
-		Tensor attn_out_bias;     // [d_model] - optional
-		Tensor alpha_q;           // [num_heads] - QK-norm scale
-		Tensor alpha_k;           // [num_kv_heads] - QK-norm scale
-		Tensor ffn_w1;            // [d_ff, d_model]
-		Tensor ffn_b1;            // [d_ff] - optional
-		Tensor ffn_w2;            // [d_model, d_ff]
-		Tensor ffn_b2;            // [d_model] - optional
-	};
-	std::vector<EncoderLayerTensors> encoder_layers;
+	// NOTE: Encoder layer weights are owned by GPUGrimEncoder, not TrainingState.
+	// Access encoder gradients via enc->getAttnWqkvGrad(), enc->getFFNW1Grad(), etc.
+	// See buildParameterGroups() in LanguageModel_Training.cu for optimizer integration.
 	
 	// ═══════════════════════════════════════════════════════════════
 	// AUTOGRAD MIGRATION COMPLETE - Legacy vectors REMOVED
@@ -98,10 +88,10 @@ struct TrainingState {
 	std::vector<float*> attn_alpha_k_grads;
 	
 	// Helpers to access raw gradient pointers for legacy code (during migration)
-	float* embedding_grads() { return embedding_weights.grad; }
-	float* position_embedding_grads() { return position_embedding_weights.grad; }
-	float* lm_head_weight_grads() { return lm_head_weights.grad; }
-	float* final_rms_gamma_grads() { return final_rms_gamma.grad; }
+	float* embedding_grads() { return embedding_weights.grad_data(); }  // ISSUE #59: Use accessor
+	float* position_embedding_grads() { return position_embedding_weights.grad_data(); }  // ISSUE #59
+	float* lm_head_weight_grads() { return lm_head_weights.grad_data(); }  // ISSUE #59
+	float* final_rms_gamma_grads() { return final_rms_gamma.grad_data(); }  // ISSUE #59
 	
 	// GQA configuration (stored for cache sizing)
 	int num_heads = 0;           // Q heads
@@ -207,6 +197,15 @@ struct TrainingState {
 	Tensor loss_tensor;                   // Scalar [1] - loss value + grad_fn
 	Tensor logits_tensor;                 // [total_tokens, vocab_size] - wraps cached_logits
 	float cached_loss_value = 0.0f;       // Host copy of loss (for return value)
+	
+	// ═══════════════════════════════════════════════════════════════
+	//  AUTOGRAD CONTEXT (Issue #47: Full computation graph for backward)
+	// ═══════════════════════════════════════════════════════════════
+	// Persists the autograd context from forward pass to backward pass.
+	// Contains intermediate Tensors (encoder_layer_outputs, etc.) that keep
+	// the grad_fn chain alive. Without this, backward() would have dangling pointers.
+	// Created in computeLossBatch(), used in backward(), cleared after optimizer step.
+	std::unique_ptr<Autograd::AutogradContext> autograd_ctx;
 
 	// ═══════════════════════════════════════════════════════════════
 	//  INTERMEDIATE GRADIENT TENSORS (Issue #45 FIX: Proper autograd)
@@ -351,6 +350,44 @@ struct TrainingState {
 	// Computed from: num_layers, num_heads, num_kv_heads, d_model, d_ff, tie_embeddings, scratch_block_enabled
 	// If this changes, optimizer state must be reset.
 	uint64_t architecture_config_hash = 0;
+	
+	// ═══════════════════════════════════════════════════════════════
+	//  DEBUG: GRADIENT ATTRIBUTION BUFFERS (Issue #60 Investigation)
+	// ═══════════════════════════════════════════════════════════════
+	// Separate buffers to isolate LM head vs embedding backward contributions
+	// With tied weights, both write to the SAME shared gradient buffer.
+	// This lets us see each source independently for debugging.
+	//
+	// Method A (Current): shared_grad = LM_head_grad + embedding_grad (accumulated)
+	// Method B (Debug):   lm_only_grad, emb_only_grad (separate buffers)
+	//
+	// Set debug_gradient_attribution=true to enable logging of both sources.
+	bool debug_gradient_attribution = false;  // Enable via ai_config.json
+	float* debug_lm_head_only_grad = nullptr; // [vocab_size * d_model] - LM head backward contribution only
+	float* debug_embedding_only_grad = nullptr; // [vocab_size * d_model] - Embedding backward contribution only
+	size_t debug_grad_buffer_size = 0;        // vocab_size * d_model
+	
+	// ═══════════════════════════════════════════════════════════════
+	//  ISSUE #60 FIX: PCGRAD BUFFER FOR TIED WEIGHTS
+	// ═══════════════════════════════════════════════════════════════
+	// When tie_embeddings=true, LM head and embedding backward produce OPPOSITE
+	// gradients that cancel when combined! PCGrad projects out the conflicting
+	// component: g_final = g_lm + (g_emb - proj_{g_lm}(g_emb))
+	//
+	// This buffer holds the embedding gradient BEFORE combining with LM head.
+	float* pcgrad_temp_buffer = nullptr;  // [vocab_size * d_model]
+	size_t pcgrad_buffer_size = 0;
+	
+	// Allocate/free PCGrad buffer
+	void allocatePCGradBuffer(int vocab_size, int d_model);
+	void freePCGradBuffer();
+	
+	// Allocate debug gradient attribution buffers
+	void allocateDebugGradBuffers(int vocab_size, int d_model);
+	// Free debug gradient attribution buffers
+	void freeDebugGradBuffers();
+	// Log comparison of gradient sources for token 277 (SPACE)
+	void logGradientAttribution(int batch_idx, cudaStream_t stream);
 
 	// ═══════════════════════════════════════════════════════════════
 	//  GUESS CACHE BUFFERS (GRIM-TS Integration - Rule 22 Compliant)

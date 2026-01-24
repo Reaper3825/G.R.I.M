@@ -266,31 +266,28 @@ void FeedForwardLayer::useExternalWeights(Tensor& w1, Tensor& b1, Tensor& w2, Te
     }
 
     // Create view Tensors that reference external buffers
+    // ISSUE #59: Use share_grad() for proper shared_ptr semantics
     W1_ = Tensor::from_ptr(w1.data, w1.shape, false, true);
-    W1_.grad = w1.grad;
+    W1_.share_grad(w1);
     W1_.owns_data = false;
-    W1_.owns_grad = false;
     W1_.name = "ffn.W1_ext";
 
     if (b1.data) {
         b1_ = Tensor::from_ptr(b1.data, b1.shape, false, true);
-        b1_.grad = b1.grad;
+        b1_.share_grad(b1);
         b1_.owns_data = false;
-        b1_.owns_grad = false;
         b1_.name = "ffn.b1_ext";
     }
 
     W2_ = Tensor::from_ptr(w2.data, w2.shape, false, true);
-    W2_.grad = w2.grad;
+    W2_.share_grad(w2);
     W2_.owns_data = false;
-    W2_.owns_grad = false;
     W2_.name = "ffn.W2_ext";
 
     if (b2.data) {
         b2_ = Tensor::from_ptr(b2.data, b2.shape, false, true);
-        b2_.grad = b2.grad;
+        b2_.share_grad(b2);
         b2_.owns_data = false;
-        b2_.owns_grad = false;
         b2_.name = "ffn.b2_ext";
     }
 
@@ -299,10 +296,10 @@ void FeedForwardLayer::useExternalWeights(Tensor& w1, Tensor& b1, Tensor& w2, Te
 }
 
 //======================================================//
-//  Forward Pass - Autograd
+//  Forward Pass - Autograd with ForwardIntermediates (Issue #56 Fix)
 //======================================================//
 
-Tensor FeedForwardLayer::forward(const Tensor& input, float* cache_pre_gelu) {
+Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& intermediates) {
     // Rule 20: Crash on invalid input
     if (!input.data) {
         throw std::runtime_error("FeedForwardLayer::forward: input.data is NULL");
@@ -349,38 +346,38 @@ Tensor FeedForwardLayer::forward(const Tensor& input, float* cache_pre_gelu) {
 
     //--------------------------------------------------
     // Layer 1: hidden = GELU(input @ W1 + b1)
+    // Issue #56: Store in intermediates to keep autograd graph alive
     //--------------------------------------------------
 
     // matmul: input [tokens, d_model] @ W1 [d_model, d_ff] = pre_gelu [tokens, d_ff]
-    Tensor pre_gelu = autograd::matmul(input, W1_, stream,
-                                       input.data,  // cache input for W1 grad
-                                       nullptr);    // W1 persists, no cache needed
+    intermediates.ffn_linear1_out = autograd::matmul(input, W1_, stream,
+                                                     input.data,  // cache input for W1 grad
+                                                     nullptr);    // W1 persists, no cache needed
 
     // Add bias b1 (broadcasted)
-    launchFFNBiasAdd(pre_gelu.data, b1_.data, total_tokens, config_.d_ff, stream);
+    launchFFNBiasAdd(intermediates.ffn_linear1_out.data, b1_.data, total_tokens, config_.d_ff, stream);
 
-    // HYBRID FIX: Cache pre_gelu (after bias, before GELU) for legacy backward
-    if (cache_pre_gelu) {
-        cudaMemcpyAsync(cache_pre_gelu, pre_gelu.data,
-                        static_cast<size_t>(total_tokens) * config_.d_ff * sizeof(float),
-                        cudaMemcpyDeviceToDevice, stream);
-    }
-
-    // GELU activation
-    Tensor post_gelu = autograd::gelu(pre_gelu, stream, pre_gelu.data);
+    // GELU activation - stores result in intermediates
+    intermediates.ffn_gelu_out = autograd::gelu(intermediates.ffn_linear1_out, stream, 
+                                                intermediates.ffn_linear1_out.data);
 
     //--------------------------------------------------
     // Layer 2: output = post_gelu @ W2 + b2
+    // The output is also stored in intermediates.ffn_out by EncodingLayer
     //--------------------------------------------------
 
     // matmul: post_gelu [tokens, d_ff] @ W2 [d_ff, d_model] = output [tokens, d_model]
-    Tensor output = autograd::matmul(post_gelu, W2_, stream,
-                                     post_gelu.data,  // cache post_gelu for W2 grad
-                                     nullptr);        // W2 persists
-
+    Tensor output = autograd::matmul(intermediates.ffn_gelu_out, W2_, stream,
+                                     intermediates.ffn_gelu_out.data,  // cache post_gelu for W2 grad
+                                     nullptr);                          // W2 persists
+    
     // Add bias b2 (broadcasted)
     launchFFNBiasAdd(output.data, b2_.data, total_tokens, config_.d_model, stream);
-
+    
+    // CRITICAL (Issue #56 root cause fix): Return the output tensor!
+    // Without this return statement, `output` is destroyed at function end,
+    // which triggers destruction of its grad_fn chain, destroying the entire
+    // autograd graph DURING the forward pass!
     return output;
 }
 

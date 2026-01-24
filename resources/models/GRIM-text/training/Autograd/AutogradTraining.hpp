@@ -7,13 +7,23 @@
 //  
 //  REPLACES the legacy 3-phase backward system which reads from
 //  cached_* buffers that are never populated by the autograd forward.
+//  
+//  ISSUE #56 FIX: Uses ForwardIntermediates to keep all intermediate
+//  tensors alive during forward-backward cycle. Without this, grad_fn
+//  objects are destroyed when intermediate tensors go out of scope.
 //======================================================//
 
 #pragma once
 
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Shared/TensorContract/ForwardIntermediates.hpp"
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
+// MUST include full definitions for types used in AutogradContext
+#include "../../GRIM/grim_language_model_cuda.hpp"
+// ScratchBlock and NumericHead for autograd forward path
+#include "../../Layers/ScratchBlock/ScratchBlock_GPU.hpp"
+#include "../../Layers/NumericHead/numeric_head_GPU.hpp"
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -23,12 +33,13 @@
 
 namespace GRIM {
 
-// Forward declarations
-class LanguageModel;
-struct LanguageModelConfig;
-class GPUGrimEncoder;
-
+// LanguageModel, LanguageModelConfig, GPUGrimEncoder are now fully defined from included header
 namespace Autograd {
+
+// Use GRIM:: prefix to refer to outer namespace types
+using ::GRIM::GPUGrimEncoder;
+using ::GRIM::LanguageModelConfig;
+using ::GRIM::LanguageModel;
 
 /**
  * Result of autograd forward pass
@@ -64,14 +75,18 @@ struct BackwardResult {
     std::string error_message;
 };
 
-// Forward declare encoder class
-class GPUGrimEncoder;
+// NOTE: GPUGrimEncoder is brought in via 'using' declaration above
 
 /**
  * Context for autograd training operations
  * 
- * PRODUCTION-READY: Stores ALL intermediate Tensors from forward pass
- * so the autograd graph stays alive for backward propagation.
+ * PRODUCTION-READY (Issue #56 Fix): Stores ALL intermediate Tensors from 
+ * forward pass so the autograd graph stays alive for backward propagation.
+ * 
+ * The AllLayerIntermediates struct keeps each encoder layer's intermediate
+ * tensors alive. Without this, when EncodingLayer::forward() returns, all
+ * local tensors are destroyed, cascading the grad_fn destructor chain and
+ * invalidating the autograd graph before backward() runs.
  */
 struct AutogradContext {
     // Model and config
@@ -81,9 +96,32 @@ struct AutogradContext {
     cublasHandle_t cublas_handle;
     cudaStream_t stream;
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // OPTIONAL COMPONENTS (ScratchBlock, NumericHead)
+    // These can be nullptr if not enabled in config
+    // ═══════════════════════════════════════════════════════════════════════════
+    ScratchBlockLayer* scratch_block = nullptr;    // Numeric/code processing layer
+    
+    // ScratchBlock forward inputs (from DataLoader)
+    // These are raw pointers matching TrainingState cached buffers
+    const float* token_numeric_values = nullptr;   // [total_tokens] numeric values
+    const uint8_t* token_numeric_mask = nullptr;   // [total_tokens] 1=has_value, 0=no_value
+    const uint16_t* token_text_features = nullptr; // [total_tokens, TEXT_FEATURE_DIM] text features
+    const uint8_t* token_text_mask = nullptr;      // [total_tokens] 1=has_text_feature
+    
+    // NumericHead outputs - stored for backward
+    Tensor numeric_head_output;        // [total_tokens, 1] numeric predictions
+    
     // Batch info
     int batch_size;
     int seq_len;
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ISSUE #56 FIX: ForwardIntermediates storage
+    // Keeps ALL intermediate tensors alive during forward-backward cycle.
+    // This is the PRIMARY mechanism for autograd graph preservation.
+    // ═══════════════════════════════════════════════════════════════════════════
+    AllLayerIntermediates layer_intermediates;
     
     // ═══════════════════════════════════════════════════════════════════════════
     // INTERMEDIATE TENSORS (kept alive during forward-backward cycle)
@@ -95,10 +133,15 @@ struct AutogradContext {
     
     // Encoder layer outputs (one per layer)
     // Each Tensor has grad_fn pointing to the operations that created it
+    // NOTE: These are non-owning views - actual data lives in layer_intermediates
     std::vector<Tensor> encoder_layer_outputs;
     
     // Final encoder output (after final RMSNorm)
     Tensor encoder_output_tensor;  // [total_tokens, d_model]
+    
+    // LM head input (view of encoder output with grad_fn linked)
+    // MUST persist until backward completes - grad_fn stores pointer to this
+    Tensor lm_input_tensor;        // [total_tokens, d_model] - input to LM head matmul
     
     // LM head outputs
     Tensor logits_tensor;        // [total_tokens, vocab_size] - output of forward, input to loss
@@ -121,32 +164,24 @@ struct AutogradContext {
     }
     
     // Clear all intermediate tensors (call after backward to free memory)
+    // Issue #56: MUST clear layer_intermediates - this is where grad_fn ownership lives
     void clearIntermediates() {
+        // Issue #56: Clear layer intermediates FIRST - they own the grad_fn objects
+        layer_intermediates.clear();
+        
         embedding_tensor = Tensor();
         encoder_layer_outputs.clear();
         encoder_output_tensor = Tensor();
+        lm_input_tensor = Tensor();  // Issue #48: Must clear this too
         logits_tensor = Tensor();
         loss_tensor = Tensor();
+        numeric_head_output = Tensor();  // Clear NumericHead output
     }
 };
 
-/**
- * Link encoder layer weights to TrainingState Tensors
- * 
- * CRITICAL: This must be called ONCE before any autograd training to ensure
- * that gradients computed by autograd go directly to TrainingState buffers
- * (which the optimizer reads from).
- * 
- * Without this, encoder layers would have their own weight Tensors, and
- * autograd gradients would never reach the optimizer.
- * 
- * @param gpu_encoder The encoder whose layers need weight linking
- * @param training_state The TrainingState that owns the actual weight/grad buffers
- */
-void linkEncoderWeightsToTrainingState(
-    GPUGrimEncoder* gpu_encoder,
-    TrainingState* training_state
-);
+// NOTE: linkEncoderWeightsToTrainingState was removed.
+// Encoder owns its weights internally; optimizer accesses gradients via
+// enc->getAttnWqkvGrad(), enc->getFFNW1Grad(), etc.
 
 /**
  * Initialize autograd context
@@ -157,6 +192,7 @@ AutogradContext initAutogradContext(
     const LanguageModelConfig* config,
     TrainingState* training_state,
     GPUGrimEncoder* gpu_encoder,
+    ScratchBlockLayer* scratch_block,   // Optional: nullptr if disabled
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     int batch_size,

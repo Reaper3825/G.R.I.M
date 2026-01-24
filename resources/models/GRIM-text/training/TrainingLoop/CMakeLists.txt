@@ -151,12 +151,12 @@ target_link_libraries(grim_flash_attention PUBLIC
 
 # GPU transformer kernels object library
 add_library(grim_cuda_kernels OBJECT
-    ../../Layers/BackwardOps/BackwardKernels.cu
     ../../Layers/Attention/QKV_Projector.cu
     # Embedding_GPU.cu removed - compiled in grim_training_kernels to avoid duplicate symbols
     ../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.cu
 
     ../../Layers/LayernNorm/RMSNorm_Kernel_GPU.cu
+    ../BiasGradientKernel.cu  # Bias gradient kernel (was in deleted BackwardKernels.cu)
 )
 set_target_properties(grim_cuda_kernels PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
@@ -198,10 +198,8 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Dropout/Dropout_GPU.cu
     ../LanguageModel_Training.cu
     ../../Shared/Gradients/GradStatsCollector.cu
-    ../../Layers/BackwardOps/BackwardPhase1_OutputLayer.cu
-    ../../Layers/BackwardOps/BackwardPhase2_Encoder.cu
-    ../../Layers/BackwardOps/BackwardPhase3_InputLayer.cu
-    ../../Layers/BackwardOps/BackwardOps_Orchestrator.cu
+    # BackwardOps DELETED - replaced by pure autograd in Autograd/AutogradTraining.cu
+    ../Autograd/AutogradTraining.cu
     ../../Layers/ForwardOps/ForwardDiagnostics.cu
     ../../Layers/ForwardOps/ForwardKernels.cu
     ../../Layers/ForwardOps/ForwardOps_Orchestrator.cu

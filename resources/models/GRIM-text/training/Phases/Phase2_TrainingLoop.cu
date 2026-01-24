@@ -2427,6 +2427,72 @@ BatchResult processBatch(
         ctx.logging.logger->log(loss_stats.str());
     }
     
+    // ========================================================================
+    // TRAINING SIGNAL: Logit Statistics (argmax distribution, confidence)
+    // ========================================================================
+    {
+        const auto& ts = ctx.model->getTrainingState();
+        if (ts.cached_logits && ts.cached_batch_size > 0 && ts.cached_seq_len > 0) {
+            const int total_tokens = ts.cached_batch_size * ts.cached_seq_len;
+            const int vocab_size = ctx.config.actual_vocab_size;
+            
+            // Sample logits for statistics (limit to avoid expensive D2H copy)
+            const int sample_positions = std::min(total_tokens, 50);
+            const size_t logit_bytes = static_cast<size_t>(sample_positions) * vocab_size * sizeof(float);
+            std::vector<float> logit_sample(sample_positions * vocab_size);
+            cudaMemcpy(logit_sample.data(), ts.cached_logits, logit_bytes, cudaMemcpyDeviceToHost);
+            
+            // Compute argmax predictions and logit statistics
+            std::map<int, int> argmax_counts;
+            float logit_mean = 0.0f;
+            float logit_max = -1e30f;
+            float logit_min = 1e30f;
+            float max_logit_per_pos_sum = 0.0f;
+            
+            for (int pos = 0; pos < sample_positions; ++pos) {
+                float pos_max = -1e30f;
+                int pos_argmax = 0;
+                
+                for (int v = 0; v < vocab_size; ++v) {
+                    float logit = logit_sample[pos * vocab_size + v];
+                    logit_mean += logit;
+                    logit_max = std::max(logit_max, logit);
+                    logit_min = std::min(logit_min, logit);
+                    
+                    if (logit > pos_max) {
+                        pos_max = logit;
+                        pos_argmax = v;
+                    }
+                }
+                argmax_counts[pos_argmax]++;
+                max_logit_per_pos_sum += pos_max;
+            }
+            
+            logit_mean /= (sample_positions * vocab_size);
+            float avg_max_logit = max_logit_per_pos_sum / sample_positions;
+            
+            // Find top argmax predictions
+            std::vector<std::pair<int, int>> sorted_argmax(argmax_counts.begin(), argmax_counts.end());
+            std::sort(sorted_argmax.begin(), sorted_argmax.end(),
+                      [](const auto& a, const auto& b) { return a.second > b.second; });
+            
+            std::ostringstream logit_stats;
+            logit_stats << "[LogitSignal] batch=" << (batch_idx + 1)
+                        << " logit_mean=" << Internal::formatScalar(logit_mean, 4)
+                        << " logit_max=" << Internal::formatScalar(logit_max, 4)
+                        << " logit_min=" << Internal::formatScalar(logit_min, 4)
+                        << " avg_max_logit=" << Internal::formatScalar(avg_max_logit, 4)
+                        << " unique_argmax=" << argmax_counts.size()
+                        << " top_argmax=[";
+            for (size_t i = 0; i < std::min(sorted_argmax.size(), size_t(5)); ++i) {
+                logit_stats << "tok" << sorted_argmax[i].first << ":" << sorted_argmax[i].second;
+                if (i + 1 < std::min(sorted_argmax.size(), size_t(5))) logit_stats << ",";
+            }
+            logit_stats << "]";
+            ctx.logging.logger->log(logit_stats.str());
+        }
+    }
+    
     if (!std::isfinite(result.loss)) {
         throw std::runtime_error("Non-finite batch loss: " + std::to_string(result.loss));
     }
@@ -2718,6 +2784,9 @@ BatchResult processBatch(
                             " grad_scale=" + Internal::formatScalar(grad_scale, 8) +
                             " valid_tokens=" + std::to_string(valid_tokens)
                             );
+    
+    // NOTE: Gradient component logging happens later after computeGradNorm() at line ~2994
+    // via formatGradientComponents(). Premature logging here would use undefined variables.
     
     // ========================================================================
     // DIAGNOSTIC: Token 277 (SPACE) gradient analysis - Issue #36.5
@@ -3268,6 +3337,26 @@ BatchResult processBatch(
                             " grad_norm=" + Internal::formatScalar(result.grad_norm) +
                             " step=" + std::to_string(ctx.optimizer.optimizer_state.step) +
                             " " + pre_weights);
+    
+    // ========================================================================
+    // TRAINING SIGNAL: Pre-Optimizer State (clipping, normalization)
+    // ========================================================================
+    {
+        const float clip_ratio = (preclip_grad_norm > 1e-8f) 
+            ? (result.grad_norm / preclip_grad_norm) 
+            : 1.0f;
+        const bool was_clipped = (clip_ratio < 0.99f);  // Clipped if ratio < 1.0
+        
+        std::ostringstream opt_signal;
+        opt_signal << "[OptimizerSignal] batch=" << (batch_idx + 1)
+                   << " preclip_norm=" << Internal::formatScalar(preclip_grad_norm, 6)
+                   << " postclip_norm=" << Internal::formatScalar(result.grad_norm, 6)
+                   << " clip_ratio=" << Internal::formatScalar(clip_ratio, 4)
+                   << " was_clipped=" << (was_clipped ? "YES" : "NO")
+                   << " lr=" << Internal::formatScalar(result.learning_rate, 8)
+                   << " step=" << ctx.optimizer.optimizer_state.step;
+        ctx.logging.logger->log(opt_signal.str());
+    }
 
     if (sync_diag) {
         auto& training_state = ctx.model->getTrainingState();

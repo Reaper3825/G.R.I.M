@@ -250,6 +250,7 @@ struct LanguageModelConfig {
     HyperParameters::PositionalEncodingType positional_encoding = HyperParameters::DEFAULT_POSITIONAL_ENCODING;
     
     // Fixed config values (not architecture-dependent)
+    float rms_epsilon = 1e-3f;  // RMSNorm epsilon - shared across all RMSNorm layers
     bool causal_mask = true;
     bool use_pre_norm = true;
     bool fuse_qkv = true;

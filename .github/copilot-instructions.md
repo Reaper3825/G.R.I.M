@@ -354,27 +354,28 @@ json response = BridgeManager::send("tts", request);
 - Config: `ai_config.json` → `personality.custom_prompt`
 
 ### Unified Loss System
-**Production Architecture** - Single kernel combining focal loss + label smoothing
-- **Mathematical Formula**: `L = α(1-p_t)^γ * CE_smooth` where:
+**Production Architecture** - Autograd-enabled loss combining focal loss + label smoothing + entropy regularization
+- **Mathematical Formula**: `L = α(1-p_t)^γ * CE_smooth + λ * H(p)` where:
   - `CE_smooth = -(1-ε)log(p_t) - ε/(V-1)Σlog(p_i)` (label-smoothed cross entropy)
+  - `H(p) = Σ p_i * log(p_i)` (negative entropy, penalizes low entropy/mode collapse)
   - `p_t` = probability of correct class
-  - `α` = focal weight (default 1.0), `γ` = focal gamma (default 2.0)
-  - `ε` = smoothing epsilon (default 0.15)
-- **Gradient Formula**: `∂L/∂z_i = α(1-p_t)^(γ-1)[(1-p_t)(p_i - q_i) + γp_t·CE·(p_i - δ)]`
-  - `q_i` = smoothed target distribution
-  - Correct composition (no overwrite bugs, no normalization errors)
-- **Telemetry Integration**: Full observability via TelemetryLattice
-  - Loss statistics (mean, variance, min, max)
-  - Gradient norms (mean, max)
-  - Focal weight distribution, hard example ratio
-  - NaN/Inf detection with fail-loud error codes
+  - `α` = focal weight (default 1.0), `γ` = focal gamma (default 0.0 for plain CE)
+  - `ε` = smoothing epsilon (default 0.0 for plain CE)
+  - `λ` = entropy regularization lambda (default 0.0)
+- **Gradient Formula**: Standard CE gradient `∂L/∂z = (softmax - one_hot) / N`
+  - Focal/smoothing/entropy only affect loss magnitude, gradient direction unchanged
+  - N = valid_count (mean reduction like PyTorch)
 - **Files**: 
-  - Core: `resources/models/GRIM-text/Shared/Loss/UnifiedLoss/UnifiedLoss_GPU.{cu,hpp}`
-  - Orchestrator: `resources/models/GRIM-text/Shared/Loss/ComputeLoss_GPU.{cu,hpp}`
-  - Telemetry: `resources/models/GRIM-text/Shared/Telemetry/TelemetryLattice_GPU.{cu,hpp}`
+  - Core: `resources/models/GRIM-text/Shared/Loss/ComputeLoss/AutogradLoss.{cu,hpp}`
+  - Call Site: `resources/models/GRIM-text/Shared/Loss/ComputeLoss/ComputeLossBatch.cu`
 - **Config**: `ai_config.json` → `training.config.loss`
-  - `focal_alpha`, `focal_gamma`, `smoothing_epsilon`, `strict_mode`
-- **Removed Modules**: FocalLoss_GPU, LabelSmoothing_GPU, Preference_KL_GPU, TKML_GPU, Divergence_GPU (all had gradient bugs)
+  - `focal.enabled`, `focal.alpha`, `focal.gamma`
+  - `label_smoothing.enabled`, `label_smoothing.epsilon`
+  - `entropy_reg.enabled`, `entropy_reg.lambda`
+- **API**: 
+  - `autograd::unified_loss(logits, targets, mask, num_tokens, vocab_size, config, stream)` - Full loss
+  - `autograd::cross_entropy_loss(...)` - Legacy wrapper using plain CE config
+- **DELETED**: `UnifiedLoss_GPU.cu`, `ComputeLoss_GPU.cu` (old system disconnected from autograd gradients)
 
 ### TelemetryLattice System
 **Hierarchical Telemetry Tracking** - Multi-resolution streaming statistics
@@ -446,22 +447,28 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
 20. **NEVER Keep Backwards Compatibility**: When removing functionality, DELETE all compatibility shims, legacy APIs, and fallback code paths. If code fails after removal, that's GOOD - it exposes misconnects and incorrect assumptions. Backwards compatibility hides bugs and creates maintenance debt. Let it fail loud and fix the root cause. Example: Removed `computeOptimalBlockSizes()` from Flash Attention - any caller should be updated to use constants directly from `HyperParameters::FLASH_ATTN_BLOCK_Q/KV`.
 16. **Three-Phase Training Files**: The old monolithic `train_gpu.cu` (3569 lines) is kept as backup. The new build uses `train_gpu_orchestrator.cu` + `Phases/Phase{1,2,3}_{Startup,TrainingLoop,Cleanup}.{cu,hpp}`. If modifying training logic, edit the appropriate phase file, not the old train_gpu.cu. CMakeLists.txt in `training/TrainingLoop/` defines the build.
 
-17. **Unified Loss System**: ONLY use `UnifiedLoss_GPU` for training loss computation. Old modules (FocalLoss, LabelSmoothing, etc.) are removed - they had fundamental gradient bugs (overwrite instead of compose, wrong normalization). All loss telemetry flows through `UnifiedLoss_GPU.cu` → `TelemetryLattice_GPU.cu` pipeline.
+17. **Unified Loss System**: Use `autograd::unified_loss()` in `AutogradLoss.cu` for training loss computation. This is the ONLY loss path - it combines focal loss, label smoothing, entropy regularization, and cross-entropy into a single autograd-enabled kernel. The `cross_entropy_loss()` function is a convenience wrapper that calls `unified_loss()` with plain CE config. **DELETED**: `UnifiedLoss_GPU.cu`, `ComputeLoss_GPU.cu` - these old modules had the bug where loss computation was disconnected from gradients.
 
 19. **Batched Embedding Position Bug (FIXED)**: Prior to fix, when `positions=nullptr` was passed to embedding kernels, position was computed as `token_idx` (global index) instead of `token_idx % seq_len` (within-sequence position). This caused 2/3 of every batch to use wrong position embeddings (e.g., batch 1 tokens got positions 720-1439 instead of 0-719). Symptoms: loss starts at 10.5 (correct random baseline) but increases to 15-20 as sequence length grows, with catastrophic spikes (77-259) for long sequences. Fix in `Embedding_GPU.cu` now computes `pos_id = token_idx % seq_len` when positions is null.
 
 18. **CMake Cache After Removing Files**: When removing .cu files from CMakeLists.txt, must clean CMake cache to remove stale device-link objects. Linker errors like `unresolved external symbol __fatbinwrap_*` indicate cached library still references deleted files. Fix: `Remove-Item -Recurse -Force build\CMakeFiles\grim_training_kernels.dir` then rebuild, or use `cmake --build build --config Release --clean-first`.
+
+60. **PCGrad for Tied Embedding/LM Head Weights (CRITICAL FIX Jan 2026)**: When `tie_embeddings=true`, the LM head backward and embedding backward produce **OPPOSITE** gradients that cancel to ZERO! The diagnostic showed: `LM_HEAD: sum=+4.05, EMBEDDING: sum=-4.05, COMBINED: sum=0.00, COSINE=-1.0 (CANCELING)`. 
+  - **Root Cause**: LM head wants token prediction probability to INCREASE, embedding wants input representation to DECREASE. With shared weights, these are opposite directions!
+  - **Fix**: PCGrad (Projecting Conflicting Gradients) - `g_final = g_lm + (g_emb - proj_{g_lm}(g_emb))`. This projects out the conflicting component, keeping the LM head direction + any orthogonal embedding information.
+  - **Implementation**: `kernel_pcgrad_combine` in `TensorContract_GPU.cu`, `pcgrad_temp_buffer` in TrainingState, allocated in Phase1_Startup.cu when `tie_embeddings=true`.
+  - **Effect**: When cosine=-1 (opposing): uses g_lm only. When cosine=0 (orthogonal): uses g_lm + g_emb. When cosine=+1 (aligned): avoids double-counting.
 
 21. **Weight Tying Grad Buffer Aliasing**: When `tie_embeddings=true`, `embedding_grads` and `lm_head_weight_grads` are the **same pointer** (aliased). NEVER:
   - Register both in GradAccumulationController (double-zeroing)
   - Add both to parameter_groups_ (double optimizer update)
   - Free both in destructor (double-free crash)
   - The ownership flags `lm_head_weights_owned` and pointer comparison `embedding_grads == lm_head_weight_grads` track aliasing.
-  - **NOTE**: Both LM head backward (GEMM) AND embedding backward (atomicAdd) write to this shared buffer - this is CORRECT. They are different gradient sources that combine naturally.
+  - **NOTE**: With PCGrad fix (Issue #60), embedding backward writes to TEMP buffer first, then orthogonal component is added to shared grad buffer.
 
 44. **per_token_grad_scale is REQUIRED (NOT a bug)**: When loss is averaged (`loss_mean = sum(losses) / valid_tokens`), the backward pass gradient is already scaled by `1/valid_tokens`. The `per_token_grad_scale=true` setting in `ai_config.json` is MANDATORY to ensure gradients match this scaling. DO NOT disable this thinking "tiny gradients" is a bug - gradient RMS of ~1e-6 is CORRECT when `valid_tokens ~ 3000`. The tiny gradients combine correctly in AdamW. Disabling this causes gradient magnitude explosion (effective LR becomes 3000x larger).
 
-38. **Issue #38 WAS WRONG - REVERTED (Jan 20, 2026)**: The previous "fix" that SKIPPED embedding backward for weight-tied models was **FUNDAMENTALLY INCORRECT**. It removed ~99.99% of gradient signal, causing weights to be essentially frozen (changed by 0.000001 per step). The LM head GEMM (`grad_W = h.T @ grad_logits`) and embedding scatter-add (`grad_E[token_id] += grad`) are DIFFERENT gradients - both MUST run. The "centering pollution" concern was a red herring. Fix: Always run embedding backward.
+38. **Issue #38 WAS WRONG - SUPERSEDED BY #60**: The original "fix" that SKIPPED embedding backward was wrong. The CORRECT fix is PCGrad (Issue #60) which preserves both gradient sources without cancellation.
 
 43. **Encoder Weight Gradient Centering (Issue #43, Jan 2026)**: Encoder backward uses cached activations (`cached_ln1_output`, `cached_ffn_input`, `cached_ffn_hidden`, `cached_attn_output`) for weight gradient GEMMs. These activations have NON-ZERO MEAN, creating systematic gradient bias: `grad_W[i,j] = Σ_t ((centered[t,i] + mean_t) × grad[t,j])` - the mean term doesn't cancel. Fix in `BackwardPhase2_Encoder.cu`: Added `centerActivationsKernel` to center each cached activation BEFORE weight gradient GEMMs (grad_W_qkv, grad_W_o, grad_W1, grad_W2). Uses `centered_activation_scratch` buffer allocated in TrainingState. This matches the Issue #37 pattern applied to LM head.
 
@@ -488,6 +495,10 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
   - **Solution**: Pass `sync_for_host_read=false` to skip sync when metrics not needed (9 out of 10 batches)
   - **When to sync**: Only when gradient component logging needed (every 10 batches) or for debugging
   - **Gradient clipping**: Does NOT need sync - clipping happens on GPU using device-resident norms
+  - **Performance gain**: 10-15x speedup per batch (from 15s to 1-2s) by eliminating unnecessary CPU-GPU synchronization
+  - **Implementation**: `Phase2_TrainingLoop.cu` syncs every 10th batch via `computeGradNorm(batch_idx % 10 == 0)`
+
+56. **Autograd Function Return Statements (Issue #56, Jan 2026)**: When writing autograd-enabled forward functions that build computation graphs, **ALWAYS return the output Tensor**. A missing return statement causes the local Tensor's destructor to run at function end, which cascades deletion of the entire `grad_fn` chain DURING the forward pass. Symptom: "illegal memory access" in backward kernels because `grad_fn` pointers point to freed memory. Fix: Always explicitly `return output;` from forward functions. C++ compilers often don't warn about missing return statements returning non-void (undefined behavior). The FFN::forward() bug in `Feed_Forward_GPU.cu` caused training crashes for weeks until discovered.
   - **Performance gain**: 10-15x speedup per batch (from 15s to 1-2s) by eliminating unnecessary CPU-GPU synchronization
   - **Implementation**: `Phase2_TrainingLoop.cu` syncs every 10th batch via `computeGradNorm(batch_idx % 10 == 0)`
 

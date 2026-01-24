@@ -21,6 +21,8 @@
 #include "../NumericLoss/NumericLoss_GPU.hpp"
 #include "../../TeacherLogits/TeacherLogits_GPU.hpp"
 #include "../../LogRecorder/LogRecorder.hpp"
+#include "../../../training/Autograd/AutogradTraining.hpp"  // Issue #47: Full autograd forward pass
+#include "../../VerboseLogging.hpp"  // Guards for expensive debug prints
 
 namespace GRIM {
 
@@ -274,7 +276,9 @@ float LanguageModel::computeLossBatch(
 		cache_seq_limit);
 	auto prep_end = std::chrono::high_resolution_clock::now();
 	auto prep_ms = std::chrono::duration<double, std::milli>(prep_end - prep_start).count();
-	fprintf(stderr, "[VOCAB_TIMING] prepareLossBatchInputs: %.2f ms\n", prep_ms);
+	if constexpr (VerboseLogging::ENABLE_VOCAB_TIMING_LOGS) {
+		fprintf(stderr, "[VOCAB_TIMING] prepareLossBatchInputs: %.2f ms\n", prep_ms);
+	}
 
 	orderLog("computeLossBatch.prep",
 		prep.batch_size, prep.max_seq_len,
@@ -348,111 +352,145 @@ float LanguageModel::computeLossBatch(
 	auto copy_start = std::chrono::high_resolution_clock::now();
 	orderLog("computeLossBatch.copy_inputs",
 		batch_size, seq_len, total_tokens, 0);
-	fprintf(stderr, "[GPU_COPY] Copying token_ids: dst=%p src=%p size=%zu bytes\n",
-	        training_state_.cached_token_ids,
-	        prep.padded_input_ids.data(),
-	        total_tokens * sizeof(int));
+	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
+		fprintf(stderr, "[GPU_COPY] Copying token_ids: dst=%p src=%p size=%zu bytes\n",
+		        training_state_.cached_token_ids,
+		        prep.padded_input_ids.data(),
+		        total_tokens * sizeof(int));
+	}
 	CUDA_CHECK(cudaMemcpyAsync(
 		training_state_.cached_token_ids,
 		prep.padded_input_ids.data(),
 		total_tokens * sizeof(int),
 		cudaMemcpyHostToDevice,
 		training_state_.stream_ctrl.getPrimaryStream()));
-	fprintf(stderr, "[GPU_COPY] token_ids copy initiated\n");
+	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
+		fprintf(stderr, "[GPU_COPY] token_ids copy initiated\n");
+	}
 
 	orderLog("computeLossBatch.copy_targets",
 		batch_size, seq_len, total_tokens, 0);
-	fprintf(stderr, "[GPU_COPY] Copying targets: dst=%p src=%p size=%zu bytes\n",
-	        training_state_.cached_targets,
-	        prep.padded_target_ids.data(),
-	        total_tokens * sizeof(int));
+	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
+		fprintf(stderr, "[GPU_COPY] Copying targets: dst=%p src=%p size=%zu bytes\n",
+		        training_state_.cached_targets,
+		        prep.padded_target_ids.data(),
+		        total_tokens * sizeof(int));
+	}
 	CUDA_CHECK(cudaMemcpyAsync(
 		training_state_.cached_targets,
 		prep.padded_target_ids.data(),
 		total_tokens * sizeof(int),
 		cudaMemcpyHostToDevice,
 		training_state_.stream_ctrl.getPrimaryStream()));
-	fprintf(stderr, "[GPU_COPY] targets copy initiated\n");
+	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
+		fprintf(stderr, "[GPU_COPY] targets copy initiated\n");
+	}
 
 	orderLog("computeLossBatch.copy_numeric",
 		batch_size, seq_len, total_tokens, 0);
-	fprintf(stderr, "[GPU_COPY] Checking numeric buffers: values=%p mask=%p\n",
-	        training_state_.cached_token_numeric_values,
-	        training_state_.cached_token_numeric_mask);
+	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
+		fprintf(stderr, "[GPU_COPY] Checking numeric buffers: values=%p mask=%p\n",
+		        training_state_.cached_token_numeric_values,
+		        training_state_.cached_token_numeric_mask);
+	}
 	if (!training_state_.cached_token_numeric_values || !training_state_.cached_token_numeric_mask) {
 		throw std::runtime_error("computeLossBatch: numeric side-channel buffers not initialized");
 	}
-	fprintf(stderr, "[GPU_COPY] Copying numeric_values: dst=%p src=%p size=%zu bytes\n",
-	        training_state_.cached_token_numeric_values,
-	        prep.padded_numeric_values.data(),
-	        total_tokens * sizeof(float));
+	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
+		fprintf(stderr, "[GPU_COPY] Copying numeric_values: dst=%p src=%p size=%zu bytes\n",
+		        training_state_.cached_token_numeric_values,
+		        prep.padded_numeric_values.data(),
+		        total_tokens * sizeof(float));
+	}
 	CUDA_CHECK(cudaMemcpyAsync(
 		training_state_.cached_token_numeric_values,
 		prep.padded_numeric_values.data(),
 		total_tokens * sizeof(float),
 		cudaMemcpyHostToDevice,
 		training_state_.stream_ctrl.getPrimaryStream()));
-	fprintf(stderr, "[GPU_COPY] numeric_values copy initiated\n");
+	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
+		fprintf(stderr, "[GPU_COPY] numeric_values copy initiated\n");
+	}
 	
-	fprintf(stderr, "[GPU_COPY] Copying numeric_mask: dst=%p src=%p size=%zu bytes\n",
-	        training_state_.cached_token_numeric_mask,
-	        prep.padded_numeric_mask.data(),
-	        total_tokens * sizeof(uint8_t));
+	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
+		fprintf(stderr, "[GPU_COPY] Copying numeric_mask: dst=%p src=%p size=%zu bytes\n",
+		        training_state_.cached_token_numeric_mask,
+		        prep.padded_numeric_mask.data(),
+		        total_tokens * sizeof(uint8_t));
+	}
 	CUDA_CHECK(cudaMemcpyAsync(
 		training_state_.cached_token_numeric_mask,
 		prep.padded_numeric_mask.data(),
 		total_tokens * sizeof(uint8_t),
 		cudaMemcpyHostToDevice,
 		training_state_.stream_ctrl.getPrimaryStream()));
-	fprintf(stderr, "[GPU_COPY] numeric_mask copy initiated\n");
+	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
+		fprintf(stderr, "[GPU_COPY] numeric_mask copy initiated\n");
+	}
 
 	// GRMT v4: copy text features
 	constexpr int kTextFeatureDim = 16;  // Must match GRIM::Tokenizer::kTextFeatureDim
-	fprintf(stderr, "[GPU_COPY] Checking text feature buffers: features=%p mask=%p\n",
-	        training_state_.cached_token_text_features,
-	        training_state_.cached_token_text_mask);
-	if (training_state_.cached_token_text_features && training_state_.cached_token_text_mask) {
-		fprintf(stderr, "[GPU_COPY] Copying text_features: dst=%p src=%p size=%zu bytes\n",
+	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
+		fprintf(stderr, "[GPU_COPY] Checking text feature buffers: features=%p mask=%p\n",
 		        training_state_.cached_token_text_features,
-		        prep.padded_text_features.data(),
-		        total_tokens * kTextFeatureDim * sizeof(uint16_t));
+		        training_state_.cached_token_text_mask);
+	}
+	if (training_state_.cached_token_text_features && training_state_.cached_token_text_mask) {
+		if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
+			fprintf(stderr, "[GPU_COPY] Copying text_features: dst=%p src=%p size=%zu bytes\n",
+			        training_state_.cached_token_text_features,
+			        prep.padded_text_features.data(),
+			        total_tokens * kTextFeatureDim * sizeof(uint16_t));
+		}
 		CUDA_CHECK(cudaMemcpyAsync(
 			training_state_.cached_token_text_features,
 			prep.padded_text_features.data(),
 			total_tokens * kTextFeatureDim * sizeof(uint16_t),
 			cudaMemcpyHostToDevice,
 			training_state_.stream_ctrl.getPrimaryStream()));
-		fprintf(stderr, "[GPU_COPY] text_features copy initiated\n");
+		if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
+			fprintf(stderr, "[GPU_COPY] text_features copy initiated\n");
+		}
 		
-		fprintf(stderr, "[GPU_COPY] Copying text_mask: dst=%p src=%p size=%zu bytes\n",
-		        training_state_.cached_token_text_mask,
-		        prep.padded_text_mask.data(),
-		        total_tokens * sizeof(uint8_t));
+		if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
+			fprintf(stderr, "[GPU_COPY] Copying text_mask: dst=%p src=%p size=%zu bytes\n",
+			        training_state_.cached_token_text_mask,
+			        prep.padded_text_mask.data(),
+			        total_tokens * sizeof(uint8_t));
+		}
 		CUDA_CHECK(cudaMemcpyAsync(
 			training_state_.cached_token_text_mask,
 			prep.padded_text_mask.data(),
 			total_tokens * sizeof(uint8_t),
 			cudaMemcpyHostToDevice,
 			training_state_.stream_ctrl.getPrimaryStream()));
-		fprintf(stderr, "[GPU_COPY] text_mask copy initiated\n");
+		if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
+			fprintf(stderr, "[GPU_COPY] text_mask copy initiated\n");
+		}
 	}
 	// GRMT v6: copy byte lengths for per-position loss weighting
 	if (training_state_.cached_token_byte_lengths && !prep.padded_byte_lengths.empty()) {
-		fprintf(stderr, "[GPU_COPY] Copying byte_lengths: dst=%p src=%p size=%zu bytes\n",
-		        training_state_.cached_token_byte_lengths,
-		        prep.padded_byte_lengths.data(),
-		        total_tokens * sizeof(uint16_t));
+		if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
+			fprintf(stderr, "[GPU_COPY] Copying byte_lengths: dst=%p src=%p size=%zu bytes\n",
+			        training_state_.cached_token_byte_lengths,
+			        prep.padded_byte_lengths.data(),
+			        total_tokens * sizeof(uint16_t));
+		}
 		CUDA_CHECK(cudaMemcpyAsync(
 			training_state_.cached_token_byte_lengths,
 			prep.padded_byte_lengths.data(),
 			total_tokens * sizeof(uint16_t),
 			cudaMemcpyHostToDevice,
 			training_state_.stream_ctrl.getPrimaryStream()));
-		fprintf(stderr, "[GPU_COPY] byte_lengths copy initiated\n");
+		if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
+			fprintf(stderr, "[GPU_COPY] byte_lengths copy initiated\n");
+		}
 	}
 	auto copy_end = std::chrono::high_resolution_clock::now();
 	auto copy_ms = std::chrono::duration<double, std::milli>(copy_end - copy_start).count();
-	fprintf(stderr, "[VOCAB_TIMING] GPU copies complete: %.2f ms\n", copy_ms);
+	if constexpr (VerboseLogging::ENABLE_VOCAB_TIMING_LOGS) {
+		fprintf(stderr, "[VOCAB_TIMING] GPU copies complete: %.2f ms\n", copy_ms);
+	}
 
 	training_state_.cached_batch_size = static_cast<int>(batch_size);
 	training_state_.cached_seq_len = static_cast<int>(seq_len);
@@ -461,41 +499,89 @@ float LanguageModel::computeLossBatch(
 	orderLog("computeLossBatch.inputs_copied",
 		batch_size, seq_len, total_tokens, 0);
 
-	orderLog("computeLossBatch.forward_ctx",
+	// ═══════════════════════════════════════════════════════════════════════════
+	// Issue #47 FIX: USE FULL AUTOGRAD FORWARD PASS
+	// ═══════════════════════════════════════════════════════════════════════════
+	// The legacy Forward::executeForward() does NOT build the computation graph!
+	// This caused loss.backward() to only propagate through the loss computation,
+	// NOT through the entire model (encoder layers, embeddings, etc.).
+	// 
+	// Now we use Autograd::executeAutogradForward() which:
+	//   1. Builds computation graph via grad_fn nodes at each operation
+	//   2. Stores intermediate Tensors (not just raw pointers) so graph stays alive
+	//   3. Returns logits Tensor with full grad_fn chain back to embeddings
+	// ═══════════════════════════════════════════════════════════════════════════
+	
+	orderLog("computeLossBatch.autograd_ctx",
 		batch_size, seq_len, total_tokens, 0);
-	auto fwd_ctx = GRIM::Forward::initForwardContext(
-		*this,
-		GRIM::Forward::ForwardMode::TrainingFull,
-		static_cast<int>(batch_size),
-		static_cast<int>(seq_len),
-		GRIM::Forward::ForwardLogitsTarget::FullSequence,
-		nullptr,
-		true,
-		-1,
-		-1,
-		scratch_block_layer_ && scratch_block_layer_->isEnabled(),
-		cfg.activation_quantization.enabled,
-		true);
+	
+	// Get encoder for autograd forward
+	GPUGrimEncoder* autograd_encoder = gpu_encoder;
+	
+	// Get ScratchBlock layer (optional - nullptr if not enabled)
+	ScratchBlockLayer* scratch_block = getScratchBlockLayer();
+	
+	// NOTE: linkEncoderWeightsToTrainingState was removed because TrainingState.encoder_layers
+	// is not populated in the current architecture. The autograd forward uses the encoder's
+	// existing weights directly. Gradients will be written to Tensor.grad fields and copied
+	// to the optimizer's buffers after backward.
+	
+	// Initialize autograd context
+	cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
+	
+	// Issue #47: Store autograd context in training_state_ so it persists for backward()
+	// The context contains intermediate Tensors (encoder_layer_outputs, etc.) that keep
+	// the grad_fn chain alive. Without persisting, backward() would have dangling pointers.
+	training_state_.autograd_ctx = std::make_unique<GRIM::Autograd::AutogradContext>(
+		GRIM::Autograd::initAutogradContext(
+			&cfg,
+			&training_state_,
+			autograd_encoder,
+			scratch_block,
+			training_state_.cublas_handle,
+			stream,
+			static_cast<int>(batch_size),
+			static_cast<int>(seq_len),
+			1.0f,  // grad_scale (will be applied later in backward)
+			0      // step (not used in forward)
+		)
+	);
+	
+	if (!training_state_.autograd_ctx || !training_state_.autograd_ctx->isValid()) {
+		fprintf(stderr, "[ComputeLossBatch] FATAL: Failed to init autograd context\n");
+		throw std::runtime_error("computeLossBatch: autograd context init failed");
+	}
+	
+	// Set ScratchBlock input buffers from TrainingState (populated by prepareLossBatchInputs)
+	training_state_.autograd_ctx->token_numeric_values = training_state_.cached_token_numeric_values;
+	training_state_.autograd_ctx->token_numeric_mask = training_state_.cached_token_numeric_mask;
+	training_state_.autograd_ctx->token_text_features = training_state_.cached_token_text_features;
+	training_state_.autograd_ctx->token_text_mask = training_state_.cached_token_text_mask;
 
 	orderLog("computeLossBatch.forward_start",
 		batch_size, seq_len, total_tokens, 0);
 
-	fprintf(stderr, "[VOCAB_TIMING] Starting forward pass (batch=%zu, seq=%zu, vocab=%d)\n",
-	        batch_size, seq_len, cfg.vocab_size);
+	if constexpr (VerboseLogging::ENABLE_VOCAB_TIMING_LOGS) {
+		fprintf(stderr, "[VOCAB_TIMING] Starting AUTOGRAD forward pass (batch=%zu, seq=%zu, vocab=%d)\n",
+		        batch_size, seq_len, cfg.vocab_size);
+	}
 	auto fwd_start = std::chrono::high_resolution_clock::now();
-	const auto fwd_status = GRIM::Forward::executeForward(fwd_ctx);
 	
+	// Execute autograd forward (builds computation graph)
+	GRIM::Autograd::ForwardResult fwd_result = GRIM::Autograd::executeAutogradForward(*training_state_.autograd_ctx);
 
 	auto fwd_end = std::chrono::high_resolution_clock::now();
 	auto fwd_ms = std::chrono::duration<double, std::milli>(fwd_end - fwd_start).count();
-	fprintf(stderr, "[VOCAB_TIMING] Forward pass complete: %.2f ms\n", fwd_ms);
-	if (fwd_status != GRIM::Forward::ForwardStatus::SUCCESS) {
-		fprintf(stderr, "[ComputeLossBatch] FATAL: forward failed: %s (%s)\n",
-		        GRIM::Forward::statusToString(fwd_status),
-		        fwd_ctx.error_message.c_str());
+	if constexpr (VerboseLogging::ENABLE_VOCAB_TIMING_LOGS) {
+		fprintf(stderr, "[VOCAB_TIMING] AUTOGRAD forward pass complete: %.2f ms\n", fwd_ms);
+	}
+	
+	if (!fwd_result.success) {
+		fprintf(stderr, "[ComputeLossBatch] FATAL: autograd forward failed: %s\n",
+		        fwd_result.error_message.c_str());
 		orderLog("computeLossBatch.forward_fail",
 			batch_size, seq_len, total_tokens, 0);
-		throw std::runtime_error("computeLossBatch: forward failed");
+		throw std::runtime_error("computeLossBatch: autograd forward failed - " + fwd_result.error_message);
 	}
 
 	orderLog("computeLossBatch.forward_done",
@@ -592,7 +678,8 @@ float LanguageModel::computeLossBatch(
 
 	// === FORWARD DIAGNOSTIC: Verify logits and targets before loss computation ===
 	// This helps trace the plateau bug by showing what values reach the loss function
-	{
+	// NOTE: This block causes GPU sync + D2H copies - VERY EXPENSIVE! Guard with ENABLE_FORWARD_DIAG_LOGS
+	if constexpr (VerboseLogging::ENABLE_FORWARD_DIAG_LOGS) {
 		cudaStreamSynchronize(training_state_.stream_ctrl.getPrimaryStream());
 		
 		// Sample first batch's logits to check
@@ -708,31 +795,55 @@ float LanguageModel::computeLossBatch(
 	// Now loss is computed ONCE and the grad_fn is cached for backward.
 	// ═══════════════════════════════════════════════════════════════════════════
 
-	cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
+	// 'stream' already defined above when setting up autograd context
 	
-	// Setup logits tensor wrapping cached_logits (doesn't allocate new memory)
+	// ═══════════════════════════════════════════════════════════════════════════
+	// Issue #47: Use the logits_tensor from autograd forward pass
+	// The autograd_ctx now contains logits_tensor with full grad_fn chain back to embeddings
+	// We set up training_state_.logits_tensor to reference the same data and grad_fn
+	// ═══════════════════════════════════════════════════════════════════════════
+	
+	// Setup training_state_.logits_tensor to reference the autograd forward output
+	// The data is in cached_logits (autograd forward copies there for compatibility)
 	training_state_.logits_tensor.data = training_state_.cached_logits;
-	training_state_.logits_tensor.shape = TensorContract::TensorShape::make_BSM(
-		static_cast<int>(total_tokens), cfg.vocab_size);
+	training_state_.logits_tensor.shape = training_state_.autograd_ctx->logits_tensor.shape;
 	training_state_.logits_tensor.requires_grad = true;
-	training_state_.logits_tensor.is_leaf = false;  // Has parent operations (LM head projection)
+	training_state_.logits_tensor.is_leaf = false;
 	training_state_.logits_tensor.stream = stream;
 	training_state_.logits_tensor.owns_data = false;  // Memory owned by training_state_.cached_logits
 	
-	// Setup gradient buffer for logits
+	// CRITICAL Issue #47: Link the grad_fn from autograd forward
+	// This is what makes backward() propagate through the entire model!
+	// NOTE: We borrow the grad_fn, the autograd_ctx owns it
+	training_state_.logits_tensor.grad_fn = training_state_.autograd_ctx->logits_tensor.grad_fn;
+	training_state_.logits_tensor.owns_grad_fn = false;  // Borrowed from autograd_ctx
+	
+	// Setup gradient buffer for logits (reuse pre-allocated buffer)
+	// ISSUE #59: Use set_grad_from_external() for proper Tensor-based grad
 	if (!training_state_.grad_logits_tensor.data) {
 		throw std::runtime_error("[ComputeLossBatch] grad_logits_tensor.data not allocated!");
 	}
-	training_state_.logits_tensor.grad = training_state_.grad_logits_tensor.data;
-	training_state_.logits_tensor.owns_grad = false;  // TrainingState owns this buffer
+	training_state_.logits_tensor.set_grad_from_external(
+		training_state_.grad_logits_tensor.data,
+		false  // TrainingState owns this buffer, not the grad Tensor
+	);
 	
 	// Compute loss using AUTOGRAD - this attaches grad_fn for backward pass
-	training_state_.loss_tensor = autograd::cross_entropy_loss(
+	// Build autograd LossConfig from the full LossConfig
+	autograd::LossConfig ag_loss_config;
+	const auto& full_loss_cfg = loss_inputs.config;
+	ag_loss_config.focal_alpha = full_loss_cfg.focal.enabled ? full_loss_cfg.focal.alpha : 1.0f;
+	ag_loss_config.focal_gamma = full_loss_cfg.focal.enabled ? full_loss_cfg.focal.gamma : 0.0f;
+	ag_loss_config.smoothing_epsilon = full_loss_cfg.label_smoothing.enabled ? full_loss_cfg.label_smoothing.epsilon : 0.0f;
+	ag_loss_config.entropy_reg_lambda = full_loss_cfg.entropy_reg.enabled ? full_loss_cfg.entropy_reg.lambda : 0.0f;
+	
+	training_state_.loss_tensor = autograd::unified_loss(
 		training_state_.logits_tensor,
 		training_state_.cached_targets,
 		nullptr,  // valid_mask (nullptr = all valid, padding handled by target=-1)
 		static_cast<int>(total_tokens),
 		cfg.vocab_size,
+		ag_loss_config,
 		stream
 	);
 	
@@ -744,9 +855,6 @@ float LanguageModel::computeLossBatch(
 		cudaStreamSynchronize(stream);
 	}
 	training_state_.cached_loss_value = autograd_loss;
-	
-	fprintf(stderr, "[ComputeLossBatch] AUTOGRAD loss=%.6f (valid_tokens=%d)\n", 
-	        autograd_loss, valid_tokens);
 	
 	// Diagnostic: If loss is suspiciously high, dump detailed diagnostics
 	if (autograd_loss > 20.0f) {

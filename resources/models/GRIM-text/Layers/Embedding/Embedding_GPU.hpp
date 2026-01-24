@@ -129,10 +129,16 @@ struct EmbeddingRuntime {
     EmbeddingConfig config{};
     EmbeddingWeights weights{};
 
-    // GPU buffers (owned by runtime)
+    // GPU buffers (may be owned by runtime OR by TrainingTensors)
     float* token_buffer = nullptr;
     float* position_buffer = nullptr;
     float* gamma_buffer = nullptr;
+
+    // Ownership flags: true = runtime owns memory, false = points to external memory (e.g. TrainingTensors)
+    // When false, destroyEmbeddingRuntime() will NOT cudaFree these buffers.
+    bool owns_token_buffer = true;
+    bool owns_position_buffer = true;
+    bool owns_gamma_buffer = true;
 
     // Pre-allocated single-token buffers (avoids malloc per inference call)
     int* single_token_id = nullptr;

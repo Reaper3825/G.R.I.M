@@ -4,6 +4,9 @@
 //  
 //  Two-layer MLP: Linear -> GELU -> Linear
 //  Uses autograd::matmul and autograd::gelu for automatic differentiation
+//  
+//  ISSUE #56 FIX: Forward now accepts ForwardIntermediates& to keep
+//  intermediate tensors alive until backward completes.
 //======================================================//
 
 #pragma once
@@ -16,6 +19,7 @@
 #include <memory>
 
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Shared/TensorContract/ForwardIntermediates.hpp"
 
 namespace GRIM {
 
@@ -85,7 +89,7 @@ public:
     const Tensor& b2() const { return b2_; }
 
     //--------------------------------------------------
-    // Forward Pass - Autograd
+    // Forward Pass - Autograd with ForwardIntermediates (Issue #56 Fix)
     //--------------------------------------------------
     /**
      * FFN forward with autograd tracking:
@@ -94,12 +98,16 @@ public:
      * 
      * Builds compute graph for automatic backward().
      * 
+     * CRITICAL: Intermediate tensors (pre_gelu, post_gelu) are stored in
+     * ForwardIntermediates to keep the autograd graph alive. Without this,
+     * grad_fn objects are destroyed when forward() returns, causing 
+     * use-after-free in backward pass.
+     * 
      * @param input [total_tokens, d_model] - MUST have requires_grad if training
-     * @param cache_pre_gelu (optional) buffer to copy pre-GELU activations [tokens, d_ff]
-     *                       for legacy backward pass compatibility
+     * @param intermediates Storage for intermediate tensors (REQUIRED for autograd)
      * @return output [total_tokens, d_model] with grad_fn attached
      */
-    Tensor forward(const Tensor& input, float* cache_pre_gelu = nullptr);
+    Tensor forward(const Tensor& input, ForwardIntermediates& intermediates);
 
     //--------------------------------------------------
     // NOTE: Backward Pass handled by autograd

@@ -35,6 +35,7 @@
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Shared/TensorContract/ForwardIntermediates.hpp"
 
 namespace GRIM {
 
@@ -153,27 +154,31 @@ public:
     const EncodingConfig& config() const noexcept { return config_; }
     
     //--------------------------------------------------
-    // Forward Pass - Autograd
-    // NOTE: backward() handled by autograd via output.backward()
-    //       OR by legacy BackwardPhase2_Encoder.cu via cached buffers
+    // Forward Pass - Pure Autograd with ForwardIntermediates
+    // backward() handled automatically via output.backward()
     //--------------------------------------------------
     /**
-     * Encoder forward with autograd tracking:
+     * Encoder forward with autograd tracking (Issue #56 Fix)
+     * 
+     * Architecture:
      *   ln1 = RMSNorm(input)
      *   attn_out = Attention(ln1) + input  (residual)
      *   ln2 = RMSNorm(attn_out)
      *   output = FFN(ln2) + attn_out  (residual)
      * 
-     * Builds compute graph for automatic backward().
+     * CRITICAL: Caller MUST provide ForwardIntermediates storage for this layer.
+     * All intermediate tensors are moved to the storage to keep the autograd
+     * graph alive until backward completes. Without this, grad_fn objects are
+     * destroyed when this function returns, causing use-after-free in backward.
      * 
      * @param input [total_tokens, d_model] - encoder input (from embedding or prev layer)
      * @param seq_len sequence length (for attention masking)
      * @param stream CUDA stream for execution
-     * @param cache (optional) EncoderLayerCache to populate for legacy backward
+     * @param intermediates Storage for this layer's intermediate tensors (REQUIRED for autograd)
      * @return output [total_tokens, d_model] with grad_fn attached
      */
     Tensor forward(const Tensor& input, int seq_len, cudaStream_t stream,
-                   struct EncoderLayerCache* cache = nullptr);
+                   struct ForwardIntermediates& intermediates);
     
     //--------------------------------------------------
     // Weight Management
@@ -231,8 +236,9 @@ public:
     // Raw data accessors (for serialization - returns Tensor.data)
     float* getRMS1Gamma() { return rms1_gamma_.data; }
     float* getRMS2Gamma() { return rms2_gamma_.data; }
-    float* getRMS1GammaGrad() { return rms1_gamma_.grad; }
-    float* getRMS2GammaGrad() { return rms2_gamma_.grad; }
+    // ISSUE #59: Use grad_data() accessor
+    float* getRMS1GammaGrad() { return rms1_gamma_.grad_data(); }
+    float* getRMS2GammaGrad() { return rms2_gamma_.grad_data(); }
     
     // Attention weights - raw data (for serialization)
     float* getAttnWqkv() { return W_qkv_.data; }
@@ -240,11 +246,12 @@ public:
     float* getAttnWo() { return W_o_.data; }
     float* getAttnBo() { return b_o_.data; }
     
-    // Attention weight gradients (from Tensor.grad)
-    float* getAttnWqkvGrad() { return W_qkv_.grad; }
-    float* getAttnBqkvGrad() { return b_qkv_.grad; }
-    float* getAttnWoGrad() { return W_o_.grad; }
-    float* getAttnBoGrad() { return b_o_.grad; }
+    // Attention weight gradients (from Tensor.grad_data())
+    // ISSUE #59: Use grad_data() accessor
+    float* getAttnWqkvGrad() { return W_qkv_.grad_data(); }
+    float* getAttnBqkvGrad() { return b_qkv_.grad_data(); }
+    float* getAttnWoGrad() { return W_o_.grad_data(); }
+    float* getAttnBoGrad() { return b_o_.grad_data(); }
     
     // FFN weight raw data (for serialization, owned by FeedForwardLayer's Tensors)
     float* getFFNW1() { return ffn_ ? ffn_->W1().data : nullptr; }
@@ -252,11 +259,12 @@ public:
     float* getFFNW2() { return ffn_ ? ffn_->W2().data : nullptr; }
     float* getFFNB2() { return ffn_ ? ffn_->b2().data : nullptr; }
     
-    // FFN gradient raw data (from Tensor.grad)
-    float* getFFNW1Grad() { return ffn_ ? ffn_->W1().grad : nullptr; }
-    float* getFFNB1Grad() { return ffn_ ? ffn_->b1().grad : nullptr; }
-    float* getFFNW2Grad() { return ffn_ ? ffn_->W2().grad : nullptr; }
-    float* getFFNB2Grad() { return ffn_ ? ffn_->b2().grad : nullptr; }
+    // FFN gradient raw data (from Tensor.grad_data())
+    // ISSUE #59: Use grad_data() accessor
+    float* getFFNW1Grad() { return ffn_ ? ffn_->W1().grad_data() : nullptr; }
+    float* getFFNB1Grad() { return ffn_ ? ffn_->b1().grad_data() : nullptr; }
+    float* getFFNW2Grad() { return ffn_ ? ffn_->W2().grad_data() : nullptr; }
+    float* getFFNB2Grad() { return ffn_ ? ffn_->b2().grad_data() : nullptr; }
     
     // Direct access to FFN layer (for autograd forward)
     FeedForwardLayer* getFfnLayer() { return ffn_.get(); }

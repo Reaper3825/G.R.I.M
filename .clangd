@@ -27,12 +27,13 @@ CompileFlags:
     - "-ID:/G.R.I.M/resources/models/GRIM-text/Shared/Activations"
     - "-ID:/G.R.I.M/resources/models/GRIM-text/Shared/HyperParameters"
     # Layers subdirectories
-    - "-ID:/G.R.I.M/resources/models/GRIM-text/Layers/BackwardOps"
     - "-ID:/G.R.I.M/resources/models/GRIM-text/Layers/Embedding"
     - "-ID:/G.R.I.M/resources/models/GRIM-text/Layers/FlashAttention"
     - "-ID:/G.R.I.M/resources/models/GRIM-text/Layers/Attention"
     - "-ID:/G.R.I.M/resources/models/GRIM-text/Layers/LayernNorm"
     - "-ID:/G.R.I.M/resources/models/GRIM-text/Layers/Serialization"
+    # Autograd training
+    - "-ID:/G.R.I.M/resources/models/GRIM-text/training/Autograd"
     # Control directory (for ai_config_paths.hpp)
     - "-ID:/G.R.I.M/control"
     # Main GRIM includes

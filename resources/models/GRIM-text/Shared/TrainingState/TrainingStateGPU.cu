@@ -6,6 +6,7 @@
 #include "TrainingState_GPU.hpp"
 #include "TrainingTensors.hpp"  // Autograd tensor system
 #include "../../GRIM/grim_language_model_cuda.hpp"
+#include "../../training/Autograd/AutogradTraining.hpp"  
 
 #include <stdexcept>
 #include <string>
@@ -121,10 +122,16 @@ TrainingState::~TrainingState() {
 	TeacherLogits::release(reference_logits);
 	
 	// Free optimizer states
-	freeOptimizerStates();;
+	freeOptimizerStates();
 	
 	// Free guess cache buffers (GRIM-TS)
 	freeGuessCacheBuffers();
+	
+	// Issue #60: Free debug gradient attribution buffers
+	freeDebugGradBuffers();
+	
+	// Issue #60 FIX: Free PCGrad buffer for tied weights
+	freePCGradBuffer();
 	
 	// StreamController owns and destroys streams - no manual cleanup needed
 	if (cublas_handle) cublasDestroy(cublas_handle);
@@ -365,16 +372,65 @@ void TrainingState::initializeAutogradTensors(
 			"use_autograd_tensors is already true");
 	}
 	
-	// AUTOGRAD MIGRATION COMPLETE (Jan 2026):
-	// Encoder layers now own their own Tensors via allocateWeights() which calls ensure_grad().
-	// TrainingTensors is only created if needed for backwards compatibility with tests.
-	// The encoder's getFFNW1Grad(), getRMS1GammaGrad() etc are the single source of truth.
-	tensors_ = nullptr;
+	// ═══════════════════════════════════════════════════════════════
+	// PROPER FIX: TrainingTensors OWNS all parameter memory
+	// ═══════════════════════════════════════════════════════════════
+	// TrainingTensors creates Tensors via Tensor::zeros() which OWNS GPU memory.
+	// This replaces the broken pattern of:
+	//   EmbeddingRuntime: cudaMalloc → token_buffer
+	//   InitTrainingState: Tensor::from_ptr(token_buffer) ← WRAPPING!
+	//
+	// After this, embedding_weights/position_embedding_weights/lm_head_weights
+	// can be accessed via tensors_->embedding_weights etc.
+	tensors_ = std::make_unique<TrainingTensors>();
+	tensors_->initializeParams(
+		vocab_sz, d_mod, d_ffn,
+		n_layers, n_heads, n_kv_heads,
+		max_seq, tie_emb, bias,
+		stream
+	);
+	
+	// Also copy references to the TrainingState Tensor members for backwards compatibility
+	// with code that accesses training_state_.embedding_weights directly
+	embedding_weights = Tensor::from_ptr(
+		tensors_->embedding_weights.data,
+		tensors_->embedding_weights.shape,
+		false,  // doesn't take ownership (TrainingTensors owns it)
+		true    // requires_grad
+	);
+	// ISSUE #59: Share the grad Tensor object (shared_ptr) for proper reference counting
+	embedding_weights.share_grad(tensors_->embedding_weights);
+	
+	position_embedding_weights = Tensor::from_ptr(
+		tensors_->position_embedding_weights.data,
+		tensors_->position_embedding_weights.shape,
+		false,
+		true
+	);
+	// ISSUE #59: Share the grad Tensor object
+	position_embedding_weights.share_grad(tensors_->position_embedding_weights);
+	
+	lm_head_weights = Tensor::from_ptr(
+		tensors_->lm_head_weights.data,
+		tensors_->lm_head_weights.shape,
+		false,
+		true
+	);
+	// BUG FIX: When tie_embeddings=true, lm_head_weights.grad MUST alias embedding_weights.grad!
+	// TrainingTensors sets this up, but we must preserve it when copying to TrainingState.
+	if (tie_emb) {
+		// Weight tying: share grad Tensor with embedding_weights (which we just set above)
+		// ISSUE #59: Use share_grad() for proper shared_ptr semantics
+		lm_head_weights.share_grad(embedding_weights);
+	} else {
+		lm_head_weights.share_grad(tensors_->lm_head_weights);
+	}
 	
 	use_autograd_tensors = true;
 	
-	fprintf(stdout, "[INFO] TrainingState: Autograd system enabled (use_autograd_tensors=true). "
-	        "Encoder gradients via enc->getFFNW1Grad(), enc->getRMS1GammaGrad() etc.\n");
+	fprintf(stdout, "[INFO] TrainingState: TrainingTensors initialized (%d params, %zu layers). "
+	        "Memory owned by Tensor::zeros(), not EmbeddingRuntime.\n",
+	        vocab_sz, static_cast<size_t>(n_layers));
 }
 
 //======================================================//
@@ -424,6 +480,213 @@ void TrainingState::zeroIntermediateGrads(cudaStream_t stream) {
 	
 	// Issue #43: Centering scratch (not strictly a gradient, but needs zeroing)
 	safe_zero(centering_scratch_tensor, "centering_scratch");
+}
+
+//======================================================//
+//  ISSUE #60 FIX: PCGrad Buffer for Tied Weights
+//======================================================//
+
+void TrainingState::allocatePCGradBuffer(int vocab_size, int d_model) {
+	if (pcgrad_temp_buffer) {
+		freePCGradBuffer();
+	}
+	
+	pcgrad_buffer_size = static_cast<size_t>(vocab_size) * d_model;
+	const size_t bytes = pcgrad_buffer_size * sizeof(float);
+	
+	cudaStream_t stream = stream_ctrl.isInitialized() 
+		? stream_ctrl.getPrimaryStream() 
+		: nullptr;
+	
+	cudaError_t err = cudaMalloc(&pcgrad_temp_buffer, bytes);
+	if (err != cudaSuccess) {
+		throw std::runtime_error("[TrainingState::allocatePCGradBuffer] cudaMalloc failed: " +
+			std::string(cudaGetErrorString(err)));
+	}
+	
+	// Zero the buffer
+	if (stream) {
+		cudaMemsetAsync(pcgrad_temp_buffer, 0, bytes, stream);
+	} else {
+		cudaMemset(pcgrad_temp_buffer, 0, bytes);
+	}
+	
+	// Set global pointers for EmbeddingGradFn to use
+	extern float* g_pcgrad_temp_buffer;
+	extern size_t g_pcgrad_buffer_size;
+	g_pcgrad_temp_buffer = pcgrad_temp_buffer;
+	g_pcgrad_buffer_size = pcgrad_buffer_size;
+	
+	fprintf(stdout, "[PCGRAD] Allocated PCGrad buffer: %zu elements (%zu MB)\n",
+	        pcgrad_buffer_size, bytes / (1024 * 1024));
+}
+
+void TrainingState::freePCGradBuffer() {
+	if (pcgrad_temp_buffer) {
+		cudaFree(pcgrad_temp_buffer);
+		pcgrad_temp_buffer = nullptr;
+		
+		// Clear global pointers
+		extern float* g_pcgrad_temp_buffer;
+		extern size_t g_pcgrad_buffer_size;
+		g_pcgrad_temp_buffer = nullptr;
+		g_pcgrad_buffer_size = 0;
+	}
+	pcgrad_buffer_size = 0;
+}
+
+//======================================================//
+//  DEBUG: Gradient Attribution Buffers (Issue #60)
+//======================================================//
+
+void TrainingState::allocateDebugGradBuffers(int vocab_size, int d_model) {
+	if (debug_lm_head_only_grad || debug_embedding_only_grad) {
+		freeDebugGradBuffers();  // Clean up any existing buffers
+	}
+	
+	debug_grad_buffer_size = static_cast<size_t>(vocab_size) * d_model;
+	const size_t bytes = debug_grad_buffer_size * sizeof(float);
+	
+	cudaStream_t stream = stream_ctrl.isInitialized() 
+		? stream_ctrl.getPrimaryStream() 
+		: nullptr;
+	
+	cudaError_t err1 = cudaMalloc(&debug_lm_head_only_grad, bytes);
+	if (err1 != cudaSuccess) {
+		throw std::runtime_error("[TrainingState::allocateDebugGradBuffers] cudaMalloc lm_head failed: " +
+			std::string(cudaGetErrorString(err1)));
+	}
+	
+	cudaError_t err2 = cudaMalloc(&debug_embedding_only_grad, bytes);
+	if (err2 != cudaSuccess) {
+		cudaFree(debug_lm_head_only_grad);
+		debug_lm_head_only_grad = nullptr;
+		throw std::runtime_error("[TrainingState::allocateDebugGradBuffers] cudaMalloc emb failed: " +
+			std::string(cudaGetErrorString(err2)));
+	}
+	
+	// Zero the buffers
+	if (stream) {
+		cudaMemsetAsync(debug_lm_head_only_grad, 0, bytes, stream);
+		cudaMemsetAsync(debug_embedding_only_grad, 0, bytes, stream);
+	} else {
+		cudaMemset(debug_lm_head_only_grad, 0, bytes);
+		cudaMemset(debug_embedding_only_grad, 0, bytes);
+	}
+	
+	fprintf(stdout, "[DEBUG] Allocated gradient attribution buffers: %zu elements (%zu MB each)\n",
+	        debug_grad_buffer_size, bytes / (1024 * 1024));
+}
+
+void TrainingState::freeDebugGradBuffers() {
+	if (debug_lm_head_only_grad) {
+		cudaFree(debug_lm_head_only_grad);
+		debug_lm_head_only_grad = nullptr;
+	}
+	if (debug_embedding_only_grad) {
+		cudaFree(debug_embedding_only_grad);
+		debug_embedding_only_grad = nullptr;
+	}
+	debug_grad_buffer_size = 0;
+}
+
+void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream) {
+	if (!debug_gradient_attribution || !debug_lm_head_only_grad || !debug_embedding_only_grad) {
+		return;  // Debug mode not enabled or buffers not allocated
+	}
+	
+	// TOKEN 277 = SPACE (the one causing mode collapse)
+	constexpr int TARGET_TOKEN = 277;
+	
+	// Get d_model from the embedding shape - BSM layout uses Shape2D with (rows=vocab, cols=d_model)
+	int d_model = 768;  // Default fallback
+	if (embedding_weights.shape.is_flat()) {
+		d_model = embedding_weights.shape.flat.cols;
+	}
+	const int vocab_size = static_cast<int>(debug_grad_buffer_size / d_model);
+	
+	if (TARGET_TOKEN >= vocab_size) {
+		fprintf(stderr, "[DEBUG] Token %d out of range (vocab=%d)\n", TARGET_TOKEN, vocab_size);
+		return;
+	}
+	
+	// Sync stream to ensure backward pass is complete
+	cudaStreamSynchronize(stream);
+	
+	// Offset for token 277's row in the weight gradient matrix
+	const size_t row_offset = static_cast<size_t>(TARGET_TOKEN) * d_model;
+	const size_t row_bytes = d_model * sizeof(float);
+	
+	// Copy row 277 from each debug buffer to host
+	// NOTE: debug_lm_head_only_grad = LM head contribution only (captured AFTER LM head backward)
+	//       debug_embedding_only_grad = Raw embedding contribution (captured BEFORE PCGrad projection)
+	// With PCGrad: final_grad = g_lm + orthogonal(g_emb)
+	std::vector<float> lm_grad_277(d_model);
+	std::vector<float> raw_emb_grad_277(d_model);  // Pre-projection embedding gradient
+	
+	cudaMemcpy(lm_grad_277.data(), debug_lm_head_only_grad + row_offset, row_bytes, cudaMemcpyDeviceToHost);
+	cudaMemcpy(raw_emb_grad_277.data(), debug_embedding_only_grad + row_offset, row_bytes, cudaMemcpyDeviceToHost);
+	
+	// Get the ACTUAL final gradient from the shared buffer (this is post-PCGrad!)
+	std::vector<float> final_grad_277(d_model);
+	float* shared_grad_ptr = embedding_weights.grad_data();
+	if (shared_grad_ptr) {
+		cudaMemcpy(final_grad_277.data(), shared_grad_ptr + row_offset, row_bytes, cudaMemcpyDeviceToHost);
+	}
+	
+	// Compute statistics for LM head gradient
+	float lm_sum = 0, lm_sq_sum = 0;
+	for (int i = 0; i < d_model; ++i) {
+		lm_sum += lm_grad_277[i];
+		lm_sq_sum += lm_grad_277[i] * lm_grad_277[i];
+	}
+	const float lm_norm = sqrtf(lm_sq_sum);
+	
+	// Compute statistics for raw embedding gradient (pre-projection)
+	float raw_emb_sum = 0, raw_emb_sq_sum = 0;
+	for (int i = 0; i < d_model; ++i) {
+		raw_emb_sum += raw_emb_grad_277[i];
+		raw_emb_sq_sum += raw_emb_grad_277[i] * raw_emb_grad_277[i];
+	}
+	const float raw_emb_norm = sqrtf(raw_emb_sq_sum);
+	
+	// Compute statistics for FINAL gradient (post-PCGrad)
+	float final_sum = 0, final_sq_sum = 0;
+	for (int i = 0; i < d_model; ++i) {
+		final_sum += final_grad_277[i];
+		final_sq_sum += final_grad_277[i] * final_grad_277[i];
+	}
+	const float final_norm = sqrtf(final_sq_sum);
+	
+	// Compute cosine similarity between LM and raw embedding gradients
+	float lm_emb_dot = 0;
+	for (int i = 0; i < d_model; ++i) {
+		lm_emb_dot += lm_grad_277[i] * raw_emb_grad_277[i];
+	}
+	const float cosine_sim = (lm_norm > 1e-8f && raw_emb_norm > 1e-8f) 
+	                       ? lm_emb_dot / (lm_norm * raw_emb_norm) : 0.0f;
+	
+	// Check if they're canceling or reinforcing
+	const char* interaction = (cosine_sim > 0.5f) ? "REINFORCING" 
+	                        : (cosine_sim < -0.5f) ? "CANCELING" 
+	                        : "ORTHOGONAL";
+	
+	// Check if PCGrad preserved the gradient (final should ≈ lm when emb opposes)
+	const char* pcgrad_status = (final_norm > lm_norm * 0.5f) ? "PRESERVED" : "LOST";
+	
+	fprintf(stdout, "\n[GRAD_ATTRIB] batch=%d TOKEN_277 (SPACE):\n", batch_idx);
+	fprintf(stdout, "  LM_HEAD_ONLY:    sum=%.6f norm=%.6f mean=%.6e\n", 
+	        lm_sum, lm_norm, lm_sum / d_model);
+	fprintf(stdout, "  RAW_EMBEDDING:   sum=%.6f norm=%.6f mean=%.6e\n", 
+	        raw_emb_sum, raw_emb_norm, raw_emb_sum / d_model);
+	fprintf(stdout, "  COSINE(lm,emb):  %.4f ← %s\n", cosine_sim, interaction);
+	fprintf(stdout, "  FINAL_GRADIENT:  sum=%.6f norm=%.6f mean=%.6e ← %s\n", 
+	        final_sum, final_norm, final_sum / d_model, pcgrad_status);
+	fprintf(stdout, "  DIRECTION:       LM wants %s, EMB wants %s\n",
+	        lm_sum > 0 ? "INCREASE" : "DECREASE",
+	        raw_emb_sum > 0 ? "INCREASE" : "DECREASE");
+	fprintf(stdout, "\n");
+	fflush(stdout);
 }
 
 } // namespace GRIM
