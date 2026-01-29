@@ -87,6 +87,31 @@ __global__ void numericLossKernel(const float* __restrict__ predictions,
 	}
 }
 
+// ============================================================================
+// Issue #74 FIX: Scale numeric gradients by 1/count to match mean reduction
+// ============================================================================
+// The numericLossKernel computes gradients as: grad_predictions[i] = grad * loss_weight
+// But the loss is averaged: loss_avg = loss_sum / count
+// Issue #85 FIX: Scale gradients by 1/total_tokens to match text loss normalization
+// ============================================================================
+// Previously (Issue #74), we scaled by 1/numeric_count, but this created a magnitude
+// imbalance: text loss divides by ~7000 tokens, numeric loss divided by ~400 atoms.
+// Result: numeric gradients were ~18x larger than text gradients!
+//
+// The correct fix is to scale by 1/total_tokens so both losses have the same 
+// gradient magnitude normalization. When loss_weight=1.0, this gives equal influence.
+// ============================================================================
+__global__ void scaleNumericGradKernel(
+	float* __restrict__ grad_predictions,
+	int total_tokens
+) {
+	const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+	if (idx >= total_tokens) return;
+	
+	// Scale by 1/total_tokens to match text loss normalization
+	grad_predictions[idx] *= (1.0f / static_cast<float>(total_tokens));
+}
+
 } // namespace
 
 bool launchNumericLoss(const NumericLossInputs& inputs,
@@ -124,6 +149,16 @@ bool launchNumericLoss(const NumericLossInputs& inputs,
 		inputs.log_scale,
 		inputs.log_max,
 		inputs.loss_weight);
+
+	// Issue #85 FIX: Scale gradients by 1/total_tokens to match text loss normalization
+	// Previously we scaled by 1/numeric_count (Issue #74), but this created imbalance:
+	// text loss divides by ~7000 tokens, numeric divided by ~400 atoms → 18x larger!
+	// Now we scale by 1/total_tokens for matching normalization.
+	// 
+	// NOTE: We no longer need to sync/read count since we use total_tokens directly.
+	scaleNumericGradKernel<<<blocks, kBlockSize, 0, stream>>>(
+		outputs.grad_predictions,
+		inputs.total_tokens);
 
 	return cudaGetLastError() == cudaSuccess;
 }

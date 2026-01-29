@@ -324,4 +324,11 @@ private:
 void setEncoderW277Reference(const float* lm_weights, int vocab_size, int d_model, cudaStream_t stream);
 void resetEncoderDiagCount();
 
+//======================================================//
+// Issue #77 DIAGNOSTIC: ln1_out Statistics Logging
+// Call resetIssue77FwdDiag() at start of each training batch
+// to reset per-batch diagnostic counters
+//======================================================//
+void resetIssue77FwdDiag();
+
 } // namespace GRIM

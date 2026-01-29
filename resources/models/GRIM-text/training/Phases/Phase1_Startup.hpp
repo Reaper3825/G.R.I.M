@@ -43,7 +43,6 @@
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/Dynamic_LR/DynamicLR.hpp"
 #include "../../Shared/SoftRestart/SoftRestart.hpp"
-#include "../../Shared/GradAccumulationController/GradAccumulationController_Integration.hpp"
 #include "../../Shared/RareTokens/RareTokens_GPU.hpp"
 #include "../../Shared/Loss/LossContext/LossContext.hpp"
 #include "../../Shared/Telemetry/TelemetryLattice_GPU.hpp"
@@ -175,7 +174,9 @@ struct OptimizerContext {
     GRIM::OptimizerState optimizer_state;
     GRIM::DynamicLR::DynamicLRController dynamic_lr_controller;
     GRIM::SoftRestart::SoftRestartController soft_restart_controller;
-    std::unique_ptr<GRIM::ModelGradAccumulationController> grad_controller;
+    // Gradient accumulation now tracked via ctx.config.hyperparameters.gradient_accumulation_steps
+    // and current_micro_step counter in TrainingContext (not a separate controller)
+    int current_micro_step = 0;  // Tracks position within accumulation window [0, accum_steps)
 };
 
 /**

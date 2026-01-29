@@ -46,7 +46,9 @@ struct GPUGrimEncoder::Impl {
 
         for (int i = 0; i < config.num_layers; ++i) {
             gpu_layers_.emplace_back(std::make_unique<GPUEncoderLayer>(enc_cfg));
-            gpu_layers_.back()->ensureWeightStorage();
+            // NOTE: DO NOT call ensureWeightStorage() here!
+            // TrainingOps.cu will call useExternalWeights() to point to TrainingTensors.
+            // Rule 20: No backwards compatibility - single source of truth for weights.
         }
     }
 };

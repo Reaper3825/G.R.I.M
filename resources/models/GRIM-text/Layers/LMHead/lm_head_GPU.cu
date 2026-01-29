@@ -253,6 +253,34 @@ inline void centerHiddenStates(
 
 } // namespace
 
+// ============================================================================
+// ISSUE #37/#43 FIX: Public API for centering hidden states
+// Called by AutogradTraining.cu BEFORE autograd::matmul() for LM head
+// ============================================================================
+void launchCenterHiddenStates(
+    const float* input,
+    float* output,
+    int d_model,
+    int total_tokens,
+    cudaStream_t stream
+) {
+    // RULE 20: Fail loud
+    if (!input) {
+        throw std::runtime_error("[launchCenterHiddenStates] input is NULL");
+    }
+    if (!output) {
+        throw std::runtime_error("[launchCenterHiddenStates] output is NULL");
+    }
+    if (d_model <= 0) {
+        throw std::runtime_error("[launchCenterHiddenStates] d_model must be > 0, got " + std::to_string(d_model));
+    }
+    if (total_tokens <= 0) {
+        return;  // Nothing to do
+    }
+    
+    centerHiddenStates(input, output, d_model, total_tokens, stream);
+}
+
 void launchLMHeadForward(const LMHeadForwardParams& params) {
 	// RULE 20: Fail loud - validate all tensor views upfront
 	params.validate("LMHead::forward");

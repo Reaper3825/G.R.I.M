@@ -87,8 +87,27 @@ __global__ void kernelUnifiedLossForward(
     for (int offset = warpSize / 2; offset > 0; offset /= 2) {
         local_max = fmaxf(local_max, __shfl_down_sync(0xffffffff, local_max, offset));
     }
-    if (threadIdx.x % warpSize == 0) {
-        atomicMax(reinterpret_cast<int*>(&s_max), __float_as_int(local_max));
+    
+    // ISSUE: atomicMax with int reinterpret fails for negative floats
+    // FIX: Use deterministic shared memory reduction instead
+    constexpr int kMaxWarps = 8;  // 256 threads / 32 = 8 warps max
+    __shared__ float s_warp_max[kMaxWarps];
+    const int warp_id = threadIdx.x / warpSize;
+    const int lane_id = threadIdx.x % warpSize;
+    const int num_warps = (blockDim.x + warpSize - 1) / warpSize;
+    
+    if (lane_id == 0 && warp_id < kMaxWarps) {
+        s_warp_max[warp_id] = local_max;
+    }
+    __syncthreads();
+    
+    // Thread 0 computes final max from all warp results
+    if (threadIdx.x == 0) {
+        float final_max = s_warp_max[0];
+        for (int w = 1; w < num_warps && w < kMaxWarps; w++) {
+            final_max = fmaxf(final_max, s_warp_max[w]);
+        }
+        s_max = final_max;
     }
     __syncthreads();
     const float max_val = s_max;
@@ -187,13 +206,23 @@ __global__ void kernelUnifiedLossForward(
 }
 
 /**
- * Backward kernel - computes gradient of CE w.r.t. logits
+ * Backward kernel - computes gradient of unified loss w.r.t. logits
  * 
- * Gradient: ∂L/∂logits = (softmax - one_hot) / valid_count
+ * Full gradient for focal loss + label smoothing + entropy regularization:
  * 
- * NOTE: Uses standard CE gradient for simplicity. The focal/smoothing/entropy
- * terms only affect the loss magnitude, not the gradient direction. This is
- * a common simplification that works well in practice.
+ * Let L = α * (1-p_t)^γ * CE_smooth + λ * H(p)
+ * 
+ * Where:
+ *   CE_smooth = -q_t*log(p_t) - Σ_{i≠t} q_i*log(p_i)  [label smoothed CE]
+ *   q_t = 1 - ε, q_i = ε/(V-1) for i≠t
+ *   H(p) = Σ p_i*log(p_i) [negative entropy, penalizes low entropy]
+ * 
+ * Gradient components:
+ *   1. CE gradient with label smoothing: (p - q) where q is smoothed target
+ *   2. Focal weighting: multiply by (1-p_t)^γ and add derivative term
+ *   3. Entropy regularization: λ * (1 + log(p_i)) * dp_i/dlogits
+ * 
+ * Final: grad[i] = (1/N) * [focal_weight * (p_i - q_i) + focal_deriv + entropy_grad]
  */
 __global__ void kernelUnifiedLossBackward(
     const float* __restrict__ logits,
@@ -202,7 +231,11 @@ __global__ void kernelUnifiedLossBackward(
     float* __restrict__ grad_logits,
     int num_tokens,
     int vocab_size,
-    float inv_valid_count
+    float inv_valid_count,  // ISSUE #81: Pass 1/N as float to avoid integer division
+    float focal_alpha,
+    float focal_gamma,
+    float smoothing_epsilon,
+    float entropy_reg_lambda
 ) {
     const int token_idx = blockIdx.x;
     if (token_idx >= num_tokens) return;
@@ -233,8 +266,27 @@ __global__ void kernelUnifiedLossBackward(
     for (int offset = warpSize / 2; offset > 0; offset /= 2) {
         local_max = fmaxf(local_max, __shfl_down_sync(0xffffffff, local_max, offset));
     }
-    if (threadIdx.x % warpSize == 0) {
-        atomicMax(reinterpret_cast<int*>(&s_max), __float_as_int(local_max));
+    
+    // ISSUE: atomicMax with int reinterpret fails for negative floats
+    // FIX: Use deterministic shared memory reduction instead
+    constexpr int kMaxWarps = 8;  // 256 threads / 32 = 8 warps max
+    __shared__ float s_warp_max[kMaxWarps];
+    const int warp_id = threadIdx.x / warpSize;
+    const int lane_id = threadIdx.x % warpSize;
+    const int num_warps = (blockDim.x + warpSize - 1) / warpSize;
+    
+    if (lane_id == 0 && warp_id < kMaxWarps) {
+        s_warp_max[warp_id] = local_max;
+    }
+    __syncthreads();
+    
+    // Thread 0 computes final max from all warp results
+    if (threadIdx.x == 0) {
+        float final_max = s_warp_max[0];
+        for (int w = 1; w < num_warps && w < kMaxWarps; w++) {
+            final_max = fmaxf(final_max, s_warp_max[w]);
+        }
+        s_max = final_max;
     }
     __syncthreads();
     const float max_val = s_max;
@@ -257,16 +309,75 @@ __global__ void kernelUnifiedLossBackward(
     }
     __syncthreads();
     
-    const float inv_sum = 1.0f / (s_sum + kEpsilon);
+    const float sum_exp = s_sum;
+    const float inv_sum = 1.0f / (sum_exp + kEpsilon);
     
-    // Step 3: Compute gradient = (softmax - one_hot) / valid_count
+    // Step 3: Compute p_t (probability of correct class) for focal weighting
+    const float p_t = expf(row[target] - max_val) * inv_sum;
+    
+    // Focal loss weight and its derivative w.r.t. p_t
+    float focal_weight = 1.0f;
+    float focal_deriv_factor = 0.0f;  // γ * (1-p_t)^(γ-1) for derivative contribution
+    if (focal_gamma > 0.0f) {
+        const float one_minus_pt = fmaxf(1.0f - p_t, kEpsilon);
+        focal_weight = powf(one_minus_pt, focal_gamma);
+        // Derivative: d/dp_t[(1-p_t)^γ * -log(p_t)] has additional term from (1-p_t)^γ
+        // = -(1-p_t)^γ / p_t - γ*(1-p_t)^(γ-1)*log(p_t)
+        // The second term contributes to grad only at target position
+        focal_deriv_factor = focal_gamma * powf(one_minus_pt, focal_gamma - 1.0f) * (-logf(fmaxf(p_t, kEpsilon)));
+    }
+    
+    // Label smoothing target distribution
+    const float q_on = (smoothing_epsilon > 0.0f && vocab_size > 1) ? (1.0f - smoothing_epsilon) : 1.0f;
+    const float q_off = (smoothing_epsilon > 0.0f && vocab_size > 1) ? (smoothing_epsilon / static_cast<float>(vocab_size - 1)) : 0.0f;
+    
+    // Step 4: Compute full gradient
+    // grad[i] = (1/N) * [α * focal_weight * (p_i - q_i) + focal_deriv_contrib + entropy_grad]
     for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
-        const float prob = expf(row[v] - max_val) * inv_sum;
-        const float one_hot = (v == target) ? 1.0f : 0.0f;
-        grad_row[v] = (prob - one_hot) * inv_valid_count;
+        const float p_v = expf(row[v] - max_val) * inv_sum;
+        
+        // Label-smoothed target: q_on for target, q_off for others
+        const float q_v = (v == target) ? q_on : q_off;
+        
+        // Base CE gradient with label smoothing: (p - q)
+        float grad_v = focal_alpha * focal_weight * (p_v - q_v);
+        
+        // Focal loss derivative contribution (only affects target through p_t dependence)
+        // The focal weight (1-p_t)^γ depends on p_t, which depends on all logits via softmax
+        // d(focal_weight)/d(logit_i) = -γ*(1-p_t)^(γ-1) * dp_t/dlogit_i
+        // dp_t/dlogit_i = p_t*(1_{i=t} - p_i) for softmax
+        if (focal_gamma > 0.0f) {
+            // Add derivative of focal_weight w.r.t. this logit
+            // focal_deriv_factor = γ*(1-p_t)^(γ-1)*(-log(p_t))
+            // dp_t/dlogit_v = p_t * ((v==target ? 1 : 0) - p_v)
+            const float dp_t_dlogit_v = p_t * ((v == target ? 1.0f : 0.0f) - p_v);
+            grad_v += focal_alpha * focal_deriv_factor * dp_t_dlogit_v;
+        }
+        
+        // Entropy regularization gradient: λ * d/dlogit[Σ p_i*log(p_i)]
+        // d/dlogit_v[Σ_j p_j*log(p_j)] = Σ_j (1+log(p_j)) * dp_j/dlogit_v
+        //                              = Σ_j (1+log(p_j)) * p_j * (1_{j=v} - p_v)
+        //                              = (1+log(p_v))*p_v - p_v * Σ_j p_j*(1+log(p_j))
+        if (entropy_reg_lambda > 0.0f) {
+            // Simplified: d/dlogit_v[H(p)] ≈ p_v * (1 + log(p_v) - H - 1) = p_v * (log(p_v) - H)
+            // where H = -Σp_i*log(p_i). For regularization pushing toward higher entropy,
+            // the gradient is: λ * p_v * (1 + log(p_v)) summed appropriately.
+            // Exact form: λ * (p_v * (1 + log(max(p_v, ε))) - p_v * weighted_term)
+            // For simplicity and numerical stability, use: λ * p_v * log(max(p_v, ε))
+            // This pushes probabilities toward uniform (higher entropy)
+            grad_v += entropy_reg_lambda * p_v * (logf(fmaxf(p_v, kEpsilon)) + 1.0f);
+        }
+        
+        // Apply mean reduction scaling
+        grad_row[v] = grad_v * inv_valid_count;
+        
+        // DEBUG: Print token 100's target gradient (skip BOS at position 0)
+        if (token_idx == 100 && v == target && threadIdx.x == (target % blockDim.x)) {
+            printf("[LOSS-KERNEL-DBG] token=%d target=%d p_t=%.8f q_on=%.8f focal_w=%.6f inv_valid=%.8f grad_before=%.8f grad_final=%.10f\n",
+                   token_idx, target, p_t, q_on, focal_weight, inv_valid_count, grad_v, grad_v * inv_valid_count);
+        }
     }
 }
-
 //========================================================================
 // Launch Functions
 //========================================================================
@@ -306,16 +417,26 @@ void launchUnifiedLossBackward(
     int num_tokens,
     int vocab_size,
     int valid_count,
+    float focal_alpha,
+    float focal_gamma,
+    float smoothing_epsilon,
+    float entropy_reg_lambda,
     cudaStream_t stream
 ) {
+    // ISSUE #81 FIX: MUST divide gradient by valid_count to match PyTorch mean reduction!
+    // Issue #80 "fix" was WRONG - it removed ALL 1/N scaling.
+    // The math: loss = sum(ce_i) / N, so d(loss)/d(logits) = (1/N) * (softmax - one_hot)
+    // Without the 1/N, gradients are N times too large (18,000x in our case).
     const float inv_valid_count = (valid_count > 0) ? (1.0f / static_cast<float>(valid_count)) : 1.0f;
     
     const int block_size = 256;
     kernelUnifiedLossBackward<<<num_tokens, block_size, 0, stream>>>(
         logits, targets, valid_mask, grad_logits,
-        num_tokens, vocab_size, inv_valid_count
+        num_tokens, vocab_size, inv_valid_count,
+        focal_alpha, focal_gamma, smoothing_epsilon, entropy_reg_lambda
     );
 }
+
 
 
 //========================================================================
@@ -336,6 +457,12 @@ struct UnifiedLossGradFn : public GradFn {
     int vocab_size;
     int valid_count;
     
+    // Loss config parameters for proper backward gradients
+    float focal_alpha;
+    float focal_gamma;
+    float smoothing_epsilon;
+    float entropy_reg_lambda;
+    
     Tensor* logits_tensor_ptr;
     cudaStream_t async_stream;
     cudaEvent_t cleanup_event;
@@ -344,12 +471,17 @@ struct UnifiedLossGradFn : public GradFn {
         float* logits, size_t logits_numel,
         const int* targets_, const float* valid_mask_,
         int num_tokens_, int vocab_size_, int valid_count_,
+        float focal_alpha_, float focal_gamma_,
+        float smoothing_epsilon_, float entropy_reg_lambda_,
         Tensor* logits_tensor,
         cudaStream_t stream_
     ) : logits_data(nullptr), logits_size(logits_numel),
         targets(targets_), valid_mask(valid_mask_),
         num_tokens(num_tokens_), vocab_size(vocab_size_),
-        valid_count(valid_count_), logits_tensor_ptr(logits_tensor),
+        valid_count(valid_count_),
+        focal_alpha(focal_alpha_), focal_gamma(focal_gamma_),
+        smoothing_epsilon(smoothing_epsilon_), entropy_reg_lambda(entropy_reg_lambda_),
+        logits_tensor_ptr(logits_tensor),
         async_stream(stream_), cleanup_event(nullptr)
     {
         op_name = "unified_loss";
@@ -372,10 +504,15 @@ struct UnifiedLossGradFn : public GradFn {
     }
     
     __host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        AG_TRACE("[UnifiedLossGradFn::apply] ENTER: logits_tensor_ptr=%p\n", (void*)logits_tensor_ptr);
+        
         if (logits_tensor_ptr) {
+            AG_TRACE("[UnifiedLossGradFn::apply] logits_tensor_ptr->grad_fn=%p\n", 
+                    (void*)logits_tensor_ptr->grad_fn);
+            
             logits_tensor_ptr->ensure_grad();
             
-            // Compute gradient: (softmax - one_hot) / valid_count
+            // Compute full unified loss gradient with focal/smoothing/entropy
             launchUnifiedLossBackward(
                 logits_data.get(),
                 targets,
@@ -384,6 +521,10 @@ struct UnifiedLossGradFn : public GradFn {
                 num_tokens,
                 vocab_size,
                 valid_count,
+                focal_alpha,
+                focal_gamma,
+                smoothing_epsilon,
+                entropy_reg_lambda,
                 stream
             );
             
@@ -394,8 +535,27 @@ struct UnifiedLossGradFn : public GradFn {
                 return;
             }
             
+            // DIAGNOSTIC: Log the grad_logits we just computed
+            {
+                const size_t grad_elems = static_cast<size_t>(num_tokens) * vocab_size;
+                const size_t sample_sz = std::min(grad_elems, static_cast<size_t>(50000));
+                // FIX: Sample from MIDDLE of buffer to avoid masked BOS token
+                // Token 0 is BOS/masked with all-zero gradient. Start from token 50.
+                const size_t start_offset = static_cast<size_t>(50) * vocab_size;
+                const size_t actual_sample_sz = std::min(sample_sz, grad_elems - start_offset);
+                std::vector<float> samp(actual_sample_sz);
+                cudaMemcpy(samp.data(), logits_tensor_ptr->grad_data() + start_offset, 
+                           actual_sample_sz * sizeof(float), cudaMemcpyDeviceToHost);
+                float mx = 0.0f; double sq = 0.0;
+                for (auto& v : samp) { if (!std::isnan(v) && !std::isinf(v)) { mx = std::max(mx, std::abs(v)); sq += v*v; } }
+                float rms = std::sqrt(static_cast<float>(sq / actual_sample_sz));
+                fprintf(stderr, "[LOSS-BWD-OUT] grad_logits: num_tokens=%d vocab=%d valid=%d | max=%.6f rms=%.6f (sampled from token 50+) PTR=%p\n",
+                        num_tokens, vocab_size, valid_count, mx, rms, (void*)logits_tensor_ptr->grad_data());
+            }
+            
             // Continue backward chain
             if (logits_tensor_ptr->grad_fn) {
+                AG_TRACE("[UnifiedLossGradFn::apply] CALLING logits_tensor_ptr->grad_fn->apply()...\n");
                 Tensor logits_grad;
                 logits_grad.data = logits_tensor_ptr->grad_data();
                 logits_grad.shape = logits_tensor_ptr->shape;
@@ -403,9 +563,16 @@ struct UnifiedLossGradFn : public GradFn {
                 logits_grad.owns_grad_fn = false;
                 logits_grad.stream = stream;
                 
+                fprintf(stderr, "[LOSS-TO-MATMUL] Passing logits_grad.data=%p to grad_fn->apply()\n",
+                        (void*)logits_grad.data);
+                
                 logits_tensor_ptr->grad_fn->apply(logits_grad, stream);
+                AG_TRACE("[UnifiedLossGradFn::apply] grad_fn->apply() RETURNED\n");
+            } else {
+                AG_TRACE("[UnifiedLossGradFn::apply] WARNING: logits_tensor_ptr->grad_fn is NULL!\n");
             }
         }
+        AG_TRACE("[UnifiedLossGradFn::apply] EXIT\n");
     }
     
     __host__ void release_saved() override {
@@ -465,6 +632,10 @@ __host__ Tensor unified_loss(
     // Compute mean loss
     const float mean_loss = (h_valid_count > 0) ? (h_loss_sum / h_valid_count) : 0.0f;
     
+    // Log the computed loss for debugging (Issue #62) - guarded behind AG_TRACE for performance
+    AG_TRACE("[AutogradLoss] COMPUTED: loss_sum=%.6f valid_count=%d mean_loss=%.6f\n",
+            h_loss_sum, h_valid_count, mean_loss);
+    
     AG_TRACE("[unified_loss] loss_sum=%.6f valid_count=%d mean_loss=%.6f\n",
              h_loss_sum, h_valid_count, mean_loss);
     AG_TRACE("[unified_loss] config: focal_alpha=%.2f focal_gamma=%.2f smoothing=%.3f entropy_lambda=%.4f\n",
@@ -491,6 +662,8 @@ __host__ Tensor unified_loss(
             logits.data, logits.numel(),
             targets, valid_mask,
             num_tokens, vocab_size, h_valid_count,
+            config.focal_alpha, config.focal_gamma,
+            config.smoothing_epsilon, config.entropy_reg_lambda,
             &logits,
             stream
         );

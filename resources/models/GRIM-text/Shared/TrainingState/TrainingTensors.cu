@@ -15,6 +15,7 @@ void TrainingTensors::initializeParams(
     int vocab_sz, int d_mod, int d_ffn,
     int n_layers, int n_heads, int n_kv_heads,
     int max_seq, bool tie_emb, bool bias,
+    HyperParameters::PositionalEncodingType positional_encoding,
     cudaStream_t stream
 ) {
     // Store config
@@ -43,11 +44,20 @@ void TrainingTensors::initializeParams(
     embedding_weights.ensure_grad();  // Allocate grad NOW so share_grad() works
     Tensor::xavier_uniform_(embedding_weights, stream);
     
-    // Position embeddings [max_seq_len, d_model]
-    position_embedding_weights = Tensor::zeros({max_seq_len, d_model}, stream);
-    position_embedding_weights.requires_grad_();
-    position_embedding_weights.ensure_grad();  // Allocate grad NOW
-    Tensor::xavier_uniform_(position_embedding_weights, stream);
+    // ISSUE #96 FIX: Position embeddings ONLY allocated for LEARNED positional encoding.
+    // Current modes (NONE, ALIBI, ROPE, ALIBI_ROPE) all use attention-based position
+    // encoding - they do NOT add learned position embeddings to token embeddings.
+    // The position_embedding_weights will be left UNINITIALIZED (null data pointer)
+    // which tells AutogradTraining.cu to SKIP the position embedding addition.
+    //
+    // If a LEARNED positional encoding mode is added later, add:
+    //   if (positional_encoding == PositionalEncodingType::LEARNED) { ... }
+    //
+    // For now, this block is NEVER executed because no LEARNED mode exists.
+    // Rule 20: Don't silently allocate - config must explicitly enable features.
+    fprintf(stdout, "[TrainingTensors] Position embeddings: SKIPPED (positional_encoding=%s uses attention-based encoding)\n",
+            HyperParameters::positionalEncodingTypeToString(positional_encoding));
+    // position_embedding_weights intentionally left uninitialized (data=nullptr)
     
     //==================================================//        
     //  LM HEAD
@@ -183,8 +193,9 @@ void TrainingTensors::initializeParams(
                             cudaMemcpyHostToDevice, stream);
         }
         
-        // FFN W1 [d_ff, d_model] - up-projection
-        params.ffn_w1 = Tensor::zeros({d_ff, d_model}, stream);
+        // FFN W1 [d_model, d_ff] - up-projection (matches FeedForwardLayer::useExternalWeights)
+        // Issue #89 FIX: Was [d_ff, d_model] - swapped to match consumer's expectation
+        params.ffn_w1 = Tensor::zeros({d_model, d_ff}, stream);
         params.ffn_w1.requires_grad_();
         Tensor::xavier_uniform_(params.ffn_w1, stream);
         
@@ -193,8 +204,9 @@ void TrainingTensors::initializeParams(
             params.ffn_b1.requires_grad_();
         }
         
-        // FFN W2 [d_model, d_ff] - down-projection
-        params.ffn_w2 = Tensor::zeros({d_model, d_ff}, stream);
+        // FFN W2 [d_ff, d_model] - down-projection (matches FeedForwardLayer::useExternalWeights)
+        // Issue #89 FIX: Was [d_model, d_ff] - swapped to match consumer's expectation
+        params.ffn_w2 = Tensor::zeros({d_ff, d_model}, stream);
         params.ffn_w2.requires_grad_();
         Tensor::xavier_uniform_(params.ffn_w2, stream);
         

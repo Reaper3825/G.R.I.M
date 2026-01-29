@@ -6,6 +6,7 @@
 // Licensed under BSD 3-Clause (see external/flash-attention/LICENSE).
 
 #include <cuda_runtime.h>
+#include <cuda_bf16.h>  // ISSUE #79: For __nv_bfloat16 in diagnostic logging
 
 #include <cstddef>
 #include <cstdint>
@@ -13,6 +14,8 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <vector>
+#include <algorithm>
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../training/module_logger.hpp"
@@ -274,6 +277,35 @@ __global__ void flash_bwd_dq_dk_dv_loop_kernel(const Flash_bwd_params params) {
 #endif
 }
 
+// ============================================================================
+// ISSUE #84 FIX: CRITICAL - Preprocessing kernel for FlashAttention backward
+// ============================================================================
+// This kernel computes dP_sum = dot(dO, O) for ALL query positions BEFORE the
+// main backward kernel runs. Without this, the dsoftmax_sum buffer contains
+// garbage for most positions, causing dQ/dK gradient explosion.
+//
+// The main backward kernel (flash_bwd_dq_dk_dv_loop_kernel) uses the Is_first
+// template parameter to conditionally call dot_do_o() - but Is_first is only
+// true for the FIRST column block. The loop then reads from gdPsum for ALL
+// m_blocks, expecting valid pre-computed dP_sum values.
+//
+// ROOT CAUSE: GRIM was missing this preprocessing kernel, so gdPsum contained
+// uninitialized memory (cudaMalloc doesn't zero). This caused:
+// - dQ/dK to explode by 100,000-500,000x despite dO being near-zero
+// - Layers 9-0 showed exploding gradients while layers 11-10 were correct
+//   (first 2 layers' starting m_blocks got valid data from inline dot_do_o)
+// ============================================================================
+template<bool Clear_dQaccum, typename Kernel_traits>
+__global__ void flash_bwd_dot_do_o_kernel(const Flash_bwd_params params) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    grim_flash::compute_dot_do_o<Clear_dQaccum, Kernel_traits>(params);
+#else
+    if (threadIdx.x == 0) {
+        printf("FATAL: FlashAttention requires SM80+.\n");
+    }
+#endif
+}
+
 template<typename Kernel_traits, bool Is_causal>
 void run_flash_fwd(Flash_fwd_params& params, cudaStream_t stream) {
     constexpr size_t smem_size = Kernel_traits::kSmemSize;
@@ -312,11 +344,37 @@ void run_flash_fwd(Flash_fwd_params& params, cudaStream_t stream) {
 template<typename Kernel_traits, bool Is_causal>
 void run_flash_bwd(Flash_bwd_params& params, cudaStream_t stream) {
     constexpr size_t smem_size = Kernel_traits::kSmemSize1colblock;
-    dim3 grid(params.b, params.h, 1);
+    
+    // ===========================================================================
+    // ISSUE #84 FIX: Grid dimensions for preprocessing vs main kernel
+    // ===========================================================================
+    // Preprocessing kernel: one block per query tile (num_m_block, batch, heads)
+    // Main kernel: one block per (batch, heads) - loops over all m_blocks internally
+    // ===========================================================================
+    const int num_m_block = (params.seqlen_q + Kernel_traits::kBlockM - 1) / Kernel_traits::kBlockM;
+    dim3 grid_preprocess(num_m_block, params.b, params.h);  // For preprocessing
+    dim3 grid(params.b, params.h, 1);  // For main backward kernel
+    
     const bool is_even_MN = params.cu_seqlens_q == nullptr && params.cu_seqlens_k == nullptr &&
                             (params.seqlen_q % Kernel_traits::kBlockM == 0) &&
                             (params.seqlen_k % Kernel_traits::kBlockN == 0);
     const bool is_even_K = params.d == Kernel_traits::kHeadDim;
+
+    // ===========================================================================
+    // ISSUE #84 FIX: Launch preprocessing kernel FIRST
+    // ===========================================================================
+    // This computes dP_sum = dot(dO, O) for ALL query positions and stores in
+    // dsoftmax_sum buffer. Without this, the main backward kernel reads garbage
+    // from dsoftmax_sum for most positions, causing gradient explosion.
+    //
+    // Clear_dQaccum=true means this kernel will also zero dq_accum, which is
+    // the correct behavior for non-deterministic mode.
+    // ===========================================================================
+    {
+        auto preprocess_kernel = &flash_bwd_dot_do_o_kernel</*Clear_dQaccum=*/true, Kernel_traits>;
+        preprocess_kernel<<<grid_preprocess, Kernel_traits::kNThreads, 0, stream>>>(params);
+        check_cuda(cudaGetLastError(), "flash_bwd_dot_do_o_kernel launch");
+    }
 
     BOOL_SWITCH(is_even_MN, IsEvenMNConst, [&] {
         EVENK_SWITCH(is_even_K, IsEvenKConst, [&] {
@@ -587,6 +645,60 @@ extern "C" void flash_attn_fwd_ex(
                                                    batch, seqlen, n_heads, n_kv_heads, head_dim,
                                                    is_bf16, causal);
 
+    // ISSUE #76: Log ALiBi slopes for this sequence - CRITICAL for max_seq_len boundary debugging
+    static int s_fwd_call_count = 0;
+    ++s_fwd_call_count;
+    {
+        std::vector<float> h_slopes(static_cast<size_t>(n_heads));
+        cudaMemcpyAsync(h_slopes.data(), alibi_slopes, n_heads * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        
+        // Log slopes range and all values if at or near max_seq_len
+        float min_slope = h_slopes[0], max_slope = h_slopes[0];
+        for (int h = 1; h < n_heads; ++h) {
+            min_slope = std::min(min_slope, h_slopes[h]);
+            max_slope = std::max(max_slope, h_slopes[h]);
+        }
+        
+        // Always log sequence dimensions and slope range - CRITICAL for Issue #76
+        fprintf(stderr, "[FA-FWD-ALIBI] call=%d seqlen=%d batch=%d n_heads=%d | slope_range=[%.6f, %.6f]",
+                s_fwd_call_count, seqlen, batch, n_heads, min_slope, max_slope);
+        
+        // Log all slopes for sequences near max_seq_len (potential boundary issue)
+        // Standard max_seq_len is 1024 or 2048, flag when within 10% of that
+        const bool is_boundary_seq = (seqlen >= 920) || (seqlen >= 1840);  // 90% of 1024 or 2048
+        if (is_boundary_seq) {
+            fprintf(stderr, " [*** BOUNDARY_SEQ seqlen=%d ***] slopes=[", seqlen);
+            for (int h = 0; h < n_heads; ++h) {
+                fprintf(stderr, "%.6f%s", h_slopes[h], h < n_heads - 1 ? "," : "");
+            }
+            fprintf(stderr, "]");
+        }
+        fprintf(stderr, "\n");
+    }
+
+    // ISSUE #67: Log Flash Attention FORWARD INPUTS
+    {
+        const size_t q_elems = static_cast<size_t>(batch) * n_heads * seqlen * head_dim;
+        const size_t kv_elems = static_cast<size_t>(batch) * n_kv_heads * seqlen * head_dim;
+        const size_t sample_size = 100;
+        std::vector<float> h_q(std::min(q_elems, sample_size));
+        std::vector<float> h_k(std::min(kv_elems, sample_size));
+        std::vector<float> h_v(std::min(kv_elems, sample_size));
+        cudaMemcpyAsync(h_q.data(), q, h_q.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(h_k.data(), k, h_k.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(h_v.data(), v, h_v.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        int nan_q = 0, inf_q = 0, nan_k = 0, inf_k = 0, nan_v = 0, inf_v = 0;
+        for (float val : h_q) { if (std::isnan(val)) nan_q++; if (std::isinf(val)) inf_q++; }
+        for (float val : h_k) { if (std::isnan(val)) nan_k++; if (std::isinf(val)) inf_k++; }
+        for (float val : h_v) { if (std::isnan(val)) nan_v++; if (std::isinf(val)) inf_v++; }
+        fprintf(stderr, "[FA-FWD-IN] Q: nan=%d inf=%d first=%.6f | K: nan=%d inf=%d first=%.6f | V: nan=%d inf=%d first=%.6f\n",
+                nan_q, inf_q, h_q.empty() ? 0.0f : h_q[0],
+                nan_k, inf_k, h_k.empty() ? 0.0f : h_k[0],
+                nan_v, inf_v, h_v.empty() ? 0.0f : h_v[0]);
+    }
+
 #if defined(GRIM_FLASHATTN_HDIM64_ONLY)
 #if defined(GRIM_FLASHATTN_CAUSAL_ONLY)
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
@@ -692,6 +804,80 @@ extern "C" void flash_attn_fwd_ex(
 #endif
     }
 #endif
+
+    // ISSUE #67: Log Flash Attention FORWARD OUTPUT
+    {
+        const size_t out_elems = static_cast<size_t>(batch) * n_heads * seqlen * head_dim;
+        const size_t sample_size = 100;
+        std::vector<float> h_out(std::min(out_elems, sample_size));
+        cudaMemcpyAsync(h_out.data(), out, h_out.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        int nan_out = 0, inf_out = 0;
+        for (float val : h_out) { if (std::isnan(val)) nan_out++; if (std::isinf(val)) inf_out++; }
+        fprintf(stderr, "[FA-FWD-OUT] output: nan=%d inf=%d first=%.6f\n",
+                nan_out, inf_out, h_out.empty() ? 0.0f : h_out[0]);
+    }
+    
+    // ISSUE #76: Log softmax_lse stats - CRITICAL for max_seq_len boundary debugging
+    // softmax_lse has shape [batch, num_heads, seqlen] (FP32 dense)
+    {
+        const size_t lse_elems = static_cast<size_t>(batch) * n_heads * seqlen;
+        std::vector<float> h_lse(lse_elems);
+        cudaMemcpyAsync(h_lse.data(), softmax_lse, lse_elems * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        
+        // Compute statistics per head to identify which head explodes first
+        fprintf(stderr, "[FA-FWD-LSE] seqlen=%d batch=%d n_heads=%d total_elems=%zu\n", seqlen, batch, n_heads, lse_elems);
+        
+        // Overall stats
+        float global_min = h_lse[0], global_max = h_lse[0];
+        int nan_count = 0, inf_count = 0;
+        double sum = 0.0;
+        for (size_t i = 0; i < lse_elems; ++i) {
+            float val = h_lse[i];
+            if (std::isnan(val)) { nan_count++; continue; }
+            if (std::isinf(val)) { inf_count++; continue; }
+            if (val < global_min) global_min = val;
+            if (val > global_max) global_max = val;
+            sum += val;
+        }
+        float mean = lse_elems > 0 ? static_cast<float>(sum / lse_elems) : 0.0f;
+        
+        fprintf(stderr, "[FA-FWD-LSE-SUMMARY] nan=%d inf=%d range=[%.4f, %.4f] mean=%.4f\n",
+                nan_count, inf_count, global_min, global_max, mean);
+        
+        // Per-head stats (only if at boundary or anomalous)
+        const bool is_boundary_seq = (seqlen >= 920) || (seqlen >= 1840);
+        const bool has_anomaly = (global_max > 50.0f) || (nan_count > 0) || (inf_count > 0);
+        if (is_boundary_seq || has_anomaly) {
+            fprintf(stderr, "[FA-FWD-LSE-PERHEAD] %s head_stats:\n", 
+                    has_anomaly ? "*** ANOMALY ***" : "(boundary sequence)");
+            for (int h = 0; h < n_heads; ++h) {
+                // Head slice: [batch, h, seqlen] -> starts at h * seqlen for batch 0
+                float head_min = std::numeric_limits<float>::max();
+                float head_max = std::numeric_limits<float>::lowest();
+                double head_sum = 0.0;
+                int head_nan = 0, head_inf = 0;
+                size_t head_count = 0;
+                
+                for (int b = 0; b < batch; ++b) {
+                    for (int s = 0; s < seqlen; ++s) {
+                        size_t idx = static_cast<size_t>(b) * n_heads * seqlen + h * seqlen + s;
+                        float val = h_lse[idx];
+                        if (std::isnan(val)) { head_nan++; continue; }
+                        if (std::isinf(val)) { head_inf++; continue; }
+                        if (val < head_min) head_min = val;
+                        if (val > head_max) head_max = val;
+                        head_sum += val;
+                        head_count++;
+                    }
+                }
+                float head_mean = head_count > 0 ? static_cast<float>(head_sum / head_count) : 0.0f;
+                fprintf(stderr, "    head[%d]: range=[%.4f, %.4f] mean=%.4f nan=%d inf=%d\n",
+                        h, head_min, head_max, head_mean, head_nan, head_inf);
+            }
+        }
+    }
 }
 
 extern "C" void flash_attn_bwd_ex(
@@ -866,6 +1052,94 @@ extern "C" void flash_attn_bwd_ex(
     grim_flash::detail::check_cuda(cudaMemsetAsync(dq_accum, 0, dq_bytes, stream),
                                    "cudaMemsetAsync(dq_accum)");
 
+    // ISSUE #76: Log saved softmax_lse statistics BEFORE backward pass - CRITICAL for boundary debugging
+    // This is the LSE from forward pass, used to recompute softmax in backward
+    static int s_bwd_call_count = 0;
+    ++s_bwd_call_count;
+    {
+        const size_t lse_elems = static_cast<size_t>(batch) * n_heads * seqlen;
+        std::vector<float> h_lse(lse_elems);
+        cudaMemcpyAsync(h_lse.data(), softmax_lse, lse_elems * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        
+        float global_min = h_lse[0], global_max = h_lse[0];
+        int nan_count = 0, inf_count = 0;
+        double sum = 0.0;
+        for (size_t i = 0; i < lse_elems; ++i) {
+            float val = h_lse[i];
+            if (std::isnan(val)) { nan_count++; continue; }
+            if (std::isinf(val)) { inf_count++; continue; }
+            if (val < global_min) global_min = val;
+            if (val > global_max) global_max = val;
+            sum += val;
+        }
+        float mean = lse_elems > 0 ? static_cast<float>(sum / lse_elems) : 0.0f;
+        
+        fprintf(stderr, "[FA-BWD-SAVED-LSE] call=%d seqlen=%d | nan=%d inf=%d range=[%.4f, %.4f] mean=%.4f\n",
+                s_bwd_call_count, seqlen, nan_count, inf_count, global_min, global_max, mean);
+        
+        // Per-head stats if anomalous or at boundary
+        const bool is_boundary_seq = (seqlen >= 920) || (seqlen >= 1840);
+        const bool has_anomaly = (global_max > 50.0f) || (nan_count > 0) || (inf_count > 0);
+        if (has_anomaly || is_boundary_seq) {
+            fprintf(stderr, "[FA-BWD-SAVED-LSE-PERHEAD] %s%s per-head stats:\n",
+                    has_anomaly ? "*** LSE ANOMALY *** " : "",
+                    is_boundary_seq ? "(BOUNDARY_SEQ)" : "");
+            for (int h = 0; h < n_heads; ++h) {
+                float head_min = std::numeric_limits<float>::max();
+                float head_max = std::numeric_limits<float>::lowest();
+                int head_nan = 0, head_inf = 0;
+                double head_sum = 0.0;
+                size_t head_count = 0;
+                
+                for (int b = 0; b < batch; ++b) {
+                    for (int s = 0; s < seqlen; ++s) {
+                        size_t idx = static_cast<size_t>(b) * n_heads * seqlen + h * seqlen + s;
+                        float val = h_lse[idx];
+                        if (std::isnan(val)) { head_nan++; continue; }
+                        if (std::isinf(val)) { head_inf++; continue; }
+                        if (val < head_min) head_min = val;
+                        if (val > head_max) head_max = val;
+                        head_sum += val;
+                        head_count++;
+                    }
+                }
+                float head_mean = head_count > 0 ? static_cast<float>(head_sum / head_count) : 0.0f;
+                
+                // Flag heads with unusually high LSE (potential ALiBi slope issue)
+                const char* flag = (head_max > 50.0f) ? " *** EXPLOSION ***" : "";
+                fprintf(stderr, "    head[%d]: range=[%.4f, %.4f] mean=%.4f nan=%d inf=%d%s\n",
+                        h, head_min, head_max, head_mean, head_nan, head_inf, flag);
+            }
+        }
+    }
+
+    // ISSUE #67: Log Flash Attention BACKWARD INPUT (grad_output)
+    // ISSUE #79 FIX: dout is BF16 (not FP32)! Must read as __nv_bfloat16 and convert.
+    {
+        const size_t grad_elems = static_cast<size_t>(batch) * n_heads * seqlen * head_dim;
+        const size_t sample_size = std::min(grad_elems, static_cast<size_t>(10000));
+        std::vector<__nv_bfloat16> h_dout_bf16(sample_size);
+        cudaMemcpyAsync(h_dout_bf16.data(), dout, sample_size * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        
+        int nan_dout = 0, inf_dout = 0;
+        float dout_max = 0.0f;
+        double dout_sq_sum = 0.0;
+        for (const auto& val_bf16 : h_dout_bf16) {
+            float val = __bfloat162float(val_bf16);
+            if (std::isnan(val)) { nan_dout++; continue; }
+            if (std::isinf(val)) { inf_dout++; continue; }
+            dout_max = std::max(dout_max, std::abs(val));
+            dout_sq_sum += static_cast<double>(val) * val;
+        }
+        float dout_rms = std::sqrt(static_cast<float>(dout_sq_sum / sample_size));
+        float first_val = h_dout_bf16.empty() ? 0.0f : __bfloat162float(h_dout_bf16[0]);
+        
+        fprintf(stderr, "[FA-BWD-IN] grad_output (BF16): nan=%d inf=%d max=%.10f rms=%.10f first=%.10f\n",
+                nan_dout, inf_dout, dout_max, dout_rms, first_val);
+    }
+
     FlashAttentionLog::info("[FlashAttention] flash_attn_bwd_ex launching kernels");
 #if defined(GRIM_FLASHATTN_HDIM64_ONLY)
 #if defined(GRIM_FLASHATTN_CAUSAL_ONLY)
@@ -977,4 +1251,72 @@ extern "C" void flash_attn_bwd_ex(
     FlashAttentionLog::info("[FlashAttention] flash_attn_bwd_ex synchronizing stream for error check");
     grim_flash::detail::check_cuda(cudaStreamSynchronize(stream), "flash_attn_bwd_ex sync");
     FlashAttentionLog::info("[FlashAttention] flash_attn_bwd_ex stream synchronized");
+
+    // ISSUE #75: Log Flash Attention BACKWARD OUTPUTS (dQ, dK, dV) to isolate gradient explosion source
+    // NOTE: dK and dV are written using QUERY head indices (0..n_heads-1), NOT KV head indices!
+    // The Dao-AILab library writes to bidh * dk_head_stride where bidh goes from 0 to n_heads-1.
+    // So these buffers must be sized for n_heads (12), not n_kv_heads (4).
+    // ISSUE #79 FIX: dQ/dK/dV are BF16 (not FP32)! Must read as __nv_bfloat16 and convert.
+    {
+        // dQ is sized for n_heads (12), layout BSHD
+        const size_t dq_elems = static_cast<size_t>(batch) * seqlen * n_heads * head_dim;
+        const size_t dk_elems = static_cast<size_t>(batch) * seqlen * n_heads * head_dim;
+        const size_t dv_elems = static_cast<size_t>(batch) * seqlen * n_heads * head_dim;
+        
+        const size_t sample_size = 10000;
+        std::vector<__nv_bfloat16> h_dq(std::min(dq_elems, sample_size));
+        std::vector<__nv_bfloat16> h_dk(std::min(dk_elems, sample_size));
+        std::vector<__nv_bfloat16> h_dv(std::min(dv_elems, sample_size));
+        
+        cudaMemcpyAsync(h_dq.data(), dq, h_dq.size() * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(h_dk.data(), dk, h_dk.size() * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(h_dv.data(), dv, h_dv.size() * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        
+        int nan_dq = 0, inf_dq = 0, nan_dk = 0, inf_dk = 0, nan_dv = 0, inf_dv = 0;
+        float max_dq = 0, max_dk = 0, max_dv = 0;
+        double sum_sq_dq = 0, sum_sq_dk = 0, sum_sq_dv = 0;
+        float first_dq = 0, first_dk = 0, first_dv = 0;
+        
+        for (size_t i = 0; i < h_dq.size(); ++i) {
+            float val = __bfloat162float(h_dq[i]);
+            if (i == 0) first_dq = val;
+            if (std::isnan(val)) { nan_dq++; continue; }
+            if (std::isinf(val)) { inf_dq++; continue; }
+            float abs_val = std::fabs(val);
+            if (abs_val > max_dq) max_dq = abs_val;
+            sum_sq_dq += static_cast<double>(val) * val;
+        }
+        for (size_t i = 0; i < h_dk.size(); ++i) {
+            float val = __bfloat162float(h_dk[i]);
+            if (i == 0) first_dk = val;
+            if (std::isnan(val)) { nan_dk++; continue; }
+            if (std::isinf(val)) { inf_dk++; continue; }
+            float abs_val = std::fabs(val);
+            if (abs_val > max_dk) max_dk = abs_val;
+            sum_sq_dk += static_cast<double>(val) * val;
+        }
+        for (size_t i = 0; i < h_dv.size(); ++i) {
+            float val = __bfloat162float(h_dv[i]);
+            if (i == 0) first_dv = val;
+            if (std::isnan(val)) { nan_dv++; continue; }
+            if (std::isinf(val)) { inf_dv++; continue; }
+            float abs_val = std::fabs(val);
+            if (abs_val > max_dv) max_dv = abs_val;
+            sum_sq_dv += static_cast<double>(val) * val;
+        }
+        
+        float rms_dq = std::sqrt(static_cast<float>(sum_sq_dq / std::max(h_dq.size(), size_t(1))));
+        float rms_dk = std::sqrt(static_cast<float>(sum_sq_dk / std::max(h_dk.size(), size_t(1))));
+        float rms_dv = std::sqrt(static_cast<float>(sum_sq_dv / std::max(h_dv.size(), size_t(1))));
+        
+        fprintf(stderr, "[FA-BWD-OUT] dQ (BF16): nan=%d inf=%d max=%.10f rms=%.10f first=%.10f\n",
+                nan_dq, inf_dq, max_dq, rms_dq, first_dq);
+        fprintf(stderr, "[FA-BWD-OUT] actual tensor elems: dq=%zu dk=%zu dv=%zu (sampled %zu each) head_dim=%d\n",
+                dq_elems, dk_elems, dv_elems, h_dq.size(), head_dim);
+        fprintf(stderr, "[FA-BWD-OUT] dK (BF16): nan=%d inf=%d max=%.10f rms=%.10f first=%.10f (n_heads=%d buffer)\n",
+                nan_dk, inf_dk, max_dk, rms_dk, first_dk, n_heads);
+        fprintf(stderr, "[FA-BWD-OUT] dV (BF16): nan=%d inf=%d max=%.10f rms=%.10f first=%.10f (n_heads=%d buffer)\n",
+                nan_dv, inf_dv, max_dv, rms_dv, first_dv, n_heads);
+    }
 }

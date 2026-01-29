@@ -18,7 +18,6 @@
 #include "../TeacherLogits/TeacherLogits_GPU.hpp"
 #include "../ScratchBlock/ScratchBlock_GPU.hpp"
 #include "../StreamController/StreamController_GPU.hpp"
-#include "../GradAccumulationController/GradAccumulationController_Integration.hpp"
 #include "../GradNorm/GradNormGPU.hpp"
 #include "../PBM/PositionalBiasMethod.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
@@ -64,6 +63,11 @@ struct TrainingState {
 	// Numeric head for number prediction
 	Tensor numeric_head_weights;  // [d_model]
 	Tensor numeric_head_bias;     // [1]
+	
+	// Learned loss weighting (homoscedastic uncertainty)
+	// log_var = log(σ²), loss = L / (2*exp(log_var)) + 0.5*log_var
+	Tensor log_var_text;     // [1] - learned log-variance for text CE loss
+	Tensor log_var_numeric;  // [1] - learned log-variance for numeric loss
 
 	// Final RMSNorm before LM head (Issue #33 fix)
 	Tensor final_rms_gamma;  // [d_model]
@@ -196,7 +200,9 @@ struct TrainingState {
 	// Backward: backward() calls loss_tensor.backward() → grad_fn->apply()
 	Tensor loss_tensor;                   // Scalar [1] - loss value + grad_fn
 	Tensor logits_tensor;                 // [total_tokens, vocab_size] - wraps cached_logits
-	float cached_loss_value = 0.0f;       // Host copy of loss (for return value)
+	float cached_loss_value = 0.0f;       // Host copy of total loss (for return value)
+	float cached_text_loss = 0.0f;        // Host copy of text CE loss (for learned weighting backward)
+	float cached_numeric_loss = 0.0f;     // Host copy of numeric loss (for learned weighting backward)
 	
 	// ═══════════════════════════════════════════════════════════════
 	//  AUTOGRAD CONTEXT (Issue #47: Full computation graph for backward)
@@ -281,9 +287,8 @@ struct TrainingState {
 	//  STREAM & GRADIENT MANAGEMENT (Centralized Controllers)
 	// ═══════════════════════════════════════════════════════════════
 	// NO RAW STREAMS: All stream operations go through stream_ctrl
-	// NO RAW GRAD POINTERS: All grad operations go through grad_ctrl
+	// Gradients now managed via autograd system (GRIM::Tensor)
 	StreamController stream_ctrl;  // Owns all CUDA streams
-	ModelGradAccumulationController grad_ctrl;  // Manages grad accumulation
 	GradNorm::GradNormController gradnorm_ctrl;  // GPU-resident gradient norm computation
 
 	// cuBLAS handle bound to stream_ctrl.getPrimaryStream()
@@ -323,9 +328,11 @@ struct TrainingState {
 	bool use_autograd_tensors = false;  // Initialized by initializeAutogradTensors()
 	
 	// Initialize autograd system (just sets use_autograd_tensors = true)
+	// Issue #96: Added positional_encoding to control position embedding allocation
 	void initializeAutogradTensors(int vocab_size, int d_model, int d_ff,
 	                               int num_layers, int num_heads, int num_kv_heads,
 	                               int max_seq_len, bool tie_embeddings, bool use_bias,
+	                               HyperParameters::PositionalEncodingType positional_encoding,
 	                               cudaStream_t stream = nullptr);
 
 	// ═══════════════════════════════════════════════════════════════

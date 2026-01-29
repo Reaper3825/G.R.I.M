@@ -5,6 +5,7 @@
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 
@@ -113,6 +114,132 @@ inline void addBias(float* data,
     }
 }
 
+struct NonFiniteStats {
+    int nan_count;
+    int inf_count;
+    int first_nan_idx;
+    int first_inf_idx;
+    float first_nan_val;
+    float first_inf_val;
+};
+
+__global__ void scanNonFiniteKernel(const float* data, int count, NonFiniteStats* stats) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= count) {
+        return;
+    }
+    const float v = data[idx];
+    if (isnan(v)) {
+        atomicAdd(&stats->nan_count, 1);
+        const int old = atomicCAS(&stats->first_nan_idx, -1, idx);
+        if (old == -1) {
+            stats->first_nan_val = v;
+        }
+    } else if (isinf(v)) {
+        atomicAdd(&stats->inf_count, 1);
+        const int old = atomicCAS(&stats->first_inf_idx, -1, idx);
+        if (old == -1) {
+            stats->first_inf_val = v;
+        }
+    }
+}
+
+int qkvDebugLevel() {
+    static int level = []() {
+        const char* raw = std::getenv("GRIM_DEBUG_QKV");
+        return (raw && *raw) ? std::atoi(raw) : 0;
+    }();
+    return level;
+}
+
+void logNonFiniteStats(const char* tag,
+                       const float* data,
+                       int count,
+                       cudaStream_t stream,
+                       bool always_log) {
+    if (!data || count <= 0) {
+        fprintf(stderr, "[QKV_DEBUG] %s invalid (ptr=%p count=%d)\n",
+                tag ? tag : "<null>", static_cast<const void*>(data), count);
+        return;
+    }
+
+    NonFiniteStats init{};
+    init.first_nan_idx = -1;
+    init.first_inf_idx = -1;
+
+    NonFiniteStats* d_stats = nullptr;
+    cudaError_t err = cudaMalloc(&d_stats, sizeof(NonFiniteStats));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[QKV_DEBUG] %s cudaMalloc failed: %s\n",
+                tag ? tag : "<null>", cudaGetErrorString(err));
+        return;
+    }
+
+    err = cudaMemcpyAsync(d_stats, &init, sizeof(init), cudaMemcpyHostToDevice, stream);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[QKV_DEBUG] %s cudaMemcpyAsync H2D failed: %s\n",
+                tag ? tag : "<null>", cudaGetErrorString(err));
+        cudaFree(d_stats);
+        return;
+    }
+
+    constexpr int kThreads = 256;
+    const int blocks = (count + kThreads - 1) / kThreads;
+    scanNonFiniteKernel<<<blocks, kThreads, 0, stream>>>(data, count, d_stats);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[QKV_DEBUG] %s scanNonFiniteKernel launch failed: %s\n",
+                tag ? tag : "<null>", cudaGetErrorString(err));
+        cudaFree(d_stats);
+        return;
+    }
+
+    NonFiniteStats out{};
+    err = cudaMemcpyAsync(&out, d_stats, sizeof(out), cudaMemcpyDeviceToHost, stream);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[QKV_DEBUG] %s cudaMemcpyAsync D2H failed: %s\n",
+                tag ? tag : "<null>", cudaGetErrorString(err));
+        cudaFree(d_stats);
+        return;
+    }
+
+    err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[QKV_DEBUG] %s cudaStreamSynchronize failed: %s\n",
+                tag ? tag : "<null>", cudaGetErrorString(err));
+        cudaFree(d_stats);
+        return;
+    }
+
+    cudaFree(d_stats);
+
+    if (!always_log && out.nan_count == 0 && out.inf_count == 0) {
+        return;
+    }
+
+    fprintf(stderr, "[QKV_DEBUG] %s n=%d nan=%d inf=%d",
+            tag ? tag : "<null>", count, out.nan_count, out.inf_count);
+    if (out.nan_count > 0) {
+        fprintf(stderr, " first_nan_idx=%d first_nan_val=%g",
+                out.first_nan_idx, out.first_nan_val);
+    }
+    if (out.inf_count > 0) {
+        fprintf(stderr, " first_inf_idx=%d first_inf_val=%g",
+                out.first_inf_idx, out.first_inf_val);
+    }
+    fprintf(stderr, "\n");
+}
+
+void logQkvConfig(const char* tag, const QKVProjectionConfig& config, int total_tokens) {
+    if (qkvDebugLevel() < 2) {
+        return;
+    }
+    fprintf(stderr, "[QKV_DEBUG] %s batch=%d seq=%d tokens=%d d_model=%d heads=%d kv_heads=%d head_dim=%d\n",
+            tag ? tag : "<null>",
+            config.batch_size, config.seq_len, total_tokens,
+            config.d_model, config.num_heads, config.getNumKVHeads(), config.head_dim);
+}
+
 } // namespace
 
 size_t getQkvProjectionWorkspaceSize(const QKVProjectionConfig& config) {
@@ -176,6 +303,11 @@ void launchQkvProjection(const float* input,
     }
     float* fused_qkv = workspace;
 
+    const int debug_level = qkvDebugLevel();
+    if (debug_level > 0) {
+        logQkvConfig("QkvProjection", config, total_tokens);
+    }
+
     cublasHandle_t handle = config.handle;
     if (!handle) {
         throw std::runtime_error("[QKV_Projector] launchQkvProjection: config.handle is NULL - MUST pass training_state.cublas_handle per Rule 22");
@@ -232,6 +364,18 @@ void launchQkvProjection(const float* input,
                 " k=" + std::to_string(d_model));
     }
 
+    if (debug_level > 0) {
+        const bool always_log = (debug_level >= 2);
+        logNonFiniteStats("QkvProjection:input", input, total_tokens * d_model, config.stream, always_log);
+        if (debug_level >= 3) {
+            logNonFiniteStats("QkvProjection:W_qkv", weights.W_qkv, 3 * d_model * d_model, config.stream, always_log);
+        }
+        if (weights.b_qkv) {
+            logNonFiniteStats("QkvProjection:b_qkv", weights.b_qkv, 3 * d_model, config.stream, always_log);
+        }
+        logNonFiniteStats("QkvProjection:fused_qkv_prebias", fused_qkv, total_tokens * 3 * d_model, config.stream, always_log);
+    }
+
     addBias(fused_qkv, weights.b_qkv, total_tokens, 3 * d_model, config.stream);
 
     // Row-major [tokens, 3*d_model]: each row has [Q_features | K_features | V_features]
@@ -257,6 +401,14 @@ void launchQkvProjection(const float* input,
         split_qkv(q_out, 0, "Q");
         split_qkv(k_out, d_model, "K");
         split_qkv(v_out, 2 * d_model, "V");
+    }
+
+    if (debug_level > 0) {
+        const bool always_log = (debug_level >= 2);
+        logNonFiniteStats("QkvProjection:fused_qkv", fused_qkv, total_tokens * 3 * d_model, config.stream, always_log);
+        logNonFiniteStats("QkvProjection:Q", q_out, total_tokens * d_model, config.stream, always_log);
+        logNonFiniteStats("QkvProjection:K", k_out, total_tokens * d_model, config.stream, always_log);
+        logNonFiniteStats("QkvProjection:V", v_out, total_tokens * d_model, config.stream, always_log);
     }
 
     // Rule 22: Do NOT destroy handle - we don't own it!
@@ -346,6 +498,11 @@ void launchGQAProjection(const float* input,
     const float beta = 0.0f;
     cublasStatus_t status;
     
+    const int debug_level = qkvDebugLevel();
+    if (debug_level > 0) {
+        logQkvConfig("GQAProjection", config, total_tokens);
+    }
+
     // Q projection: [tokens, d_model] @ W_q^T[d_model, d_model] = [tokens, d_model]
     status = cublasSgemm(handle,
                 CUBLAS_OP_T, CUBLAS_OP_N,
@@ -357,6 +514,17 @@ void launchGQAProjection(const float* input,
                 q_out, d_model);
     if (status != CUBLAS_STATUS_SUCCESS) {
         throw std::runtime_error("[GQAProjection] Q projection cublasSgemm failed: status=" + std::to_string(status));
+    }
+    if (debug_level > 0) {
+        const bool always_log = (debug_level >= 2);
+        logNonFiniteStats("GQAProjection:input", input, total_tokens * d_model, config.stream, always_log);
+        if (debug_level >= 3) {
+            logNonFiniteStats("GQAProjection:W_q", W_q, d_model * d_model, config.stream, always_log);
+        }
+        if (b_q) {
+            logNonFiniteStats("GQAProjection:b_q", b_q, d_model, config.stream, always_log);
+        }
+        logNonFiniteStats("GQAProjection:Q_prebias", q_out, total_tokens * d_model, config.stream, always_log);
     }
     
     // K projection: [tokens, d_model] @ W_k^T[kv_dim, d_model] = [tokens, kv_dim]
@@ -370,6 +538,16 @@ void launchGQAProjection(const float* input,
                 k_out, kv_dim);
     if (status != CUBLAS_STATUS_SUCCESS) {
         throw std::runtime_error("[GQAProjection] K projection cublasSgemm failed: status=" + std::to_string(status));
+    }
+    if (debug_level > 0) {
+        const bool always_log = (debug_level >= 2);
+        if (debug_level >= 3) {
+            logNonFiniteStats("GQAProjection:W_k", W_k, kv_dim * d_model, config.stream, always_log);
+        }
+        if (b_k) {
+            logNonFiniteStats("GQAProjection:b_k", b_k, kv_dim, config.stream, always_log);
+        }
+        logNonFiniteStats("GQAProjection:K_prebias", k_out, total_tokens * kv_dim, config.stream, always_log);
     }
     
     // K-TRACE: After K projection (before bias)
@@ -387,6 +565,16 @@ void launchGQAProjection(const float* input,
     if (status != CUBLAS_STATUS_SUCCESS) {
         throw std::runtime_error("[GQAProjection] V projection cublasSgemm failed: status=" + std::to_string(status));
     }
+    if (debug_level > 0) {
+        const bool always_log = (debug_level >= 2);
+        if (debug_level >= 3) {
+            logNonFiniteStats("GQAProjection:W_v", W_v, kv_dim * d_model, config.stream, always_log);
+        }
+        if (b_v) {
+            logNonFiniteStats("GQAProjection:b_v", b_v, kv_dim, config.stream, always_log);
+        }
+        logNonFiniteStats("GQAProjection:V_prebias", v_out, total_tokens * kv_dim, config.stream, always_log);
+    }
     
     // Add biases
     if (b_q) addBias(q_out, b_q, total_tokens, d_model, config.stream);
@@ -396,6 +584,13 @@ void launchGQAProjection(const float* input,
         traceKTensor(k_out, total_tokens * kv_dim, "GQAProjection:K_bias", -1, config.stream);
     }
     if (b_v) addBias(v_out, b_v, total_tokens, kv_dim, config.stream);
+
+    if (debug_level > 0) {
+        const bool always_log = (debug_level >= 2);
+        logNonFiniteStats("GQAProjection:Q", q_out, total_tokens * d_model, config.stream, always_log);
+        logNonFiniteStats("GQAProjection:K", k_out, total_tokens * kv_dim, config.stream, always_log);
+        logNonFiniteStats("GQAProjection:V", v_out, total_tokens * kv_dim, config.stream, always_log);
+    }
     
     // Rule 22: Do NOT destroy handle - we don't own it!
 }

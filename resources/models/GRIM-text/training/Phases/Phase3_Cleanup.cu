@@ -271,11 +271,9 @@ void releaseResources(TrainingContext& ctx) {
     ctx.data.val_catalog = GRIM::DynaSeq::Catalog{};
     EmitModuleInfo(ModuleId::Training, "✓ Training data released", ctx.global_step);
     
-    // Release gradient controller
-    if (ctx.optimizer.grad_controller) {
-        ctx.optimizer.grad_controller.reset();
-        EmitModuleInfo(ModuleId::Training, "✓ Gradient controller released", ctx.global_step);
-    }
+    // Note: Gradient accumulation now tracked via current_micro_step counter in OptimizerContext
+    // No separate grad_controller to release
+    EmitModuleInfo(ModuleId::Training, "✓ Gradient state released", ctx.global_step);
     
 #ifdef USE_CUDA
     // Final CUDA synchronization

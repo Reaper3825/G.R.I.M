@@ -32,7 +32,6 @@
 #include "grim_scale_buffer.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../Layers/Embedding/Embedding_GPU.hpp"
-#include "../Shared/Loss/ComputeLoss/ComputeLoss_GPU.hpp"
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"    // For Flash Attention kernels

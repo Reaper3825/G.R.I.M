@@ -1,16 +1,18 @@
 #pragma once
 /**
  * @file Embedding_GPU.hpp
- * @brief GPU-accelerated embedding layer with forward, backward, and runtime support
+ * @brief EmbeddingRuntime memory management for GPU embedding buffers
  *
- * CONSOLIDATED from: Embedding_GPU.hpp, EmbeddingBackward.hpp, EmbeddingRuntime.hpp
+ * PRODUCTION PATH: autograd::embedding() in TensorContract_GPU.cu
  *
- * COMPONENTS:
+ * COMPONENTS (RETAINED):
  * - EmbeddingConfig, EmbeddingWeights, EmbeddingForwardArgs: Core data structures
- * - EmbeddingRuntime: Stateful runtime for inference with pre-allocated buffers
- * - EmbeddingLayer: Stateless forward-only class
- * - launchEmbeddingLookup(): Forward kernel launcher
- * - launchEmbeddingBackward(): Backward kernel launcher (used by BackwardPhase3)
+ * - EmbeddingRuntime: Struct holding GPU buffers for embedding weights
+ * - destroyEmbeddingRuntime(): Frees GPU buffers
+ *
+ * LEGACY CODE DELETED (Issue #92 / Rule 20: No Backwards Compatibility):
+ * Production uses autograd::embedding() which has kernel_embedding_forward/backward
+ * in TensorContract_GPU.cu. All legacy kernels and launchers removed.
  */
 
 #include <cuda_runtime.h>
@@ -28,6 +30,7 @@ struct EmbeddingConfig {
     int d_model = 0;
     bool apply_rms_norm = false;
     float rms_epsilon = 1e-5f;
+    float embedding_scale = 1.0f;  // Scale factor applied to embeddings (sqrt(d_model) for AIAYN-style)
     cudaStream_t stream = nullptr;
 };
 
@@ -154,130 +157,5 @@ struct EmbeddingRuntime {
  * @param runtime Runtime to destroy (safe to call with nullptr)
  */
 void destroyEmbeddingRuntime(EmbeddingRuntime* runtime);
-
-/**
- * @brief Batched embedding forward pass
- *
- * When positions=nullptr, position IDs are computed as: token_idx % seq_len
- * This gives each sequence in the batch positions [0, 1, ..., seq_len-1].
- *
- * @return true on success, false on error (error logged to stderr)
- */
-bool embeddingRuntimeForward(EmbeddingRuntime* runtime,
-                             const int* token_ids,
-                             const int* positions,
-                             int batch_size,
-                             int seq_len,
-                             float* output);
-
-/**
- * @brief Single-token embedding forward pass (incremental generation)
- *
- * Uses pre-allocated buffers, no CUDA allocation per call.
- *
- * @return true on success, false on error
- */
-bool embeddingRuntimeForwardSingle(EmbeddingRuntime* runtime,
-                                   int token_id,
-                                   int position,
-                                   float* output);
-
-//======================================================//
-// Kernel Launchers
-//======================================================//
-
-/**
- * @brief Validate token IDs and throw if any are invalid (Rule 20: Fail Loud)
- * 
- * Checks that all token IDs are in range [0, vocab_size).
- * Negative token IDs or IDs >= vocab_size will cause a clear exception
- * with the index and value of the first invalid token.
- * 
- * @param token_ids Device pointer to token IDs
- * @param total_tokens Number of tokens to validate
- * @param vocab_size Valid token range is [0, vocab_size)
- * @param stream CUDA stream to use
- * @throws std::runtime_error if any token ID is invalid
- * 
- * @note Call this before launchEmbeddingLookup() or launchEmbeddingBackward()
- *       when debugging data pipeline issues. Enabled automatically in debug builds.
- */
-void validateTokenIds(const int* token_ids,
-                      int total_tokens,
-                      int vocab_size,
-                      cudaStream_t stream);
-
-/**
- * @brief Launch embedding lookup kernel (forward pass)
- *
- * Rule 20: Throws on invalid input. Requires non-null stream.
- */
-void launchEmbeddingLookup(const EmbeddingForwardArgs& args,
-                           const EmbeddingConfig& config);
-
-/**
- * @brief Launch embedding backward kernel (gradient accumulation)
- *
- * Uses atomicAdd to scatter-add gradients to embedding table.
- * Rule 20: Throws on invalid input.
- *
- * @param grad_output Gradient from downstream [batch_size * seq_len, d_model]
- * @param token_ids Token IDs from forward pass [batch_size * seq_len]
- * @param grad_embeddings Gradient accumulator [vocab_size, d_model]
- */
-void launchEmbeddingBackward(const float* grad_output,
-                             const int* token_ids,
-                             float* grad_embeddings,
-                             int batch_size,
-                             int seq_len,
-                             int d_model,
-                             int vocab_size,
-                             cudaStream_t stream);
-
-/**
- * @brief Launch position embedding backward kernel (gradient accumulation)
- *
- * Issue #36 FIX: Position embeddings MUST be trainable to match PyTorch baseline.
- * Uses atomicAdd to scatter-add gradients to position embedding table.
- * For each position in [0, seq_len), accumulates gradients from all batch elements.
- *
- * @param grad_output Gradient from downstream [batch_size * seq_len, d_model]
- * @param grad_position_embeddings Gradient accumulator [max_seq_len, d_model]
- */
-void launchPositionEmbeddingBackward(const float* grad_output,
-                                     float* grad_position_embeddings,
-                                     int batch_size,
-                                     int seq_len,
-                                     int d_model,
-                                     int max_seq_len,
-                                     cudaStream_t stream);
-
-//======================================================//
-// EmbeddingLayer: Stateless forward-only class
-//======================================================//
-
-/**
- * @brief GPU-accelerated embedding layer
- *
- * Rule 20: Forward-only implementation. Backward pass uses standalone
- * launchEmbeddingBackward() kernel via BackwardPhase3_InputLayer.cu.
- */
-class EmbeddingLayer {
-public:
-    EmbeddingLayer() = default;
-    explicit EmbeddingLayer(const EmbeddingConfig& config) : config_(config) {}
-
-    void setConfig(const EmbeddingConfig& cfg) { config_ = cfg; }
-    const EmbeddingConfig& config() const noexcept { return config_; }
-
-    void setWeights(const EmbeddingWeights& weights) { weights_ = weights; }
-    const EmbeddingWeights& weights() const noexcept { return weights_; }
-
-    void forward(const EmbeddingForwardArgs& args);
-
-private:
-    EmbeddingConfig config_{};
-    EmbeddingWeights weights_{};
-};
 
 } // namespace GRIM

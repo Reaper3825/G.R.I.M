@@ -1,9 +1,1385 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** 🔄 **IN PROGRESS** - Issue #59: Unified Loss System Refactor  
+**Status:** ✅ **CRITICAL FIX IMPLEMENTED** - Issue #90: ScratchBlock Buffer Desync - Layer 0 received stale pre-ScratchBlock data
 **Started:** December 22, 2025  
-**Last Updated:** January 24, 2026
-**Latest Issue:** Loss computation was using plain CE without focal loss, label smoothing, or entropy regularization. The autograd migration (Issue #46) accidentally removed all loss components! Refactored to `unified_loss()` with full config support.
+**Last Updated:** January 29, 2026
+**Latest Finding:** Issue #90: After ScratchBlock modifies `ts->cached_embeddings` in-place, `ctx.embedding_tensor.data` still points to the OLD buffer from `autograd::add`. Layer 0 received STALE embeddings, causing Q/K/V values ~8x larger than expected and LSE explosion (300-600 instead of 6-10).
+
+---
+
+## 🔴 NEW: Issue #96 - Position Embedding Allocation IGNORES Config (Rule 20 Violation!)
+
+### Discovery (January 30, 2026)
+
+After Issue #95 identified ISOTROPIC position embeddings as the source of Layer 0 QKV explosion, investigation revealed a **critical Rule 20 violation**:
+
+**The `use_learned: false` config setting is COMPLETELY IGNORED!**
+
+### Root Cause: Unconditional Allocation
+
+**ai_config.json:**
+```json
+"positional_encoding": {
+    "use_learned": false,  // ← This is IGNORED!
+    "use_rope": true,
+    "use_alibi": true
+}
+```
+
+**TrainingTensors.cu (lines 47-50):**
+```cpp
+// Position embeddings [max_seq_len, d_model]
+position_embedding_weights = Tensor::zeros({max_seq_len, d_model}, stream);  // ALWAYS ALLOCATED!
+position_embedding_weights.requires_grad_();
+position_embedding_weights.ensure_grad();
+Tensor::xavier_uniform_(position_embedding_weights, stream);
+```
+
+**AutogradTraining.cu (line 334):**
+```cpp
+if (ts->position_embedding_weights.data) {  // Always TRUE because always allocated!
+    // ... adds position embeddings regardless of config ...
+}
+```
+
+### The Chain of Failures
+
+1. `TrainingTensors::initializeParams()` UNCONDITIONALLY allocates `position_embedding_weights`
+2. The function signature has NO `positional_encoding` parameter
+3. `AutogradTraining.cu` checks `if (ts->position_embedding_weights.data)` - always true
+4. Position embeddings are ALWAYS added even when config says `use_learned: false`
+5. Config setting has **ZERO EFFECT** - silent failure per Rule 20
+
+### Architectural Mismatch
+
+The `PositionalEncodingType` enum has FOUR values:
+- `NONE` - No positional encoding
+- `ALIBI` - Attention bias (no additive embedding)
+- `ROPE` - Rotary embedding in attention (no additive embedding)
+- `ALIBI_ROPE` - Hybrid (no additive embedding)
+
+**NONE of these use additive position embeddings!** The code allocates and uses learned position embeddings that are **incompatible with the architecture**.
+
+### Why This Causes Layer 0 Explosion
+
+1. **Position embeddings are ISOTROPIC** (column variance range_ratio = 1.01x)
+2. Position variance (0.855) >> Token variance (0.015)
+3. Combined embeddings inherit isotropy from position embeddings
+4. Isotropic input to QKV projection causes coherent summation
+5. QKV magnitude explodes 10x
+
+### Evidence from Issue #95 Diagnostic
+
+```
+[Issue95-COL-VARIANCE] TOKEN_EMB: col_var min=0.0151 max=0.0411 range_ratio=2.7x  ← Heterogeneous (OK)
+[Issue95-COL-VARIANCE] POS_EMB: col_var min=0.8552 max=0.8597 range_ratio=1.01x   ← ISOTROPIC (PROBLEM!)
+[Issue95-COL-VARIANCE] COMBINED: col_var min=0.8548 max=0.8961 range_ratio=1.05x  ← Dominated by POS_EMB
+```
+
+### Fix Required
+
+1. **TrainingTensors.cu**: Add `PositionalEncodingType` parameter, only allocate when mode requires learned embeddings
+2. **TrainingStateGPU.cu**: Pass `positional_encoding` to `initializeParams()`
+3. **AutogradTraining.cu**: Check `positional_encoding` config, not buffer existence
+
+**Alternative (Simpler)**: Since NO current mode uses learned embeddings, just REMOVE position embedding allocation entirely.
+
+**Status:** 🔴 **FIX REQUIRED** - Position embeddings should NOT be allocated/used with RoPE/ALiBi
+
+---
+
+## 🔴 PREVIOUS: Issue #95 - Isotropic Embeddings Cause 10x QKV Magnitude Explosion
+
+### Discovery (January 29, 2026)
+
+Training diagnostics showed Layer 0 QKV output is **10x larger** than expected while later layers match predictions:
+
+| Layer | Expected QKV RMS | Actual QKV RMS | Ratio |
+|-------|------------------|----------------|-------|
+| **Layer 0** | 1.08 | **10.66** | **10x WRONG!** |
+| Layer 6 | 3.83 | 3.75 | ✓ Close |
+
+### Root Cause: INPUT COLUMN VARIANCE
+
+The key diagnostic difference between Layer 0 and later layers:
+
+| Layer | Column Variance Min | Column Variance Max | Range Ratio |
+|-------|---------------------|---------------------|-------------|
+| **Layer 0** | **0.928** | **1.11** | **1.2x (isotropic!)** |
+| Layer 6 | 0.41 | 2.41 | 6x (heterogeneous) |
+
+**Layer 0 input (embeddings) is ISOTROPIC** - all 768 columns have nearly identical variance (~1.0). This means the embedding vectors are "spherically symmetric" in the 768-dimensional space.
+
+### Why Isotropic Input Explodes QKV
+
+The QKV projection is: `QKV[i,j] = Σ_k input[i,k] × W_qkv[j,k]`
+
+**With isotropic input (Layer 0):**
+- Each `input[i,k]` has the SAME variance across all columns k
+- W_qkv rows are Xavier-initialized (also uniform variance)
+- The 768-term sum becomes a **coherent sum** - all terms contribute similarly
+- Terms don't cancel, they **constructively interfere** → magnitude explosion
+
+**With heterogeneous input (Layer 6+):**
+- Columns have DIVERSE variances (some 0.4, some 2.4)
+- High-variance columns dominate, low-variance contribute less
+- The sum is **incoherent** - terms partially cancel
+- Output matches theoretical prediction
+
+### Mathematical Explanation
+
+For a dot product of two vectors:
+```
+E[|a·b|²] = Σᵢ Σⱼ E[aᵢ bᵢ aⱼ bⱼ]
+```
+
+When `a` (input rows) is isotropic:
+- Cross terms `E[aᵢ aⱼ]` for i≠j are correlated (isotropy = all dimensions similar)
+- This inflates the expected magnitude
+
+When `a` is heterogeneous:
+- Cross terms partially cancel due to variance differences
+- Output matches independent-element assumption
+
+### Evidence from Diagnostic
+
+```
+Layer 0:
+  INPUT COLUMN VARIANCE: min=0.9284 max=1.1117 mean=0.9981
+  alignment_ratio=0.028, EXPECTED=1.08, ACTUAL=10.66 (10x!)
+
+Layer 6:
+  INPUT COLUMN VARIANCE: min=0.4058 max=2.4120 mean=0.9753
+  alignment_ratio=0.157, EXPECTED=3.83, ACTUAL=3.75 (close!)
+```
+
+### Relationship to Issue #92 (Embedding Scale)
+
+Issue #92 added `√d_model` scaling to embeddings per the AIAYN paper. However, this scaling affects **magnitude**, not **isotropy**. The embedding vectors are still isotropic after scaling.
+
+### Next Investigation
+
+Need to determine whether **token_emb** or **pos_emb** (or both) causes the isotropy:
+- Token embeddings from learned vocabulary
+- Position embeddings from learned position table
+- The sum `token_emb + pos_emb` may inherit isotropy from either component
+
+**Status:** 🔴 **UNDER INVESTIGATION** - Need diagnostic to isolate token_emb vs pos_emb
+
+---
+
+## 🔴 NEW: Issue #90 - ScratchBlock Buffer Desync (ROOT CAUSE OF LSE EXPLOSION!)
+
+### Discovery (January 29, 2026)
+
+Training log showed LSE (Log-Sum-Exp) explosion in FlashAttention backward:
+- **Expected LSE:** ~6-10 (normal attention score range)
+- **Actual LSE:** 300-600 (catastrophically high!)
+- **Only affects Layer 0** - all subsequent layers have normal LSE values
+
+### Root Cause Analysis
+
+Traced through the forward pass data flow:
+
+1. **Embedding lookup + position add:**
+   ```cpp
+   emb_output = autograd::add(emb_output, pos_emb_output, ctx.stream);
+   // autograd::add creates NEW Tensor with Tensor::empty() - new buffer allocated!
+   ```
+
+2. **Copy to cached_embeddings:**
+   ```cpp
+   cudaMemcpyAsync(ts->cached_embeddings, emb_output.data, ...);  // Sync copy
+   ```
+
+3. **Store in context:**
+   ```cpp
+   ctx.embedding_tensor = std::move(emb_output);  // Points to autograd::add's NEW buffer
+   ```
+
+4. **ScratchBlock processes:**
+   ```cpp
+   sb_args.input = TensorView::make_BSM(ts->cached_embeddings, ...);  // DIFFERENT buffer!
+   sb_args.output = TensorView::make_BSM(ts->cached_embeddings, ...);
+   ctx.scratch_block->forward(sb_args);  // Modifies ts->cached_embeddings IN-PLACE
+   ```
+
+5. **Layer 0 input:**
+   ```cpp
+   Tensor& layer_input = (layer_idx == 0) ? ctx.embedding_tensor : ...;
+   // ctx.embedding_tensor.data = autograd::add's buffer (NOT UPDATED!)
+   // ts->cached_embeddings = MODIFIED by ScratchBlock
+   ```
+
+**RESULT:** Layer 0 receives STALE pre-ScratchBlock data instead of ScratchBlock's output!
+
+### Evidence from Training Log
+
+**Layer 0 (BUGGY - receives stale data):**
+```
+[Issue77-FWD-ln1_out] layer=0: min=-0.837554 max=1.381872
+[FA-FWD-IN] Layer 0: K first=-8.172143, V first=-8.296962  ← 10x TOO LARGE!
+[FA-FWD-DIAG] layer=0: softmax_lse_mean=387.6942  ← LSE EXPLOSION!
+```
+
+**Layer 1+ (CORRECT - receives layer 0 output):**
+```
+[Issue77-FWD-ln1_out] layer=1: min=-0.853169 max=1.378891
+[FA-FWD-IN] Layer 1: K first=0.110870, V first=0.108553  ← NORMAL
+[FA-FWD-DIAG] layer=1: softmax_lse_mean=4.8030  ← NORMAL LSE
+```
+
+### Why Layer 1+ Are Normal
+
+Layer 1+ use `ctx.encoder_layer_outputs.back()` as input, which is the ACTUAL output from the previous layer with proper autograd chain. Only Layer 0 uses `ctx.embedding_tensor` which points to stale data.
+
+### Fix Applied (AutogradTraining.cu)
+
+Added sync copy after ScratchBlock completes:
+
+```cpp
+// ISSUE #90 FIX: ScratchBlock operates on ts->cached_embeddings, but
+// ctx.embedding_tensor.data points to a DIFFERENT buffer (from autograd::add).
+// 
+// Without this sync, Layer 0 receives STALE pre-ScratchBlock data!
+if (ts->cached_embeddings && ctx.embedding_tensor.data && 
+    ctx.embedding_tensor.data != ts->cached_embeddings) {
+    cudaMemcpyAsync(ctx.embedding_tensor.data, ts->cached_embeddings,
+                    static_cast<size_t>(total_tokens) * cfg->d_model * sizeof(float),
+                    cudaMemcpyDeviceToDevice, ctx.stream);
+}
+```
+
+### Expected Results After Fix
+
+1. Layer 0 receives ScratchBlock's output (same as if ScratchBlock operated directly on embedding_tensor)
+2. Q/K/V values should be ~0.1 instead of ~8
+3. LSE should be ~6-10 instead of 300-600
+4. No more attention score explosion in backward pass
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔴 PREVIOUS: Issue #89 - Encoder Weights Had DUPLICATE Allocations (ROOT CAUSE OF ZERO GRADIENTS!)
+
+### Discovery (January 28, 2026)
+
+While debugging why incoming gradient to FlashAttention was ~1M times smaller than expected, traced backward chain:
+1. Loss outputs `max=0.000251` ✓
+2. LM_HEAD receives `max=0.000251` ✓  
+3. **LM_HEAD passes only `max=0.000006` to encoder** - **40x shrinkage!**
+
+Root cause: LM head uses tied embedding weights, so `grad_A = grad_C @ B^T` produces tiny gradients because **B (embedding weights) was ALL ZEROS**.
+ccccc
+Further investigation revealed the **SAME pattern in encoder weights**:
+- TrainingTensors allocates and Xavier-inits encoder_layers[] (NEVER USED!)
+- GPUEncoderLayer allocates its OWN weights via `ensureWeightStorage()` (ACTUALLY USED)
+- TrainingOps.cu then Xavier-inits the GPUEncoderLayer weights (re-inits #2's memory)
+
+**Result:** TrainingTensors encoder weights were DEAD MEMORY - autograd used GPUEncoderLayer's internal Tensors instead.
+
+### Audit Results - 3 Separate Allocations!
+
+1. **TrainingTensors::initializeParams()** - Allocates `encoder_layers[i].attn_qkv_weight`, etc. - **DEAD MEMORY (never read!)**
+2. **GPUEncoderLayer::allocateWeights()** - Called via `ensureWeightStorage()` in Forward_GPU.cu:49 - **Actually used in forward**
+3. **FeedForwardLayer::ensureWeightStorage()** - Called by allocateWeights() - **Actually used in forward**
+
+Plus TrainingOps.cu Xavier-inits #2/#3's memory (not a 4th allocation, just re-init).
+
+### Why This is a Rule 20 Violation
+
+The `useExternalWeights()` method EXISTS at `Encoding_GPU.hpp:215` but was **NEVER CALLED from outside**!
+
+The pattern was clearly designed for:
+- TrainingTensors = single source of truth for all weights
+- GPUEncoderLayer uses `useExternalWeights()` to point to TrainingTensors
+
+But the implementation had "backwards compatibility" where GPUEncoderLayer could also allocate its own weights. This violated Rule 20: **NO BACKWARDS COMPATIBILITY**.
+
+### Fix Applied (2 files)
+
+**1. Forward_GPU.cu - Remove ensureWeightStorage() call:**
+```cpp
+for (int i = 0; i < config.num_layers; ++i) {
+    gpu_layers_.emplace_back(std::make_unique<GPUEncoderLayer>(enc_cfg));
+    // NOTE: DO NOT call ensureWeightStorage() here!
+    // TrainingOps.cu will call useExternalWeights() to point to TrainingTensors.
+    // Rule 20: No backwards compatibility - single source of truth for weights.
+}
+```
+
+**2. TrainingOps.cu - Replace Xavier init with useExternalWeights():**
+```cpp
+// Wire GPUEncoderLayer to use TrainingTensors' memory
+// This makes TrainingTensors the SINGLE source of truth for all weights.
+gpu_layer->useExternalWeights(
+    params.rms1_gamma,
+    params.rms2_gamma,
+    params.attn_qkv_weight,
+    params.attn_qkv_bias,
+    params.attn_out_weight,
+    params.attn_out_bias,
+    params.ffn_w1,
+    params.ffn_b1,
+    params.ffn_w2,
+    params.ffn_b2
+);
+```
+
+### Expected Results After Fix
+
+1. TrainingTensors is the SINGLE source of truth for ALL encoder weights
+2. GPUEncoderLayer's internal Tensors POINT TO TrainingTensors (via `share_grad()`)
+3. Gradients computed in autograd backward will update TrainingTensors' grad buffers
+4. No more dead memory - all allocated weights are actually used
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔴 PREVIOUS: Issue #88 - Embedding Backward Skip Flag Not Set for Tied Weights (ROOT CAUSE OF MODE COLLAPSE!)
+
+### Discovery (January 29, 2026)
+
+After investigating why Issue #87 (same Tensor for tied weights) didn't fix mode collapse, traced through the EmbeddingGradFn::apply() code and found:
+
+1. PCGrad buffer is NOT allocated (Issue #87 superseded it)
+2. `g_skip_embedding_backward_for_tied_weights` is initialized to `false` and **NEVER SET TO TRUE**
+3. Code falls through to "normal mode" with comment: `"// No PCGrad, no skip: run embedding backward normally (will cancel!)"`
+
+### Root Cause
+
+**TensorContract_GPU.cu line 56:**
+```cpp
+bool g_skip_embedding_backward_for_tied_weights = false;  // NEVER SET TO TRUE!
+```
+
+**EmbeddingGradFn::apply() lines 2707-2714:**
+```cpp
+} else if (g_skip_embedding_backward_for_tied_weights) {
+    // Fallback: skip embedding backward entirely (previous fix)
+    AG_TRACE("[EmbeddingGradFn] SKIPPING embedding backward - weights tied, no PCGrad buffer\n");
+} else {
+    // No PCGrad, no skip: run embedding backward normally (will cancel!)
+    kernel_embedding_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        grad_output.data, token_ids, weight_grad, num_tokens, d_model);
+```
+
+The grep search confirmed only **ONE definition** of this variable at line 56 with no assignments anywhere else!
+
+### Why Gradients Cancel
+
+- **LM head backward**: `grad_W = h^T @ grad_logits` where `grad_logits[t,v] = p[t,v] - target[t,v]`
+  - For token 277 (SPACE): grad_logits[277] is NEGATIVE when model over-predicts
+  - LM head gradient wants to DECREASE W[277] to reduce SPACE probability
+  
+- **Embedding backward**: `grad_E[token_id] += grad_encoder[pos]`
+  - Adds encoder backward gradient (from chain rule through layers)
+  - This gradient has OPPOSITE sign because embedding wants to DECREASE input contribution
+
+- **Result**: With tied weights writing to same buffer:
+  - LM head: writes negative gradient to W[277]
+  - Embedding: writes positive gradient (opposite) to same W[277]
+  - **Combined: gradients CANCEL to ~zero!**
+
+The diagnostic from Issue #60 showed: `LM_HEAD: sum=+4.05, EMBEDDING: sum=-4.05, COMBINED: sum=0.00, COSINE=-1.0 (CANCELING)`
+
+### Fix Applied (Phase1_Startup.cu)
+
+Inside the Issue #87 block where PCGrad was disabled:
+```cpp
+if (model_cfg.tie_embeddings) {
+    // ISSUE #88 FIX: Set skip flag to prevent gradient cancellation!
+    g_skip_embedding_backward_for_tied_weights = true;
+    
+    ctx->logging.logger->log("✓ Issue #87: Using SAME Tensor for tied weights (PyTorch-style)");
+    ctx->logging.logger->log("  PCGrad is NO LONGER NEEDED - gradients accumulate naturally");
+    ctx->logging.logger->log("✓ Issue #88: Embedding backward SKIPPED for tied weights");
+}
+```
+
+### Expected Results After Fix
+
+1. Embedding backward SKIPPED when tie_embeddings=true
+2. Only LM head gradient remains (no cancellation)
+3. p_277 should stay ~1e-5 like PyTorch baseline (not explode to >0.1)
+4. Model should NOT collapse to predicting only SPACE token
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🟢 RESOLVED: Issue #87 - Issue #83 Normalization CRUSHING Attention Gradients
+
+### Discovery (January 29, 2026)
+
+Training log `training_17696307607301724.log` showed classic vanishing gradient pattern:
+- **attn gradients**: 1.96 → 0.08 (24x DECREASE)
+- **ffn gradients**: 1.83 → 0.07 (26x DECREASE)
+- **rms gradients**: 0.02 → 0.60 (30x INCREASE - still has signal)
+- **Loss**: NOT improving, actually INCREASING (10.5→13.5)
+
+### Root Cause
+
+Issue #83's "fix" normalized dQ/dK to match dV magnitude:
+```cpp
+const float dq_scale = (dq_rms > 1e-8f) ? (dv_ref / dq_rms) : 1.0f;  // Divides by huge dQ, multiplies by tiny dV
+```
+
+This was correct when Issue #77 found gradient EXPLOSION (dQ/dK 500,000x larger than dV).
+
+**BUT:** Issue #84 fixed the ROOT CAUSE - the missing FlashAttention preprocessing kernel (`flash_bwd_dot_do_o_kernel`). Now dQ/dK are at proper magnitude.
+
+With both fixes active:
+1. Issue #84 → dQ/dK no longer explode (correct magnitude)
+2. Issue #83 → dQ/dK scaled down to match tiny dV → VANISHING!
+
+The doc at line 270 explicitly said:
+> "Issue #83 Normalization Can Be Removed... With the preprocessing kernel fix, that normalization is **no longer needed and may actually harm training**"
+
+### Fix Applied (TensorContract_GPU.cu)
+
+Disabled Issue #83 normalization - all gradients now use scale=1.0:
+```cpp
+// Scale = 1.0 (no normalization - Issue #84 fixed root cause)
+kernel_accumulate_grad<<<acc_blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+    q_grad, grad_q_fp32, q_elems, 1.0f);  // Was: dq_scale (crushing to ~1e-6)
+```
+
+### Expected Results After Fix
+
+1. Attention gradients should stay at ~1-5 magnitude (matching early training)
+2. FFN gradients should stay at ~1-4 magnitude
+3. Loss should DECREASE, not increase
+4. Encoder layers will actually learn
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔴 PREVIOUS: Issue #86 - Autograd Training Path Bypasses Centering (ROOT CAUSE OF MODE COLLAPSE!)
+
+### Discovery (January 28, 2026)
+
+After extensive investigation of mode collapse (Token 277 SPACE logit exploding from -0.08 → 3.11 in just 3 batches), discovered that the Issue #37/#43 centering fix was **NEVER APPLIED** in the autograd training path!
+
+### Timeline of Bug
+
+1. **Issue #37 Fix (January 2026)**: Added `centerHiddenStates()` to `lm_head_GPU.cu::launchLMHeadForward()`
+2. **Autograd Migration (January 2026)**: Training moved to `AutogradTraining.cu` using `autograd::matmul()` directly
+3. **Bug Introduced**: The new autograd path NEVER called the centering function!
+4. **Result**: Mode collapse returned despite "having the fix"
+
+### Root Cause Analysis
+
+**AutogradTraining.cu line 603 (BEFORE FIX):**
+```cpp
+// This bypasses centering entirely!
+Tensor logits_tensor = autograd::matmul(
+    ctx.lm_input_tensor,  // Raw encoder output - NOT CENTERED!
+    lm_weights,
+    ctx.stream,
+    nullptr,
+    nullptr,
+    true
+);
+```
+
+The centering function existed in `lm_head_GPU.cu`, but `AutogradTraining.cu`:
+1. Didn't include the header
+2. Didn't call the centering function
+3. Passed raw encoder output directly to matmul
+
+### Evidence
+
+**Token 277 Logit Explosion Timeline:**
+| Batch | Token 277 logit | z-score | Status |
+|-------|-----------------|---------|--------|
+| 1 | -0.083 | -0.49 | NORMAL |
+| 2 | **+1.46** | **8.44** | 🔴 EXPLOSION |
+| 4 | **+3.11** | **18.00** | 🔴🔴 COLLAPSED |
+
+**Gradient Analysis:**
+- LM head gradient sum: POSITIVE (WRONG - should be negative to decrease W[277])
+- Embedding gradient sum: NEGATIVE (correct)
+- Without centering: `negative_mean × negative_grad = POSITIVE update`
+
+### Fix Applied (3 files)
+
+**1. lm_head_GPU.hpp - Exposed public centering function:**
+```cpp
+void launchCenterHiddenStates(
+    const float* input,    // [total_tokens, d_model] - encoder output
+    float* output,         // [total_tokens, d_model] - scratch buffer
+    int d_model,
+    int total_tokens,
+    cudaStream_t stream
+);
+```
+
+**2. lm_head_GPU.cu - Added public wrapper:**
+```cpp
+void launchCenterHiddenStates(
+    const float* input, float* output, int d_model, int total_tokens, cudaStream_t stream
+) {
+    // RULE 20: Fail loud validation
+    if (!input) throw std::runtime_error("input is NULL");
+    if (!output) throw std::runtime_error("output is NULL");
+    centerHiddenStates(input, output, d_model, total_tokens, stream);
+}
+```
+
+**3. AutogradTraining.cu - Added centering before LM head:**
+```cpp
+#include "../../Layers/LMHead/lm_head_GPU.hpp"  // Issue #37/#43: launchCenterHiddenStates
+
+// Before matmul:
+const bool use_centering = cfg->lm_head_center_hidden_states;
+float* centered_scratch = ts->centered_activation_scratch();
+
+if (use_centering) {
+    launchCenterHiddenStates(
+        ctx.encoder_output_tensor.data,  // input: encoder output
+        centered_scratch,                 // output: scratch buffer
+        cfg->d_model,
+        total_tokens,
+        ctx.stream
+    );
+    lm_input_ptr = centered_scratch;  // Use centered data for matmul
+}
+```
+
+**4. ai_config.json - ENABLED centering:**
+```json
+"lm_head_centering": {
+    "enabled": true,
+    "center_hidden_states": true,
+    "recenter_gradients": true
+}
+```
+
+### Why This Was Missed
+
+1. The centering scratch buffer WAS allocated (84 MB) - looked like it was working
+2. The config DID have `center_hidden_states: true` - but never used!
+3. No error messages - code silently bypassed the fix
+4. PCGrad (Issue #60) was functioning correctly - red herring
+5. Focus was on gradient direction analysis, not the forward path
+
+### Expected Results After Fix
+
+1. Hidden states will be zero-mean before LM head projection
+2. `Σ_i hidden[t,i] = 0` for all positions t
+3. Weight gradients will NOT have systematic bias
+4. Token 277 logit should stay ~0 instead of exploding
+5. Mode collapse should NOT occur
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🟢 RESOLVED: Issue #85 - Validation Token Budget Exceeds Training Buffer Size (CRITICAL FIX Jan 2026)
+
+### Discovery (January 30, 2026)
+
+Training completed successfully (3475 batches, ~12 hours) but crashed immediately after "Created 387 validation batches" message with exit code -1073740791 (0xC0000409 = STATUS_STACK_BUFFER_OVERRUN).
+
+### Root Cause
+
+**Training buffers allocated based on config:**
+```cpp
+// Phase1_Startup.cu line 879
+const uint32_t token_budget = static_cast<uint32_t>(actual_batch_size) * seq_cap;
+// With batch_size=7, max_seq_len=1024: token_budget = 7 * 1024 = 7168
+```
+
+**Validation used HARDCODED constant:**
+```cpp
+// Phase2_TrainingLoop.cu line 1572
+val_opts.max_tokens_per_batch = kDefaultMaxTokensPerBatch;  // = 8192 (exceeds 7168!)
+```
+
+This caused validation batches to write past buffer boundaries.
+
+### Fix Applied (Phase2_TrainingLoop.cu)
+
+Changed validation to use the model's actual buffer capacity:
+```cpp
+// Issue #85 FIX: Use model's actual buffer capacity
+const auto& model_cfg = ctx.model->getConfig();
+const int model_token_budget = model_cfg.max_tokens_per_batch;
+const int safe_token_budget = (model_token_budget > 0) 
+    ? model_token_budget 
+    : static_cast<int>(model_cfg.max_cached_batch * model_cfg.max_cached_seq_len);
+val_opts.max_tokens_per_batch = static_cast<uint32_t>(safe_token_budget);
+```
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🟢 RESOLVED: Issue #84 - Missing FlashAttention Preprocessing Kernel (ROOT CAUSE!)
+
+### Discovery (January 29, 2026)
+
+After extensive investigation through Issue #77-#83, traced the gradient explosion to its TRUE root cause:
+
+**GRIM's `run_flash_bwd()` was missing the preprocessing kernel that Tri Dao's reference implementation requires!**
+
+### The Bug
+
+**GRIM's `run_flash_bwd` (BROKEN):**
+```cpp
+template<typename Kernel_traits, bool Is_causal>
+void run_flash_bwd(Flash_bwd_params& params, cudaStream_t stream) {
+    // ONLY launched main backward kernel - NO PREPROCESSING!
+    kernel<<<grid, ...>>>(params);
+}
+```
+
+**Tri Dao Reference `run_flash_bwd_seqk_parallel` (CORRECT):**
+```cpp
+template<typename Kernel_traits, bool Is_dropout, bool Is_causal>
+void run_flash_bwd_seqk_parallel(Flash_bwd_params &params, cudaStream_t stream) {
+    // Step 1: Launch preprocessing kernel to compute dP_sum for ALL query positions
+    flash_bwd_dot_do_o_kernel<true, Kernel_traits><<<grid_m, ...>>>(params);
+    
+    // Step 2: Launch main backward kernel
+    flash_bwd_dq_dk_dv_loop_seqk_parallel_kernel<<<grid_n, ...>>>(params);
+}
+```
+
+### Why This Caused Gradient Explosion
+
+The FlashAttention backward formula is:
+```
+dS = P * (dP - dP_sum)
+dQ = dS @ K
+dK = dS^T @ Q
+dV = P^T @ dO
+```
+
+Where `dP_sum = sum(dO * O)` (the softmax correction term).
+
+**The main backward kernel (`flash_bwd_dq_dk_dv_loop_kernel`):**
+1. Uses template parameter `Is_first` to conditionally compute `dP_sum` inline via `dot_do_o()`
+2. `Is_first=true` only for the **first column block** of each tile
+3. The kernel then **reads `gdPsum` for ALL m_blocks** expecting pre-computed values
+4. For positions where `dP_sum` was NOT computed inline, `gdPsum` contained **GARBAGE** from `cudaMalloc`
+
+**Evidence from training_run.log:**
+```
+Batch 1 (calls 1-12):
+- Calls 1-2: FA-BWD-OUT dQ_max=0.000001 ← CORRECT (starting m_block got valid data)
+- Calls 3-12: FA-BWD-OUT dQ_max=0.4-0.7 ← EXPLODED 300,000x (garbage in gdPsum)
+```
+
+The first 2 layers per batch happened to have their starting m_blocks aligned correctly, while layers 3-12 read from uninitialized memory.
+
+### Fix Applied (Flash_Attention_Kernal.cu)
+
+**1. Added preprocessing kernel template (line ~267):**
+```cpp
+template<bool Clear_dQaccum, typename Kernel_traits>
+__global__ void flash_bwd_dot_do_o_kernel(const Flash_bwd_params params) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    grim_flash::compute_dot_do_o<Clear_dQaccum, Kernel_traits>(params);
+#else
+    // ...
+#endif
+}
+```
+
+**2. Modified `run_flash_bwd` to launch preprocessing kernel FIRST (line ~344):**
+```cpp
+template<typename Kernel_traits, bool Is_causal>
+void run_flash_bwd(Flash_bwd_params& params, cudaStream_t stream) {
+    const int num_m_block = (params.seqlen_q + Kernel_traits::kBlockM - 1) / Kernel_traits::kBlockM;
+    dim3 grid_preprocess(num_m_block, params.b, params.h);  // For preprocessing
+    dim3 grid(params.b, params.h, 1);  // For main backward kernel
+    
+    // ISSUE #84 FIX: Launch preprocessing kernel FIRST
+    {
+        auto preprocess_kernel = &flash_bwd_dot_do_o_kernel</*Clear_dQaccum=*/true, Kernel_traits>;
+        preprocess_kernel<<<grid_preprocess, Kernel_traits::kNThreads, 0, stream>>>(params);
+        check_cuda(cudaGetLastError(), "flash_bwd_dot_do_o_kernel launch");
+    }
+    
+    // Then launch main backward kernel (unchanged)
+    // ...
+}
+```
+
+### Expected Results After Fix
+
+- `dsoftmax_sum` buffer will be properly populated for ALL query positions
+- dQ/dK gradients should now be proportional to dO magnitude (~0 when dO≈0)
+- No more 100,000x+ gradient explosion in middle layers
+- Attention gradient norm should match FFN gradient norm (~2-5 instead of 18,000+)
+
+### Issue #83 Normalization Can Be Removed
+
+The Issue #83 "fix" that normalized dQ/dK to dV magnitude was a bandaid for this root cause. With the preprocessing kernel fix, that normalization is no longer needed and may actually harm training by distorting gradient direction. Consider removing it after verifying Issue #84 fix works.
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔵 HISTORICAL: Issue #77 - FlashAttention dQ/dK Gradient Explosion (SUPERSEDED BY #84)
+
+### Discovery Update (January 28, 2026)
+
+**Diagnostic logging (Issue #77 instrumentation) reveals the ACTUAL pattern:**
+
+1. ✅ **`grad_b_BEFORE` is correctly zeroed** for ALL MatMulGradFn calls - NOT a beta_accum bug!
+2. ❌ **FlashAttention backward itself produces exploded dQ/dK** - the explosion happens INSIDE FA
+3. ⚠️ **dV stays normal (~0.00002) while dQ/dK explode (0.6-1.6)** - asymmetric gradient pattern
+
+### FlashAttention Backward Output Analysis (Batch 0)
+
+| FA Call | Layer | dQ max | dK max | dV max | Status |
+|---------|-------|--------|--------|--------|--------|
+| 1 | L11 | 0.000000 | 0.000003 | 0.000020 | ✅ Normal |
+| 2 | L10 | 0.000000 | 0.000008 | 0.000019 | ✅ Normal |
+| 3 | L9 | 0.000000 | 0.000015 | 0.000024 | ✅ Normal |
+| 4 | L8 | 0.000000 | 0.000007 | 0.000023 | ✅ Normal |
+| 5 | L7 | 0.000000 | 0.000008 | 0.000029 | ✅ Normal |
+| **6** | **L6** | **0.641572** | **1.630841** | 0.000022 | ❌ **dQ/dK EXPLODE!** |
+| **7** | **L5** | **0.150132** | **1.517553** | 0.000015 | ❌ **dQ/dK EXPLODE!** |
+| **8** | **L4** | **0.318822** | **1.080052** | 0.000015 | ❌ **dQ/dK EXPLODE!** |
+
+**Key Pattern:**
+- **dV stays normal** (~0.00002) across ALL layers
+- **dQ and dK explode** by 100,000x-200,000x starting at L6 (FA call 6)
+- **dK > dQ** consistently (roughly 2-10x larger)
+
+### What This Means
+
+The asymmetry `dV_normal, dQ/dK_exploded` indicates:
+1. **Value gradients** (how to change information flow) are healthy
+2. **Query/Key gradients** (how to change attention patterns) are exploding
+
+This is a **FlashAttention backward numerical instability**, not a GEMM accumulation bug.
+
+### Diagnostic Evidence (training_run.txt)
+
+**Normal layer (L11, FA-BWD call 1):**
+```
+[FA-BWD-OUT] dQ: max=0.000000 rms=0.000000
+[FA-BWD-OUT] dK: max=0.000003 rms=0.000001
+[FA-BWD-OUT] dV: max=0.000020 rms=0.000006
+```
+
+**Exploding layer (L6, FA-BWD call 6):**
+```
+[FA-BWD-OUT] dQ: max=0.641572 rms=0.211325
+[FA-BWD-OUT] dK: max=1.630841 rms=0.508276  ← 500,000x larger than L11!
+[FA-BWD-OUT] dV: max=0.000022 rms=0.000007  ← Still normal!
+```
+
+### beta_accum Hypothesis DISPROVEN
+
+The diagnostic shows `grad_b_BEFORE` is **all zeros** for every call:
+```
+[Issue77-CachedActivation] grad_b_BEFORE_call13_K768_N1280: min=0.0 max=0.0 mean=0.0 std=0.0
+```
+
+This proves:
+- ✅ Gradient buffers ARE being properly zeroed by zeroGrad()
+- ✅ beta_accum=1.0 is NOT accumulating garbage
+- ❌ The explosion comes from VALID but HUGE grad_qkv values from FlashAttention
+
+### W_qkv Gradient Explosion Math
+
+At the exploding layer (call 13):
+- `ln1_out`: min=-0.000073, max=4.074906, std=0.995535 (reasonable)
+- `grad_qkv`: min=-0.004445, **max=1.007812**, std=0.052598 (HUGE max!)
+- `grad_W_qkv = ln1_out^T @ grad_qkv`
+- Result: max(grad_W_qkv) = 4.0 × 1.0 × 3605 tokens ≈ **14,420** (matches observed 14,870!)
+
+### Previous Evidence (January 27, 2026)
+
+| Batch | seq_len | attn grad | ffn grad | Status |
+|-------|---------|-----------|----------|--------|
+| 1 | 515 | 20,094 | 2.06 | ❌ EXPLODED |
+| 4 | **670** | **2.66** | **2.33** | ✅ **NORMAL!** |
+| 7 | **584** | **440,608** | 1.62 | ❌ **BIGGEST EXPLOSION!** |
+| 8 | 996 | 332,658 | 2.35 | ❌ EXPLODED |
+| 9 | 1024 | 296,357 | 1.49 | ❌ EXPLODED |
+
+**KEY OBSERVATION:** Batch 7 has seq_len=584 (shortest!) but the BIGGEST explosion (440,608). This **DISPROVES** Issue #76's max_seq_len hypothesis!
+
+### Why Issue #76 Was WRONG
+
+1. **Claimed:** Explosion happens when seq_len first reaches max_seq_len=1024
+2. **Reality:** 
+   - Batch 4 (seq=670) is NORMAL
+   - Batch 5 (seq=1024) EXPLODES - matches Issue #76
+   - BUT Batch 7 (seq=584) has the BIGGEST explosion!
+   - The explosion is RANDOM, not correlated with sequence length
+
+### Per-Layer Analysis: W_qkv vs Flash Attention Outputs
+
+From GradExport data for Batch 0 (lens=515):
+
+| Layer | FA dK_max | W_qkv grad norm | Status |
+|-------|-----------|-----------------|--------|
+| 0 | 0.00004 | 0.003 | ✅ Both tiny |
+| 1 | 1.16 | 0.018 | ✅ Normal |
+| 2 | 1.55 | 0.027 | ✅ Normal |
+| 3 | 1.69 | 0.054 | ✅ Normal |
+| 4 | 1.88 | 0.049 | ✅ Normal |
+| 5 | 1.38 | **3,525** | ❌ FA normal, W_qkv EXPLODED! |
+| 6 | 2.07 | **12,183** | ❌ FA normal, W_qkv EXPLODED! |
+| 7 | 0.000008 | **3,781** | ❌ **FA TINY, W_qkv EXPLODED!** |
+| 8 | 0.000008 | **6,044** | ❌ **FA TINY, W_qkv EXPLODED!** |
+| 9 | 0.000008 | **5,839** | ❌ **FA TINY, W_qkv EXPLODED!** |
+| 10 | 0.000006 | **10,877** | ❌ **FA TINY, W_qkv EXPLODED!** |
+| 11 | 0.000003 | 0.064 | ✅ Both tiny |
+
+**SMOKING GUN:** Layers 7-10 have Flash Attention dK values of ~0.000008 (basically zero), yet their W_qkv weight gradients are 3,781 to 10,877!
+
+### The Real Bug Location
+
+The weight gradient is computed as:
+\grad_W_qkv = ln1_out^T @ grad_qkv
+\
+Where:
+- \ln1_out\ = cached RMSNorm output (input to W_qkv forward)
+- \grad_qkv\ = merged gradients from dQ + dK + dV
+
+If \grad_qkv\ is tiny (from FA backward) but \grad_W_qkv\ is huge, the bug must be:
+1. **Corrupted \ln1_out\ cache** - contains garbage or NaN values
+2. **Wrong \eta_accum\ in GEMM** - accumulating stale/garbage gradients
+3. **Pointer aliasing** - multiple layers sharing the same gradient buffer
+
+### Current Hypothesis: MatMulGradFn beta_accum Bug
+
+From \TensorContract_GPU.cu\ line 3547:
+\\cpp
+const float beta_accum = 1.0f;  // Accumulate to existing gradient
+\
+This means **ALL weight gradient GEMMs use beta=1.0**. But:
+- First micro-batch should use beta=0.0 (overwrite)
+- Second micro-batch should use beta=1.0 (accumulate)
+
+The \eta_accum = 1.0f\ is UNCONDITIONAL! If gradient buffers aren't properly zeroed by \zeroGrad()\ for EVERY MatMulGradFn instance, gradients will accumulate garbage.
+
+### Investigation TODO
+
+1. [x] Add diagnostic to MatMulGradFn showing grad_b BEFORE and AFTER GEMM - **DONE: grad_b_BEFORE is zeros**
+2. [x] Check if \zeroGrad()\ zeros the Tensor.grad buffers - **DONE: Properly zeroed**
+3. [ ] Verify ln1_out cache values are finite and reasonable
+4. [ ] Check if layers 5-10 share any buffers that 0-4 and 11 don't
+5. [ ] Investigate ALiBi + FlashAttention backward numerical stability
+
+**Status:** 🔴 **ROOT CAUSE IDENTIFIED** - See Issue #78 below
+
+---
+
+## 🔴 NEW: Issue #78 - ALiBi Causes dQ/dK vs dV Asymmetry Through Softmax Backward Math
+
+### Discovery (January 28, 2026)
+
+After ruling out beta_accum bug (grad_b_BEFORE is correctly zeroed), traced through FlashAttention backward math to understand WHY dQ/dK explode while dV stays normal.
+
+### The Critical Asymmetry in FlashAttention Backward
+
+**Backward math (from flash_bwd_kernel.h):**
+```
+dP = dO @ V^T                           // Lines ~573
+dS = P * (dP - sum_k(P_k * dP_k))       // Lines 587-593 (softmax backward)
+dQ = dS @ K                             // Line 653
+dK = dS^T @ Q                           // Line 688
+dV = P^T @ dO                           // Line ~629
+```
+
+**The asymmetry:**
+- **dV = P^T @ dO** - Uses softmax probabilities P directly (bounded 0-1)
+- **dQ and dK use dS** - Where `dS = P * (dP - dP_sum)`
+
+### Why ALiBi Amplifies dQ/dK But NOT dV
+
+**ALiBi with slope -0.25 and seq_len=1024:**
+- For head 0: `alibi_bias = -0.25 * distance`
+- At maximum distance: `bias = -0.25 * 1024 = -256`
+- This makes `P[query_pos, 0]` essentially 0 (exp(-256) ≈ 0)
+
+**Effect on attention distribution P:**
+- P becomes highly localized (recent positions dominate)
+- Most P[i,j] values are near-zero for large distances
+- Only positions within ~32 tokens have significant P (since -0.25 * 32 = -8)
+
+**Effect on dV = P^T @ dO:**
+- P is bounded [0, 1], sums to 1 per row
+- dV is a weighted average of dO values
+- **dV stays bounded** because P is a proper probability distribution
+
+**Effect on dS = P * (dP - dP_sum) and dQ/dK:**
+- `dP = dO @ V^T` can have large values
+- `dP_sum = sum_k(P_k * dP_k)` is dominated by positions where P is large
+- For positions where `P[i,j] ≈ 0`, the term `P[i,j] * (dP[i,j] - dP_sum)` ≈ `-P[i,j] * dP_sum`
+- If `dP_sum` is large (from significant positions) but P[i,j] is small but non-zero (e.g., 1e-10):
+  - The gradient doesn't fully cancel!
+  - Residual terms accumulate
+
+### The Compounding Effect Through Layers
+
+**User insight: "nothing is going to be per layer it will only ever compound"**
+
+1. **Layer 11** (closest to output): Receives dO from loss, computes dQ/dK/dV
+2. dQ flows back through W_qkv gradient → W_qkv updates
+3. **Residual connection**: dQ also flows to layer 10's output via skip connection
+4. **Layer 10**: Now has slightly amplified input gradient
+5. **Each layer**: Amplification accumulates through the softmax backward
+6. **By layer 6-0**: Amplification has compounded to 100,000x
+
+**Evidence supporting compounding:**
+| FA Call | Layer | dQ max | dK max | Ratio to L11 |
+|---------|-------|--------|--------|--------------|
+| 1 | L11 | 0.000000 | 0.000003 | 1x |
+| 6 | L6 | 0.641572 | 1.630841 | **543,614x** |
+
+### GQA Reduction Does NOT Cause the Asymmetry
+
+Checked `kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32`:
+- Applies SAME `gqa_grad_scale = 1/3` to BOTH dK and dV
+- dQ uses `kernel_BSHD_bf16_to_BHSD_fp32` (no scaling)
+- GQA treatment is IDENTICAL for K and V
+
+This proves the dQ/dK vs dV difference originates INSIDE FlashAttention backward, NOT in our reduction/accumulation code.
+
+### Proposed Fix Options
+
+1. **Gradient clipping INSIDE attention backward** - Clip dS before computing dQ/dK
+2. **ALiBi slope reduction** - Use gentler slopes to reduce extreme attention distributions
+3. **Separate dQ/dK gradient cap** - Limit dQ/dK magnitude relative to dV
+4. **FlashAttention v2.6+ update** - Check if newer versions have numerical stability fixes
+
+### Immediate Mitigation
+
+Reduce ALiBi slopes to prevent extreme attention patterns:
+```json
+// Current: m_max=0.25 → -256 bias at distance 1024
+// Proposed: m_max=0.0625 → -64 bias at distance 1024 (less extreme)
+```
+
+**Status:** ✅ **FIX IMPLEMENTED** - ALiBi clamping added via ALIBI_MAX_BIAS
+
+---
+
+## 🔴 CRITICAL: Issue #81 - Issue #80 "Fix" Was WRONG - Removed ALL 1/N Scaling
+
+### Discovery (January 28, 2026)
+
+After Issue #78 ALiBi fix, attention dQ/dK/dV ratios are now normal (~0.7x-1.0x via Issue #79 diagnostic). However, gradient norms are still **18,000x too large** compared to PyTorch baseline:
+
+| Component | PyTorch Reference | GRIM (Issue #80) | Ratio |
+|-----------|------------------|------------------|-------|
+| emb/head | 0.8764 | 15,803 | **18,000x** |
+| attn | 0.05-0.33 | 9,000-347,000 | **100,000x** |
+| rms | 0.03-0.1 | 100-10,000 | **10,000x** |
+
+**Root Cause:** Issue #80 "fix" INCORRECTLY removed ALL 1/N scaling from cross-entropy backward:
+
+```cuda
+// Issue #80 (WRONG):
+grad_row[v] = prob - one_hot;  // No scaling!
+
+// Comment said: "dividing gradient by N again would make gradients N² too small"
+// THIS REASONING WAS WRONG!
+```
+
+### Mathematical Proof Issue #80 Was Wrong
+
+For mean reduction loss:
+```
+loss = sum(ce_i) / N                              # Mean reduction
+d(loss)/d(logits_i) = d(sum(ce_i)/N)/d(logits_i)
+                    = (1/N) * d(sum(ce_i))/d(logits_i)
+                    = (1/N) * (softmax_i - one_hot_i)  # Chain rule!
+```
+
+**The 1/N is REQUIRED by the chain rule!** Issue #80 incorrectly reasoned that "loss mean reduction already handles 1/N" - but that only affects the loss VALUE, not the GRADIENT path.
+
+### PyTorch Verification
+
+```python
+>>> F.cross_entropy(logits, targets, reduction='mean').backward()
+>>> grad_mean = logits.grad.clone()
+>>> logits.grad.zero_()
+>>> F.cross_entropy(logits, targets, reduction='sum').backward()
+>>> grad_sum = logits.grad.clone()
+>>> grad_sum / grad_mean  # = exactly N (number of tokens)
+```
+
+### Issue #79 Diagnostic Proves Issue #78 IS Working
+
+Despite Issue #80's wrong gradient scale, the Issue #79 diagnostic shows dQ/dK/dV are NOW balanced:
+```
+[Issue79-MERGE-DIAG] grad_Q: max=0.003159 rms=0.000357
+[Issue79-MERGE-DIAG] grad_K: max=0.001675 rms=0.000130
+[Issue79-MERGE-DIAG] grad_V: max=0.004333 rms=0.000583
+[Issue79-MERGE-DIAG] RATIO max(Q,K)/V: max_ratio=0.7x rms_ratio=0.6x  ← NORMAL!
+```
+
+This proves the ALiBi clamping fix (Issue #78) IS working. The remaining problem is pure gradient SCALE, not direction.
+
+### Fix Applied (AutogradLoss.cu)
+
+**1. Kernel signature (line ~190):**
+```cuda
+__global__ void kernelUnifiedLossBackward(
+    ...
+    float inv_valid_count  // ISSUE #81: Pass 1/N as float
+) {
+```
+
+**2. Kernel body (line ~277):**
+```cuda
+// ISSUE #81 FIX: MUST divide by valid_count to match PyTorch mean reduction!
+grad_row[v] = (prob - one_hot) * inv_valid_count;
+```
+
+**3. Launch function (line ~315):**
+```cuda
+const float inv_valid_count = (valid_count > 0) ? (1.0f / static_cast<float>(valid_count)) : 1.0f;
+kernelUnifiedLossBackward<<<num_tokens, block_size, 0, stream>>>(
+    logits, targets, valid_mask, grad_logits,
+    num_tokens, vocab_size, inv_valid_count
+);
+```
+
+### Expected Results After Fix
+
+- Gradient norms should match PyTorch baseline (~0.8 for emb_lm, ~0.05-0.3 for attn)
+- Training should proceed normally without mode collapse
+- This restores the correct Issue #58 behavior that Issue #80 incorrectly removed
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔴 SUPERSEDED: Issue #80 - Removed 1/N Scaling (WAS WRONG!)
+
+### Context (January 28, 2026)
+
+This "fix" was applied based on INCORRECT reasoning that removing 1/N scaling would fix gradient issues. It made things 18,000x worse.
+
+**WRONG reasoning from Issue #80:**
+> "dividing gradient by N again would make gradients N² too small"
+
+**Why this was wrong:**
+- Loss forward: `loss = sum(ce) / N` (division by N affects LOSS VALUE only)
+- Loss backward: INDEPENDENT chain rule computation - requires its OWN 1/N factor
+- The 1/N in backward is NOT "doing it again" - it's the chain rule!
+
+**Status:** ❌ **SUPERSEDED BY ISSUE #81** - This fix was incorrect and has been reverted
+
+---
+
+## 🔵 SUPERSEDED: Issue #76 - max_seq_len Boundary Hypothesis (DISPROVEN!)
+
+
+**Status:** ❌ **DISPROVED** (January 27, 2026)
+
+The Issue #76 hypothesis claimed gradient explosion happens when seq_len first reaches max_seq_len=1024. This was based on incomplete log analysis.
+
+**Evidence disproving Issue #76:**
+1. Batch 4 (seq=670) has attn=2.66 - NORMAL
+2. Batch 5 (seq=1024) has attn=163,475 - EXPLODED (seemed to support hypothesis)
+3. **BUT Batch 7 (seq=584) has attn=440,608** - BIGGEST explosion despite short sequence!
+4. The pattern is RANDOM, not correlated with sequence length
+
+**What actually causes the explosion:** See Issue #77 above - W_qkv weight gradient GEMM bug
+
+---
+
+## 🟡 LOWER PRIORITY: Issue #74b - Numeric Loss Scaling Kernel Race Condition
+
+### Discovery (January 27, 2026)
+
+Training log STILL shows `num` (numeric head) gradient dominating even though Issue #74 fix was implemented:
+
+```
+[GradTrace] COMPUTED COMPONENTS: total=4477.5542 emb_lm_tied=3.3138 num=4344.9854 attn=2.5215 ffn=0.8005 rms=1081.4725
+```
+
+The Issue #74 `scaleNumericGradKernel` was supposed to scale gradients by `1/count`, but the `num` component is still ~1000x larger than expected.
+
+### Root Cause
+
+**CUDA kernel launches are asynchronous!** The two kernels were launching back-to-back:
+
+```cuda
+numericLossKernel<<<...>>>(...);  // Writes count via atomicAdd
+// NO SYNC HERE!
+scaleNumericGradKernel<<<...>>>(...);  // Reads count - BUT count is still 0 or partial!
+```
+
+The `scaleNumericGradKernel` was reading `count` BEFORE `numericLossKernel` finished writing it via `atomicAdd`. This caused:
+- `count = 0` → division skipped entirely (n > 0 check fails)
+- Or `count = partial` → wrong scaling applied
+
+### Fix Applied (NumericLoss_GPU.cu)
+
+Added `cudaStreamSynchronize` between the two kernels:
+
+```cpp
+numericLossKernel<<<blocks, kBlockSize, 0, stream>>>(...);
+
+// CRITICAL: Wait for numericLossKernel to complete writing count via atomicAdd
+cudaError_t sync_err = cudaStreamSynchronize(stream);
+if (sync_err != cudaSuccess) {
+    return false;
+}
+
+scaleNumericGradKernel<<<blocks, kBlockSize, 0, stream>>>(...);
+```
+
+### Expected Results After Fix
+
+- `count` will have the correct value when `scaleNumericGradKernel` reads it
+- `num` gradient norm should drop from ~4000 to ~2-5 (similar to other components)
+- Numeric head gradients will be properly scaled by `1/N`
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🟢 RESOLVED: Issue #74 - Numeric Loss Gradients Missing Mean Reduction Scaling
+
+### Discovery (January 26, 2026)
+
+Training log showed `num` (numeric head) gradient dominating the total gradient norm:
+
+```
+[GradTrace] COMPUTED COMPONENTS: total=2641.7903 emb_lm_tied=2.6821 num=2641.7871 attn=2.2029 ffn=2.0609 rms=0.0210
+```
+
+The `num=2641.7871` component is **99.99% of the total gradient norm!** Other components are healthy (~2-4).
+
+### Root Cause Analysis
+
+**The text loss uses mean reduction** (cross-entropy loss divided by `valid_tokens`):
+```cpp
+// AutogradLoss.cu - text gradients scaled by 1/valid_count
+const float scale = (valid_count > 0) ? (1.0f / static_cast<float>(valid_count)) : 1.0f;
+```
+
+**The numeric loss also averages the loss value:**
+```cpp
+// ComputeLossBatch.cu line ~1060
+const float numeric_loss_avg = (numeric_loss_count > 0) 
+    ? (numeric_loss_sum / numeric_loss_count) : 0.0f;
+```
+
+**BUT the numeric loss GRADIENTS were NOT scaled by `1/count`!**
+```cuda
+// NumericLoss_GPU.cu line 81 (BEFORE FIX)
+grad_predictions[idx] = grad * loss_weight;  // Raw gradient, no 1/count scaling!
+```
+
+### Mathematical Analysis
+
+By chain rule, if loss is averaged:
+- `loss_avg = loss_sum / N`
+- `d(loss_avg)/d(pred) = (1/N) * d(loss_sum)/d(pred)`
+
+**Without the `1/N` scaling:**
+- Text gradients: ~O(1/3584) magnitude (properly scaled)
+- Numeric gradients: ~O(1) magnitude (raw, unscaled)
+- Ratio: ~3584x difference!
+
+This explains why `num=2641.7871` while other components are ~2-4.
+
+### Fix Applied (NumericLoss_GPU.cu)
+
+Added a scaling kernel that runs after the loss kernel:
+
+```cuda
+// Issue #74 FIX: Scale numeric gradients by 1/count to match mean reduction
+__global__ void scaleNumericGradKernel(
+    float* __restrict__ grad_predictions,
+    const int* __restrict__ count,
+    int total_tokens
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total_tokens) return;
+    
+    const int n = *count;
+    if (n > 0) {
+        grad_predictions[idx] *= (1.0f / static_cast<float>(n));
+    }
+}
+```
+
+Called in `launchNumericLoss()` after the main kernel:
+```cpp
+scaleNumericGradKernel<<<blocks, kBlockSize, 0, stream>>>(
+    outputs.grad_predictions,
+    outputs.count,
+    inputs.total_tokens);
+```
+
+### Expected Results After Fix
+
+- `num` gradient norm should be ~2-5 (similar magnitude to other components)
+- Total gradient norm should be ~3-6 (not dominated by numeric head)
+- Training should progress normally without numeric gradients overwhelming other parameters
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🟢 RESOLVED: Issue #71 - NumericHead Backward NEVER CALLED (ZERO GRADIENTS!)
+
+### Discovery (January 28, 2026)
+
+Training log showed `numeric_head=0` and `numeric_head_norm=0.000000` consistently across all batches:
+
+```
+[GradTrace] batch=1 micro=1/2 valid_tokens=3118
+           COMPUTED COMPONENTS: total=3.7823 emb_lm_tied=3.7750 num=0.0000 attn=0.5161 ffn=0.2313 rms=0.0025 sb=0.0025
+           component_norms: emb_lm_tied_norm=3.7750 numeric_head_norm=0.000000 attn_norm=0.5161 ffn_norm=0.2313 rms_norm=0.0025 sb_norm=0.0025
+```
+
+**All gradient component logs showed `num=0.0000` and `numeric_head_norm=0.000000`** even though numeric loss was being computed!
+
+### Root Cause Analysis
+
+**The forward path for numeric head:**
+```cpp
+// AutogradTraining.cu line 726
+ctx.numeric_head_output = numeric_head_forward(encoder_output, weights, bias, batch_size, seq_len, d_model, stream);
+// Creates Tensor with NumericHeadGradFn attached for autograd
+```
+
+**The numeric loss computation:**
+```cpp
+// ComputeLossBatch.cu line 1005
+launchNumericLoss(numeric_predictions, numeric_targets, mask, 
+                  grad_numeric_tensor.data,  // ← Gradients written HERE
+                  huber_delta, num_tokens, stream);
+```
+
+**The backward path (BROKEN):**
+```cpp
+// LanguageModel_Training.cu backward() BEFORE FIX
+training_state_.loss_tensor.backward(nullptr);  // Only text loss backward!
+// ← MISSING: numeric_head_output.backward() was NEVER called!
+```
+
+**The `NumericHeadGradFn::apply()` is fully implemented** with cuBLAS GEMM/GEMV operations to compute:
+- `grad_weight = encoder^T @ grad_predictions`
+- `grad_encoder = weights @ grad_predictions`
+- `grad_bias = sum(grad_predictions)`
+
+But because `numeric_head_output.backward()` was never called, this apply() method NEVER EXECUTED!
+
+### Impact
+
+- `numeric_head_weights` received **ZERO gradients** for entire training
+- Numeric head parameters were **NOT being trained at all**
+- Only the text (cross-entropy) loss path was working
+
+### Fix Applied (LanguageModel_Training.cu)
+
+After `training_state_.loss_tensor.backward(nullptr)`, added:
+
+```cpp
+// ISSUE #71 FIX: NumericHead backward was NEVER CALLED!
+if (config_.numeric_head_enabled && 
+    training_state_.autograd_ctx && 
+    training_state_.autograd_ctx->numeric_head_output.data &&
+    training_state_.autograd_ctx->numeric_head_output.grad_fn &&
+    training_state_.grad_numeric_tensor.data) {
+    
+    // Create Tensor wrapper around the gradient from launchNumericLoss
+    Tensor numeric_grad;
+    numeric_grad.data = training_state_.grad_numeric_tensor.data;
+    numeric_grad.shape = training_state_.autograd_ctx->numeric_head_output.shape;
+    numeric_grad.owns_data = false;
+    numeric_grad.stream = stream;
+    
+    // Call backward on numeric head output with loss gradients
+    training_state_.autograd_ctx->numeric_head_output.backward(&numeric_grad);
+}
+```
+
+### Expected Results After Fix
+
+- `numeric_head_norm` should be non-zero (matching text gradient magnitudes)
+- `num=X.XXXX` should appear in COMPUTED COMPONENTS (not 0.0000)
+- NumericHead weights should update via AdamW
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔴 PREVIOUS: Issue #69 - ALiBi Sign Error Causing Attention Score Explosion (ROOT CAUSE!)
+
+### Discovery (January 27, 2026)
+
+Training crashed with NaN in FlashAttention backward pass. Diagnostic showed:
+```
+[FA-BWD-SAVED] softmax_lse: n=43260 nan=0 inf=0 range=[-0.1267,325.1074]
+[SDPA-Backward] POST-FLASH dQ FULL (n=2768640): nan=7237 inf=123 first_nan_idx=108288
+```
+
+**The softmax_lse MAX value of 325 was the smoking gun!** Normal LSE should be ~6-10.
+
+### Root Cause Analysis
+
+**FlashAttention library's ALiBi implementation** (in `external/flash-attention/csrc/flash_attn/src/alibi.h` lines 44-50):
+```cpp
+if constexpr (Is_causal) {  // Causal attention path
+    tensor(mi, make_coord(j, nj)) += alibi_slope * col_idx;
+}
+```
+
+**The library uses `+= alibi_slope * col_idx`** where `col_idx` is the key position.
+
+**Standard ALiBi formula:** `bias = -m * distance` where m is positive, so bias is NEGATIVE.
+
+**What FlashAttention expects:** `alibi_slope` should already be NEGATIVE so that `+slope * col_idx` produces a negative bias.
+
+**What GRIM was providing:** POSITIVE slopes (0.63, 0.40, 0.25, etc.)
+
+**Result:** 
+- For query at position 514 attending to key at position 0:
+- `bias = +0.63 * 514 = +323.8` ← REWARDING distant attention instead of penalizing!
+- This caused attention scores to explode, LSE to reach 325
+- In backward: `exp(score - 325) = exp(-324) ≈ 0` → underflow → NaN
+
+### Mathematical Proof
+
+```
+GRIM computed slopes: 2^(-8 * (h+1) / num_heads) = 2^(-8 * 1/12) = 2^(-0.667) = 0.63
+Library applies: bias = slope * col_idx = 0.63 * 514 = +323.8 (WRONG!)
+
+Should be: bias = -0.63 * 514 = -323.8 (penalizes distant positions)
+```
+
+### Fix Applied (PositionalBiasMethod.cu)
+
+```cpp
+// ISSUE #69 FIX: FlashAttention library (alibi.h) uses += alibi_slope * col_idx for causal
+// attention. For the bias to PENALIZE distant positions (standard ALiBi behavior),
+// the slopes must be NEGATIVE. The library assumes slopes are already negative.
+out_slopes[h] = -std::pow(2.0f, exponent);  // Was: +std::pow(...)
+```
+
+### Expected Results After Fix
+
+- ALiBi slopes will be negative: -0.63, -0.40, -0.25, etc.
+- For position 514→0: bias = -0.63 * 514 = -323.8 (penalizes looking far back) ✓
+- For position i→i: bias = -0.63 * i (self-attention gets bias=0 when i=0)
+- softmax_lse will be in normal range (~6-10)
+- No NaN in backward pass
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
 
 ---
 

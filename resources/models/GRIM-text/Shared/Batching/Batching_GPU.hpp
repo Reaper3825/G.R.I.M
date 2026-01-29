@@ -114,6 +114,9 @@ struct BatchOptions {
     // === Batch ordering (post-packing) ===
     BatchOrdering batch_ordering = BatchOrdering::LENGTH_ASCENDING;  // curriculum by default
     bool interleave_overflow = true;       // spread overflow batches throughout instead of clustering
+    
+    // === RNG for shuffling (Issue #90) ===
+    uint64_t rng_seed = 0;                 // 0 = use random_device, >0 = deterministic shuffle
 };
 
 // =============================================================================

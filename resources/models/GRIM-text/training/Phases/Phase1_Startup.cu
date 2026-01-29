@@ -627,6 +627,7 @@ SequenceData loadTrainingData(
         
         size_t long_seq_count = 0;
         size_t generated_windows = 0;
+        size_t bos_prepended = 0;
         
         for (const auto& seq : sequences) {
             if (static_cast<int>(seq.token_ids.size()) <= max_seq_len) {
@@ -638,34 +639,67 @@ SequenceData loadTrainingData(
             const size_t seq_len = seq.token_ids.size();
             size_t start = 0;
             const size_t stride = static_cast<size_t>(sliding_window_stride);
+            bool is_first_window = true;
             
             while (start < seq_len) {
-                size_t end = std::min(seq_len, start + static_cast<size_t>(max_seq_len));
+                // Reserve 1 token for BOS if this is not the first window
+                const size_t effective_max = is_first_window 
+                    ? static_cast<size_t>(max_seq_len) 
+                    : static_cast<size_t>(max_seq_len - 1);
+                size_t end = std::min(seq_len, start + effective_max);
                 
                 TrainingSequence window;
-                window.token_ids.assign(seq.token_ids.begin() + start, seq.token_ids.begin() + end);
-                window.targets.assign(seq.targets.begin() + start, seq.targets.begin() + end);
-                window.token_numeric_values.assign(seq.token_numeric_values.begin() + start,
-                                                  seq.token_numeric_values.begin() + end);
-                window.token_numeric_mask.assign(seq.token_numeric_mask.begin() + start,
-                                                 seq.token_numeric_mask.begin() + end);
+                
+                // For non-first windows, prepend BOS token
+                if (!is_first_window && bos_id >= 0) {
+                    window.token_ids.push_back(bos_id);
+                    window.targets.push_back(-1);  // BOS position masked
+                    window.token_numeric_values.push_back(0.0f);
+                    window.token_numeric_mask.push_back(0);
+                    for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
+                        window.token_text_features.push_back(0);
+                    }
+                    window.token_text_mask.push_back(0);
+                    window.token_byte_lengths.push_back(0);
+                    bos_prepended++;
+                }
+                
+                // Copy window content
+                window.token_ids.insert(window.token_ids.end(),
+                    seq.token_ids.begin() + start, seq.token_ids.begin() + end);
+                window.targets.insert(window.targets.end(),
+                    seq.targets.begin() + start, seq.targets.begin() + end);
+                window.token_numeric_values.insert(window.token_numeric_values.end(),
+                    seq.token_numeric_values.begin() + start, seq.token_numeric_values.begin() + end);
+                window.token_numeric_mask.insert(window.token_numeric_mask.end(),
+                    seq.token_numeric_mask.begin() + start, seq.token_numeric_mask.begin() + end);
                 // GRMT v4: slice text features (16 values per token)
-                window.token_text_features.assign(
+                window.token_text_features.insert(window.token_text_features.end(),
                     seq.token_text_features.begin() + start * GRIM::Tokenizer::kTextFeatureDim,
                     seq.token_text_features.begin() + end * GRIM::Tokenizer::kTextFeatureDim);
-                window.token_text_mask.assign(seq.token_text_mask.begin() + start,
-                                              seq.token_text_mask.begin() + end);
+                window.token_text_mask.insert(window.token_text_mask.end(),
+                    seq.token_text_mask.begin() + start, seq.token_text_mask.begin() + end);
                 // GRMT v6: slice byte lengths
-                window.token_byte_lengths.assign(seq.token_byte_lengths.begin() + start,
-                                                 seq.token_byte_lengths.begin() + end);
+                window.token_byte_lengths.insert(window.token_byte_lengths.end(),
+                    seq.token_byte_lengths.begin() + start, seq.token_byte_lengths.begin() + end);
+                
+                // Mask first position if it's the first window (BOS already there)
+                // For non-first windows, BOS was prepended above with target=-1
+                if (is_first_window && !window.targets.empty()) {
+                    window.targets[0] = -1;  // Mask BOS position
+                }
+                
+                // Mask last position for window boundary (except validation)
                 if (mask_window_last_token && !window.targets.empty()) {
                     window.targets.back() = -1;
                 }
+                
                 windowed.push_back(std::move(window));
                 generated_windows++;
                 
                 if (end == seq_len) break;
                 start += stride;
+                is_first_window = false;
             }
         }
         
@@ -673,7 +707,8 @@ SequenceData loadTrainingData(
         if (long_seq_count > 0) {
             logger.log("Sliding window (" + split_name + "): " +
                        std::to_string(long_seq_count) + " long sequences expanded into " +
-                       std::to_string(generated_windows) + " windows");
+                       std::to_string(generated_windows) + " windows" +
+                       " (BOS prepended to " + std::to_string(bos_prepended) + " mid-sequence windows)");
         }
     };
     
@@ -943,10 +978,12 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
         // Calculate num_kv_heads (same logic as InitTrainingState.cu)
         int num_kv_heads = cfg.num_kv_heads;
 
+        // ISSUE #96: Pass positional_encoding to control position embedding allocation
         model->getTrainingState().initializeAutogradTensors(
             cfg.vocab_size, cfg.d_model, cfg.d_ff,
             cfg.num_layers, cfg.num_heads, num_kv_heads,
             cfg.max_seq_len, cfg.tie_embeddings, cfg.use_bias,
+            cfg.positional_encoding,  // Issue #96: Only allocate pos_emb for LEARNED mode
             stream
         );
         logger.log("✓ TrainingTensors initialized (Tensors OWN memory)");
@@ -1173,83 +1210,23 @@ OptimizerContext initializeOptimizer(
     ctx.dynamic_lr_controller.setRuntimeLimits(hp.dynamic_lr_min, hp.dynamic_lr_max);
     ctx.dynamic_lr_controller.setEnabled(hp.dynamic_lr_enabled);
     
-    std::cout << "[DEBUG-O] Creating GradAccumulationController..." << std::endl << std::flush;
-    // Gradient accumulation controller
-    logger.log("Initializing GradAccumulationController...");
-    ctx.grad_controller = std::make_unique<GRIM::ModelGradAccumulationController>();
+    // Gradient accumulation now tracked directly via hyperparameters
+    // ctx.optimizer.current_micro_step is reset at start of each accumulation window
+    const int accum_steps = std::max(1, hp.gradient_accumulation_steps);
+    logger.log("✓ Gradient accumulation configured: " + std::to_string(accum_steps) + 
+               " steps (effective batch = " + std::to_string(hp.batch_size * accum_steps) + ")");
+    ctx.current_micro_step = 0;
     
-    std::cout << "[DEBUG-P] Getting TrainingState reference..." << std::endl << std::flush;
-    // DEBUG: Verify pointer integrity before bindToModel
-    auto& ts = model.getTrainingState();
-    std::cout << "[DEBUG-Q] Got TrainingState, embedding_grads=" << ts.embedding_grads() << std::endl << std::flush;
-    {
-        std::ostringstream oss;
-        oss << "[DEBUG Phase1] Before bindToModel:\n"
-            << "  model address=" << &model << "\n"
-            << "  training_state address=" << &ts
-            << " (offset from model: "
-            << (reinterpret_cast<const char*>(&ts) - reinterpret_cast<const char*>(&model))
-            << " bytes)\n"
-            << "  embedding_grads=" << static_cast<const void*>(ts.embedding_grads()) << "\n"
-            << "  lm_head_weight_grads=" << static_cast<const void*>(ts.lm_head_weight_grads()) << "\n"
-            << "  embedding_grad_size=" << (static_cast<std::size_t>(model.getConfig().vocab_size) * model.getConfig().d_model) << "\n"
-            << "  tie_embeddings=" << (model.getConfig().tie_embeddings ? "TRUE" : "FALSE");
-        EmitModuleInfo(ModuleId::Training, oss.str());
-    }
-    
-    std::cout << "[DEBUG-R] Calling bindToModel..." << std::endl << std::flush;
-    ctx.grad_controller->bindToModel(model);
-    std::cout << "[DEBUG-S] bindToModel completed" << std::endl << std::flush;
-    
-    std::cout << "[DEBUG-T] Configuring GradAccumulationConfig..." << std::endl << std::flush;
-    GRIM::GradAccumulationConfig grad_cfg;
-    grad_cfg.accum_steps = std::max(1, hp.gradient_accumulation_steps);  // Load from config, minimum 1
-    grad_cfg.stream = model.getTrainingState().stream_ctrl.getPrimaryStream();  // Use StreamController's primary stream!
-    
-    std::cout << "[DEBUG-U] Checking stream validity..." << std::endl << std::flush;
-    // CRITICAL: Verify stream is valid before configuring controller
-    if (!grad_cfg.stream) {
-        EmitModuleError(ModuleId::Training,
-                        "[FATAL] GradAccumulationController: getPrimaryStream() returned nullptr! StreamController may not be initialized yet.");
-        throw std::runtime_error("GradAccumulationController: primary stream is null");
-    }
-    std::cout << "[DEBUG-V] Stream is valid: " << grad_cfg.stream << std::endl << std::flush;
-    logger.log("✓ GradAccumulationController stream validated: " + 
-               std::to_string(reinterpret_cast<uintptr_t>(grad_cfg.stream)));
-    grad_cfg.zero_on_window_start = true;
-    grad_cfg.zero_on_optimizer_complete = true;
-    grad_cfg.auto_scale_loss = true;
-    grad_cfg.verbose = true;  // CRITICAL: verbose=false to prevent registration spam during forward pass
-    grad_cfg.strict_mode = true;
-    // Disable per-buffer RMS monitoring by default (expensive: sync per buffer).
-    grad_cfg.monitor_gradients = false;
-    grad_cfg.gradient_explosion_threshold = 1e6f;
-    std::cout << "[DEBUG-W] Calling configure..." << std::endl << std::flush;
-    ctx.grad_controller->configure(grad_cfg);
-    std::cout << "[DEBUG-X] configure completed" << std::endl << std::flush;
-    
-    // BUG FIX: Verify ALL encoder layers initialized BEFORE bindToModel was called
+    // Verify ALL encoder layers initialized (prevents lazy init during forward pass)
     std::cout << "[DEBUG-Y] Verifying encoder layers..." << std::endl << std::flush;
-    // If layers 4-5 are missing, they'll be lazily initialized during forward pass,
-    // causing GradController registration during execution → crash
     auto* gpu_encoder = &model.getGpuEncoder();
     for (int layer = 0; layer < model.getConfig().num_layers; ++layer) {
         if (!gpu_encoder->getLayer(layer)) {
-            EmitModuleError(ModuleId::Training,
-                            "[FATAL] Layer " + std::to_string(layer) + " not initialized before bindToModel! " +
-                            "This causes lazy initialization during forward pass → crash. " +
-                            "Ensure model.initGPU() completes all layers before bindToModel().");
-            throw std::runtime_error("Encoder layer " + std::to_string(layer) + " not initialized");
+            throw std::runtime_error("Encoder layer " + std::to_string(layer) + " not initialized - "
+                                     "ensure model.initGPU() completes all layers before training");
         }
     }
     std::cout << "[DEBUG-Z] All encoder layers verified" << std::endl << std::flush;
-    
-    logger.log("✓ GradAccumulationController configured:");
-    logger.log("  - Accumulation steps: " + std::to_string(grad_cfg.accum_steps) + 
-               " (effective batch = " + std::to_string(hp.batch_size * grad_cfg.accum_steps) + ")");
-    logger.log("  - Registered " + std::to_string(ctx.grad_controller->controller().bufferCount()) + " gradient buffers");
-    logger.log("  - Total memory: " + std::to_string(ctx.grad_controller->controller().totalGradientBytes() / (1024.0 * 1024.0)) + " MB");
-    std::cout << "[DEBUG-AA] GradAccumController fully configured" << std::endl << std::flush;
     
     logger.log("✓ Optimizer state initialized");
     return ctx;
@@ -1841,7 +1818,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         
         // PRODUCTION: Disable debug gradient attribution (causes GPU sync + D2H copies)
         // Set to true only when debugging tied embedding gradient issues
-        ts.debug_gradient_attribution = false;
+        ts.debug_gradient_attribution = true;  // ENABLED for Issue #60 debugging
         
         if (ts.debug_gradient_attribution) {
             const int vocab_size = static_cast<int>(model_cfg.vocab_size);
@@ -1861,20 +1838,36 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         }
         
         // ═══════════════════════════════════════════════════════════════════════════
-        // ISSUE #60 FIX: Allocate PCGrad buffer for tied weights
+        // ISSUE #87 SUPERSEDES #60: PCGrad is NO LONGER NEEDED!
         // ═══════════════════════════════════════════════════════════════════════════
-        // When tie_embeddings=true, LM head backward and embedding backward produce
-        // OPPOSITE gradients! PCGrad fixes this by projecting out the conflicting 
-        // component, preserving the LM head signal + orthogonal embedding info.
+        // Issue #87 FIX: When tie_embeddings=true, AutogradTraining.cu now uses the
+        // SAME Tensor object (embedding_weights) for both embedding lookup AND LM head
+        // matmul. This matches PyTorch behavior where tok_emb->weight is used for both.
+        //
+        // With the same Tensor object, gradients naturally accumulate:
+        // - MatMulGradFn::apply() writes grad_W with beta_accum=1.0
+        // - EmbeddingGradFn::apply() writes with atomicAdd
+        // Both write to embedding_weights.grad, just like PyTorch!
+        //
+        // PCGrad was a workaround for using TWO DIFFERENT Tensor objects that happened
+        // to share data. It's no longer needed.
+        //
+        // ISSUE #88 FIX: When PCGrad is disabled, we MUST skip embedding backward!
+        // Without PCGrad buffer AND without skip flag, EmbeddingGradFn runs in
+        // "normal mode" where it writes gradients that CANCEL the LM head gradients!
+        // The code comment literally says "will cancel!" - this was the root cause
+        // of mode collapse where the model only predicts token 277 (SPACE).
+        //
+        // OLD (Issue #60): ts.allocatePCGradBuffer(vocab_size, d_model);
         if (model_cfg.tie_embeddings) {
-            const int vocab_size = static_cast<int>(model_cfg.vocab_size);
-            const int d_model = model_cfg.d_model;
+            // ISSUE #88 FIX: Set skip flag to prevent gradient cancellation!
+            // Without this, EmbeddingGradFn runs kernel_embedding_backward which
+            // produces gradients OPPOSITE to LM head backward, causing cancellation.
+            g_skip_embedding_backward_for_tied_weights = true;
             
-            ts.allocatePCGradBuffer(vocab_size, d_model);
-            
-            ctx->logging.logger->log("✓ Issue #60 FIX: PCGrad buffer allocated for tied weights");
-            ctx->logging.logger->log("  Formula: g_final = g_lm + (g_emb - proj(g_emb onto g_lm))");
-            ctx->logging.logger->log("  This prevents LM head and embedding gradients from canceling!");
+            ctx->logging.logger->log("✓ Issue #87: Using SAME Tensor for tied weights (PyTorch-style)");
+            ctx->logging.logger->log("  PCGrad is NO LONGER NEEDED - gradients accumulate naturally");
+            ctx->logging.logger->log("✓ Issue #88: Embedding backward SKIPPED for tied weights");
         }
     }
     

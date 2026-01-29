@@ -42,6 +42,13 @@
 namespace GRIM {
 
 //======================================================//
+//  Forward Declarations
+//======================================================//
+
+// GPUGrimEncoder is defined later in this file but used by LanguageModel class
+class GPUGrimEncoder;
+
+//======================================================//
 //  CUDA Error Handling Macros
 //======================================================//
 
@@ -271,7 +278,7 @@ struct LanguageModelConfig {
     bool use_scratch_block = true;            // Enable ScratchBlock reasoning layer
     int scratch_block_atom_embedding_dim = 64; // Atom embedding dimension
     int scratch_block_max_atoms = 256;         // Max atoms per sequence
-    float scratch_block_atom_scale = 0.1f;     // Scale factor for atom injection
+    float scratch_block_atom_scale = 1.0f;     // Scale factor for atom injection (unit scale)
 
     // Numeric head (side-channel regression for numeric atoms)
     bool numeric_head_enabled = false;

@@ -77,4 +77,25 @@ void launchLMHeadForward(const LMHeadForwardParams& params);
 // that handles backward pass via TensorContract_GPU.cu operations.
 // See AutogradTraining.cu for usage.
 
+// ============================================================================
+// ISSUE #37/#43 FIX: Center hidden states (zero-mean each token's features)
+// 
+// This function centers the encoder output before LM head projection.
+// It MUST be called before autograd::matmul() in the autograd training path!
+//
+// Why: Without centering, non-zero mean hidden states cause systematic bias
+// in weight gradients, leading to mode collapse (all predictions converge
+// to most frequent token 277 = SPACE).
+//
+// Math: centered[t,i] = hidden[t,i] - mean_t  where mean_t = (1/d_model) Σ_i hidden[t,i]
+// After centering: Σ_i centered[t,i] = 0 for all positions t
+// ============================================================================
+void launchCenterHiddenStates(
+    const float* input,    // [total_tokens, d_model] - encoder output
+    float* output,         // [total_tokens, d_model] - scratch buffer for centered data
+    int d_model,
+    int total_tokens,
+    cudaStream_t stream
+);
+
 } // namespace GRIM

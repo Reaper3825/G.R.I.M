@@ -12,6 +12,7 @@
 #include "../../Layers/Encoding/Encoding_GPU.hpp"             // EncodingLayer::useExternalWeights
 #include "../../Layers/ScratchBlock/ScratchBlock_GPU.hpp"     // ScratchBlockLayer
 #include "../../Layers/NumericHead/numeric_head_GPU.hpp"      // NumericHead forward/backward
+#include "../../Layers/LMHead/lm_head_GPU.hpp"                // Issue #37/#43: launchCenterHiddenStates
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 
@@ -305,12 +306,17 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     }
     
     // Use autograd::embedding for proper gradient tracking
-    // This performs: output[i] = weight[token_ids[i]] with gradient scatter-add backward
+    // This performs: output[i] = weight[token_ids[i]] * scale with gradient scatter-add backward
+    // Issue #92: Scale by sqrt(d_model) to bring Xavier-initialized embeddings (~0.036 rms)
+    // to unit scale (~1.0 rms), matching the atom injection scale from ScratchBlock.
+    // AIAYN paper: "we multiply those weights by sqrt(d_model)"
+    const float embedding_scale = std::sqrt(static_cast<float>(cfg->d_model));
     Tensor emb_output = autograd::embedding(
         emb_weights,
         ts->cached_token_ids,
         total_tokens,
-        ctx.stream
+        ctx.stream,
+        embedding_scale  // Issue #92: sqrt(d_model) scaling
     );
     
     // Copy to cached buffer for compatibility with rest of pipeline
@@ -342,18 +348,176 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         generatePositionIds(d_position_ids, total_tokens, ctx.seq_len, ctx.stream);
         
         // Look up position embeddings with autograd tracking
+        // Issue #92: Position embeddings also scaled by sqrt(d_model) for consistency
         Tensor pos_emb_output = autograd::embedding(
             ts->position_embedding_weights,
             d_position_ids,
             total_tokens,
-            ctx.stream
+            ctx.stream,
+            embedding_scale  // Same scale as token embeddings
         );
         
         // Free temporary position IDs (embedding lookup already copied them)
         cudaFreeAsync(d_position_ids, ctx.stream);
         
+        // ========================================================================
+        // ISSUE #93 DIAGNOSTIC: Log token_embedding and position_embedding SEPARATELY
+        // This helps understand why Layer 0/1 produce different QKV magnitudes.
+        // ========================================================================
+        {
+            const int sample_size = std::min(10000, total_tokens * cfg->d_model);
+            std::vector<float> h_tok_emb(sample_size);
+            std::vector<float> h_pos_emb(sample_size);
+            
+            cudaMemcpy(h_tok_emb.data(), emb_output.data, sample_size * sizeof(float), cudaMemcpyDeviceToHost);
+            cudaMemcpy(h_pos_emb.data(), pos_emb_output.data, sample_size * sizeof(float), cudaMemcpyDeviceToHost);
+            
+            // Token embedding stats
+            float tok_min = h_tok_emb[0], tok_max = h_tok_emb[0];
+            double tok_sum = 0.0, tok_sum_sq = 0.0;
+            for (int i = 0; i < sample_size; i++) {
+                tok_min = std::min(tok_min, h_tok_emb[i]);
+                tok_max = std::max(tok_max, h_tok_emb[i]);
+                tok_sum += h_tok_emb[i];
+                tok_sum_sq += h_tok_emb[i] * h_tok_emb[i];
+            }
+            float tok_mean = tok_sum / sample_size;
+            float tok_rms = sqrtf(tok_sum_sq / sample_size);
+            
+            // Position embedding stats
+            float pos_min = h_pos_emb[0], pos_max = h_pos_emb[0];
+            double pos_sum = 0.0, pos_sum_sq = 0.0;
+            for (int i = 0; i < sample_size; i++) {
+                pos_min = std::min(pos_min, h_pos_emb[i]);
+                pos_max = std::max(pos_max, h_pos_emb[i]);
+                pos_sum += h_pos_emb[i];
+                pos_sum_sq += h_pos_emb[i] * h_pos_emb[i];
+            }
+            float pos_mean = pos_sum / sample_size;
+            float pos_rms = sqrtf(pos_sum_sq / sample_size);
+            
+            fprintf(stderr, "[Issue93-SEPARATE-EMB] tokens=%d d_model=%d scale=%.4f\n",
+                    total_tokens, cfg->d_model, embedding_scale);
+            fprintf(stderr, "  TOKEN_EMB (BEFORE add): min=%.6f max=%.6f mean=%.6f rms=%.6f\n",
+                    tok_min, tok_max, tok_mean, tok_rms);
+            fprintf(stderr, "  POS_EMB   (BEFORE add): min=%.6f max=%.6f mean=%.6f rms=%.6f\n",
+                    pos_min, pos_max, pos_mean, pos_rms);
+        }
+        
+        // ========================================================================
+        // ISSUE #95 DIAGNOSTIC: Compute COLUMN VARIANCE for token_emb, pos_emb
+        // to identify which causes isotropic structure in Layer 0 input
+        // ========================================================================
+        {
+            // Copy full matrices to compute per-column variance
+            const int num_rows = std::min(1000, total_tokens);  // Sample first 1000 tokens
+            const int num_cols = cfg->d_model;  // 768
+            const size_t matrix_size = num_rows * num_cols;
+            
+            std::vector<float> h_tok_matrix(matrix_size);
+            std::vector<float> h_pos_matrix(matrix_size);
+            
+            cudaMemcpy(h_tok_matrix.data(), emb_output.data, matrix_size * sizeof(float), cudaMemcpyDeviceToHost);
+            cudaMemcpy(h_pos_matrix.data(), pos_emb_output.data, matrix_size * sizeof(float), cudaMemcpyDeviceToHost);
+            
+            // Compute per-column variance for TOKEN embeddings
+            float tok_col_var_min = FLT_MAX, tok_col_var_max = 0.0f;
+            double tok_col_var_sum = 0.0;
+            for (int col = 0; col < num_cols; col++) {
+                double col_sum = 0.0, col_sum_sq = 0.0;
+                for (int row = 0; row < num_rows; row++) {
+                    float val = h_tok_matrix[row * num_cols + col];
+                    col_sum += val;
+                    col_sum_sq += val * val;
+                }
+                float col_mean = col_sum / num_rows;
+                float col_var = (col_sum_sq / num_rows) - (col_mean * col_mean);
+                tok_col_var_min = std::min(tok_col_var_min, col_var);
+                tok_col_var_max = std::max(tok_col_var_max, col_var);
+                tok_col_var_sum += col_var;
+            }
+            
+            // Compute per-column variance for POSITION embeddings
+            float pos_col_var_min = FLT_MAX, pos_col_var_max = 0.0f;
+            double pos_col_var_sum = 0.0;
+            for (int col = 0; col < num_cols; col++) {
+                double col_sum = 0.0, col_sum_sq = 0.0;
+                for (int row = 0; row < num_rows; row++) {
+                    float val = h_pos_matrix[row * num_cols + col];
+                    col_sum += val;
+                    col_sum_sq += val * val;
+                }
+                float col_mean = col_sum / num_rows;
+                float col_var = (col_sum_sq / num_rows) - (col_mean * col_mean);
+                pos_col_var_min = std::min(pos_col_var_min, col_var);
+                pos_col_var_max = std::max(pos_col_var_max, col_var);
+                pos_col_var_sum += col_var;
+            }
+            
+            fprintf(stderr, "[Issue95-COL-VARIANCE] TOKEN_EMB:  col_var min=%.4f max=%.4f mean=%.4f range_ratio=%.2fx\n",
+                    tok_col_var_min, tok_col_var_max, tok_col_var_sum / num_cols, 
+                    tok_col_var_max / (tok_col_var_min + 1e-8f));
+            fprintf(stderr, "[Issue95-COL-VARIANCE] POS_EMB:    col_var min=%.4f max=%.4f mean=%.4f range_ratio=%.2fx\n",
+                    pos_col_var_min, pos_col_var_max, pos_col_var_sum / num_cols,
+                    pos_col_var_max / (pos_col_var_min + 1e-8f));
+            fprintf(stderr, "  (isotropic = range_ratio near 1.0, heterogeneous = range_ratio >> 1)\n");
+        }
+        
         // Add token embeddings + position embeddings (both tracked by autograd)
         emb_output = autograd::add(emb_output, pos_emb_output, ctx.stream);
+        
+        // ========================================================================
+        // ISSUE #93 DIAGNOSTIC: Log COMBINED embedding AFTER add, BEFORE ScratchBlock
+        // ========================================================================
+        {
+            const int sample_size = std::min(10000, total_tokens * cfg->d_model);
+            std::vector<float> h_combined(sample_size);
+            cudaMemcpy(h_combined.data(), emb_output.data, sample_size * sizeof(float), cudaMemcpyDeviceToHost);
+            
+            float comb_min = h_combined[0], comb_max = h_combined[0];
+            double comb_sum = 0.0, comb_sum_sq = 0.0;
+            for (int i = 0; i < sample_size; i++) {
+                comb_min = std::min(comb_min, h_combined[i]);
+                comb_max = std::max(comb_max, h_combined[i]);
+                comb_sum += h_combined[i];
+                comb_sum_sq += h_combined[i] * h_combined[i];
+            }
+            float comb_mean = comb_sum / sample_size;
+            float comb_rms = sqrtf(comb_sum_sq / sample_size);
+            
+            fprintf(stderr, "  COMBINED  (AFTER add):  min=%.6f max=%.6f mean=%.6f rms=%.6f\n",
+                    comb_min, comb_max, comb_mean, comb_rms);
+            
+            // ISSUE #95: Compute column variance for COMBINED embedding
+            {
+                const int num_rows = std::min(1000, total_tokens);
+                const int num_cols = cfg->d_model;
+                const size_t matrix_size = num_rows * num_cols;
+                
+                std::vector<float> h_comb_matrix(matrix_size);
+                cudaMemcpy(h_comb_matrix.data(), emb_output.data, matrix_size * sizeof(float), cudaMemcpyDeviceToHost);
+                
+                float comb_col_var_min = FLT_MAX, comb_col_var_max = 0.0f;
+                double comb_col_var_sum = 0.0;
+                for (int col = 0; col < num_cols; col++) {
+                    double col_sum = 0.0, col_sum_sq = 0.0;
+                    for (int row = 0; row < num_rows; row++) {
+                        float val = h_comb_matrix[row * num_cols + col];
+                        col_sum += val;
+                        col_sum_sq += val * val;
+                    }
+                    float col_mean = col_sum / num_rows;
+                    float col_var = (col_sum_sq / num_rows) - (col_mean * col_mean);
+                    comb_col_var_min = std::min(comb_col_var_min, col_var);
+                    comb_col_var_max = std::max(comb_col_var_max, col_var);
+                    comb_col_var_sum += col_var;
+                }
+                
+                fprintf(stderr, "[Issue95-COL-VARIANCE] COMBINED:   col_var min=%.4f max=%.4f mean=%.4f range_ratio=%.2fx\n",
+                        comb_col_var_min, comb_col_var_max, comb_col_var_sum / num_cols,
+                        comb_col_var_max / (comb_col_var_min + 1e-8f));
+            }
+        }
         
         // Update cached embeddings with the combined result
         if (ts->cached_embeddings) {
@@ -363,6 +527,12 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         }
         
         AG_INFO("Step 1b: Position embeddings added (Issue #57 FIX)");
+    } else {
+        // ISSUE #96: Position embeddings SKIPPED per config (use_learned=false or ALIBI/RoPE mode)
+        // This is CORRECT behavior - ALIBI and RoPE don't use additive position embeddings
+        fprintf(stderr, "[Issue96-POSEMB] Position embeddings SKIPPED (positional_encoding != LEARNED)\n");
+        fprintf(stderr, "[Issue96-POSEMB] Using only token embeddings for Layer 0 input\n");
+        AG_INFO("Step 1b: Position embeddings SKIPPED (Issue #96 - positional_encoding != LEARNED)");
     }
     
     // Store in context for backward
@@ -385,12 +555,21 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         
         ScratchBlockForwardArgs sb_args{};
         
-        // Input/output are the same (in-place operation on embeddings)
-        // Use cached_embeddings since that's where embedding data lives
+        // ═══════════════════════════════════════════════════════════════════════
+        //  ISSUE #90 FIX (PROPER): Operate directly on ctx.embedding_tensor.data!
+        //  
+        //  OLD BUG: ScratchBlock operated on ts->cached_embeddings (separate buffer),
+        //  but Layer 0 used ctx.embedding_tensor.data (autograd's buffer).
+        //  Result: Layer 0 received STALE pre-ScratchBlock data → K/V explosion!
+        //  
+        //  FIX: Pass ctx.embedding_tensor.data directly to ScratchBlock.
+        //  Now ScratchBlock modifies the autograd buffer in-place, and Layer 0
+        //  automatically gets the correct ScratchBlock-processed embeddings.
+        // ═══════════════════════════════════════════════════════════════════════
         sb_args.input = TensorContract::TensorView::make_BSM(
-            ts->cached_embeddings, total_tokens, cfg->d_model, "sb_input");
+            ctx.embedding_tensor.data, total_tokens, cfg->d_model, "sb_input");
         sb_args.output = TensorContract::TensorView::make_BSM(
-            ts->cached_embeddings, total_tokens, cfg->d_model, "sb_output");
+            ctx.embedding_tensor.data, total_tokens, cfg->d_model, "sb_output");
         
         sb_args.total_tokens = total_tokens;
         sb_args.seq_len = ctx.seq_len;
@@ -418,7 +597,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         sb_args.cache_atom_types = ts->cached_scratch_block_types;
         sb_args.cache_num_atoms = ts->cached_scratch_block_num_atoms;
         
-        // Run ScratchBlock forward
+        // Run ScratchBlock forward (operates directly on ctx.embedding_tensor.data)
         ctx.scratch_block->forward(sb_args);
         
         cudaError_t cuda_err = cudaGetLastError();
@@ -427,9 +606,40 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                                      std::string(cudaGetErrorString(cuda_err)));
         }
         
-        AG_INFO("Step 1.5: ScratchBlock complete");
+        // Also update ts->cached_embeddings for any legacy code that reads it
+        if (ts->cached_embeddings && ts->cached_embeddings != ctx.embedding_tensor.data) {
+            cudaMemcpyAsync(ts->cached_embeddings, ctx.embedding_tensor.data,
+                            static_cast<size_t>(total_tokens) * cfg->d_model * sizeof(float),
+                            cudaMemcpyDeviceToDevice, ctx.stream);
+        }
+        
+        AG_INFO("Step 1.5: ScratchBlock complete (operated on embedding_tensor.data directly)");
     }
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ISSUE #91 DIAGNOSTIC: Dump embedding stats AFTER ScratchBlock, BEFORE encoder
+    // This tells us what Layer 0 actually receives as input!
+    // ═══════════════════════════════════════════════════════════════════════════
+    {
+        const int sample_size = std::min(10000, total_tokens * cfg->d_model);
+        std::vector<float> h_emb(sample_size);
+        cudaMemcpy(h_emb.data(), ctx.embedding_tensor.data, sample_size * sizeof(float), cudaMemcpyDeviceToHost);
+        
+        float emb_min = h_emb[0], emb_max = h_emb[0];
+        double emb_sum = 0.0, emb_sum_sq = 0.0;
+        for (int i = 0; i < sample_size; i++) {
+            emb_min = std::min(emb_min, h_emb[i]);
+            emb_max = std::max(emb_max, h_emb[i]);
+            emb_sum += h_emb[i];
+            emb_sum_sq += h_emb[i] * h_emb[i];
+        }
+        float emb_mean = emb_sum / sample_size;
+        float emb_rms = sqrtf(emb_sum_sq / sample_size);
+        
+        fprintf(stderr, "[Issue91-EMB-AFTER-SB] tokens=%d d_model=%d: min=%.6f max=%.6f mean=%.6f rms=%.6f\n",
+                total_tokens, cfg->d_model, emb_min, emb_max, emb_mean, emb_rms);
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     //  STEP 2: Encoder Layers (transformer blocks)
     //  
@@ -570,8 +780,21 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     //  entire computation graph (encoder → final_rms → lm_head → loss)
     // ═══════════════════════════════════════════════════════════════════════════
     
-    // Get LM head weights tensor (already a Tensor in TrainingState)
-    Tensor& lm_weights = ts->lm_head_weights;
+    // ════════════════════════════════════════════════════════════════════════
+    // ISSUE #87 FIX: Use SAME Tensor object for tied weights!
+    //
+    // PyTorch uses ONE tensor (tok_emb->weight) for both embedding lookup AND
+    // LM head matmul. Its autograd sees one tensor used twice and handles
+    // gradient accumulation naturally.
+    //
+    // GRIM was using TWO Tensor objects (embedding_weights, lm_head_weights)
+    // that happened to share data pointers. But they had separate grad_fn
+    // chains, so autograd didn't know they were the same tensor!
+    //
+    // FIX: When tie_embeddings=true, use embedding_weights for BOTH operations.
+    // This makes GRIM's autograd behave like PyTorch's.
+    // ════════════════════════════════════════════════════════════════════════
+    Tensor& lm_weights = cfg->tie_embeddings ? ts->embedding_weights : ts->lm_head_weights;
     lm_weights.requires_grad = true;  // Gradients for weight update
     
     // RULE 20: Fail loud - validate cached_logits buffer
@@ -579,12 +802,48 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     if (!logits_output) {
         throw std::runtime_error("AutogradTraining: cached_logits buffer is NULL - TrainingState MUST allocate logits buffer");
     }
+     
+    // ════════════════════════════════════════════════════════════════════════
+    // ISSUE #37/#43 FIX: Center hidden states BEFORE LM head projection!
+    //
+    // The autograd path was missing centering, causing mode collapse.
+    // Without centering, non-zero mean hidden states create systematic bias
+    // in weight gradients: negative_mean × negative_grad = POSITIVE update!
+    // This caused Token 277 (SPACE) logits to explode: -0.08 → 3.11 in 3 batches.
+    //
+    // NOTE: Centering must happen BEFORE lm_input_tensor is created because
+    // autograd::matmul will cache the input pointer for backward pass.
+    // ════════════════════════════════════════════════════════════════════════
+    float* lm_input_ptr = ctx.encoder_output_tensor.data;  // Default: use encoder output directly
     
-    // Create input tensor referencing the encoder output
-      // Link grad_fn to continue the backward chain
+    // Check if centering is enabled in config and scratch buffer is available
+    const bool use_centering = cfg->lm_head_center_hidden_states;
+    float* centered_scratch = ts->centered_activation_scratch();
+    
+    if (use_centering) {
+        if (!centered_scratch) {
+            throw std::runtime_error("AutogradTraining: centering enabled but centering_scratch_tensor is NULL");
+        }
+        
+        // Center the encoder output: centered[t,i] = hidden[t,i] - mean(hidden[t,:])
+        launchCenterHiddenStates(
+            ctx.encoder_output_tensor.data,  // input: encoder output
+            centered_scratch,                 // output: scratch buffer
+            cfg->d_model,
+            total_tokens,
+            ctx.stream
+        );
+        
+        // Use centered data for LM head projection
+        lm_input_ptr = centered_scratch;
+        AG_INFO("Step 4a: Hidden states centered (Issue #37/#43 fix active)");
+    }
+    
+    // Create input tensor referencing the (possibly centered) data
+    // Link grad_fn to continue the backward chain
     // ISSUE #48 FIX: Store in context so pointer remains valid until backward completes
     ctx.lm_input_tensor = Tensor::from_ptr(
-        ctx.encoder_output_tensor.data,
+        lm_input_ptr,  // May point to centered scratch or raw encoder output
         TensorContract::TensorShape::make_BSM(total_tokens, cfg->d_model),
         false,  // doesn't own data
         true    // requires_grad
@@ -598,7 +857,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     lm_weights.shape = TensorContract::TensorShape::make_BSM(cfg->vocab_size, cfg->d_model);
     lm_weights.shape.require("lm_weights");
     
-    // Execute autograd matmul: logits = encoder @ lm_weights^T
+    // Execute autograd matmul: logits = centered_encoder @ lm_weights^T
     // transpose_b=true because lm_weights is [vocab_size, d_model]
     Tensor logits_tensor = autograd::matmul(
         ctx.lm_input_tensor,
@@ -873,6 +1132,36 @@ BackwardResult executeAutogradBackward(
     ctx.loss_tensor.backward();
     AG_INFO("loss_tensor.backward() returned successfully");
     
+    // Compute gradients for learned loss weights (not in autograd graph)
+    // L = L_task / (2*exp(log_var)) + 0.5*log_var
+    // dL/d(log_var) = -L_task * 0.5*exp(-log_var) + 0.5
+    auto* ts = ctx.training_state;
+    if (ts->log_var_text.data && ts->log_var_text.has_grad() &&
+        ts->log_var_numeric.data && ts->log_var_numeric.has_grad()) {
+        // Read current log_var values
+        float log_var_text_val = 0.0f, log_var_numeric_val = 0.0f;
+        cudaMemcpyAsync(&log_var_text_val, ts->log_var_text.data, sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
+        cudaMemcpyAsync(&log_var_numeric_val, ts->log_var_numeric.data, sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
+        cudaStreamSynchronize(ctx.stream);
+        
+        // Clamp for numerical stability
+        log_var_text_val = std::clamp(log_var_text_val, -4.0f, 4.0f);
+        log_var_numeric_val = std::clamp(log_var_numeric_val, -4.0f, 4.0f);
+        
+        // weight = 0.5 * exp(-log_var)
+        const float weight_text = 0.5f * std::exp(-log_var_text_val);
+        const float weight_numeric = 0.5f * std::exp(-log_var_numeric_val);
+        
+        // grad = -L * weight + 0.5 (from regularization term)
+        // Use cached loss values from forward pass (stored in TrainingState)
+        const float grad_text = -ts->cached_text_loss * weight_text + 0.5f;
+        const float grad_numeric = -ts->cached_numeric_loss * weight_numeric + 0.5f;
+        
+        // Write gradients to GPU
+        cudaMemcpyAsync(ts->log_var_text.grad_data(), &grad_text, sizeof(float), cudaMemcpyHostToDevice, ctx.stream);
+        cudaMemcpyAsync(ts->log_var_numeric.grad_data(), &grad_numeric, sizeof(float), cudaMemcpyHostToDevice, ctx.stream);
+    }
+    
     // Copy gradients from Tensor.grad to TrainingState raw buffers
     // (for compatibility with optimizer that uses raw pointers)
     AG_INFO("Calling copyGradientsToTrainingState...");
@@ -981,6 +1270,7 @@ bool copyGradientsToTrainingState(AutogradContext& ctx) {
 
 float computeGradientNorm(const AutogradContext& ctx) {
     auto* ts = ctx.training_state;
+    const auto* cfg = ctx.config;
     
     // Allocate accumulator on device
     double* d_sum;
@@ -999,10 +1289,69 @@ float computeGradientNorm(const AutogradContext& ctx) {
     computeSumSquared(ts->lm_head_bias.grad_data(), ts->lm_head_bias.numel(), d_sum, ctx.stream);
     computeSumSquared(ts->final_rms_gamma.grad_data(), ts->final_rms_gamma.numel(), d_sum, ctx.stream);
     
-    // NOTE: Encoder gradients need separate norm computation from encoder directly.
-    // The optimizer accesses encoder gradients via enc->getAttnWqkvGrad() etc.
-    // For now, we compute norm only from TrainingState-owned Tensors.
-    // TODO: If needed, add gradient norm computation from encoder's internal Tensors.
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ENCODER GRADIENT NORM: Compute from encoder's internal Tensors
+    // The encoder owns its weights internally; we access gradients via
+    // enc->getAttnWqkvGrad(), enc->getFFNW1Grad(), etc.
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (ctx.gpu_encoder && cfg) {
+        const int num_layers = ctx.gpu_encoder->getNumLayers();
+        
+        // Compute GQA dimensions for W_qkv sizing
+        const int head_dim = cfg->d_model / cfg->num_heads;
+        const int kv_dim = cfg->num_kv_heads * head_dim;
+        const int total_qkv_dim = cfg->d_model + 2 * kv_dim;  // Q + K + V with GQA
+        const size_t qkv_weight_size = static_cast<size_t>(total_qkv_dim) * cfg->d_model;
+        
+        for (int layer = 0; layer < num_layers; ++layer) {
+            auto* enc = ctx.gpu_encoder->getLayer(layer);
+            if (!enc) continue;
+            
+            // RMSNorm gamma gradients [d_model]
+            if (float* grad = enc->getRMS1GammaGrad()) {
+                computeSumSquared(grad, cfg->d_model, d_sum, ctx.stream);
+            }
+            if (float* grad = enc->getRMS2GammaGrad()) {
+                computeSumSquared(grad, cfg->d_model, d_sum, ctx.stream);
+            }
+            
+            // Attention weight gradients
+            // W_qkv: [total_qkv_dim, d_model]
+            if (float* grad = enc->getAttnWqkvGrad()) {
+                computeSumSquared(grad, qkv_weight_size, d_sum, ctx.stream);
+            }
+            // b_qkv: [total_qkv_dim]
+            if (float* grad = enc->getAttnBqkvGrad()) {
+                computeSumSquared(grad, total_qkv_dim, d_sum, ctx.stream);
+            }
+            // W_o: [d_model, d_model]
+            if (float* grad = enc->getAttnWoGrad()) {
+                computeSumSquared(grad, static_cast<size_t>(cfg->d_model) * cfg->d_model, d_sum, ctx.stream);
+            }
+            // b_o: [d_model]
+            if (float* grad = enc->getAttnBoGrad()) {
+                computeSumSquared(grad, cfg->d_model, d_sum, ctx.stream);
+            }
+            
+            // FFN weight gradients
+            // W1: [d_model, d_ff]
+            if (float* grad = enc->getFFNW1Grad()) {
+                computeSumSquared(grad, static_cast<size_t>(cfg->d_model) * cfg->d_ff, d_sum, ctx.stream);
+            }
+            // b1: [d_ff]
+            if (float* grad = enc->getFFNB1Grad()) {
+                computeSumSquared(grad, cfg->d_ff, d_sum, ctx.stream);
+            }
+            // W2: [d_ff, d_model]
+            if (float* grad = enc->getFFNW2Grad()) {
+                computeSumSquared(grad, static_cast<size_t>(cfg->d_ff) * cfg->d_model, d_sum, ctx.stream);
+            }
+            // b2: [d_model]
+            if (float* grad = enc->getFFNB2Grad()) {
+                computeSumSquared(grad, cfg->d_model, d_sum, ctx.stream);
+            }
+        }
+    }
     
     // Copy result to host and compute sqrt
     double h_sum = 0.0;

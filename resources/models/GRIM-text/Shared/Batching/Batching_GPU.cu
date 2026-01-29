@@ -331,10 +331,20 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
             return a.length > b.length;
         });
     } else {
-        // Greedy / Gradient-balanced: use sort_key
-        std::stable_sort(views.begin(), views.end(), [](const SequenceView& a, const SequenceView& b) {
-            return a.sort_key < b.sort_key;
-        });
+        // GREEDY / Gradient-balanced: SHUFFLE to mix short and long sequences!
+        // Issue #90: Length-sorted batching caused mode collapse at max_seq_len boundary.
+        // By shuffling, we expose ALL position ranges from batch 1, preventing the
+        // boundary effect where positions 671-1023 were only first seen in batch 5.
+        if (opts.rng_seed != 0) {
+            // Deterministic shuffle using provided seed
+            std::mt19937_64 shuffle_rng(opts.rng_seed);
+            std::shuffle(views.begin(), views.end(), shuffle_rng);
+        } else {
+            // Non-deterministic shuffle (fallback)
+            std::random_device rd;
+            std::mt19937_64 shuffle_rng(rd());
+            std::shuffle(views.begin(), views.end(), shuffle_rng);
+        }
     }
     
     // Determine effective token budget

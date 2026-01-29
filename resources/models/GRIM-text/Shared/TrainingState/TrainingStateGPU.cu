@@ -364,6 +364,7 @@ void TrainingState::initializeAutogradTensors(
 	int vocab_sz, int d_mod, int d_ffn,
 	int n_layers, int n_heads, int n_kv_heads,
 	int max_seq, bool tie_emb, bool bias,
+	HyperParameters::PositionalEncodingType positional_encoding,
 	cudaStream_t stream
 ) {
 	// Rule 20: Fail loud if already initialized
@@ -387,6 +388,7 @@ void TrainingState::initializeAutogradTensors(
 		vocab_sz, d_mod, d_ffn,
 		n_layers, n_heads, n_kv_heads,
 		max_seq, tie_emb, bias,
+		positional_encoding,
 		stream
 	);
 	
@@ -401,14 +403,22 @@ void TrainingState::initializeAutogradTensors(
 	// ISSUE #59: Share the grad Tensor object (shared_ptr) for proper reference counting
 	embedding_weights.share_grad(tensors_->embedding_weights);
 	
-	position_embedding_weights = Tensor::from_ptr(
-		tensors_->position_embedding_weights.data,
-		tensors_->position_embedding_weights.shape,
-		false,
-		true
-	);
-	// ISSUE #59: Share the grad Tensor object
-	position_embedding_weights.share_grad(tensors_->position_embedding_weights);
+	// ISSUE #96 FIX: Only copy position embeddings if they were allocated
+	// (they are NULL when using ALIBI/ROPE/ALIBI_ROPE positional encoding)
+	if (tensors_->position_embedding_weights.data) {
+		position_embedding_weights = Tensor::from_ptr(
+			tensors_->position_embedding_weights.data,
+			tensors_->position_embedding_weights.shape,
+			false,
+			true
+		);
+		// ISSUE #59: Share the grad Tensor object
+		position_embedding_weights.share_grad(tensors_->position_embedding_weights);
+	} else {
+		// Leave position_embedding_weights uninitialized (data=nullptr)
+		// AutogradTraining.cu will check this and skip position embedding addition
+		fprintf(stdout, "[TrainingState] position_embedding_weights: SKIPPED (not using learned position embeddings)\n");
+	}
 	
 	lm_head_weights = Tensor::from_ptr(
 		tensors_->lm_head_weights.data,
@@ -682,9 +692,12 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream) {
 	fprintf(stdout, "  COSINE(lm,emb):  %.4f ← %s\n", cosine_sim, interaction);
 	fprintf(stdout, "  FINAL_GRADIENT:  sum=%.6f norm=%.6f mean=%.6e ← %s\n", 
 	        final_sum, final_norm, final_sum / d_model, pcgrad_status);
+	// NOTE: AdamW update is W_new = W - lr * grad, so:
+	//   positive gradient → W decreases → want logit/prediction to DECREASE
+	//   negative gradient → W increases → want logit/prediction to INCREASE
 	fprintf(stdout, "  DIRECTION:       LM wants %s, EMB wants %s\n",
-	        lm_sum > 0 ? "INCREASE" : "DECREASE",
-	        raw_emb_sum > 0 ? "INCREASE" : "DECREASE");
+	        lm_sum > 0 ? "DECREASE" : "INCREASE",  // Fixed: positive grad = weight decrease
+	        raw_emb_sum > 0 ? "DECREASE" : "INCREASE");
 	fprintf(stdout, "\n");
 	fflush(stdout);
 }

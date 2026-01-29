@@ -403,16 +403,73 @@ void LanguageModel::backward(float loss, bool accumulate, float grad_scale, uint
     // Zero gradients if not accumulating
     // The autograd system's executeAutogradBackward handles this, but we also need to zero
     // any raw gradient buffers that might still be referenced by the optimizer
+    // 
+    // beta_accum decision:
+    //   accumulate=false → zeroGrad() called → beta_accum effectively 0 (start fresh)
+    //   accumulate=true  → skip zeroGrad()   → beta_accum effectively 1 (add to existing)
+    const float effective_beta = accumulate ? 1.0f : 0.0f;
+    BWD_INFO("[backward] beta_accum decision: accumulate=" << (accumulate ? "true" : "false") 
+             << " → effective_beta=" << effective_beta 
+             << (accumulate ? " (ACCUMULATING to existing gradients)" : " (OVERWRITING with fresh gradients)"));
+    
     if (!accumulate) {
         // Autograd will zero Tensor.grad fields, but we also zero legacy buffers
         // for any code paths that still expect them
         zeroGrad();  
     }
     
+    // Issue #87 DEBUG: Verify grad buffer addresses match between zeroGrad and autograd
+    BWD_INFO("[backward] GRAD BUFFER VERIFICATION:");
+    BWD_INFO("[backward]   ts.embedding_weights.grad_data() = " << (void*)training_state_.embedding_weights.grad_data());
+    BWD_INFO("[backward]   ts.lm_head_weights.grad_data()   = " << (void*)training_state_.lm_head_weights.grad_data());
+    BWD_INFO("[backward]   (both should be IDENTICAL if weight tying is correct)");
+    
     // Call backward on the loss tensor from forward pass
     // The grad_fn chain is already attached - this propagates through entire graph:
     // loss → logits → encoder_output → encoder_layers → embeddings
     training_state_.loss_tensor.backward(nullptr);
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  ISSUE #71 FIX: NumericHead backward was NEVER CALLED!
+    //  
+    //  The numeric head forward creates ctx.numeric_head_output with a grad_fn.
+    //  The numeric loss kernel (launchNumericLoss) computes grad_predictions and
+    //  stores them in training_state_.grad_numeric_tensor.data. BUT this gradient
+    //  was never backpropagated through the NumericHead autograd graph!
+    //  
+    //  Result: numeric_head_weights received ZERO gradients.
+    //  
+    //  Fix: Call numeric_head_output.backward() with the gradients from launchNumericLoss.
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (config_.numeric_head_enabled && 
+        training_state_.autograd_ctx && 
+        training_state_.autograd_ctx->numeric_head_output.data &&
+        training_state_.autograd_ctx->numeric_head_output.grad_fn &&
+        training_state_.grad_numeric_tensor.data) {
+        
+        BWD_INFO("[backward] Issue #71 FIX: Calling numeric_head_output.backward() with numeric loss gradients");
+        
+        // Create a Tensor wrapper around the gradient from launchNumericLoss
+        // This gradient is d(numeric_loss)/d(predictions) already computed by the kernel
+        Tensor numeric_grad;
+        numeric_grad.data = training_state_.grad_numeric_tensor.data;
+        numeric_grad.shape = training_state_.autograd_ctx->numeric_head_output.shape;
+        numeric_grad.owns_data = false;  // grad_numeric_tensor owns the memory
+        numeric_grad.stream = stream;
+        
+        // Call backward on the numeric head output with the loss gradients
+        // This propagates through NumericHeadGradFn::apply() to compute:
+        //   - grad_numeric_head_weights = encoder_output^T @ grad_predictions
+        //   - grad_encoder_output += weights @ grad_predictions (accumulated to encoder path)
+        training_state_.autograd_ctx->numeric_head_output.backward(&numeric_grad);
+        
+        BWD_INFO("[backward] Issue #71: numeric_head_output.backward() completed");
+    }
+    
+    // ISSUE #62: Sync stream after backward to ensure all async CUDA operations complete
+    // before any GradFn destructors run (which might free buffers still in use)
+    cudaStreamSynchronize(stream);
+    fprintf(stderr, "[backward] Stream synced after backward pass\n");
     
     // Issue #60 DEBUG: Log gradient attribution for debugging token 277 mode collapse
     // This shows LM head vs embedding backward contributions separately
@@ -560,35 +617,93 @@ void LanguageModel::buildParameterGroups() {
         numeric_group.type = ParamGroupType::NUMERIC_HEAD;
         parameter_groups_.push_back(numeric_group);
     }
+    
+    // Learned loss weighting parameters (log-variance for text and numeric losses)
+    if (training_state_.log_var_text.has_grad() && training_state_.log_var_text.data) {
+        ParameterGroup log_var_text_group;
+        log_var_text_group.name = "log_var_text";
+        log_var_text_group.weights = training_state_.log_var_text.data;
+        log_var_text_group.grads = training_state_.log_var_text.grad_data();
+        log_var_text_group.size = 1;
+        log_var_text_group.m_state = nullptr;
+        log_var_text_group.v_state = nullptr;
+        log_var_text_group.type = ParamGroupType::NUMERIC_HEAD;  // Reuse type for scalar params
+        parameter_groups_.push_back(log_var_text_group);
+    }
+    if (training_state_.log_var_numeric.has_grad() && training_state_.log_var_numeric.data) {
+        ParameterGroup log_var_numeric_group;
+        log_var_numeric_group.name = "log_var_numeric";
+        log_var_numeric_group.weights = training_state_.log_var_numeric.data;
+        log_var_numeric_group.grads = training_state_.log_var_numeric.grad_data();
+        log_var_numeric_group.size = 1;
+        log_var_numeric_group.m_state = nullptr;
+        log_var_numeric_group.v_state = nullptr;
+        log_var_numeric_group.type = ParamGroupType::NUMERIC_HEAD;  // Reuse type for scalar params
+        parameter_groups_.push_back(log_var_numeric_group);
+    }
 
+    // ========================================================================
+    // Issue #66 FIX: Verify gradient buffer initialization before registration
+    // ========================================================================
+    // CRITICAL: Encoder layers MUST call ensure_grad() during initialization
+    // to allocate gradient buffers. If gradients are nullptr here, we'll crash
+    // when optimizer tries to update them. Add diagnostic logging to catch this.
+    
     // Per-layer parameters
     for (int layer = 0; layer < cfg.num_layers; ++layer) {
         GPUEncoderLayer* enc = gpu_encoder->getLayer(layer);
-        if (!enc) continue;
+        if (!enc) {
+            BWD_WARN("[buildParameterGroups] Layer " << layer << " is NULL - skipping");
+            continue;
+        }
 
         // QKV weights - uses encoder's Tensor.grad (autograd migration)
-        if (enc->getAttnWqkvGrad() && enc->getAttnWqkv()) {
+        float* qkv_grad_ptr = enc->getAttnWqkvGrad();
+        float* qkv_weight_ptr = enc->getAttnWqkv();
+        if (qkv_grad_ptr && qkv_weight_ptr) {
             ParameterGroup qkv_group;
             qkv_group.name = "layer" + std::to_string(layer) + "_qkv_weight";
-            qkv_group.weights = enc->getAttnWqkv();
-            qkv_group.grads = enc->getAttnWqkvGrad();
+            qkv_group.weights = qkv_weight_ptr;
+            qkv_group.grads = qkv_grad_ptr;
             qkv_group.size = total_qkv_dim * cfg.d_model;
             qkv_group.m_state = nullptr;
             qkv_group.v_state = nullptr;
             qkv_group.type = ParamGroupType::ATTENTION;
-            // Depth-aware upsilon: Υ_l = 0.1 * sqrt(L_ref / L) where L is 1-indexed
             qkv_group.layer_index = layer;
             qkv_group.upsilon = HyperParameters::UPSILON_BASE * 
                 sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
             parameter_groups_.push_back(qkv_group);
+        } else {
+            BWD_WARN("[buildParameterGroups] Layer " << layer << " QKV: weights=" << (void*)qkv_weight_ptr 
+                     << " grads=" << (void*)qkv_grad_ptr << " (skipping - not initialized)");
+        }
+
+        // Issue #97 FIX: b_qkv bias - previously NOT in optimizer (frozen at init!)
+        float* bqkv_grad_ptr = enc->getAttnBqkvGrad();
+        float* bqkv_weight_ptr = enc->getAttnBqkv();
+        if (bqkv_grad_ptr && bqkv_weight_ptr) {
+            ParameterGroup bqkv_group;
+            bqkv_group.name = "layer" + std::to_string(layer) + "_qkv_bias";
+            bqkv_group.weights = bqkv_weight_ptr;
+            bqkv_group.grads = bqkv_grad_ptr;
+            bqkv_group.size = total_qkv_dim;  // b_qkv: [total_qkv_dim]
+            bqkv_group.m_state = nullptr;
+            bqkv_group.v_state = nullptr;
+            bqkv_group.type = ParamGroupType::ATTENTION;
+            bqkv_group.layer_index = layer;
+            bqkv_group.upsilon = HyperParameters::UPSILON_BASE * 
+                sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
+            parameter_groups_.push_back(bqkv_group);
         }
 
         // Wo weights - uses encoder's Tensor.grad (autograd migration)
-        if (enc->getAttnWoGrad() && enc->getAttnWo()) {
+        float* wo_grad_ptr = enc->getAttnWoGrad();
+        float* wo_weight_ptr = enc->getAttnWo();
+        if (wo_grad_ptr && wo_weight_ptr) {
             ParameterGroup wo_group;
             wo_group.name = "layer" + std::to_string(layer) + "_wo_weight";
-            wo_group.weights = enc->getAttnWo();
-            wo_group.grads = enc->getAttnWoGrad();
+            wo_group.weights = wo_weight_ptr;
+            wo_group.grads = wo_grad_ptr;
             wo_group.size = cfg.d_model * cfg.d_model;
             wo_group.m_state = nullptr;
             wo_group.v_state = nullptr;
@@ -597,14 +712,37 @@ void LanguageModel::buildParameterGroups() {
             wo_group.upsilon = HyperParameters::UPSILON_BASE * 
                 sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
             parameter_groups_.push_back(wo_group);
+        } else {
+            BWD_WARN("[buildParameterGroups] Layer " << layer << " Wo: weights=" << (void*)wo_weight_ptr 
+                     << " grads=" << (void*)wo_grad_ptr << " (skipping - not initialized)");
+        }
+
+        // Issue #97 FIX: b_o bias - previously NOT in optimizer (frozen at init!)
+        float* bo_grad_ptr = enc->getAttnBoGrad();
+        float* bo_weight_ptr = enc->getAttnBo();
+        if (bo_grad_ptr && bo_weight_ptr) {
+            ParameterGroup bo_group;
+            bo_group.name = "layer" + std::to_string(layer) + "_wo_bias";
+            bo_group.weights = bo_weight_ptr;
+            bo_group.grads = bo_grad_ptr;
+            bo_group.size = cfg.d_model;  // b_o: [d_model]
+            bo_group.m_state = nullptr;
+            bo_group.v_state = nullptr;
+            bo_group.type = ParamGroupType::ATTENTION;
+            bo_group.layer_index = layer;
+            bo_group.upsilon = HyperParameters::UPSILON_BASE * 
+                sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
+            parameter_groups_.push_back(bo_group);
         }
 
         // FFN W1 - uses encoder's Tensor.grad (autograd migration)
-        if (enc->getFFNW1Grad() && enc->getFFNW1()) {
+        float* w1_grad_ptr = enc->getFFNW1Grad();
+        float* w1_weight_ptr = enc->getFFNW1();
+        if (w1_grad_ptr && w1_weight_ptr) {
             ParameterGroup w1_group;
             w1_group.name = "layer" + std::to_string(layer) + "_ffn_w1";
-            w1_group.weights = enc->getFFNW1();
-            w1_group.grads = enc->getFFNW1Grad();
+            w1_group.weights = w1_weight_ptr;
+            w1_group.grads = w1_grad_ptr;
             w1_group.size = cfg.d_model * cfg.d_ff;
             w1_group.m_state = nullptr;
             w1_group.v_state = nullptr;
@@ -613,14 +751,37 @@ void LanguageModel::buildParameterGroups() {
             w1_group.upsilon = HyperParameters::UPSILON_BASE * 
                 sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
             parameter_groups_.push_back(w1_group);
+        } else {
+            BWD_WARN("[buildParameterGroups] Layer " << layer << " W1: weights=" << (void*)w1_weight_ptr 
+                     << " grads=" << (void*)w1_grad_ptr << " (skipping - not initialized)");
+        }
+
+        // Issue #97 FIX: b1 bias - previously NOT in optimizer (frozen at init!)
+        float* b1_grad_ptr = enc->getFFNB1Grad();
+        float* b1_weight_ptr = enc->getFFNB1();
+        if (b1_grad_ptr && b1_weight_ptr) {
+            ParameterGroup b1_group;
+            b1_group.name = "layer" + std::to_string(layer) + "_ffn_b1";
+            b1_group.weights = b1_weight_ptr;
+            b1_group.grads = b1_grad_ptr;
+            b1_group.size = cfg.d_ff;  // b1: [d_ff]
+            b1_group.m_state = nullptr;
+            b1_group.v_state = nullptr;
+            b1_group.type = ParamGroupType::FFN;
+            b1_group.layer_index = layer;
+            b1_group.upsilon = HyperParameters::UPSILON_BASE * 
+                sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
+            parameter_groups_.push_back(b1_group);
         }
 
         // FFN W2 - uses encoder's Tensor.grad (autograd migration)
-        if (enc->getFFNW2Grad() && enc->getFFNW2()) {
+        float* w2_grad_ptr = enc->getFFNW2Grad();
+        float* w2_weight_ptr = enc->getFFNW2();
+        if (w2_grad_ptr && w2_weight_ptr) {
             ParameterGroup w2_group;
             w2_group.name = "layer" + std::to_string(layer) + "_ffn_w2";
-            w2_group.weights = enc->getFFNW2();
-            w2_group.grads = enc->getFFNW2Grad();
+            w2_group.weights = w2_weight_ptr;
+            w2_group.grads = w2_grad_ptr;
             w2_group.size = cfg.d_ff * cfg.d_model;
             w2_group.m_state = nullptr;
             w2_group.v_state = nullptr;
@@ -629,14 +790,37 @@ void LanguageModel::buildParameterGroups() {
             w2_group.upsilon = HyperParameters::UPSILON_BASE * 
                 sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
             parameter_groups_.push_back(w2_group);
+        } else {
+            BWD_WARN("[buildParameterGroups] Layer " << layer << " W2: weights=" << (void*)w2_weight_ptr 
+                     << " grads=" << (void*)w2_grad_ptr << " (skipping - not initialized)");
+        }
+
+        // Issue #97 FIX: b2 bias - previously NOT in optimizer (frozen at init!)
+        float* b2_grad_ptr = enc->getFFNB2Grad();
+        float* b2_weight_ptr = enc->getFFNB2();
+        if (b2_grad_ptr && b2_weight_ptr) {
+            ParameterGroup b2_group;
+            b2_group.name = "layer" + std::to_string(layer) + "_ffn_b2";
+            b2_group.weights = b2_weight_ptr;
+            b2_group.grads = b2_grad_ptr;
+            b2_group.size = cfg.d_model;  // b2: [d_model]
+            b2_group.m_state = nullptr;
+            b2_group.v_state = nullptr;
+            b2_group.type = ParamGroupType::FFN;
+            b2_group.layer_index = layer;
+            b2_group.upsilon = HyperParameters::UPSILON_BASE * 
+                sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
+            parameter_groups_.push_back(b2_group);
         }
 
         // RMSNorm gamma 1
-        if (enc->getRMS1GammaGrad() && enc->getRMS1Gamma()) {
+        float* rms1_grad_ptr = enc->getRMS1GammaGrad();
+        float* rms1_weight_ptr = enc->getRMS1Gamma();
+        if (rms1_grad_ptr && rms1_weight_ptr) {
             ParameterGroup rms1_group;
             rms1_group.name = "layer" + std::to_string(layer) + "_rms1_gamma";
-            rms1_group.weights = enc->getRMS1Gamma();
-            rms1_group.grads = enc->getRMS1GammaGrad();
+            rms1_group.weights = rms1_weight_ptr;
+            rms1_group.grads = rms1_grad_ptr;
             rms1_group.size = cfg.d_model;
             rms1_group.m_state = nullptr;
             rms1_group.v_state = nullptr;
@@ -645,14 +829,19 @@ void LanguageModel::buildParameterGroups() {
             rms1_group.upsilon = HyperParameters::UPSILON_BASE * 
                 sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
             parameter_groups_.push_back(rms1_group);
+        } else {
+            BWD_WARN("[buildParameterGroups] Layer " << layer << " RMS1: weights=" << (void*)rms1_weight_ptr 
+                     << " grads=" << (void*)rms1_grad_ptr << " (skipping - not initialized)");
         }
 
         // RMSNorm gamma 2
-        if (enc->getRMS2GammaGrad() && enc->getRMS2Gamma()) {
+        float* rms2_grad_ptr = enc->getRMS2GammaGrad();
+        float* rms2_weight_ptr = enc->getRMS2Gamma();
+        if (rms2_grad_ptr && rms2_weight_ptr) {
             ParameterGroup rms2_group;
             rms2_group.name = "layer" + std::to_string(layer) + "_rms2_gamma";
-            rms2_group.weights = enc->getRMS2Gamma();
-            rms2_group.grads = enc->getRMS2GammaGrad();
+            rms2_group.weights = rms2_weight_ptr;
+            rms2_group.grads = rms2_grad_ptr;
             rms2_group.size = cfg.d_model;
             rms2_group.m_state = nullptr;  // Will be set after TrainingState allocation
             rms2_group.v_state = nullptr;
@@ -661,6 +850,9 @@ void LanguageModel::buildParameterGroups() {
             rms2_group.upsilon = HyperParameters::UPSILON_BASE * 
                 sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
             parameter_groups_.push_back(rms2_group);
+        } else {
+            BWD_WARN("[buildParameterGroups] Layer " << layer << " RMS2: weights=" << (void*)rms2_weight_ptr 
+                     << " grads=" << (void*)rms2_grad_ptr << " (skipping - not initialized)");
         }
     }
 
@@ -1203,21 +1395,25 @@ void LanguageModel::updateWeights(float learning_rate,
             }
 
             // Log a small sample of optimizer state (m/v) for the probe group
+            // BUG FIX: Use SAME offset as weights/grads for consistent sampling!
+            // Previously was sampling m_state[0] while grad was from token 277 (offset 212736)
             if (probe_group.m_state && probe_group.v_state) {
                 constexpr size_t kProbeStateSamples = 4;
-                const size_t state_samples = std::min(kProbeStateSamples, probe_group.size);
+                const size_t state_samples = std::min(kProbeStateSamples, update_probe_sample_elems_);
                 std::array<float, kProbeStateSamples> m_sample{};
                 std::array<float, kProbeStateSamples> v_sample{};
-                cudaMemcpy(m_sample.data(), probe_group.m_state,
+                // Use update_probe_sample_offset_ to read from SAME position as weights/grads
+                cudaMemcpy(m_sample.data(), probe_group.m_state + update_probe_sample_offset_,
                            state_samples * sizeof(float), cudaMemcpyDeviceToHost);
-                cudaMemcpy(v_sample.data(), probe_group.v_state,
+                cudaMemcpy(v_sample.data(), probe_group.v_state + update_probe_sample_offset_,
                            state_samples * sizeof(float), cudaMemcpyDeviceToHost);
 
                 std::ostringstream state_oss;
                 state_oss << "[UpdateProbeState] group='" << probe_group.name
                           << "' step=" << optimizer_state->step
-                          << " m_state[0:" << state_samples << "]=[";
-                for (size_t i = 0; i < state_samples; ++i) {
+                          << " offset=" << update_probe_sample_offset_
+                          << " (token " << (update_probe_sample_offset_ / 768) << ")"
+                          << " m_state[0:" << state_samples << "]=[";                for (size_t i = 0; i < state_samples; ++i) {
                     if (i) state_oss << ", ";
                     state_oss << m_sample[i];
                 }

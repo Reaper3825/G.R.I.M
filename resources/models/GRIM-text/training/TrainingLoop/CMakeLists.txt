@@ -58,9 +58,6 @@ add_library(grim_training_kernels STATIC
     ../../Shared/Gradients/GradientCC_GPU.cu
     ../../Shared/Gradients/GradientCC_Host_GPU.cu
     ../../Shared/GPUBuffer/GPUBuffer.cu
-    # GradTear REMOVED - Rule 20: No backwards compatibility. GradAccumulationController is the production system.
-    ../../Shared/GradAccumulationController/GradAccumulationController_GPU.cu
-    ../../Shared/GradAccumulationController/GradAccumulationController_Integration.cu
     ../../Shared/GradNorm/GradNormGPU.cu
     ../../Shared/Telemetry/TelemetryLattice_GPU.cu
     ../../Shared/Telemetry/TelemetryControl_GPU.cu
@@ -80,7 +77,6 @@ target_include_directories(grim_training_kernels PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM    # shared GRIM
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared  # Shared/ folder for TrainingState, etc.
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../control  # control/ for ai_config_paths.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared/GradAccumulationController # GradAccumulationController headers
 )
 target_link_libraries(grim_training_kernels PUBLIC
     CUDA::cudart
@@ -168,7 +164,6 @@ target_include_directories(grim_cuda_kernels PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared             # Shared/ folder for TrainingState, etc.
     ${CMAKE_CURRENT_SOURCE_DIR}/../../archive
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../control  # control/ for ai_config_paths.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared/GradAccumulationController # GradAccumulationController headers
 )
 target_compile_options(grim_cuda_kernels PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
@@ -229,7 +224,6 @@ target_include_directories(grim_language_model_gpu_impl PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared/TensorContract  # TensorContract module
     ${CMAKE_CURRENT_SOURCE_DIR}/../../archive
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../control  # control/ for ai_config_paths.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared/GradAccumulationController # GradAccumulationController headers
 )
 target_compile_options(grim_language_model_gpu_impl PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
@@ -344,7 +338,6 @@ target_include_directories(train_gpu PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../archive
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../../core
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared/GradAccumulationController # GradAccumulationController headers
 )
 
 # UnigramByte tokenizer library (Unigram LM + Byte fallback + Atoms)
@@ -506,10 +499,6 @@ target_include_directories(gradient_verification_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Layers
 )
 
-
-# GradAccumulationController is the production gradient management system
-# See: training_state.grad_ctrl in TrainingState_GPU.hpp
-
 # ============================================================================
 # DIAGNOSTIC MINIMAL TRAINING LOOP
 # Barebones training loop for isolating plateau bug
@@ -563,48 +552,8 @@ target_include_directories(diagnostic_train_minimal PRIVATE
 # ============================================================================
 # EMBEDDING AUTOGRAD TEST SUITE
 # Autograd-enabled embedding tests using TensorContract system
-# Tests: forward/backward with Tensors, gradient verification, TrainingState integration
-# ============================================================================
-add_executable(embedding_autograd_test
-    ../../Tests/embedding_autograd_test.cu
-    ../../Layers/Embedding/Embedding_GPU.cu
-    ../../Layers/LayernNorm/RMSNorm_Kernel_GPU.cu
-    ../../Shared/Activations/Xavier/Xavier.cu
-    ../../Shared/DataLoader/DataLoader.cu
-    # ../../Shared/TrainingState/TrainingStateGPU.cu  # Disabled - test 4 is disabled
-    # ../../Shared/TrainingState/TrainingTensors.cu  # Disabled - test 4 is disabled
-)
-
-set_target_properties(embedding_autograd_test PROPERTIES
-    CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES "86"
-    CUDA_RUNTIME_LIBRARY Shared
-)
-
-target_compile_options(embedding_autograd_test PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
-)
-
-target_compile_definitions(embedding_autograd_test PRIVATE
-    USE_CUDA
-)
-
-target_link_libraries(embedding_autograd_test PRIVATE
-    CUDA::cudart
-    CUDA::cublas
-    nlohmann_json::nlohmann_json
-    grim_unigrambyte_tokenizer
-)
-
-target_include_directories(embedding_autograd_test PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../..
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Layers
-)
+# DELETED: embedding_autograd_test target (Issue #92 / Rule 20)
+# Legacy embedding tests deleted - production uses autograd::embedding() in TensorContract_GPU.cu
 
 message(STATUS "TrainingLoop configured:")
 message(STATUS "  - train_gpu: GPU-accelerated training with comprehensive logging")
@@ -613,5 +562,4 @@ message(STATUS "  - tokenizer_self_test: deterministic tokenizer regression suit
 message(STATUS "  - unigrambyte_self_test: UnigramByte tokenizer test suite")
 message(STATUS "  - flash_attention_test: Flash Attention forward/backward test suite")
 message(STATUS "  - gradient_verification_test: Encoder gradient collapse debugging")
-message(STATUS "  - embedding_autograd_test: Autograd-enabled embedding test suite")
 message(STATUS "  - grim_unigrambyte_tokenizer: Unigram LM + Byte fallback + AtomTable")

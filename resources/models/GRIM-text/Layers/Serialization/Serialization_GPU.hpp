@@ -123,7 +123,7 @@ struct SerializationScratchBlockReadView {
 	int num_atom_types = 0;
 	int atom_embedding_dim = 0;
 	int d_model = 0;
-	float atom_scale = 0.1f;
+	float atom_scale = 1.0f;  // Unit scale - embeddings are scaled up to match
 	bool enabled = false;
 };
 

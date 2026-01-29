@@ -79,7 +79,7 @@
     }, 
     "training": {
         "config": {
-            "epochs": 1,
+            "epochs": 3,
             "seed": 1,
             "batch_size": 7,
             "gradient_accumulation_steps": 2,
@@ -253,11 +253,11 @@
             
             "loss": {
                 "label_smoothing": {
-                    "enabled": false,
+                    "enabled": true,
                     "epsilon": 0.1
                 },
                 "focal": {
-                    "enabled": false,
+                    "enabled": true,
                     "gamma": 1.05,
                     "alpha": 1.0
                 },
@@ -344,9 +344,9 @@
             },
             
             "attention_diagnostics": {
-                "enabled": false,
+                "enabled": true,
                 "layer": -1,
-                "head": 0
+                "head": 0 
             },
             
             "log_recorder": {
@@ -386,7 +386,7 @@
             "num_kv_heads": 4,
             "tie_embeddings": true,
             "positional_encoding": {
-                "use_learned": true,
+                "use_learned": false,
                 "use_rope": true,
                 "use_alibi": true
             },
@@ -399,8 +399,8 @@
             },
             "lm_head_centering": {
                 "enabled": false,
-                "center_hidden_states": true,
-                "recenter_gradients": true
+                "center_hidden_states": false,
+                "recenter_gradients": false
             },
             "hardcoded_hidden_states": {
                 "enabled": false,
@@ -415,7 +415,7 @@
                 }
             },
             "guess_cache": {
-                "enabled": true,
+                "enabled": false,
                 "initial_capacity": 16384,
                 "min_capacity": 4096,
                 "max_capacity": 262144,

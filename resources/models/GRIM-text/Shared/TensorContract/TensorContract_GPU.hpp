@@ -106,6 +106,7 @@ void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream
 #include <string>
 #include <algorithm>  // for std::max in merge_qkv_grads_gqa
 #include <memory>     // for std::shared_ptr (ISSUE #59: grad as Tensor)
+#include <tuple>      // for std::tuple (ISSUE #61: split_and_reshape_qkv return type)
 
 //======================================================//
 //  ISSUE #53 FIX: Deferred GPU Memory Cleanup (GLOBAL SCOPE)
@@ -1204,6 +1205,19 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr,
 Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
 
 /**
+ * Broadcast add with bias: output[i,j] = input[i,j] + bias[j]
+ * 
+ * ISSUE #97 FIX: This replaces raw launchFFNBiasAdd calls with proper autograd tracking.
+ * Without this, encoder biases (b_qkv, b_o, b1, b2) were frozen at initialization.
+ *
+ * @param input Input tensor [N, D] where N=total_tokens, D=features  
+ * @param bias Bias tensor [D] - will be broadcasted across tokens
+ * @param stream CUDA stream
+ * @return Output tensor [N, D] with autograd graph attached for both input and bias
+ */
+Tensor broadcast_add(const Tensor& input, const Tensor& bias, cudaStream_t stream = nullptr);
+
+/**
  * GELU activation: y = x * 0.5 * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
  *
  * TAPE-BASED: Uses external cache pointer for backward pass.
@@ -1261,10 +1275,11 @@ Tensor unified_loss(const Tensor& logits, const int* targets,
                     cudaStream_t stream = nullptr);
 
 /**
- * Embedding lookup: output[i] = weight[token_ids[i]]
+ * Embedding lookup: output[i] = weight[token_ids[i]] * embedding_scale
+ * @param embedding_scale Scale factor for embeddings (default 1.0, use sqrt(d_model) for AIAYN-style)
  */
 Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens,
-                 cudaStream_t stream = nullptr);
+                 cudaStream_t stream = nullptr, float embedding_scale = 1.0f);
 
 /**
  * Softmax: y[i] = exp(x[i] - max(x)) / sum(exp(x - max(x)))
@@ -1301,6 +1316,47 @@ Tensor scaled_dot_product_attention(
     const float* alibi_slopes = nullptr, float scale = 0.0f,
     cudaStream_t stream = nullptr,
     float* cache_softmax_lse = nullptr);
+
+/**
+ * Split QKV projection output and reshape to BHSD layout with autograd tracking.
+ * 
+ * ISSUE #61 FIX: This replaces manual cudaMemcpy2D + Tensor::empty() operations
+ * that broke the autograd chain (Q/K/V had no grad_fn, causing zero gradients
+ * for W_qkv).
+ * 
+ * @param qkv_out      Input tensor [tokens, d_model + 2*kv_dim] from matmul(ln1_out, W_qkv)
+ * @param batch        Batch size
+ * @param seq          Sequence length (tokens = batch * seq)
+ * @param num_heads    Number of Q heads
+ * @param num_kv_heads Number of K/V heads (GQA)
+ * @param head_dim     Dimension per head
+ * @param stream       CUDA stream
+ * @return Tuple of (Q_bhsd, K_bhsd, V_bhsd) with properly linked autograd chains
+ */
+std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
+    Tensor& qkv_out,
+    int batch, int seq, int num_heads, int num_kv_heads, int head_dim,
+    cudaStream_t stream = nullptr);
+
+/**
+ * Reshape attention output from BHSD to flat layout with autograd tracking.
+ * 
+ * ISSUE #62 FIX: This replaces Tensor::empty() + launchReshapeFromBHSD()
+ * that broke the autograd chain (output had no grad_fn, causing W_o and 
+ * downstream gradients to not flow through attention backward).
+ * 
+ * @param bhsd_input   Input tensor [B, H, S, D] from attention output
+ * @param batch_size   Batch size
+ * @param seq_len      Sequence length
+ * @param num_heads    Number of attention heads
+ * @param head_dim     Dimension per head
+ * @param stream       CUDA stream
+ * @return Tensor [tokens, d_model] with properly linked autograd chain
+ */
+Tensor reshape_bhsd_to_flat(
+    Tensor& bhsd_input,
+    int batch_size, int seq_len, int num_heads, int head_dim,
+    cudaStream_t stream = nullptr);
 
 }  // namespace autograd
 

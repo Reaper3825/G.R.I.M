@@ -28,9 +28,23 @@ bool checkCuda(cudaError_t err, const char* what) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  ALiBi Slope Computation (Host)
-//  Formula: slope[h] = 2^(exponent * (h+1) / num_heads)
-//  With exponent=-8: slopes decay geometrically from 2^-1 to 2^-8
+//  ALiBi Slope Computation (Host) - Context-Aware Scaling
+//  
+//  This formula explicitly controls penalty strength at near vs far distances
+//  and automatically adapts when context length changes.
+//  
+//  Parameters:
+//    d_min = locality distance (tied to rotary_dim/2 or minimum 16)
+//    d_max = context length (max_seq_len)
+//    target_bias = |alibi_slope_exponent| (e.g., 8.0 for standard ALiBi)
+//  
+//  Formula:
+//    m_max = target_bias / d_min  (penalty slope for NEAR distances - strongest head)
+//    m_min = target_bias / d_max  (penalty slope for FAR distances - weakest head)
+//    slopes interpolated geometrically across heads
+//  
+//  WARNING: If you scale slopes for max_seq_len=2048 but run 8192 tokens,
+//           your weakest heads will be too weak. Always set max_seq_len correctly!
 // ═══════════════════════════════════════════════════════════════════════════
 
 bool computeAlibiSlopes(const PBMConfig& config, std::vector<float>& out_slopes) {
@@ -39,30 +53,151 @@ bool computeAlibiSlopes(const PBMConfig& config, std::vector<float>& out_slopes)
         return false;
     }
     
+    if (config.max_seq_len <= 0) {
+        std::cerr << kTag << " Invalid max_seq_len=" << config.max_seq_len 
+                  << " - MUST be set from model config for proper ALiBi scaling!" << std::endl;
+        return false;
+    }
+    
+    // d_max = context length (what we're calibrating ALiBi for)
+    const int d_max = config.max_seq_len;
+    
+    // d_min = locality distance (tie to rotary_dim for hybrid ALiBi+RoPE, else use 16)
+    // This controls how aggressively the STRONGEST head penalizes distance
+    int d_min = config.rotary_dim > 0 ? (config.rotary_dim / 2) : 16;
+    d_min = std::max(16, std::min(d_min, d_max));  // Clamp to [16, d_max]
+    
+    // target_bias controls overall penalty strength (standard ALiBi uses 8.0)
+    // Derived from alibi_slope_exponent for backwards compatibility
+    const float target_bias = std::abs(config.alibi_slope_exponent);
+    
+    // Safety check: target_bias==0 would generate all-zero slopes (useless)
+    if (target_bias == 0.0f) {
+        std::cerr << kTag << " ERROR: alibi_slope_exponent=0 generates all-zero slopes!" << std::endl;
+        return false;
+    }
+    
+    // Compute slope range based on context length
+    // m_max: strongest head (penalizes even nearby tokens)
+    // m_min: weakest head (only penalizes very distant tokens)
+    const float m_max = target_bias / static_cast<float>(d_min);
+    const float m_min = target_bias / static_cast<float>(d_max);
+    
+    // Safety check: m_min > m_max means d_min > d_max (inverted, should never happen)
+    if (m_min > m_max) {
+        std::cerr << kTag << " ERROR: m_min(" << m_min << ") > m_max(" << m_max 
+                  << ") - d_min/d_max inverted! d_min=" << d_min << ", d_max=" << d_max << std::endl;
+        return false;
+    }
+    
+    // ISSUE #76: Log context-aware ALiBi penalty computation for debugging
+    // At max_seq_len boundary, the ALiBi penalty for the weakest head scales with 1/max_seq_len
+    // Example: max_seq_len=1024, target_bias=8 -> m_min = 8/1024 = 0.0078
+    //          At position 1024, penalty = -0.0078 * 1024 = -8.0 (as designed)
+    // If max_seq_len changes, penalties scale! This is intentional behavior.
+    std::cerr << "[PBM-ALIBI-ISSUE76] max_seq_len=" << config.max_seq_len 
+              << " d_min=" << d_min 
+              << " target_bias=" << target_bias
+              << " => m_max=" << m_max << " m_min=" << m_min << std::endl;
+    std::cerr << "[PBM-ALIBI-ISSUE76] At position " << config.max_seq_len << ":\n"
+              << "    Head 0 (strongest): bias = -" << m_max << " * " << config.max_seq_len 
+              << " = " << (-m_max * config.max_seq_len) << std::endl;
+    std::cerr << "    Head " << (config.num_heads - 1) << " (weakest): bias = -" << m_min << " * " << config.max_seq_len 
+              << " = " << (-m_min * config.max_seq_len) << std::endl;
+    
     out_slopes.resize(static_cast<size_t>(config.num_heads));
+    
+    // ISSUE #78 FIX: Compute maximum allowed slope magnitude based on bias cap
+    // If alibi_max_bias = -10.0 and max_seq_len = 1024:
+    //   max_slope_magnitude = |-10| / 1024 = 0.00976
+    // Any slope with larger magnitude will cause bias to exceed -10 at max distance
+    const float max_bias_magnitude = std::abs(config.alibi_max_bias);
+    const float max_slope_magnitude = (config.alibi_max_bias != 0.0f && config.max_seq_len > 0)
+        ? (max_bias_magnitude / static_cast<float>(config.max_seq_len))
+        : 0.0f;  // 0 = no capping
+    
+    if (config.num_heads == 1) {
+        // Single head: use strongest slope (with optional capping) 
+        float slope = -m_max;
+        if (max_slope_magnitude > 0.0f && m_max > max_slope_magnitude) {
+            slope = -max_slope_magnitude;
+            std::cerr << "[PBM-ALIBI-ISSUE78] Head 0 slope CAPPED: -" << m_max 
+                      << " -> " << slope << " (max_bias=" << config.alibi_max_bias << ")" << std::endl;
+        }
+        out_slopes[0] = slope;
+        return true;
+    }
+    
+    // Interpolate slopes geometrically from m_max to m_min
+    // Head 0 = strongest (m_max), Head N-1 = weakest (m_min)
+    const float log_mmax = std::log(m_max);
+    const float log_mmin = std::log(m_min);
+    
+    int capped_count = 0;
     for (int h = 0; h < config.num_heads; ++h) {
-        const float exponent = config.alibi_slope_exponent * 
-            static_cast<float>(h + 1) / static_cast<float>(config.num_heads);
-        out_slopes[static_cast<size_t>(h)] = std::pow(2.0f, exponent);
+        const float t = static_cast<float>(h) / static_cast<float>(config.num_heads - 1);
+        const float log_m = log_mmax + t * (log_mmin - log_mmax);
+        float m = std::exp(log_m);
+        
+        // ISSUE #78 FIX: Cap slope magnitude to prevent extreme biases
+        // slope * max_seq_len should not exceed alibi_max_bias
+        if (max_slope_magnitude > 0.0f && m > max_slope_magnitude) {
+            m = max_slope_magnitude;
+            ++capped_count;
+        }
+        
+        // ISSUE #69 FIX: FlashAttention library expects NEGATIVE slopes
+        // (it uses += slope * col_idx for causal attention)
+        out_slopes[static_cast<size_t>(h)] = -m;
+    }
+    
+    // Issue #78: Log how many heads were capped
+    if (capped_count > 0) {
+        std::cerr << "[PBM-ALIBI-ISSUE78] " << capped_count << "/" << config.num_heads 
+                  << " heads CAPPED to max_slope=" << max_slope_magnitude 
+                  << " (max_bias=" << config.alibi_max_bias 
+                  << " at max_seq_len=" << config.max_seq_len << ")" << std::endl;
+        std::cerr << "[PBM-ALIBI-ISSUE78] Effective bias range: [" << config.alibi_max_bias 
+                  << ", 0] instead of [" << (-m_max * config.max_seq_len) << ", 0]" << std::endl;
     }
     
     if (config.verbose) {
-        std::cout << kTag << " ALiBi slopes computed for " << config.num_heads << " heads:" << std::endl;
+        std::cout << kTag << " ALiBi slopes computed (context-aware scaling):" << std::endl;
+        std::cout << "    max_seq_len=" << config.max_seq_len 
+                  << ", d_min=" << d_min 
+                  << ", target_bias=" << target_bias << std::endl;
+        std::cout << "    m_max=" << m_max << " (head 0), m_min=" << m_min 
+                  << " (head " << (config.num_heads-1) << ")" << std::endl;
+        if (capped_count > 0) {
+            std::cout << "    ISSUE #78: " << capped_count << " heads capped to max_slope=" 
+                      << max_slope_magnitude << std::endl;
+        }
         const int preview = std::min(config.num_heads, 4);
         for (int h = 0; h < preview; ++h) {
-            std::cout << "  head[" << h << "] slope=" << out_slopes[static_cast<size_t>(h)] << std::endl;
+            std::cout << "    head[" << h << "] slope=" << out_slopes[static_cast<size_t>(h)] << std::endl;
         }
         if (config.num_heads > 4) {
-            std::cout << "  ... (" << (config.num_heads - 4) << " more heads)" << std::endl;
+            std::cout << "    ... (" << (config.num_heads - 4) << " more heads)" << std::endl;
         }
     }
     return true;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  RoPE Inverse Frequency Computation (Host)
-//  Formula: inv_freq[i] = scaling / theta^(2*i / rotary_dim)
-//  Standard: theta=10000, scaling=1.0, rotary_dim=head_dim
+//  RoPE Inverse Frequency Computation (Host) - Context-Aware NTK Scaling
+//  
+//  Standard Formula: inv_freq[i] = 1.0 / theta^(2*i / rotary_dim)
+//  
+//  NTK-Aware Scaling (for extending context beyond training length):
+//    When max_seq_len > base_seq_len (default 2048):
+//    - scaled_theta = theta * (max_seq_len / base_seq_len)^(rotary_dim / (rotary_dim - 2))
+//    - This adjusts the rotation frequencies to accommodate longer sequences
+//    - Equivalent to "dynamic NTK" / "Code Llama" style scaling
+//  
+//  rope_scaling field provides additional manual scaling (1.0 = no extra scaling)
+//  
+//  WARNING: If you set max_seq_len=2048 but run inference at 8192 tokens,
+//           position encodings will be extrapolated (may degrade quality)!
 // ═══════════════════════════════════════════════════════════════════════════
 
 bool computeRoPEInvFreq(const PBMConfig& config, std::vector<float>& out_inv_freq) {
@@ -72,26 +207,59 @@ bool computeRoPEInvFreq(const PBMConfig& config, std::vector<float>& out_inv_fre
         return false;
     }
     
+    if (config.max_seq_len <= 0) {
+        std::cerr << kTag << " Invalid max_seq_len=" << config.max_seq_len 
+                  << " - MUST be set from model config for proper RoPE scaling!" << std::endl;
+        return false;
+    }
+    
     const int half_dim = config.rotary_dim / 2;
     out_inv_freq.resize(static_cast<size_t>(half_dim));
     
+    // Base context length for which theta was originally calibrated (standard: 2048)
+    constexpr int BASE_SEQ_LEN = 2048;
+    
+    // Compute NTK-aware theta scaling if extending beyond base context
+    float effective_theta = config.rope_theta;
+    if (config.max_seq_len > BASE_SEQ_LEN && config.rotary_dim > 2) {
+        // NTK-aware formula: theta_scaled = theta * (ctx / base)^(dim / (dim - 2))
+        const float ctx_ratio = static_cast<float>(config.max_seq_len) / static_cast<float>(BASE_SEQ_LEN);
+        const float ntk_exponent = static_cast<float>(config.rotary_dim) / 
+                                   static_cast<float>(config.rotary_dim - 2);
+        effective_theta = config.rope_theta * std::pow(ctx_ratio, ntk_exponent);
+    }
+    
+    // Safety check: effective_theta must be positive for valid rotation frequencies
+    if (effective_theta <= 0.0f) {
+        std::cerr << kTag << " ERROR: effective_theta=" << effective_theta 
+                  << " (must be > 0). Check rope_theta=" << config.rope_theta << std::endl;
+        return false;
+    }
+    
     for (int i = 0; i < half_dim; ++i) {
         const float exp_arg = static_cast<float>(2 * i) / static_cast<float>(config.rotary_dim);
+        // Apply rope_scaling for any additional manual scaling (typically 1.0)
         out_inv_freq[static_cast<size_t>(i)] = config.rope_scaling / 
-            std::pow(config.rope_theta, exp_arg);
+            std::pow(effective_theta, exp_arg);
     }
     
     if (config.verbose) {
-        std::cout << kTag << " RoPE inverse frequencies computed:" << std::endl;
-        std::cout << "  rotary_dim=" << config.rotary_dim 
-                  << ", theta=" << config.rope_theta
-                  << ", scaling=" << config.rope_scaling << std::endl;
+        std::cout << kTag << " RoPE inverse frequencies computed (context-aware NTK scaling):" << std::endl;
+        std::cout << "    rotary_dim=" << config.rotary_dim 
+                  << ", max_seq_len=" << config.max_seq_len << std::endl;
+        std::cout << "    base_theta=" << config.rope_theta
+                  << ", effective_theta=" << effective_theta
+                  << ", manual_scaling=" << config.rope_scaling << std::endl;
+        if (config.max_seq_len > BASE_SEQ_LEN) {
+            std::cout << "    NTK scaling active: extending from " << BASE_SEQ_LEN 
+                      << " to " << config.max_seq_len << " context" << std::endl;
+        }
         const int preview = std::min(half_dim, 4);
         for (int i = 0; i < preview; ++i) {
-            std::cout << "  inv_freq[" << i << "]=" << out_inv_freq[static_cast<size_t>(i)] << std::endl;
+            std::cout << "    inv_freq[" << i << "]=" << out_inv_freq[static_cast<size_t>(i)] << std::endl;
         }
         if (half_dim > 4) {
-            std::cout << "  ... (" << (half_dim - 4) << " more frequencies)" << std::endl;
+            std::cout << "    ... (" << (half_dim - 4) << " more frequencies)" << std::endl;
         }
     }
     return true;
@@ -175,12 +343,16 @@ bool initializePBM(const PBMConfig& config, PBMState& state) {
     }
     
     // ─────────────────────────────────────────────────────────────────────────
-    // Step 5: Store metadata
+    // Step 5: Store metadata (including config values for stale reuse detection)
     // ─────────────────────────────────────────────────────────────────────────
     state.num_heads = config.num_heads;
     state.head_dim = config.head_dim;
     state.rotary_dim = config.rotary_dim;
     state.num_kv_heads = config.num_kv_heads;
+    state.max_seq_len = config.max_seq_len;
+    state.rope_theta = config.rope_theta;
+    state.rope_scaling = config.rope_scaling;
+    state.alibi_slope_exponent = config.alibi_slope_exponent;
     state.initialized = true;
     
     std::cout << kTag << " ✓ Hybrid ALiBi+RoPE initialized successfully" << std::endl;
@@ -193,14 +365,18 @@ bool initializePBM(const PBMConfig& config, PBMState& state) {
 }
 
 bool ensurePBM(const PBMConfig& config, PBMState& state) {
-    // Check if re-initialization needed
-    const bool dims_match = state.initialized &&
-                            state.num_heads == config.num_heads &&
-                            state.head_dim == config.head_dim &&
-                            state.rotary_dim == config.rotary_dim &&
-                            state.num_kv_heads == config.num_kv_heads;
+    // Check if re-initialization needed (all config values that affect computation)
+    const bool config_match = state.initialized &&
+                              state.num_heads == config.num_heads &&
+                              state.head_dim == config.head_dim &&
+                              state.rotary_dim == config.rotary_dim &&
+                              state.num_kv_heads == config.num_kv_heads &&
+                              state.max_seq_len == config.max_seq_len &&
+                              state.rope_theta == config.rope_theta &&
+                              state.rope_scaling == config.rope_scaling &&
+                              state.alibi_slope_exponent == config.alibi_slope_exponent;
     
-    if (dims_match) {
+    if (config_match) {
         return true;  // Already initialized with matching config
     }
     
@@ -226,6 +402,10 @@ void releasePBM(PBMState& state) {
     state.head_dim = 0;
     state.rotary_dim = 0;
     state.num_kv_heads = 0;
+    state.max_seq_len = 0;
+    state.rope_theta = 0.0f;
+    state.rope_scaling = 0.0f;
+    state.alibi_slope_exponent = 0.0f;
     state.initialized = false;
 }
 

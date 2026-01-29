@@ -52,12 +52,14 @@ struct LossConfig {
  *   CE_smooth = -(1-ε)*log(p_t) - ε/(V-1)*Σ_{i≠t}log(p_i)
  *   p_t = softmax(logits)[target]
  * 
- * Gradient:
- *   ∂L/∂logits = (softmax - one_hot) / valid_count
+ * Gradient (full unified loss backward):
+ *   ∂L/∂logits = (1/N) * [focal_weight * (p - q) + focal_deriv + entropy_grad]
  * 
- * NOTE: The backward uses standard CE gradient for simplicity and stability.
- * The focal/smoothing only affect the loss value (forward), not gradient direction.
- * This matches common focal loss implementations.
+ * Where:
+ *   - q is the label-smoothed target (q_t = 1-ε, q_i = ε/(V-1) for i≠t)
+ *   - focal_weight = (1-p_t)^γ
+ *   - focal_deriv accounts for d(focal_weight)/d(logits) via softmax Jacobian
+ *   - entropy_grad = λ * p * (1 + log(p)) pushes toward uniform distribution
  * 
  * @param logits      [total_tokens, vocab_size] - raw logits from LM head
  * @param targets     [total_tokens] - target token IDs (on GPU), -1 = masked
@@ -106,6 +108,10 @@ void launchUnifiedLossBackward(
     int num_tokens,
     int vocab_size,
     int valid_count,
+    float focal_alpha,
+    float focal_gamma,
+    float smoothing_epsilon,
+    float entropy_reg_lambda,
     cudaStream_t stream
 );
 

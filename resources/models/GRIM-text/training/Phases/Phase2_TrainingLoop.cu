@@ -470,57 +470,9 @@ MomentSample sampleOptimizerMomentStats(const GRIM::TrainingState& ts, bool sync
     return sample;
 }
 
-struct GradAccumSample {
-    bool valid = false;
-    float total_rms = 0.0f;
-    float hottest_rms = 0.0f;
-    std::string hottest_name;
-    std::size_t buffers = 0;
-    std::size_t total_elements = 0;
-};
-
-GradAccumSample sampleGradAccumRms(const GRIM::ModelGradAccumulationController& controller) {
-    GradAccumSample sample{};
-    const auto& buffers = controller.controller().buffers();
-    if (buffers.empty()) {
-        return sample;
-    }
-
-    double sum_sq = 0.0;
-    std::size_t total_elements = 0;
-    std::size_t valid_buffers = 0;
-    float hottest_rms = 0.0f;
-    std::string hottest_name;
-
-    for (const auto& buf : buffers) {
-        if (!buf.enabled || !buf.ptr || buf.size == 0 || !buf.rms_valid) {
-            continue;
-        }
-        if (buf.last_rms < 0.0f) {
-            continue;
-        }
-        sum_sq += static_cast<double>(buf.last_rms) * buf.last_rms *
-                  static_cast<double>(buf.size);
-        total_elements += buf.size;
-        ++valid_buffers;
-        if (buf.last_rms > hottest_rms) {
-            hottest_rms = buf.last_rms;
-            hottest_name = buf.name;
-        }
-    }
-
-    if (total_elements == 0) {
-        return sample;
-    }
-
-    sample.total_rms = static_cast<float>(std::sqrt(sum_sq / total_elements));
-    sample.hottest_rms = hottest_rms;
-    sample.hottest_name = hottest_name;
-    sample.buffers = valid_buffers;
-    sample.total_elements = total_elements;
-    sample.valid = true;
-    return sample;
-}
+// GradAccumulationController REMOVED (Rule 20: No backwards compatibility)
+// Gradient accumulation now tracked via ctx.optimizer.current_micro_step and
+// ctx.config.hyperparameters.gradient_accumulation_steps directly
 
 //======================================================//
 //  Token 277 Mode Collapse Diagnostic (Issue #36+)
@@ -1101,8 +1053,13 @@ GRIM::Batching::BatchSchedule buildEpochBatches(
     const std::vector<float>* rarity_scores,
     TrainingLogger& logger) {
     
+    fprintf(stderr, "[DEBUG-BUILD] ENTER buildEpochBatches batch_size=%d\n", batch_size);
+    
     const bool warmup_phase = (global_step < kWarmupTokenSteps);
     const bool curriculum_active = (epoch < kCurriculumEpochs);
+    
+    fprintf(stderr, "[DEBUG-BUILD] warmup_phase=%d curriculum_active=%d\n", 
+            warmup_phase ? 1 : 0, curriculum_active ? 1 : 0);
     
     GRIM::Batching::BatchOptions opts;
     
@@ -1120,19 +1077,17 @@ GRIM::Batching::BatchSchedule buildEpochBatches(
     opts.max_batch_size = static_cast<uint32_t>(batch_size);
     
     // Parse batch strategy from config
+    // ISSUE #90 FIX: SIMILARITY_GROUPED causes mode collapse at max_seq_len boundary!
+    // When batches are sorted by length, the model first sees positions 0-670, then suddenly
+    // ALL sequences in a batch have positions 0-1023. The untrained position embeddings for
+    // positions 671-1023 cause distribution shift → mode collapse to token 277.
+    // SOLUTION: Always use GREEDY to mix short and long sequences, exposing all positions gradually.
     std::string strat_str = ctx.config.hyperparameters.batch_strategy;
     std::transform(strat_str.begin(), strat_str.end(), strat_str.begin(), ::toupper);
-    if (strat_str == "RANDOM" || strat_str == "GREEDY") {
-        // RANDOM in config maps to GREEDY (simple first-fit)
-        opts.strategy = GRIM::Batching::PackingStrategy::GREEDY;
-        strat_str = "RANDOM";
-    } else if (strat_str == "BEST_FIT_DECREASING") {
-        opts.strategy = GRIM::Batching::PackingStrategy::BEST_FIT_DECREASING;
-    } else {
-        // Default to SIMILARITY_GROUPED
-        opts.strategy = GRIM::Batching::PackingStrategy::SIMILARITY_GROUPED;
-        strat_str = "SIMILARITY_GROUPED";
-    }
+    
+    // FORCED: Always use GREEDY to prevent boundary-induced mode collapse
+    opts.strategy = GRIM::Batching::PackingStrategy::GREEDY;
+    strat_str = "GREEDY (forced - Issue #90)";
     
     opts.similarity_threshold = 0.30f;
     opts.prefer_short_first = curriculum_active;
@@ -1142,22 +1097,48 @@ GRIM::Batching::BatchSchedule buildEpochBatches(
     opts.rarity_weight = 0.3f;
     opts.target_effective_batch_size = 32;
     opts.adaptive_token_budget = !warmup_phase;
+    // Issue #90: Pass RNG seed for reproducible shuffling in GREEDY mode
+    opts.rng_seed = ctx.rng.data_seed + epoch;  // Vary by epoch for different shuffle each epoch
     // Use RANDOM ordering to avoid loss spikes at epoch end
     // LENGTH_ASCENDING causes easy→hard progression: loss plateaus then explodes
     // RANDOM interleaves difficulties for stable gradient flow
     opts.batch_ordering = GRIM::Batching::BatchOrdering::RANDOM;
     opts.interleave_overflow = true;
     
+    fprintf(stderr, "[DEBUG-BUILD] About to call buildBatches...\n");
     auto schedule = GRIM::Batching::buildBatches(catalog, opts);
+    fprintf(stderr, "[DEBUG-BUILD] buildBatches returned, batches=%zu\n", schedule.batches.size());
+    fflush(stderr);  // Force flush before potential crash
     
+    fprintf(stderr, "[DEBUG-BUILD] Checking schedule.batches.empty()...\n");
+    fflush(stderr);
+    bool is_empty = schedule.batches.empty();
+    fprintf(stderr, "[DEBUG-BUILD] is_empty=%d\n", is_empty ? 1 : 0);
+    fflush(stderr);
+    
+    fprintf(stderr, "[DEBUG-BUILD] Checking schedule stats...\n");
+    fflush(stderr);
+    fprintf(stderr, "[DEBUG-BUILD] min_batch=%u max_batch=%u avg_eff=%.2f\n", 
+            schedule.min_batch_size_observed, 
+            schedule.max_batch_size_observed,
+            schedule.avg_packing_efficiency);
+    fflush(stderr);
+    
+    fprintf(stderr, "[DEBUG-BUILD] About to log batches created...\n");
+    fflush(stderr);
     logger.log("Created " + std::to_string(schedule.batches.size()) + " dynamic batches");
+    fprintf(stderr, "[DEBUG-BUILD] About to log token budget...\n");
     logger.log("[Batching] Token budget: " + std::to_string(opts.max_tokens_per_batch));
+    fprintf(stderr, "[DEBUG-BUILD] About to log strategy...\n");
     logger.log("[Batching] Strategy: " + strat_str);
+    fprintf(stderr, "[DEBUG-BUILD] About to log batch size range...\n");
     logger.log("[Batching] Batch size range: " +
                std::to_string(schedule.min_batch_size_observed) + "-" +
                std::to_string(schedule.max_batch_size_observed));
+    fprintf(stderr, "[DEBUG-BUILD] About to log packing efficiency...\n");
     logger.log("[Batching] Packing efficiency: " + 
                std::to_string(static_cast<int>(schedule.avg_packing_efficiency * 100)) + "%");
+    fprintf(stderr, "[DEBUG-BUILD] All logger.log calls completed\n");
     
     return schedule;
 }
@@ -1587,8 +1568,20 @@ ValidationResult runValidation(TrainingContext& ctx) {
     
     ctx.logging.logger->log("Running validation...");
     
+    // Issue #85 FIX: Use model's actual buffer capacity, NOT kDefaultMaxTokensPerBatch (8192)!
+    // Training allocates buffers based on batch_size * max_seq_len (e.g., 7 * 1024 = 7168).
+    // Using 8192 for validation exceeds this → buffer overflow → crash!
+    const auto& model_cfg = ctx.model->getConfig();
+    const int model_token_budget = model_cfg.max_tokens_per_batch;
+    const int safe_token_budget = (model_token_budget > 0) 
+        ? model_token_budget 
+        : static_cast<int>(model_cfg.max_cached_batch * model_cfg.max_cached_seq_len);
+    
+    ctx.logging.logger->log("[Val] Token budget: " + std::to_string(safe_token_budget) + 
+        " (model limit: " + std::to_string(model_token_budget) + ")");
+    
     GRIM::Batching::BatchOptions val_opts;
-    val_opts.max_tokens_per_batch = kDefaultMaxTokensPerBatch;
+    val_opts.max_tokens_per_batch = static_cast<uint32_t>(safe_token_budget);
     val_opts.max_batch_size = static_cast<uint32_t>(ctx.config.hyperparameters.batch_size);
     val_opts.bucket_step = 256;
     
@@ -1747,12 +1740,14 @@ BatchResult processBatch(
     const auto clip_selection = GRIM::TNC::computeClipSelection(
         hp.grad_clip_norm, token_stats, 1.0f, long_seq_threshold);
     
-    // Start gradient accumulation window only when in IDLE state
+    // Start gradient accumulation window only when at micro_step 0
     // (i.e., first micro-batch after an optimizer step or at very start)
     // This is critical for gradient accumulation: we must NOT zero gradients
     // between micro-batches, only at the start of each accumulation window.
-    if (ctx.optimizer.grad_controller->controller().state() == GRIM::GradControllerState::IDLE) {
-        ctx.optimizer.grad_controller->beginAccumulationWindow();
+    const int accum_steps = std::max(1, ctx.config.hyperparameters.gradient_accumulation_steps);
+    if (ctx.optimizer.current_micro_step == 0) {
+        // Zero gradients at window start via autograd system
+        ctx.model->zeroGrad();
     }
     
     // BUG FIX: beginBatch() must be called EVERY batch to clear previous entries,
@@ -1785,18 +1780,23 @@ BatchResult processBatch(
         ctx.logging.logger->log(batch_info.str());
     }
 
+    fprintf(stderr, "[DEBUG-PROCESS] After BATCH_INFO log, checking shouldLogAtomStats...\n");
     if (shouldLogAtomStats(ctx, batch_idx)) {
+        fprintf(stderr, "[DEBUG-PROCESS] shouldLogAtomStats=true, creating vectors...\n");
         std::vector<int> per_seq_atoms;
         std::vector<int> per_seq_lengths;
         per_seq_atoms.reserve(batch_inputs.size());
         per_seq_lengths.reserve(batch_inputs.size());
 
+        fprintf(stderr, "[DEBUG-PROCESS] About to call computeAtomStats...\n");
         const AtomStats stats = computeAtomStats(batch_inputs, ctx.tokenizer,
                                                  &per_seq_atoms, &per_seq_lengths);
+        fprintf(stderr, "[DEBUG-PROCESS] computeAtomStats returned\n");
         const double atom_ratio = stats.total_tokens > 0
             ? static_cast<double>(stats.total_atoms) / static_cast<double>(stats.total_tokens)
             : 0.0;
 
+        fprintf(stderr, "[DEBUG-PROCESS] Building atom_msg...\n");
         std::ostringstream atom_msg;
         atom_msg << "[AtomStats] batch=" << (batch_idx + 1)
                  << " seqs=" << batch_inputs.size()
@@ -1806,7 +1806,9 @@ BatchResult processBatch(
                  << " min=" << stats.min_atoms
                  << " max=" << stats.max_atoms
                  << " avg=" << std::fixed << std::setprecision(2) << stats.avg_atoms;
+        fprintf(stderr, "[DEBUG-PROCESS] About to log atom_msg...\n");
         ctx.logging.logger->log(atom_msg.str());
+        fprintf(stderr, "[DEBUG-PROCESS] atom_msg logged\n");
 
         const int max_seq_log = std::max(0, ctx.config.hyperparameters.atom_stats_max_seqs);
         if (max_seq_log > 0 && !per_seq_atoms.empty()) {
@@ -1833,6 +1835,7 @@ BatchResult processBatch(
         }
     }
     
+    fprintf(stderr, "[DEBUG-PROCESS] After atom stats, entering boundary diagnostic...\n");
     // ========================================================================
     // DIAGNOSTIC: Boundary crossing check (simplified for FlashAttention v2)
     // NOTE: FlashAttention v2 does NOT use O(seq²) attention buffers.
@@ -1964,10 +1967,12 @@ BatchResult processBatch(
         }
     }
     
+    fprintf(stderr, "[DEBUG-PROCESS] After boundary diagnostic, entering forward pass...\n");
     // Forward pass
     static int forward_call_count = 0;
     ++forward_call_count;
     
+    fprintf(stderr, "[DEBUG-PROCESS] forward_call_count=%d, building target distribution...\n", forward_call_count);
     // Log target and prediction distributions (uses ForwardPass module for filtering)
     {
         // Log target distribution - count occurrences of each target ID
@@ -2004,12 +2009,14 @@ BatchResult processBatch(
         EmitModuleInfo(ModuleId::ForwardPass, target_info.str(), ctx.global_step);
     }
     
+    fprintf(stderr, "[DEBUG-PROCESS] After target distribution, clearing loss weights...\n");
     // BUG FIX Issue #30: sequence_rarity was scaling down ALL losses by ~0.66x,
     // causing initial loss to be ~6.8 instead of expected ~10.8 (ln(vocab_size)).
     // This broke the loss baseline and made training plateau investigation misleading.
     // REMOVE sequence_rarity weighting entirely - all sequences weighted equally.
     ctx.model->clearSequenceLossWeights();
     
+    fprintf(stderr, "[DEBUG-PROCESS] About to call computeLossBatch...\n");
     result.loss = ctx.model->computeLossBatch(
         batch_inputs,
         batch_targets,
@@ -2018,7 +2025,9 @@ BatchResult processBatch(
         batch_text_features,
         batch_text_mask,
         batch_byte_lengths);
+    fprintf(stderr, "[DEBUG-PROCESS] computeLossBatch returned, loss=%f\n", result.loss);
     ctx.model->clearSequenceLossWeights();
+    fprintf(stderr, "[DEBUG-PROCESS] clearSequenceLossWeights completed\n");
 
     if (std::isfinite(result.loss) &&
         ctx.config.hyperparameters.guess_aux_enabled &&
@@ -2662,8 +2671,9 @@ BatchResult processBatch(
             }
             
             // IMPORTANT: Reset state before early return
-            // Note: Gradients still zero from window start, no need to re-zero
-            ctx.optimizer.grad_controller->forceReset();
+            // Zero gradients to ensure corrupted data doesn't persist
+            ctx.model->zeroGrad();
+            ctx.optimizer.current_micro_step = 0;  // Reset accumulation window
             
             ctx.model->clearSequenceLossWeights();
             result.skipped = true;
@@ -2742,12 +2752,15 @@ BatchResult processBatch(
     // Use PyTorch reference (validate_gradients_pytorch.py) for numerical verification
     // Per-layer gradient flow logging below provides runtime diagnostics
     
-    // Rule 20: No silent failures - if accumulation window is closed when we try to run
-    // backward, that's a bug in the training loop state management. Crash with clear message.
-    if (ctx.optimizer.grad_controller->isAccumulationComplete()) {
-        fprintf(stderr, "\n[Phase2] FATAL: Backward pass attempted with closed accumulation window\n");
+    // Rule 20: No silent failures - accumulation window logic is simple counter-based
+    // First micro-batch (micro_step=0) should have already zeroed gradients above
+    // This check is now a sanity assertion that micro_step is within bounds
+    // NOTE: accum_steps already defined at start of processBatch (line ~1735)
+    if (ctx.optimizer.current_micro_step >= accum_steps) {
+        fprintf(stderr, "\n[Phase2] FATAL: Backward pass attempted with micro_step=%d >= accum_steps=%d\n", 
+                ctx.optimizer.current_micro_step, accum_steps);
         fprintf(stderr, "[Phase2] batch=%d global_step=%d\n", batch_idx + 1, ctx.global_step);
-        fprintf(stderr, "[Phase2] This indicates a missing forceReset() after skip or invalid state flow.\n");
+        fprintf(stderr, "[Phase2] This indicates current_micro_step was not reset after optimizer step.\n");
         std::abort();
     }
     
@@ -2757,27 +2770,18 @@ BatchResult processBatch(
     // only the LAST micro-batch's gradients were used, cutting effective batch size in half.
     //
     // Fix: First micro-batch (micro_step=0) should overwrite (accumulate=false) since
-    // gradients were just zeroed by beginAccumulationWindow(). Subsequent micro-batches
-    // (micro_step>0) should accumulate (accumulate=true) to add their gradients.
-    const bool should_accumulate = ctx.optimizer.grad_controller->controller().currentMicroStep() > 0;
+    // gradients were just zeroed. Subsequent micro-batches (micro_step>0) should 
+    // accumulate (accumulate=true) to add their gradients.
+    const bool should_accumulate = ctx.optimizer.current_micro_step > 0;
     
-    ctx.optimizer.grad_controller->beginBackward();
+    // Run backward pass
     ctx.model->backward(result.loss, should_accumulate, grad_scale, ctx.global_step);
-    ctx.optimizer.grad_controller->endBackward();
 
-    const auto accum_sample = sampleGradAccumRms(*ctx.optimizer.grad_controller);
-    if (accum_sample.valid) {
-        const int micro_step = ctx.optimizer.grad_controller->controller().currentMicroStep();
-        const int accum_steps = ctx.optimizer.grad_controller->controller().accumSteps();
-        ctx.logging.logger->log("[GradAccum] batch=" + std::to_string(batch_idx + 1) +
-                                " micro_step=" + std::to_string(micro_step) +
-                                "/" + std::to_string(accum_steps) +
-                                " rms=" + Internal::formatScalar(accum_sample.total_rms, 6) +
-                                " hottest=" + accum_sample.hottest_name +
-                                " hottest_rms=" + Internal::formatScalar(accum_sample.hottest_rms, 6) +
-                                " buffers=" + std::to_string(accum_sample.buffers) +
-                                " elems=" + std::to_string(accum_sample.total_elements));
-    }
+    // Log gradient accumulation status (simplified - no longer using GradAccumulationController)
+    ctx.logging.logger->log("[GradAccum] batch=" + std::to_string(batch_idx + 1) +
+                            " micro_step=" + std::to_string(ctx.optimizer.current_micro_step) +
+                            "/" + std::to_string(accum_steps) +
+                            " accumulate=" + (should_accumulate ? "true" : "false"));
     
     ctx.logging.logger->log("[GradTrace] POST-BACKWARD batch=" + std::to_string(batch_idx + 1) + 
                             " loss=" + Internal::formatScalar(result.loss) + 
@@ -2793,7 +2797,7 @@ BatchResult processBatch(
     // Track WHY p_277 increases: if grad_sum > 0, weight row increases
     // For tied weights: logit[277] = x @ W[277].T, so larger W[277] → larger logit_277
     // ========================================================================
-    constexpr bool kToken277DiagEnabled = false;  // Set to true to enable [Token277Trace] / [HiddenState277] logs
+    constexpr bool kToken277DiagEnabled = true;  // Set to true to enable [Token277Trace] / [HiddenState277] logs
     
     if constexpr (kToken277DiagEnabled) {
         const auto& ts = ctx.model->getTrainingState();
@@ -2914,16 +2918,15 @@ BatchResult processBatch(
     //
     // IMPORTANT: Only run on LAST micro-batch when gradients are fully accumulated
     // ========================================================================
-    const int current_micro_step = ctx.optimizer.grad_controller->controller().currentMicroStep();
-    const int total_accum_steps = ctx.optimizer.grad_controller->controller().accumSteps();
-    // Logic fix: current_micro_step is the count of COMPLETED steps (1-based effective progress)
-    // So if current_micro_step == total_accum_steps, we are done.
-    const bool is_last_micro_batch = (current_micro_step >= total_accum_steps);
+    // Logic: After this batch's backward, increment micro_step. If it reaches accum_steps,
+    // this was the last micro-batch and we should run numerical checks.
+    const int micro_step_after_backward = ctx.optimizer.current_micro_step + 1;
+    const bool is_last_micro_batch = (micro_step_after_backward >= accum_steps);
     
     // DEBUG: Log gradient check decision
     ctx.logging.logger->log("[GradCheckDebug] batch=" + std::to_string(batch_idx + 1) + 
-                            " micro_step=" + std::to_string(current_micro_step) + 
-                            "/" + std::to_string(total_accum_steps) + 
+                            " micro_step=" + std::to_string(ctx.optimizer.current_micro_step) + 
+                            "/" + std::to_string(accum_steps) + 
                             " is_last=" + (is_last_micro_batch ? "yes" : "no"));
     
     Internal::NumericalGradCheckResult grad_check_result{};
@@ -2963,6 +2966,9 @@ BatchResult processBatch(
     // Impact: 90% of batches were clipped with WRONG norm, corrupting optimization trajectory.
     // NOTE: Performance cost is ~1ms per batch (acceptable for correctness).
     const bool should_sync = true;  // Was: (batch_idx % 10 == 0) - WRONG!
+
+    ctx.logging.logger->log("[GradTrace] PRE-GRADNORM batch=" + std::to_string(batch_idx + 1) +
+                            " cached_preclip=" + Internal::formatScalar(state.last_grad_norm));
     
     // === TIMING GUARD: Track expensive operations between POST-BACKWARD logs ===
     auto grad_ops_start = std::chrono::steady_clock::now();
@@ -2976,9 +2982,32 @@ BatchResult processBatch(
     
     // Log gradient component breakdown ONLY when we synced
     if (should_sync) {
-        ctx.logging.logger->log("[GradTrace] POST-BACKWARD synced computeGradNorm in " + 
+        ctx.logging.logger->log("[GradTrace] POST-BACKWARD synced computeGradNorm in " +
                                 Internal::formatScalar(norm_elapsed_ms, 2) + "ms");
-        
+
+        const auto& ts = ctx.model->getTrainingState();
+        if (ts.gradnorm_ctrl.isInitialized()) {
+            const auto& gn = ts.gradnorm_ctrl.getHostMetrics();
+            if (gn.has_nan || gn.has_inf) {
+                std::ostringstream nf_log;
+                nf_log << "[GradTrace] NON-FINITE grads detected"
+                       << " nan=" << (gn.has_nan ? "true" : "false")
+                       << " inf=" << (gn.has_inf ? "true" : "false")
+                       << " first_nan_group=" << gn.first_nan_group
+                       << " first_nan_value=" << gn.first_nan_value
+                       << " first_inf_group=" << gn.first_inf_group
+                       << " first_inf_value=" << gn.first_inf_value
+                       << " groups_processed=" << gn.groups_processed;
+                ctx.logging.logger->log(nf_log.str());
+                
+                // RULE 20: Fail loud! NaN/Inf in gradients is a critical bug - crash immediately
+                throw std::runtime_error("[FATAL] NaN/Inf detected in gradients at batch " + 
+                                        std::to_string(batch_idx + 1) + 
+                                        " first_nan_group=" + std::to_string(gn.first_nan_group) +
+                                        " - investigate the backward pass!");
+            }
+        }
+
         std::string comp_log = Internal::formatGradientComponents(ctx.model.get());
         if (!comp_log.empty()) {
             ctx.logging.logger->log(comp_log);
@@ -3035,10 +3064,8 @@ BatchResult processBatch(
     if (Internal::handleGradientSpike(ctx, state, batch, preclip_grad_norm, preclip_grad_norm, 
                                       result.loss, clip_selection, batch_idx)) {
         // CRITICAL: Zero gradients before reset - bad gradients must not persist
-        // Even though beginAccumulationWindow() zeros at next batch start, we zero now
-        // to ensure nothing reads corrupted gradients between batches
-        ctx.optimizer.grad_controller->zeroAllGradients();
-        ctx.optimizer.grad_controller->forceReset();
+        ctx.model->zeroGrad();
+        ctx.optimizer.current_micro_step = 0;  // Reset accumulation window
         result.skipped = true;
         result.skip_reason = "gradient_spike";
         ctx.global_step++;
@@ -3162,9 +3189,8 @@ BatchResult processBatch(
     ctx.model->recordGradientClip(effective_per_token_limit, result.gradient_clipped);
     auto clipping_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - clipping_start).count();
     
-    // Learning rate computation
+    // Learning rate computation (accum_steps already computed above)
     auto lr_start = std::chrono::steady_clock::now();
-    const int accum_steps = ctx.optimizer.grad_controller->controller().accumSteps();
     const float scheduled_lr = Internal::getScheduledLearningRate(
         ctx.global_step, hp.learning_rate, hp.warmup_steps, 
         hp.dynamic_lr_min, ctx.config.stability.enabled,
@@ -3196,15 +3222,13 @@ BatchResult processBatch(
     // GPU kernel already made all decisions - just execute them
     switch (telemetry_action) {
         case GRIM::Telemetry::ControlAction::SkipStep:
-            // Skip optimizer step entirely
-            // CRITICAL: Reset gradient controller to prevent ERROR state cascade
-            // When we skip a step, the accumulation window may be in READY_FOR_STEP state.
-            // If we don't reset, the next batch will try beginBackward() on a closed window → ERROR.
-            ctx.optimizer.grad_controller->forceReset();
+            // Skip optimizer step entirely - reset accumulation window
+            ctx.model->zeroGrad();
+            ctx.optimizer.current_micro_step = 0;
             
             result.skipped = true;
             result.skip_reason = "telemetry_control_skip";
-            ctx.logging.logger->log("[TelemetryControl] SKIP_STEP batch=" + std::to_string(batch_idx + 1) + " (reset gradient controller)");
+            ctx.logging.logger->log("[TelemetryControl] SKIP_STEP batch=" + std::to_string(batch_idx + 1) + " (reset accumulation window)");
             return result;
             
         case GRIM::Telemetry::ControlAction::ExtendCooldown:
@@ -3394,12 +3418,13 @@ BatchResult processBatch(
     
     // Only run optimizer step when accumulation is complete
     // This enables gradient accumulation across multiple micro-batches
-    const bool should_step = ctx.optimizer.grad_controller->isAccumulationComplete();
+    // Increment micro_step BEFORE checking, since we already processed this batch's backward
+    ctx.optimizer.current_micro_step++;
+    const bool should_step = (ctx.optimizer.current_micro_step >= accum_steps);
     
     if (should_step) {
-        ctx.optimizer.grad_controller->beginOptimizerStep();
-        const int micro_step_for_log = ctx.optimizer.grad_controller->controller().currentMicroStep();
-        const int accum_steps_for_log = ctx.optimizer.grad_controller->controller().accumSteps();
+        const int micro_step_for_log = ctx.optimizer.current_micro_step;
+        const int accum_steps_for_log = accum_steps;
         
         // GRADIENT ACCUMULATION SCALING (Issue #27 - Jan 11, 2026)
         // Standard practice: scale accumulated gradients by 1/accum_steps before optimizer step.
@@ -3446,7 +3471,8 @@ BatchResult processBatch(
         ctx.model->updateWeights(result.learning_rate,
                                  &ctx.optimizer.optimizer_state,
                                  ctx.config.hyperparameters.weight_decay);
-        ctx.optimizer.grad_controller->endOptimizerStep();
+        // Reset micro_step counter after optimizer step completes
+        ctx.optimizer.current_micro_step = 0;
 
         const auto moment_sample = sampleOptimizerMomentStats(ctx.model->getTrainingState(), sync_diag);
         if (moment_sample.valid) {
@@ -3534,8 +3560,8 @@ BatchResult processBatch(
         ctx.optimizer.optimizer_state.step++;
     } else {
         ctx.logging.logger->log("[GradTrace] ACCUMULATING batch=" + std::to_string(batch_idx + 1) + 
-                                " micro_step=" + std::to_string(ctx.optimizer.grad_controller->controller().currentMicroStep()) +
-                                " of " + std::to_string(ctx.optimizer.grad_controller->controller().accumSteps()) +
+                                " micro_step=" + std::to_string(ctx.optimizer.current_micro_step) +
+                                " of " + std::to_string(accum_steps) +
                                 " (skipping optimizer step)");
     }
     
@@ -3710,17 +3736,25 @@ EpochResult runEpoch(
     ctx.logging.logger->log("Epoch " + std::to_string(epoch_idx + 1) + "/" + std::to_string(num_epochs));
     
     // Reset guess cache at epoch start
+    // BUG FIX: Must pass stream to ResetGuessCache - nullptr causes cudaMemsetAsync crash!
     if (ctx.config.hyperparameters.guess_aux_enabled &&
         state.guess_cache_ready && !state.guess_cache_faulted) {
-        GRIMTS::ResetGuessCache();
+        cudaStream_t primary_stream = ctx.model->getTrainingState().stream_ctrl.getPrimaryStream();
+        GRIMTS::ResetGuessCache(primary_stream);
     }
+    
+    fprintf(stderr, "[DEBUG-EPOCH] After ResetGuessCache, checking shuffle...\n");
     
     // Shuffle train catalog if enabled
     const bool shuffle_this_epoch = hp.shuffle_train_enabled &&
         (hp.shuffle_train_epochs == 0 || epoch_idx < hp.shuffle_train_epochs);
+    fprintf(stderr, "[DEBUG-EPOCH] shuffle_this_epoch=%d hp.shuffle_train_enabled=%d\n", 
+            shuffle_this_epoch ? 1 : 0, hp.shuffle_train_enabled ? 1 : 0);
     
     if (shuffle_this_epoch) {
+        fprintf(stderr, "[DEBUG-EPOCH] Entering shuffle block\n");
         ctx.logging.logger->log("[Shuffle] Randomizing train catalog for epoch " + std::to_string(epoch_idx + 1));
+        fprintf(stderr, "[DEBUG-EPOCH] train_views.size()=%zu\n", ctx.data.train_views.size());
         
         std::vector<size_t> perm(ctx.data.train_views.size());
         for (size_t i = 0; i < perm.size(); ++i) perm[i] = i;
@@ -3750,8 +3784,10 @@ EpochResult runEpoch(
         if (!shuffled_rarity.empty()) {
             ctx.data.sequence_rarity.swap(shuffled_rarity);
         }
+        fprintf(stderr, "[DEBUG-EPOCH] Shuffle complete\n");
     }
     
+    fprintf(stderr, "[DEBUG-EPOCH] About to build epoch batches...\n");
     // Build batches for this epoch
     auto schedule = Internal::buildEpochBatches(
         ctx,
@@ -3779,8 +3815,8 @@ EpochResult runEpoch(
     const auto epoch_start = std::chrono::steady_clock::now();
     float epoch_loss = 0.0f;
     
-    // Get accumulation steps from GradAccumulationController (number of micro-batches per batch)
-    const int accum_steps = ctx.optimizer.grad_controller->controller().accumSteps();
+    // Get accumulation steps from hyperparameters
+    const int accum_steps = std::max(1, ctx.config.hyperparameters.gradient_accumulation_steps);
     
     // Process batches
     for (int batch_idx = 0; batch_idx < total_batches_to_run; ++batch_idx) {
@@ -3802,9 +3838,9 @@ EpochResult runEpoch(
         // that called processBatch() accum_steps times with THE SAME BATCH!
         // This caused each batch to be processed twice, doubling gradients and leading to loss explosion.
         //
-        // CORRECT BEHAVIOR: Each batch is processed ONCE. The GradAccumulationController
-        // internally tracks micro_step and decides when to run the optimizer step after
-        // accum_steps DIFFERENT batches have been processed.
+        // CORRECT BEHAVIOR: Each batch is processed ONCE. The current_micro_step counter
+        // tracks how many batches have been processed and decides when to run the optimizer 
+        // step after accum_steps DIFFERENT batches have been processed.
         //
         // The inner loop was WRONG because:
         //   - With accum_steps=2, batch 0 was processed twice → gradients for batch 0 doubled
@@ -4011,19 +4047,25 @@ bool executePhase2(TrainingContext& ctx) {
     }
     
     if (state.guess_cache_ready) {
+        fprintf(stderr, "[DEBUG] About to call EmitModuleInfo for GuessCache...\n");
         EmitModuleInfo(ModuleId::GuessCache, 
             std::string("GPU cache ready (capacity=") + std::to_string(kDefaultGuessCacheCapacity) + ")", ctx.global_step);
+        fprintf(stderr, "[DEBUG] EmitModuleInfo completed, about to create GuessCacheBatchBuffers...\n");
         state.guess_cache_buffers = std::make_unique<GuessCacheBatchBuffers>();
+        fprintf(stderr, "[DEBUG] GuessCacheBatchBuffers created successfully\n");
     } else if (!ctx.config.hyperparameters.guess_aux_enabled) {
         EmitModuleInfo(ModuleId::GuessCache, "Guess cache disabled (guess_aux.enabled=false)", ctx.global_step);
     }
     
+    fprintf(stderr, "[DEBUG] About to initialize K-tensor tracing...\n");
     // ========== K-TENSOR TRACING (trace K values through pipeline) ==========
     // Uses same enable flag as attention diagnostics
     auto& k_trace = GRIM::getKTensorTrace();
+    fprintf(stderr, "[DEBUG] K-tensor trace obtained, setting enabled flag...\n");
     k_trace.enabled = ctx.config.hyperparameters.attention_diag_enabled;
     k_trace.current_step = 0;
     k_trace.current_layer = 0;
+    fprintf(stderr, "[DEBUG] K-tensor tracing initialized\n");
     
     if (k_trace.enabled) {
         EmitModuleInfo(ModuleId::Training, 

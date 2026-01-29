@@ -796,7 +796,7 @@ struct ScratchBlockConfig {
     int d_model = 768;              // Model hidden dimension
     int max_atoms = 1024;           // Max atoms per batch
     int atom_embedding_dim = 64;    // Atom type embedding size
-    float atom_scale = 0.1f;        // Injection scale factor
+    float atom_scale = 1.0f;        // Unit injection scale (embeddings scaled to match)
     bool enabled = true;            // Master enable/disable
     bool inject_atom_embeddings = true;  // Inject type embeddings
     int atom_token_start = 256;     // First atom token ID
@@ -812,7 +812,7 @@ struct ScratchBlockConfig {
     "tokenizer": {
         "scratch_block_reasoning": true,
         "atom_embedding_dim": 64,
-        "atom_scale": 0.1
+        "atom_scale": 1.0
     },
     "model": {
         "scratchblock": {

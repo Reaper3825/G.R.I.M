@@ -29,6 +29,15 @@ struct PBMConfig {
     int num_heads = GRIM::HyperParameters::DEFAULT_NUM_HEADS;
     float alibi_slope_exponent = GRIM::HyperParameters::ALIBI_SLOPE_EXPONENT;
     
+    // ISSUE #78 FIX: Maximum ALiBi bias cap (negative value, e.g., -10.0f)
+    // Slopes are capped so that: abs(slope) * max_seq_len <= abs(alibi_max_bias)
+    // Set to 0.0f to disable capping (NOT RECOMMENDED)
+    float alibi_max_bias = GRIM::HyperParameters::ALIBI_MAX_BIAS;
+    
+    // Context length for ALiBi slope calculation (must be set from model config)
+    // This determines the maximum position distance ALiBi is calibrated for
+    int max_seq_len = GRIM::HyperParameters::DEFAULT_MAX_SEQ_LEN;
+    
     // RoPE configuration
     // head_dim: MUST be set from LanguageModelConfig.head_dim (= d_model / num_heads)
     // DO NOT use DEFAULT_HEAD_DIM - it may not match actual model dimensions
@@ -63,6 +72,12 @@ struct PBMState {
     
     // GQA
     int num_kv_heads = 0;
+    
+    // Config values used during initialization (for stale reuse detection)
+    int max_seq_len = 0;
+    float rope_theta = 0.0f;
+    float rope_scaling = 0.0f;
+    float alibi_slope_exponent = 0.0f;
     
     // Status
     bool initialized = false;

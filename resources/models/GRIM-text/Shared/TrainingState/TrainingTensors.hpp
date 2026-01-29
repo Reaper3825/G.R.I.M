@@ -6,6 +6,7 @@
 #pragma once
 
 #include "../TensorContract/TensorContract_GPU.hpp"
+#include "../HyperParameters/HyperParameters_GPU.hpp"  // Issue #96: For PositionalEncodingType
 #include <vector>
 #include <cstddef>
 
@@ -157,10 +158,12 @@ struct TrainingTensors {
      * Initialize all parameter tensors with Xavier uniform initialization
      * @param config Model configuration
      * @param stream CUDA stream for async operations
+     * @param positional_encoding Positional encoding type - only LEARNED modes need position embeddings
      */
     void initializeParams(int vocab_size, int d_model, int d_ff, 
                           int num_layers, int num_heads, int num_kv_heads,
                           int max_seq_len, bool tie_embeddings, bool use_bias,
+                          HyperParameters::PositionalEncodingType positional_encoding,
                           cudaStream_t stream = nullptr);
     
     /**

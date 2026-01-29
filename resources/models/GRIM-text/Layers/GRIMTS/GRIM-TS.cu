@@ -1015,16 +1015,20 @@ bool InitializeGuessCache(const CacheConfig& config,
 //==============================================================================
 
 void ShutdownGuessCache() {
+    fprintf(stderr, "[DEBUG] ShutdownGuessCache called - ENTER (g_initialized=%d)\n", g_initialized ? 1 : 0);
     if (!g_initialized) {
+        fprintf(stderr, "[DEBUG] ShutdownGuessCache - early return (not initialized)\n");
         return;
     }
     
+    fprintf(stderr, "[DEBUG] ShutdownGuessCache - about to sync stream...\n");
     // Sync to ensure all operations complete
     if (g_primary_stream) {
         cudaStreamSynchronize(g_primary_stream);
     } else {
         cudaDeviceSynchronize();
     }
+    fprintf(stderr, "[DEBUG] ShutdownGuessCache - stream synced\n");
     
     // RULE 22: Clear our references to TrainingState-owned pinned memory
     ClearPinnedBufferRefs();
@@ -1034,13 +1038,20 @@ void ShutdownGuessCache() {
     g_single_meta_buffer = nullptr;
     g_single_reward_buffer = nullptr;
     
+    fprintf(stderr, "[DEBUG] ShutdownGuessCache - about to clear h_cache_state...\n");
     h_cache_state = {};
+    fprintf(stderr, "[DEBUG] ShutdownGuessCache - about to copy to symbol...\n");
     cudaMemcpyToSymbol(d_cache_state, &h_cache_state, sizeof(h_cache_state));
+    fprintf(stderr, "[DEBUG] ShutdownGuessCache - symbol copied\n");
+    
     ResetCacheTelemetry();
     
+    fprintf(stderr, "[DEBUG] ShutdownGuessCache - clearing g_primary_stream...\n");
     g_primary_stream = nullptr;
     g_initialized = false;
+    fprintf(stderr, "[DEBUG] ShutdownGuessCache - about to log shutdown...\n");
     CacheLog::LogCacheShutdown();
+    fprintf(stderr, "[DEBUG] ShutdownGuessCache - EXIT\n");
 }
 
 //==============================================================================
@@ -1048,12 +1059,25 @@ void ShutdownGuessCache() {
 //==============================================================================
 
 void ResetGuessCache(cudaStream_t stream) {
+    // Get stack trace to identify caller
+    void* callstack[128];
+    unsigned short frames = CaptureStackBackTrace(0, 128, callstack, NULL);
+    fprintf(stderr, "[DEBUG] ResetGuessCache called - ENTER (g_initialized=%d) - %d stack frames\n", 
+            g_initialized ? 1 : 0, frames);
+    for (unsigned short i = 0; i < std::min((int)frames, 5); i++) {
+        fprintf(stderr, "[STACK %d] %p\n", i, callstack[i]);
+    }
+    
     if (!g_initialized) {
+        fprintf(stderr, "[DEBUG] ResetGuessCache - early return (not initialized)\n");
         return;
     }
     
+    fprintf(stderr, "[DEBUG] ResetGuessCache - about to call cudaMemsetAsync for records\n");
     cudaMemsetAsync(h_cache_state.records, 0, 
                     h_cache_state.capacity * sizeof(GuessRecord), stream);
+    fprintf(stderr, "[DEBUG] ResetGuessCache - records reset complete\n");
+    
     cudaMemsetAsync(h_cache_state.size, 0, sizeof(unsigned int), stream);
     cudaMemsetAsync(h_cache_state.keys, 0xFF, 
                     h_cache_state.capacity * sizeof(std::uint64_t), stream);
@@ -1068,14 +1092,18 @@ void ResetGuessCache(cudaStream_t stream) {
     cudaMemcpyAsync(h_cache_state.calibration_offset, &zero_cal, sizeof(float),
                     cudaMemcpyHostToDevice, stream);
     
+    fprintf(stderr, "[DEBUG] ResetGuessCache - about to call ResetCacheTelemetry\n");
     ResetCacheTelemetry();
+    fprintf(stderr, "[DEBUG] ResetGuessCache - ResetCacheTelemetry complete\n");
     
     {
         std::lock_guard<std::mutex> lock(g_trends_mutex);
         g_trends = {};
     }
     
+    fprintf(stderr, "[DEBUG] ResetGuessCache - about to call LogCacheReset\n");
     CacheLog::LogCacheReset();
+    fprintf(stderr, "[DEBUG] ResetGuessCache - EXIT\n");
 }
 
 //==============================================================================

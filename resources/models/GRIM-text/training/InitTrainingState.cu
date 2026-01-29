@@ -81,10 +81,11 @@ void LanguageModel::initPBM() {
     PBM::PBMConfig pbm_config{};  // Uses HyperParameters defaults
     pbm_config.num_heads = cfg.num_heads;
     pbm_config.num_kv_heads = cfg.num_kv_heads;
+    pbm_config.max_seq_len = cfg.max_seq_len;  // CRITICAL: Set from model config for context-aware scaling
     // alibi_slope_exponent uses default from HyperParameters::ALIBI_SLOPE_EXPONENT
+    // rope_theta/rope_scaling use defaults from HyperParameters (NTK scaling auto-applies if max_seq_len > 2048)
     pbm_config.head_dim = head_dim;
     pbm_config.rotary_dim = head_dim;  // Full rotation
-    // rope_theta/rope_scaling use defaults from HyperParameters
     pbm_config.verbose = true;
     cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
     StreamController::fatalIfDefaultStream(primary_stream, "LanguageModel::initPBM");
@@ -110,14 +111,16 @@ void LanguageModel::initTrainingState() {
     if (training_state_.initialized) return;
     
     const auto& cfg = getConfig();
-    std::cout << "[DEBUG initTrainingState] Entry point" << std::endl;
+    
+    // NOTE: batch_prep_* vectors may be corrupted due to memory overwrite bug.
+    // We use local vectors in prepareLossBatchInputs() instead (Issue #59+ workaround).
+    // Do NOT attempt to resize/use batch_prep_* vectors until root cause is found.
 
     
     // ═══════════════════════════════════════════════════════════════════════
     //  STEP 1: Initialize StreamController if not already done
     //  (May be pre-initialized by Phase1_Startup before initGPU)
     // ═══════════════════════════════════════════════════════════════════════
-    std::cout << "[DEBUG initTrainingState] Checking StreamController..." << std::endl;
     if (!training_state_.stream_ctrl.isInitialized()) {
         StreamControllerConfig stream_config;
         stream_config.verbose = true;
@@ -159,10 +162,11 @@ void LanguageModel::initTrainingState() {
         PBM::PBMConfig pbm_config{};  // Uses HyperParameters defaults
         pbm_config.num_heads = cfg.num_heads;
         pbm_config.num_kv_heads = cfg.num_kv_heads;
+        pbm_config.max_seq_len = cfg.max_seq_len;  // CRITICAL: Set from model config for context-aware scaling
         // alibi_slope_exponent uses default from HyperParameters::ALIBI_SLOPE_EXPONENT
+        // rope_theta/rope_scaling use defaults from HyperParameters (NTK scaling auto-applies if max_seq_len > 2048)
         pbm_config.head_dim = head_dim;
         pbm_config.rotary_dim = head_dim;  // Full rotation
-        // rope_theta/rope_scaling use defaults from HyperParameters
         pbm_config.verbose = true;
         pbm_config.stream = training_state_.stream_ctrl.getPrimaryStream();
         
@@ -289,6 +293,21 @@ void LanguageModel::initTrainingState() {
         launchXavierInit(training_state_.numeric_head_weights.data, cfg.d_model,
                          numeric_stddev, 44, primary_stream);
         std::cout << "📦 Numeric head allocated (stddev=" << numeric_stddev << ")" << std::endl;
+        
+        // Learned loss weighting (homoscedastic uncertainty)
+        // Formula: weight = 0.5 * exp(-log_var)
+        // To get weight = 1.0 (no scaling), need log_var = -ln(2) ≈ -0.693
+        // BUG FIX: Was initialized to 0 → weight = 0.5 → HALVED the loss!
+        const float init_log_var = -std::log(2.0f);  // -0.693 → weight = 1.0
+        training_state_.log_var_text = Tensor::zeros(TC::make_BSM(1, 1), true, primary_stream);
+        training_state_.log_var_text.ensure_grad();
+        cudaMemcpyAsync(training_state_.log_var_text.data, &init_log_var, sizeof(float), 
+                        cudaMemcpyHostToDevice, primary_stream);
+        training_state_.log_var_numeric = Tensor::zeros(TC::make_BSM(1, 1), true, primary_stream);
+        training_state_.log_var_numeric.ensure_grad();
+        cudaMemcpyAsync(training_state_.log_var_numeric.data, &init_log_var, sizeof(float),
+                        cudaMemcpyHostToDevice, primary_stream);
+        std::cout << "📦 Learned loss weights allocated (log_var=" << init_log_var << " → weight=1.0)" << std::endl;
     }
     
     // Final RMSNorm gamma [d_model] - Issue #33 FIX
@@ -335,6 +354,17 @@ void LanguageModel::initTrainingState() {
     std::cout << "🔧 GQA Configuration: num_heads=" << cfg.num_heads 
               << " num_kv_heads=" << num_kv_heads 
               << " (heads_per_kv_group=" << (cfg.num_heads / num_kv_heads) << ")" << std::endl;
+    std::cout.flush();
+    
+    std::cout << "[DEBUG-LAYER-ALLOC] About to allocate QK-norm scales for " << cfg.num_layers << " layers..." << std::endl;
+    std::cout.flush();
+    
+    // CHECK: Are batch_prep vectors intact BEFORE the QK-norm loop?
+    std::cout << "[DEBUG-CORRUPTION-CHECK] BEFORE QK-norm loop:" << std::endl;
+    std::cout << "[DEBUG-CORRUPTION-CHECK] target_ids: size=" << training_state_.batch_prep_target_ids.size()
+              << " capacity=" << training_state_.batch_prep_target_ids.capacity()
+              << " data=" << (void*)training_state_.batch_prep_target_ids.data() << std::endl;
+    std::cout.flush();
     
     for (int layer = 0; layer < cfg.num_layers; ++layer) {
         // AUTOGRAD MIGRATION COMPLETE: All encoder layer gradients now use encoder's Tensor.grad
@@ -356,7 +386,24 @@ void LanguageModel::initTrainingState() {
         std::vector<float> alpha_k_init(num_kv_heads, HyperParameters::QK_NORM_ALPHA_INIT);
         cudaMemcpy(training_state_.attn_alpha_k[layer], alpha_k_init.data(), 
                    num_kv_heads * sizeof(float), cudaMemcpyHostToDevice);
+        
+        if (layer == 0 || layer == cfg.num_layers - 1) {
+            std::cout << "[DEBUG-LAYER-ALLOC] Layer " << layer << " QK-norm allocated OK" << std::endl;
+            std::cout.flush();
+        }
     }
+    std::cout << "[DEBUG-LAYER-ALLOC] All " << cfg.num_layers << " layers allocated successfully" << std::endl;
+    std::cout.flush();
+    
+    // CHECK: Are the batch_prep vectors already corrupt after the QK-norm loop?
+    std::cout << "[DEBUG-CORRUPTION-CHECK] After QK-norm loop, checking batch_prep vectors..." << std::endl;
+    std::cout << "[DEBUG-CORRUPTION-CHECK] input_ids: size=" << training_state_.batch_prep_input_ids.size()
+              << " capacity=" << training_state_.batch_prep_input_ids.capacity()
+              << " data=" << (void*)training_state_.batch_prep_input_ids.data() << std::endl;
+    std::cout << "[DEBUG-CORRUPTION-CHECK] target_ids: size=" << training_state_.batch_prep_target_ids.size()
+              << " capacity=" << training_state_.batch_prep_target_ids.capacity()
+              << " data=" << (void*)training_state_.batch_prep_target_ids.data() << std::endl;
+    std::cout.flush();
 
     // NOTE: Encoder layer weight initialization is handled in TrainingOps.cu::initGPU()
     // with proper GQA-aware dimensions and GPT-2 residual scaling.
@@ -373,6 +420,15 @@ void LanguageModel::initTrainingState() {
     training_state_.max_cached_seq_len = static_cast<int>(max_seq_len_cache);
     training_state_.max_cached_tokens = max_tokens;
     training_state_.max_logit_tokens = max_logit_tokens;
+    
+    // ========== REMOVED: batch_prep pre-allocation (CAUSES CRASH) ==========
+    // batch_prep_target_ids vector is corrupted BEFORE initTrainingState() is called
+    // (capacity = garbage value 1113289828100734976).
+    // Something is writing over TrainingState memory. 
+    // WORKAROUND: Let prepareLossBatchInputs() allocate on first use.
+    // The 0.02s allocation cost is acceptable vs crash.
+    // =========================================================================
+    training_state_.batch_prep_capacity = 0;  // Signal to prepareLossBatchInputs: allocate on first use
     
     // BUG FIX: Set kv_cache_capacity for inference sampling during training
     // Previously missing - caused forwardInit() to fail with capacity=0

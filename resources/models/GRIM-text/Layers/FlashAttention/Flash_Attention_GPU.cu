@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <vector>
+#include <cmath>
 
 namespace GRIM {
 
@@ -146,6 +148,27 @@ void FlashAttentionLayer::forward(const FlashAttentionForwardArgs& args,
     TensorConversion::convert_BHSD_to_BSHD_bf16(
         args.V, fa_v, cfg.batch_size, cfg.num_kv_heads, cfg.seq_len, cfg.head_dim, cfg.stream);
 
+    // ISSUE #67: Log Flash Attention FORWARD INPUTS
+    {
+        cudaStreamSynchronize(cfg.stream);
+        const size_t q_elems = cfg.batch_size * cfg.num_heads * cfg.seq_len * cfg.head_dim;
+        const size_t kv_elems = cfg.batch_size * cfg.num_kv_heads * cfg.seq_len * cfg.head_dim;
+        std::vector<float> h_q(std::min(q_elems, size_t(100)));
+        std::vector<float> h_k(std::min(kv_elems, size_t(100)));
+        std::vector<float> h_v(std::min(kv_elems, size_t(100)));
+        cudaMemcpy(h_q.data(), args.Q, h_q.size() * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(h_k.data(), args.K, h_k.size() * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(h_v.data(), args.V, h_v.size() * sizeof(float), cudaMemcpyDeviceToHost);
+        int nan_q = 0, inf_q = 0, nan_k = 0, inf_k = 0, nan_v = 0, inf_v = 0;
+        for (float val : h_q) { if (std::isnan(val)) nan_q++; if (std::isinf(val)) inf_q++; }
+        for (float val : h_k) { if (std::isnan(val)) nan_k++; if (std::isinf(val)) inf_k++; }
+        for (float val : h_v) { if (std::isnan(val)) nan_v++; if (std::isinf(val)) inf_v++; }
+        fprintf(stderr, "[FA-FWD-IN] Q: nan=%d inf=%d first=%.6f | K: nan=%d inf=%d first=%.6f | V: nan=%d inf=%d first=%.6f\n",
+                nan_q, inf_q, h_q.empty() ? 0.0f : h_q[0],
+                nan_k, inf_k, h_k.empty() ? 0.0f : h_k[0],
+                nan_v, inf_v, h_v.empty() ? 0.0f : h_v[0]);
+    }
+
     flash_attn_fwd_ex(
         fa_q,
         fa_k,
@@ -164,6 +187,18 @@ void FlashAttentionLayer::forward(const FlashAttentionForwardArgs& args,
 
     TensorConversion::convert_BSHD_bf16_to_BHSD(
         fa_out, args.output, cfg.batch_size, cfg.seq_len, cfg.num_heads, cfg.head_dim, cfg.stream);
+
+    // ISSUE #67: Log Flash Attention FORWARD OUTPUT
+    {
+        cudaStreamSynchronize(cfg.stream);
+        const size_t out_elems = cfg.batch_size * cfg.num_heads * cfg.seq_len * cfg.head_dim;
+        std::vector<float> h_out(std::min(out_elems, size_t(100)));
+        cudaMemcpy(h_out.data(), args.output, h_out.size() * sizeof(float), cudaMemcpyDeviceToHost);
+        int nan_out = 0, inf_out = 0;
+        for (float val : h_out) { if (std::isnan(val)) nan_out++; if (std::isinf(val)) inf_out++; }
+        fprintf(stderr, "[FA-FWD-OUT] output: nan=%d inf=%d first=%.6f\n",
+                nan_out, inf_out, h_out.empty() ? 0.0f : h_out[0]);
+    }
 
     fa_fwd_valid_ = true;
     fa_last_batch_ = cfg.batch_size;
@@ -215,6 +250,18 @@ void FlashAttentionLayer::backward(const FlashAttentionBackwardArgs& args,
         args.V, fa_v, cfg.batch_size, cfg.num_kv_heads, cfg.seq_len, cfg.head_dim, cfg.stream);
     TensorConversion::convert_BHSD_to_BSHD_bf16(
         args.grad_output, fa_dout, cfg.batch_size, cfg.num_heads, cfg.seq_len, cfg.head_dim, cfg.stream);
+
+    // ISSUE #67: Log Flash Attention BACKWARD INPUT (grad_output)
+    {
+        cudaStreamSynchronize(cfg.stream);
+        const size_t grad_elems = cfg.batch_size * cfg.num_heads * cfg.seq_len * cfg.head_dim;
+        std::vector<float> h_grad_out(std::min(grad_elems, size_t(100)));
+        cudaMemcpy(h_grad_out.data(), args.grad_output, h_grad_out.size() * sizeof(float), cudaMemcpyDeviceToHost);
+        int nan_grad = 0, inf_grad = 0;
+        for (float val : h_grad_out) { if (std::isnan(val)) nan_grad++; if (std::isinf(val)) inf_grad++; }
+        fprintf(stderr, "[FA-BWD-IN] grad_output: nan=%d inf=%d first=%.10f\n",
+                nan_grad, inf_grad, h_grad_out.empty() ? 0.0f : h_grad_out[0]);
+    }
 
     flash_attn_bwd_ex(
         fa_q,

@@ -147,7 +147,8 @@ bool testConfigDefaults(std::string& message) {
     SB_ASSERT_EQ(config.d_model, 768, "Default d_model should be 768");
     SB_ASSERT_EQ(config.atom_embedding_dim, 64, "Default atom_embedding_dim should be 64");
     SB_ASSERT_EQ(config.max_atoms, 256, "Default max_atoms should be 256");
-    SB_ASSERT_NEAR(config.atom_scale, 0.1f, 0.001f, "Default atom_scale should be 0.1");
+    // atom_scale=1.0 is correct - embeddings are scaled up by sqrt(d_model) to match
+    SB_ASSERT_NEAR(config.atom_scale, 1.0f, 0.001f, "Default atom_scale should be 1.0");
     
     logDiagnostic("Config defaults verified: d_model=768, atom_emb=64, max_atoms=256");
     
@@ -427,7 +428,7 @@ bool testForwardWithAtoms(std::string& message) {
     config.atom_embedding_dim = 16;
     config.max_atoms = 32;
     config.inject_atom_embeddings = true;
-    config.atom_scale = 0.1f;
+    config.atom_scale = 1.0f;  // Unit scale - embeddings scaled up to match
     
     ScratchBlockLayer layer(config);
     

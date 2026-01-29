@@ -22,15 +22,12 @@
 #include "../Shared/Loss/NumericLoss/NumericLoss_GPU.hpp"
 #include "../Shared/StreamController/StreamController_GPU.hpp"
 #include "../Shared/TensorContract/TensorContract_GPU.hpp"
-#include "../Shared/Activations/Xavier/Xavier.hpp"
 #include "../Shared/TrainingState/TrainingTensors.hpp"  // For proper memory ownership
 #include "module_logger.hpp"
 
 // External kernel declaration (C++ linkage - can throw exceptions)
 void launchBiasSumGradient(const float* grad_output, float* grad_bias,
                            int total_tokens, int hidden_dim, cudaStream_t stream);
-
-using GRIM::launchXavierInit;
 
 namespace {
 using ForwardLog = ModuleLogger<GRIM::Logging::ModuleId::ForwardPass>;
@@ -246,8 +243,21 @@ void LanguageModel::initGPU() {
         embedding_runtime->config.vocab_size = cfg.vocab_size;
         embedding_runtime->config.max_position = cfg.max_seq_len;
         embedding_runtime->config.d_model = cfg.d_model;
-        embedding_runtime->config.apply_rms_norm = true;
+        // ISSUE #91 FIX: Disable fused embedding RMSNorm!
+        // With apply_rms_norm=true, embeddings have rms≈0.035 (tiny values).
+        // ScratchBlock then ADDS atom projections at scale=1.0, creating a 
+        // 20-30x scale mismatch between atom and non-atom tokens.
+        // This causes Layer 0's K values to explode → LSE explosion → ZERO gradients.
+        // Standard transformers do NOT pre-normalize embeddings - the encoder's
+        // first RMSNorm handles normalization AFTER any injection (like ScratchBlock).
+        embedding_runtime->config.apply_rms_norm = false;
         embedding_runtime->config.rms_epsilon = 1e-5f;
+        // ISSUE #92 FIX: Scale embeddings by sqrt(d_model) to bring Xavier-initialized 
+        // values (~0.036 rms) to unit scale (~1.0 rms). This matches:
+        // 1. The "Attention is All You Need" approach (Section 3.4 Embeddings)
+        // 2. ScratchBlock atom injection which adds at scale=1.0
+        // Without this, atom tokens have 28x larger values than regular tokens.
+        embedding_runtime->config.embedding_scale = std::sqrt(static_cast<float>(cfg.d_model));
 
         embedding_runtime->stream = primary_stream;
         embedding_runtime->owns_stream = false; // TrainingState owns it
@@ -263,114 +273,37 @@ void LanguageModel::initGPU() {
             throw std::runtime_error("Failed to initialize GPU embeddings");
         };
 
-        const GrimEmbeddingStack& cpu_embedder = *getEmbedderPtr();
-
         // ═══════════════════════════════════════════════════════════════
-        // PROPER OWNERSHIP FIX: Use TrainingTensors if already initialized
+        // RULE 20: TrainingTensors is the ONLY initialization path.
+        // No legacy paths, no conditionals, no CPU embedder.
         // ═══════════════════════════════════════════════════════════════
-        // TrainingTensors owns GPU memory via Tensor::zeros().
-        // EmbeddingRuntime now just POINTS to that memory (doesn't own it).
-        // This eliminates the Tensor::from_ptr() wrapping pattern.
+        // TrainingTensors owns GPU memory (Xavier-initialized).
+        // EmbeddingRuntime just POINTS to that memory (doesn't own it).
         
-        const bool use_training_tensors = (training_state_.tensors_ != nullptr);
-        
-        // --- Token embeddings ---
-        const size_t token_elements = static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
-        const size_t token_bytes = token_elements * sizeof(float);
-
-        if (use_training_tensors) {
-            // TrainingTensors owns the memory - just point to it (no ownership)
-            embedding_runtime->token_buffer = training_state_.tensors_->embedding_weights.data;
-            embedding_runtime->owns_token_buffer = false;  // CRITICAL: Don't free on destroy!
-            std::cout << "✓ Token embeddings using TrainingTensors memory (no duplicate allocation)\n";
-        } else {
-            // Legacy path: allocate new memory (takes ownership)
-            embedding_runtime->owns_token_buffer = true;
-            if (cudaMalloc(&embedding_runtime->token_buffer, token_bytes) != cudaSuccess) {
-                fail_embedding("❌ FATAL: Failed to allocate GPU memory for token embeddings");
-            }
+        if (!training_state_.tensors_) {
+            fail_embedding("❌ FATAL: TrainingTensors not initialized! Call initTrainingTensors() first.");
         }
-
+        
+        // --- Token embeddings (TrainingTensors owns, already Xavier-initialized) ---
+        embedding_runtime->token_buffer = training_state_.tensors_->embedding_weights.data;
+        embedding_runtime->owns_token_buffer = false;  // TrainingTensors owns this memory
         embedding_runtime->weights.token_embeddings = TensorContract::TensorView::make_BSM(
             embedding_runtime->token_buffer, cfg.vocab_size, cfg.d_model, "token_embeddings");
+        std::cout << "✓ Token embeddings: TrainingTensors memory (Xavier-initialized)\n";
 
-        // Load CPU embedder data into the buffer (whether owned by TrainingTensors or self)
-        std::vector<float> token_data;
-        token_data.reserve(token_elements);
-        for (int i = 0; i < cfg.vocab_size; ++i) {
-            const auto& row = cpu_embedder.token_embed.rows[i];
-            if (row.data.size() != static_cast<size_t>(cfg.d_model)) {
-                fail_embedding("❌ FATAL: Token embedding size mismatch");
-            }
-            token_data.insert(token_data.end(), row.data.begin(), row.data.end());
-        }
-
-        cudaFail(cudaMemcpyAsync(embedding_runtime->token_buffer,
-                                 token_data.data(),
-                                 token_bytes,
-                                 cudaMemcpyHostToDevice,
-                                 primary_stream),
-                 "[initGPU] cudaMemcpyAsync(token_embeddings)");
-
-        // --- Position embeddings ---
-        const size_t pos_elements = static_cast<size_t>(cfg.max_seq_len) * cfg.d_model;
-        const size_t pos_bytes = pos_elements * sizeof(float);
-
-        if (use_training_tensors) {
-            // TrainingTensors owns the memory - just point to it (no ownership)
-            embedding_runtime->position_buffer = training_state_.tensors_->position_embedding_weights.data;
-            embedding_runtime->owns_position_buffer = false;  // CRITICAL: Don't free on destroy!
-            std::cout << "✓ Position embeddings using TrainingTensors memory (no duplicate allocation)\n";
-            
-            // NOTE: TrainingTensors already did Xavier init, but we still do it here for consistency
-            // This overwrites the TrainingTensors Xavier init with the same algorithm
-        } else {
-            embedding_runtime->owns_position_buffer = true;
-            if (cudaMalloc(&embedding_runtime->position_buffer, pos_bytes) != cudaSuccess) {
-                fail_embedding("❌ FATAL: Failed to allocate GPU memory for positional encodings");
-            }
-        }
-
+        // --- Position embeddings (TrainingTensors owns, already Xavier-initialized) ---
+        embedding_runtime->position_buffer = training_state_.tensors_->position_embedding_weights.data;
+        embedding_runtime->owns_position_buffer = false;  // TrainingTensors owns this memory
         embedding_runtime->weights.position_embeddings = TensorContract::TensorView::make_BSM(
             embedding_runtime->position_buffer, cfg.max_seq_len, cfg.d_model, "position_embeddings");
+        std::cout << "✓ Position embeddings: TrainingTensors memory (Xavier-initialized)\n";
 
-        // Learned position embeddings: Xavier init on GPU
-        const float pos_embedding_stddev =
-            std::sqrt(2.0f / static_cast<float>(cfg.max_seq_len + cfg.d_model));
-
-        std::cout << "🎲 Initializing position embeddings on GPU (stddev=" << pos_embedding_stddev << ")\n";
-
-        launchXavierInit(embedding_runtime->position_buffer,
-                         static_cast<int>(pos_elements),
-                         pos_embedding_stddev,
-                         43,
-                         primary_stream);
-        cudaFailLast("[initGPU] launchXavierInit(position_embeddings)");
-
-        // --- RMSNorm gamma ---
-        const size_t ln_bytes = static_cast<size_t>(cfg.d_model) * sizeof(float);
-
-        if (use_training_tensors && training_state_.tensors_->final_rms_gamma.data) {
-            // TrainingTensors owns the memory (no ownership)
-            embedding_runtime->gamma_buffer = training_state_.tensors_->final_rms_gamma.data;
-            embedding_runtime->owns_gamma_buffer = false;  // CRITICAL: Don't free on destroy!
-            std::cout << "✓ RMSNorm gamma using TrainingTensors memory (no duplicate allocation)\n";
-        } else {
-            embedding_runtime->owns_gamma_buffer = true;
-            if (cudaMalloc(&embedding_runtime->gamma_buffer, ln_bytes) != cudaSuccess) {
-                fail_embedding("❌ FATAL: Failed to allocate GPU memory for RMSNorm gamma");
-            }
-        }
-
+        // --- RMSNorm gamma (TrainingTensors owns, initialized to 1.0) ---
+        embedding_runtime->gamma_buffer = training_state_.tensors_->final_rms_gamma.data;
+        embedding_runtime->owns_gamma_buffer = false;  // TrainingTensors owns this memory
         embedding_runtime->weights.gamma = TensorContract::TensorView::make_BSM(
             embedding_runtime->gamma_buffer, 1, cfg.d_model, "rmsnorm_gamma");
-
-        cudaFail(cudaMemcpyAsync(embedding_runtime->gamma_buffer,
-                                 cpu_embedder.rms_gamma.data.data(),
-                                 ln_bytes,
-                                 cudaMemcpyHostToDevice,
-                                 primary_stream),
-                 "[initGPU] cudaMemcpyAsync(rmsnorm_gamma)");
+        std::cout << "✓ RMSNorm gamma: TrainingTensors memory (initialized to 1.0)\n";
 
         // Ensure embedding uploads complete before exposing runtime
         cudaFail(cudaStreamSynchronize(primary_stream), "[initGPU] cudaStreamSynchronize(embedding uploads)");
@@ -421,93 +354,48 @@ void LanguageModel::initGPU() {
         gpu_encoder_.reset(encoder_ptr);
 
         //======================================================//
-        //  5) Initialize encoder weights (Xavier + GPT-2 residual scaling)
+        //  5) Wire encoder layers to TrainingTensors (single source of truth)
+        //  Rule 20: NO backwards compatibility - GPUEncoderLayer does NOT allocate.
+        //  TrainingTensors already has Xavier-initialized weights from step 2.75.
         //======================================================//
-        const float residual_scale = 1.0f / std::sqrt(2.0f * cfg.num_layers);
+        if (!training_state_.tensors_) {
+            throw std::runtime_error("[initGPU] FATAL: tensors_ is NULL - Phase1_Startup must call "
+                                     "initializeAutogradTensors() BEFORE initGPU()");
+        }
 
-        std::cout << "🎲 Initializing encoder layer weights...\n";
-        std::cout << "   Using GPT-2 residual scaling: " << residual_scale << "\n";
+        std::cout << "🔗 Wiring encoder layers to TrainingTensors (single source of truth)...\n";
 
         for (int layer = 0; layer < cfg.num_layers; ++layer) {
             auto* gpu_layer = encoder_ptr->getLayer(layer);
             if (!gpu_layer) {
-                ForwardLog::error("    ERROR: Could not get layer " + std::to_string(layer) + " for initialization!");
-                continue;
+                throw std::runtime_error("[initGPU] FATAL: Could not get layer " + std::to_string(layer));
             }
 
-            // Attention weights
-            {
-                float* w_qkv_ptr = gpu_layer->getAttnWqkv();
-                float* w_o_ptr = gpu_layer->getAttnWo();
-
-                if (!w_qkv_ptr || !w_o_ptr) {
-                    ForwardLog::error("    ERROR: Null attention weight pointers!");
-                } else {
-                    TensorContract::GQADims gqa_dims{cfg.num_heads, cfg.num_kv_heads, cfg.head_dim};
-                    const int total_qkv_dim = gqa_dims.total_qkv_dim();
-                    const size_t qkv_size = static_cast<size_t>(total_qkv_dim) * cfg.d_model;
-
-                    const float xavier_qkv_stddev =
-                        std::sqrt(2.0f / (cfg.d_model + static_cast<float>(total_qkv_dim)));
-
-                    launchXavierInit(w_qkv_ptr,
-                                     static_cast<int>(qkv_size),
-                                     xavier_qkv_stddev,
-                                     42 + layer * 4,
-                                     primary_stream);
-                    cudaFailLast("[initGPU] launchXavierInit(W_qkv)");
-
-                    const float xavier_wo_stddev = xavier_qkv_stddev * residual_scale;
-                    launchXavierInit(w_o_ptr,
-                                     cfg.d_model * cfg.d_model,
-                                     xavier_wo_stddev,
-                                     43 + layer * 4,
-                                     primary_stream);
-                    cudaFailLast("[initGPU] launchXavierInit(W_o)");
-                }
+            auto& params = training_state_.tensors_->encoder_layers[layer];
+            
+            // Rule 20: Crash if TrainingTensors wasn't properly initialized
+            if (!params.attn_qkv_weight.data || !params.ffn_w1.data) {
+                throw std::runtime_error("[initGPU] FATAL: TrainingTensors encoder_layers[" + 
+                    std::to_string(layer) + "] not initialized!");
             }
 
-            // FFN weights
-            {
-                float* w1_ptr = gpu_layer->getFFNW1();
-                float* w2_ptr = gpu_layer->getFFNW2();
-
-                if (!w1_ptr || !w2_ptr) {
-                    ForwardLog::error("    ERROR: Null FFN weight pointers!");
-                } else {
-                    const float xavier_w1_stddev =
-                        std::sqrt(2.0f / (cfg.d_model + cfg.d_ff));
-
-                    launchXavierInit(w1_ptr,
-                                     cfg.d_model * cfg.d_ff,
-                                     xavier_w1_stddev,
-                                     44 + layer * 4,
-                                     primary_stream);
-                    cudaFailLast("[initGPU] launchXavierInit(W1)");
-
-                    const float xavier_w2_stddev =
-                        std::sqrt(2.0f / (cfg.d_ff + cfg.d_model)) * residual_scale;
-
-                    launchXavierInit(w2_ptr,
-                                     cfg.d_ff * cfg.d_model,
-                                     xavier_w2_stddev,
-                                     45 + layer * 4,
-                                     primary_stream);
-                    cudaFailLast("[initGPU] launchXavierInit(W2)");
-                }
-            }
-
-            // LayerNorm/RMSNorm gamma init handled by layer constructors (per your architecture)
+            // Wire GPUEncoderLayer to use TrainingTensors' memory
+            // This makes TrainingTensors the SINGLE source of truth for all weights.
+            gpu_layer->useExternalWeights(
+                params.rms1_gamma,
+                params.rms2_gamma,
+                params.attn_qkv_weight,
+                params.attn_qkv_bias,
+                params.attn_out_weight,
+                params.attn_out_bias,
+                params.ffn_w1,
+                params.ffn_b1,
+                params.ffn_w2,
+                params.ffn_b2
+            );
         }
 
-        // Stream sync (NOT device-wide) to guarantee weights ready
-        cudaFail(cudaStreamSynchronize(primary_stream), "[initGPU] cudaStreamSynchronize(weight init)");
-
-        {
-            std::ostringstream oss;
-            oss << "✓ Encoder layer weights initialized with Xavier (layers 0-" << (cfg.num_layers - 1) << ")";
-            std::cout << oss.str() << "\n";
-        }
+        std::cout << "✓ Encoder layers wired to TrainingTensors (" << cfg.num_layers << " layers)\n";
 
         std::cout << "✓ GPU encoder initialized with " << cfg.num_layers << " layers\n";
         std::cout << "  - Attention: GPU-accelerated\n";

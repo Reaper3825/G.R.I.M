@@ -6,16 +6,15 @@
 //    hidden = GELU(input @ W1 + b1)
 //    output = hidden @ W2 + b2
 //
-//  NOTE:
-//  - Autograd covers matmul + GELU.
-//  - Bias add is done by custom kernels; bias gradients must be computed
-//    via launchFFNBiasBackward (outside this forward graph), unless you
-//    later add an autograd broadcast_add op.
+//  ISSUE #97 FIX: Bias add now uses autograd::broadcast_add for proper
+//  gradient tracking. Previously used raw kernels which bypassed autograd,
+//  causing b1/b2 to receive ZERO gradients (frozen biases).
 //======================================================//
 
 #include "Feed_Forward_GPU.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
+#include "../../Shared/TensorContract/TensorContract_GPU.hpp"  // Issue #97: autograd::broadcast_add
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -354,8 +353,8 @@ Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& inte
                                                      input.data,  // cache input for W1 grad
                                                      nullptr);    // W1 persists, no cache needed
 
-    // Add bias b1 (broadcasted)
-    launchFFNBiasAdd(intermediates.ffn_linear1_out.data, b1_.data, total_tokens, config_.d_ff, stream);
+    // ISSUE #97 FIX: Add bias b1 with autograd tracking (was bypassing gradient computation)
+    intermediates.ffn_linear1_out = autograd::broadcast_add(intermediates.ffn_linear1_out, b1_, stream);
 
     // GELU activation - stores result in intermediates
     intermediates.ffn_gelu_out = autograd::gelu(intermediates.ffn_linear1_out, stream, 
@@ -371,8 +370,8 @@ Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& inte
                                      intermediates.ffn_gelu_out.data,  // cache post_gelu for W2 grad
                                      nullptr);                          // W2 persists
     
-    // Add bias b2 (broadcasted)
-    launchFFNBiasAdd(output.data, b2_.data, total_tokens, config_.d_model, stream);
+    // ISSUE #97 FIX: Add bias b2 with autograd tracking (was bypassing gradient computation)
+    output = autograd::broadcast_add(output, b2_, stream);
     
     // CRITICAL (Issue #56 root cause fix): Return the output tensor!
     // Without this return statement, `output` is destroyed at function end,
