@@ -32,7 +32,83 @@
 
 ---
 
-## 🔴 ACTIVE BUG INVESTIGATION
+## � MANDATORY: Equation-Based Diagnostic Logging (Rule 21)
+
+**When adding diagnostic logging for AI/ML math operations, ALWAYS use the `[*_EQUATION]` format:**
+
+This format is non-negotiable for training/inference debugging because **you can't argue with hard mathematical facts**.
+
+**Required Format Structure:**
+```
+[OPERATION_EQUATION] CONTEXT: equation = mathematical_formula
+  INPUT_A (description): shape=[dims] min=X max=Y rms=Z
+  INPUT_B (description): shape=[dims] min=X max=Y rms=Z
+  PARAMETERS: param1=value1, param2=value2
+  EXPECTED result = formula_with_values = computed_expectation
+  ACTUAL result: min=X max=Y rms=Z mean=W
+  [ANOMALY] if actual differs significantly from expected: explanation
+```
+
+**Examples of Good Logging Tags:**
+- `[GRAD_A_EQUATION]` - Matrix A weight gradient computation
+- `[GRAD_B_EQUATION]` - Matrix B weight gradient computation  
+- `[ATTN_SCORE_EQUATION]` - Attention score computation (Q @ K^T / sqrt(d))
+- `[LSE_EQUATION]` - Log-Sum-Exp computation
+- `[SOFTMAX_EQUATION]` - Softmax forward/backward
+- `[RMSNORM_EQUATION]` - RMSNorm computation
+- `[EMBEDDING_EQUATION]` - Embedding lookup with scaling
+- `[LOSS_EQUATION]` - Loss computation (cross-entropy, focal, etc.)
+
+**Mandatory Elements:**
+1. **Mathematical equation** - The EXACT formula being computed
+2. **Input shapes** - Tensor dimensions for dimensional analysis
+3. **Input statistics** - min, max, rms (and optionally mean, std)
+4. **Expected value** - What the result SHOULD be based on input stats
+5. **Actual value** - What was actually computed
+6. **Anomaly detection** - Flag when actual >> expected or contains NaN/Inf
+
+**Example Implementation (Attention Scores):**
+```cpp
+// [ATTN_SCORE_EQUATION] format for attention computation
+fprintf(stderr, "[ATTN_SCORE_EQUATION] FLASH_ATTENTION_FWD: score = (Q @ K^T) / sqrt(head_dim) + alibi_bias\n");
+fprintf(stderr, "  Q (sample tokens, head 0): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n", 
+        n_sample, head_dim, q_min, q_max, q_rms);
+fprintf(stderr, "  K (sample tokens, head 0): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
+        n_sample, head_dim, k_min, k_max, k_rms);
+fprintf(stderr, "  PARAMETERS: scale=1/sqrt(%d)=%.10f, alibi_slope=%.10f, max_bias=%.10f\n",
+        head_dim, scale, alibi_slope, max_alibi_bias);
+fprintf(stderr, "  EXPECTED score_magnitude = Q_row_norm * K_row_norm * scale = %.10f * %.10f * %.10f ≈ %.10f\n",
+        q_row_norm, k_row_norm, scale, expected_score);
+fprintf(stderr, "  ACTUAL score: min=%.10f max=%.10f rms=%.10f\n", score_min, score_max, score_rms);
+if (fabsf(score_max) > 100.0f) {
+    fprintf(stderr, "  [ANOMALY] score_max=%.10f >> expected=%.10f, indicates Q/K magnitude explosion\n",
+            score_max, expected_score);
+}
+```
+
+**Why This Format:**
+1. **Irrefutable evidence** - Math doesn't lie; discrepancies reveal bugs immediately
+2. **Self-documenting** - Log shows exactly what computation is being performed
+3. **Root cause isolation** - Expected vs actual comparison pinpoints where explosion/collapse starts
+4. **Audit trail** - Can trace anomaly propagation through computation graph
+5. **Reproducible debugging** - Same inputs + formula = same expected output
+
+**When to Add Equation Logging:**
+- ✅ ANY new forward/backward kernel implementation
+- ✅ When debugging gradient explosion/vanishing
+- ✅ When investigating loss anomalies
+- ✅ When verifying weight initialization
+- ✅ Any GEMM operation (grad_A = C^T @ B, grad_B = A^T @ C, etc.)
+
+**Pre-merge checklist for ML code:**
+- [ ] All tensor operations have `[*_EQUATION]` logging available (can be behind `#ifdef DEBUG_EQUATIONS`)
+- [ ] Expected values computed from input statistics
+- [ ] Anomaly thresholds defined (e.g., score > 100, LSE > 50, gradient > 1e6)
+- [ ] Log includes tensor shapes for dimensional analysis
+
+---
+
+## �🔴 ACTIVE BUG INVESTIGATION
 
 **READ FIRST:** 
 1. [docs/LOG_FILE_CONVENTION.md](../docs/LOG_FILE_CONVENTION.md) - **CRITICAL: Always verify which log file before making claims**
@@ -456,6 +532,48 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
   - **Fix**: Added `float embedding_scale = 1.0f` parameter to `autograd::embedding()` with proper chain rule handling in backward: `grad_weight[token_id] += grad_output * scale`.
   - **Implementation**: `AutogradTraining.cu` passes `sqrt(d_model)` for both token and position embeddings.
   - **Legacy Cleanup (Rule 20)**: Deleted ALL dead code from `Embedding_GPU.cu` (kernels, launchers, EmbeddingLayer class). Also deleted `embedding_self_test.cu` and `embedding_autograd_test.cu`. File now only contains `destroyEmbeddingRuntime()` for memory management.
+
+105. **RMSNorm Diagnostic False Anomaly (NOT A BUG) - Issue #105, Jan 2026**: RMSNorm diagnostic was flagging Layer 0 as anomalous (`output_rms=0.89` instead of expected `1.0`). The diagnostic expectation formula was **WRONG** - it assumed `output_rms = gamma_rms`, but the **correct** formula is: `output_rms = input_rms × gamma_rms / sqrt(input_rms² + eps)`. When input_rms is small (~0.006 for Xavier-init embeddings) and eps=1e-5, epsilon contributes ~20% of the denominator, resulting in output_rms ≈ 0.89 which is mathematically correct!
+  - **Root Cause**: Diagnostic in `Encoding_GPU.cu` assumed `output_rms = gamma_rms`, which only holds when `input_rms² >> eps`. With small embeddings (per_row_rms=0.006), eps=1e-5 becomes significant.
+  - **Fix**: Changed diagnostic to compute correct expected value: `expected_output_rms = input_rms * gamma_rms / sqrt(input_rms² + eps)`. Added epsilon contribution percentage to help identify when this matters.
+  - **Note**: This is NOT a training bug - RMSNorm is computing correctly. The diagnostic was generating false positives.
+
+107. **Xavier Init LCG PRNG Correlation (CRITICAL FIX Jan 2026)**: The `kernel_xavier_uniform` kernel in `TensorContract_GPU.cu` produced highly correlated random values with avg|cosine| ≈ 0.37 instead of expected ≈ 0.036 (12x too high!). Combined with Issue #106, this caused W_qkv initialization to NOT be fixed even after applying the scaling.
+  - **Root Cause**: The LCG PRNG computed state as a LINEAR function of thread index:
+    ```cuda
+    uint64_t state = seed + idx * A;  // Linear in idx!
+    state = state * A + C;            // Only ONE iteration
+    ```
+    Since `state[idx+1] - state[idx] = A²` (constant), consecutive elements had correlated outputs.
+  - **Symptom**: Diagnostic showed row_rms=0.0312 (expected 0.0011 with Issue #106 fix), avg|cosine|=0.374 (expected ~0.036), individual cosines as high as 0.847 (85% aligned!).
+  - **Why Issue #106 Wasn't Applied**: `Phase1_Startup.cu` only reseeded when `sample_rms < 1e-7f`, but `TrainingTensors.cu` already initialized weights with the BUGGY kernel.
+  - **Fix (2 parts)**:
+    1. Fixed LCG in `kernel_xavier_uniform`: Use splitmix64-style mixing for per-element seed, run 16 LCG iterations before extracting value.
+    2. Removed `sample_rms < 1e-7f` check in `Phase1_Startup.cu` - ALWAYS reinitialize encoder weights with corrected scaling.
+  - **Files Modified**: `TensorContract_GPU.cu`, `Phase1_Startup.cu`
+  - **Expected Result**: avg|cosine| ≈ 1/sqrt(768) ≈ 0.036, row_rms ≈ 0.0011 (with Issue #106 scaling)
+
+106. **W_qkv Initialization Too Large (LSE Explosion) - Issue #106, Jan 2026**: QKV projection output was 33x larger than expected, causing attention score explosion (800 instead of ~1) and LSE explosion (700+ instead of 6-10).
+  - **Root Cause Chain**:
+    1. RMSNorm output has row_norm ≈ sqrt(d_model) ≈ 27.7
+    2. W_qkv uses standard Xavier init with stddev ≈ 0.031 → row_norm ≈ 0.87
+    3. **Isotropic columns** (variance ratio 2.01x) + **high cosine alignment** (154x expected) cause **coherent summation** instead of partial cancellation
+    4. QKV GEMM output row_norm = 265.6 (33.2x larger than expected 0.77)
+    5. Q/K row norms ≈ 80 instead of target 8 → attention scores ≈ 800 → LSE explodes to 700+
+  - **Fix**: Scale W_qkv initialization by `1/sqrt(d_model)` ≈ 0.036 to compensate for coherent summation
+  - **Implementation**: `Phase1_Startup.cu` - `qkv_std = qkv_std_base * (1.0f / sqrt(d_model))`
+  - **Expected Result**: Q/K row_norm ≈ 265 × 0.036 ≈ 9.6 (close to target 8), LSE in normal range 6-10
+
+98. **LM Head Scale Mismatch with Tied Embeddings - Issue #98, Jan 2026**: When `tie_embeddings=true`, Issue #92 scales embedding forward by `sqrt(d_model)≈27.7`, but LM head used RAW weights. This created **27.7x gradient attenuation** in backward pass.
+  - **Root Cause**: AIAYN states "multiply weights by sqrt(d_model)" - this applies to BOTH embedding lookup AND output projection with tied weights. GRIM only did the embedding side.
+  - **Symptom**: FlashAttention dQ gradients were ~0.0000004 (should be ~0.00001). LM head backward `grad_encoder = grad_logits @ weights` used raw weights rms≈0.006 instead of scaled weights.
+  - **Fix**: Added `autograd::scale(logits, sqrt(d_model))` after LM head matmul when `tie_embeddings=true`.
+  - **Implementation**: 
+    - `TensorContract_GPU.cu`: Added `ScaleGradFn` struct and `autograd::scale()` function
+    - `TensorContract_GPU.hpp`: Added `scale()` declaration
+    - `AutogradTraining.cu`: Apply scaling to LM head output when tie_embeddings=true
+  - **Math**: `logits_scaled = logits * scale` → backward: `grad_input = grad_output * scale`. This restores gradient magnitude to match embedding forward scaling.
+  - **PyTorch Note**: PyTorch baseline does NOT scale embeddings at all (plain lookup), so no mismatch exists there.
 
 97. **Encoder Biases Frozen (No Autograd Tracking) - Issue #97, Jan 2026**: All encoder biases (b_qkv, b_o, b1, b2) received **ZERO gradients** because bias addition used raw CUDA kernels (`launchFFNBiasAdd`) that bypassed autograd completely.
   - **Root Cause**: The forward pass did `qkv_out = matmul(ln1_out, W_qkv)` (autograd ✓) then `qkv_out.data += b_qkv` (raw kernel, NO GradFn!). Backward: MatMulGradFn has NO knowledge of b_qkv, so bias gradients = 0.

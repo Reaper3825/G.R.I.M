@@ -1,13 +1,415 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** ✅ **CRITICAL FIX IMPLEMENTED** - Issue #90: ScratchBlock Buffer Desync - Layer 0 received stale pre-ScratchBlock data
+**Status:** 🟡 **Issue #105 IMPLEMENTED** - Fixed RMSNorm diagnostic formula (not a bug, just incorrect expectation)
 **Started:** December 22, 2025  
-**Last Updated:** January 29, 2026
-**Latest Finding:** Issue #90: After ScratchBlock modifies `ts->cached_embeddings` in-place, `ctx.embedding_tensor.data` still points to the OLD buffer from `autograd::add`. Layer 0 received STALE embeddings, causing Q/K/V values ~8x larger than expected and LSE explosion (300-600 instead of 6-10).
+**Last Updated:** January 30, 2026
+**Latest Finding:** Issue #105 - RMSNorm diagnostic was reporting false anomalies for Layer 0. The expectation formula assumed output_rms = gamma_rms, but this only holds when input_rms >> sqrt(eps). Fixed to use correct formula.
 
 ---
 
-## 🔴 NEW: Issue #96 - Position Embedding Allocation IGNORES Config (Rule 20 Violation!)
+## 🟢 RESOLVED: Issue #105 - RMSNorm Diagnostic False Anomaly (NOT A BUG - Incorrect Expectation)
+
+### Discovery (January 30, 2026)
+
+After changing epsilon from 1e-3 to 1e-5, Layer 0 RMSNorm showed "anomaly":
+```
+[RMSNORM_EQUATION] layer=0: y = x * gamma / sqrt(mean(x²) + eps)
+  INPUT x: shape=[7168, 768], per_row_rms=0.006274, eps=1.00e-05
+  GAMMA: min=0.999939 max=1.000055 rms=0.999997
+  EXPECTED output_rms = gamma_rms = 0.999997
+  ACTUAL output_rms: min=0.891844 max=0.892077 avg=0.891960
+  [ANOMALY] output_rms=0.8920 != expected=1.0000 (ratio=0.89x)
+```
+
+But Layer 1+ showed no anomaly (output_rms ≈ 1.0).
+
+### Root Cause: Flawed Diagnostic Expectation Formula
+
+The diagnostic assumed `output_rms = gamma_rms`, but the **correct** formula is:
+```
+output_rms = input_rms × gamma_rms / sqrt(input_rms² + eps)
+```
+
+**Layer 0 Math:**
+- input_rms = 0.00627, input_rms² = 3.93e-5
+- eps = 1e-5
+- denominator = sqrt(3.93e-5 + 1e-5) = sqrt(4.93e-5) = 0.00702
+- expected = 0.00627 × 1.0 / 0.00702 = **0.893** ✓
+
+**Why Layer 0 is Different:**
+- Layer 0 input is raw token embeddings with per_row_rms ≈ 0.006 (Xavier init, no sqrt(d_model) scaling)
+- With eps=1e-5, epsilon contributes **20.3%** of the denominator!
+- Layer 1+ inputs have per_row_rms ≈ 2.0-4.0 (after attention/FFN), so eps contributes <0.001%
+
+### Fix Applied (Encoding_GPU.cu)
+
+Changed the diagnostic to compute **correct** expected value:
+```cpp
+// Issue #105 FIX: Correct expected value formula accounting for epsilon contribution
+const float input_rms_sq = g_diag_input_avg_rms * g_diag_input_avg_rms;
+const float eps = config_.rms_epsilon;
+const float expected_output_rms = g_diag_input_avg_rms * gamma_rms / sqrtf(input_rms_sq + eps);
+const float eps_contribution_pct = 100.0f * eps / (input_rms_sq + eps);
+```
+
+New diagnostic output:
+```
+  EPSILON CONTRIBUTION: 20.3% of denominator (eps / (input_rms² + eps))
+  EXPECTED output_rms = input_rms * gamma_rms / sqrt(input_rms² + eps) = 0.893123
+  ACTUAL output_rms: min=0.891844 max=0.892077 avg=0.891960
+  [INFO] Epsilon is 20.3% of denominator - consider scaling inputs larger (e.g., sqrt(d_model) embedding scale)
+```
+
+### Key Insight
+
+This is **NOT a bug** - RMSNorm is computing correctly. The "anomaly" was a **diagnostic false positive** caused by wrong expectation formula.
+
+However, the large epsilon contribution (20.3% for Layer 0) suggests:
+1. Token embeddings are very small magnitude (Xavier without sqrt(d_model) scaling)
+2. Consider adding sqrt(d_model) embedding scaling like "Attention Is All You Need" paper
+3. Or simply accept that RMSNorm output won't be exactly gamma_rms when epsilon dominates
+
+**Status:** ✅ **DIAGNOSTIC FIXED** - Not a training bug, just incorrect diagnostic expectation
+
+---
+
+## 🔴 NEW: Issue #103 - Position Embeddings IGNORING Config (ROOT CAUSE OF LSE EXPLOSION!)
+
+### Discovery (January 30, 2026)
+
+After Issue #102 (removing sqrt(d_model) scaling), QKV was still too large. Investigation revealed:
+
+**Config says:**
+```json
+"positional_encoding": {
+    "use_learned": false,
+    "use_rope": true,
+    "use_alibi": true
+}
+```
+
+**But code was checking:**
+```cpp
+if (ts->position_embedding_weights.data) {  // ALWAYS TRUE!
+```
+
+TrainingTensors allocates position_embedding_weights UNCONDITIONALLY, so the config was **completely ignored!**
+
+### Root Cause: Isotropic Position Embeddings
+
+The Issue #95 diagnostic showed:
+- **Token embeddings:** column variance ratio = 2.7x (heterogeneous, GOOD)
+- **Position embeddings:** column variance ratio = 1.01x (ISOTROPIC, BAD!)
+
+When isotropic position embeddings are added to token embeddings:
+1. Combined embeddings become nearly isotropic
+2. All 768 dimensions contribute similarly in QKV GEMM
+3. **COHERENT SUMMATION** occurs instead of partial cancellation
+4. QKV output is 36-344x larger than expected
+5. LSE explodes from ~6-10 to 600-900
+
+### Fix Applied (AutogradTraining.cu)
+
+Changed the condition from:
+```cpp
+if (ts->position_embedding_weights.data) {
+```
+
+To:
+```cpp
+const bool use_learned_pos_emb = (cfg->positional_encoding == HyperParameters::PositionalEncodingType::NONE);
+if (use_learned_pos_emb && ts->position_embedding_weights.data) {
+```
+
+Now position embeddings are ONLY added when `positional_encoding == NONE` (i.e., no ALIBI/RoPE).
+With ALIBI or ROPE, position information comes from attention bias/rotation, NOT additive embeddings.
+
+### Expected Results After Fix
+
+1. Layer 0 input is now ONLY token embeddings (heterogeneous, column variance ratio ~2.7x)
+2. No isotropic noise from position embeddings
+3. QKV GEMM should have partial cancellation instead of coherent summation
+4. QKV output should be ~8-10 (close to target sqrt(64)=8) instead of 292
+5. LSE should drop from 600-900 to ~6-10
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔵 HISTORICAL: Issue #102 - Removed sqrt(d_model) Embedding Scaling
+
+### Discovery (January 30, 2026)
+
+PyTorch baseline does NOT scale embeddings:
+```cpp
+auto x = tok_emb->forward(idx) + pos_emb->forward(pos);  // NO SCALING
+```
+
+GRIM-text was scaling by sqrt(d_model) ≈ 27.7 (Issue #92 "fix"), which:
+1. Amplified embedding magnitudes 27.7x
+2. After RMSNorm: row_norm normalized to ~1.0, but this still propagated to QKV
+3. Combined with isotropic position embeddings → coherent GEMM summation
+
+### Fix Applied (AutogradTraining.cu)
+
+Changed:
+```cpp
+const float embedding_scale = std::sqrt(static_cast<float>(cfg->d_model));
+```
+
+To:
+```cpp
+const float embedding_scale = 1.0f;  // No scaling - match PyTorch baseline
+```
+
+**Status:** ✅ **FIX IMPLEMENTED** - Combined with Issue #103 for full fix
+
+---
+
+## 🔴 PREVIOUS: Issue #100 - diagLn1OutKernel atomicMin/Max Bug for Negative Floats
+
+### Discovery (January 30, 2026)
+
+While investigating Layer 0 LSE explosion, found discrepancy between two diagnostics measuring the SAME data:
+
+```
+[Issue91-EMB-AFTER-SB]: min=-0.8472 max=0.8423 rms=0.1767  (CPU-based, correct)
+[Issue91-FWD-rms_input]: min=-0.2155 max=0.8423 rms=0.1767  (GPU kernel, WRONG MIN!)
+```
+
+The **max and rms match**, but **min is different**. CPU scan correctly finds -0.8472, GPU kernel incorrectly finds -0.2155.
+
+### Root Cause: Same Bug Class as Issue #15
+
+The `diagLn1OutKernel` in `Encoding_GPU.cu` used:
+```cuda
+atomicMin(reinterpret_cast<int*>(&s_min), __float_as_int(local_min));
+atomicMax(reinterpret_cast<int*>(&s_max), __float_as_int(local_max));
+```
+
+**Why this fails for negative floats:**
+- IEEE 754: `-0.8472` as int bits ≈ `-1085276358`
+- IEEE 754: `-0.2155` as int bits ≈ `-1089811251`
+- `atomicMin` picks the smaller int value (more negative), which is `-1089811251`
+- But that corresponds to `-0.2155`, the LESS negative float!
+- The actual minimum (`-0.8472`) is discarded because its int representation is "larger"
+
+### Fix Applied (Encoding_GPU.cu)
+
+Added proper float atomics using CAS loop (same pattern as Issue #15 fix):
+```cuda
+__device__ __forceinline__ void atomicMinFloat_local(float* addr, float value) {
+    int* addr_as_int = reinterpret_cast<int*>(addr);
+    int old = *addr_as_int;
+    int expected;
+    do {
+        expected = old;
+        float old_float = __int_as_float(expected);
+        if (value >= old_float) return;  // Our value is not smaller, exit
+        old = atomicCAS(addr_as_int, expected, __float_as_int(value));
+    } while (expected != old);
+}
+```
+
+### Impact
+
+- All diagnostic min values from `diagLn1OutKernel` were potentially wrong when negative values exist
+- The "discrepancy" between ScratchBlock output and RMSNorm input was an artifact of the bug
+- Actual data flow is likely correct; diagnostics were just measuring incorrectly
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔴 CRITICAL: Issue #99 - Issue #98 Was COMPLETELY WRONG (Logit/Loss Explosion)
+
+### Discovery (January 30, 2026)
+
+Training with Issue #98 fix showed catastrophic failure:
+```
+[GradTrace] POST-FORWARD loss=22.0112   ← Should be ~10.5 (random baseline)
+[LogitSignal] logit_max=35.6756 logit_min=-33.3575   ← Should be ~-10 to +10
+[Token277Diag] space_logit: mean=12.2219 max=21.8833   ← Massive inflation
+```
+
+### Why Issue #98 Was Wrong
+
+**Issue #98 implemented:**
+```cpp
+logits_tensor = autograd::scale(logits_tensor, sqrt(768), stream);  // scale=27.7
+```
+
+**Forward pass effect:**
+- `logits_scaled = logits_raw * 27.7`
+- Logits exploded from ~±1 to ~±30
+- Cross-entropy loss exploded: loss=22 vs random baseline=10.5
+
+**Backward pass effect (the fatal flaw):**
+- Chain rule: `d(y)/d(x) = scale` when `y = x * scale`
+- So: `grad_logits_raw = grad_logits_scaled * 27.7`
+- Gradients were AMPLIFIED 27.7x, not fixed!
+
+**The original hypothesis was BACKWARDS:**
+- We thought gradients were 27.7x too SMALL
+- The "fix" made them 27.7x LARGER (amplifying, not fixing)
+- AND it exploded the forward pass logits, making loss=22
+
+### Mathematical Error in Issue #98 Analysis
+
+The analysis claimed LM head backward uses "raw weights (rms=0.006)" but this reasoning was flawed:
+- Yes, `grad_encoder = grad_logits @ weights` uses the shared tied weights
+- But the gradient FLOW is correct - it's the same weights that embedding uses
+- The asymmetry was a misdiagnosis
+
+### Correct Understanding
+
+The AIAYN `sqrt(d_model)` scaling is for **embedding vector magnitude**, not a mathematical constraint that must be applied to LM head output. PyTorch baseline works WITHOUT any LM head scaling because:
+1. Embedding scaling affects INPUT magnitude to the transformer
+2. LM head backward naturally produces appropriately-scaled gradients
+3. There is no "27.7x attenuation" - that was a misdiagnosis
+
+### Fix Applied
+
+**Reverted Issue #98** - Removed the `autograd::scale()` call from LM head forward.
+
+### Next Investigation (Issue #99)
+
+Need to re-examine why FlashAttention dQ gradients appeared small (~4e-7). Possible causes:
+1. The dQ values may actually be CORRECT for the current training state
+2. BF16 precision in FlashAttention backward may be normal
+3. The "small" gradients may be an artifact of the diagnostic, not a bug
+
+**Status:** ✅ **Issue #98 REVERTED** - Rebuild and test required
+
+---
+
+## 🔵 HISTORICAL: Issue #98 - LM Head Gradient 27.7x Too Small (WRONG DIAGNOSIS!)
+
+### Discovery (January 30, 2026)
+
+FlashAttention backward produces vanishing dQ gradients:
+```
+[FA-BWD-OUT] dQ (BF16): max=0.0000003986 rms=0.0000000280
+```
+
+Traced gradient flow through entire backward chain:
+- Loss backward: grad_logits max=0.000147 ✓ (expected for mean-reduced CE)
+- LM head backward: `grad_encoder = grad_logits @ weights`
+- Result: grad_encoder max=1.6e-6 (92x attenuation!)
+
+### Root Cause: Asymmetric Scaling with Tied Weights
+
+**Embedding forward (Issue #92 AIAYN scaling):**
+```cpp
+embedding_scale = sqrt(768) ≈ 27.71
+output = weights[token_id] * embedding_scale  // Amplified by 27.7x
+```
+
+**LM head forward (NO scaling):**
+```cpp
+logits = encoder @ weights^T  // Uses RAW weights (rms=0.006)
+```
+
+**With Xavier-initialized weights (rms≈0.006):**
+- Forward: embedding outputs are O(0.17) magnitude (0.006 × 27.7)
+- LM head backward: `grad_encoder = grad_logits @ weights` uses raw weights (0.006)
+- Result: Gradients are ~27.7x smaller than they should be!
+
+### Mathematical Analysis
+
+**Expected gradient magnitude:**
+```
+grad_encoder = grad_logits @ weights^T
+grad_encoder_max ≈ grad_logits_max × sqrt(vocab_size × d_model) × weights_rms
+                 ≈ 0.000147 × sqrt(50377 × 768) × 0.006
+                 ≈ 0.000147 × 6220 × 0.006
+                 ≈ 0.0055
+```
+
+**Actual observed:** 0.0000016 (3400x smaller!)
+
+The mismatch is because:
+1. Embedding scales UP by 27.7x on forward
+2. LM head doesn't scale at all
+3. Gradients flowing backward through LM head are 27.7x too small
+4. This compounds through the transformer layers → vanishing gradients
+
+### The AIAYN Paper Intent
+
+The original paper states: "we multiply those weights by sqrt(d_model)"
+
+With tied weights, this should apply to BOTH:
+1. ✅ Embedding lookup: `output = emb[id] * sqrt(d_model)`
+2. ❌ LM head projection: `logits = encoder @ (emb * sqrt(d_model))^T`
+
+We were only doing #1, not #2.
+
+### Fix Applied (3 files)
+
+**1. TensorContract_GPU.cu - Added ScaleGradFn struct:**
+```cpp
+struct ScaleGradFn : public GradFn {
+    float scale_factor = 1.0f;
+    
+    void capture_input(Tensor& input, float scale, cudaStream_t stream) {
+        scale_factor = scale;
+        input_ptr = &input;
+        // ... capture for backward
+    }
+    
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        // grad_input = grad_output * scale_factor
+        kernel_accumulate_grad<<<...>>>(input_grad, grad_output.data, n, scale_factor);
+    }
+};
+```
+
+**2. TensorContract_GPU.cu - Added autograd::scale function:**
+```cpp
+Tensor scale(const Tensor& x, float scale_factor, cudaStream_t stream) {
+    // Forward: output = x * scale_factor
+    TensorContract::scale(x_view, scale_factor, out_view, stream);
+    
+    // Setup backward: grad_x = grad_output * scale_factor
+    auto* grad_fn = new ScaleGradFn();
+    grad_fn->capture_input(const_cast<Tensor&>(x), scale_factor, stream);
+    output.grad_fn = grad_fn;
+    return output;
+}
+```
+
+**3. AutogradTraining.cu - Apply scaling to LM head:**
+```cpp
+Tensor logits_tensor = autograd::matmul(ctx.lm_input_tensor, lm_weights, ...);
+
+// ISSUE #98 FIX: Scale LM head output when using tied embeddings
+if (cfg->tie_embeddings) {
+    const float lm_head_scale = std::sqrt(static_cast<float>(cfg->d_model));
+    logits_tensor = autograd::scale(logits_tensor, lm_head_scale, ctx.stream);
+}
+```
+
+### Expected Results After Fix
+
+1. LM head backward now applies sqrt(d_model) scaling to gradients
+2. grad_encoder should be ~27.7x larger (matching embedding scale)
+3. FlashAttention dQ should be ~0.00001 instead of ~0.0000004
+4. Training should now learn properly
+
+### Why PyTorch Baseline Works
+
+PyTorch baseline (`Tools/libtorch_baseline/main.cpp` line 790) does NOT scale embeddings:
+```cpp
+auto x = tok_emb->forward(idx) + pos_emb->forward(pos);  // Plain lookup, no scaling
+```
+
+So there's no mismatch to fix. GRIM-text's Issue #92 added AIAYN scaling but forgot to apply it to LM head projection.
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔴 PREVIOUS: Issue #96 - Position Embedding Allocation IGNORES Config (Rule 20 Violation!)
 
 ### Discovery (January 30, 2026)
 

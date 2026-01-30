@@ -3,9 +3,12 @@
 //  TrainingState implementation details
 //======================================================//
 
+// Include grim_language_model_cuda.hpp FIRST to get complete EncoderLayerCache definition
+// before TrainingState_GPU.hpp which forward-declares it.
+// This fixes C++2c warning about deleting pointer to incomplete type.
+#include "../../GRIM/grim_language_model_cuda.hpp"
 #include "TrainingState_GPU.hpp"
 #include "TrainingTensors.hpp"  // Autograd tensor system
-#include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../training/Autograd/AutogradTraining.hpp"  
 
 #include <stdexcept>
@@ -19,112 +22,31 @@ TrainingState::TrainingState() = default;
 
 TrainingState::~TrainingState() {
 	// ═══════════════════════════════════════════════════════════════
-	// TENSOR-MANAGED MEMORY (embedding_weights, lm_head_weights, etc.)
+	// ALL MEMORY NOW TENSOR-MANAGED
 	// ═══════════════════════════════════════════════════════════════
-	// Tensor members (embedding_weights, position_embedding_weights, lm_head_weights, etc.)
-	// are automatically destroyed and call their own release() method.
-	// DO NOT manually cudaFree these - they own their data/grad memory.
+	// After Rule 20 migration, all float* buffers are GRIM::Tensor objects.
+	// Tensor::~Tensor() calls release() to free GPU memory.
+	// DO NOT manually cudaFree any Tensor member - they own their data.
 	
-	// ═══════════════════════════════════════════════════════════════
-	// AUTOGRAD MIGRATION COMPLETE - Legacy vectors REMOVED
-	// ═══════════════════════════════════════════════════════════════
-	// FFN/Attention/RMSNorm gradients now owned by encoder's Tensor.grad
-	// (freed when encoder layers are destroyed).
-	auto freeVector = [](std::vector<float*>& buffers) {
-		for (auto ptr : buffers) {
-			if (ptr) {
-				cudaFree(ptr);
-			}
-		}
-	};
-	
-	// ═══════════════════════════════════════════════════════════════
-	// ACTIVATION CACHES (raw float* buffers for backward pass)
-	// ═══════════════════════════════════════════════════════════════
-	if (cached_embeddings) cudaFree(cached_embeddings);
-	if (cached_final_rms_input) cudaFree(cached_final_rms_input);
-	
-	freeVector(cached_ln1_outputs);
-	freeVector(cached_attn_outputs);
-	freeVector(cached_residual1_outputs);
-	freeVector(cached_ln2_outputs);
-	freeVector(cached_ffn_pre_gelu);
-	freeVector(cached_ffn_outputs);
-	freeVector(cached_layer_outputs);
+	// Free legacy forward layer cache array (raw pointer into Tensor.data)
 	if (forward_layer_caches) {
 		delete[] forward_layer_caches;
 		forward_layer_caches = nullptr;
 		forward_layer_cache_count = 0;
 	}
-
-	freeVector(cached_Q);
-	freeVector(cached_K);
-	freeVector(cached_V);
-	freeVector(cached_attn_inputs);
-	freeVector(cached_attn_bhsd);
-	freeVector(cached_softmax_lse);
-
-	if (cached_encoder_outputs) cudaFree(cached_encoder_outputs);
-
-	if (cached_logits) cudaFree(cached_logits);
-	if (cached_numeric_predictions) cudaFree(cached_numeric_predictions);
-	if (cached_targets) cudaFree(cached_targets);
-	if (cached_token_ids) cudaFree(cached_token_ids);
-	if (cached_token_numeric_values) cudaFree(cached_token_numeric_values);
-	if (cached_token_numeric_mask) cudaFree(cached_token_numeric_mask);
-	// GRMT v4: text feature buffers
-	if (cached_token_text_features) cudaFree(cached_token_text_features);
-	if (cached_token_text_mask) cudaFree(cached_token_text_mask);
-	// GRMT v6: byte length buffer
-	if (cached_token_byte_lengths) cudaFree(cached_token_byte_lengths);
-	if (sequence_weights) cudaFree(sequence_weights);
-	// Issue #39 FIX: Output logit bias correction buffers
-	if (logit_bias) cudaFree(logit_bias);
-	if (logit_bias_update) cudaFree(logit_bias_update);
 	
-	// ═══════════════════════════════════════════════════════════════
-	// TENSOR-MANAGED GRADIENT BUFFERS (Issue #45 FIX)
-	// ═══════════════════════════════════════════════════════════════
-	// The following are now Tensor objects that handle their own cleanup:
-	// - grad_logits_tensor, grad_numeric_tensor, grad_encoder_tensor
-	// - grad_ffn_input_tensor, grad_ffn_hidden_tensor
-	// - grad_attn_input_tensor, grad_attn_out_proj_tensor, grad_attn_out_bhsd_tensor
-	// - grad_q_tensor, grad_k_tensor, grad_v_tensor
-	// - grad_qkv_concat_tensor, grad_qkv_input_tensor, grad_attn_bsm_tensor
-	// - centering_scratch_tensor
-	// DO NOT manually cudaFree these - Tensor::~Tensor() calls release().
+	// encoder_layer_caches is std::vector<EncoderLayerCacheTensors>
+	// Each EncoderLayerCacheTensors contains Tensor members that auto-cleanup.
+	encoder_layer_caches.clear();
 	
-	// Flash Attention workspace (still raw pointers - not migrated)
-	if (fa_dq_accum) cudaFree(fa_dq_accum);
-	if (fa_dsoftmax_sum) cudaFree(fa_dsoftmax_sum);
-	if (fa_q_bf16) cudaFree(fa_q_bf16);
-	if (fa_k_bf16) cudaFree(fa_k_bf16);
-	if (fa_v_bf16) cudaFree(fa_v_bf16);
-	if (fa_out_bf16) cudaFree(fa_out_bf16);
-	if (fa_dout_bf16) cudaFree(fa_dout_bf16);
-	if (fa_dq_bf16) cudaFree(fa_dq_bf16);
-	if (fa_dk_bf16) cudaFree(fa_dk_bf16);
-	if (fa_dv_bf16) cudaFree(fa_dv_bf16);
-	if (encoder_workspace) cudaFree(encoder_workspace);
-	
-	// Backward temporaries - NOW TENSOR-MANAGED (Issue #45)
-	// grad_ffn_input_tensor, grad_ffn_hidden_tensor, etc. release() via ~Tensor()
-	// grad_attn_*_tensor, grad_q/k/v_tensor, grad_qkv_*_tensor → auto cleanup
-	// centering_scratch_tensor → auto cleanup
-	
-	// Loss scratch (still raw pointers - small buffers)
-	if (d_loss_scratch) cudaFree(d_loss_scratch);
-	if (d_loss_sum_scratch) cudaFree(d_loss_sum_scratch);
-	if (d_numeric_loss_sum) cudaFree(d_numeric_loss_sum);
-	if (d_numeric_loss_count) cudaFree(d_numeric_loss_count);
-	if (d_entropy_output) cudaFree(d_entropy_output);  // Free entropy buffer
+	// TeacherLogits has its own release function (not Tensor-based yet)
 	TeacherLogits::release(teacher_logits);
 	TeacherLogits::release(reference_logits);
 	
-	// Free optimizer states
+	// Free optimizer states (std::vector<Tensor> clears automatically)
 	freeOptimizerStates();
 	
-	// Free guess cache buffers (GRIM-TS)
+	// Free guess cache buffers (GRIM-TS - not Tensor-based, uses raw cudaMalloc)
 	freeGuessCacheBuffers();
 	
 	// Issue #60: Free debug gradient attribution buffers
@@ -138,60 +60,40 @@ TrainingState::~TrainingState() {
 }
 
 //======================================================//
-//  Optimizer State Management (Centralized)
+//  Optimizer State Management (Tensor-based)
 //======================================================//
 
-void TrainingState::allocateOptimizerStates(const std::vector<size_t>& sizes) {
+void TrainingState::allocateOptimizerStates(const std::vector<size_t>& sizes, cudaStream_t stream) {
 	// Free any existing states first
 	freeOptimizerStates();
 	
-	optimizer_m_states.resize(sizes.size(), nullptr);
-	optimizer_v_states.resize(sizes.size(), nullptr);
-	optimizer_state_sizes = sizes;
-	
-	// Get stream from centralized controller per Rule 22
-	cudaStream_t primary_stream = stream_ctrl.isInitialized() 
-		? stream_ctrl.getPrimaryStream() 
-		: nullptr;
+	// Get stream from centralized controller if not provided
+	cudaStream_t primary_stream = stream ? stream :
+		(stream_ctrl.isInitialized() ? stream_ctrl.getPrimaryStream() : nullptr);
 	StreamController::fatalIfDefaultStream(primary_stream, "TrainingState::allocateOptimizerStates");
+	
+	// Allocate Tensor objects for each parameter group
+	optimizer_m_states.reserve(sizes.size());
+	optimizer_v_states.reserve(sizes.size());
 	
 	for (size_t i = 0; i < sizes.size(); ++i) {
 		if (sizes[i] > 0) {
-			// Rule 20: Check cudaMalloc and throw on failure
-			cudaError_t err_m = cudaMalloc(&optimizer_m_states[i], sizes[i] * sizeof(float));
-			if (err_m != cudaSuccess) {
-				freeOptimizerStates();
-				throw std::runtime_error("[TrainingState::allocateOptimizerStates] cudaMalloc m_states[" +
-					std::to_string(i) + "] failed: size=" + std::to_string(sizes[i]) +
-					" error=" + cudaGetErrorString(err_m));
-			}
-			
-			cudaError_t err_v = cudaMalloc(&optimizer_v_states[i], sizes[i] * sizeof(float));
-			if (err_v != cudaSuccess) {
-				freeOptimizerStates();
-				throw std::runtime_error("[TrainingState::allocateOptimizerStates] cudaMalloc v_states[" +
-					std::to_string(i) + "] failed: size=" + std::to_string(sizes[i]) +
-					" error=" + cudaGetErrorString(err_v));
-			}
-			
-			// Async zero using centralized stream
-			cudaMemsetAsync(optimizer_m_states[i], 0, sizes[i] * sizeof(float), primary_stream);
-			cudaMemsetAsync(optimizer_v_states[i], 0, sizes[i] * sizeof(float), primary_stream);
+			// Create Tensor with flat shape and zero-initialize
+			optimizer_m_states.push_back(Tensor::zeros({static_cast<int>(sizes[i])}, primary_stream));
+			optimizer_v_states.push_back(Tensor::zeros({static_cast<int>(sizes[i])}, primary_stream));
+		} else {
+			// Empty placeholder Tensor for zero-size groups
+			optimizer_m_states.emplace_back();
+			optimizer_v_states.emplace_back();
 		}
 	}
 	optimizer_states_allocated = true;
 }
 
 void TrainingState::freeOptimizerStates() {
-	for (auto ptr : optimizer_m_states) {
-		if (ptr) cudaFree(ptr);
-	}
-	for (auto ptr : optimizer_v_states) {
-		if (ptr) cudaFree(ptr);
-	}
+	// Tensors auto-cleanup via destructor - just clear the vectors
 	optimizer_m_states.clear();
 	optimizer_v_states.clear();
-	optimizer_state_sizes.clear();
 	optimizer_states_allocated = false;
 }
 
@@ -365,6 +267,8 @@ void TrainingState::initializeAutogradTensors(
 	int n_layers, int n_heads, int n_kv_heads,
 	int max_seq, bool tie_emb, bool bias,
 	HyperParameters::PositionalEncodingType positional_encoding,
+	bool use_layer_scale,
+	float layer_scale_init,
 	cudaStream_t stream
 ) {
 	// Rule 20: Fail loud if already initialized
@@ -389,6 +293,8 @@ void TrainingState::initializeAutogradTensors(
 		n_layers, n_heads, n_kv_heads,
 		max_seq, tie_emb, bias,
 		positional_encoding,
+		use_layer_scale,
+		layer_scale_init,
 		stream
 	);
 	
@@ -493,115 +399,74 @@ void TrainingState::zeroIntermediateGrads(cudaStream_t stream) {
 }
 
 //======================================================//
-//  ISSUE #60 FIX: PCGrad Buffer for Tied Weights
+//  ISSUE #60 FIX: PCGrad Buffer for Tied Weights (Tensor-based)
 //======================================================//
 
-void TrainingState::allocatePCGradBuffer(int vocab_size, int d_model) {
-	if (pcgrad_temp_buffer) {
+void TrainingState::allocatePCGradBuffer(int vocab_size, int d_model, cudaStream_t stream) {
+	if (pcgrad_temp_buffer.data) {
 		freePCGradBuffer();
 	}
 	
-	pcgrad_buffer_size = static_cast<size_t>(vocab_size) * d_model;
-	const size_t bytes = pcgrad_buffer_size * sizeof(float);
+	// Get stream from centralized controller if not provided
+	cudaStream_t primary_stream = stream ? stream :
+		(stream_ctrl.isInitialized() ? stream_ctrl.getPrimaryStream() : nullptr);
 	
-	cudaStream_t stream = stream_ctrl.isInitialized() 
-		? stream_ctrl.getPrimaryStream() 
-		: nullptr;
-	
-	cudaError_t err = cudaMalloc(&pcgrad_temp_buffer, bytes);
-	if (err != cudaSuccess) {
-		throw std::runtime_error("[TrainingState::allocatePCGradBuffer] cudaMalloc failed: " +
-			std::string(cudaGetErrorString(err)));
-	}
-	
-	// Zero the buffer
-	if (stream) {
-		cudaMemsetAsync(pcgrad_temp_buffer, 0, bytes, stream);
-	} else {
-		cudaMemset(pcgrad_temp_buffer, 0, bytes);
-	}
+	// Allocate as Tensor [vocab_size, d_model]
+	pcgrad_temp_buffer = Tensor::zeros({vocab_size, d_model}, primary_stream);
 	
 	// Set global pointers for EmbeddingGradFn to use
 	extern float* g_pcgrad_temp_buffer;
 	extern size_t g_pcgrad_buffer_size;
-	g_pcgrad_temp_buffer = pcgrad_temp_buffer;
-	g_pcgrad_buffer_size = pcgrad_buffer_size;
+	g_pcgrad_temp_buffer = pcgrad_temp_buffer.data;
+	g_pcgrad_buffer_size = static_cast<size_t>(vocab_size) * d_model;
 	
 	fprintf(stdout, "[PCGRAD] Allocated PCGrad buffer: %zu elements (%zu MB)\n",
-	        pcgrad_buffer_size, bytes / (1024 * 1024));
+	        g_pcgrad_buffer_size, g_pcgrad_buffer_size * sizeof(float) / (1024 * 1024));
 }
 
 void TrainingState::freePCGradBuffer() {
-	if (pcgrad_temp_buffer) {
-		cudaFree(pcgrad_temp_buffer);
-		pcgrad_temp_buffer = nullptr;
-		
-		// Clear global pointers
+	if (pcgrad_temp_buffer.data) {
+		// Clear global pointers BEFORE releasing tensor
 		extern float* g_pcgrad_temp_buffer;
 		extern size_t g_pcgrad_buffer_size;
 		g_pcgrad_temp_buffer = nullptr;
 		g_pcgrad_buffer_size = 0;
+		
+		// Tensor::release() called via default destruction or explicit clear
+		pcgrad_temp_buffer = Tensor();  // Replace with empty tensor
 	}
-	pcgrad_buffer_size = 0;
 }
 
 //======================================================//
-//  DEBUG: Gradient Attribution Buffers (Issue #60)
+//  DEBUG: Gradient Attribution Buffers (Issue #60) - Tensor-based
 //======================================================//
 
-void TrainingState::allocateDebugGradBuffers(int vocab_size, int d_model) {
-	if (debug_lm_head_only_grad || debug_embedding_only_grad) {
+void TrainingState::allocateDebugGradBuffers(int vocab_size, int d_model, cudaStream_t stream) {
+	if (debug_lm_head_only_grad.data || debug_embedding_only_grad.data) {
 		freeDebugGradBuffers();  // Clean up any existing buffers
 	}
 	
-	debug_grad_buffer_size = static_cast<size_t>(vocab_size) * d_model;
-	const size_t bytes = debug_grad_buffer_size * sizeof(float);
+	// Get stream from centralized controller if not provided
+	cudaStream_t primary_stream = stream ? stream :
+		(stream_ctrl.isInitialized() ? stream_ctrl.getPrimaryStream() : nullptr);
 	
-	cudaStream_t stream = stream_ctrl.isInitialized() 
-		? stream_ctrl.getPrimaryStream() 
-		: nullptr;
+	// Allocate as Tensors [vocab_size, d_model]
+	debug_lm_head_only_grad = Tensor::zeros({vocab_size, d_model}, primary_stream);
+	debug_embedding_only_grad = Tensor::zeros({vocab_size, d_model}, primary_stream);
 	
-	cudaError_t err1 = cudaMalloc(&debug_lm_head_only_grad, bytes);
-	if (err1 != cudaSuccess) {
-		throw std::runtime_error("[TrainingState::allocateDebugGradBuffers] cudaMalloc lm_head failed: " +
-			std::string(cudaGetErrorString(err1)));
-	}
-	
-	cudaError_t err2 = cudaMalloc(&debug_embedding_only_grad, bytes);
-	if (err2 != cudaSuccess) {
-		cudaFree(debug_lm_head_only_grad);
-		debug_lm_head_only_grad = nullptr;
-		throw std::runtime_error("[TrainingState::allocateDebugGradBuffers] cudaMalloc emb failed: " +
-			std::string(cudaGetErrorString(err2)));
-	}
-	
-	// Zero the buffers
-	if (stream) {
-		cudaMemsetAsync(debug_lm_head_only_grad, 0, bytes, stream);
-		cudaMemsetAsync(debug_embedding_only_grad, 0, bytes, stream);
-	} else {
-		cudaMemset(debug_lm_head_only_grad, 0, bytes);
-		cudaMemset(debug_embedding_only_grad, 0, bytes);
-	}
-	
+	const size_t buffer_size = static_cast<size_t>(vocab_size) * d_model;
 	fprintf(stdout, "[DEBUG] Allocated gradient attribution buffers: %zu elements (%zu MB each)\n",
-	        debug_grad_buffer_size, bytes / (1024 * 1024));
+	        buffer_size, buffer_size * sizeof(float) / (1024 * 1024));
 }
 
 void TrainingState::freeDebugGradBuffers() {
-	if (debug_lm_head_only_grad) {
-		cudaFree(debug_lm_head_only_grad);
-		debug_lm_head_only_grad = nullptr;
-	}
-	if (debug_embedding_only_grad) {
-		cudaFree(debug_embedding_only_grad);
-		debug_embedding_only_grad = nullptr;
-	}
-	debug_grad_buffer_size = 0;
+	// Tensor auto-cleanup - just replace with empty tensors
+	debug_lm_head_only_grad = Tensor();
+	debug_embedding_only_grad = Tensor();
 }
 
 void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream) {
-	if (!debug_gradient_attribution || !debug_lm_head_only_grad || !debug_embedding_only_grad) {
+	if (!debug_gradient_attribution || !debug_lm_head_only_grad.data || !debug_embedding_only_grad.data) {
 		return;  // Debug mode not enabled or buffers not allocated
 	}
 	
@@ -613,7 +478,7 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream) {
 	if (embedding_weights.shape.is_flat()) {
 		d_model = embedding_weights.shape.flat.cols;
 	}
-	const int vocab_size = static_cast<int>(debug_grad_buffer_size / d_model);
+	const int vocab_size = static_cast<int>(debug_lm_head_only_grad.numel() / d_model);
 	
 	if (TARGET_TOKEN >= vocab_size) {
 		fprintf(stderr, "[DEBUG] Token %d out of range (vocab=%d)\n", TARGET_TOKEN, vocab_size);
@@ -634,8 +499,8 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream) {
 	std::vector<float> lm_grad_277(d_model);
 	std::vector<float> raw_emb_grad_277(d_model);  // Pre-projection embedding gradient
 	
-	cudaMemcpy(lm_grad_277.data(), debug_lm_head_only_grad + row_offset, row_bytes, cudaMemcpyDeviceToHost);
-	cudaMemcpy(raw_emb_grad_277.data(), debug_embedding_only_grad + row_offset, row_bytes, cudaMemcpyDeviceToHost);
+	cudaMemcpy(lm_grad_277.data(), debug_lm_head_only_grad.data + row_offset, row_bytes, cudaMemcpyDeviceToHost);
+	cudaMemcpy(raw_emb_grad_277.data(), debug_embedding_only_grad.data + row_offset, row_bytes, cudaMemcpyDeviceToHost);
 	
 	// Get the ACTUAL final gradient from the shared buffer (this is post-PCGrad!)
 	std::vector<float> final_grad_277(d_model);
@@ -700,6 +565,66 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream) {
 	        raw_emb_sum > 0 ? "DECREASE" : "INCREASE");
 	fprintf(stdout, "\n");
 	fflush(stdout);
+}
+
+//======================================================//
+//  Legacy Cache Pointer Setup (Rule 20 Bridge)
+//======================================================//
+
+void TrainingState::setupLegacyCachePointers() {
+	// This method sets up forward_layer_caches (raw EncoderLayerCache*)
+	// to point into the Tensor.data buffers of encoder_layer_caches.
+	//
+	// WHY: CUDA kernels need raw float* for pointer arithmetic.
+	// The Tensor API owns the memory, this just creates a pointer interface.
+	//
+	// NOTE: EncoderLayerCache is defined inside namespace GRIM in grim_language_model_cuda.hpp.
+	// This file includes it FIRST, so we have the full definition.
+	
+	const int num_layers = static_cast<int>(encoder_layer_caches.size());
+	if (num_layers == 0) {
+		throw std::runtime_error("[setupLegacyCachePointers] encoder_layer_caches is empty! "
+		                         "Call allocation first.");
+	}
+	
+	// Allocate the raw pointer array if needed
+	if (!forward_layer_caches) {
+		forward_layer_cache_count = num_layers;
+		forward_layer_caches = new EncoderLayerCache[num_layers]();
+	} else if (forward_layer_cache_count != num_layers) {
+		// Mismatch - delete and reallocate
+		delete[] forward_layer_caches;
+		forward_layer_cache_count = num_layers;
+		forward_layer_caches = new EncoderLayerCache[num_layers]();
+	}
+	
+	// Set up raw pointers into Tensor.data for each layer
+	for (int layer = 0; layer < num_layers; ++layer) {
+		const auto& tc = encoder_layer_caches[layer];
+		EncoderLayerCache& cache = forward_layer_caches[layer];
+		
+		// Main activation caches
+		cache.ln1_output = tc.ln1_output.data;
+		cache.attn_input = tc.attn_input.data;
+		cache.attn_bhsd = tc.attn_bhsd.data;
+		cache.softmax_lse = tc.softmax_lse.data;
+		cache.attn_output = tc.attn_output.data;
+		cache.residual1 = tc.residual1.data;
+		cache.ln2_input = tc.residual1.data;  // Alias: same buffer (pre-LN2 = post-residual1)
+		cache.ln2_output = tc.ln2_output.data;
+		cache.ffn_input = tc.ln2_output.data;  // Alias: same buffer (post-LN2 = FFN input)
+		cache.ffn_pre_gelu = tc.ffn_pre_gelu.data;
+		cache.ffn_output = tc.ffn_output.data;
+		cache.layer_output = tc.layer_output.data;
+		
+		// Q/K/V projections
+		cache.q = tc.Q.data;
+		cache.k = tc.K.data;
+		cache.v = tc.V.data;
+	}
+	
+	fprintf(stdout, "[INFO] setupLegacyCachePointers: %d layers bridged (Tensor → EncoderLayerCache*)\n",
+	        num_layers);
 }
 
 } // namespace GRIM

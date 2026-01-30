@@ -149,7 +149,12 @@ struct EncoderConfig {
     int max_cached_seq_len = 8192;
     
     // Fixed config values (not architecture-dependent)
-    float rms_epsilon = 1e-3f;  // RMSNorm epsilon - increased for numerical stability during training
+    // Issue #104 FIX: Changed from 1e-3 to 1e-5. The old value was too large for Layer 0 embeddings:
+    // - Layer 0 input: per_row_rms ≈ 0.006, so mean(x²) ≈ 0.00004
+    // - With eps=1e-3: epsilon dominated denominator (25x larger than mean(x²))
+    // - Result: output_rms = 0.19 instead of expected 1.0
+    // Standard practice (LLaMA, Mistral, GPT): eps = 1e-5 to 1e-6
+    float rms_epsilon = 1e-5f;  // RMSNorm epsilon - standard value matching LLaMA/Mistral
     HyperParameters::PositionalEncodingType positional_encoding = HyperParameters::DEFAULT_POSITIONAL_ENCODING;
     bool causal_mask = true;                        
     bool use_pre_norm = true;
@@ -164,6 +169,11 @@ struct EncoderConfig {
     // Positional encoding (ALiBi+RoPE hybrid) - pointer to shared state in TrainingState
     // WARNING: If nullptr, attention sees no positional info - positions become equivalent!
     const PBM::PBMSpec* pos_encoding = nullptr;
+    
+    // LayerScale (Issue #109 fix - config propagation)
+    // These fields were missing, causing reliance on EncoderLayerConfig defaults
+    bool use_layer_scale = false;        // Enable per-sublayer learnable scaling
+    float layer_scale_init = 0.1f;       // Initial scale value (typical: 0.1 for small models)
     
     // CUDA execution
     cudaStream_t stream = nullptr;       // CUDA stream for async execution
@@ -257,7 +267,8 @@ struct LanguageModelConfig {
     HyperParameters::PositionalEncodingType positional_encoding = HyperParameters::DEFAULT_POSITIONAL_ENCODING;
     
     // Fixed config values (not architecture-dependent)
-    float rms_epsilon = 1e-3f;  // RMSNorm epsilon - shared across all RMSNorm layers
+    // Issue #104 FIX: Changed from 1e-3 to 1e-5 (see TransformerConfig above for rationale)
+    float rms_epsilon = 1e-5f;  // RMSNorm epsilon - shared across all RMSNorm layers
     bool causal_mask = true;
     bool use_pre_norm = true;
     bool fuse_qkv = true;
@@ -265,6 +276,13 @@ struct LanguageModelConfig {
     int num_threads = 4;
     bool tie_embeddings = true;
     bool use_bias = true;
+    
+    // Issue #109: LayerScale - learnable residual scaling from CaiT paper
+    // Reduces correlation buildup between layers by gating sublayer outputs
+    // with learnable scalars (initialized to layer_scale_init, typically 0.1)
+    bool use_layer_scale = false;         // Enable LayerScale (gated residual scaling)
+    float layer_scale_init = 0.1f;        // Initial value for layer scale parameters
+    
     bool use_gpu = true;
     bool use_flash_attention = true;  // Use Flash Attention 2 for memory efficiency
     int min_seq_len_for_flash = 512;   // Minimum sequence length to activate Flash Attention

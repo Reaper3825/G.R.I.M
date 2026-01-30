@@ -37,6 +37,9 @@ struct GPUGrimEncoder::Impl {
         enc_cfg.stream = config.stream;
         enc_cfg.cublas_handle = config.cublas_handle;
         enc_cfg.pos_encoding = config.pos_encoding;  // RoPE/ALiBi positional encoding
+        // Issue #109 FIX: Propagate LayerScale config (was relying on EncodingConfig defaults!)
+        enc_cfg.use_layer_scale = config.use_layer_scale;
+        enc_cfg.layer_scale_init = config.layer_scale_init;
 
         if (!config.pos_encoding) {
             FWD_ERROR("[GPUGrimEncoder] FATAL: pos_encoding is NULL");

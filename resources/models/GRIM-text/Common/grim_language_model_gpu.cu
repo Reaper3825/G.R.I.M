@@ -854,7 +854,7 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
     if (training_state_.cached_seq_len != static_cast<int>(context_len)) {
         throw std::runtime_error("getNextTokenLogitsGPU: cached_seq_len mismatch after forwardWithCache");
     }
-    if (!training_state_.cached_logits) {
+    if (!training_state_.cached_logits_tensor.data) {
         throw std::runtime_error("getNextTokenLogitsGPU: cached_logits not initialized");
     }
     const size_t seq_len = static_cast<size_t>(training_state_.cached_seq_len);
@@ -867,7 +867,7 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
         throw std::runtime_error("getNextTokenLogitsGPU: primary stream is null");
     }
     CUDA_CHECK(cudaMemcpyAsync(logits.data.data(),
-                               training_state_.cached_logits + column_offset,
+                               training_state_.cached_logits_tensor.data + column_offset,
                                static_cast<size_t>(cfg.vocab_size) * sizeof(float),
                                cudaMemcpyDeviceToHost,
                                stream));
@@ -895,9 +895,9 @@ TokenBufferView LanguageModel::getTokenBufferView() {
             initInferenceState();
         }
     }
-    view.device_token_ids = training_state_.cached_token_ids;
-    view.device_token_numeric_values = training_state_.cached_token_numeric_values;
-    view.device_token_numeric_mask = training_state_.cached_token_numeric_mask;
+    view.device_token_ids = reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data);
+    view.device_token_numeric_values = training_state_.cached_token_numeric_values.data;
+    view.device_token_numeric_mask = reinterpret_cast<uint8_t*>(training_state_.cached_token_numeric_mask.data);
     view.max_tokens = config_.max_seq_len;
     view.stream = training_state_.stream_ctrl.getPrimaryStream();
     return view;
@@ -1058,7 +1058,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
     };
 
     auto fetchNumericPrediction = [&](int logits_pos) -> float {
-        if (!config_.numeric_head_enabled || !training_state_.cached_numeric_predictions) {
+        if (!config_.numeric_head_enabled || !training_state_.cached_numeric_predictions.data) {
             return std::numeric_limits<float>::quiet_NaN();
         }
         if (logits_pos < 0) {
@@ -1066,7 +1066,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         }
         float pred = std::numeric_limits<float>::quiet_NaN();
         cudaMemcpyAsync(&pred,
-                        training_state_.cached_numeric_predictions + logits_pos,
+                        training_state_.cached_numeric_predictions.data + logits_pos,
                         sizeof(float),
                         cudaMemcpyDeviceToHost,
                         training_state_.stream_ctrl.getPrimaryStream());

@@ -289,8 +289,10 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     // ═══════════════════════════════════════════════════════════════════════════
     
     // RULE 20: Fail loud - validate required buffers
-    if (!ts->cached_token_ids) {
-        throw std::runtime_error("AutogradForward: cached_token_ids buffer is NULL");
+    // NOTE: cached_token_ids_tensor stores int32 data in float* buffer - cast when accessing
+    int* token_ids = reinterpret_cast<int*>(ts->cached_token_ids_tensor.data);
+    if (!token_ids) {
+        throw std::runtime_error("AutogradForward: cached_token_ids_tensor.data is NULL");
     }
     
     // Embedding weights tensor (already a Tensor in TrainingState)
@@ -307,21 +309,21 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     
     // Use autograd::embedding for proper gradient tracking
     // This performs: output[i] = weight[token_ids[i]] * scale with gradient scatter-add backward
-    // Issue #92: Scale by sqrt(d_model) to bring Xavier-initialized embeddings (~0.036 rms)
-    // to unit scale (~1.0 rms), matching the atom injection scale from ScratchBlock.
-    // AIAYN paper: "we multiply those weights by sqrt(d_model)"
-    const float embedding_scale = std::sqrt(static_cast<float>(cfg->d_model));
+    // Issue #102: REMOVED Issue #92 sqrt(d_model) scaling - it caused GEMM coherent summation
+    // bug where QKV output was 36x too large (292 vs target 8.0), causing LSE explosion.
+    // PyTorch baseline does NOT scale embeddings and works correctly.
+    const float embedding_scale = 1.0f;  // No scaling - match PyTorch baseline
     Tensor emb_output = autograd::embedding(
         emb_weights,
-        ts->cached_token_ids,
+        token_ids,  // Use local variable from Tensor cast
         total_tokens,
         ctx.stream,
-        embedding_scale  // Issue #92: sqrt(d_model) scaling
+        embedding_scale  // Issue #102: No scaling (was sqrt(d_model) causing LSE explosion)
     );
     
     // Copy to cached buffer for compatibility with rest of pipeline
-    if (ts->cached_embeddings) {
-        cudaMemcpyAsync(ts->cached_embeddings, emb_output.data,
+    if (ts->cached_embeddings_tensor.data) {
+        cudaMemcpyAsync(ts->cached_embeddings_tensor.data, emb_output.data,
                         static_cast<size_t>(total_tokens) * cfg->d_model * sizeof(float),
                         cudaMemcpyDeviceToDevice, ctx.stream);
     }
@@ -330,8 +332,14 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     // Issue #57 FIX: Add position embeddings
     // PyTorch baseline: x = tok_emb->forward(idx) + pos_emb->forward(pos)
     // GRIM was MISSING this step, causing training plateau!
+    //
+    // Issue #96/103 FIX: ONLY add position embeddings for LEARNED positional encoding!
+    // With ALIBI or ROPE, position embeddings are ISOTROPIC (all columns have same variance)
+    // which causes GEMM coherent summation and QKV explosion.
+    // Config says use_learned=false but code was ignoring it!
     // ═══════════════════════════════════════════════════════════════════════════
-    if (ts->position_embedding_weights.data) {
+    const bool use_learned_pos_emb = (cfg->positional_encoding == HyperParameters::PositionalEncodingType::NONE);
+    if (use_learned_pos_emb && ts->position_embedding_weights.data) {
         ts->position_embedding_weights.requires_grad = true;
         
         // Ensure position embedding weights have correct shape [max_seq_len, d_model]
@@ -348,13 +356,13 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         generatePositionIds(d_position_ids, total_tokens, ctx.seq_len, ctx.stream);
         
         // Look up position embeddings with autograd tracking
-        // Issue #92: Position embeddings also scaled by sqrt(d_model) for consistency
+        // Issue #102: No scaling (was sqrt(d_model) causing LSE explosion)
         Tensor pos_emb_output = autograd::embedding(
             ts->position_embedding_weights,
             d_position_ids,
             total_tokens,
             ctx.stream,
-            embedding_scale  // Same scale as token embeddings
+            embedding_scale  // Issue #102: No scaling - match PyTorch baseline
         );
         
         // Free temporary position IDs (embedding lookup already copied them)
@@ -520,19 +528,23 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         }
         
         // Update cached embeddings with the combined result
-        if (ts->cached_embeddings) {
-            cudaMemcpyAsync(ts->cached_embeddings, emb_output.data,
+        if (ts->cached_embeddings_tensor.data) {
+            cudaMemcpyAsync(ts->cached_embeddings_tensor.data, emb_output.data,
                             static_cast<size_t>(total_tokens) * cfg->d_model * sizeof(float),
                             cudaMemcpyDeviceToDevice, ctx.stream);
         }
         
         AG_INFO("Step 1b: Position embeddings added (Issue #57 FIX)");
     } else {
-        // ISSUE #96: Position embeddings SKIPPED per config (use_learned=false or ALIBI/RoPE mode)
-        // This is CORRECT behavior - ALIBI and RoPE don't use additive position embeddings
-        fprintf(stderr, "[Issue96-POSEMB] Position embeddings SKIPPED (positional_encoding != LEARNED)\n");
-        fprintf(stderr, "[Issue96-POSEMB] Using only token embeddings for Layer 0 input\n");
-        AG_INFO("Step 1b: Position embeddings SKIPPED (Issue #96 - positional_encoding != LEARNED)");
+        // Issue #96/103 FIX: Position embeddings SKIPPED when using ALIBI/RoPE
+        // This is CORRECT - ALIBI and RoPE provide positional information via attention bias/rotation,
+        // NOT via additive embeddings. Adding learned position embeddings when using ALIBI/RoPE
+        // introduces ISOTROPIC noise that causes GEMM coherent summation → QKV explosion.
+        fprintf(stderr, "[Issue103-POSEMB] Position embeddings SKIPPED (positional_encoding=%s)\n",
+                HyperParameters::positionalEncodingTypeToString(cfg->positional_encoding));
+        fprintf(stderr, "[Issue103-POSEMB] This is CORRECT for ALIBI/RoPE - they don't use additive position embeddings\n");
+        AG_INFO("Step 1b: Position embeddings SKIPPED (Issue #103 - positional_encoding=" 
+                << HyperParameters::positionalEncodingTypeToString(cfg->positional_encoding) << ")");
     }
     
     // Store in context for backward
@@ -558,7 +570,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         // ═══════════════════════════════════════════════════════════════════════
         //  ISSUE #90 FIX (PROPER): Operate directly on ctx.embedding_tensor.data!
         //  
-        //  OLD BUG: ScratchBlock operated on ts->cached_embeddings (separate buffer),
+        //  OLD BUG: ScratchBlock operated on ts->cached_embeddings_tensor (separate buffer),
         //  but Layer 0 used ctx.embedding_tensor.data (autograd's buffer).
         //  Result: Layer 0 received STALE pre-ScratchBlock data → K/V explosion!
         //  
@@ -573,7 +585,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         
         sb_args.total_tokens = total_tokens;
         sb_args.seq_len = ctx.seq_len;
-        sb_args.token_ids = ts->cached_token_ids;
+        sb_args.token_ids = reinterpret_cast<int*>(ts->cached_token_ids_tensor.data);
         
         // Numeric values and mask from DataLoader (passed via context)
         sb_args.token_numeric_values = ctx.token_numeric_values;
@@ -586,16 +598,16 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         sb_args.stream = ctx.stream;
         
         // Cache atom embeddings for backward
-        if (ts->cached_scratch_block_embeddings) {
+        if (ts->cached_scratch_block_embeddings.data) {
             sb_args.cache_atom_embeddings = TensorContract::TensorView::make_BSM(
-                ts->cached_scratch_block_embeddings,
+                ts->cached_scratch_block_embeddings.data,
                 ctx.scratch_block->config().max_atoms,
                 ctx.scratch_block->config().atom_embedding_dim,
                 "sb_cache_embeddings");
         }
-        sb_args.cache_atom_positions = ts->cached_scratch_block_positions;
-        sb_args.cache_atom_types = ts->cached_scratch_block_types;
-        sb_args.cache_num_atoms = ts->cached_scratch_block_num_atoms;
+        sb_args.cache_atom_positions = reinterpret_cast<int*>(ts->cached_scratch_block_positions.data);
+        sb_args.cache_atom_types = reinterpret_cast<int*>(ts->cached_scratch_block_types.data);
+        sb_args.cache_num_atoms = reinterpret_cast<int*>(ts->cached_scratch_block_num_atoms.data);
         
         // Run ScratchBlock forward (operates directly on ctx.embedding_tensor.data)
         ctx.scratch_block->forward(sb_args);
@@ -606,9 +618,9 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                                      std::string(cudaGetErrorString(cuda_err)));
         }
         
-        // Also update ts->cached_embeddings for any legacy code that reads it
-        if (ts->cached_embeddings && ts->cached_embeddings != ctx.embedding_tensor.data) {
-            cudaMemcpyAsync(ts->cached_embeddings, ctx.embedding_tensor.data,
+        // Also update ts->cached_embeddings_tensor for any legacy code that reads it
+        if (ts->cached_embeddings_tensor.data && ts->cached_embeddings_tensor.data != ctx.embedding_tensor.data) {
+            cudaMemcpyAsync(ts->cached_embeddings_tensor.data, ctx.embedding_tensor.data,
                             static_cast<size_t>(total_tokens) * cfg->d_model * sizeof(float),
                             cudaMemcpyDeviceToDevice, ctx.stream);
         }
@@ -619,24 +631,25 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     // ═══════════════════════════════════════════════════════════════════════════
     // ISSUE #91 DIAGNOSTIC: Dump embedding stats AFTER ScratchBlock, BEFORE encoder
     // This tells us what Layer 0 actually receives as input!
+    // FIX: Now scans FULL tensor instead of just first 10,000 elements
     // ═══════════════════════════════════════════════════════════════════════════
     {
-        const int sample_size = std::min(10000, total_tokens * cfg->d_model);
-        std::vector<float> h_emb(sample_size);
-        cudaMemcpy(h_emb.data(), ctx.embedding_tensor.data, sample_size * sizeof(float), cudaMemcpyDeviceToHost);
+        const int full_size = total_tokens * cfg->d_model;
+        std::vector<float> h_emb(full_size);
+        cudaMemcpy(h_emb.data(), ctx.embedding_tensor.data, full_size * sizeof(float), cudaMemcpyDeviceToHost);
         
         float emb_min = h_emb[0], emb_max = h_emb[0];
         double emb_sum = 0.0, emb_sum_sq = 0.0;
-        for (int i = 0; i < sample_size; i++) {
+        for (int i = 0; i < full_size; i++) {
             emb_min = std::min(emb_min, h_emb[i]);
             emb_max = std::max(emb_max, h_emb[i]);
             emb_sum += h_emb[i];
             emb_sum_sq += h_emb[i] * h_emb[i];
         }
-        float emb_mean = emb_sum / sample_size;
-        float emb_rms = sqrtf(emb_sum_sq / sample_size);
+        float emb_mean = emb_sum / full_size;
+        float emb_rms = sqrtf(emb_sum_sq / full_size);
         
-        fprintf(stderr, "[Issue91-EMB-AFTER-SB] tokens=%d d_model=%d: min=%.6f max=%.6f mean=%.6f rms=%.6f\n",
+        fprintf(stderr, "[Issue91-EMB-AFTER-SB] tokens=%d d_model=%d: min=%.10f max=%.10f mean=%.10f rms=%.10f\n",
                 total_tokens, cfg->d_model, emb_min, emb_max, emb_mean, emb_rms);
     }
 
@@ -651,7 +664,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     if (!ctx.gpu_encoder) {
         throw std::runtime_error("AutogradForward: gpu_encoder is NULL - pass encoder in context");
     }
-    if (!ts->encoder_workspace) {
+    if (!ts->encoder_workspace.data) {
         throw std::runtime_error("AutogradForward: encoder_workspace is NULL - TrainingState MUST allocate workspace");
     }
     
@@ -689,7 +702,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         
         // Setup workspace
         LayerWorkspace<float> ws{};
-        ws.data = ts->encoder_workspace;
+        ws.data = ts->encoder_workspace.data;
         ws.bytes = enc_layer->requiredWorkspaceBytes(total_tokens, ctx.seq_len);
         enc_layer->setWorkspace(ws.data, ws.bytes);
         
@@ -723,8 +736,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     result.encoder_output = encoder_output;
     
     // Also copy to cached buffer for compatibility
-    if (ts->cached_encoder_outputs) {
-        cudaMemcpyAsync(ts->cached_encoder_outputs, encoder_output,
+    if (ts->cached_encoder_output.data) {
+        cudaMemcpyAsync(ts->cached_encoder_output.data, encoder_output,
                         static_cast<size_t>(total_tokens) * cfg->d_model * sizeof(float),
                         cudaMemcpyDeviceToDevice, ctx.stream);
     }
@@ -798,9 +811,9 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     lm_weights.requires_grad = true;  // Gradients for weight update
     
     // RULE 20: Fail loud - validate cached_logits buffer
-    float* logits_output = ts->cached_logits;
+    float* logits_output = ts->cached_logits_tensor.data;
     if (!logits_output) {
-        throw std::runtime_error("AutogradTraining: cached_logits buffer is NULL - TrainingState MUST allocate logits buffer");
+        throw std::runtime_error("AutogradTraining: cached_logits_tensor buffer is NULL - TrainingState MUST allocate logits buffer");
     }
      
     // ════════════════════════════════════════════════════════════════════════
@@ -867,6 +880,21 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         nullptr,  // b_cache: weights persist in memory
         true      // transpose_b=true
     );
+    
+    // ISSUE #98 REVERTED: The autograd::scale() approach was WRONG!
+    //
+    // The problem with Issue #98's implementation:
+    //   - Forward: logits_scaled = logits_raw * 27.7 → EXPLODES logits (loss=22 vs baseline=10.5)
+    //   - Backward: autograd::scale applies grad_raw = grad_scaled * 27.7 → AMPLIFIES gradients!
+    //
+    // We wanted to fix SMALL gradients but instead:
+    //   - Forward exploded logits (wrong)
+    //   - Backward AMPLIFIED gradients (opposite of what we needed if they were too small!)
+    //
+    // The AIAYN paper's "multiply weights by sqrt(d_model)" is for embedding magnitude,
+    // NOT for post-matmul scaling. The original gradient issue needs different diagnosis.
+    //
+    // Issue #99: Need to re-investigate the actual gradient flow problem.
     
     AG_INFO("Step 4: LM head matmul complete");
     
@@ -1417,11 +1445,11 @@ float autogradTrainingStep(
         return -1.0f;
     }
     
-    // Set ScratchBlock input buffers from TrainingState
-    ctx.token_numeric_values = training_state.cached_token_numeric_values;
-    ctx.token_numeric_mask = training_state.cached_token_numeric_mask;
-    ctx.token_text_features = training_state.cached_token_text_features;
-    ctx.token_text_mask = training_state.cached_token_text_mask;
+    // Set ScratchBlock input buffers from TrainingState (Rule 20: use Tensor.data)
+    ctx.token_numeric_values = training_state.cached_token_numeric_values.data;
+    ctx.token_numeric_mask = reinterpret_cast<const uint8_t*>(training_state.cached_token_numeric_mask.data);
+    ctx.token_text_features = reinterpret_cast<const uint16_t*>(training_state.cached_token_text_features.data);
+    ctx.token_text_mask = reinterpret_cast<const uint8_t*>(training_state.cached_token_text_mask.data);
     
     // Forward pass (runs entire model with autograd graph)
     ForwardResult fwd_result = executeAutogradForward(ctx);
@@ -1430,8 +1458,9 @@ float autogradTrainingStep(
         return -1.0f;
     }
     
-    // Loss computation
-    LossResult loss_result = computeAutogradLoss(ctx, training_state.cached_targets, nullptr);
+    // Loss computation (Rule 20: use Tensor.data for targets)
+    LossResult loss_result = computeAutogradLoss(ctx, 
+        reinterpret_cast<int*>(training_state.cached_targets_tensor.data), nullptr);
     if (!loss_result.success) {
         AG_ERROR("autogradTrainingStep: Loss failed - " << loss_result.error_message);
         return -1.0f;

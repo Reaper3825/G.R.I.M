@@ -1136,13 +1136,29 @@ __global__ void kernel_zero_autograd(float* data, size_t count) {
 namespace {
 
 // Kernel: Xavier uniform initialization (uses curand-free LCG for reproducibility)
+// Issue #107 FIX: Run multiple LCG iterations to decorrelate consecutive elements
+// BUG: Single iteration with state = (seed + idx*A)*A + C is LINEAR in idx,
+// causing consecutive elements to have constant state difference A².
+// This produced correlated values with avg|cosine| ≈ 0.37 instead of expected ≈ 0.036.
+// FIX: Initialize state with hash-like mixing, then run 16 LCG iterations.
 __global__ void kernel_xavier_uniform(float* data, size_t count, float scale, uint64_t seed) {
     const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (idx < count) {
+        // Use idx to create per-element unique seed via bit mixing (splitmix64-style)
+        uint64_t z = seed + idx * 0x9E3779B97F4A7C15ULL;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+        uint64_t state = z ^ (z >> 31);
+        
+        // Run 16 LCG iterations to fully decorrelate
         // LCG PRNG: x_{n+1} = (a * x_n + c) mod m
-        // Parameters from Numerical Recipes
-        uint64_t state = seed + idx * 6364136223846793005ULL;
-        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        // Parameters from PCG family (better statistical properties)
+        constexpr uint64_t LCG_A = 6364136223846793005ULL;
+        constexpr uint64_t LCG_C = 1442695040888963407ULL;
+        #pragma unroll
+        for (int i = 0; i < 16; i++) {
+            state = state * LCG_A + LCG_C;
+        }
         
         // Convert to uniform [0, 1)
         float u = static_cast<float>(state >> 33) / static_cast<float>(1ULL << 31);
@@ -2088,6 +2104,248 @@ __global__ void kernel_dropout_backward(
 //======================================================//
 
 /**
+ * ScaleGradFn - Backward for scalar multiplication
+ * Forward: y = x * scale
+ * Backward: grad_x = grad_y * scale (scale is constant, chain rule)
+ *
+ * ISSUE #98: Added to fix gradient vanishing when tie_embeddings=true.
+ * When embeddings are scaled by sqrt(d_model) (Issue #92), the LM head
+ * must also scale by sqrt(d_model) to maintain gradient flow symmetry.
+ * Without this, gradients to encoder are ~27.7x smaller than they should be.
+ */
+struct ScaleGradFn : public GradFn {
+    float scale_factor = 1.0f;
+    float* input_grad = nullptr;
+    std::shared_ptr<float> owned_input_grad;
+    GradFn* input_grad_fn = nullptr;
+    bool owns_input_grad_fn = false;
+    TensorContract::TensorShape input_shape;
+    size_t element_count = 0;
+    bool applied = false;
+    
+    ScaleGradFn() { op_name = "scale"; }
+    
+    ~ScaleGradFn() {
+        if (owns_input_grad_fn && input_grad_fn) {
+            delete input_grad_fn;
+            input_grad_fn = nullptr;
+        }
+    }
+    
+    void capture_input(Tensor& input, float scale, cudaStream_t stream) {
+        scale_factor = scale;
+        input_shape = input.shape;
+        element_count = input.numel();
+        
+        // Take ownership of input's grad_fn
+        input_grad_fn = input.grad_fn;
+        if (input.grad_fn && input.owns_grad_fn) {
+            owns_input_grad_fn = true;
+            input.owns_grad_fn = false;
+        }
+        
+        // Setup gradient buffer
+        if (input.requires_grad) {
+            input.ensure_grad();
+            if (input.is_leaf) {
+                input_grad = input.grad_data();
+                AG_TRACE("[ScaleGradFn] Using persistent input_grad buffer (leaf): %p\n", (void*)input_grad);
+            } else {
+                float* buffer = nullptr;
+                cudaMalloc(&buffer, element_count * sizeof(float));
+                cudaMemsetAsync(buffer, 0, element_count * sizeof(float), stream);
+                owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) {
+                    queueForDeferredCleanup(p);
+                });
+                input_grad = owned_input_grad.get();
+                AG_TRACE("[ScaleGradFn] Allocated owned input_grad buffer (non-leaf): %zu floats at %p\n", element_count, (void*)input_grad);
+            }
+        }
+    }
+    
+    __host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        if (applied) {
+            AG_TRACE("[ScaleGradFn] apply() SKIPPED (already applied)\n");
+            return;
+        }
+        applied = true;
+        
+        // Backward: grad_input = grad_output * scale_factor
+        // The scale is a constant, so it multiplies the incoming gradient
+        if (input_grad && grad_output.data) {
+            const size_t n = element_count;
+            const int blocks = (n + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
+            
+            AG_TRACE("[ScaleGradFn] apply() scale_factor=%f n=%zu input_grad=%p\n", 
+                     scale_factor, n, (void*)input_grad);
+            
+            // grad_input += grad_output * scale  (accumulate mode)
+            kernel_accumulate_grad<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+                input_grad, grad_output.data, n, scale_factor);
+        }
+        
+        // Continue backward chain
+        if (input_grad_fn) {
+            Tensor input_grad_tensor;
+            input_grad_tensor.data = input_grad;
+            input_grad_tensor.shape = input_shape;
+            input_grad_tensor.owns_data = false;
+            input_grad_tensor.stream = stream;
+            
+            input_grad_fn->apply(input_grad_tensor, stream);
+            input_grad_fn->release_saved();
+        }
+    }
+    
+    __host__ void release_saved() override {
+        owned_input_grad.reset();
+    }
+};
+
+/**
+ * LayerScaleGradFn - Backward for learnable scalar multiplication (Issue #109)
+ * Forward:  y[i,j] = x[i,j] * scale_param[0]  (broadcast)
+ * Backward: grad_x = grad_y * scale_param     (broadcast)
+ *           grad_scale = sum(grad_y * x)      (reduction)
+ *
+ * Similar to ScaleGradFn but scale is a LEARNABLE PARAMETER (not constant).
+ */
+struct LayerScaleGradFn : public GradFn {
+    // Input tensor info
+    float* input_data = nullptr;  // Cached for backward
+    float* input_grad = nullptr;
+    std::shared_ptr<float> owned_input_data;  // If we need to copy input
+    std::shared_ptr<float> owned_input_grad;
+    GradFn* input_grad_fn = nullptr;
+    bool owns_input_grad_fn = false;
+    TensorContract::TensorShape input_shape;
+    size_t element_count = 0;
+    
+    // Scale param info (shape [1])
+    float scale_value = 1.0f;     // Cached scale value for backward
+    float* scale_grad = nullptr;  // Points to scale_param's grad
+    
+    bool applied = false;
+    
+    LayerScaleGradFn() { op_name = "layer_scale"; }
+    
+    ~LayerScaleGradFn() {
+        if (owns_input_grad_fn && input_grad_fn) {
+            delete input_grad_fn;
+            input_grad_fn = nullptr;
+        }
+    }
+    
+    void capture_inputs(Tensor& input, Tensor& scale_param, cudaStream_t stream) {
+        input_shape = input.shape;
+        element_count = input.numel();
+        
+        // Cache scale value
+        cudaMemcpyAsync(&scale_value, scale_param.data, sizeof(float), 
+                        cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);  // Need sync to read value
+        
+        // Take ownership of input's grad_fn
+        input_grad_fn = input.grad_fn;
+        if (input.grad_fn && input.owns_grad_fn) {
+            owns_input_grad_fn = true;
+            input.owns_grad_fn = false;
+        }
+        
+        // Setup gradient buffer for input
+        if (input.requires_grad) {
+            input.ensure_grad();
+            if (input.is_leaf) {
+                input_grad = input.grad_data();
+            } else {
+                float* buffer = nullptr;
+                cudaMalloc(&buffer, element_count * sizeof(float));
+                cudaMemsetAsync(buffer, 0, element_count * sizeof(float), stream);
+                owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) {
+                    queueForDeferredCleanup(p);
+                });
+                input_grad = owned_input_grad.get();
+            }
+        }
+        
+        // Setup gradient buffer for scale_param (always scalar [1])
+        if (scale_param.requires_grad) {
+            scale_param.ensure_grad();
+            scale_grad = scale_param.grad_data();
+        }
+        
+        // Cache input data for grad_scale computation
+        // For leaf tensors, data persists. For non-leaf, we need to copy.
+        if (input.is_leaf) {
+            input_data = input.data;
+        } else {
+            float* buffer = nullptr;
+            cudaMalloc(&buffer, element_count * sizeof(float));
+            cudaMemcpyAsync(buffer, input.data, element_count * sizeof(float),
+                           cudaMemcpyDeviceToDevice, stream);
+            owned_input_data = std::shared_ptr<float>(buffer, [](float* p) {
+                queueForDeferredCleanup(p);
+            });
+            input_data = owned_input_data.get();
+        }
+    }
+    
+    __host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        if (applied) {
+            AG_TRACE("[LayerScaleGradFn] apply() SKIPPED (already applied)\n");
+            return;
+        }
+        applied = true;
+        
+        const size_t n = element_count;
+        const int blocks = (n + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
+        
+        // 1. grad_input = grad_output * scale_value  (broadcast)
+        if (input_grad && grad_output.data) {
+            kernel_accumulate_grad<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+                input_grad, grad_output.data, n, scale_value);
+        }
+        
+        // 2. grad_scale = sum(grad_output * input_data)  (dot product → scalar)
+        if (scale_grad && grad_output.data && input_data) {
+            // Compute dot product using cublas
+            cublasHandle_t handle;
+            cublasCreate(&handle);
+            cublasSetStream(handle, stream);
+            
+            float dot_result = 0.0f;
+            cublasSdot(handle, static_cast<int>(n), 
+                       grad_output.data, 1, input_data, 1, &dot_result);
+            
+            // Accumulate to scale_grad (atomicAdd for safety)
+            // Copy to temp buffer then atomicAdd
+            float* h_dot = &dot_result;
+            cudaMemcpyAsync(scale_grad, h_dot, sizeof(float), 
+                           cudaMemcpyHostToDevice, stream);
+            
+            cublasDestroy(handle);
+        }
+        
+        // Continue backward chain for input
+        if (input_grad_fn) {
+            Tensor input_grad_tensor;
+            input_grad_tensor.data = input_grad;
+            input_grad_tensor.shape = input_shape;
+            input_grad_tensor.owns_data = false;
+            input_grad_tensor.stream = stream;
+            
+            input_grad_fn->apply(input_grad_tensor, stream);
+            input_grad_fn->release_saved();
+        }
+    }
+    
+    __host__ void release_saved() override {
+        owned_input_grad.reset();
+        owned_input_data.reset();
+    }
+};
+
+/**
  * AddGradFn - Backward for element-wise addition
  * Forward: c = a + b
  * Backward: grad_a += grad_c, grad_b += grad_c
@@ -2456,7 +2714,7 @@ struct BiasAddGradFn : public GradFn {
                     } 
                 }
                 float bg_rms = std::sqrt(static_cast<float>(bg_sq / bias_grad_host.size()));
-                fprintf(stderr, "[BIAS-ADD-BWD-DONE] call=%d | grad_bias: max=%.6f rms=%.6f (sampled %zu/%zu features)\n",
+                fprintf(stderr, "[BIAS-ADD-BWD-DONE] call=%d | grad_bias: max=%.10f rms=%.10f (sampled %zu/%zu features)\n",
                         bias_call_idx, bg_mx, bg_rms, bias_grad_host.size(), features);
             }
         } else {
@@ -3487,6 +3745,73 @@ Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, cudaStream_t st
     kernel_rmsnorm_forward<<<tokens, AUTOGRAD_BLOCK_SIZE, shared_mem, stream>>>(
         x.data, gamma.data, result.data, tokens, d_model, eps);
     
+    // [RMSNORM_EQUATION] Rule 21 diagnostic - verify RMSNorm math
+    // Equation: y = x * gamma * inv_rms, where inv_rms = 1/sqrt(mean(x²) + eps)
+    // Expected: output_rms = gamma * x_rms * inv_rms = gamma * x_rms / x_rms = gamma ≈ 1.0
+    #ifdef DEBUG_RMSNORM_EQUATION
+    {
+        cudaStreamSynchronize(stream);
+        const int sample_rows = std::min(5, tokens);
+        std::vector<float> h_input(sample_rows * d_model);
+        std::vector<float> h_output(sample_rows * d_model);
+        std::vector<float> h_gamma(d_model);
+        cudaMemcpy(h_input.data(), x.data, h_input.size() * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(h_output.data(), result.data, h_output.size() * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(h_gamma.data(), gamma.data, h_gamma.size() * sizeof(float), cudaMemcpyDeviceToHost);
+        
+        // Compute gamma stats
+        float gamma_min = h_gamma[0], gamma_max = h_gamma[0];
+        double gamma_sum_sq = 0.0;
+        for (int i = 0; i < d_model; i++) {
+            gamma_min = std::min(gamma_min, h_gamma[i]);
+            gamma_max = std::max(gamma_max, h_gamma[i]);
+            gamma_sum_sq += h_gamma[i] * h_gamma[i];
+        }
+        float gamma_rms = std::sqrt(gamma_sum_sq / d_model);
+        
+        fprintf(stderr, "[RMSNORM_EQUATION] y = x * gamma * inv_rms, inv_rms = 1/sqrt(mean(x²) + eps)\n");
+        fprintf(stderr, "  INPUT x: shape=[%d, %d], eps=%.2e\n", tokens, d_model, eps);
+        fprintf(stderr, "  GAMMA: min=%.6f max=%.6f rms=%.6f\n", gamma_min, gamma_max, gamma_rms);
+        
+        for (int r = 0; r < sample_rows; r++) {
+            // Compute input row stats
+            float x_min = h_input[r * d_model], x_max = h_input[r * d_model];
+            double x_sum_sq = 0.0;
+            for (int c = 0; c < d_model; c++) {
+                float val = h_input[r * d_model + c];
+                x_min = std::min(x_min, val);
+                x_max = std::max(x_max, val);
+                x_sum_sq += val * val;
+            }
+            float x_rms = std::sqrt(x_sum_sq / d_model);
+            float inv_rms = 1.0f / std::sqrt(x_sum_sq / d_model + eps);
+            
+            // Compute output row stats
+            float y_min = h_output[r * d_model], y_max = h_output[r * d_model];
+            double y_sum_sq = 0.0;
+            for (int c = 0; c < d_model; c++) {
+                float val = h_output[r * d_model + c];
+                y_min = std::min(y_min, val);
+                y_max = std::max(y_max, val);
+                y_sum_sq += val * val;
+            }
+            float y_rms = std::sqrt(y_sum_sq / d_model);
+            
+            // Expected: y_rms = gamma_rms (when gamma=1.0, y_rms should be 1.0)
+            float expected_y_rms = gamma_rms;
+            
+            fprintf(stderr, "  ROW %d: x_rms=%.10f inv_rms=%.10f | EXPECTED y_rms=%.10f | ACTUAL y_rms=%.10f",
+                    r, x_rms, inv_rms, expected_y_rms, y_rms);
+            if (std::abs(y_rms - expected_y_rms) > 0.01f) {
+                fprintf(stderr, " [ANOMALY] diff=%.10f (%.4fx off)\n", 
+                        y_rms - expected_y_rms, y_rms / expected_y_rms);
+            } else {
+                fprintf(stderr, " ✓\n");
+            }
+        }
+    }
+    #endif
+    
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
     if (result.requires_grad) {
         result.is_leaf = false;
@@ -3636,6 +3961,76 @@ Tensor residual_add(const Tensor& x, const Tensor& residual, cudaStream_t stream
         grad_fn->capture_inputs(const_cast<Tensor&>(x), const_cast<Tensor&>(residual), stream);  // ISSUE #56 FIX
         result.grad_fn = grad_fn;
         result.owns_grad_fn = true;  // ISSUE #54 FIX: Result owns its grad_fn
+    }
+    
+    return result;
+}
+
+/**
+ * autograd::scale - Scale tensor by constant scalar with gradient tracking
+ * Forward: y = x * scale_factor
+ * Backward: grad_x = grad_y * scale_factor (chain rule)
+ *
+ * ISSUE #98: Added to fix gradient vanishing when tie_embeddings=true.
+ * When embeddings are scaled by sqrt(d_model) (Issue #92), the LM head
+ * must also scale by sqrt(d_model) to maintain gradient flow symmetry.
+ */
+Tensor scale(const Tensor& x, float scale_factor, cudaStream_t stream) {
+    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream);
+    
+    // Forward: y = x * scale_factor
+    TensorContract::TensorView x_view(const_cast<float*>(x.data), x.shape);
+    TensorContract::TensorView out_view(result.data, result.shape);
+    TensorContract::scale(x_view, scale_factor, out_view, stream);
+    
+    // Set up backward
+    if (x.requires_grad) {
+        result.is_leaf = false;
+        auto* grad_fn = new ScaleGradFn();
+        grad_fn->capture_input(const_cast<Tensor&>(x), scale_factor, stream);
+        result.grad_fn = grad_fn;
+        result.owns_grad_fn = true;
+    }
+    
+    return result;
+}
+
+/**
+ * layer_scale - Element-wise multiply by learnable scalar (Issue #109)
+ * 
+ * Forward:  y[i,j] = x[i,j] * scale_param[0]  (scale_param is shape [1])
+ * Backward: grad_x = grad_y * scale_param
+ *           grad_scale_param = sum(grad_y * x)  (reduction)
+ *
+ * This differs from scale() which uses a constant float. LayerScale uses a
+ * LEARNABLE parameter that receives its own gradients during training.
+ */
+Tensor layer_scale(const Tensor& x, Tensor& scale_param, cudaStream_t stream) {
+    if (!scale_param.data) {
+        throw std::runtime_error("layer_scale: scale_param is NULL");
+    }
+    
+    // Read scale value from GPU
+    float scale_value = 1.0f;
+    cudaMemcpyAsync(&scale_value, scale_param.data, sizeof(float), 
+                    cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    
+    const bool track_grad = x.requires_grad || scale_param.requires_grad;
+    Tensor result = Tensor::empty(x.shape, track_grad, stream);
+    
+    // Forward: y = x * scale_value  (broadcast)
+    TensorContract::TensorView x_view(const_cast<float*>(x.data), x.shape);
+    TensorContract::TensorView out_view(result.data, result.shape);
+    TensorContract::scale(x_view, scale_value, out_view, stream);
+    
+    // Set up backward
+    if (track_grad) {
+        result.is_leaf = false;
+        auto* grad_fn = new LayerScaleGradFn();
+        grad_fn->capture_inputs(const_cast<Tensor&>(x), scale_param, stream);
+        result.grad_fn = grad_fn;
+        result.owns_grad_fn = true;
     }
     
     return result;

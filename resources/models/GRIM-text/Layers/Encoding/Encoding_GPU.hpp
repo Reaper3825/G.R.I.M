@@ -57,6 +57,12 @@ struct EncodingConfig {
     // Normalization
     float rms_epsilon = 1e-5f;
     
+    // LayerScale (Issue #109 fix for input row correlation)
+    // When enabled, residuals become: residual = input + layer_scale * sublayer_output
+    // This reduces the correlation buildup through layers by dampening sublayer contributions
+    bool use_layer_scale = true;
+    float layer_scale_init = 0.1f;  // Initial scale (CaiT uses 0.1, can go lower for more layers)
+    
     // Attention
     bool causal_mask = true;
     float softmax_temperature = 1.0f;
@@ -222,7 +228,9 @@ public:
         Tensor& ffn_w1,
         Tensor& ffn_b1,
         Tensor& ffn_w2,
-        Tensor& ffn_b2
+        Tensor& ffn_b2,
+        Tensor* layer_scale1 = nullptr,  // Issue #109: optional LayerScale for attention residual
+        Tensor* layer_scale2 = nullptr   // Issue #109: optional LayerScale for FFN residual
     );
     
     // Tensor weight accessors (for autograd)
@@ -269,6 +277,14 @@ public:
     // Direct access to FFN layer (for autograd forward)
     FeedForwardLayer* getFfnLayer() { return ffn_.get(); }
     
+    // LayerScale accessors (Issue #109)
+    Tensor& layerScale1() { return layer_scale1_; }
+    Tensor& layerScale2() { return layer_scale2_; }
+    float* getLayerScale1() { return layer_scale1_.data; }
+    float* getLayerScale2() { return layer_scale2_.data; }
+    float* getLayerScale1Grad() { return layer_scale1_.grad_data(); }
+    float* getLayerScale2Grad() { return layer_scale2_.grad_data(); }
+    
     //--------------------------------------------------
     // Flash Attention Control
     //--------------------------------------------------
@@ -310,6 +326,13 @@ private:
     
     // FFN layer (owns its own weights as Tensors)
     std::unique_ptr<FeedForwardLayer> ffn_;
+    
+    // LayerScale parameters (Issue #109: reduces correlation buildup)
+    // These are learnable scalars applied to sublayer outputs before residual addition:
+    //   residual1 = input + layer_scale1 * attn_output
+    //   residual2 = residual1 + layer_scale2 * ffn_output
+    Tensor layer_scale1_;  // [1] scalar for attention
+    Tensor layer_scale2_;  // [1] scalar for FFN
     
     // Workspace (NOT owned - provided by caller)
     float* workspace_ = nullptr;

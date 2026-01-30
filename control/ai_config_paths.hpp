@@ -302,6 +302,12 @@ struct TrainingHyperparameters {
     bool lm_head_center_hidden_states;
     bool lm_head_recenter_gradients;
     
+    // Issue #109: LayerScale (learnable residual scaling from CaiT paper)
+    // Reduces correlation buildup between layers by gating sublayer outputs
+    // with learnable scalars (initialized to layer_scale_init, typically 0.1)
+    bool use_layer_scale;
+    float layer_scale_init;
+    
     // Hardcoded Hidden States Diagnostic (Issue #42) - NO DEFAULTS
     // When enabled, replaces encoder output with synthetic patterns to isolate
     // whether mode collapse is caused by encoder or LM head/gradient system.
@@ -1079,6 +1085,16 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         params.lm_head_centering_enabled = lmc.value("enabled", false);
         params.lm_head_center_hidden_states = lmc.value("center_hidden_states", false);
         params.lm_head_recenter_gradients = lmc.value("recenter_gradients", false);
+    }
+    
+    // Issue #109: LayerScale (learnable residual scaling from CaiT paper)
+    // Reduces correlation buildup between layers by gating sublayer outputs
+    params.use_layer_scale = false;   // Default: disabled (standard residual connections)
+    params.layer_scale_init = 0.1f;   // CaiT paper recommends 0.1 for deeper networks
+    if (auto it = trainConfig.find("layer_scale"); it != trainConfig.end() && it->is_object()) {
+        const auto& ls = *it;
+        params.use_layer_scale = ls.value("enabled", false);
+        params.layer_scale_init = ls.value("init_value", 0.1f);
     }
     
     // Hardcoded Hidden States Diagnostic (Issue #42)

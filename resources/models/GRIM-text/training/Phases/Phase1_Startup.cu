@@ -51,7 +51,6 @@ using json = nlohmann::json;
 // Module logging aliases
 using GRIM::Logging::ModuleId;
 using GRIM::Logging::EmitModuleInfo;
-using GRIM::Logging::EmitModuleWarning;
 using GRIM::Logging::EmitModuleError;
 
 namespace GRIMText::Training {
@@ -849,6 +848,13 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     logger.log("LM Head centering: center_hidden_states=" + std::string(model_config.lm_head_center_hidden_states ? "true" : "false") +
               ", recenter_gradients=" + std::string(model_config.lm_head_recenter_gradients ? "true" : "false"));
     
+    // Issue #109: LayerScale configuration (learnable residual scaling from CaiT paper)
+    model_config.use_layer_scale = hp.use_layer_scale;
+    model_config.layer_scale_init = hp.layer_scale_init;
+    
+    logger.log("LayerScale: enabled=" + std::string(model_config.use_layer_scale ? "true" : "false") +
+              ", init=" + std::to_string(model_config.layer_scale_init));
+    
     // Hardcoded Hidden States Diagnostic (Issue #42)
     model_config.hardcoded_hidden_pattern = static_cast<GRIM::LanguageModelConfig::HardcodedPattern>(hp.hardcoded_hidden_pattern);
     model_config.hardcoded_log_every_n_batches = hp.hardcoded_log_every_n_batches;
@@ -979,11 +985,14 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
         int num_kv_heads = cfg.num_kv_heads;
 
         // ISSUE #96: Pass positional_encoding to control position embedding allocation
+        // ISSUE #109: Pass use_layer_scale and layer_scale_init for LayerScale support
         model->getTrainingState().initializeAutogradTensors(
             cfg.vocab_size, cfg.d_model, cfg.d_ff,
             cfg.num_layers, cfg.num_heads, num_kv_heads,
             cfg.max_seq_len, cfg.tie_embeddings, cfg.use_bias,
             cfg.positional_encoding,  // Issue #96: Only allocate pos_emb for LEARNED mode
+            cfg.use_layer_scale,      // Issue #109: LayerScale gating flag
+            cfg.layer_scale_init,     // Issue #109: Initial value for layer scale params
             stream
         );
         logger.log("✓ TrainingTensors initialized (Tensors OWN memory)");
@@ -1076,31 +1085,227 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
             const size_t qkv_size = static_cast<size_t>(total_qkv_dim) * cfg.d_model;
             std::cout << "[DEBUG] Layer " << layer << " - qkv_size=" << qkv_size << std::endl << std::flush;
             
+            // Issue #108 FIX: REMOVE Issue #106 scaling now that Issue #107 fixed PRNG correlation!
+            // 
+            // History:
+            // - Issue #106 added 1/sqrt(d_model) scaling to compensate for "coherent summation"
+            // - Issue #107 fixed the root cause: LCG PRNG correlation (avg|cosine|=0.37)
+            // - Now that PRNG is decorrelated (avg|cosine|≈0.03), partial cancellation happens
+            //   naturally, so the extra scaling causes Q/K to be 10x BELOW target!
+            //
+            // Current (broken): QKV row_norm ≈ 0.87, TARGET = 8.0 (sqrt(head_dim))
+            // Fix: Use standard Xavier init WITHOUT 1/sqrt(d_model) scaling
+            //
+            // Math:
+            // - ln1_out row_norm ≈ 27.7 (RMSNorm)
+            // - Standard Xavier W_qkv: elem_std = sqrt(2/(768+1280)) ≈ 0.031
+            // - W_qkv row_norm ≈ elem_std * sqrt(d_model) ≈ 0.031 * 27.7 ≈ 0.87
+            // - With partial cancellation in GEMM (decorrelated PRNG):
+            //   QKV row_norm ≈ ln1_row_norm * W_row_norm / sqrt(d_model)
+            //                ≈ 27.7 * 0.87 / 27.7 ≈ 0.87 (matches observation!)
+            // - But we WANT QKV row_norm ≈ 8.0 for healthy attention
+            // - So we need W_qkv to produce Q/K row_norm ≈ 8.0
+            // - Actually with ln1_row_norm ≈ 27.7 and W_qkv standard Xavier:
+            //   Expected QKV = 27.7 * 0.031 * sqrt(768) = 23.8 (way too high!)
+            //   But with partial cancellation: Expected ≈ 8-10 (close to target!)
+            //
+            // The Issue #106 comment was wrong about the cancellation factor.
+            // Standard Xavier with decorrelated PRNG should give reasonable Q/K magnitudes.
             const float qkv_std = std::sqrt(2.0f / (cfg.d_model + static_cast<float>(total_qkv_dim)));
             const float wo_std = std::sqrt(2.0f / (2.0f * cfg.d_model));
             const float w1_std = std::sqrt(2.0f / (cfg.d_model + cfg.d_ff));
             const float w2_std = std::sqrt(2.0f / (cfg.d_ff + cfg.d_model));
             
+            // Issue #106/107 FIX: ALWAYS reinitialize weights with scaled Xavier
+            // Previous code only reseeded when sample_rms < 1e-7f, but TrainingTensors.cu
+            // already initialized weights via Tensor::xavier_uniform_() which uses the BUGGY
+            // kernel_xavier_uniform with correlated LCG (avg|cosine| ≈ 0.37).
+            // Now we FORCE reinitialization to apply:
+            // 1. Issue #106 scaling (1/sqrt(d_model) for W_qkv)
+            // 2. Issue #107 decorrelated PRNG
             bool reseeded = false;
-            if (sample_rms(w_qkv, qkv_size) < 1e-7f && w_qkv) {
+            if (w_qkv) {
                 launchXavierInit(w_qkv, static_cast<int>(qkv_size), qkv_std, xavier_seed + layer * 4 + 0, 0);
                 reseeded = true;
             }
-            if (sample_rms(w_o, cfg.d_model * cfg.d_model) < 1e-7f && w_o) {
+            if (w_o) {
                 launchXavierInit(w_o, cfg.d_model * cfg.d_model, wo_std, xavier_seed + layer * 4 + 1, 0);
                 reseeded = true;
             }
-            if (sample_rms(w1, cfg.d_model * cfg.d_ff) < 1e-7f && w1) {
+            if (w1) {
                 launchXavierInit(w1, cfg.d_model * cfg.d_ff, w1_std, xavier_seed + layer * 4 + 2, 0);
                 reseeded = true;
             }
-            if (sample_rms(w2, cfg.d_ff * cfg.d_model) < 1e-7f && w2) {
+            if (w2) {
                 launchXavierInit(w2, cfg.d_ff * cfg.d_model, w2_std, xavier_seed + layer * 4 + 3, 0);
                 reseeded = true;
             }
             if (reseeded) {
                 logger.log("[EncoderInit] Layer " + std::to_string(layer) + " reseeded with Xavier");
             }
+            
+            // ============================================================================
+            // Issue #106 DIAGNOSTIC: Prove W_qkv stats in exact GEMM layout
+            // W_qkv shape: [total_qkv_dim, d_model] row-major
+            // GEMM reads: A[M,K] × B[K,N] → C[M,N]
+            // For QKV: input[tokens, d_model] × W_qkv^T[d_model, total_qkv_dim] → qkv[tokens, total_qkv_dim]
+            // So W_qkv is stored as [total_qkv_dim rows, d_model cols]
+            // ============================================================================
+            if (layer == 0 && w_qkv) {
+                cudaDeviceSynchronize();  // Ensure Xavier init complete
+                
+                const int num_rows = total_qkv_dim;  // 1280
+                const int num_cols = cfg.d_model;    // 768
+                
+                // Copy W_qkv to host for analysis
+                std::vector<float> h_wqkv(qkv_size);
+                cudaMemcpy(h_wqkv.data(), w_qkv, qkv_size * sizeof(float), cudaMemcpyDeviceToHost);
+                
+                // === Per-row RMS (rows are W_qkv[i, :], size d_model) ===
+                std::vector<float> row_rms(num_rows);
+                for (int r = 0; r < num_rows; ++r) {
+                    double sum_sq = 0.0;
+                    for (int c = 0; c < num_cols; ++c) {
+                        float val = h_wqkv[r * num_cols + c];
+                        sum_sq += val * val;
+                    }
+                    row_rms[r] = std::sqrt(sum_sq / num_cols);
+                }
+                
+                // === Per-column RMS (cols are W_qkv[:, j], size total_qkv_dim) ===
+                std::vector<float> col_rms(num_cols);
+                for (int c = 0; c < num_cols; ++c) {
+                    double sum_sq = 0.0;
+                    for (int r = 0; r < num_rows; ++r) {
+                        float val = h_wqkv[r * num_cols + c];
+                        sum_sq += val * val;
+                    }
+                    col_rms[c] = std::sqrt(sum_sq / num_rows);
+                }
+                
+                // === Row statistics ===
+                float row_rms_min = *std::min_element(row_rms.begin(), row_rms.end());
+                float row_rms_max = *std::max_element(row_rms.begin(), row_rms.end());
+                double row_rms_sum = 0.0;
+                for (float v : row_rms) row_rms_sum += v;
+                float row_rms_mean = row_rms_sum / num_rows;
+                
+                // === Column statistics ===
+                float col_rms_min = *std::min_element(col_rms.begin(), col_rms.end());
+                float col_rms_max = *std::max_element(col_rms.begin(), col_rms.end());
+                double col_rms_sum = 0.0;
+                for (float v : col_rms) col_rms_sum += v;
+                float col_rms_mean = col_rms_sum / num_cols;
+                
+                // === Cosine similarity between rows ===
+                auto cosine_rows = [&](int r1, int r2) -> float {
+                    double dot = 0.0, norm1_sq = 0.0, norm2_sq = 0.0;
+                    for (int c = 0; c < num_cols; ++c) {
+                        float v1 = h_wqkv[r1 * num_cols + c];
+                        float v2 = h_wqkv[r2 * num_cols + c];
+                        dot += v1 * v2;
+                        norm1_sq += v1 * v1;
+                        norm2_sq += v2 * v2;
+                    }
+                    return dot / (std::sqrt(norm1_sq) * std::sqrt(norm2_sq) + 1e-10);
+                };
+                
+                // === Cosine similarity between columns ===
+                auto cosine_cols = [&](int c1, int c2) -> float {
+                    double dot = 0.0, norm1_sq = 0.0, norm2_sq = 0.0;
+                    for (int r = 0; r < num_rows; ++r) {
+                        float v1 = h_wqkv[r * num_cols + c1];
+                        float v2 = h_wqkv[r * num_cols + c2];
+                        dot += v1 * v2;
+                        norm1_sq += v1 * v1;
+                        norm2_sq += v2 * v2;
+                    }
+                    return dot / (std::sqrt(norm1_sq) * std::sqrt(norm2_sq) + 1e-10);
+                };
+                
+                // Sample cosine similarities
+                float cos_row_0_1 = cosine_rows(0, 1);
+                float cos_row_0_100 = cosine_rows(0, 100);
+                float cos_row_0_500 = cosine_rows(0, 500);
+                float cos_row_100_500 = cosine_rows(100, 500);
+                
+                float cos_col_0_1 = cosine_cols(0, 1);
+                float cos_col_0_100 = cosine_cols(0, 100);
+                float cos_col_0_500 = cosine_cols(0, 500);
+                float cos_col_100_500 = cosine_cols(100, 500);
+                
+                // === Compute average absolute cosine across many row pairs ===
+                double row_cos_sum = 0.0;
+                int row_pairs = 0;
+                for (int i = 0; i < std::min(50, num_rows); ++i) {
+                    for (int j = i + 1; j < std::min(50, num_rows); ++j) {
+                        row_cos_sum += std::abs(cosine_rows(i, j));
+                        row_pairs++;
+                    }
+                }
+                float avg_row_cos = row_cos_sum / (row_pairs > 0 ? row_pairs : 1);
+                
+                // === Compute average absolute cosine across many column pairs ===
+                double col_cos_sum = 0.0;
+                int col_pairs = 0;
+                for (int i = 0; i < std::min(50, num_cols); ++i) {
+                    for (int j = i + 1; j < std::min(50, num_cols); ++j) {
+                        col_cos_sum += std::abs(cosine_cols(i, j));
+                        col_pairs++;
+                    }
+                }
+                float avg_col_cos = col_cos_sum / (col_pairs > 0 ? col_pairs : 1);
+                
+                // === Column variance (to check isotropy) ===
+                std::vector<float> col_var(num_cols);
+                for (int c = 0; c < num_cols; ++c) {
+                    double mean = 0.0;
+                    for (int r = 0; r < num_rows; ++r) {
+                        mean += h_wqkv[r * num_cols + c];
+                    }
+                    mean /= num_rows;
+                    double var = 0.0;
+                    for (int r = 0; r < num_rows; ++r) {
+                        float diff = h_wqkv[r * num_cols + c] - mean;
+                        var += diff * diff;
+                    }
+                    col_var[c] = var / num_rows;
+                }
+                float col_var_min = *std::min_element(col_var.begin(), col_var.end());
+                float col_var_max = *std::max_element(col_var.begin(), col_var.end());
+                float col_var_ratio = col_var_max / (col_var_min + 1e-10f);
+                
+                fprintf(stderr, "\n[Issue106-WQKV-GEMM-LAYOUT] Layer 0 W_qkv analysis (EXACT GEMM memory layout):\n");
+                fprintf(stderr, "  SHAPE: [%d rows, %d cols] = [total_qkv_dim, d_model]\n", num_rows, num_cols);
+                fprintf(stderr, "  GEMM: input[tokens,%d] @ W_qkv^T[%d,%d] -> qkv[tokens,%d]\n", 
+                        num_cols, num_cols, num_rows, num_rows);
+                fprintf(stderr, "  \n");
+                fprintf(stderr, "  ROW RMS (each row is a d_model-dim output vector):\n");
+                fprintf(stderr, "    min=%.10f max=%.10f mean=%.10f ratio=%.4fx\n",
+                        row_rms_min, row_rms_max, row_rms_mean, row_rms_max / (row_rms_min + 1e-10f));
+                fprintf(stderr, "  \n");
+                fprintf(stderr, "  COLUMN RMS (each col is a total_qkv_dim-dim input weight vector):\n");
+                fprintf(stderr, "    min=%.10f max=%.10f mean=%.10f ratio=%.4fx\n",
+                        col_rms_min, col_rms_max, col_rms_mean, col_rms_max / (col_rms_min + 1e-10f));
+                fprintf(stderr, "  \n");
+                fprintf(stderr, "  COLUMN VARIANCE (isotropy check - should vary if NOT isotropic):\n");
+                fprintf(stderr, "    min=%.10f max=%.10f ratio=%.4fx\n", col_var_min, col_var_max, col_var_ratio);
+                fprintf(stderr, "    %s\n", col_var_ratio < 1.5f ? "WARNING: ISOTROPIC (ratio < 1.5x)" : "OK: Heterogeneous");
+                fprintf(stderr, "  \n");
+                fprintf(stderr, "  ROW COSINE SIMILARITY (expect ~0 for independent rows):\n");
+                fprintf(stderr, "    cos(row0,row1)=%.6f cos(row0,row100)=%.6f\n", cos_row_0_1, cos_row_0_100);
+                fprintf(stderr, "    cos(row0,row500)=%.6f cos(row100,row500)=%.6f\n", cos_row_0_500, cos_row_100_500);
+                fprintf(stderr, "    avg|cos| over %d pairs: %.6f\n", row_pairs, avg_row_cos);
+                fprintf(stderr, "  \n");
+                fprintf(stderr, "  COLUMN COSINE SIMILARITY (expect ~0 for independent cols):\n");
+                fprintf(stderr, "    cos(col0,col1)=%.6f cos(col0,col100)=%.6f\n", cos_col_0_1, cos_col_0_100);
+                fprintf(stderr, "    cos(col0,col500)=%.6f cos(col100,col500)=%.6f\n", cos_col_0_500, cos_col_100_500);
+                fprintf(stderr, "    avg|cos| over %d pairs: %.6f\n", col_pairs, avg_col_cos);
+                fprintf(stderr, "  \n");
+                fprintf(stderr, "  EXPECTED for good init: row_rms~%.4f, cosines~0.0, col_var_ratio>2x\n", qkv_std);
+                fprintf(stderr, "\n");
+            }
+            // ============================================================================
         }
         std::cout << "[DEBUG] Xavier loop completed, exiting scope..." << std::endl << std::flush;
     }
@@ -1775,35 +1980,18 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     {
         auto& ts = ctx->model->getTrainingState();
         const int vocab_size = static_cast<int>(ctx->config.actual_vocab_size);
-        const size_t bias_bytes = vocab_size * sizeof(float);
+        cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
         
-        // Allocate main bias buffer (stores running EMA)
-        cudaError_t err = cudaMalloc(&ts.logit_bias, bias_bytes);
-        if (err != cudaSuccess) {
-            throw std::runtime_error(std::string("cudaMalloc failed for logit_bias: ") + 
-                                     cudaGetErrorString(err));
-        }
-        // Initialize to zero (no bias correction initially - let EMA build up)
-        err = cudaMemsetAsync(ts.logit_bias, 0, bias_bytes, ts.stream_ctrl.getPrimaryStream());
-        if (err != cudaSuccess) {
-            cudaFree(ts.logit_bias);
-            ts.logit_bias = nullptr;
-            throw std::runtime_error(std::string("cudaMemset failed for logit_bias: ") + 
-                                     cudaGetErrorString(err));
-        }
+        // Allocate main bias buffer (stores running EMA) using Tensor::zeros
+        ts.logit_bias_tensor = GRIM::Tensor::zeros({vocab_size}, stream);
         
         // Allocate scratch buffer for batch mean computation
-        err = cudaMalloc(&ts.logit_bias_update, bias_bytes);
-        if (err != cudaSuccess) {
-            cudaFree(ts.logit_bias);
-            ts.logit_bias = nullptr;
-            throw std::runtime_error(std::string("cudaMalloc failed for logit_bias_update: ") + 
-                                     cudaGetErrorString(err));
-        }
+        ts.logit_bias_update_tensor = GRIM::Tensor::zeros({vocab_size}, stream);
         
         ts.logit_bias_count = vocab_size;
         ts.logit_bias_update_step = 0;
         
+        const size_t bias_bytes = vocab_size * sizeof(float);
         ctx->logging.logger->log("✓ Logit bias buffer allocated: " + 
                                  std::to_string(2 * bias_bytes / 1024) + " KB total (EMA + scratch)");
         ctx->logging.logger->log("  Issue #39: Output logit bias correction ENABLED");
@@ -1823,17 +2011,18 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         if (ts.debug_gradient_attribution) {
             const int vocab_size = static_cast<int>(model_cfg.vocab_size);
             const int d_model = model_cfg.d_model;
+            cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
             
-            ts.allocateDebugGradBuffers(vocab_size, d_model);
+            ts.allocateDebugGradBuffers(vocab_size, d_model, stream);
             
-            // Set global hooks for gradient capture
-            g_debug_lm_head_only_grad = ts.debug_lm_head_only_grad;
-            g_debug_embedding_only_grad = ts.debug_embedding_only_grad;
-            g_debug_grad_buffer_size = ts.debug_grad_buffer_size;
+            // Set global hooks for gradient capture (use Tensor.data for raw pointer)
+            g_debug_lm_head_only_grad = ts.debug_lm_head_only_grad.data;
+            g_debug_embedding_only_grad = ts.debug_embedding_only_grad.data;
+            g_debug_grad_buffer_size = static_cast<size_t>(ts.debug_lm_head_only_grad.numel());
             g_debug_capture_enabled = true;
             
             ctx->logging.logger->log("✓ Issue #60 DEBUG: Gradient attribution buffers allocated");
-            ctx->logging.logger->log("  LM_HEAD_ONLY buffer: " + std::to_string(ts.debug_grad_buffer_size * sizeof(float) / (1024*1024)) + " MB");
+            ctx->logging.logger->log("  LM_HEAD_ONLY buffer: " + std::to_string(ts.debug_lm_head_only_grad.numel() * sizeof(float) / (1024*1024)) + " MB");
             ctx->logging.logger->log("  Will log TOKEN_277 gradient sources after each backward pass");
         }
         

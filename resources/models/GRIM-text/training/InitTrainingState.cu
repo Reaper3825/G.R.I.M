@@ -329,11 +329,9 @@ void LanguageModel::initTrainingState() {
     //   - enc->getRMS1GammaGrad(), enc->getRMS2GammaGrad()
     // Allocated via ensure_grad() in encoder's allocateWeights().
     
-    // Learnable QK-norm scales (nGPT-style)
-    training_state_.attn_alpha_q.resize(cfg.num_layers, nullptr);
-    training_state_.attn_alpha_k.resize(cfg.num_layers, nullptr);
-    training_state_.attn_alpha_q_grads.resize(cfg.num_layers, nullptr);
-    training_state_.attn_alpha_k_grads.resize(cfg.num_layers, nullptr);
+    // Learnable QK-norm scales (nGPT-style) - now Tensor-based with autograd
+    training_state_.attn_alpha_q.resize(cfg.num_layers);
+    training_state_.attn_alpha_k.resize(cfg.num_layers);
     
     // GQA configuration: determine number of KV heads
     // Use HyperParameters default if config doesn't specify, or equal to num_heads for MHA
@@ -370,21 +368,25 @@ void LanguageModel::initTrainingState() {
         // AUTOGRAD MIGRATION COMPLETE: All encoder layer gradients now use encoder's Tensor.grad
         // (allocated via ensure_grad() in encoder's allocateWeights())
         
-        // Allocate and initialize learnable QK-norm scales
+        // Allocate and initialize learnable QK-norm scales using Tensor
         // GQA: alpha_q has num_heads entries, alpha_k has num_kv_heads entries
-        cudaMalloc(&training_state_.attn_alpha_q[layer], cfg.num_heads * sizeof(float));
-        cudaMalloc(&training_state_.attn_alpha_k[layer], num_kv_heads * sizeof(float));
-        cudaMalloc(&training_state_.attn_alpha_q_grads[layer], cfg.num_heads * sizeof(float));
-        cudaMalloc(&training_state_.attn_alpha_k_grads[layer], num_kv_heads * sizeof(float));
+        // Use BSM shape with dim=1 for 1D vectors
+        training_state_.attn_alpha_q[layer] = Tensor::empty(
+            TensorContract::TensorShape::make_BSM(cfg.num_heads, 1), true, primary_stream);
+        training_state_.attn_alpha_q[layer].ensure_grad();
+        
+        training_state_.attn_alpha_k[layer] = Tensor::empty(
+            TensorContract::TensorShape::make_BSM(num_kv_heads, 1), true, primary_stream);
+        training_state_.attn_alpha_k[layer].ensure_grad();
         
         // Initialize alpha_q to 1.0 (num_heads entries)
         std::vector<float> alpha_q_init(cfg.num_heads, HyperParameters::QK_NORM_ALPHA_INIT);
-        cudaMemcpy(training_state_.attn_alpha_q[layer], alpha_q_init.data(), 
+        cudaMemcpy(training_state_.attn_alpha_q[layer].data, alpha_q_init.data(), 
                    cfg.num_heads * sizeof(float), cudaMemcpyHostToDevice);
         
         // Initialize alpha_k to 1.0 (num_kv_heads entries for GQA)
         std::vector<float> alpha_k_init(num_kv_heads, HyperParameters::QK_NORM_ALPHA_INIT);
-        cudaMemcpy(training_state_.attn_alpha_k[layer], alpha_k_init.data(), 
+        cudaMemcpy(training_state_.attn_alpha_k[layer].data, alpha_k_init.data(), 
                    num_kv_heads * sizeof(float), cudaMemcpyHostToDevice);
         
         if (layer == 0 || layer == cfg.num_layers - 1) {
@@ -438,42 +440,24 @@ void LanguageModel::initTrainingState() {
     // BUG FIX: Allocate single-token inference buffers for training-time sampling
     // These are required by forwardInit() for incremental generation during training
     // Rule 20: Fail loud if allocation fails - no silent fallbacks
-    cudaError_t err;  // Error tracking for remaining legacy allocations
-    err = cudaMalloc(&training_state_.single_token_hidden, cfg.d_model * sizeof(float));
-    if (err != cudaSuccess) {
-        throw std::runtime_error("Failed to allocate single_token_hidden: " + std::string(cudaGetErrorString(err)));
-    }
     
-    err = cudaMalloc(&training_state_.single_token_logits, cfg.vocab_size * sizeof(float));
-    if (err != cudaSuccess) {
-        throw std::runtime_error("Failed to allocate single_token_logits: " + std::string(cudaGetErrorString(err)));
-    }
+    // Use BSM shape with dim=1 for 1D vectors
+    training_state_.single_token_hidden = Tensor::empty(
+        TensorContract::TensorShape::make_BSM(cfg.d_model, 1), false, primary_stream);
+    
+    training_state_.single_token_logits = Tensor::empty(
+        TensorContract::TensorShape::make_BSM(cfg.vocab_size, 1), false, primary_stream);
+    
     std::cout << "✓ Allocated single-token inference buffers for training sampling" << std::endl;
     
     std::cout << "📊 Allocating activation caches for max_tokens=" << max_tokens
               << " (batch=" << max_batch_size << ", seq_len=" << max_seq_len_cache << ")" << std::endl;
     
-    err = cudaMalloc(&training_state_.cached_embeddings, max_tokens * cfg.d_model * sizeof(float));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate embedding cache: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    // Embedding cache - now uses Tensor
+    training_state_.cached_embeddings_tensor = Tensor::empty(
+        TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
     
-    training_state_.cached_ln1_outputs.resize(cfg.num_layers, nullptr);
-    training_state_.cached_attn_outputs.resize(cfg.num_layers, nullptr);
-    training_state_.cached_residual1_outputs.resize(cfg.num_layers, nullptr);
-    training_state_.cached_ln2_outputs.resize(cfg.num_layers, nullptr);
-    training_state_.cached_ffn_pre_gelu.resize(cfg.num_layers, nullptr);
-    training_state_.cached_ffn_outputs.resize(cfg.num_layers, nullptr);
-    training_state_.cached_layer_outputs.resize(cfg.num_layers, nullptr);
-    
-    training_state_.cached_Q.resize(cfg.num_layers, nullptr);
-    training_state_.cached_K.resize(cfg.num_layers, nullptr);
-    training_state_.cached_V.resize(cfg.num_layers, nullptr);
-    training_state_.cached_attn_inputs.resize(cfg.num_layers, nullptr);
-    training_state_.cached_attn_bhsd.resize(cfg.num_layers, nullptr);
-    training_state_.cached_softmax_lse.resize(cfg.num_layers, nullptr);
-    
+    // Per-layer encoder activation caches using new Tensor-based architecture
     // GQA: K and V caches use num_kv_heads, Q uses num_heads
     const int head_dim_cache = cfg.head_dim;  // Use pre-computed value from config
     const int kv_dim_cache = training_state_.num_kv_heads * head_dim_cache;
@@ -482,129 +466,148 @@ void LanguageModel::initTrainingState() {
                                      static_cast<size_t>(cfg.num_heads) *
                                      static_cast<size_t>(max_seq_len_cache);
 
+    // Initialize encoder_layer_caches vector with Tensors for each layer
+    training_state_.encoder_layer_caches.resize(cfg.num_layers);
+    
     for (int layer = 0; layer < cfg.num_layers; ++layer) {
-        cudaMalloc(&training_state_.cached_ln1_outputs[layer], max_tokens * cfg.d_model * sizeof(float));
-        cudaMalloc(&training_state_.cached_attn_outputs[layer], max_tokens * cfg.d_model * sizeof(float));
-        cudaMalloc(&training_state_.cached_residual1_outputs[layer], max_tokens * cfg.d_model * sizeof(float));
-        cudaMalloc(&training_state_.cached_ln2_outputs[layer], max_tokens * cfg.d_model * sizeof(float));
-        cudaMalloc(&training_state_.cached_ffn_pre_gelu[layer], max_tokens * cfg.d_ff * sizeof(float));
-        cudaMalloc(&training_state_.cached_ffn_outputs[layer], max_tokens * cfg.d_ff * sizeof(float));
-        cudaMalloc(&training_state_.cached_layer_outputs[layer], max_tokens * cfg.d_model * sizeof(float));
+        auto& cache = training_state_.encoder_layer_caches[layer];
         
-        // GQA: Q has full d_model (num_heads * head_dim)
-        // K and V have reduced dimension (num_kv_heads * head_dim)
-        cudaMalloc(&training_state_.cached_Q[layer], max_tokens * cfg.d_model * sizeof(float));
-        cudaMalloc(&training_state_.cached_K[layer], max_tokens * kv_dim_cache * sizeof(float));
-        cudaMalloc(&training_state_.cached_V[layer], max_tokens * kv_dim_cache * sizeof(float));
-        cudaMalloc(&training_state_.cached_attn_inputs[layer], max_tokens * cfg.d_model * sizeof(float));
-        cudaMalloc(&training_state_.cached_attn_bhsd[layer], max_tokens * cfg.d_model * sizeof(float));
-        cudaMalloc(&training_state_.cached_softmax_lse[layer], softmax_lse_elems * sizeof(float));
+        // BSM layout for [batch*seq, feature_dim] shaped tensors
+        cache.ln1_output = Tensor::empty(
+            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
+        cache.attn_input = Tensor::empty(
+            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
+        cache.attn_output = Tensor::empty(
+            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
+        cache.residual1 = Tensor::empty(
+            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
+        cache.ln2_output = Tensor::empty(
+            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
+        cache.ffn_pre_gelu = Tensor::empty(
+            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_ff), false, primary_stream);
+        cache.ffn_output = Tensor::empty(
+            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_ff), false, primary_stream);
+        cache.layer_output = Tensor::empty(
+            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
+        
+        // BHSD layout for attention tensors [batch, heads, seq, head_dim]
+        cache.attn_bhsd = Tensor::empty(
+            TensorContract::TensorShape::make_BHSD(max_batch_size, cfg.num_heads, max_seq_len_cache, head_dim_cache), false, primary_stream);
+        cache.softmax_lse = Tensor::empty(
+            TensorContract::TensorShape::make_BSM(max_batch_size * cfg.num_heads, max_seq_len_cache), false, primary_stream);
+        
+        // Q/K/V caches - Q uses full num_heads, K/V use num_kv_heads (GQA)
+        cache.Q = Tensor::empty(
+            TensorContract::TensorShape::make_BHSD(max_batch_size, cfg.num_heads, max_seq_len_cache, head_dim_cache), false, primary_stream);
+        cache.K = Tensor::empty(
+            TensorContract::TensorShape::make_BHSD(max_batch_size, training_state_.num_kv_heads, max_seq_len_cache, head_dim_cache), false, primary_stream);
+        cache.V = Tensor::empty(
+            TensorContract::TensorShape::make_BHSD(max_batch_size, training_state_.num_kv_heads, max_seq_len_cache, head_dim_cache), false, primary_stream);
     }
 
+    // Allocate raw pointer cache array for CUDA kernel interface
     if (!training_state_.forward_layer_caches) {
         training_state_.forward_layer_cache_count = cfg.num_layers;
         training_state_.forward_layer_caches = new EncoderLayerCache[cfg.num_layers]();
     }
+    
+    // Populate raw pointer interface from Tensor caches
     for (int layer = 0; layer < cfg.num_layers; ++layer) {
-        auto& cache = training_state_.forward_layer_caches[layer];
-        cache.ln1_output = training_state_.cached_ln1_outputs[layer];
-        cache.attn_input = training_state_.cached_attn_inputs[layer];
-        cache.attn_bhsd = training_state_.cached_attn_bhsd[layer];
-        cache.softmax_lse = training_state_.cached_softmax_lse[layer];
-        cache.attn_output = training_state_.cached_attn_outputs[layer];
-        cache.residual1 = training_state_.cached_residual1_outputs[layer];
-        cache.ln2_input = training_state_.cached_residual1_outputs[layer];
-        cache.ln2_output = training_state_.cached_ln2_outputs[layer];
-        cache.ffn_input = training_state_.cached_ln2_outputs[layer];
-        cache.ffn_pre_gelu = training_state_.cached_ffn_pre_gelu[layer];
-        cache.ffn_output = training_state_.cached_ffn_outputs[layer];
-        cache.layer_output = training_state_.cached_layer_outputs[layer];
-        cache.q = training_state_.cached_Q[layer];
-        cache.k = training_state_.cached_K[layer];
-        cache.v = training_state_.cached_V[layer];
+        auto& tensor_cache = training_state_.encoder_layer_caches[layer];
+        auto& raw_cache = training_state_.forward_layer_caches[layer];
+        
+        raw_cache.ln1_output = tensor_cache.ln1_output.data;
+        raw_cache.attn_input = tensor_cache.attn_input.data;
+        raw_cache.attn_bhsd = tensor_cache.attn_bhsd.data;
+        raw_cache.softmax_lse = tensor_cache.softmax_lse.data;
+        raw_cache.attn_output = tensor_cache.attn_output.data;
+        raw_cache.residual1 = tensor_cache.residual1.data;
+        raw_cache.ln2_input = tensor_cache.residual1.data;  // ln2_input aliases residual1
+        raw_cache.ln2_output = tensor_cache.ln2_output.data;
+        raw_cache.ffn_input = tensor_cache.ln2_output.data;  // ffn_input aliases ln2_output
+        raw_cache.ffn_pre_gelu = tensor_cache.ffn_pre_gelu.data;
+        raw_cache.ffn_output = tensor_cache.ffn_output.data;
+        raw_cache.layer_output = tensor_cache.layer_output.data;
+        raw_cache.q = tensor_cache.Q.data;
+        raw_cache.k = tensor_cache.K.data;
+        raw_cache.v = tensor_cache.V.data;
     }
     
-    err = cudaMalloc(&training_state_.cached_encoder_outputs, max_tokens * cfg.d_model * sizeof(float));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate encoder output cache: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    // Output layer caches - using Tensor API
+    training_state_.cached_encoder_output = Tensor::empty(
+        TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
     
     // Issue #33: Final RMSNorm input cache for backward pass
     // Stores encoder output BEFORE final norm (used to compute gamma gradients)
-    err = cudaMalloc(&training_state_.cached_final_rms_input, max_tokens * cfg.d_model * sizeof(float));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate final RMSNorm input cache: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    training_state_.cached_final_rms_input = Tensor::empty(
+        TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
     
     // Allocate logits cache with LOGITS layout tracking (TensorContract integration)
-    err = cudaMalloc(&training_state_.cached_logits, max_logit_tokens * cfg.vocab_size * sizeof(float));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate logits cache: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    training_state_.cached_logits_tensor = Tensor::empty(
+        TensorContract::TensorShape::make_LOGITS(max_logit_tokens, cfg.vocab_size), false, primary_stream);
     std::cout << "✓ Allocated cached_logits [" << max_logit_tokens << " x " << cfg.vocab_size << "] LOGITS layout" << std::endl;
 
     if (cfg.numeric_head_enabled) {
-        err = cudaMalloc(&training_state_.cached_numeric_predictions, max_logit_tokens * sizeof(float));
-        if (err != cudaSuccess) {
-            std::cerr << "Failed to allocate numeric prediction cache: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
+        training_state_.cached_numeric_predictions = Tensor::empty(
+            TensorContract::TensorShape::make_BSM(max_logit_tokens, 1), false, primary_stream);
     }
     
-    err = cudaMalloc(&training_state_.cached_targets, max_logit_tokens * sizeof(int));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate targets cache: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    training_state_.cached_targets_tensor = Tensor::empty(
+        TensorContract::TensorShape::make_BSM(max_logit_tokens, 1), false, primary_stream);
     
     // BUG FIX: Token IDs cache must be sized by max_tokens (full cache capacity)
     // not max_logit_tokens. Inference sampling requires full buffer.
-    err = cudaMalloc(&training_state_.cached_token_ids, max_tokens * sizeof(int));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate token IDs cache: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    // Rule 20: Use Tensor API instead of raw cudaMalloc
+    training_state_.cached_token_ids_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
+        false,  // no grad for token IDs
+        primary_stream
+    );
+    std::cout << "✓ Allocated token IDs cache (Tensor API) [" << max_tokens << "]" << std::endl;
     
     // BUG FIX: Numeric buffers must be sized by max_tokens (full cache capacity)
     // not max_logit_tokens (training optimization). Inference sampling requires
     // the full buffer for sequences up to max_cached_seq_len.
     // BUG FIX: Always allocate numeric/text buffers even when ScratchBlock is disabled
     // because prepareLossBatchInputs() always populates these fields from tokenizer
-    err = cudaMalloc(&training_state_.cached_token_numeric_values, max_tokens * sizeof(float));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate token numeric value cache: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    // Rule 20: Use Tensor API instead of raw cudaMalloc
+    training_state_.cached_token_numeric_values = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
+        false,  // no grad
+        primary_stream
+    );
+    std::cout << "✓ Allocated token numeric values cache (Tensor API)" << std::endl;
     
-    err = cudaMalloc(&training_state_.cached_token_numeric_mask, max_tokens * sizeof(uint8_t));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate token numeric mask cache: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    training_state_.cached_token_numeric_mask = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
+        false,  // no grad
+        primary_stream
+    );
+    std::cout << "✓ Allocated token numeric mask cache (Tensor API)" << std::endl;
 
-    // GRMT v4: Allocate text feature buffers
+    // GRMT v4: Allocate text feature buffers - Rule 20: Tensor API
     constexpr int kTextFeatureDim = 16;  // Must match GRIM::Tokenizer::kTextFeatureDim
-    err = cudaMalloc(&training_state_.cached_token_text_features, max_tokens * kTextFeatureDim * sizeof(uint16_t));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate token text feature cache: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    training_state_.cached_token_text_features = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(static_cast<int>(max_tokens), kTextFeatureDim),
+        false,  // no grad
+        primary_stream
+    );
+    std::cout << "✓ Allocated token text features cache (Tensor API)" << std::endl;
     
-    err = cudaMalloc(&training_state_.cached_token_text_mask, max_tokens * sizeof(uint8_t));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate token text mask cache: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    training_state_.cached_token_text_mask = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
+        false,  // no grad
+        primary_stream
+    );
+    std::cout << "✓ Allocated token text mask cache (Tensor API)" << std::endl;
     
-    // GRMT v6: Allocate byte length buffer for loss weighting
-    err = cudaMalloc(&training_state_.cached_token_byte_lengths, max_tokens * sizeof(uint16_t));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate token byte length cache: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    // GRMT v6: Allocate byte length buffer for loss weighting - Rule 20: Tensor API
+    training_state_.cached_token_byte_lengths = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
+        false,  // no grad
+        primary_stream
+    );
+    std::cout << "✓ Allocated token byte lengths cache (Tensor API)" << std::endl;
     
     std::cout << "✓ Allocated numeric/text/byte_length feature buffers (" 
               << (max_tokens * (sizeof(float) + sizeof(uint8_t) + kTextFeatureDim * sizeof(uint16_t) + sizeof(uint8_t) + sizeof(uint16_t)) / 1024 / 1024) 
@@ -613,23 +616,13 @@ void LanguageModel::initTrainingState() {
     // Allocate entropy output buffer (per-layer, per-batch, per-head)
     // Size: num_layers * max_batch_size * num_heads
     const size_t entropy_size = cfg.num_layers * max_batch_size * cfg.num_heads;
-    training_state_.entropy_output_capacity = entropy_size;
-    err = cudaMalloc(&training_state_.d_entropy_output, entropy_size * sizeof(float));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate entropy output buffer: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    training_state_.d_entropy_output = Tensor::empty(
+        TensorContract::TensorShape::make_BSM(static_cast<int>(entropy_size), 1), false, primary_stream);
     std::cout << "📊 Allocated entropy output buffer: " << entropy_size 
               << " floats (" << (entropy_size * sizeof(float) / 1024.0 / 1024.0) << " MB)" << std::endl;
 
-    err = cudaMalloc(&training_state_.sequence_weights, max_batch_size * sizeof(float));
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate sequence weight buffer: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
-    // Use centralized stream per Rule 22
-    cudaMemsetAsync(training_state_.sequence_weights, 0, max_batch_size * sizeof(float),
-                    training_state_.stream_ctrl.getPrimaryStream());
+    training_state_.sequence_weights_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(static_cast<int>(max_batch_size), 1), false, primary_stream);
     training_state_.sequence_weight_capacity = static_cast<int>(max_batch_size);
     training_state_.sequence_weight_count = 0;
     
@@ -685,11 +678,8 @@ void LanguageModel::initTrainingState() {
               << " batch_size=" << (tokens_per_batch / seq_len_for_workspace)
               << " workspace=" << (workspace_bytes / (1024*1024)) << "MB" << std::endl;
 
-    err = cudaMalloc(&training_state_.encoder_workspace, workspace_bytes);
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate encoder workspace: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
+    training_state_.encoder_workspace = Tensor::empty(
+        TensorContract::TensorShape::make_BSM(static_cast<int>(workspace_bytes / sizeof(float)), 1), false, primary_stream);
     training_state_.encoder_workspace_size = workspace_bytes;
 
     // ═══════════════════════════════════════════════════════════════
@@ -773,29 +763,30 @@ void LanguageModel::initTrainingState() {
     // Rule 20: NO BACKWARDS COMPATIBILITY - callers must use tensor.data directly
     // Removed raw pointer alias assignments
 
-    training_state_.fa_dq_accum_bytes = flash_attn_dq_accum_bytes(
+    // Flash Attention workspace allocation (using Tensor API)
+    const size_t fa_dq_accum_elems = flash_attn_dq_accum_bytes(
         static_cast<int>(max_batch_size),
         static_cast<int>(max_seq_len_cache),
         cfg.num_heads,
-        head_dim);
-    training_state_.fa_dsoftmax_sum_bytes = flash_attn_dsoftmax_sum_bytes(
+        head_dim) / sizeof(float);  // Convert bytes to float elems
+    const size_t fa_dsoftmax_sum_elems = flash_attn_dsoftmax_sum_bytes(
         static_cast<int>(max_batch_size),
         static_cast<int>(max_seq_len_cache),
-        cfg.num_heads);
+        cfg.num_heads) / sizeof(float);
 
-    if (training_state_.fa_dq_accum_bytes > 0) {
-        err = cudaMalloc(&training_state_.fa_dq_accum, training_state_.fa_dq_accum_bytes);
-        if (err != cudaSuccess) {
-            std::cerr << "Failed to allocate fa_dq_accum: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
+    if (fa_dq_accum_elems > 0) {
+        training_state_.fa_dq_accum = Tensor::zeros(
+            TensorContract::TensorShape::make_BHSD(
+                static_cast<int>(max_batch_size), cfg.num_heads, 
+                static_cast<int>(max_seq_len_cache), head_dim),
+            false, primary_stream);
     }
-    if (training_state_.fa_dsoftmax_sum_bytes > 0) {
-        err = cudaMalloc(&training_state_.fa_dsoftmax_sum, training_state_.fa_dsoftmax_sum_bytes);
-        if (err != cudaSuccess) {
-            std::cerr << "Failed to allocate fa_dsoftmax_sum: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
+    if (fa_dsoftmax_sum_elems > 0) {
+        training_state_.fa_dsoftmax_sum = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(
+                static_cast<int>(max_batch_size * cfg.num_heads),
+                static_cast<int>(max_seq_len_cache)),
+            false, primary_stream);
     }
 
     const size_t fa_q_elems = static_cast<size_t>(max_batch_size) *
@@ -809,56 +800,56 @@ void LanguageModel::initTrainingState() {
     training_state_.fa_q_bf16_elems = fa_q_elems;
     training_state_.fa_kv_bf16_elems = fa_kv_elems;
 
-    auto alloc_bf16 = [&](__nv_bfloat16** ptr, size_t elems, const char* label) -> bool {
-        cudaError_t berr = cudaMalloc(ptr, elems * sizeof(__nv_bfloat16));
-        if (berr != cudaSuccess) {
-            std::cerr << "Failed to allocate " << label << ": " << cudaGetErrorString(berr) << std::endl;
-            return false;
-        }
-        return true;
-    };
-
-    if (!alloc_bf16(&training_state_.fa_q_bf16, fa_q_elems, "fa_q_bf16")) return;
-    if (!alloc_bf16(&training_state_.fa_k_bf16, fa_kv_elems, "fa_k_bf16")) return;
-    if (!alloc_bf16(&training_state_.fa_v_bf16, fa_kv_elems, "fa_v_bf16")) return;
-    if (!alloc_bf16(&training_state_.fa_out_bf16, fa_q_elems, "fa_out_bf16")) return;
-    if (!alloc_bf16(&training_state_.fa_dout_bf16, fa_q_elems, "fa_dout_bf16")) return;
-    if (!alloc_bf16(&training_state_.fa_dq_bf16, fa_q_elems, "fa_dq_bf16")) return;
-    if (!alloc_bf16(&training_state_.fa_dk_bf16, fa_kv_elems, "fa_dk_bf16")) return;
-    if (!alloc_bf16(&training_state_.fa_dv_bf16, fa_kv_elems, "fa_dv_bf16")) return;
+    // BF16 buffers for FlashAttention v2 - using Tensor API with BSHD layout
+    // Note: Tensors use float but these need bf16 - must cast at usage site
+    training_state_.fa_q_bf16 = Tensor::empty(
+        TensorContract::TensorShape::make_BSHD(
+            static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
+            cfg.num_heads, head_dim), false, primary_stream);
+    training_state_.fa_k_bf16 = Tensor::empty(
+        TensorContract::TensorShape::make_BSHD(
+            static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
+            training_state_.num_kv_heads, head_dim), false, primary_stream);
+    training_state_.fa_v_bf16 = Tensor::empty(
+        TensorContract::TensorShape::make_BSHD(
+            static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
+            training_state_.num_kv_heads, head_dim), false, primary_stream);
+    training_state_.fa_out_bf16 = Tensor::empty(
+        TensorContract::TensorShape::make_BSHD(
+            static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
+            cfg.num_heads, head_dim), false, primary_stream);
+    training_state_.fa_dout_bf16 = Tensor::empty(
+        TensorContract::TensorShape::make_BSHD(
+            static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
+            cfg.num_heads, head_dim), false, primary_stream);
+    training_state_.fa_dq_bf16 = Tensor::empty(
+        TensorContract::TensorShape::make_BSHD(
+            static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
+            cfg.num_heads, head_dim), false, primary_stream);
+    training_state_.fa_dk_bf16 = Tensor::empty(
+        TensorContract::TensorShape::make_BSHD(
+            static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
+            training_state_.num_kv_heads, head_dim), false, primary_stream);
+    training_state_.fa_dv_bf16 = Tensor::empty(
+        TensorContract::TensorShape::make_BSHD(
+            static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
+            training_state_.num_kv_heads, head_dim), false, primary_stream);
     
-    err = cudaMallocAsync(&training_state_.d_loss_scratch,
-                          max_logit_tokens * sizeof(float),
-                          training_state_.stream_ctrl.getPrimaryStream());
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate loss scratch buffer: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
-    
-    err = cudaMallocAsync(&training_state_.d_loss_sum_scratch,
-                          sizeof(float),
-                          training_state_.stream_ctrl.getPrimaryStream());
-    if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate loss sum scratch buffer: " << cudaGetErrorString(err) << std::endl;
-        return;
-    }
-    training_state_.loss_scratch_capacity = max_logit_tokens;
+    // Loss scratch buffers using Tensor API (Rule 20: no raw cudaMalloc)
+    training_state_.d_loss_scratch = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(static_cast<int>(max_logit_tokens), 1),
+        false, primary_stream);
+    training_state_.d_loss_sum_scratch = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, 1),  // Scalar
+        false, primary_stream);
 
     if (cfg.numeric_head_enabled) {
-        err = cudaMallocAsync(&training_state_.d_numeric_loss_sum,
-                              sizeof(float),
-                              training_state_.stream_ctrl.getPrimaryStream());
-        if (err != cudaSuccess) {
-            std::cerr << "Failed to allocate numeric loss sum buffer: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
-        err = cudaMallocAsync(&training_state_.d_numeric_loss_count,
-                              sizeof(int),
-                              training_state_.stream_ctrl.getPrimaryStream());
-        if (err != cudaSuccess) {
-            std::cerr << "Failed to allocate numeric loss count buffer: " << cudaGetErrorString(err) << std::endl;
-            return;
-        }
+        training_state_.d_numeric_loss_sum = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, 1),  // Scalar
+            false, primary_stream);
+        training_state_.d_numeric_loss_count = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, 1),  // Scalar (int stored as float, cast at usage)
+            false, primary_stream);
     }
     
     // Initialize scratch block pool for pinned memory transfers (if enabled in config)
@@ -916,13 +907,22 @@ void LanguageModel::initTrainingState() {
         
         scratch_block_layer_ = std::make_unique<ScratchBlockLayer>(sb_config);
         
-        // Allocate activation caches for ScratchBlock forward/backward pass
-        // These store intermediate values (atom positions, types, etc.) - NOT gradients
+        // Allocate activation caches for ScratchBlock forward/backward pass (Rule 20: Tensor API)
         const size_t atom_emb_size = cfg.scratch_block_max_atoms * cfg.scratch_block_atom_embedding_dim;
-        cudaMalloc(&training_state_.cached_scratch_block_embeddings, atom_emb_size * sizeof(float));
-        cudaMalloc(&training_state_.cached_scratch_block_positions, cfg.scratch_block_max_atoms * sizeof(int));
-        cudaMalloc(&training_state_.cached_scratch_block_types, cfg.scratch_block_max_atoms * sizeof(int));
-        cudaMalloc(&training_state_.cached_scratch_block_num_atoms, sizeof(int));
+        training_state_.cached_scratch_block_embeddings = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(
+                static_cast<int>(cfg.scratch_block_max_atoms),
+                static_cast<int>(cfg.scratch_block_atom_embedding_dim)),
+            false, primary_stream);
+        training_state_.cached_scratch_block_positions = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(static_cast<int>(cfg.scratch_block_max_atoms), 1),
+            false, primary_stream);  // int32 stored as float, cast at usage
+        training_state_.cached_scratch_block_types = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(static_cast<int>(cfg.scratch_block_max_atoms), 1),
+            false, primary_stream);  // int32 stored as float, cast at usage
+        training_state_.cached_scratch_block_num_atoms = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, 1),
+            false, primary_stream);  // Scalar int32 stored as float
         
         std::cout << "✓ ScratchBlock reasoning layer initialized (d_model="
                   << cfg.d_model << ", atom_dim=" << cfg.scratch_block_atom_embedding_dim

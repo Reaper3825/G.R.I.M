@@ -380,14 +380,16 @@ float LanguageModel::computeLossBatch(
 	auto copy_start = std::chrono::high_resolution_clock::now();
 	orderLog("computeLossBatch.copy_inputs",
 		batch_size, seq_len, total_tokens, 0);
+	// Rule 20: Access Tensor data via .data and cast for int* storage
+	int* cached_token_ids_ptr = reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data);
 	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
 		fprintf(stderr, "[GPU_COPY] Copying token_ids: dst=%p src=%p size=%zu bytes\n",
-		        training_state_.cached_token_ids,
+		        static_cast<void*>(cached_token_ids_ptr),
 		        prep.padded_input_ids.data(),
 		        total_tokens * sizeof(int));
 	}
 	CUDA_CHECK(cudaMemcpyAsync(
-		training_state_.cached_token_ids,
+		cached_token_ids_ptr,
 		prep.padded_input_ids.data(),
 		total_tokens * sizeof(int),
 		cudaMemcpyHostToDevice,
@@ -398,14 +400,16 @@ float LanguageModel::computeLossBatch(
 
 	orderLog("computeLossBatch.copy_targets",
 		batch_size, seq_len, total_tokens, 0);
+	// Rule 20: Access Tensor data via .data and cast for int* storage
+	int* cached_targets_ptr = reinterpret_cast<int*>(training_state_.cached_targets_tensor.data);
 	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
 		fprintf(stderr, "[GPU_COPY] Copying targets: dst=%p src=%p size=%zu bytes\n",
-		        training_state_.cached_targets,
+		        static_cast<void*>(cached_targets_ptr),
 		        prep.padded_target_ids.data(),
 		        total_tokens * sizeof(int));
 	}
 	CUDA_CHECK(cudaMemcpyAsync(
-		training_state_.cached_targets,
+		cached_targets_ptr,
 		prep.padded_target_ids.data(),
 		total_tokens * sizeof(int),
 		cudaMemcpyHostToDevice,
@@ -416,22 +420,25 @@ float LanguageModel::computeLossBatch(
 
 	orderLog("computeLossBatch.copy_numeric",
 		batch_size, seq_len, total_tokens, 0);
+	// Rule 20: Access Tensor data via .data
+	float* cached_numeric_values_ptr = training_state_.cached_token_numeric_values.data;
+	float* cached_numeric_mask_ptr = training_state_.cached_token_numeric_mask.data;  // stored as float
 	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
 		fprintf(stderr, "[GPU_COPY] Checking numeric buffers: values=%p mask=%p\n",
-		        training_state_.cached_token_numeric_values,
-		        training_state_.cached_token_numeric_mask);
+		        static_cast<void*>(cached_numeric_values_ptr),
+		        static_cast<void*>(cached_numeric_mask_ptr));
 	}
-	if (!training_state_.cached_token_numeric_values || !training_state_.cached_token_numeric_mask) {
+	if (!cached_numeric_values_ptr || !cached_numeric_mask_ptr) {
 		throw std::runtime_error("computeLossBatch: numeric side-channel buffers not initialized");
 	}
 	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
 		fprintf(stderr, "[GPU_COPY] Copying numeric_values: dst=%p src=%p size=%zu bytes\n",
-		        training_state_.cached_token_numeric_values,
+		        static_cast<void*>(cached_numeric_values_ptr),
 		        prep.padded_numeric_values.data(),
 		        total_tokens * sizeof(float));
 	}
 	CUDA_CHECK(cudaMemcpyAsync(
-		training_state_.cached_token_numeric_values,
+		cached_numeric_values_ptr,
 		prep.padded_numeric_values.data(),
 		total_tokens * sizeof(float),
 		cudaMemcpyHostToDevice,
@@ -442,12 +449,14 @@ float LanguageModel::computeLossBatch(
 	
 	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
 		fprintf(stderr, "[GPU_COPY] Copying numeric_mask: dst=%p src=%p size=%zu bytes\n",
-		        training_state_.cached_token_numeric_mask,
+		        static_cast<void*>(cached_numeric_mask_ptr),
 		        prep.padded_numeric_mask.data(),
 		        total_tokens * sizeof(uint8_t));
 	}
+	// Note: numeric mask stored as float Tensor but source is uint8_t - need to convert or store differently
+	// For now, cast the float pointer to uint8_t* (Tensor memory is large enough)
 	CUDA_CHECK(cudaMemcpyAsync(
-		training_state_.cached_token_numeric_mask,
+		reinterpret_cast<uint8_t*>(cached_numeric_mask_ptr),
 		prep.padded_numeric_mask.data(),
 		total_tokens * sizeof(uint8_t),
 		cudaMemcpyHostToDevice,
@@ -458,20 +467,23 @@ float LanguageModel::computeLossBatch(
 
 	// GRMT v4: copy text features
 	constexpr int kTextFeatureDim = 16;  // Must match GRIM::Tokenizer::kTextFeatureDim
+	float* cached_text_features_ptr = training_state_.cached_token_text_features.data;
+	float* cached_text_mask_ptr = training_state_.cached_token_text_mask.data;  // stored as float
 	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
 		fprintf(stderr, "[GPU_COPY] Checking text feature buffers: features=%p mask=%p\n",
-		        training_state_.cached_token_text_features,
-		        training_state_.cached_token_text_mask);
+		        static_cast<void*>(cached_text_features_ptr),
+		        static_cast<void*>(cached_text_mask_ptr));
 	}
-	if (training_state_.cached_token_text_features && training_state_.cached_token_text_mask) {
+	if (cached_text_features_ptr && cached_text_mask_ptr) {
 		if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
 			fprintf(stderr, "[GPU_COPY] Copying text_features: dst=%p src=%p size=%zu bytes\n",
-			        training_state_.cached_token_text_features,
+			        static_cast<void*>(cached_text_features_ptr),
 			        prep.padded_text_features.data(),
 			        total_tokens * kTextFeatureDim * sizeof(uint16_t));
 		}
+		// Note: text features are uint16_t, stored in float Tensor - cast needed
 		CUDA_CHECK(cudaMemcpyAsync(
-			training_state_.cached_token_text_features,
+			reinterpret_cast<uint16_t*>(cached_text_features_ptr),
 			prep.padded_text_features.data(),
 			total_tokens * kTextFeatureDim * sizeof(uint16_t),
 			cudaMemcpyHostToDevice,
@@ -482,12 +494,12 @@ float LanguageModel::computeLossBatch(
 		
 		if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
 			fprintf(stderr, "[GPU_COPY] Copying text_mask: dst=%p src=%p size=%zu bytes\n",
-			        training_state_.cached_token_text_mask,
+			        static_cast<void*>(cached_text_mask_ptr),
 			        prep.padded_text_mask.data(),
 			        total_tokens * sizeof(uint8_t));
 		}
 		CUDA_CHECK(cudaMemcpyAsync(
-			training_state_.cached_token_text_mask,
+			reinterpret_cast<uint8_t*>(cached_text_mask_ptr),
 			prep.padded_text_mask.data(),
 			total_tokens * sizeof(uint8_t),
 			cudaMemcpyHostToDevice,
@@ -497,15 +509,16 @@ float LanguageModel::computeLossBatch(
 		}
 	}
 	// GRMT v6: copy byte lengths for per-position loss weighting
-	if (training_state_.cached_token_byte_lengths && !prep.padded_byte_lengths.empty()) {
+	float* cached_byte_lengths_ptr = training_state_.cached_token_byte_lengths.data;
+	if (cached_byte_lengths_ptr && !prep.padded_byte_lengths.empty()) {
 		if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
 			fprintf(stderr, "[GPU_COPY] Copying byte_lengths: dst=%p src=%p size=%zu bytes\n",
-			        training_state_.cached_token_byte_lengths,
+			        static_cast<void*>(cached_byte_lengths_ptr),
 			        prep.padded_byte_lengths.data(),
 			        total_tokens * sizeof(uint16_t));
 		}
 		CUDA_CHECK(cudaMemcpyAsync(
-			training_state_.cached_token_byte_lengths,
+			reinterpret_cast<uint16_t*>(cached_byte_lengths_ptr),
 			prep.padded_byte_lengths.data(),
 			total_tokens * sizeof(uint16_t),
 			cudaMemcpyHostToDevice,
@@ -581,10 +594,11 @@ float LanguageModel::computeLossBatch(
 	}
 	
 	// Set ScratchBlock input buffers from TrainingState (populated by prepareLossBatchInputs)
-	training_state_.autograd_ctx->token_numeric_values = training_state_.cached_token_numeric_values;
-	training_state_.autograd_ctx->token_numeric_mask = training_state_.cached_token_numeric_mask;
-	training_state_.autograd_ctx->token_text_features = training_state_.cached_token_text_features;
-	training_state_.autograd_ctx->token_text_mask = training_state_.cached_token_text_mask;
+	// Rule 20: Access Tensor data via .data with proper cast for non-float types
+	training_state_.autograd_ctx->token_numeric_values = training_state_.cached_token_numeric_values.data;
+	training_state_.autograd_ctx->token_numeric_mask = reinterpret_cast<const uint8_t*>(training_state_.cached_token_numeric_mask.data);
+	training_state_.autograd_ctx->token_text_features = reinterpret_cast<const uint16_t*>(training_state_.cached_token_text_features.data);
+	training_state_.autograd_ctx->token_text_mask = reinterpret_cast<const uint8_t*>(training_state_.cached_token_text_mask.data);
 
 	orderLog("computeLossBatch.forward_start",
 		batch_size, seq_len, total_tokens, 0);
@@ -618,8 +632,8 @@ float LanguageModel::computeLossBatch(
 	// LossScratch struct deleted - scratch buffers managed directly in training_state_
 
 	LossContext::TensorViews ctx_views{};
-	ctx_views.logits = training_state_.cached_logits;
-	ctx_views.targets = training_state_.cached_targets;
+	ctx_views.logits = training_state_.cached_logits_tensor.data;
+	ctx_views.targets = reinterpret_cast<int*>(training_state_.cached_targets_tensor.data);
 	ctx_views.teacher_logits = training_state_.teacher_logits.device;
 	ctx_views.reference_logits = training_state_.reference_logits.device;
 	ctx_views.batch_size = training_state_.cached_batch_size;
@@ -629,11 +643,11 @@ float LanguageModel::computeLossBatch(
 	// Only pass sequence_weights if we actually have weights set (count > 0)
 	// Otherwise pass nullptr so kernel uses default sample_weight=1.0f
 	ctx_views.sequence_weights = (training_state_.sequence_weight_count > 0) 
-	                            ? training_state_.sequence_weights 
+	                            ? training_state_.sequence_weights_tensor.data 
 	                            : nullptr;
 	ctx_views.sequence_weight_count = training_state_.sequence_weight_count;
 	// GRMT v6: Per-position byte length for loss weighting
-	ctx_views.position_byte_lengths = training_state_.cached_token_byte_lengths;
+	ctx_views.position_byte_lengths = reinterpret_cast<const uint16_t*>(training_state_.cached_token_byte_lengths.data);
 	ctx_views.stream = training_state_.stream_ctrl.getPrimaryStream();
 
 	// Legacy LossComputationInputs struct deleted - use variables directly
@@ -647,7 +661,7 @@ float LanguageModel::computeLossBatch(
 		orderLog("computeLossBatch.distill_copy",
 			batch_size, seq_len, total_tokens, valid_tokens);
 		if (!TeacherLogits::copyFromDevice(training_state_.teacher_logits,
-		                                   training_state_.cached_logits,
+		                                   training_state_.cached_logits_tensor.data,
 		                                   total_tokens,
 		                                   cfg.vocab_size,
 		                                   training_state_.stream_ctrl.getPrimaryStream())) {
@@ -659,7 +673,7 @@ float LanguageModel::computeLossBatch(
 		orderLog("computeLossBatch.preference_copy",
 			batch_size, seq_len, total_tokens, valid_tokens);
 		if (!TeacherLogits::copyFromDevice(training_state_.reference_logits,
-		                                   training_state_.cached_logits,
+		                                   training_state_.cached_logits_tensor.data,
 		                                   total_tokens,
 		                                   cfg.vocab_size,
 		                                   training_state_.stream_ctrl.getPrimaryStream())) {
@@ -713,9 +727,9 @@ float LanguageModel::computeLossBatch(
 		std::vector<float> logit_sample(sample_tokens * cfg.vocab_size);
 		std::vector<int> target_sample(sample_tokens);
 		
-		cudaMemcpy(logit_sample.data(), training_state_.cached_logits, 
+		cudaMemcpy(logit_sample.data(), training_state_.cached_logits_tensor.data, 
 		           logit_sample.size() * sizeof(float), cudaMemcpyDeviceToHost);
-		cudaMemcpy(target_sample.data(), training_state_.cached_targets, 
+		cudaMemcpy(target_sample.data(), reinterpret_cast<int*>(training_state_.cached_targets_tensor.data), 
 		           target_sample.size() * sizeof(int), cudaMemcpyDeviceToHost);
 		
 		fprintf(stderr, "\n[ForwardDiag] ========== PRE-LOSS CHECK ==========\n");
@@ -830,7 +844,7 @@ float LanguageModel::computeLossBatch(
 	
 	// Setup training_state_.logits_tensor to reference the autograd forward output
 	// The data is in cached_logits (autograd forward copies there for compatibility)
-	training_state_.logits_tensor.data = training_state_.cached_logits;
+	training_state_.logits_tensor.data = training_state_.cached_logits_tensor.data;
 	training_state_.logits_tensor.shape = training_state_.autograd_ctx->logits_tensor.shape;
 	training_state_.logits_tensor.requires_grad = true;
 	training_state_.logits_tensor.is_leaf = false;
@@ -864,7 +878,7 @@ float LanguageModel::computeLossBatch(
 	
 	training_state_.loss_tensor = autograd::unified_loss(
 		training_state_.logits_tensor,
-		training_state_.cached_targets,
+		reinterpret_cast<int*>(training_state_.cached_targets_tensor.data),
 		nullptr,  // valid_mask (nullptr = all valid, padding handled by target=-1)
 		static_cast<int>(total_tokens),
 		cfg.vocab_size,
@@ -896,7 +910,7 @@ float LanguageModel::computeLossBatch(
 		// Sample encoder outputs
 		const size_t enc_sample_size = std::min<size_t>(1000, total_tokens * cfg.d_model);
 		std::vector<float> enc_sample(enc_sample_size);
-		cudaMemcpy(enc_sample.data(), training_state_.cached_encoder_outputs, 
+		cudaMemcpy(enc_sample.data(), training_state_.cached_encoder_output.data, 
 		           enc_sample_size * sizeof(float), cudaMemcpyDeviceToHost);
 		
 		float enc_max = -1e30f, enc_min = 1e30f, enc_sum = 0.0f;
@@ -914,7 +928,7 @@ float LanguageModel::computeLossBatch(
 		// Sample logits
 		const size_t logit_sample_size = std::min<size_t>(50000, total_tokens * cfg.vocab_size);
 		std::vector<float> logit_sample(logit_sample_size);
-		cudaMemcpy(logit_sample.data(), training_state_.cached_logits, 
+		cudaMemcpy(logit_sample.data(), training_state_.cached_logits_tensor.data, 
 		           logit_sample_size * sizeof(float), cudaMemcpyDeviceToHost);
 		
 		float logit_max = -1e30f, logit_min = 1e30f, logit_sum = 0.0f;
@@ -931,7 +945,7 @@ float LanguageModel::computeLossBatch(
 		
 		// Check first few targets
 		std::vector<int> target_sample(std::min<size_t>(20, total_tokens));
-		cudaMemcpy(target_sample.data(), training_state_.cached_targets, 
+		cudaMemcpy(target_sample.data(), reinterpret_cast<int*>(training_state_.cached_targets_tensor.data), 
 		           target_sample.size() * sizeof(int), cudaMemcpyDeviceToHost);
 		fprintf(stderr, "[SPIKE_DIAG] First targets: ");
 		for (int t : target_sample) fprintf(stderr, "%d ", t);
@@ -980,17 +994,17 @@ float LanguageModel::computeLossBatch(
 	float numeric_loss_sum = 0.0f;
 	int numeric_loss_count = 0;
 	if (cfg.numeric_head_enabled) {
-		if (!training_state_.cached_numeric_predictions ||
+		if (!training_state_.cached_numeric_predictions.data ||
 		    !training_state_.grad_numeric_tensor.data ||
-		    !training_state_.d_numeric_loss_sum ||
-		    !training_state_.d_numeric_loss_count) {
+		    !training_state_.d_numeric_loss_sum.data ||
+		    !training_state_.d_numeric_loss_count.data) {
 			throw std::runtime_error("computeLossBatch: numeric head enabled but buffers missing");
 		}
 		NumericLossInputs num_inputs{};
-		num_inputs.predictions = training_state_.cached_numeric_predictions;
-		num_inputs.token_numeric_values = training_state_.cached_token_numeric_values;
-		num_inputs.token_numeric_mask = training_state_.cached_token_numeric_mask;
-		num_inputs.targets = training_state_.cached_targets;
+		num_inputs.predictions = training_state_.cached_numeric_predictions.data;
+		num_inputs.token_numeric_values = training_state_.cached_token_numeric_values.data;
+		num_inputs.token_numeric_mask = reinterpret_cast<uint8_t*>(training_state_.cached_token_numeric_mask.data);
+		num_inputs.targets = reinterpret_cast<int*>(training_state_.cached_targets_tensor.data);
 		num_inputs.total_tokens = static_cast<int>(total_tokens);
 		num_inputs.seq_len = static_cast<int>(seq_len);
 		num_inputs.huber_delta = cfg.numeric_head_huber_delta;
@@ -998,18 +1012,18 @@ float LanguageModel::computeLossBatch(
 		num_inputs.loss_weight = cfg.numeric_head_loss_weight;
 
 		NumericLossOutputs num_outputs{};
-		num_outputs.loss_sum = training_state_.d_numeric_loss_sum;
-		num_outputs.count = training_state_.d_numeric_loss_count;
+		num_outputs.loss_sum = training_state_.d_numeric_loss_sum.data;
+		num_outputs.count = reinterpret_cast<int*>(training_state_.d_numeric_loss_count.data);
 		num_outputs.grad_predictions = training_state_.grad_numeric_tensor.data;
 
 		if (!launchNumericLoss(num_inputs, num_outputs, training_state_.stream_ctrl.getPrimaryStream())) {
 			throw std::runtime_error("computeLossBatch: numeric loss kernel launch failed");
 		}
 
-		cudaMemcpyAsync(&numeric_loss_sum, training_state_.d_numeric_loss_sum,
+		cudaMemcpyAsync(&numeric_loss_sum, training_state_.d_numeric_loss_sum.data,
 		                sizeof(float), cudaMemcpyDeviceToHost,
 		                training_state_.stream_ctrl.getPrimaryStream());
-		cudaMemcpyAsync(&numeric_loss_count, training_state_.d_numeric_loss_count,
+		cudaMemcpyAsync(&numeric_loss_count, reinterpret_cast<int*>(training_state_.d_numeric_loss_count.data),
 		                sizeof(int), cudaMemcpyDeviceToHost,
 		                training_state_.stream_ctrl.getPrimaryStream());
 		training_state_.stream_ctrl.syncPrimaryStream();

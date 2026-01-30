@@ -77,6 +77,11 @@ struct TrainingTensors {
         Tensor ffn_b1;  // [d_ff] - optional
         Tensor ffn_w2;  // [d_model, d_ff]
         Tensor ffn_b2;  // [d_model] - optional
+        
+        // LayerScale (Issue #109: reduces correlation buildup)
+        // Single scalar per residual connection, initialized to 0.1
+        Tensor layer_scale1;  // [1] - scales attention output before residual
+        Tensor layer_scale2;  // [1] - scales FFN output before residual
     };
     std::vector<EncoderLayerParams> encoder_layers;
     
@@ -149,6 +154,8 @@ struct TrainingTensors {
     int max_seq_len = 0;
     bool tie_embeddings = true;
     bool use_bias = true;
+    bool use_layer_scale = false;  // Issue #109: LayerScale to reduce correlation buildup
+    float layer_scale_init = 0.1f;  // Initial value (CaiT paper uses 0.1)
     
     //======================================================//
     //  INITIALIZATION
@@ -159,11 +166,15 @@ struct TrainingTensors {
      * @param config Model configuration
      * @param stream CUDA stream for async operations
      * @param positional_encoding Positional encoding type - only LEARNED modes need position embeddings
+     * @param use_layer_scale Issue #109: Enable LayerScale to reduce correlation buildup
+     * @param layer_scale_init_val Initial value for layer_scale (default 0.1 per CaiT)
      */
     void initializeParams(int vocab_size, int d_model, int d_ff, 
                           int num_layers, int num_heads, int num_kv_heads,
                           int max_seq_len, bool tie_embeddings, bool use_bias,
                           HyperParameters::PositionalEncodingType positional_encoding,
+                          bool use_layer_scale_flag = false,
+                          float layer_scale_init_val = 0.1f,
                           cudaStream_t stream = nullptr);
     
     /**

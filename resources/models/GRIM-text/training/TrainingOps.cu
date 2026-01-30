@@ -335,6 +335,10 @@ void LanguageModel::initGPU() {
         enc_config.max_cached_batch = cfg.max_cached_batch;
         enc_config.max_cached_seq_len = cfg.max_cached_seq_len;
 
+        // Issue #109 FIX: Propagate LayerScale config from LanguageModelConfig → EncoderConfig
+        enc_config.use_layer_scale = cfg.use_layer_scale;
+        enc_config.layer_scale_init = cfg.layer_scale_init;
+
         enc_config.stream = primary_stream;
         enc_config.cublas_handle = training_state_.cublas_handle;
 
@@ -381,6 +385,9 @@ void LanguageModel::initGPU() {
 
             // Wire GPUEncoderLayer to use TrainingTensors' memory
             // This makes TrainingTensors the SINGLE source of truth for all weights.
+            // Issue #109: Pass LayerScale tensors if allocated (gated by use_layer_scale)
+            Tensor* ls1_ptr = params.layer_scale1.data ? &params.layer_scale1 : nullptr;
+            Tensor* ls2_ptr = params.layer_scale2.data ? &params.layer_scale2 : nullptr;
             gpu_layer->useExternalWeights(
                 params.rms1_gamma,
                 params.rms2_gamma,
@@ -391,7 +398,9 @@ void LanguageModel::initGPU() {
                 params.ffn_w1,
                 params.ffn_b1,
                 params.ffn_w2,
-                params.ffn_b2
+                params.ffn_b2,
+                ls1_ptr,
+                ls2_ptr
             );
         }
 

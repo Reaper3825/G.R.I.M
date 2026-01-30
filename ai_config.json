@@ -402,6 +402,10 @@
                 "center_hidden_states": false,
                 "recenter_gradients": false
             },
+            "layer_scale": {
+                "enabled": true,
+                "init_value": 0.1
+            },
             "hardcoded_hidden_states": {
                 "enabled": false,
                 "pattern": "random_centered",

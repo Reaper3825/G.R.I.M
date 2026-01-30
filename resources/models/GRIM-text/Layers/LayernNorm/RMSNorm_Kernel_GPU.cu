@@ -69,9 +69,9 @@ __global__ void rmsNormKernel(const float* __restrict__ input,
 			total += warp_sums[i];
 		}
 		const float mean_square = total / hidden_dim;
-		float inv = rsqrtf(mean_square + eps);
-		// Clamp inv_rms to prevent explosion when variance is near zero
-		shared_inv_rms = fminf(inv, 100.0f);
+		// Issue #104: Removed inv_rms clamp - RMSNorm MUST normalize to RMS=1.0
+		// The clamp broke normalization when input RMS was small (e.g., embeddings with RMS=0.006)
+		shared_inv_rms = rsqrtf(mean_square + eps);
 	}
 	__syncthreads();
 
@@ -131,9 +131,8 @@ __global__ void rmsNormBackwardKernel(const float* __restrict__ input,
 			total += warp_sums[i];
 		}
 		const float mean_sq = total / hidden_dim;
+		// Issue #104: Removed inv_rms clamp - RMSNorm MUST normalize to RMS=1.0
 		inv_rms = rsqrtf(mean_sq + eps);
-		// Clamp inv_rms to prevent explosion when variance is near zero
-		inv_rms = fminf(inv_rms, 100.0f);
 	}
 	__syncthreads();
 

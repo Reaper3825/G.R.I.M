@@ -16,6 +16,8 @@ void TrainingTensors::initializeParams(
     int n_layers, int n_heads, int n_kv_heads,
     int max_seq, bool tie_emb, bool bias,
     HyperParameters::PositionalEncodingType positional_encoding,
+    bool use_layer_scale_flag,
+    float layer_scale_init_val,
     cudaStream_t stream
 ) {
     // Store config
@@ -29,6 +31,8 @@ void TrainingTensors::initializeParams(
     max_seq_len = max_seq;
     tie_embeddings = tie_emb;
     use_bias = bias;
+    use_layer_scale = use_layer_scale_flag;
+    layer_scale_init = layer_scale_init_val;
     
     // GQA dimensions
     const int kv_dim = num_kv_heads * head_dim;
@@ -214,6 +218,21 @@ void TrainingTensors::initializeParams(
             params.ffn_b2 = Tensor::zeros({d_model}, stream);
             params.ffn_b2.requires_grad_();
         }
+        
+        // LayerScale (Issue #109) - learnable scalars that multiply sublayer outputs before residual
+        if (use_layer_scale) {
+            // layer_scale1: scales attention output before residual
+            params.layer_scale1 = Tensor::zeros({1}, stream);
+            params.layer_scale1.requires_grad_();
+            cudaMemcpyAsync(params.layer_scale1.data, &layer_scale_init, sizeof(float),
+                            cudaMemcpyHostToDevice, stream);
+            
+            // layer_scale2: scales FFN output before residual
+            params.layer_scale2 = Tensor::zeros({1}, stream);
+            params.layer_scale2.requires_grad_();
+            cudaMemcpyAsync(params.layer_scale2.data, &layer_scale_init, sizeof(float),
+                            cudaMemcpyHostToDevice, stream);
+        }
     }
     
     initialized_ = true;
@@ -253,6 +272,9 @@ void TrainingTensors::allocateAllGradients() {
         if (layer.ffn_b1.data) layer.ffn_b1.ensure_grad();
         layer.ffn_w2.ensure_grad();
         if (layer.ffn_b2.data) layer.ffn_b2.ensure_grad();
+        // LayerScale (Issue #109)
+        if (layer.layer_scale1.data) layer.layer_scale1.ensure_grad();
+        if (layer.layer_scale2.data) layer.layer_scale2.ensure_grad();
     }
     
     fprintf(stdout, "[INFO] TrainingTensors: Pre-allocated gradient buffers for %zu encoder layers\n",

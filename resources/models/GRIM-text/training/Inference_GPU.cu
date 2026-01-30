@@ -42,8 +42,8 @@ static Vector executeInferenceForward(
         0           // step (unused for inference)
     );
     
-    // Copy token IDs to cached buffer
-    cudaMemcpyAsync(ts.cached_token_ids, d_token_ids,
+    // Copy token IDs to cached buffer - Rule 20: use Tensor .data accessor
+    cudaMemcpyAsync(reinterpret_cast<int*>(ts.cached_token_ids_tensor.data), d_token_ids,
                     seq_len * sizeof(int),
                     cudaMemcpyDeviceToDevice, stream);
     
@@ -58,7 +58,7 @@ static Vector executeInferenceForward(
     Vector logits(cfg.vocab_size);
     const size_t last_token_offset = static_cast<size_t>(seq_len - 1) * cfg.vocab_size;
     cudaMemcpyAsync(logits.data.data(),
-                    ts.cached_logits + last_token_offset,
+                    ts.cached_logits_tensor.data + last_token_offset,
                     cfg.vocab_size * sizeof(float),
                     cudaMemcpyDeviceToHost, stream);
     cudaStreamSynchronize(stream);
@@ -91,21 +91,21 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
 
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
     
-    // Copy tokens to device
-    cudaMemcpyAsync(training_state_.cached_token_ids,
+    // Copy tokens to device - Rule 20: use Tensor .data accessor
+    cudaMemcpyAsync(reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data),
                     prompt_tokens.data(),
                     seq_len * sizeof(int),
                     cudaMemcpyHostToDevice, stream);
     
-    // Copy numeric side-channel
+    // Copy numeric side-channel - Rule 20: use Tensor .data accessor
     if (!prompt_numeric_values.empty()) {
-        cudaMemcpyAsync(training_state_.cached_token_numeric_values,
+        cudaMemcpyAsync(training_state_.cached_token_numeric_values.data,
                         prompt_numeric_values.data(),
                         seq_len * sizeof(float),
                         cudaMemcpyHostToDevice, stream);
     }
     if (!prompt_numeric_mask.empty()) {
-        cudaMemcpyAsync(training_state_.cached_token_numeric_mask,
+        cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_numeric_mask.data),
                         prompt_numeric_mask.data(),
                         seq_len * sizeof(uint8_t),
                         cudaMemcpyHostToDevice, stream);
@@ -116,8 +116,8 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
     training_state_.cached_batch_size = 1;
     training_state_.cached_seq_len = seq_len;
     
-    // Run forward and return last token logits
-    return executeInferenceForward(*this, training_state_.cached_token_ids, seq_len, stream);
+    // Run forward and return last token logits - Rule 20: use Tensor .data accessor
+    return executeInferenceForward(*this, reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data), seq_len, stream);
 }
 
 //======================================================//
@@ -140,24 +140,25 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t nu
 
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
     
-    // Append new token
-    cudaMemcpyAsync(training_state_.cached_token_ids + new_pos,
+    // Append new token - Rule 20: use Tensor .data accessor with cast for int*
+    int* token_ids_ptr = reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data);
+    cudaMemcpyAsync(token_ids_ptr + new_pos,
                     &new_token, sizeof(int),
                     cudaMemcpyHostToDevice, stream);
     
-    // Append numeric side-channel
-    cudaMemcpyAsync(training_state_.cached_token_numeric_values + new_pos,
+    // Append numeric side-channel - Rule 20: use Tensor .data accessor
+    cudaMemcpyAsync(training_state_.cached_token_numeric_values.data + new_pos,
                     &numeric_value, sizeof(float),
                     cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(training_state_.cached_token_numeric_mask + new_pos,
+    cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_numeric_mask.data) + new_pos,
                     &numeric_mask, sizeof(uint8_t),
                     cudaMemcpyHostToDevice, stream);
 
     training_state_.kv_cache_len = new_seq_len;
     training_state_.cached_seq_len = new_seq_len;
     
-    // Recompute full forward pass
-    return executeInferenceForward(*this, training_state_.cached_token_ids, new_seq_len, stream);
+    // Recompute full forward pass - Rule 20: use Tensor .data accessor
+    return executeInferenceForward(*this, token_ids_ptr, new_seq_len, stream);
 }
 
 //======================================================//
@@ -206,7 +207,7 @@ Vector LanguageModel::forwardWithCache(const std::vector<int>& token_ids,
     
     // Copy tokens to device (if not already there)
     if (!tokens_on_device) {
-        cudaMemcpyAsync(training_state_.cached_token_ids,
+        cudaMemcpyAsync(reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data),
                         token_ids.data(),
                         seq_len * sizeof(int),
                         cudaMemcpyHostToDevice, stream);
@@ -214,13 +215,13 @@ Vector LanguageModel::forwardWithCache(const std::vector<int>& token_ids,
     
     // Copy numeric side-channel
     if (!token_numeric_values.empty()) {
-        cudaMemcpyAsync(training_state_.cached_token_numeric_values,
+        cudaMemcpyAsync(training_state_.cached_token_numeric_values.data,
                         token_numeric_values.data(),
                         seq_len * sizeof(float),
                         cudaMemcpyHostToDevice, stream);
     }
     if (!token_numeric_mask.empty()) {
-        cudaMemcpyAsync(training_state_.cached_token_numeric_mask,
+        cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_numeric_mask.data),
                         token_numeric_mask.data(),
                         seq_len * sizeof(uint8_t),
                         cudaMemcpyHostToDevice, stream);
@@ -254,7 +255,7 @@ Vector LanguageModel::forwardWithCache(const std::vector<int>& token_ids,
     Vector last_hidden(config_.d_model);
     const size_t last_token_offset = static_cast<size_t>(seq_len - 1) * config_.d_model;
     cudaMemcpyAsync(last_hidden.data.data(),
-                    training_state_.cached_encoder_outputs + last_token_offset,
+                    training_state_.cached_encoder_output.data + last_token_offset,
                     config_.d_model * sizeof(float),
                     cudaMemcpyDeviceToHost, stream);
     cudaStreamSynchronize(stream);

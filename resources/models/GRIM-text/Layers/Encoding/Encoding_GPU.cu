@@ -243,6 +243,41 @@ namespace {
     static bool g_issue77_fwd_diag_enabled = true;
     static int g_issue77_fwd_layer_count = 0;
     static int g_issue77_fwd_batch_count = 0;
+    static float g_diag_input_avg_rms = 0.0f;  // [RMSNORM_EQUATION] temp for cross-block communication
+    
+    // ========================================================================
+    // ISSUE #100 FIX: Proper float atomics for min/max (Issue #15 bug class)
+    // 
+    // Using atomicMin/Max on reinterpret_cast<int*>(float*) FAILS for negative
+    // floats because IEEE 754 bit patterns don't sort correctly as integers.
+    // Example: -0.8472 as int = -1085276358, -0.2155 as int = -1089811251
+    // atomicMin would pick -1089811251 (the LESS negative float), giving wrong result.
+    // 
+    // FIX: Use CAS loop with proper float comparison.
+    // ========================================================================
+    __device__ __forceinline__ void atomicMinFloat_local(float* addr, float value) {
+        int* addr_as_int = reinterpret_cast<int*>(addr);
+        int old = *addr_as_int;
+        int expected;
+        do {
+            expected = old;
+            float old_float = __int_as_float(expected);
+            if (value >= old_float) return;  // Our value is not smaller, exit
+            old = atomicCAS(addr_as_int, expected, __float_as_int(value));
+        } while (expected != old);
+    }
+    
+    __device__ __forceinline__ void atomicMaxFloat_local(float* addr, float value) {
+        int* addr_as_int = reinterpret_cast<int*>(addr);
+        int old = *addr_as_int;
+        int expected;
+        do {
+            expected = old;
+            float old_float = __int_as_float(expected);
+            if (value <= old_float) return;  // Our value is not larger, exit
+            old = atomicCAS(addr_as_int, expected, __float_as_int(value));
+        } while (expected != old);
+    }
     
     // Kernel to compute min/max/sum/sum_sq for ln1_out diagnostics  
     __global__ void diagLn1OutKernel(
@@ -278,16 +313,16 @@ namespace {
             }
         }
         
-        // Reduce within block
-        atomicMin(reinterpret_cast<int*>(&s_min), __float_as_int(local_min));
-        atomicMax(reinterpret_cast<int*>(&s_max), __float_as_int(local_max));
+        // Reduce within block - ISSUE #100 FIX: Use proper float atomics
+        atomicMinFloat_local(&s_min, local_min);
+        atomicMaxFloat_local(&s_max, local_max);
         atomicAdd(&s_sum, local_sum);
         atomicAdd(&s_sum_sq, local_sum_sq);
         __syncthreads();
         
         if (threadIdx.x == 0) {
-            atomicMin(reinterpret_cast<int*>(out_min), __float_as_int(s_min));
-            atomicMax(reinterpret_cast<int*>(out_max), __float_as_int(s_max));
+            atomicMinFloat_local(out_min, s_min);
+            atomicMaxFloat_local(out_max, s_max);
             atomicAdd(out_sum, s_sum);
             atomicAdd(out_sum_sq, s_sum_sq);
         }
@@ -388,7 +423,7 @@ namespace {
         float rms = sqrtf(h_sum_sq / count);  // RMS = sqrt(mean(x^2))
         
         fprintf(stderr, "[Issue91-FWD-rms_input] layer=%d batch=%d tokens=%d d_model=%d: "
-                "min=%.6f max=%.6f mean=%.6f std=%.6f rms=%.6f\n",
+                "min=%.10f max=%.10f mean=%.10f std=%.10f rms=%.10f\n",
                 layer_idx, g_issue77_fwd_batch_count, total_tokens, d_model,
                 h_min, h_max, mean, stddev, rms);
         
@@ -511,6 +546,87 @@ namespace {
         stats.stddev = sqrtf(fmaxf(variance, 0.0f));
         
         return stats;
+    }
+    
+    // ========================================================================
+    // ISSUE #106 DIAGNOSTIC: Input-Weight Directional Alignment Analysis
+    // Rule 21 Equation-Based Diagnostic for QKV Magnitude Explosion
+    // ========================================================================
+    // 
+    // EQUATION: Y[i,j] = ||x_i|| × ||w_j|| × cos(θ_ij)
+    // 
+    // The QKV output magnitude depends on THREE factors:
+    // 1. Input row norms ||x_i|| - magnitude of input vectors
+    // 2. Weight row norms ||w_j|| - magnitude of weight rows
+    // 3. cos(θ_ij) - DIRECTIONAL ALIGNMENT between input row i and weight row j
+    //
+    // For RANDOM vectors: E[cos(θ)] = 0, Var[cos(θ)] = 1/K (where K = d_model)
+    // For STRUCTURED vectors: E[cos(θ)] ≠ 0 if there's systematic alignment!
+    //
+    // Layer 0 embeddings may have STRUCTURE that systematically aligns with 
+    // W_qkv rows (both learned from same vocabulary/position semantics).
+    // This would cause E[cos(θ)] >> 0 and explain the 12x explosion.
+    // ========================================================================
+    
+    __global__ void inputWeightCosineSampleKernel(
+        const float* __restrict__ input,     // [tokens, d_model] - ln1_out
+        const float* __restrict__ weight,    // [qkv_dim, d_model] - W_qkv
+        float* __restrict__ cosine_stats,    // [6] = {sum, sum_sq, min, max, count, sum_abs}
+        int d_model,
+        int sample_input_rows,               // How many input rows to sample
+        int sample_weight_rows               // How many weight rows to sample
+    ) {
+        // Compute pairwise cosine similarity between sampled input rows and weight rows
+        // Each block handles one (input_row, weight_row) pair
+        const int input_idx = blockIdx.x;
+        const int weight_idx = blockIdx.y;
+        
+        if (input_idx >= sample_input_rows || weight_idx >= sample_weight_rows) return;
+        
+        // Shared memory for parallel dot product reduction
+        __shared__ float s_dot[256];
+        __shared__ float s_input_norm_sq[256];
+        __shared__ float s_weight_norm_sq[256];
+        
+        float local_dot = 0.0f, local_in_sq = 0.0f, local_w_sq = 0.0f;
+        
+        for (int k = threadIdx.x; k < d_model; k += blockDim.x) {
+            float a = input[input_idx * d_model + k];
+            float b = weight[weight_idx * d_model + k];
+            local_dot += a * b;
+            local_in_sq += a * a;
+            local_w_sq += b * b;
+        }
+        
+        s_dot[threadIdx.x] = local_dot;
+        s_input_norm_sq[threadIdx.x] = local_in_sq;
+        s_weight_norm_sq[threadIdx.x] = local_w_sq;
+        __syncthreads();
+        
+        // Reduction
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride) {
+                s_dot[threadIdx.x] += s_dot[threadIdx.x + stride];
+                s_input_norm_sq[threadIdx.x] += s_input_norm_sq[threadIdx.x + stride];
+                s_weight_norm_sq[threadIdx.x] += s_weight_norm_sq[threadIdx.x + stride];
+            }
+            __syncthreads();
+        }
+        
+        if (threadIdx.x == 0) {
+            float dot = s_dot[0];
+            float input_norm = sqrtf(s_input_norm_sq[0]);
+            float weight_norm = sqrtf(s_weight_norm_sq[0]);
+            float cosine = dot / (input_norm * weight_norm + 1e-8f);
+            
+            // Accumulate statistics atomically
+            atomicAdd(&cosine_stats[0], cosine);           // sum
+            atomicAdd(&cosine_stats[1], cosine * cosine);  // sum_sq  
+            // Use CAS for min/max (proper float atomics)
+            // For simplicity, just use atomicAdd for now and compute min/max on host
+            atomicAdd(&cosine_stats[4], 1.0f);             // count
+            atomicAdd(&cosine_stats[5], fabsf(cosine));    // sum_abs (for mean |cos|)
+        }
     }
     
     // Manual GEMM to compute expected output for a small sample of rows
@@ -832,6 +948,52 @@ namespace {
         }
         float col_var_mean = static_cast<float>(col_var_sum / d_model);
         
+        // ========================================================================
+        // Issue #106: INPUT-WEIGHT COSINE SIMILARITY ANALYSIS (Rule 21)
+        // This is the KEY diagnostic for understanding why Layer 0 explodes!
+        // ========================================================================
+        // We compute: cos(θ_ij) = (x_i · w_j) / (||x_i|| × ||w_j||)
+        // For RANDOM vectors: E[cos(θ)] = 0, Var[cos] = 1/K, E[|cos|] = sqrt(2/(πK))
+        // If Layer 0 embeddings share STRUCTURE with W_qkv (both learned from same
+        // vocabulary/semantic space), we'll see E[cos²] >> 1/K (systematic alignment)
+        // ========================================================================
+        
+        const int cos_sample_input = std::min(32, split_sample_tokens);
+        const int cos_sample_weight = std::min(64, qkv_dim);
+        
+        // Allocate GPU buffer for cosine statistics
+        float* d_cos_stats = nullptr;
+        cudaMalloc(&d_cos_stats, 6 * sizeof(float));
+        cudaMemsetAsync(d_cos_stats, 0, 6 * sizeof(float), stream);
+        
+        // Launch kernel to compute input-weight cosine similarities
+        dim3 cos_grid(cos_sample_input, cos_sample_weight);
+        inputWeightCosineSampleKernel<<<cos_grid, 256, 0, stream>>>(
+            ln1_out, W_qkv, d_cos_stats, d_model, cos_sample_input, cos_sample_weight);
+        
+        // Get statistics back to host
+        float h_cos_stats[6];
+        cudaMemcpy(h_cos_stats, d_cos_stats, 6 * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaFree(d_cos_stats);
+        
+        float cos_count = h_cos_stats[4];
+        float cos_mean = (cos_count > 0) ? h_cos_stats[0] / cos_count : 0.0f;
+        float cos_variance = (cos_count > 1) ? 
+            (h_cos_stats[1] / cos_count - cos_mean * cos_mean) : 0.0f;
+        float cos_std = sqrtf(fmaxf(cos_variance, 0.0f));
+        float cos_abs_mean = (cos_count > 0) ? h_cos_stats[5] / cos_count : 0.0f;
+        
+        // EXPECTED VALUES for random vectors in K=768 dimensions:
+        // E[cos] = 0
+        // Var[cos] = 1/K = 1/768 = 0.0013
+        // E[|cos|] = sqrt(2/(π*K)) = sqrt(2/(π*768)) ≈ 0.0287
+        float expected_cos_variance = 1.0f / static_cast<float>(d_model);
+        float expected_cos_abs_mean = sqrtf(2.0f / (3.14159f * static_cast<float>(d_model)));
+        
+        // Compute actual-to-expected ratios
+        float cos_var_ratio = cos_variance / (expected_cos_variance + 1e-12f);
+        float cos_abs_ratio = cos_abs_mean / (expected_cos_abs_mean + 1e-6f);
+        
         // 7h. Check for "dominant direction" - compute mean row and its norm
         std::vector<float> mean_row(d_model, 0.0f);
         for (int t = 0; t < split_sample_tokens; ++t) {
@@ -939,9 +1101,54 @@ namespace {
         fprintf(stderr, "    (random vectors: ~0.0, identical: 1.0)\n");
         
         // NEW: Input column variance
-        fprintf(stderr, "  INPUT COLUMN VARIANCE: min=%.4f max=%.4f mean=%.4f\n",
-                col_var_min, col_var_max, col_var_mean);
-        fprintf(stderr, "    (low variance = rows similar, high variance = rows diverse)\n");
+        fprintf(stderr, "  INPUT COLUMN VARIANCE: min=%.4f max=%.4f mean=%.4f range_ratio=%.2fx\n",
+                col_var_min, col_var_max, col_var_mean, col_var_max / (col_var_min + 1e-8f));
+        fprintf(stderr, "    (low range_ratio = ISOTROPIC columns, high ratio = HETEROGENEOUS columns)\n");
+        
+        // ========================================================================
+        // ISSUE #106 RULE 21 OUTPUT: INPUT-WEIGHT COSINE SIMILARITY ANALYSIS
+        // ========================================================================
+        fprintf(stderr, "\n[QKV_EQUATION] layer=%d: Y[i,j] = ||x_i|| × ||w_j|| × cos(θ_ij)\n", layer_idx);
+        fprintf(stderr, "  INPUT x (ln1_out): shape=[%d,%d] row_norm_mean=%.4f\n", 
+                total_tokens, d_model, in_row_norm_mean);
+        fprintf(stderr, "  WEIGHT w (W_qkv):  shape=[%d,%d] row_norm_mean=%.4f\n",
+                qkv_dim, d_model, w_row_norm_mean);
+        fprintf(stderr, "  PARAMETERS: d_model=%d, sampled_pairs=%d×%d=%d\n",
+                d_model, cos_sample_input, cos_sample_weight, static_cast<int>(cos_count));
+        fprintf(stderr, "  \n");
+        fprintf(stderr, "  [COSINE DISTRIBUTION] cos(θ) between input rows and weight rows:\n");
+        fprintf(stderr, "    OBSERVED: mean=%.6f std=%.6f mean_abs=%.6f\n", cos_mean, cos_std, cos_abs_mean);
+        fprintf(stderr, "    EXPECTED (random K=%d): mean=0.0 var=%.6f mean_abs=%.6f\n",
+                d_model, expected_cos_variance, expected_cos_abs_mean);
+        fprintf(stderr, "    RATIO: variance=%.2fx expected, |cos|=%.2fx expected\n", 
+                cos_var_ratio, cos_abs_ratio);
+        fprintf(stderr, "  \n");
+        fprintf(stderr, "  [QKV_OUTPUT] Expected from GEMM formula:\n");
+        fprintf(stderr, "    If cos uniformly random: Y_rms ≈ ||x|| × ||w|| × √(1/K) = %.4f × %.4f × %.4f = %.4f\n",
+                in_row_norm_mean, w_row_norm_mean, 1.0f/sqrtf(static_cast<float>(d_model)), rownorm_expected_rms);
+        fprintf(stderr, "    If cos systematic bias: Y_rms ≈ ||x|| × ||w|| × |cos_mean| + random ≈ (formula complex)\n");
+        fprintf(stderr, "    ADJUSTED formula (alignment_ratio=%.4f): %.4f\n", alignment_ratio, adjusted_expected_rms);
+        fprintf(stderr, "    ACTUAL Y_rms: %.4f\n", actual_stats.rms);
+        fprintf(stderr, "  \n");
+        
+        // Root cause analysis
+        if (cos_var_ratio > 2.0f || cos_abs_ratio > 2.0f) {
+            fprintf(stderr, "  [ANOMALY] INPUT-WEIGHT COSINE SIMILARITY IS %.1fx HIGHER THAN RANDOM!\n", 
+                    fmaxf(cos_var_ratio, cos_abs_ratio));
+            fprintf(stderr, "            This means input vectors SYSTEMATICALLY ALIGN with weight rows.\n");
+            fprintf(stderr, "            For Layer 0 (embeddings): Embedding weights and W_qkv may share structure!\n");
+            fprintf(stderr, "            Both learned from same vocabulary → similar semantic directions.\n");
+        }
+        
+        // Column variance analysis (isotropic vs heterogeneous)
+        float col_var_range_ratio = col_var_max / (col_var_min + 1e-8f);
+        if (col_var_range_ratio < 3.0f) {
+            fprintf(stderr, "  [ANOMALY] INPUT COLUMNS ARE ISOTROPIC (range_ratio=%.2fx < 3x)!\n", col_var_range_ratio);
+            fprintf(stderr, "            Isotropic columns cause COHERENT summation in GEMM → output explosion.\n");
+            fprintf(stderr, "            Layer 0 embeddings are often isotropic (uniform variance across dimensions).\n");
+        }
+        
+        fprintf(stderr, "\n");
         
         // NEW: Alignment ratio - most important metric!
         fprintf(stderr, "  INPUT ALIGNMENT: mean_row_norm=%.4f, avg_row_norm=%.4f, RATIO=%.4f\n",
@@ -1334,6 +1541,7 @@ void EncodingLayer::allocateWeights() {
     W_o_.ensure_grad();
     b_o_.ensure_grad();
     // FFN gradients allocated via ffn_->ensureWeightStorage() -> FFN's own ensure_grad() calls
+    // LayerScale: Allocated via TrainingTensors, wired via useExternalWeights()
     
     weights_allocated_ = true;
 }
@@ -1348,7 +1556,9 @@ void EncodingLayer::useExternalWeights(
     Tensor& ffn_w1,
     Tensor& ffn_b1,
     Tensor& ffn_w2,
-    Tensor& ffn_b2
+    Tensor& ffn_b2,
+    Tensor* layer_scale1,    // Issue #109: optional LayerScale for attention residual
+    Tensor* layer_scale2     // Issue #109: optional LayerScale for FFN residual
 ) {
     // Rule 20: Fail loud if already allocated own weights (prevents confusion)
     if (weights_allocated_ && !using_external_weights_) {
@@ -1432,6 +1642,18 @@ void EncodingLayer::useExternalWeights(
         ffn_ = std::make_unique<FeedForwardLayer>(ffn_cfg);
     }
     ffn_->useExternalWeights(ffn_w1, ffn_b1, ffn_w2, ffn_b2);
+    
+    // Issue #109: LayerScale tensors (optional, gated by config_.use_layer_scale)
+    if (layer_scale1 && layer_scale1->data) {
+        layer_scale1_ = Tensor::from_ptr(layer_scale1->data, layer_scale1->shape, false, true);
+        layer_scale1_.share_grad(*layer_scale1);
+        layer_scale1_.owns_data = false;
+    }
+    if (layer_scale2 && layer_scale2->data) {
+        layer_scale2_ = Tensor::from_ptr(layer_scale2->data, layer_scale2->shape, false, true);
+        layer_scale2_.share_grad(*layer_scale2);
+        layer_scale2_.owns_data = false;
+    }
     
     weights_allocated_ = true;
     using_external_weights_ = true;
@@ -1572,7 +1794,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         }
         float gamma_mean = gamma_sum / d_model;
         float gamma_rms = sqrtf(gamma_sum_sq / d_model);
-        fprintf(stderr, "[Issue91-FWD-gamma] layer=%d: gamma_mean=%.6f gamma_rms=%.6f (expected: mean=1.0, rms=1.0)\n",
+        fprintf(stderr, "[Issue91-FWD-gamma] layer=%d: gamma_mean=%.10f gamma_rms=%.10f (expected: mean=1.0, rms=1.0)\n",
                 layer_idx, gamma_mean, gamma_rms);
         
         // ISSUE #91 DIAGNOSTIC: Log W_qkv weight statistics to check initialization
@@ -1590,7 +1812,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         }
         float wqkv_mean = wqkv_sum / sample_size;
         float wqkv_rms = sqrtf(wqkv_sum_sq / sample_size);
-        fprintf(stderr, "[Issue91-FWD-W_qkv] layer=%d: min=%.6f max=%.6f mean=%.6f rms=%.6f (expected rms ~0.036 for Xavier)\n",
+        fprintf(stderr, "[Issue91-FWD-W_qkv] layer=%d: min=%.10f max=%.10f mean=%.10f rms=%.10f (expected rms ~0.036 for Xavier)\n",
                 layer_idx, wqkv_min, wqkv_max, wqkv_mean, wqkv_rms);
     }
     
@@ -1629,16 +1851,35 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         float avg_row_rms = sum_row_rms / sample_rows;
         
         fprintf(stderr, "[Issue94-RMSNorm-INPUT] layer=%d: per_row_rms: min=%.4f max=%.4f avg=%.4f "
-                "(RMSNorm divides each row by its RMS, so output rms -> 1.0)\n",
+                "(Note: output_rms = input_rms * gamma / sqrt(input_rms² + eps))\n",
                 layer_idx, min_row_rms, max_row_rms, avg_row_rms);
+        
+        // Store for equation logging after RMSNorm (using file-scope temp)
+        g_diag_input_avg_rms = avg_row_rms;
     }
     
     intermediates.ln1_out = autograd::rms_norm(input, rms1_gamma_, config_.rms_epsilon, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 1: RMSNorm1 DONE\n");
     
-    // ISSUE #94 DIAGNOSTIC: Log RMSNorm OUTPUT per-row statistics
+    // [RMSNORM_EQUATION] Rule 21 diagnostic - MUST verify math matches expectation
+    // Equation: y[i] = x[i] * gamma[i] / sqrt(mean(x²) + eps)
+    // Expected: per_row_rms(y) = input_rms * gamma_rms / sqrt(input_rms² + eps)
+    // Note: When input_rms >> sqrt(eps), this approaches gamma_rms ≈ 1.0
+    //       When input_rms ≈ sqrt(eps), epsilon contributes significantly to denominator
     if (g_issue77_fwd_diag_enabled && g_issue77_fwd_layer_count < 24) {
         const int layer_idx = g_issue77_fwd_layer_count % 12;
+        
+        // Get gamma stats
+        std::vector<float> h_gamma(d_model);
+        cudaMemcpy(h_gamma.data(), rms1_gamma_.data, d_model * sizeof(float), cudaMemcpyDeviceToHost);
+        float gamma_min = h_gamma[0], gamma_max = h_gamma[0];
+        double gamma_sum_sq = 0.0;
+        for (int c = 0; c < d_model; c++) {
+            gamma_min = std::min(gamma_min, h_gamma[c]);
+            gamma_max = std::max(gamma_max, h_gamma[c]);
+            gamma_sum_sq += h_gamma[c] * h_gamma[c];
+        }
+        float gamma_rms = sqrtf(gamma_sum_sq / d_model);
         
         const int sample_rows = std::min(10, total_tokens);
         std::vector<float> h_output_rows(sample_rows * d_model);
@@ -1662,9 +1903,33 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         }
         float avg_row_rms = sum_row_rms / sample_rows;
         
-        fprintf(stderr, "[Issue94-RMSNorm-OUTPUT] layer=%d: per_row_rms: min=%.4f max=%.4f avg=%.4f "
-                "val_range=[%.4f, %.4f]\n",
-                layer_idx, min_row_rms, max_row_rms, avg_row_rms, min_val, max_val);
+        // [RMSNORM_EQUATION] format per Rule 21
+        // Issue #105 FIX: Correct expected value formula accounting for epsilon contribution
+        // Formula: y = x * gamma / sqrt(mean(x²) + eps)
+        // Therefore: output_rms = input_rms * gamma_rms / sqrt(input_rms² + eps)
+        // When input_rms² >> eps: output_rms ≈ gamma_rms (the old assumption)
+        // When input_rms² ≈ eps: output_rms ≈ input_rms * gamma_rms / sqrt(2*eps) < gamma_rms
+        const float input_rms_sq = g_diag_input_avg_rms * g_diag_input_avg_rms;
+        const float eps = config_.rms_epsilon;
+        const float expected_output_rms = g_diag_input_avg_rms * gamma_rms / sqrtf(input_rms_sq + eps);
+        const float eps_contribution_pct = 100.0f * eps / (input_rms_sq + eps);
+        
+        fprintf(stderr, "[RMSNORM_EQUATION] layer=%d: y = x * gamma / sqrt(mean(x²) + eps)\n", layer_idx);
+        fprintf(stderr, "  INPUT x: shape=[%d, %d], per_row_rms=%.6f (rms²=%.2e), eps=%.2e\n", 
+                total_tokens, d_model, g_diag_input_avg_rms, input_rms_sq, eps);
+        fprintf(stderr, "  GAMMA: min=%.6f max=%.6f rms=%.6f\n", gamma_min, gamma_max, gamma_rms);
+        fprintf(stderr, "  EPSILON CONTRIBUTION: %.1f%% of denominator (eps / (input_rms² + eps))\n", eps_contribution_pct);
+        fprintf(stderr, "  EXPECTED output_rms = input_rms * gamma_rms / sqrt(input_rms² + eps) = %.6f\n", expected_output_rms);
+        fprintf(stderr, "  ACTUAL output_rms: min=%.6f max=%.6f avg=%.6f\n", min_row_rms, max_row_rms, avg_row_rms);
+        
+        if (std::abs(avg_row_rms - expected_output_rms) > 0.01f) {
+            float ratio = avg_row_rms / expected_output_rms;
+            fprintf(stderr, "  [ANOMALY] output_rms=%.4f != expected=%.4f (ratio=%.2fx) - CHECK KERNEL!\n",
+                    avg_row_rms, expected_output_rms, ratio);
+        } else if (eps_contribution_pct > 5.0f) {
+            fprintf(stderr, "  [INFO] Epsilon is %.1f%% of denominator - consider scaling inputs larger (e.g., sqrt(d_model) embedding scale)\n",
+                    eps_contribution_pct);
+        }
     }
     
     // ISSUE #77 DIAGNOSTIC: Log ln1_out statistics during forward pass
@@ -1696,6 +1961,166 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     if (qkv_debug > 0) {
         const bool always_log = (qkv_debug >= 2);
         logTensorNonFinite("AutogradQKV:qkv_out_prebias", intermediates.qkv_out, stream, always_log);
+    }
+    
+    // ========================================================================
+    // [QKV_EQUATION] DIAGNOSTIC (Rule 21) - Equation-based logging
+    // Formula: qkv_out = ln1_out @ W_qkv^T + b_qkv
+    // ========================================================================
+    {
+        const int qkv_dim_local = config_.d_model + 2 * config_.kvDim();
+        const int d_model_local = config_.d_model;
+        const int kv_dim_local = config_.kvDim();
+        const int head_dim_local = d_model_local / config_.num_heads;
+        
+        // Sample first N tokens for statistics (to avoid huge GPU->CPU transfers)
+        const int n_sample = std::min(64, total_tokens);
+        
+        // Allocate host buffers
+        std::vector<float> h_ln1_sample(static_cast<size_t>(n_sample) * d_model_local);
+        std::vector<float> h_wqkv_sample(static_cast<size_t>(qkv_dim_local) * 64);  // First 64 cols of W_qkv
+        std::vector<float> h_qkv_sample(static_cast<size_t>(n_sample) * qkv_dim_local);
+        std::vector<float> h_bias_sample(qkv_dim_local);
+        
+        // Copy data from GPU
+        cudaMemcpyAsync(h_ln1_sample.data(), intermediates.ln1_out.data,
+                        h_ln1_sample.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(h_wqkv_sample.data(), W_qkv_.data,
+                        h_wqkv_sample.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(h_qkv_sample.data(), intermediates.qkv_out.data,
+                        h_qkv_sample.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        if (b_qkv_.data) {
+            cudaMemcpyAsync(h_bias_sample.data(), b_qkv_.data,
+                            h_bias_sample.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        }
+        cudaStreamSynchronize(stream);
+        
+        // Compute ln1_out statistics
+        float ln1_min = FLT_MAX, ln1_max = -FLT_MAX;
+        double ln1_sum_sq = 0.0;
+        double ln1_row_norm_sum = 0.0;
+        for (int t = 0; t < n_sample; ++t) {
+            double row_sum_sq = 0.0;
+            for (int d = 0; d < d_model_local; ++d) {
+                float v = h_ln1_sample[t * d_model_local + d];
+                ln1_min = fminf(ln1_min, v);
+                ln1_max = fmaxf(ln1_max, v);
+                ln1_sum_sq += v * v;
+                row_sum_sq += v * v;
+            }
+            ln1_row_norm_sum += sqrtf(static_cast<float>(row_sum_sq));
+        }
+        float ln1_rms = sqrtf(static_cast<float>(ln1_sum_sq / (n_sample * d_model_local)));
+        float ln1_row_norm_mean = static_cast<float>(ln1_row_norm_sum / n_sample);
+        
+        // Compute W_qkv statistics (first 64 columns)
+        float wqkv_min = FLT_MAX, wqkv_max = -FLT_MAX;
+        double wqkv_sum_sq = 0.0;
+        double wqkv_row_norm_sum = 0.0;
+        const int w_sample_cols = 64;
+        for (int row = 0; row < qkv_dim_local; ++row) {
+            double row_sum_sq = 0.0;
+            for (int col = 0; col < w_sample_cols; ++col) {
+                float v = h_wqkv_sample[row * w_sample_cols + col];
+                wqkv_min = fminf(wqkv_min, v);
+                wqkv_max = fmaxf(wqkv_max, v);
+                wqkv_sum_sq += v * v;
+                row_sum_sq += v * v;
+            }
+            // Scale row norm to full d_model (assuming similar variance)
+            wqkv_row_norm_sum += sqrtf(static_cast<float>(row_sum_sq * d_model_local / w_sample_cols));
+        }
+        float wqkv_rms = sqrtf(static_cast<float>(wqkv_sum_sq / (qkv_dim_local * w_sample_cols)));
+        float wqkv_row_norm_mean = static_cast<float>(wqkv_row_norm_sum / qkv_dim_local);
+        
+        // Compute qkv_out statistics (Q portion only - first d_model columns)
+        float qkv_min = FLT_MAX, qkv_max = -FLT_MAX;
+        double qkv_sum_sq = 0.0;
+        double qkv_row_norm_sum = 0.0;
+        for (int t = 0; t < n_sample; ++t) {
+            double row_sum_sq = 0.0;
+            for (int d = 0; d < d_model_local; ++d) {  // Q portion only
+                float v = h_qkv_sample[t * qkv_dim_local + d];
+                qkv_min = fminf(qkv_min, v);
+                qkv_max = fmaxf(qkv_max, v);
+                qkv_sum_sq += v * v;
+                row_sum_sq += v * v;
+            }
+            qkv_row_norm_sum += sqrtf(static_cast<float>(row_sum_sq));
+        }
+        float qkv_rms = sqrtf(static_cast<float>(qkv_sum_sq / (n_sample * d_model_local)));
+        float qkv_row_norm_mean = static_cast<float>(qkv_row_norm_sum / n_sample);
+        
+        // Compute bias statistics
+        float bias_min = 0.0f, bias_max = 0.0f, bias_rms = 0.0f;
+        if (b_qkv_.data) {
+            double bias_sum_sq = 0.0;
+            for (int i = 0; i < qkv_dim_local; ++i) {
+                float v = h_bias_sample[i];
+                bias_min = fminf(bias_min, v);
+                bias_max = fmaxf(bias_max, v);
+                bias_sum_sq += v * v;
+            }
+            bias_rms = sqrtf(static_cast<float>(bias_sum_sq / qkv_dim_local));
+        }
+        
+        // Compute EXPECTED qkv_out magnitude
+        // GEMM: Y = X @ W^T where X is [N, d_model], W is [qkv_dim, d_model]
+        // For random orthogonal vectors: E[||Y_row||] = ||X_row|| * ||W_row|| / sqrt(d_model)
+        float expected_qkv_row_norm = ln1_row_norm_mean * wqkv_row_norm_mean / sqrtf(static_cast<float>(d_model_local));
+        float expected_qkv_elem_rms = expected_qkv_row_norm / sqrtf(static_cast<float>(d_model_local));
+        
+        // What Q row norm SHOULD be for healthy attention scores
+        // Attention score = Q_row · K_row / sqrt(head_dim) should be O(1)
+        // So Q_row_norm and K_row_norm should each be ~sqrt(head_dim) = 8.0
+        float target_qkv_row_norm = sqrtf(static_cast<float>(head_dim_local));
+        
+        // Get layer index
+        const int layer_idx_local = (g_issue77_fwd_layer_count > 0) 
+            ? ((g_issue77_fwd_layer_count - 1) % 12) : 0;
+        
+        // Print [QKV_EQUATION] diagnostic
+        fprintf(stderr, "\n[QKV_EQUATION] ENCODER_LAYER_%d: qkv_out = ln1_out @ W_qkv^T + b_qkv\n", layer_idx_local);
+        fprintf(stderr, "  ln1_out (sample %d tokens): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
+                n_sample, n_sample, d_model_local, ln1_min, ln1_max, ln1_rms);
+        fprintf(stderr, "  ln1_out row_norms: mean=%.10f\n", ln1_row_norm_mean);
+        fprintf(stderr, "  W_qkv (sample 64 cols): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
+                qkv_dim_local, d_model_local, wqkv_min, wqkv_max, wqkv_rms);
+        fprintf(stderr, "  W_qkv row_norms (scaled to d_model): mean=%.10f\n", wqkv_row_norm_mean);
+        if (b_qkv_.data) {
+            fprintf(stderr, "  b_qkv: shape=[%d] min=%.10f max=%.10f rms=%.10f\n",
+                    qkv_dim_local, bias_min, bias_max, bias_rms);
+        } else {
+            fprintf(stderr, "  b_qkv: [nullptr]\n");
+        }
+        fprintf(stderr, "  EXPECTED qkv_row_norm = ln1_row_norm * wqkv_row_norm / sqrt(d_model)\n");
+        fprintf(stderr, "                       = %.4f * %.4f / sqrt(%d) = %.4f\n",
+                ln1_row_norm_mean, wqkv_row_norm_mean, d_model_local, expected_qkv_row_norm);
+        fprintf(stderr, "  ACTUAL qkv_out (Q portion): min=%.10f max=%.10f rms=%.10f\n",
+                qkv_min, qkv_max, qkv_rms);
+        fprintf(stderr, "  ACTUAL qkv_row_norms (Q portion): mean=%.10f\n", qkv_row_norm_mean);
+        fprintf(stderr, "  TARGET qkv_row_norm for healthy attention: ~%.1f (sqrt(head_dim=%d))\n",
+                target_qkv_row_norm, head_dim_local);
+        
+        // Anomaly detection
+        float inflation_ratio = qkv_row_norm_mean / target_qkv_row_norm;
+        if (inflation_ratio > 5.0f) {
+            fprintf(stderr, "  *** ANOMALY: qkv_row_norm=%.2f is %.1fx larger than target=%.1f! ***\n",
+                    qkv_row_norm_mean, inflation_ratio, target_qkv_row_norm);
+            fprintf(stderr, "      This will cause attention score explosion (score ~ %.1f instead of ~1)\n",
+                    inflation_ratio * inflation_ratio);
+        }
+        if (ln1_row_norm_mean > 50.0f) {
+            fprintf(stderr, "  *** ANOMALY: ln1_out row_norm=%.2f >> expected ~27.7 (sqrt(d_model)*rms~1) ***\n",
+                    ln1_row_norm_mean);
+            fprintf(stderr, "      Input to QKV projection is already too large!\n");
+        }
+        if (wqkv_row_norm_mean > 5.0f) {
+            fprintf(stderr, "  *** ANOMALY: W_qkv row_norm=%.2f >> expected ~1.0 (Xavier init) ***\n",
+                    wqkv_row_norm_mean);
+            fprintf(stderr, "      Weight magnitudes are too large!\n");
+        }
+        fprintf(stderr, "\n");
     }
     
     // ISSUE #93 DIAGNOSTIC: Compare actual QKV output vs expected GEMM math
@@ -1850,9 +2275,16 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     //--------------------------------------------------
     // 7. Residual1: input + proj_out -> residual1
     // Issue #56: Store in intermediates
+    // Issue #109: Apply LayerScale to proj_out before residual addition
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1...\n");
-    intermediates.residual1 = autograd::add(input, intermediates.proj_out, stream);
+    
+    // Issue #109: LayerScale gating for attention sublayer
+    Tensor scaled_proj;
+    const Tensor& proj_for_residual = (config_.use_layer_scale && layer_scale1_.data)
+        ? (scaled_proj = autograd::layer_scale(intermediates.proj_out, layer_scale1_, stream), scaled_proj)
+        : intermediates.proj_out;
+    intermediates.residual1 = autograd::add(input, proj_for_residual, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 DONE\n");
     
     // ISSUE #93 DIAGNOSTIC: Log residual1 = input + proj_out
@@ -1888,9 +2320,16 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     // 10. Residual2: residual1 + ffn_out -> output
     // Issue #56: The final output IS stored in intermediates too
     // for consistency, but we also return it
+    // Issue #109: Apply LayerScale to ffn_out before residual addition
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2...\n");
-    intermediates.output = autograd::add(intermediates.residual1, intermediates.ffn_out, stream);
+    
+    // Issue #109: LayerScale gating for FFN sublayer
+    Tensor scaled_ffn;
+    const Tensor& ffn_for_residual = (config_.use_layer_scale && layer_scale2_.data)
+        ? (scaled_ffn = autograd::layer_scale(intermediates.ffn_out, layer_scale2_, stream), scaled_ffn)
+        : intermediates.ffn_out;
+    intermediates.output = autograd::add(intermediates.residual1, ffn_for_residual, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2 DONE - layer COMPLETE\n");
     
     // ISSUE #93 DIAGNOSTIC: Log final layer output

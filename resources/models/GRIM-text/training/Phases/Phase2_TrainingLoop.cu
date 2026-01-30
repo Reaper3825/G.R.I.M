@@ -421,11 +421,9 @@ MomentSample sampleOptimizerMomentStats(const GRIM::TrainingState& ts, bool sync
     cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
     bool has_copy = false;
     for (std::size_t i = 0; i < group_count; ++i) {
-        const float* m_ptr = ts.optimizer_m_states[i];
-        const float* v_ptr = ts.optimizer_v_states[i];
-        const std::size_t size = (i < ts.optimizer_state_sizes.size())
-            ? ts.optimizer_state_sizes[i]
-            : 0;
+        const float* m_ptr = ts.optimizer_m_states[i].data;
+        const float* v_ptr = ts.optimizer_v_states[i].data;
+        const std::size_t size = ts.optimizer_m_states[i].numel();
         const std::size_t count = std::min<std::size_t>(kMomentSamplePerGroup, size);
         if (!m_ptr || !v_ptr || count == 0) {
             continue;
@@ -533,9 +531,9 @@ Token277Diagnostic computeToken277Diagnostic(
     std::vector<float> grad_row(d_model, 0.0f);
     std::vector<float> weight_row(d_model, 0.0f);
     
-    // Copy gradient row (if embedding_grads is aliased to lm_head_weight_grads for tied weights)
+    // Copy gradient row (if embedding grad buffer is aliased to lm_head grad buffer for tied weights)
     // The gradient buffer contains BOTH embedding backward + LM head backward contributions
-    float* emb_grads_ptr = const_cast<GRIM::TrainingState&>(ts).embedding_grads();
+    const float* emb_grads_ptr = ts.embedding_weights.grad_data();
     if (emb_grads_ptr) {
         cudaMemcpyAsync(grad_row.data(), emb_grads_ptr + row_offset,
                         row_bytes, cudaMemcpyDeviceToHost, stream);
@@ -645,7 +643,7 @@ HiddenState277Analysis computeHiddenState277Analysis(
     HiddenState277Analysis analysis{};
     
     const int total_tokens = static_cast<int>(targets.size());
-    if (total_tokens == 0 || !ts.cached_encoder_outputs || !ts.grad_logits_tensor.data) {
+    if (total_tokens == 0 || !ts.cached_encoder_output.data || !ts.grad_logits_tensor.data) {
         return analysis;
     }
     
@@ -656,7 +654,7 @@ HiddenState277Analysis computeHiddenState277Analysis(
     std::vector<float> h_hidden(hidden_size);
     std::vector<float> h_grad_logits(grad_logits_size);
     
-    cudaMemcpyAsync(h_hidden.data(), ts.cached_encoder_outputs, 
+    cudaMemcpyAsync(h_hidden.data(), ts.cached_encoder_output.data, 
                     hidden_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
     cudaMemcpyAsync(h_grad_logits.data(), ts.grad_logits_tensor.data,
                     grad_logits_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
@@ -1430,7 +1428,7 @@ NumericalGradCheckResult performNumericalGradientCheck(
     // Choose a parameter to check - use embedding weight at a specific index
     // This is a good choice because it's directly involved in both forward and backward
     float* weight_ptr = ts.lm_head_weights.data;  // [vocab_size, d_model]
-    float* grad_ptr = const_cast<GRIM::TrainingState&>(ts).lm_head_weight_grads();
+    const float* grad_ptr = ts.lm_head_weights.grad_data();
     
     if (!weight_ptr || !grad_ptr) {
         ctx.logging.logger->log("[NumGradCheck] ERROR: lm_head weights or grads not available");
@@ -2048,7 +2046,7 @@ BatchResult processBatch(
                 EmitModuleError(ModuleId::GuessCache,
                                 "Guess cache update failed: stream controller not initialized",
                                 ctx.global_step);
-            } else if (!training_state.cached_logits ||
+            } else if (!training_state.cached_logits_tensor.data ||
                        training_state.cached_batch_size != static_cast<int>(guess_count) ||
                        training_state.cached_seq_len <= 0) {
                 EmitModuleWarning(ModuleId::GuessCache,
@@ -2083,7 +2081,7 @@ BatchResult processBatch(
                     const std::size_t offset =
                         (static_cast<std::size_t>(i) * cached_seq_len + pos) * vocab_size;
                     err = cudaMemcpyAsync(pred_logits.data() + static_cast<std::size_t>(i) * vocab_size,
-                                          training_state.cached_logits + offset,
+                                          training_state.cached_logits_tensor.data + offset,
                                           static_cast<std::size_t>(vocab_size) * sizeof(float),
                                           cudaMemcpyDeviceToHost, stream);
                     if (err != cudaSuccess) {
@@ -2224,7 +2222,7 @@ BatchResult processBatch(
     // Log model predictions (what it predicts vs targets) - uses ForwardPass module for filtering
     {
         const auto& ts = ctx.model->getTrainingState();
-        if (ts.cached_logits && ts.cached_batch_size > 0 && ts.cached_seq_len > 0) {
+        if (ts.cached_logits_tensor.data && ts.cached_batch_size > 0 && ts.cached_seq_len > 0) {
             const int total_tokens = ts.cached_batch_size * ts.cached_seq_len;
             const int vocab_size = ctx.config.actual_vocab_size;
             
@@ -2232,7 +2230,7 @@ BatchResult processBatch(
             const int sample_positions = std::min(total_tokens, 100);
             const size_t logit_bytes = static_cast<size_t>(sample_positions) * vocab_size * sizeof(float);
             std::vector<float> logit_sample(sample_positions * vocab_size);
-            cudaMemcpy(logit_sample.data(), ts.cached_logits, logit_bytes, cudaMemcpyDeviceToHost);
+            cudaMemcpy(logit_sample.data(), ts.cached_logits_tensor.data, logit_bytes, cudaMemcpyDeviceToHost);
             
             // Count argmax predictions
             std::map<int, int> pred_counts;
@@ -2373,7 +2371,7 @@ BatchResult processBatch(
                     space_logit_min = std::min(space_logit_min, space_logit);
                     
                     // Find argmax for this position
-                    float pos_max = -1e30f;
+                    float pos_max = -INFINITY;
                     int pos_argmax = 0;
                     for (int v = 0; v < vocab_size; ++v) {
                         float logit = logit_sample[pos * vocab_size + v];
@@ -2441,15 +2439,16 @@ BatchResult processBatch(
     // ========================================================================
     {
         const auto& ts = ctx.model->getTrainingState();
-        if (ts.cached_logits && ts.cached_batch_size > 0 && ts.cached_seq_len > 0) {
+        if (ts.cached_logits_tensor.data && ts.cached_batch_size > 0 && ts.cached_seq_len > 0) {
             const int total_tokens = ts.cached_batch_size * ts.cached_seq_len;
             const int vocab_size = ctx.config.actual_vocab_size;
+            const int d_model = ctx.model->getConfig().d_model;
             
             // Sample logits for statistics (limit to avoid expensive D2H copy)
             const int sample_positions = std::min(total_tokens, 50);
             const size_t logit_bytes = static_cast<size_t>(sample_positions) * vocab_size * sizeof(float);
             std::vector<float> logit_sample(sample_positions * vocab_size);
-            cudaMemcpy(logit_sample.data(), ts.cached_logits, logit_bytes, cudaMemcpyDeviceToHost);
+            cudaMemcpy(logit_sample.data(), ts.cached_logits_tensor.data, logit_bytes, cudaMemcpyDeviceToHost);
             
             // Compute argmax predictions and logit statistics
             std::map<int, int> argmax_counts;
@@ -2457,9 +2456,11 @@ BatchResult processBatch(
             float logit_max = -1e30f;
             float logit_min = 1e30f;
             float max_logit_per_pos_sum = 0.0f;
+            float margin_sum = 0.0f;  // Top-2 margin: logit[max] - logit[second]
             
             for (int pos = 0; pos < sample_positions; ++pos) {
                 float pos_max = -1e30f;
+                float pos_second = -1e30f;
                 int pos_argmax = 0;
                 
                 for (int v = 0; v < vocab_size; ++v) {
@@ -2469,16 +2470,21 @@ BatchResult processBatch(
                     logit_min = std::min(logit_min, logit);
                     
                     if (logit > pos_max) {
+                        pos_second = pos_max;  // Previous max becomes second
                         pos_max = logit;
                         pos_argmax = v;
+                    } else if (logit > pos_second) {
+                        pos_second = logit;
                     }
                 }
                 argmax_counts[pos_argmax]++;
                 max_logit_per_pos_sum += pos_max;
+                margin_sum += (pos_max - pos_second);  // margin = max - second
             }
             
             logit_mean /= (sample_positions * vocab_size);
             float avg_max_logit = max_logit_per_pos_sum / sample_positions;
+            float avg_margin = margin_sum / sample_positions;  // Average top-2 margin
             
             // Find top argmax predictions
             std::vector<std::pair<int, int>> sorted_argmax(argmax_counts.begin(), argmax_counts.end());
@@ -2491,6 +2497,7 @@ BatchResult processBatch(
                         << " logit_max=" << Internal::formatScalar(logit_max, 4)
                         << " logit_min=" << Internal::formatScalar(logit_min, 4)
                         << " avg_max_logit=" << Internal::formatScalar(avg_max_logit, 4)
+                        << " top2_margin=" << Internal::formatScalar(avg_margin, 4)
                         << " unique_argmax=" << argmax_counts.size()
                         << " top_argmax=[";
             for (size_t i = 0; i < std::min(sorted_argmax.size(), size_t(5)); ++i) {
@@ -2499,6 +2506,88 @@ BatchResult processBatch(
             }
             logit_stats << "]";
             ctx.logging.logger->log(logit_stats.str());
+            
+            // ================================================================
+            // HIDDEN STATE DIAGNOSTICS: Cosine similarity between positions
+            // ================================================================
+            if (ts.cached_encoder_output.data && sample_positions >= 2) {
+                const size_t hidden_bytes = static_cast<size_t>(sample_positions) * d_model * sizeof(float);
+                std::vector<float> hidden_sample(sample_positions * d_model);
+                cudaMemcpy(hidden_sample.data(), ts.cached_encoder_output.data, hidden_bytes, cudaMemcpyDeviceToHost);
+                
+                // Compute cosine similarity between position pairs (sample 5 pairs)
+                auto compute_cosine = [&](int i, int j) -> float {
+                    float dot = 0.0f, norm_i = 0.0f, norm_j = 0.0f;
+                    for (int d = 0; d < d_model; ++d) {
+                        float hi = hidden_sample[i * d_model + d];
+                        float hj = hidden_sample[j * d_model + d];
+                        dot += hi * hj;
+                        norm_i += hi * hi;
+                        norm_j += hj * hj;
+                    }
+                    return dot / (std::sqrt(norm_i * norm_j) + 1e-8f);
+                };
+                
+                // Compute pairwise cosines: (0,1), (0,10), (0,25), (10,25), (25,49)
+                std::ostringstream hidden_stats;
+                hidden_stats << "[HiddenCosine] batch=" << (batch_idx + 1) << " cos(h_i,h_j)=[";
+                const int pairs[][2] = {{0, 1}, {0, std::min(10, sample_positions-1)}, 
+                                        {0, std::min(25, sample_positions-1)},
+                                        {std::min(10, sample_positions-1), std::min(25, sample_positions-1)},
+                                        {std::min(25, sample_positions-1), sample_positions-1}};
+                for (int p = 0; p < 5; ++p) {
+                    int i = pairs[p][0], j = pairs[p][1];
+                    if (i < sample_positions && j < sample_positions && i != j) {
+                        float cos_ij = compute_cosine(i, j);
+                        hidden_stats << "(" << i << "," << j << "):" << Internal::formatScalar(cos_ij, 3);
+                        if (p < 4) hidden_stats << ",";
+                    }
+                }
+                hidden_stats << "]";
+                
+                // Compute average pairwise cosine (measure of hidden state isotropy)
+                float cos_sum = 0.0f;
+                int cos_count = 0;
+                for (int i = 0; i < std::min(10, sample_positions); ++i) {
+                    for (int j = i + 1; j < std::min(10, sample_positions); ++j) {
+                        cos_sum += compute_cosine(i, j);
+                        cos_count++;
+                    }
+                }
+                float avg_cos = (cos_count > 0) ? cos_sum / cos_count : 0.0f;
+                hidden_stats << " avg_cos=" << Internal::formatScalar(avg_cos, 4);
+                ctx.logging.logger->log(hidden_stats.str());
+            }
+            
+            // ================================================================
+            // LM HEAD DIAGNOSTICS: Row norms ||W[v]|| for top predicted tokens
+            // ================================================================
+            if (ts.lm_head_weights.data) {
+                // Copy LM head rows for top-5 predicted tokens
+                std::ostringstream lm_stats;
+                lm_stats << "[LMHeadNorm] batch=" << (batch_idx + 1) << " ||W[v]||=[";
+                
+                std::vector<float> row_buffer(d_model);
+                for (size_t i = 0; i < std::min(sorted_argmax.size(), size_t(5)); ++i) {
+                    int tok_id = sorted_argmax[i].first;
+                    // Copy row [tok_id, :] from W [vocab_size, d_model]
+                    const size_t row_offset = static_cast<size_t>(tok_id) * d_model;
+                    cudaMemcpy(row_buffer.data(), 
+                               static_cast<float*>(ts.lm_head_weights.data) + row_offset,
+                               d_model * sizeof(float), cudaMemcpyDeviceToHost);
+                    
+                    // Compute L2 norm of row
+                    float norm_sq = 0.0f;
+                    for (int d = 0; d < d_model; ++d) {
+                        norm_sq += row_buffer[d] * row_buffer[d];
+                    }
+                    float row_norm = std::sqrt(norm_sq);
+                    lm_stats << "tok" << tok_id << ":" << Internal::formatScalar(row_norm, 4);
+                    if (i + 1 < std::min(sorted_argmax.size(), size_t(5))) lm_stats << ",";
+                }
+                lm_stats << "]";
+                ctx.logging.logger->log(lm_stats.str());
+            }
         }
     }
     
@@ -2861,7 +2950,7 @@ BatchResult processBatch(
         printf("========================================\n");
         
         // Embedding grads
-        exportBuffer("embedding_grads", const_cast<GRIM::TrainingState&>(ts).embedding_grads(), 
+        exportBuffer("embedding_grads", ts.embedding_weights.grad_data(), 
                      static_cast<size_t>(cfg.vocab_size) * cfg.d_model);
         
         // Per-layer gradients (via encoder's Tensor.grad per AUTOGRAD MIGRATION)
@@ -3480,8 +3569,8 @@ BatchResult processBatch(
                                     " step=" + std::to_string(ctx.optimizer.optimizer_state.step) +
                                     " micro_step=" + std::to_string(micro_step_for_log) +
                                     "/" + std::to_string(accum_steps_for_log) +
-                                    " m_rms=" + Internal::formatScalar(moment_sample.m_rms, 6) +
-                                    " v_rms=" + Internal::formatScalar(moment_sample.v_rms, 6) +
+                                    " m_rms=" + Internal::formatScalar(moment_sample.m_rms, 10) +
+                                    " v_rms=" + Internal::formatScalar(moment_sample.v_rms, 10) +
                                     " groups=" + std::to_string(moment_sample.groups) +
                                     " samples=" + std::to_string(moment_sample.samples));
         }

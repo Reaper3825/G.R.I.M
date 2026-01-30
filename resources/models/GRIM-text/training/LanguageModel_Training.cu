@@ -243,22 +243,22 @@ void LanguageModel::zeroGrad() {
     const int kv_dim = num_kv_heads * head_dim;
     const int total_qkv_dim = cfg.d_model + 2 * kv_dim;
     
-    // Zero embedding gradients (Tensor API - grad buffer via accessor)
-    if (float* emb_grad = training_state_.embedding_grads()) {
+    // Zero embedding gradients (Tensor API)
+    if (float* emb_grad = training_state_.embedding_weights.grad_data()) {
         cudaMemsetAsync(emb_grad, 0, 
                        cfg.vocab_size * cfg.d_model * sizeof(float),
                        training_state_.stream_ctrl.getPrimaryStream());
     }
     
     // Issue #36 FIX: Zero position embedding gradients
-    if (float* pos_grad = training_state_.position_embedding_grads()) {
+    if (float* pos_grad = training_state_.position_embedding_weights.grad_data()) {
         cudaMemsetAsync(pos_grad, 0,
                        cfg.max_seq_len * cfg.d_model * sizeof(float),
                        training_state_.stream_ctrl.getPrimaryStream());
     }
     
     // Zero LM head gradients (Tensor API)
-    if (float* lm_weight_grad = training_state_.lm_head_weight_grads()) {
+    if (float* lm_weight_grad = training_state_.lm_head_weights.grad_data()) {
         cudaMemsetAsync(lm_weight_grad, 0,
                        cfg.vocab_size * cfg.d_model * sizeof(float),
                        training_state_.stream_ctrl.getPrimaryStream());
@@ -547,10 +547,10 @@ void LanguageModel::buildParameterGroups() {
     }
 
     // Embedding weights - SKIP when tied (handled by LM head group below)
-    // When tie_embeddings=true, embedding_grads == lm_head_weight_grads (same pointer)
+    // When tie_embeddings=true, embedding grad buffer == lm_head grad buffer (same pointer)
     // Registering both would double-count gradients and corrupt optimizer state
     EmbeddingRuntime* embedding_runtime = &getGpuEmbedder();
-    float* emb_grads = training_state_.embedding_grads();
+    float* emb_grads = training_state_.embedding_weights.grad_data();
     if (!cfg.tie_embeddings && emb_grads && embedding_runtime) {
         ParameterGroup emb_group;
         emb_group.name = "embedding";
@@ -568,7 +568,7 @@ void LanguageModel::buildParameterGroups() {
     // PyTorch baseline: pos_emb = nn.Embedding(seq_len, d_model) - gets gradients
     // GRIM was missing this → position embeddings were FROZEN at random init!
     // ==========================================================================
-    float* pos_emb_grads = training_state_.position_embedding_grads();
+    float* pos_emb_grads = training_state_.position_embedding_weights.grad_data();
     if (pos_emb_grads && embedding_runtime && embedding_runtime->position_buffer) {
         ParameterGroup pos_emb_group;
         pos_emb_group.name = "position_embedding";
@@ -583,7 +583,7 @@ void LanguageModel::buildParameterGroups() {
     }
 
     // LM head weights (includes tied embedding grads when tie_embeddings=true)
-    float* lm_weight_grads = training_state_.lm_head_weight_grads();
+    float* lm_weight_grads = training_state_.lm_head_weights.grad_data();
     if (lm_weight_grads && training_state_.lm_head_weights.data) {
         ParameterGroup lm_group;
         lm_group.name = cfg.tie_embeddings ? "embedding_lm_head_tied" : "lm_head_weight";
@@ -918,7 +918,7 @@ void LanguageModel::buildParameterGroups() {
     // This normalizes encoder output variance to prevent logit scale explosion.
     // Standard transformer architecture: embedding → encoder → FINAL_NORM → lm_head
     // Without this, variance grows unboundedly through residual connections.
-    float* final_rms_grads = training_state_.final_rms_gamma_grads();
+    float* final_rms_grads = training_state_.final_rms_gamma.grad_data();
     if (training_state_.final_rms_gamma.data && final_rms_grads) {
         ParameterGroup final_rms_group;
         final_rms_group.name = "final_rms_gamma";
@@ -944,8 +944,8 @@ void LanguageModel::buildParameterGroups() {
     
     // Bind pointers back to parameter groups (groups hold pointers, NOT ownership)
     for (size_t i = 0; i < parameter_groups_.size(); ++i) {
-        parameter_groups_[i].m_state = training_state_.optimizer_m_states[i];
-        parameter_groups_[i].v_state = training_state_.optimizer_v_states[i];
+        parameter_groups_[i].m_state = training_state_.optimizer_m_states[i].data;
+        parameter_groups_[i].v_state = training_state_.optimizer_v_states[i].data;
     }
     
     // Note: Gradient norm computation moved to TrainingState::gradnorm_ctrl (GradNormController)
@@ -1800,7 +1800,7 @@ void LanguageModel::setSequenceLossWeights(const std::vector<float>& weights) {
                                 static_cast<size_t>(training_state_.max_cached_tokens));
     
     cudaMemcpyAsync(
-        training_state_.sequence_weights,
+        training_state_.sequence_weights_tensor.data,
         weights.data(),
         copy_size * sizeof(float),
         cudaMemcpyHostToDevice,

@@ -698,6 +698,169 @@ extern "C" void flash_attn_fwd_ex(
                 nan_k, inf_k, h_k.empty() ? 0.0f : h_k[0],
                 nan_v, inf_v, h_v.empty() ? 0.0f : h_v[0]);
     }
+    
+    // ========================================================================
+    // [ATTN_SCORE_EQUATION] DIAGNOSTIC: Predict attention scores from Q, K math
+    // Formula: score[i,j] = (Q[i,:] @ K[j,:]^T) / sqrt(head_dim) + alibi_bias[i-j]
+    //          LSE[i] = log(sum_j(exp(score[i,j] - max_score[i]))) + max_score[i]
+    //
+    // This diagnostic computes EXPECTED values and compares to ACTUAL LSE output.
+    // Helps diagnose whether the explosion is in:
+    //   1. Q/K magnitudes (input to attention)
+    //   2. ALiBi bias computation  
+    //   3. Softmax numerical issues
+    // ========================================================================
+    {
+        // Sample a small subset for detailed analysis (avoid O(seqlen^2) cost)
+        const int sample_tokens = std::min(32, seqlen);
+        const int sample_heads = std::min(4, n_heads);
+        const size_t q_sample_size = static_cast<size_t>(sample_tokens) * head_dim;
+        const size_t k_sample_size = static_cast<size_t>(sample_tokens) * head_dim;
+        
+        // Get slopes for analysis
+        std::vector<float> h_slopes(static_cast<size_t>(n_heads));
+        cudaMemcpyAsync(h_slopes.data(), alibi_slopes, n_heads * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        
+        // Get Q and K for first batch, sample heads
+        // Q layout: [batch, n_heads, seqlen, head_dim] = BHSD
+        // K layout: [batch, n_kv_heads, seqlen, head_dim] = BHSD (with GQA)
+        std::vector<float> h_q_sample(q_sample_size);
+        std::vector<float> h_k_sample(k_sample_size);
+        
+        // Copy first head's Q and K for batch 0
+        const float* q_head0 = static_cast<const float*>(q);  // batch=0, head=0, pos=0
+        const float* k_head0 = static_cast<const float*>(k);  // batch=0, kv_head=0, pos=0
+        cudaMemcpyAsync(h_q_sample.data(), q_head0, q_sample_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(h_k_sample.data(), k_head0, k_sample_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        
+        // Compute Q and K statistics
+        float q_rms = 0.0f, k_rms = 0.0f;
+        float q_max = -FLT_MAX, k_max = -FLT_MAX;
+        float q_min = FLT_MAX, k_min = FLT_MAX;
+        for (size_t i = 0; i < q_sample_size; ++i) {
+            q_rms += h_q_sample[i] * h_q_sample[i];
+            q_max = std::max(q_max, h_q_sample[i]);
+            q_min = std::min(q_min, h_q_sample[i]);
+        }
+        for (size_t i = 0; i < k_sample_size; ++i) {
+            k_rms += h_k_sample[i] * h_k_sample[i];
+            k_max = std::max(k_max, h_k_sample[i]);
+            k_min = std::min(k_min, h_k_sample[i]);
+        }
+        q_rms = sqrtf(q_rms / static_cast<float>(q_sample_size));
+        k_rms = sqrtf(k_rms / static_cast<float>(k_sample_size));
+        
+        // Compute Q row norms and K row norms
+        std::vector<float> q_row_norms(sample_tokens), k_row_norms(sample_tokens);
+        for (int t = 0; t < sample_tokens; ++t) {
+            float q_norm_sq = 0.0f, k_norm_sq = 0.0f;
+            for (int d = 0; d < head_dim; ++d) {
+                q_norm_sq += h_q_sample[t * head_dim + d] * h_q_sample[t * head_dim + d];
+                k_norm_sq += h_k_sample[t * head_dim + d] * h_k_sample[t * head_dim + d];
+            }
+            q_row_norms[t] = sqrtf(q_norm_sq);
+            k_row_norms[t] = sqrtf(k_norm_sq);
+        }
+        
+        float q_norm_mean = 0.0f, k_norm_mean = 0.0f;
+        for (int t = 0; t < sample_tokens; ++t) {
+            q_norm_mean += q_row_norms[t];
+            k_norm_mean += k_row_norms[t];
+        }
+        q_norm_mean /= sample_tokens;
+        k_norm_mean /= sample_tokens;
+        
+        // Compute attention scores for sample positions
+        const float scale = 1.0f / sqrtf(static_cast<float>(head_dim));
+        std::vector<float> scores_sample(static_cast<size_t>(sample_tokens) * sample_tokens);
+        float score_max = -FLT_MAX, score_min = FLT_MAX;
+        double score_sum_sq = 0.0;
+        
+        for (int qi = 0; qi < sample_tokens; ++qi) {
+            for (int ki = 0; ki <= qi; ++ki) {  // Causal: only attend to ki <= qi
+                // Dot product: Q[qi,:] @ K[ki,:]^T
+                float dot = 0.0f;
+                for (int d = 0; d < head_dim; ++d) {
+                    dot += h_q_sample[qi * head_dim + d] * h_k_sample[ki * head_dim + d];
+                }
+                // Scale by 1/sqrt(head_dim)
+                float score = dot * scale;
+                // Add ALiBi bias: slope * (ki - qi) = slope * distance (negative for past tokens)
+                float alibi_bias = h_slopes[0] * static_cast<float>(ki - qi);
+                float final_score = score + alibi_bias;
+                
+                scores_sample[qi * sample_tokens + ki] = final_score;
+                score_max = std::max(score_max, final_score);
+                score_min = std::min(score_min, final_score);
+                score_sum_sq += final_score * final_score;
+            }
+        }
+        
+        // Count valid scores (lower triangle of matrix)
+        int valid_scores = (sample_tokens * (sample_tokens + 1)) / 2;
+        float score_rms = sqrtf(static_cast<float>(score_sum_sq / valid_scores));
+        
+        // Compute expected LSE from scores
+        // For causal attention: LSE[qi] = log(sum_{ki<=qi} exp(score[qi,ki] - max_score[qi])) + max_score[qi]
+        std::vector<float> expected_lse(sample_tokens);
+        for (int qi = 0; qi < sample_tokens; ++qi) {
+            float max_score_row = -FLT_MAX;
+            for (int ki = 0; ki <= qi; ++ki) {
+                max_score_row = std::max(max_score_row, scores_sample[qi * sample_tokens + ki]);
+            }
+            double sum_exp = 0.0;
+            for (int ki = 0; ki <= qi; ++ki) {
+                sum_exp += exp(static_cast<double>(scores_sample[qi * sample_tokens + ki] - max_score_row));
+            }
+            expected_lse[qi] = static_cast<float>(log(sum_exp) + max_score_row);
+        }
+        
+        float expected_lse_min = expected_lse[0], expected_lse_max = expected_lse[0];
+        double expected_lse_sum = 0.0;
+        for (int qi = 0; qi < sample_tokens; ++qi) {
+            expected_lse_min = std::min(expected_lse_min, expected_lse[qi]);
+            expected_lse_max = std::max(expected_lse_max, expected_lse[qi]);
+            expected_lse_sum += expected_lse[qi];
+        }
+        float expected_lse_mean = static_cast<float>(expected_lse_sum / sample_tokens);
+        
+        // ========================================================================
+        // LOG THE EQUATION-BASED DIAGNOSTIC
+        // ========================================================================
+        fprintf(stderr, "\n[ATTN_SCORE_EQUATION] FLASH_ATTENTION_FWD: score = (Q @ K^T) / sqrt(head_dim) + alibi_bias\n");
+        fprintf(stderr, "  Q (sample %d tokens, head 0): shape=[%d,%d] min=%.4f max=%.4f rms=%.4f\n",
+                sample_tokens, sample_tokens, head_dim, q_min, q_max, q_rms);
+        fprintf(stderr, "  K (sample %d tokens, head 0): shape=[%d,%d] min=%.4f max=%.4f rms=%.4f\n",
+                sample_tokens, sample_tokens, head_dim, k_min, k_max, k_rms);
+        fprintf(stderr, "  Q_row_norms: mean=%.4f | K_row_norms: mean=%.4f\n", q_norm_mean, k_norm_mean);
+        fprintf(stderr, "  scale = 1/sqrt(%d) = %.6f\n", head_dim, scale);
+        fprintf(stderr, "  alibi_slope[head0] = %.6f (max_distance=%d -> max_bias=%.4f)\n",
+                h_slopes[0], seqlen - 1, h_slopes[0] * static_cast<float>(-(seqlen - 1)));
+        fprintf(stderr, "  EXPECTED score = Q_row_norm * K_row_norm * scale = %.4f * %.4f * %.6f ≈ %.4f\n",
+                q_norm_mean, k_norm_mean, scale, q_norm_mean * k_norm_mean * scale);
+        fprintf(stderr, "  ACTUAL score (computed %d samples): min=%.4f max=%.4f rms=%.4f\n",
+                valid_scores, score_min, score_max, score_rms);
+        fprintf(stderr, "  EXPECTED LSE (from sampled scores): min=%.4f max=%.4f mean=%.4f\n",
+                expected_lse_min, expected_lse_max, expected_lse_mean);
+        fprintf(stderr, "  (Normal LSE for random init: ~6-10, depending on seqlen)\n");
+        
+        // Check for anomalies
+        const float expected_score_magnitude = q_norm_mean * k_norm_mean * scale;
+        if (expected_score_magnitude > 20.0f) {
+            fprintf(stderr, "  *** ANOMALY: Expected score magnitude %.2f >> 20! Q/K vectors too large! ***\n",
+                    expected_score_magnitude);
+            fprintf(stderr, "      For head_dim=%d, Q_norm and K_norm should each be ~%.1f for score~1.0\n",
+                    head_dim, sqrtf(static_cast<float>(head_dim)));
+        }
+        if (score_max > 100.0f) {
+            fprintf(stderr, "  *** ANOMALY: score_max=%.2f >> 100! This will cause LSE explosion! ***\n", score_max);
+        }
+        if (expected_lse_max > 50.0f) {
+            fprintf(stderr, "  *** ANOMALY: expected_lse_max=%.2f >> 50! Softmax will saturate! ***\n", expected_lse_max);
+        }
+        fprintf(stderr, "\n");
+    }
 
 #if defined(GRIM_FLASHATTN_HDIM64_ONLY)
 #if defined(GRIM_FLASHATTN_CAUSAL_ONLY)

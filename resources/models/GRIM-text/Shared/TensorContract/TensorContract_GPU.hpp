@@ -1205,6 +1205,38 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr,
 Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
 
 /**
+ * Scale tensor by constant scalar: y = x * scale_factor
+ * Backward: grad_x = grad_y * scale_factor (chain rule)
+ *
+ * ISSUE #98: Added to fix gradient vanishing when tie_embeddings=true.
+ * When embeddings are scaled by sqrt(d_model) (Issue #92), the LM head
+ * must also scale by sqrt(d_model) to maintain gradient flow symmetry.
+ * Without this, gradients to encoder are ~27.7x smaller than they should be.
+ *
+ * @param x Input tensor
+ * @param scale_factor Scalar multiplier
+ * @param stream CUDA stream
+ * @return Scaled tensor with autograd tracking
+ */
+Tensor scale(const Tensor& x, float scale_factor, cudaStream_t stream = nullptr);
+
+/**
+ * LayerScale: Scale tensor by a learned scalar parameter (tensor of shape [1])
+ * Forward:  y[i,j] = x[i,j] * scale_param[0]
+ * Backward: grad_x = grad_y * scale_param
+ *           grad_scale = sum(grad_y * x)
+ *
+ * ISSUE #109: LayerScale from CaiT paper - learnable residual connection scaling
+ * to reduce high input row correlation in deeper transformer layers.
+ *
+ * @param x Input tensor [N, D]
+ * @param scale_param Learnable scalar tensor [1]
+ * @param stream CUDA stream
+ * @return Scaled tensor with autograd tracking for both input and scale_param
+ */
+Tensor layer_scale(const Tensor& x, Tensor& scale_param, cudaStream_t stream = nullptr);
+
+/**
  * Broadcast add with bias: output[i,j] = input[i,j] + bias[j]
  * 
  * ISSUE #97 FIX: This replaces raw launchFFNBiasAdd calls with proper autograd tracking.
