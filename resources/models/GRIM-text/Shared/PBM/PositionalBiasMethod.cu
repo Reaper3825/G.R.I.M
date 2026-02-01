@@ -652,8 +652,16 @@ void launchRoPERotationGQA_backward(
     int rotary_dim,
     cudaStream_t stream
 ) {
-    if (grad_Q == nullptr || grad_K == nullptr || inv_freq == nullptr) {
-        std::cerr << kTag << " ERROR: Null pointer passed to launchRoPERotationGQA_backward" << std::endl;
+    // ISSUE #119 FIX: The caller (RoPEGradFn in TensorContract_GPU.cu) intentionally
+    // passes nullptr for one of grad_Q or grad_K because Q and K have independent
+    // gradient paths in the autograd system. We should allow processing either one
+    // individually. The validation should only fail if BOTH are null.
+    if (grad_Q == nullptr && grad_K == nullptr) {
+        std::cerr << kTag << " ERROR: Both grad_Q and grad_K are null in launchRoPERotationGQA_backward" << std::endl;
+        return;
+    }
+    if (inv_freq == nullptr) {
+        std::cerr << kTag << " ERROR: inv_freq is null in launchRoPERotationGQA_backward" << std::endl;
         return;
     }
     
@@ -673,8 +681,13 @@ void launchRoPERotationGQA_backward(
     const int threads_per_block = 256;
     const int blocks_seq = (seq_len + threads_per_block - 1) / threads_per_block;
     
+    // ISSUE #119 FIX: Only launch kernel if the corresponding gradient pointer is valid.
+    // The caller passes nullptr for one of grad_Q/grad_K to process them separately.
+    // The kernel uses is_q_pass to select which pointer to dereference, so the other
+    // pointer is never accessed, but we still guard the launch for clarity and safety.
+    
     // Launch for grad_Q (with num_q_heads) - inverse rotation
-    {
+    if (grad_Q) {
         dim3 grid(blocks_seq, num_q_heads, batch_size);
         dim3 block(threads_per_block);
         
@@ -693,7 +706,7 @@ void launchRoPERotationGQA_backward(
     }
     
     // Launch for grad_K (with num_kv_heads) - inverse rotation
-    {
+    if (grad_K) {
         dim3 grid(blocks_seq, num_kv_heads, batch_size);
         dim3 block(threads_per_block);
         

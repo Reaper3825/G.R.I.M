@@ -976,9 +976,11 @@ extern "C" void flash_attn_fwd_ex(
         cudaMemcpyAsync(h_out.data(), out, h_out.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
         int nan_out = 0, inf_out = 0;
+        if (h_out.size() > 0) {
         for (float val : h_out) { if (std::isnan(val)) nan_out++; if (std::isinf(val)) inf_out++; }
         fprintf(stderr, "[FA-FWD-OUT] output: nan=%d inf=%d first=%.6f\n",
                 nan_out, inf_out, h_out.empty() ? 0.0f : h_out[0]);
+    }
     }
     
     // ISSUE #76: Log softmax_lse stats - CRITICAL for max_seq_len boundary debugging

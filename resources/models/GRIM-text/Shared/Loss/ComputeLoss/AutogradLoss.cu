@@ -358,23 +358,235 @@ __global__ void kernelUnifiedLossBackward(
         // d/dlogit_v[Σ_j p_j*log(p_j)] = Σ_j (1+log(p_j)) * dp_j/dlogit_v
         //                              = Σ_j (1+log(p_j)) * p_j * (1_{j=v} - p_v)
         //                              = (1+log(p_v))*p_v - p_v * Σ_j p_j*(1+log(p_j))
+        float entropy_term = 0.0f;
         if (entropy_reg_lambda > 0.0f) {
-            // Simplified: d/dlogit_v[H(p)] ≈ p_v * (1 + log(p_v) - H - 1) = p_v * (log(p_v) - H)
-            // where H = -Σp_i*log(p_i). For regularization pushing toward higher entropy,
-            // the gradient is: λ * p_v * (1 + log(p_v)) summed appropriately.
-            // Exact form: λ * (p_v * (1 + log(max(p_v, ε))) - p_v * weighted_term)
-            // For simplicity and numerical stability, use: λ * p_v * log(max(p_v, ε))
-            // This pushes probabilities toward uniform (higher entropy)
-            grad_v += entropy_reg_lambda * p_v * (logf(fmaxf(p_v, kEpsilon)) + 1.0f);
+            // Issue #119 FIX: Scale entropy gradient by inv_valid_count to match CE scale
+            //
+            // PROBLEM: CE gradient is scaled by 1/N (mean reduction), but entropy gradient
+            // was NOT scaled. With N=6000 tokens and λ=0.1:
+            //   CE term:      ~p * 0.000163  (scaled by 1/N)
+            //   Entropy term: ~p * 0.98      (unscaled, ~6000x stronger!)
+            // This caused entropy to overpower CE for rare tokens.c
+            //
+            // FIX: Apply inv_valid_count to entropy term so both are on same scale.
+            // Now effective entropy strength = λ (not λ*N).
+            //
+            // Issue #121 FIX: REMOVE probability-based clamping on g!
+            // OLD (WRONG): g = fmaxf(log(p) + 1, 0) - clamped when p < 0.368
+            //   Problem: Disabled entropy for ALL vocab tokens (p << 0.368)
+            //   Root cause: Gated on PROBABILITY threshold, not GRADIENT sign
+            // NEW (CORRECT): g = log(p) + 1 - allow negative g
+            //   When p < e^(-1), g < 0, which means entropy DECREASES that token's probability
+            //   This is CORRECT behavior - entropy should push down overly-low probabilities
+            const float g = logf(fmaxf(p_v, kEpsilon)) + 1.0f;  // Issue #121: Allow negative g
+            entropy_term = entropy_reg_lambda * p_v * g * inv_valid_count;  // Issue #119: scale by 1/N
+            grad_v += entropy_term;
+        }
+        
+        //========================================================================
+        // [GRAD_NONTARGET_EQUATION] Rule 21: Per-term breakdown for non-target tokens
+        // 
+        // EQUATION: grad_v = base_CE_term + focal_deriv_term + entropy_term
+        //   base_CE_term   = α * focal_weight * (p_v - q_off)
+        //   focal_deriv    = α * focal_deriv_factor * p_t * (-p_v)  [for non-target]
+        //   entropy_term   = λ * p_v * (log(p_v) + 1)  [Issue #121: now allows negative!]
+        //
+        // ENTROPY GRADIENT BEHAVIOR (Issue #121 fix):
+        //   When p_v > e^(-1) ≈ 0.368: log(p_v)+1 > 0 → entropy INCREASES this token
+        //   When p_v < e^(-1) ≈ 0.368: log(p_v)+1 < 0 → entropy DECREASES this token
+        //   For typical vocab tokens: p_v ≈ 1e-5 → log(p_v)+1 ≈ -10.5 (negative)
+        //   This is CORRECT: entropy should push down tokens that are too rare
+        //========================================================================
+        if (v != target && token_idx < 5) {  // Log for first 5 tokens only
+            // Sample: Token 277 (SPACE) and a few periodic vocab positions
+            const bool should_log_this_v = (v == 277) || (v % 10000 == 0 && v > 0);
+            if (should_log_this_v) {
+                const float base_ce_term = focal_alpha * focal_weight * (p_v - q_off);
+                // Focal deriv for non-target: α * focal_deriv_factor * p_t * (-p_v)
+                const float focal_term = (focal_gamma > 0.0f) 
+                    ? focal_alpha * focal_deriv_factor * p_t * (-p_v) 
+                    : 0.0f;
+                const float raw_log_p_plus_1 = logf(fmaxf(p_v, kEpsilon)) + 1.0f;
+                const bool was_clamped = (raw_log_p_plus_1 < 0.0f);
+                
+                printf("[GRAD_NONTARGET_EQUATION] token_pos=%d vocab_id=%d target=%d\n"
+                       "  INPUTS: p_v=%.8e q_off=%.8e focal_alpha=%.8f focal_weight=%.8e λ=%.8f\n"
+                       "  TERM_1 base_CE:     α×fw×(p_v - q_off) = %.8f × %.8e × (%.8e - %.8e) = %.8e\n"
+                       "  TERM_2 focal_deriv: α×fd_fac×p_t×(-p_v) = %.8f × %.8e × %.8e × (%.8e) = %.8e\n"
+                       "  TERM_3 entropy:     λ×p_v×max(g,0) = %.8f × %.8e × max(%.8e,0) = %.8e [%s]\n"
+                       "  TOTAL grad_v (pre-centering) = %.8e, scaled = %.8e\n",
+                       token_idx, v, target,
+                       p_v, q_off, focal_alpha, focal_weight, entropy_reg_lambda,
+                       // TERM 1: base CE
+                       focal_alpha, focal_weight, p_v, q_off, base_ce_term,
+                       // TERM 2: focal deriv
+                       focal_alpha, focal_deriv_factor, p_t, -p_v, focal_term,
+                       // TERM 3: entropy (now with clamping)
+                       entropy_reg_lambda, p_v, raw_log_p_plus_1, entropy_term,
+                       was_clamped ? "CLAMPED to 0" : "not clamped",
+                       // Total
+                       grad_v, grad_v * inv_valid_count);
+            }
         }
         
         // Apply mean reduction scaling
         grad_row[v] = grad_v * inv_valid_count;
+    }
+    
+    //========================================================================
+    // [GRAD_CENTER_EQUATION] CRITICAL FIX: Remove uniform bias from gradient
+    // 
+    // PROBLEM: Entropy regularization adds λ × p_v × (log(p_v) + 1) to each gradient.
+    //          Sum over vocab: λ × (1 - H) ≠ 0 (uniform bias!)
+    //          With tied weights: grad_W[i,j] = Σ_t h[t,i] × grad_logits[t,j]
+    //                           = signal + bias × Σ_t h[t,i]
+    //          The bias × hidden_mean term causes systematic gradient corruption!
+    //
+    // FIX: Center the gradient to have zero mean across vocab dimension.
+    //      This removes uniform bias while preserving gradient direction.
+    //      grad_v_centered = grad_v - mean_v(grad_v)
+    //
+    // EQUATION: mean = (1/V) × Σ_v grad_row[v]
+    //           grad_row[v] -= mean  (for all v)
+    //========================================================================
+    __shared__ float s_grad_mean_partial[32];  // One per warp for centering
+    
+    // Step 1: Compute sum of gradients for this row
+    float local_sum_for_mean = 0.0f;
+    for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
+        local_sum_for_mean += grad_row[v];
+    }
+    
+    // Warp-level reduction for sum
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        local_sum_for_mean += __shfl_down_sync(0xFFFFFFFF, local_sum_for_mean, offset);
+    }
+    
+    if (lane_id == 0) {
+        s_grad_mean_partial[warp_id] = local_sum_for_mean;
+    }
+    __syncthreads();
+    
+    // Final reduction and broadcast mean to all threads
+    __shared__ float s_grad_mean;
+    if (warp_id == 0) {
+        const int num_warps = (blockDim.x + 31) / 32;
+        float sum_all = (lane_id < num_warps) ? s_grad_mean_partial[lane_id] : 0.0f;
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            sum_all += __shfl_down_sync(0xFFFFFFFF, sum_all, offset);
+        }
+        if (lane_id == 0) {
+            s_grad_mean = sum_all / static_cast<float>(vocab_size);
+        }
+    }
+    __syncthreads();
+    
+    // Step 2: Subtract mean from all gradient elements (centering)
+    const float grad_mean = s_grad_mean;
+    for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
+        grad_row[v] -= grad_mean;
+    }
+    __syncthreads();
+    
+    //========================================================================
+    // [GRAD_NONTARGET_CLAMP] Issue #120 FIX: Clamp non-target gradients to ≥ 0
+    //
+    // PROBLEM: Multiple gradient terms (focal derivative, entropy before clamping)
+    //          can make non-target gradients NEGATIVE. Negative gradient at non-target
+    //          means "increase this probability" - WRONG! Should decrease.
+    //
+    // FIX: After all computations, ensure non-target gradients are ≥ 0.
+    //      - Target (v == target): gradient should be NEGATIVE (increase probability)
+    //      - Non-target (v != target): gradient should be ≥ 0 (decrease or maintain)
+    //
+    // This catches ALL sources of negative non-target gradients in one place.
+    //========================================================================
+    for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
+        if (v != target) {
+            grad_row[v] = fmaxf(grad_row[v], 0.0f);
+        }
+    }
+    __syncthreads();
+    
+    // [GRAD_POST_CLAMP_EQUATION] Issue #120 verification: Check token 277 after clamp
+    // EQUATION: grad_277 should be ≥ 0 at non-target positions after clamp
+    // If we see negative values here, the clamp is NOT working!
+    if (threadIdx.x == 0 && target != 277 && (token_idx == 1 || token_idx == 100)) {
+        const float grad_277_post_clamp = grad_row[277];
+        printf("[GRAD_POST_CLAMP_EQUATION] token_pos=%d target=%d "
+               "grad_277_POST_CLAMP=%.10e "
+               "EXPECTED: ≥ 0 (non-target clamped), ACTUAL: %s\n",
+               token_idx, target, grad_277_post_clamp,
+               (grad_277_post_clamp >= 0.0f) ? "OK" : "**NEGATIVE - CLAMP FAILED!**");
+    }
+    
+    // Log centering diagnostic for sampled tokens
+    if (threadIdx.x == 0 && (token_idx == 100 || (token_idx > 0 && token_idx % 500 == 0))) {
+        printf("[GRAD_CENTER_EQUATION] token=%d grad_mean_removed=%.10e vocab_size=%d "
+               "EXPECTED: After centering, sum_grad_logits ≈ 0\n",
+               token_idx, grad_mean, vocab_size);
+    }
+    
+    //========================================================================
+    // [GRAD_SUM_EQUATION] RULE 21: Compute sum_grad_logits for validation
+    // EQUATION: sum_grad_logits = Σ_v grad_logits[v] for each token
+    // EXPECTED: For plain CE (focal_gamma=0, entropy_lambda=0):
+    //           Σ_v (p_v - q_v) = Σp - Σq = 1 - 1 = 0
+    //           After inv_valid_count: still 0
+    //           With focal_gamma > 0: non-zero from derivative term
+    //           With entropy_lambda > 0: λ × Σp_v × (log(p_v)+1) = λ × (H + 1)
+    //========================================================================
+    __shared__ float s_grad_sum_partial[32];  // One per warp
+    
+    // Each thread accumulates its vocab elements
+    float local_grad_sum = 0.0f;
+    for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
+        local_grad_sum += grad_row[v];
+    }
+    
+    // Warp-level reduction
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        local_grad_sum += __shfl_down_sync(0xFFFFFFFF, local_grad_sum, offset);
+    }
+    
+    // Store warp result (reuse warp_id/lane_id from earlier in kernel)
+    if (lane_id == 0) {
+        s_grad_sum_partial[warp_id] = local_grad_sum;
+    }
+    __syncthreads();
+    
+    // Final reduction in first warp
+    if (warp_id == 0) {
+        const int num_warps = (blockDim.x + 31) / 32;
+        float sum = (lane_id < num_warps) ? s_grad_sum_partial[lane_id] : 0.0f;
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            sum += __shfl_down_sync(0xFFFFFFFF, sum, offset);
+        }
         
-        // DEBUG: Print token 100's target gradient (skip BOS at position 0)
-        if (token_idx == 100 && v == target && threadIdx.x == (target % blockDim.x)) {
-            printf("[LOSS-KERNEL-DBG] token=%d target=%d p_t=%.8f q_on=%.8f focal_w=%.6f inv_valid=%.8f grad_before=%.8f grad_final=%.10f\n",
-                   token_idx, target, p_t, q_on, focal_weight, inv_valid_count, grad_v, grad_v * inv_valid_count);
+        // Thread 0 of block logs the result for diagnostic tokens
+        if (lane_id == 0) {
+            // Log for token 100 (skip BOS at 0) and periodically every 500 tokens
+            // NOTE: With entropy regularization (lambda > 0), the gradient formula adds:
+            //   λ × p_v × (log(p_v) + 1)
+            // This term is NEGATIVE when p_v < e^(-1) ≈ 0.368 (i.e., most tokens!)
+            // So sum_grad_logits CAN be negative even at non-target positions.
+            // EXPECTED: With plain CE: sum ≈ 0 (machine epsilon)
+            //           With entropy_reg: sum = inv_valid × λ × Σp_v(log(p_v)+1)
+            //                                 = inv_valid × λ × (H(p) + 1)
+            //                                 where H(p) = -Σp_v×log(p_v) (entropy, typically 0-10 nats)
+            if (token_idx == 100 || (token_idx > 0 && token_idx % 500 == 0)) {
+                printf("[GRAD_SUM_EQUATION] token=%d sum_grad_logits=%.10e target=%d "
+                       "entropy_lambda=%.4f focal_gamma=%.4f smoothing_eps=%.4f inv_valid=%.8f "
+                       "EXPECTED: plain_CE≈0, with_entropy≈inv_valid×λ×(H+1)\n",
+                       token_idx, sum, target, entropy_reg_lambda, focal_gamma, 
+                       smoothing_epsilon, inv_valid_count);
+            }
+            
+            // ANOMALY DETECTION: Flag if |sum| > 1e-4 when entropy_lambda=0 AND focal_gamma=0
+            if (entropy_reg_lambda == 0.0f && focal_gamma == 0.0f && fabsf(sum) > 1e-4f) {
+                printf("[GRAD_SUM_EQUATION] [ANOMALY] token=%d sum=%.10e SHOULD BE ~0 for plain CE!\n",
+                       token_idx, sum);
+            }
         }
     }
 }

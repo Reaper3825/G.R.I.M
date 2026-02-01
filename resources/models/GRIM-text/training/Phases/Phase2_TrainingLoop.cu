@@ -577,23 +577,41 @@ std::string formatToken277Diagnostic(const Token277Diagnostic& diag, int batch_i
     
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(6);
-    oss << "[Token277Trace] batch=" << (batch_idx + 1)
-        << " grad_row277: norm=" << diag.grad_row_norm
-        << " sum=" << diag.grad_row_sum
-        << " mean=" << diag.grad_row_mean
-        << " | weight_row277: norm=" << diag.weight_row_norm
-        << " mean=" << diag.weight_row_mean
-        << " | targets: 277_count=" << diag.target_277_count
-        << "/" << diag.total_valid_targets
-        << " ratio=" << std::setprecision(4) << (diag.target_277_ratio * 100.0f) << "%";
     
-    // CRITICAL FLAG: If gradient sum is positive, row 277 weight will INCREASE
-    // For weight-tied model: logit[277] = x @ W[277].T
-    // If W[277] increases (positive gradient update), logit[277] increases for ALL x
+    // Rule 21 Equation-Based Diagnostic Format
+    oss << "[WEIGHT_GRADIENT_EQUATION] W_UPDATE[277]: W_new[277] = W[277] - lr × grad_W[277] / sqrt(v + eps)\n";
+    oss << "  GRAD_W[277]: ||grad||=" << diag.grad_row_norm
+        << " sum=" << diag.grad_row_sum
+        << " mean=" << diag.grad_row_mean << "\n";
+    oss << "  WEIGHT[277]: ||W[277]||=" << diag.weight_row_norm
+        << " mean=" << diag.weight_row_mean << "\n";
+    oss << "  TARGET_DISTRIBUTION: token_277_count=" << diag.target_277_count
+        << "/" << diag.total_valid_targets
+        << " ratio=" << std::setprecision(4) << (diag.target_277_ratio * 100.0f) << "%\n";
+    
+    // Issue #114: Predict weight change direction
+    // AdamW: W_new = W - lr × m_hat / (sqrt(v_hat) + eps)
+    // where m_hat ≈ grad (after bias correction)
+    // POSITIVE grad_sum → m_hat > 0 → W DECREASES
+    // NEGATIVE grad_sum → m_hat < 0 → W INCREASES (wait, this seems backwards!)
+    // CORRECTION: AdamW subtracts lr×grad, so:
+    //   grad_sum > 0 → W_new = W - (+value) → W DECREASES
+    //   grad_sum < 0 → W_new = W - (-value) → W INCREASES
+    
     if (diag.grad_row_sum > 0.0f) {
-        oss << " ⚠️ POSITIVE_GRAD (will increase weight → increase logit_277)";
+        oss << "  [PREDICTION] W[277] DECREASE: grad_sum=" << diag.grad_row_sum << " > 0 → W_new = W - lr×(+) → ||W[277]|| decreases\n";
     } else if (diag.grad_row_sum < 0.0f) {
-        oss << " ✓ NEGATIVE_GRAD (will decrease weight → decrease logit_277)";
+        oss << "  [PREDICTION] W[277] INCREASE: grad_sum=" << diag.grad_row_sum << " < 0 → W_new = W - lr×(-) → ||W[277]|| increases\n";
+    } else {
+        oss << "  [PREDICTION] W[277] STABLE: grad_sum=" << diag.grad_row_sum << " ≈ 0\n";
+    }
+    
+    // Issue #114: Flag weight paradox risk
+    // If grad is consistently negative across batches, weight will GROW, not shrink
+    // Combined with hidden state alignment, this creates the feedback loop
+    if (diag.grad_row_sum < 0.0f && diag.target_277_ratio > 0.05f) {
+        oss << "  [ANOMALY] WEIGHT_PARADOX_RISK: Token 277 is " << (diag.target_277_ratio * 100.0f) 
+            << "% of targets with NEGATIVE grad_sum → W[277] will GROW despite trying to reduce p(277)!\n";
     }
     
     return oss.str();
@@ -621,8 +639,13 @@ struct HiddenState277Analysis {
     float hidden_other_norm = 0.0f;   // Mean norm at positions targeting other
     
     // Gradient logits for token 277
-    float grad_277_at_277_targets = 0.0f;    // Sum of grad_logits[t,277] where target=277 (should be negative)
-    float grad_277_at_other_targets = 0.0f;  // Sum of grad_logits[t,277] where target≠277 (should be positive but tiny)
+    // NOTE: With entropy regularization (lambda > 0), the gradient formula is:
+    //   grad = (p - q) + lambda * p * (log(p) + 1)
+    // The entropy term is NEGATIVE when p < e^(-1) ≈ 0.368 (i.e., most tokens!)
+    // For small p, the entropy term dominates, making the total gradient NEGATIVE.
+    // This is EXPECTED behavior - entropy reg pushes small probs DOWN to encourage uniformity.
+    float grad_277_at_277_targets = 0.0f;    // Sum of grad_logits[t,277] where target=277 (negative: p_t - 1)
+    float grad_277_at_other_targets = 0.0f;  // Sum of grad_logits[t,277] where target≠277 (can be negative with entropy reg!)
     
     // The key: dot product contributions to grad_W[277]
     float contribution_from_277_targets = 0.0f;   // hidden @ grad when target=277
@@ -638,12 +661,17 @@ HiddenState277Analysis computeHiddenState277Analysis(
     const std::vector<int>& targets,  // Batch targets (flattened)
     int d_model,
     int vocab_size,
+    bool use_centering,  // Issue #115: Added to read correct buffer
     cudaStream_t stream
 ) {
     HiddenState277Analysis analysis{};
     
     const int total_tokens = static_cast<int>(targets.size());
-    if (total_tokens == 0 || !ts.cached_encoder_output.data || !ts.grad_logits_tensor.data) {
+    // Issue #115: Check the buffer we'll actually use (centered or raw)
+    const bool have_hidden_data = use_centering 
+        ? (ts.centering_scratch_tensor.data != nullptr)
+        : (ts.cached_encoder_output.data != nullptr);
+    if (total_tokens == 0 || !have_hidden_data || !ts.grad_logits_tensor.data) {
         return analysis;
     }
     
@@ -654,7 +682,22 @@ HiddenState277Analysis computeHiddenState277Analysis(
     std::vector<float> h_hidden(hidden_size);
     std::vector<float> h_grad_logits(grad_logits_size);
     
-    cudaMemcpyAsync(h_hidden.data(), ts.cached_encoder_output.data, 
+    // ============================================================================
+    // ISSUE #115 FIX: Diagnostic was reading WRONG buffer!
+    //
+    // BUG: ts.cached_encoder_output is written BEFORE centering in AutogradTraining.cu:947
+    //      The actual LM head uses centered_scratch (via lm_input_ptr) at line 1055
+    //
+    // RESULT: Diagnostic showed hidden_mean ≠ 0 even when centering was ACTIVE!
+    //         This led to FALSE conclusions that centering wasn't working.
+    //
+    // FIX: Read from centered_scratch when centering is enabled, else cached_encoder_output
+    // ============================================================================
+    const float* hidden_source = use_centering && ts.centering_scratch_tensor.data
+        ? ts.centering_scratch_tensor.data  // CENTERED: actual LM head input
+        : ts.cached_encoder_output.data;    // UNCENTERED: raw encoder output
+    
+    cudaMemcpyAsync(h_hidden.data(), hidden_source, 
                     hidden_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
     cudaMemcpyAsync(h_grad_logits.data(), ts.grad_logits_tensor.data,
                     grad_logits_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
@@ -755,26 +798,482 @@ std::string formatHiddenState277Analysis(const HiddenState277Analysis& a, int ba
     
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(6);
-    oss << "[HiddenState277] batch=" << (batch_idx + 1)
-        << " hidden: mean=" << a.hidden_mean
-        << " norm=" << a.hidden_norm_mean
-        << " std=" << a.hidden_std
-        << " | at_277_targets(n=" << a.count_277_targets << "): mean=" << a.hidden_277_mean
-        << " norm=" << a.hidden_277_norm
-        << " | at_other_targets(n=" << a.count_other_targets << "): mean=" << a.hidden_other_mean
-        << " norm=" << a.hidden_other_norm;
     
-    oss << "\n[HiddenState277] batch=" << (batch_idx + 1)
-        << " grad_logits[277]: at_277=" << a.grad_277_at_277_targets << " (should be negative)"
-        << " at_other=" << a.grad_277_at_other_targets << " (p_277 * N_other)"
-        << " | contribution to grad_W[277].sum: from_277=" << a.contribution_from_277_targets
-        << " from_other=" << a.contribution_from_other_targets
-        << " TOTAL=" << (a.contribution_from_277_targets + a.contribution_from_other_targets);
+    // Rule 21 Equation-Based Diagnostic Format
+    oss << "[HIDDEN_STATE_EQUATION] GRAD_W[277]: grad_W[277,i] = Σ_t (hidden[t,i] × grad_logits[t,277])\n";
+    oss << "  HIDDEN STATES (encoder output): mean=" << a.hidden_mean
+        << " ||h||_mean=" << a.hidden_norm_mean
+        << " std=" << a.hidden_std << "\n";
     
-    // Flag if contribution from other targets dominates (causing positive gradient)
-    float total = a.contribution_from_277_targets + a.contribution_from_other_targets;
-    if (total > 0 && a.contribution_from_277_targets < 0) {
-        oss << " ⚠️ OTHER_DOMINATES (hidden states at non-277 positions cause positive W[277] update!)";
+    // Breakdown by target type (Issue #37 root cause: hidden_sum × grad contribution)
+    oss << "  AT_277_TARGETS (n=" << a.count_277_targets << "): hidden_mean=" << a.hidden_277_mean
+        << " ||h||=" << a.hidden_277_norm << "\n";
+    oss << "  AT_OTHER_TARGETS (n=" << a.count_other_targets << "): hidden_mean=" << a.hidden_other_mean
+        << " ||h||=" << a.hidden_other_norm << "\n";
+    
+    // Gradient contribution analysis - THE KEY EQUATION
+    // NOTE: With entropy regularization, at_other_targets can be NEGATIVE for small p_277
+    // Formula: grad = (p - q) + lambda * p * (log(p) + 1)
+    // When p_277 < e^(-(1+1/lambda)), the entropy term dominates and grad becomes negative
+    oss << "  GRAD_LOGITS[277]: at_277_targets=" << a.grad_277_at_277_targets 
+        << " (p_t - 1, always negative), at_other_targets=" << a.grad_277_at_other_targets 
+        << " (p_v + entropy_term, may be negative for small p with entropy_reg)\n";
+    
+    // Contribution decomposition (Issue #37: this reveals the sign flip bug)
+    float total_contribution = a.contribution_from_277_targets + a.contribution_from_other_targets;
+    oss << "  CONTRIBUTION TO Σ grad_W[277,i] = Σ_t (hidden_sum[t] × grad[t,277]):\n";
+    oss << "    from_277_targets: " << a.contribution_from_277_targets << " = Σ_{t:target=277} hidden_sum[t] × grad[t,277]\n";
+    oss << "    from_other_targets: " << a.contribution_from_other_targets << " = Σ_{t:target≠277} hidden_sum[t] × grad[t,277]\n";
+    oss << "    TOTAL: " << total_contribution << " (POSITIVE → W[277] INCREASES, NEGATIVE → W[277] DECREASES)\n";
+    
+    // Anomaly detection per Rule 21
+    if (total_contribution > 0 && a.grad_277_at_277_targets < 0) {
+        oss << "  [ANOMALY] WEIGHT_PARADOX_SOURCE: grad[277] at 277-targets is negative (model wants to DECREASE)";
+        oss << " but total contribution is POSITIVE (W[277] will INCREASE!) hidden_mean=" << a.hidden_mean << " ≠ 0\n";
+        oss << "    ROOT_CAUSE: Non-zero mean in hidden states causes sign flip: negative_hidden × negative_grad = POSITIVE\n";
+    }
+    
+    if (std::abs(a.hidden_mean) > 0.001f) {
+        oss << "  [ANOMALY] NON_ZERO_HIDDEN_MEAN: hidden_mean=" << a.hidden_mean 
+            << " should be ~0 for RMSNorm output. This biases weight gradients!\n";
+    }
+    
+    return oss.str();
+}
+
+//======================================================//
+//  Issue #114: FEEDBACK_LOOP_EQUATION Diagnostic (Rule 21)
+//  
+//  Mathematical Foundation:
+//    logit[277] = h · W[277]^T = ||h|| × ||W[277]|| × cos(h, W[277])
+//  
+//  The feedback loop equation tracks the decomposition of logit[277] into
+//  three components that form a self-reinforcing cycle:
+//    1. ||h|| (hidden norm) - encoder output magnitude
+//    2. ||W[277]|| (weight norm) - LM head row magnitude  
+//    3. cos(h, W[277]) (alignment) - hidden-weight correlation
+//  
+//  When any component grows, logit[277] grows, causing more mode collapse
+//  predictions, which drives further alignment between h and W[277].
+//======================================================//
+
+struct FeedbackLoopDiagnostic {
+    bool valid = false;
+    
+    // ==========================================
+    // Core Equation Components (Issue #114)
+    // logit[277] = ||h|| × ||W[277]|| × cos(h, W[277])
+    // ==========================================
+    float hidden_norm_mean = 0.0f;    // ||h|| averaged over positions
+    float weight_277_norm = 0.0f;     // ||W[277]||
+    float cosine_h_w277_mean = 0.0f;  // cos(h, W[277]) averaged over positions
+    
+    // Predicted logit from decomposition (should match actual logit_277)
+    float predicted_logit_277 = 0.0f;
+    float actual_logit_277_mean = 0.0f;
+    float decomposition_error_pct = 0.0f;  // |predicted - actual| / actual * 100
+    
+    // ==========================================
+    // Growth Rates (Issue #114 Anomaly Tracking)
+    // These track d(metric)/d(batch) to detect explosion
+    // ==========================================
+    float hidden_norm_growth_pct = 0.0f;   // (current - previous) / previous * 100
+    float weight_norm_growth_pct = 0.0f;
+    float cosine_growth_pct = 0.0f;
+    float logit_growth_pct = 0.0f;
+    
+    // ==========================================
+    // Cosine Similarity Collapse Detection
+    // avg_cos(h_i, h_j) measures hidden state correlation
+    // Expected: ~1/sqrt(768) ≈ 0.036 for orthogonal vectors
+    // Anomaly: avg_cos > 0.5 indicates collapse
+    // ==========================================
+    float avg_hidden_cosine = 0.0f;  // avg cos(h_i, h_j) pairwise
+    int hidden_cosine_samples = 0;   // Number of pairs sampled
+    
+    // ==========================================
+    // Weight Paradox Detection (Issue #114)
+    // AdamW: W_new = W - lr * grad
+    // grad · W > 0 → optimizer decreases ||W|| (gradient points WITH weight)
+    // grad · W < 0 → optimizer increases ||W|| (gradient points AGAINST weight)
+    // Paradox: grad · W > 0 (should shrink) BUT ||W[277]|| actually GREW
+    // ==========================================
+    float grad_dot_w277 = 0.0f;      // Dot product: grad_W[277] · W[277]
+    bool weight_paradox = false;     // True if grad·W>0 but weight grew
+    
+    // ==========================================
+    // Per-component logit contribution breakdown
+    // ==========================================
+    float contribution_from_h_norm = 0.0f;    // Factor: ||h|| / ||h||_prev
+    float contribution_from_w_norm = 0.0f;    // Factor: ||W|| / ||W||_prev
+    float contribution_from_cosine = 0.0f;    // Factor: cos / cos_prev
+    
+    // Statistics
+    int valid_position_count = 0;
+    
+    // Previous batch values for growth rate calculation
+    static float prev_hidden_norm;
+    static float prev_weight_norm;
+    static float prev_cosine;
+    static float prev_logit;
+    static int prev_batch_idx;
+};
+
+// Static storage for growth rate tracking across batches
+float FeedbackLoopDiagnostic::prev_hidden_norm = 0.0f;
+float FeedbackLoopDiagnostic::prev_weight_norm = 0.0f;
+float FeedbackLoopDiagnostic::prev_cosine = 0.0f;
+float FeedbackLoopDiagnostic::prev_logit = 0.0f;
+int FeedbackLoopDiagnostic::prev_batch_idx = -1;
+
+FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
+    const GRIM::TrainingState& ts,
+    const std::vector<int>& targets,
+    int d_model,
+    int vocab_size,
+    int batch_idx,
+    bool use_centering,  // Issue #115: Read correct buffer (centered vs raw)
+    cudaStream_t stream
+) {
+    FeedbackLoopDiagnostic diag{};
+    
+    const int total_tokens = static_cast<int>(targets.size());
+    // Issue #115: Check the buffer we'll actually use (centered or raw)
+    const bool have_hidden_data = use_centering 
+        ? (ts.centering_scratch_tensor.data != nullptr)
+        : (ts.cached_encoder_output.data != nullptr);
+    if (total_tokens == 0 || !have_hidden_data || !ts.lm_head_weights.data) {
+        return diag;
+    }
+    
+    // ==========================================
+    // D2H Copy: Hidden states, W[277], logits, gradients
+    // ==========================================
+    const size_t hidden_size = static_cast<size_t>(total_tokens) * d_model;
+    std::vector<float> h_hidden(hidden_size);
+    std::vector<float> w277(d_model);
+    std::vector<float> h_logits(static_cast<size_t>(total_tokens) * vocab_size);
+    std::vector<float> grad_w277(d_model);
+    
+    // ============================================================================
+    // ISSUE #115 FIX: Same bug as computeHiddenState277Analysis()
+    // Read from centered buffer when centering is active, otherwise raw encoder output
+    // ============================================================================
+    const float* hidden_source = use_centering && ts.centering_scratch_tensor.data
+        ? ts.centering_scratch_tensor.data  // CENTERED: actual LM head input
+        : ts.cached_encoder_output.data;    // UNCENTERED: raw encoder output
+    
+    cudaMemcpyAsync(h_hidden.data(), hidden_source,
+                    hidden_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
+    cudaMemcpyAsync(w277.data(), ts.lm_head_weights.data + static_cast<size_t>(kToken277) * d_model,
+                    d_model * sizeof(float), cudaMemcpyDeviceToHost, stream);
+    
+    // Get logits if available (from forward pass cache)
+    if (ts.logits_tensor.data) {
+        cudaMemcpyAsync(h_logits.data(), ts.logits_tensor.data,
+                        static_cast<size_t>(total_tokens) * vocab_size * sizeof(float),
+                        cudaMemcpyDeviceToHost, stream);
+    }
+    
+    // Get gradient of W[277] row if available
+    if (ts.lm_head_weights.grad_data()) {
+        cudaMemcpyAsync(grad_w277.data(), 
+                        ts.lm_head_weights.grad_data() + static_cast<size_t>(kToken277) * d_model,
+                        d_model * sizeof(float), cudaMemcpyDeviceToHost, stream);
+    }
+    
+    cudaStreamSynchronize(stream);
+    
+    // ==========================================
+    // Compute ||W[277]||
+    // Equation: ||W[277]|| = sqrt(Σ_d W[277,d]²)
+    // ==========================================
+    double w277_sq = 0.0;
+    for (int d = 0; d < d_model; ++d) {
+        w277_sq += static_cast<double>(w277[d]) * w277[d];
+    }
+    diag.weight_277_norm = static_cast<float>(std::sqrt(w277_sq));
+    
+    // ==========================================
+    // Compute grad_W[277] · W[277] for weight paradox detection
+    // Math: If grad · W > 0, optimizer will DECREASE ||W|| (gradient aligns with weight)
+    //       If grad · W < 0, optimizer will INCREASE ||W|| (gradient opposes weight)
+    // ==========================================
+    double grad_dot_w = 0.0;
+    for (int d = 0; d < d_model; ++d) {
+        grad_dot_w += static_cast<double>(grad_w277[d]) * w277[d];
+    }
+    diag.grad_dot_w277 = static_cast<float>(grad_dot_w);
+    
+    // ==========================================
+    // Per-position analysis
+    // ==========================================
+    const int PAD_ID = 274;
+    double sum_h_norm = 0.0;
+    double sum_cosine = 0.0;
+    double sum_actual_logit = 0.0;
+    double sum_predicted_logit = 0.0;
+    int valid_count = 0;
+    
+    // For hidden cosine sampling (pairwise)
+    std::vector<std::pair<int, double>> position_norms;  // (position_idx, norm)
+    
+    for (int t = 0; t < total_tokens; ++t) {
+        if (targets[t] < 0 || targets[t] == PAD_ID) continue;
+        
+        const float* h_t = &h_hidden[static_cast<size_t>(t) * d_model];
+        
+        // ==========================================
+        // Compute ||h[t]||
+        // Equation: ||h[t]|| = sqrt(Σ_d h[t,d]²)
+        // ==========================================
+        double h_sq = 0.0;
+        for (int d = 0; d < d_model; ++d) {
+            h_sq += static_cast<double>(h_t[d]) * h_t[d];
+        }
+        double h_norm = std::sqrt(h_sq);
+        sum_h_norm += h_norm;
+        position_norms.emplace_back(t, h_norm);
+        
+        // ==========================================
+        // Compute cos(h[t], W[277])
+        // Equation: cos(h,W) = (h · W) / (||h|| × ||W||)
+        // ==========================================
+        double dot_hw = 0.0;
+        for (int d = 0; d < d_model; ++d) {
+            dot_hw += static_cast<double>(h_t[d]) * w277[d];
+        }
+        double cosine = (h_norm > 1e-8 && diag.weight_277_norm > 1e-8) 
+                        ? dot_hw / (h_norm * diag.weight_277_norm) : 0.0;
+        sum_cosine += cosine;
+        
+        // ==========================================
+        // Compute predicted vs actual logit[277]
+        // Equation: logit[277] = ||h|| × ||W|| × cos(h,W)
+        // Alternatively: logit[277] = h · W^T (direct dot product)
+        // ==========================================
+        double predicted_logit = h_norm * diag.weight_277_norm * cosine;
+        sum_predicted_logit += predicted_logit;
+        
+        // Actual logit from forward pass
+        if (ts.logits_tensor.data) {
+            float actual = h_logits[static_cast<size_t>(t) * vocab_size + kToken277];
+            sum_actual_logit += actual;
+        }
+        
+        valid_count++;
+    }
+    
+    if (valid_count == 0) return diag;
+    
+    diag.valid = true;
+    diag.valid_position_count = valid_count;
+    
+    // ==========================================
+    // Compute means for the feedback loop equation
+    // ==========================================
+    diag.hidden_norm_mean = static_cast<float>(sum_h_norm / valid_count);
+    diag.cosine_h_w277_mean = static_cast<float>(sum_cosine / valid_count);
+    diag.predicted_logit_277 = static_cast<float>(sum_predicted_logit / valid_count);
+    diag.actual_logit_277_mean = static_cast<float>(sum_actual_logit / valid_count);
+    
+    // ==========================================
+    // Decomposition error check
+    // If ||h|| × ||W|| × cos ≠ actual logit, something is wrong
+    // ==========================================
+    if (std::abs(diag.actual_logit_277_mean) > 1e-8) {
+        diag.decomposition_error_pct = std::abs(diag.predicted_logit_277 - diag.actual_logit_277_mean) 
+                                       / std::abs(diag.actual_logit_277_mean) * 100.0f;
+    }
+    
+    // ==========================================
+    // Hidden Cosine Collapse Detection
+    // Sample pairwise cosine similarities between hidden states
+    // ==========================================
+    constexpr int kMaxCosineSamples = 100;
+    double sum_pairwise_cos = 0.0;
+    int pair_count = 0;
+    
+    for (size_t i = 0; i < position_norms.size() && pair_count < kMaxCosineSamples; ++i) {
+        for (size_t j = i + 1; j < position_norms.size() && pair_count < kMaxCosineSamples; ++j) {
+            int t_i = position_norms[i].first;
+            int t_j = position_norms[j].first;
+            double norm_i = position_norms[i].second;
+            double norm_j = position_norms[j].second;
+            
+            if (norm_i < 1e-8 || norm_j < 1e-8) continue;
+            
+            // Compute h[i] · h[j]
+            const float* h_i = &h_hidden[static_cast<size_t>(t_i) * d_model];
+            const float* h_j = &h_hidden[static_cast<size_t>(t_j) * d_model];
+            double dot_ij = 0.0;
+            for (int d = 0; d < d_model; ++d) {
+                dot_ij += static_cast<double>(h_i[d]) * h_j[d];
+            }
+            
+            double cos_ij = dot_ij / (norm_i * norm_j);
+            sum_pairwise_cos += std::abs(cos_ij);  // Take abs for avg magnitude
+            pair_count++;
+        }
+    }
+    
+    if (pair_count > 0) {
+        diag.avg_hidden_cosine = static_cast<float>(sum_pairwise_cos / pair_count);
+        diag.hidden_cosine_samples = pair_count;
+    }
+    
+    // ==========================================
+    // Growth Rate Calculation (Issue #114)
+    // Track explosion via d(metric)/d(batch)
+    // ==========================================
+    if (FeedbackLoopDiagnostic::prev_batch_idx >= 0 && 
+        batch_idx > FeedbackLoopDiagnostic::prev_batch_idx) {
+        
+        if (FeedbackLoopDiagnostic::prev_hidden_norm > 1e-8) {
+            diag.hidden_norm_growth_pct = 
+                (diag.hidden_norm_mean - FeedbackLoopDiagnostic::prev_hidden_norm) 
+                / FeedbackLoopDiagnostic::prev_hidden_norm * 100.0f;
+            diag.contribution_from_h_norm = 
+                diag.hidden_norm_mean / FeedbackLoopDiagnostic::prev_hidden_norm;
+        }
+        
+        if (FeedbackLoopDiagnostic::prev_weight_norm > 1e-8) {
+            diag.weight_norm_growth_pct = 
+                (diag.weight_277_norm - FeedbackLoopDiagnostic::prev_weight_norm)
+                / FeedbackLoopDiagnostic::prev_weight_norm * 100.0f;
+            diag.contribution_from_w_norm = 
+                diag.weight_277_norm / FeedbackLoopDiagnostic::prev_weight_norm;
+            
+            // Weight paradox detection: grad·W > 0 means optimizer will decrease ||W||
+            // If ||W|| actually GREW despite this, that's a paradox
+            if (diag.grad_dot_w277 > 0 && diag.weight_norm_growth_pct > 0.1f) {
+                diag.weight_paradox = true;
+            }
+        }
+        
+        if (std::abs(FeedbackLoopDiagnostic::prev_cosine) > 1e-8) {
+            diag.cosine_growth_pct = 
+                (diag.cosine_h_w277_mean - FeedbackLoopDiagnostic::prev_cosine)
+                / std::abs(FeedbackLoopDiagnostic::prev_cosine) * 100.0f;
+            diag.contribution_from_cosine = 
+                diag.cosine_h_w277_mean / FeedbackLoopDiagnostic::prev_cosine;
+        }
+        
+        if (std::abs(FeedbackLoopDiagnostic::prev_logit) > 1e-8) {
+            diag.logit_growth_pct = 
+                (diag.actual_logit_277_mean - FeedbackLoopDiagnostic::prev_logit)
+                / std::abs(FeedbackLoopDiagnostic::prev_logit) * 100.0f;
+        }
+    }
+    
+    // Update static storage for next batch
+    FeedbackLoopDiagnostic::prev_hidden_norm = diag.hidden_norm_mean;
+    FeedbackLoopDiagnostic::prev_weight_norm = diag.weight_277_norm;
+    FeedbackLoopDiagnostic::prev_cosine = diag.cosine_h_w277_mean;
+    FeedbackLoopDiagnostic::prev_logit = diag.actual_logit_277_mean;
+    FeedbackLoopDiagnostic::prev_batch_idx = batch_idx;
+    
+    return diag;
+}
+
+std::string formatFeedbackLoopDiagnostic(const FeedbackLoopDiagnostic& d, int batch_idx) {
+    if (!d.valid) {
+        return "[FEEDBACK_LOOP_EQUATION] batch=" + std::to_string(batch_idx + 1) + " INVALID (missing data)";
+    }
+    
+    std::ostringstream oss;
+    oss << std::fixed;
+    
+    // ==========================================
+    // Rule 21: Equation-Based Diagnostic Format
+    // ==========================================
+    oss << "[FEEDBACK_LOOP_EQUATION] TOKEN_277_MODE_COLLAPSE: logit[277] = ||h|| × ||W[277]|| × cos(h, W[277])\n";
+    
+    oss << std::setprecision(6);
+    oss << "  INPUT h (encoder output): n_positions=" << d.valid_position_count 
+        << " ||h||_mean=" << d.hidden_norm_mean << "\n";
+    oss << "  INPUT W[277] (LM head row): ||W[277]||=" << d.weight_277_norm << "\n";
+    oss << "  ALIGNMENT: cos(h, W[277])_mean=" << d.cosine_h_w277_mean << "\n";
+    
+    oss << std::setprecision(4);
+    oss << "  EXPECTED logit_277 = " << d.hidden_norm_mean << " × " << d.weight_277_norm 
+        << " × " << d.cosine_h_w277_mean << " = " << d.predicted_logit_277 << "\n";
+    oss << "  ACTUAL logit_277_mean = " << d.actual_logit_277_mean;
+    if (d.decomposition_error_pct > 5.0f) {
+        oss << " [DECOMPOSITION_ERROR: " << d.decomposition_error_pct << "%]";
+    }
+    oss << "\n";
+    
+    // ==========================================
+    // Growth Rates - Issue #114 Anomaly Detection
+    // ==========================================
+    oss << "  GROWTH_RATES: ||h||=" << std::showpos << d.hidden_norm_growth_pct << "% "
+        << "||W||=" << d.weight_norm_growth_pct << "% "
+        << "cos=" << d.cosine_growth_pct << "% "
+        << "logit=" << d.logit_growth_pct << "%" << std::noshowpos << "\n";
+    
+    // ==========================================
+    // Anomaly Flags
+    // ==========================================
+    std::vector<std::string> anomalies;
+    
+    // Hidden norm explosion (Issue #114: +111% observed)
+    if (d.hidden_norm_growth_pct > 5.0f) {
+        anomalies.push_back("HIDDEN_NORM_EXPLOSION(+" + std::to_string(static_cast<int>(d.hidden_norm_growth_pct)) + "%)");
+    }
+    
+    // Cosine collapse (Issue #114: avg_cos → 0.84)
+    constexpr float kExpectedRandomCosine = 0.036f;  // 1/sqrt(768)
+    if (d.avg_hidden_cosine > 0.5f) {
+        std::ostringstream anom;
+        anom << "COSINE_COLLAPSE(avg_cos=" << std::setprecision(3) << d.avg_hidden_cosine 
+             << " vs expected=" << kExpectedRandomCosine << ")";
+        anomalies.push_back(anom.str());
+    }
+    
+    // Weight paradox (Issue #114: grad·W > 0 means optimizer wants ||W|| to decrease, but it grew)
+    if (d.weight_paradox) {
+        anomalies.push_back("WEIGHT_PARADOX(grad·W=" + std::to_string(d.grad_dot_w277) + 
+                           ">0 should_shrink but ||W|| grew by " + std::to_string(d.weight_norm_growth_pct) + "%)");
+    }
+    
+    // Alignment explosion (Issue #114: cos 0.05 → 0.44)
+    if (d.cosine_h_w277_mean > 0.3f) {
+        std::ostringstream anom;
+        anom << "ALIGNMENT_EXPLOSION(cos=" << std::setprecision(3) << d.cosine_h_w277_mean << ")";
+        anomalies.push_back(anom.str());
+    }
+    
+    // Logit explosion
+    if (d.actual_logit_277_mean > 3.0f) {
+        anomalies.push_back("LOGIT_EXPLOSION(logit_277=" + std::to_string(d.actual_logit_277_mean) + ")");
+    }
+    
+    if (!anomalies.empty()) {
+        oss << "  [ANOMALIES] ";
+        for (size_t i = 0; i < anomalies.size(); ++i) {
+            if (i > 0) oss << ", ";
+            oss << anomalies[i];
+        }
+        oss << "\n";
+    }
+    
+    // ==========================================
+    // Hidden State Correlation Analysis
+    // ==========================================
+    if (d.hidden_cosine_samples > 0) {
+        oss << "  HIDDEN_CORRELATION: avg|cos(h_i,h_j)|=" << std::setprecision(4) << d.avg_hidden_cosine
+            << " (sampled " << d.hidden_cosine_samples << " pairs, expected~" << kExpectedRandomCosine << ")\n";
+    }
+    
+    // ==========================================
+    // Per-Component Contribution (if growth data available)
+    // ==========================================
+    if (d.contribution_from_h_norm > 0 || d.contribution_from_w_norm > 0 || d.contribution_from_cosine != 0) {
+        oss << "  CONTRIBUTION_FACTORS: h_norm=" << std::setprecision(3) << d.contribution_from_h_norm << "x"
+            << " w_norm=" << d.contribution_from_w_norm << "x"
+            << " cosine=" << d.contribution_from_cosine << "x"
+            << " PRODUCT=" << (d.contribution_from_h_norm * d.contribution_from_w_norm * d.contribution_from_cosine) << "x\n";
     }
     
     return oss.str();
@@ -2509,11 +3008,19 @@ BatchResult processBatch(
             
             // ================================================================
             // HIDDEN STATE DIAGNOSTICS: Cosine similarity between positions
+            // Issue #115 FIX: Use centered buffer when centering is enabled!
+            // ts.cached_encoder_output = RAW encoder output BEFORE centering
+            // ts.centering_scratch_tensor = CENTERED output (what LM head actually uses)
             // ================================================================
-            if (ts.cached_encoder_output.data && sample_positions >= 2) {
+            const bool use_centering_for_diag = ctx.model->getConfig().lm_head_center_hidden_states;
+            const float* hidden_source = (use_centering_for_diag && ts.centering_scratch_tensor.data)
+                ? ts.centering_scratch_tensor.data  // CENTERED: actual LM head input
+                : ts.cached_encoder_output.data;    // UNCENTERED: raw encoder output
+            
+            if (hidden_source && sample_positions >= 2) {
                 const size_t hidden_bytes = static_cast<size_t>(sample_positions) * d_model * sizeof(float);
                 std::vector<float> hidden_sample(sample_positions * d_model);
-                cudaMemcpy(hidden_sample.data(), ts.cached_encoder_output.data, hidden_bytes, cudaMemcpyDeviceToHost);
+                cudaMemcpy(hidden_sample.data(), hidden_source, hidden_bytes, cudaMemcpyDeviceToHost);
                 
                 // Compute cosine similarity between position pairs (sample 5 pairs)
                 auto compute_cosine = [&](int i, int j) -> float {
@@ -2905,9 +3412,24 @@ BatchResult processBatch(
         
         // Issue #37: Hidden state analysis - understand WHY grad_W[277].sum is positive
         // Run async to avoid blocking training (expensive D2H copy)
+        // Issue #115: Pass use_centering to read correct buffer (centered vs raw)
         HiddenState277Analysis hidden277 = computeHiddenState277Analysis(
-            ts, flat_targets, cfg.d_model, cfg.vocab_size, stream);
+            ts, flat_targets, cfg.d_model, cfg.vocab_size, 
+            cfg.lm_head_center_hidden_states,  // Issue #115: Use centered buffer when active
+            stream);
         ctx.logging.logger->log(formatHiddenState277Analysis(hidden277, batch_idx));
+        
+        // ========================================================================
+        // DIAGNOSTIC: Issue #114 - Feedback Loop Detection (Rule 21 Equation-Based)
+        // Tracks the self-reinforcing collapse: logit[277] = ||h|| × ||W[277]|| × cos(h, W[277])
+        // Detects: hidden norm explosion, cosine collapse, weight paradox, alignment explosion
+        // ========================================================================
+        // Issue #115: Pass use_centering to read correct buffer (centered vs raw)
+        FeedbackLoopDiagnostic feedback_diag = computeFeedbackLoopDiagnostic(
+            ts, flat_targets, cfg.d_model, cfg.vocab_size, batch_idx, 
+            cfg.lm_head_center_hidden_states,  // Issue #115: Use centered buffer when active
+            stream);
+        ctx.logging.logger->log(formatFeedbackLoopDiagnostic(feedback_diag, batch_idx));
     }
     
     // ========================================================================
@@ -4139,7 +4661,6 @@ bool executePhase2(TrainingContext& ctx) {
         fprintf(stderr, "[DEBUG] About to call EmitModuleInfo for GuessCache...\n");
         EmitModuleInfo(ModuleId::GuessCache, 
             std::string("GPU cache ready (capacity=") + std::to_string(kDefaultGuessCacheCapacity) + ")", ctx.global_step);
-        fprintf(stderr, "[DEBUG] EmitModuleInfo completed, about to create GuessCacheBatchBuffers...\n");
         state.guess_cache_buffers = std::make_unique<GuessCacheBatchBuffers>();
         fprintf(stderr, "[DEBUG] GuessCacheBatchBuffers created successfully\n");
     } else if (!ctx.config.hyperparameters.guess_aux_enabled) {

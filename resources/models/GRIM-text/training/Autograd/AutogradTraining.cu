@@ -7,7 +7,7 @@
 
 // MUST include full definition of GPUGrimEncoder for method calls
 #include "../../GRIM/grim_language_model_cuda.hpp"
-#include "../../Layers/LayernNorm/RMSNorm_Kernel_GPU.hpp"
+// RMSNorm_Kernel_GPU.hpp removed - using autograd::rms_norm in TensorContract_GPU instead
 #include "../../Layers/grim_layer_gpu.hpp"                    // LayerWorkspace
 #include "../../Layers/Encoding/Encoding_GPU.hpp"             // EncodingLayer::useExternalWeights
 #include "../../Layers/ScratchBlock/ScratchBlock_GPU.hpp"     // ScratchBlockLayer
@@ -18,6 +18,7 @@
 
 #include <iostream>
 #include <cmath>
+#include <algorithm>  // Rule 21 diagnostic: std::min_element, std::max_element
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <stdexcept>
@@ -75,6 +76,61 @@ __global__ void generatePositionIdsKernel(int* __restrict__ position_ids,
 inline void generatePositionIds(int* position_ids, int total_tokens, int seq_len, cudaStream_t stream) {
     const int blocks = (total_tokens + kBlockSize - 1) / kBlockSize;
     generatePositionIdsKernel<<<blocks, kBlockSize, 0, stream>>>(position_ids, total_tokens, seq_len);
+}
+
+//======================================================//
+// ISSUE #113 FIX: Sinusoidal Position Embeddings
+// ROOT CAUSE: Issue #103 removed learned pos_emb (caused isotropic QKV explosion)
+// but without ANY position embedding, same tokens at different positions have
+// IDENTICAL representations => avg_cos=0.90 => mode collapse!
+//
+// SOLUTION: Add sinusoidal position embeddings (AIAYN original design):
+// - Fixed (not learned) => no training instability
+// - Non-isotropic by design => each dim has different frequency
+// - Works WITH ALiBi/RoPE (they handle attention, this handles residual stream)
+//
+// Formula: PE(pos, 2i) = sin(pos / 10000^(2i/d_model))
+//          PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
+//======================================================//
+
+__global__ void addSinusoidalPositionEmbeddingsKernel(
+    float* __restrict__ embeddings,  // [total_tokens, d_model] - MODIFIED IN-PLACE
+    int total_tokens,
+    int d_model,
+    int seq_len,
+    float scale  // Amplitude scale (default 1.0, can reduce if needed)
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total_elements = total_tokens * d_model;
+    if (idx >= total_elements) return;
+    
+    const int token_idx = idx / d_model;
+    const int dim = idx % d_model;
+    
+    // Position within sequence
+    const int pos = token_idx % seq_len;
+    
+    // Compute frequency for this dimension
+    // div_term = 10000^(dim_pair / d_model) where dim_pair = 2*(dim/2)
+    const int dim_pair = (dim / 2) * 2;  // Even dimension for this pair
+    const float exponent = -static_cast<float>(dim_pair) / static_cast<float>(d_model);
+    const float freq = powf(10000.0f, exponent);
+    
+    // Compute sinusoidal value
+    const float angle = static_cast<float>(pos) / freq;
+    const float pe_value = (dim % 2 == 0) ? sinf(angle) : cosf(angle);
+    
+    // Add to embedding (in-place)
+    embeddings[idx] += scale * pe_value;
+}
+
+inline void addSinusoidalPositionEmbeddings(float* embeddings, int total_tokens, 
+                                             int d_model, int seq_len, 
+                                             float scale, cudaStream_t stream) {
+    const int total_elements = total_tokens * d_model;
+    const int blocks = (total_elements + kBlockSize - 1) / kBlockSize;
+    addSinusoidalPositionEmbeddingsKernel<<<blocks, kBlockSize, 0, stream>>>(
+        embeddings, total_tokens, d_model, seq_len, scale);
 }
 
 //======================================================================
@@ -536,15 +592,69 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         
         AG_INFO("Step 1b: Position embeddings added (Issue #57 FIX)");
     } else {
-        // Issue #96/103 FIX: Position embeddings SKIPPED when using ALIBI/RoPE
-        // This is CORRECT - ALIBI and RoPE provide positional information via attention bias/rotation,
-        // NOT via additive embeddings. Adding learned position embeddings when using ALIBI/RoPE
-        // introduces ISOTROPIC noise that causes GEMM coherent summation → QKV explosion.
-        fprintf(stderr, "[Issue103-POSEMB] Position embeddings SKIPPED (positional_encoding=%s)\n",
+        // ═══════════════════════════════════════════════════════════════════════
+        // ISSUE #113 FIX: Add SINUSOIDAL position embeddings when using ALIBI/RoPE!
+        // 
+        // ROOT CAUSE of mode collapse (Issue #108, avg_cos=0.90):
+        //   - Issue #103 correctly removed LEARNED position embeddings (they were isotropic)
+        //   - BUT this left same tokens at different positions with IDENTICAL embeddings!
+        //   - ALiBi/RoPE provide position info ONLY inside attention, not in residual stream
+        //   - Result: hidden states are 90% correlated → mode collapse to any W[v] row
+        // 
+        // FIX: Add SINUSOIDAL position embeddings (from original "Attention Is All You Need"):
+        //   - Fixed (not learned) → no training instability
+        //   - Non-isotropic by design → each dimension has different frequency
+        //   - Different positions get DIFFERENT vectors → breaks the 90% correlation
+        //   - Works WITH ALiBi/RoPE (they complement each other)
+        // ═══════════════════════════════════════════════════════════════════════
+        
+        const float sinusoidal_scale = 1.0f;  // Full scale (can reduce if needed)
+        
+        fprintf(stderr, "[Issue113-SINUSOIDAL] Adding SINUSOIDAL position embeddings (scale=%.2f)\n", sinusoidal_scale);
+        fprintf(stderr, "[Issue113-SINUSOIDAL] This fixes Issue #108 (avg_cos=0.90) by giving different positions different representations\n");
+        fprintf(stderr, "[Issue113-SINUSOIDAL] Works WITH %s - they provide attention bias, this provides residual stream differentiation\n",
                 HyperParameters::positionalEncodingTypeToString(cfg->positional_encoding));
-        fprintf(stderr, "[Issue103-POSEMB] This is CORRECT for ALIBI/RoPE - they don't use additive position embeddings\n");
-        AG_INFO("Step 1b: Position embeddings SKIPPED (Issue #103 - positional_encoding=" 
-                << HyperParameters::positionalEncodingTypeToString(cfg->positional_encoding) << ")");
+        
+        // Add sinusoidal position embeddings IN-PLACE to token embeddings
+        addSinusoidalPositionEmbeddings(
+            emb_output.data,
+            total_tokens,
+            cfg->d_model,
+            ctx.seq_len,
+            sinusoidal_scale,
+            ctx.stream
+        );
+        
+        // Diagnostic: Check embedding variance after sinusoidal addition
+        #ifdef DEBUG_ISSUE113
+        {
+            std::vector<float> h_emb(total_tokens * cfg->d_model);
+            cudaMemcpy(h_emb.data(), emb_output.data, h_emb.size() * sizeof(float), cudaMemcpyDeviceToHost);
+            
+            // Sample pairwise cosine similarities
+            float cos_sum = 0.0f;
+            int num_pairs = 0;
+            for (int i = 0; i < std::min(20, total_tokens); i++) {
+                for (int j = i + 1; j < std::min(20, total_tokens); j++) {
+                    float dot = 0.0f, norm_i = 0.0f, norm_j = 0.0f;
+                    for (int d = 0; d < cfg->d_model; d++) {
+                        float vi = h_emb[i * cfg->d_model + d];
+                        float vj = h_emb[j * cfg->d_model + d];
+                        dot += vi * vj;
+                        norm_i += vi * vi;
+                        norm_j += vj * vj;
+                    }
+                    float cos = dot / (sqrtf(norm_i) * sqrtf(norm_j) + 1e-8f);
+                    cos_sum += fabsf(cos);
+                    num_pairs++;
+                }
+            }
+            fprintf(stderr, "[Issue113-DIAG] Post-sinusoidal avg_cos = %.6f (target: < 0.5)\n", 
+                    cos_sum / num_pairs);
+        }
+        #endif
+        
+        AG_INFO("Step 1b: SINUSOIDAL position embeddings added (Issue #113 FIX for avg_cos=0.90)");
     }
     
     // Store in context for backward
@@ -651,6 +761,103 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         
         fprintf(stderr, "[Issue91-EMB-AFTER-SB] tokens=%d d_model=%d: min=%.10f max=%.10f mean=%.10f rms=%.10f\n",
                 total_tokens, cfg->d_model, emb_min, emb_max, emb_mean, emb_rms);
+        
+        // ═══════════════════════════════════════════════════════════════════════
+        // RULE 21 DIAGNOSTIC: Embedding Cosine Similarity (BEFORE encoder layers)
+        // 
+        // This measures how correlated token representations are BEFORE any
+        // transformer layers process them. Without additive position embeddings
+        // (Issue #103), same tokens at different positions have IDENTICAL
+        // embeddings, causing avg_cos to approach 1.0 as token repetition increases.
+        //
+        // EQUATION: cosine(h_i, h_j) = (h_i · h_j) / (||h_i|| * ||h_j||)
+        // EXPECTED: avg_cos ≈ 1/sqrt(d_model) ≈ 0.036 for random orthogonal vectors
+        // ANOMALY: avg_cos > 0.5 indicates high correlation (representational collapse)
+        // ═══════════════════════════════════════════════════════════════════════
+        {
+            const int d_model = cfg->d_model;
+            const int sample_pairs = std::min(50, total_tokens / 2);  // Sample pairs for efficiency
+            
+            if (sample_pairs >= 2) {
+                // Compute norms for each position
+                std::vector<float> row_norms(total_tokens);
+                for (int t = 0; t < total_tokens; t++) {
+                    double norm_sq = 0.0;
+                    for (int d = 0; d < d_model; d++) {
+                        float v = h_emb[t * d_model + d];
+                        norm_sq += v * v;
+                    }
+                    row_norms[t] = sqrtf(norm_sq);
+                }
+                
+                // Compute pairwise cosine similarity for sampled pairs
+                double cos_sum = 0.0;
+                double cos_min = 2.0, cos_max = -2.0;
+                int num_pairs = 0;
+                int identical_token_pairs = 0;
+                double identical_cos_sum = 0.0;
+                
+                // Sample evenly-spaced pairs throughout the sequence
+                const int stride = std::max(1, total_tokens / sample_pairs);
+                for (int i = 0; i < total_tokens && num_pairs < sample_pairs; i += stride) {
+                    int j = (i + total_tokens / 2) % total_tokens;  // Pair with distant position
+                    if (i == j || row_norms[i] < 1e-8f || row_norms[j] < 1e-8f) continue;
+                    
+                    // Compute dot product h_i · h_j
+                    double dot = 0.0;
+                    for (int d = 0; d < d_model; d++) {
+                        dot += h_emb[i * d_model + d] * h_emb[j * d_model + d];
+                    }
+                    
+                    double cosine = dot / (row_norms[i] * row_norms[j]);
+                    cos_sum += cosine;
+                    cos_min = std::min(cos_min, cosine);
+                    cos_max = std::max(cos_max, cosine);
+                    num_pairs++;
+                    
+                    // Track identical token pairs (from cached_token_ids_tensor if available)
+                    if (ts->cached_token_ids_tensor.data) {
+                        std::vector<int> h_tok_ids(total_tokens);
+                        cudaMemcpy(h_tok_ids.data(), ts->cached_token_ids_tensor.data, 
+                                   total_tokens * sizeof(int), cudaMemcpyDeviceToHost);
+                        if (h_tok_ids[i] == h_tok_ids[j]) {
+                            identical_token_pairs++;
+                            identical_cos_sum += cosine;
+                        }
+                    }
+                }
+                
+                const double avg_cos = (num_pairs > 0) ? cos_sum / num_pairs : 0.0;
+                const double expected_cos = 1.0 / sqrt(static_cast<double>(d_model));  // ~0.036 for d=768
+                
+                fprintf(stderr, "[EMBED_COSINE_EQUATION] BEFORE_ENCODER: cosine(h_i, h_j) = (h_i · h_j) / (||h_i|| * ||h_j||)\n");
+                fprintf(stderr, "  INPUT h (embeddings): shape=[%d, %d] row_norm_range=[%.6f, %.6f]\n",
+                        total_tokens, d_model, 
+                        *std::min_element(row_norms.begin(), row_norms.end()),
+                        *std::max_element(row_norms.begin(), row_norms.end()));
+                fprintf(stderr, "  PARAMETERS: sample_pairs=%d, stride=%d\n", num_pairs, stride);
+                fprintf(stderr, "  EXPECTED avg_cos = 1/sqrt(%d) = %.6f (for random orthogonal vectors)\n", 
+                        d_model, expected_cos);
+                fprintf(stderr, "  ACTUAL avg_cos=%.6f min=%.6f max=%.6f\n", avg_cos, cos_min, cos_max);
+                
+                if (identical_token_pairs > 0) {
+                    double avg_identical_cos = identical_cos_sum / identical_token_pairs;
+                    fprintf(stderr, "  IDENTICAL_TOKEN_PAIRS: %d/%d pairs, avg_cos=%.6f\n",
+                            identical_token_pairs, num_pairs, avg_identical_cos);
+                    if (avg_identical_cos > 0.99) {
+                        fprintf(stderr, "  [ANOMALY] Same tokens have cosine≈1.0 - NO position differentiation!\n");
+                        fprintf(stderr, "  [ANOMALY] Without additive position embeddings, same tokens are IDENTICAL\n");
+                    }
+                }
+                
+                if (avg_cos > 0.5) {
+                    fprintf(stderr, "  [ANOMALY] avg_cos=%.6f >> expected=%.6f (%.1fx larger!)\n",
+                            avg_cos, expected_cos, avg_cos / expected_cos);
+                    fprintf(stderr, "  [ANOMALY] High embedding correlation BEFORE encoder = representational collapse!\n");
+                    fprintf(stderr, "  [ANOMALY] Root cause: Without additive pos_emb, same tokens have IDENTICAL representations\n");
+                }
+            }
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -809,6 +1016,12 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     // ════════════════════════════════════════════════════════════════════════
     Tensor& lm_weights = cfg->tie_embeddings ? ts->embedding_weights : ts->lm_head_weights;
     lm_weights.requires_grad = true;  // Gradients for weight update
+
+    // Configure LM head gradient corrections for centering.
+    // These forward transforms are currently outside the autograd graph, so we
+    // must fix grad_input before it flows back into the encoder.
+    autograd::set_lm_head_grad_correction(
+        cfg->lm_head_center_hidden_states && cfg->lm_head_recenter_gradients);
     
     // RULE 20: Fail loud - validate cached_logits buffer
     float* logits_output = ts->cached_logits_tensor.data;
@@ -850,6 +1063,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         // Use centered data for LM head projection
         lm_input_ptr = centered_scratch;
         AG_INFO("Step 4a: Hidden states centered (Issue #37/#43 fix active)");
+        
     }
     
     // Create input tensor referencing the (possibly centered) data
@@ -897,6 +1111,118 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     // Issue #99: Need to re-investigate the actual gradient flow problem.
     
     AG_INFO("Step 4: LM head matmul complete");
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  RULE 21 DIAGNOSTIC: Why is token 277 (or any token) the argmax?
+    //  
+    //  Equation: logit[v] = Σ_d encoder[pos, d] × W[v, d]
+    //  
+    //  For argmax analysis: compare logit[277] vs logit[other tokens]
+    //  The argmax wins because: Σ_d h[d] × W[argmax, d] > Σ_d h[d] × W[v, d] for all v
+    //  
+    //  This diagnostic shows:
+    //  1. Hidden state (encoder output) statistics at sample position
+    //  2. Weight row statistics for top predicted tokens
+    //  3. Dot product decomposition showing WHY argmax wins
+    // ═══════════════════════════════════════════════════════════════════════════
+    {
+        constexpr int kAnalysisToken = 277;
+        constexpr int kSamplePositions = 5;  // Sample first 5 positions
+        const int d_model = cfg->d_model;
+        const int vocab_size_local = cfg->vocab_size;
+        
+        // Copy sample data to host
+        const int sample_size = std::min(kSamplePositions, total_tokens);
+        std::vector<float> h_encoder(sample_size * d_model);
+        std::vector<float> h_weights_277(d_model);
+        std::vector<float> h_logits(sample_size * vocab_size_local);
+        
+        cudaMemcpyAsync(h_encoder.data(), lm_input_ptr,
+                        sample_size * d_model * sizeof(float),
+                        cudaMemcpyDeviceToHost, ctx.stream);
+        cudaMemcpyAsync(h_weights_277.data(), 
+                        lm_weights.data + static_cast<size_t>(kAnalysisToken) * d_model,
+                        d_model * sizeof(float),
+                        cudaMemcpyDeviceToHost, ctx.stream);
+        cudaMemcpyAsync(h_logits.data(), logits_tensor.data,
+                        sample_size * vocab_size_local * sizeof(float),
+                        cudaMemcpyDeviceToHost, ctx.stream);
+        cudaStreamSynchronize(ctx.stream);
+        
+        for (int pos = 0; pos < sample_size; ++pos) {
+            const float* h = h_encoder.data() + pos * d_model;
+            const float* logits_row = h_logits.data() + pos * vocab_size_local;
+            
+            // Compute hidden state statistics
+            float h_sum = 0.0f, h_sum_sq = 0.0f, h_min = h[0], h_max = h[0];
+            for (int d = 0; d < d_model; ++d) {
+                h_sum += h[d];
+                h_sum_sq += h[d] * h[d];
+                h_min = std::min(h_min, h[d]);
+                h_max = std::max(h_max, h[d]);
+            }
+            float h_mean = h_sum / d_model;
+            float h_rms = std::sqrt(h_sum_sq / d_model);
+            
+            // Compute W[277] statistics
+            float w_sum = 0.0f, w_sum_sq = 0.0f, w_min = h_weights_277[0], w_max = h_weights_277[0];
+            for (int d = 0; d < d_model; ++d) {
+                w_sum += h_weights_277[d];
+                w_sum_sq += h_weights_277[d] * h_weights_277[d];
+                w_min = std::min(w_min, h_weights_277[d]);
+                w_max = std::max(w_max, h_weights_277[d]);
+            }
+            float w_mean = w_sum / d_model;
+            float w_rms = std::sqrt(w_sum_sq / d_model);
+            
+            // Compute dot product decomposition for token 277
+            float dot_product_277 = 0.0f;
+            float positive_contrib = 0.0f, negative_contrib = 0.0f;
+            for (int d = 0; d < d_model; ++d) {
+                float contrib = h[d] * h_weights_277[d];
+                dot_product_277 += contrib;
+                if (contrib > 0) positive_contrib += contrib;
+                else negative_contrib += contrib;
+            }
+            
+            // Find argmax and its logit
+            int argmax_token = 0;
+            float max_logit_val = logits_row[0];
+            for (int v = 1; v < vocab_size_local; ++v) {
+                if (logits_row[v] > max_logit_val) {
+                    max_logit_val = logits_row[v];
+                    argmax_token = v;
+                }
+            }
+            
+            // Compute logit[277] vs logit[argmax]
+            float logit_277 = logits_row[kAnalysisToken];
+            float logit_diff = max_logit_val - logit_277;  // How much 277 loses by
+            
+            // Compute cosine similarity between h and W[277]
+            float h_norm = std::sqrt(h_sum_sq);
+            float w_norm = std::sqrt(w_sum_sq);
+            float cosine_sim = (h_norm > 1e-8f && w_norm > 1e-8f) 
+                               ? (dot_product_277 / (h_norm * w_norm)) : 0.0f;
+            
+            fprintf(stderr, "[ARGMAX_EQUATION] pos=%d: logit[v] = Σ_d h[d] × W[v,d]\n", pos);
+            fprintf(stderr, "  HIDDEN h[%d]: mean=%.6f rms=%.6f min=%.6f max=%.6f sum=%.6f\n",
+                    pos, h_mean, h_rms, h_min, h_max, h_sum);
+            fprintf(stderr, "  W[277]: mean=%.6f rms=%.6f min=%.6f max=%.6f sum=%.6f\n",
+                    w_mean, w_rms, w_min, w_max, w_sum);
+            fprintf(stderr, "  DOT(h, W[277]): computed=%.6f (pos_contrib=%.6f neg_contrib=%.6f)\n",
+                    dot_product_277, positive_contrib, negative_contrib);
+            fprintf(stderr, "  COSINE(h, W[277]): %.6f (measures alignment: 1.0=perfect, 0=orthogonal)\n",
+                    cosine_sim);
+            fprintf(stderr, "  ACTUAL logit[277]=%.6f (via GEMM)\n", logit_277);
+            fprintf(stderr, "  ARGMAX: token=%d logit=%.6f (277 loses by %.6f)\n",
+                    argmax_token, max_logit_val, logit_diff);
+            if (argmax_token == kAnalysisToken) {
+                fprintf(stderr, "  [ANOMALY] Token 277 IS argmax! Mode collapse risk.\n");
+            }
+            fprintf(stderr, "\n");
+        }
+    }
     
     // RULE 20: Validate output shape
     const auto expected_shape = TensorContract::TensorShape::make_LOGITS(total_tokens, cfg->vocab_size);
@@ -1481,6 +1807,5 @@ float autogradTrainingStep(
     
     return loss_result.loss_value;
 }
-
 }  // namespace Autograd
 }  // namespace GRIM

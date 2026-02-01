@@ -8,6 +8,7 @@
 #include "../../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../../Layers/Attention/QKV_Projector.hpp"  // ISSUE #62: For launchReshapeFromBHSD
 #include "../../Layers/FeedForward/Feed_Forward_GPU.hpp"  // ISSUE #97: For launchFFNBiasAdd/Backward
+#include "../PBM/PositionalBiasMethod.hpp"  // ISSUE #119: For RoPE autograd backward
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <cuda_bf16.h>
@@ -2097,6 +2098,115 @@ __global__ void kernel_dropout_backward(
     }
 }
 
+/**
+ * ISSUE #118: Row-wise centering kernel for forward activation centering
+ * Subtracts the mean of each row to remove common direction accumulation.
+ * 
+ * Forward:  y[t,d] = x[t,d] - mean_d(x[t,:])
+ * 
+ * One block per row (token), 256 threads cooperatively compute row mean
+ * and subtract it from each element.
+ *
+ * This kernel is used for BOTH forward pass (center activations before residual add)
+ * and backward pass (centering is linear, so backward is also centering).
+ */
+__global__ void kernel_center_rows(
+    const float* __restrict__ input,   // [num_rows, row_dim]
+    float* __restrict__ output,        // [num_rows, row_dim]
+    int row_dim,
+    int num_rows
+) {
+    const int row_idx = blockIdx.x;
+    if (row_idx >= num_rows) return;
+    
+    const float* in_row = input + static_cast<size_t>(row_idx) * row_dim;
+    float* out_row = output + static_cast<size_t>(row_idx) * row_dim;
+    
+    // Compute row mean via parallel reduction
+    __shared__ float s_sum;
+    if (threadIdx.x == 0) s_sum = 0.0f;
+    __syncthreads();
+    
+    // Each thread sums a subset of elements
+    float local_sum = 0.0f;
+    for (int i = threadIdx.x; i < row_dim; i += blockDim.x) {
+        local_sum += in_row[i];
+    }
+    
+    // Warp reduction
+    for (int offset = warpSize / 2; offset > 0; offset /= 2) {
+        local_sum += __shfl_down_sync(0xffffffff, local_sum, offset);
+    }
+    
+    // First thread in each warp atomically adds to shared sum
+    if ((threadIdx.x & (warpSize - 1)) == 0) {
+        atomicAdd(&s_sum, local_sum);
+    }
+    __syncthreads();
+    
+    const float mean = s_sum / static_cast<float>(row_dim);
+    
+    // Subtract mean from each element
+    for (int i = threadIdx.x; i < row_dim; i += blockDim.x) {
+        out_row[i] = in_row[i] - mean;
+    }
+}
+
+/**
+ * kernel_center_columns - ISSUE #118 FIX (correct centering dimension!)
+ * 
+ * Centers each COLUMN by subtracting the mean computed ACROSS ROWS (positions).
+ * This removes the "common direction" that causes inter-position correlation.
+ * 
+ * Formula: out[t,d] = in[t,d] - mean_t(in[:,d])
+ *        = in[t,d] - (1/num_rows) × Σ_t(in[t,d])
+ * 
+ * After centering, each column (feature dimension) sums to zero across all positions.
+ * This DOES affect cos(h_i, h_j) because we remove the shared component!
+ * 
+ * Parallelization: One block per column (d_model columns, each processes num_rows elements)
+ */
+__global__ void kernel_center_columns(
+    const float* __restrict__ input,   // [num_rows, num_cols] row-major
+    float* __restrict__ output,        // [num_rows, num_cols] row-major
+    int num_cols,                      // d_model (e.g., 768)
+    int num_rows                       // total_tokens (e.g., 3500)
+) {
+    const int col_idx = blockIdx.x;
+    if (col_idx >= num_cols) return;
+    
+    // Compute column mean via parallel reduction across rows
+    __shared__ float s_sum;
+    if (threadIdx.x == 0) s_sum = 0.0f;
+    __syncthreads();
+    
+    // Each thread sums a subset of row elements in this column
+    // Access pattern: input[row * num_cols + col_idx] for each row
+    float local_sum = 0.0f;
+    for (int row = threadIdx.x; row < num_rows; row += blockDim.x) {
+        local_sum += input[static_cast<size_t>(row) * num_cols + col_idx];
+    }
+    
+    // Warp reduction
+    for (int offset = warpSize / 2; offset > 0; offset /= 2) {
+        local_sum += __shfl_down_sync(0xffffffff, local_sum, offset);
+    }
+    
+    // First thread in each warp atomically adds to shared sum
+    if ((threadIdx.x & (warpSize - 1)) == 0) {
+        atomicAdd(&s_sum, local_sum);
+    }
+    __syncthreads();
+    
+    const float mean = s_sum / static_cast<float>(num_rows);
+    
+    // Subtract column mean from each row element in this column
+    for (int row = threadIdx.x; row < num_rows; row += blockDim.x) {
+        const size_t idx = static_cast<size_t>(row) * num_cols + col_idx;
+        output[idx] = input[idx] - mean;
+    }
+}
+
 }  // anonymous namespace
 
 //======================================================//
@@ -2342,6 +2452,204 @@ struct LayerScaleGradFn : public GradFn {
     __host__ void release_saved() override {
         owned_input_grad.reset();
         owned_input_data.reset();
+    }
+};
+
+/**
+ * CenterRowsGradFn - Backward for row-wise centering (Issue #118)
+ * Forward:  y[t,d] = x[t,d] - mean_d(x[t,:])     (per-row mean subtraction)
+ * Backward: grad_x[t,d] = grad_y[t,d] - mean_d(grad_y[t,:])  (SAME centering operation!)
+ *
+ * Mathematical derivation:
+ *   y_d = x_d - (1/D) * sum_d(x_d)
+ *   Let S = sum_d(x_d), then y_d = x_d - S/D
+ *   
+ *   dy/dx_d = 1 - 1/D                   (for same dimension d)
+ *   dy/dx_k = -1/D                      (for other dimensions k≠d)
+ *   
+ *   grad_x_d = sum_k (grad_y_k * dy_k/dx_d)
+ *            = grad_y_d * (1 - 1/D) + sum_{k≠d} grad_y_k * (-1/D)
+ *            = grad_y_d - (1/D) * sum_k(grad_y_k)
+ *            = grad_y_d - mean_d(grad_y)
+ *
+ * BEAUTIFUL: The backward pass is ALSO row-wise centering!
+ */
+struct CenterRowsGradFn : public GradFn {
+    // Stable data (ISSUE #48 pattern - don't store Tensor* pointers)
+    float* input_grad = nullptr;
+    GradFn* input_grad_fn = nullptr;
+    bool owns_input_grad_fn = false;
+    TensorContract::TensorShape input_shape;
+    size_t element_count = 0;
+    int row_dim = 0;
+    int num_rows = 0;
+    bool input_requires_grad = false;
+    
+    // ISSUE #56 FIX: Owned gradient buffer for non-leaf tensors
+    std::shared_ptr<float> owned_input_grad;
+    
+    CenterRowsGradFn() { op_name = "center_rows"; }
+    
+    ~CenterRowsGradFn() {
+        if (owns_input_grad_fn && input_grad_fn) {
+            delete input_grad_fn;
+            input_grad_fn = nullptr;
+        }
+    }
+    
+    __host__ void capture_input(Tensor& input, int dim, int rows, cudaStream_t stream) {
+        input_requires_grad = input.requires_grad;
+        if (!input.requires_grad) return;
+        
+        input_shape = input.shape;
+        element_count = input.numel();
+        row_dim = dim;
+        num_rows = rows;
+        
+        // Take ownership of input's grad_fn (Issue #50 pattern)
+        input_grad_fn = input.grad_fn;
+        if (input.grad_fn && input.owns_grad_fn) {
+            owns_input_grad_fn = true;
+            input.owns_grad_fn = false;
+        }
+        
+        // Setup gradient buffer (Issue #54 pattern)
+        input.ensure_grad();
+        if (input.is_leaf) {
+            input_grad = input.grad_data();
+            AG_TRACE("[CenterRowsGradFn] Using persistent input_grad buffer (leaf): %p\n", (void*)input_grad);
+        } else {
+            float* buf = nullptr;
+            cudaMalloc(&buf, element_count * sizeof(float));
+            cudaMemsetAsync(buf, 0, element_count * sizeof(float), stream);
+            owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
+            input_grad = owned_input_grad.get();
+            AG_TRACE("[CenterRowsGradFn] Allocated owned input_grad buffer (non-leaf): %zu floats at %p\n", element_count, (void*)input_grad);
+        }
+    }
+    
+    __host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        if (applied || !input_requires_grad || !input_grad || !grad_output.data) {
+            return;
+        }
+        applied = true;
+        
+        // BACKWARD: grad_x = grad_y - mean_d(grad_y)  (reuse centering kernel!)
+        // We can use kernel_center_rows to center grad_output directly to input_grad
+        if (input_grad && grad_output.data) {
+            kernel_center_rows<<<num_rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+                grad_output.data, input_grad, row_dim, num_rows);
+        }
+        
+        // Continue backward chain
+        if (input_grad_fn) {
+            Tensor input_grad_tensor;
+            input_grad_tensor.data = input_grad;
+            input_grad_tensor.shape = input_shape;
+            input_grad_tensor.owns_data = false;
+            input_grad_tensor.stream = stream;
+            
+            input_grad_fn->apply(input_grad_tensor, stream);
+            input_grad_fn->release_saved();
+        }
+    }
+    
+    __host__ void release_saved() override {
+        owned_input_grad.reset();
+    }
+};
+
+/**
+ * CenterColumnsGradFn - Backward for column-wise centering (Issue #118 proper fix)
+ * Forward: y[t,d] = x[t,d] - mean_t(x[:,d])   (centers each column across rows/positions)
+ * Backward: Since centering is linear, grad_x = grad_y - mean_t(grad_y[:,d])  (same operation)
+ * 
+ * This is the CORRECT centering for reducing inter-position correlation:
+ * - Removes the common direction that all positions share
+ * - Actually reduces cos(h_i, h_j) between different positions
+ */
+struct CenterColumnsGradFn : public GradFn {
+    // Input tensor info (stable data, Issue #48 pattern)
+    bool input_requires_grad = false;
+    TensorContract::TensorShape input_shape;
+    std::size_t element_count = 0;
+    int num_cols = 0;      // d_model (number of columns)
+    int num_rows = 0;      // total_tokens (number of positions)
+    
+    // Input gradient chain
+    float* input_grad = nullptr;
+    GradFn* input_grad_fn = nullptr;
+    bool owns_input_grad_fn = false;
+    std::shared_ptr<float> owned_input_grad;
+    
+    CenterColumnsGradFn() { op_name = "center_columns"; }
+    
+    ~CenterColumnsGradFn() {
+        if (owns_input_grad_fn && input_grad_fn) {
+            delete input_grad_fn;
+            input_grad_fn = nullptr;
+        }
+    }
+    
+    __host__ void capture_input(Tensor& input, int cols, int rows, cudaStream_t stream) {
+        input_requires_grad = input.requires_grad;
+        if (!input.requires_grad) return;
+        
+        input_shape = input.shape;
+        element_count = input.numel();
+        num_cols = cols;
+        num_rows = rows;
+        
+        // Take ownership of input's grad_fn (Issue #50 pattern)
+        input_grad_fn = input.grad_fn;
+        if (input.grad_fn && input.owns_grad_fn) {
+            owns_input_grad_fn = true;
+            input.owns_grad_fn = false;
+        }
+        
+        // Setup gradient buffer (Issue #54 pattern)
+        input.ensure_grad();
+        if (input.is_leaf) {
+            input_grad = input.grad_data();
+            AG_TRACE("[CenterColumnsGradFn] Using persistent input_grad buffer (leaf): %p\n", (void*)input_grad);
+        } else {
+            float* buf = nullptr;
+            cudaMalloc(&buf, element_count * sizeof(float));
+            cudaMemsetAsync(buf, 0, element_count * sizeof(float), stream);
+            owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
+            input_grad = owned_input_grad.get();
+            AG_TRACE("[CenterColumnsGradFn] Allocated owned input_grad buffer (non-leaf): %zu floats at %p\n", element_count, (void*)input_grad);
+        }
+    }
+    
+    __host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        if (applied || !input_requires_grad || !input_grad || !grad_output.data) {
+            return;
+        }
+        applied = true;
+        
+        // BACKWARD: grad_x = grad_y - mean_t(grad_y[:,d])  (same centering operation!)
+        // Since column-wise centering is linear, backward is same as forward
+        if (input_grad && grad_output.data) {
+            kernel_center_columns<<<num_cols, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+                grad_output.data, input_grad, num_cols, num_rows);
+        }
+        
+        // Continue backward chain
+        if (input_grad_fn) {
+            Tensor input_grad_tensor;
+            input_grad_tensor.data = input_grad;
+            input_grad_tensor.shape = input_shape;
+            input_grad_tensor.owns_data = false;
+            input_grad_tensor.stream = stream;
+            
+            input_grad_fn->apply(input_grad_tensor, stream);
+            input_grad_fn->release_saved();
+        }
+    }
+    
+    __host__ void release_saved() override {
+        owned_input_grad.reset();
     }
 };
 
@@ -4036,6 +4344,109 @@ Tensor layer_scale(const Tensor& x, Tensor& scale_param, cudaStream_t stream) {
     return result;
 }
 
+/**
+ * center_rows - Row-wise mean centering (Issue #118)
+ * 
+ * Forward:  y[t,d] = x[t,d] - mean_d(x[t,:])
+ * Backward: grad_x[t,d] = grad_y[t,d] - mean_d(grad_y[t,:])  (SAME centering!)
+ * 
+ * Purpose: Removes common direction from activations to prevent mode collapse.
+ * The common direction accumulates through residual stream (12 layers × LayerScale).
+ * By centering before residual add, we zero the accumulated bias.
+ * 
+ * @param x Input tensor [num_rows, row_dim] (typically [total_tokens, d_model])
+ * @param stream CUDA stream
+ * @return Centered tensor (row sums ≈ 0)
+ */
+Tensor center_rows(const Tensor& x, cudaStream_t stream) {
+    if (!x.data) {
+        throw std::runtime_error("center_rows: input tensor data is NULL");
+    }
+    
+    // For 2D tensors [total_tokens, d_model]: rows=total_tokens, cols=d_model
+    // We center each ROW (subtract mean of that row's d_model elements)
+    if (!x.shape.is_flat()) {
+        throw std::runtime_error("center_rows: expected 2D (flat) tensor, got 4D");
+    }
+    const int num_rows = x.shape.as_2d().rows;  // total_tokens
+    const int row_dim = x.shape.as_2d().cols;   // d_model (768)
+    
+    const bool track_grad = x.requires_grad;
+    Tensor result = Tensor::empty(x.shape, track_grad, stream);
+    
+    // Forward: y = x - mean(x)  (per-row)
+    kernel_center_rows<<<num_rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        x.data, result.data, row_dim, num_rows);
+    
+    // Set up backward
+    if (track_grad) {
+        result.is_leaf = false;
+        auto* grad_fn = new CenterRowsGradFn();
+        grad_fn->capture_input(const_cast<Tensor&>(x), row_dim, num_rows, stream);
+        result.grad_fn = grad_fn;
+        result.owns_grad_fn = true;
+    }
+    
+    return result;
+}
+
+/**
+ * center_columns - Remove mean across rows (positions) for each column (feature)
+ * ISSUE #118 PROPER FIX: This is the CORRECT centering dimension!
+ * 
+ * Forward:  y[t,d] = x[t,d] - mean_t(x[:,d])  (subtract column mean from each element)
+ * Backward: grad_x[t,d] = grad_y[t,d] - mean_t(grad_y[:,d])  (SAME centering - linear!)
+ * 
+ * WHY THIS FIXES THE MODE COLLAPSE:
+ * ─────────────────────────────────
+ * - center_rows (old): Made each row's features sum to 0, but didn't change cos(h_i, h_j)
+ *   because rows still pointed in same relative directions
+ * - center_columns (new): Removes the "common direction" that all positions share
+ *   by subtracting the mean vector across all positions
+ * 
+ * Mathematical Effect:
+ *   Before: h[t,:] = signal[t,:] + common[:]  (all positions have same common component)
+ *   After:  h[t,:] = signal[t,:]              (common component removed!)
+ *   
+ *   This DIRECTLY reduces avg_cos(h_i, h_j) because the shared direction is gone.
+ * 
+ * @param x Input tensor [num_rows, num_cols] (typically [total_tokens, d_model])
+ * @param stream CUDA stream
+ * @return Column-centered tensor (column means ≈ 0 for each feature dimension)
+ */
+Tensor center_columns(const Tensor& x, cudaStream_t stream) {
+    if (!x.data) {
+        throw std::runtime_error("center_columns: input tensor data is NULL");
+    }
+    
+    // For 2D tensors [total_tokens, d_model]: rows=total_tokens, cols=d_model
+    // We center each COLUMN (subtract mean across all rows for each column)
+    if (!x.shape.is_flat()) {
+        throw std::runtime_error("center_columns: expected 2D (flat) tensor, got 4D");
+    }
+    const int num_rows = x.shape.as_2d().rows;  // total_tokens (positions)
+    const int num_cols = x.shape.as_2d().cols;  // d_model (768 features)
+    
+    const bool track_grad = x.requires_grad;
+    Tensor result = Tensor::empty(x.shape, track_grad, stream);
+    
+    // Forward: y[t,d] = x[t,d] - mean_t(x[:,d])  (per-column mean subtraction)
+    // Launch one block per column (768 blocks for d_model=768)
+    kernel_center_columns<<<num_cols, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        x.data, result.data, num_cols, num_rows);
+    
+    // Set up backward
+    if (track_grad) {
+        result.is_leaf = false;
+        auto* grad_fn = new CenterColumnsGradFn();
+        grad_fn->capture_input(const_cast<Tensor&>(x), num_cols, num_rows, stream);
+        result.grad_fn = grad_fn;
+        result.owns_grad_fn = true;
+    }
+    
+    return result;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ISSUE #77 DIAGNOSTIC: Log cached activation (ln1_out) values during backward
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -4172,6 +4583,70 @@ static void logCachedActivationStats(
 // Global toggle for Issue #77 diagnostics (enable during investigation)
 static bool g_issue77_diag_enabled = true;
 static int g_issue77_diag_call_count = 0;
+
+// LM head gradient correction flags (centering outside autograd)
+static bool g_lm_head_recenter_gradients = false;
+
+void set_lm_head_grad_correction(bool recenter_gradients) {
+    g_lm_head_recenter_gradients = recenter_gradients;
+}
+
+__global__ void centerGradientsKernel(
+    float* __restrict__ data,   // [total_tokens, d_model] in-place
+    int d_model,
+    int total_tokens
+) {
+    const int token_idx = blockIdx.x;
+    if (token_idx >= total_tokens) return;
+
+    float* row = data + static_cast<size_t>(token_idx) * d_model;
+
+    __shared__ float s_sum;
+    if (threadIdx.x == 0) s_sum = 0.0f;
+    __syncthreads();
+
+    float local_sum = 0.0f;
+    for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
+        local_sum += row[i];
+    }
+
+    for (int offset = warpSize / 2; offset > 0; offset /= 2) {
+        local_sum += __shfl_down_sync(0xffffffff, local_sum, offset);
+    }
+    if ((threadIdx.x & (warpSize - 1)) == 0) {
+        atomicAdd(&s_sum, local_sum);
+    }
+    __syncthreads();
+
+    const float mean = s_sum / static_cast<float>(d_model);
+    for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
+        row[i] -= mean;
+    }
+}
+
+static inline void applyLmHeadGradCorrections(
+    float* grad_a,
+    int total_tokens,
+    int d_model,
+    cudaStream_t stream
+) {
+    if (!grad_a || total_tokens <= 0 || d_model <= 0) {
+        return;
+    }
+    if (!g_lm_head_recenter_gradients) {
+        return;
+    }
+
+    constexpr int kBlockSize = 256;
+
+    centerGradientsKernel<<<total_tokens, kBlockSize, 0, stream>>>(
+        grad_a, d_model, total_tokens);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("[applyLmHeadGradCorrections] recenter kernel failed: ") +
+                                 cudaGetErrorString(err));
+    }
+}
 
 /**
  * MatMulGradFn - Backward for matrix multiplication (TAPE-BASED)
@@ -4677,6 +5152,16 @@ struct MatMulGradFn : public GradFn {
                 debugCaptureLMHeadGrad(grad_b, static_cast<size_t>(N) * K, stream);
                 AG_TRACE("[MatMulGradFn] DEBUG: Captured LM head grad, N=%d K=%d\n", N, K);
             }
+        }
+
+        // If LM head centering was applied outside autograd,
+        // correct grad_A before passing it to the encoder backward chain.
+        if (a_requires_grad && transpose_b && N > 10000) {
+            applyLmHeadGradCorrections(
+                grad_a,
+                M,
+                K,
+                stream);
         }
 
         // CONTINUE AUTOGRAD CHAIN (Recursive) - ISSUE #48 FIX: Use stored grad_fn pointers
@@ -6269,6 +6754,270 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     }
     
     return {std::move(Q_bhsd), std::move(K_bhsd), std::move(V_bhsd)};
+}
+
+
+// =============================================================================
+// ISSUE #119: RoPEGradFn - Autograd wrapper for RoPE rotation
+// =============================================================================
+// RoPE forward rotates Q and K tensors IN-PLACE. The backward pass must apply
+// the INVERSE rotation (R(-θ) = R(θ)^T) to the gradients dQ and dK to correctly
+// propagate gradients through the rotation.
+//
+// Without this, gradients remain in the "rotated space" and are incorrect,
+// causing training to learn wrong attention patterns.
+//
+// Uses SharedState pattern (like SplitAndReshapeQKVGradFn) to coordinate Q and K.
+// When both Q and K backward are complete, continues the autograd chain.
+// =============================================================================
+
+struct RoPEGradFn : public GradFn {
+    /**
+     * OutputType identifies which tensor (Q or K) this GradFn is attached to.
+     */
+    enum class OutputType { Q, K };
+    OutputType output_type = OutputType::Q;
+    
+    /**
+     * SharedState holds the common data for coordinating Q and K backward passes.
+     * - Stores upstream grad_fns for Q and K (from split_and_reshape_qkv)
+     * - Stores RoPE parameters (inv_freq, dimensions)
+     * - Uses atomic counter to detect when both Q and K backward are complete
+     */
+    struct SharedState {
+        // Upstream grad_fns for Q and K (from split_and_reshape_qkv output)
+        GradFn* q_upstream_grad_fn = nullptr;
+        GradFn* k_upstream_grad_fn = nullptr;
+        bool owns_q_upstream = false;
+        bool owns_k_upstream = false;
+        
+        // ISSUE #48 FIX: Don't store Tensor by value - operator= is deleted
+        // Instead, store only what we need for backward: requires_grad flags
+        bool q_requires_grad = false;
+        bool k_requires_grad = false;
+        
+        // RoPE parameters (captured at forward time)
+        const float* inv_freq = nullptr;
+        int batch_size = 0;
+        int num_q_heads = 0;
+        int num_kv_heads = 0;
+        int seq_len = 0;
+        int head_dim = 0;
+        int rotary_dim = 0;
+        
+        // Atomic counter: when reaches 2, both Q and K backward complete
+        std::atomic<int> apply_count{0};
+        
+        ~SharedState() {
+            if (owns_q_upstream && q_upstream_grad_fn) {
+                delete q_upstream_grad_fn;
+            }
+            if (owns_k_upstream && k_upstream_grad_fn) {
+                delete k_upstream_grad_fn;
+            }
+        }
+    };
+    
+    std::shared_ptr<SharedState> shared;
+    
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        if (!shared) {
+            fprintf(stderr, "[RoPEGradFn] ERROR: shared state is null!\n");
+            return;
+        }
+        auto& state = *shared;
+        
+        const char* type_str = (output_type == OutputType::Q) ? "Q" : "K";
+        // Shape is 4D (BHSD layout) - use as_4d() accessor
+        const auto& s4d = grad_output.shape.as_4d();
+        AG_TRACE("[RoPEGradFn-%s] apply() ENTER grad_output.data=%p shape=[%d,%d,%d,%d]\n",
+                 type_str, grad_output.data, 
+                 s4d.batch, s4d.heads, s4d.seq, s4d.head_dim);
+        
+        // Apply inverse RoPE rotation to THIS gradient IN-PLACE
+        // The grad_output.data points to the upstream gradient buffer (dQ or dK)
+        // We need a mutable copy since grad_output is const
+        float* grad_data = const_cast<float*>(grad_output.data);
+        
+        if (output_type == OutputType::Q) {
+            // Inverse-rotate dQ only - K gradients handled by K's GradFn
+            PBM::launchRoPERotationGQA_backward(
+                grad_data,        // dQ - modified in-place
+                nullptr,          // dK = nullptr, handle separately
+                state.inv_freq,
+                state.batch_size,
+                state.num_q_heads,
+                state.num_kv_heads,
+                state.seq_len,
+                state.head_dim,
+                state.rotary_dim,
+                stream
+            );
+            AG_TRACE("[RoPEGradFn-Q] Inverse RoPE applied to dQ\n");
+        } else {
+            // Inverse-rotate dK only - Q gradients handled by Q's GradFn
+            PBM::launchRoPERotationGQA_backward(
+                nullptr,          // dQ = nullptr, handle separately
+                grad_data,        // dK - modified in-place
+                state.inv_freq,
+                state.batch_size,
+                state.num_q_heads,
+                state.num_kv_heads,
+                state.seq_len,
+                state.head_dim,
+                state.rotary_dim,
+                stream
+            );
+            AG_TRACE("[RoPEGradFn-K] Inverse RoPE applied to dK\n");
+        }
+        
+        // Increment counter to track completion
+        const int count = state.apply_count.fetch_add(1) + 1;
+        AG_TRACE("[RoPEGradFn-%s] apply_count = %d/2\n", type_str, count);
+        
+        // Continue upstream chain for THIS output immediately
+        // (Unlike SplitAndReshapeQKV, we don't need to wait for both because
+        //  Q and K have independent upstream paths after split_and_reshape_qkv)
+        if (output_type == OutputType::Q) {
+            if (state.q_requires_grad && state.q_upstream_grad_fn) {
+                AG_TRACE("[RoPEGradFn-Q] Continuing to q_upstream_grad_fn...\n");
+                state.q_upstream_grad_fn->apply(grad_output, stream);
+                state.q_upstream_grad_fn->release_saved();
+            }
+        } else {
+            if (state.k_requires_grad && state.k_upstream_grad_fn) {
+                AG_TRACE("[RoPEGradFn-K] Continuing to k_upstream_grad_fn...\n");
+                state.k_upstream_grad_fn->apply(grad_output, stream);
+                state.k_upstream_grad_fn->release_saved();
+            }
+        }
+        
+        AG_TRACE("[RoPEGradFn-%s] apply() EXIT\n", type_str);
+    }
+    
+    void release_saved() override {
+        GradFn::release_saved();
+        // SharedState cleanup happens via shared_ptr destructor
+    }
+};
+
+
+/**
+ * Apply RoPE rotation to Q and K tensors IN-PLACE with autograd tracking.
+ * 
+ * ISSUE #119: This function wraps PBM::launchRoPERotationGQA with proper autograd
+ * so that the backward pass correctly applies inverse rotation to dQ and dK.
+ * 
+ * RoPE Math:
+ *   Forward:  Q' = R(θ) * Q,  K' = R(θ) * K   (rotation by position-dependent angle)
+ *   Backward: dQ = R(-θ) * dQ', dK = R(-θ) * dK'  (inverse rotation)
+ * 
+ * Since R(-θ) = R(θ)^T and R is orthogonal, this is mathematically correct.
+ * 
+ * @param Q        Query tensor [B, num_heads, S, head_dim] - modified IN-PLACE
+ * @param K        Key tensor [B, num_kv_heads, S, head_dim] - modified IN-PLACE
+ * @param inv_freq Inverse frequencies for RoPE [rotary_dim/2]
+ * @param batch_size   Batch size
+ * @param num_q_heads  Number of Q heads
+ * @param num_kv_heads Number of K/V heads (GQA: num_kv_heads < num_q_heads)
+ * @param seq_len      Sequence length
+ * @param head_dim     Dimension per head
+ * @param rotary_dim   Number of dimensions to rotate (typically head_dim or head_dim/2)
+ * @param stream       CUDA stream
+ */
+void rope_rotation(
+    Tensor& Q,
+    Tensor& K,
+    const float* inv_freq,
+    int batch_size,
+    int num_q_heads,
+    int num_kv_heads,
+    int seq_len,
+    int head_dim,
+    int rotary_dim,
+    cudaStream_t stream
+) {
+    // RULE 20: Fail loud validation
+    if (!Q.data) {
+        throw std::runtime_error("rope_rotation: Q.data is NULL");
+    }
+    if (!K.data) {
+        throw std::runtime_error("rope_rotation: K.data is NULL");
+    }
+    if (!inv_freq) {
+        throw std::runtime_error("rope_rotation: inv_freq is NULL");
+    }
+    if (rotary_dim <= 0 || rotary_dim > head_dim) {
+        throw std::runtime_error("rope_rotation: invalid rotary_dim=" + std::to_string(rotary_dim) +
+                                 " (head_dim=" + std::to_string(head_dim) + ")");
+    }
+    
+    AG_TRACE("[rope_rotation] ENTER Q.data=%p K.data=%p batch=%d seq=%d heads=%d/%d dim=%d rotary=%d\n",
+             Q.data, K.data, batch_size, seq_len, num_q_heads, num_kv_heads, head_dim, rotary_dim);
+    
+    // Forward pass: Apply RoPE rotation IN-PLACE to Q and K
+    PBM::launchRoPERotationGQA(
+        Q.data, K.data, inv_freq,
+        batch_size, num_q_heads, num_kv_heads, seq_len, head_dim, rotary_dim,
+        stream
+    );
+    
+    // Setup backward pass if either tensor requires gradients
+    const bool requires_grad = Q.requires_grad || K.requires_grad;
+    
+    if (requires_grad) {
+        AG_TRACE("[rope_rotation] Setting up RoPEGradFn for backward...\n");
+        
+        // Create shared state for coordinating Q and K backward
+        auto shared = std::make_shared<RoPEGradFn::SharedState>();
+        
+        // Capture upstream grad_fns (transfer ownership from input tensors)
+        if (Q.grad_fn) {
+            shared->q_upstream_grad_fn = Q.grad_fn;
+            shared->owns_q_upstream = Q.owns_grad_fn;
+            Q.owns_grad_fn = false;  // Transfer ownership to SharedState
+        }
+        if (K.grad_fn) {
+            shared->k_upstream_grad_fn = K.grad_fn;
+            shared->owns_k_upstream = K.owns_grad_fn;
+            K.owns_grad_fn = false;  // Transfer ownership to SharedState
+        }
+        
+        // ISSUE #48 FIX: Store requires_grad flags, not Tensor copies
+        // (Tensor::operator= is deleted, and we only need these flags)
+        shared->q_requires_grad = Q.requires_grad;
+        shared->k_requires_grad = K.requires_grad;
+        
+        // Capture RoPE parameters
+        shared->inv_freq = inv_freq;
+        shared->batch_size = batch_size;
+        shared->num_q_heads = num_q_heads;
+        shared->num_kv_heads = num_kv_heads;
+        shared->seq_len = seq_len;
+        shared->head_dim = head_dim;
+        shared->rotary_dim = rotary_dim;
+        
+        // Create and attach GradFn for Q
+        auto q_grad_fn = new RoPEGradFn();
+        q_grad_fn->output_type = RoPEGradFn::OutputType::Q;
+        q_grad_fn->shared = shared;
+        Q.is_leaf = false;
+        Q.grad_fn = q_grad_fn;
+        Q.owns_grad_fn = true;
+        
+        // Create and attach GradFn for K
+        auto k_grad_fn = new RoPEGradFn();
+        k_grad_fn->output_type = RoPEGradFn::OutputType::K;
+        k_grad_fn->shared = shared;
+        K.is_leaf = false;
+        K.grad_fn = k_grad_fn;
+        K.owns_grad_fn = true;
+        
+        AG_TRACE("[rope_rotation] RoPEGradFn attached: Q.grad_fn=%p K.grad_fn=%p\n",
+                 Q.grad_fn, K.grad_fn);
+    }
+    
+    AG_TRACE("[rope_rotation] EXIT\n");
 }
 
 }  // namespace autograd

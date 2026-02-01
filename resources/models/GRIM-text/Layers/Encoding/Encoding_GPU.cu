@@ -25,6 +25,7 @@
 #include <string>
 #include <vector>
 #include <cmath>
+#include <algorithm>  // Rule 21 diagnostic: std::min_element, std::max_element
 
 //======================================================//
 //  Issue #37 DIAGNOSTIC: Hidden State Alignment Tracker
@@ -34,6 +35,7 @@
 namespace {
     constexpr bool kEnableHiddenAlignDiag = false;  // Set true to enable [HiddenAlign] logs
     constexpr bool kEnableEncoderStepLogs = false;  // Set true to enable [EncoderFwd] step logs
+    constexpr bool kEnableEquationLogging = false;  // Set true to enable [*_EQUATION] diagnostic logs (Rule 21)
     
     // Shared W[277] reference - set once per forward pass
     static const float* s_w277_ref = nullptr;
@@ -1108,47 +1110,49 @@ namespace {
         // ========================================================================
         // ISSUE #106 RULE 21 OUTPUT: INPUT-WEIGHT COSINE SIMILARITY ANALYSIS
         // ========================================================================
-        fprintf(stderr, "\n[QKV_EQUATION] layer=%d: Y[i,j] = ||x_i|| × ||w_j|| × cos(θ_ij)\n", layer_idx);
-        fprintf(stderr, "  INPUT x (ln1_out): shape=[%d,%d] row_norm_mean=%.4f\n", 
-                total_tokens, d_model, in_row_norm_mean);
-        fprintf(stderr, "  WEIGHT w (W_qkv):  shape=[%d,%d] row_norm_mean=%.4f\n",
-                qkv_dim, d_model, w_row_norm_mean);
-        fprintf(stderr, "  PARAMETERS: d_model=%d, sampled_pairs=%d×%d=%d\n",
-                d_model, cos_sample_input, cos_sample_weight, static_cast<int>(cos_count));
-        fprintf(stderr, "  \n");
-        fprintf(stderr, "  [COSINE DISTRIBUTION] cos(θ) between input rows and weight rows:\n");
-        fprintf(stderr, "    OBSERVED: mean=%.6f std=%.6f mean_abs=%.6f\n", cos_mean, cos_std, cos_abs_mean);
-        fprintf(stderr, "    EXPECTED (random K=%d): mean=0.0 var=%.6f mean_abs=%.6f\n",
-                d_model, expected_cos_variance, expected_cos_abs_mean);
-        fprintf(stderr, "    RATIO: variance=%.2fx expected, |cos|=%.2fx expected\n", 
-                cos_var_ratio, cos_abs_ratio);
-        fprintf(stderr, "  \n");
-        fprintf(stderr, "  [QKV_OUTPUT] Expected from GEMM formula:\n");
-        fprintf(stderr, "    If cos uniformly random: Y_rms ≈ ||x|| × ||w|| × √(1/K) = %.4f × %.4f × %.4f = %.4f\n",
-                in_row_norm_mean, w_row_norm_mean, 1.0f/sqrtf(static_cast<float>(d_model)), rownorm_expected_rms);
-        fprintf(stderr, "    If cos systematic bias: Y_rms ≈ ||x|| × ||w|| × |cos_mean| + random ≈ (formula complex)\n");
-        fprintf(stderr, "    ADJUSTED formula (alignment_ratio=%.4f): %.4f\n", alignment_ratio, adjusted_expected_rms);
-        fprintf(stderr, "    ACTUAL Y_rms: %.4f\n", actual_stats.rms);
-        fprintf(stderr, "  \n");
-        
-        // Root cause analysis
-        if (cos_var_ratio > 2.0f || cos_abs_ratio > 2.0f) {
-            fprintf(stderr, "  [ANOMALY] INPUT-WEIGHT COSINE SIMILARITY IS %.1fx HIGHER THAN RANDOM!\n", 
-                    fmaxf(cos_var_ratio, cos_abs_ratio));
-            fprintf(stderr, "            This means input vectors SYSTEMATICALLY ALIGN with weight rows.\n");
-            fprintf(stderr, "            For Layer 0 (embeddings): Embedding weights and W_qkv may share structure!\n");
-            fprintf(stderr, "            Both learned from same vocabulary → similar semantic directions.\n");
+        if constexpr (kEnableEquationLogging) {
+            fprintf(stderr, "\n[QKV_EQUATION] layer=%d: Y[i,j] = ||x_i|| × ||w_j|| × cos(θ_ij)\n", layer_idx);
+            fprintf(stderr, "  INPUT x (ln1_out): shape=[%d,%d] row_norm_mean=%.4f\n", 
+                    total_tokens, d_model, in_row_norm_mean);
+            fprintf(stderr, "  WEIGHT w (W_qkv):  shape=[%d,%d] row_norm_mean=%.4f\n",
+                    qkv_dim, d_model, w_row_norm_mean);
+            fprintf(stderr, "  PARAMETERS: d_model=%d, sampled_pairs=%d×%d=%d\n",
+                    d_model, cos_sample_input, cos_sample_weight, static_cast<int>(cos_count));
+            fprintf(stderr, "  \n");
+            fprintf(stderr, "  [COSINE DISTRIBUTION] cos(θ) between input rows and weight rows:\n");
+            fprintf(stderr, "    OBSERVED: mean=%.6f std=%.6f mean_abs=%.6f\n", cos_mean, cos_std, cos_abs_mean);
+            fprintf(stderr, "    EXPECTED (random K=%d): mean=0.0 var=%.6f mean_abs=%.6f\n",
+                    d_model, expected_cos_variance, expected_cos_abs_mean);
+            fprintf(stderr, "    RATIO: variance=%.2fx expected, |cos|=%.2fx expected\n", 
+                    cos_var_ratio, cos_abs_ratio);
+            fprintf(stderr, "  \n");
+            fprintf(stderr, "  [QKV_OUTPUT] Expected from GEMM formula:\n");
+            fprintf(stderr, "    If cos uniformly random: Y_rms ≈ ||x|| × ||w|| × √(1/K) = %.4f × %.4f × %.4f = %.4f\n",
+                    in_row_norm_mean, w_row_norm_mean, 1.0f/sqrtf(static_cast<float>(d_model)), rownorm_expected_rms);
+            fprintf(stderr, "    If cos systematic bias: Y_rms ≈ ||x|| × ||w|| × |cos_mean| + random ≈ (formula complex)\n");
+            fprintf(stderr, "    ADJUSTED formula (alignment_ratio=%.4f): %.4f\n", alignment_ratio, adjusted_expected_rms);
+            fprintf(stderr, "    ACTUAL Y_rms: %.4f\n", actual_stats.rms);
+            fprintf(stderr, "  \n");
+            
+            // Root cause analysis
+            if (cos_var_ratio > 2.0f || cos_abs_ratio > 2.0f) {
+                fprintf(stderr, "  [ANOMALY] INPUT-WEIGHT COSINE SIMILARITY IS %.1fx HIGHER THAN RANDOM!\n", 
+                        fmaxf(cos_var_ratio, cos_abs_ratio));
+                fprintf(stderr, "            This means input vectors SYSTEMATICALLY ALIGN with weight rows.\n");
+                fprintf(stderr, "            For Layer 0 (embeddings): Embedding weights and W_qkv may share structure!\n");
+                fprintf(stderr, "            Both learned from same vocabulary → similar semantic directions.\n");
+            }
+            
+            // Column variance analysis (isotropic vs heterogeneous)
+            float col_var_range_ratio = col_var_max / (col_var_min + 1e-8f);
+            if (col_var_range_ratio < 3.0f) {
+                fprintf(stderr, "  [ANOMALY] INPUT COLUMNS ARE ISOTROPIC (range_ratio=%.2fx < 3x)!\n", col_var_range_ratio);
+                fprintf(stderr, "            Isotropic columns cause COHERENT summation in GEMM → output explosion.\n");
+                fprintf(stderr, "            Layer 0 embeddings are often isotropic (uniform variance across dimensions).\n");
+            }
+            
+            fprintf(stderr, "\n");
         }
-        
-        // Column variance analysis (isotropic vs heterogeneous)
-        float col_var_range_ratio = col_var_max / (col_var_min + 1e-8f);
-        if (col_var_range_ratio < 3.0f) {
-            fprintf(stderr, "  [ANOMALY] INPUT COLUMNS ARE ISOTROPIC (range_ratio=%.2fx < 3x)!\n", col_var_range_ratio);
-            fprintf(stderr, "            Isotropic columns cause COHERENT summation in GEMM → output explosion.\n");
-            fprintf(stderr, "            Layer 0 embeddings are often isotropic (uniform variance across dimensions).\n");
-        }
-        
-        fprintf(stderr, "\n");
         
         // NEW: Alignment ratio - most important metric!
         fprintf(stderr, "  INPUT ALIGNMENT: mean_row_norm=%.4f, avg_row_norm=%.4f, RATIO=%.4f\n",
@@ -1610,11 +1614,13 @@ void EncodingLayer::useExternalWeights(
     rms2_gamma_.share_grad(rms2_gamma);
     rms2_gamma_.owns_data = false;
     
-    // QKV projection
+
+    
     W_qkv_ = Tensor::from_ptr(qkv_weight.data, qkv_weight.shape, false, true);
     W_qkv_.share_grad(qkv_weight);
     W_qkv_.owns_data = false;
     
+
     if (qkv_bias.data) {
         b_qkv_ = Tensor::from_ptr(qkv_bias.data, qkv_bias.shape, false, true);
         b_qkv_.share_grad(qkv_bias);
@@ -1914,21 +1920,23 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         const float expected_output_rms = g_diag_input_avg_rms * gamma_rms / sqrtf(input_rms_sq + eps);
         const float eps_contribution_pct = 100.0f * eps / (input_rms_sq + eps);
         
-        fprintf(stderr, "[RMSNORM_EQUATION] layer=%d: y = x * gamma / sqrt(mean(x²) + eps)\n", layer_idx);
-        fprintf(stderr, "  INPUT x: shape=[%d, %d], per_row_rms=%.6f (rms²=%.2e), eps=%.2e\n", 
-                total_tokens, d_model, g_diag_input_avg_rms, input_rms_sq, eps);
-        fprintf(stderr, "  GAMMA: min=%.6f max=%.6f rms=%.6f\n", gamma_min, gamma_max, gamma_rms);
-        fprintf(stderr, "  EPSILON CONTRIBUTION: %.1f%% of denominator (eps / (input_rms² + eps))\n", eps_contribution_pct);
-        fprintf(stderr, "  EXPECTED output_rms = input_rms * gamma_rms / sqrt(input_rms² + eps) = %.6f\n", expected_output_rms);
-        fprintf(stderr, "  ACTUAL output_rms: min=%.6f max=%.6f avg=%.6f\n", min_row_rms, max_row_rms, avg_row_rms);
-        
-        if (std::abs(avg_row_rms - expected_output_rms) > 0.01f) {
-            float ratio = avg_row_rms / expected_output_rms;
-            fprintf(stderr, "  [ANOMALY] output_rms=%.4f != expected=%.4f (ratio=%.2fx) - CHECK KERNEL!\n",
-                    avg_row_rms, expected_output_rms, ratio);
-        } else if (eps_contribution_pct > 5.0f) {
-            fprintf(stderr, "  [INFO] Epsilon is %.1f%% of denominator - consider scaling inputs larger (e.g., sqrt(d_model) embedding scale)\n",
-                    eps_contribution_pct);
+        if constexpr (kEnableEquationLogging) {
+            fprintf(stderr, "[RMSNORM_EQUATION] layer=%d: y = x * gamma / sqrt(mean(x²) + eps)\n", layer_idx);
+            fprintf(stderr, "  INPUT x: shape=[%d, %d], per_row_rms=%.6f (rms²=%.2e), eps=%.2e\n", 
+                    total_tokens, d_model, g_diag_input_avg_rms, input_rms_sq, eps);
+            fprintf(stderr, "  GAMMA: min=%.6f max=%.6f rms=%.6f\n", gamma_min, gamma_max, gamma_rms);
+            fprintf(stderr, "  EPSILON CONTRIBUTION: %.1f%% of denominator (eps / (input_rms² + eps))\n", eps_contribution_pct);
+            fprintf(stderr, "  EXPECTED output_rms = input_rms * gamma_rms / sqrt(input_rms² + eps) = %.6f\n", expected_output_rms);
+            fprintf(stderr, "  ACTUAL output_rms: min=%.6f max=%.6f avg=%.6f\n", min_row_rms, max_row_rms, avg_row_rms);
+            
+            if (std::abs(avg_row_rms - expected_output_rms) > 0.01f) {
+                float ratio = avg_row_rms / expected_output_rms;
+                fprintf(stderr, "  [ANOMALY] output_rms=%.4f != expected=%.4f (ratio=%.2fx) - CHECK KERNEL!\n",
+                        avg_row_rms, expected_output_rms, ratio);
+            } else if (eps_contribution_pct > 5.0f) {
+                fprintf(stderr, "  [INFO] Epsilon is %.1f%% of denominator - consider scaling inputs larger (e.g., sqrt(d_model) embedding scale)\n",
+                        eps_contribution_pct);
+            }
         }
     }
     
@@ -2080,47 +2088,49 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
             ? ((g_issue77_fwd_layer_count - 1) % 12) : 0;
         
         // Print [QKV_EQUATION] diagnostic
-        fprintf(stderr, "\n[QKV_EQUATION] ENCODER_LAYER_%d: qkv_out = ln1_out @ W_qkv^T + b_qkv\n", layer_idx_local);
-        fprintf(stderr, "  ln1_out (sample %d tokens): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
-                n_sample, n_sample, d_model_local, ln1_min, ln1_max, ln1_rms);
-        fprintf(stderr, "  ln1_out row_norms: mean=%.10f\n", ln1_row_norm_mean);
-        fprintf(stderr, "  W_qkv (sample 64 cols): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
-                qkv_dim_local, d_model_local, wqkv_min, wqkv_max, wqkv_rms);
-        fprintf(stderr, "  W_qkv row_norms (scaled to d_model): mean=%.10f\n", wqkv_row_norm_mean);
-        if (b_qkv_.data) {
-            fprintf(stderr, "  b_qkv: shape=[%d] min=%.10f max=%.10f rms=%.10f\n",
-                    qkv_dim_local, bias_min, bias_max, bias_rms);
-        } else {
-            fprintf(stderr, "  b_qkv: [nullptr]\n");
+        if constexpr (kEnableEquationLogging) {
+            fprintf(stderr, "\n[QKV_EQUATION] ENCODER_LAYER_%d: qkv_out = ln1_out @ W_qkv^T + b_qkv\n", layer_idx_local);
+            fprintf(stderr, "  ln1_out (sample %d tokens): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
+                    n_sample, n_sample, d_model_local, ln1_min, ln1_max, ln1_rms);
+            fprintf(stderr, "  ln1_out row_norms: mean=%.10f\n", ln1_row_norm_mean);
+            fprintf(stderr, "  W_qkv (sample 64 cols): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
+                    qkv_dim_local, d_model_local, wqkv_min, wqkv_max, wqkv_rms);
+            fprintf(stderr, "  W_qkv row_norms (scaled to d_model): mean=%.10f\n", wqkv_row_norm_mean);
+            if (b_qkv_.data) {
+                fprintf(stderr, "  b_qkv: shape=[%d] min=%.10f max=%.10f rms=%.10f\n",
+                        qkv_dim_local, bias_min, bias_max, bias_rms);
+            } else {
+                fprintf(stderr, "  b_qkv: [nullptr]\n");
+            }
+            fprintf(stderr, "  EXPECTED qkv_row_norm = ln1_row_norm * wqkv_row_norm / sqrt(d_model)\n");
+            fprintf(stderr, "                       = %.4f * %.4f / sqrt(%d) = %.4f\n",
+                    ln1_row_norm_mean, wqkv_row_norm_mean, d_model_local, expected_qkv_row_norm);
+            fprintf(stderr, "  ACTUAL qkv_out (Q portion): min=%.10f max=%.10f rms=%.10f\n",
+                    qkv_min, qkv_max, qkv_rms);
+            fprintf(stderr, "  ACTUAL qkv_row_norms (Q portion): mean=%.10f\n", qkv_row_norm_mean);
+            fprintf(stderr, "  TARGET qkv_row_norm for healthy attention: ~%.1f (sqrt(head_dim=%d))\n",
+                    target_qkv_row_norm, head_dim_local);
+            
+            // Anomaly detection
+            float inflation_ratio = qkv_row_norm_mean / target_qkv_row_norm;
+            if (inflation_ratio > 5.0f) {
+                fprintf(stderr, "  *** ANOMALY: qkv_row_norm=%.2f is %.1fx larger than target=%.1f! ***\n",
+                        qkv_row_norm_mean, inflation_ratio, target_qkv_row_norm);
+                fprintf(stderr, "      This will cause attention score explosion (score ~ %.1f instead of ~1)\n",
+                        inflation_ratio * inflation_ratio);
+            }
+            if (ln1_row_norm_mean > 50.0f) {
+                fprintf(stderr, "  *** ANOMALY: ln1_out row_norm=%.2f >> expected ~27.7 (sqrt(d_model)*rms~1) ***\n",
+                        ln1_row_norm_mean);
+                fprintf(stderr, "      Input to QKV projection is already too large!\n");
+            }
+            if (wqkv_row_norm_mean > 5.0f) {
+                fprintf(stderr, "  *** ANOMALY: W_qkv row_norm=%.2f >> expected ~1.0 (Xavier init) ***\n",
+                        wqkv_row_norm_mean);
+                fprintf(stderr, "      Weight magnitudes are too large!\n");
+            }
+            fprintf(stderr, "\n");
         }
-        fprintf(stderr, "  EXPECTED qkv_row_norm = ln1_row_norm * wqkv_row_norm / sqrt(d_model)\n");
-        fprintf(stderr, "                       = %.4f * %.4f / sqrt(%d) = %.4f\n",
-                ln1_row_norm_mean, wqkv_row_norm_mean, d_model_local, expected_qkv_row_norm);
-        fprintf(stderr, "  ACTUAL qkv_out (Q portion): min=%.10f max=%.10f rms=%.10f\n",
-                qkv_min, qkv_max, qkv_rms);
-        fprintf(stderr, "  ACTUAL qkv_row_norms (Q portion): mean=%.10f\n", qkv_row_norm_mean);
-        fprintf(stderr, "  TARGET qkv_row_norm for healthy attention: ~%.1f (sqrt(head_dim=%d))\n",
-                target_qkv_row_norm, head_dim_local);
-        
-        // Anomaly detection
-        float inflation_ratio = qkv_row_norm_mean / target_qkv_row_norm;
-        if (inflation_ratio > 5.0f) {
-            fprintf(stderr, "  *** ANOMALY: qkv_row_norm=%.2f is %.1fx larger than target=%.1f! ***\n",
-                    qkv_row_norm_mean, inflation_ratio, target_qkv_row_norm);
-            fprintf(stderr, "      This will cause attention score explosion (score ~ %.1f instead of ~1)\n",
-                    inflation_ratio * inflation_ratio);
-        }
-        if (ln1_row_norm_mean > 50.0f) {
-            fprintf(stderr, "  *** ANOMALY: ln1_out row_norm=%.2f >> expected ~27.7 (sqrt(d_model)*rms~1) ***\n",
-                    ln1_row_norm_mean);
-            fprintf(stderr, "      Input to QKV projection is already too large!\n");
-        }
-        if (wqkv_row_norm_mean > 5.0f) {
-            fprintf(stderr, "  *** ANOMALY: W_qkv row_norm=%.2f >> expected ~1.0 (Xavier init) ***\n",
-                    wqkv_row_norm_mean);
-            fprintf(stderr, "      Weight magnitudes are too large!\n");
-        }
-        fprintf(stderr, "\n");
     }
     
     // ISSUE #93 DIAGNOSTIC: Compare actual QKV output vs expected GEMM math
@@ -2191,8 +2201,11 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 3c: RoPE rotation...\n");
     if (config_.pos_encoding && config_.pos_encoding->valid && 
         config_.pos_encoding->rope_inv_freq != nullptr && config_.pos_encoding->rotary_dim > 0) {
-        PBM::launchRoPERotationGQA(
-            intermediates.Q_bhsd.data, intermediates.K_bhsd.data,
+        // ISSUE #119 FIX: Use autograd::rope_rotation() instead of raw kernel call
+        // The raw PBM::launchRoPERotationGQA() bypassed autograd - dQ/dK gradients
+        // were never inverse-rotated in backward pass, causing gradient corruption.
+        autograd::rope_rotation(
+            intermediates.Q_bhsd, intermediates.K_bhsd,  // Tensor refs, not .data
             config_.pos_encoding->rope_inv_freq,
             batch_size, num_heads, num_kv_heads, seq_len, head_dim,
             config_.pos_encoding->rotary_dim, stream);
@@ -2276,6 +2289,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     // 7. Residual1: input + proj_out -> residual1
     // Issue #56: Store in intermediates
     // Issue #109: Apply LayerScale to proj_out before residual addition
+    // Issue #118: Apply centering to remove common direction before residual add
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1...\n");
     
@@ -2284,7 +2298,16 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     const Tensor& proj_for_residual = (config_.use_layer_scale && layer_scale1_.data)
         ? (scaled_proj = autograd::layer_scale(intermediates.proj_out, layer_scale1_, stream), scaled_proj)
         : intermediates.proj_out;
-    intermediates.residual1 = autograd::add(input, proj_for_residual, stream);
+    
+    // Issue #118 FIX: Center attention output to remove common direction before residual add
+    // Root cause: V projection weights learn a "common direction" added to ALL positions,
+    // which accumulates through 12 layers via residual stream causing avg_cos collapse.
+    // CRITICAL: Must center COLUMNS (across positions), NOT rows (across features)!
+    // - center_rows: mean_d(x[t,:]) → doesn't change cos(h_i, h_j) between positions
+    // - center_columns: mean_t(x[:,d]) → removes shared direction, REDUCES avg_cos
+    // Formula: centered[t,d] = x[t,d] - mean_t(x[:,d]) → column_sum = 0
+    Tensor centered_attn = autograd::center_columns(proj_for_residual, stream);
+    intermediates.residual1 = autograd::add(input, centered_attn, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 DONE\n");
     
     // ISSUE #93 DIAGNOSTIC: Log residual1 = input + proj_out
@@ -2321,6 +2344,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     // Issue #56: The final output IS stored in intermediates too
     // for consistency, but we also return it
     // Issue #109: Apply LayerScale to ffn_out before residual addition
+    // Issue #118: Apply centering to remove common direction before residual add
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2...\n");
     
@@ -2329,7 +2353,16 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     const Tensor& ffn_for_residual = (config_.use_layer_scale && layer_scale2_.data)
         ? (scaled_ffn = autograd::layer_scale(intermediates.ffn_out, layer_scale2_, stream), scaled_ffn)
         : intermediates.ffn_out;
-    intermediates.output = autograd::add(intermediates.residual1, ffn_for_residual, stream);
+    
+    // Issue #118 FIX: Center FFN output to remove common direction before residual add
+    // Root cause: FFN W2 weights learn a "common direction" added to ALL positions,
+    // which accumulates through 12 layers via residual stream causing avg_cos collapse.
+    // CRITICAL: Must center COLUMNS (across positions), NOT rows (across features)!
+    // - center_rows: mean_d(x[t,:]) → doesn't change cos(h_i, h_j) between positions
+    // - center_columns: mean_t(x[:,d]) → removes shared direction, REDUCES avg_cos
+    // Formula: centered[t,d] = x[t,d] - mean_t(x[:,d]) → column_sum = 0
+    Tensor centered_ffn = autograd::center_columns(ffn_for_residual, stream);
+    intermediates.output = autograd::add(intermediates.residual1, centered_ffn, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2 DONE - layer COMPLETE\n");
     
     // ISSUE #93 DIAGNOSTIC: Log final layer output
@@ -2337,6 +2370,97 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         const int layer_idx = g_issue77_fwd_layer_count % 12;
         logForwardStageStats("layer_output", layer_idx, intermediates.output.data, total_tokens * d_model, stream);
     };
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // RULE 21 DIAGNOSTIC: Per-Layer Cosine Similarity (correlation tracking)
+    //
+    // EQUATION: output = residual1 + LayerScale(ffn_out) = input + LS1*attn_out + LS2*ffn_out
+    //           residual_fraction = (1 - LS_init)^2 ≈ (1 - 0.1)^2 = 0.81 (81% residual passthrough!)
+    //           
+    // LayerScale with init=0.1 means: output ≈ 0.9*input + 0.1*sublayer_output
+    // After 2 residual connections: output ≈ 0.81*input + 0.19*layers
+    // This PRESERVES input correlation through layers when LS_init is small!
+    //
+    // We track: avg_cos(h_i, h_j) for layer output
+    //           delta_cos = (layer_cos - input_cos) to see if attention DIVERSIFIES
+    // ═══════════════════════════════════════════════════════════════════════════
+    {
+        const int layer_idx = g_issue77_fwd_layer_count % 12;
+        
+        // Only log every 4th layer and first/last layers to reduce overhead
+        if (layer_idx == 0 || layer_idx == 5 || layer_idx == 11) {
+            cudaStreamSynchronize(stream);  // Ensure data is ready
+            
+            // Copy layer output to host for analysis
+            const int output_size = total_tokens * d_model;
+            std::vector<float> h_output(output_size);
+            cudaMemcpy(h_output.data(), intermediates.output.data, output_size * sizeof(float), cudaMemcpyDeviceToHost);
+            
+            // Compute row norms
+            std::vector<float> row_norms(total_tokens);
+            for (int t = 0; t < total_tokens; t++) {
+                double norm_sq = 0.0;
+                for (int d = 0; d < d_model; d++) {
+                    float v = h_output[t * d_model + d];
+                    norm_sq += v * v;
+                }
+                row_norms[t] = sqrtf(norm_sq);
+            }
+            
+            // Sample pairwise cosine similarity
+            const int sample_pairs = std::min(30, total_tokens / 2);
+            const int stride = std::max(1, total_tokens / sample_pairs);
+            double cos_sum = 0.0;
+            int num_pairs = 0;
+            
+            for (int i = 0; i < total_tokens && num_pairs < sample_pairs; i += stride) {
+                int j = (i + total_tokens / 2) % total_tokens;
+                if (i == j || row_norms[i] < 1e-8f || row_norms[j] < 1e-8f) continue;
+                
+                double dot = 0.0;
+                for (int d = 0; d < d_model; d++) {
+                    dot += h_output[i * d_model + d] * h_output[j * d_model + d];
+                }
+                cos_sum += dot / (row_norms[i] * row_norms[j]);
+                num_pairs++;
+            }
+            
+            const double avg_cos = (num_pairs > 0) ? cos_sum / num_pairs : 0.0;
+            const float norm_min = *std::min_element(row_norms.begin(), row_norms.end());
+            const float norm_max = *std::max_element(row_norms.begin(), row_norms.end());
+            
+            // Log LayerScale values if available
+            float ls1_val = 0.0f, ls2_val = 0.0f;
+            if (config_.use_layer_scale && layer_scale1_.data) {
+                cudaMemcpy(&ls1_val, layer_scale1_.data, sizeof(float), cudaMemcpyDeviceToHost);
+            }
+            if (config_.use_layer_scale && layer_scale2_.data) {
+                cudaMemcpy(&ls2_val, layer_scale2_.data, sizeof(float), cudaMemcpyDeviceToHost);
+            }
+            
+            // Compute expected residual fraction: (1-ls1)*(1-ls2) = fraction of input that passes through
+            const double residual_fraction = (1.0 - ls1_val) * (1.0 - ls2_val);
+            
+            if constexpr (kEnableEquationLogging) {
+                fprintf(stderr, "[LAYER_%d_COSINE_EQUATION] output = input + LS1*attn + LS2*ffn\n", layer_idx);
+                fprintf(stderr, "  OUTPUT h_L%d: shape=[%d, %d] row_norm_range=[%.4f, %.4f]\n",
+                        layer_idx, total_tokens, d_model, norm_min, norm_max);
+                fprintf(stderr, "  LAYERSCALE: LS1=%.4f LS2=%.4f -> residual_fraction=(1-LS1)*(1-LS2)=%.4f (%.1f%% passthrough)\n",
+                        ls1_val, ls2_val, residual_fraction, residual_fraction * 100.0);
+                fprintf(stderr, "  ACTUAL avg_cos=%.6f (pairs=%d)\n", avg_cos, num_pairs);
+                
+                if (avg_cos > 0.8) {
+                    fprintf(stderr, "  [ANOMALY] Layer %d avg_cos=%.4f still HIGH after attention!\n", layer_idx, avg_cos);
+                    if (residual_fraction > 0.7) {
+                        fprintf(stderr, "  [ANOMALY] LayerScale residual_fraction=%.2f means %.0f%% of input passes through unchanged\n",
+                                residual_fraction, residual_fraction * 100.0);
+                        fprintf(stderr, "  [ANOMALY] High input correlation propagates because LS_init=%.2f is too small\n", ls1_val);
+                        fprintf(stderr, "  [ANOMALY] RECOMMENDED: Increase layer_scale_init from %.2f to 0.5+ or add positional signal to residual\n", ls1_val);
+                    }
+                }
+            }
+        }
+    }
     
     // Return a non-owning view of the output
     // The actual Tensor lives in intermediates and stays alive until backward completes

@@ -660,6 +660,9 @@ void LanguageModel::buildParameterGroups() {
         // QKV weights - uses encoder's Tensor.grad (autograd migration)
         float* qkv_grad_ptr = enc->getAttnWqkvGrad();
         float* qkv_weight_ptr = enc->getAttnWqkv();
+        
+
+        
         if (qkv_grad_ptr && qkv_weight_ptr) {
             ParameterGroup qkv_group;
             qkv_group.name = "layer" + std::to_string(layer) + "_qkv_weight";
@@ -674,8 +677,9 @@ void LanguageModel::buildParameterGroups() {
                 sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
             parameter_groups_.push_back(qkv_group);
         } else {
-            BWD_WARN("[buildParameterGroups] Layer " << layer << " QKV: weights=" << (void*)qkv_weight_ptr 
-                     << " grads=" << (void*)qkv_grad_ptr << " (skipping - not initialized)");
+            // ISSUE #110: This warning explains WHY encoder groups are being skipped
+            fprintf(stderr, "[buildParameterGroups] WARNING: Layer %d QKV SKIPPED! weights=%p grads=%p (not initialized)\n",
+                    layer, (void*)qkv_weight_ptr, (void*)qkv_grad_ptr);
         }
 
         // Issue #97 FIX: b_qkv bias - previously NOT in optimizer (frozen at init!)
@@ -952,6 +956,20 @@ void LanguageModel::buildParameterGroups() {
     // Old d_grad_norm_sums_/h_grad_norm_sums_ buffers removed per Rule 20 (no backwards compatibility)
 
     BWD_INFO("[buildParameterGroups] Built " << parameter_groups_.size() << " parameter groups");
+    
+    // ISSUE #110 DIAGNOSTIC: Count parameter groups by type to understand what was registered
+    int emb_count = 0, attn_count = 0, ffn_count = 0, rms_count = 0, other_count = 0;
+    for (const auto& pg : parameter_groups_) {
+        switch (pg.type) {
+            case ParamGroupType::EMBEDDING: emb_count++; break;
+            case ParamGroupType::ATTENTION: attn_count++; break;
+            case ParamGroupType::FFN: ffn_count++; break;
+            case ParamGroupType::RMSNORM: rms_count++; break;
+            default: other_count++; break;
+        }
+    }
+    fprintf(stderr, "[buildParameterGroups] TOTAL: %zu groups (emb=%d, attn=%d, ffn=%d, rms=%d, other=%d)\n",
+            parameter_groups_.size(), emb_count, attn_count, ffn_count, rms_count, other_count);
 }
 
 //======================================================//
@@ -1185,9 +1203,26 @@ void LanguageModel::updateWeights(float learning_rate,
         }
     }
     
+    // Issue #110 diagnostic: Log every group being processed on first step
+    if (optimizer_state->step == 0) {
+        fprintf(stderr, "\n[updateWeights] STEP 0: Processing %zu parameter groups...\n", 
+                parameter_groups_.size());
+    }
+    
     for (size_t i = 0; i < parameter_groups_.size(); ++i) {
         auto& group = parameter_groups_[i];
         if (!group.weights || !group.grads || group.size == 0) continue;
+        
+        // Issue #110: Log EVERY encoder group being updated on first step
+        if (optimizer_state->step == 0) {
+            fprintf(stderr, "[updateWeights] Group %zu/%zu: '%s' size=%d weights=%p grads=%p m=%p v=%p\n",
+                    i, parameter_groups_.size(), group.name.c_str(), group.size,
+                    static_cast<const void*>(group.weights),
+                    static_cast<const void*>(group.grads),
+                    static_cast<const void*>(group.m_state),
+                    static_cast<const void*>(group.v_state));
+        }
+        
         if (!group.m_state || !group.v_state) {
             BWD_ERROR("[updateWeights] FATAL: Missing optimizer state for group '"
                       << group.name << "' idx=" << i
@@ -1332,6 +1367,12 @@ void LanguageModel::updateWeights(float learning_rate,
             logged_optimizer_io = true;
         
         }
+    }
+    
+    // Issue #110: Log completion of all groups on first step
+    if (optimizer_state->step == 0) {
+        fprintf(stderr, "[updateWeights] STEP 0 COMPLETE: All %zu groups processed by optimizer!\n\n",
+                parameter_groups_.size());
     }
     
     // //old_sync: cudaStreamSynchronize(training_state_.stream_ctrl.getPrimaryStream());

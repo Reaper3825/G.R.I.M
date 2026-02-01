@@ -98,7 +98,7 @@ __global__ void distillationKernel(const float* __restrict__ student_logits,
 	}
 
 	if (loss_accum) {
-		const float scaled_loss = scale * temp_sq * sample_weight * loss_token;
+		const float scaled_loss = scale * temp_sq * norm * loss_token;
 		atomicAdd(loss_accum, scaled_loss);
 	}
 }

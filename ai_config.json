@@ -88,7 +88,7 @@
             "weight_decay": 0.01,
             "gradient_clip": 1.0,
             "per_token_grad_scale": true,
-            "warmup_steps": 10,
+            "warmup_steps": 0,
             "max_seq_len": 1024,
             "min_seq_valid_tokens": 10,
             "log_interval": 10,
@@ -116,7 +116,7 @@
                 "max_loss_jump": 1.5,
                 "smoothing": 0.2,
                 "cooldown_steps": 5,
-                "warmup_steps": 25,
+                "warmup_steps": 0,
                 "max_step_up_ratio": 1.12,
                 "max_step_down_ratio": 0.72,
                 "auto_band": true,
@@ -258,7 +258,7 @@
                 },
                 "focal": {
                     "enabled": true,
-                    "gamma": 1.05,
+                    "gamma": 1.0,
                     "alpha": 1.0
                 },
                 "entropy_reg": {
@@ -390,21 +390,21 @@
                 "use_rope": true,
                 "use_alibi": true
             },
-            "attention_dropout": 0.1,
-            "dropout_rate": 0.1,
+            "attention_dropout": 0.2,
+            "dropout_rate": 0.2,
             "force_rebuild_vocab": false,
             "qk_normalization": {
                 "enabled": false,
                 "scale": 16.0
             },
             "lm_head_centering": {
-                "enabled": false,
-                "center_hidden_states": false,
-                "recenter_gradients": false
+                "enabled": true,
+                "center_hidden_states": true,
+                "recenter_gradients": true
             },
             "layer_scale": {
                 "enabled": true,
-                "init_value": 0.1
+                "init_value": 0.3
             },
             "hardcoded_hidden_states": {
                 "enabled": false,
@@ -458,7 +458,7 @@
         "Minimize": "Side",
         "font_name": "DejaVuSans-Bold",
         "font_size": 16
-    },
+    },  
     "vision": {
         "enabled": false
     },

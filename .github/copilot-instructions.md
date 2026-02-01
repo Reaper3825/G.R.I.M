@@ -23,6 +23,7 @@
 ✅ Delete code instead of deprecating it
 
 **Pre-commit checklist - search your code for:**
+
 - `? :` (ternary with fallback) → rewrite to throw
 - `if (args.` (optional parameter check) → require parameter
 - `else {` (compatibility branch) → delete the else clause
@@ -39,6 +40,7 @@
 This format is non-negotiable for training/inference debugging because **you can't argue with hard mathematical facts**.
 
 **Required Format Structure:**
+
 ```
 [OPERATION_EQUATION] CONTEXT: equation = mathematical_formula
   INPUT_A (description): shape=[dims] min=X max=Y rms=Z
@@ -50,8 +52,9 @@ This format is non-negotiable for training/inference debugging because **you can
 ```
 
 **Examples of Good Logging Tags:**
+
 - `[GRAD_A_EQUATION]` - Matrix A weight gradient computation
-- `[GRAD_B_EQUATION]` - Matrix B weight gradient computation  
+- `[GRAD_B_EQUATION]` - Matrix B weight gradient computation
 - `[ATTN_SCORE_EQUATION]` - Attention score computation (Q @ K^T / sqrt(d))
 - `[LSE_EQUATION]` - Log-Sum-Exp computation
 - `[SOFTMAX_EQUATION]` - Softmax forward/backward
@@ -60,6 +63,7 @@ This format is non-negotiable for training/inference debugging because **you can
 - `[LOSS_EQUATION]` - Loss computation (cross-entropy, focal, etc.)
 
 **Mandatory Elements:**
+
 1. **Mathematical equation** - The EXACT formula being computed
 2. **Input shapes** - Tensor dimensions for dimensional analysis
 3. **Input statistics** - min, max, rms (and optionally mean, std)
@@ -68,10 +72,11 @@ This format is non-negotiable for training/inference debugging because **you can
 6. **Anomaly detection** - Flag when actual >> expected or contains NaN/Inf
 
 **Example Implementation (Attention Scores):**
+
 ```cpp
 // [ATTN_SCORE_EQUATION] format for attention computation
 fprintf(stderr, "[ATTN_SCORE_EQUATION] FLASH_ATTENTION_FWD: score = (Q @ K^T) / sqrt(head_dim) + alibi_bias\n");
-fprintf(stderr, "  Q (sample tokens, head 0): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n", 
+fprintf(stderr, "  Q (sample tokens, head 0): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
         n_sample, head_dim, q_min, q_max, q_rms);
 fprintf(stderr, "  K (sample tokens, head 0): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
         n_sample, head_dim, k_min, k_max, k_rms);
@@ -87,6 +92,7 @@ if (fabsf(score_max) > 100.0f) {
 ```
 
 **Why This Format:**
+
 1. **Irrefutable evidence** - Math doesn't lie; discrepancies reveal bugs immediately
 2. **Self-documenting** - Log shows exactly what computation is being performed
 3. **Root cause isolation** - Expected vs actual comparison pinpoints where explosion/collapse starts
@@ -94,6 +100,7 @@ if (fabsf(score_max) > 100.0f) {
 5. **Reproducible debugging** - Same inputs + formula = same expected output
 
 **When to Add Equation Logging:**
+
 - ✅ ANY new forward/backward kernel implementation
 - ✅ When debugging gradient explosion/vanishing
 - ✅ When investigating loss anomalies
@@ -101,6 +108,7 @@ if (fabsf(score_max) > 100.0f) {
 - ✅ Any GEMM operation (grad_A = C^T @ B, grad_B = A^T @ C, etc.)
 
 **Pre-merge checklist for ML code:**
+
 - [ ] All tensor operations have `[*_EQUATION]` logging available (can be behind `#ifdef DEBUG_EQUATIONS`)
 - [ ] Expected values computed from input statistics
 - [ ] Anomaly thresholds defined (e.g., score > 100, LSE > 50, gradient > 1e6)
@@ -110,11 +118,13 @@ if (fabsf(score_max) > 100.0f) {
 
 ## �🔴 ACTIVE BUG INVESTIGATION
 
-**READ FIRST:** 
+**READ FIRST:**
+
 1. [docs/LOG_FILE_CONVENTION.md](../docs/LOG_FILE_CONVENTION.md) - **CRITICAL: Always verify which log file before making claims**
 2. [docs/PLATEAU_BUG_INVESTIGATION.md](../docs/PLATEAU_BUG_INVESTIGATION.md) - Check "CURRENT RUN TRACKING" section first
 
 Training plateau bug under investigation. The docs above track:
+
 - What has been verified correct (NOT the problem)
 - Known issues found and fixed
 - Diagnostic data and hypotheses
@@ -127,6 +137,7 @@ When working on GRIM-text training issues, check this doc first to avoid re-inve
 ## Project Overview
 
 GRIM (General Request and Information Manager) is an offline-first, modular C++/Python AI assistant featuring:
+
 - Custom transformer model (GRIM-text) with Flash Attention v2, cuBLAS, custom fused CUDA kernels
 - Multi-modal perception (screen capture, OCR, object detection)
 - Voice I/O (Whisper.cpp STT, Coqui XTTS v2 via Python bridge)
@@ -145,6 +156,7 @@ GRIM (General Request and Information Manager) is an offline-first, modular C++/
 ### Main Components
 
 **C++ Core** ([main.cpp](main.cpp))
+
 - `ai/` - Intent classification, task planning, GRIM-text integration
 - `commands/` - Command routing and execution (see [commands/commands_core.hpp](commands/commands_core.hpp))
 - `memory/` - FlatBuffer-serialized memory storage (unified schema in [memory/unified_memory.hpp](memory/unified_memory.hpp))
@@ -155,14 +167,16 @@ GRIM (General Request and Information Manager) is an offline-first, modular C++/
 - `ui/` - BGFX-based console UI
 
 **Python Bridges** (`resources/python/`)
+
 - `coqui_bridge.py` - TTS synthesis (XTTS v2)
 - `osit_bridge.py` - Sherlock OSINT integration
 
 **GRIM-text Model** (`resources/models/GRIM-text/`)
+
 - Custom transformer with GPU-accelerated training/inference
 - **ScratchBlock Reasoning Layer** - Internal structured reasoning with atom detection (numbers, URLs, emails, paths, dates, code literals)
 - **Unigram + Byte Fallback Tokenizer** - High-quality subword segmentation with 100% UTF-8 coverage
-  - Token layout: [0-255] = bytes, [256-511] = atom placeholders, [512+] = unigram vocab
+    - Token layout: [0-255] = bytes, [256-511] = atom placeholders, [512+] = unigram vocab
 - **Quantization Support** - Int8/FP16 activation quantization for inference
 - **Personality Layer** - RL-weighted response selection governed by reward learning
 - Separate build from main GRIM executable
@@ -172,14 +186,16 @@ GRIM (General Request and Information Manager) is an offline-first, modular C++/
 ### Key Integration Points
 
 **Backend Configuration** ([ai_config.json](ai_config.json))
+
 ```json
 {
-  "backend": "grim_native",  // Uses GRIM-text instead of Ollama/OpenAI
-  "grim_text_url": "http://127.0.0.1:11435"
+    "backend": "grim_native", // Uses GRIM-text instead of Ollama/OpenAI
+    "grim_text_url": "http://127.0.0.1:11435"
 }
 ```
 
 **Server Managers**
+
 - `GRIM::startGRIMTextServer()` - Launches inference server ([ai/grim_text_server_manager.hpp](ai/grim_text_server_manager.hpp))
 - `GRIM::startTrainingServer()` - Launches training control server ([ai/training_server_manager.hpp](ai/training_server_manager.hpp))
 - Both auto-start in [bootstrap/bootstrap.cpp](bootstrap/bootstrap.cpp), auto-stop on Ctrl+C
@@ -187,6 +203,7 @@ GRIM (General Request and Information Manager) is an offline-first, modular C++/
 ## Build System
 
 **CMake Configuration**
+
 ```bash
 # Use presets for vcpkg + CUDA integration
 cmake --preset=release
@@ -199,11 +216,13 @@ cmake --build . --parallel
 ```
 
 **Key Build Options** ([cmake/Options.cmake](cmake/Options.cmake))
+
 - `GRIM_USE_CUDA=ON` - GPU acceleration for Whisper/GRIM-text
 - `GRIM_USE_PERCEPTION=ON` - Enable vision/OCR features
 - `GRIM_PORTABLE_ONLY=OFF` - Resources in fixed paths vs portable layout
 
 **Critical Build Notes**
+
 - Main GRIM executable: `GRIM.exe`
 - GRIM-text builds separately in `resources/models/GRIM-text/training/`
 - Core plugin (`plugins/core_plugin.cpp`) compiles directly into GRIM.exe
@@ -214,22 +233,24 @@ cmake --build . --parallel
 ### Training Data Pipeline
 
 **Data Collection** (`DataCollection/`)
+
 1. **Web Collection** - Scrapes text from academic papers, technical docs, Wikipedia, GitHub
 2. **BERT Verification** - DeBERTa v3 model (`resources/models/GRIM-text/quality/deberta-v3-base-mnli/`) validates quality
-   - Language detection (English word frequency)
-   - Spam pattern detection
-   - Duplicate content filtering (hash-based)
-   - UI artifact removal
-   - Encoding error detection
+    - Language detection (English word frequency)
+    - Spam pattern detection
+    - Duplicate content filtering (hash-based)
+    - UI artifact removal
+    - Encoding error detection
 3. **HTML Cleaning** - DataLoader.cu automatically strips HTML tags/entities from training texts
-   - `stripHtmlTags()` - Removes `<tag>` patterns via std::regex
-   - `decodeHtmlEntities()` - Converts `&lt;`, `&gt;`, `&amp;`, `&nbsp;`, etc.
-   - `normalizeWhitespace()` - Collapses multiple spaces, trims edges
-   - Filters texts shorter than 20 characters after cleaning
+    - `stripHtmlTags()` - Removes `<tag>` patterns via std::regex
+    - `decodeHtmlEntities()` - Converts `&lt;`, `&gt;`, `&amp;`, `&nbsp;`, etc.
+    - `normalizeWhitespace()` - Collapses multiple spaces, trims edges
+    - Filters texts shorter than 20 characters after cleaning
 4. **Data Splits** - Splits into train/val/test sets
 5. **Binary Format** - Converts to `.grmt` FlatBuffer format for training
 
 **Training Workflow**
+
 ```bash
 
 
@@ -242,6 +263,7 @@ cd control/build/Release
 ```
 
 **Training Features**
+
 - **Flash Attention v2** - O(N) memory complexity for long sequences (512+ tokens)
 - **Custom Fused Kernels** - Combined QKV projection, FFN+GELU, LayerNorm
 - **Unified Loss System** - Single kernel combining focal loss + label smoothing with telemetry
@@ -254,36 +276,38 @@ cd control/build/Release
 Training loop refactored into debuggable phases ([resources/models/GRIM-text/training/Phases/](resources/models/GRIM-text/training/Phases/)):
 
 - **Phase 1: Startup** ([Phase1_Startup.cu/hpp](resources/models/GRIM-text/training/Phases/Phase1_Startup.cu))
-  - Configuration loading from `ai_config.json`
-  - Path validation (model, data, checkpoint dirs)
-  - Tokenizer initialization (GrimTokenizer with scratch blocks)
-  - Training data loading with sliding windows
-  - Model initialization with Xavier weight seeding
-  - Optimizer/gradient controller setup
-  - Returns `TrainingContext` struct with all initialized state
+    - Configuration loading from `ai_config.json`
+    - Path validation (model, data, checkpoint dirs)
+    - Tokenizer initialization (GrimTokenizer with scratch blocks)
+    - Training data loading with sliding windows
+    - Model initialization with Xavier weight seeding
+    - Optimizer/gradient controller setup
+    - Returns `TrainingContext` struct with all initialized state
 
 - **Phase 2: Training Loop** ([Phase2_TrainingLoop.cu/hpp](resources/models/GRIM-text/training/Phases/Phase2_TrainingLoop.cu))
-  - Epoch iteration with dynamic batching
-  - Batch construction (content weighting, rare token scoring)
-  - Forward/backward passes with gradient accumulation
-  - Gradient clipping (token-normalized + adaptive)
-  - Optimizer steps with dynamic learning rate
-  - Validation and checkpointing
-  - Auto-stop detection (plateau, high loss)
-  - Soft restart and micro-validation
+    - Epoch iteration with dynamic batching
+    - Batch construction (content weighting, rare token scoring)
+    - Forward/backward passes with gradient accumulation
+    - Gradient clipping (token-normalized + adaptive)
+    - Optimizer steps with dynamic learning rate
+    - Validation and checkpointing
+    - Auto-stop detection (plateau, high loss)
+    - Soft restart and micro-validation
 
 - **Phase 3: Cleanup** ([Phase3_Cleanup.cu/hpp](resources/models/GRIM-text/training/Phases/Phase3_Cleanup.cu))
-  - Final model checkpoint save
-  - Training summary generation
-  - Status file updates (FlatBuffer)
-  - Resource cleanup (GPU/CPU)
+    - Final model checkpoint save
+    - Training summary generation
+    - Status file updates (FlatBuffer)
+    - Resource cleanup (GPU/CPU)
 
 **Orchestrator** ([train_gpu_orchestrator.cu](resources/models/GRIM-text/training/train_gpu_orchestrator.cu))
+
 - Simple `main()` that calls `executePhase1()` → `executePhase2()` → `executePhase3()`
 - Clear phase boundaries for debugging
 - Data flow via `TrainingContext` struct (no globals)
 
 **Benefits:**
+
 - Each phase is a separate compilation unit → faster incremental builds
 - Set breakpoints at phase boundaries without navigating 3500+ line file
 - Clear contracts: `TrainingContext` passed explicitly between phases
@@ -317,6 +341,7 @@ python test_grim_model.py  # Automated health checks
 ### Adding Commands
 
 Commands registered in [commands/commands_core.hpp](commands/commands_core.hpp):
+
 ```cpp
 extern std::unordered_map<std::string, CommandFunc> commandMap;
 
@@ -329,6 +354,7 @@ commandMap["mycommand"] = [](const std::string& arg) -> CommandResult {
 ### Hot-Reloadable Plugins
 
 Example: [plugins/osint_plugin/osint_plugin.cpp](plugins/osint_plugin/osint_plugin.cpp)
+
 - Export `plugin_init()`, `plugin_commands()`, `plugin_unload()`
 - Place DLL in `plugins/` directory
 - GRIM checks for file changes every 2 seconds
@@ -337,12 +363,14 @@ Example: [plugins/osint_plugin/osint_plugin.cpp](plugins/osint_plugin/osint_plug
 ### Memory System
 
 **RL-Gated Dual Memory Architecture**
+
 - **Short-Term Memory** - Recent context window (max 50 items), cached in RAM
 - **Long-Term Memory** - Persistent storage with FlatBuffer serialization
 - **RL Gating** - Reward learning system decides what gets promoted from STM → LTM
 - Context decay with confidence scoring to prevent memory bloat
 
 Uses FlatBuffers for zero-copy serialization ([memory/unified_memory_generated.h](memory/unified_memory_generated.h)):
+
 ```cpp
 GRIM::UnifiedMemoryObject obj(
     GRIM::SourceType::USER_VOICE,
@@ -362,6 +390,7 @@ g_memoryStorage.storeLongTerm(obj);
 ```
 
 **Memory Components** ([memory/](memory/))
+
 - `memory_storage.{cpp,hpp}` - Dual-store with STM/LTM separation
 - `context_manager.{cpp,hpp}` - Contextual snapshots for intent classification
 - `unified_memory.{hpp,fbs}` - FlatBuffer schema and C++ API
@@ -369,6 +398,7 @@ g_memoryStorage.storeLongTerm(obj);
 ### Python Bridge Communication
 
 C++ launches Python with `BridgeManager` ([core/bridge_manager.hpp](core/bridge_manager.hpp)):
+
 ```cpp
 BridgeManager::start("tts", "resources/python/coqui_bridge.py");
 json request = {{"text", "Hello"}, {"voice", "default"}};
@@ -378,7 +408,9 @@ json response = BridgeManager::send("tts", request);
 ## GRIM-text Architecture
 
 ### ScratchBlock Reasoning Layer
+
 **Critical Feature:** Internal structured reasoning before text generation
+
 - Detects and tokenizes structural elements: numbers, URLs, emails, file paths, dates, code literals
 - Uses **AtomTable** system with dedicated embeddings for each atom type
 - Token layout: `[0-255]` = byte fallback, `[256-511]` = atom placeholders, `[512+]` = unigram vocab
@@ -386,43 +418,48 @@ json response = BridgeManager::send("tts", request);
 - Configurable via `ai_config.json` → `tokenizer.scratch_block_reasoning`
 
 ### Tokenization: Unigram + Byte Fallback
+
 - **Unigram Language Model** - Statistical subword segmentation for quality (via Viterbi decoding)
 - **Byte Fallback** - Raw UTF-8 bytes (0x00-0xFF) for 100% coverage of unknown chars/emojis
 - **Trie-Based Lookup** - Fast prefix matching for Viterbi encoding; trie auto-built in constructor
 - **Aho-Corasick DFA** - O(n) multi-pattern matching for structural token detection (50-100x faster than std::regex)
-  - Detects URL prefixes (http://, https://, www., ftp://)
-  - Email indicators (@, mailto:)
-  - Number prefixes (-, +, digits)
+    - Detects URL prefixes (http://, https://, www., ftp://)
+    - Email indicators (@, mailto:)
+    - Number prefixes (-, +, digits)
 - **Zero-copy design** - `std::string_view` references, no allocations during tokenization
 - **Files**: `resources/models/GRIM-text/Shared/UnigramByte/`
 - **Key Implementation**: GrimTokenizer.hpp (alias to UniByte), AhoCorasick.cu (pattern matching), Unigram.cu (vocab + Viterbi)
 - **Test Suite**: `resources/models/GRIM-text/Tests/unigrambyte_self_test.cu` (37 tests covering Byte, Unigram, UniByte, AtomTable, Integration)
 
 ### Quantization System
+
 - **Activation Quantization** - Int8 symmetric quantization for inference speedup
 - Configurable per-layer: embeddings, encoder outputs, QKV cache, logits
 - See `ai_config.json` → `training.config.activation_quantization`
 - Files: `resources/models/GRIM-text/Layers/Quantization/`
 
 ### Grouped Query Attention (GQA)
+
 **Production Implementation** - Efficient attention mechanism reducing KV cache memory
+
 - **Configuration**: num_heads=12, num_kv_heads=4, heads_per_kv_group=3 (3:1 reduction ratio)
 - **Memory Efficiency**: KV cache reduced by 3x compared to Multi-Head Attention (MHA)
 - **Backward Compatibility**: Old MHA checkpoints cannot be loaded into GQA models (config validation enforces this)
 - **Gradient Scaling**: GQA backward kernel applies `gqa_grad_scale = 1.0f / heads_per_kv_group` to dV, dK accumulation to prevent gradient explosion
 - **Weight Layout**: W_qkv shape is `[(num_heads + 2*num_kv_heads) * head_dim, d_model]` = `[1280, 768]` vs MHA `[2304, 768]`
-- **Serialization Support**: 
-  - FlatBuffer schema includes `num_kv_heads` in both `ModelConfig` and `AttentionWeights` tables
-  - Checkpoint save/load automatically handles GQA dimensions
-  - Old checkpoints have `num_kv_heads=0` (treats as MHA); new checkpoints store actual `num_kv_heads` value
-- **Files**: 
-  - Forward/backward kernels: `Layers/Flash_Attention_Kernal.cu`
-  - Serialization: `Layers/Serialization/Serialization_GPU.cu/hpp`
-  - FlatBuffer schema: `training/schemas/grim_transformer_model.fbs`
-  - Training state: `Training/TrainingState_GPU.hpp`
+- **Serialization Support**:
+    - FlatBuffer schema includes `num_kv_heads` in both `ModelConfig` and `AttentionWeights` tables
+    - Checkpoint save/load automatically handles GQA dimensions
+    - Old checkpoints have `num_kv_heads=0` (treats as MHA); new checkpoints store actual `num_kv_heads` value
+- **Files**:
+    - Forward/backward kernels: `Layers/Flash_Attention_Kernal.cu`
+    - Serialization: `Layers/Serialization/Serialization_GPU.cu/hpp`
+    - FlatBuffer schema: `training/schemas/grim_transformer_model.fbs`
+    - Training state: `Training/TrainingState_GPU.hpp`
 - **Test Results**: Training with GQA gradient scaling produces stable gradients (no explosion), loss converges normally
 
 ### Personality & RL Weighting
+
 - **Reward Learning Integration** - Response selection weighted by RL feedback
 - Pre-dispatch command suggestions based on learned user preferences
 - Feedback loop: user interaction → sentiment scoring → RL model update
@@ -430,43 +467,47 @@ json response = BridgeManager::send("tts", request);
 - Config: `ai_config.json` → `personality.custom_prompt`
 
 ### Unified Loss System
+
 **Production Architecture** - Autograd-enabled loss combining focal loss + label smoothing + entropy regularization
+
 - **Mathematical Formula**: `L = α(1-p_t)^γ * CE_smooth + λ * H(p)` where:
-  - `CE_smooth = -(1-ε)log(p_t) - ε/(V-1)Σlog(p_i)` (label-smoothed cross entropy)
-  - `H(p) = Σ p_i * log(p_i)` (negative entropy, penalizes low entropy/mode collapse)
-  - `p_t` = probability of correct class
-  - `α` = focal weight (default 1.0), `γ` = focal gamma (default 0.0 for plain CE)
-  - `ε` = smoothing epsilon (default 0.0 for plain CE)
-  - `λ` = entropy regularization lambda (default 0.0)
+    - `CE_smooth = -(1-ε)log(p_t) - ε/(V-1)Σlog(p_i)` (label-smoothed cross entropy)
+    - `H(p) = Σ p_i * log(p_i)` (negative entropy, penalizes low entropy/mode collapse)
+    - `p_t` = probability of correct class
+    - `α` = focal weight (default 1.0), `γ` = focal gamma (default 0.0 for plain CE)
+    - `ε` = smoothing epsilon (default 0.0 for plain CE)
+    - `λ` = entropy regularization lambda (default 0.0)
 - **Gradient Formula**: Standard CE gradient `∂L/∂z = (softmax - one_hot) / N`
-  - Focal/smoothing/entropy only affect loss magnitude, gradient direction unchanged
-  - N = valid_count (mean reduction like PyTorch)
-- **Files**: 
-  - Core: `resources/models/GRIM-text/Shared/Loss/ComputeLoss/AutogradLoss.{cu,hpp}`
-  - Call Site: `resources/models/GRIM-text/Shared/Loss/ComputeLoss/ComputeLossBatch.cu`
+    - Focal/smoothing/entropy only affect loss magnitude, gradient direction unchanged
+    - N = valid_count (mean reduction like PyTorch)
+- **Files**:
+    - Core: `resources/models/GRIM-text/Shared/Loss/ComputeLoss/AutogradLoss.{cu,hpp}`
+    - Call Site: `resources/models/GRIM-text/Shared/Loss/ComputeLoss/ComputeLossBatch.cu`
 - **Config**: `ai_config.json` → `training.config.loss`
-  - `focal.enabled`, `focal.alpha`, `focal.gamma`
-  - `label_smoothing.enabled`, `label_smoothing.epsilon`
-  - `entropy_reg.enabled`, `entropy_reg.lambda`
-- **API**: 
-  - `autograd::unified_loss(logits, targets, mask, num_tokens, vocab_size, config, stream)` - Full loss
-  - `autograd::cross_entropy_loss(...)` - Legacy wrapper using plain CE config
+    - `focal.enabled`, `focal.alpha`, `focal.gamma`
+    - `label_smoothing.enabled`, `label_smoothing.epsilon`
+    - `entropy_reg.enabled`, `entropy_reg.lambda`
+- **API**:
+    - `autograd::unified_loss(logits, targets, mask, num_tokens, vocab_size, config, stream)` - Full loss
+    - `autograd::cross_entropy_loss(...)` - Legacy wrapper using plain CE config
 - **DELETED**: `UnifiedLoss_GPU.cu`, `ComputeLoss_GPU.cu` (old system disconnected from autograd gradients)
 
 ### TelemetryLattice System
+
 **Hierarchical Telemetry Tracking** - Multi-resolution streaming statistics
+
 - **Architecture**: 8 temporal levels, exponential stride (2^k), pure GPU computation
 - **Per-Level State**: 10-dimensional telemetry vector per metric stream:
-  - `μ` (magnitude), `σ_tilde` (coefficient of variation), `v_σ` (volatility-of-volatility)
-  - `Δ_bar` (normalized slope), `p` (directional persistence)
-  - `r_out` (soft outlier gate), `ℓ_out` (regime persistence)
-  - `μ_ex` (excess magnitude), `Δμ`/`Δσ` (anchor drift)
+    - `μ` (magnitude), `σ_tilde` (coefficient of variation), `v_σ` (volatility-of-volatility)
+    - `Δ_bar` (normalized slope), `p` (directional persistence)
+    - `r_out` (soft outlier gate), `ℓ_out` (regime persistence)
+    - `μ_ex` (excess magnitude), `Δμ`/`Δσ` (anchor drift)
 - **Metric Streams**: LOSS, GRAD_NORM_MEAN, GRAD_NORM_MAX, LEARNING_RATE, TOKENS_PER_BATCH
-- **Use Cases**: 
-  - Loss divergence detection (r_out spike + ℓ_out persistence)
-  - Gradient explosion early warning (v_σ increase)
-  - Adaptive learning rate (delta_bar trend)
-  - Training regime shifts (anchor drift)
+- **Use Cases**:
+    - Loss divergence detection (r_out spike + ℓ_out persistence)
+    - Gradient explosion early warning (v_σ increase)
+    - Adaptive learning rate (delta_bar trend)
+    - Training regime shifts (anchor drift)
 - **API**: `initTelemetryLattice()`, `updateTelemetryLattice()`, `readTelemetryVector()`
 - **Files**: `resources/models/GRIM-text/Shared/Telemetry/TelemetryLattice_GPU.{cu,hpp}`
 - **Integration**: UnifiedLoss outputs feed directly into lattice
@@ -474,26 +515,31 @@ json response = BridgeManager::send("tts", request);
 ## Project-Specific Conventions
 
 ### Logging & Remote Monitoring
+
 - Use `LOG_PHASE()` for major initialization steps
 - Use `LOG_DEBUG(module, message)` for debugging
 - Logs written to `grim.log` via [logger.hpp](logger.hpp)
 - **WebSocket Server** (port 9002) - Real-time log streaming and UI integration
-  - Broadcasts all log messages to connected clients
-  - Started automatically in [main.cpp](main.cpp) via `wsServer.start()`
-  - See [net/websocket_server.hpp](net/websocket_server.hpp)
+    - Broadcasts all log messages to connected clients
+    - Started automatically in [main.cpp](main.cpp) via `wsServer.start()`
+    - See [net/websocket_server.hpp](net/websocket_server.hpp)
 
 ### Intent Classification
+
 - Fast path: Rule-based NLP ([nlp/nlp.cpp](nlp/nlp.cpp))
 - Slow path: FastClassifier ([ai/fast_classifier.cpp](ai/fast_classifier.cpp))
 - LLM fallback: GRIM-text via `ai_interpret()` ([ai/ai.cpp](ai/ai.cpp))
 
 ### Perception Context Caching
+
 - Visual context cached for 2 seconds ([perception/perception_context.hpp](perception/perception_context.hpp))
 - Prevents redundant OCR/object detection on unchanged screens
 - Access via `PerceptionContext::getInstance().getContext()`
 
 ### Signal Handling
+
 Clean shutdown of child processes (GRIM-text/training servers) on Ctrl+C:
+
 ```cpp
 // Installed in main.cpp
 SetConsoleCtrlHandler(consoleHandler, TRUE);
@@ -517,73 +563,81 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
 14. **Data Quality vs Gradient Alignment**: High gradient alignment (99.45% cosine similarity) does NOT automatically mean low data diversity. GRIM-text training data has 6,733 unique sequences with only 10% token overlap (Jaccard), 0% duplicates, and 98-99% prefix diversity. The gradient alignment comes from batch composition strategy (`SIMILARITY_GROUPED`) or model architecture, NOT the data. Always run empirical data quality analysis before assuming data issues.
 
 15. **Production Recommendation — Prefer Standard Attention + RMSNorm**: For production training stability, prefer standard scaled dot-product attention together with pre-norm `RMSNorm` (i.e., disable per-head L2 normalization of `Q` and `K`). To switch:
-  - Set `QK_NORMALIZATION_ENABLED = false` in `resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp`.
-  - Keep `RMSNorm` as the pre-normalization layer (no changes required if already in use).
-  - Rationale: Standard scaled dot-product attention (score = `Q · K^T / sqrt(d)`) avoids the `1/||Q||` or `1/||K||` singularities introduced by per-head L2 normalization, and is the approach used in large production models (LLaMA, Mistral, Gemma). Use this when you prioritize robustness over the representational geometry benefits of QK-normalization.
+
+- Set `QK_NORMALIZATION_ENABLED = false` in `resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp`.
+- Keep `RMSNorm` as the pre-normalization layer (no changes required if already in use).
+- Rationale: Standard scaled dot-product attention (score = `Q · K^T / sqrt(d)`) avoids the `1/||Q||` or `1/||K||` singularities introduced by per-head L2 normalization, and is the approach used in large production models (LLaMA, Mistral, Gemma). Use this when you prioritize robustness over the representational geometry benefits of QK-normalization.
+
 20. **NEVER Keep Backwards Compatibility**: When removing functionality, DELETE all compatibility shims, legacy APIs, and fallback code paths. If code fails after removal, that's GOOD - it exposes misconnects and incorrect assumptions. Backwards compatibility hides bugs and creates maintenance debt. Let it fail loud and fix the root cause. Example: Removed `computeOptimalBlockSizes()` from Flash Attention - any caller should be updated to use constants directly from `HyperParameters::FLASH_ATTN_BLOCK_Q/KV`.
-16. **Three-Phase Training Files**: The old monolithic `train_gpu.cu` (3569 lines) is kept as backup. The new build uses `train_gpu_orchestrator.cu` + `Phases/Phase{1,2,3}_{Startup,TrainingLoop,Cleanup}.{cu,hpp}`. If modifying training logic, edit the appropriate phase file, not the old train_gpu.cu. CMakeLists.txt in `training/TrainingLoop/` defines the build.
+21. **Three-Phase Training Files**: The old monolithic `train_gpu.cu` (3569 lines) is kept as backup. The new build uses `train_gpu_orchestrator.cu` + `Phases/Phase{1,2,3}_{Startup,TrainingLoop,Cleanup}.{cu,hpp}`. If modifying training logic, edit the appropriate phase file, not the old train_gpu.cu. CMakeLists.txt in `training/TrainingLoop/` defines the build.
 
-17. **Unified Loss System**: Use `autograd::unified_loss()` in `AutogradLoss.cu` for training loss computation. This is the ONLY loss path - it combines focal loss, label smoothing, entropy regularization, and cross-entropy into a single autograd-enabled kernel. The `cross_entropy_loss()` function is a convenience wrapper that calls `unified_loss()` with plain CE config. **DELETED**: `UnifiedLoss_GPU.cu`, `ComputeLoss_GPU.cu` - these old modules had the bug where loss computation was disconnected from gradients.
+22. **Unified Loss System**: Use `autograd::unified_loss()` in `AutogradLoss.cu` for training loss computation. This is the ONLY loss path - it combines focal loss, label smoothing, entropy regularization, and cross-entropy into a single autograd-enabled kernel. The `cross_entropy_loss()` function is a convenience wrapper that calls `unified_loss()` with plain CE config. **DELETED**: `UnifiedLoss_GPU.cu`, `ComputeLoss_GPU.cu` - these old modules had the bug where loss computation was disconnected from gradients.
 
-19. **Batched Embedding Position Bug (FIXED)**: Prior to fix, when `positions=nullptr` was passed to embedding kernels, position was computed as `token_idx` (global index) instead of `token_idx % seq_len` (within-sequence position). This caused 2/3 of every batch to use wrong position embeddings (e.g., batch 1 tokens got positions 720-1439 instead of 0-719). Symptoms: loss starts at 10.5 (correct random baseline) but increases to 15-20 as sequence length grows, with catastrophic spikes (77-259) for long sequences. Fix in `kernel_embedding_forward` (TensorContract_GPU.cu) now computes `pos_id = token_idx % seq_len` when positions is null.
+23. **Batched Embedding Position Bug (FIXED)**: Prior to fix, when `positions=nullptr` was passed to embedding kernels, position was computed as `token_idx` (global index) instead of `token_idx % seq_len` (within-sequence position). This caused 2/3 of every batch to use wrong position embeddings (e.g., batch 1 tokens got positions 720-1439 instead of 0-719). Symptoms: loss starts at 10.5 (correct random baseline) but increases to 15-20 as sequence length grows, with catastrophic spikes (77-259) for long sequences. Fix in `kernel_embedding_forward` (TensorContract_GPU.cu) now computes `pos_id = token_idx % seq_len` when positions is null.
 
-92. **Embedding Scale Missing (AIAYN √d_model) - Issue #92, Jan 2026**: The "Attention Is All You Need" paper states: "we multiply those weights by √d_model" for embedding scaling. GRIM-text was MISSING this scaling - embeddings were used raw (scale=1.0). Without scaling, embedding vectors are too small relative to attention scores (which scale by 1/√d), causing the softmax to be overly flat.
-  - **Root Cause**: Legacy `Embedding_GPU.cu` was DEAD CODE - never called in production. The embedding_scale parameter was added to the legacy path but production uses `autograd::embedding()` in `TensorContract_GPU.cu`.
-  - **Fix**: Added `float embedding_scale = 1.0f` parameter to `autograd::embedding()` with proper chain rule handling in backward: `grad_weight[token_id] += grad_output * scale`.
-  - **Implementation**: `AutogradTraining.cu` passes `sqrt(d_model)` for both token and position embeddings.
-  - **Legacy Cleanup (Rule 20)**: Deleted ALL dead code from `Embedding_GPU.cu` (kernels, launchers, EmbeddingLayer class). Also deleted `embedding_self_test.cu` and `embedding_autograd_test.cu`. File now only contains `destroyEmbeddingRuntime()` for memory management.
+24. **Embedding Scale Missing (AIAYN √d_model) - Issue #92, Jan 2026**: The "Attention Is All You Need" paper states: "we multiply those weights by √d_model" for embedding scaling. GRIM-text was MISSING this scaling - embeddings were used raw (scale=1.0). Without scaling, embedding vectors are too small relative to attention scores (which scale by 1/√d), causing the softmax to be overly flat.
+
+- **Root Cause**: Legacy `Embedding_GPU.cu` was DEAD CODE - never called in production. The embedding_scale parameter was added to the legacy path but production uses `autograd::embedding()` in `TensorContract_GPU.cu`.
+- **Fix**: Added `float embedding_scale = 1.0f` parameter to `autograd::embedding()` with proper chain rule handling in backward: `grad_weight[token_id] += grad_output * scale`.
+- **Implementation**: `AutogradTraining.cu` passes `sqrt(d_model)` for both token and position embeddings.
+- **Legacy Cleanup (Rule 20)**: Deleted ALL dead code from `Embedding_GPU.cu` (kernels, launchers, EmbeddingLayer class). Also deleted `embedding_self_test.cu` and `embedding_autograd_test.cu`. File now only contains `destroyEmbeddingRuntime()` for memory management.
 
 105. **RMSNorm Diagnostic False Anomaly (NOT A BUG) - Issue #105, Jan 2026**: RMSNorm diagnostic was flagging Layer 0 as anomalous (`output_rms=0.89` instead of expected `1.0`). The diagnostic expectation formula was **WRONG** - it assumed `output_rms = gamma_rms`, but the **correct** formula is: `output_rms = input_rms × gamma_rms / sqrt(input_rms² + eps)`. When input_rms is small (~0.006 for Xavier-init embeddings) and eps=1e-5, epsilon contributes ~20% of the denominator, resulting in output_rms ≈ 0.89 which is mathematically correct!
-  - **Root Cause**: Diagnostic in `Encoding_GPU.cu` assumed `output_rms = gamma_rms`, which only holds when `input_rms² >> eps`. With small embeddings (per_row_rms=0.006), eps=1e-5 becomes significant.
-  - **Fix**: Changed diagnostic to compute correct expected value: `expected_output_rms = input_rms * gamma_rms / sqrt(input_rms² + eps)`. Added epsilon contribution percentage to help identify when this matters.
-  - **Note**: This is NOT a training bug - RMSNorm is computing correctly. The diagnostic was generating false positives.
+
+- **Root Cause**: Diagnostic in `Encoding_GPU.cu` assumed `output_rms = gamma_rms`, which only holds when `input_rms² >> eps`. With small embeddings (per_row_rms=0.006), eps=1e-5 becomes significant.
+- **Fix**: Changed diagnostic to compute correct expected value: `expected_output_rms = input_rms * gamma_rms / sqrt(input_rms² + eps)`. Added epsilon contribution percentage to help identify when this matters.
+- **Note**: This is NOT a training bug - RMSNorm is computing correctly. The diagnostic was generating false positives.
 
 107. **Xavier Init LCG PRNG Correlation (CRITICAL FIX Jan 2026)**: The `kernel_xavier_uniform` kernel in `TensorContract_GPU.cu` produced highly correlated random values with avg|cosine| ≈ 0.37 instead of expected ≈ 0.036 (12x too high!). Combined with Issue #106, this caused W_qkv initialization to NOT be fixed even after applying the scaling.
-  - **Root Cause**: The LCG PRNG computed state as a LINEAR function of thread index:
+
+- **Root Cause**: The LCG PRNG computed state as a LINEAR function of thread index:
     ```cuda
     uint64_t state = seed + idx * A;  // Linear in idx!
     state = state * A + C;            // Only ONE iteration
     ```
     Since `state[idx+1] - state[idx] = A²` (constant), consecutive elements had correlated outputs.
-  - **Symptom**: Diagnostic showed row_rms=0.0312 (expected 0.0011 with Issue #106 fix), avg|cosine|=0.374 (expected ~0.036), individual cosines as high as 0.847 (85% aligned!).
-  - **Why Issue #106 Wasn't Applied**: `Phase1_Startup.cu` only reseeded when `sample_rms < 1e-7f`, but `TrainingTensors.cu` already initialized weights with the BUGGY kernel.
-  - **Fix (2 parts)**:
+- **Symptom**: Diagnostic showed row_rms=0.0312 (expected 0.0011 with Issue #106 fix), avg|cosine|=0.374 (expected ~0.036), individual cosines as high as 0.847 (85% aligned!).
+- **Why Issue #106 Wasn't Applied**: `Phase1_Startup.cu` only reseeded when `sample_rms < 1e-7f`, but `TrainingTensors.cu` already initialized weights with the BUGGY kernel.
+- **Fix (2 parts)**:
     1. Fixed LCG in `kernel_xavier_uniform`: Use splitmix64-style mixing for per-element seed, run 16 LCG iterations before extracting value.
     2. Removed `sample_rms < 1e-7f` check in `Phase1_Startup.cu` - ALWAYS reinitialize encoder weights with corrected scaling.
-  - **Files Modified**: `TensorContract_GPU.cu`, `Phase1_Startup.cu`
-  - **Expected Result**: avg|cosine| ≈ 1/sqrt(768) ≈ 0.036, row_rms ≈ 0.0011 (with Issue #106 scaling)
+- **Files Modified**: `TensorContract_GPU.cu`, `Phase1_Startup.cu`
+- **Expected Result**: avg|cosine| ≈ 1/sqrt(768) ≈ 0.036, row_rms ≈ 0.0011 (with Issue #106 scaling)
 
 106. **W_qkv Initialization Too Large (LSE Explosion) - Issue #106, Jan 2026**: QKV projection output was 33x larger than expected, causing attention score explosion (800 instead of ~1) and LSE explosion (700+ instead of 6-10).
-  - **Root Cause Chain**:
+
+- **Root Cause Chain**:
     1. RMSNorm output has row_norm ≈ sqrt(d_model) ≈ 27.7
     2. W_qkv uses standard Xavier init with stddev ≈ 0.031 → row_norm ≈ 0.87
     3. **Isotropic columns** (variance ratio 2.01x) + **high cosine alignment** (154x expected) cause **coherent summation** instead of partial cancellation
     4. QKV GEMM output row_norm = 265.6 (33.2x larger than expected 0.77)
     5. Q/K row norms ≈ 80 instead of target 8 → attention scores ≈ 800 → LSE explodes to 700+
-  - **Fix**: Scale W_qkv initialization by `1/sqrt(d_model)` ≈ 0.036 to compensate for coherent summation
-  - **Implementation**: `Phase1_Startup.cu` - `qkv_std = qkv_std_base * (1.0f / sqrt(d_model))`
-  - **Expected Result**: Q/K row_norm ≈ 265 × 0.036 ≈ 9.6 (close to target 8), LSE in normal range 6-10
+- **Fix**: Scale W_qkv initialization by `1/sqrt(d_model)` ≈ 0.036 to compensate for coherent summation
+- **Implementation**: `Phase1_Startup.cu` - `qkv_std = qkv_std_base * (1.0f / sqrt(d_model))`
+- **Expected Result**: Q/K row_norm ≈ 265 × 0.036 ≈ 9.6 (close to target 8), LSE in normal range 6-10
 
 98. **LM Head Scale Mismatch with Tied Embeddings - Issue #98, Jan 2026**: When `tie_embeddings=true`, Issue #92 scales embedding forward by `sqrt(d_model)≈27.7`, but LM head used RAW weights. This created **27.7x gradient attenuation** in backward pass.
-  - **Root Cause**: AIAYN states "multiply weights by sqrt(d_model)" - this applies to BOTH embedding lookup AND output projection with tied weights. GRIM only did the embedding side.
-  - **Symptom**: FlashAttention dQ gradients were ~0.0000004 (should be ~0.00001). LM head backward `grad_encoder = grad_logits @ weights` used raw weights rms≈0.006 instead of scaled weights.
-  - **Fix**: Added `autograd::scale(logits, sqrt(d_model))` after LM head matmul when `tie_embeddings=true`.
-  - **Implementation**: 
+
+- **Root Cause**: AIAYN states "multiply weights by sqrt(d_model)" - this applies to BOTH embedding lookup AND output projection with tied weights. GRIM only did the embedding side.
+- **Symptom**: FlashAttention dQ gradients were ~0.0000004 (should be ~0.00001). LM head backward `grad_encoder = grad_logits @ weights` used raw weights rms≈0.006 instead of scaled weights.
+- **Fix**: Added `autograd::scale(logits, sqrt(d_model))` after LM head matmul when `tie_embeddings=true`.
+- **Implementation**:
     - `TensorContract_GPU.cu`: Added `ScaleGradFn` struct and `autograd::scale()` function
     - `TensorContract_GPU.hpp`: Added `scale()` declaration
     - `AutogradTraining.cu`: Apply scaling to LM head output when tie_embeddings=true
-  - **Math**: `logits_scaled = logits * scale` → backward: `grad_input = grad_output * scale`. This restores gradient magnitude to match embedding forward scaling.
-  - **PyTorch Note**: PyTorch baseline does NOT scale embeddings at all (plain lookup), so no mismatch exists there.
+- **Math**: `logits_scaled = logits * scale` → backward: `grad_input = grad_output * scale`. This restores gradient magnitude to match embedding forward scaling.
+- **PyTorch Note**: PyTorch baseline does NOT scale embeddings at all (plain lookup), so no mismatch exists there.
 
 97. **Encoder Biases Frozen (No Autograd Tracking) - Issue #97, Jan 2026**: All encoder biases (b_qkv, b_o, b1, b2) received **ZERO gradients** because bias addition used raw CUDA kernels (`launchFFNBiasAdd`) that bypassed autograd completely.
-  - **Root Cause**: The forward pass did `qkv_out = matmul(ln1_out, W_qkv)` (autograd ✓) then `qkv_out.data += b_qkv` (raw kernel, NO GradFn!). Backward: MatMulGradFn has NO knowledge of b_qkv, so bias gradients = 0.
-  - **Symptom**: Biases stayed at initial values (zeros or Xavier) throughout training. Diagnostic showed `b_qkv: [0.0, 0.0, 0.0, ...]` never changing.
-  - **Fix**: Created `autograd::broadcast_add(Tensor input[N×D], Tensor bias[D])` with proper `BiasAddGradFn`:
+
+- **Root Cause**: The forward pass did `qkv_out = matmul(ln1_out, W_qkv)` (autograd ✓) then `qkv_out.data += b_qkv` (raw kernel, NO GradFn!). Backward: MatMulGradFn has NO knowledge of b_qkv, so bias gradients = 0.
+- **Symptom**: Biases stayed at initial values (zeros or Xavier) throughout training. Diagnostic showed `b_qkv: [0.0, 0.0, 0.0, ...]` never changing.
+- **Fix**: Created `autograd::broadcast_add(Tensor input[N×D], Tensor bias[D])` with proper `BiasAddGradFn`:
     - Forward: `output[i,j] = input[i,j] + bias[j]` (uses existing `launchFFNBiasAdd`)
     - Backward for input: `grad_input = grad_output` (pass-through, standard for addition)
     - Backward for bias: `grad_bias[j] = Σᵢ grad_output[i,j]` (sum over batch dimension, uses existing `launchFFNBiasBackward`)
-  - **Implementation**: `BiasAddGradFn` struct in `TensorContract_GPU.cu`, following patterns from Issue #48 (stable data caching), #50 (grad_fn ownership), #54 (result ownership), #56 (non-leaf buffers).
-  - **Files Modified**:
+- **Implementation**: `BiasAddGradFn` struct in `TensorContract_GPU.cu`, following patterns from Issue #48 (stable data caching), #50 (grad_fn ownership), #54 (result ownership), #56 (non-leaf buffers).
+- **Files Modified**:
     - `TensorContract_GPU.cu`: Added `BiasAddGradFn` struct and `autograd::broadcast_add` function
     - `TensorContract_GPU.hpp`: Added `broadcast_add` declaration
     - `Encoding_GPU.cu`: Changed b_qkv and b_o from `launchFFNBiasAdd` to `autograd::broadcast_add`
@@ -591,152 +645,217 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
 
 18. **CMake Cache After Removing Files**: When removing .cu files from CMakeLists.txt, must clean CMake cache to remove stale device-link objects. Linker errors like `unresolved external symbol __fatbinwrap_*` indicate cached library still references deleted files. Fix: `Remove-Item -Recurse -Force build\CMakeFiles\grim_training_kernels.dir` then rebuild, or use `cmake --build build --config Release --clean-first`.
 
-60. **PCGrad for Tied Embedding/LM Head Weights (CRITICAL FIX Jan 2026)**: When `tie_embeddings=true`, the LM head backward and embedding backward produce **OPPOSITE** gradients that cancel to ZERO! The diagnostic showed: `LM_HEAD: sum=+4.05, EMBEDDING: sum=-4.05, COMBINED: sum=0.00, COSINE=-1.0 (CANCELING)`. 
-  - **Root Cause**: LM head wants token prediction probability to INCREASE, embedding wants input representation to DECREASE. With shared weights, these are opposite directions!
-  - **Fix**: PCGrad (Projecting Conflicting Gradients) - `g_final = g_lm + (g_emb - proj_{g_lm}(g_emb))`. This projects out the conflicting component, keeping the LM head direction + any orthogonal embedding information.
-  - **Implementation**: `kernel_pcgrad_combine` in `TensorContract_GPU.cu`, `pcgrad_temp_buffer` in TrainingState, allocated in Phase1_Startup.cu when `tie_embeddings=true`.
-  - **Effect**: When cosine=-1 (opposing): uses g_lm only. When cosine=0 (orthogonal): uses g_lm + g_emb. When cosine=+1 (aligned): avoids double-counting.
+19. **PCGrad for Tied Embedding/LM Head Weights (CRITICAL FIX Jan 2026)**: When `tie_embeddings=true`, the LM head backward and embedding backward produce **OPPOSITE** gradients that cancel to ZERO! The diagnostic showed: `LM_HEAD: sum=+4.05, EMBEDDING: sum=-4.05, COMBINED: sum=0.00, COSINE=-1.0 (CANCELING)`.
+
+- **Root Cause**: LM head wants token prediction probability to INCREASE, embedding wants input representation to DECREASE. With shared weights, these are opposite directions!
+- **Fix**: PCGrad (Projecting Conflicting Gradients) - `g_final = g_lm + (g_emb - proj_{g_lm}(g_emb))`. This projects out the conflicting component, keeping the LM head direction + any orthogonal embedding information.
+- **Implementation**: `kernel_pcgrad_combine` in `TensorContract_GPU.cu`, `pcgrad_temp_buffer` in TrainingState, allocated in Phase1_Startup.cu when `tie_embeddings=true`.
+- **Effect**: When cosine=-1 (opposing): uses g_lm only. When cosine=0 (orthogonal): uses g_lm + g_emb. When cosine=+1 (aligned): avoids double-counting.
 
 72. **FlashAttention GQA dK/dV Buffer Overflow (CRITICAL FIX Jan 2026)**: The Dao-AILab FlashAttention backward kernel writes dK/dV gradients using the **query head index** (`bidh`), NOT the KV head index (`bidh / h_h_k_ratio`). With GQA (12 Q heads, 4 KV heads), query heads 4-11 write **outside** a buffer sized for num_kv_heads=4. This causes STATUS_STACK_BUFFER_OVERRUN (exit code -1073740791 / 0xC0000409) and corrupts adjacent memory, leading to gradient explosion.
-  - **Symptom**: Training crashes after ~100-120 batches with exit code -1073740791. Gradients show massive spikes (attn=4,501,145, rms=520,659) before crash.
-  - **Root Cause**: `flash_bwd_kernel.h` line 758 writes to `bidh * dk_head_stride` where `bidh` = 0..11. Buffer allocated for 4 KV heads → heads 4-11 write out-of-bounds.
-  - **Fix**: Allocate `dk_bf16`/`dv_bf16` for `num_heads` (not `num_kv_heads`), then reduce gradients afterward using `kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32` which sums grouped Q head gradients to get proper KV head gradients.
-  - **Implementation**: Fix must be applied in **TWO places** in `TensorContract_GPU.cu`:
+
+- **Symptom**: Training crashes after ~100-120 batches with exit code -1073740791. Gradients show massive spikes (attn=4,501,145, rms=520,659) before crash.
+- **Root Cause**: `flash_bwd_kernel.h` line 758 writes to `bidh * dk_head_stride` where `bidh` = 0..11. Buffer allocated for 4 KV heads → heads 4-11 write out-of-bounds.
+- **Fix**: Allocate `dk_bf16`/`dv_bf16` for `num_heads` (not `num_kv_heads`), then reduce gradients afterward using `kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32` which sums grouped Q head gradients to get proper KV head gradients.
+- **Implementation**: Fix must be applied in **TWO places** in `TensorContract_GPU.cu`:
     1. `ScaledDotProductAttentionGradFn::save()` - allocates dk_bf16/dv_bf16 with `dk_dv_alloc_elems = b * s * num_heads * hd`
     2. `scaled_dot_product_attention()` - allocates grad_fn->dk_bf16/dv_bf16 with same sizing
-  - **CRITICAL**: Both allocation sites MUST use num_heads (12), not num_kv_heads (4). Initial fix only patched save(), leaving scaled_dot_product_attention() with wrong size → continued crashes.
+- **CRITICAL**: Both allocation sites MUST use num_heads (12), not num_kv_heads (4). Initial fix only patched save(), leaving scaled_dot_product_attention() with wrong size → continued crashes.
 
 73. **GQA Gradient Scaling Missing in Reduction Kernel (CRITICAL FIX Jan 2026)**: Issue #72's reduction kernel **SUMMED** gradients from 3 Q heads but did NOT apply GQA gradient scaling. The external Dao-AILab FlashAttention library (unlike our old custom kernel) does NOT apply `gqa_grad_scale = 1.0 / heads_per_kv_group` internally. Result: K/V gradients were **3x too large**, causing attention gradient explosion (16K-600K instead of ~1-5).
-  - **Symptom**: After Issue #72 fix, training no longer crashes but attention gradients are still massive (attn=28,488 to 610,297). Some batches are normal (attn=2.7) - these happen to have lower loss.
-  - **Root Cause**: `kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32` did `dst[idx] = sum` without dividing by `heads_per_kv_group`.
-  - **Fix**: Apply `gqa_grad_scale = 1.0f / heads_per_kv_group` in the reduction kernel: `dst[idx] = sum * gqa_grad_scale`.
-  - **Mathematical basis**: When 3 Q heads each produce dK/dV for the same KV head, the total contribution should be averaged, not summed. This matches the old custom Flash kernel behavior which had `dv *= gqa_grad_scale` and `dk *= gqa_grad_scale`.
+
+- **Symptom**: After Issue #72 fix, training no longer crashes but attention gradients are still massive (attn=28,488 to 610,297). Some batches are normal (attn=2.7) - these happen to have lower loss.
+- **Root Cause**: `kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32` did `dst[idx] = sum` without dividing by `heads_per_kv_group`.
+- **Fix**: Apply `gqa_grad_scale = 1.0f / heads_per_kv_group` in the reduction kernel: `dst[idx] = sum * gqa_grad_scale`.
+- **Mathematical basis**: When 3 Q heads each produce dK/dV for the same KV head, the total contribution should be averaged, not summed. This matches the old custom Flash kernel behavior which had `dv *= gqa_grad_scale` and `dk *= gqa_grad_scale`.
 
 78. **ALiBi Causes dQ/dK vs dV Asymmetry Through Softmax Backward Math (Issue #78, Jan 2026)**: FlashAttention backward produces exploded dQ/dK (100,000x) while dV stays normal. This is due to the fundamental difference in how softmax backward treats these gradients:
-  - **dV = P^T @ dO** - Uses softmax probabilities P directly, which are bounded [0,1] and sum to 1
-  - **dS = P * (dP - dP_sum)**, then **dQ = dS @ K**, **dK = dS^T @ Q** - Uses softmax Jacobian which can amplify
-  - **ALiBi effect**: With `m_max=0.25` and `max_seq_len=1024`, head 0 applies bias `-0.25 * 1024 = -256` to distant positions. This creates near-zero attention weights `P[i,j] ≈ exp(-256) ≈ 0` for distant positions.
-  - **Why dV stays bounded**: `dV = P^T @ dO` is a weighted average of dO values, bounded by max(abs(dO))
-  - **Why dQ/dK explode**: `dS = P * (dP - dP_sum)` involves subtraction. When P is highly localized (most weight on ~32 tokens), `dP_sum` is dominated by high-P positions. For positions where `P[i,j] ≈ 0` but `dP[i,j] ≠ 0`, the term `-P[i,j] * dP_sum` creates residual gradients that don't cancel.
-  - **Compounding through layers**: Backward starts at L11 (near output) with normal gradients. Each layer's dQ/dK flow through residual connections to the previous layer's input. Any amplification COMPOUNDS: L11→L10→L9...→L0. By L6-L0, amplification reaches 100,000x.
-  - **GQA is NOT the cause**: `kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32` applies SAME `gqa_grad_scale = 1/3` to both dK and dV. The asymmetry originates INSIDE FlashAttention backward, not our reduction code.
-  - **FIX IMPLEMENTED**: Clamped ALiBi bias via `ALIBI_MAX_BIAS = -10.0f` in HyperParameters_GPU.hpp. Slopes are capped so `abs(slope) * max_seq_len <= abs(ALIBI_MAX_BIAS)`. This ensures `exp(-10) ≈ 0.000045` (computable) instead of `exp(-256) ≈ 0` (underflow). Implementation in `PositionalBiasMethod.cu::computeAlibiSlopes()`.
+
+- **dV = P^T @ dO** - Uses softmax probabilities P directly, which are bounded [0,1] and sum to 1
+- **dS = P \* (dP - dP_sum)**, then **dQ = dS @ K**, **dK = dS^T @ Q** - Uses softmax Jacobian which can amplify
+- **ALiBi effect**: With `m_max=0.25` and `max_seq_len=1024`, head 0 applies bias `-0.25 * 1024 = -256` to distant positions. This creates near-zero attention weights `P[i,j] ≈ exp(-256) ≈ 0` for distant positions.
+- **Why dV stays bounded**: `dV = P^T @ dO` is a weighted average of dO values, bounded by max(abs(dO))
+- **Why dQ/dK explode**: `dS = P * (dP - dP_sum)` involves subtraction. When P is highly localized (most weight on ~32 tokens), `dP_sum` is dominated by high-P positions. For positions where `P[i,j] ≈ 0` but `dP[i,j] ≠ 0`, the term `-P[i,j] * dP_sum` creates residual gradients that don't cancel.
+- **Compounding through layers**: Backward starts at L11 (near output) with normal gradients. Each layer's dQ/dK flow through residual connections to the previous layer's input. Any amplification COMPOUNDS: L11→L10→L9...→L0. By L6-L0, amplification reaches 100,000x.
+- **GQA is NOT the cause**: `kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32` applies SAME `gqa_grad_scale = 1/3` to both dK and dV. The asymmetry originates INSIDE FlashAttention backward, not our reduction code.
+- **FIX IMPLEMENTED**: Clamped ALiBi bias via `ALIBI_MAX_BIAS = -10.0f` in HyperParameters_GPU.hpp. Slopes are capped so `abs(slope) * max_seq_len <= abs(ALIBI_MAX_BIAS)`. This ensures `exp(-10) ≈ 0.000045` (computable) instead of `exp(-256) ≈ 0` (underflow). Implementation in `PositionalBiasMethod.cu::computeAlibiSlopes()`.
 
 21. **Weight Tying Grad Buffer Aliasing**: When `tie_embeddings=true`, `embedding_grads` and `lm_head_weight_grads` are the **same pointer** (aliased). NEVER:
-  - Zero both buffers separately (they're the same memory - will destroy accumulated gradients)
-  - Add both to parameter_groups_ (double optimizer update)
-  - Free both in destructor (double-free crash)
-  - The ownership flags `lm_head_weights_owned` and pointer comparison `embedding_grads == lm_head_weight_grads` track aliasing.
-  - **NOTE**: With PCGrad fix (Issue #60), embedding backward writes to TEMP buffer first, then orthogonal component is added to shared grad buffer.
+
+- Zero both buffers separately (they're the same memory - will destroy accumulated gradients)
+- Add both to parameter*groups* (double optimizer update)
+- Free both in destructor (double-free crash)
+- The ownership flags `lm_head_weights_owned` and pointer comparison `embedding_grads == lm_head_weight_grads` track aliasing.
+- **NOTE**: With PCGrad fix (Issue #60), embedding backward writes to TEMP buffer first, then orthogonal component is added to shared grad buffer.
 
 44. **per_token_grad_scale is REQUIRED (NOT a bug)**: When loss is averaged (`loss_mean = sum(losses) / valid_tokens`), the backward pass gradient is already scaled by `1/valid_tokens`. The `per_token_grad_scale=true` setting in `ai_config.json` is MANDATORY to ensure gradients match this scaling. DO NOT disable this thinking "tiny gradients" is a bug - gradient RMS of ~1e-6 is CORRECT when `valid_tokens ~ 3000`. The tiny gradients combine correctly in AdamW. Disabling this causes gradient magnitude explosion (effective LR becomes 3000x larger).
 
-38. **Issue #38 WAS WRONG - SUPERSEDED BY #60**: The original "fix" that SKIPPED embedding backward was wrong. The CORRECT fix is PCGrad (Issue #60) which preserves both gradient sources without cancellation.
+45. **Issue #38 WAS WRONG - SUPERSEDED BY #60**: The original "fix" that SKIPPED embedding backward was wrong. The CORRECT fix is PCGrad (Issue #60) which preserves both gradient sources without cancellation.
 
-43. **Encoder Weight Gradient Centering (Issue #43, Jan 2026)**: Encoder backward uses cached activations (`cached_ln1_output`, `cached_ffn_input`, `cached_ffn_hidden`, `cached_attn_output`) for weight gradient GEMMs. These activations have NON-ZERO MEAN, creating systematic gradient bias: `grad_W[i,j] = Σ_t ((centered[t,i] + mean_t) × grad[t,j])` - the mean term doesn't cancel. Fix in `BackwardPhase2_Encoder.cu`: Added `centerActivationsKernel` to center each cached activation BEFORE weight gradient GEMMs (grad_W_qkv, grad_W_o, grad_W1, grad_W2). Uses `centered_activation_scratch` buffer allocated in TrainingState. This matches the Issue #37 pattern applied to LM head.
+46. **Encoder Weight Gradient Centering (Issue #43, Jan 2026)**: Encoder backward uses cached activations (`cached_ln1_output`, `cached_ffn_input`, `cached_ffn_hidden`, `cached_attn_output`) for weight gradient GEMMs. These activations have NON-ZERO MEAN, creating systematic gradient bias: `grad_W[i,j] = Σ_t ((centered[t,i] + mean_t) × grad[t,j])` - the mean term doesn't cancel. Fix in `BackwardPhase2_Encoder.cu`: Added `centerActivationsKernel` to center each cached activation BEFORE weight gradient GEMMs (grad_W_qkv, grad_W_o, grad_W1, grad_W2). Uses `centered_activation_scratch` buffer allocated in TrainingState. This matches the Issue #37 pattern applied to LM head.
 
-69. **ALiBi Slopes: Context-Length-Aware Scaling (Issue #69 + multi-model fix)**: ALiBi slopes MUST scale relative to `max_seq_len` for multi-model orchestration. The formula in `PositionalBiasMethod.cu` computes:
-  - `d_min = rotary_dim/2` (or 16): locality distance for strongest head
-  - `d_max = max_seq_len`: context length being trained/inferred on
-  - `m_max = target_bias / d_min`: penalty slope for NEAR distances (head 0)
-  - `m_min = target_bias / d_max`: penalty slope for FAR distances (head N-1)
-  - Slopes interpolated **geometrically** from `-m_max` to `-m_min`
-  - **CRITICAL**: FlashAttention expects NEGATIVE slopes (library uses `+= slope * col_idx`)
-  - **WARNING**: If you set `max_seq_len=2048` but run inference at 8192 tokens, weakest heads will be too weak! Always match `max_seq_len` to actual context length.
+47. **ALiBi Slopes: Context-Length-Aware Scaling (Issue #69 + multi-model fix)**: ALiBi slopes MUST scale relative to `max_seq_len` for multi-model orchestration. The formula in `PositionalBiasMethod.cu` computes:
+
+- `d_min = rotary_dim/2` (or 16): locality distance for strongest head
+- `d_max = max_seq_len`: context length being trained/inferred on
+- `m_max = target_bias / d_min`: penalty slope for NEAR distances (head 0)
+- `m_min = target_bias / d_max`: penalty slope for FAR distances (head N-1)
+- Slopes interpolated **geometrically** from `-m_max` to `-m_min`
+- **CRITICAL**: FlashAttention expects NEGATIVE slopes (library uses `+= slope * col_idx`)
+- **WARNING**: If you set `max_seq_len=2048` but run inference at 8192 tokens, weakest heads will be too weak! Always match `max_seq_len` to actual context length.
 
 70. **RoPE: NTK-Aware Context Scaling**: RoPE frequencies auto-scale when `max_seq_len > 2048` (base context). Formula in `PositionalBiasMethod.cu`:
-  - `effective_theta = theta * (max_seq_len / 2048)^(rotary_dim / (rotary_dim - 2))`
-  - This is "dynamic NTK" / "Code Llama style" scaling for extending context
-  - `rope_scaling` field provides additional manual scaling (default 1.0)
-  - **WARNING**: Position encodings will extrapolate if runtime sequence exceeds `max_seq_len`
+
+- `effective_theta = theta * (max_seq_len / 2048)^(rotary_dim / (rotary_dim - 2))`
+- This is "dynamic NTK" / "Code Llama style" scaling for extending context
+- `rope_scaling` field provides additional manual scaling (default 1.0)
+
+113. **Sinusoidal Position Embeddings Required with ALiBi/RoPE (ROOT CAUSE FIX Feb 2026)**: Issue #103 correctly removed **learned** position embeddings (they were isotropic → QKV explosion), but this left same tokens at different positions with **IDENTICAL** representations. ALiBi/RoPE only provide position info **INSIDE attention**, not in the residual stream. Result: avg_cos=0.90 (hidden states 90% correlated) → mode collapse to whatever W[v] row aligns with the common direction.
+
+- **Root Cause**: Without position differentiation in embeddings, token "the" at pos 0 has the SAME vector as "the" at pos 50 → cos=1.0 → all positions look similar → model can't learn positional structure
+- **Fix**: Added sinusoidal position embeddings from AIAYN paper: `PE(pos,2i) = sin(pos/10000^(2i/d_model))`, `PE(pos,2i+1) = cos(pos/10000^(2i/d_model))`
+- **Properties**: Fixed (not learned) → no training instability; Non-isotropic by design → each dimension has DIFFERENT frequency; Works WITH ALiBi/RoPE (they complement each other)
+- **Implementation**: `addSinusoidalPositionEmbeddingsKernel` in `AutogradTraining.cu`, called UNCONDITIONALLY after token embedding lookup when using ALiBi/RoPE
+- **Why Issue #112 (Gram-Schmidt orthogonalization) was WRONG**: It was a bandaid - orthogonalizing W[277] just made another token dominate. Sinusoidal embeddings fix the ROOT CAUSE by breaking the 90% hidden state correlation
+- **Expected Result**: avg_cos drops from 0.90 → ~0.3-0.5, mode collapse no longer occurs
+- **WARNING**: Position encodings will extrapolate if runtime sequence exceeds `max_seq_len`
+
+115. **Diagnostic Buffer Mismatch (DIAGNOSTIC BUG! - Issue #115, Feb 2026)**: Diagnostic functions in `Phase2_TrainingLoop.cu` were reading the WRONG buffer (`cached_encoder_output` = pre-centering) instead of the centered buffer (`centering_scratch_tensor` = post-centering). This caused all diagnostic logs to show incorrect values even though training was using centered data correctly.
+
+- **Root Cause**: `AutogradTraining.cu` populates `cached_encoder_output` at line 947 (BEFORE centering) and `centering_scratch_tensor` at line 1055 (AFTER centering). Training correctly uses the centered buffer, but all 3 diagnostic functions read the pre-centering buffer.
+- **Symptom**: `[HIDDEN_STATE_EQUATION]` showed `hidden_mean ≈ -0.001` (non-zero) when it should show `hidden_mean ≈ 0` (centered)
+- **Impact**: Led to false conclusions that centering wasn't working, wasted investigation time on Issues #108-#114
+- **Fix (Phase2_TrainingLoop.cu)**:
+    - `computeHiddenState277Analysis()` - Added `bool use_centering` parameter with conditional buffer selection
+    - `computeFeedbackLoopDiagnostic()` - Added `bool use_centering` parameter with conditional buffer selection
+    - `[HiddenCosine]` diagnostic - Added inline conditional buffer selection using `ctx.model->getConfig().lm_head_center_hidden_states`
+    - Call sites now pass `cfg.lm_head_center_hidden_states` as the `use_centering` parameter
+- **Verification**: After fix, `[HIDDEN_STATE_EQUATION]` should show `hidden_mean ≈ 0` when centering is enabled
+
+114. **Hidden State Norm Explosion Feedback Loop (ROOT CAUSE - Issue #114, Feb 2026)**: The persistent Token 277 (SPACE) mode collapse is caused by a **self-reinforcing feedback loop** with 5 interlocking anomalies. The mathematical root cause is:
+
+- **Root Cause Equation**: `logit[277] = h · W[277]^T = ||h|| × ||W[277]|| × cos(h, W[277])`
+- **The Paradox**: Even when gradient says "decrease W[277]", logit INCREASES because ||h|| growth outpaces any W[277] reduction!
+- **Five Critical Anomalies**:
+    1. **Hidden Norm Explosion (+111%)**: ||h|| grows 24.79→52.34+ because encoder amplifies the aligned direction. RMSNorm normalizes variance but NOT magnitude.
+    2. **Cosine Collapse (+232%)**: avg_cos(h_i, h_j) grows 0.25→0.84 - hidden states converge to a single common direction.
+    3. **Weight Paradox (+32%)**: ||W[277]|| GROWS from 0.17→0.22 despite NEGATIVE gradients! Hidden mean bias corrupts gradient direction.
+    4. **Mean Drift (→0)**: h_mean drifts from -0.011→-0.0004 as hidden states center while norms explode.
+    5. **Logit Explosion (+25x)**: logit[277] grows 0.20→5.12 as the product of all factors compounds.
+- **Feedback Loop Mechanism**:
+    ```
+    logit[277] = ||h|| × ||W|| × cos(h,W) high → p(277)↑ → negative grad_logits[277]
+    → AdamW tries to shrink W[277] → BUT encoder learns h ALIGNED with W[277]
+    → ||h||↑ and cos(h,W)↑ OUTPACE ||W||↓ → logit[277]↑ → REPEAT
+    ```
+- **Diagnostic Logging**: Added `[FEEDBACK_LOOP_EQUATION]` logging in `Phase2_TrainingLoop.cu` with:
+    - Per-batch decomposition: ||h||, ||W[277]||, cos(h, W[277]), growth rates
+    - Expected vs Actual logit comparison
+    - Anomaly flags for divergence detection
+- **Related Issues**: #37 (hidden centering), #43 (encoder centering), #108 (cosine collapse), #111 (centering disabled), #113 (sinusoidal position)
+- **Files Modified**: `Phase2_TrainingLoop.cu` (diagnostic), `PLATEAU_BUG_INVESTIGATION.md` (documentation)
 
 22. **Centralized Controller Pattern - MANDATORY**: All GPU resource management MUST go through centralized controllers in TrainingState. VIOLATIONS ARE BUGS:
-  - **CUDA Streams**: Use `training_state.stream_ctrl.getPrimaryStream()` - NEVER create raw `cudaStream_t` locals or store in other structs
-  - **Gradient Buffers**: Gradients are managed via autograd system - use `ctx.model->zeroGradients()` before accumulation window, `ctx.model->backward()` computes and accumulates
-  - **Optimizer States**: Use `training_state.optimizer_m_states/optimizer_v_states` - ParameterGroup holds pointers, does NOT allocate
-  - **cuBLAS**: Use `training_state.cublas_handle` - NEVER create separate handles
-  - **Gradient Accumulation**: Track via `ctx.optimizer.current_micro_step` (int), reset to 0 after optimizer step. No traffic light state machine.
-  - Pattern: Structs store pointers only. TrainingState owns allocations. Lifecycle methods (`allocate*`/`free*`) are centralized.
-  - Rationale: Prevents memory leaks, double-frees, stream synchronization bugs, and makes resource lifetime explicit.
+
+- **CUDA Streams**: Use `training_state.stream_ctrl.getPrimaryStream()` - NEVER create raw `cudaStream_t` locals or store in other structs
+- **Gradient Buffers**: Gradients are managed via autograd system - use `ctx.model->zeroGradients()` before accumulation window, `ctx.model->backward()` computes and accumulates
+- **Optimizer States**: Use `training_state.optimizer_m_states/optimizer_v_states` - ParameterGroup holds pointers, does NOT allocate
+- **cuBLAS**: Use `training_state.cublas_handle` - NEVER create separate handles
+- **Gradient Accumulation**: Track via `ctx.optimizer.current_micro_step` (int), reset to 0 after optimizer step. No traffic light state machine.
+- Pattern: Structs store pointers only. TrainingState owns allocations. Lifecycle methods (`allocate*`/`free*`) are centralized.
+- Rationale: Prevents memory leaks, double-frees, stream synchronization bugs, and makes resource lifetime explicit.
 
 90. **ScratchBlock Buffer Desync (Issue #90, Jan 2026)**: After `autograd::add(emb, pos_emb)` creates a NEW Tensor with its own buffer, `ctx.embedding_tensor.data` points to this NEW buffer. Then `ts->cached_embeddings` is synced from `emb_output.data`. ScratchBlock operates IN-PLACE on `ts->cached_embeddings`, but `ctx.embedding_tensor.data` is NOT updated! Layer 0 receives STALE pre-ScratchBlock data while Layer 1+ are correct (they use Layer 0's output).
-  - **Symptom**: LSE explosion (300-600 instead of 6-10) ONLY in Layer 0. K/V values ~8x larger than expected after QKV projection.
-  - **Root Cause**: Two different buffers - `ctx.embedding_tensor.data` (from autograd::add) vs `ts->cached_embeddings` (ScratchBlock output)
-  - **Fix**: After ScratchBlock completes, copy `ts->cached_embeddings` back to `ctx.embedding_tensor.data`
-  - **Implementation**: `AutogradTraining.cu` - added cudaMemcpyAsync after `ctx.scratch_block->forward()`
 
-25. **FFN Post-GELU Cache CRITICAL (Fixed Dec 2025)**: EncodingLayer::forward() MUST write post-GELU activations to `args.cache_ffn_output`. Bug history: field existed in `EncodingForwardArgs` but was NEVER written, causing `cached_ffn_outputs[]` to contain garbage. Backward pass then used garbage for `grad_W2 = ffn_hidden^T @ grad_output`, corrupting W2 weight gradients. Symptom: FFN gradient norm was 4.3x smaller than expected. Fix: Added cudaMemcpyAsync after ffn_->forward() to copy `post_gelu` to `args.cache_ffn_output`. If you add new forward caches, VERIFY they're actually written!
+- **Symptom**: LSE explosion (300-600 instead of 6-10) ONLY in Layer 0. K/V values ~8x larger than expected after QKV projection.
+- **Root Cause**: Two different buffers - `ctx.embedding_tensor.data` (from autograd::add) vs `ts->cached_embeddings` (ScratchBlock output)
+- **Fix**: After ScratchBlock completes, copy `ts->cached_embeddings` back to `ctx.embedding_tensor.data`
+- **Implementation**: `AutogradTraining.cu` - added cudaMemcpyAsync after `ctx.scratch_block->forward()`
 
-23. **GRIM-text vs G.R.I.M Delegate Systems - CRITICAL SEPARATION**: GRIM-text is a SEPARATE PROGRAM from G.R.I.M and MUST NOT depend on G.R.I.M's core libraries:
-  - **WRONG**: `#include "../../../../core/delegate.hpp"` in GRIM-text files - this is G.R.I.M's main program delegate system
-  - **CORRECT**: GRIM-text has its own GPU delegate system at `resources/models/GRIM-text/Shared/Delegate/Delegate.hpp` (GPU-side `__device__` functions only)
-  - **YAGNI Principle**: If a GRIM-text component declares delegate/callback functionality but NO code registers callbacks, DELETE the delegate code entirely
-  - **Files affected**: StreamController and any Shared/ components - they should NOT use any delegate pattern
-  - **Rationale**: GRIM-text trains/runs as standalone executable (`train_gpu.exe`, `grim_text_server.exe`), completely independent of G.R.I.M's main process
-  - **Build separation**: GRIM-text builds in `resources/models/GRIM-text/training/`, G.R.I.M builds in root `build/` - NO cross-dependencies allowed
+25. **FFN Post-GELU Cache CRITICAL (Fixed Dec 2025)**: EncodingLayer::forward() MUST write post-GELU activations to `args.cache_ffn_output`. Bug history: field existed in `EncodingForwardArgs` but was NEVER written, causing `cached_ffn_outputs[]` to contain garbage. Backward pass then used garbage for `grad_W2 = ffn_hidden^T @ grad_output`, corrupting W2 weight gradients. Symptom: FFN gradient norm was 4.3x smaller than expected. Fix: Added cudaMemcpyAsync after ffn\_->forward() to copy `post_gelu` to `args.cache_ffn_output`. If you add new forward caches, VERIFY they're actually written!
+
+26. **GRIM-text vs G.R.I.M Delegate Systems - CRITICAL SEPARATION**: GRIM-text is a SEPARATE PROGRAM from G.R.I.M and MUST NOT depend on G.R.I.M's core libraries:
+
+- **WRONG**: `#include "../../../../core/delegate.hpp"` in GRIM-text files - this is G.R.I.M's main program delegate system
+- **CORRECT**: GRIM-text has its own GPU delegate system at `resources/models/GRIM-text/Shared/Delegate/Delegate.hpp` (GPU-side `__device__` functions only)
+- **YAGNI Principle**: If a GRIM-text component declares delegate/callback functionality but NO code registers callbacks, DELETE the delegate code entirely
+- **Files affected**: StreamController and any Shared/ components - they should NOT use any delegate pattern
+- **Rationale**: GRIM-text trains/runs as standalone executable (`train_gpu.exe`, `grim_text_server.exe`), completely independent of G.R.I.M's main process
+- **Build separation**: GRIM-text builds in `resources/models/GRIM-text/training/`, G.R.I.M builds in root `build/` - NO cross-dependencies allow
 
 24. **GPU Gradient Norm Sync Performance**: `computeGradNorm()` has GPU kernel implementation but syncs CPU-GPU by default for logging. This adds **7+ seconds per batch** on 3080Ti when called every iteration:
-  - **Root cause**: `cudaStreamSynchronize()` forces CPU to wait for GPU completion to read metrics (total_norm, component norms)
-  - **Solution**: Pass `sync_for_host_read=false` to skip sync when metrics not needed (9 out of 10 batches)
-  - **When to sync**: Only when gradient component logging needed (every 10 batches) or for debugging
-  - **Gradient clipping**: Does NOT need sync - clipping happens on GPU using device-resident norms
-  - **Performance gain**: 10-15x speedup per batch (from 15s to 1-2s) by eliminating unnecessary CPU-GPU synchronization
-  - **Implementation**: `Phase2_TrainingLoop.cu` syncs every 10th batch via `computeGradNorm(batch_idx % 10 == 0)`
+
+- **Root cause**: `cudaStreamSynchronize()` forces CPU to wait for GPU completion to read metrics (total_norm, component norms)
+- **Solution**: Pass `sync_for_host_read=false` to skip sync when metrics not needed (9 out of 10 batches)
+- **When to sync**: Only when gradient component logging needed (every 10 batches) or for debugging
+- **Gradient clipping**: Does NOT need sync - clipping happens on GPU using device-resident norms
+- **Performance gain**: 10-15x speedup per batch (from 15s to 1-2s) by eliminating unnecessary CPU-GPU synchronization
+- **Implementation**: `Phase2_TrainingLoop.cu` syncs every 10th batch via `computeGradNorm(batch_idx % 10 == 0)`
 
 56. **Autograd Function Return Statements (Issue #56, Jan 2026)**: When writing autograd-enabled forward functions that build computation graphs, **ALWAYS return the output Tensor**. A missing return statement causes the local Tensor's destructor to run at function end, which cascades deletion of the entire `grad_fn` chain DURING the forward pass. Symptom: "illegal memory access" in backward kernels because `grad_fn` pointers point to freed memory. Fix: Always explicitly `return output;` from forward functions. C++ compilers often don't warn about missing return statements returning non-void (undefined behavior). The FFN::forward() bug in `Feed_Forward_GPU.cu` caused training crashes for weeks until discovered.
 
-71. **NumericHead Backward NEVER Called (Issue #71, Jan 2026)**: When using a multi-task loss (e.g., text CE + numeric Huber), each loss path needs its own backward() call! The numeric loss kernel (`launchNumericLoss`) computed `grad_predictions` and wrote them to `grad_numeric_tensor.data`, but `numeric_head_output.backward()` was NEVER called! Result: `numeric_head_weights` received ZERO gradients for entire training - the numeric head parameters were NOT trained at all. Fix in `LanguageModel_Training.cu::backward()`: After `loss_tensor.backward(nullptr)`, check if numeric head is enabled and call `numeric_head_output.backward(&grad_numeric_tensor)`. **PATTERN**: For ANY auxiliary loss head (numeric, classification, etc.), you MUST explicitly call `.backward()` on that head's output tensor with the corresponding loss gradients.
+57. **NumericHead Backward NEVER Called (Issue #71, Jan 2026)**: When using a multi-task loss (e.g., text CE + numeric Huber), each loss path needs its own backward() call! The numeric loss kernel (`launchNumericLoss`) computed `grad_predictions` and wrote them to `grad_numeric_tensor.data`, but `numeric_head_output.backward()` was NEVER called! Result: `numeric_head_weights` received ZERO gradients for entire training - the numeric head parameters were NOT trained at all. Fix in `LanguageModel_Training.cu::backward()`: After `loss_tensor.backward(nullptr)`, check if numeric head is enabled and call `numeric_head_output.backward(&grad_numeric_tensor)`. **PATTERN**: For ANY auxiliary loss head (numeric, classification, etc.), you MUST explicitly call `.backward()` on that head's output tensor with the corresponding loss gradients.
 
-74. **Numeric Loss Gradients Missing Mean Reduction (Issue #74, Jan 2026)**: The numeric loss was computed as `loss_avg = loss_sum / count` (proper mean reduction), but the **gradients** were NOT scaled by `1/count`! The `numericLossKernel` wrote `grad_predictions[idx] = grad * loss_weight` without the `1/count` factor. By chain rule: `d(loss_avg)/d(pred) = (1/count) * d(loss_sum)/d(pred)`. Without scaling, numeric gradients were ~3500x too large (matching the token count). This caused `num` gradient norm to dominate (2641 vs ~3 for other components). Fix in `NumericLoss_GPU.cu`: Added `scaleNumericGradKernel` that runs after the loss kernel and multiplies all gradients by `1.0f / count`. **PATTERN**: When using mean reduction for loss, gradients MUST also be scaled by `1/N` where N is the count of valid elements.
+58. **Numeric Loss Gradients Missing Mean Reduction (Issue #74, Jan 2026)**: The numeric loss was computed as `loss_avg = loss_sum / count` (proper mean reduction), but the **gradients** were NOT scaled by `1/count`! The `numericLossKernel` wrote `grad_predictions[idx] = grad * loss_weight` without the `1/count` factor. By chain rule: `d(loss_avg)/d(pred) = (1/count) * d(loss_sum)/d(pred)`. Without scaling, numeric gradients were ~3500x too large (matching the token count). This caused `num` gradient norm to dominate (2641 vs ~3 for other components). Fix in `NumericLoss_GPU.cu`: Added `scaleNumericGradKernel` that runs after the loss kernel and multiplies all gradients by `1.0f / count`. **PATTERN**: When using mean reduction for loss, gradients MUST also be scaled by `1/N` where N is the count of valid elements.
 
 74b. **Issue #74 Scaling Kernel Race Condition (Jan 2026)**: The Issue #74 fix added `scaleNumericGradKernel` after `numericLossKernel`, but CUDA kernels launch asynchronously! The scaling kernel was reading `count` BEFORE the loss kernel finished writing it via `atomicAdd`. Result: `count=0` or partial count → scaling either skipped (n>0 check fails) or incorrect. Fix: Added `cudaStreamSynchronize(stream)` between the two kernel launches to ensure the loss kernel completes before the scaling kernel reads the count. **PATTERN**: When kernel B reads data written by kernel A via atomics, you MUST sync between them even on the same stream.
 
 82. **RMSNorm Gamma Gradient Token Normalization (Issue #82, Jan 2026) - REVERTED**: The original Issue #82 added `1/tokens` scaling to RMSNorm gamma gradients, claiming they were ~400x larger than FFN gradients. This was **WRONG** because: (1) the loss backward already applies `1/tokens` through mean reduction (Issue #58), (2) the incoming `dy` to RMSNorm already reflects this scaling, (3) adding another `1/tokens` made RMS gradients `1/tokens²` too small (~300,000x too small with 3500 tokens). The correct gradient is simply: `atomicAdd(&grad_gamma[i], dy[i] * x[i] * inv_rms)` - NO `inv_tokens` scaling. **PATTERN**: Don't double-apply mean reduction scaling - if loss backward already scales by `1/N`, don't scale again in parameter gradient kernels.
 
 83. **FlashAttention dQ/dK vs dV Magnitude Asymmetry (Issue #83, Jan 2026) - SUPERSEDED BY #87**: FlashAttention backward produces dQ/dK that are **500,000x larger** than dV! Root cause: Softmax backward Jacobian asymmetry with ALiBi localized attention:
-  - **dV = P^T @ dO** - Uses softmax probabilities P directly (bounded 0-1)
-  - **dQ = dS @ K, dK = dS^T @ Q** - Where `dS = P * (dP - dP_sum)` involves Jacobian (unbounded)
-  - With ALiBi's ~32-token attention window, the Jacobian creates residual gradients that don't cancel
-  - Result: dQ_rms ≈ 0.06, dK_rms ≈ 0.02, dV_rms ≈ 0.000001 (500,000x ratio!)
-  - This asymmetry flows into W_qkv weight gradients → attention grad norm ~30,000 vs FFN ~2
-  - **Original Fix**: After FlashAttention backward, scale dQ/dK to match dV magnitude: `dq_scale = dv_rms / dq_rms`.
-  - ⚠️ **SUPERSEDED**: Issue #84 fixed the ROOT CAUSE (missing preprocessing kernel). Issue #83's normalization then CRUSHED gradients instead of fixing them. **Issue #87 removed Issue #83 normalization.**
+
+- **dV = P^T @ dO** - Uses softmax probabilities P directly (bounded 0-1)
+- **dQ = dS @ K, dK = dS^T @ Q** - Where `dS = P * (dP - dP_sum)` involves Jacobian (unbounded)
+- With ALiBi's ~32-token attention window, the Jacobian creates residual gradients that don't cancel
+- Result: dQ_rms ≈ 0.06, dK_rms ≈ 0.02, dV_rms ≈ 0.000001 (500,000x ratio!)
+- This asymmetry flows into W_qkv weight gradients → attention grad norm ~30,000 vs FFN ~2
+- **Original Fix**: After FlashAttention backward, scale dQ/dK to match dV magnitude: `dq_scale = dv_rms / dq_rms`.
+- ⚠️ **SUPERSEDED**: Issue #84 fixed the ROOT CAUSE (missing preprocessing kernel). Issue #83's normalization then CRUSHED gradients instead of fixing them. **Issue #87 removed Issue #83 normalization.**
 
 84. **FlashAttention Missing Preprocessing Kernel (Issue #84, Jan 2026)**: **ROOT CAUSE OF GRADIENT EXPLOSION!** GRIM's FlashAttention backward was missing the preprocessing kernel that computes `dP_sum = dot(dO, O)` for all query positions. The main backward kernel (`flash_bwd_dq_dk_dv_loop_kernel`) uses `Is_first` template parameter to conditionally call `dot_do_o()` inline, but `Is_first=true` only for the FIRST column block. The kernel then reads `gdPsum` for ALL m_blocks, expecting valid pre-computed values. Without the preprocessing kernel, `dsoftmax_sum` buffer (allocated via `cudaMalloc` with NO zeroing) contained garbage for most positions.
-  - **Symptom**: dQ/dK explode 100,000-500,000x while dV stays normal. First 2 layers per batch are correct (starting m_blocks get valid data from inline `dot_do_o`), layers 3-12 explode.
-  - **Evidence**: `training_run.log` shows calls 1-2 with dQ_max=0.000001, calls 3-12 with dQ_max=0.4-0.7 despite identical dO_max=0.000002.
-  - **Fix in `Flash_Attention_Kernal.cu`**: Added `flash_bwd_dot_do_o_kernel` template and modified `run_flash_bwd` to launch preprocessing kernel FIRST with grid `(num_m_block, batch, heads)` before main backward kernel.
-  - **CRITICAL**: This preprocessing kernel call is REQUIRED by Tri Dao's FlashAttention library. The reference implementation (`flash_bwd_launch_template.h`) clearly shows `flash_bwd_dot_do_o_kernel<<<grid_m, ...>>>` launched before `flash_bwd_dq_dk_dv_loop_seqk_parallel_kernel<<<grid_n, ...>>>`.
+
+- **Symptom**: dQ/dK explode 100,000-500,000x while dV stays normal. First 2 layers per batch are correct (starting m_blocks get valid data from inline `dot_do_o`), layers 3-12 explode.
+- **Evidence**: `training_run.log` shows calls 1-2 with dQ_max=0.000001, calls 3-12 with dQ_max=0.4-0.7 despite identical dO_max=0.000002.
+- **Fix in `Flash_Attention_Kernal.cu`**: Added `flash_bwd_dot_do_o_kernel` template and modified `run_flash_bwd` to launch preprocessing kernel FIRST with grid `(num_m_block, batch, heads)` before main backward kernel.
+- **CRITICAL**: This preprocessing kernel call is REQUIRED by Tri Dao's FlashAttention library. The reference implementation (`flash_bwd_launch_template.h`) clearly shows `flash_bwd_dot_do_o_kernel<<<grid_m, ...>>>` launched before `flash_bwd_dq_dk_dv_loop_seqk_parallel_kernel<<<grid_n, ...>>>`.
 
 85. **Validation Token Budget Exceeds Training Buffer Size (CRITICAL FIX Jan 2026)**: Training allocates GPU buffers based on `batch_size * max_seq_len` (e.g., 7×1024=7168 tokens). But validation used hardcoded `kDefaultMaxTokensPerBatch = 8192`. When validation batch had >7168 tokens, it wrote past buffer boundaries → STATUS_STACK_BUFFER_OVERRUN crash (exit code -1073740791 / 0xC0000409).
-  - **Symptom**: Training completes successfully (3000+ batches), then crashes immediately after "Created N validation batches" message.
-  - **Root Cause**: `Phase2_TrainingLoop.cu` used `val_opts.max_tokens_per_batch = kDefaultMaxTokensPerBatch` (8192) which exceeds `max_cached_tokens` (7168 for batch_size=7, seq_len=1024).
-  - **Fix**: Changed validation to use `ctx.model->getConfig().max_tokens_per_batch` instead of hardcoded constant. Added logging: `"[Val] Token budget: X (model limit: Y)"`.
-  - **PATTERN**: When reusing buffers allocated for training, validation MUST respect the same size limits. Never use hardcoded constants that could exceed allocated buffer sizes.
+
+- **Symptom**: Training completes successfully (3000+ batches), then crashes immediately after "Created N validation batches" message.
+- **Root Cause**: `Phase2_TrainingLoop.cu` used `val_opts.max_tokens_per_batch = kDefaultMaxTokensPerBatch` (8192) which exceeds `max_cached_tokens` (7168 for batch_size=7, seq_len=1024).
+- **Fix**: Changed validation to use `ctx.model->getConfig().max_tokens_per_batch` instead of hardcoded constant. Added logging: `"[Val] Token budget: X (model limit: Y)"`.
+- **PATTERN**: When reusing buffers allocated for training, validation MUST respect the same size limits. Never use hardcoded constants that could exceed allocated buffer sizes.
 
 87. **Issue #83 dQ/dK Normalization CRUSHING Gradients (Issue #87, Jan 2026)**: After Issue #84 fixed the root cause of gradient explosion (missing preprocessing kernel), Issue #83's dQ/dK normalization became **HARMFUL**. It was scaling dQ/dK DOWN to match tiny dV magnitude, causing vanishing gradients:
-  - **Symptom**: attn gradients 1.96→0.08 (24x decrease), ffn gradients 1.83→0.07 (26x decrease), loss NOT improving (actually increasing!)
-  - **Root Cause**: Issue #83 computed `dq_scale = dv_rms / dq_rms`. When dQ/dK were at proper magnitude (Issue #84 fix) but dV is tiny (~1e-6), this CRUSHED attention gradients.
-  - **Fix in `TensorContract_GPU.cu`**: Disabled Issue #83 normalization entirely. Now all gradients use scale=1.0.
-  - **PATTERN**: When a bandaid fix is superseded by a root cause fix, REMOVE the bandaid immediately. It will become harmful.
 
-88. **Embedding Backward Skip Flag Not Set for Tied Weights (CRITICAL FIX Jan 2026)**: When Issue #87 superseded Issue #60 by disabling PCGrad buffer allocation, it forgot to enable the fallback skip flag! Result: `EmbeddingGradFn::apply()` ran in "normal mode" where LM head and embedding gradients **CANCEL** each other to zero.
-  - **Symptom**: Mode collapse where model only predicts token 277 (SPACE). p_277 explodes from ~1e-5 to >0.1 within first few batches. PyTorch baseline doesn't collapse because it uses separate grad_fn for tied weights.
-  - **Root Cause**: `g_skip_embedding_backward_for_tied_weights` was initialized to `false` in TensorContract_GPU.cu line 56, but **NEVER SET TO TRUE ANYWHERE**. With PCGrad buffer also NULL, code falls through to line 2711-2714: `kernel_embedding_backward` runs and produces gradients OPPOSITE to LM head backward.
-  - **Code Comment Evidence**: TensorContract_GPU.cu line 2710 literally says: `// No PCGrad, no skip: run embedding backward normally (will cancel!)`
-  - **Fix in `Phase1_Startup.cu`**: Set `g_skip_embedding_backward_for_tied_weights = true;` when `tie_embeddings=true` (inside the Issue #87 block).
-  - **Mathematical Basis**: LM head backward computes `grad_W = h^T @ grad_logits` where grad_logits[t,v] = p[t,v] - 1{target[t]=v}. Embedding backward computes `grad_E[token_id] += grad_encoder[pos]`. These gradients have **OPPOSITE signs** for tied weights because LM head wants to INCREASE output probability while embedding wants to DECREASE input contribution. PCGrad was designed to resolve this conflict; without it, we must skip embedding backward entirely.
-  - **PATTERN**: When disabling a feature (PCGrad), verify all fallback paths are properly configured. In this case, the skip flag fallback existed but was never enabled.
+- **Symptom**: attn gradients 1.96→0.08 (24x decrease), ffn gradients 1.83→0.07 (26x decrease), loss NOT improving (actually increasing!)
+- **Root Cause**: Issue #83 computed `dq_scale = dv_rms / dq_rms`. When dQ/dK were at proper magnitude (Issue #84 fix) but dV is tiny (~1e-6), this CRUSHED attention gradients.
+- **Fix in `TensorContract_GPU.cu`**: Disabled Issue #83 normalization entirely. Now all gradients use scale=1.0.
+- **PATTERN**: When a bandaid fix is superseded by a root cause fix, REMOVE the bandaid immediately. It will become harmful.
+
+88. **Embedding Backward Skip Flag Was WRONG (Issue #88→#109→#110, Feb 2026)**: Issue #88 set `g_skip_embedding_backward_for_tied_weights = true` thinking LM head and embedding gradients "cancel". Issue #109 set it to `false`, but that STILL caused cancellation without PCGrad. Issue #110 re-enables PCGrad buffer allocation.
+
+- **CRITICAL**: The ROOT CAUSE was Issue #87 incorrectly removing PCGrad allocation!
+- **Why #88/#109 Were Both Wrong**:
+    - LM head: `grad_W[i,j] = sum_t hidden[t,i] * grad_logits[t,j]` - DENSE MATMUL
+    - Embedding: `atomicAdd(&grad_W[token_id[t], :], grad_encoder[t, :])` - SPARSE SCATTER to SAME buffer
+    - With tied weights writing to SAME buffer, these gradients ARE OPPOSITE and DO CANCEL!
+    - Issue #60 correctly implemented PCGrad to fix this, but Issue #87 removed it
+- **Issue #110 Fix in `Phase1_Startup.cu`**: Call `allocatePCGradBuffer()` for tied weights.
+- **Three EmbeddingGradFn paths**: (1) PCGrad mode [correct], (2) Skip mode [Issue #88], (3) Normal mode [cancels!]
+- **Evidence**: Log showed `pcgrad_buffer=0000000000000000` (NULL) for all calls, forcing PATH 3 which says "(will cancel!)" in comment.
 
 ## Testing & Debugging
 
 **Run GRIM**
+
 ```bash
 # From repo root (sets working directory correctly)
 ./build/Release/GRIM.exe
 ```
 
 **Tokenizer Tests**
+
 ```powershell
 # Build and run tokenizer self-test (37 tests)
 cd resources/models/GRIM-text/training/build
@@ -745,6 +864,7 @@ cmake --build . --config Release --target unigrambyte_self_test
 ```
 
 **Debug GRIM-text Server**
+
 ```powershell
 # Test server health
 python test_grim_model.py
@@ -754,6 +874,7 @@ python verify_model_config.py
 ```
 
 **Voice Testing**
+
 ```bash
 # STT only (skip if no microphone)
 ./GRIM.exe --voice-test
@@ -773,6 +894,7 @@ python -m resources.python.coqui_bridge --test
 ## External Dependencies
 
 **C++ Dependencies (vcpkg manifest mode)**
+
 - **vcpkg.json** - Manifest mode for reproducible builds (not classic mode)
 - **CUDA 12.5** - Required for GPU acceleration (cuBLAS, custom kernels)
 - **FlatBuffers** - Zero-copy serialization (memory, checkpoints, training status)
@@ -784,13 +906,16 @@ python -m resources.python.coqui_bridge --test
 - **BGFX** - `external/bgfx.cmake` (rendering backend)
 
 **Python Dependencies**
+
 - **Coqui TTS** (XTTS v2) - High-quality voice synthesis
 - **Sherlock** - OSINT username lookups
+
 ```bash
 pip install -r resources/python/requirements.txt
 ```
 
 **GPU Technology Stack**
+
 - **Flash Attention v2** - Memory-efficient attention (48x48 block tiling)
 - **cuBLAS** - NVIDIA BLAS library for matrix operations
 - **Custom CUDA Kernels** - Fused operations (QKV projection, FFN+GELU, LayerNorm)

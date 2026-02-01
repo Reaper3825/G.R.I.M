@@ -39,7 +39,7 @@
 #include "../Shared/UnigramByte/Unigram.hpp"
 #include "../Shared/UnigramByte/AtomTable.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"                 // Unified PBM (ALiBi + RoPE)
-#include "../Layers/LayernNorm/RMSNorm_Kernel_GPU.hpp"            // For RMSNorm kernels
+// RMSNorm_Kernel_GPU.hpp removed - production uses autograd::rms_norm in TensorContract_GPU
 
 namespace GRIM {
 

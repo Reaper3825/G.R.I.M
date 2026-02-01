@@ -147,8 +147,6 @@ add_library(grim_cuda_kernels OBJECT
     ../../Layers/Attention/QKV_Projector.cu
     # Embedding_GPU.cu removed - compiled in grim_training_kernels to avoid duplicate symbols
     ../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.cu
-
-    ../../Layers/LayernNorm/RMSNorm_Kernel_GPU.cu
     ../BiasGradientKernel.cu  # Bias gradient kernel (was in deleted BackwardKernels.cu)
 )
 set_target_properties(grim_cuda_kernels PROPERTIES
@@ -461,11 +459,12 @@ target_include_directories(flash_attention_test PRIVATE
 add_executable(gradient_verification_test
     ../../Tests/gradient_verification_test.cu
     ../../Layers/FeedForward/Feed_Forward_GPU.cu
-    ../../Layers/LayernNorm/RMSNorm_Kernel_GPU.cu
+    ../../Layers/Attention/QKV_Projector.cu
     ../../Shared/Activations/GELU/GELU.cu
     ../../Shared/TensorConversion/TensorConversion.cu
     ../../Shared/StreamController/StreamController_GPU.cu
     ../../Shared/TensorContract/TensorContract_GPU.cu
+    ../../Shared/PBM/PositionalBiasMethod.cu
 )
 
 set_target_properties(gradient_verification_test PROPERTIES

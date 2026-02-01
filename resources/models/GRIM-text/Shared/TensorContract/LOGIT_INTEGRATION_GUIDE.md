@@ -38,7 +38,7 @@ float loss = computeLoss(cached_logits, targets, ...);
 launchBackward(grad_logits, ...);  // Manual backward
 
 // New way (automatic)
-Tensor logits = Tensor::from_ptr(cached_logits, 
+Tensor logits = Tensor::from_ptr(cached_logits,
                                  TensorShape::make_LOGITS(total_tokens, vocab_size),
                                  false, // doesn't own
                                  true); // requires_grad
@@ -52,6 +52,7 @@ loss.backward();  // Automatic backward - grad_logits computed automatically!
 ### Step 1: Mark Logits with LOGITS Layout
 
 **Before (ForwardPhase1_OutputLayer.cu):**
+
 ```cpp
 // Manual allocation
 training_state_.cached_logits = /* cudaMalloc */;
@@ -59,6 +60,7 @@ training_state_.cached_logits = /* cudaMalloc */;
 ```
 
 **After:**
+
 ```cpp
 // Wrap in Tensor with LOGITS layout
 Tensor logits = Tensor::from_ptr(
@@ -73,6 +75,7 @@ logits.name = "lm_head_logits";
 ### Step 2: Use Autograd Loss Functions
 
 **Before (Phase2_TrainingLoop.cu):**
+
 ```cpp
 // Manual loss computation
 LossInputs inputs{
@@ -87,6 +90,7 @@ launchBackward(...);
 ```
 
 **After:**
+
 ```cpp
 // Automatic gradient tracking
 Tensor logits = /* from Step 1 */;
@@ -102,6 +106,7 @@ float* grad_logits = logits.grad;  // Ready to use!
 ### Step 3: Replace Manual Gradient Buffers
 
 **Before (BackwardPhase1_OutputLayer.cu):**
+
 ```cpp
 // Manual grad_logits computation
 launchCrossEntropyBackward(
@@ -113,6 +118,7 @@ launchCrossEntropyBackward(
 ```
 
 **After:**
+
 ```cpp
 // Gradient automatically computed by loss.backward()
 // Just access logits.grad - it's already computed!
@@ -125,19 +131,23 @@ cudaMemcpyAsync(training_state_.grad_logits, logits.grad, ...);
 ## Key Benefits
 
 ### 1. Automatic Gradient Computation
+
 - No manual backward kernels
 - No forgetting to call backward
 - Computation graph tracks dependencies
 
 ### 2. Type Safety
+
 - `Layout::LOGITS` makes it explicit what a tensor contains
 - Compiler catches mismatches (BSM vs LOGITS)
 
 ### 3. Memory Efficiency
+
 - Lazy gradient allocation (only when needed)
 - Automatic cleanup via RAII
 
 ### 4. Unified API
+
 - Same Tensor type for all operations
 - Consistent with existing autograd operations (matmul, gelu, etc.)
 
@@ -185,24 +195,29 @@ Tensor focal_loss(const Tensor& logits, const int* targets,
 ## Troubleshooting
 
 ### "Layout mismatch" error
+
 **Cause:** Passing non-LOGITS tensor to loss function  
 **Fix:** Ensure logits have `TensorShape::make_LOGITS(tokens, vocab_size)`
 
 ### Gradients are zero
+
 **Cause:** Forgot to set `requires_grad=true`  
 **Fix:** `Tensor::from_ptr(..., true)` or `tensor.requires_grad_(true)`
 
 ### Segfault in backward
+
 **Cause:** Logits pointer freed before backward()  
 **Fix:** Ensure logits outlive loss.backward() call
 
 ### Double gradient accumulation
+
 **Cause:** Calling backward() multiple times  
 **Fix:** Call `logits.zero_grad()` between iterations
 
 ## Performance Notes
 
 The integrated autograd system has **zero overhead** compared to manual gradient computation:
+
 - Same CUDA kernels used (no extra copies)
 - Lazy allocation (grad buffer only created when needed)
 - Computation graph is lightweight (just function pointers)

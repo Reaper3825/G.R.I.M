@@ -195,9 +195,11 @@ void FlashAttentionLayer::forward(const FlashAttentionForwardArgs& args,
         std::vector<float> h_out(std::min(out_elems, size_t(100)));
         cudaMemcpy(h_out.data(), args.output, h_out.size() * sizeof(float), cudaMemcpyDeviceToHost);
         int nan_out = 0, inf_out = 0;
+        if (DebugFlashFwd) {
         for (float val : h_out) { if (std::isnan(val)) nan_out++; if (std::isinf(val)) inf_out++; }
         fprintf(stderr, "[FA-FWD-OUT] output: nan=%d inf=%d first=%.6f\n",
                 nan_out, inf_out, h_out.empty() ? 0.0f : h_out[0]);
+        }
     }
 
     fa_fwd_valid_ = true;

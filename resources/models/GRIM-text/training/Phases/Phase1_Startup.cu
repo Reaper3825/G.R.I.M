@@ -2027,36 +2027,51 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         }
         
         // ═══════════════════════════════════════════════════════════════════════════
-        // ISSUE #87 SUPERSEDES #60: PCGrad is NO LONGER NEEDED!
+        // ISSUE #109 FIX: Embedding backward must NOT be skipped!
         // ═══════════════════════════════════════════════════════════════════════════
-        // Issue #87 FIX: When tie_embeddings=true, AutogradTraining.cu now uses the
-        // SAME Tensor object (embedding_weights) for both embedding lookup AND LM head
-        // matmul. This matches PyTorch behavior where tok_emb->weight is used for both.
+        // Issue #88 was WRONG! It claimed LM head and embedding backward "cancel" each other,
+        // but they are COMPLETELY DIFFERENT gradient operations:
         //
-        // With the same Tensor object, gradients naturally accumulate:
-        // - MatMulGradFn::apply() writes grad_W with beta_accum=1.0
-        // - EmbeddingGradFn::apply() writes with atomicAdd
-        // Both write to embedding_weights.grad, just like PyTorch!
+        // LM HEAD BACKWARD (MatMulGradFn):
+        //   grad_W[i,j] = sum_t hidden[t,i] * grad_logits[t,j]
+        //   This is a DENSE MATMUL - updates ALL vocab rows based on which OUTPUT predictions were wrong
         //
-        // PCGrad was a workaround for using TWO DIFFERENT Tensor objects that happened
-        // to share data. It's no longer needed.
+        // EMBEDDING BACKWARD (EmbeddingGradFn):
+        //   grad_W[token_id[t], :] += grad_encoder[t, :]
+        //   This is SPARSE SCATTER - only updates rows for tokens that APPEARED IN INPUT
         //
-        // ISSUE #88 FIX: When PCGrad is disabled, we MUST skip embedding backward!
-        // Without PCGrad buffer AND without skip flag, EmbeddingGradFn runs in
-        // "normal mode" where it writes gradients that CANCEL the LM head gradients!
-        // The code comment literally says "will cancel!" - this was the root cause
-        // of mode collapse where the model only predicts token 277 (SPACE).
+        // ISSUE #110 FIX: LM head and embedding gradients ARE OPPOSITE and DO CANCEL!
+        // ═══════════════════════════════════════════════════════════════════════════
+        // Issue #60 proved that LM head and embedding backward produce OPPOSING gradients:
+        //   - LM head: grad = h^T @ grad_logits (DENSE MATMUL, based on OUTPUT predictions)
+        //   - Embedding: grad_W[token_id] += grad_encoder (SPARSE SCATTER, based on INPUT)
         //
-        // OLD (Issue #60): ts.allocatePCGradBuffer(vocab_size, d_model);
+        // These gradients have OPPOSITE SIGNS and CANCEL when accumulated to same buffer!
+        // The "different information" claim was WRONG - they fight each other:
+        //   LM_HEAD:    wants to DECREASE token 277 probability → negative grad
+        //   EMBEDDING:  wants to INCREASE token 277 representation → positive grad
+        //   COMBINED:   near-zero (cancellation)!
+        //
+        // Issue #87 INCORRECTLY removed PCGrad allocation, claiming "gradients accumulate naturally".
+        // Issue #88 then skipped embedding backward to stop the cancellation.
+        // Issue #109 re-enabled embedding backward but forgot to restore PCGrad!
+        // Result: Training collapses to token 277 mode (same as Issue #88 bug).
+        //
+        // The CORRECT solution is PCGrad (Issue #60):
+        //   g_final = g_lm + orthogonal_component(g_emb)
+        // This keeps LM head gradient direction while adding any NOVEL embedding info.
+        // ═══════════════════════════════════════════════════════════════════════════
         if (model_cfg.tie_embeddings) {
-            // ISSUE #88 FIX: Set skip flag to prevent gradient cancellation!
-            // Without this, EmbeddingGradFn runs kernel_embedding_backward which
-            // produces gradients OPPOSITE to LM head backward, causing cancellation.
-            g_skip_embedding_backward_for_tied_weights = true;
+            // ISSUE #110 FIX: MUST allocate PCGrad buffer to prevent gradient cancellation!
+            ctx->model->getTrainingState().allocatePCGradBuffer(
+                model_cfg.vocab_size, 
+                model_cfg.d_model, 
+                ctx->model->getTrainingState().stream_ctrl.getPrimaryStream());
+            ctx->logging.logger->log("✓ Issue #110: PCGrad buffer allocated for tied weights");
             
-            ctx->logging.logger->log("✓ Issue #87: Using SAME Tensor for tied weights (PyTorch-style)");
-            ctx->logging.logger->log("  PCGrad is NO LONGER NEEDED - gradients accumulate naturally");
-            ctx->logging.logger->log("✓ Issue #88: Embedding backward SKIPPED for tied weights");
+            // Skip flag MUST be false so embedding backward runs (through PCGrad path)
+            g_skip_embedding_backward_for_tied_weights = false;
+            ctx->logging.logger->log("✓ Issue #109: Embedding backward ENABLED via PCGrad");
         }
     }
     

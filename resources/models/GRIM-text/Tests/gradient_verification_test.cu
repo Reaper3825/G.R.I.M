@@ -29,10 +29,14 @@
 #include <cstring>
 
 // Include the ACTUAL kernel headers (same as training uses)
-#include "../Layers/LayernNorm/RMSNorm_Kernel_GPU.hpp"
+#include "../Shared/TensorContract/TensorContract_GPU.hpp"  // autograd::rms_norm (production path)
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../Layers/FeedForward/Feed_Forward_GPU.hpp"
 #include "../Shared/TensorConversion/TensorConversion.hpp"
+
+// Bring GRIM types into scope for cleaner test code
+using GRIM::Tensor;
+namespace autograd = GRIM::autograd;
 
 //==============================================================================
 // Configuration - Small model for tractable manual verification
@@ -405,19 +409,6 @@ void testFlashAttentionBackward() {
     cudaStreamDestroy(stream);
 }
 
-//==============================================================================
-// Test: FFN Backward - DELETED per Rule 20
-// 
-// FeedForwardLayer::backwardGPU() was dead code (training uses
-// BackwardPhase2_Encoder.cu::computeFFNBackward instead), so it was deleted.
-// This test tested the dead code, so it's also removed.
-// 
-// FFN backward correctness is now verified by:
-// 1. Production training via BackwardPhase2_Encoder.cu
-// 2. Gradient norm tracking in training logs
-// 3. Loss convergence (if FFN backward was wrong, loss wouldn't decrease)
-//==============================================================================
-
 void testFFNBackward() {
     printf("\n");
     printf("################################################################\n");
@@ -428,7 +419,7 @@ void testFFNBackward() {
 }
 
 //==============================================================================
-// Test: RMSNorm (tests the actual GRIM::launchRMSNorm kernel)
+// Test: RMSNorm (tests production autograd::rms_norm path)
 //==============================================================================
 
 void testRMSNorm() {
@@ -488,9 +479,21 @@ void testRMSNorm() {
     CPURef::rmsNormForward(h_input.data(), h_gamma.data(), cpu_output.data(),
                            TOTAL_TOKENS, D_MODEL, EPSILON);
     
-    // ===== GPU Actual: Forward (ACTUAL KERNEL) =====
-    GRIM::launchRMSNorm(d_input, d_output, d_gamma,
-                        TOTAL_TOKENS, D_MODEL, EPSILON, stream);
+    // ===== GPU Actual: Forward (ACTUAL KERNEL via autograd) =====
+    // Use autograd::rms_norm - the SAME path production training uses
+    Tensor input_tensor = Tensor::from_ptr(
+        d_input, TensorContract::TensorShape::make_BSM(TOTAL_TOKENS, D_MODEL), false, false);
+    input_tensor.stream = stream;
+    
+    Tensor gamma_tensor = Tensor::from_ptr(
+        d_gamma, TensorContract::TensorShape::make_BSM(1, D_MODEL), false, false);
+    gamma_tensor.stream = stream;
+    
+    // Forward pass using production autograd path
+    Tensor output_tensor = autograd::rms_norm(input_tensor, gamma_tensor, EPSILON, stream);
+    
+    // Copy result to our output buffer for comparison
+    CUDA_CHECK(cudaMemcpy(d_output, output_tensor.data, TOTAL_TOKENS * D_MODEL * sizeof(float), cudaMemcpyDeviceToDevice));
     CUDA_CHECK(cudaStreamSynchronize(stream));
     
     printf("\n===== FORWARD PASS =====\n");
@@ -503,11 +506,35 @@ void testRMSNorm() {
                             cpu_grad_input.data(), cpu_grad_gamma.data(),
                             TOTAL_TOKENS, D_MODEL, EPSILON);
     
-    // ===== GPU Actual: Backward (ACTUAL KERNEL) =====
-    GRIM::launchRMSNormBackwardLegacy(d_input, d_grad_output, d_gamma,
-                                d_grad_input, d_grad_gamma,
-                                TOTAL_TOKENS, D_MODEL, EPSILON, stream);
-    CUDA_CHECK(cudaStreamSynchronize(stream));
+    // ===== GPU Actual: Backward (via autograd) =====
+    // Re-run forward with requires_grad=true to build computation graph
+    {
+        Tensor input_for_bwd = Tensor::from_ptr(
+            d_input, TensorContract::TensorShape::make_BSM(TOTAL_TOKENS, D_MODEL), false, true);  // requires_grad=true
+        input_for_bwd.stream = stream;
+        input_for_bwd.ensure_grad();  // Allocate gradient buffer
+        
+        Tensor gamma_for_bwd = Tensor::from_ptr(
+            d_gamma, TensorContract::TensorShape::make_BSM(1, D_MODEL), false, true);  // requires_grad=true
+        gamma_for_bwd.stream = stream;
+        gamma_for_bwd.ensure_grad();
+        
+        // Forward to build graph
+        Tensor out_for_bwd = autograd::rms_norm(input_for_bwd, gamma_for_bwd, EPSILON, stream, d_input);
+        
+        // Create upstream gradient tensor
+        Tensor grad_upstream = Tensor::from_ptr(
+            d_grad_output, TensorContract::TensorShape::make_BSM(TOTAL_TOKENS, D_MODEL), false, false);
+        grad_upstream.stream = stream;
+        
+        // Run backward
+        out_for_bwd.backward(&grad_upstream);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        
+        // Copy gradients to comparison buffers
+        CUDA_CHECK(cudaMemcpy(d_grad_input, input_for_bwd.grad_data(), TOTAL_TOKENS * D_MODEL * sizeof(float), cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(d_grad_gamma, gamma_for_bwd.grad_data(), D_MODEL * sizeof(float), cudaMemcpyDeviceToDevice));
+    }
     
     printf("\n===== BACKWARD PASS =====\n");
     compareSideBySide("RMSNorm grad_input", d_grad_input, cpu_grad_input.data(), TOTAL_TOKENS, D_MODEL);

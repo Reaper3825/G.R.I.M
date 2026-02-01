@@ -95,13 +95,22 @@ struct TrainConfig {
     bool enable_sampling = true;
     
     // Focal loss: down-weight easy examples (gamma > 0)
-    bool enable_focal_loss = false;
+    bool enable_focal_loss = true;
     double focal_gamma = 1.0;
     double focal_alpha = 1.0;
     
     // Label smoothing: smooth target distribution
-    bool enable_label_smoothing = false;
+    bool enable_label_smoothing = true;
     double label_smoothing = 0.1;
+    
+    // Entropy regularization: encourage exploration (matches GRIM-text)
+    // grad += λ × p_v × (log(p_v) + 1)
+    bool enable_entropy_reg = true;
+    double entropy_reg_lambda = 0.1;
+    
+    // Debug logging: log [GRAD_NONTARGET_EQUATION] for comparing with GRIM-text
+    bool enable_grad_equation_logging = true;
+    int64_t grad_equation_log_interval = 50;  // Log every N batches
     
     // Auto-stop: stop training on plateau
     bool enable_auto_stop = false;
@@ -112,10 +121,10 @@ struct TrainConfig {
     bool enable_telemetry = true;
     
     // Weight stats: log weight statistics periodically
-    bool enable_weight_stats = false;
+    bool enable_weight_stats = true;
     
     // Optimizer state logging: log AdamW m/v statistics
-    bool enable_optimizer_stats = false;
+    bool enable_optimizer_stats = true;
     
     // Xavier initialization: use Xavier/Glorot normal for weight init
     bool use_xavier_init = true;
@@ -896,7 +905,7 @@ static void apply_args(const std::unordered_map<std::string, std::string> & args
 }
 
 //======================================================//
-//  Focal Loss (matches GRIM-text UnifiedLoss)
+//  Focal Loss with Entropy Regularization (matches GRIM-text UnifiedLoss)
 //======================================================//
 
 static torch::Tensor compute_focal_loss(
@@ -906,10 +915,13 @@ static torch::Tensor compute_focal_loss(
     double alpha,
     bool label_smoothing_enabled,
     double smoothing_eps,
+    bool entropy_reg_enabled,
+    double entropy_lambda,
     int64_t vocab_size) {
     
-    // Compute log probabilities
+    // Compute probabilities and log probabilities
     auto log_probs = torch::log_softmax(logits, -1);
+    auto probs = log_probs.exp();
     
     // Get log probability of target class
     auto target_log_probs = log_probs.gather(1, targets.unsqueeze(1)).squeeze(1);
@@ -931,10 +943,118 @@ static torch::Tensor compute_focal_loss(
         ce_loss = -target_log_probs;
     }
     
-    // Apply focal weight and alpha
-    auto loss = alpha * focal_weight * ce_loss;
+    // Apply focal weight and alpha to get focal loss
+    auto focal_loss = alpha * focal_weight * ce_loss;
+    
+    // Entropy regularization: H(p) = -Σ p_v log(p_v)
+    // Gradient of -H(p) w.r.t. logits adds penalty for low entropy (mode collapse)
+    // Loss term: λ * (-H) = λ * Σ p_v * log(p_v)
+    torch::Tensor loss;
+    if (entropy_reg_enabled && entropy_lambda > 0.0) {
+        // Negative entropy: Σ p_v * log(p_v) (summed over vocab, per position)
+        auto neg_entropy = (probs * log_probs).sum(-1);  // [B*T]
+        loss = focal_loss + entropy_lambda * neg_entropy;
+    } else {
+        loss = focal_loss;
+    }
     
     return loss.mean();
+}
+
+//======================================================//
+//  [GRAD_NONTARGET_EQUATION] Diagnostic Logging
+//  Matches GRIM-text AutogradLoss.cu format for comparison
+//======================================================//
+
+static void log_grad_equation_diagnostic(
+    const torch::Tensor& logits,  // [B*T, vocab]
+    const torch::Tensor& targets, // [B*T]
+    double focal_alpha,
+    double focal_gamma,
+    bool label_smoothing_enabled,
+    double smoothing_eps,
+    bool entropy_reg_enabled,
+    double entropy_lambda,
+    int64_t vocab_size,
+    int64_t batch_idx,
+    int64_t sample_token = 277) {
+    
+    torch::NoGradGuard no_grad;
+    
+    auto logits_flat = logits.view({-1, vocab_size});
+    auto targets_flat = targets.view({-1});
+    const int64_t total_tokens = targets_flat.numel();
+    
+    // Find a valid token position to analyze
+    auto targets_cpu = targets_flat.to(torch::kCPU);
+    auto* t_ptr = targets_cpu.data_ptr<int64_t>();
+    int64_t sample_pos = -1;
+    int64_t target_at_pos = -1;
+    for (int64_t i = 0; i < total_tokens; ++i) {
+        if (t_ptr[i] >= 0 && t_ptr[i] < vocab_size) {
+            sample_pos = i;
+            target_at_pos = t_ptr[i];
+            break;
+        }
+    }
+    if (sample_pos < 0) return;
+    
+    // Compute probabilities for this position
+    auto logits_row = logits_flat[sample_pos];
+    auto log_probs = torch::log_softmax(logits_row, 0);
+    auto probs = log_probs.exp();
+    
+    // Extract values for sample_token (typically 277 = SPACE)
+    double p_sample = probs.index({sample_token}).item<double>();
+    double log_p_sample = log_probs.index({sample_token}).item<double>();
+    double p_target = probs.index({target_at_pos}).item<double>();
+    
+    // Compute gradient components for non-target token (sample_token != target_at_pos)
+    // Base CE gradient: grad_v = p_v - q_v
+    //   For non-target: q_v = smoothing_eps / (vocab_size - 1) or 0
+    double q_off = label_smoothing_enabled ? (smoothing_eps / (vocab_size - 1)) : 0.0;
+    double base_ce_term = p_sample - q_off;
+    
+    // Focal derivative term (for non-target position)
+    // focal_weight = (1 - p_t)^gamma
+    // d(focal_weight)/d(logit_v) = -gamma * (1-p_t)^(gamma-1) * d(p_t)/d(logit_v)
+    // d(p_t)/d(logit_v) = -p_t * p_v for v != t
+    double focal_weight = std::pow(1.0 - p_target, focal_gamma);
+    double fd_fac = (focal_gamma > 0.0) ? 
+        (focal_gamma * std::pow(1.0 - p_target, focal_gamma - 1.0)) : 0.0;
+    double focal_deriv_term = focal_alpha * fd_fac * p_target * (-p_sample);
+    
+    // Entropy regularization term
+    // grad_entropy_v = λ * p_v * (log(p_v) + 1) / total_tokens
+    double inv_valid = 1.0 / static_cast<double>(total_tokens);
+    double entropy_term = 0.0;
+    if (entropy_reg_enabled && entropy_lambda > 0.0) {
+        double g = log_p_sample + 1.0;  // Issue #121: NO clamping!
+        entropy_term = entropy_lambda * p_sample * g * inv_valid;
+    }
+    
+    // Total gradient for this non-target token
+    double total_grad = base_ce_term + focal_deriv_term + entropy_term;
+    
+    // Print in GRIM-text [GRAD_NONTARGET_EQUATION] format
+    std::cout << "[GRAD_NONTARGET_EQUATION] batch=" << batch_idx 
+              << " pos=" << sample_pos 
+              << " target=" << target_at_pos 
+              << " sample_token=" << sample_token << "\n";
+    std::cout << "  TERM_1 (base_CE): p_v - q_off = " << p_sample << " - " << q_off 
+              << " = " << base_ce_term << "\n";
+    std::cout << "  TERM_2 (focal_deriv): α × fd_fac × p_t × (-p_v) = "
+              << focal_alpha << " × " << fd_fac << " × " << p_target << " × " << (-p_sample)
+              << " = " << focal_deriv_term << "\n";
+    std::cout << "  TERM_3 (entropy): λ × p_v × (log(p_v) + 1) × inv_valid = "
+              << entropy_lambda << " × " << p_sample << " × (" << log_p_sample << " + 1)"
+              << " × " << inv_valid << " = " << entropy_term << "\n";
+    std::cout << "  p_v=" << p_sample << " log_p_v=" << log_p_sample 
+              << " (log_p_v + 1)=" << (log_p_sample + 1.0) 
+              << " CLAMPED=" << ((log_p_sample + 1.0) < 0 ? "NO (Issue #121: allow negative)" : "n/a") << "\n";
+    std::cout << "  TOTAL grad[" << sample_token << "] = " << total_grad << "\n";
+    std::cout << "  expected_sign=" << (total_grad > 0 ? "POSITIVE (decrease token prob)" : "NEGATIVE (increase token prob)") << "\n";
+    std::cout << std::endl;
 }
 
 //======================================================//

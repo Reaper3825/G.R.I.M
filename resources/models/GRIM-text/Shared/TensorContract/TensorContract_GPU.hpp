@@ -1184,6 +1184,12 @@ void set_autograd_cublas_handle(cublasHandle_t handle);
 cublasHandle_t get_autograd_cublas_handle();
 
 /**
+ * Configure LM head gradient recentering when centering is applied
+ * outside the autograd graph.
+ */
+void set_lm_head_grad_correction(bool recenter_gradients);
+
+/**
  * Matrix multiplication: C = A @ B  (or C = A @ B^T if transpose_b=true)
  * Creates MatMulGradFn node if either input requires_grad
  * Requires: call set_autograd_cublas_handle() first
@@ -1235,6 +1241,46 @@ Tensor scale(const Tensor& x, float scale_factor, cudaStream_t stream = nullptr)
  * @return Scaled tensor with autograd tracking for both input and scale_param
  */
 Tensor layer_scale(const Tensor& x, Tensor& scale_param, cudaStream_t stream = nullptr);
+
+/**
+ * Row-wise mean centering: output[t,d] = input[t,d] - mean_d(input[t,:])
+ *
+ * ISSUE #118 FIX: Removes common direction from activations to prevent mode collapse.
+ * The common direction (learned by V projection and FFN) accumulates through 
+ * residual stream across 12 encoder layers. By centering before residual add,
+ * we zero this accumulated bias.
+ *
+ * Mathematical property: Backward is ALSO centering (grad_x = grad_y - mean(grad_y))
+ * This is because centering is a linear operation with symmetric Jacobian.
+ *
+ * @param x Input tensor [N, D] where N=total_tokens, D=d_model
+ * @param stream CUDA stream
+ * @return Centered tensor (each row has sum ≈ 0)
+ */
+Tensor center_rows(const Tensor& x, cudaStream_t stream = nullptr);
+
+/**
+ * Center columns (positions) - subtract mean across rows for each column
+ * ISSUE #118 PROPER FIX: This is the CORRECT centering dimension!
+ * 
+ * Forward:  y[t,d] = x[t,d] - mean_t(x[:,d])   (per-column mean subtraction)
+ * Backward: grad_x = grad_y - mean_t(grad_y)  (same operation - linear!)
+ *
+ * WHY THIS IS DIFFERENT FROM center_rows:
+ * - center_rows: Subtracts mean across columns (features) → row sums = 0
+ *   BUT doesn't change cos(h_i, h_j) between positions!
+ * - center_columns: Subtracts mean across rows (positions) → column sums = 0
+ *   This REMOVES the common direction all positions share → reduces avg_cos!
+ *
+ * Mathematical effect:
+ *   Before: h[t,:] = signal[t,:] + common[:]   (all positions share common component)
+ *   After:  h[t,:] = signal[t,:]              (common component removed!)
+ *
+ * @param x Input tensor [N, D] where N=total_tokens (positions), D=d_model (features)
+ * @param stream CUDA stream
+ * @return Centered tensor (each column has mean ≈ 0 across positions)
+ */
+Tensor center_columns(const Tensor& x, cudaStream_t stream = nullptr);
 
 /**
  * Broadcast add with bias: output[i,j] = input[i,j] + bias[j]
@@ -1388,6 +1434,37 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
 Tensor reshape_bhsd_to_flat(
     Tensor& bhsd_input,
     int batch_size, int seq_len, int num_heads, int head_dim,
+    cudaStream_t stream = nullptr);
+
+/**
+ * Apply RoPE rotation to Q and K tensors with autograd tracking.
+ * 
+ * ISSUE #119 FIX: This wraps PBM::launchRoPERotationGQA() to provide proper
+ * autograd tracking. Previously, RoPE was called with raw .data pointers,
+ * completely bypassing the autograd chain. The backward kernel existed but
+ * was NEVER called because no RoPEGradFn was attached.
+ * 
+ * Forward: Rotates Q and K in-place using R(θ) where θ = position * inv_freq
+ * Backward: Applies inverse rotation R(-θ) to dQ and dK gradients
+ * 
+ * Uses SharedState pattern to coordinate backward calls from both Q and K.
+ * 
+ * @param Q          Q tensor [B, H, S, D] - modified in-place
+ * @param K          K tensor [B, Hkv, S, D] - modified in-place  
+ * @param inv_freq   Device pointer to inverse frequencies [rotary_dim/2]
+ * @param batch_size Batch size (B)
+ * @param num_q_heads Number of query heads (H)
+ * @param num_kv_heads Number of key/value heads (Hkv) for GQA
+ * @param seq_len    Sequence length (S)
+ * @param head_dim   Dimension per head (D)
+ * @param rotary_dim Number of dimensions to rotate (must be <= head_dim, typically 64)
+ * @param stream     CUDA stream
+ */
+void rope_rotation(
+    Tensor& Q, Tensor& K,
+    const float* inv_freq,
+    int batch_size, int num_q_heads, int num_kv_heads,
+    int seq_len, int head_dim, int rotary_dim,
     cudaStream_t stream = nullptr);
 
 }  // namespace autograd
