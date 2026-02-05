@@ -19,10 +19,16 @@
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../training/module_logger.hpp"
+#include "../../Shared/EquationLogging/EquationLogging.hpp"
 
 // Module logger for Flash Attention diagnostics
 namespace {
 using FlashAttentionLog = ModuleLogger<GRIM::Logging::ModuleId::Activations>;
+
+// Helper function to check if equation logging is enabled at runtime
+inline bool isEquationLoggingEnabled() {
+    return GRIM::getEquationLogger().isEnabled();
+}
 }
 
 #define FLASHATTENTION_DISABLE_DROPOUT
@@ -661,20 +667,21 @@ extern "C" void flash_attn_fwd_ex(
         }
         
         // Always log sequence dimensions and slope range - CRITICAL for Issue #76
-        fprintf(stderr, "[FA-FWD-ALIBI] call=%d seqlen=%d batch=%d n_heads=%d | slope_range=[%.6f, %.6f]",
-                s_fwd_call_count, seqlen, batch, n_heads, min_slope, max_slope);
-        
         // Log all slopes for sequences near max_seq_len (potential boundary issue)
         // Standard max_seq_len is 1024 or 2048, flag when within 10% of that
         const bool is_boundary_seq = (seqlen >= 920) || (seqlen >= 1840);  // 90% of 1024 or 2048
-        if (is_boundary_seq) {
-            fprintf(stderr, " [*** BOUNDARY_SEQ seqlen=%d ***] slopes=[", seqlen);
-            for (int h = 0; h < n_heads; ++h) {
-                fprintf(stderr, "%.6f%s", h_slopes[h], h < n_heads - 1 ? "," : "");
+        if (isEquationLoggingEnabled()) {
+            fprintf(stderr, "[FA-FWD-ALIBI] call=%d seqlen=%d batch=%d n_heads=%d | slope_range=[%.6f, %.6f]",
+                    s_fwd_call_count, seqlen, batch, n_heads, min_slope, max_slope);
+            if (is_boundary_seq) {
+                fprintf(stderr, " [*** BOUNDARY_SEQ seqlen=%d ***] slopes=[", seqlen);
+                for (int h = 0; h < n_heads; ++h) {
+                    fprintf(stderr, "%.6f%s", h_slopes[h], h < n_heads - 1 ? "," : "");
+                }
+                fprintf(stderr, "]");
             }
-            fprintf(stderr, "]");
+            fprintf(stderr, "\n");
         }
-        fprintf(stderr, "\n");
     }
 
     // ISSUE #67: Log Flash Attention FORWARD INPUTS
@@ -693,10 +700,12 @@ extern "C" void flash_attn_fwd_ex(
         for (float val : h_q) { if (std::isnan(val)) nan_q++; if (std::isinf(val)) inf_q++; }
         for (float val : h_k) { if (std::isnan(val)) nan_k++; if (std::isinf(val)) inf_k++; }
         for (float val : h_v) { if (std::isnan(val)) nan_v++; if (std::isinf(val)) inf_v++; }
-        fprintf(stderr, "[FA-FWD-IN] Q: nan=%d inf=%d first=%.6f | K: nan=%d inf=%d first=%.6f | V: nan=%d inf=%d first=%.6f\n",
-                nan_q, inf_q, h_q.empty() ? 0.0f : h_q[0],
-                nan_k, inf_k, h_k.empty() ? 0.0f : h_k[0],
-                nan_v, inf_v, h_v.empty() ? 0.0f : h_v[0]);
+        if (isEquationLoggingEnabled()) {
+            fprintf(stderr, "[FA-FWD-IN] Q: nan=%d inf=%d first=%.6f | K: nan=%d inf=%d first=%.6f | V: nan=%d inf=%d first=%.6f\n",
+                    nan_q, inf_q, h_q.empty() ? 0.0f : h_q[0],
+                    nan_k, inf_k, h_k.empty() ? 0.0f : h_k[0],
+                    nan_v, inf_v, h_v.empty() ? 0.0f : h_v[0]);
+        }
     }
     
     // ========================================================================
@@ -828,38 +837,41 @@ extern "C" void flash_attn_fwd_ex(
         // ========================================================================
         // LOG THE EQUATION-BASED DIAGNOSTIC
         // ========================================================================
-        fprintf(stderr, "\n[ATTN_SCORE_EQUATION] FLASH_ATTENTION_FWD: score = (Q @ K^T) / sqrt(head_dim) + alibi_bias\n");
-        fprintf(stderr, "  Q (sample %d tokens, head 0): shape=[%d,%d] min=%.4f max=%.4f rms=%.4f\n",
-                sample_tokens, sample_tokens, head_dim, q_min, q_max, q_rms);
-        fprintf(stderr, "  K (sample %d tokens, head 0): shape=[%d,%d] min=%.4f max=%.4f rms=%.4f\n",
-                sample_tokens, sample_tokens, head_dim, k_min, k_max, k_rms);
-        fprintf(stderr, "  Q_row_norms: mean=%.4f | K_row_norms: mean=%.4f\n", q_norm_mean, k_norm_mean);
-        fprintf(stderr, "  scale = 1/sqrt(%d) = %.6f\n", head_dim, scale);
-        fprintf(stderr, "  alibi_slope[head0] = %.6f (max_distance=%d -> max_bias=%.4f)\n",
-                h_slopes[0], seqlen - 1, h_slopes[0] * static_cast<float>(-(seqlen - 1)));
-        fprintf(stderr, "  EXPECTED score = Q_row_norm * K_row_norm * scale = %.4f * %.4f * %.6f ≈ %.4f\n",
-                q_norm_mean, k_norm_mean, scale, q_norm_mean * k_norm_mean * scale);
-        fprintf(stderr, "  ACTUAL score (computed %d samples): min=%.4f max=%.4f rms=%.4f\n",
-                valid_scores, score_min, score_max, score_rms);
-        fprintf(stderr, "  EXPECTED LSE (from sampled scores): min=%.4f max=%.4f mean=%.4f\n",
-                expected_lse_min, expected_lse_max, expected_lse_mean);
-        fprintf(stderr, "  (Normal LSE for random init: ~6-10, depending on seqlen)\n");
-        
         // Check for anomalies
         const float expected_score_magnitude = q_norm_mean * k_norm_mean * scale;
-        if (expected_score_magnitude > 20.0f) {
-            fprintf(stderr, "  *** ANOMALY: Expected score magnitude %.2f >> 20! Q/K vectors too large! ***\n",
-                    expected_score_magnitude);
-            fprintf(stderr, "      For head_dim=%d, Q_norm and K_norm should each be ~%.1f for score~1.0\n",
-                    head_dim, sqrtf(static_cast<float>(head_dim)));
+        
+        if (isEquationLoggingEnabled()) {
+            fprintf(stderr, "\n[ATTN_SCORE_EQUATION] FLASH_ATTENTION_FWD: score = (Q @ K^T) / sqrt(head_dim) + alibi_bias\n");
+            fprintf(stderr, "  Q (sample %d tokens, head 0): shape=[%d,%d] min=%.4f max=%.4f rms=%.4f\n",
+                    sample_tokens, sample_tokens, head_dim, q_min, q_max, q_rms);
+            fprintf(stderr, "  K (sample %d tokens, head 0): shape=[%d,%d] min=%.4f max=%.4f rms=%.4f\n",
+                    sample_tokens, sample_tokens, head_dim, k_min, k_max, k_rms);
+            fprintf(stderr, "  Q_row_norms: mean=%.4f | K_row_norms: mean=%.4f\n", q_norm_mean, k_norm_mean);
+            fprintf(stderr, "  scale = 1/sqrt(%d) = %.6f\n", head_dim, scale);
+            fprintf(stderr, "  alibi_slope[head0] = %.6f (max_distance=%d -> max_bias=%.4f)\n",
+                    h_slopes[0], seqlen - 1, h_slopes[0] * static_cast<float>(-(seqlen - 1)));
+            fprintf(stderr, "  EXPECTED score = Q_row_norm * K_row_norm * scale = %.4f * %.4f * %.6f ≈ %.4f\n",
+                    q_norm_mean, k_norm_mean, scale, q_norm_mean * k_norm_mean * scale);
+            fprintf(stderr, "  ACTUAL score (computed %d samples): min=%.4f max=%.4f rms=%.4f\n",
+                    valid_scores, score_min, score_max, score_rms);
+            fprintf(stderr, "  EXPECTED LSE (from sampled scores): min=%.4f max=%.4f mean=%.4f\n",
+                    expected_lse_min, expected_lse_max, expected_lse_mean);
+            fprintf(stderr, "  (Normal LSE for random init: ~6-10, depending on seqlen)\n");
+            
+            if (expected_score_magnitude > 20.0f) {
+                fprintf(stderr, "  *** ANOMALY: Expected score magnitude %.2f >> 20! Q/K vectors too large! ***\n",
+                        expected_score_magnitude);
+                fprintf(stderr, "      For head_dim=%d, Q_norm and K_norm should each be ~%.1f for score~1.0\n",
+                        head_dim, sqrtf(static_cast<float>(head_dim)));
+            }
+            if (score_max > 100.0f) {
+                fprintf(stderr, "  *** ANOMALY: score_max=%.2f >> 100! This will cause LSE explosion! ***\n", score_max);
+            }
+            if (expected_lse_max > 50.0f) {
+                fprintf(stderr, "  *** ANOMALY: expected_lse_max=%.2f >> 50! Softmax will saturate! ***\n", expected_lse_max);
+            }
+            fprintf(stderr, "\n");
         }
-        if (score_max > 100.0f) {
-            fprintf(stderr, "  *** ANOMALY: score_max=%.2f >> 100! This will cause LSE explosion! ***\n", score_max);
-        }
-        if (expected_lse_max > 50.0f) {
-            fprintf(stderr, "  *** ANOMALY: expected_lse_max=%.2f >> 50! Softmax will saturate! ***\n", expected_lse_max);
-        }
-        fprintf(stderr, "\n");
     }
 
 #if defined(GRIM_FLASHATTN_HDIM64_ONLY)

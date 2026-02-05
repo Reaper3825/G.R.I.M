@@ -116,6 +116,40 @@ void launchUnifiedLossBackward(
 );
 
 //=============================================================================
+// TOKEN 277 DIAGNOSTIC LOGGING (Rule 21 Equation-Based)
+//=============================================================================
+
+/**
+ * Launch Token 277 diagnostic logging kernel
+ * 
+ * Tracks all components contributing to Token 277 (SPACE) becoming argmax:
+ * - Softmax probability p(277)
+ * - Argmax status (is 277 the predicted token?)
+ * - Loss contribution when 277 is the target
+ * 
+ * @param logits       [num_tokens, vocab_size] - current logits
+ * @param targets      [num_tokens] - target token IDs
+ * @param valid_mask   [num_tokens] - mask for valid positions (optional)
+ * @param grad_logits  [num_tokens, vocab_size] - gradients if available (optional)
+ * @param num_tokens   Number of tokens
+ * @param vocab_size   Vocabulary size
+ * @param batch_idx    Current batch index
+ * @param step_idx     Current training step
+ * @param stream       CUDA stream
+ */
+void launchToken277Diagnostic(
+    const float* logits,
+    const int* targets,
+    const float* valid_mask,
+    const float* grad_logits,
+    int num_tokens,
+    int vocab_size,
+    int batch_idx,
+    int step_idx,
+    cudaStream_t stream
+);
+
+//=============================================================================
 // LEGACY API (for existing call sites - forwards to unified_loss)
 //=============================================================================
 

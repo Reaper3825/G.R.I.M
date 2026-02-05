@@ -569,7 +569,7 @@ ALiBiPositionalBias::~ALiBiPositionalBias() {
     cleanup();
 }
 
-void ALiBiPositionalBias::computeSlopes(int num_heads_, int num_kv_heads_, int d_head_, PositionalEncodingType type_) {
+void ALiBiPositionalBias::computeSlopes(int num_heads_, int num_kv_heads_, int d_head_, int max_seq_len_, PositionalEncodingType type_) {
     if (num_heads_ <= 0) {
         throw std::runtime_error("ALiBiPositionalBias::computeSlopes: num_heads must be > 0");
     }
@@ -590,6 +590,7 @@ void ALiBiPositionalBias::computeSlopes(int num_heads_, int num_kv_heads_, int d
     config.head_dim = d_head_;
     config.rotary_dim = config.head_dim;
     config.num_kv_heads = num_kv_heads_;
+    config.max_seq_len = max_seq_len_; 
     config.rope_theta = 10000.0f;
     config.verbose = false;
     
@@ -660,7 +661,7 @@ GrimEmbeddingStack::GrimEmbeddingStack(int vocab_size, int d_model, int max_seq_
     // NOTE: Position embeddings initialized directly on GPU in TrainingOps.cu
 }
 
-void GrimEmbeddingStack::enableALiBi(int num_heads, int num_kv_heads) {
+void GrimEmbeddingStack::enableALiBi(int num_heads, int num_kv_heads, int max_seq_len) {
     if (num_heads <= 0) {
         throw std::runtime_error("GrimEmbeddingStack::enableALiBi: num_heads must be > 0");
     }
@@ -672,10 +673,10 @@ void GrimEmbeddingStack::enableALiBi(int num_heads, int num_kv_heads) {
     }
     const int d_head = d_model_ / num_heads;
     alibi_ = std::make_unique<ALiBiPositionalBias>();
-    alibi_->computeSlopes(num_heads, num_kv_heads, d_head, PositionalEncodingType::ALIBI);
+    alibi_->computeSlopes(num_heads, num_kv_heads, d_head, max_seq_len, PositionalEncodingType::ALIBI);
 }
 
-void GrimEmbeddingStack::enableHybridPositionalEncoding(int num_heads, int d_head, int num_kv_heads) {
+void GrimEmbeddingStack::enableHybridPositionalEncoding(int num_heads, int d_head, int num_kv_heads, int max_seq_len) {
     if (num_heads <= 0) {
         throw std::runtime_error("GrimEmbeddingStack::enableHybridPositionalEncoding: num_heads must be > 0");
     }
@@ -691,7 +692,7 @@ void GrimEmbeddingStack::enableHybridPositionalEncoding(int num_heads, int d_hea
     alibi_ = std::make_unique<ALiBiPositionalBias>();
     alibi_->d_head = d_head;
     // Pass through num_kv_heads so PBM and encoder GQA settings match
-    alibi_->computeSlopes(num_heads, num_kv_heads, d_head, PositionalEncodingType::ALIBI_ROPE);
+    alibi_->computeSlopes(num_heads, num_kv_heads, d_head, max_seq_len, PositionalEncodingType::ALIBI_ROPE);
 }
 
 const ALiBiPositionalBias* GrimEmbeddingStack::getALiBiBias() const {
@@ -754,9 +755,9 @@ LanguageModel::LanguageModel(const LanguageModelConfig& config)
         
         // Use appropriate initialization based on encoding type
         if (config_.positional_encoding == PositionalEncodingType::ALIBI_ROPE) {
-            embedder_->enableHybridPositionalEncoding(config_.num_heads, d_head, config_.num_kv_heads);
+            embedder_->enableHybridPositionalEncoding(config_.num_heads, d_head, config_.num_kv_heads, config_.max_seq_len);
         } else if (config_.positional_encoding == PositionalEncodingType::ALIBI) {
-            embedder_->enableALiBi(config_.num_heads, config_.num_kv_heads);
+            embedder_->enableALiBi(config_.num_heads, config_.num_kv_heads, config_.max_seq_len);
         }
         // Note: Pure RoPE handled differently (integrated into attention)
     }

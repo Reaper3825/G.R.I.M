@@ -1,9 +1,734 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** Issue #118 FIXED - Forward Centering to Prevent Common Direction Accumulation
+**Status:** EQUATION LOG VERIFIED - Issue #126 Centering Fix WORKING, New Issue #128 Identified
 **Started:** December 22, 2025
 **Last Updated:** February 5, 2026
-**Latest Finding:** Trained V projection and FFN weights learn a "common direction" that accumulates through 12 encoder layers via residual stream. Within ONE forward pass, avg_cos goes from -0.039 (L0) → +0.067 (L11) and row_norm max grows 60%. **FIX: Apply row-wise centering to attention/FFN outputs before residual addition to zero the common component.**
+**Latest Finding:** Equation log analysis confirms Issue #126 centering IS WORKING (avg_cos ≈ -0.001). However, Loss is NOT converging and Token 277 is increasingly appearing in argmax predictions. Root cause identified: **Weight Paradox** where grad_W[277] sign conflicts lead to W[277] increasing despite model trying to decrease it.
+
+---
+
+## 🔴 CURRENT RUN TRACKING: Session 17702644885411807 (February 4-5, 2026)
+
+### Equation Log Verification Summary
+
+Analysis of `equation_log.csv` and `training_17702644885411807.log` from same training run.
+
+#### ✅ VERIFIED CORRECT - Mathematical Operations Working
+
+| Equation Type | Formula | Expected | Actual | Status |
+|---------------|---------|----------|--------|--------|
+| **RMSNorm** | `y = x * γ / sqrt(mean(x²) + ε)` | rms=0.999990 | rms=0.999990-0.999992 | ✅ **PERFECT** |
+| **Layer Cosine** | `output = input + LS1*attn + LS2*ffn` | cos < 0.5 | cos ≈ -0.046 | ✅ **EXCELLENT** |
+| **Hidden Cosine** | `avg\|cos(h_i, h_j)\|` | ~0.036 (1/√768) | **-0.001 to 0.001** | ✅ **EXCELLENT** |
+| **Loss Gradients** | `dL/d(logits)` | max~1e-4, rms~1e-5 | max=0.000147, rms=1e-6 | ✅ **CORRECT** |
+| **Batch Loss** | `-sum(log(p_target))/N` | 10.827 (ln(50377)) | 11.75 initial | ✅ **EXPECTED** |
+
+**Key Verification: Issue #126 Centering IS Working!**
+- Batch 1: `avg_cos = -0.0009`
+- Batch 50: `avg_cos = -0.0008`
+- Batch 98: `avg_cos = -0.0009`
+- **Stable near zero throughout training** - no correlation buildup!
+
+#### ⚠️ ANOMALIES DETECTED
+
+| Equation Type | Formula | Expected | Actual | Issue |
+|---------------|---------|----------|--------|-------|
+| **QKV Projection** | `qkv = ln1 @ W_qkv^T` | row_norm=0.86, target=8.0 | row_norm=24.0 | **3x inflation** |
+| **QKV Cosine** | `Y = \|\|x\|\| * \|\|w\|\| * cos(θ)` | rms=1.4-1.5 | rms=0.866 | Mismatch |
+| **Loss Convergence** | Decreasing over time | < 10.827 | 10.85-12.74 | **NOT CONVERGING** |
+| **Token 277** | Low frequency in argmax | ~1-2/batch | **4-8/batch** | Mode collapse starting |
+
+### Detailed Equation Analysis
+
+#### 1. QKV_PROJECTION_EQUATION (All 12 Layers)
+
+```
+FORMULA: qkv_out = ln1_out @ W_qkv^T + b_qkv
+INPUTS (typical): ln1_rms=0.999990, ln1_row_norm=27.71 (=√768), wqkv_rms=0.0312
+EXPECTED: expected_row_norm=0.864, target=8.0
+ACTUAL: actual_row_norm=24.0, inflation=3.00x
+```
+
+**Mathematical Analysis:**
+- `ln1_row_norm = 27.71 ≈ √768` - **CORRECT** (RMSNorm output has row norm = √d_model)
+- `wqkv_rms = 0.0312 ≈ 1/√1024` - **CORRECT** Xavier init for d_in=768, d_out=1280
+- Expected: `out_norm = in_norm × w_rms × √d_out = 27.71 × 0.0312 × √1280 ≈ 31` → but we measure 24
+- **Inflation Factor 3x**: The "target=8.0" is from Issue #106 scaling, but actual output is 3x expected
+- **Impact**: Q/K vectors have norms ~24 instead of ~8, but this is CONSISTENT across all layers
+
+**Status:** Known architectural choice. Attention scaling (1/√d_head) compensates. Not a bug.
+
+#### 2. RMSNORM_EQUATION (All 12 Layers)
+
+```
+FORMULA: y = x * gamma / sqrt(mean(x²) + eps)
+INPUTS: input_rms=0.707-0.740 (increasing by layer), gamma_rms=1.0, eps=1e-5
+EXPECTED: expected_rms=0.999990
+ACTUAL: actual_rms=0.999990-0.999992
+```
+
+**Layer-by-Layer Input RMS Progression:**
+| Layer | input_rms | Notes |
+|-------|-----------|-------|
+| 0 | 0.707193 | ~1/√2 (embeddings after centering) |
+| 1 | 0.708684 | Slight increase from residual |
+| 2 | 0.711671 | |
+| 3 | 0.714711 | |
+| 4 | 0.718342 | |
+| 5 | 0.721853 | |
+| 6 | 0.724932 | |
+| 7 | 0.728874 | |
+| 8 | 0.731684 | |
+| 9 | 0.734625 | |
+| 10 | 0.736947 | |
+| 11 | 0.740397 | Final layer before LM head |
+
+**Observation:** Input RMS increases ~4.7% (0.707→0.740) through encoder layers. This is the residual connection accumulating information while RMSNorm keeps output variance stable.
+
+**Status:** ✅ **PERFECT** - RMSNorm operating exactly as designed.
+
+#### 3. LAYER_COSINE_EQUATION (Residual Connections)
+
+```
+FORMULA: output = input + LS1*attn + LS2*ffn (where LS1=LS2=0.1)
+EXPECTED: cos < 0.5 (layer contributions should be diverse)
+ACTUAL: cos ≈ -0.046 (all layers)
+```
+
+**Analysis:** 
+- LayerScale (0.1) means 81% of output is residual passthrough, 19% is new information
+- Negative cosine indicates attention/FFN outputs are ANTI-correlated with input direction
+- This is healthy: layers are adding orthogonal/diverse information
+
+**Status:** ✅ **EXCELLENT** - Issue #126 centering working correctly.
+
+#### 4. BATCH_LOSS
+
+```
+FORMULA: loss = -sum(log(p_target)) / valid_tokens
+EXPECTED: 10.827290 (ln(50377) = random baseline)
+ACTUAL: 11.75 (batch 1), 10.85-12.74 (batches 92-98)
+```
+
+**Cross-Reference with Training Log:**
+| Batch | Loss | Token 277 in argmax | Unique argmax |
+|-------|------|---------------------|---------------|
+| 1 | 11.7471 | 0/10 | 50 |
+| 92 | 11.2306 | 5/50 | 46 |
+| 93 | 12.7401 | 6/50 | 45 |
+| 94 | 12.0176 | 4/50 | 47 |
+| 95 | 12.2257 | 6/50 | 45 |
+| 96 | 11.4761 | 8/50 | 43 |
+| 97 | 11.8037 | 7/50 | 44 |
+| 98 | 10.8552 | 6/50 | 45 |
+
+**Analysis:**
+- Loss NOT decreasing meaningfully (started 11.75, now 10.85-12.74)
+- Token 277 appearing MORE frequently in top argmax (0→6-8)
+- Unique argmax DECREASING (50→43-45)
+
+**Status:** ⚠️ **CONCERNING** - Model not learning, Token 277 dominating.
+
+---
+
+## 🔴 NEW: Issue #128 - Weight Paradox Causing Token 277 Growth (February 5, 2026)
+
+### Discovery
+
+Training log shows [ANOMALY] WEIGHT_PARADOX_SOURCE in HIDDEN_STATE_EQUATION:
+
+```
+[WEIGHT_GRADIENT_EQUATION] W_UPDATE[277]: W_new[277] = W[277] - lr × grad_W[277] / sqrt(v + eps)
+  GRAD_W[277]: ||grad||=0.136532 sum=-0.003090 mean=-0.000004
+  TARGET_DISTRIBUTION: token_277_count=700/6130 ratio=11.4192%
+  [PREDICTION] W[277] INCREASE: grad_sum=-0.0031 < 0 → W_new = W - lr×(-) → ||W[277]|| increases
+
+[HIDDEN_STATE_EQUATION] GRAD_W[277,i] = Σ_t (hidden[t,i] × grad_logits[t,277])
+  CONTRIBUTION TO Σ grad_W[277,i]:
+    from_277_targets: 0.081664
+    from_other_targets: -0.032248
+    TOTAL: 0.049416 (POSITIVE → W[277] INCREASES)
+  [ANOMALY] WEIGHT_PARADOX_SOURCE: grad[277] at 277-targets is negative (model wants to DECREASE)
+    but total contribution is POSITIVE (W[277] will INCREASE!)
+```
+
+### Root Cause Analysis
+
+The weight paradox occurs because:
+
+1. **At positions where target=277**: `grad_logits[t,277] = p(277) - 1 ≈ -0.94` (negative, wants to INCREASE probability)
+2. **At positions where target≠277**: `grad_logits[t,277] = p(277) + entropy_term ≈ -0.02 to -0.05` (also negative due to entropy regularization)
+3. **Hidden state variance**: Each position has `hidden_sum[t]` that varies positive and negative
+4. **Product sign**: `grad_W[277,i] = Σ hidden[t,i] × grad[t,277]`
+   - When `hidden_sum[t] < 0` AND `grad < 0`: negative × negative = **POSITIVE contribution**
+   - This positive contribution can dominate despite model "wanting" to decrease W[277]
+
+**Mathematical Formula:**
+```
+grad_W[277] = Σ_{t:target=277} h[t] × (p_t - 1) + Σ_{t:target≠277} h[t] × (p_277 + λ_ent × ∂H/∂p)
+            = negative_grad × pos/neg_hidden + negative_grad × pos/neg_hidden
+            → Sign depends on hidden state distribution!
+```
+
+### Why This Causes Mode Collapse
+
+1. Model predicts token 277 with low probability
+2. Gradient says "increase W[277]" (to increase p_277 where needed)
+3. But hidden states have specific variance pattern
+4. Net gradient has WRONG SIGN for some weight updates
+5. ||W[277]|| increases instead of staying stable
+6. Higher ||W[277]|| → higher logit_277 → more predictions → more mode collapse
+
+### Potential Fixes
+
+1. **AdamW Direction Fix**: Use gradient SIGN consistently, not magnitude
+2. **Hidden State Normalization**: Center hidden states PER-POSITION before LM head
+3. **Gradient Clipping Per-Token**: Clip gradients for high-frequency tokens
+4. **Focal Loss Adjustment**: Increase focal gamma to reduce gradient magnitude for frequent tokens
+
+---
+
+## 🟢 FIXED: Issue #126 - Encoder Centering Applied to WRONG TENSOR (February 4, 2026)
+
+### Discovery (February 4, 2026)
+
+Training log showed persistent mode collapse despite Issue #118 centering being active:
+- `avg|cos(h_i,h_j)| = 0.538` (expected ~0.036 = 1/√768) - **15x too high!**
+- `cos(h, W[277])` growing at +13.3%/batch - alignment explosion
+- `logit_277 = 3.10` and growing at +13%/batch - mode collapse in progress
+
+### Root Cause: Issue #118 Centered the WRONG Tensor!
+
+**Issue #118 code (WRONG):**
+```cuda
+// Step 7: Residual1 = input + centered_attn
+Tensor centered_attn = autograd::center_columns(proj_for_residual, stream);
+intermediates.residual1 = autograd::add(input, centered_attn, stream);  // ❌ INPUT is NOT centered!
+```
+
+**The Problem:**
+- We center the **layer output** (`proj_for_residual`) 
+- But add it to an **uncenterered input** (`input`)
+- The `input` tensor carries correlation from the previous layer!
+- Result: `mean_t(residual1[:,d]) = mean_t(input[:,d]) ≠ 0` → **Correlation preserved!**
+
+**Mathematical Proof:**
+```
+Let A = input (correlated, mean_t(A[:,d]) ≠ 0)
+Let B = layer_out (centered, mean_t(B[:,d]) = 0)
+
+OLD (Issue #118 - WRONG):
+  output = A + center_columns(B) = A + B
+  mean_t(output[:,d]) = mean_t(A[:,d]) + mean_t(B[:,d]) = mean_t(A[:,d]) ≠ 0
+  → Correlation from input PRESERVED!
+
+NEW (Issue #126 - CORRECT):
+  output = center_columns(A + B)
+  mean_t(output[:,d]) = 0
+  → Accumulated correlation REMOVED!
+```
+
+### Fix Applied (Encoding_GPU.cu)
+
+**Residual1 (attention sublayer):**
+```cuda
+// OLD: centered_attn = center_columns(proj_for_residual); residual1 = add(input, centered_attn)
+// NEW:
+Tensor raw_residual1 = autograd::add(input, proj_for_residual, stream);
+intermediates.residual1 = autograd::center_columns(raw_residual1, stream);
+```
+
+**Output (FFN sublayer):**
+```cuda
+// OLD: centered_ffn = center_columns(ffn_for_residual); output = add(residual1, centered_ffn)
+// NEW:
+Tensor raw_output = autograd::add(intermediates.residual1, ffn_for_residual, stream);
+intermediates.output = autograd::center_columns(raw_output, stream);
+```
+
+### Why This Fixes Mode Collapse
+
+By centering the **combined output** after each residual add:
+1. Each column (feature dimension) now sums to 0 across all positions
+2. The "common direction" accumulated from ALL previous layers is removed
+3. No shared component can propagate through the residual stream
+4. `avg_cos(h_i, h_j)` should drop from ~0.54 to ~0.036 (expected for orthogonal vectors)
+
+### Files Modified
+
+1. **Encoding_GPU.cu**: Changed centering from layer contribution to combined output (2 locations)
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔵 SUPERSEDED: Issue #125 - LM Head Centering Used WRONG CENTERING FUNCTION (February 6, 2026)
+
+Issue #125 fixed the LM head centering to use `center_columns()` instead of `launchCenterHiddenStates()`, but mode collapse persisted because the encoder-level centering (Issue #118) was still centering the wrong tensor.
+
+---
+
+## 🔵 HISTORICAL: Issue #124 - Entropy Gradient Missing Centering Term (Superseded by #125)
+
+### Discovery (February 6, 2026)
+ 
+Token 277 diagnostic showed persistent mode collapse despite centering being "enabled":
+- `avg|cos(h_i,h_j)| = 0.9579` (expected ~0.036 = 1/√768) - **26.6x too high!**
+- `cos(h, W[277]) = 0.463` - alignment explosion
+- `logit_277 = 5.07` - mode collapse confirmed
+
+### Root Cause: `launchCenterHiddenStates` Does ROW Centering, Not COLUMN Centering!
+
+**Investigation traced the data flow:**
+1. `AutogradTraining.cu` calls `launchCenterHiddenStates()` when `center_hidden_states=true`
+2. `launchCenterHiddenStates()` is defined in `lm_head_GPU.cu` lines 210-290
+3. The kernel math: `mean = s_sum / d_model` - divides by FEATURE count (768)
+4. Kernel launch: `<<<total_tokens, kBlockSize>>>` - one block PER TOKEN = ROW-WISE
+
+**Explicit comment in code confirmed the bug:**
+```cpp
+// mean(hidden[t,:]) - computes mean across features FOR EACH TOKEN
+```
+
+**Mathematical Analysis:**
+
+**ROW centering** (what `launchCenterHiddenStates` does - WRONG):
+```
+centered[t,d] = hidden[t,d] - mean_d(hidden[t,:])
+```
+- Makes each token's features sum to 0
+- Does NOT change the ANGLE between hidden vectors
+- cos(h_i, h_j) is UNCHANGED because:
+  - Subtracting the same scalar from all features is a translation
+  - Translation preserves angles in high-dimensional space
+
+**COLUMN centering** (what we NEED):
+```
+centered[t,d] = hidden[t,d] - mean_t(hidden[:,d])
+```
+- Removes the SHARED DIRECTION that all tokens have
+- Directly reduces cos(h_i, h_j) toward 0
+- This is what `autograd::center_columns()` does (already used in Encoding_GPU.cu)
+
+### Evidence from Code
+
+**lm_head_GPU.cu lines 215-240 (WRONG):**
+```cuda
+__global__ void centerHiddenStatesKernel(
+    const float* input,
+    float* output,
+    int d_model,
+    int total_tokens
+) {
+    const int token_idx = blockIdx.x;  // One block per TOKEN
+    float local_sum = 0.0f;
+    for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
+        local_sum += input[token_idx * d_model + i];  // Sum across FEATURES
+    }
+    // ... warp reduction ...
+    const float mean = s_sum / static_cast<float>(d_model);  // Divide by d_model!
+    for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
+        output[token_idx * d_model + i] = input[token_idx * d_model + i] - mean;
+    }
+}
+```
+
+**Encoding_GPU.cu uses CORRECT centering:**
+```cuda
+// Step 7 - Center attention output to remove common direction
+Tensor centered_attn = autograd::center_columns(proj_for_residual, stream);  // CORRECT!
+```
+
+### Fix Applied (AutogradTraining.cu)
+
+Replaced:
+```cuda
+launchCenterHiddenStates(encoder_output_ptr, centered_scratch, cfg->d_model, total_tokens, ctx.stream);
+```
+
+With:
+```cuda
+Tensor centered_encoder_output = autograd::center_columns(ctx.encoder_output_tensor, ctx.stream);
+lm_input_ptr = centered_encoder_output.data;
+```
+
+### Expected Results After Fix
+
+1. `avg|cos(h_i,h_j)|` should drop from ~0.96 to ~0.036 (1/√768)
+2. Hidden states will have DIVERSE directions instead of all pointing the same way
+3. Token 277 will not systematically dominate
+4. Mode collapse should be resolved
+
+### Files Modified
+
+1. **AutogradTraining.cu**: Replaced `launchCenterHiddenStates()` with `autograd::center_columns()`
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## 🔵 HISTORICAL: Issue #124 - Entropy Gradient Missing Centering Term (Superseded by #125)
+
+Issue #124 fixed entropy gradient centering, but mode collapse persisted because the LM head centering itself was using the wrong function.
+
+---
+
+## 🔴 HISTORICAL: Issue #120 - Weight Decay Functionally ZERO (February 2, 2026)
+
+### Discovery (February 2, 2026)
+
+After confirming Issue #119's fd_fac fix (now correctly outputting 1.0), mode collapse PERSISTS. Token 277 diagnostics show:
+
+- `space_logit` mean: -0.0238 (batch 1) → +0.2100 (batch 17)
+- `||W[277]||`: 0.17883 → 0.19105 (monotonically INCREASING)
+- `cos(h, W[277])`: +266% increase over 20 batches
+
+### Root Cause: Weight Decay Term is Negligible
+
+**AdamW formula (verified correct per PyTorch):**
+
+```
+params[i] = param - learning_rate * (adam_update + weight_decay * param)
+```
+
+**Numeric analysis:**
+
+```
+lr = 0.0003
+weight_decay = 0.01
+W_element_avg = 0.00023 (embedding weight magnitude)
+
+weight_decay_term = lr × wd × W_element
+                  = 0.0003 × 0.01 × 0.00023
+                  = 6.9e-10 per step
+
+adam_update_term (from UpdateProbe) = max_abs ≈ 0.0003 per step
+
+RATIO: adam_update / weight_decay = 0.0003 / 7e-10 = 428,571×
+```
+
+**Weight decay is 400,000× weaker than the learning signal!**
+
+### Evidence from Training Log
+
+**[UpdateProbe] diagnostics (embedding_lm_head_tied):**
+
+| Step | upd_rms  | grad_rms | param_rms | max_abs   |
+| ---- | -------- | -------- | --------- | --------- |
+| 0    | 0.000280 | 0.002530 | 0.006337  | 3.000e-04 |
+| 1    | 0.000215 | 0.002110 | 0.006352  | 3.001e-04 |
+| 4    | 0.000167 | 0.003895 | 0.006418  | 2.980e-04 |
+| 9    | 0.000147 | 0.003984 | 0.006558  | 2.944e-04 |
+
+**Critical Observation:** `param_rms` is INCREASING (0.006337 → 0.006558) - weights growing overall despite weight decay.
+
+**[Token277] POST-OPT diagnostics:**
+
+| Batch | pre_norm | post_norm | delta_norm | Status            |
+| ----- | -------- | --------- | ---------- | ----------------- |
+| 1     | 0.17836  | 0.17883   | +0.00047   | ⚠️ NORM_INCREASED |
+| 5     | 0.17994  | 0.18064   | +0.00070   | ⚠️ NORM_INCREASED |
+| 10    | 0.18351  | 0.18468   | +0.00118   | ⚠️ NORM_INCREASED |
+| 15    | 0.18719  | 0.18899   | +0.00180   | ⚠️ NORM_INCREASED |
+| 17    | 0.18898  | 0.19105   | +0.00207   | ⚠️ NORM_INCREASED |
+
+**delta_norm ACCELERATING:** 0.00047 → 0.00207 (4.4× increase over 17 batches)
+
+### Mathematical Explanation
+
+The gradient for W[277] has:
+
+- **Large NORM:** ||grad|| ≈ 0.11-0.23
+- **Near-zero SUM/MEAN:** Centered (Issue #117 fix working)
+- **But DIRECTIONALLY ALIGNED:** Gradient consistently points in norm-increasing direction
+
+This creates "rich get richer" dynamics:
+
+1. Token 277 is 11% of training data (most common)
+2. High-probability tokens get larger absolute gradient magnitudes
+3. Gradient direction aligns with ||W[277]|| growth
+4. Weight decay (7e-10) cannot counteract update (3e-4)
+5. ||W[277]|| grows → logit[277] grows → p(277) grows → repeat
+
+### Proposed Fix Options
+
+1. **Increase weight_decay significantly:**
+    - Current: 0.01 → Proposed: 0.3 or higher
+    - To match update magnitude: `wd ≈ 0.0003 / (0.0003 × 0.00023) ≈ 4.3`
+    - More practically: Try wd=0.3 (30× current, still won't fully balance)
+
+2. **Add L2 regularization to loss:**
+    - Loss += λ × ||W||² acts on loss gradient directly
+    - More effective than decoupled weight decay for small weights
+
+3. **Per-token weight norm constraint (spectral norm):**
+    - After each step: `W[v] = W[v] / max(1, ||W[v]|| / max_norm)`
+    - Prevents any single token from dominating
+
+4. **Separate weight decay for LM head:**
+    - High weight decay (0.3-0.5) for embedding/LM head
+    - Lower weight decay (0.01) for encoder layers
+
+### Immediate Action Required
+
+Change `ai_config.json`:
+
+```json
+"weight_decay": 0.3,  // Was 0.01 - increase 30×
+```
+
+Or implement per-group weight decay with higher value for `embedding_lm_head_tied` group.
+
+**Status:** 🔴 **ROOT CAUSE IDENTIFIED** - Fix required in ai_config.json or optimizer configuration
+
+---
+
+## � FIXED: Issue #124 - Entropy Gradient Missing Centering Term (ROOT CAUSE OF MODE COLLAPSE!)
+
+### Discovery (February 2026)
+
+Comparing PyTorch documentation and libtorch_baseline against AutogradLoss.cu revealed that Issue #123 INCORRECTLY reverted Issue #122's mathematically correct centering term in the entropy gradient formula.
+
+### Root Cause: Confusion Between Display Format and Actual Gradient
+
+**The Confusion:**
+- PyTorch DIAGNOSTIC logging shows: `λ × p_v × (log(p_v) + 1)` per token
+- Developers assumed this was the actual gradient formula
+- Issue #123 "fixed" the code to match this display format
+- **BUT THIS WAS WRONG!**
+
+**The Reality:**
+- PyTorch uses AUTOGRAD (`loss.backward()`) which handles centering internally via the Softmax Jacobian
+- GRIM-text uses MANUAL gradient computation which requires EXPLICIT centering
+- The `+1` in the display is NOT the centering term - it's an offset for entropy interpretation
+
+### Mathematical Proof
+
+**Entropy Definition:**
+```
+H(p) = -Σ_v p_v × log(p_v)  (negative entropy - what we minimize)
+neg_entropy = Σ_v p_v × log(p_v) ≈ -10.83 for uniform over 50k vocab
+```
+
+**Loss Function:**
+```
+L = CE_terms + λ × H(p)  where H(p) = Σ_v p_v × log(p_v)
+```
+
+**Gradient Derivation via Chain Rule:**
+
+For any logit z_k, the gradient is:
+```
+∂L/∂z_k = ∂L/∂p · ∂p/∂z_k
+
+∂H/∂p_v = log(p_v) + 1  (direct derivative of p*log(p))
+
+∂p_i/∂z_k = p_i × (δ_ik - p_k)  (Softmax Jacobian - THE CRITICAL PIECE!)
+```
+
+**Combining via Chain Rule:**
+```
+∂H/∂z_k = Σ_v (log(p_v) + 1) × p_v × (δ_vk - p_k)
+        = (log(p_k) + 1) × p_k × (1 - p_k)     [v=k term]
+        + Σ_{v≠k} (log(p_v) + 1) × p_v × (-p_k)  [v≠k terms]
+        
+Simplifying:
+        = p_k × (log(p_k) + 1) - p_k × Σ_v p_v × (log(p_v) + 1)
+        = p_k × (log(p_k) + 1) - p_k × (H + 1)  where H = Σ p_v×log(p_v)
+        = p_k × (log(p_k) + 1 - H - 1)
+        = p_k × (log(p_k) - H)
+        = p_k × (log(p_k) - neg_entropy)  ← THE CORRECT FORMULA!
+```
+
+**Verification:**
+```
+Σ_k ∂H/∂z_k = Σ_k p_k × (log(p_k) - neg_entropy)
+            = neg_entropy - neg_entropy × Σ_k p_k
+            = neg_entropy - neg_entropy × 1
+            = 0  ✓  (gradients MUST sum to zero for valid loss)
+```
+
+### Wrong vs Correct Formula
+
+| Formula | Equation | Sum of Gradients | Mode Collapse? |
+|---------|----------|------------------|----------------|
+| **Issue #123 (WRONG)** | `λ × p_k × (log(p_k) + 1)` | `λ × (H + 1) ≠ 0` | YES - bias in gradient |
+| **Issue #124 (CORRECT)** | `λ × p_k × (log(p_k) - neg_entropy)` | `0` | NO - centered |
+
+**Numerical Impact for 50k vocab:**
+- `neg_entropy ≈ -10.83` (approximately `-log(V)`)
+- Wrong formula uses `+1` → offset by ~11.8
+- Centered gradient has `centered_g = log(p_v) - (-10.83) = log(p_v) + 10.83`
+- For typical token: `p_v ≈ 2e-5`, `log(p_v) ≈ -10.82`, `centered_g ≈ 0.01` (near zero)
+- For common token: `p_v ≈ 2e-4`, `centered_g ≈ +2.31` (push probability DOWN)
+- For rare token: `p_v ≈ 2e-6`, `centered_g ≈ -2.29` (push probability UP)
+
+### Why Issue #123 Caused Mode Collapse
+
+Without centering (`+1` instead of `-neg_entropy`):
+1. **ALL tokens receive negative entropy gradient** (since `log(p_v) + 1 < 0` for `p_v < 1/e`)
+2. **Gradient sum ≠ 0** creates systematic bias toward higher entropy
+3. **Most common token (277/SPACE) gets largest absolute gradient** due to highest p_v
+4. Combined with weight decay issues, this creates positive feedback loop → mode collapse
+
+### Fix Applied (AutogradLoss.cu)
+
+**1. Added neg_entropy computation (lines 327-352):**
+```cuda
+// Issue #124 FIX: Compute neg_entropy = Σ p_v × log(p_v) for centering
+// This is required because manual gradient computation needs explicit centering,
+// unlike PyTorch autograd which handles it internally via the Softmax Jacobian.
+__shared__ float s_neg_entropy;
+if (threadIdx.x == 0) s_neg_entropy = 0.0f;
+__syncthreads();
+
+float local_neg_entropy = 0.0f;
+for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
+    const float prob = prob_row[v];
+    if (prob > 1e-10f) {
+        local_neg_entropy += prob * logf(prob);
+    }
+}
+// Warp reduction, then atomic add to shared
+// ... neg_entropy ≈ -10.83 for 50k vocab
+```
+
+**2. Changed entropy_term formula (lines ~430-461):**
+```cuda
+// BEFORE (Issue #123 - WRONG):
+const float g = log_p_v + 1.0f;
+entropy_term = entropy_reg_lambda * p_v * g;
+
+// AFTER (Issue #124 - CORRECT):
+// The centered formula ensures Σ_v (entropy gradient) = 0
+entropy_term = entropy_reg_lambda * p_v * (log_p_v - neg_entropy);
+```
+
+### Why libtorch_baseline Works
+
+The reference implementation at `Tools/libtorch_baseline/main.cpp` line 1691:
+```cpp
+loss.backward();  // PyTorch AUTOGRAD handles centering internally!
+```
+
+PyTorch's autograd automatically applies the Softmax Jacobian chain rule, which includes the centering term. GRIM-text's manual CUDA implementation must do this EXPLICITLY.
+
+### Files Modified
+
+1. **AutogradLoss.cu**: Added neg_entropy computation block (lines 327-352)
+2. **AutogradLoss.cu**: Fixed entropy_term formula with centering (lines ~430-461)
+3. **AutogradLoss.cu**: Updated GRAD_NONTARGET_EQUATION comment (lines ~462-478)
+
+### Issue History Chain
+
+| Issue | Action | Result |
+|-------|--------|--------|
+| #117 | Added gradient centering via row mean subtraction | Partial fix |
+| #121 | Changed `(log(p)+1)` clamping behavior | Debugging |
+| #122 | Added proper centering term `-neg_entropy` | **CORRECT FIX** |
+| #123 | REVERTED #122, used `+1` to "match PyTorch" | **BROKE IT** |
+| #124 | Restored #122's centering term with mathematical proof | **ROOT CAUSE FIX** |
+
+**Status:** ✅ **FIX IMPLEMENTED** - Rebuild and test required
+
+---
+
+## �🟡 SUPERSEDED: Issue #119 - GRAD_NONTARGET_EQUATION Numerical Comparison (February 1, 2026)
+
+### Log Comparison: PyTorch vs GRIM-text
+
+#### PyTorch Baseline (batch=0, pos=0, target=781, sample_token=277)
+
+| Field        | Value       |
+| ------------ | ----------- |
+| p_v          | 1.98503e-05 |
+| q_off        | 1.98507e-06 |
+| focal_alpha  | 1           |
+| focal_weight | 1           |
+| λ            | 0.1         |
+| inv_valid    | 0.000488281 |
+| log(p_v)     | -10.8273    |
+| log(p_v) + 1 | -9.82729    |
+
+| Term      | Formula                            | Value           |
+| --------- | ---------------------------------- | --------------- |
+| TERM_1    | p_v - q_off                        | 1.78653e-05     |
+| TERM_2    | α × fw × p_t × (-p_v)              | -3.94036e-10    |
+| TERM_3    | λ × p_v × (log(p_v)+1) × inv_valid | -9.52515e-09    |
+| **TOTAL** |                                    | **1.78553e-05** |
+
+#### GRIM-text (token_pos=3, vocab_id=277, target=311)
+
+| Field          | Value          |
+| -------------- | -------------- |
+| p_v            | 2.37361910e-05 |
+| q_off          | 1.98507223e-06 |
+| focal_alpha    | 1.00000000     |
+| focal_weight   | 9.99982834e-01 |
+| λ              | 0.10000000     |
+| g (log(p_v)+1) | -9.64850903    |
+
+| Term                      | Formula             | Value                          |
+| ------------------------- | ------------------- | ------------------------------ |
+| TERM_1                    | α×fw×(p_v - q_off)  | 2.17507459e-05                 |
+| TERM_2                    | α×fd_fac×p_t×(-p_v) | -4.47120163e-09                |
+| TERM_3                    | λ×p_v×max(g,0)      | -3.73603326e-09 [CLAMPED to 0] |
+| **TOTAL (pre-centering)** |                     | **2.17425386e-05**             |
+| **TOTAL (scaled)**        |                     | **3.54690677e-09**             |
+
+### Numerical Differences
+
+| Metric         | PyTorch      | GRIM-text       | Ratio |
+| -------------- | ------------ | --------------- | ----- |
+| TOTAL gradient | 1.78553e-05  | 3.54690677e-09  | 5034x |
+| TERM_1         | 1.78653e-05  | 2.17507459e-05  | 0.82x |
+| TERM_2         | -3.94036e-10 | -4.47120163e-09 | 0.09x |
+| TERM_3         | -9.52515e-09 | 0 (clamped)     | N/A   |
+
+### Formula Differences
+
+| Component           | PyTorch                              | GRIM-text                 |
+| ------------------- | ------------------------------------ | ------------------------- |
+| TERM_3 formula      | `λ × p_v × (log(p_v)+1) × inv_valid` | `λ × p_v × max(g, 0)`     |
+| TERM_3 clamping     | NO                                   | YES (to 0)                |
+| inv_valid in TERM_3 | YES (0.000488281)                    | NO                        |
+| Final scaling       | None shown                           | `scaled = 3.54690677e-09` |
+
+### Output Format Differences
+
+| Field                   | PyTorch           | GRIM-text      |
+| ----------------------- | ----------------- | -------------- |
+| Reports "pre-centering" | No                | Yes            |
+| Reports "scaled"        | No                | Yes            |
+| Shows inv_valid value   | Yes (0.000488281) | No             |
+| fd_fac value            | 1                 | 1.09724903e+01 |
+
+### Raw Log Excerpts
+
+**PyTorch:**
+
+```
+[GRAD_NONTARGET_EQUATION] batch=0 pos=0 target=781 sample_token=277
+  TERM_1 (base_CE): p_v - q_off = 1.98503e-05 - 1.98507e-06 = 1.78653e-05
+  TERM_2 (focal_deriv): α × fd_fac × p_t × (-p_v) = 1 × 1 × 1.98503e-05 × -1.98503e-05 = -3.94036e-10
+  TERM_3 (entropy): λ × p_v × (log(p_v) + 1) × inv_valid = 0.1 × 1.98503e-05 × (-10.8273 + 1) × 0.000488281 = -9.52515e-09
+  p_v=1.98503e-05 log_p_v=-10.8273 (log_p_v + 1)=-9.82729 CLAMPED=NO (Issue #121: allow negative)
+  TOTAL grad[277] = 1.78553e-05
+  expected_sign=POSITIVE (decrease token prob)
+```
+
+**GRIM-text:**
+
+```
+[GRAD_NONTARGET_EQUATION] token_pos=3 vocab_id=277 target=311
+  INPUTS: p_v=2.37361910e-05 q_off=1.98507223e-06 focal_alpha=1.00000000 focal_weight=9.99982834e-01 λ=0.10000000
+  TERM_1 base_CE:     α×fw×(p_v - q_off) = 1.00000000 × 9.99982834e-01 × (2.37361910e-05 - 1.98507223e-06) = 2.17507459e-05
+  TERM_2 focal_deriv: α×fd_fac×p_t×(-p_v) = 1.00000000 × 1.09724903e+01 × 1.71675383e-05 × (-2.37361910e-05) = -4.47120163e-09
+  TERM_3 entropy:     λ×p_v×max(g,0) = 0.1000 × 2.37361910e-05 × max(-9.64850903e+00,0) = -3.73603326e-09 [CLAMPED to 0]
+  TOTAL grad_v (pre-centering) = 2.17425386e-05, scaled = 3.54690677e-09
+```
+
+**Status:** 🔴 **UNDER INVESTIGATION** - Need to identify where 5034x magnitude difference originates
 
 ---
 

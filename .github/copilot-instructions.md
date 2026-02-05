@@ -720,6 +720,71 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
 - **Expected Result**: avg_cos drops from 0.90 → ~0.3-0.5, mode collapse no longer occurs
 - **WARNING**: Position encodings will extrapolate if runtime sequence exceeds `max_seq_len`
 
+125. **LM Head Centering Used WRONG CENTERING FUNCTION (ROOT CAUSE FIX - Issue #125, Feb 2026)**: The `launchCenterHiddenStates()` function did **ROW-WISE** centering (`mean(hidden[t,:])` - per-token mean across features) instead of **COLUMN-WISE** centering (`mean(hidden[:,d])` - per-feature mean across tokens). Row centering does NOT reduce hidden state correlation - it only makes each row sum to 0 without changing the angle between vectors!
+
+- **Root Cause**: `lm_head_GPU.cu::centerHiddenStatesKernel` computed `mean = s_sum / d_model` (dividing by 768 features) with one CUDA block per token → row centering. The kernel was designed wrong from the start.
+- **Symptom**: Despite centering being "enabled", diagnostic still showed `avg|cos(h_i,h_j)| = 0.958` (26.6x higher than expected 0.036)
+- **Mathematical Proof**:
+    - **Row centering**: `centered[t,d] = x[t,d] - mean_d(x[t,:])` → Subtracting same scalar from all features is a TRANSLATION, which preserves angles
+    - **Column centering**: `centered[t,d] = x[t,d] - mean_t(x[:,d])` → Removes the SHARED DIRECTION, directly reduces cos(h_i, h_j)
+- **Fix (AutogradTraining.cu)**: Replaced `launchCenterHiddenStates()` with `autograd::center_columns()` which correctly centers across positions
+- **Files Modified**: `AutogradTraining.cu` - LM head input centering now uses column-wise centering
+- **Expected Result**: `avg|cos(h_i,h_j)|` should drop from ~0.96 to ~0.036 (1/√768), mode collapse resolved
+
+126. **RMSNormGradFn Stale input_grad Pointer (CRITICAL FIX - Issue #126, Feb 2026)**: RMSNormGradFn stored a raw pointer to `x.grad_data()` during `capture_inputs()`. When the input tensor `x` was a temporary (created by `autograd::add()` or similar), it would be destroyed before `backward()` ran, leaving `input_grad` as a dangling pointer.
+
+- **Root Cause**: `capture_inputs()` called `x.ensure_grad()` which allocated a gradient buffer owned by `x`, then stored `input_grad = x.grad_data()`. When `x` destructed, the buffer was freed.
+- **Symptom**: `[RMS-BWD-VALIDATE] input_grad read: err=1 (invalid argument)` - CUDA error when accessing freed memory
+- **Fix**: RMSNormGradFn now allocates its OWN gradient buffer via `cudaMalloc()` instead of borrowing from the input tensor.
+- **New Member**: `bool owns_input_grad = false` - tracks whether we own the buffer and need to free it
+- **Files Modified**: `TensorContract_GPU.cu` - `RMSNormGradFn::capture_inputs()` and destructor
+
+127. **center_columns() Causes Use-After-Free of RMSNormGradFn (CRITICAL FIX - Issue #127, Feb 2026)**: When `lm_head_center_hidden_states=true`, `autograd::center_columns()` creates a `CenterColumnsGradFn` that takes ownership of `encoder_output_tensor.grad_fn` (the RMSNormGradFn). If the centered tensor was a local variable, it would be destroyed after forward(), deleting the RMSNormGradFn. But `lm_input_tensor.grad_fn` still pointed to it → crash in backward.
+
+- **Root Cause Chain**:
+    1. `center_columns(ctx.encoder_output_tensor)` creates CenterColumnsGradFn
+    2. CenterColumnsGradFn::capture_input() transfers ownership of RMSNormGradFn
+    3. Local `Tensor centered_encoder_output` goes out of scope after forward()
+    4. CenterColumnsGradFn destructor DELETES RMSNormGradFn
+    5. `ctx.lm_input_tensor.grad_fn` (set to encoder_output_tensor.grad_fn) is now dangling
+    6. Backward calls `a_grad_fn->apply()` → crash on invalid vtable
+- **Symptom**: Crash immediately after `[MATMUL-BWD-TO-A] About to call a_grad_fn->apply()` with no ENTRY log
+- **Fix (AutogradTraining.cu + hpp)**:
+    1. Added `Tensor centered_encoder_output` member to ForwardContext (persists until clearIntermediates)
+    2. Changed `lm_input_tensor.grad_fn` to use `centered_encoder_output.grad_fn` when centering enabled
+    3. Same fix for numeric_head's encoder_for_numeric tensor
+- **Files Modified**: `AutogradTraining.cu`, `AutogradTraining.hpp`
+
+128. **Weight Paradox - Token 277 Gradient Sign Conflict (ANALYSIS - Issue #128, Feb 2026)**: Despite Issue #126 centering fix working (avg_cos ≈ -0.001), Token 277 increasingly dominates predictions because gradient sign conflicts cause ||W[277]|| to INCREASE when it should decrease.
+
+- **Root Cause**: `grad_W[277,i] = Σ_t hidden[t,i] × grad_logits[t,277]`
+    - At target=277 positions: `grad_logits = p(277) - 1 ≈ -0.94` (negative)
+    - At target≠277 positions: `grad_logits = p(277) + entropy_term ≈ -0.02` (negative due to entropy reg)
+    - When `hidden_sum[t] < 0` AND `grad < 0`: negative × negative = **POSITIVE** contribution
+    - Net gradient can have WRONG sign: `from_277_targets=+0.08, from_other=-0.03 → total=+0.05`
+- **Symptom**: Training log shows `[ANOMALY] WEIGHT_PARADOX_SOURCE` - gradient contribution positive despite model trying to decrease W[277]
+- **Evidence from Session 17702644885411807**:
+    - Loss NOT converging: 11.75→10.85-12.74 (no improvement)
+    - Token 277 in argmax: 0/50 (batch 1) → 6-8/50 (batch 95+)
+    - unique_argmax decreasing: 50 → 43-45 (diversity loss)
+    - But avg_cos stable at -0.001 (centering IS working!)
+- **Potential Fixes**: Per-token gradient clipping, focal loss gamma increase, hidden centering per-position
+- **Status**: Under investigation - centering fixes hidden correlation but not weight gradient sign conflicts
+
+129. **LayerScale=0.1 Causes Gradient Vanishing (ROOT CAUSE FIX - Issue #129, Feb 2026)**: Training loss not converging despite correct forward pass. LayerScale initialized to 0.1 (CaiT paper recommendation) causes catastrophic gradient attenuation through encoder layers.
+
+- **Gradient Flow Analysis**:
+    1. LM_HEAD grad_C: max=0.000147, rms=1.47e-6 (healthy)
+    2. LM_HEAD grad_A (→encoder): max=1.64e-6, rms=8.77e-7 (90x drop from weight magnitude)
+    3. LayerScale: grad_attn = 0.1 × grad_output (additional 10x drop)
+    4. Result: Encoder weight gradients have RMS ~1e-8
+- **Effective Learning**: `update = lr × grad = 3e-4 × 1e-8 = 3e-12` (essentially ZERO!)
+- **Root Cause**: LayerScale forward is `y = x * 0.1`, backward is `grad_x = grad_y * 0.1`. Combined with LM head weight scaling (~90x drop), gradients vanish.
+- **Fix**: Changed `ai_config.json` → `layer_scale.init_value` from 0.1 to 1.0
+- **Why**: `init_value=1.0` disables gradient attenuation while keeping learnable scalar (can adapt during training)
+- **Files Modified**: `ai_config.json`
+- **Alternative**: Set `layer_scale.enabled=false` to completely remove LayerScale
+
 115. **Diagnostic Buffer Mismatch (DIAGNOSTIC BUG! - Issue #115, Feb 2026)**: Diagnostic functions in `Phase2_TrainingLoop.cu` were reading the WRONG buffer (`cached_encoder_output` = pre-centering) instead of the centered buffer (`centering_scratch_tensor` = post-centering). This caused all diagnostic logs to show incorrect values even though training was using centered data correctly.
 
 - **Root Cause**: `AutogradTraining.cu` populates `cached_encoder_output` at line 947 (BEFORE centering) and `centering_scratch_tensor` at line 1055 (AFTER centering). Training correctly uses the centered buffer, but all 3 diagnostic functions read the pre-centering buffer.

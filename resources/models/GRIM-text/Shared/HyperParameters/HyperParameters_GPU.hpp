@@ -96,6 +96,13 @@ constexpr int TELEMETRY_MAX_LEVELS = 8;           // TelemetryLattice temporal l
 constexpr int TELEMETRY_MAX_STREAMS = 16;         // TelemetryLattice metric streams
 
 //======================================================//
+// Equation Logging Configuration
+// Controls diagnostic equation-based logging for training
+//======================================================//
+constexpr bool DEFAULT_EQ_LOG_ENABLED = true;     // Enable equation logging by default
+constexpr int DEFAULT_EQ_LOG_INTERVAL = 10;       // Log every N batches (0 = every batch)
+
+//======================================================//
 // Gradient Scaling Defaults
 //======================================================//
 constexpr bool DEFAULT_GRAD_SCALE_PER_TOKEN = false;  // Apply 1/valid_tokens in backward
@@ -200,7 +207,7 @@ constexpr float ALIBI_SLOPE_EXPONENT = -8.0f; // Controls ALiBi slope decay acro
 // - Preserves ALiBi's distance-decay within the capped range
 //
 // Set to 0.0f to disable capping (NOT RECOMMENDED - causes Issue #78 gradient explosion)
-constexpr float ALIBI_MAX_BIAS = -10.0f;
+constexpr float ALIBI_MAX_BIAS = 0.0f;
 
 //======================================================//
 // Grouped Query Attention (GQA) Configuration

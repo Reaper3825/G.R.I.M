@@ -18,6 +18,7 @@
 #include "../../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/TensorConversion/TensorConversion.hpp"
+#include "../../Shared/EquationLogging/EquationLogging.hpp"  // Centralized equation logging (Rule 21)
 #include <cuda_runtime.h>
 #include <cstdlib>
 #include <cstring>
@@ -35,7 +36,11 @@
 namespace {
     constexpr bool kEnableHiddenAlignDiag = false;  // Set true to enable [HiddenAlign] logs
     constexpr bool kEnableEncoderStepLogs = false;  // Set true to enable [EncoderFwd] step logs
-    constexpr bool kEnableEquationLogging = false;  // Set true to enable [*_EQUATION] diagnostic logs (Rule 21)
+    
+    // Use centralized EquationLogger for [*_EQUATION] diagnostic logs (Rule 21)
+    inline bool isEquationLoggingEnabled() {
+        return GRIM::getEquationLogger().isEnabled();
+    }
     
     // Shared W[277] reference - set once per forward pass
     static const float* s_w277_ref = nullptr;
@@ -1110,7 +1115,7 @@ namespace {
         // ========================================================================
         // ISSUE #106 RULE 21 OUTPUT: INPUT-WEIGHT COSINE SIMILARITY ANALYSIS
         // ========================================================================
-        if constexpr (kEnableEquationLogging) {
+        if (isEquationLoggingEnabled()) {
             fprintf(stderr, "\n[QKV_EQUATION] layer=%d: Y[i,j] = ||x_i|| × ||w_j|| × cos(θ_ij)\n", layer_idx);
             fprintf(stderr, "  INPUT x (ln1_out): shape=[%d,%d] row_norm_mean=%.4f\n", 
                     total_tokens, d_model, in_row_norm_mean);
@@ -1133,6 +1138,16 @@ namespace {
             fprintf(stderr, "    ADJUSTED formula (alignment_ratio=%.4f): %.4f\n", alignment_ratio, adjusted_expected_rms);
             fprintf(stderr, "    ACTUAL Y_rms: %.4f\n", actual_stats.rms);
             fprintf(stderr, "  \n");
+            
+            // Structured logging via centralized EquationLogger
+            EQ_LOG_HOST(
+                "QKV_COSINE_EQUATION",
+                "Y[i,j] = ||x_i|| * ||w_j|| * cos(theta_ij)",
+                "x_row_norm=" + std::to_string(in_row_norm_mean) + " w_row_norm=" + std::to_string(w_row_norm_mean) + " cos_mean=" + std::to_string(cos_mean),
+                "cos_var_ratio=" + std::to_string(cos_var_ratio) + " cos_abs_ratio=" + std::to_string(cos_abs_ratio),
+                "expected_rms=" + std::to_string(adjusted_expected_rms),
+                "actual_rms=" + std::to_string(actual_stats.rms),
+                0, layer_idx, 0, GRIM::EquationPhase::ATTENTION_SCORE);
             
             // Root cause analysis
             if (cos_var_ratio > 2.0f || cos_abs_ratio > 2.0f) {
@@ -1920,7 +1935,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         const float expected_output_rms = g_diag_input_avg_rms * gamma_rms / sqrtf(input_rms_sq + eps);
         const float eps_contribution_pct = 100.0f * eps / (input_rms_sq + eps);
         
-        if constexpr (kEnableEquationLogging) {
+        if (isEquationLoggingEnabled()) {
             fprintf(stderr, "[RMSNORM_EQUATION] layer=%d: y = x * gamma / sqrt(mean(x²) + eps)\n", layer_idx);
             fprintf(stderr, "  INPUT x: shape=[%d, %d], per_row_rms=%.6f (rms²=%.2e), eps=%.2e\n", 
                     total_tokens, d_model, g_diag_input_avg_rms, input_rms_sq, eps);
@@ -1928,6 +1943,16 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
             fprintf(stderr, "  EPSILON CONTRIBUTION: %.1f%% of denominator (eps / (input_rms² + eps))\n", eps_contribution_pct);
             fprintf(stderr, "  EXPECTED output_rms = input_rms * gamma_rms / sqrt(input_rms² + eps) = %.6f\n", expected_output_rms);
             fprintf(stderr, "  ACTUAL output_rms: min=%.6f max=%.6f avg=%.6f\n", min_row_rms, max_row_rms, avg_row_rms);
+            
+            // Structured logging via centralized EquationLogger
+            EQ_LOG_HOST(
+                "RMSNORM_EQUATION",
+                "y = x * gamma / sqrt(mean(x^2) + eps)",
+                "input_rms=" + std::to_string(g_diag_input_avg_rms) + " gamma_rms=" + std::to_string(gamma_rms) + " eps=" + std::to_string(eps),
+                "eps_contrib=" + std::to_string(eps_contribution_pct) + "%",
+                "expected_rms=" + std::to_string(expected_output_rms),
+                "actual_rms=" + std::to_string(avg_row_rms) + " min=" + std::to_string(min_row_rms) + " max=" + std::to_string(max_row_rms),
+                0, layer_idx, 0, GRIM::EquationPhase::RMSNORM);
             
             if (std::abs(avg_row_rms - expected_output_rms) > 0.01f) {
                 float ratio = avg_row_rms / expected_output_rms;
@@ -2088,7 +2113,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
             ? ((g_issue77_fwd_layer_count - 1) % 12) : 0;
         
         // Print [QKV_EQUATION] diagnostic
-        if constexpr (kEnableEquationLogging) {
+        if (isEquationLoggingEnabled()) {
             fprintf(stderr, "\n[QKV_EQUATION] ENCODER_LAYER_%d: qkv_out = ln1_out @ W_qkv^T + b_qkv\n", layer_idx_local);
             fprintf(stderr, "  ln1_out (sample %d tokens): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
                     n_sample, n_sample, d_model_local, ln1_min, ln1_max, ln1_rms);
@@ -2110,6 +2135,16 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
             fprintf(stderr, "  ACTUAL qkv_row_norms (Q portion): mean=%.10f\n", qkv_row_norm_mean);
             fprintf(stderr, "  TARGET qkv_row_norm for healthy attention: ~%.1f (sqrt(head_dim=%d))\n",
                     target_qkv_row_norm, head_dim_local);
+            
+            // Structured logging via centralized EquationLogger
+            EQ_LOG_HOST(
+                "QKV_PROJECTION_EQUATION",
+                "qkv_out = ln1_out @ W_qkv^T + b_qkv",
+                "ln1_rms=" + std::to_string(ln1_rms) + " ln1_row_norm=" + std::to_string(ln1_row_norm_mean) + " wqkv_rms=" + std::to_string(wqkv_rms),
+                "qkv_rms=" + std::to_string(qkv_rms) + " qkv_row_norm=" + std::to_string(qkv_row_norm_mean),
+                "expected_row_norm=" + std::to_string(expected_qkv_row_norm) + " target=" + std::to_string(target_qkv_row_norm),
+                "actual_row_norm=" + std::to_string(qkv_row_norm_mean) + " inflation=" + std::to_string(qkv_row_norm_mean / target_qkv_row_norm),
+                0, layer_idx_local, 0, GRIM::EquationPhase::QKV_PROJECTION);
             
             // Anomaly detection
             float inflation_ratio = qkv_row_norm_mean / target_qkv_row_norm;
@@ -2299,15 +2334,27 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         ? (scaled_proj = autograd::layer_scale(intermediates.proj_out, layer_scale1_, stream), scaled_proj)
         : intermediates.proj_out;
     
-    // Issue #118 FIX: Center attention output to remove common direction before residual add
-    // Root cause: V projection weights learn a "common direction" added to ALL positions,
-    // which accumulates through 12 layers via residual stream causing avg_cos collapse.
-    // CRITICAL: Must center COLUMNS (across positions), NOT rows (across features)!
-    // - center_rows: mean_d(x[t,:]) → doesn't change cos(h_i, h_j) between positions
-    // - center_columns: mean_t(x[:,d]) → removes shared direction, REDUCES avg_cos
-    // Formula: centered[t,d] = x[t,d] - mean_t(x[:,d]) → column_sum = 0
-    Tensor centered_attn = autograd::center_columns(proj_for_residual, stream);
-    intermediates.residual1 = autograd::add(input, centered_attn, stream);
+    // ========================================================================
+    // ISSUE #126 FIX: Center the COMBINED residual output, not just the layer contribution!
+    //
+    // OLD (Issue #118 - WRONG):
+    //   centered_attn = center_columns(proj_for_residual)
+    //   residual1 = add(input, centered_attn)
+    //   Problem: `input` still carries correlation from previous layers!
+    //   Result: mean_t(residual1[:,d]) = mean_t(input[:,d]) ≠ 0 → correlation preserved!
+    //
+    // NEW (Issue #126 - CORRECT):
+    //   raw_residual1 = add(input, proj_for_residual)
+    //   residual1 = center_columns(raw_residual1)
+    //   Result: mean_t(residual1[:,d]) = 0 → accumulated correlation REMOVED!
+    //
+    // Math proof:
+    //   center(A + B) = A + B - mean(A+B) = center(A) + center(B)
+    //   If we only center B (layer output), the mean(A) term stays in the result!
+    //   By centering the combined output, we remove mean(A) + mean(B) = mean(A+B).
+    // ========================================================================
+    Tensor raw_residual1 = autograd::add(input, proj_for_residual, stream);
+    intermediates.residual1 = autograd::center_columns(raw_residual1, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 DONE\n");
     
     // ISSUE #93 DIAGNOSTIC: Log residual1 = input + proj_out
@@ -2354,15 +2401,21 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         ? (scaled_ffn = autograd::layer_scale(intermediates.ffn_out, layer_scale2_, stream), scaled_ffn)
         : intermediates.ffn_out;
     
-    // Issue #118 FIX: Center FFN output to remove common direction before residual add
-    // Root cause: FFN W2 weights learn a "common direction" added to ALL positions,
-    // which accumulates through 12 layers via residual stream causing avg_cos collapse.
-    // CRITICAL: Must center COLUMNS (across positions), NOT rows (across features)!
-    // - center_rows: mean_d(x[t,:]) → doesn't change cos(h_i, h_j) between positions
-    // - center_columns: mean_t(x[:,d]) → removes shared direction, REDUCES avg_cos
-    // Formula: centered[t,d] = x[t,d] - mean_t(x[:,d]) → column_sum = 0
-    Tensor centered_ffn = autograd::center_columns(ffn_for_residual, stream);
-    intermediates.output = autograd::add(intermediates.residual1, centered_ffn, stream);
+    // ========================================================================
+    // ISSUE #126 FIX: Center the COMBINED residual output, not just the layer contribution!
+    //
+    // OLD (Issue #118 - WRONG):
+    //   centered_ffn = center_columns(ffn_for_residual)
+    //   output = add(residual1, centered_ffn)
+    //   Problem: `residual1` still carries correlation (RMSNorm can shift angles)!
+    //
+    // NEW (Issue #126 - CORRECT):
+    //   raw_output = add(residual1, ffn_for_residual)
+    //   output = center_columns(raw_output)
+    //   Result: mean_t(output[:,d]) = 0 → accumulated correlation REMOVED!
+    // ========================================================================
+    Tensor raw_output = autograd::add(intermediates.residual1, ffn_for_residual, stream);
+    intermediates.output = autograd::center_columns(raw_output, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2 DONE - layer COMPLETE\n");
     
     // ISSUE #93 DIAGNOSTIC: Log final layer output
@@ -2441,13 +2494,23 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
             // Compute expected residual fraction: (1-ls1)*(1-ls2) = fraction of input that passes through
             const double residual_fraction = (1.0 - ls1_val) * (1.0 - ls2_val);
             
-            if constexpr (kEnableEquationLogging) {
+            if (isEquationLoggingEnabled()) {
                 fprintf(stderr, "[LAYER_%d_COSINE_EQUATION] output = input + LS1*attn + LS2*ffn\n", layer_idx);
                 fprintf(stderr, "  OUTPUT h_L%d: shape=[%d, %d] row_norm_range=[%.4f, %.4f]\n",
                         layer_idx, total_tokens, d_model, norm_min, norm_max);
                 fprintf(stderr, "  LAYERSCALE: LS1=%.4f LS2=%.4f -> residual_fraction=(1-LS1)*(1-LS2)=%.4f (%.1f%% passthrough)\n",
                         ls1_val, ls2_val, residual_fraction, residual_fraction * 100.0);
                 fprintf(stderr, "  ACTUAL avg_cos=%.6f (pairs=%d)\n", avg_cos, num_pairs);
+                
+                // Structured logging via centralized EquationLogger
+                EQ_LOG_HOST(
+                    "LAYER_COSINE_EQUATION",
+                    "output = input + LS1*attn + LS2*ffn",
+                    "LS1=" + std::to_string(ls1_val) + " LS2=" + std::to_string(ls2_val),
+                    "residual_frac=" + std::to_string(residual_fraction) + " passthrough=" + std::to_string(residual_fraction * 100.0) + "%",
+                    "expected_cos<0.5",
+                    "actual_cos=" + std::to_string(avg_cos) + " pairs=" + std::to_string(num_pairs),
+                    0, layer_idx, 0, GRIM::EquationPhase::RESIDUAL_ADD);
                 
                 if (avg_cos > 0.8) {
                     fprintf(stderr, "  [ANOMALY] Layer %d avg_cos=%.4f still HIGH after attention!\n", layer_idx, avg_cos);

@@ -1044,26 +1044,39 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     
     // Check if centering is enabled in config and scratch buffer is available
     const bool use_centering = cfg->lm_head_center_hidden_states;
-    float* centered_scratch = ts->centered_activation_scratch();
+    
+    // ========================================================================
+    // ISSUE #125 FIX: Use autograd::center_columns() instead of row centering!
+    // 
+    // OLD (WRONG - launchCenterHiddenStates):
+    //   centered[t,d] = hidden[t,d] - mean_d(hidden[t,:])
+    //   This makes each row's feature sum = 0, but does NOT change cos(h_i, h_j)!
+    //
+    // NEW (CORRECT - center_columns):
+    //   centered[t,d] = hidden[t,d] - mean_t(hidden[:,d])
+    //   This removes the shared direction that ALL positions have, REDUCING cos(h_i, h_j)!
+    //
+    // Math proof:
+    //   Row centering shifts vectors but doesn't change angle between them
+    //   Column centering removes the common component, reducing correlation
+    // ========================================================================
+     // ISSUE #127 FIX: Store in ctx so it persists until backward!
+    // CenterColumnsGradFn takes ownership of encoder_output_tensor's grad_fn,
+    // so ctx.centered_encoder_output must live until backward completes.
     
     if (use_centering) {
-        if (!centered_scratch) {
-            throw std::runtime_error("AutogradTraining: centering enabled but centering_scratch_tensor is NULL");
+        // Use autograd::center_columns which correctly centers across positions
+        ctx.centered_encoder_output = autograd::center_columns(ctx.encoder_output_tensor, ctx.stream);
+        lm_input_ptr = ctx.centered_encoder_output.data;
+        
+        // Also copy to centering_scratch_tensor for diagnostic reads
+        if (ts->centering_scratch_tensor.data) {
+            cudaMemcpyAsync(ts->centering_scratch_tensor.data, lm_input_ptr,
+                           static_cast<size_t>(total_tokens) * cfg->d_model * sizeof(float),
+                           cudaMemcpyDeviceToDevice, ctx.stream);
         }
         
-        // Center the encoder output: centered[t,i] = hidden[t,i] - mean(hidden[t,:])
-        launchCenterHiddenStates(
-            ctx.encoder_output_tensor.data,  // input: encoder output
-            centered_scratch,                 // output: scratch buffer
-            cfg->d_model,
-            total_tokens,
-            ctx.stream
-        );
-        
-        // Use centered data for LM head projection
-        lm_input_ptr = centered_scratch;
-        AG_INFO("Step 4a: Hidden states centered (Issue #37/#43 fix active)");
-        
+        AG_INFO("Step 4a: Hidden states COLUMN-centered (Issue #125 fix - reduces cos(h_i, h_j))");
     }
     
     // Create input tensor referencing the (possibly centered) data
@@ -1076,7 +1089,17 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         true    // requires_grad
     );
     ctx.lm_input_tensor.is_leaf = false;
-    ctx.lm_input_tensor.grad_fn = ctx.encoder_output_tensor.grad_fn;  // Link to RMSNorm or last encoder layer
+    
+    // ISSUE #127 FIX: Use the CORRECT grad_fn based on whether centering is enabled!
+    // When centering is enabled, CenterColumnsGradFn takes ownership of encoder_output_tensor's
+    // grad_fn (the RMSNormGradFn). If we set lm_input_tensor.grad_fn to encoder_output_tensor.grad_fn,
+    // it would point to a grad_fn that will be DELETED when ctx.centered_encoder_output destructs!
+    // Instead, link to the centering grad_fn, which properly chains to RMSNormGradFn.
+    if (use_centering) {
+        ctx.lm_input_tensor.grad_fn = ctx.centered_encoder_output.grad_fn;  // Link to CenterColumnsGradFn -> RMSNorm
+    } else {
+        ctx.lm_input_tensor.grad_fn = ctx.encoder_output_tensor.grad_fn;  // Link directly to RMSNorm or last encoder
+    }
     ctx.lm_input_tensor.owns_grad_fn = false;  // Borrowed, not owned
     
     // RULE 20: Validate shapes
@@ -1109,6 +1132,25 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     // NOT for post-matmul scaling. The original gradient issue needs different diagnosis.
     //
     // Issue #99: Need to re-investigate the actual gradient flow problem.
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  LOGIT CENTERING: Subtract mean across vocab for each position
+    //  
+    //  Forward:  centered[t,v] = logit[t,v] - mean_v(logit[t,:])
+    //  Backward: grad_logit = grad_centered (centering is linear, same grad flows back)
+    //  
+    //  Mathematical effect:
+    //  - Softmax is SHIFT-INVARIANT: softmax(x - c) = softmax(x) for any constant c
+    //  - Therefore centering does NOT change predictions or loss
+    //  - BUT it improves numerical stability by keeping logits near zero
+    //  - AND it may help with gradient flow by removing DC bias
+    //  
+    //  Shape: [total_tokens, vocab_size] → each row centered to mean=0
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (cfg->center_logits) {
+        logits_tensor = autograd::center_rows(logits_tensor, ctx.stream);
+        AG_INFO("Step 4a: Logits ROW-centered (each position's logit mean → 0)");
+    }
     
     AG_INFO("Step 4: LM head matmul complete");
     
@@ -1328,8 +1370,13 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             true    // requires_grad
         );
         encoder_for_numeric.is_leaf = false;
-        // Link to encoder's grad_fn for chain continuation
-        encoder_for_numeric.grad_fn = ctx.encoder_output_tensor.grad_fn;
+        // ISSUE #127 FIX: Use correct grad_fn based on whether centering is enabled
+        // When centering is enabled, the RMSNormGradFn is owned by CenterColumnsGradFn
+        if (use_centering && ctx.centered_encoder_output.grad_fn) {
+            encoder_for_numeric.grad_fn = ctx.centered_encoder_output.grad_fn;
+        } else {
+            encoder_for_numeric.grad_fn = ctx.encoder_output_tensor.grad_fn;
+        }
         encoder_for_numeric.owns_grad_fn = false;  // ctx owns it
         
         // Call autograd numeric_head_forward

@@ -18,11 +18,8 @@
 #include "../Layers/ScratchBlock/ScratchBlock_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../Shared/StreamController/StreamController_GPU.hpp"
-#include "../Shared/Activations/Xavier/Xavier.hpp"
 #include "../Shared/UnigramByte/Unigram.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"
-
-using GRIM::launchXavierInit;
 
 namespace GRIM {
 
@@ -288,11 +285,12 @@ void LanguageModel::initTrainingState() {
             TC::make_BSM(1, 1), true, primary_stream);
         training_state_.numeric_head_bias.ensure_grad();  // Allocate grad buffer NOW
         
-        // Initialize numeric head with Xavier
-        const float numeric_stddev = std::sqrt(2.0f / static_cast<float>(cfg.d_model + 1));
-        launchXavierInit(training_state_.numeric_head_weights.data, cfg.d_model,
-                         numeric_stddev, 44, primary_stream);
-        std::cout << "📦 Numeric head allocated (stddev=" << numeric_stddev << ")" << std::endl;
+        // Initialize numeric head with Xavier uniform
+        // Shape [1, d_model]: fan_in = d_model (columns), fan_out = 1 (rows)
+        Tensor::xavier_uniform_(training_state_.numeric_head_weights, primary_stream);
+        // expected_rms = sqrt(6 / (fan_in + fan_out)) / sqrt(3) where fan_in=d_model, fan_out=1
+        const float expected_rms = std::sqrt(6.0f / static_cast<float>(cfg.d_model + 1)) / std::sqrt(3.0f);
+        std::cout << "📦 Numeric head allocated (expected_rms=" << expected_rms << ")" << std::endl;
         
         // Learned loss weighting (homoscedastic uncertainty)
         // Formula: weight = 0.5 * exp(-log_var)

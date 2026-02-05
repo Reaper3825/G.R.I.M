@@ -12,6 +12,7 @@
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <cuda_bf16.h>
+#include <curand_kernel.h>  // Issue #107: Philox PRNG for Xavier init
 #include <device_launch_parameters.h>
 #include <cstdio>
 #include <cstdlib>
@@ -35,7 +36,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // AUTOGRAD DEBUG TOGGLE - Set to true to trace autograd chain execution
 // ═══════════════════════════════════════════════════════════════════════════
-bool g_autograd_verbose = false;  // PRODUCTION: Disable verbose AG_TRACE logging (causes GPU syncs)
+bool g_autograd_verbose = true;  // DEBUG: Enable verbose AG_TRACE logging to diagnose silent crash
 
 #define AG_TRACE(...) do { if (g_autograd_verbose) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while(0)
 
@@ -152,6 +153,10 @@ std::string getCurrentGradFnContext() {
     return ctx;
 }
 
+// DEBUG FLAG: Set to true to sync after EVERY kernel to find which one crashes
+// WARNING: This is VERY slow but helps find elusive CUDA errors
+static bool g_debug_sync_after_every_kernel = true;  // ENABLE FOR DEBUGGING
+
 void trackKernelLaunch(const char* kernel_name, cudaStream_t stream) {
     ++g_kernel_launch_count;
     g_last_kernel_name = kernel_name;
@@ -168,6 +173,17 @@ void trackKernelLaunch(const char* kernel_name, cudaStream_t stream) {
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         throw std::runtime_error(std::string("CUDA kernel launch failed: ") + kernel_name + " - " + cudaGetErrorString(err));
+    }
+    
+    // DEBUG: Sync after every kernel to catch errors immediately
+    if (g_debug_sync_after_every_kernel) {
+        cudaError_t sync_err = cudaStreamSynchronize(stream);
+        if (sync_err != cudaSuccess) {
+            fprintf(stderr, "[FATAL] Kernel '%s' (#%d) execution failed: %s\n",
+                    kernel_name, static_cast<int>(g_kernel_launch_count), cudaGetErrorString(sync_err));
+            fflush(stderr);
+            throw std::runtime_error(std::string("CUDA kernel execution failed: ") + kernel_name + " - " + cudaGetErrorString(sync_err));
+        }
     }
 }
 
@@ -1141,32 +1157,21 @@ namespace {
 // BUG: Single iteration with state = (seed + idx*A)*A + C is LINEAR in idx,
 // causing consecutive elements to have constant state difference A².
 // This produced correlated values with avg|cosine| ≈ 0.37 instead of expected ≈ 0.036.
-// FIX: Initialize state with hash-like mixing, then run 16 LCG iterations.
+// Issue #107 FIX: Use cuRAND Philox PRNG for high-quality random initialization.
+// The previous LCG-based implementation produced correlated values causing QKV
+// projection inflation (actual_row_norm=24.1 vs expected=0.86). Philox is a
+// counter-based PRNG with excellent statistical properties used by PyTorch/TensorFlow.
 __global__ void kernel_xavier_uniform(float* data, size_t count, float scale, uint64_t seed) {
     const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx < count) {
-        // Use idx to create per-element unique seed via bit mixing (splitmix64-style)
-        uint64_t z = seed + idx * 0x9E3779B97F4A7C15ULL;
-        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-        z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-        uint64_t state = z ^ (z >> 31);
-        
-        // Run 16 LCG iterations to fully decorrelate
-        // LCG PRNG: x_{n+1} = (a * x_n + c) mod m
-        // Parameters from PCG family (better statistical properties)
-        constexpr uint64_t LCG_A = 6364136223846793005ULL;
-        constexpr uint64_t LCG_C = 1442695040888963407ULL;
-        #pragma unroll
-        for (int i = 0; i < 16; i++) {
-            state = state * LCG_A + LCG_C;
-        }
-        
-        // Convert to uniform [0, 1)
-        float u = static_cast<float>(state >> 33) / static_cast<float>(1ULL << 31);
-        
-        // Transform to [-scale, +scale]
-        data[idx] = (2.0f * u - 1.0f) * scale;
-    }
+    if (idx >= count) return;
+    
+    // Initialize Philox4_32_10 state - each thread gets unique sequence via idx
+    curandStatePhilox4_32_10_t state;
+    curand_init(seed, idx, 0, &state);
+    
+    // curand_uniform returns (0, 1], transform to (-1, 1) then scale
+    const float rnd = curand_uniform(&state) * 2.0f - 1.0f;
+    data[idx] = rnd * scale;
 }
 
 // Kernel: Accumulate gradient (dst += src * scale)
@@ -3220,6 +3225,7 @@ struct RMSNormGradFn : public GradFn {
     bool input_requires_grad = false;
     bool gamma_requires_grad = false;
     float* input_grad = nullptr;
+    bool owns_input_grad = false;  // ISSUE #126: Track if we own input_grad buffer
     float* gamma_grad_ptr = nullptr;  // For gamma gradient
     float* gamma_data = nullptr;      // Gamma weights data (for forward values)
     TensorContract::TensorShape input_shape;
@@ -3240,13 +3246,22 @@ struct RMSNormGradFn : public GradFn {
             delete input_grad_fn; 
             input_grad_fn = nullptr; 
         }
+        // ISSUE #126: Free owned input_grad buffer
+        if (owns_input_grad && input_grad) {
+            queueForDeferredCleanup(input_grad);
+            input_grad = nullptr;
+        }
         // shared_ptr members destruct automatically after this
     }
     
-    void capture_inputs(Tensor& x, Tensor& gamma_tensor) {
+    void capture_inputs(Tensor& x, Tensor& gamma_tensor, cudaStream_t stream) {
         input_requires_grad = x.requires_grad;
         gamma_requires_grad = gamma_tensor.requires_grad;
         input_shape = x.shape;
+        
+        fprintf(stderr, "[RMSNormGradFn::capture_inputs] this=%p x.requires_grad=%d gamma.requires_grad=%d\n",
+                (void*)this, x.requires_grad ? 1 : 0, gamma_tensor.requires_grad ? 1 : 0);
+        fflush(stderr);
         
         // ISSUE #50 FIX: Take ownership of captured grad_fn to prevent use-after-free
         input_grad_fn = x.grad_fn;
@@ -3257,13 +3272,29 @@ struct RMSNormGradFn : public GradFn {
         
         gamma_data = gamma_tensor.data;
         
+        // ISSUE #126 FIX: Allocate OWNED gradient buffer instead of storing pointer to x.grad_data()
+        // The input tensor x may be a temporary that gets destroyed before backward() runs.
+        // x.ensure_grad() allocates a gradient buffer owned by x, which gets freed when x destructs.
+        // We need our own buffer that persists until backward is complete.
         if (input_requires_grad) {
-            x.ensure_grad();
-            input_grad = x.grad_data();  // ISSUE #59: Use accessor
+            const size_t grad_size = x.shape.total_elements();
+            cudaError_t err = cudaMalloc(&input_grad, grad_size * sizeof(float));
+            if (err != cudaSuccess) {
+                throw std::runtime_error("RMSNormGradFn: Failed to allocate input_grad buffer");
+            }
+            // Zero-initialize the gradient buffer
+            cudaMemsetAsync(input_grad, 0, grad_size * sizeof(float), stream);
+            owns_input_grad = true;
+            fprintf(stderr, "[RMSNormGradFn::capture_inputs] this=%p → Allocated input_grad: %p (%zu floats)\n",
+                    (void*)this, (void*)input_grad, grad_size);
+        } else {
+            fprintf(stderr, "[RMSNormGradFn::capture_inputs] SKIPPED input_grad allocation (input_requires_grad=false)\n");
         }
+        fflush(stderr);
+        
         if (gamma_requires_grad) {
             gamma_tensor.ensure_grad();
-            gamma_grad_ptr = gamma_tensor.grad_data();  // ISSUE #59: Use accessor
+            gamma_grad_ptr = gamma_tensor.grad_data();  // Gamma tensor is persistent (from TrainingState)
         }
     }
     
@@ -3292,14 +3323,28 @@ struct RMSNormGradFn : public GradFn {
     }
     
     void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        fprintf(stderr, "[RMSNormGradFn::apply] ENTRY - this=%p grad_output.data=%p stream=%p\n",
+                (void*)this, (void*)grad_output.data, (void*)stream);
+        fflush(stderr);
+        
         // RULE 20: Track current operation for error context
         setCurrentGradFnOp("rms_norm", this);
         
         // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
         if (applied) {
+            fprintf(stderr, "[RMSNormGradFn::apply] SKIP - already applied\n");
+            fflush(stderr);
             return;
         }
         applied = true;
+        
+        // Check for pre-existing CUDA errors BEFORE any sync
+        cudaError_t pre_err = cudaGetLastError();
+        if (pre_err != cudaSuccess) {
+            fprintf(stderr, "[RMSNormGradFn::apply] PRE-EXISTING CUDA ERROR: %d (%s)\n",
+                    (int)pre_err, cudaGetErrorString(pre_err));
+            fflush(stderr);
+        }
         
         // DIAGNOSTIC: Log incoming gradient to RMSNorm backward
         static int s_rms_bwd_call = 0;
@@ -3326,6 +3371,46 @@ struct RMSNormGradFn : public GradFn {
         const int tokens = static_cast<int>(cached_size / d_model);
         const int shared_mem = (AUTOGRAD_BLOCK_SIZE / 32 + 1) * sizeof(float);
         
+        // Add detailed logging before kernel launch
+        fprintf(stderr, "[RMS-BWD-LAUNCH] call=%d tokens=%d d_model=%d shared_mem=%d\n",
+                rms_call_idx, tokens, d_model, shared_mem);
+        fprintf(stderr, "[RMS-BWD-LAUNCH] ptrs: grad_output=%p cached_input=%p gamma=%p\n",
+                (void*)grad_output.data, (void*)cached_input, (void*)gamma_data);
+        fprintf(stderr, "[RMS-BWD-LAUNCH] ptrs: input_grad=%p gamma_grad=%p\n",
+                (void*)input_grad, (void*)gamma_grad_ptr);
+        fprintf(stderr, "[RMS-BWD-LAUNCH] cached_size=%zu expected=%zu (tokens*d_model)\n",
+                cached_size, static_cast<size_t>(tokens) * d_model);
+        fflush(stderr);
+        
+        // VALIDATE: Try to read from each pointer to detect stale/freed memory
+        {
+            float test_val = 0.0f;
+            cudaError_t err;
+            
+            err = cudaMemcpy(&test_val, grad_output.data, sizeof(float), cudaMemcpyDeviceToHost);
+            fprintf(stderr, "[RMS-BWD-VALIDATE] grad_output read: err=%d (%s) val=%.6f\n",
+                    (int)err, cudaGetErrorString(err), test_val);
+            
+            err = cudaMemcpy(&test_val, cached_input, sizeof(float), cudaMemcpyDeviceToHost);
+            fprintf(stderr, "[RMS-BWD-VALIDATE] cached_input read: err=%d (%s) val=%.6f\n",
+                    (int)err, cudaGetErrorString(err), test_val);
+            
+            err = cudaMemcpy(&test_val, gamma_data, sizeof(float), cudaMemcpyDeviceToHost);
+            fprintf(stderr, "[RMS-BWD-VALIDATE] gamma_data read: err=%d (%s) val=%.6f\n",
+                    (int)err, cudaGetErrorString(err), test_val);
+            
+            err = cudaMemcpy(&test_val, input_grad, sizeof(float), cudaMemcpyDeviceToHost);
+            fprintf(stderr, "[RMS-BWD-VALIDATE] input_grad read: err=%d (%s) val=%.6f\n",
+                    (int)err, cudaGetErrorString(err), test_val);
+            
+            if (gamma_grad_ptr) {
+                err = cudaMemcpy(&test_val, gamma_grad_ptr, sizeof(float), cudaMemcpyDeviceToHost);
+                fprintf(stderr, "[RMS-BWD-VALIDATE] gamma_grad read: err=%d (%s) val=%.6f\n",
+                        (int)err, cudaGetErrorString(err), test_val);
+            }
+            fflush(stderr);
+        }
+        
         if (input_requires_grad && input_grad) {
             kernel_rmsnorm_backward<<<tokens, AUTOGRAD_BLOCK_SIZE, shared_mem, stream>>>(
                 grad_output.data, cached_input, gamma_data,
@@ -3348,6 +3433,11 @@ struct RMSNormGradFn : public GradFn {
         GradFn::release_saved();
         cached_input = nullptr;
         cached_size = 0;
+        // ISSUE #126: Free owned input_grad buffer (if not already freed by destructor)
+        if (owns_input_grad && input_grad) {
+            queueForDeferredCleanup(input_grad);
+            owns_input_grad = false;
+        }
         input_grad = nullptr;
         gamma_grad_ptr = nullptr;
         // ISSUE #50: Set ownership false BEFORE delete
@@ -3401,13 +3491,31 @@ struct EmbeddingGradFn : public GradFn {
         num_tokens = tokens;
         d_model = d;
         
+        fprintf(stdout, "[EmbeddingGradFn::save] ENTER - ids=%p tokens=%d d=%d copy_ids=%s stream=%p\n",
+                (void*)ids, tokens, d, copy_ids ? "true" : "false", (void*)stream);
+        fflush(stdout);
+        
         if (copy_ids) {
             cudaMalloc(&token_ids, tokens * sizeof(int));
             cudaMemcpyAsync(token_ids, ids, tokens * sizeof(int), cudaMemcpyDeviceToDevice, stream);
             owns_token_ids = true;
+            
+            // Validate token IDs at save time (sync required but helpful for debugging)
+            cudaStreamSynchronize(stream);
+            std::vector<int> h_tokens(std::min(20, tokens));
+            cudaMemcpy(h_tokens.data(), token_ids, h_tokens.size() * sizeof(int), cudaMemcpyDeviceToHost);
+            fprintf(stdout, "[EmbeddingGradFn::save] First %zu token_ids after copy: ", h_tokens.size());
+            for (size_t i = 0; i < h_tokens.size(); i++) {
+                fprintf(stdout, "%d ", h_tokens[i]);
+            }
+            fprintf(stdout, "\n");
+            fprintf(stdout, "[EmbeddingGradFn::save] Allocated owned buffer at %p\n", (void*)token_ids);
+            fflush(stdout);
         } else {
             token_ids = const_cast<int*>(ids);
             owns_token_ids = false;
+            fprintf(stdout, "[EmbeddingGradFn::save] Using borrowed pointer %p\n", (void*)token_ids);
+            fflush(stdout);
         }
     }
     
@@ -3420,6 +3528,13 @@ struct EmbeddingGradFn : public GradFn {
                 num_tokens, d_model, (void*)g_pcgrad_temp_buffer, g_pcgrad_buffer_size);
         fflush(stdout);
         
+        // DEBUG CRASH DIAGNOSIS: Check all pointers immediately
+        fprintf(stdout, "[EmbeddingGradFn::apply] PHASE1: applied=%d weight_requires_grad=%d token_ids=%p weight_grad=%p\n",
+                applied, weight_requires_grad, (void*)token_ids, (void*)weight_grad);
+        fprintf(stdout, "[EmbeddingGradFn::apply] PHASE2: grad_output.data=%p stream=%p\n",
+                (void*)grad_output.data, (void*)stream);
+        fflush(stdout);
+        
         // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
         if (applied) {
             fprintf(stdout, "[EmbeddingGradFn::apply] SKIP - already applied\n");
@@ -3427,6 +3542,8 @@ struct EmbeddingGradFn : public GradFn {
             return;
         }
         applied = true;
+        fprintf(stdout, "[EmbeddingGradFn::apply] PHASE3: passed applied check\n");
+        fflush(stdout);
         
         if (!weight_requires_grad || !token_ids) {
             fprintf(stdout, "[EmbeddingGradFn::apply] SKIP - no grad needed (requires_grad=%d, ids=%p)\n",
@@ -3434,9 +3551,14 @@ struct EmbeddingGradFn : public GradFn {
             fflush(stdout);
             return;
         }
+        fprintf(stdout, "[EmbeddingGradFn::apply] PHASE4: passed requires_grad check\n");
+        fflush(stdout);
+        
         if (!weight_grad) {
             throw std::runtime_error("EmbeddingGradFn::apply: weight_grad is NULL - capture_weight() must be called first");
         }
+        fprintf(stdout, "[EmbeddingGradFn::apply] PHASE5: passed weight_grad check\n");
+        fflush(stdout);
         
         // ═══════════════════════════════════════════════════════════════════════════
         // ISSUE #60 FIX: PCGrad for tied embedding/lm_head weights
@@ -3456,19 +3578,144 @@ struct EmbeddingGradFn : public GradFn {
         
         // Embedding shape is [vocab_size, d_model] in BSM layout
         const int vocab_size = weight_shape.as_2d().rows;
+        fprintf(stdout, "[EmbeddingGradFn::apply] PHASE6: vocab_size=%d about to enter PCGrad check\n", vocab_size);
+        fprintf(stdout, "[EmbeddingGradFn::apply] PHASE6a: g_pcgrad_temp_buffer=%p\n", (void*)g_pcgrad_temp_buffer);
+        fprintf(stdout, "[EmbeddingGradFn::apply] PHASE6b: g_pcgrad_buffer_size=%zu required=%zu\n", 
+                g_pcgrad_buffer_size, static_cast<size_t>(vocab_size) * d_model);
+        fflush(stdout);
         
         if (g_pcgrad_temp_buffer && g_pcgrad_buffer_size >= static_cast<size_t>(vocab_size) * d_model) {
             // PCGrad mode: compute embedding gradient into temp buffer, then combine
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE7: Inside PCGrad branch\n");
+            fflush(stdout);
             AG_TRACE("[EmbeddingGradFn] Using PCGrad mode for tied weights\n");
             
             // Step 1: Zero the temp buffer
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE8: About to cudaMemsetAsync (bytes=%zu)\n",
+                    static_cast<size_t>(vocab_size) * d_model * sizeof(float));
+            fflush(stdout);
             cudaMemsetAsync(g_pcgrad_temp_buffer, 0, 
                            static_cast<size_t>(vocab_size) * d_model * sizeof(float), stream);
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE8a: cudaMemsetAsync returned\n");
+            fflush(stdout);
             
             // Step 2: Compute embedding backward into temp buffer (NOT shared grad buffer)
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9: About to launch kernel_embedding_backward\n");
+            fflush(stdout);
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9-LAUNCH: grid=%d block=%d stream=%p\n", 
+                    num_tokens, AUTOGRAD_BLOCK_SIZE, (void*)stream);
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9-PTRS: grad=%p tokens=%p temp=%p\n",
+                    (void*)grad_output.data, (void*)token_ids, (void*)g_pcgrad_temp_buffer);
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9-DIMS: num_tokens=%d d_model=%d emb_scale=%.4f\n",
+                    num_tokens, d_model, embedding_scale);
+            fflush(stdout);
+            
+            // PHASE9-VALIDATE: Check for invalid token IDs that could cause OOB access
+            {
+                int max_token_id = -1;
+                int min_token_id = INT_MAX;
+                std::vector<int> h_tokens(num_tokens);
+  
+                cudaError_t memcpy_err = cudaMemcpy(h_tokens.data(), token_ids, num_tokens * sizeof(int), cudaMemcpyDeviceToHost);
+                fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9-VALIDATE: cudaMemcpy result=%d (%s)\n",
+                        (int)memcpy_err, cudaGetErrorString(memcpy_err));
+                
+                // Count zeros and show first 20 token IDs
+                int zero_count = 0;
+                fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9-VALIDATE: First 20 token_ids: ");
+                for (int i = 0; i < std::min(20, num_tokens); i++) {
+                    fprintf(stdout, "%d ", h_tokens[i]);
+                    if (h_tokens[i] == 0) zero_count++;
+                }
+                fprintf(stdout, "\n");
+                
+                // Count total zeros
+                for (int i = 0; i < num_tokens; i++) {
+                    if (h_tokens[i] > max_token_id) max_token_id = h_tokens[i];
+                    if (h_tokens[i] < min_token_id) min_token_id = h_tokens[i];
+                    if (h_tokens[i] == 0) zero_count++;
+                }
+                // Subtract double-counted first 20
+                zero_count -= std::min(20, num_tokens);
+                for (int i = 0; i < std::min(20, num_tokens); i++) {
+                    if (h_tokens[i] == 0) zero_count++;
+                }
+                
+                fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9-VALIDATE: token_id range [%d, %d] vs vocab_size=%d\n",
+                        min_token_id, max_token_id, vocab_size);
+                fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9-VALIDATE: zero_count=%d/%d (%.1f%%)\n",
+                        zero_count, num_tokens, 100.0f * zero_count / num_tokens);
+                fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9-VALIDATE: token_ids ptr=%p owns=%s\n",
+                        (void*)token_ids, owns_token_ids ? "true" : "false");
+                fflush(stdout);
+                
+                if (max_token_id >= vocab_size || min_token_id < 0) {
+                    fprintf(stderr, "[EmbeddingGradFn] FATAL: Token ID out of bounds! max=%d min=%d vocab=%d\n",
+                            max_token_id, min_token_id, vocab_size);
+                    fflush(stderr);
+                    return;
+                }
+                
+                // NEW: Warn if ALL tokens are zero - likely memory corruption
+                if (min_token_id == 0 && max_token_id == 0) {
+                    fprintf(stderr, "[EmbeddingGradFn] WARNING: ALL token IDs are 0! Possible causes:\n");
+                    fprintf(stderr, "  1. token_ids buffer was never populated (check forward pass)\n");
+                    fprintf(stderr, "  2. token_ids pointer changed after save() (check owns_token_ids=%s)\n", 
+                            owns_token_ids ? "true" : "false");
+                    fprintf(stderr, "  3. Memory corruption from earlier CUDA error\n");
+                    fflush(stderr);
+                }
+            }
+            
+            // CRITICAL: Check for pre-existing CUDA errors from PREVIOUS kernels
+            // CUDA errors are sticky - an error from an earlier kernel persists until checked
+            cudaError_t pre_check = cudaGetLastError();
+            if (pre_check != cudaSuccess) {
+                fprintf(stderr, "[EmbeddingGradFn] FATAL: Pre-existing CUDA error before kernel launch: %d (%s)\n",
+                        (int)pre_check, cudaGetErrorString(pre_check));
+                fprintf(stderr, "  This error came from a PREVIOUS kernel, not embedding_backward!\n");
+                fflush(stderr);
+                // Force sync to surface the actual error location
+                cudaDeviceSynchronize();
+                return;  // Don't proceed with corrupted state
+            }
+            
             kernel_embedding_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 grad_output.data, token_ids, g_pcgrad_temp_buffer, num_tokens, d_model, embedding_scale);
+            
+            // Immediate error check BEFORE trackKernelLaunch
+            cudaError_t launch_err = cudaGetLastError();
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9a: kernel launched, cudaGetLastError=%d (%s)\n",
+                    (int)launch_err, cudaGetErrorString(launch_err));
+            fflush(stdout);
+            
+            if (launch_err != cudaSuccess) {
+                fprintf(stderr, "[EmbeddingGradFn] FATAL: kernel_embedding_backward launch failed: %s\n",
+                        cudaGetErrorString(launch_err));
+                fflush(stderr);
+                return;  // Don't crash, just exit apply()
+            }
+            
+            // PHASE9a-SYNC: Force sync to catch kernel execution errors (not just launch errors)
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9a-SYNC: Syncing to catch kernel errors...\n");
+            fflush(stdout);
+            cudaError_t sync_err = cudaStreamSynchronize(stream);
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9a-SYNC: sync returned %d (%s)\n",
+                    (int)sync_err, cudaGetErrorString(sync_err));
+            fflush(stdout);
+            
+            if (sync_err != cudaSuccess) {
+                fprintf(stderr, "[EmbeddingGradFn] FATAL: kernel_embedding_backward execution failed: %s\n",
+                        cudaGetErrorString(sync_err));
+                fflush(stderr);
+                return;
+            }
+            
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9b: about to call trackKernelLaunch\n");
+            fflush(stdout);
             trackKernelLaunch("kernel_embedding_backward_pcgrad", stream);
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9c: trackKernelLaunch returned\n");
+            fflush(stdout);
             
             // ISSUE #60 DEBUG: Capture RAW embedding gradient BEFORE PCGrad projection
             // Need sync to ensure kernel completes before capture
@@ -3498,12 +3745,21 @@ struct EmbeddingGradFn : public GradFn {
             
             // Step 3: Apply PCGrad - combine LM head grad (in weight_grad) with orthogonal 
             //         component of embedding grad (in temp buffer)
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE10: About to launch kernel_pcgrad_combine\n");
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE10a: vocab_size=%d d_model=%d\n", vocab_size, d_model);
+            fflush(stdout);
             const int shared_mem = 2 * ((AUTOGRAD_BLOCK_SIZE / 32) + 1) * sizeof(float);
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE10b: shared_mem=%d blocks=%d threads=%d\n", 
+                    shared_mem, vocab_size, AUTOGRAD_BLOCK_SIZE);
+            fflush(stdout);
             kernel_pcgrad_combine<<<vocab_size, AUTOGRAD_BLOCK_SIZE, shared_mem, stream>>>(
                 weight_grad, g_pcgrad_temp_buffer, vocab_size, d_model);
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE10c: kernel_pcgrad_combine launched\n");
+            fflush(stdout);
             trackKernelLaunch("kernel_pcgrad_combine", stream);
             
             fprintf(stdout, "[EmbeddingGradFn] PCGrad combination complete\n");
+            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE11: PCGrad complete, exiting if block\n");
             fflush(stdout);
             
         } else if (g_skip_embedding_backward_for_tied_weights) {
@@ -4124,7 +4380,7 @@ Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, cudaStream_t st
     if (result.requires_grad) {
         result.is_leaf = false;
         auto* grad_fn = new RMSNormGradFn();
-        grad_fn->capture_inputs(const_cast<Tensor&>(x), const_cast<Tensor&>(gamma));
+        grad_fn->capture_inputs(const_cast<Tensor&>(x), const_cast<Tensor&>(gamma), stream);  // ISSUE #126: pass stream
         
         // ISSUE #51 FIX: Copy cache to owned buffer
         const float* effective_cache = input_cache ? input_cache : x.data;
@@ -4630,22 +4886,51 @@ static inline void applyLmHeadGradCorrections(
     int d_model,
     cudaStream_t stream
 ) {
+    fprintf(stderr, "[applyLmHeadGradCorrections] ENTRY - grad_a=%p tokens=%d d_model=%d stream=%p\n",
+            (void*)grad_a, total_tokens, d_model, (void*)stream);
+    fflush(stderr);
+    
     if (!grad_a || total_tokens <= 0 || d_model <= 0) {
+        fprintf(stderr, "[applyLmHeadGradCorrections] SKIP - invalid args\n");
+        fflush(stderr);
         return;
     }
     if (!g_lm_head_recenter_gradients) {
+        fprintf(stderr, "[applyLmHeadGradCorrections] SKIP - recentering disabled\n");
+        fflush(stderr);
         return;
     }
 
+    fprintf(stderr, "[applyLmHeadGradCorrections] Launching centerGradientsKernel\n");
+    fflush(stderr);
+    
     constexpr int kBlockSize = 256;
 
     centerGradientsKernel<<<total_tokens, kBlockSize, 0, stream>>>(
         grad_a, d_model, total_tokens);
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        throw std::runtime_error(std::string("[applyLmHeadGradCorrections] recenter kernel failed: ") +
-                                 cudaGetErrorString(err));
+    cudaError_t launch_err = cudaGetLastError();
+    fprintf(stderr, "[applyLmHeadGradCorrections] Kernel launch result: %d (%s)\n",
+            (int)launch_err, cudaGetErrorString(launch_err));
+    fflush(stderr);
+    
+    if (launch_err != cudaSuccess) {
+        throw std::runtime_error(std::string("[applyLmHeadGradCorrections] recenter kernel launch failed: ") +
+                                 cudaGetErrorString(launch_err));
     }
+    
+    // Sync to catch EXECUTION errors (not just launch errors)
+    cudaError_t exec_err = cudaStreamSynchronize(stream);
+    fprintf(stderr, "[applyLmHeadGradCorrections] Kernel EXECUTION result: %d (%s)\n",
+            (int)exec_err, cudaGetErrorString(exec_err));
+    fflush(stderr);
+    
+    if (exec_err != cudaSuccess) {
+        throw std::runtime_error(std::string("[applyLmHeadGradCorrections] recenter kernel EXECUTION failed: ") +
+                                 cudaGetErrorString(exec_err));
+    }
+    
+    fprintf(stderr, "[applyLmHeadGradCorrections] EXIT\n");
+    fflush(stderr);
 }
 
 /**
@@ -5151,29 +5436,58 @@ struct MatMulGradFn : public GradFn {
             if (g_debug_capture_enabled && N > 10000 && K < 2000) {
                 debugCaptureLMHeadGrad(grad_b, static_cast<size_t>(N) * K, stream);
                 AG_TRACE("[MatMulGradFn] DEBUG: Captured LM head grad, N=%d K=%d\n", N, K);
+                fflush(stderr);
             }
         }
 
         // If LM head centering was applied outside autograd,
         // correct grad_A before passing it to the encoder backward chain.
+        fprintf(stderr, "[MATMUL-CHAIN] Before applyLmHeadGradCorrections check: a_requires_grad=%d transpose_b=%d N=%d\n",
+                a_requires_grad ? 1 : 0, transpose_b ? 1 : 0, N);
+        fflush(stderr);
+        
         if (a_requires_grad && transpose_b && N > 10000) {
+            fprintf(stderr, "[MATMUL-CHAIN] CALLING applyLmHeadGradCorrections...\n");
+            fflush(stderr);
             applyLmHeadGradCorrections(
                 grad_a,
                 M,
                 K,
                 stream);
+            fprintf(stderr, "[MATMUL-CHAIN] applyLmHeadGradCorrections RETURNED\n");
+            fflush(stderr);
         }
 
         // CONTINUE AUTOGRAD CHAIN (Recursive) - ISSUE #48 FIX: Use stored grad_fn pointers
+        fprintf(stderr, "[MATMUL-CHAIN] Before autograd chain: a_requires_grad=%d a_grad_fn=%p\n",
+                a_requires_grad ? 1 : 0, (void*)a_grad_fn);
+        fflush(stderr);
+        
         if (a_requires_grad && a_grad_fn) {
+            fprintf(stderr, "[MATMUL-CHAIN] a_grad_fn->op_name=%s\n", 
+                    a_grad_fn->op_name ? a_grad_fn->op_name : "NULL");
+            fflush(stderr);
+            
             if (a_grad_fn->op_name) {
                 Tensor view;
                 view.data = grad_a; view.shape = a_shape;
                 view.owns_data = false; view.owns_grad_fn = false; view.stream = stream;
                 
+                fprintf(stderr, "[MATMUL-CHAIN] About to sync stream (this may hang if kernel failed)...\n");
+                fflush(stderr);
+                
                 // DIAGNOSTIC: Log grad_a that we're passing to next grad_fn
                 {
-                    cudaStreamSynchronize(stream);
+                    cudaError_t pre_sync_err = cudaGetLastError();
+                    fprintf(stderr, "[MATMUL-CHAIN] Pre-sync cudaGetLastError: %d (%s)\n",
+                            (int)pre_sync_err, cudaGetErrorString(pre_sync_err));
+                    fflush(stderr);
+                    
+                    cudaError_t sync_err = cudaStreamSynchronize(stream);
+                    fprintf(stderr, "[MATMUL-CHAIN] cudaStreamSynchronize returned: %d (%s)\n",
+                            (int)sync_err, cudaGetErrorString(sync_err));
+                    fflush(stderr);
+                    
                     const size_t grad_elems = view.numel();
                     std::vector<float> samp(std::min(grad_elems, static_cast<size_t>(10000)));
                     cudaMemcpy(samp.data(), grad_a, samp.size() * sizeof(float), cudaMemcpyDeviceToHost);
@@ -5184,7 +5498,35 @@ struct MatMulGradFn : public GradFn {
                             a_grad_fn->op_name ? a_grad_fn->op_name : "?", grad_elems, mx, rms);
                 }
                 
+                fprintf(stderr, "[MATMUL-BWD-TO-A] About to call a_grad_fn->apply(), ptr=%p op=%s\n",
+                        (void*)a_grad_fn, a_grad_fn->op_name ? a_grad_fn->op_name : "NULL");
+                fflush(stderr);
+                
+                // ISSUE #127: Validate GradFn to detect use-after-free
+                {
+                    // On MSVC debug heap, freed memory is filled with 0xDD or 0xFEEE patterns
+                    // Check if the vtable pointer looks valid (not freed pattern)
+                    void** vtable_ptr = *(void***)a_grad_fn;
+                    fprintf(stderr, "[MATMUL-BWD-TO-A] vtable_ptr=%p\n", (void*)vtable_ptr);
+                    
+                    // Check for common freed memory patterns
+                    uint64_t vtable_value = (uint64_t)vtable_ptr;
+                    if (vtable_value == 0xDDDDDDDDDDDDDDDDull ||
+                        vtable_value == 0xFEEEFEEEFEEEFEEEull ||
+                        vtable_value == 0xCDCDCDCDCDCDCDCDull ||
+                        vtable_value == 0x0000000000000000ull) {
+                        fprintf(stderr, "[MATMUL-BWD-TO-A] ERROR: vtable pointer looks like freed memory! value=0x%llx\n",
+                                (unsigned long long)vtable_value);
+                        fflush(stderr);
+                        throw std::runtime_error("Use-after-free detected: a_grad_fn vtable is corrupted");
+                    }
+                    fflush(stderr);
+                }
+                
                 a_grad_fn->apply(view, stream);
+                
+                fprintf(stderr, "[MATMUL-BWD-TO-A] a_grad_fn->apply() returned\n");
+                fflush(stderr);
                 // ISSUE #52 FIX: Do NOT call release_saved() here - cudaFree blocks while GPU busy
             }
         }

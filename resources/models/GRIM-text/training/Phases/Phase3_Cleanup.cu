@@ -19,6 +19,7 @@
 #include "Phase3_Cleanup.hpp"
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
+#include "../../Shared/EquationLogging/EquationLogging.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -334,7 +335,25 @@ CleanupResult executePhase3(
         EmitModuleInfo(ModuleId::Training, "Flushing device logs...", ctx.global_step);
         GRIM::Logging::FlushDeviceLogs();
         GRIM::Logging::ShutdownLogRecorder();
+        
+        // Test: Add a final summary entry to equation log to verify system works
+        // Test LOG entry to verify EquationLogger is working
+        EQ_LOG_HOST(
+            "TRAINING_COMPLETE",
+            "final_loss = avg(batch_losses)",
+            "batches_completed=" + std::to_string(ctx.global_step),
+            "cleanup_phase",
+            "loss_at_end=see_training_log",
+            "training_completed_successfully",
+            static_cast<int>(ctx.global_step),  // batch_idx
+            -1,                                  // layer_idx (N/A)
+            static_cast<int>(ctx.global_step),  // step_idx
+            GRIM::EquationPhase::LOSS_COMPUTATION  // Use LOSS_COMPUTATION as training summary phase
+        );
+        
+        GRIM::getEquationLogger().shutdown();
         EmitModuleInfo(ModuleId::Training, "✓ Device logs flushed", ctx.global_step);
+        EmitModuleInfo(ModuleId::Training, "✓ Equation logs flushed", ctx.global_step);
         
         result.success = true;
         

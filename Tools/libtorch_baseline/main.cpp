@@ -110,7 +110,7 @@ struct TrainConfig {
     
     // Debug logging: log [GRAD_NONTARGET_EQUATION] for comparing with GRIM-text
     bool enable_grad_equation_logging = true;
-    int64_t grad_equation_log_interval = 50;  // Log every N batches
+    int64_t grad_equation_log_interval = 1;  // Log every N batches
     
     // Auto-stop: stop training on plateau
     bool enable_auto_stop = false;
@@ -253,8 +253,8 @@ static std::pair<std::vector<int64_t>, uint32_t> load_grmt(const std::string& pa
     std::cout << "[GRMT] Validating version...\n";
     std::cout.flush();
     
-    if (header.version < 4 || header.version > 5) {
-        throw std::runtime_error("unsupported GRMT version: " + std::to_string(header.version) + " (expected 4 or 5)");
+    if (header.version < 4 || header.version > 6) {
+        throw std::runtime_error("unsupported GRMT version: " + std::to_string(header.version) + " (expected 4, 5, or 6)");
     }
     
     std::cout << "[GRMT] Printing header info...\n";
@@ -345,6 +345,15 @@ static std::pair<std::vector<int64_t>, uint32_t> load_grmt(const std::string& pa
         }
         // Skip text_mask (uint8 array)
         file.seekg(seq_len * sizeof(uint8_t), std::ios::cur);
+        
+        // GRMT v6: Skip byte_lengths (uint16 array for loss weighting)
+        if (header.version >= 6) {
+            if (seq_idx == 0) {
+                std::cout << "[GRMT] Skipping byte_lengths (v6)...\n";
+                std::cout.flush();
+            }
+            file.seekg(seq_len * sizeof(uint16_t), std::ios::cur);
+        }
         
         // Log progress for ALL sequences to see where it hangs
         if ((seq_idx + 1) % 10 == 0 || seq_idx < 5) {
@@ -1634,7 +1643,7 @@ int main(int argc, char ** argv) {
             //  Loss Computation (with toggleable features)
             //======================================================//
             torch::Tensor loss;
-            if (cfg.enable_focal_loss || cfg.enable_label_smoothing) {
+            if (cfg.enable_focal_loss || cfg.enable_label_smoothing || cfg.enable_entropy_reg) {
                 loss = compute_focal_loss(
                     logits.view({-1, model_cfg.vocab_size}),
                     batch.y.view({-1}),
@@ -1642,12 +1651,33 @@ int main(int argc, char ** argv) {
                     cfg.enable_focal_loss ? cfg.focal_alpha : 1.0,
                     cfg.enable_label_smoothing,
                     cfg.label_smoothing,
+                    cfg.enable_entropy_reg,
+                    cfg.entropy_reg_lambda,
                     model_cfg.vocab_size);
             } else {
                 loss = torch::nn::functional::cross_entropy(
                     logits.view({-1, model_cfg.vocab_size}),
                     batch.y.view({-1}),
                     torch::nn::functional::CrossEntropyFuncOptions().reduction(torch::kMean));
+            }
+            
+            //======================================================//
+            //  [GRAD_NONTARGET_EQUATION] Diagnostic Logging
+            //======================================================//
+            if (cfg.enable_grad_equation_logging && 
+                (batch_idx % cfg.grad_equation_log_interval == 0)) {
+                log_grad_equation_diagnostic(
+                    logits.view({-1, model_cfg.vocab_size}),
+                    batch.y.view({-1}),
+                    cfg.enable_focal_loss ? cfg.focal_alpha : 1.0,
+                    cfg.enable_focal_loss ? cfg.focal_gamma : 0.0,
+                    cfg.enable_label_smoothing,
+                    cfg.label_smoothing,
+                    cfg.enable_entropy_reg,
+                    cfg.entropy_reg_lambda,
+                    model_cfg.vocab_size,
+                    batch_idx,
+                    277);  // Token 277 = SPACE in GRIM-text vocab
             }
             
             //======================================================//

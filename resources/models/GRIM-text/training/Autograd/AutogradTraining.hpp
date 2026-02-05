@@ -139,6 +139,11 @@ struct AutogradContext {
     // Final encoder output (after final RMSNorm)
     Tensor encoder_output_tensor;  // [total_tokens, d_model]
     
+    // Centered encoder output (if centering enabled) - MUST persist until backward!
+    // ISSUE #127 FIX: CenterColumnsGradFn takes ownership of encoder_output_tensor's grad_fn,
+    // so this tensor must live until backward completes to keep the grad_fn chain alive.
+    Tensor centered_encoder_output;  // [total_tokens, d_model]
+    
     // LM head input (view of encoder output with grad_fn linked)
     // MUST persist until backward completes - grad_fn stores pointer to this
     Tensor lm_input_tensor;        // [total_tokens, d_model] - input to LM head matmul
@@ -172,6 +177,7 @@ struct AutogradContext {
         embedding_tensor = Tensor();
         encoder_layer_outputs.clear();
         encoder_output_tensor = Tensor();
+        centered_encoder_output = Tensor();  // Issue #127: Clear centering tensor
         lm_input_tensor = Tensor();  // Issue #48: Must clear this too
         logits_tensor = Tensor();
         loss_tensor = Tensor();

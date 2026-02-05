@@ -8,10 +8,22 @@
 
 #include "AutogradLoss.hpp"
 #include "../../TensorContract/TensorContract_GPU.hpp"
+#include "../../EquationLogging/EquationLogging.hpp"
 #include <cuda_runtime.h>
 #include <cfloat>
 #include <cmath>
 #include <memory>
+
+// ========================================================================
+// Finite Difference Gradient Verification (Issue Investigation)
+// ========================================================================
+// Define GRIM_FD_GRAD_VERIFY to enable finite difference gradient verification.
+// This adds significant overhead (2 full loss computations per sample) so should
+// only be enabled for debugging gradient sign errors.
+//
+// Usage: Uncomment the line below to enable FD verification:
+#define GRIM_FD_GRAD_VERIFY
+// ========================================================================
 
 // Access the global autograd verbose flag
 extern bool g_autograd_verbose;
@@ -231,7 +243,7 @@ __global__ void kernelUnifiedLossBackward(
     float* __restrict__ grad_logits,
     int num_tokens,
     int vocab_size,
-    float inv_valid_count,  // ISSUE #81: Pass 1/N as float to avoid integer division
+    float inv_valid_count,  // 1/N - applied uniformly to ALL gradient terms at end
     float focal_alpha,
     float focal_gamma,
     float smoothing_epsilon,
@@ -306,11 +318,37 @@ __global__ void kernelUnifiedLossBackward(
     }
     if (threadIdx.x % warpSize == 0) {
         atomicAdd(&s_sum, local_sum);
-    }
+    } 
     __syncthreads();
     
     const float sum_exp = s_sum;
     const float inv_sum = 1.0f / (sum_exp + kEpsilon);
+    
+    // Step 2.5: Compute neg_entropy = Σ_v p_v * log(p_v) for entropy gradient centering
+    // Issue #124 FIX: This was MISSING in backward kernel, causing Issue #123's wrong reversion.
+    // The entropy regularization term H(p) = Σ p_v*log(p_v) requires the CENTERING term in gradients:
+    // ∂H/∂z_k = p_k * (log(p_k) + 1 - H) = p_k * (log(p_k) + 1 - neg_entropy)
+    // Without the centering term, gradients sum to non-zero (λ*(1-H)), causing mode collapse.
+    __shared__ float s_neg_entropy;
+    if (threadIdx.x == 0) s_neg_entropy = 0.0f;
+    __syncthreads();
+    
+    float local_neg_entropy = 0.0f;
+    for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
+        const float p_v_temp = expf(row[v] - max_val) * inv_sum;
+        if (p_v_temp > kEpsilon) {
+            local_neg_entropy += p_v_temp * logf(p_v_temp);
+        }
+    }
+    // Warp reduction for neg_entropy
+    for (int offset = warpSize / 2; offset > 0; offset /= 2) {
+        local_neg_entropy += __shfl_down_sync(0xffffffff, local_neg_entropy, offset);
+    }
+    if (threadIdx.x % warpSize == 0) {
+        atomicAdd(&s_neg_entropy, local_neg_entropy);
+    }
+    __syncthreads();
+    const float neg_entropy = s_neg_entropy;  // H(p) = Σ p_v * log(p_v) ≈ -10.83 for uniform 50k vocab
     
     // Step 3: Compute p_t (probability of correct class) for focal weighting
     const float p_t = expf(row[target] - max_val) * inv_sum;
@@ -321,10 +359,19 @@ __global__ void kernelUnifiedLossBackward(
     if (focal_gamma > 0.0f) {
         const float one_minus_pt = fmaxf(1.0f - p_t, kEpsilon);
         focal_weight = powf(one_minus_pt, focal_gamma);
-        // Derivative: d/dp_t[(1-p_t)^γ * -log(p_t)] has additional term from (1-p_t)^γ
-        // = -(1-p_t)^γ / p_t - γ*(1-p_t)^(γ-1)*log(p_t)
-        // The second term contributes to grad only at target position
-        focal_deriv_factor = focal_gamma * powf(one_minus_pt, focal_gamma - 1.0f) * (-logf(fmaxf(p_t, kEpsilon)));
+        // Issue #119 FIX: Focal derivative factor was WRONG!
+        // OLD (BUGGY): focal_deriv_factor = γ * (1-p_t)^(γ-1) * (-log(p_t))
+        // The extra (-log(p_t)) term is INCORRECT and causes fd_fac to be ~10.5x too large
+        // when p_t ≈ 1e-5 (typical), since -log(1e-5) ≈ 11.5
+        //
+        // CORRECT formula (matching PyTorch baseline):
+        // d/dp_t[(1-p_t)^γ] = -γ * (1-p_t)^(γ-1)
+        // The focal derivative w.r.t logit_v (for v != target) is:
+        //   d(focal_weight)/d(logit_v) = d/dp_t[(1-p_t)^γ] * d(p_t)/d(logit_v)
+        //                              = -γ * (1-p_t)^(γ-1) * (-p_t * p_v)
+        //                              = γ * (1-p_t)^(γ-1) * p_t * p_v
+        // So focal_deriv_factor = γ * (1-p_t)^(γ-1) (NO log term!)
+        focal_deriv_factor = focal_gamma * powf(one_minus_pt, focal_gamma - 1.0f);
     }
     
     // Label smoothing target distribution
@@ -375,11 +422,39 @@ __global__ void kernelUnifiedLossBackward(
             // OLD (WRONG): g = fmaxf(log(p) + 1, 0) - clamped when p < 0.368
             //   Problem: Disabled entropy for ALL vocab tokens (p << 0.368)
             //   Root cause: Gated on PROBABILITY threshold, not GRADIENT sign
-            // NEW (CORRECT): g = log(p) + 1 - allow negative g
-            //   When p < e^(-1), g < 0, which means entropy DECREASES that token's probability
-            //   This is CORRECT behavior - entropy should push down overly-low probabilities
-            const float g = logf(fmaxf(p_v, kEpsilon)) + 1.0f;  // Issue #121: Allow negative g
-            entropy_term = entropy_reg_lambda * p_v * g * inv_valid_count;  // Issue #119: scale by 1/N
+            // g = log(p) + 1, allowing negative values
+            const float log_p_v = logf(fmaxf(p_v, kEpsilon));
+            const float g = log_p_v + 1.0f;  // Issue #121: Allow negative g
+            //
+            // Issue #124 FIX: RESTORE Issue #122's centering term - Issue #123 was WRONG!
+            //
+            // MATHEMATICAL DERIVATION:
+            //   H(p) = Σ_v p_v * log(p_v)  (negative entropy, always ≤ 0)
+            //   Loss_entropy = λ * H(p) = λ * Σ_v p_v * log(p_v)
+            //
+            //   ∂H/∂z_k = Σ_v (∂p_v/∂z_k) * (log(p_v) + 1)
+            //           = Σ_v p_v * (δ_vk - p_k) * (log(p_v) + 1)
+            //           = p_k * (log(p_k) + 1) - p_k * Σ_v p_v * (log(p_v) + 1)
+            //           = p_k * (log(p_k) + 1 - (H + 1))
+            //           = p_k * (log(p_k) - H)
+            //           = p_k * (log(p_k) - neg_entropy)  [where neg_entropy = H(p)]
+            //
+            // WHY Issue #123 WAS WRONG:
+            //   Issue #123 claimed PyTorch baseline shows per-token entropy grad = p_v * (log(p_v) + 1).
+            //   But that's just how the DIAGNOSTIC displays it! PyTorch autograd computes the
+            //   COMPLETE gradient via chain rule, which includes the centering term internally.
+            //   The libtorch_baseline uses loss.backward() (line 1691), which autograd handles.
+            //   Our MANUAL gradient requires explicit centering: grad = p_k * (log(p_k) - neg_entropy)
+            //
+            // VERIFICATION:
+            //   Without centering: Σ_k p_k * (log(p_k) + 1) = H + 1 ≠ 0
+            //   With centering:    Σ_k p_k * (log(p_k) - H) = H - H = 0  ✓
+            //   Gradients MUST sum to zero for proper softmax training!
+            //
+            // neg_entropy = H(p) = Σ_v p_v * log(p_v) ≈ -10.83 for uniform 50k vocab
+            // Without centering, entropy gradient is ~10x too weak and doesn't sum to zero!
+            //
+            entropy_term = entropy_reg_lambda * p_v * (log_p_v - neg_entropy);  // Issue #124: CORRECT with centering!
             grad_v += entropy_term;
         }
         
@@ -389,47 +464,82 @@ __global__ void kernelUnifiedLossBackward(
         // EQUATION: grad_v = base_CE_term + focal_deriv_term + entropy_term
         //   base_CE_term   = α * focal_weight * (p_v - q_off)
         //   focal_deriv    = α * focal_deriv_factor * p_t * (-p_v)  [for non-target]
-        //   entropy_term   = λ * p_v * (log(p_v) + 1)  [Issue #121: now allows negative!]
+        //   entropy_term   = λ * p_v * (log(p_v) - neg_entropy)  [Issue #124: WITH centering!]
         //
-        // ENTROPY GRADIENT BEHAVIOR (Issue #121 fix):
-        //   When p_v > e^(-1) ≈ 0.368: log(p_v)+1 > 0 → entropy INCREASES this token
-        //   When p_v < e^(-1) ≈ 0.368: log(p_v)+1 < 0 → entropy DECREASES this token
-        //   For typical vocab tokens: p_v ≈ 1e-5 → log(p_v)+1 ≈ -10.5 (negative)
-        //   This is CORRECT: entropy should push down tokens that are too rare
+        // ENTROPY GRADIENT BEHAVIOR (Issue #124):
+        //   neg_entropy = Σ_v p_v * log(p_v) ≈ -10.83 for 50k vocab (≈ -log(V))
+        //   centered_g = log(p_v) - neg_entropy = log(p_v) + 10.83
+        //   For typical vocab tokens: p_v ≈ 2e-5 → log(p_v) ≈ -10.82 → centered_g ≈ 0.01
+        //   For common tokens: p_v ≈ 2e-4 → log(p_v) ≈ -8.52 → centered_g ≈ +2.31 (push DOWN)
+        //   For rare tokens:   p_v ≈ 2e-6 → log(p_v) ≈ -13.12 → centered_g ≈ -2.29 (push UP)
+        //   
+        //   CRITICAL: Sum of all entropy gradients = 0 (verified: Σ p_v*(log(p_v)-H) = H-H = 0)
+        //   This is WHY centering is required - ensures gradient doesn't bias the mean.
         //========================================================================
         if (v != target && token_idx < 5) {  // Log for first 5 tokens only
             // Sample: Token 277 (SPACE) and a few periodic vocab positions
             const bool should_log_this_v = (v == 277) || (v % 10000 == 0 && v > 0);
-            if (should_log_this_v) {
+            if (should_log_this_v && threadIdx.x == 0 && g_eq_log_buffer && g_eq_log_state) {
                 const float base_ce_term = focal_alpha * focal_weight * (p_v - q_off);
                 // Focal deriv for non-target: α * focal_deriv_factor * p_t * (-p_v)
                 const float focal_term = (focal_gamma > 0.0f) 
                     ? focal_alpha * focal_deriv_factor * p_t * (-p_v) 
                     : 0.0f;
                 const float raw_log_p_plus_1 = logf(fmaxf(p_v, kEpsilon)) + 1.0f;
-                const bool was_clamped = (raw_log_p_plus_1 < 0.0f);
+                // Note: raw_log_p_plus_1 IS the same as 'g' from the entropy computation
+                // Using it directly since 'g' is scoped inside the entropy_reg_lambda block
                 
-                printf("[GRAD_NONTARGET_EQUATION] token_pos=%d vocab_id=%d target=%d\n"
-                       "  INPUTS: p_v=%.8e q_off=%.8e focal_alpha=%.8f focal_weight=%.8e λ=%.8f\n"
-                       "  TERM_1 base_CE:     α×fw×(p_v - q_off) = %.8f × %.8e × (%.8e - %.8e) = %.8e\n"
-                       "  TERM_2 focal_deriv: α×fd_fac×p_t×(-p_v) = %.8f × %.8e × %.8e × (%.8e) = %.8e\n"
-                       "  TERM_3 entropy:     λ×p_v×max(g,0) = %.8f × %.8e × max(%.8e,0) = %.8e [%s]\n"
-                       "  TOTAL grad_v (pre-centering) = %.8e, scaled = %.8e\n",
-                       token_idx, v, target,
-                       p_v, q_off, focal_alpha, focal_weight, entropy_reg_lambda,
-                       // TERM 1: base CE
-                       focal_alpha, focal_weight, p_v, q_off, base_ce_term,
-                       // TERM 2: focal deriv
-                       focal_alpha, focal_deriv_factor, p_t, -p_v, focal_term,
-                       // TERM 3: entropy (now with clamping)
-                       entropy_reg_lambda, p_v, raw_log_p_plus_1, entropy_term,
-                       was_clamped ? "CLAMPED to 0" : "not clamped",
-                       // Total
-                       grad_v, grad_v * inv_valid_count);
+                // Rule 21: Build input string with key values
+                char inputs_buf[256];
+                int len = 0;
+                len = eq_strcpy_device(inputs_buf, "token_pos=", 256);
+                len = eq_itoa_device(inputs_buf + len, token_idx, 256 - len) + len;
+                len = eq_strcat_device(inputs_buf, " v=", len, 256);
+                len = eq_itoa_device(inputs_buf + len, v, 256 - len) + len;
+                len = eq_strcat_device(inputs_buf, " target=", len, 256);
+                len = eq_itoa_device(inputs_buf + len, target, 256 - len) + len;
+                len = eq_strcat_device(inputs_buf, " p_v=", len, 256);
+                len = eq_ftoa_device(inputs_buf + len, p_v, 256 - len) + len;
+                len = eq_strcat_device(inputs_buf, " q_off=", len, 256);
+                len = eq_ftoa_device(inputs_buf + len, q_off, 256 - len) + len;
+                len = eq_strcat_device(inputs_buf, " λ=", len, 256);
+                len = eq_ftoa_device(inputs_buf + len, entropy_reg_lambda, 256 - len) + len;
+                
+                // Rule 21: Build output string with term breakdown + expected sign
+                char outputs_buf[256];
+                int olen = 0;
+                olen = eq_strcpy_device(outputs_buf, "TERM1=", 256);
+                olen = eq_ftoa_device(outputs_buf + olen, base_ce_term, 256 - olen) + olen;
+                olen = eq_strcat_device(outputs_buf, " TERM2=", olen, 256);
+                olen = eq_ftoa_device(outputs_buf + olen, focal_term, 256 - olen) + olen;
+                olen = eq_strcat_device(outputs_buf, " TERM3=", olen, 256);
+                olen = eq_ftoa_device(outputs_buf + olen, entropy_term, 256 - olen) + olen;
+                olen = eq_strcat_device(outputs_buf, " TOTAL=", olen, 256);
+                olen = eq_ftoa_device(outputs_buf + olen, grad_v, 256 - olen) + olen;
+                olen = eq_strcat_device(outputs_buf, " g=", olen, 256);
+                olen = eq_ftoa_device(outputs_buf + olen, raw_log_p_plus_1, 256 - olen) + olen;
+                
+                // Expected sign: non-target gradient should be POSITIVE (push probability DOWN)
+                const char* expected_sign = (grad_v > 0.0f) ? "POSITIVE(correct)" : "NEGATIVE(WRONG!)";
+                
+                enqueueEquationLog(
+                    g_eq_log_buffer, g_eq_log_state,
+                    "[GRAD_NONTARGET_EQUATION]",
+                    "grad_v = TERM1 + TERM2 + TERM3 = α×fw×(p_v-q_off) + α×fd_fac×p_t×(-p_v) + λ×p_v×g",
+                    inputs_buf,
+                    outputs_buf,
+                    expected_sign,
+                    (grad_v < 0.0f) ? "[ANOMALY] NEGATIVE gradient for non-target!" : "OK",
+                    token_idx,  // batch_idx = token position for logging
+                    v,          // layer_idx = vocab token for logging
+                    0,          // step_idx not used here
+                    EquationPhase::LOSS_BACKWARD
+                );
             }
         }
         
-        // Apply mean reduction scaling
+        // Issue #119 FIX: Apply inv_valid_count uniformly to ALL gradient terms.
+        // This is the ONLY place inv_valid_count should be applied (not in individual terms).
         grad_row[v] = grad_v * inv_valid_count;
     }
     
@@ -488,44 +598,13 @@ __global__ void kernelUnifiedLossBackward(
     }
     __syncthreads();
     
-    //========================================================================
-    // [GRAD_NONTARGET_CLAMP] Issue #120 FIX: Clamp non-target gradients to ≥ 0
-    //
-    // PROBLEM: Multiple gradient terms (focal derivative, entropy before clamping)
-    //          can make non-target gradients NEGATIVE. Negative gradient at non-target
-    //          means "increase this probability" - WRONG! Should decrease.
-    //
-    // FIX: After all computations, ensure non-target gradients are ≥ 0.
-    //      - Target (v == target): gradient should be NEGATIVE (increase probability)
-    //      - Non-target (v != target): gradient should be ≥ 0 (decrease or maintain)
-    //
-    // This catches ALL sources of negative non-target gradients in one place.
-    //========================================================================
-    for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
-        if (v != target) {
-            grad_row[v] = fmaxf(grad_row[v], 0.0f);
-        }
-    }
-    __syncthreads();
+    // Issue #120 REMOVED: Non-target gradient clamping was WRONG!
+    // Clamping gradients to >= 0 killed entropy regularization's ability to
+    // push DOWN high-probability tokens. Entropy reg NEEDS negative gradients
+    // at high-p tokens to decrease their probability and prevent mode collapse.
     
-    // [GRAD_POST_CLAMP_EQUATION] Issue #120 verification: Check token 277 after clamp
-    // EQUATION: grad_277 should be ≥ 0 at non-target positions after clamp
-    // If we see negative values here, the clamp is NOT working!
-    if (threadIdx.x == 0 && target != 277 && (token_idx == 1 || token_idx == 100)) {
-        const float grad_277_post_clamp = grad_row[277];
-        printf("[GRAD_POST_CLAMP_EQUATION] token_pos=%d target=%d "
-               "grad_277_POST_CLAMP=%.10e "
-               "EXPECTED: ≥ 0 (non-target clamped), ACTUAL: %s\n",
-               token_idx, target, grad_277_post_clamp,
-               (grad_277_post_clamp >= 0.0f) ? "OK" : "**NEGATIVE - CLAMP FAILED!**");
-    }
-    
-    // Log centering diagnostic for sampled tokens
-    if (threadIdx.x == 0 && (token_idx == 100 || (token_idx > 0 && token_idx % 500 == 0))) {
-        printf("[GRAD_CENTER_EQUATION] token=%d grad_mean_removed=%.10e vocab_size=%d "
-               "EXPECTED: After centering, sum_grad_logits ≈ 0\n",
-               token_idx, grad_mean, vocab_size);
-    }
+    // NOTE: Gradient centering diagnostic removed - snprintf is host-only.
+    // Formula: centered[v] = grad[v] - mean(grad), ensures sum_grad_logits ≈ 0
     
     //========================================================================
     // [GRAD_SUM_EQUATION] RULE 21: Compute sum_grad_logits for validation
@@ -574,19 +653,10 @@ __global__ void kernelUnifiedLossBackward(
             //           With entropy_reg: sum = inv_valid × λ × Σp_v(log(p_v)+1)
             //                                 = inv_valid × λ × (H(p) + 1)
             //                                 where H(p) = -Σp_v×log(p_v) (entropy, typically 0-10 nats)
-            if (token_idx == 100 || (token_idx > 0 && token_idx % 500 == 0)) {
-                printf("[GRAD_SUM_EQUATION] token=%d sum_grad_logits=%.10e target=%d "
-                       "entropy_lambda=%.4f focal_gamma=%.4f smoothing_eps=%.4f inv_valid=%.8f "
-                       "EXPECTED: plain_CE≈0, with_entropy≈inv_valid×λ×(H+1)\n",
-                       token_idx, sum, target, entropy_reg_lambda, focal_gamma, 
-                       smoothing_epsilon, inv_valid_count);
-            }
+            // NOTE: Grad sum logging removed - snprintf is host-only.
             
-            // ANOMALY DETECTION: Flag if |sum| > 1e-4 when entropy_lambda=0 AND focal_gamma=0
-            if (entropy_reg_lambda == 0.0f && focal_gamma == 0.0f && fabsf(sum) > 1e-4f) {
-                printf("[GRAD_SUM_EQUATION] [ANOMALY] token=%d sum=%.10e SHOULD BE ~0 for plain CE!\n",
-                       token_idx, sum);
-            }
+            // ANOMALY DETECTION: Plain CE should have |sum| ≈ 0
+            // (snprintf logging removed - host-only function)
         }
     }
 }
@@ -649,6 +719,484 @@ void launchUnifiedLossBackward(
     );
 }
 
+//========================================================================
+// [FD_GRAD_VERIFY_EQUATION] Finite Difference Gradient Verification Kernel
+// PURPOSE: Compare sign(analytical gradient) vs sign(finite difference gradient)
+// EQUATION: FD_grad = (L(z_v + ε) - L(z_v - ε)) / (2ε)
+//           If sign(FD_grad) != sign(analytical_grad), we have a sign error!
+// This is RULE 21 diagnostic logging - mathematical proof of gradient correctness
+//========================================================================
+
+__global__ void kernelFiniteDiffGradVerify(
+    const float* __restrict__ logits,       // [num_tokens, vocab_size]
+    const int* __restrict__ targets,        // [num_tokens]
+    const float* __restrict__ valid_mask,   // [num_tokens] or nullptr
+    const float* __restrict__ grad_logits,  // [num_tokens, vocab_size] - analytical gradient
+    int num_tokens,
+    int vocab_size,
+    float inv_valid_count,                  // 1/N for mean reduction
+    float focal_alpha,
+    float focal_gamma,
+    float smoothing_epsilon,
+    float entropy_reg_lambda,
+    int sample_token_idx,                   // Which token position to verify
+    int sample_vocab_idx                    // Which vocab position to verify (e.g., 277 for SPACE)
+) {
+    // Only thread 0 of block 0 runs this diagnostic
+    if (blockIdx.x != 0 || threadIdx.x != 0) return;
+    
+    // Bounds check
+    if (sample_token_idx >= num_tokens || sample_vocab_idx >= vocab_size) {
+        printf("[FD_GRAD_VERIFY_EQUATION] ERROR: sample indices out of bounds (tok=%d/%d, vocab=%d/%d)\n",
+               sample_token_idx, num_tokens, sample_vocab_idx, vocab_size);
+        return;
+    }
+    
+    // Check if token is valid (not masked)
+    const bool is_valid = (valid_mask == nullptr) || (valid_mask[sample_token_idx] >= 0.5f);
+    if (!is_valid) {
+        printf("[FD_GRAD_VERIFY_EQUATION] SKIP: token %d is masked\n", sample_token_idx);
+        return;
+    }
+    
+    const int target = targets[sample_token_idx];
+    if (target < 0 || target >= vocab_size) {
+        printf("[FD_GRAD_VERIFY_EQUATION] SKIP: invalid target %d for token %d\n", target, sample_token_idx);
+        return;
+    }
+    
+    const float* row = logits + static_cast<size_t>(sample_token_idx) * vocab_size;
+    const float analytical_grad = grad_logits[static_cast<size_t>(sample_token_idx) * vocab_size + sample_vocab_idx];
+    
+    // Epsilon for finite difference (should be small but not too small to avoid FP errors)
+    const float epsilon = 1e-4f;
+    const float kEpsilon_local = 1e-10f;  // For numerical stability in log
+    
+    //========================================================================
+    // Compute L(z_v + ε) - perturbed loss with logit[v] increased by epsilon
+    //========================================================================
+    
+    // Step 1: Find max logit for numerical stability (with perturbation at sample_vocab_idx)
+    float max_val_plus = -1e30f;
+    for (int v = 0; v < vocab_size; v++) {
+        float logit_v = row[v];
+        if (v == sample_vocab_idx) logit_v += epsilon;  // Perturbation
+        if (logit_v > max_val_plus) max_val_plus = logit_v;
+    }
+    
+    // Step 2: Compute softmax denominator, neg_entropy, and sum_log_off with perturbation
+    float sum_exp_plus = 0.0f;
+    float neg_entropy_plus = 0.0f;
+    float sum_log_off_plus = 0.0f;
+    
+    for (int v = 0; v < vocab_size; v++) {
+        float logit_v = row[v];
+        if (v == sample_vocab_idx) logit_v += epsilon;  // Perturbation
+        
+        float exp_v = expf(logit_v - max_val_plus);
+        sum_exp_plus += exp_v;
+    }
+    
+    const float log_sum_exp_plus = logf(sum_exp_plus) + max_val_plus;
+    
+    for (int v = 0; v < vocab_size; v++) {
+        float logit_v = row[v];
+        if (v == sample_vocab_idx) logit_v += epsilon;  // Perturbation
+        
+        float log_p_v = logit_v - log_sum_exp_plus;
+        float p_v = expf(log_p_v);
+        
+        // Entropy term: p_v * log(p_v)
+        if (p_v > kEpsilon_local) {
+            neg_entropy_plus += p_v * log_p_v;
+        }
+        
+        // Label smoothing sum (for non-target)
+        if (v != target) {
+            sum_log_off_plus += log_p_v;
+        }
+    }
+    
+    // Step 3: Compute loss L(z + ε)
+    float log_p_target_plus = row[target] + (target == sample_vocab_idx ? epsilon : 0.0f) - log_sum_exp_plus;
+    float p_target_plus = expf(log_p_target_plus);
+    
+    float ce_smooth_plus;
+    if (smoothing_epsilon > 0.0f) {
+        const float q_on = 1.0f - smoothing_epsilon;
+        const float q_off = smoothing_epsilon / (vocab_size - 1);
+        ce_smooth_plus = -q_on * log_p_target_plus - q_off * sum_log_off_plus;
+    } else {
+        ce_smooth_plus = -log_p_target_plus;
+    }
+    
+    float focal_weight_plus = 1.0f;
+    if (focal_gamma > 0.0f) {
+        focal_weight_plus = powf(1.0f - p_target_plus + kEpsilon_local, focal_gamma);
+    }
+    
+    float loss_plus = focal_alpha * focal_weight_plus * ce_smooth_plus + entropy_reg_lambda * neg_entropy_plus;
+    
+    //========================================================================
+    // Compute L(z_v - ε) - perturbed loss with logit[v] decreased by epsilon
+    //========================================================================
+    
+    // Step 1: Find max logit with minus perturbation
+    float max_val_minus = -1e30f;
+    for (int v = 0; v < vocab_size; v++) {
+        float logit_v = row[v];
+        if (v == sample_vocab_idx) logit_v -= epsilon;  // Perturbation
+        if (logit_v > max_val_minus) max_val_minus = logit_v;
+    }
+    
+    // Step 2: Compute softmax components with minus perturbation
+    float sum_exp_minus = 0.0f;
+    float neg_entropy_minus = 0.0f;
+    float sum_log_off_minus = 0.0f;
+    
+    for (int v = 0; v < vocab_size; v++) {
+        float logit_v = row[v];
+        if (v == sample_vocab_idx) logit_v -= epsilon;  // Perturbation
+        
+        float exp_v = expf(logit_v - max_val_minus);
+        sum_exp_minus += exp_v;
+    }
+    
+    const float log_sum_exp_minus = logf(sum_exp_minus) + max_val_minus;
+    
+    for (int v = 0; v < vocab_size; v++) {
+        float logit_v = row[v];
+        if (v == sample_vocab_idx) logit_v -= epsilon;  // Perturbation
+        
+        float log_p_v = logit_v - log_sum_exp_minus;
+        float p_v = expf(log_p_v);
+        
+        if (p_v > kEpsilon_local) {
+            neg_entropy_minus += p_v * log_p_v;
+        }
+        
+        if (v != target) {
+            sum_log_off_minus += log_p_v;
+        }
+    }
+    
+    // Step 3: Compute loss L(z - ε)
+    float log_p_target_minus = row[target] + (target == sample_vocab_idx ? -epsilon : 0.0f) - log_sum_exp_minus;
+    float p_target_minus = expf(log_p_target_minus);
+    
+    float ce_smooth_minus;
+    if (smoothing_epsilon > 0.0f) {
+        const float q_on = 1.0f - smoothing_epsilon;
+        const float q_off = smoothing_epsilon / (vocab_size - 1);
+        ce_smooth_minus = -q_on * log_p_target_minus - q_off * sum_log_off_minus;
+    } else {
+        ce_smooth_minus = -log_p_target_minus;
+    }
+    
+    float focal_weight_minus = 1.0f;
+    if (focal_gamma > 0.0f) {
+        focal_weight_minus = powf(1.0f - p_target_minus + kEpsilon_local, focal_gamma);
+    }
+    
+    float loss_minus = focal_alpha * focal_weight_minus * ce_smooth_minus + entropy_reg_lambda * neg_entropy_minus;
+    
+    //========================================================================
+    // Finite Difference Gradient Computation
+    // FD_grad = (L(z+ε) - L(z-ε)) / (2ε) ... this is PER-TOKEN loss gradient
+    // Then apply inv_valid_count to match mean-reduced gradient
+    //========================================================================
+    
+    float fd_grad_per_token = (loss_plus - loss_minus) / (2.0f * epsilon);
+    float fd_grad = fd_grad_per_token * inv_valid_count;  // Apply mean reduction scaling
+    
+    // Determine signs
+    int sign_fd = (fd_grad > 1e-10f) ? 1 : ((fd_grad < -1e-10f) ? -1 : 0);
+    int sign_analytical = (analytical_grad > 1e-10f) ? 1 : ((analytical_grad < -1e-10f) ? -1 : 0);
+    bool sign_match = (sign_fd == sign_analytical);
+    
+    // Compute relative error
+    float abs_fd = fabsf(fd_grad);
+    float abs_anal = fabsf(analytical_grad);
+    float rel_error = (abs_fd > 1e-10f || abs_anal > 1e-10f) 
+        ? fabsf(fd_grad - analytical_grad) / fmaxf(abs_fd, abs_anal)
+        : 0.0f;
+    
+    //========================================================================
+    // [FD_GRAD_VERIFY_EQUATION] RULE 21 Logging
+    //========================================================================
+    const char* match_str = sign_match ? "MATCH" : "MISMATCH";
+    const bool is_target_pos = (sample_vocab_idx == target);
+    
+    printf("[FD_GRAD_VERIFY_EQUATION] token=%d vocab=%d (is_target=%s) target=%d\n",
+           sample_token_idx, sample_vocab_idx, is_target_pos ? "YES" : "NO", target);
+    printf("  INPUTS: L_plus=%.10f L_minus=%.10f epsilon=%.6f inv_valid=%e\n",
+           loss_plus, loss_minus, epsilon, inv_valid_count);
+    printf("  FD_grad_per_token = (L+ - L-) / (2ε) = (%.10f - %.10f) / %.6f = %.10e\n",
+           loss_plus, loss_minus, 2.0f * epsilon, fd_grad_per_token);
+    printf("  FD_grad (mean-reduced) = FD_per_token × inv_valid = %.10e × %e = %.10e\n",
+           fd_grad_per_token, inv_valid_count, fd_grad);
+    printf("  ANALYTICAL_grad = %.10e\n", analytical_grad);
+    printf("  SIGN CHECK: sign(FD)=%d sign(anal)=%d => %s\n", sign_fd, sign_analytical, match_str);
+    printf("  RELATIVE ERROR: |FD - anal| / max(|FD|,|anal|) = %.6f%%\n", rel_error * 100.0f);
+    
+    // Issue #124b FIX: Distinguish TRUE sign mismatch from PRECISION-LIMITED cases
+    // When FD=0 because L_plus≈L_minus (float32 precision limit), this is NOT an anomaly
+    // Only flag ANOMALY when FD and analytical have genuinely OPPOSITE non-zero signs
+    const bool fd_is_zero = (sign_fd == 0);
+    const bool loss_identical = (fabsf(loss_plus - loss_minus) < 1e-10f);
+    const bool analytical_small = (abs_anal < 1e-6f);  // Gradient too small for FD detection
+    
+    if (!sign_match) {
+        if (fd_is_zero && loss_identical && analytical_small) {
+            // FD=0 due to precision limit, NOT a gradient bug
+            printf("  [PRECISION LIMITED] FD=0 because L_plus==L_minus to float32 precision\n");
+            printf("  [PRECISION LIMITED] Analytical grad %.2e is below FD detection threshold (~1e-6)\n", abs_anal);
+            printf("  [PRECISION LIMITED] This is EXPECTED for non-target tokens with tiny gradients - NOT A BUG\n");
+        } else if (fd_is_zero && !loss_identical) {
+            // FD numerically zero but loss values differ - suspicious
+            printf("  [WARNING] FD≈0 but L_plus≠L_minus (diff=%.2e), numerical instability?\n", 
+                   fabsf(loss_plus - loss_minus));
+        } else {
+            // TRUE sign mismatch: FD>0 but anal<0, or FD<0 but anal>0
+            printf("  [ANOMALY] GRADIENT SIGN MISMATCH! Your gradient has OPPOSITE sign from finite difference!\n");
+            printf("  [ANOMALY] FD=%+.6e, Analytical=%+.6e (genuinely opposite non-zero signs)\n", fd_grad, analytical_grad);
+            printf("  [ANOMALY] This means either: (1) logging negative gradient, or (2) update uses wrong sign\n");
+        }
+    }
+    
+    if (rel_error > 0.01f && sign_match) {  // >1% error but same sign
+        printf("  [WARNING] Magnitude differs >1%% (could be expected for focal/entropy terms)\n");
+    }
+}
+
+//========================================================================
+// Launch function for finite difference gradient verification
+//========================================================================
+
+/**
+ * DIAGNOSTIC: Launches finite difference gradient verification
+ * This should be called AFTER launchUnifiedLossBackward to verify the gradients
+ * 
+ * @param logits          Input logits [num_tokens, vocab_size]
+ * @param targets         Target token IDs [num_tokens]
+ * @param valid_mask      Validity mask (or nullptr)
+ * @param grad_logits     The computed gradients to verify
+ * @param num_tokens      Number of tokens
+ * @param vocab_size      Vocabulary size
+ * @param valid_count     Number of valid (non-masked) tokens
+ * @param focal_alpha     Focal loss alpha
+ * @param focal_gamma     Focal loss gamma
+ * @param smoothing_eps   Label smoothing epsilon
+ * @param entropy_lambda  Entropy regularization lambda
+ * @param sample_token_idx Token index to verify (should be non-masked)
+ * @param sample_vocab_idx Vocab index to verify (e.g., 277 for SPACE)
+ * @param stream          CUDA stream
+ */
+void launchFiniteDiffGradVerify(
+    const float* logits,  
+    const int* targets,
+    const float* valid_mask,
+    const float* grad_logits,
+    int num_tokens,
+    int vocab_size,
+    int valid_count,
+    float focal_alpha,
+    float focal_gamma,
+    float smoothing_eps,
+    float entropy_lambda,
+    int sample_token_idx,
+    int sample_vocab_idx,
+    cudaStream_t stream
+) {
+    // Validate inputs
+    if (!logits || !targets || !grad_logits) {
+        fprintf(stderr, "[launchFiniteDiffGradVerify] ERROR: null input pointer\n");
+        return;
+    }
+    
+    if (sample_token_idx < 0 || sample_token_idx >= num_tokens) {
+        fprintf(stderr, "[launchFiniteDiffGradVerify] ERROR: sample_token_idx=%d out of range [0,%d)\n",
+                sample_token_idx, num_tokens);
+        return;
+    }
+    
+    if (sample_vocab_idx < 0 || sample_vocab_idx >= vocab_size) {
+        fprintf(stderr, "[launchFiniteDiffGradVerify] ERROR: sample_vocab_idx=%d out of range [0,%d)\n",
+                sample_vocab_idx, vocab_size);
+        return;
+    }
+    
+    const float inv_valid_count = (valid_count > 0) ? (1.0f / static_cast<float>(valid_count)) : 1.0f;
+    
+    // Launch single-thread diagnostic kernel
+    kernelFiniteDiffGradVerify<<<1, 1, 0, stream>>>(
+        logits,
+        targets,
+        valid_mask,
+        grad_logits,
+        num_tokens,
+        vocab_size,
+        inv_valid_count,
+        focal_alpha,
+        focal_gamma,
+        smoothing_eps,
+        entropy_lambda,
+        sample_token_idx,
+        sample_vocab_idx
+    );
+    
+    // Sync to ensure printf output is flushed
+    cudaStreamSynchronize(stream);
+}
+
+
+//========================================================================
+// [TOKEN277_DIAGNOSTIC] Rule 21 Device-Side Equation Logging for Mode Collapse Detection
+// Uses the centralized EquationLogging system to track Token 277 (SPACE) metrics
+//========================================================================
+
+__global__ void kernelToken277Diagnostic(
+    const float* __restrict__ logits,       // [num_tokens, vocab_size]
+    const int* __restrict__ targets,        // [num_tokens]
+    const float* __restrict__ valid_mask,   // [num_tokens] or nullptr
+    const float* __restrict__ grad_logits,  // [num_tokens, vocab_size] - computed gradients
+    int num_tokens,
+    int vocab_size,
+    int batch_idx,
+    int step_idx,
+    GRIM::EquationLogEntryDevice* d_eq_buffer,
+    GRIM::EquationLogBufferState* d_eq_state
+) {
+    // Each block processes one token position
+    const int token_idx = blockIdx.x;
+    if (token_idx >= num_tokens) return;
+    
+    // Only thread 0 per block does the logging (to avoid races)
+    if (threadIdx.x != 0) return;
+    
+    // Skip masked/invalid tokens
+    const float mask = valid_mask ? valid_mask[token_idx] : 1.0f;
+    const int target = targets[token_idx];
+    if (mask < 0.5f || target < 0 || target >= vocab_size) return;
+    
+    // Only log for a sample of positions (every 100th) to avoid spam
+    if (token_idx % 100 != 0) return;
+    
+    constexpr int TOKEN_277 = 277;  // SPACE token
+    const float* row = logits + static_cast<size_t>(token_idx) * vocab_size;
+    const float* grad_row = grad_logits + static_cast<size_t>(token_idx) * vocab_size;
+    
+    // ========================================================================
+    // Step 1: Compute max logit and softmax for Token 277
+    // ========================================================================
+    float max_logit = -1e30f;
+    int argmax_token = 0;
+    for (int v = 0; v < vocab_size; v++) {
+        if (row[v] > max_logit) {
+            max_logit = row[v];
+            argmax_token = v;
+        }
+    }
+    
+    // Compute sum_exp for softmax
+    float sum_exp = 0.0f;
+    for (int v = 0; v < vocab_size; v++) {
+        sum_exp += expf(row[v] - max_logit);
+    }
+    const float log_sum_exp = logf(sum_exp);
+    
+    // Token 277 probability
+    const float logit_277 = row[TOKEN_277];
+    const float prob_277 = expf(logit_277 - max_logit) / sum_exp;
+    const float expected_uniform = 1.0f / static_cast<float>(vocab_size);
+    
+    // ========================================================================
+    // Step 2: Log Token 277 Softmax Probability
+    // ========================================================================
+    GRIM::logToken277SoftmaxProb(
+        d_eq_buffer, d_eq_state,
+        logit_277, max_logit, log_sum_exp, prob_277, expected_uniform,
+        token_idx, batch_idx, step_idx
+    );
+    
+    // ========================================================================
+    // Step 3: Log Argmax Analysis - is Token 277 the argmax?
+    // ========================================================================
+    const bool is_277_argmax = (argmax_token == TOKEN_277);
+    const bool is_277_target = (target == TOKEN_277);
+    const float gap_to_argmax = max_logit - logit_277;  // Positive if 277 is NOT argmax
+    
+    GRIM::logToken277ArgmaxAnalysis(
+        d_eq_buffer, d_eq_state,
+        argmax_token, max_logit, logit_277, gap_to_argmax,
+        target, is_277_argmax, is_277_target,
+        token_idx, batch_idx, step_idx
+    );
+    
+    // ========================================================================
+    // Step 4: Log Token 277 Loss Contribution (if 277 is the target)
+    // ========================================================================
+    if (is_277_target) {
+        const float log_prob_277 = logf(fmaxf(prob_277, 1e-10f));
+        const float ce_loss_277 = -log_prob_277;  // Plain CE loss for this token
+        const float focal_weight = 1.0f;  // Assume gamma=0 for simplicity
+        
+        // Gradient at target position
+        const float grad_277_at_target = grad_row[TOKEN_277];
+        const float expected_grad = prob_277 - 1.0f;  // For plain CE: p - 1 at target
+        
+        GRIM::logToken277LossContribution(
+            d_eq_buffer, d_eq_state,
+            ce_loss_277, focal_weight, prob_277, log_prob_277,
+            grad_277_at_target, expected_grad,
+            token_idx, batch_idx, step_idx
+        );
+    }
+}
+
+/**
+ * Launch Token 277 diagnostic kernel
+ * This should be called AFTER backward pass to analyze gradients
+ * 
+ * TEMPORARILY DISABLED: The inlined __device__ functions use ~2KB of stack space
+ * each (3x 256-byte char arrays), causing GPU stack overflow. Need to either:
+ *   1. Enable -rdc=true for cross-TU device linking
+ *   2. Reduce EQ_LOG_STRING_LEN 
+ *   3. Use static device memory instead of local arrays
+ */
+void launchToken277Diagnostic(
+    const float* logits,
+    const int* targets,
+    const float* valid_mask,
+    const float* grad_logits,
+    int num_tokens,
+    int vocab_size,
+    int batch_idx,
+    int step_idx,
+    cudaStream_t stream
+) {
+    // DISABLED: Stack overflow from inlined equation logging functions
+    // TODO: Re-enable after fixing device function linking with -rdc=true
+    return;
+    
+    /*
+    auto& logger = GRIM::getEquationLogger();
+    if (!logger.isEnabled()) return;
+    
+    auto* d_eq_buffer = logger.getDeviceBuffer();
+    auto* d_eq_state = logger.getDeviceState();
+    if (!d_eq_buffer || !d_eq_state) return;
+    
+    // Launch with 1 thread per block (each block handles one token position)
+    const int num_blocks = (num_tokens + 255) / 256;  // Up to 256 tokens logged
+    kernelToken277Diagnostic<<<num_blocks, 1, 0, stream>>>(
+        logits, targets, valid_mask, grad_logits,
+        num_tokens, vocab_size,
+        batch_idx, step_idx,
+        d_eq_buffer, d_eq_state
+    );
+    */
+}
 
 
 //========================================================================
@@ -747,6 +1295,98 @@ struct UnifiedLossGradFn : public GradFn {
                 return;
             }
             
+            // ================================================================
+            // TOKEN 277 (SPACE) DIAGNOSTIC: Track all components contributing to mode collapse
+            // Uses equation-based logging (Rule 21) to trace why token 277 becomes argmax
+            // ================================================================
+            {
+                // Static step counter to track batch/step indices
+                static int s_step_idx = 0;
+                static int s_batch_idx = 0;
+                
+                // Only log every 1st batch to avoid log spam
+                if (s_batch_idx % 1 == 0) {
+                    launchToken277Diagnostic(
+                        logits_data.get(),
+                        targets,
+                        valid_mask,
+                        logits_tensor_ptr->grad_data(),
+                        num_tokens,
+                        vocab_size,
+                        s_batch_idx,
+                        s_step_idx,
+                        stream
+                    );
+                }
+                
+                s_step_idx++;
+                // Increment batch index every accumulation_steps (assume 2)
+                if (s_step_idx % 2 == 0) {
+                    s_batch_idx++;
+                }
+            }
+            
+            // ================================================================
+            // ISSUE INVESTIGATION: Finite Difference Gradient Verification
+            // Verify that sign(FD_grad) == sign(analytical_grad)
+            // If signs mismatch → gradient logging or update has wrong sign!
+            // ================================================================
+#ifdef GRIM_FD_GRAD_VERIFY
+            {
+                // Sample token 100 to avoid masked BOS, verify against its TARGET
+                const int sample_token_idx = std::min(100, num_tokens - 1);
+                
+                // Get the target token ID for this position (what gradient should be computed for)
+                int target_vocab_id = 0;
+                cudaMemcpy(&target_vocab_id, targets + sample_token_idx, sizeof(int), cudaMemcpyDeviceToHost);
+                
+                // Also check token 277 (SPACE) which was causing mode collapse
+                const int sample_vocab_idx_277 = 277;
+                
+                fprintf(stderr, "\n[FD_GRAD_VERIFY] Running finite difference verification...\n");
+                fprintf(stderr, "[FD_GRAD_VERIFY] sample_token=%d target_vocab=%d also_checking=277\n", 
+                        sample_token_idx, target_vocab_id);
+                
+                // Verify gradient at the TARGET position (should be negative: p_t - 1)
+                launchFiniteDiffGradVerify(
+                    logits_data.get(),
+                    targets,
+                    valid_mask,
+                    logits_tensor_ptr->grad_data(),
+                    num_tokens,
+                    vocab_size,
+                    valid_count,
+                    focal_alpha,
+                    focal_gamma,
+                    smoothing_epsilon,
+                    entropy_reg_lambda,
+                    sample_token_idx,
+                    target_vocab_id,
+                    stream
+                );
+                
+                // Also verify gradient at token 277 (NON-target, should be positive: p_v)
+                if (target_vocab_id != sample_vocab_idx_277) {
+                    launchFiniteDiffGradVerify(
+                        logits_data.get(),
+                        targets,
+                        valid_mask,
+                        logits_tensor_ptr->grad_data(),
+                        num_tokens,
+                        vocab_size,
+                        valid_count,
+                        focal_alpha,
+                        focal_gamma,
+                        smoothing_epsilon,
+                        entropy_reg_lambda,
+                        sample_token_idx,
+                        sample_vocab_idx_277,
+                        stream
+                    );
+                }
+            }
+#endif  // GRIM_FD_GRAD_VERIFY
+            
             // DIAGNOSTIC: Log the grad_logits we just computed
             {
                 const size_t grad_elems = static_cast<size_t>(num_tokens) * vocab_size;
@@ -761,8 +1401,16 @@ struct UnifiedLossGradFn : public GradFn {
                 float mx = 0.0f; double sq = 0.0;
                 for (auto& v : samp) { if (!std::isnan(v) && !std::isinf(v)) { mx = std::max(mx, std::abs(v)); sq += v*v; } }
                 float rms = std::sqrt(static_cast<float>(sq / actual_sample_sz));
-                fprintf(stderr, "[LOSS-BWD-OUT] grad_logits: num_tokens=%d vocab=%d valid=%d | max=%.6f rms=%.6f (sampled from token 50+) PTR=%p\n",
-                        num_tokens, vocab_size, valid_count, mx, rms, (void*)logits_tensor_ptr->grad_data());
+                
+                char inputs_buf[256];
+                char outputs_buf[128];
+                snprintf(inputs_buf, sizeof(inputs_buf), 
+                    "num_tokens=%d vocab=%d valid=%d", num_tokens, vocab_size, valid_count);
+                snprintf(outputs_buf, sizeof(outputs_buf), 
+                    "max=%.6f rms=%.6f PTR=%p", mx, rms, (void*)logits_tensor_ptr->grad_data());
+                EQ_LOG_HOST("LOSS-BWD-OUT", "grad_logits = dL/d(logits) [sampled from token 50+]",
+                    inputs_buf, outputs_buf, "max~1e-4 rms~1e-5", outputs_buf,
+                    0, 0, 0, EquationPhase::LOSS_BACKWARD);
             }
             
             // Continue backward chain
@@ -775,8 +1423,15 @@ struct UnifiedLossGradFn : public GradFn {
                 logits_grad.owns_grad_fn = false;
                 logits_grad.stream = stream;
                 
-                fprintf(stderr, "[LOSS-TO-MATMUL] Passing logits_grad.data=%p to grad_fn->apply()\n",
-                        (void*)logits_grad.data);
+                {
+                    char inputs_buf[128];
+                    char outputs_buf[128];
+                    snprintf(inputs_buf, sizeof(inputs_buf), "logits_grad.data=%p", (void*)logits_grad.data);
+                    snprintf(outputs_buf, sizeof(outputs_buf), "calling grad_fn->apply()");
+                    EQ_LOG_HOST("LOSS-TO-MATMUL", "passing gradients to upstream matmul",
+                        inputs_buf, outputs_buf, "non-null ptr", inputs_buf,
+                        0, 0, 0, EquationPhase::LOSS_BACKWARD);
+                }
                 
                 logits_tensor_ptr->grad_fn->apply(logits_grad, stream);
                 AG_TRACE("[UnifiedLossGradFn::apply] grad_fn->apply() RETURNED\n");

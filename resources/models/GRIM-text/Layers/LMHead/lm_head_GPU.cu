@@ -1,6 +1,7 @@
 #include "lm_head_GPU.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
+#include "../../Shared/EquationLogging/EquationLogging.hpp"
 
 #include <stdexcept>
 #include <sstream>
@@ -371,15 +372,161 @@ void launchLMHeadForward(const LMHeadForwardParams& params) {
 
 	if (status != CUBLAS_STATUS_SUCCESS) {
 		std::ostringstream oss;
-		oss << "[LMHead::forward] cublasSgemm failed status=" << status
+		oss << "[LMHead::forward] cublasSgemm FAILED status=" << status
 		    << " m=" << vocab_size << " n=" << total_tokens
-		    << " k=" << d_model;
+		    << " k=" << d_model
+		    << " projection_input=" << projection_input
+		    << " beta=" << beta;
 		throw std::runtime_error(oss.str());
 	}
 
 	if (params.use_bias && bias_ptr) {
 		addBias(logits_ptr, bias_ptr, vocab_size, total_tokens, stream);
 	}
+
+	// ============================================================================
+	// Token 277 Equation Diagnostic (Rule 21 - Mandatory Equation-Based Logging)
+	// ============================================================================
+	// Track all components contributing to Token 277 (SPACE) becoming argmax.
+	// This is ASYNC logging using the ring buffer - does NOT add cudaStreamSynchronize.
+	// Log entries are flushed to disk periodically by the LogRecorder system.
+	// ============================================================================
+#ifdef DEBUG_TOKEN277_EQUATIONS
+	launchToken277LogitDiagnostic(
+		logits_ptr,
+		projection_input,  // centered hidden states (Issue #37)
+		weights_ptr,
+		total_tokens,
+		d_model,
+		vocab_size,
+		stream
+	);
+#endif  // DEBUG_TOKEN277_EQUATIONS
+}
+
+// ============================================================================
+// Token 277 Logit Diagnostic Kernel (Rule 21 Equation Logging)
+// ============================================================================
+// Logs the decomposition: logit[277] = ||h|| × ||W[277]|| × cos(h, W[277])
+// Also tracks hidden state alignment with W[277] row vector.
+// ============================================================================
+
+__global__ void kernelToken277LogitDiagnostic(
+	const float* __restrict__ logits,         // [total_tokens, vocab_size] row-major
+	const float* __restrict__ hidden_states,  // [total_tokens, d_model] row-major
+	const float* __restrict__ weights,        // [vocab_size, d_model] row-major
+	int total_tokens,
+	int d_model,
+	int vocab_size,
+	int batch_idx,
+	int step_idx,
+	GRIM::EquationLogEntryDevice* d_eq_buffer,
+	GRIM::EquationLogBufferState* d_eq_state
+) {
+	const int token_idx = blockIdx.x * blockDim.x + threadIdx.x;
+	if (token_idx >= total_tokens) return;
+
+	// Only process every 100th token to reduce log volume
+	// (Token 277 logging is expensive even with async writes)
+	if (token_idx % 100 != 0) return;
+
+	constexpr int TOKEN_277 = 277;
+	if (TOKEN_277 >= vocab_size) return;
+
+	// Get pointers to this token's hidden state and W[277] row
+	const float* h = hidden_states + static_cast<size_t>(token_idx) * d_model;
+	const float* w_277 = weights + static_cast<size_t>(TOKEN_277) * d_model;
+
+	// Compute ||h||, ||W[277]||, and h·W[277]
+	float h_norm_sq = 0.0f;
+	float w_norm_sq = 0.0f;
+	float h_dot_w = 0.0f;
+	for (int i = 0; i < d_model; ++i) {
+		h_norm_sq += h[i] * h[i];
+		w_norm_sq += w_277[i] * w_277[i];
+		h_dot_w += h[i] * w_277[i];
+	}
+	const float h_norm = sqrtf(h_norm_sq + 1e-8f);
+	const float w_norm = sqrtf(w_norm_sq + 1e-8f);
+	const float cosine = h_dot_w / (h_norm * w_norm + 1e-8f);
+
+	// Get actual logit[277] from SGEMM output
+	const float logit_277 = logits[static_cast<size_t>(token_idx) * vocab_size + TOKEN_277];
+
+	// Expected logit from decomposition
+	const float expected_logit = h_norm * w_norm * cosine;
+
+	// Find max logit among tokens OTHER than 277 (for comparison)
+	float max_other_logit = -1e30f;
+	int max_other_token = -1;
+	const float* token_logits = logits + static_cast<size_t>(token_idx) * vocab_size;
+	for (int v = 0; v < vocab_size; ++v) {
+		if (v != TOKEN_277 && token_logits[v] > max_other_logit) {
+			max_other_logit = token_logits[v];
+			max_other_token = v;
+		}
+	}
+
+	// Log the decomposition equation (Rule 21 format)
+	// logit[277] = ||h|| × ||W[277]|| × cos(h, W[277])
+	logToken277LogitDecomposition(
+		d_eq_buffer,
+		d_eq_state,
+		h_norm,
+		w_norm,
+		cosine,
+		expected_logit,
+		logit_277,
+		max_other_logit,
+		max_other_token,
+		token_idx,
+		batch_idx,
+		step_idx
+	);
+
+	// NOTE: logToken277HiddenAlignment is for AGGREGATE statistics across all positions,
+	// not per-token logging. Compute alignment stats in a separate host-side reduction
+	// if needed for mode collapse diagnosis.
+}
+
+void launchToken277LogitDiagnostic(
+	const float* logits,
+	const float* hidden_states,
+	const float* weights,
+	int total_tokens,
+	int d_model,
+	int vocab_size,
+	int batch_idx,
+	int step_idx,
+	cudaStream_t stream
+) {
+	if (!logits || !hidden_states || !weights) return;
+	if (total_tokens <= 0 || d_model <= 0 || vocab_size <= 0) return;
+
+	// Get equation logger buffer and state (Rule 21 pattern from AutogradLoss.cu)
+	auto& logger = GRIM::getEquationLogger();
+	if (!logger.isEnabled()) return;
+
+	auto* d_eq_buffer = logger.getDeviceBuffer();
+	auto* d_eq_state = logger.getDeviceState();
+	if (!d_eq_buffer || !d_eq_state) return;
+
+	constexpr int kBlockSize = 256;
+	const int num_blocks = (total_tokens + kBlockSize - 1) / kBlockSize;
+
+	kernelToken277LogitDiagnostic<<<num_blocks, kBlockSize, 0, stream>>>(
+		logits,
+		hidden_states,
+		weights,
+		total_tokens,
+		d_model,
+		vocab_size,
+		batch_idx,
+		step_idx,
+		d_eq_buffer,
+		d_eq_state
+	);
+	// NOTE: No cudaStreamSynchronize - this is async diagnostic logging (Rule 21)
 }
 
 // NOTE: launchLMHeadBackward() REMOVED (Issue #58 cleanup)

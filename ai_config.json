@@ -76,7 +76,7 @@
             "detect_urls": true,
             "enabled": true
         }
-    }, 
+    },
     "training": {
         "config": {
             "epochs": 3,
@@ -84,8 +84,8 @@
             "batch_size": 7,
             "gradient_accumulation_steps": 2,
             "batch_strategy": "RANDOM",
-            "learning_rate": 0.0003,
-            "weight_decay": 0.01,
+            "learning_rate": 3e-4,
+            "weight_decay": 0.3,
             "gradient_clip": 1.0,
             "per_token_grad_scale": true,
             "warmup_steps": 0,
@@ -103,7 +103,7 @@
                 "enabled": false,
                 "max_steps": 1000
             },
-            
+
             "dynamic_lr": {
                 "enabled": false,
                 "auto_generate": false,
@@ -150,14 +150,14 @@
                 "safety_gain": 0.1,
                 "safety_scale": 2.4
             },
-            
+
             "soft_restart": {
                 "enabled": false,
                 "loss_increase_threshold": 3.0,
                 "max_step_window": 50,
                 "cooldown_steps": 200
             },
-            
+
             "auto_stop": {
                 "enabled": true,
                 "plateau_patience": 12,
@@ -165,12 +165,12 @@
                 "high_loss_threshold": 5.5,
                 "high_loss_patience": 8
             },
-            
+
             "cache_limits": {
                 "max_cached_batch": 24,
                 "max_cached_seq_len": 2048
             },
-            
+
             "micro_validation": {
                 "enabled": false,
                 "interval": 200,
@@ -178,18 +178,18 @@
                 "min_step": 150,
                 "prefer_short": false
             },
-            
+
             "guess_aux": {
                 "enabled": true,
                 "lambda": 0.25,
                 "min_confidence": 0.7
             },
-            
+
             "shuffle": {
                 "enabled": false,
                 "epochs": 0
             },
-            
+
             "telemetry_control": {
                 "enabled": true,
                 "spike_thresholds": {
@@ -250,7 +250,7 @@
                     "max_per_epoch": 3
                 }
             },
-            
+
             "loss": {
                 "label_smoothing": {
                     "enabled": true,
@@ -285,7 +285,7 @@
                     "log_scale": true
                 }
             },
-            
+
             "stability_overrides_enabled": false,
             "stability_overrides": {
                 "batch_size": 3,
@@ -293,23 +293,23 @@
                 "max_tokens_per_batch": 32768,
                 "clip_abs": 12.0,
                 "clip_per_token": 0.025,
-                "lr_min": 3e-05
+                "lr_min": 3e-5
             },
-            
+
             "scratch_blocks": {
                 "enabled": true,
                 "max_tokens_per_block": 16384,
                 "num_blocks": 4,
                 "use_write_combined": true
             },
-            
+
             "scratch_block_reasoning": {
                 "enabled": true,
                 "atom_embedding_dim": 64,
                 "max_atoms": 4096,
                 "atom_scale": 1.0
             },
-            
+
             "activation_quantization": {
                 "enabled": false,
                 "apply_to_embeddings": false,
@@ -323,13 +323,13 @@
                 "zero_point": 0,
                 "symmetric": false
             },
-            
+
             "cuda_execution": {
                 "single_stream_mode": true,
                 "disable_async_frees": false,
                 "synchronize_after_kernels": false
             },
-            
+
             "prediction_comparison": {
                 "enabled": false,
                 "interval": 100,
@@ -342,13 +342,13 @@
                 "enabled": true,
                 "interval": 1
             },
-            
+
             "attention_diagnostics": {
                 "enabled": true,
                 "layer": -1,
-                "head": 0 
+                "head": 0
             },
-            
+
             "log_recorder": {
                 "enabled": true,
                 "default_level": "Info",
@@ -378,8 +378,8 @@
                     "encoding": true,
                     "serialization": true
                 }
-            }, 
-            
+            },
+
             "d_model": 768,
             "num_layers": 12,
             "num_heads": 12,
@@ -400,11 +400,12 @@
             "lm_head_centering": {
                 "enabled": true,
                 "center_hidden_states": true,
-                "recenter_gradients": true
+                "recenter_gradients": true,
+                "center_logits": true
             },
             "layer_scale": {
                 "enabled": true,
-                "init_value": 0.3
+                "init_value": 1.0
             },
             "hardcoded_hidden_states": {
                 "enabled": false,
@@ -458,17 +459,13 @@
         "Minimize": "Side",
         "font_name": "DejaVuSans-Bold",
         "font_size": 16
-    },  
+    },
     "vision": {
         "enabled": false
     },
     "vision_model": "llama3.2-vision:11b",
     "voice": {
-        "available_speakers": [
-            "default",
-            "p226",
-            "grim"
-        ],
+        "available_speakers": ["default", "p226", "grim"],
         "confidence_threshold": 0.6,
         "coqui": {
             "model": "tts_models/en/vctk/vits",

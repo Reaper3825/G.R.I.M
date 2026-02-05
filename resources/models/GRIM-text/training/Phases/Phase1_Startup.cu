@@ -28,6 +28,7 @@
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Shared/EquationLogging/EquationLogging.hpp"
 #include "../../Layers/GRIMTS/GRIM-TS.hpp"
 
 #include <nlohmann/json.hpp>
@@ -42,8 +43,7 @@
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
 #include <curand.h>
-#include "../../Shared/Activations/Xavier/Xavier.hpp"
-using GRIM::launchXavierInit;
+// Xavier.hpp removed - weights initialized via Tensor::xavier_uniform_() with Philox PRNG (Issue #107)
 #endif
 
 using json = nlohmann::json;
@@ -844,9 +844,11 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     // LM Head centering configuration (Issue #37 / #40)
     model_config.lm_head_center_hidden_states = hp.lm_head_center_hidden_states;
     model_config.lm_head_recenter_gradients = hp.lm_head_recenter_gradients;
+    model_config.center_logits = hp.center_logits;
     
     logger.log("LM Head centering: center_hidden_states=" + std::string(model_config.lm_head_center_hidden_states ? "true" : "false") +
-              ", recenter_gradients=" + std::string(model_config.lm_head_recenter_gradients ? "true" : "false"));
+              ", recenter_gradients=" + std::string(model_config.lm_head_recenter_gradients ? "true" : "false") +
+              ", center_logits=" + std::string(model_config.center_logits ? "true" : "false"));
     
     // Issue #109: LayerScale configuration (learnable residual scaling from CaiT paper)
     model_config.use_layer_scale = hp.use_layer_scale;
@@ -1109,47 +1111,15 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
             //   Expected QKV = 27.7 * 0.031 * sqrt(768) = 23.8 (way too high!)
             //   But with partial cancellation: Expected ≈ 8-10 (close to target!)
             //
-            // The Issue #106 comment was wrong about the cancellation factor.
-            // Standard Xavier with decorrelated PRNG should give reasonable Q/K magnitudes.
-            const float qkv_std = std::sqrt(2.0f / (cfg.d_model + static_cast<float>(total_qkv_dim)));
-            const float wo_std = std::sqrt(2.0f / (2.0f * cfg.d_model));
-            const float w1_std = std::sqrt(2.0f / (cfg.d_model + cfg.d_ff));
-            const float w2_std = std::sqrt(2.0f / (cfg.d_ff + cfg.d_model));
-            
-            // Issue #106/107 FIX: ALWAYS reinitialize weights with scaled Xavier
-            // Previous code only reseeded when sample_rms < 1e-7f, but TrainingTensors.cu
-            // already initialized weights via Tensor::xavier_uniform_() which uses the BUGGY
-            // kernel_xavier_uniform with correlated LCG (avg|cosine| ≈ 0.37).
-            // Now we FORCE reinitialization to apply:
-            // 1. Issue #106 scaling (1/sqrt(d_model) for W_qkv)
-            // 2. Issue #107 decorrelated PRNG
-            bool reseeded = false;
-            if (w_qkv) {
-                launchXavierInit(w_qkv, static_cast<int>(qkv_size), qkv_std, xavier_seed + layer * 4 + 0, 0);
-                reseeded = true;
-            }
-            if (w_o) {
-                launchXavierInit(w_o, cfg.d_model * cfg.d_model, wo_std, xavier_seed + layer * 4 + 1, 0);
-                reseeded = true;
-            }
-            if (w1) {
-                launchXavierInit(w1, cfg.d_model * cfg.d_ff, w1_std, xavier_seed + layer * 4 + 2, 0);
-                reseeded = true;
-            }
-            if (w2) {
-                launchXavierInit(w2, cfg.d_ff * cfg.d_model, w2_std, xavier_seed + layer * 4 + 3, 0);
-                reseeded = true;
-            }
-            if (reseeded) {
-                logger.log("[EncoderInit] Layer " + std::to_string(layer) + " reseeded with Xavier");
-            }
-            
             // ============================================================================
             // Issue #106 DIAGNOSTIC: Prove W_qkv stats in exact GEMM layout
             // W_qkv shape: [total_qkv_dim, d_model] row-major
             // GEMM reads: A[M,K] × B[K,N] → C[M,N]
             // For QKV: input[tokens, d_model] × W_qkv^T[d_model, total_qkv_dim] → qkv[tokens, total_qkv_dim]
             // So W_qkv is stored as [total_qkv_dim rows, d_model cols]
+            //
+            // NOTE: Weights are now initialized ONCE by TrainingTensors.cu via Tensor::xavier_uniform_()
+            // which uses Philox PRNG (Issue #107 fix). No reinitialization needed here.
             // ============================================================================
             if (layer == 0 && w_qkv) {
                 cudaDeviceSynchronize();  // Ensure Xavier init complete
@@ -1302,7 +1272,10 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
                 fprintf(stderr, "    cos(col0,col500)=%.6f cos(col100,col500)=%.6f\n", cos_col_0_500, cos_col_100_500);
                 fprintf(stderr, "    avg|cos| over %d pairs: %.6f\n", col_pairs, avg_col_cos);
                 fprintf(stderr, "  \n");
-                fprintf(stderr, "  EXPECTED for good init: row_rms~%.4f, cosines~0.0, col_var_ratio>2x\n", qkv_std);
+                // Expected row_rms for Xavier uniform: scale/sqrt(3) where scale = sqrt(6/(fan_in+fan_out))
+                // For W_qkv [total_qkv_dim, d_model]: scale = sqrt(6/(768+1280)) ≈ 0.054, rms ≈ 0.031
+                const float expected_qkv_rms = std::sqrt(6.0f / (cfg.d_model + total_qkv_dim)) / std::sqrt(3.0f);
+                fprintf(stderr, "  EXPECTED for good init: row_rms~%.4f, cosines~0.0, col_var_ratio>2x\n", expected_qkv_rms);
                 fprintf(stderr, "\n");
             }
             // ============================================================================
@@ -1805,6 +1778,17 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     };
     if (!ctx->logging.guess_cache_sink->bind("GuessCache", guess_cache_formatter)) {
         ctx->logging.logger->log("[WARNING] Failed to bind GuessCache module logger - cache diagnostics may not appear in logs");
+    }
+    
+    // Initialize EquationLogger for kernel diagnostic logging (Rule 21 equation tracing)
+    {
+        std::string eq_log_path = ctx->config.paths.log_dir + "/equation_log.csv";
+        bool eq_init_ok = GRIM::getEquationLogger().initialize(eq_log_path);
+        if (eq_init_ok) {
+            ctx->logging.logger->log("✓ EquationLogger initialized: " + eq_log_path);
+        } else {
+            ctx->logging.logger->log("[WARNING] EquationLogger initialization failed - equation diagnostics disabled");
+        }
     }
     
     // 2b. Auto-prepare training data/vocab from merged cache when needed.

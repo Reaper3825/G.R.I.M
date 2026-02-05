@@ -25,6 +25,7 @@
 #include "../../Shared/Gradients/GradStatsCollector.hpp"
 #include "../../Shared/Gradients/GradientCC_Host_GPU.hpp"
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
+#include "../../Shared/EquationLogging/EquationLogging.hpp"
 #include "../../Layers/FlashAttention/AttentionDiagnostics.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
@@ -606,14 +607,6 @@ std::string formatToken277Diagnostic(const Token277Diagnostic& diag, int batch_i
         oss << "  [PREDICTION] W[277] STABLE: grad_sum=" << diag.grad_row_sum << " ≈ 0\n";
     }
     
-    // Issue #114: Flag weight paradox risk
-    // If grad is consistently negative across batches, weight will GROW, not shrink
-    // Combined with hidden state alignment, this creates the feedback loop
-    if (diag.grad_row_sum < 0.0f && diag.target_277_ratio > 0.05f) {
-        oss << "  [ANOMALY] WEIGHT_PARADOX_RISK: Token 277 is " << (diag.target_277_ratio * 100.0f) 
-            << "% of targets with NEGATIVE grad_sum → W[277] will GROW despite trying to reduce p(277)!\n";
-    }
-    
     return oss.str();
 }
 
@@ -829,8 +822,29 @@ std::string formatHiddenState277Analysis(const HiddenState277Analysis& a, int ba
     // Anomaly detection per Rule 21
     if (total_contribution > 0 && a.grad_277_at_277_targets < 0) {
         oss << "  [ANOMALY] WEIGHT_PARADOX_SOURCE: grad[277] at 277-targets is negative (model wants to DECREASE)";
-        oss << " but total contribution is POSITIVE (W[277] will INCREASE!) hidden_mean=" << a.hidden_mean << " ≠ 0\n";
-        oss << "    ROOT_CAUSE: Non-zero mean in hidden states causes sign flip: negative_hidden × negative_grad = POSITIVE\n";
+        oss << " but total contribution is POSITIVE (W[277] will INCREASE!)\n";
+        
+        // Issue #125: Diagnose the ACTUAL root cause based on the data
+        if (a.contribution_from_other_targets > std::abs(a.contribution_from_277_targets)) {
+            // Other targets dominate - this is the entropy regularization case
+            oss << "    ROOT_CAUSE: contribution_from_other_targets=" << a.contribution_from_other_targets 
+                << " dominates contribution_from_277_targets=" << a.contribution_from_277_targets << "\n";
+            if (a.grad_277_at_other_targets < 0) {
+                oss << "    ENTROPY_REG_EFFECT: grad_277_at_other=" << a.grad_277_at_other_targets 
+                    << " < 0 (entropy term dominates when p(277) < 0.368)\n";
+                oss << "    When hidden_sum[t] < 0 AND grad < 0: negative × negative = POSITIVE contribution\n";
+            } else {
+                oss << "    hidden_sum at other-target positions is positive, amplifying positive grad\n";
+            }
+        } else if (std::abs(a.hidden_mean) > 0.001f) {
+            // Non-zero hidden mean case (Issue #37 original root cause)
+            oss << "    ROOT_CAUSE: Non-zero hidden_mean=" << a.hidden_mean 
+                << " causes sign flip: negative_hidden × negative_grad = POSITIVE\n";
+        } else {
+            // Hidden_mean is near zero but individual positions have non-zero hidden_sum
+            oss << "    ROOT_CAUSE: Per-position hidden_sum[t] variance (hidden_mean=" << a.hidden_mean 
+                << " ≈ 0 but individual positions have |hidden_sum[t]| >> 0)\n";
+        }
     }
     
     if (std::abs(a.hidden_mean) > 0.001f) {
@@ -2915,6 +2929,28 @@ BatchResult processBatch(
     
     ctx.logging.logger->log("[GradTrace] POST-FORWARD loss=" + Internal::formatScalar(result.loss, 4));
 
+    // ========================================================================
+    // EQUATION LOGGING: Per-batch loss computation trace (Issue #120 debug)
+    // ========================================================================
+    {
+        const auto& ts_eq = ctx.model->getTrainingState();
+        const int valid_tokens_eq = ts_eq.cached_valid_tokens;
+        const float expected_random_loss = std::log(static_cast<float>(ctx.config.actual_vocab_size));
+        
+        EQ_LOG_HOST(
+            "BATCH_LOSS",
+            "loss = -sum(log(p_target)) / valid_tokens",
+            "valid_tokens=" + std::to_string(valid_tokens_eq) + " vocab_size=" + std::to_string(ctx.config.actual_vocab_size),
+            "loss_value",
+            std::to_string(expected_random_loss),
+            std::to_string(result.loss),
+            batch_idx,
+            -1,  // layer_idx (N/A for loss)
+            ctx.global_step,
+            GRIM::EquationPhase::LOSS_COMPUTATION
+        );
+    }
+
     {
         const auto& ts = ctx.model->getTrainingState();
         const int valid_tokens = ts.cached_valid_tokens;
@@ -3393,9 +3429,10 @@ BatchResult processBatch(
     // Track WHY p_277 increases: if grad_sum > 0, weight row increases
     // For tied weights: logit[277] = x @ W[277].T, so larger W[277] → larger logit_277
     // ========================================================================
-    constexpr bool kToken277DiagEnabled = true;  // Set to true to enable [Token277Trace] / [HiddenState277] logs
+    // Use centralized EquationLogger to gate expensive diagnostics
+    const bool kToken277DiagEnabled = GRIM::getEquationLogger().isEnabled();
     
-    if constexpr (kToken277DiagEnabled) {
+    if (kToken277DiagEnabled) {
         const auto& ts = ctx.model->getTrainingState();
         const auto& cfg = ctx.model->getConfig();
         cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
@@ -3410,6 +3447,20 @@ BatchResult processBatch(
             ts, flat_targets, cfg.d_model, stream);
         ctx.logging.logger->log(formatToken277Diagnostic(tok277, batch_idx));
         
+        // [WEIGHT_GRADIENT_EQUATION] Structured logging via centralized EquationLogger
+        EQ_LOG_HOST(
+            "WEIGHT_GRADIENT_EQUATION",
+            "W_new[277] = W[277] - lr * grad_W[277] / sqrt(v + eps)",
+            "grad_norm=" + std::to_string(tok277.grad_row_norm) + 
+            " grad_sum=" + std::to_string(tok277.grad_row_sum) + 
+            " grad_mean=" + std::to_string(tok277.grad_row_mean),
+            "weight_norm=" + std::to_string(tok277.weight_row_norm) + 
+            " weight_mean=" + std::to_string(tok277.weight_row_mean),
+            "target_277_ratio=" + std::to_string(tok277.target_277_ratio),
+            "target_277_count=" + std::to_string(tok277.target_277_count) + 
+            "/" + std::to_string(tok277.total_valid_targets),
+            static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::GRADIENT_CLIP);
+        
         // Issue #37: Hidden state analysis - understand WHY grad_W[277].sum is positive
         // Run async to avoid blocking training (expensive D2H copy)
         // Issue #115: Pass use_centering to read correct buffer (centered vs raw)
@@ -3418,6 +3469,21 @@ BatchResult processBatch(
             cfg.lm_head_center_hidden_states,  // Issue #115: Use centered buffer when active
             stream);
         ctx.logging.logger->log(formatHiddenState277Analysis(hidden277, batch_idx));
+        
+        // [HIDDEN_STATE_EQUATION] Structured logging via centralized EquationLogger
+        EQ_LOG_HOST(
+            "HIDDEN_STATE_EQUATION",
+            "grad_W[277,i] = sum_t(hidden[t,i] * grad_logits[t,277])",
+            "h_mean=" + std::to_string(hidden277.hidden_mean) + 
+            " h_norm=" + std::to_string(hidden277.hidden_norm_mean) + 
+            " h_std=" + std::to_string(hidden277.hidden_std),
+            "contrib_277=" + std::to_string(hidden277.contribution_from_277_targets) + 
+            " contrib_other=" + std::to_string(hidden277.contribution_from_other_targets),
+            "total_contrib=" + std::to_string(hidden277.contribution_from_277_targets + 
+                                              hidden277.contribution_from_other_targets),
+            "grad_at_277=" + std::to_string(hidden277.grad_277_at_277_targets) + 
+            " grad_at_other=" + std::to_string(hidden277.grad_277_at_other_targets),
+            static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::GRADIENT_CLIP);
         
         // ========================================================================
         // DIAGNOSTIC: Issue #114 - Feedback Loop Detection (Rule 21 Equation-Based)
@@ -3430,6 +3496,21 @@ BatchResult processBatch(
             cfg.lm_head_center_hidden_states,  // Issue #115: Use centered buffer when active
             stream);
         ctx.logging.logger->log(formatFeedbackLoopDiagnostic(feedback_diag, batch_idx));
+        
+        // [FEEDBACK_LOOP_EQUATION] Structured logging via centralized EquationLogger
+        EQ_LOG_HOST(
+            "FEEDBACK_LOOP_EQUATION",
+            "logit[277] = ||h|| * ||W[277]|| * cos(h, W[277])",
+            "h_norm=" + std::to_string(feedback_diag.hidden_norm_mean) + 
+            " W_norm=" + std::to_string(feedback_diag.weight_277_norm) + 
+            " cos=" + std::to_string(feedback_diag.cosine_h_w277_mean),
+            "h_growth=" + std::to_string(feedback_diag.hidden_norm_growth_pct) + "%" +
+            " W_growth=" + std::to_string(feedback_diag.weight_norm_growth_pct) + "%" +
+            " cos_growth=" + std::to_string(feedback_diag.cosine_growth_pct) + "%",
+            "predicted=" + std::to_string(feedback_diag.predicted_logit_277),
+            "actual=" + std::to_string(feedback_diag.actual_logit_277_mean) + 
+            " error=" + std::to_string(feedback_diag.decomposition_error_pct) + "%",
+            static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::LM_HEAD_PROJECTION);
     }
     
     // ========================================================================
@@ -4084,6 +4165,14 @@ BatchResult processBatch(
                                  ctx.config.hyperparameters.weight_decay);
         // Reset micro_step counter after optimizer step completes
         ctx.optimizer.current_micro_step = 0;
+
+        // Periodic equation log flush (every 10 optimizer steps)
+        // ISSUE FIX: Must call flushAsync() FIRST to copy device buffer to host,
+        // THEN flushSync() to process and write the data
+        if (ctx.optimizer.optimizer_state.step % 10 == 0) {
+            GRIM::getEquationLogger().flushAsync();  // Device→Host async copy
+            GRIM::getEquationLogger().flushSync();   // Wait, process, write to file
+        }
 
         const auto moment_sample = sampleOptimizerMomentStats(ctx.model->getTrainingState(), sync_diag);
         if (moment_sample.valid) {

@@ -30,7 +30,6 @@
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
 #include "../Layers/Embedding/Embedding_GPU.hpp"
-#include "../Layers/Embedding/Embedding_GPU.hpp"
 #include "../Layers/Quantization/Quantization_GPU.hpp"
 #include "../Layers/ScratchBlock/ScratchBlock_GPU.hpp"
 #include "../Shared/GPUBuffer/GPUBuffer.hpp"
@@ -299,8 +298,8 @@ struct LanguageModelConfig {
     float scratch_block_atom_scale = 1.0f;     // Scale factor for atom injection (unit scale)
 
     // Numeric head (side-channel regression for numeric atoms)
-    bool numeric_head_enabled = false;
-    float numeric_head_loss_weight = 0.1f;
+    bool numeric_head_enabled = true;
+    float numeric_head_loss_weight = 1.0f;
     float numeric_head_huber_delta = 1.0f;
     bool numeric_head_log_scale = true;
     
@@ -310,6 +309,7 @@ struct LanguageModelConfig {
     // Set to false to use standard (PyTorch-style) implementation.
     bool lm_head_center_hidden_states = false;  // Center encoder output before projection
     bool lm_head_recenter_gradients = false;    // Recenter grad_weight rows after GEMM
+    bool center_logits = true;                 // Center logits per position (row-wise, mean→0)
     
     // Hardcoded Hidden States Diagnostic (Issue #42)
     // When enabled, replaces encoder output with synthetic patterns to isolate
@@ -378,6 +378,7 @@ public:
         int num_heads,
         int num_kv_heads,
         int d_head,
+        int max_seq_len,
         PositionalEncodingType type
     );
 
@@ -396,8 +397,8 @@ public:
     GrimEmbeddingStack(int vocab_size, int d_model, int max_seq_len);
     
     // num_kv_heads REQUIRED - only GQA is supported (no MHA fallback)
-    void enableALiBi(int num_heads, int num_kv_heads);
-    void enableHybridPositionalEncoding(int num_heads, int d_head, int num_kv_heads);
+    void enableALiBi(int num_heads, int num_kv_heads, int max_seq_len);
+    void enableHybridPositionalEncoding(int num_heads, int d_head, int num_kv_heads, int max_seq_len);
     const ALiBiPositionalBias* getALiBiBias() const;
     const Matrix& getTokenEmbeddings() const;
     // NOTE: getBatchEmbeddings removed - pure GPU training uses EmbeddingRuntime directly
@@ -665,7 +666,7 @@ public:
     const UpdateProbeResult& updateProbe() const { return update_probe_result_; }
     bool hasUpdateProbe() const { return update_probe_ready_; }
     void clearUpdateProbeFlag() { update_probe_ready_ = false; }
-    void configureUpdateProbe(const std::string& group_name, size_t sample_elems = 2048);
+    void configureUpdateProbe(const std::string& group_name, size_t sample_elems = 1024);
     void disableUpdateProbe();
     const std::vector<float>& updateProbeWeightsBefore() const { return update_probe_weights_before_; }
     const std::vector<float>& updateProbeWeightsAfter() const { return update_probe_weights_after_; }
@@ -700,14 +701,10 @@ public:
     const EmbeddingRuntime& getGpuEmbedder() const;
     GPUGrimEncoder& getGpuEncoder();
     const GPUGrimEncoder& getGpuEncoder() const;
-#endif
-
-#ifdef USE_CUDA
     // Activation quantization helper for forward phases
     void applyActivationQuantization(float* device_buffer, std::size_t elements);
-#endif
+
     
-#ifdef USE_CUDA
     // ScratchBlock reasoning layer access
     ScratchBlockLayer* getScratchBlockLayer() { return scratch_block_layer_.get(); }
     const ScratchBlockLayer* getScratchBlockLayer() const { return scratch_block_layer_.get(); }
@@ -779,9 +776,6 @@ private:
     
     // NOTE: Gradient norm computation moved to TrainingState::gradnorm_ctrl (GradNormController)
     // Old buffers (d_grad_norm_sums_, h_grad_norm_sums_) removed per Rule 20
-#endif
-    
-#ifdef USE_CUDA
     std::unique_ptr<Quantization::QuantizationLayer> activation_quantizer_;
     
     // ScratchBlock reasoning layer (togglable)
