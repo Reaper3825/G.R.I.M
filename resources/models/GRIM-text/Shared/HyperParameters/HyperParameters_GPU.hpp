@@ -100,7 +100,17 @@ constexpr int TELEMETRY_MAX_STREAMS = 16;         // TelemetryLattice metric str
 // Controls diagnostic equation-based logging for training
 //======================================================//
 constexpr bool DEFAULT_EQ_LOG_ENABLED = true;     // Enable equation logging by default
-constexpr int DEFAULT_EQ_LOG_INTERVAL = 10;       // Log every N batches (0 = every batch)
+constexpr int DEFAULT_EQ_LOG_INTERVAL = 1;       // Log every N batches (0 = every batch)
+
+//======================================================//
+// PyTorch Verification Configuration
+// When GRIM_PYTORCH_VERIFY is defined at compile time, enables
+// side-by-side comparison with PyTorch reference implementations.
+// 
+// To enable: Add -DGRIM_PYTORCH_VERIFY to CMake compile flags
+// WARNING: This is SLOW (subprocess per op) - use DEBUG builds only!
+//======================================================//
+constexpr int DEFAULT_PYTORCH_VERIFY_INTERVAL = 1;  // Verify every N batches (reduces overhead)
 
 //======================================================//
 // Gradient Scaling Defaults
@@ -132,7 +142,7 @@ constexpr float GELU_CUBIC_COEFF = 0.044715f;              // Coefficient in GEL
 // This helps the optimizer adapt faster to gradient changes.
 //======================================================//
 constexpr float ADAMW_BETA1 = 0.9f;
-constexpr float ADAMW_BETA2 = 0.95f;              // Matched to baseline (was 0.99)
+constexpr float ADAMW_BETA2 = 0.9f;              // Matched to baseline (was 0.99)
 constexpr float ADAMW_EPSILON = 1e-8f;
 constexpr float ADAMW_WEIGHT_DECAY = 0.1f;        // Matched to baseline (was 0.01)
 
@@ -179,7 +189,7 @@ constexpr float SOFTMAX_TEMPERATURE = 1.0f;
 // training plateau. Loss still stalls at ~8.3-8.8 with this enabled. See:
 // docs/PLATEAU_BUG_INVESTIGATION.md "🚫 CRITICAL: QK-NORMALIZATION DOES NOT FIX PLATEAU"
 constexpr bool QK_NORMALIZATION_ENABLED = false;  // Master switch for QK-normalization
-constexpr float QK_NORM_SCALE = 16.0f;  // Default scale factor (like sqrt(head_dim) but tunable)
+constexpr float QK_NORM_SCALE = 1.0f;  // Default scale factor (like sqrt(head_dim) but tunable)
 
 // Learnable per-head QK-norm scales (nGPT-style)
 // When enabled, each attention head has learnable alpha_q and alpha_k parameters
@@ -321,11 +331,11 @@ constexpr bool DEFAULT_LOSS_PREFERENCE_ENABLED = false;
 constexpr float DEFAULT_LOSS_PREFERENCE_BETA = 0.1f;  // KL penalty coefficient
 
 // Token Masking: exclude specific tokens from loss
-constexpr bool DEFAULT_LOSS_MASKING_ENABLED = false;
+constexpr bool DEFAULT_LOSS_MASKING_ENABLED = true;
 
 // Numeric head loss (side-channel regression for numeric atoms)
 constexpr bool DEFAULT_NUMERIC_HEAD_ENABLED = false;
-constexpr float DEFAULT_NUMERIC_HEAD_LOSS_WEIGHT = 0.1f;
+constexpr float DEFAULT_NUMERIC_HEAD_LOSS_WEIGHT = 1.0f;
 constexpr float DEFAULT_NUMERIC_HEAD_HUBER_DELTA = 1.0f;
 constexpr bool DEFAULT_NUMERIC_HEAD_LOG_SCALE = true;
 constexpr float DEFAULT_NUMERIC_HEAD_LOG_MAX = 20.0f;

@@ -469,7 +469,7 @@ void LanguageModel::backward(float loss, bool accumulate, float grad_scale, uint
     // ISSUE #62: Sync stream after backward to ensure all async CUDA operations complete
     // before any GradFn destructors run (which might free buffers still in use)
     cudaStreamSynchronize(stream);
-    fprintf(stderr, "[backward] Stream synced after backward pass\n");
+    // NOTE: Removed "[backward] Stream synced" fprintf - runs every batch, no value
     
     // Issue #60 DEBUG: Log gradient attribution for debugging token 277 mode collapse
     // This shows LM head vs embedding backward contributions separately

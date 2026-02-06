@@ -1783,12 +1783,49 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     // Initialize EquationLogger for kernel diagnostic logging (Rule 21 equation tracing)
     {
         std::string eq_log_path = ctx->config.paths.log_dir + "/equation_log.csv";
+        
+        // If file already exists, create a timestamped version to preserve old logs
+        if (fs::exists(eq_log_path)) {
+            auto now = std::chrono::system_clock::now();
+            auto time_t_now = std::chrono::system_clock::to_time_t(now);
+            std::tm tm_now;
+            localtime_s(&tm_now, &time_t_now);
+            char timestamp[32];
+            std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &tm_now);
+            eq_log_path = ctx->config.paths.log_dir + "/equation_log_" + timestamp + ".csv";
+            ctx->logging.logger->log("Previous equation_log.csv exists, creating: " + eq_log_path);
+        }
+        
         bool eq_init_ok = GRIM::getEquationLogger().initialize(eq_log_path);
         if (eq_init_ok) {
             ctx->logging.logger->log("✓ EquationLogger initialized: " + eq_log_path);
         } else {
             ctx->logging.logger->log("[WARNING] EquationLogger initialization failed - equation diagnostics disabled");
         }
+        
+        // PyTorch verification for side-by-side comparison (compile with -DGRIM_PYTORCH_VERIFY)
+#ifdef GRIM_PYTORCH_VERIFY
+        ctx->logging.logger->log("🔬 PyTorch verification: ENABLED (compile flag GRIM_PYTORCH_VERIFY)");
+        // Derive GRIM root from log_dir (e.g., .../GRIM-text/training/logs -> .../G.R.I.M)
+        std::string grim_root = ctx->config.paths.log_dir;
+        auto pos = grim_root.find("resources");
+        if (pos != std::string::npos) {
+            grim_root = grim_root.substr(0, pos);
+        } else {
+            // Fallback: walk up from log_dir
+            fs::path root_path = fs::path(ctx->config.paths.log_dir).parent_path().parent_path().parent_path().parent_path();
+            grim_root = root_path.string();
+        }
+        bool pytorch_ok = PYTORCH_VERIFY_INIT(grim_root);
+        if (pytorch_ok) {
+            ctx->logging.logger->log("✓ PyTorch verifier initialized (root=" + grim_root + ")");
+            ctx->logging.logger->log("  Script: " + grim_root + "resources/models/GRIM-text/Shared/EquationLogging/pytorch_verify.py");
+        } else {
+            ctx->logging.logger->log("[WARNING] PyTorch verifier failed to initialize - verification disabled");
+        }
+#else
+        ctx->logging.logger->log("PyTorch verification: DISABLED (compile with -DGRIM_PYTORCH_VERIFY to enable)");
+#endif
     }
     
     // 2b. Auto-prepare training data/vocab from merged cache when needed.

@@ -9,6 +9,7 @@
 #include "../../Layers/Attention/QKV_Projector.hpp"  // ISSUE #62: For launchReshapeFromBHSD
 #include "../../Layers/FeedForward/Feed_Forward_GPU.hpp"  // ISSUE #97: For launchFFNBiasAdd/Backward
 #include "../PBM/PositionalBiasMethod.hpp"  // ISSUE #119: For RoPE autograd backward
+#include "../EquationLogging/PyTorchVerify.hpp"  // PyTorch verification for side-by-side comparison
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <cuda_bf16.h>
@@ -36,7 +37,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // AUTOGRAD DEBUG TOGGLE - Set to true to trace autograd chain execution
 // ═══════════════════════════════════════════════════════════════════════════
-bool g_autograd_verbose = true;  // DEBUG: Enable verbose AG_TRACE logging to diagnose silent crash
+bool g_autograd_verbose = false;  // DEBUG: Set true to trace autograd chain (KILLS PERF with fflush!)
 
 #define AG_TRACE(...) do { if (g_autograd_verbose) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while(0)
 
@@ -48,7 +49,7 @@ bool g_autograd_verbose = true;  // DEBUG: Enable verbose AG_TRACE logging to di
 float* g_debug_lm_head_only_grad = nullptr;   // Where to copy LM head backward contribution
 float* g_debug_embedding_only_grad = nullptr; // Where to copy embedding backward contribution
 size_t g_debug_grad_buffer_size = 0;          // Size in elements (vocab_size * d_model)
-bool g_debug_capture_enabled = true;         // Enable/disable capturing
+bool g_debug_capture_enabled = g_autograd_verbose;         // Enable/disable capturing
 
 // ISSUE #60 ROOT CAUSE FIX: Skip embedding backward when weights are tied
 // PyTorch with tied weights does: logits = x @ embedding.weight.T
@@ -2088,6 +2089,44 @@ __global__ void kernel_softmax_backward(
     }
 }
 
+// Dropout forward: y = x * mask / (1 - p)
+// mask is 0 where dropped, 1 where kept; scale = 1/(1-p) for inverted dropout
+__global__ void kernel_dropout_forward(
+    const float* __restrict__ input,
+    const uint8_t* __restrict__ mask,
+    float* __restrict__ output,
+    float scale,                // 1.0 / (1.0 - dropout_prob)
+    size_t count
+) {
+    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        // Inverted dropout: scale up kept values so expected value unchanged
+        output[idx] = input[idx] * (mask[idx] ? scale : 0.0f);
+    }
+}
+
+// Generate random dropout mask using Philox PRNG
+// Each element is 1 (keep) with probability (1-p), 0 (drop) with probability p
+__global__ void kernel_generate_dropout_mask(
+    uint8_t* __restrict__ mask,
+    size_t count,
+    float dropout_prob,         // Probability of dropping (e.g., 0.1)
+    uint64_t seed
+) {
+    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        // Initialize Philox RNG per-element with unique sequence
+        curandStatePhilox4_32_10_t state;
+        curand_init(seed, idx, 0, &state);
+        
+        // Generate random value in (0, 1]
+        float rnd = curand_uniform(&state);
+        
+        // Keep if random > dropout_prob (so dropout_prob fraction gets dropped)
+        mask[idx] = (rnd > dropout_prob) ? 1 : 0;
+    }
+}
+
 // Dropout backward: grad_x = grad_y * mask / (1 - p)
 // mask is 0 where dropped, 1 where kept
 __global__ void kernel_dropout_backward(
@@ -2803,7 +2842,8 @@ struct AddGradFn : public GradFn {
         }
         applied = true;
         
-        // DIAGNOSTIC: Log incoming gradient to Add backward
+        // DIAGNOSTIC: Log incoming gradient to Add backward (GUARDED - expensive!)
+#if TENSOR_VERBOSE_DEBUG
         static int s_add_bwd_call = 0;
         const int add_call_idx = ++s_add_bwd_call;
         {
@@ -2819,6 +2859,7 @@ struct AddGradFn : public GradFn {
             fprintf(stderr, "[ADD-BWD-IN] call=%d | grad: numel=%zu max=%.6f rms=%.10f | a->%s b->%s\n",
                     add_call_idx, grad_elems, mx, rms, a_op, b_op);
         }
+#endif
         
         if (!grad_output.data) {
             return;
@@ -2976,7 +3017,8 @@ struct BiasAddGradFn : public GradFn {
         }
         applied = true;
         
-        // DIAGNOSTIC: Log incoming gradient and capture state
+        // DIAGNOSTIC: Log incoming gradient and capture state (GUARDED - expensive!)
+#if TENSOR_VERBOSE_DEBUG
         static int s_bias_bwd_call = 0;
         const int bias_call_idx = ++s_bias_bwd_call;
         {
@@ -2994,6 +3036,7 @@ struct BiasAddGradFn : public GradFn {
             fprintf(stderr, "[BIAS-ADD-BWD-STATE] call=%d | bias_requires_grad=%d grad_bias=%p\n",
                     bias_call_idx, (int)bias_requires_grad, (void*)grad_bias);
         }
+#endif
         
         if (!grad_output.data) {
             return;
@@ -3013,7 +3056,7 @@ struct BiasAddGradFn : public GradFn {
         if (bias_requires_grad && grad_bias) {
             launchFFNBiasBackward(grad_output.data, grad_bias, 
                                   static_cast<int>(total_tokens), static_cast<int>(features), stream);
-            
+#if TENSOR_VERBOSE_DEBUG
             // ISSUE #97 DIAGNOSTIC: Read back and report bias gradient after computation
             {
                 cudaStreamSynchronize(stream);
@@ -3030,10 +3073,14 @@ struct BiasAddGradFn : public GradFn {
                 fprintf(stderr, "[BIAS-ADD-BWD-DONE] call=%d | grad_bias: max=%.10f rms=%.10f (sampled %zu/%zu features)\n",
                         bias_call_idx, bg_mx, bg_rms, bias_grad_host.size(), features);
             }
-        } else {
+#endif
+        }
+#if TENSOR_VERBOSE_DEBUG
+        else {
             fprintf(stderr, "[BIAS-ADD-BWD-SKIP] call=%d | bias_requires_grad=%d grad_bias=%p - NOT computing bias gradient!\n",
                     bias_call_idx, (int)bias_requires_grad, (void*)grad_bias);
         }
+#endif
         
         // CONTINUE AUTOGRAD CHAIN for input
         if (input_requires_grad && input_grad_fn && input_grad_fn->op_name) {
@@ -3154,7 +3201,8 @@ struct GeluGradFn : public GradFn {
         }
         applied = true;
         
-        // DIAGNOSTIC: Log incoming gradient to GELU backward
+        // DIAGNOSTIC: Log incoming gradient to GELU backward (GUARDED - expensive!)
+#if TENSOR_VERBOSE_DEBUG
         static int s_gelu_bwd_call = 0;
         const int gelu_call_idx = ++s_gelu_bwd_call;
         {
@@ -3168,6 +3216,7 @@ struct GeluGradFn : public GradFn {
             fprintf(stderr, "[GELU-BWD-IN] call=%d | grad: numel=%zu max=%.6f rms=%.6f\n",
                     gelu_call_idx, grad_elems, mx, rms);
         }
+#endif
         
         if (!input_requires_grad) {
             return;  // Nothing to do
@@ -3259,9 +3308,11 @@ struct RMSNormGradFn : public GradFn {
         gamma_requires_grad = gamma_tensor.requires_grad;
         input_shape = x.shape;
         
+#if TENSOR_VERBOSE_DEBUG
         fprintf(stderr, "[RMSNormGradFn::capture_inputs] this=%p x.requires_grad=%d gamma.requires_grad=%d\n",
                 (void*)this, x.requires_grad ? 1 : 0, gamma_tensor.requires_grad ? 1 : 0);
         fflush(stderr);
+#endif
         
         // ISSUE #50 FIX: Take ownership of captured grad_fn to prevent use-after-free
         input_grad_fn = x.grad_fn;
@@ -3285,12 +3336,17 @@ struct RMSNormGradFn : public GradFn {
             // Zero-initialize the gradient buffer
             cudaMemsetAsync(input_grad, 0, grad_size * sizeof(float), stream);
             owns_input_grad = true;
+#if TENSOR_VERBOSE_DEBUG
             fprintf(stderr, "[RMSNormGradFn::capture_inputs] this=%p → Allocated input_grad: %p (%zu floats)\n",
                     (void*)this, (void*)input_grad, grad_size);
-        } else {
+#endif
+        }
+#if TENSOR_VERBOSE_DEBUG
+        else {
             fprintf(stderr, "[RMSNormGradFn::capture_inputs] SKIPPED input_grad allocation (input_requires_grad=false)\n");
         }
         fflush(stderr);
+#endif
         
         if (gamma_requires_grad) {
             gamma_tensor.ensure_grad();
@@ -3323,20 +3379,19 @@ struct RMSNormGradFn : public GradFn {
     }
     
     void apply(const Tensor& grad_output, cudaStream_t stream) override {
-        fprintf(stderr, "[RMSNormGradFn::apply] ENTRY - this=%p grad_output.data=%p stream=%p\n",
-                (void*)this, (void*)grad_output.data, (void*)stream);
-        fflush(stderr);
-        
         // RULE 20: Track current operation for error context
         setCurrentGradFnOp("rms_norm", this);
         
         // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
         if (applied) {
-            fprintf(stderr, "[RMSNormGradFn::apply] SKIP - already applied\n");
-            fflush(stderr);
             return;
         }
         applied = true;
+
+#if TENSOR_VERBOSE_DEBUG
+        fprintf(stderr, "[RMSNormGradFn::apply] ENTRY - this=%p grad_output.data=%p stream=%p\n",
+                (void*)this, (void*)grad_output.data, (void*)stream);
+        fflush(stderr);
         
         // Check for pre-existing CUDA errors BEFORE any sync
         cudaError_t pre_err = cudaGetLastError();
@@ -3360,6 +3415,7 @@ struct RMSNormGradFn : public GradFn {
             fprintf(stderr, "[RMS-BWD-IN] call=%d | grad: numel=%zu max=%.10f rms=%.10f\n",
                     rms_call_idx, grad_elems, mx, rms);
         }
+#endif
         
         if (!cached_input) {
             throw std::runtime_error("RMSNormGradFn::apply: cached_input is NULL - set_cache() must be called first");
@@ -3371,9 +3427,10 @@ struct RMSNormGradFn : public GradFn {
         const int tokens = static_cast<int>(cached_size / d_model);
         const int shared_mem = (AUTOGRAD_BLOCK_SIZE / 32 + 1) * sizeof(float);
         
+#if TENSOR_VERBOSE_DEBUG
         // Add detailed logging before kernel launch
-        fprintf(stderr, "[RMS-BWD-LAUNCH] call=%d tokens=%d d_model=%d shared_mem=%d\n",
-                rms_call_idx, tokens, d_model, shared_mem);
+        fprintf(stderr, "[RMS-BWD-LAUNCH] tokens=%d d_model=%d shared_mem=%d\n",
+                tokens, d_model, shared_mem);
         fprintf(stderr, "[RMS-BWD-LAUNCH] ptrs: grad_output=%p cached_input=%p gamma=%p\n",
                 (void*)grad_output.data, (void*)cached_input, (void*)gamma_data);
         fprintf(stderr, "[RMS-BWD-LAUNCH] ptrs: input_grad=%p gamma_grad=%p\n",
@@ -3410,6 +3467,7 @@ struct RMSNormGradFn : public GradFn {
             }
             fflush(stderr);
         }
+#endif
         
         if (input_requires_grad && input_grad) {
             kernel_rmsnorm_backward<<<tokens, AUTOGRAD_BLOCK_SIZE, shared_mem, stream>>>(
@@ -3893,11 +3951,13 @@ struct SoftmaxGradFn : public GradFn {
 /**
  * DropoutGradFn - Backward for dropout operation (ISSUE #48 FIX)
  * DOES NOT store Tensor* - stores stable data instead
+ * ISSUE #133 FIX: Allocates own gradient buffer (same pattern as Issue #126 RMSNormGradFn)
  */
 struct DropoutGradFn : public GradFn {
     // ISSUE #48: Store stable data, NOT Tensor* pointers
     bool input_requires_grad = false;
     float* input_grad = nullptr;
+    bool owns_input_grad = false;  // ISSUE #133: Track if we own the buffer
     TensorContract::TensorShape input_shape;
     GradFn* input_grad_fn = nullptr;
     bool owns_input_grad_fn = false;  // ISSUE #50: Take ownership to prevent use-after-free
@@ -3909,6 +3969,8 @@ struct DropoutGradFn : public GradFn {
     
     ~DropoutGradFn() override {
         if (saved_mask) cudaFree(saved_mask);
+        // ISSUE #133: Free owned gradient buffer
+        if (owns_input_grad && input_grad) { cudaFree(input_grad); input_grad = nullptr; }
         // ISSUE #50: Delete owned grad_fn to complete the chain cleanup
         if (owns_input_grad_fn && input_grad_fn) { delete input_grad_fn; input_grad_fn = nullptr; }
     }
@@ -3924,9 +3986,13 @@ struct DropoutGradFn : public GradFn {
             x.owns_grad_fn = false;  // Transfer ownership to us
         }
         
+        // ISSUE #133 FIX: Allocate our OWN gradient buffer (same as Issue #126 for RMSNormGradFn)
+        // The input tensor x may be destroyed before backward() runs, so we can't borrow its buffer
         if (input_requires_grad) {
-            x.ensure_grad();
-            input_grad = x.grad_data();  // ISSUE #59: Use accessor
+            size_t grad_size = x.numel();
+            cudaMalloc(&input_grad, grad_size * sizeof(float));
+            cudaMemset(input_grad, 0, grad_size * sizeof(float));
+            owns_input_grad = true;
         }
     }
     
@@ -3973,6 +4039,8 @@ struct DropoutGradFn : public GradFn {
     void release_saved() override {
         GradFn::release_saved();
         if (saved_mask) { cudaFree(saved_mask); saved_mask = nullptr; }
+        // ISSUE #133: Free owned gradient buffer
+        if (owns_input_grad && input_grad) { cudaFree(input_grad); owns_input_grad = false; }
         input_grad = nullptr;
         // ISSUE #50: Set ownership false BEFORE delete
         if (owns_input_grad_fn && input_grad_fn) { owns_input_grad_fn = false; delete input_grad_fn; input_grad_fn = nullptr; }
@@ -4255,6 +4323,9 @@ Tensor gelu(const Tensor& x, cudaStream_t stream, const float* input_cache) {
     // Launch GELU forward kernel
     kernel_gelu_forward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(x.data, result.data, count);
     
+    // PyTorch verification for GELU forward
+    PYTORCH_VERIFY_GELU(x.data, result.data, static_cast<int>(count), 0, 0, 0);
+    
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
     if (x.requires_grad) {
         result.is_leaf = false;
@@ -4376,6 +4447,9 @@ Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, cudaStream_t st
     }
     #endif
     
+    // PyTorch verification for RMSNorm forward
+    PYTORCH_VERIFY_RMSNORM(x.data, gamma.data, result.data, tokens, d_model, eps, 0, 0, 0);
+    
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
     if (result.requires_grad) {
         result.is_leaf = false;
@@ -4485,15 +4559,21 @@ Tensor dropout(const Tensor& x, float p, bool training, const uint8_t* mask, cud
         return result;
     }
     
+    if (!mask) {
+        throw std::invalid_argument("autograd::dropout: mask required when training=true and p>0. Use dropout(x, p, seed, training, stream) to auto-generate mask.");
+    }
+    
     const size_t count = x.numel();
+    const float scale = 1.0f / (1.0f - p);  // Inverted dropout scale
     
     // Forward: y = x * mask / (1 - p) where mask is 0/1
-    // Would call dropout forward kernel with mask
-    // Placeholder: copy input
-    cudaMemcpyAsync(result.data, x.data, x.size_bytes(), cudaMemcpyDeviceToDevice, stream);
+    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
+    kernel_dropout_forward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        x.data, mask, result.data, scale, count);
+    trackKernelLaunch("kernel_dropout_forward", stream);
     
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
-    if (x.requires_grad && mask) {
+    if (x.requires_grad) {
         result.is_leaf = false;
         auto* grad_fn = new DropoutGradFn();
         grad_fn->capture_input(const_cast<Tensor&>(x));
@@ -4501,6 +4581,70 @@ Tensor dropout(const Tensor& x, float p, bool training, const uint8_t* mask, cud
         result.grad_fn = grad_fn;
         result.owns_grad_fn = true;  // ISSUE #54 FIX: Result owns its grad_fn
     }
+    
+    return result;
+}
+
+/**
+ * Dropout with auto-generated mask using PRNG seed
+ * This is the preferred interface - mask is generated internally and managed properly.
+ * 
+ * @param x Input tensor
+ * @param p Dropout probability (fraction to drop, e.g., 0.1 means drop 10%)
+ * @param seed Random seed for mask generation (use batch_idx * step + offset for reproducibility)
+ * @param training If false, no dropout applied (identity function)
+ * @param stream CUDA stream
+ */
+Tensor dropout(const Tensor& x, float p, uint64_t seed, bool training, cudaStream_t stream) {
+    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream);
+    
+    if (!training || p == 0.0f) {
+        // No dropout during inference or when p=0
+        cudaMemcpyAsync(result.data, x.data, x.size_bytes(), cudaMemcpyDeviceToDevice, stream);
+        
+        if (x.requires_grad) {
+            result.is_leaf = false;
+            auto* grad_fn = new AddGradFn();
+            grad_fn->capture_single_input(const_cast<Tensor&>(x), stream);
+            result.grad_fn = grad_fn;
+            result.owns_grad_fn = true;
+        }
+        return result;
+    }
+    
+    const size_t count = x.numel();
+    const float scale = 1.0f / (1.0f - p);
+    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
+    
+    // Allocate mask on device
+    uint8_t* mask = nullptr;
+    cudaMalloc(&mask, count * sizeof(uint8_t));
+    
+    // Generate random mask: 1 = keep (with prob 1-p), 0 = drop (with prob p)
+    kernel_generate_dropout_mask<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        mask, count, p, seed);
+    trackKernelLaunch("kernel_generate_dropout_mask", stream);
+    
+    // Forward: y = x * mask * scale
+    kernel_dropout_forward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        x.data, mask, result.data, scale, count);
+    trackKernelLaunch("kernel_dropout_forward", stream);
+    
+    // Set up backward - ISSUE #48: capture stable data
+    if (x.requires_grad) {
+        result.is_leaf = false;
+        auto* grad_fn = new DropoutGradFn();
+        grad_fn->capture_input(const_cast<Tensor&>(x));
+        // save() copies the mask and takes ownership - we must free our copy
+        grad_fn->save(mask, p, count, stream);
+        result.grad_fn = grad_fn;
+        result.owns_grad_fn = true;
+    }
+    
+    // Free our mask copy (DropoutGradFn::save() made its own copy)
+    // Sync first to ensure kernel finished reading the mask
+    cudaStreamSynchronize(stream);
+    cudaFree(mask);
     
     return result;
 }
@@ -5106,7 +5250,6 @@ struct MatMulGradFn : public GradFn {
                 queueForDeferredCleanup(p);
             });
             cached_a = owned_cache_a.get();
-            AG_TRACE("[MatMulGradFn] Copied cache_A: %zu floats to %p\n", a_size, (void*)cached_a);
         }
         
         // Copy cache B if needed for grad_A computation
@@ -5124,7 +5267,6 @@ struct MatMulGradFn : public GradFn {
                 queueForDeferredCleanup(p);
             });
             cached_b = owned_cache_b.get();
-            AG_TRACE("[MatMulGradFn] Copied cache_B: %zu floats to %p\n", b_size, (void*)cached_b);
         }
         
         // Validate that required caches are set
@@ -5241,12 +5383,12 @@ struct MatMulGradFn : public GradFn {
                 float c_rms = std::sqrt(static_cast<float>(c_sq / c_sample_sz));
                 
                 // Expected grad_A magnitude: sqrt(N) * grad_C_rms * B_rms
-                float expected_grad_a = std::sqrt(static_cast<float>(N)) * c_rms * b_rms;
+                float expected_grad_a = std::sqrt(static_cast<float>(N)) * c_rms * b_rms; 
                 
                 fprintf(stderr, "[GRAD_A_EQUATION] LM_HEAD: grad_A = grad_C @ B\n");
-                fprintf(stderr, "  grad_C: shape=[%d,%d] max=%.6f rms=%.6f\n", M, N, c_max, c_rms);
-                fprintf(stderr, "  B(weights): shape=[%d,%d] max=%.6f std=%.6f rms=%.6f\n", N, K, b_max, b_std, b_rms);
-                fprintf(stderr, "  EXPECTED grad_A ≈ sqrt(%d) * %.6f * %.6f = %.6f\n", N, c_rms, b_rms, expected_grad_a);
+                fprintf(stderr, "  grad_C: shape=[%d,%d] max=%.10e rms=%.10e\n", M, N, c_max, c_rms);
+                fprintf(stderr, "  B(weights): shape=[%d,%d] max=%.10e std=%.10e rms=%.10e\n", N, K, b_max, b_std, b_rms);
+                fprintf(stderr, "  EXPECTED grad_A ≈ sqrt(%d) * %.10e * %.10e = %.10e\n", N, c_rms, b_rms, expected_grad_a);
             }
             
             if (transpose_b) {
@@ -5294,7 +5436,7 @@ struct MatMulGradFn : public GradFn {
                         }
                     }
                     float a_rms = std::sqrt(static_cast<float>(a_sq / a_sample_sz));
-                    fprintf(stderr, "  ACTUAL grad_A: shape=[%d,%d] max=%.6f rms=%.6f\n", M, K, a_max, a_rms);
+                    fprintf(stderr, "  ACTUAL grad_A: shape=[%d,%d] max=%.2e rms=%.2e\n", M, K, a_max, a_rms);
                 }
             } else {
                 // grad_A = grad_C @ B^T  where B is [K, N]
@@ -5680,6 +5822,9 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
     if (status != CUBLAS_STATUS_SUCCESS) {
         throw std::runtime_error("autograd::matmul: cuBLAS sgemm failed");
     }
+    
+    // PyTorch verification for MatMul forward (pass transpose_b to handle weight matrix layouts)
+    PYTORCH_VERIFY_MATMUL(a.data, b.data, result.data, M, K, N, "matmul", 0, 0, 0, transpose_b);
     
     // Set up backward (TAPE-BASED)
     if (result.requires_grad) {

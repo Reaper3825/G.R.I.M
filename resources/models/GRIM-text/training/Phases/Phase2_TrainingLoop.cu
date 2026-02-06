@@ -820,7 +820,9 @@ std::string formatHiddenState277Analysis(const HiddenState277Analysis& a, int ba
     oss << "    TOTAL: " << total_contribution << " (POSITIVE → W[277] INCREASES, NEGATIVE → W[277] DECREASES)\n";
     
     // Anomaly detection per Rule 21
-    if (total_contribution > 0 && a.grad_277_at_277_targets < 0) {
+    // Issue #132 FIX: With row centering, contribution ≈ 0. Only flag if SIGNIFICANTLY positive (>0.01).
+    const float kContributionThreshold = 0.01f;
+    if (total_contribution > kContributionThreshold && a.grad_277_at_277_targets < 0) {
         oss << "  [ANOMALY] WEIGHT_PARADOX_SOURCE: grad[277] at 277-targets is negative (model wants to DECREASE)";
         oss << " but total contribution is POSITIVE (W[277] will INCREASE!)\n";
         
@@ -3430,7 +3432,11 @@ BatchResult processBatch(
     // For tied weights: logit[277] = x @ W[277].T, so larger W[277] → larger logit_277
     // ========================================================================
     // Use centralized EquationLogger to gate expensive diagnostics
-    const bool kToken277DiagEnabled = GRIM::getEquationLogger().isEnabled();
+    // Issue #134: Run EXPENSIVE diagnostics every N batches to avoid sync bottleneck
+    // These copy GB of data D2H (logits are 7168*50377*4 = 1.4GB per call!)
+    constexpr int kExpensiveDiagFrequency = 50;  // Every 50 batches instead of every batch
+    const bool kToken277DiagEnabled = GRIM::getEquationLogger().isEnabled() &&
+        (batch_idx == 0 || (batch_idx + 1) % kExpensiveDiagFrequency == 0);
     
     if (kToken277DiagEnabled) {
         const auto& ts = ctx.model->getTrainingState();
@@ -3447,18 +3453,22 @@ BatchResult processBatch(
             ts, flat_targets, cfg.d_model, stream);
         ctx.logging.logger->log(formatToken277Diagnostic(tok277, batch_idx));
         
-        // [WEIGHT_GRADIENT_EQUATION] Structured logging via centralized EquationLogger
+        // [TOKEN_277_WEIGHT_GRADIENT] Structured logging via centralized EquationLogger
+        // NOTE: This logs GRADIENT state at backward pass. Actual weight update happens later
+        // in optimizer step (see POST-OPTIMIZER Token 277 Weight Delta diagnostic below).
+        // Phase is GRADIENT_CLIP because this runs after backward, before optimizer.
         EQ_LOG_HOST(
-            "WEIGHT_GRADIENT_EQUATION",
-            "W_new[277] = W[277] - lr * grad_W[277] / sqrt(v + eps)",
-            "grad_norm=" + std::to_string(tok277.grad_row_norm) + 
-            " grad_sum=" + std::to_string(tok277.grad_row_sum) + 
-            " grad_mean=" + std::to_string(tok277.grad_row_mean),
-            "weight_norm=" + std::to_string(tok277.weight_row_norm) + 
-            " weight_mean=" + std::to_string(tok277.weight_row_mean),
-            "target_277_ratio=" + std::to_string(tok277.target_277_ratio),
-            "target_277_count=" + std::to_string(tok277.target_277_count) + 
-            "/" + std::to_string(tok277.total_valid_targets),
+            "TOKEN_277_WEIGHT_GRADIENT",
+            "grad_W[277] = dL/dW[277] (computed from backward pass)",
+            "context: target_277_count=" + std::to_string(tok277.target_277_count) + 
+            "/" + std::to_string(tok277.total_valid_targets) + 
+            " target_277_ratio=" + std::to_string(tok277.target_277_ratio),
+            "grad_stats: norm=" + std::to_string(tok277.grad_row_norm) + 
+            " sum=" + std::to_string(tok277.grad_row_sum) + 
+            " mean=" + std::to_string(tok277.grad_row_mean),
+            "weight_pre_opt: norm=" + std::to_string(tok277.weight_row_norm) + 
+            " mean=" + std::to_string(tok277.weight_row_mean),
+            "optimizer_update: W_new = W - lr * m_hat / sqrt(v_hat + eps)",
             static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::GRADIENT_CLIP);
         
         // Issue #37: Hidden state analysis - understand WHY grad_W[277].sum is positive
@@ -3498,26 +3508,32 @@ BatchResult processBatch(
         ctx.logging.logger->log(formatFeedbackLoopDiagnostic(feedback_diag, batch_idx));
         
         // [FEEDBACK_LOOP_EQUATION] Structured logging via centralized EquationLogger
+        // NOTE: This diagnostic runs every 50 batches (kExpensiveDiagFrequency) to avoid sync overhead
+        // Tracks self-reinforcing mode collapse: logit magnitude = component products
         EQ_LOG_HOST(
-            "FEEDBACK_LOOP_EQUATION",
-            "logit[277] = ||h|| * ||W[277]|| * cos(h, W[277])",
-            "h_norm=" + std::to_string(feedback_diag.hidden_norm_mean) + 
+            "FEEDBACK_LOOP_EQUATION",                                    // metric_name
+            "logit[277] = ||h|| × ||W[277]|| × cos(h, W[277])",        // equation_str
+            "COMPONENTS: h_norm=" + std::to_string(feedback_diag.hidden_norm_mean) + 
             " W_norm=" + std::to_string(feedback_diag.weight_277_norm) + 
-            " cos=" + std::to_string(feedback_diag.cosine_h_w277_mean),
-            "h_growth=" + std::to_string(feedback_diag.hidden_norm_growth_pct) + "%" +
-            " W_growth=" + std::to_string(feedback_diag.weight_norm_growth_pct) + "%" +
-            " cos_growth=" + std::to_string(feedback_diag.cosine_growth_pct) + "%",
-            "predicted=" + std::to_string(feedback_diag.predicted_logit_277),
-            "actual=" + std::to_string(feedback_diag.actual_logit_277_mean) + 
-            " error=" + std::to_string(feedback_diag.decomposition_error_pct) + "%",
-            static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::LM_HEAD_PROJECTION);
+            " cos(h,W)=" + std::to_string(feedback_diag.cosine_h_w277_mean),  // context_str (current values)
+            "GROWTH_RATES: h=" + std::to_string(feedback_diag.hidden_norm_growth_pct) + "pct" +
+            " W=" + std::to_string(feedback_diag.weight_norm_growth_pct) + "pct" +
+            " cos=" + std::to_string(feedback_diag.cosine_growth_pct) + "pct",  // expected_str (batch-to-batch deltas)
+            "PREDICTED_LOGIT: " + std::to_string(feedback_diag.predicted_logit_277),  // computed_str (from decomposition)
+            "ACTUAL_LOGIT: " + std::to_string(feedback_diag.actual_logit_277_mean) + 
+            " DECOMP_ERROR: " + std::to_string(feedback_diag.decomposition_error_pct) + "pct",  // info_str (forward pass vs reconstruction)
+            static_cast<int>(batch_idx),                                 // batch_idx
+            0,                                                           // layer_idx (N/A for global diagnostic)
+            0,                                                           // head_idx (N/A)
+            GRIM::EquationPhase::GRADIENT_CLIP);                        // phase (runs POST-BACKWARD, before optimizer)
     }
     
     // ========================================================================
     // DIAGNOSTIC: Export gradients for PyTorch comparison (EVERY batch)
     // ========================================================================
+    const bool export_grads = false;
     static bool exported_grads = false;
-    if (batch_idx < 10) {  // Export first 10 batches for gradient tracking
+    if (batch_idx < 10 && export_grads ) {  // Export first 10 batches for gradient tracking
         exported_grads = true;
         
         const auto& ts = ctx.model->getTrainingState();

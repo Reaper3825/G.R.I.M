@@ -247,7 +247,7 @@ namespace {
     // This helps track what values are being cached for backward GEMM
     // ========================================================================
     
-    static bool g_issue77_fwd_diag_enabled = true;
+    static bool g_issue77_fwd_diag_enabled = false;  // Set true to enable, adds D2H sync overhead
     static int g_issue77_fwd_layer_count = 0;
     static int g_issue77_fwd_batch_count = 0;
     static float g_diag_input_avg_rms = 0.0f;  // [RMSNORM_EQUATION] temp for cross-block communication
@@ -453,7 +453,7 @@ namespace {
     // This is guarded by g_debug_qkv_expectations_enabled and runs first 2 batches
     // ========================================================================
     
-    static bool g_debug_qkv_expectations_enabled = true;
+    static bool g_debug_qkv_expectations_enabled = false;  // Set true to enable, VERY expensive D2H copies
     static int g_debug_qkv_call_count = 0;
     static constexpr int kMaxDebugQKVCalls = 24;  // 2 batches * 12 layers
     

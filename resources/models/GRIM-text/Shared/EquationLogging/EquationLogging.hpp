@@ -4,6 +4,7 @@
 #include <cstring>
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <chrono>
 #include <filesystem>
@@ -1403,3 +1404,107 @@ inline EquationLogger& getEquationLogger() {
     } while(0)
 
 } // namespace GRIM
+
+// ============================================================================
+// PYTORCH VERIFICATION INTEGRATION
+// ============================================================================
+// When GRIM_PYTORCH_VERIFY is defined, enables side-by-side comparison with
+// PyTorch reference implementations via subprocess.
+// 
+// Usage:
+//   1. Define GRIM_PYTORCH_VERIFY before including this header
+//   2. Call PYTORCH_VERIFY_INIT("path/to/grim/root") at startup
+//   3. Use EQ_LOG_AND_VERIFY_* macros instead of plain EQ_LOG_HOST
+//   4. Call PYTORCH_VERIFY_SHUTDOWN() at cleanup
+// 
+// NOTE: This is SLOW (subprocess per verification) - use only for debugging!
+// ============================================================================
+
+#include "PyTorchVerify.hpp"
+
+// ============================================================================
+// COMBINED LOGGING + VERIFICATION MACROS
+// These log the equation AND run PyTorch verification in one call
+// ============================================================================
+
+// RMSNorm: Log equation AND verify with PyTorch
+#define EQ_LOG_AND_VERIFY_RMSNORM(x_host, gamma_host, output_host, batch_size, hidden_dim, eps, batch_idx, layer_idx, step_idx) \
+    do { \
+        /* Log equation */ \
+        std::ostringstream _inputs, _expected, _actual; \
+        float _x_rms = 0.0f, _out_rms = 0.0f; \
+        for (int _i = 0; _i < (batch_size) * (hidden_dim); _i++) { _x_rms += (x_host)[_i] * (x_host)[_i]; } \
+        _x_rms = std::sqrt(_x_rms / ((batch_size) * (hidden_dim))); \
+        for (int _i = 0; _i < (batch_size) * (hidden_dim); _i++) { _out_rms += (output_host)[_i] * (output_host)[_i]; } \
+        _out_rms = std::sqrt(_out_rms / ((batch_size) * (hidden_dim))); \
+        _inputs << "x: shape=[" << (batch_size) << "," << (hidden_dim) << "] rms=" << _x_rms; \
+        _expected << "output_rms ≈ 1.0"; \
+        _actual << "output_rms = " << _out_rms; \
+        EQ_LOG_HOST("RMSNORM_FWD", "y = x * gamma / sqrt(mean(x²) + eps)", \
+                    _inputs.str(), "", _expected.str(), _actual.str(), \
+                    batch_idx, layer_idx, step_idx, GRIM::EquationPhase::RMSNORM); \
+        /* PyTorch verification */ \
+        PYTORCH_VERIFY_RMSNORM(x_host, gamma_host, output_host, batch_size, hidden_dim, eps, batch_idx, layer_idx, step_idx); \
+    } while(0)
+
+// MatMul: Log equation AND verify with PyTorch
+// transpose_b: If true, B is [N,K] and we compute A @ B^T
+#define EQ_LOG_AND_VERIFY_MATMUL(A_host, B_host, C_host, M, K, N, op_name, batch_idx, layer_idx, step_idx, transpose_b) \
+    do { \
+        std::ostringstream _inputs, _actual; \
+        float _a_rms = 0.0f, _c_rms = 0.0f; \
+        for (int _i = 0; _i < (M) * (K); _i++) { _a_rms += (A_host)[_i] * (A_host)[_i]; } \
+        _a_rms = std::sqrt(_a_rms / ((M) * (K))); \
+        for (int _i = 0; _i < (M) * (N); _i++) { _c_rms += (C_host)[_i] * (C_host)[_i]; } \
+        _c_rms = std::sqrt(_c_rms / ((M) * (N))); \
+        _inputs << "A: [" << (M) << "x" << (K) << "] rms=" << _a_rms; \
+        _actual << "C: [" << (M) << "x" << (N) << "] rms=" << _c_rms; \
+        EQ_LOG_HOST(op_name, (transpose_b) ? "C = A @ B^T" : "C = A @ B", _inputs.str(), "", "", _actual.str(), \
+                    batch_idx, layer_idx, step_idx, GRIM::EquationPhase::QKV_PROJECTION); \
+        PYTORCH_VERIFY_MATMUL(A_host, B_host, C_host, M, K, N, op_name, batch_idx, layer_idx, step_idx, transpose_b); \
+    } while(0)
+
+// GELU: Log equation AND verify with PyTorch
+#define EQ_LOG_AND_VERIFY_GELU(input_host, output_host, n, batch_idx, layer_idx, step_idx) \
+    do { \
+        std::ostringstream _inputs, _actual; \
+        float _in_rms = 0.0f, _out_rms = 0.0f; \
+        for (int _i = 0; _i < (n); _i++) { _in_rms += (input_host)[_i] * (input_host)[_i]; } \
+        _in_rms = std::sqrt(_in_rms / (n)); \
+        for (int _i = 0; _i < (n); _i++) { _out_rms += (output_host)[_i] * (output_host)[_i]; } \
+        _out_rms = std::sqrt(_out_rms / (n)); \
+        _inputs << "x: n=" << (n) << " rms=" << _in_rms; \
+        _actual << "y: rms=" << _out_rms; \
+        EQ_LOG_HOST("GELU_FWD", "y = 0.5*x*(1+tanh(sqrt(2/pi)*(x+0.044715*x³)))", \
+                    _inputs.str(), "", "", _actual.str(), \
+                    batch_idx, layer_idx, step_idx, GRIM::EquationPhase::FFN_GELU); \
+        PYTORCH_VERIFY_GELU(input_host, output_host, n, batch_idx, layer_idx, step_idx); \
+    } while(0)
+
+// Cross-entropy loss: Log equation AND verify with PyTorch
+#define EQ_LOG_AND_VERIFY_CE_LOSS(logits_host, targets_host, loss_host, batch_size, vocab_size, batch_idx, step_idx) \
+    do { \
+        std::ostringstream _inputs, _actual; \
+        _inputs << "logits: [" << (batch_size) << "x" << (vocab_size) << "]"; \
+        _actual << "loss = " << *(loss_host); \
+        EQ_LOG_HOST("CE_LOSS_FWD", "L = -log(softmax(logits)[target])", \
+                    _inputs.str(), "", "", _actual.str(), \
+                    batch_idx, -1, step_idx, GRIM::EquationPhase::LOSS_COMPUTATION); \
+        PYTORCH_VERIFY_CE_LOSS(logits_host, targets_host, loss_host, batch_size, vocab_size, batch_idx, step_idx); \
+    } while(0)
+
+// Scaled dot-product attention: Log equation AND verify with PyTorch
+#define EQ_LOG_AND_VERIFY_SDPA(Q_host, K_host, V_host, out_host, b, h, s, d, scale, batch_idx, layer_idx, step_idx) \
+    do { \
+        std::ostringstream _inputs, _actual; \
+        _inputs << "Q,K,V: [" << (b) << "," << (h) << "," << (s) << "," << (d) << "] scale=" << (scale); \
+        float _out_rms = 0.0f; \
+        size_t _n = (size_t)(b) * (h) * (s) * (d); \
+        for (size_t _i = 0; _i < _n; _i++) { _out_rms += (out_host)[_i] * (out_host)[_i]; } \
+        _out_rms = std::sqrt(_out_rms / _n); \
+        _actual << "output rms=" << _out_rms; \
+        EQ_LOG_HOST("SDPA_FWD", "out = softmax(Q@K^T * scale) @ V", \
+                    _inputs.str(), "", "", _actual.str(), \
+                    batch_idx, layer_idx, step_idx, GRIM::EquationPhase::FLASH_ATTENTION_FWD); \
+        PYTORCH_VERIFY_SDPA(Q_host, K_host, V_host, out_host, b, h, s, d, scale, batch_idx, layer_idx, step_idx); \
+    } while(0)

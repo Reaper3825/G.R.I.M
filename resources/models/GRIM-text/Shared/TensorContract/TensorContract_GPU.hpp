@@ -1366,14 +1366,27 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens,
 Tensor softmax(const Tensor& x, cudaStream_t stream = nullptr);
 
 /**
- * Dropout: y = x * mask / (1 - p), where mask is binary
+ * Dropout with external mask: y = x * mask / (1 - p), where mask is binary
  * @param x Input tensor
  * @param p Dropout probability (fraction to drop, e.g., 0.1)
- * @param training If false, no dropout is applied
- * @param mask External binary mask (nullptr to generate internally - not yet supported)
+ * @param training If false, no dropout is applied (identity function)
+ * @param mask External binary mask (REQUIRED when training=true and p>0)
+ * @throws std::invalid_argument if mask is nullptr when dropout should be applied
  */
 Tensor dropout(const Tensor& x, float p, bool training = true,
                const uint8_t* mask = nullptr, cudaStream_t stream = nullptr);
+
+/**
+ * Dropout with auto-generated mask: y = x * mask / (1 - p)
+ * Preferred interface - generates mask internally using Philox PRNG.
+ * 
+ * @param x Input tensor
+ * @param p Dropout probability (fraction to drop, e.g., 0.1 = drop 10%)
+ * @param seed Random seed for mask generation (use batch_idx * step + layer_offset for reproducibility)
+ * @param training If false, no dropout is applied (identity function)
+ */
+Tensor dropout(const Tensor& x, float p, uint64_t seed, bool training = true,
+               cudaStream_t stream = nullptr);
 
 /**
  * Residual/skip connection add: y = x + residual

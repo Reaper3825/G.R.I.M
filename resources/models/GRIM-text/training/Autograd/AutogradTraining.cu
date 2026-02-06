@@ -659,6 +659,21 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     
     // Store in context for backward
     ctx.embedding_tensor = std::move(emb_output);
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  EMBEDDING DROPOUT (Issue #133)
+    //  
+    //  Apply dropout to embeddings BEFORE encoder layers. This breaks symmetry
+    //  between hidden states and prevents mode collapse to dominant tokens.
+    //  PyTorch transformers do this - we weren't, which caused mode collapse.
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (cfg->dropout_rate > 0.0f) {
+        const uint64_t emb_dropout_seed = ctx.step * 1000 + 999;  // Unique seed for embedding dropout
+        ctx.embedding_tensor = autograd::dropout(ctx.embedding_tensor, cfg->dropout_rate, 
+                                                  emb_dropout_seed, true, ctx.stream);
+        AG_INFO("Step 1c: Embedding dropout applied (p=" << cfg->dropout_rate << ")");
+    }
+    
     AG_INFO("Step 1: Embedding complete, shape=[" << total_tokens << ", " << cfg->d_model << "]");
     
     // ═══════════════════════════════════════════════════════════════════════════
@@ -740,10 +755,10 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     
     // ═══════════════════════════════════════════════════════════════════════════
     // ISSUE #91 DIAGNOSTIC: Dump embedding stats AFTER ScratchBlock, BEFORE encoder
-    // This tells us what Layer 0 actually receives as input!
-    // FIX: Now scans FULL tensor instead of just first 10,000 elements
+    // (GUARDED: set ENABLE_EXPENSIVE_DIAGNOSTICS=true in VerboseLogging.hpp to enable)
     // ═══════════════════════════════════════════════════════════════════════════
-    {
+    if constexpr (GRIM::VerboseLogging::ENABLE_EXPENSIVE_DIAGNOSTICS) {
+        // This copies ~22MB to host - expensive!
         const int full_size = total_tokens * cfg->d_model;
         std::vector<float> h_emb(full_size);
         cudaMemcpy(h_emb.data(), ctx.embedding_tensor.data, full_size * sizeof(float), cudaMemcpyDeviceToHost);
@@ -858,7 +873,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 }
             }
         }
-    }
+    }  // end ENABLE_EXPENSIVE_DIAGNOSTICS guard (Issue #91 embedding stats)
 
     // ═══════════════════════════════════════════════════════════════════════════
     //  STEP 2: Encoder Layers (transformer blocks)
@@ -930,6 +945,18 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         
         // Run layer forward with intermediates storage
         Tensor layer_output = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, layer_storage);
+        
+        // ═══════════════════════════════════════════════════════════════════════
+        //  ENCODER LAYER DROPOUT (Issue #133)
+        //  
+        //  Apply dropout after each encoder layer. This is standard practice in
+        //  transformer implementations and prevents mode collapse.
+        // ═══════════════════════════════════════════════════════════════════════
+        if (cfg->dropout_rate > 0.0f) {
+            const uint64_t layer_dropout_seed = ctx.step * 1000 + layer_idx;  // Unique seed per layer per step
+            layer_output = autograd::dropout(layer_output, cfg->dropout_rate,
+                                             layer_dropout_seed, true, ctx.stream);
+        }
         
         // Store output reference in encoder_layer_outputs (for compatibility)
         // NOTE: The actual output data lives in layer_storage.output
@@ -1065,8 +1092,20 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     // so ctx.centered_encoder_output must live until backward completes.
     
     if (use_centering) {
-        // Use autograd::center_columns which correctly centers across positions
+        // ISSUE #125 FIX: Column centering - removes common direction, reduces cos(h_i, h_j)
+        // center_columns: centered[t,d] = hidden[t,d] - mean_t(hidden[:,d])
+        // Result: Σ_t h[t,d] = 0 for each feature d
         ctx.centered_encoder_output = autograd::center_columns(ctx.encoder_output_tensor, ctx.stream);
+        
+        // ISSUE #132 FIX: Row centering - eliminates gradient sign flip!
+        // center_rows: centered[t,d] = hidden[t,d] - mean_d(hidden[t,:])
+        // Result: Σ_d h[t,d] = 0 for each position t
+        // 
+        // WHY: Gradient sign flip occurs when hidden_sum[t] × grad[t,277] creates
+        // wrong-sign contributions. With row centering, hidden_sum[t] = 0 for all t,
+        // eliminating the mechanism entirely.
+        ctx.centered_encoder_output = autograd::center_rows(ctx.centered_encoder_output, ctx.stream);
+        
         lm_input_ptr = ctx.centered_encoder_output.data;
         
         // Also copy to centering_scratch_tensor for diagnostic reads
@@ -1076,7 +1115,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                            cudaMemcpyDeviceToDevice, ctx.stream);
         }
         
-        AG_INFO("Step 4a: Hidden states COLUMN-centered (Issue #125 fix - reduces cos(h_i, h_j))");
+        AG_INFO("Step 4a: Hidden states COLUMN+ROW centered (Issue #125 + #132 fix)");
     }
     
     // Create input tensor referencing the (possibly centered) data
@@ -1156,18 +1195,18 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     
     // ═══════════════════════════════════════════════════════════════════════════
     //  RULE 21 DIAGNOSTIC: Why is token 277 (or any token) the argmax?
-    //  
-    //  Equation: logit[v] = Σ_d encoder[pos, d] × W[v, d]
-    //  
-    //  For argmax analysis: compare logit[277] vs logit[other tokens]
-    //  The argmax wins because: Σ_d h[d] × W[argmax, d] > Σ_d h[d] × W[v, d] for all v
-    //  
-    //  This diagnostic shows:
-    //  1. Hidden state (encoder output) statistics at sample position
-    //  2. Weight row statistics for top predicted tokens
-    //  3. Dot product decomposition showing WHY argmax wins
+    //  (GUARDED: set ENABLE_EXPENSIVE_DIAGNOSTICS=true in VerboseLogging.hpp to enable)
     // ═══════════════════════════════════════════════════════════════════════════
-    {
+    if constexpr (GRIM::VerboseLogging::ENABLE_EXPENSIVE_DIAGNOSTICS) {
+        //  Equation: logit[v] = Σ_d encoder[pos, d] × W[v, d]
+        //  
+        //  For argmax analysis: compare logit[277] vs logit[other tokens]
+        //  The argmax wins because: Σ_d h[d] × W[argmax, d] > Σ_d h[d] × W[v, d] for all v
+        //  
+        //  This diagnostic shows:
+        //  1. Hidden state (encoder output) statistics at sample position
+        //  2. Weight row statistics for top predicted tokens
+        //  3. Dot product decomposition showing WHY argmax wins
         constexpr int kAnalysisToken = 277;
         constexpr int kSamplePositions = 5;  // Sample first 5 positions
         const int d_model = cfg->d_model;
@@ -1247,32 +1286,80 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             float cosine_sim = (h_norm > 1e-8f && w_norm > 1e-8f) 
                                ? (dot_product_277 / (h_norm * w_norm)) : 0.0f;
             
-            fprintf(stderr, "[ARGMAX_EQUATION] pos=%d: logit[v] = Σ_d h[d] × W[v,d]\n", pos);
-            fprintf(stderr, "  HIDDEN h[%d]: mean=%.6f rms=%.6f min=%.6f max=%.6f sum=%.6f\n",
-                    pos, h_mean, h_rms, h_min, h_max, h_sum);
-            fprintf(stderr, "  W[277]: mean=%.6f rms=%.6f min=%.6f max=%.6f sum=%.6f\n",
-                    w_mean, w_rms, w_min, w_max, w_sum);
-            fprintf(stderr, "  DOT(h, W[277]): computed=%.6f (pos_contrib=%.6f neg_contrib=%.6f)\n",
-                    dot_product_277, positive_contrib, negative_contrib);
-            fprintf(stderr, "  COSINE(h, W[277]): %.6f (measures alignment: 1.0=perfect, 0=orthogonal)\n",
-                    cosine_sim);
-            fprintf(stderr, "  ACTUAL logit[277]=%.6f (via GEMM)\n", logit_277);
-            fprintf(stderr, "  ARGMAX: token=%d logit=%.6f (277 loses by %.6f)\n",
-                    argmax_token, max_logit_val, logit_diff);
+            fprintf(stderr, "═══════════════════════════════════════════════════════════════════════════\n");
+            fprintf(stderr, "[LOGIT_ANALYSIS] Position %d: Why does logit[v] = Σ_d h[d] × W[v,d] choose token %d?\n", pos, argmax_token);
+            fprintf(stderr, "═══════════════════════════════════════════════════════════════════════════\n");
+            
+            // Analyze hidden state properties
+            fprintf(stderr, "HIDDEN STATE h[pos=%d]:\n", pos);
+            fprintf(stderr, "  Statistics: mean=%.6f (offset) rms=%.6f (magnitude) range=[%.6f, %.6f]\n",
+                    h_mean, h_rms, h_min, h_max);
+            fprintf(stderr, "  ├─ mean≠0 → systematic bias in dot products (mean × W_sum term)\n");
+            fprintf(stderr, "  ├─ rms=magnitude → scales all dot products proportionally\n");
+            fprintf(stderr, "  └─ range→variation across dimensions affects different weight rows differently\n");
+            
+            // Analyze weight row for token 277 (often SPACE token causing mode collapse)
+            fprintf(stderr, "WEIGHT ROW W[277] (target token):\n");
+            fprintf(stderr, "  Statistics: mean=%.6f rms=%.6f range=[%.6f, %.6f]\n",
+                    w_mean, w_rms, w_min, w_max);
+            fprintf(stderr, "  ├─ Initialized to mean≈0 (ideal), rms controls sensitivity\n");
+            fprintf(stderr, "  └─ Alignment with h determines dot product magnitude\n");
+            
+            // Decompose the dot product
+            fprintf(stderr, "DOT_PRODUCT ANALYSIS Σ_d h[d]×W[277,d]:\n");
+            fprintf(stderr, "  Raw computation: %.6f\n", dot_product_277);
+            fprintf(stderr, "  ├─ Positive contributions (h×W>0): %.6f (%.1f%%)\n", 
+                    positive_contrib, 100.0f * positive_contrib / (std::abs(dot_product_277) + 1e-8f));
+            fprintf(stderr, "  ├─ Negative contributions (h×W<0): %.6f (%.1f%%)\n",
+                    negative_contrib, 100.0f * std::abs(negative_contrib) / (std::abs(dot_product_277) + 1e-8f));
+            fprintf(stderr, "  ├─ Cosine alignment: %.6f (1.0=perfect alignment, 0=orthogonal, -1=opposite)\n", cosine_sim);
+            fprintf(stderr, "  └─ Interpretation: h and W[277] are %.1f%% aligned\n", 100.0f * cosine_sim);
+            
+            // Compare against argmax
+            fprintf(stderr, "PREDICTIONS:\n");
+            fprintf(stderr, "  logit[277]=%.6f (your token)\n", logit_277);
+            fprintf(stderr, "  logit[%d]=%.6f (ARGMAX wins)\n", argmax_token, max_logit_val);
+            fprintf(stderr, "  Margin: %.6f (277 is %.2f%% behind)\n", logit_diff, 100.0f * logit_diff / (std::abs(max_logit_val) + 1e-8f));
+            
+            // Reflection on what this means
+            fprintf(stderr, "REFLECTION:\n");
             if (argmax_token == kAnalysisToken) {
-                fprintf(stderr, "  [ANOMALY] Token 277 IS argmax! Mode collapse risk.\n");
+                fprintf(stderr, "  ⚠️  TOKEN 277 IS ARGMAX!\n");
+                fprintf(stderr, "  └─ This is the MODE COLLAPSE symptom:\n");
+                fprintf(stderr, "     - 277 (SPACE) is winning most of the time\n");
+                fprintf(stderr, "     - Hidden states are too correlated (high avg_cos)\n");
+                fprintf(stderr, "     - All positions have similar h[d] values\n");
+                fprintf(stderr, "     - W[277] captures the mode direction, beats other tokens\n");
+                fprintf(stderr, "  └─ Root cause: Positions not sufficiently differentiated\n");
+                fprintf(stderr, "     (Missing or weak position embeddings?)\n");
+            } else {
+                fprintf(stderr, "  ✓ Token 277 is NOT dominant (good)\n");
+                if (cosine_sim > 0.3f) {
+                    fprintf(stderr, "  ⚠️  But cosine_sim=%.6f is suspicious (>0.3):\n", cosine_sim);
+                    fprintf(stderr, "     - h and W[277] are MORE aligned than expected\n");
+                    fprintf(stderr, "     - If many positions have this alignment, mode collapse is forming\n");
+                } else {
+                    fprintf(stderr, "  ✓ h and W[277] are well-separated (cosine=%.6f, good)\n", cosine_sim);
+                }
             }
             fprintf(stderr, "\n");
         }
-    }
+    }  // end ENABLE_EXPENSIVE_DIAGNOSTICS guard
     
-    // RULE 20: Validate output shape
+    // RULE 20: Validate logits output shape
+    // Expected: [total_tokens, vocab_size] from matmul(lm_input, lm_weights^T)
     const auto expected_shape = TensorContract::TensorShape::make_LOGITS(total_tokens, cfg->vocab_size);
-    if (logits_tensor.shape.total_elements() != expected_shape.total_elements()) {
-        throw std::runtime_error("AutogradTraining: logits shape mismatch - got " + 
-                                 std::to_string(logits_tensor.shape.total_elements()) + 
-                                 " elements, expected " + 
-                                 std::to_string(expected_shape.total_elements()));
+    const size_t logits_elements = logits_tensor.shape.total_elements();
+    const size_t expected_elements = expected_shape.total_elements();
+    if (logits_elements != expected_elements) {
+        throw std::runtime_error(
+            "AutogradTraining: Logits shape validation FAILED after matmul\n" +
+            std::string("  Got: ") + std::to_string(logits_elements) + " elements (" +
+            std::to_string(logits_tensor.shape.batch_size) + "," +
+            std::to_string(logits_tensor.shape.seq_or_vocab) + ")\n" +
+            std::string("  Expected: ") + std::to_string(expected_elements) + " elements (" +
+            std::to_string(total_tokens) + "," + std::to_string(cfg->vocab_size) + ")\n" +
+            "  Root cause: lm_input or lm_weights dimensions incorrect");
     }
     
     // Update logits shape to use LOGITS layout (semantic correctness)

@@ -1,13 +1,194 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** EQUATION LOG VERIFIED - Issue #126 Centering Fix WORKING, New Issue #128 Identified
+**Status:** ISSUE #132 FIXED - Row Centering Eliminates Gradient Sign Flip
 **Started:** December 22, 2025
 **Last Updated:** February 5, 2026
-**Latest Finding:** Equation log analysis confirms Issue #126 centering IS WORKING (avg_cos ≈ -0.001). However, Loss is NOT converging and Token 277 is increasingly appearing in argmax predictions. Root cause identified: **Weight Paradox** where grad_W[277] sign conflicts lead to W[277] increasing despite model trying to decrease it.
+**Latest Finding:** Issue #132 (gradient sign flip) has been **FIXED** by adding row centering after column centering. Training log training_17703239465655733.log confirms hidden_sum[t] = 0 for all positions, eliminating the sign flip mechanism.
 
 ---
 
-## 🔴 CURRENT RUN TRACKING: Session 17702644885411807 (February 4-5, 2026)
+## ISSUE #132 FIX VERIFIED (Feb 5, 2026)
+
+### Before Fix (training_17703145711474962.log)
+- HIDDEN STATES: mean=-0.000430 (near zero but NOT exactly zero)
+- AT_277_TARGETS: hidden_mean=-0.001666 (more negative than average!)
+- from_277_targets: 0.217721 (POSITIVE - WRONG!)
+- TOTAL: 0.023126 (W[277] INCREASES when should DECREASE!)
+
+### After Fix (training_17703239465655733.log)
+- HIDDEN STATES: mean=-0.000000 (exactly zero due to row centering!)
+- AT_277_TARGETS: hidden_mean=0.000000 (exactly zero!)
+- from_277_targets: 0.000000 (no systematic contribution!)
+- TOTAL: -0.000000 (no gradient sign flip!)
+
+### The Fix: Column + Row Centering
+Implementation in AutogradTraining.cu lines 1067-1083:
+1. Column centering: Sigma_t h[t,d] = 0 for each feature d (Issue #125)
+2. Row centering: Sigma_d h[t,d] = 0 for each position t (Issue #132)
+
+---
+## ⚠️ CORRECTION: Previous "Mismatches" Were Misdiagnosed
+
+### Issue #130: QKV "Mismatch" Was Wrong Diagnostic Formula
+
+**What the log showed:**
+```
+EXPECTED: expected_row_norm=0.864
+ACTUAL: actual_row_norm=24.0
+```
+
+**Why this was WRONG:**
+The "expected" formula in `Encoding_GPU.cu` line ~2150 computed:
+```cpp
+expected_row_norm = ln1_row_norm * wqkv_row_norm / sqrt(d_model)
+                  = 27.7 * 0.031 / 27.7 = 0.031 → BUT log showed 0.864 (different formula)
+```
+
+**The CORRECT formula** for GEMM output row norm is:
+```
+||Y_row|| ≈ sqrt(d_model) × σ_x × σ_w × ||x_row|| = sqrt(768) × 1.0 × 0.031 × 27.7 ≈ 24
+```
+
+**Conclusion:** The actual value (24.0) is **MATHEMATICALLY CORRECT**. The diagnostic expected value was wrong.
+
+### Issue #131: LibTorch Gradient Comparison Was Invalid
+
+**What the comparison showed:**
+- GRIM QKV grad norm: 0.118
+- LibTorch QKV grad norm: 13.77
+- Ratio: **116x difference** → Claimed as "mismatch"
+
+**Why this comparison was INVALID:**
+
+| Config | LibTorch Baseline | GRIM |
+|--------|-------------------|------|
+| d_model | 512 | 768 |
+| num_layers | 6 | 12 |
+| num_heads | 8 | 12 |
+| batch_tokens | 1,536 | ~6,000 |
+
+**These are COMPLETELY DIFFERENT MODELS!** The gradient norms cannot be meaningfully compared.
+
+Even accounting for batch size (6000/1536 = 3.9x), there's still ~30x unexplained. This comes from:
+- Different model depth (12 vs 6 layers affects gradient flow)
+- Different model width (768 vs 512 affects gradient magnitude)
+- Possibly different weight initialization
+
+**To fix:** Run LibTorch baseline with IDENTICAL config to GRIM before claiming mismatch.
+
+---
+
+## 🔴 REAL ISSUE: HIDDEN_STATE_EQUATION Gradient Sign Flip (Issue #132)
+
+### The Actual Training Problem
+
+**Evidence from training_17703145711474962.log:**
+```
+[HIDDEN_STATE_EQUATION] GRAD_W[277]: grad_W[277,i] = Σ_t (hidden[t,i] × grad_logits[t,277])
+  AT_277_TARGETS (n=700): hidden_mean=-0.001666 ||h||=27.713331
+  AT_OTHER_TARGETS (n=5430): hidden_mean=-0.000271 ||h||=27.712530
+  CONTRIBUTION TO Σ grad_W[277,i] = Σ_t (hidden_sum[t] × grad[t,277]):
+  [ANOMALY] WEIGHT_PARADOX_SOURCE: grad[277] at 277-targets is negative (model wants to DECREASE)
+    but total contribution is POSITIVE (W[277] will INCREASE!)
+    ROOT_CAUSE: Per-position hidden_sum[t] variance (hidden_mean=-0.000430 ≈ 0 but individual
+    positions have |hidden_sum[t]| >> 0)
+```
+
+### Root Cause: Column Centering ≠ Row-Sum Centering
+
+**What column centering does:**
+- Centers each **feature column**: `Σ_t hidden[t,d] = 0` for each d
+- Makes overall `hidden_mean ≈ 0`
+
+**What column centering does NOT do:**
+- Does NOT make each **row sum** zero: `Σ_d hidden[t,d] ≠ 0` for each t
+- Row sums (per-position sums) still have variance!
+
+**The Gradient Sign Flip:**
+1. At 277-target positions: `grad_logits[t,277]` is NEGATIVE (~-0.06)
+2. At those same positions: `hidden_sum[t]` happens to be MORE NEGATIVE than average
+3. Product: `negative × negative = POSITIVE` contribution to grad_W[277]
+4. Result: W[277] weight INCREASES when it should DECREASE → mode collapse
+
+### Why This Causes Mode Collapse
+
+```
+Token 277 (SPACE) appears in ~11% of targets (700/6130).
+These positions have hidden_mean = -0.001666 (more negative than average -0.000271).
+When grad[t,277] < 0 AND hidden_sum[t] < 0:
+  contribution = hidden_sum[t] × grad[t,277] = negative × negative = POSITIVE
+
+Total contribution: +0.023 (positive)
+Expected contribution: negative (to decrease W[277] dominance)
+Result: W[277] grows → more 277 predictions → feedback loop → mode collapse
+```
+
+### Potential Fixes
+
+1. **Row centering** in addition to column centering:
+   - `hidden'[t,d] = hidden[t,d] - mean_d(hidden[t,:])` 
+   - Makes each position's row sum = 0
+   - Risk: May hurt representation quality
+
+2. **Contribution-weighted gradient projection:**
+   - Project out contributions with wrong sign
+   - Similar to PCGrad but for single-token focus
+
+3. **Per-position dropout/noise:**
+   - Break the correlation between hidden_sum[t] and target type
+   - Random noise on row sums
+
+---
+
+## 🟡 Previous "Mismatches" (Diagnostic Issues, Not Training Bugs)
+
+The following were originally flagged as "critical mismatches" but are actually **diagnostic formula errors**:
+
+**What This Means:**
+- Model performing WORSE than random initialization
+- PyTorch starts AT random baseline and DECREASES
+- GRIM starts ABOVE random and doesn't improve
+
+#### 4. Hidden State Gradient Contribution (WRONG SIGN) 🔴
+
+**Equation Log Evidence:**
+```
+[HIDDEN_STATE_EQUATION] batch=0
+  FORMULA: grad_W[277,i] = sum_t(hidden[t,i] * grad_logits[t,277])
+  INPUTS: h_mean=-0.000430 h_norm=27.712622
+  EXPECTED: total_contrib=0.023126
+  ACTUAL: grad_at_277=-0.060925 grad_at_other=-0.022743
+```
+
+**The Mismatch:**
+- PyTorch Expected: `+0.023` (positive)
+- GRIM Actual: `-0.061 + (-0.023) = -0.084` (negative)
+- **Gradients have WRONG SIGN!**
+
+**Why This Breaks Training:**
+- Optimizer moves weights in WRONG direction
+- Model learns to predict Token 277 MORE instead of less
+- Direct cause of mode collapse
+
+### Summary: GRIM ≠ PyTorch
+
+| Component | PyTorch | GRIM | Impact |
+|-----------|---------|------|--------|
+| QKV output norm | ~8 | ~24 | Attention saturation |
+| Matmul RMS | 2.5-5.0 | 0.87 | Wrong magnitude |
+| Initial loss | 10.827 | 11.75 | Worse than random |
+| Weight grads | Correct sign | **WRONG sign** | Mode collapse |
+
+### Next Steps to Fix
+
+1. **Compare PyTorch matmul vs GRIM matmul** - Transpositions correct?
+2. **Check weight initialization** - Does GRIM init match PyTorch?
+3. **Verify gradient flow** - Where does sign flip happen?
+4. **Run minimal test** - Single layer comparison
+
+---
+
+## � HISTORICAL: Session 17702644885411807 (February 4-5, 2026)
 
 ### Equation Log Verification Summary
 
@@ -6914,3 +7095,4 @@ cd D:\G.R.I.M\resources\models\GRIM-text\training
 # Analyze latest log
 python D:\G.R.I.M\verify_training_math.py
 ```
+

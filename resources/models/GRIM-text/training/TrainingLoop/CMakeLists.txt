@@ -20,6 +20,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Disable Windows min/max macros to prevent conflicts with std::min/std::max
 add_compile_definitions(NOMINMAX)
 
+# Option: PyTorch verification for side-by-side comparison (SLOW - debug only!)
+option(GRIM_PYTORCH_VERIFY "Enable PyTorch verification via subprocess" OFF)
+if(GRIM_PYTORCH_VERIFY)
+    add_compile_definitions(GRIM_PYTORCH_VERIFY)
+    message(STATUS "PyTorch verification ENABLED (debug mode - will be slow!)")
+endif()
+
 # Enable precompiled headers for faster compilation
 set(CMAKE_PCH_INSTANTIATE_TEMPLATES ON)
 

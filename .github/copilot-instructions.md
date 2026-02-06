@@ -139,17 +139,14 @@ When working on GRIM-text training issues, check this doc first to avoid re-inve
 GRIM (General Request and Information Manager) is an offline-first, modular C++/Python AI assistant featuring:
 
 - Custom transformer model (GRIM-text) with Flash Attention v2, cuBLAS, custom fused CUDA kernels
-- Multi-modal perception (screen capture, OCR, object detection)
-- Voice I/O (Whisper.cpp STT, Coqui XTTS v2 via Python bridge)
-- Hot-reloadable plugin architecture
 - GPU-accelerated training and inference (CUDA, GELU activation, FlatBuffers serialization)
 - DeBERTa BERT model for training data quality verification
 
 **Core Philosophy:** All features work offline by default. Only browser commands and external APIs require internet.
 
-**Project Status:** Personal Jarvis-style assistant, not intended for distribution. Optimized for single-user experience.
+**Project Status:** Personal Jarvis-style assistant/companion/reasoning engine, not intended for distribution. Optimized for single-user experience made to adapt to user use cases and model's environment and systems it has access to.
 
-**Planned:** Multi-model orchestration system, VR/Quest headset overlay mode
+**Planned:** Multi-model orchestration system, VR/Quest headset overlay mode, crossplatform support.
 
 ## Architecture Overview
 
@@ -796,6 +793,37 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
     - `[HiddenCosine]` diagnostic - Added inline conditional buffer selection using `ctx.model->getConfig().lm_head_center_hidden_states`
     - Call sites now pass `cfg.lm_head_center_hidden_states` as the `use_centering` parameter
 - **Verification**: After fix, `[HIDDEN_STATE_EQUATION]` should show `hidden_mean ≈ 0` when centering is enabled
+
+130. **QKV "Expected" Diagnostic Formula Was WRONG (DIAGNOSTIC BUG - Issue #130, Feb 2026)**: The QKV_PROJECTION_EQUATION diagnostic showed `expected_row_norm=0.864` vs `actual_row_norm=24.0`, claiming a "28x mismatch". This was **NOT a training bug** - the diagnostic formula was wrong.
+
+- **What the diagnostic computed**: `expected = ln1_row_norm × wqkv_row_norm / sqrt(d_model)` ≈ 0.864
+- **Correct GEMM output formula**: `||Y_row|| ≈ sqrt(d_model) × σ_x × σ_w × ||x_row||` ≈ 24
+- **Conclusion**: The actual value (24.0) is **mathematically correct**. The diagnostic expected formula was wrong.
+- **Impact**: Led to false conclusions about QKV projection being broken. Individual GEMM operations are working correctly.
+- **Files**: `Encoding_GPU.cu` lines ~2150 has the wrong expected formula in diagnostic code
+
+131. **LibTorch Gradient Comparison Was INVALID (DIAGNOSTIC BUG - Issue #131, Feb 2026)**: The gradient comparison showed GRIM QKV grad norm (0.118) vs LibTorch (13.77) = "116x mismatch". This comparison was **invalid** due to completely different model configurations.
+
+- **LibTorch Baseline Config**: d_model=512, num_layers=6, num_heads=8, batch_tokens=1,536
+- **GRIM Config**: d_model=768, num_layers=12, num_heads=12, batch_tokens=6,000
+- **Why invalid**: Different model depth/width affects gradient magnitude. Different batch size affects gradient scale from mean reduction.
+- **Corrected Analysis**: Expected ~4x from batch size (6000/1536), remaining ~30x from model size difference
+- **To fix**: Run LibTorch baseline with IDENTICAL config to GRIM before claiming gradient mismatch
+- **Files**: `Tools/libtorch_baseline/main.cpp` - needs config matching GRIM's `ai_config.json`
+
+132. **Hidden State Gradient Sign Flip Due to Row-Sum Variance (FIXED - Issue #132, Feb 2026)**: The gradient sign flip was caused by row sums varying across positions.
+
+- **Root Cause**: Column centering makes `Σ_t hidden[t,d] = 0` but does NOT make `Σ_d hidden[t,d] = 0` (row sums still vary)
+- **Mechanism**: At 277-target positions, `hidden_sum[t]` correlates with being more NEGATIVE than average
+- **Sign Flip**: `grad_logits[t,277]` is negative (want to decrease) × `hidden_sum[t]` is negative = POSITIVE contribution
+- **Result**: W[277] weight INCREASES when it should decrease → mode collapse feedback loop
+- **Evidence**: Training log shows `[ANOMALY] WEIGHT_PARADOX_SOURCE` with positive total contribution despite negative grad
+- **FIX**: Apply ROW centering AFTER column centering in `AutogradTraining.cu`:
+    1. Column centering: `Σ_t h[t,d] = 0` for each feature d → reduces hidden state correlation (Issue #125)
+    2. Row centering: `Σ_d h[t,d] = 0` for each position t → eliminates gradient sign flip (Issue #132)
+- **Implementation**: `ctx.centered_encoder_output = autograd::center_rows(autograd::center_columns(encoder_output))`
+- **Why This Works**: With `hidden_sum[t] = 0` for all positions t, the contribution formula `Σ_t hidden_sum[t] × grad[t,277]` becomes 0, preventing systematic sign errors
+- **Files Modified**: `AutogradTraining.cu` (added center_rows after center_columns)
 
 114. **Hidden State Norm Explosion Feedback Loop (ROOT CAUSE - Issue #114, Feb 2026)**: The persistent Token 277 (SPACE) mode collapse is caused by a **self-reinforcing feedback loop** with 5 interlocking anomalies. The mathematical root cause is:
 

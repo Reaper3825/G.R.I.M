@@ -9,6 +9,7 @@
 #include "AutogradLoss.hpp"
 #include "../../TensorContract/TensorContract_GPU.hpp"
 #include "../../EquationLogging/EquationLogging.hpp"
+#include "../../EquationLogging/PyTorchVerify.hpp"  // PyTorch verification for side-by-side comparison
 #include <cuda_runtime.h>
 #include <cfloat>
 #include <cmath>
@@ -22,7 +23,7 @@
 // only be enabled for debugging gradient sign errors.
 //
 // Usage: Uncomment the line below to enable FD verification:
-#define GRIM_FD_GRAD_VERIFY
+// #define GRIM_FD_GRAD_VERIFY  // DISABLED for production - significant overhead
 // ========================================================================
 
 // Access the global autograd verbose flag
@@ -1507,6 +1508,9 @@ __host__ Tensor unified_loss(
              h_loss_sum, h_valid_count, mean_loss);
     AG_TRACE("[unified_loss] config: focal_alpha=%.2f focal_gamma=%.2f smoothing=%.3f entropy_lambda=%.4f\n",
              config.focal_alpha, config.focal_gamma, config.smoothing_epsilon, config.entropy_reg_lambda);
+    
+    // PyTorch verification for cross-entropy loss
+    PYTORCH_VERIFY_CE_LOSS(logits.data, targets, &mean_loss, num_tokens, vocab_size, 0, 0);
     
     // Create scalar loss tensor
     float* d_loss = nullptr;

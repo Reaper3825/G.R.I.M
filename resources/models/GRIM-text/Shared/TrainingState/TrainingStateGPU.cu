@@ -549,19 +549,16 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream) {
 	// Check if PCGrad preserved the gradient (final should ≈ lm when emb opposes)
 	const char* pcgrad_status = (final_norm > lm_norm * 0.5f) ? "PRESERVED" : "LOST";
 	
-	fprintf(stdout, "\n[GRAD_ATTRIB] batch=%d TOKEN_277 (SPACE):\n", batch_idx);
-	fprintf(stdout, "  LM_HEAD_ONLY:    sum=%.6f norm=%.6f mean=%.6e\n", 
+	fprintf(stdout, "\n[GRAD_ATTRIB_TOKEN277] batch=%d SPACE_TOKEN gradient conflict analysis:\n", batch_idx);
+	fprintf(stdout, "  ├─ LM_HEAD_GRAD:        sum=%+.10f  norm=%.10f  mean=%+.10e\n", 
 	        lm_sum, lm_norm, lm_sum / d_model);
-	fprintf(stdout, "  RAW_EMBEDDING:   sum=%.6f norm=%.6f mean=%.6e\n", 
+	fprintf(stdout, "  ├─ EMBEDDING_RAW_GRAD:  sum=%+.10f  norm=%.10f  mean=%+.10e\n", 
 	        raw_emb_sum, raw_emb_norm, raw_emb_sum / d_model);
-	fprintf(stdout, "  COSINE(lm,emb):  %.4f ← %s\n", cosine_sim, interaction);
-	fprintf(stdout, "  FINAL_GRADIENT:  sum=%.6f norm=%.6f mean=%.6e ← %s\n", 
+	fprintf(stdout, "  ├─ COSINE_SIMILARITY:   %.10f [%s]\n", cosine_sim, interaction);
+	fprintf(stdout, "  ├─ FINAL_GRAD_POSTPCGR: sum=%+.10f  norm=%.10f  mean=%+.10e [%s]\n", 
 	        final_sum, final_norm, final_sum / d_model, pcgrad_status);
-	// NOTE: AdamW update is W_new = W - lr * grad, so:
-	//   positive gradient → W decreases → want logit/prediction to DECREASE
-	//   negative gradient → W increases → want logit/prediction to INCREASE
-	fprintf(stdout, "  DIRECTION:       LM wants %s, EMB wants %s\n",
-	        lm_sum > 0 ? "DECREASE" : "INCREASE",  // Fixed: positive grad = weight decrease
+	fprintf(stdout, "  └─ UPDATE_DIRECTION:    LM→%s  EMB→%s  (W_new = W - lr*grad)\n",
+	        lm_sum > 0 ? "DECREASE" : "INCREASE",
 	        raw_emb_sum > 0 ? "DECREASE" : "INCREASE");
 	fprintf(stdout, "\n");
 	fflush(stdout);
