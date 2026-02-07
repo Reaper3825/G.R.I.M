@@ -129,7 +129,7 @@ void traceGradientComponents(GRIM::LanguageModel& model, int batch, cudaStream_t
     }
     
     // 2. Per-layer gradients (show gradient flow through encoder)
-    // AUTOGRAD MIGRATION: Use encoder's Tensor.grad instead of legacy TrainingState vectors
+    // Uses Tensor& accessors + numel() — no manual size computation.
     for (int layer = config.num_layers - 1; layer >= 0; --layer) {
         std::cout << "  Layer " << layer << ":" << std::endl;
         
@@ -139,58 +139,30 @@ void traceGradientComponents(GRIM::LanguageModel& model, int batch, cudaStream_t
             continue;
         }
         
-        // Attention gradients (via encoder's Tensor.grad)
-        if (float* grad = enc->getAttnWqkvGrad()) {
-            const int head_dim = config.head_dim;  // Use pre-computed value from config
-            const int kv_dim = ts.num_kv_heads * head_dim;
-            const int total_qkv_dim = config.d_model + 2 * kv_dim;
-            size_t qkv_size = static_cast<size_t>(total_qkv_dim) * config.d_model;
-            
-            float qkv_norm = computeGradNormSync(grad, qkv_size, stream);
-            std::cout << "    QKV: " << std::scientific << std::setprecision(4) << qkv_norm;
-        }
+        // Helper: compute and print grad norm for a named Tensor
+        auto printGradNorm = [&](const char* label, GRIM::Tensor& tensor) {
+            if (tensor.has_grad()) {
+                float norm = computeGradNormSync(tensor.grad_data(), tensor.numel(), stream);
+                std::cout << "  " << label << ": " << std::scientific << std::setprecision(4) << norm;
+            } else {
+                std::cout << "  " << label << ": NULL";
+            }
+        };
         
-        // W_o (output projection)
-        if (float* grad = enc->getAttnWoGrad()) {
-            size_t wo_size = static_cast<size_t>(config.d_model) * config.d_model;
-            float wo_norm = computeGradNormSync(grad, wo_size, stream);
-            std::cout << "  W_o: " << wo_norm;
-        }
+        // Attention gradients
+        printGradNorm("QKV", enc->attnWqkv());
+        printGradNorm("W_o", enc->attnWo());
         
-        // FFN gradients (via encoder's Tensor.grad)
-        if (float* grad = enc->getFFNW1Grad()) {
-            size_t w1_size = static_cast<size_t>(config.d_model) * config.d_ff;
-            float w1_norm = computeGradNormSync(grad, w1_size, stream);
-            std::cout << "  FFN_W1: " << w1_norm;
-        }
-        
-        if (float* grad = enc->getFFNW2Grad()) {
-            size_t w2_size = static_cast<size_t>(config.d_ff) * config.d_model;
-            float w2_norm = computeGradNormSync(grad, w2_size, stream);
-            std::cout << "  FFN_W2: " << w2_norm << std::endl;
-        }
+        // FFN gradients
+        printGradNorm("FFN_W1", enc->ffnW1());
+        printGradNorm("FFN_W2", enc->ffnW2());
+        std::cout << std::endl;
         
         // RMSNorm gradients (should be smallest)
-        if (enc) {
-            float* rms1_grad = enc->getRMS1GammaGrad();
-            float* rms2_grad = enc->getRMS2GammaGrad();
-            
-            if (rms1_grad) {
-                float gamma1_norm = computeGradNormSync(rms1_grad, config.d_model, stream);
-                std::cout << "    RMS1_gamma: " << std::scientific << std::setprecision(4) << gamma1_norm;
-            } else {
-                std::cout << "    RMS1_gamma: NULL";
-            }
-            
-            if (rms2_grad) {
-                float gamma2_norm = computeGradNormSync(rms2_grad, config.d_model, stream);
-                std::cout << "  RMS2_gamma: " << std::scientific << std::setprecision(4) << gamma2_norm << std::endl;
-            } else {
-                std::cout << "  RMS2_gamma: NULL" << std::endl;
-            }
-        } else {
-            std::cout << "    RMS1_gamma: NO_ENC  RMS2_gamma: NO_ENC" << std::endl;
-        }
+        std::cout << "    ";
+        printGradNorm("RMS1_gamma", enc->rms1Gamma());
+        printGradNorm("RMS2_gamma", enc->rms2Gamma());
+        std::cout << std::endl;
     }
     
     // 3. Embedding gradients (input layer - should be attenuated from output)

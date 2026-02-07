@@ -278,7 +278,7 @@
                     "tag": ""
                 },
                 "numeric_head": {
-                    "enabled": true,
+                    "enabled": false,
                     "weight": 1.0,
                     "huber_delta": 1.0,
                     "log_scale": true
@@ -400,7 +400,8 @@
                 "enabled": true,
                 "center_hidden_states": true,
                 "recenter_gradients": true,
-                "center_logits": true
+                "center_logits": true,
+                "center_encoder_residuals": false
             },
             "layer_scale": {
                 "enabled": true,

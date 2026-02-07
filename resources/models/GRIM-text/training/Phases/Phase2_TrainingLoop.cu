@@ -3585,15 +3585,10 @@ BatchResult processBatch(
             auto* enc = gpu_encoder ? gpu_encoder->getLayer(layer) : nullptr;
             
             if (enc) {
-                size_t qkv_size = static_cast<size_t>((cfg.num_heads + 2*cfg.num_kv_heads) * 
-                                  cfg.head_dim) * cfg.d_model;  // Use pre-computed head_dim
-                exportBuffer((prefix + "qkv_grads").c_str(), enc->getAttnWqkvGrad(), qkv_size);
-                exportBuffer((prefix + "wo_grads").c_str(), enc->getAttnWoGrad(), 
-                             static_cast<size_t>(cfg.d_model) * cfg.d_model);
-                exportBuffer((prefix + "ffn_w1_grads").c_str(), enc->getFFNW1Grad(),
-                             static_cast<size_t>(cfg.d_model) * cfg.d_ff);
-                exportBuffer((prefix + "ffn_w2_grads").c_str(), enc->getFFNW2Grad(),
-                             static_cast<size_t>(cfg.d_ff) * cfg.d_model);
+                exportBuffer((prefix + "qkv_grads").c_str(), enc->attnWqkv().grad_data(), enc->attnWqkv().numel());
+                exportBuffer((prefix + "wo_grads").c_str(), enc->attnWo().grad_data(), enc->attnWo().numel());
+                exportBuffer((prefix + "ffn_w1_grads").c_str(), enc->ffnW1().grad_data(), enc->ffnW1().numel());
+                exportBuffer((prefix + "ffn_w2_grads").c_str(), enc->ffnW2().grad_data(), enc->ffnW2().numel());
             } else {
                 printf("[GradExport] SKIP layer %d: encoder layer is null\n", layer);
             }
@@ -4763,10 +4758,6 @@ EpochResult runEpoch(
 //======================================================//
 
 bool executePhase2(TrainingContext& ctx) {
-    EmitModuleInfo(ModuleId::Training, "========================================", ctx.global_step);
-    EmitModuleInfo(ModuleId::Training, "  Phase 2: Training Loop", ctx.global_step);
-    EmitModuleInfo(ModuleId::Training, "========================================", ctx.global_step);
-    
     const auto& hp = ctx.config.hyperparameters;
     
     // Initialize loop state
@@ -4848,11 +4839,6 @@ bool executePhase2(TrainingContext& ctx) {
         
         throw;
     }
-    
-    EmitModuleInfo(ModuleId::Training, "========================================", ctx.global_step);
-    EmitModuleInfo(ModuleId::Training, "  Phase 2 Complete", ctx.global_step);
-    EmitModuleInfo(ModuleId::Training, "========================================", ctx.global_step);
-    
     return true;
 }
 

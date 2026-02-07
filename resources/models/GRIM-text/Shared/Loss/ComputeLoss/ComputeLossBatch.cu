@@ -675,9 +675,22 @@ float LanguageModel::computeLossBatch(
 	ctx_views.position_byte_lengths = reinterpret_cast<const uint16_t*>(training_state_.cached_token_byte_lengths.data);
 	ctx_views.stream = training_state_.stream_ctrl.getPrimaryStream();
 
-	// Legacy LossComputationInputs struct deleted - use variables directly
-	Loss::LossContext loss_context = LossContext::MakeContext(ctx_views);
-	Loss::LossConfig loss_config = LossContext::BuildLossConfig(loss_options_, false);
+	// Build loss config inline (Issue #136: removed LossContext.cu module)
+	Loss::LossConfig loss_config{};
+	loss_config.label_smoothing.enabled = loss_options_.label_smoothing_enabled;
+	loss_config.label_smoothing.epsilon = loss_options_.label_smoothing_epsilon;
+	loss_config.focal.enabled = loss_options_.focal_enabled;
+	loss_config.focal.gamma = loss_options_.focal_gamma;
+	loss_config.focal.alpha = loss_options_.focal_alpha;
+	loss_config.preference.enabled = loss_options_.preference_enabled;
+	loss_config.preference.beta = loss_options_.preference_beta;
+	loss_config.distillation.enabled = loss_options_.distillation_enabled;
+	loss_config.distillation.temperature = loss_options_.distillation_temperature;
+	loss_config.distillation.lambda = loss_options_.distillation_lambda;
+	loss_config.masking.enabled = loss_options_.masking_enabled;
+	loss_config.masking.tag = loss_options_.masking_tag;
+	loss_config.entropy_reg.enabled = loss_options_.entropy_reg_enabled;
+	loss_config.entropy_reg.lambda = loss_options_.entropy_reg_lambda;
 	float* grad_logits_ptr = training_state_.grad_logits_tensor.data;  // Pass pre-allocated buffer
 	// If distillation/preference are enabled and no teacher/reference logits are present,
 	// mirror the current logits into the teacher/reference buffers. This keeps the call
@@ -1032,6 +1045,7 @@ float LanguageModel::computeLossBatch(
 		num_inputs.targets = reinterpret_cast<int*>(training_state_.cached_targets_tensor.data);
 		num_inputs.total_tokens = static_cast<int>(total_tokens);
 		num_inputs.seq_len = static_cast<int>(seq_len);
+		num_inputs.valid_text_tokens = static_cast<int>(valid_tokens);  // Issue #136: Compensation scaling
 		num_inputs.huber_delta = cfg.numeric_head_huber_delta;
 		num_inputs.log_scale = cfg.numeric_head_log_scale;
 		num_inputs.loss_weight = cfg.numeric_head_loss_weight;

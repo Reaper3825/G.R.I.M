@@ -187,7 +187,7 @@ struct AutogradContext {
 
 // NOTE: linkEncoderWeightsToTrainingState was removed.
 // Encoder owns its weights internally; optimizer accesses gradients via
-// enc->getAttnWqkvGrad(), enc->getFFNW1Grad(), etc.
+// Tensor& accessors (enc->attnWqkv().grad_data() etc.).
 
 /**
  * Initialize autograd context

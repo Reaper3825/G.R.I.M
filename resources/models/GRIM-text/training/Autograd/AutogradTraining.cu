@@ -110,14 +110,14 @@ __global__ void addSinusoidalPositionEmbeddingsKernel(
     // Position within sequence
     const int pos = token_idx % seq_len;
     
-    // Compute frequency for this dimension
-    // div_term = 10000^(dim_pair / d_model) where dim_pair = 2*(dim/2)
-    const int dim_pair = (dim / 2) * 2;  // Even dimension for this pair
-    const float exponent = -static_cast<float>(dim_pair) / static_cast<float>(d_model);
-    const float freq = powf(10000.0f, exponent);
+    // Compute AIAYN divisor for this dimension:
+    // angle = pos / (10000^(2i/d_model)), with dim_pair = 2i.
+    const int dim_pair = (dim / 2) * 2;  // Even index shared by the sin/cos pair.
+    const float exponent = static_cast<float>(dim_pair) / static_cast<float>(d_model);
+    const float div_term = powf(10000.0f, exponent);
     
-    // Compute sinusoidal value
-    const float angle = static_cast<float>(pos) / freq;
+    // Keep this as division by a positive-power divisor to avoid sign inversions.
+    const float angle = static_cast<float>(pos) / div_term;
     const float pe_value = (dim % 2 == 0) ? sinf(angle) : cosf(angle);
     
     // Add to embedding (in-place)
@@ -263,7 +263,7 @@ inline double computeSumSquared(const float* data, size_t n, double* d_sum, cuda
 
 // NOTE: linkEncoderWeightsToTrainingState was removed.
 // Encoder owns its weights internally; optimizer accesses gradients via
-// enc->getAttnWqkvGrad(), enc->getFFNW1Grad(), etc.
+// Tensor& accessors (enc->attnWqkv().grad_data() etc.).
 // See buildParameterGroups() in LanguageModel_Training.cu.
 
 //======================================================================
@@ -460,7 +460,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             float pos_mean = pos_sum / sample_size;
             float pos_rms = sqrtf(pos_sum_sq / sample_size);
             
-            fprintf(stderr, "[Issue93-SEPARATE-EMB] tokens=%d d_model=%d scale=%.4f\n",
+            fprintf(stderr, "[SEPARATE-EMB] tokens=%d d_model=%d scale=%.4f\n",
                     total_tokens, cfg->d_model, embedding_scale);
             fprintf(stderr, "  TOKEN_EMB (BEFORE add): min=%.6f max=%.6f mean=%.6f rms=%.6f\n",
                     tok_min, tok_max, tok_mean, tok_rms);
@@ -518,10 +518,10 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 pos_col_var_sum += col_var;
             }
             
-            fprintf(stderr, "[Issue95-COL-VARIANCE] TOKEN_EMB:  col_var min=%.4f max=%.4f mean=%.4f range_ratio=%.2fx\n",
+            fprintf(stderr, "[COL-VARIANCE] TOKEN_EMB:  col_var min=%.4f max=%.4f mean=%.4f range_ratio=%.2fx\n",
                     tok_col_var_min, tok_col_var_max, tok_col_var_sum / num_cols, 
                     tok_col_var_max / (tok_col_var_min + 1e-8f));
-            fprintf(stderr, "[Issue95-COL-VARIANCE] POS_EMB:    col_var min=%.4f max=%.4f mean=%.4f range_ratio=%.2fx\n",
+            fprintf(stderr, "[COL-VARIANCE] POS_EMB:    col_var min=%.4f max=%.4f mean=%.4f range_ratio=%.2fx\n",
                     pos_col_var_min, pos_col_var_max, pos_col_var_sum / num_cols,
                     pos_col_var_max / (pos_col_var_min + 1e-8f));
             fprintf(stderr, "  (isotropic = range_ratio near 1.0, heterogeneous = range_ratio >> 1)\n");
@@ -577,7 +577,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     comb_col_var_sum += col_var;
                 }
                 
-                fprintf(stderr, "[Issue95-COL-VARIANCE] COMBINED:   col_var min=%.4f max=%.4f mean=%.4f range_ratio=%.2fx\n",
+                fprintf(stderr, "[COL-VARIANCE] COMBINED:   col_var min=%.4f max=%.4f mean=%.4f range_ratio=%.2fx\n",
                         comb_col_var_min, comb_col_var_max, comb_col_var_sum / num_cols,
                         comb_col_var_max / (comb_col_var_min + 1e-8f));
             }
@@ -1664,7 +1664,7 @@ BackwardResult executeAutogradBackward(
         scaleGradBuffer(ts->final_rms_gamma.grad_data(), ts->final_rms_gamma.numel(), scale, ctx.stream);
         
         // NOTE: Encoder gradients are in encoder's internal Tensors.
-        // The optimizer accesses them via enc->getAttnWqkvGrad() etc.
+        // The optimizer accesses them via Tensor& accessors (enc->attnWqkv() etc.).
     }
     
     // Compute gradient norm
@@ -1732,7 +1732,7 @@ bool copyGradientsToTrainingState(AutogradContext& ctx) {
     }
     
     // NOTE: Encoder gradients are in encoder's internal Tensors, not TrainingState.
-    // The optimizer accesses them via enc->getAttnWqkvGrad() etc.
+    // The optimizer accesses them via Tensor& accessors (enc->attnWqkv() etc.).
     
     // ═══════════════════════════════════════════════════════════════════════════
     // Final RMSNorm gamma
@@ -1768,65 +1768,32 @@ float computeGradientNorm(const AutogradContext& ctx) {
     
     // ═══════════════════════════════════════════════════════════════════════════
     // ENCODER GRADIENT NORM: Compute from encoder's internal Tensors
-    // The encoder owns its weights internally; we access gradients via
-    // enc->getAttnWqkvGrad(), enc->getFFNW1Grad(), etc.
+    // Uses Tensor& accessors + numel() — no manual size computation.
     // ═══════════════════════════════════════════════════════════════════════════
     if (ctx.gpu_encoder && cfg) {
         const int num_layers = ctx.gpu_encoder->getNumLayers();
         
-        // Compute GQA dimensions for W_qkv sizing
-        const int head_dim = cfg->d_model / cfg->num_heads;
-        const int kv_dim = cfg->num_kv_heads * head_dim;
-        const int total_qkv_dim = cfg->d_model + 2 * kv_dim;  // Q + K + V with GQA
-        const size_t qkv_weight_size = static_cast<size_t>(total_qkv_dim) * cfg->d_model;
+        // Helper: add gradient contribution from a Tensor if it has grad
+        auto addGradNorm = [&](Tensor& tensor) {
+            if (tensor.has_grad()) {
+                computeSumSquared(tensor.grad_data(), tensor.numel(), d_sum, ctx.stream);
+            }
+        };
         
         for (int layer = 0; layer < num_layers; ++layer) {
             auto* enc = ctx.gpu_encoder->getLayer(layer);
             if (!enc) continue;
             
-            // RMSNorm gamma gradients [d_model]
-            if (float* grad = enc->getRMS1GammaGrad()) {
-                computeSumSquared(grad, cfg->d_model, d_sum, ctx.stream);
-            }
-            if (float* grad = enc->getRMS2GammaGrad()) {
-                computeSumSquared(grad, cfg->d_model, d_sum, ctx.stream);
-            }
-            
-            // Attention weight gradients
-            // W_qkv: [total_qkv_dim, d_model]
-            if (float* grad = enc->getAttnWqkvGrad()) {
-                computeSumSquared(grad, qkv_weight_size, d_sum, ctx.stream);
-            }
-            // b_qkv: [total_qkv_dim]
-            if (float* grad = enc->getAttnBqkvGrad()) {
-                computeSumSquared(grad, total_qkv_dim, d_sum, ctx.stream);
-            }
-            // W_o: [d_model, d_model]
-            if (float* grad = enc->getAttnWoGrad()) {
-                computeSumSquared(grad, static_cast<size_t>(cfg->d_model) * cfg->d_model, d_sum, ctx.stream);
-            }
-            // b_o: [d_model]
-            if (float* grad = enc->getAttnBoGrad()) {
-                computeSumSquared(grad, cfg->d_model, d_sum, ctx.stream);
-            }
-            
-            // FFN weight gradients
-            // W1: [d_model, d_ff]
-            if (float* grad = enc->getFFNW1Grad()) {
-                computeSumSquared(grad, static_cast<size_t>(cfg->d_model) * cfg->d_ff, d_sum, ctx.stream);
-            }
-            // b1: [d_ff]
-            if (float* grad = enc->getFFNB1Grad()) {
-                computeSumSquared(grad, cfg->d_ff, d_sum, ctx.stream);
-            }
-            // W2: [d_ff, d_model]
-            if (float* grad = enc->getFFNW2Grad()) {
-                computeSumSquared(grad, static_cast<size_t>(cfg->d_ff) * cfg->d_model, d_sum, ctx.stream);
-            }
-            // b2: [d_model]
-            if (float* grad = enc->getFFNB2Grad()) {
-                computeSumSquared(grad, cfg->d_model, d_sum, ctx.stream);
-            }
+            addGradNorm(enc->rms1Gamma());
+            addGradNorm(enc->rms2Gamma());
+            addGradNorm(enc->attnWqkv());
+            addGradNorm(enc->attnBqkv());
+            addGradNorm(enc->attnWo());
+            addGradNorm(enc->attnBo());
+            addGradNorm(enc->ffnW1());
+            addGradNorm(enc->ffnB1());
+            addGradNorm(enc->ffnW2());
+            addGradNorm(enc->ffnB2());
         }
     }
     
@@ -1872,7 +1839,7 @@ float autogradTrainingStep(
     ScratchBlockLayer* scratch_block = model.getScratchBlockLayer();
     
     // NOTE: Encoder owns its weights internally; optimizer accesses gradients
-    // via enc->getAttnWqkvGrad(), enc->getFFNW1Grad(), etc.
+    // via Tensor& accessors (e.g. enc->attnWqkv().grad_data()).
     // No linking needed - see buildParameterGroups() in LanguageModel_Training.cu
     
     // Initialize context

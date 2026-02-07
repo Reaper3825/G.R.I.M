@@ -190,7 +190,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Loss/ComputeLoss/ComputeLossBatch.cu
     ../../Shared/TrainingState/TrainingStateGPU.cu
     ../../Shared/TrainingState/TrainingTensors.cu
-    ../../Shared/Loss/LossContext/LossContext.cu
     ../../Shared/TeacherLogits/TeacherLogits_GPU.cu
     ../../Shared/Dropout/Dropout_GPU.cu
     ../LanguageModel_Training.cu

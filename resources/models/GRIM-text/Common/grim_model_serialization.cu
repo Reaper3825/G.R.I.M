@@ -187,16 +187,16 @@ bool LanguageModel::save(const std::string& path) {
             return false;
         }
         auto& view = request.sources.encoder_layers[layer_idx];
-        assignRead(view.attn_w_qkv, enc->getAttnWqkv(), qkv_weight_size);
-        assignRead(view.attn_b_qkv, enc->getAttnBqkv(), total_qkv_dim);  // GQA-aware bias size
-        assignRead(view.attn_w_o, enc->getAttnWo(), d_model * d_model);
-        assignRead(view.attn_b_o, enc->getAttnBo(), d_model);
-        assignRead(view.ffn_w1, enc->getFFNW1(), d_model * d_ff);
-        assignRead(view.ffn_b1, enc->getFFNB1(), d_ff);
-        assignRead(view.ffn_w2, enc->getFFNW2(), d_ff * d_model);
-        assignRead(view.ffn_b2, enc->getFFNB2(), d_model);
-        assignRead(view.rms1_gamma, enc->getRMS1Gamma(), d_model);
-        assignRead(view.rms2_gamma, enc->getRMS2Gamma(), d_model);
+        assignRead(view.attn_w_qkv, enc->attnWqkv().data, qkv_weight_size);
+        assignRead(view.attn_b_qkv, enc->attnBqkv().data, total_qkv_dim);  // GQA-aware bias size
+        assignRead(view.attn_w_o, enc->attnWo().data, d_model * d_model);
+        assignRead(view.attn_b_o, enc->attnBo().data, d_model);
+        assignRead(view.ffn_w1, enc->ffnW1().data, d_model * d_ff);
+        assignRead(view.ffn_b1, enc->ffnB1().data, d_ff);
+        assignRead(view.ffn_w2, enc->ffnW2().data, d_ff * d_model);
+        assignRead(view.ffn_b2, enc->ffnB2().data, d_model);
+        assignRead(view.rms1_gamma, enc->rms1Gamma().data, d_model);
+        assignRead(view.rms2_gamma, enc->rms2Gamma().data, d_model);
     }
 
     EmitModuleInfo(ModuleId::Checkpoint, "Processing LM head (projection=" + std::string(training_state_.lm_head_weights.data ? "yes" : "no") + ", bias=" + std::string(training_state_.lm_head_bias.data ? "yes" : "no") + ")");
@@ -230,22 +230,22 @@ bool LanguageModel::save(const std::string& path) {
         request.sources.scratch_block.d_model = config_.d_model;
         request.sources.scratch_block.atom_scale = config_.scratch_block_atom_scale;
         
-        if (float* atom_emb = scratch_block_layer_->getAtomTypeEmbeddings()) {
-            request.sources.scratch_block.atom_type_embeddings.ptr = atom_emb;
+        if (scratch_block_layer_->atomTypeEmbeddings().data) {
+            request.sources.scratch_block.atom_type_embeddings.ptr = scratch_block_layer_->atomTypeEmbeddings().data;
             request.sources.scratch_block.atom_type_embeddings.count = 
                 static_cast<std::size_t>(kNumAtomTypes * atom_emb_dim);
         }
         
-        if (float* atom_proj = scratch_block_layer_->getAtomProjection()) {
-            request.sources.scratch_block.atom_projection.ptr = atom_proj;
+        if (scratch_block_layer_->atomProjection().data) {
+            request.sources.scratch_block.atom_projection.ptr = scratch_block_layer_->atomProjection().data;
             request.sources.scratch_block.atom_projection.count = 
                 static_cast<std::size_t>(atom_emb_dim * config_.d_model);
         }
         
         // Text feature projection [16 x d_model] - VALUE encoding path
         constexpr int kTextFeatureDim = 16;
-        if (float* text_proj = scratch_block_layer_->getTextFeatureProjection()) {
-            request.sources.scratch_block.text_feature_projection.ptr = text_proj;
+        if (scratch_block_layer_->textFeatureProjection().data) {
+            request.sources.scratch_block.text_feature_projection.ptr = scratch_block_layer_->textFeatureProjection().data;
             request.sources.scratch_block.text_feature_projection.count = 
                 static_cast<std::size_t>(kTextFeatureDim * config_.d_model);
         }
@@ -325,16 +325,16 @@ bool LanguageModel::load(const std::string& path) {
             return false;
         }
         auto& view = request.encoder_layers[layer_idx];
-        assignWrite(view.attn_w_qkv, enc->getAttnWqkv(), qkv_weight_size);
-        assignWrite(view.attn_b_qkv, enc->getAttnBqkv(), total_qkv_dim);  // GQA-aware bias size
-        assignWrite(view.attn_w_o, enc->getAttnWo(), d_model * d_model);
-        assignWrite(view.attn_b_o, enc->getAttnBo(), d_model);
-        assignWrite(view.ffn_w1, enc->getFFNW1(), d_model * d_ff);
-        assignWrite(view.ffn_b1, enc->getFFNB1(), d_ff);
-        assignWrite(view.ffn_w2, enc->getFFNW2(), d_ff * d_model);
-        assignWrite(view.ffn_b2, enc->getFFNB2(), d_model);
-        assignWrite(view.rms1_gamma, enc->getRMS1Gamma(), d_model);
-        assignWrite(view.rms2_gamma, enc->getRMS2Gamma(), d_model);
+        assignWrite(view.attn_w_qkv, enc->attnWqkv().data, qkv_weight_size);
+        assignWrite(view.attn_b_qkv, enc->attnBqkv().data, total_qkv_dim);  // GQA-aware bias size
+        assignWrite(view.attn_w_o, enc->attnWo().data, d_model * d_model);
+        assignWrite(view.attn_b_o, enc->attnBo().data, d_model);
+        assignWrite(view.ffn_w1, enc->ffnW1().data, d_model * d_ff);
+        assignWrite(view.ffn_b1, enc->ffnB1().data, d_ff);
+        assignWrite(view.ffn_w2, enc->ffnW2().data, d_ff * d_model);
+        assignWrite(view.ffn_b2, enc->ffnB2().data, d_model);
+        assignWrite(view.rms1_gamma, enc->rms1Gamma().data, d_model);
+        assignWrite(view.rms2_gamma, enc->rms2Gamma().data, d_model);
     }
 
     if (!training_state_.initialized) {
@@ -375,23 +375,23 @@ bool LanguageModel::load(const std::string& path) {
         constexpr int kNumAtomTypes = 16;
         const int atom_emb_dim = config_.scratch_block_atom_embedding_dim;
         
-        if (float* atom_emb = scratch_block_layer_->getAtomTypeEmbeddings()) {
+        if (scratch_block_layer_->atomTypeEmbeddings().data) {
             assignWrite(request.scratch_block.atom_type_embeddings,
-                        atom_emb,
+                        scratch_block_layer_->atomTypeEmbeddings().data,
                         static_cast<std::size_t>(kNumAtomTypes * atom_emb_dim));
         }
         
-        if (float* atom_proj = scratch_block_layer_->getAtomProjection()) {
+        if (scratch_block_layer_->atomProjection().data) {
             assignWrite(request.scratch_block.atom_projection,
-                        atom_proj,
+                        scratch_block_layer_->atomProjection().data,
                         static_cast<std::size_t>(atom_emb_dim * config_.d_model));
         }
         
         // Text feature projection [16 x d_model] - VALUE encoding path
         constexpr int kTextFeatureDim = 16;
-        if (float* text_proj = scratch_block_layer_->getTextFeatureProjection()) {
+        if (scratch_block_layer_->textFeatureProjection().data) {
             assignWrite(request.scratch_block.text_feature_projection,
-                        text_proj,
+                        scratch_block_layer_->textFeatureProjection().data,
                         static_cast<std::size_t>(kTextFeatureDim * config_.d_model));
         }
         

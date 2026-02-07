@@ -63,6 +63,11 @@ struct EncodingConfig {
     bool use_layer_scale = true;
     float layer_scale_init = 0.1f;  // Initial scale (CaiT uses 0.1, can go lower for more layers)
     
+    // Per-layer residual centering
+    // When true: output = center_columns(input + branch) — prevents mode collapse but 24 gradient projections
+    // When false: output = input + branch — standard pre-norm, better gradient flow
+    bool center_encoder_residuals = false;
+    
     // Attention
     bool causal_mask = true;
     float softmax_temperature = 1.0f;
@@ -233,57 +238,33 @@ public:
         Tensor* layer_scale2 = nullptr   // Issue #109: optional LayerScale for FFN residual
     );
     
-    // Tensor weight accessors (for autograd)
+    //--------------------------------------------------
+    // Tensor Accessors (use these for ALL access)
+    //--------------------------------------------------
+    
+    // RMSNorm
     Tensor& rms1Gamma() { return rms1_gamma_; }
     Tensor& rms2Gamma() { return rms2_gamma_; }
+    
+    // Attention weights/biases
     Tensor& attnWqkv() { return W_qkv_; }
     Tensor& attnBqkv() { return b_qkv_; }
     Tensor& attnWo() { return W_o_; }
     Tensor& attnBo() { return b_o_; }
     
-    // Raw data accessors (for serialization - returns Tensor.data)
-    float* getRMS1Gamma() { return rms1_gamma_.data; }
-    float* getRMS2Gamma() { return rms2_gamma_.data; }
-    // ISSUE #59: Use grad_data() accessor
-    float* getRMS1GammaGrad() { return rms1_gamma_.grad_data(); }
-    float* getRMS2GammaGrad() { return rms2_gamma_.grad_data(); }
-    
-    // Attention weights - raw data (for serialization)
-    float* getAttnWqkv() { return W_qkv_.data; }
-    float* getAttnBqkv() { return b_qkv_.data; }
-    float* getAttnWo() { return W_o_.data; }
-    float* getAttnBo() { return b_o_.data; }
-    
-    // Attention weight gradients (from Tensor.grad_data())
-    // ISSUE #59: Use grad_data() accessor
-    float* getAttnWqkvGrad() { return W_qkv_.grad_data(); }
-    float* getAttnBqkvGrad() { return b_qkv_.grad_data(); }
-    float* getAttnWoGrad() { return W_o_.grad_data(); }
-    float* getAttnBoGrad() { return b_o_.grad_data(); }
-    
-    // FFN weight raw data (for serialization, owned by FeedForwardLayer's Tensors)
-    float* getFFNW1() { return ffn_ ? ffn_->W1().data : nullptr; }
-    float* getFFNB1() { return ffn_ ? ffn_->b1().data : nullptr; }
-    float* getFFNW2() { return ffn_ ? ffn_->W2().data : nullptr; }
-    float* getFFNB2() { return ffn_ ? ffn_->b2().data : nullptr; }
-    
-    // FFN gradient raw data (from Tensor.grad_data())
-    // ISSUE #59: Use grad_data() accessor
-    float* getFFNW1Grad() { return ffn_ ? ffn_->W1().grad_data() : nullptr; }
-    float* getFFNB1Grad() { return ffn_ ? ffn_->b1().grad_data() : nullptr; }
-    float* getFFNW2Grad() { return ffn_ ? ffn_->W2().grad_data() : nullptr; }
-    float* getFFNB2Grad() { return ffn_ ? ffn_->b2().grad_data() : nullptr; }
+    // FFN weights/biases (delegates to FeedForwardLayer)
+    // Rule 20: ffn_ MUST be initialized - crash if null
+    Tensor& ffnW1() { return ffn_->W1(); }
+    Tensor& ffnB1() { return ffn_->b1(); }
+    Tensor& ffnW2() { return ffn_->W2(); }
+    Tensor& ffnB2() { return ffn_->b2(); }
     
     // Direct access to FFN layer (for autograd forward)
     FeedForwardLayer* getFfnLayer() { return ffn_.get(); }
     
-    // LayerScale accessors (Issue #109)
+    // LayerScale (Issue #109)
     Tensor& layerScale1() { return layer_scale1_; }
     Tensor& layerScale2() { return layer_scale2_; }
-    float* getLayerScale1() { return layer_scale1_.data; }
-    float* getLayerScale2() { return layer_scale2_.data; }
-    float* getLayerScale1Grad() { return layer_scale1_.grad_data(); }
-    float* getLayerScale2Grad() { return layer_scale2_.grad_data(); }
     
     //--------------------------------------------------
     // Flash Attention Control

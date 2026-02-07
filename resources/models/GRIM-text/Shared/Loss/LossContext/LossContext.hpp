@@ -51,10 +51,4 @@ struct TensorViews {
     cudaStream_t stream = nullptr;
 };
 
-// Build a LossConfig from high-level options and emit a concise log line.
-Loss::LossConfig BuildLossConfig(const LossOptions& opts, bool emit_log = true);
-
-// Populate LossContext from tensor views; keeps call sites concise.
-Loss::LossContext MakeContext(const TensorViews& views);
-
 }  // namespace GRIM::LossContext

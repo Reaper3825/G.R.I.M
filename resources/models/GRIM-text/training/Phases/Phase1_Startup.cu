@@ -848,10 +848,12 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.lm_head_center_hidden_states = hp.lm_head_center_hidden_states;
     model_config.lm_head_recenter_gradients = hp.lm_head_recenter_gradients;
     model_config.center_logits = hp.center_logits;
+    model_config.center_encoder_residuals = hp.center_encoder_residuals;
     
     logger.log("LM Head centering: center_hidden_states=" + std::string(model_config.lm_head_center_hidden_states ? "true" : "false") +
               ", recenter_gradients=" + std::string(model_config.lm_head_recenter_gradients ? "true" : "false") +
-              ", center_logits=" + std::string(model_config.center_logits ? "true" : "false"));
+              ", center_logits=" + std::string(model_config.center_logits ? "true" : "false") +
+              ", center_encoder_residuals=" + std::string(model_config.center_encoder_residuals ? "true" : "false"));
     
     // Issue #109: LayerScale configuration (learnable residual scaling from CaiT paper)
     model_config.use_layer_scale = hp.use_layer_scale;
@@ -1114,11 +1116,11 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
             if (!enc) continue;
             
             std::cout << "[DEBUG] Layer " << layer << " - getting weight pointers..." << std::endl << std::flush;
-            float* w_qkv = enc->getAttnWqkv();
+            float* w_qkv = enc->attnWqkv().data;
             std::cout << "[DEBUG] Layer " << layer << " - w_qkv=" << w_qkv << std::endl << std::flush;
-            float* w_o = enc->getAttnWo();
-            float* w1 = enc->getFFNW1();
-            float* w2 = enc->getFFNW2();
+            float* w_o = enc->attnWo().data;
+            float* w1 = enc->ffnW1().data;
+            float* w2 = enc->ffnW2().data;
             std::cout << "[DEBUG] Layer " << layer << " - got all weight pointers" << std::endl << std::flush;
             
             // GQA dimension calculation using TensorContract

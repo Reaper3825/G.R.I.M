@@ -327,10 +327,10 @@ bool testEnabledAllocatesWeights(std::string& message) {
     
     ScratchBlockLayer layer(config);
     
-    // Check that weight pointers are not null
-    SB_ASSERT_TRUE(layer.getAtomTypeEmbeddings() != nullptr, "Atom type embeddings should be allocated");
-    SB_ASSERT_TRUE(layer.getAtomProjection() != nullptr, "Atom projection should be allocated");
-    SB_ASSERT_TRUE(layer.getTextFeatureProjection() != nullptr, "Text feature projection should be allocated");
+    // Check that weight Tensors have allocated data
+    SB_ASSERT_TRUE(layer.atomTypeEmbeddings().data != nullptr, "Atom type embeddings should be allocated");
+    SB_ASSERT_TRUE(layer.atomProjection().data != nullptr, "Atom projection should be allocated");
+    SB_ASSERT_TRUE(layer.textFeatureProjection().data != nullptr, "Text feature projection should be allocated");
     
     return true;
 }
@@ -585,15 +585,15 @@ bool testMoveConstruct(std::string& message) {
     config.atom_embedding_dim = 32;
     
     ScratchBlockLayer layer1(config);
-    float* weights_before = layer1.getAtomTypeEmbeddings();
+    float* weights_before = layer1.atomTypeEmbeddings().data;
     
     SB_ASSERT_TRUE(weights_before != nullptr, "Original should have weights");
     
     ScratchBlockLayer layer2(std::move(layer1));
     
-    SB_ASSERT_TRUE(layer2.getAtomTypeEmbeddings() == weights_before, 
+    SB_ASSERT_TRUE(layer2.atomTypeEmbeddings().data == weights_before, 
                    "Moved layer should have same weights pointer");
-    SB_ASSERT_TRUE(layer1.getAtomTypeEmbeddings() == nullptr, 
+    SB_ASSERT_TRUE(layer1.atomTypeEmbeddings().data == nullptr, 
                    "Original should have null weights after move");
     
     return true;
@@ -608,13 +608,13 @@ bool testMoveAssign(std::string& message) {
     ScratchBlockLayer layer1(config);
     ScratchBlockLayer layer2;
     
-    float* weights_before = layer1.getAtomTypeEmbeddings();
+    float* weights_before = layer1.atomTypeEmbeddings().data;
     
     layer2 = std::move(layer1);
     
-    SB_ASSERT_TRUE(layer2.getAtomTypeEmbeddings() == weights_before, 
+    SB_ASSERT_TRUE(layer2.atomTypeEmbeddings().data == weights_before, 
                    "Assigned layer should have same weights pointer");
-    SB_ASSERT_TRUE(layer1.getAtomTypeEmbeddings() == nullptr, 
+    SB_ASSERT_TRUE(layer1.atomTypeEmbeddings().data == nullptr, 
                    "Original should have null weights after move assign");
     
     return true;

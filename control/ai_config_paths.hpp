@@ -302,6 +302,7 @@ struct TrainingHyperparameters {
     bool lm_head_center_hidden_states;
     bool lm_head_recenter_gradients;
     bool center_logits;  // Center logits per position (row-wise) before softmax
+    bool center_encoder_residuals;  // Center residuals INSIDE encoder layers (24 projections - can attenuate gradients)
     
     // Issue #109: LayerScale (learnable residual scaling from CaiT paper)
     // Reduces correlation buildup between layers by gating sublayer outputs
@@ -1081,12 +1082,14 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     params.lm_head_center_hidden_states = false;
     params.lm_head_recenter_gradients = false;
     params.center_logits = false;  // Default to disabled (standard implementation)
+    params.center_encoder_residuals = false;  // Default: disabled (24 centering projections attenuate gradient signal)
     if (auto it = trainConfig.find("lm_head_centering"); it != trainConfig.end() && it->is_object()) {
         const auto& lmc = *it;
         params.lm_head_centering_enabled = lmc.value("enabled", false);
         params.lm_head_center_hidden_states = lmc.value("center_hidden_states", false);
         params.lm_head_recenter_gradients = lmc.value("recenter_gradients", false);
         params.center_logits = lmc.value("center_logits", false);
+        params.center_encoder_residuals = lmc.value("center_encoder_residuals", false);
     }
     
     // Issue #109: LayerScale (learnable residual scaling from CaiT paper)

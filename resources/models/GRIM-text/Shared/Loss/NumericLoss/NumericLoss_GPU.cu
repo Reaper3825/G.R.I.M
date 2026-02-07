@@ -93,24 +93,32 @@ __global__ void numericLossKernel(const float* __restrict__ predictions,
 // The numericLossKernel computes gradients as: grad_predictions[i] = grad * loss_weight
 // But the loss is averaged: loss_avg = loss_sum / count
 // By chain rule: d(loss_avg)/d(pred) = (1/count) * d(loss_sum)/d(pred)
-//
-// Issue #85 was WRONG - it scaled by 1/total_tokens (padded=7168) instead of
-// 1/numeric_count (~400). Text CE uses 1/valid_text_count (~4227).
-// Each loss should divide by its OWN valid count. The loss_weight config param
-// controls relative balance, not the denominator.
 // ============================================================================
 __global__ void scaleNumericGradKernel(
 	float* __restrict__ grad_predictions,
 	int total_tokens,
-	int valid_count
+	int valid_count,
+	int valid_text_tokens  // UNUSED - kept for API compatibility
 ) {
 	const int idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= total_tokens) return;
 	
 	if (valid_count <= 0) return;
 	
-	// Scale by 1/valid_count — proper mean reduction matching loss_avg = loss_sum / count
-	grad_predictions[idx] *= (1.0f / static_cast<float>(valid_count));
+	// Two-level scaling to match text CE gradient scale:
+	// 1. Mean reduction over valid atoms: 1/valid_count
+	// 2. Scale to text token count: valid_text_tokens measures the overall batch scale
+	//
+	// Both text and numeric losses update the same encoder. Without this scaling,
+	// numeric gradients dominate because they're only divided by atom count (~400),
+	// while text CE is divided by token count (~6000+).
+	//
+	// Combined scale makes them comparable: grad *= 1 / (valid_count * valid_text_tokens)^0.5
+	const float atom_reduction = 1.0f / static_cast<float>(valid_count);
+	const float token_scale_factor = 1.0f / sqrtf(static_cast<float>(valid_text_tokens));
+	const float scale = atom_reduction * token_scale_factor;
+	
+	grad_predictions[idx] *= scale;
 }
 
 } // namespace
@@ -130,6 +138,15 @@ bool launchNumericLoss(const NumericLossInputs& inputs,
 	}
 	if (!stream) {
 		return false;
+	}
+	
+	// RULE 20: FAIL LOUD - valid_text_tokens MUST be provided by caller
+	// This is NOT optional. If caller doesn't know valid_text_tokens, that's a BUG in the caller.
+	if (inputs.valid_text_tokens <= 0) {
+		throw std::runtime_error("launchNumericLoss: valid_text_tokens is " + 
+		                         std::to_string(inputs.valid_text_tokens) + 
+		                         " but MUST be > 0. Caller MUST provide valid text token count " +
+		                         "for proper gradient scaling (Issue #136).");
 	}
 
 	cudaMemsetAsync(outputs.loss_sum, 0, sizeof(float), stream);
@@ -165,10 +182,12 @@ bool launchNumericLoss(const NumericLossInputs& inputs,
 	}
 	
 	// Scale by 1/h_count — each loss divides by its OWN valid count (not total_tokens)
+	// ISSUE #136: Also apply compensation for token count mismatch
 	scaleNumericGradKernel<<<blocks, kBlockSize, 0, stream>>>(
 		outputs.grad_predictions,
 		inputs.total_tokens,
-		h_count);
+		h_count,
+		inputs.valid_text_tokens);
 
 	return cudaGetLastError() == cudaSuccess;
 }

@@ -338,6 +338,7 @@ void LanguageModel::initGPU() {
         // Issue #109 FIX: Propagate LayerScale config from LanguageModelConfig → EncoderConfig
         enc_config.use_layer_scale = cfg.use_layer_scale;
         enc_config.layer_scale_init = cfg.layer_scale_init;
+        enc_config.center_encoder_residuals = cfg.center_encoder_residuals;
 
         enc_config.stream = primary_stream;
         enc_config.cublas_handle = training_state_.cublas_handle;

@@ -455,24 +455,15 @@ ScratchBlockLayer::~ScratchBlockLayer() {
 ScratchBlockLayer::ScratchBlockLayer(ScratchBlockLayer&& other) noexcept
     : config_(other.config_)
     , stats_(other.stats_)
-    , d_atom_type_embeddings_(other.d_atom_type_embeddings_)
-    , d_atom_type_embeddings_grad_(other.d_atom_type_embeddings_grad_)
-    , d_atom_projection_(other.d_atom_projection_)
-    , d_atom_projection_grad_(other.d_atom_projection_grad_)
-    , d_text_feature_projection_(other.d_text_feature_projection_)
-    , d_text_feature_projection_grad_(other.d_text_feature_projection_grad_)
+    , atom_type_embeddings_(std::move(other.atom_type_embeddings_))
+    , atom_projection_(std::move(other.atom_projection_))
+    , text_feature_projection_(std::move(other.text_feature_projection_))
     , d_atom_positions_(other.d_atom_positions_)
     , d_num_atoms_(other.d_num_atoms_)
     , d_atom_embeddings_(other.d_atom_embeddings_)
     , d_grad_atom_embeddings_(other.d_grad_atom_embeddings_)
     , weights_allocated_(other.weights_allocated_)
 {
-    other.d_atom_type_embeddings_ = nullptr;
-    other.d_atom_type_embeddings_grad_ = nullptr;
-    other.d_atom_projection_ = nullptr;
-    other.d_atom_projection_grad_ = nullptr;
-    other.d_text_feature_projection_ = nullptr;
-    other.d_text_feature_projection_grad_ = nullptr;
     other.d_atom_positions_ = nullptr;
     other.d_num_atoms_ = nullptr;
     other.d_atom_embeddings_ = nullptr;
@@ -486,24 +477,15 @@ ScratchBlockLayer& ScratchBlockLayer::operator=(ScratchBlockLayer&& other) noexc
         
         config_ = other.config_;
         stats_ = other.stats_;
-        d_atom_type_embeddings_ = other.d_atom_type_embeddings_;
-        d_atom_type_embeddings_grad_ = other.d_atom_type_embeddings_grad_;
-        d_atom_projection_ = other.d_atom_projection_;
-        d_atom_projection_grad_ = other.d_atom_projection_grad_;
-        d_text_feature_projection_ = other.d_text_feature_projection_;
-        d_text_feature_projection_grad_ = other.d_text_feature_projection_grad_;
+        atom_type_embeddings_ = std::move(other.atom_type_embeddings_);
+        atom_projection_ = std::move(other.atom_projection_);
+        text_feature_projection_ = std::move(other.text_feature_projection_);
         d_atom_positions_ = other.d_atom_positions_;
         d_num_atoms_ = other.d_num_atoms_;
         d_atom_embeddings_ = other.d_atom_embeddings_;
         d_grad_atom_embeddings_ = other.d_grad_atom_embeddings_;
         weights_allocated_ = other.weights_allocated_;
         
-        other.d_atom_type_embeddings_ = nullptr;
-        other.d_atom_type_embeddings_grad_ = nullptr;
-        other.d_atom_projection_ = nullptr;
-        other.d_atom_projection_grad_ = nullptr;
-        other.d_text_feature_projection_ = nullptr;
-        other.d_text_feature_projection_grad_ = nullptr;
         other.d_atom_positions_ = nullptr;
         other.d_num_atoms_ = nullptr;
         other.d_atom_embeddings_ = nullptr;
@@ -543,47 +525,40 @@ void ScratchBlockLayer::allocateWeights() {
     const int proj_size = config_.atom_embedding_dim * config_.d_model;
     const int text_proj_size = kTextFeatureDim * config_.d_model;
     
-    cudaMalloc(&d_atom_type_embeddings_, atom_emb_size * sizeof(float));
-    cudaMalloc(&d_atom_type_embeddings_grad_, atom_emb_size * sizeof(float));
-    cudaMalloc(&d_atom_projection_, proj_size * sizeof(float));
-    cudaMalloc(&d_atom_projection_grad_, proj_size * sizeof(float));
+    // Allocate weight Tensors with shapes and gradients
+    TensorContract::Shape2D atom_emb_2d{NUM_ATOM_TYPES, config_.atom_embedding_dim};
+    TensorContract::Shape2D proj_2d{config_.atom_embedding_dim, config_.d_model};
+    TensorContract::Shape2D text_proj_2d{kTextFeatureDim, config_.d_model};
     
-    // Text feature projection: [kTextFeatureDim, d_model]
-    cudaMalloc(&d_text_feature_projection_, text_proj_size * sizeof(float));
-    cudaMalloc(&d_text_feature_projection_grad_, text_proj_size * sizeof(float));
+    TensorContract::TensorShape atom_emb_shape(TensorContract::Layout::BSM, atom_emb_2d);
+    TensorContract::TensorShape proj_shape(TensorContract::Layout::BSM, proj_2d);
+    TensorContract::TensorShape text_proj_shape(TensorContract::Layout::BSM, text_proj_2d);
     
+    atom_type_embeddings_ = Tensor::zeros(atom_emb_shape, true, config_.stream);
+    atom_projection_ = Tensor::zeros(proj_shape, true, config_.stream);
+    text_feature_projection_ = Tensor::zeros(text_proj_shape, true, config_.stream);
+    
+    // Temporary buffers (raw — not trainable parameters)
     cudaMalloc(&d_atom_positions_, config_.max_atoms * sizeof(int));
     cudaMalloc(&d_num_atoms_, sizeof(int));
     cudaMalloc(&d_atom_embeddings_, config_.max_atoms * config_.atom_embedding_dim * sizeof(float));
     cudaMalloc(&d_grad_atom_embeddings_, config_.max_atoms * config_.atom_embedding_dim * sizeof(float));
     
-    // Zero gradients (async - GradAccumulationController will sync before first backward)
-    // NOTE: config_.stream may be nullptr during early init, use default stream
-    cudaMemsetAsync(d_atom_type_embeddings_grad_, 0, atom_emb_size * sizeof(float), config_.stream);
-    cudaMemsetAsync(d_atom_projection_grad_, 0, proj_size * sizeof(float), config_.stream);
-    cudaMemsetAsync(d_text_feature_projection_grad_, 0, text_proj_size * sizeof(float), config_.stream);
-    
     weights_allocated_ = true;
 }
 
 void ScratchBlockLayer::freeWeights() {
-    if (d_atom_type_embeddings_) cudaFree(d_atom_type_embeddings_);
-    if (d_atom_type_embeddings_grad_) cudaFree(d_atom_type_embeddings_grad_);
-    if (d_atom_projection_) cudaFree(d_atom_projection_);
-    if (d_atom_projection_grad_) cudaFree(d_atom_projection_grad_);
-    if (d_text_feature_projection_) cudaFree(d_text_feature_projection_);
-    if (d_text_feature_projection_grad_) cudaFree(d_text_feature_projection_grad_);
+    // Tensor members free themselves via RAII (destructor calls release())
+    atom_type_embeddings_ = Tensor();
+    atom_projection_ = Tensor();
+    text_feature_projection_ = Tensor();
+    
+    // Free raw temporary buffers
     if (d_atom_positions_) cudaFree(d_atom_positions_);
     if (d_num_atoms_) cudaFree(d_num_atoms_);
     if (d_atom_embeddings_) cudaFree(d_atom_embeddings_);
     if (d_grad_atom_embeddings_) cudaFree(d_grad_atom_embeddings_);
     
-    d_atom_type_embeddings_ = nullptr;
-    d_atom_type_embeddings_grad_ = nullptr;
-    d_atom_projection_ = nullptr;
-    d_atom_projection_grad_ = nullptr;
-    d_text_feature_projection_ = nullptr;
-    d_text_feature_projection_grad_ = nullptr;
     d_atom_positions_ = nullptr;
     d_num_atoms_ = nullptr;
     d_atom_embeddings_ = nullptr;
@@ -606,7 +581,7 @@ void ScratchBlockLayer::initializeWeights() {
     int block_size = 256;
     int grid_size = (atom_emb_size + block_size - 1) / block_size;
     kernelXavierInit<<<grid_size, block_size, 0, stream>>>(
-        d_atom_type_embeddings_, atom_emb_size, atom_stddev, 42);
+        atom_type_embeddings_.data, atom_emb_size, atom_stddev, 42);
     
     // Xavier init for atom projection
     const int proj_size = config_.atom_embedding_dim * config_.d_model;
@@ -614,7 +589,7 @@ void ScratchBlockLayer::initializeWeights() {
     
     grid_size = (proj_size + block_size - 1) / block_size;
     kernelXavierInit<<<grid_size, block_size, 0, stream>>>(
-        d_atom_projection_, proj_size, proj_stddev, 123);
+        atom_projection_.data, proj_size, proj_stddev, 123);
     
     // Xavier init for text feature projection [kTextFeatureDim, d_model]
     const int text_proj_size = kTextFeatureDim * config_.d_model;
@@ -622,7 +597,7 @@ void ScratchBlockLayer::initializeWeights() {
     
     grid_size = (text_proj_size + block_size - 1) / block_size;
     kernelXavierInit<<<grid_size, block_size, 0, stream>>>(
-        d_text_feature_projection_, text_proj_size, text_proj_stddev, 456);
+        text_feature_projection_.data, text_proj_size, text_proj_stddev, 456);
     
     // Log weight initialization
     logWeightInit();
@@ -735,7 +710,7 @@ void ScratchBlockLayer::forwardActive(const ScratchBlockForwardArgs& args) {
         d_atom_positions_,
         d_num_atoms_,
         max_atoms,
-        d_atom_type_embeddings_,
+        atom_type_embeddings_.data,
         args.token_numeric_values,
         args.token_numeric_mask,
         d_atom_embeddings_,
@@ -748,7 +723,7 @@ void ScratchBlockLayer::forwardActive(const ScratchBlockForwardArgs& args) {
         d_num_atoms_,
         max_atoms,
         d_atom_embeddings_,
-        d_atom_projection_,
+        atom_projection_.data,
         config_.atom_embedding_dim,
         config_.d_model,
         config_.atom_scale);
@@ -760,7 +735,7 @@ void ScratchBlockLayer::forwardActive(const ScratchBlockForwardArgs& args) {
             output_ptr,
             args.token_text_features,
             args.token_text_mask,
-            d_text_feature_projection_,
+            text_feature_projection_.data,
             args.total_tokens,
             config_.d_model,
             config_.atom_scale);
@@ -841,8 +816,8 @@ void ScratchBlockLayer::backward(const ScratchBlockForwardArgs& args,
         args.cache_num_atoms,
         max_atoms,
         args.cache_atom_embeddings.ptr,  // Extract raw pointer from TensorView
-        d_atom_projection_,
-        d_atom_projection_grad_,
+        atom_projection_.data,
+        atom_projection_.grad_data(),
         d_grad_atom_embeddings_temp,
         config_.atom_embedding_dim,
         config_.d_model,
@@ -851,26 +826,26 @@ void ScratchBlockLayer::backward(const ScratchBlockForwardArgs& args,
     
     // Step 3: Accumulate atom embedding gradients back to atom type embeddings
     // Routes from per-atom [num_atoms, atom_embedding_dim] to shared [NUM_ATOM_TYPES, atom_embedding_dim]
-    if (args.cache_atom_types && d_atom_type_embeddings_grad_) {
+    if (args.cache_atom_types && atom_type_embeddings_.has_grad()) {
         kernelAccumulateAtomTypeGradients<<<max_atoms, block_size, 0, stream>>>(
             d_grad_atom_embeddings_temp,
             args.cache_atom_types,
             args.cache_num_atoms,
             max_atoms,
-            d_atom_type_embeddings_grad_,
+            atom_type_embeddings_.grad_data(),
             config_.atom_embedding_dim
         );
     }
     
     // Step 4: Backward through text feature injection
     // Computes gradients for text_feature_projection
-    if (args.token_text_features && args.token_text_mask && d_text_feature_projection_grad_) {
+    if (args.token_text_features && args.token_text_mask && text_feature_projection_.has_grad()) {
         const int text_block_size = std::min(kTextFeatureDim, 32);
         kernelBackwardTextFeatures<<<args.total_tokens, text_block_size, 0, stream>>>(
             grad_output,
             args.token_text_features,
             args.token_text_mask,
-            d_text_feature_projection_grad_,
+            text_feature_projection_.grad_data(),
             args.total_tokens,
             config_.d_model,
             config_.atom_scale
@@ -954,7 +929,7 @@ void ScratchBlockLayer::injectAtomEmbeddings(float* hidden_states,
         d_num_atoms_,
         max_atoms,
         d_atom_embeddings_,
-        d_atom_projection_,
+        atom_projection_.data,
         config_.atom_embedding_dim,
         config_.d_model,
         config_.atom_scale);

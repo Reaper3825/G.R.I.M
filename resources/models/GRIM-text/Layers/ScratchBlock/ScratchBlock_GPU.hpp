@@ -153,17 +153,14 @@ public:
     
     std::size_t requiredWorkspaceBytes(int total_tokens) const;
     
-    // Atom type embeddings (learnable)
-    float* getAtomTypeEmbeddings() { return d_atom_type_embeddings_; }
-    float* getAtomTypeEmbeddingsGrad() { return d_atom_type_embeddings_grad_; }
+    // Atom type embeddings (learnable Tensor)
+    Tensor& atomTypeEmbeddings() { return atom_type_embeddings_; }
     
     // Projection weights (atom_embedding_dim → d_model)
-    float* getAtomProjection() { return d_atom_projection_; }
-    float* getAtomProjectionGrad() { return d_atom_projection_grad_; }
+    Tensor& atomProjection() { return atom_projection_; }
     
     // Text feature projection (16-dim FP16 → d_model) - VALUE encoding path
-    float* getTextFeatureProjection() { return d_text_feature_projection_; }
-    float* getTextFeatureProjectionGrad() { return d_text_feature_projection_grad_; }
+    Tensor& textFeatureProjection() { return text_feature_projection_; }
 
     //--------------------------------------------------//
     // Statistics
@@ -218,13 +215,10 @@ private:
     ScratchBlockConfig config_;
     Stats stats_;
     
-    // GPU weights
-    float* d_atom_type_embeddings_ = nullptr;      // [num_atom_types, atom_embedding_dim]
-    float* d_atom_type_embeddings_grad_ = nullptr;
-    float* d_atom_projection_ = nullptr;           // [atom_embedding_dim, d_model]
-    float* d_atom_projection_grad_ = nullptr;
-    float* d_text_feature_projection_ = nullptr;   // [16, d_model] - text feature value encoding
-    float* d_text_feature_projection_grad_ = nullptr;
+    // GPU weights (Tensor-managed — RAII, gradient via ensure_grad)
+    Tensor atom_type_embeddings_;         // [num_atom_types, atom_embedding_dim]
+    Tensor atom_projection_;              // [atom_embedding_dim, d_model]
+    Tensor text_feature_projection_;      // [16, d_model] - text feature value encoding
     
     // Temporary buffers
     int* d_atom_positions_ = nullptr;              // [max_atoms]

@@ -174,6 +174,12 @@ struct EncoderConfig {
     bool use_layer_scale = false;        // Enable per-sublayer learnable scaling
     float layer_scale_init = 0.1f;       // Initial scale value (typical: 0.1 for small models)
     
+    // Per-layer residual centering (Issue #126 fix - can be disabled to improve gradient signal)
+    // When true, applies center_columns after each residual add in every encoder layer (24 total).
+    // This prevents mode collapse but attenuates gradient signal through 24 centering projections.
+    // When false, only the LM head centering (center_hidden_states) prevents mode collapse.
+    bool center_encoder_residuals = false;
+    
     // CUDA execution
     cudaStream_t stream = nullptr;       // CUDA stream for async execution
     cublasHandle_t cublas_handle = nullptr;  // Centralized cuBLAS handle (Rule 22)
@@ -310,6 +316,7 @@ struct LanguageModelConfig {
     bool lm_head_center_hidden_states = false;  // Center encoder output before projection
     bool lm_head_recenter_gradients = false;    // Recenter grad_weight rows after GEMM
     bool center_logits = true;                 // Center logits per position (row-wise, mean→0)
+    bool center_encoder_residuals = false;        // Center residuals INSIDE encoder layers (attenuates gradient signal)
     
     // Hardcoded Hidden States Diagnostic (Issue #42)
     // When enabled, replaces encoder output with synthetic patterns to isolate

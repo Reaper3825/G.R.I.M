@@ -2336,25 +2336,24 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     
     // ========================================================================
     // ISSUE #126 FIX: Center the COMBINED residual output, not just the layer contribution!
+    // GUARDED by config_.center_encoder_residuals (default: false)
     //
-    // OLD (Issue #118 - WRONG):
-    //   centered_attn = center_columns(proj_for_residual)
-    //   residual1 = add(input, centered_attn)
-    //   Problem: `input` still carries correlation from previous layers!
-    //   Result: mean_t(residual1[:,d]) = mean_t(input[:,d]) ≠ 0 → correlation preserved!
-    //
-    // NEW (Issue #126 - CORRECT):
+    // When enabled (24 centerings total across 12 layers):
     //   raw_residual1 = add(input, proj_for_residual)
     //   residual1 = center_columns(raw_residual1)
-    //   Result: mean_t(residual1[:,d]) = 0 → accumulated correlation REMOVED!
+    //   Prevents per-layer correlation buildup but attenuates gradient signal
+    //   through 24 CenterColumnsGradFn backward projections.
     //
-    // Math proof:
-    //   center(A + B) = A + B - mean(A+B) = center(A) + center(B)
-    //   If we only center B (layer output), the mean(A) term stays in the result!
-    //   By centering the combined output, we remove mean(A) + mean(B) = mean(A+B).
+    // When disabled (standard pre-norm):
+    //   residual1 = add(input, proj_for_residual)
+    //   Mode collapse prevention relies on LM head centering (center_hidden_states).
     // ========================================================================
     Tensor raw_residual1 = autograd::add(input, proj_for_residual, stream);
-    intermediates.residual1 = autograd::center_columns(raw_residual1, stream);
+    if (config_.center_encoder_residuals) {
+        intermediates.residual1 = autograd::center_columns(raw_residual1, stream);
+    } else {
+        intermediates.residual1 = std::move(raw_residual1);
+    }
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 DONE\n");
     
     // ISSUE #93 DIAGNOSTIC: Log residual1 = input + proj_out
@@ -2402,20 +2401,15 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         : intermediates.ffn_out;
     
     // ========================================================================
-    // ISSUE #126 FIX: Center the COMBINED residual output, not just the layer contribution!
-    //
-    // OLD (Issue #118 - WRONG):
-    //   centered_ffn = center_columns(ffn_for_residual)
-    //   output = add(residual1, centered_ffn)
-    //   Problem: `residual1` still carries correlation (RMSNorm can shift angles)!
-    //
-    // NEW (Issue #126 - CORRECT):
-    //   raw_output = add(residual1, ffn_for_residual)
-    //   output = center_columns(raw_output)
-    //   Result: mean_t(output[:,d]) = 0 → accumulated correlation REMOVED!
+    // ISSUE #126 FIX: Center the COMBINED residual output (GUARDED)
+    // Same guard as attention residual above. See config_.center_encoder_residuals.
     // ========================================================================
     Tensor raw_output = autograd::add(intermediates.residual1, ffn_for_residual, stream);
-    intermediates.output = autograd::center_columns(raw_output, stream);
+    if (config_.center_encoder_residuals) {
+        intermediates.output = autograd::center_columns(raw_output, stream);
+    } else {
+        intermediates.output = std::move(raw_output);
+    }
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2 DONE - layer COMPLETE\n");
     
     // ISSUE #93 DIAGNOSTIC: Log final layer output

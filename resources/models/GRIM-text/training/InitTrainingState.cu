@@ -321,10 +321,10 @@ void LanguageModel::initTrainingState() {
     // ═══════════════════════════════════════════════════════════════
     // AUTOGRAD MIGRATION COMPLETE - Legacy vectors REMOVED
     // ═══════════════════════════════════════════════════════════════
-    // FFN/Attention/RMSNorm gradients now use encoder's Tensor.grad:
-    //   - enc->getFFNW1Grad(), enc->getFFNW2Grad()
-    //   - enc->getAttnWqkvGrad(), enc->getAttnWoGrad()
-    //   - enc->getRMS1GammaGrad(), enc->getRMS2GammaGrad()
+    // FFN/Attention/RMSNorm gradients now use encoder's Tensor& accessors:
+    //   - enc->ffnW1().grad_data(), enc->ffnW2().grad_data()
+    //   - enc->attnWqkv().grad_data(), enc->attnWo().grad_data()
+    //   - enc->rms1Gamma().grad_data(), enc->rms2Gamma().grad_data()
     // Allocated via ensure_grad() in encoder's allocateWeights().
     
     // Learnable QK-norm scales (nGPT-style) - now Tensor-based with autograd

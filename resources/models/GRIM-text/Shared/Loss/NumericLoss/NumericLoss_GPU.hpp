@@ -17,6 +17,7 @@ struct NumericLossInputs {
 	const int* targets = nullptr;                 // [total_tokens]
 	int total_tokens = 0;
 	int seq_len = 0;
+	int valid_text_tokens = 0;                    // FOR ISSUE #136: To compensate numeric gradient scale
 	float huber_delta = 1.0f;
 	bool log_scale = true;
 	float log_max = 20.0f;
