@@ -138,9 +138,9 @@ struct StartupConfig {
     StabilityOverrides stability;
     ScratchBlockConfig scratch;
     
-    // Derived values
-    int max_seq_len = 512;
-    int sliding_window_stride = 256;
+    // Derived values (Rule 20: No defaults - must be explicitly set during loadConfiguration)
+    int max_seq_len = 0;  // MUST be set from hyperparameters or stability override, throw if 0
+    int sliding_window_stride = 0;  // Derived from max_seq_len
     uint32_t actual_vocab_size = 0;
     
     // Flags

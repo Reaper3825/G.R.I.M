@@ -48,6 +48,9 @@
 
 using json = nlohmann::json;
 
+// Debug flag for batch_prep_* corruption investigation
+#define DEBUG_BATCH_PREP_CORRUPTION 1
+
 // Module logging aliases
 using GRIM::Logging::ModuleId;
 using GRIM::Logging::EmitModuleInfo;
@@ -947,6 +950,12 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     
     auto model = std::make_unique<GRIM::LanguageModel>(model_config);
     
+#if DEBUG_BATCH_PREP_CORRUPTION
+    fprintf(stderr, "[CORRUPT-CHECK-0] After model construction: capacity=%zu data=%p\n",
+            model->getTrainingState().batch_prep_target_ids.capacity(),
+            (void*)model->getTrainingState().batch_prep_target_ids.data());
+#endif
+    
     // STEP 1: Initialize just the stream controller part of TrainingState
     // This creates CUDA streams (CUDA context must exist from STEP 0)
     {
@@ -961,15 +970,33 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
         logger.log("✓ StreamController initialized");
     }
     
+#if DEBUG_BATCH_PREP_CORRUPTION
+    fprintf(stderr, "[CORRUPT-CHECK-1] After StreamController: capacity=%zu data=%p\n",
+            model->getTrainingState().batch_prep_target_ids.capacity(),
+            (void*)model->getTrainingState().batch_prep_target_ids.data());
+#endif
+    
     // STEP 2: Initialize cuBLAS handle (needed by encoder layers in initGPU)
     logger.log("Initializing cuBLAS handle...");
     model->initCuBLASHandle();
     logger.log("✓ cuBLAS handle initialized with Tensor Core acceleration");
     
+#if DEBUG_BATCH_PREP_CORRUPTION
+    fprintf(stderr, "[CORRUPT-CHECK-2] After cuBLAS: capacity=%zu data=%p\n",
+            model->getTrainingState().batch_prep_target_ids.capacity(),
+            (void*)model->getTrainingState().batch_prep_target_ids.data());
+#endif
+    
     // STEP 2.5: Initialize RoPE BEFORE encoder construction (CRITICAL!)
     logger.log("Initializing RoPE (required before encoder construction)...");
     model->initPBM();
     logger.log("✓ RoPE initialized");
+    
+#if DEBUG_BATCH_PREP_CORRUPTION
+    fprintf(stderr, "[CORRUPT-CHECK-3] After PBM: capacity=%zu data=%p\n",
+            model->getTrainingState().batch_prep_target_ids.capacity(),
+            (void*)model->getTrainingState().batch_prep_target_ids.data());
+#endif
     
     // ═══════════════════════════════════════════════════════════════
     // STEP 2.75: Initialize TrainingTensors (PROPER OWNERSHIP FIX)
@@ -1000,17 +1027,35 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
         logger.log("✓ TrainingTensors initialized (Tensors OWN memory)");
     }
     
+#if DEBUG_BATCH_PREP_CORRUPTION
+    fprintf(stderr, "[CORRUPT-CHECK-4] After AutogradTensors: capacity=%zu data=%p\n",
+            model->getTrainingState().batch_prep_target_ids.capacity(),
+            (void*)model->getTrainingState().batch_prep_target_ids.data());
+#endif
+    
     // STEP 3: Initialize GPU encoder (uses cuBLAS handle from step 2, RoPE from step 2.5)
     // NOTE: initGPU() now uses TrainingTensors for embedding buffers instead of allocating new ones
     logger.log("Initializing GPU encoder...");
     model->initGPU();
     logger.log("✓ GPU encoder fully initialized");
     
+#if DEBUG_BATCH_PREP_CORRUPTION
+    fprintf(stderr, "[CORRUPT-CHECK-5] After initGPU: capacity=%zu data=%p\n",
+            model->getTrainingState().batch_prep_target_ids.capacity(),
+            (void*)model->getTrainingState().batch_prep_target_ids.data());
+#endif
+    
     // STEP 4: Finish TrainingState initialization (grad buffers, activation caches)
     // NOTE: Embeddings already set up in step 2.75, this just does the rest
     logger.log("Initializing TrainingState (grad buffers, activation caches)...");
     model->initTrainingState();
     logger.log("✓ TrainingState fully initialized");
+    
+#if DEBUG_BATCH_PREP_CORRUPTION
+    fprintf(stderr, "[CORRUPT-CHECK-6] After initTrainingState: capacity=%zu data=%p\n",
+            model->getTrainingState().batch_prep_target_ids.capacity(),
+            (void*)model->getTrainingState().batch_prep_target_ids.data());
+#endif
 
     if (config.hyperparameters.logit_update_trace_enabled) {
         const bool tied = model->getConfig().tie_embeddings;

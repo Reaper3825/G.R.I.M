@@ -21,6 +21,12 @@
 #include "../../../training/Autograd/AutogradTraining.hpp"  // Issue #47: Full autograd forward pass
 #include "../../VerboseLogging.hpp"  // Guards for expensive debug prints
 
+// Debug flag for batch_prep_* corruption investigation
+// MUST match Phase1_Startup.cu setting (both files independently compiled)
+#ifndef DEBUG_BATCH_PREP_CORRUPTION
+#define DEBUG_BATCH_PREP_CORRUPTION 1
+#endif
+
 namespace GRIM {
 
 namespace {
@@ -61,6 +67,12 @@ BatchPreparationResult prepareLossBatchInputs(
 	size_t max_cached_batch,
 	size_t max_cached_seq_len)
 {
+#if DEBUG_BATCH_PREP_CORRUPTION
+	fprintf(stderr, "[CORRUPT-USE-ENTRY] prepareLossBatchInputs called: capacity=%zu data=%p\n",
+	        training_state.batch_prep_target_ids.capacity(),
+	        (void*)training_state.batch_prep_target_ids.data());
+#endif
+
 	// NOTE: training_state.batch_prep_* vectors are CORRUPT due to memory corruption 
 	// elsewhere. Using local vectors as workaround until root cause found.
 	// The 0.02s allocation cost per batch is acceptable vs crashing.
@@ -87,6 +99,13 @@ BatchPreparationResult prepareLossBatchInputs(
 	const size_t total_tokens = result.batch_size * result.max_seq_len;
 	const size_t text_feat_size = total_tokens * kTextFeatureDim;
 	
+#if DEBUG_BATCH_PREP_CORRUPTION
+	fprintf(stderr, "[CORRUPT-USE-BEFORE-ALLOC] About to resize local vectors (NOT touching training_state): total_tokens=%zu\n", total_tokens);
+	fprintf(stderr, "[CORRUPT-USE-BEFORE-ALLOC] training_state vector state: capacity=%zu data=%p\n",
+	        training_state.batch_prep_target_ids.capacity(),
+	        (void*)training_state.batch_prep_target_ids.data());
+#endif
+
 	// WORKAROUND: Allocate fresh local vectors (training_state members are corrupted)
 	result.padded_input_ids.resize(total_tokens, 0);
 	result.padded_target_ids.resize(total_tokens, -1);
@@ -288,6 +307,12 @@ float LanguageModel::computeLossBatch(
 	orderLog("computeLossBatch.prep_start",
 		batch_input_ids.size(), 0, 0, 0);
 	fprintf(stderr, "[DEBUG-LOSS] orderLog completed, calling prepareLossBatchInputs...\n");
+	
+#if DEBUG_BATCH_PREP_CORRUPTION
+	fprintf(stderr, "[CORRUPT-USE-BEFORE-PREP] About to call prepareLossBatchInputs: capacity=%zu data=%p\n",
+	        training_state_.batch_prep_target_ids.capacity(),
+	        (void*)training_state_.batch_prep_target_ids.data());
+#endif
 	
 	auto prep_start = std::chrono::high_resolution_clock::now();
 	const auto prep = prepareLossBatchInputs(

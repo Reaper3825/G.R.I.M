@@ -89,6 +89,25 @@ std::string readEnvString(const char* name, const std::string& fallback) {
     return std::string(raw);
 }
 
+bool isPhase2DebugEnabled() {
+    static const bool enabled = readEnvInt("GRIM_PHASE2_DEBUG", 0) > 0;
+    return enabled;
+}
+
+#define PHASE2_DEBUG_STDERR(...)             \
+    do {                                     \
+        if (isPhase2DebugEnabled()) {        \
+            fprintf(stderr, __VA_ARGS__);    \
+        }                                    \
+    } while (0)
+
+#define PHASE2_DEBUG_FLUSH_STDERR()          \
+    do {                                     \
+        if (isPhase2DebugEnabled()) {        \
+            fflush(stderr);                  \
+        }                                    \
+    } while (0)
+
 std::string trimSampleText(const std::string& text, std::size_t max_chars) {
     if (text.size() <= max_chars) {
         return text;
@@ -1497,14 +1516,15 @@ std::string formatGradientComponents(GRIM::LanguageModel* model) {
         comp_msg << " emb=" << formatScalar(gm.embedding_norm)
                  << " lm=" << formatScalar(gm.lm_head_norm);
     }
-
-    if (model->getConfig().numeric_head_enabled) {
-        comp_msg << " num=" << formatScalar(gm.numeric_head_norm);
-    }
     
     comp_msg << " attn=" << formatScalar(gm.attention_norm)
              << " ffn=" << formatScalar(gm.ffn_norm)
              << " rms=" << formatScalar(gm.rmsnorm_norm);
+
+    if (model->getConfig().numeric_head_enabled) {
+        comp_msg << " num=" << formatScalar(gm.numeric_head_norm);
+    }
+    comp_msg << " tied=" << (tied ? "yes" : "no");
     
     // Include ScratchBlock if enabled
     if (gm.scratchblock_norm > 0.0f) {
@@ -1518,10 +1538,7 @@ float getScheduledLearningRate(
     int step,
     float base_lr,
     int warmup_steps,
-    float min_lr,
-    bool stability_overrides_enabled,
-    int total_batches,
-    int accumulation_steps) {
+    bool stability_overrides_enabled) {
     
     if (stability_overrides_enabled) {
         return base_lr;
@@ -1531,19 +1548,8 @@ float getScheduledLearningRate(
         return base_lr * (static_cast<float>(step + 1) / warmup_steps);
     }
     
-    // Total optimizer steps = batches / accumulation (each optimizer step uses 'accumulation_steps' batches)
-    const int total_optimizer_steps = std::max(1, total_batches / std::max(1, accumulation_steps));
-    
-    int decay_steps = step - warmup_steps;
-    int total_decay_steps = std::max(1, total_optimizer_steps - warmup_steps);
-    
-    if (decay_steps < total_decay_steps) {
-        float progress = static_cast<float>(decay_steps) / total_decay_steps;
-        float cosine_decay = 0.5f * (1.0f + cosf(3.14159265359f * progress));
-        return min_lr + (base_lr - min_lr) * cosine_decay;
-    }
-    
-    return min_lr;
+    // Constant LR after warmup
+    return base_lr;
 }
 
 bool isBatchQuarantined(
@@ -1566,13 +1572,13 @@ GRIM::Batching::BatchSchedule buildEpochBatches(
     const std::vector<float>* rarity_scores,
     TrainingLogger& logger) {
     
-    fprintf(stderr, "[DEBUG-BUILD] ENTER buildEpochBatches batch_size=%d\n", batch_size);
+    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] ENTER buildEpochBatches batch_size=%d\n", batch_size);
     
     const bool warmup_phase = (global_step < kWarmupTokenSteps);
     const bool curriculum_active = (epoch < kCurriculumEpochs);
     
-    fprintf(stderr, "[DEBUG-BUILD] warmup_phase=%d curriculum_active=%d\n", 
-            warmup_phase ? 1 : 0, curriculum_active ? 1 : 0);
+    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] warmup_phase=%d curriculum_active=%d\n",
+                        warmup_phase ? 1 : 0, curriculum_active ? 1 : 0);
     
     GRIM::Batching::BatchOptions opts;
     
@@ -1618,40 +1624,40 @@ GRIM::Batching::BatchSchedule buildEpochBatches(
     opts.batch_ordering = GRIM::Batching::BatchOrdering::RANDOM;
     opts.interleave_overflow = true;
     
-    fprintf(stderr, "[DEBUG-BUILD] About to call buildBatches...\n");
+    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] About to call buildBatches...\n");
     auto schedule = GRIM::Batching::buildBatches(catalog, opts);
-    fprintf(stderr, "[DEBUG-BUILD] buildBatches returned, batches=%zu\n", schedule.batches.size());
-    fflush(stderr);  // Force flush before potential crash
-    
-    fprintf(stderr, "[DEBUG-BUILD] Checking schedule.batches.empty()...\n");
-    fflush(stderr);
+    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] buildBatches returned, batches=%zu\n", schedule.batches.size());
+    PHASE2_DEBUG_FLUSH_STDERR();  // Force flush before potential crash
+
+    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] Checking schedule.batches.empty()...\n");
+    PHASE2_DEBUG_FLUSH_STDERR();
     bool is_empty = schedule.batches.empty();
-    fprintf(stderr, "[DEBUG-BUILD] is_empty=%d\n", is_empty ? 1 : 0);
-    fflush(stderr);
-    
-    fprintf(stderr, "[DEBUG-BUILD] Checking schedule stats...\n");
-    fflush(stderr);
-    fprintf(stderr, "[DEBUG-BUILD] min_batch=%u max_batch=%u avg_eff=%.2f\n", 
-            schedule.min_batch_size_observed, 
-            schedule.max_batch_size_observed,
-            schedule.avg_packing_efficiency);
-    fflush(stderr);
-    
-    fprintf(stderr, "[DEBUG-BUILD] About to log batches created...\n");
-    fflush(stderr);
+    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] is_empty=%d\n", is_empty ? 1 : 0);
+    PHASE2_DEBUG_FLUSH_STDERR();
+
+    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] Checking schedule stats...\n");
+    PHASE2_DEBUG_FLUSH_STDERR();
+    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] min_batch=%u max_batch=%u avg_eff=%.2f\n",
+                        schedule.min_batch_size_observed,
+                        schedule.max_batch_size_observed,
+                        schedule.avg_packing_efficiency);
+    PHASE2_DEBUG_FLUSH_STDERR();
+
+    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] About to log batches created...\n");
+    PHASE2_DEBUG_FLUSH_STDERR();
     logger.log("Created " + std::to_string(schedule.batches.size()) + " dynamic batches");
-    fprintf(stderr, "[DEBUG-BUILD] About to log token budget...\n");
+    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] About to log token budget...\n");
     logger.log("[Batching] Token budget: " + std::to_string(opts.max_tokens_per_batch));
-    fprintf(stderr, "[DEBUG-BUILD] About to log strategy...\n");
+    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] About to log strategy...\n");
     logger.log("[Batching] Strategy: " + strat_str);
-    fprintf(stderr, "[DEBUG-BUILD] About to log batch size range...\n");
+    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] About to log batch size range...\n");
     logger.log("[Batching] Batch size range: " +
                std::to_string(schedule.min_batch_size_observed) + "-" +
                std::to_string(schedule.max_batch_size_observed));
-    fprintf(stderr, "[DEBUG-BUILD] About to log packing efficiency...\n");
+    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] About to log packing efficiency...\n");
     logger.log("[Batching] Packing efficiency: " + 
                std::to_string(static_cast<int>(schedule.avg_packing_efficiency * 100)) + "%");
-    fprintf(stderr, "[DEBUG-BUILD] All logger.log calls completed\n");
+    PHASE2_DEBUG_STDERR("[DEBUG-BUILD] All logger.log calls completed\n");
     
     return schedule;
 }
@@ -2028,7 +2034,7 @@ NumericalGradCheckResult performNumericalGradientCheck(
     ctx.logging.logger->log(log_msg.str());
     
     // Also print to stderr for visibility during debugging
-    fprintf(stderr, "\n%s\n", log_msg.str().c_str());
+    PHASE2_DEBUG_STDERR("\n%s\n", log_msg.str().c_str());
     
     return result;
 }
@@ -2293,23 +2299,23 @@ BatchResult processBatch(
         ctx.logging.logger->log(batch_info.str());
     }
 
-    fprintf(stderr, "[DEBUG-PROCESS] After BATCH_INFO log, checking shouldLogAtomStats...\n");
+    PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] After BATCH_INFO log, checking shouldLogAtomStats...\n");
     if (shouldLogAtomStats(ctx, batch_idx)) {
-        fprintf(stderr, "[DEBUG-PROCESS] shouldLogAtomStats=true, creating vectors...\n");
+        PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] shouldLogAtomStats=true, creating vectors...\n");
         std::vector<int> per_seq_atoms;
         std::vector<int> per_seq_lengths;
         per_seq_atoms.reserve(batch_inputs.size());
         per_seq_lengths.reserve(batch_inputs.size());
 
-        fprintf(stderr, "[DEBUG-PROCESS] About to call computeAtomStats...\n");
+        PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to call computeAtomStats...\n");
         const AtomStats stats = computeAtomStats(batch_inputs, ctx.tokenizer,
                                                  &per_seq_atoms, &per_seq_lengths);
-        fprintf(stderr, "[DEBUG-PROCESS] computeAtomStats returned\n");
+        PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] computeAtomStats returned\n");
         const double atom_ratio = stats.total_tokens > 0
             ? static_cast<double>(stats.total_atoms) / static_cast<double>(stats.total_tokens)
             : 0.0;
 
-        fprintf(stderr, "[DEBUG-PROCESS] Building atom_msg...\n");
+        PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] Building atom_msg...\n");
         std::ostringstream atom_msg;
         atom_msg << "[AtomStats] batch=" << (batch_idx + 1)
                  << " seqs=" << batch_inputs.size()
@@ -2319,9 +2325,9 @@ BatchResult processBatch(
                  << " min=" << stats.min_atoms
                  << " max=" << stats.max_atoms
                  << " avg=" << std::fixed << std::setprecision(2) << stats.avg_atoms;
-        fprintf(stderr, "[DEBUG-PROCESS] About to log atom_msg...\n");
+        PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to log atom_msg...\n");
         ctx.logging.logger->log(atom_msg.str());
-        fprintf(stderr, "[DEBUG-PROCESS] atom_msg logged\n");
+        PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] atom_msg logged\n");
 
         const int max_seq_log = std::max(0, ctx.config.hyperparameters.atom_stats_max_seqs);
         if (max_seq_log > 0 && !per_seq_atoms.empty()) {
@@ -2348,7 +2354,7 @@ BatchResult processBatch(
         }
     }
     
-    fprintf(stderr, "[DEBUG-PROCESS] After atom stats, entering boundary diagnostic...\n");
+    PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] After atom stats, entering boundary diagnostic...\n");
     // ========================================================================
     // DIAGNOSTIC: Boundary crossing check (simplified for FlashAttention v2)
     // NOTE: FlashAttention v2 does NOT use O(seq²) attention buffers.
@@ -2480,12 +2486,12 @@ BatchResult processBatch(
         }
     }
     
-    fprintf(stderr, "[DEBUG-PROCESS] After boundary diagnostic, entering forward pass...\n");
+    PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] After boundary diagnostic, entering forward pass...\n");
     // Forward pass
     static int forward_call_count = 0;
     ++forward_call_count;
     
-    fprintf(stderr, "[DEBUG-PROCESS] forward_call_count=%d, building target distribution...\n", forward_call_count);
+    PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] forward_call_count=%d, building target distribution...\n", forward_call_count);
     // Log target and prediction distributions (uses ForwardPass module for filtering)
     {
         // Log target distribution - count occurrences of each target ID
@@ -2508,7 +2514,7 @@ BatchResult processBatch(
                   [](const auto& a, const auto& b) { return a.second > b.second; });
         
         std::ostringstream target_info;
-        target_info << "BATCH_TARGET_DIST batch=" << batch_idx 
+        target_info << "BATCH_TARGET_DIST batch=" << (batch_idx + 1)
                     << " total_tokens=" << total_tokens 
                     << " valid=" << total_valid 
                     << " unique=" << target_counts.size()
@@ -2522,14 +2528,14 @@ BatchResult processBatch(
         EmitModuleInfo(ModuleId::ForwardPass, target_info.str(), ctx.global_step);
     }
     
-    fprintf(stderr, "[DEBUG-PROCESS] After target distribution, clearing loss weights...\n");
+    PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] After target distribution, clearing loss weights...\n");
     // BUG FIX Issue #30: sequence_rarity was scaling down ALL losses by ~0.66x,
     // causing initial loss to be ~6.8 instead of expected ~10.8 (ln(vocab_size)).
     // This broke the loss baseline and made training plateau investigation misleading.
     // REMOVE sequence_rarity weighting entirely - all sequences weighted equally.
     ctx.model->clearSequenceLossWeights();
     
-    fprintf(stderr, "[DEBUG-PROCESS] About to call computeLossBatch...\n");
+    PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to call computeLossBatch...\n");
     result.loss = ctx.model->computeLossBatch(
         batch_inputs,
         batch_targets,
@@ -2538,9 +2544,9 @@ BatchResult processBatch(
         batch_text_features,
         batch_text_mask,
         batch_byte_lengths);
-    fprintf(stderr, "[DEBUG-PROCESS] computeLossBatch returned, loss=%f\n", result.loss);
+    PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] computeLossBatch returned, loss=%f\n", result.loss);
     ctx.model->clearSequenceLossWeights();
-    fprintf(stderr, "[DEBUG-PROCESS] clearSequenceLossWeights completed\n");
+    PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] clearSequenceLossWeights completed\n");
 
     if (std::isfinite(result.loss) &&
         ctx.config.hyperparameters.guess_aux_enabled &&
@@ -3100,7 +3106,7 @@ BatchResult processBatch(
                     }
                 }
                 float avg_cos = (cos_count > 0) ? cos_sum / cos_count : 0.0f;
-                hidden_stats << " avg_cos=" << Internal::formatScalar(avg_cos, 4);
+                hidden_stats << " avg_cos=" << Internal::formatScalar(avg_cos, 8);
                 ctx.logging.logger->log(hidden_stats.str());
             }
             
@@ -3127,7 +3133,7 @@ BatchResult processBatch(
                         norm_sq += row_buffer[d] * row_buffer[d];
                     }
                     float row_norm = std::sqrt(norm_sq);
-                    lm_stats << "tok" << tok_id << ":" << Internal::formatScalar(row_norm, 4);
+                    lm_stats << "tok" << tok_id << ":" << Internal::formatScalar(row_norm, 10);
                     if (i + 1 < std::min(sorted_argmax.size(), size_t(5))) lm_stats << ",";
                 }
                 lm_stats << "]";
@@ -3744,6 +3750,7 @@ BatchResult processBatch(
             if (logit_trace_enabled) {
                 std::ostringstream trace_msg;
                 trace_msg << "[LogitTrace][PostBackward] source=grad_metrics"
+                          << " tied=" << (tied ? "yes" : "no")
                           << " batch=" << (batch_idx + 1)
                           << " step=" << batch_step
                           << " preclip_grad_norm=" << Internal::formatScalar(preclip_grad_norm, 6)
@@ -3853,56 +3860,37 @@ BatchResult processBatch(
         telemetry_decision.cooldown_extension = 0;
     }
     
-    // Gradient clipping - with telemetry-adaptive scaling
-    // CRITICAL FIX (Issue #13): Token-normalized clipping should scale DOWN, not UP.
-    // If per-token gradient norm exceeds threshold, clip it DOWN to threshold.
-    // OLD BUG: effective_clip = per_token_limit * token_count, then scaled UP by 500-700x!
-    // NEW: Use per_token_limit directly for clip target, matching the comparison threshold.
+    // ========================================================================
+    // Issue #135: Gradient clipping DEFERRED to after accumulation scaling
+    //
+    // OLD BUG: Clipping ran EVERY micro-batch, crushing text gradients 3x
+    //   (once per micro-batch × 3 accum steps). With accum_steps=3, text
+    //   gradients that were already tiny (~0.04) got clipped 3 times.
+    //
+    // FIX: Clipping now runs ONCE, inside should_step block, AFTER
+    //   accum_scale(1/accum_steps). This means gradients are:
+    //   1. Accumulated across all micro-batches (summed)
+    //   2. Scaled by 1/accum_steps (averaged)
+    //   3. Norm recomputed on the averaged gradients
+    //   4. Clipped once against the limit
+    //   5. Fed to optimizer
+    // ========================================================================
     auto clipping_start = std::chrono::steady_clock::now();
     
-    // CRITICAL FIX (Issue #18): Enforce minimum scale factor to prevent gradient death
-    // If telemetry returns scale=0 (bug), gradients would be zeroed, halting training.
+    // Compute clip parameters now (telemetry scale, enabled flag) but defer actual clipping
     const float telemetry_scale = telemetry_control_active ? telemetry_decision.grad_scale_factor : 1.0f;
     const float safe_scale_factor = std::max(telemetry_scale, 0.01f);
-    float effective_per_token_limit = clip_selection.per_token_limit * safe_scale_factor;
-    
-    // Telemetry-driven grad_scale_factor already applied above
-    // GPU decision kernel computes all scaling in one pass
-    
-    // Skip clipping entirely if gradient_clip <= 0 in config (disabled)
+    const float effective_per_token_limit = clip_selection.per_token_limit * safe_scale_factor;
     const bool clipping_enabled = (hp.grad_clip_norm > 0.0f);
     
-    // DEBUG Issue #30: Log clipping decision values
-    if (batch_idx < 3) {
-        ctx.logging.logger->log("[ClipDebug] batch=" + std::to_string(batch_idx + 1) +
-                                " hp.grad_clip_norm=" + Internal::formatScalar(hp.grad_clip_norm, 4) +
-                                " clipping_enabled=" + std::to_string(clipping_enabled) +
-                                " grad_norm=" + Internal::formatScalar(result.normalized_grad_norm, 4) +
-                                " per_token_limit=" + Internal::formatScalar(clip_selection.per_token_limit, 4) +
-                                " effective_limit=" + Internal::formatScalar(effective_per_token_limit, 4) +
-                                " should_clip=" + std::to_string(result.normalized_grad_norm > effective_per_token_limit));
-    }
-    
-    if (clipping_enabled && result.normalized_grad_norm > effective_per_token_limit) {
-        // FIXED: Scale DOWN to per_token_limit, not up to effective_clip_norm
-        // Before: clip_coef = (per_token_limit * tokens) / grad_norm = SCALE UP by ~700x
-        // After:  clip_coef = per_token_limit / normalized_grad_norm = SCALE DOWN to threshold
-        const float clip_coef = effective_per_token_limit / (result.normalized_grad_norm + 1e-8f);
-        ctx.model->scaleGradients(clip_coef);
-        result.grad_norm *= clip_coef;  // Actual post-clip norm
-        result.normalized_grad_norm = effective_per_token_limit;
-        result.gradient_clipped = true;
-    }
-    
-    ctx.model->recordGradientClip(effective_per_token_limit, result.gradient_clipped);
+    // No clipping here — deferred to post-accumulation inside should_step
     auto clipping_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - clipping_start).count();
     
     // Learning rate computation (accum_steps already computed above)
     auto lr_start = std::chrono::steady_clock::now();
     const float scheduled_lr = Internal::getScheduledLearningRate(
         ctx.global_step, hp.learning_rate, hp.warmup_steps, 
-        hp.dynamic_lr_min, ctx.config.stability.enabled,
-        total_batches, accum_steps);
+        ctx.config.stability.enabled);
     
     result.learning_rate = scheduled_lr;
     
@@ -4070,26 +4058,6 @@ BatchResult processBatch(
                             " step=" + std::to_string(ctx.optimizer.optimizer_state.step) +
                             " " + pre_weights);
     
-    // ========================================================================
-    // TRAINING SIGNAL: Pre-Optimizer State (clipping, normalization)
-    // ========================================================================
-    {
-        const float clip_ratio = (preclip_grad_norm > 1e-8f) 
-            ? (result.grad_norm / preclip_grad_norm) 
-            : 1.0f;
-        const bool was_clipped = (clip_ratio < 0.99f);  // Clipped if ratio < 1.0
-        
-        std::ostringstream opt_signal;
-        opt_signal << "[OptimizerSignal] batch=" << (batch_idx + 1)
-                   << " preclip_norm=" << Internal::formatScalar(preclip_grad_norm, 6)
-                   << " postclip_norm=" << Internal::formatScalar(result.grad_norm, 6)
-                   << " clip_ratio=" << Internal::formatScalar(clip_ratio, 4)
-                   << " was_clipped=" << (was_clipped ? "YES" : "NO")
-                   << " lr=" << Internal::formatScalar(result.learning_rate, 8)
-                   << " step=" << ctx.optimizer.optimizer_state.step;
-        ctx.logging.logger->log(opt_signal.str());
-    }
-
     if (sync_diag) {
         auto& training_state = ctx.model->getTrainingState();
         const auto flush_result = GRIM::GradStats::flushAndLog(
@@ -4145,6 +4113,64 @@ BatchResult processBatch(
             ctx.logging.logger->log("[GradAccum] Scaled gradients by " + 
                                     Internal::formatScalar(accum_scale, 6) + 
                                     " for accum_steps=" + std::to_string(accum_steps_for_log));
+        }
+        
+        // ========================================================================
+        // Issue #135: POST-ACCUMULATION gradient clipping
+        //
+        // Clipping runs ONCE on the fully accumulated + scaled gradients.
+        // Recompute grad norm since accum_scale changed magnitudes.
+        // Separate text vs numeric clipping (Issue #134).
+        // ========================================================================
+        if (clipping_enabled) {
+            clipping_start = std::chrono::steady_clock::now();
+            
+            // Recompute norm on the accumulated+scaled gradients
+            result.grad_norm = ctx.model->computeGradNorm(true);
+            result.normalized_grad_norm = result.grad_norm;
+            const float post_accum_norm = result.grad_norm;
+            
+            if (post_accum_norm > effective_per_token_limit) {
+                // Separate text vs numeric clipping (Issue #134)
+                const auto& gm = ctx.model->gradientMetrics();
+                const float numeric_norm = gm.numeric_head_norm;
+                const float total_norm_sq = post_accum_norm * post_accum_norm;
+                const float numeric_norm_sq = numeric_norm * numeric_norm;
+                const float text_norm_sq = total_norm_sq - numeric_norm_sq;
+                const float text_norm = (text_norm_sq > 0.0f) ? std::sqrt(text_norm_sq) : 0.0f;
+                
+                if (text_norm > effective_per_token_limit) {
+                    const float text_clip_coef = effective_per_token_limit / (text_norm + 1e-8f);
+                    ctx.model->scaleGradientsExcludingType(text_clip_coef, GRIM::ParamGroupType::NUMERIC_HEAD);
+                }
+                
+                if (numeric_norm > effective_per_token_limit) {
+                    const float numeric_clip_coef = effective_per_token_limit / (numeric_norm + 1e-8f);
+                    ctx.model->scaleGradientsByType(numeric_clip_coef, GRIM::ParamGroupType::NUMERIC_HEAD);
+                }
+                
+                const float clipped_text = std::min(text_norm, effective_per_token_limit);
+                const float clipped_numeric = std::min(numeric_norm, effective_per_token_limit);
+                result.grad_norm = std::sqrt(clipped_text * clipped_text + clipped_numeric * clipped_numeric);
+                result.normalized_grad_norm = result.grad_norm;
+                result.gradient_clipped = true;
+                
+                ctx.logging.logger->log("[PostAccumClip] batch=" + std::to_string(batch_idx + 1) +
+                                        " post_accum_norm=" + Internal::formatScalar(post_accum_norm, 6) +
+                                        " text_norm=" + Internal::formatScalar(text_norm, 6) +
+                                        " numeric_norm=" + Internal::formatScalar(numeric_norm, 6) +
+                                        " text_clipped=" + (text_norm > effective_per_token_limit ? "YES" : "NO") +
+                                        " numeric_clipped=" + (numeric_norm > effective_per_token_limit ? "YES" : "NO") +
+                                        " post_clip_total=" + Internal::formatScalar(result.grad_norm, 6));
+            } else {
+                ctx.logging.logger->log("[PostAccumClip] batch=" + std::to_string(batch_idx + 1) +
+                                        " post_accum_norm=" + Internal::formatScalar(post_accum_norm, 6) +
+                                        " limit=" + Internal::formatScalar(effective_per_token_limit, 6) +
+                                        " clipped=NO");
+            }
+            
+            ctx.model->recordGradientClip(effective_per_token_limit, result.gradient_clipped);
+            clipping_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - clipping_start).count();
         }
         
         // ========================================================================
@@ -4459,18 +4485,18 @@ EpochResult runEpoch(
         GRIMTS::ResetGuessCache(primary_stream);
     }
     
-    fprintf(stderr, "[DEBUG-EPOCH] After ResetGuessCache, checking shuffle...\n");
+    PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] After ResetGuessCache, checking shuffle...\n");
     
     // Shuffle train catalog if enabled
     const bool shuffle_this_epoch = hp.shuffle_train_enabled &&
         (hp.shuffle_train_epochs == 0 || epoch_idx < hp.shuffle_train_epochs);
-    fprintf(stderr, "[DEBUG-EPOCH] shuffle_this_epoch=%d hp.shuffle_train_enabled=%d\n", 
-            shuffle_this_epoch ? 1 : 0, hp.shuffle_train_enabled ? 1 : 0);
+    PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] shuffle_this_epoch=%d hp.shuffle_train_enabled=%d\n",
+                        shuffle_this_epoch ? 1 : 0, hp.shuffle_train_enabled ? 1 : 0);
     
     if (shuffle_this_epoch) {
-        fprintf(stderr, "[DEBUG-EPOCH] Entering shuffle block\n");
+        PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] Entering shuffle block\n");
         ctx.logging.logger->log("[Shuffle] Randomizing train catalog for epoch " + std::to_string(epoch_idx + 1));
-        fprintf(stderr, "[DEBUG-EPOCH] train_views.size()=%zu\n", ctx.data.train_views.size());
+        PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] train_views.size()=%zu\n", ctx.data.train_views.size());
         
         std::vector<size_t> perm(ctx.data.train_views.size());
         for (size_t i = 0; i < perm.size(); ++i) perm[i] = i;
@@ -4500,10 +4526,10 @@ EpochResult runEpoch(
         if (!shuffled_rarity.empty()) {
             ctx.data.sequence_rarity.swap(shuffled_rarity);
         }
-        fprintf(stderr, "[DEBUG-EPOCH] Shuffle complete\n");
+        PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] Shuffle complete\n");
     }
     
-    fprintf(stderr, "[DEBUG-EPOCH] About to build epoch batches...\n");
+    PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] About to build epoch batches...\n");
     // Build batches for this epoch
     auto schedule = Internal::buildEpochBatches(
         ctx,
@@ -4748,39 +4774,39 @@ bool executePhase2(TrainingContext& ctx) {
     
     // Initialize guess cache (Rule 22: pass TrainingState for buffer allocation)
     std::unique_ptr<GuessCacheScope> guess_cache_scope;
-    fprintf(stderr, "[DEBUG] guess_aux_enabled=%d\n", ctx.config.hyperparameters.guess_aux_enabled ? 1 : 0);
+    PHASE2_DEBUG_STDERR("[DEBUG] guess_aux_enabled=%d\n", ctx.config.hyperparameters.guess_aux_enabled ? 1 : 0);
     if (ctx.config.hyperparameters.guess_aux_enabled) {
-        fprintf(stderr, "[DEBUG] Attempting to create GuessCacheScope...\n");
+        PHASE2_DEBUG_STDERR("[DEBUG] Attempting to create GuessCacheScope...\n");
         auto& training_state = ctx.model->getTrainingState();
         guess_cache_scope = std::make_unique<GuessCacheScope>(
             training_state,
             kDefaultGuessCacheCapacity,
             !ctx.config.cuda_exec.single_stream_mode);
         state.guess_cache_ready = guess_cache_scope->active();
-        fprintf(stderr, "[DEBUG] GuessCacheScope created, active=%d\n", state.guess_cache_ready ? 1 : 0);
+        PHASE2_DEBUG_STDERR("[DEBUG] GuessCacheScope created, active=%d\n", state.guess_cache_ready ? 1 : 0);
     } else {
         state.guess_cache_ready = false;
     }
     
     if (state.guess_cache_ready) {
-        fprintf(stderr, "[DEBUG] About to call EmitModuleInfo for GuessCache...\n");
+        PHASE2_DEBUG_STDERR("[DEBUG] About to call EmitModuleInfo for GuessCache...\n");
         EmitModuleInfo(ModuleId::GuessCache, 
             std::string("GPU cache ready (capacity=") + std::to_string(kDefaultGuessCacheCapacity) + ")", ctx.global_step);
         state.guess_cache_buffers = std::make_unique<GuessCacheBatchBuffers>();
-        fprintf(stderr, "[DEBUG] GuessCacheBatchBuffers created successfully\n");
+        PHASE2_DEBUG_STDERR("[DEBUG] GuessCacheBatchBuffers created successfully\n");
     } else if (!ctx.config.hyperparameters.guess_aux_enabled) {
         EmitModuleInfo(ModuleId::GuessCache, "Guess cache disabled (guess_aux.enabled=false)", ctx.global_step);
     }
     
-    fprintf(stderr, "[DEBUG] About to initialize K-tensor tracing...\n");
+    PHASE2_DEBUG_STDERR("[DEBUG] About to initialize K-tensor tracing...\n");
     // ========== K-TENSOR TRACING (trace K values through pipeline) ==========
     // Uses same enable flag as attention diagnostics
     auto& k_trace = GRIM::getKTensorTrace();
-    fprintf(stderr, "[DEBUG] K-tensor trace obtained, setting enabled flag...\n");
+    PHASE2_DEBUG_STDERR("[DEBUG] K-tensor trace obtained, setting enabled flag...\n");
     k_trace.enabled = ctx.config.hyperparameters.attention_diag_enabled;
     k_trace.current_step = 0;
     k_trace.current_layer = 0;
-    fprintf(stderr, "[DEBUG] K-tensor tracing initialized\n");
+    PHASE2_DEBUG_STDERR("[DEBUG] K-tensor tracing initialized\n");
     
     if (k_trace.enabled) {
         EmitModuleInfo(ModuleId::Training, 

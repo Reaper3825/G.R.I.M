@@ -388,7 +388,7 @@ struct TokenizerConfig {
     int min_subword_freq = 3;  // Minimum frequency for subwords to be included in vocab
     bool prune_during_mining = false;  // Enable memory pruning during subword mining (disable if RAM is plentiful)
     std::string model_type = "unibytes";
-    std::vector<std::string> special_tokens = {"<pad>", "<unk>", "<s>", "</s>", "<mask>"};
+    std::vector<std::string> special_tokens = {"<pad>", "<unk>", "<s>", "</s>"};
     bool add_bos = true;
     bool add_eos = true;
     std::string unk_token = "<unk>";
@@ -399,7 +399,6 @@ struct TokenizerConfig {
     bool enable_lowercasing = true;
     bool enable_parallel_tokenization = true;
     int parallel_threshold = 1000;
-    bool enable_char_fallback = true;
     bool enable_byte_fallback = true;
     uint32_t expected_checksum = 0;
     bool save_text_vocab = true;  // Also save human-readable .txt alongside .bin
@@ -1264,7 +1263,6 @@ inline bool populateTokenizerConfigFromConfig(const nlohmann::json& config, Toke
     assignTrainingField(tokenizer_config.enable_lowercasing, tok, "enable_lowercasing");
     assignTrainingField(tokenizer_config.enable_parallel_tokenization, tok, "enable_parallel_tokenization");
     assignTrainingField(tokenizer_config.parallel_threshold, tok, "parallel_threshold");
-    assignTrainingField(tokenizer_config.enable_char_fallback, tok, "enable_char_fallback");
     assignTrainingField(tokenizer_config.enable_byte_fallback, tok, "enable_byte_fallback");
     assignTrainingField(tokenizer_config.expected_checksum, tok, "expected_checksum");
     assignTrainingField(tokenizer_config.save_text_vocab, tok, "save_text_vocab");

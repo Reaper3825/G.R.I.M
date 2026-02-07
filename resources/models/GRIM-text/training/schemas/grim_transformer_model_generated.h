@@ -48,6 +48,9 @@ struct ScratchBlockWeightsBuilder;
 struct ModelConfig;
 struct ModelConfigBuilder;
 
+struct LossWeightingWeights;
+struct LossWeightingWeightsBuilder;
+
 struct TrainingMetadata;
 struct TrainingMetadataBuilder;
 
@@ -295,10 +298,12 @@ struct AttentionWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_B_V_DATA = 18,
     VT_W_O_DATA = 20,
     VT_B_O_DATA = 22,
-    VT_D_MODEL = 24,
-    VT_NUM_HEADS = 26,
-    VT_NUM_KV_HEADS = 28,
-    VT_FUSE_QKV = 30
+    VT_ALPHA_Q = 24,
+    VT_ALPHA_K = 26,
+    VT_D_MODEL = 28,
+    VT_NUM_HEADS = 30,
+    VT_NUM_KV_HEADS = 32,
+    VT_FUSE_QKV = 34
   };
   const ::flatbuffers::Vector<float> *w_qkv_data() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_QKV_DATA);
@@ -329,6 +334,12 @@ struct AttentionWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const ::flatbuffers::Vector<float> *b_o_data() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_O_DATA);
+  }
+  const ::flatbuffers::Vector<float> *alpha_q() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_ALPHA_Q);
+  }
+  const ::flatbuffers::Vector<float> *alpha_k() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_ALPHA_K);
   }
   uint32_t d_model() const {
     return GetField<uint32_t>(VT_D_MODEL, 0);
@@ -364,6 +375,10 @@ struct AttentionWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyVector(w_o_data()) &&
            VerifyOffsetRequired(verifier, VT_B_O_DATA) &&
            verifier.VerifyVector(b_o_data()) &&
+           VerifyOffset(verifier, VT_ALPHA_Q) &&
+           verifier.VerifyVector(alpha_q()) &&
+           VerifyOffset(verifier, VT_ALPHA_K) &&
+           verifier.VerifyVector(alpha_k()) &&
            VerifyField<uint32_t>(verifier, VT_D_MODEL, 4) &&
            VerifyField<uint32_t>(verifier, VT_NUM_HEADS, 4) &&
            VerifyField<uint32_t>(verifier, VT_NUM_KV_HEADS, 4) &&
@@ -406,6 +421,12 @@ struct AttentionWeightsBuilder {
   void add_b_o_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_o_data) {
     fbb_.AddOffset(AttentionWeights::VT_B_O_DATA, b_o_data);
   }
+  void add_alpha_q(::flatbuffers::Offset<::flatbuffers::Vector<float>> alpha_q) {
+    fbb_.AddOffset(AttentionWeights::VT_ALPHA_Q, alpha_q);
+  }
+  void add_alpha_k(::flatbuffers::Offset<::flatbuffers::Vector<float>> alpha_k) {
+    fbb_.AddOffset(AttentionWeights::VT_ALPHA_K, alpha_k);
+  }
   void add_d_model(uint32_t d_model) {
     fbb_.AddElement<uint32_t>(AttentionWeights::VT_D_MODEL, d_model, 0);
   }
@@ -443,6 +464,8 @@ inline ::flatbuffers::Offset<AttentionWeights> CreateAttentionWeights(
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_v_data = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_o_data = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_o_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> alpha_q = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> alpha_k = 0,
     uint32_t d_model = 0,
     uint32_t num_heads = 0,
     uint32_t num_kv_heads = 0,
@@ -451,6 +474,8 @@ inline ::flatbuffers::Offset<AttentionWeights> CreateAttentionWeights(
   builder_.add_num_kv_heads(num_kv_heads);
   builder_.add_num_heads(num_heads);
   builder_.add_d_model(d_model);
+  builder_.add_alpha_k(alpha_k);
+  builder_.add_alpha_q(alpha_q);
   builder_.add_b_o_data(b_o_data);
   builder_.add_w_o_data(w_o_data);
   builder_.add_b_v_data(b_v_data);
@@ -477,6 +502,8 @@ inline ::flatbuffers::Offset<AttentionWeights> CreateAttentionWeightsDirect(
     const std::vector<float> *b_v_data = nullptr,
     const std::vector<float> *w_o_data = nullptr,
     const std::vector<float> *b_o_data = nullptr,
+    const std::vector<float> *alpha_q = nullptr,
+    const std::vector<float> *alpha_k = nullptr,
     uint32_t d_model = 0,
     uint32_t num_heads = 0,
     uint32_t num_kv_heads = 0,
@@ -491,6 +518,8 @@ inline ::flatbuffers::Offset<AttentionWeights> CreateAttentionWeightsDirect(
   auto b_v_data__ = b_v_data ? _fbb.CreateVector<float>(*b_v_data) : 0;
   auto w_o_data__ = w_o_data ? _fbb.CreateVector<float>(*w_o_data) : 0;
   auto b_o_data__ = b_o_data ? _fbb.CreateVector<float>(*b_o_data) : 0;
+  auto alpha_q__ = alpha_q ? _fbb.CreateVector<float>(*alpha_q) : 0;
+  auto alpha_k__ = alpha_k ? _fbb.CreateVector<float>(*alpha_k) : 0;
   return GRIMTransformer::CreateAttentionWeights(
       _fbb,
       w_qkv_data__,
@@ -503,6 +532,8 @@ inline ::flatbuffers::Offset<AttentionWeights> CreateAttentionWeightsDirect(
       b_v_data__,
       w_o_data__,
       b_o_data__,
+      alpha_q__,
+      alpha_k__,
       d_model,
       num_heads,
       num_kv_heads,
@@ -637,7 +668,9 @@ struct EncoderLayerWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tabl
     VT_FFN = 6,
     VT_RMS1 = 8,
     VT_RMS2 = 10,
-    VT_LAYER_ID = 12
+    VT_LAYER_SCALE1 = 12,
+    VT_LAYER_SCALE2 = 14,
+    VT_LAYER_ID = 16
   };
   const GRIMTransformer::AttentionWeights *attention() const {
     return GetPointer<const GRIMTransformer::AttentionWeights *>(VT_ATTENTION);
@@ -650,6 +683,12 @@ struct EncoderLayerWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tabl
   }
   const GRIMTransformer::RMSNormWeights *rms2() const {
     return GetPointer<const GRIMTransformer::RMSNormWeights *>(VT_RMS2);
+  }
+  const ::flatbuffers::Vector<float> *layer_scale1() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_LAYER_SCALE1);
+  }
+  const ::flatbuffers::Vector<float> *layer_scale2() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_LAYER_SCALE2);
   }
   uint32_t layer_id() const {
     return GetField<uint32_t>(VT_LAYER_ID, 0);
@@ -664,6 +703,10 @@ struct EncoderLayerWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tabl
            verifier.VerifyTable(rms1()) &&
            VerifyOffsetRequired(verifier, VT_RMS2) &&
            verifier.VerifyTable(rms2()) &&
+           VerifyOffset(verifier, VT_LAYER_SCALE1) &&
+           verifier.VerifyVector(layer_scale1()) &&
+           VerifyOffset(verifier, VT_LAYER_SCALE2) &&
+           verifier.VerifyVector(layer_scale2()) &&
            VerifyField<uint32_t>(verifier, VT_LAYER_ID, 4) &&
            verifier.EndTable();
   }
@@ -684,6 +727,12 @@ struct EncoderLayerWeightsBuilder {
   }
   void add_rms2(::flatbuffers::Offset<GRIMTransformer::RMSNormWeights> rms2) {
     fbb_.AddOffset(EncoderLayerWeights::VT_RMS2, rms2);
+  }
+  void add_layer_scale1(::flatbuffers::Offset<::flatbuffers::Vector<float>> layer_scale1) {
+    fbb_.AddOffset(EncoderLayerWeights::VT_LAYER_SCALE1, layer_scale1);
+  }
+  void add_layer_scale2(::flatbuffers::Offset<::flatbuffers::Vector<float>> layer_scale2) {
+    fbb_.AddOffset(EncoderLayerWeights::VT_LAYER_SCALE2, layer_scale2);
   }
   void add_layer_id(uint32_t layer_id) {
     fbb_.AddElement<uint32_t>(EncoderLayerWeights::VT_LAYER_ID, layer_id, 0);
@@ -709,14 +758,40 @@ inline ::flatbuffers::Offset<EncoderLayerWeights> CreateEncoderLayerWeights(
     ::flatbuffers::Offset<GRIMTransformer::FFNWeights> ffn = 0,
     ::flatbuffers::Offset<GRIMTransformer::RMSNormWeights> rms1 = 0,
     ::flatbuffers::Offset<GRIMTransformer::RMSNormWeights> rms2 = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> layer_scale1 = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> layer_scale2 = 0,
     uint32_t layer_id = 0) {
   EncoderLayerWeightsBuilder builder_(_fbb);
   builder_.add_layer_id(layer_id);
+  builder_.add_layer_scale2(layer_scale2);
+  builder_.add_layer_scale1(layer_scale1);
   builder_.add_rms2(rms2);
   builder_.add_rms1(rms1);
   builder_.add_ffn(ffn);
   builder_.add_attention(attention);
   return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<EncoderLayerWeights> CreateEncoderLayerWeightsDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<GRIMTransformer::AttentionWeights> attention = 0,
+    ::flatbuffers::Offset<GRIMTransformer::FFNWeights> ffn = 0,
+    ::flatbuffers::Offset<GRIMTransformer::RMSNormWeights> rms1 = 0,
+    ::flatbuffers::Offset<GRIMTransformer::RMSNormWeights> rms2 = 0,
+    const std::vector<float> *layer_scale1 = nullptr,
+    const std::vector<float> *layer_scale2 = nullptr,
+    uint32_t layer_id = 0) {
+  auto layer_scale1__ = layer_scale1 ? _fbb.CreateVector<float>(*layer_scale1) : 0;
+  auto layer_scale2__ = layer_scale2 ? _fbb.CreateVector<float>(*layer_scale2) : 0;
+  return GRIMTransformer::CreateEncoderLayerWeights(
+      _fbb,
+      attention,
+      ffn,
+      rms1,
+      rms2,
+      layer_scale1__,
+      layer_scale2__,
+      layer_id);
 }
 
 struct EmbeddingWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -1379,6 +1454,57 @@ inline ::flatbuffers::Offset<ModelConfig> CreateModelConfig(
   return builder_.Finish();
 }
 
+struct LossWeightingWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef LossWeightingWeightsBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_LOG_VAR_TEXT = 4,
+    VT_LOG_VAR_NUMERIC = 6
+  };
+  float log_var_text() const {
+    return GetField<float>(VT_LOG_VAR_TEXT, 0.0f);
+  }
+  float log_var_numeric() const {
+    return GetField<float>(VT_LOG_VAR_NUMERIC, 0.0f);
+  }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<float>(verifier, VT_LOG_VAR_TEXT, 4) &&
+           VerifyField<float>(verifier, VT_LOG_VAR_NUMERIC, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct LossWeightingWeightsBuilder {
+  typedef LossWeightingWeights Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_log_var_text(float log_var_text) {
+    fbb_.AddElement<float>(LossWeightingWeights::VT_LOG_VAR_TEXT, log_var_text, 0.0f);
+  }
+  void add_log_var_numeric(float log_var_numeric) {
+    fbb_.AddElement<float>(LossWeightingWeights::VT_LOG_VAR_NUMERIC, log_var_numeric, 0.0f);
+  }
+  explicit LossWeightingWeightsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<LossWeightingWeights> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<LossWeightingWeights>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<LossWeightingWeights> CreateLossWeightingWeights(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    float log_var_text = 0.0f,
+    float log_var_numeric = 0.0f) {
+  LossWeightingWeightsBuilder builder_(_fbb);
+  builder_.add_log_var_numeric(log_var_numeric);
+  builder_.add_log_var_text(log_var_text);
+  return builder_.Finish();
+}
+
 struct TrainingMetadata FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef TrainingMetadataBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -1575,11 +1701,12 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_NUMERIC_HEAD = 14,
     VT_SCRATCH_BLOCK = 16,
     VT_FINAL_RMS_GAMMA = 18,
-    VT_TRAINING_METADATA = 20,
-    VT_CHECKSUM_CRC32 = 22,
-    VT_CHECKSUM_XXHASH64 = 24,
-    VT_CREATION_TIMESTAMP = 26,
-    VT_LAST_MODIFIED_TIMESTAMP = 28
+    VT_LOSS_WEIGHTING = 20,
+    VT_TRAINING_METADATA = 22,
+    VT_CHECKSUM_CRC32 = 24,
+    VT_CHECKSUM_XXHASH64 = 26,
+    VT_CREATION_TIMESTAMP = 28,
+    VT_LAST_MODIFIED_TIMESTAMP = 30
   };
   uint32_t version() const {
     return GetField<uint32_t>(VT_VERSION, 0);
@@ -1604,6 +1731,9 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const ::flatbuffers::Vector<float> *final_rms_gamma() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_FINAL_RMS_GAMMA);
+  }
+  const GRIMTransformer::LossWeightingWeights *loss_weighting() const {
+    return GetPointer<const GRIMTransformer::LossWeightingWeights *>(VT_LOSS_WEIGHTING);
   }
   const GRIMTransformer::TrainingMetadata *training_metadata() const {
     return GetPointer<const GRIMTransformer::TrainingMetadata *>(VT_TRAINING_METADATA);
@@ -1638,6 +1768,8 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyTable(scratch_block()) &&
            VerifyOffset(verifier, VT_FINAL_RMS_GAMMA) &&
            verifier.VerifyVector(final_rms_gamma()) &&
+           VerifyOffset(verifier, VT_LOSS_WEIGHTING) &&
+           verifier.VerifyTable(loss_weighting()) &&
            VerifyOffset(verifier, VT_TRAINING_METADATA) &&
            verifier.VerifyTable(training_metadata()) &&
            VerifyField<uint32_t>(verifier, VT_CHECKSUM_CRC32, 4) &&
@@ -1675,6 +1807,9 @@ struct TransformerModelBuilder {
   }
   void add_final_rms_gamma(::flatbuffers::Offset<::flatbuffers::Vector<float>> final_rms_gamma) {
     fbb_.AddOffset(TransformerModel::VT_FINAL_RMS_GAMMA, final_rms_gamma);
+  }
+  void add_loss_weighting(::flatbuffers::Offset<GRIMTransformer::LossWeightingWeights> loss_weighting) {
+    fbb_.AddOffset(TransformerModel::VT_LOSS_WEIGHTING, loss_weighting);
   }
   void add_training_metadata(::flatbuffers::Offset<GRIMTransformer::TrainingMetadata> training_metadata) {
     fbb_.AddOffset(TransformerModel::VT_TRAINING_METADATA, training_metadata);
@@ -1716,6 +1851,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(
     ::flatbuffers::Offset<GRIMTransformer::NumericHeadWeights> numeric_head = 0,
     ::flatbuffers::Offset<GRIMTransformer::ScratchBlockWeights> scratch_block = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> final_rms_gamma = 0,
+    ::flatbuffers::Offset<GRIMTransformer::LossWeightingWeights> loss_weighting = 0,
     ::flatbuffers::Offset<GRIMTransformer::TrainingMetadata> training_metadata = 0,
     uint32_t checksum_crc32 = 0,
     uint64_t checksum_xxhash64 = 0,
@@ -1727,6 +1863,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(
   builder_.add_checksum_xxhash64(checksum_xxhash64);
   builder_.add_checksum_crc32(checksum_crc32);
   builder_.add_training_metadata(training_metadata);
+  builder_.add_loss_weighting(loss_weighting);
   builder_.add_final_rms_gamma(final_rms_gamma);
   builder_.add_scratch_block(scratch_block);
   builder_.add_numeric_head(numeric_head);
@@ -1748,6 +1885,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
     ::flatbuffers::Offset<GRIMTransformer::NumericHeadWeights> numeric_head = 0,
     ::flatbuffers::Offset<GRIMTransformer::ScratchBlockWeights> scratch_block = 0,
     const std::vector<float> *final_rms_gamma = nullptr,
+    ::flatbuffers::Offset<GRIMTransformer::LossWeightingWeights> loss_weighting = 0,
     ::flatbuffers::Offset<GRIMTransformer::TrainingMetadata> training_metadata = 0,
     uint32_t checksum_crc32 = 0,
     uint64_t checksum_xxhash64 = 0,
@@ -1765,6 +1903,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
       numeric_head,
       scratch_block,
       final_rms_gamma__,
+      loss_weighting,
       training_metadata,
       checksum_crc32,
       checksum_xxhash64,

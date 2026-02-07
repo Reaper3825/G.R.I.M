@@ -338,7 +338,7 @@ inline ::flatbuffers::Offset<ModelConfig> CreateModelConfig(
     uint32_t pad_token_id = 0,
     uint32_t unk_token_id = 0,
     bool use_layer_norm = false,
-    bool use_positional_encoding = true) {
+    bool use_positional_encoding = false) {
   ModelConfigBuilder builder_(_fbb);
   builder_.add_unk_token_id(unk_token_id);
   builder_.add_pad_token_id(pad_token_id);

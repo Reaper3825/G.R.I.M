@@ -579,6 +579,23 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
 - **Implementation**: `AutogradTraining.cu` passes `sqrt(d_model)` for both token and position embeddings.
 - **Legacy Cleanup (Rule 20)**: Deleted ALL dead code from `Embedding_GPU.cu` (kernels, launchers, EmbeddingLayer class). Also deleted `embedding_self_test.cu` and `embedding_autograd_test.cu`. File now only contains `destroyEmbeddingRuntime()` for memory management.
 
+48. **Hardcoded Defaults in Config Structs Violate Rule 20 (Feb 2026)**: Configuration structs with hardcoded default values create silent fallbacks that hide initialization failures. Example: `StartupConfig` had `int max_seq_len = 512` which violated Rule 20 (No Fallbacks).
+
+- **Problem**: If config loading fails to set `max_seq_len`, the struct silently uses 512 instead of failing loud. This hides bugs and creates wrong memory allocations.
+- **Rule 20 Enforcement**: Derived/critical parameters should default to `0` (or invalid sentinel) and validation MUST throw if still 0 after loading.
+- **Fix Pattern**:
+  ```cpp
+  struct StartupConfig {
+      // WRONG: int max_seq_len = 512;  // Silent fallback!
+      // RIGHT:
+      int max_seq_len = 0;  // MUST be set during loadConfiguration, throw if 0
+      int sliding_window_stride = 0;  // Derived from max_seq_len
+  };
+  ```
+- **Detection**: Search for `= [non-zero]` in config struct declarations. If the value is algorithmic (not a flag), it probably violates Rule 20.
+- **Files Affected**: `Phase1_Startup.hpp` - Fixed `StartupConfig.max_seq_len` and `sliding_window_stride` defaults from 512/256 → 0.
+- **Related**: See MAX_SEQ_LEN_AUDIT.md for comprehensive analysis of `max_seq_len` usage throughout codebase.
+
 105. **RMSNorm Diagnostic False Anomaly (NOT A BUG) - Issue #105, Jan 2026**: RMSNorm diagnostic was flagging Layer 0 as anomalous (`output_rms=0.89` instead of expected `1.0`). The diagnostic expectation formula was **WRONG** - it assumed `output_rms = gamma_rms`, but the **correct** formula is: `output_rms = input_rms × gamma_rms / sqrt(input_rms² + eps)`. When input_rms is small (~0.006 for Xavier-init embeddings) and eps=1e-5, epsilon contributes ~20% of the denominator, resulting in output_rms ≈ 0.89 which is mathematically correct!
 
 - **Root Cause**: Diagnostic in `Encoding_GPU.cu` assumed `output_rms = gamma_rms`, which only holds when `input_rms² >> eps`. With small embeddings (per_row_rms=0.006), eps=1e-5 becomes significant.
@@ -824,6 +841,20 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
 - **Implementation**: `ctx.centered_encoder_output = autograd::center_rows(autograd::center_columns(encoder_output))`
 - **Why This Works**: With `hidden_sum[t] = 0` for all positions t, the contribution formula `Σ_t hidden_sum[t] × grad[t,277]` becomes 0, preventing systematic sign errors
 - **Files Modified**: `AutogradTraining.cu` (added center_rows after center_columns)
+
+133. **Flat text_ce = Uniform Softmax + Entropy Reg Mask (ROOT CAUSE FIX - Issue #133, Feb 2026)**: text_ce stuck at 9.76 was NOT "near random" — it IS the random baseline `ln(50377)=10.83` minus entropy regularization offset `0.1×10.83=1.08=9.75`. Model predictions were UNIFORM because logit std≈0.17 over 50K vocab.
+
+- **Root Cause (3 compounding issues)**:
+    1. **Logit magnitude too small**: Xavier-init embeddings (rms≈0.006) + RMSNorm-normalized hidden states (rms≈1.0/dim) → logit std = 0.006 × sqrt(768) ≈ 0.17. With 50K vocab, softmax≈uniform.
+    2. **Entropy reg (λ=0.1) masks true CE**: Subtracts 0.1×ln(V)=1.08 from loss, making 10.83 look like 9.76. Also actively FIGHTS CE gradient by pushing back toward uniform.
+    3. **Weight decay=0.3 too aggressive**: Standard is 0.01-0.1.
+- **Mathematical Proof**: For uniform p_v=1/V: CE=ln(V)=10.83, entropy_penalty=-0.1×ln(V)=-1.08, total=9.75≈observed 9.76 ✓
+- **Why logit scaling is NOT the fix**: Softmax gradient at uniform is `(p - y) ≈ -1` regardless of logit magnitude. Scaling logits just amplifies backward by sqrt(d_model)=27.7x without helping escape the uniform basin.
+- **Fixes (config only)**:
+    - `entropy_reg.enabled=false` (was masking true CE and fighting learning)
+    - `weight_decay=0.1` (was 0.3, too aggressive)
+    - `focal.enabled=false` (no benefit at uniform predictions)
+- **Expected**: Initial loss ~10.83 (true random baseline, no entropy mask), then decreasing
 
 114. **Hidden State Norm Explosion Feedback Loop (ROOT CAUSE - Issue #114, Feb 2026)**: The persistent Token 277 (SPACE) mode collapse is caused by a **self-reinforcing feedback loop** with 5 interlocking anomalies. The mathematical root cause is:
 

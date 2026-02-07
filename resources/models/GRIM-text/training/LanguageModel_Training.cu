@@ -1820,6 +1820,52 @@ void LanguageModel::scaleGradients(float scale) {
 }
 
 //======================================================//
+//  scaleGradientsByType - Scale only a specific parameter group type
+//  Issue #134: Used to clip numeric head independently from text params
+//======================================================//
+
+void LanguageModel::scaleGradientsByType(float scale, ParamGroupType type) {
+    if (parameter_groups_.empty()) {
+        buildParameterGroups();
+    }
+    
+    const int threads = 256;
+    
+    for (auto& group : parameter_groups_) {
+        if (!group.grads || group.size == 0) continue;
+        if (group.type != type) continue;
+        
+        const int blocks = (group.size + threads - 1) / threads;
+        scaleKernel<<<blocks, threads, 0, training_state_.stream_ctrl.getPrimaryStream()>>>(
+            group.grads, scale, static_cast<int>(group.size)
+        );
+    }
+}
+
+//======================================================//
+//  scaleGradientsExcludingType - Scale all param groups EXCEPT a specific type
+//  Issue #134: Used to clip text params without affecting numeric head
+//======================================================//
+
+void LanguageModel::scaleGradientsExcludingType(float scale, ParamGroupType exclude_type) {
+    if (parameter_groups_.empty()) {
+        buildParameterGroups();
+    }
+    
+    const int threads = 256;
+    
+    for (auto& group : parameter_groups_) {
+        if (!group.grads || group.size == 0) continue;
+        if (group.type == exclude_type) continue;
+        
+        const int blocks = (group.size + threads - 1) / threads;
+        scaleKernel<<<blocks, threads, 0, training_state_.stream_ctrl.getPrimaryStream()>>>(
+            group.grads, scale, static_cast<int>(group.size)
+        );
+    }
+}
+
+//======================================================//
 //  setSequenceLossWeights / clearSequenceLossWeights
 //======================================================//
 // NOTE: Currently unused (sample_weight=1.0 always) but INTENTIONALLY KEPT

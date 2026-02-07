@@ -58,7 +58,6 @@
         "add_bos": true,
         "add_eos": true,
         "enable_byte_fallback": true,
-        "enable_char_fallback": false,
         "enable_lowercasing": true,
         "enable_nfkc_normalization": true,
         "max_length": 8192,
@@ -82,10 +81,10 @@
             "epochs": 3,
             "seed": 1,
             "batch_size": 7,
-            "gradient_accumulation_steps": 2,
+            "gradient_accumulation_steps": 3,
             "batch_strategy": "RANDOM",
             "learning_rate": 3e-4,
-            "weight_decay": 0.3,
+            "weight_decay": 0.01,
             "gradient_clip": 1.0,
             "per_token_grad_scale": true,
             "warmup_steps": 0,
@@ -257,13 +256,13 @@
                     "epsilon": 0.1
                 },
                 "focal": {
-                    "enabled": true,
-                    "gamma": 1.0,
+                    "enabled": false,
+                    "gamma": 0.0,
                     "alpha": 1.0
                 },
                 "entropy_reg": {
-                    "enabled": true,
-                    "lambda": 0.1
+                    "enabled": false,
+                    "lambda": 0.0
                 },
                 "preference": {
                     "enabled": false,
@@ -317,7 +316,7 @@
                 "apply_to_layer_caches": false,
                 "apply_to_qkv_cache": false,
                 "apply_to_logits": false,
-                "scale": 0.0625,
+                "scale": 1.0,
                 "clip_min": -127.0,
                 "clip_max": 127.0,
                 "zero_point": 0,
@@ -390,8 +389,8 @@
                 "use_rope": true,
                 "use_alibi": true
             },
-            "attention_dropout": 0.2,
-            "dropout_rate": 0.2,
+            "attention_dropout": 0.15,
+            "dropout_rate": 0.15,
             "force_rebuild_vocab": false,
             "qk_normalization": {
                 "enabled": false,

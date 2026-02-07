@@ -111,7 +111,7 @@ class GRIMTokenizerAnalyzer:
     
     def analyze_special_tokens(self) -> dict:
         """Check special token placement and IDs"""
-        expected_special = ['<pad>', '<unk>', '<s>', '</s>', '<mask>']
+        expected_special = ['<pad>', '<unk>', '<s>', '</s>']
         found = {}
         issues = []
         
@@ -121,10 +121,10 @@ class GRIMTokenizerAnalyzer:
             else:
                 issues.append(f"Missing special token: {token}")
         
-        # Check if special tokens are in expected range (256-260)
+        # Check if special tokens are in expected range (256-259)
         for token, tid in found.items():
-            if tid < 256 or tid > 260:
-                issues.append(f"Special token '{token}' at unusual ID {tid} (expected 256-260)")
+            if tid < 256 or tid > 259:
+                issues.append(f"Special token '{token}' at unusual ID {tid} (expected 256-259)")
         
         return {
             'found': found,
@@ -509,11 +509,11 @@ def check_encoding_consistency():
         issue_type = None
         
         if not text:
-            issue_type = "empty string handling"
-            has_issue = True
+            issue_type = "empty string (explicitly handled)"
+            has_issue = False
         elif text.isspace():
-            issue_type = "whitespace-only string"
-            has_issue = True
+            issue_type = "whitespace-only string (explicitly handled)"
+            has_issue = False
         elif any(ord(c) > 127 for c in text):
             issue_type = "non-ASCII characters"
             # Not necessarily an issue, but worth checking

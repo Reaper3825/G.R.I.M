@@ -632,6 +632,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         fb_numeric_head,
         fb_scratch_block,
         fb_final_rms_gamma,  // Issue #33: Final RMSNorm gamma
+        0,                   // loss_weighting (not used)
         fb_metadata,
         0,
         0,

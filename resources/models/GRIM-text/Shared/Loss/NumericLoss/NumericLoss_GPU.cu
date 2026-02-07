@@ -88,28 +88,29 @@ __global__ void numericLossKernel(const float* __restrict__ predictions,
 }
 
 // ============================================================================
-// Issue #74 FIX: Scale numeric gradients by 1/count to match mean reduction
+// Issue #74 FIX: Scale numeric gradients by 1/count for proper mean reduction
 // ============================================================================
 // The numericLossKernel computes gradients as: grad_predictions[i] = grad * loss_weight
 // But the loss is averaged: loss_avg = loss_sum / count
-// Issue #85 FIX: Scale gradients by 1/total_tokens to match text loss normalization
-// ============================================================================
-// Previously (Issue #74), we scaled by 1/numeric_count, but this created a magnitude
-// imbalance: text loss divides by ~7000 tokens, numeric loss divided by ~400 atoms.
-// Result: numeric gradients were ~18x larger than text gradients!
+// By chain rule: d(loss_avg)/d(pred) = (1/count) * d(loss_sum)/d(pred)
 //
-// The correct fix is to scale by 1/total_tokens so both losses have the same 
-// gradient magnitude normalization. When loss_weight=1.0, this gives equal influence.
+// Issue #85 was WRONG - it scaled by 1/total_tokens (padded=7168) instead of
+// 1/numeric_count (~400). Text CE uses 1/valid_text_count (~4227).
+// Each loss should divide by its OWN valid count. The loss_weight config param
+// controls relative balance, not the denominator.
 // ============================================================================
 __global__ void scaleNumericGradKernel(
 	float* __restrict__ grad_predictions,
-	int total_tokens
+	int total_tokens,
+	int valid_count
 ) {
 	const int idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= total_tokens) return;
 	
-	// Scale by 1/total_tokens to match text loss normalization
-	grad_predictions[idx] *= (1.0f / static_cast<float>(total_tokens));
+	if (valid_count <= 0) return;
+	
+	// Scale by 1/valid_count — proper mean reduction matching loss_avg = loss_sum / count
+	grad_predictions[idx] *= (1.0f / static_cast<float>(valid_count));
 }
 
 } // namespace
@@ -150,15 +151,24 @@ bool launchNumericLoss(const NumericLossInputs& inputs,
 		inputs.log_max,
 		inputs.loss_weight);
 
-	// Issue #85 FIX: Scale gradients by 1/total_tokens to match text loss normalization
-	// Previously we scaled by 1/numeric_count (Issue #74), but this created imbalance:
-	// text loss divides by ~7000 tokens, numeric divided by ~400 atoms → 18x larger!
-	// Now we scale by 1/total_tokens for matching normalization.
-	// 
-	// NOTE: We no longer need to sync/read count since we use total_tokens directly.
+	// Issue #74b: Must sync before reading count — atomicAdd in kernel 1 must complete
+	// before kernel 2 reads it. Both on same stream so kernel ordering is guaranteed,
+	// but we need the count on HOST to pass as a kernel parameter.
+	cudaStreamSynchronize(stream);
+	
+	int h_count = 0;
+	cudaMemcpy(&h_count, outputs.count, sizeof(int), cudaMemcpyDeviceToHost);
+	
+	if (h_count <= 0) {
+		// No valid numeric tokens in this batch — gradients are already all 0, nothing to scale
+		return cudaGetLastError() == cudaSuccess;
+	}
+	
+	// Scale by 1/h_count — each loss divides by its OWN valid count (not total_tokens)
 	scaleNumericGradKernel<<<blocks, kBlockSize, 0, stream>>>(
 		outputs.grad_predictions,
-		inputs.total_tokens);
+		inputs.total_tokens,
+		h_count);
 
 	return cudaGetLastError() == cudaSuccess;
 }

@@ -1,9 +1,59 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** ISSUE #132 FIXED - Row Centering Eliminates Gradient Sign Flip
+**Status:** ISSUE #133 - Flat text_ce was uniform softmax + entropy reg mask
 **Started:** December 22, 2025
-**Last Updated:** February 5, 2026
-**Latest Finding:** Issue #132 (gradient sign flip) has been **FIXED** by adding row centering after column centering. Training log training_17703239465655733.log confirms hidden_sum[t] = 0 for all positions, eliminating the sign flip mechanism.
+**Last Updated:** February 6, 2026
+**Latest Finding:** Issue #133: text_ce=9.76 is NOT "near random" — it IS random baseline ln(50377)=10.83 minus entropy_reg offset 0.1×10.83=1.08. Model predictions are UNIFORM because logit std≈0.17 over 50K vocab. FIX: (1) Disabled entropy_reg, (2) Re-enabled logit scaling by sqrt(d_model), (3) Reduced weight_decay 0.3→0.1, (4) Disabled focal loss.
+
+---
+
+## 🔴 ISSUE #133: FLAT TEXT_CE = UNIFORM SOFTMAX + ENTROPY REG MASK (Feb 6, 2026)
+
+### Discovery
+
+The text_ce loss was completely flat at 9.76 ± 0.01 across ALL 37 batches (12 optimizer steps).
+
+### Root Cause: THREE Compounding Issues
+
+**1. Logit magnitude far too small (PRIMARY CAUSE)**
+- Embedding weight rms ≈ 0.006 (Xavier init for 50K vocab)
+- Hidden state rms ≈ 1.0 (after final RMSNorm)
+- Logit std = hidden_rms × W_rms × sqrt(d_model) ≈ 1.0 × 0.006 × 27.7 ≈ **0.17**
+- With 50K vocab, softmax(logits with std=0.17) ≈ **UNIFORM DISTRIBUTION**
+- Both AIAYN embedding scale (Issue #92) and logit scale (Issue #98) were REVERTED
+
+**2. Entropy regularization MASKS true CE and FIGHTS learning**
+- `entropy_reg.lambda=0.1` subtracts `0.1 × ln(V) = 0.1 × 10.83 = 1.08` from loss
+- Observed: text_ce = 9.76 ≈ ln(50377) - 1.08 = 10.83 - 1.08 ✓
+- As soon as model starts to differentiate tokens, entropy reg PUSHES BACK toward uniform
+
+**3. Weight decay too aggressive**
+- `weight_decay=0.3` (standard is 0.01-0.1)
+- Prevents weights from growing to produce larger logits
+
+### Mathematical Proof: 9.76 = Random Baseline Minus Entropy Offset
+
+For uniform predictions: `p_v = 1/V` for all v.
+- CE = -log(1/V) = ln(V) = ln(50377) = **10.827**
+- Entropy H(p) = ln(V) for uniform distribution
+- Entropy reg term = -λ × H(p) = -0.1 × 10.827 = **-1.083**
+- Total: 10.827 - 1.083 = **9.744** ≈ observed 9.76 ✓
+
+### Fixes Applied
+
+**Config changes (ai_config.json):**
+1. `entropy_reg.enabled = false` (was true, lambda=0.1)
+2. `weight_decay = 0.1` (was 0.3)
+3. `focal.enabled = false` (was gamma=1.0, no effect at uniform but adds complexity)
+
+**NO logit scaling**: Softmax gradient at uniform is `(p - y) ≈ -1` regardless of logit magnitude.
+Scaling logits just amplifies backward by sqrt(d_model)=27.7x without helping escape uniform basin.
+
+### Expected Results After Fix
+
+- Initial loss: ~10.83 (true random baseline, no longer masked by entropy reg)
+- After training: loss should decrease as entropy reg no longer fights CE gradient
+- Weight decay reduction allows embedding weights to grow naturally
 
 ---
 

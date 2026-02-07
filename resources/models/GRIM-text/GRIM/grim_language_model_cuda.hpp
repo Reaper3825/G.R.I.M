@@ -642,6 +642,8 @@ public:
     void zeroGrad();
     float computeGradNorm(bool sync_for_host_read = false);  // Default false: async (fast). Set true only when reading result on host.
     void scaleGradients(float scale);
+    void scaleGradientsByType(float scale, ParamGroupType type);  // Issue #134: Scale only specific param group type
+    void scaleGradientsExcludingType(float scale, ParamGroupType exclude_type);  // Issue #134: Scale all EXCEPT specific type
     void clampGradients(float min_val, float max_val);  // Clamp individual gradient values
     void dumpGradients(const std::string& path);  // Dump gradients to binary file for inspection
     void dumpGradientValues(int step, const std::string& filepath);  // Dump gradient values to text file for comparison

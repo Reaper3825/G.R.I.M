@@ -1157,20 +1157,9 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         true      // transpose_b=true
     );
     
-    // ISSUE #98 REVERTED: The autograd::scale() approach was WRONG!
-    //
-    // The problem with Issue #98's implementation:
-    //   - Forward: logits_scaled = logits_raw * 27.7 → EXPLODES logits (loss=22 vs baseline=10.5)
-    //   - Backward: autograd::scale applies grad_raw = grad_scaled * 27.7 → AMPLIFIES gradients!
-    //
-    // We wanted to fix SMALL gradients but instead:
-    //   - Forward exploded logits (wrong)
-    //   - Backward AMPLIFIED gradients (opposite of what we needed if they were too small!)
-    //
-    // The AIAYN paper's "multiply weights by sqrt(d_model)" is for embedding magnitude,
-    // NOT for post-matmul scaling. The original gradient issue needs different diagnosis.
-    //
-    // Issue #99: Need to re-investigate the actual gradient flow problem.
+    // Issue #133: NO logit scaling. Softmax gradient (p - y) at uniform ≈ -1
+    // regardless of logit magnitude. Scaling just amplifies backward by 27.7x.
+    // The real fix is config: disable entropy_reg, reduce weight_decay, disable focal.
     
     // ═══════════════════════════════════════════════════════════════════════════
     //  LOGIT CENTERING: Subtract mean across vocab for each position
@@ -1355,8 +1344,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         throw std::runtime_error(
             "AutogradTraining: Logits shape validation FAILED after matmul\n" +
             std::string("  Got: ") + std::to_string(logits_elements) + " elements (" +
-            std::to_string(logits_tensor.shape.batch_size) + "," +
-            std::to_string(logits_tensor.shape.seq_or_vocab) + ")\n" +
+            std::to_string(logits_tensor.shape.flat.rows) + "," +
+            std::to_string(logits_tensor.shape.flat.cols) + ")\n" +
             std::string("  Expected: ") + std::to_string(expected_elements) + " elements (" +
             std::to_string(total_tokens) + "," + std::to_string(cfg->vocab_size) + ")\n" +
             "  Root cause: lm_input or lm_weights dimensions incorrect");

@@ -2427,21 +2427,20 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     // ═══════════════════════════════════════════════════════════════════════════
     // RULE 21 DIAGNOSTIC: Per-Layer Cosine Similarity (correlation tracking)
     //
-    // EQUATION: output = residual1 + LayerScale(ffn_out) = input + LS1*attn_out + LS2*ffn_out
-    //           residual_fraction = (1 - LS_init)^2 ≈ (1 - 0.1)^2 = 0.81 (81% residual passthrough!)
-    //           
-    // LayerScale with init=0.1 means: output ≈ 0.9*input + 0.1*sublayer_output
-    // After 2 residual connections: output ≈ 0.81*input + 0.19*layers
-    // This PRESERVES input correlation through layers when LS_init is small!
+    // EQUATION (Issue #126): output = center(center(input + LS1*attn) + LS2*ffn)
     //
-    // We track: avg_cos(h_i, h_j) for layer output
-    //           delta_cos = (layer_cos - input_cos) to see if attention DIVERSIFIES
+    // Centering after each residual removes the common direction (mean across tokens),
+    // which prevents correlation accumulation through layers.
+    //
+    // Interpretation:
+    //   |avg_cos| → 1.0 = mode collapse (all vectors aligned) = BAD
+    //   |avg_cos| near 0 = diverse representations = generally healthy
     // ═══════════════════════════════════════════════════════════════════════════
     {
         const int layer_idx = g_issue77_fwd_layer_count % 12;
         
         // Only log every 4th layer and first/last layers to reduce overhead
-        if (layer_idx == 0 || layer_idx == 5 || layer_idx == 11) {
+        if (layer_idx == 0 || layer_idx == 11) {
             cudaStreamSynchronize(stream);  // Ensure data is ready
             
             // Copy layer output to host for analysis
@@ -2491,35 +2490,27 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
                 cudaMemcpy(&ls2_val, layer_scale2_.data, sizeof(float), cudaMemcpyDeviceToHost);
             }
             
-            // Compute expected residual fraction: (1-ls1)*(1-ls2) = fraction of input that passes through
-            const double residual_fraction = (1.0 - ls1_val) * (1.0 - ls2_val);
-            
             if (isEquationLoggingEnabled()) {
-                fprintf(stderr, "[LAYER_%d_COSINE_EQUATION] output = input + LS1*attn + LS2*ffn\n", layer_idx);
+                // Issue #126: Actual formula includes centering after each residual add
+                fprintf(stderr, "[LAYER_%d_COSINE_EQUATION] output = center(center(input + LS1*attn) + LS2*ffn)\n", layer_idx);
                 fprintf(stderr, "  OUTPUT h_L%d: shape=[%d, %d] row_norm_range=[%.4f, %.4f]\n",
                         layer_idx, total_tokens, d_model, norm_min, norm_max);
-                fprintf(stderr, "  LAYERSCALE: LS1=%.4f LS2=%.4f -> residual_fraction=(1-LS1)*(1-LS2)=%.4f (%.1f%% passthrough)\n",
-                        ls1_val, ls2_val, residual_fraction, residual_fraction * 100.0);
-                fprintf(stderr, "  ACTUAL avg_cos=%.6f (pairs=%d)\n", avg_cos, num_pairs);
+                fprintf(stderr, "  LAYERSCALE: LS1=%.4f LS2=%.4f (centering removes mean after each residual)\n",
+                        ls1_val, ls2_val);
+                fprintf(stderr, "  ACTUAL avg_cos=%.6f (pairs=%d) [|avg_cos|→1 = collapse, near 0 = diverse]\n", avg_cos, num_pairs);
                 
                 // Structured logging via centralized EquationLogger
                 EQ_LOG_HOST(
                     "LAYER_COSINE_EQUATION",
-                    "output = input + LS1*attn + LS2*ffn",
+                    "output = center(center(input + LS1*attn) + LS2*ffn)",
                     "LS1=" + std::to_string(ls1_val) + " LS2=" + std::to_string(ls2_val),
-                    "residual_frac=" + std::to_string(residual_fraction) + " passthrough=" + std::to_string(residual_fraction * 100.0) + "%",
-                    "expected_cos<0.5",
+                    "centering=enabled after each residual add",
+                    "|avg_cos|→1=collapse, near_0=diverse",
                     "actual_cos=" + std::to_string(avg_cos) + " pairs=" + std::to_string(num_pairs),
                     0, layer_idx, 0, GRIM::EquationPhase::RESIDUAL_ADD);
                 
-                if (avg_cos > 0.8) {
-                    fprintf(stderr, "  [ANOMALY] Layer %d avg_cos=%.4f still HIGH after attention!\n", layer_idx, avg_cos);
-                    if (residual_fraction > 0.7) {
-                        fprintf(stderr, "  [ANOMALY] LayerScale residual_fraction=%.2f means %.0f%% of input passes through unchanged\n",
-                                residual_fraction, residual_fraction * 100.0);
-                        fprintf(stderr, "  [ANOMALY] High input correlation propagates because LS_init=%.2f is too small\n", ls1_val);
-                        fprintf(stderr, "  [ANOMALY] RECOMMENDED: Increase layer_scale_init from %.2f to 0.5+ or add positional signal to residual\n", ls1_val);
-                    }
+                if (fabs(avg_cos) > 0.8) {
+                    fprintf(stderr, "  [ANOMALY] Layer %d |avg_cos|=%.4f HIGH - possible mode collapse!\n", layer_idx, fabs(avg_cos));
                 }
             }
         }

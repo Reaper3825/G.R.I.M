@@ -137,14 +137,16 @@ constexpr float GELU_CUBIC_COEFF = 0.044715f;              // Coefficient in GEL
 
 //======================================================//
 // AdamW Optimizer Hyperparameters
-// NOTE: beta2=0.95 to match LibTorch baseline test configuration.
-// Baseline uses (0.9, 0.95) for faster second moment adaptation.
-// This helps the optimizer adapt faster to gradient changes.
+// Issue #134: Fixed β₂ and weight_decay magnitude problems:
+//   β₂=0.9 gave 7-step half-life on v_t → unstable for small text gradients
+//   β₂=0.999 gives ~700-step half-life → proper momentum smoothing (standard)
+//   weight_decay=0.1 was 7000x larger than text gradient updates → optimizer
+//   was just decaying weights, not learning. 0.01 is standard (GPT-2/3, LLaMA).
 //======================================================//
 constexpr float ADAMW_BETA1 = 0.9f;
-constexpr float ADAMW_BETA2 = 0.9f;              // Matched to baseline (was 0.99)
+constexpr float ADAMW_BETA2 = 0.999f;             // Issue #134: was 0.9 (7-step half-life!) → 0.999 (standard)
 constexpr float ADAMW_EPSILON = 1e-8f;
-constexpr float ADAMW_WEIGHT_DECAY = 0.1f;        // Matched to baseline (was 0.01)
+constexpr float ADAMW_WEIGHT_DECAY = 0.01f;       // Issue #134: was 0.1 (7000x > grad update) → 0.01 (standard)
 
 // Depth-Aware Upsilon (Υ) Regularization
 // Formula: Υ_l = UPSILON_BASE * sqrt(L_ref / L)

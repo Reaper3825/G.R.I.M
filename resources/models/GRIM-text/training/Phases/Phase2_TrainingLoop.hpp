@@ -205,13 +205,12 @@ ValidationResult runValidation(TrainingContext& ctx);
 namespace Internal {
 
 /**
- * @brief Get scheduled learning rate with warmup
+ * @brief Get scheduled learning rate with warmup, constant after warmup
  */
 float getScheduledLearningRate(
     int step,
     float base_lr,
     int warmup_steps,
-    float min_lr,
     bool stability_overrides_enabled);
 
 /**
