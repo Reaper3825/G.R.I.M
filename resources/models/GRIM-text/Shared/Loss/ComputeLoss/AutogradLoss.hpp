@@ -45,21 +45,19 @@ struct LossConfig {
 /**
  * Compute unified loss with autograd support
  * 
+ * Architecture (PyTorch gold standard):
+ *   logits → autograd::log_softmax() → log_probs → NLL loss → scalar loss
+ *
+ * Internally composes:
+ *   1. log_softmax(logits) — numerically stable log(softmax(x)) = x - logsumexp(x)
+ *   2. NLL loss on log_probs — -log_probs[target] with focal/smoothing/entropy
+ *
+ * Backward chain:
+ *   NLLLossGradFn → LogSoftmaxGradFn → upstream (MatMulGradFn)
+ *   Produces: grad_logits[j] = (p_j - q_j) / N  (standard CE gradient)
+ *
  * Loss formula:
  *   L = α * (1-p_t)^γ * CE_smooth + λ * Σ p*log(p)
- * 
- * Where:
- *   CE_smooth = -(1-ε)*log(p_t) - ε/(V-1)*Σ_{i≠t}log(p_i)
- *   p_t = softmax(logits)[target]
- * 
- * Gradient (full unified loss backward):
- *   ∂L/∂logits = (1/N) * [focal_weight * (p - q) + focal_deriv + entropy_grad]
- * 
- * Where:
- *   - q is the label-smoothed target (q_t = 1-ε, q_i = ε/(V-1) for i≠t)
- *   - focal_weight = (1-p_t)^γ
- *   - focal_deriv accounts for d(focal_weight)/d(logits) via softmax Jacobian
- *   - entropy_grad = λ * p * (1 + log(p)) pushes toward uniform distribution
  * 
  * @param logits      [total_tokens, vocab_size] - raw logits from LM head
  * @param targets     [total_tokens] - target token IDs (on GPU), -1 = masked
@@ -81,11 +79,15 @@ Tensor unified_loss(
 );
 
 //=============================================================================
-// KERNEL LAUNCH FUNCTIONS (internal)
+// KERNEL LAUNCH FUNCTIONS (internal — operate on log_probs, NOT raw logits)
 //=============================================================================
 
+/**
+ * NLL loss forward on log-probabilities (output of log_softmax)
+ * @param log_probs [num_tokens, vocab_size] — log-probabilities from log_softmax()
+ */
 void launchUnifiedLossForward(
-    const float* logits,
+    const float* log_probs,
     const int* targets,
     const float* valid_mask,
     float* per_token_loss,
@@ -100,11 +102,16 @@ void launchUnifiedLossForward(
     cudaStream_t stream
 );
 
+/**
+ * NLL loss backward — gradient w.r.t. log-probabilities
+ * @param log_probs      [num_tokens, vocab_size] — saved log-probabilities
+ * @param grad_log_probs [num_tokens, vocab_size] — OUTPUT: gradient w.r.t. log_probs
+ */
 void launchUnifiedLossBackward(
-    const float* logits,
+    const float* log_probs,
     const int* targets,
     const float* valid_mask,
-    float* grad_logits,
+    float* grad_log_probs,
     int num_tokens,
     int vocab_size,
     int valid_count,

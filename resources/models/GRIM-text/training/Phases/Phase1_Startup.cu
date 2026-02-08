@@ -48,9 +48,6 @@
 
 using json = nlohmann::json;
 
-// Debug flag for batch_prep_* corruption investigation
-#define DEBUG_BATCH_PREP_CORRUPTION 1
-
 // Module logging aliases
 using GRIM::Logging::ModuleId;
 using GRIM::Logging::EmitModuleInfo;
@@ -247,8 +244,8 @@ StartupConfig loadConfiguration(int argc, char** argv) {
             GRIM::Logging::SetModuleLogLevel(module, parseModuleLogLevelString(level));
         }
         
-        // Initialize log recorder system
-        GRIM::Logging::InitLogRecorder();
+        // Initialize log recorder system - MUST pass path (Rule 20: no hardcoded fallback)
+        GRIM::Logging::InitLogRecorder(config.paths.log_dir);
         
         // Configure layer logging enables
         const auto& layers = config.hyperparameters.log_recorder.layers;
@@ -353,6 +350,10 @@ StartupConfig loadConfiguration(int argc, char** argv) {
     
     // Apply stability overrides to batch size and LR (only if stability mode enabled)
     if (config.stability.enabled) {
+        if (config.stability.batch_size <= 0) {
+            throw std::runtime_error("FATAL: stability_overrides enabled but stability_override_batch_size=" + 
+                                     std::to_string(config.stability.batch_size) + " (must be > 0)");
+        }
         config.hyperparameters.batch_size = config.stability.batch_size;
         config.hyperparameters.dynamic_lr_min = config.stability.lr_min;
     }
@@ -439,6 +440,7 @@ LoggingContext initializeLogging(const PathConfig& paths) {
 GRIM::Tokenizer::UniByte initializeTokenizer(
     const std::string& vocab_path,
     const GRIM::Config::TokenizerConfig& tok_config,
+    const GRIM::Config::TrainingHyperparameters& hyperparameters,
     TrainingLogger& logger) {
     
     logger.log("Loading tokenizer configuration...");
@@ -448,17 +450,18 @@ GRIM::Tokenizer::UniByte initializeTokenizer(
     if (tok_config.vocab_size <= 0) {
         throw std::runtime_error("FATAL: tokenizer.vocab_size not configured in ai_config.json");
     }
+    // Use all tokenizer config values from hyperparameters (single source of truth)
     cfg.target_vocab_size = tok_config.vocab_size;
-    cfg.character_coverage = 0.9995f;
-    cfg.enable_scratch_block_reasoning = true;
-    cfg.detect_numbers = true;
-    cfg.detect_urls = true;
-    cfg.detect_emails = true;
-    cfg.detect_paths = true;
-    cfg.detect_dates = true;
-    cfg.detect_code_literals = true;
+    cfg.character_coverage = GRIM::HyperParameters::TOKENIZER_CHARACTER_COVERAGE;
+    cfg.enable_scratch_block_reasoning = hyperparameters.tokenizer_enable_scratch_block_reasoning;
+    cfg.detect_numbers = hyperparameters.tokenizer_detect_numbers;
+    cfg.detect_urls = hyperparameters.tokenizer_detect_urls;
+    cfg.detect_emails = hyperparameters.tokenizer_detect_emails;
+    cfg.detect_paths = hyperparameters.tokenizer_detect_paths;
+    cfg.detect_dates = hyperparameters.tokenizer_detect_dates;
+    cfg.detect_code_literals = hyperparameters.tokenizer_detect_code_literals;
     cfg.enable_byte_fallback = tok_config.enable_byte_fallback;
-    cfg.prefer_gpu = true;
+    cfg.prefer_gpu = GRIM::HyperParameters::TOKENIZER_PREFER_GPU;
     
     GRIM::Tokenizer::UniByte tokenizer(cfg);
     if (!tokenizer.load(vocab_path)) {
@@ -485,6 +488,8 @@ SequenceData loadTrainingData(
     int max_seq_len,
     int min_seq_valid_tokens,
     int sliding_window_stride,
+    bool add_bos_token,
+    bool add_eos_token,
     const GRIM::Tokenizer::UniByte& tokenizer,
     TrainingLogger& logger) {
     
@@ -497,122 +502,58 @@ SequenceData loadTrainingData(
     }
     logger.log("✓ Loaded " + std::to_string(loader.size()) + " sequences");
     
+    // Store vocab size from training data for later validation
+    data.vocab_size = loader.vocabSize();
+    
     auto all_sequences = loader.getSequences();
 
     const int bos_id = tokenizer.bosId();
     const int eos_id = tokenizer.eosId();
-    const auto resolveLegacyToken = [&](const char* token) -> int {
-        const auto ids = tokenizer.encode(token);
-        if (ids.size() == 1) {
-            const int id = ids[0];
-            if (tokenizer.tokenToString(id) == token) {
-                return id;
-            }
-        }
-        return -1;
-    };
-    const int legacy_bos_id = resolveLegacyToken("<|startoftext|>");
-    const int legacy_eos_id = resolveLegacyToken("<|endoftext|>");
 
     size_t added_bos = 0;
     size_t added_eos = 0;
-    size_t replaced_legacy_bos = 0;
-    size_t replaced_legacy_eos = 0;
-    size_t modified = 0;
 
     for (auto& seq : all_sequences) {
         if (seq.token_ids.empty()) continue;
 
-        bool changed = false;
-        if (legacy_bos_id >= 0 && bos_id >= 0 && legacy_bos_id != bos_id &&
-            seq.token_ids.front() == legacy_bos_id) {
-            seq.token_ids.front() = bos_id;
-            replaced_legacy_bos++;
-            changed = true;
-        }
-        if (legacy_eos_id >= 0 && eos_id >= 0 && legacy_eos_id != eos_id &&
-            seq.token_ids.back() == legacy_eos_id) {
-            seq.token_ids.back() = eos_id;
-            replaced_legacy_eos++;
-            changed = true;
+        // Add BOS if missing at start (controlled by config flag add_bos_token)
+        if (add_bos_token && bos_id >= 0 && seq.token_ids.front() != bos_id) {
+            seq.token_ids.insert(seq.token_ids.begin(), bos_id);
+            seq.token_numeric_values.insert(seq.token_numeric_values.begin(), 0.0f);
+            seq.token_numeric_mask.insert(seq.token_numeric_mask.begin(), 0);
+            for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
+                seq.token_text_features.insert(seq.token_text_features.begin(), 0);
+            }
+            seq.token_text_mask.insert(seq.token_text_mask.begin(), 0);
+            seq.targets.insert(seq.targets.begin(), -1);
+            added_bos++;
         }
 
-        const bool has_bos = (bos_id >= 0 && seq.token_ids.front() == bos_id);
-        const bool has_eos = (eos_id >= 0 && seq.token_ids.back() == eos_id);
-        const bool add_bos = (bos_id >= 0 && !has_bos);
-        const bool add_eos = (eos_id >= 0 && !has_eos);
-
-        if (add_bos || add_eos) {
-            std::vector<int> new_ids;
-            new_ids.reserve(seq.token_ids.size() + (add_bos ? 1 : 0) + (add_eos ? 1 : 0));
-            std::vector<float> new_numeric_values;
-            new_numeric_values.reserve(seq.token_numeric_values.size() + (add_bos ? 1 : 0) + (add_eos ? 1 : 0));
-            std::vector<uint8_t> new_numeric_mask;
-            new_numeric_mask.reserve(seq.token_numeric_mask.size() + (add_bos ? 1 : 0) + (add_eos ? 1 : 0));
-            // GRMT v4: text features
-            std::vector<uint16_t> new_text_features;
-            new_text_features.reserve(seq.token_text_features.size() + (add_bos ? GRIM::Tokenizer::kTextFeatureDim : 0) + (add_eos ? GRIM::Tokenizer::kTextFeatureDim : 0));
-            std::vector<uint8_t> new_text_mask;
-            new_text_mask.reserve(seq.token_text_mask.size() + (add_bos ? 1 : 0) + (add_eos ? 1 : 0));
-            // GRMT v5: Also shift precomputed targets when adding BOS/EOS
-            std::vector<int> new_targets;
-            new_targets.reserve(seq.targets.size() + (add_bos ? 1 : 0) + (add_eos ? 1 : 0));
-            if (add_bos) {
-                new_ids.push_back(bos_id);
-                new_numeric_values.push_back(0.0f);
-                new_numeric_mask.push_back(0);
-                for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) new_text_features.push_back(0);
-                new_text_mask.push_back(0);
-                new_targets.push_back(-1);  // BOS position has no target (masked)
-                added_bos++;
+        // Add EOS if missing at end (controlled by config flag add_eos_token)
+        if (add_eos_token && eos_id >= 0 && seq.token_ids.back() != eos_id) {
+            seq.token_ids.push_back(eos_id);
+            seq.token_numeric_values.push_back(0.0f);
+            seq.token_numeric_mask.push_back(0);
+            for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
+                seq.token_text_features.push_back(0);
             }
-            new_ids.insert(new_ids.end(), seq.token_ids.begin(), seq.token_ids.end());
-            new_numeric_values.insert(new_numeric_values.end(),
-                                      seq.token_numeric_values.begin(),
-                                      seq.token_numeric_values.end());
-            new_numeric_mask.insert(new_numeric_mask.end(),
-                                    seq.token_numeric_mask.begin(),
-                                    seq.token_numeric_mask.end());
-            new_text_features.insert(new_text_features.end(),
-                                     seq.token_text_features.begin(),
-                                     seq.token_text_features.end());
-            new_text_mask.insert(new_text_mask.end(),
-                                 seq.token_text_mask.begin(),
-                                 seq.token_text_mask.end());
-            // GRMT v5: Copy precomputed targets (shifted by BOS if added)
-            new_targets.insert(new_targets.end(),
-                               seq.targets.begin(),
-                               seq.targets.end());
-            if (add_eos) {
-                new_ids.push_back(eos_id);
-                new_numeric_values.push_back(0.0f);
-                new_numeric_mask.push_back(0);
-                for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) new_text_features.push_back(0);
-                new_text_mask.push_back(0);
-                // GRMT v5: Last target before EOS should be -1 (don't train to predict EOS)
-                if (!new_targets.empty()) {
-                    new_targets.back() = -1;
-                }
-                new_targets.push_back(-1);  // EOS position has no target
-                added_eos++;
+            seq.token_text_mask.push_back(0);
+            // Mask final target (don't train to predict EOS)
+            if (!seq.targets.empty()) {
+                seq.targets.back() = -1;
             }
-            seq.token_ids = std::move(new_ids);
-            seq.token_numeric_values = std::move(new_numeric_values);
-            seq.token_numeric_mask = std::move(new_numeric_mask);
-            seq.token_text_features = std::move(new_text_features);
-            seq.token_text_mask = std::move(new_text_mask);
-            // GRMT v5: Use shifted precomputed targets instead of recomputing from scratch
-            seq.targets = std::move(new_targets);
-            changed = true;
-            modified++;
+            seq.targets.push_back(-1);
+            added_eos++;
         }
     }
 
-    if (modified > 0) {
-        logger.log("[Data] Boundary tokens normalized: added_bos=" + std::to_string(added_bos) +
-                   " added_eos=" + std::to_string(added_eos) +
-                   " legacy_bos=" + std::to_string(replaced_legacy_bos) +
-                   " legacy_eos=" + std::to_string(replaced_legacy_eos));
+    if (added_bos > 0 || added_eos > 0) {
+        logger.log("[Data] Boundary tokens: added_bos=" + std::to_string(added_bos) +
+                   " added_eos=" + std::to_string(added_eos) + " (controlled by config flags)");
+    } else {
+        logger.log("[Data] Boundary token insertion disabled by config flags (add_bos=" + 
+                   std::string(add_bos_token ? "true" : "false") + ", add_eos=" + 
+                   std::string(add_eos_token ? "true" : "false") + ")");
     }
 
     // Split train/val
@@ -662,7 +603,6 @@ SequenceData loadTrainingData(
                         window.token_text_features.push_back(0);
                     }
                     window.token_text_mask.push_back(0);
-                    window.token_byte_lengths.push_back(0);
                     bos_prepended++;
                 }
                 
@@ -681,9 +621,6 @@ SequenceData loadTrainingData(
                     seq.token_text_features.begin() + end * GRIM::Tokenizer::kTextFeatureDim);
                 window.token_text_mask.insert(window.token_text_mask.end(),
                     seq.token_text_mask.begin() + start, seq.token_text_mask.begin() + end);
-                // GRMT v6: slice byte lengths
-                window.token_byte_lengths.insert(window.token_byte_lengths.end(),
-                    seq.token_byte_lengths.begin() + start, seq.token_byte_lengths.begin() + end);
                 
                 // Mask first position if it's the first window (BOS already there)
                 // For non-first windows, BOS was prepended above with target=-1
@@ -802,7 +739,6 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.num_heads = arch.num_heads;
     model_config.num_kv_heads = arch.num_kv_heads;  // GQA: use config value from ai_config.json
     model_config.d_ff = arch.d_ff;
-    // Rule 20: No fallback - use config.max_seq_len (already validated in loadConfiguration)
     model_config.max_seq_len = config.max_seq_len;
     model_config.dropout_rate = arch.dropout_rate;
     model_config.attention_dropout = arch.attention_dropout;
@@ -872,11 +808,8 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
         logger.log("⚠️  Encoder output will be REPLACED with synthetic patterns - this is a DIAGNOSTIC MODE ONLY!");
     }
     
-    // Cache sizing - Use configured batch_size directly (stability override if enabled)
-    // Rule 20: No backwards derivation from token budgets - we KNOW the batch size from config
-    const int actual_batch_size = config.stability.enabled 
-        ? config.hyperparameters.stability_override_batch_size
-        : config.hyperparameters.batch_size;
+    // Cache sizing - Use configured batch_size directly (stability override already applied in loadConfiguration)
+    const int actual_batch_size = config.hyperparameters.batch_size;
     
     // Sequence length cap from cache_limits
     const uint32_t seq_cap = std::min<uint32_t>(
@@ -952,12 +885,6 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     
     auto model = std::make_unique<GRIM::LanguageModel>(model_config);
     
-#if DEBUG_BATCH_PREP_CORRUPTION
-    fprintf(stderr, "[CORRUPT-CHECK-0] After model construction: capacity=%zu data=%p\n",
-            model->getTrainingState().batch_prep_target_ids.capacity(),
-            (void*)model->getTrainingState().batch_prep_target_ids.data());
-#endif
-    
     // STEP 1: Initialize just the stream controller part of TrainingState
     // This creates CUDA streams (CUDA context must exist from STEP 0)
     {
@@ -972,33 +899,15 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
         logger.log("✓ StreamController initialized");
     }
     
-#if DEBUG_BATCH_PREP_CORRUPTION
-    fprintf(stderr, "[CORRUPT-CHECK-1] After StreamController: capacity=%zu data=%p\n",
-            model->getTrainingState().batch_prep_target_ids.capacity(),
-            (void*)model->getTrainingState().batch_prep_target_ids.data());
-#endif
-    
     // STEP 2: Initialize cuBLAS handle (needed by encoder layers in initGPU)
     logger.log("Initializing cuBLAS handle...");
     model->initCuBLASHandle();
     logger.log("✓ cuBLAS handle initialized with Tensor Core acceleration");
     
-#if DEBUG_BATCH_PREP_CORRUPTION
-    fprintf(stderr, "[CORRUPT-CHECK-2] After cuBLAS: capacity=%zu data=%p\n",
-            model->getTrainingState().batch_prep_target_ids.capacity(),
-            (void*)model->getTrainingState().batch_prep_target_ids.data());
-#endif
-    
     // STEP 2.5: Initialize RoPE BEFORE encoder construction (CRITICAL!)
     logger.log("Initializing RoPE (required before encoder construction)...");
     model->initPBM();
     logger.log("✓ RoPE initialized");
-    
-#if DEBUG_BATCH_PREP_CORRUPTION
-    fprintf(stderr, "[CORRUPT-CHECK-3] After PBM: capacity=%zu data=%p\n",
-            model->getTrainingState().batch_prep_target_ids.capacity(),
-            (void*)model->getTrainingState().batch_prep_target_ids.data());
-#endif
     
     // ═══════════════════════════════════════════════════════════════
     // STEP 2.75: Initialize TrainingTensors (PROPER OWNERSHIP FIX)
@@ -1017,6 +926,8 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
 
         // ISSUE #96: Pass positional_encoding to control position embedding allocation
         // ISSUE #109: Pass use_layer_scale and layer_scale_init for LayerScale support
+        // CRITICAL: Use xavier_seed (derived init_seed from RNG context), not config.hyperparameters.seed
+        // The xavier_seed is the computed hierarchical seed from initializeRNG()
         model->getTrainingState().initializeAutogradTensors(
             cfg.vocab_size, cfg.d_model, cfg.d_ff,
             cfg.num_layers, cfg.num_heads, num_kv_heads,
@@ -1024,16 +935,11 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
             cfg.positional_encoding,  // Issue #96: Only allocate pos_emb for LEARNED mode
             cfg.use_layer_scale,      // Issue #109: LayerScale gating flag
             cfg.layer_scale_init,     // Issue #109: Initial value for layer scale params
+            xavier_seed,              // Use parameter (derived init_seed), not config.hyperparameters.seed
             stream
         );
         logger.log("✓ TrainingTensors initialized (Tensors OWN memory)");
     }
-    
-#if DEBUG_BATCH_PREP_CORRUPTION
-    fprintf(stderr, "[CORRUPT-CHECK-4] After AutogradTensors: capacity=%zu data=%p\n",
-            model->getTrainingState().batch_prep_target_ids.capacity(),
-            (void*)model->getTrainingState().batch_prep_target_ids.data());
-#endif
     
     // STEP 3: Initialize GPU encoder (uses cuBLAS handle from step 2, RoPE from step 2.5)
     // NOTE: initGPU() now uses TrainingTensors for embedding buffers instead of allocating new ones
@@ -1041,23 +947,11 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model->initGPU();
     logger.log("✓ GPU encoder fully initialized");
     
-#if DEBUG_BATCH_PREP_CORRUPTION
-    fprintf(stderr, "[CORRUPT-CHECK-5] After initGPU: capacity=%zu data=%p\n",
-            model->getTrainingState().batch_prep_target_ids.capacity(),
-            (void*)model->getTrainingState().batch_prep_target_ids.data());
-#endif
-    
     // STEP 4: Finish TrainingState initialization (grad buffers, activation caches)
     // NOTE: Embeddings already set up in step 2.75, this just does the rest
     logger.log("Initializing TrainingState (grad buffers, activation caches)...");
     model->initTrainingState();
     logger.log("✓ TrainingState fully initialized");
-    
-#if DEBUG_BATCH_PREP_CORRUPTION
-    fprintf(stderr, "[CORRUPT-CHECK-6] After initTrainingState: capacity=%zu data=%p\n",
-            model->getTrainingState().batch_prep_target_ids.capacity(),
-            (void*)model->getTrainingState().batch_prep_target_ids.data());
-#endif
 
     if (config.hyperparameters.logit_update_trace_enabled) {
         const bool tied = model->getConfig().tie_embeddings;
@@ -1081,265 +975,60 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model->setLossOptions(config.loss_options);
     
     // Log loss configuration
-    std::cout << "[LossConfig] startup: "
-              << "label_smoothing=" << (config.loss_options.label_smoothing_enabled ? "ON" : "off")
-              << " focal=" << (config.loss_options.focal_enabled ? "ON" : "off")
-              << " distill=" << (config.loss_options.distillation_enabled ? "ON" : "off")
-              << " pref=" << (config.loss_options.preference_enabled ? "ON" : "off")
-              << " entropy_reg=" << (config.loss_options.entropy_reg_enabled ? "ON" : "off")
-              << " ent_lambda=" << config.loss_options.entropy_reg_lambda
-              << std::endl;
-    std::cout << std::flush;  // DEBUG: ensure output before crash
+    {
+        std::ostringstream loss_msg;
+        loss_msg << "[LossConfig] startup: "
+                 << "label_smoothing=" << (config.loss_options.label_smoothing_enabled ? "ON" : "off")
+                 << " focal=" << (config.loss_options.focal_enabled ? "ON" : "off")
+                 << " distill=" << (config.loss_options.distillation_enabled ? "ON" : "off")
+                 << " pref=" << (config.loss_options.preference_enabled ? "ON" : "off")
+                 << " entropy_reg=" << (config.loss_options.entropy_reg_enabled ? "ON" : "off")
+                 << " ent_lambda=" << config.loss_options.entropy_reg_lambda;
+        logger.log(loss_msg.str());
+    }
     
 #ifdef USE_CUDA
-    // Xavier initialization for encoder weights if needed
-    std::cout << "[DEBUG] Entering Xavier check section..." << std::endl << std::flush;
+    // Verify encoder weights are initialized (TrainingTensors.cu handles Xavier init via Tensor::xavier_uniform_)
     {
         auto* gpu_encoder = &model->getGpuEncoder();
-        std::cout << "[DEBUG] Got GPU encoder: " << gpu_encoder << std::endl << std::flush;
         const auto& cfg = model->getConfig();
-        std::cout << "[DEBUG] Got config, num_layers=" << cfg.num_layers << std::endl << std::flush;
-        auto sample_rms = [&](float* ptr, size_t count) -> float {
-            if (!ptr || count == 0) return 0.0f;
-            std::vector<float> sample(std::min<size_t>(32, count), 0.0f);
-            cudaMemcpy(sample.data(), ptr, sample.size() * sizeof(float), cudaMemcpyDeviceToHost);
-            float sum_sq = 0.f;
-            for (float v : sample) sum_sq += v * v;
-            return std::sqrt(sum_sq / static_cast<float>(sample.size()));
-        };
-        
-        std::cout << "[DEBUG] Starting layer loop..." << std::endl << std::flush;
         for (int layer = 0; layer < cfg.num_layers; ++layer) {
-            std::cout << "[DEBUG] Layer " << layer << " - getting enc pointer..." << std::endl << std::flush;
             auto* enc = gpu_encoder->getLayer(layer);
-            std::cout << "[DEBUG] Layer " << layer << " - enc=" << enc << std::endl << std::flush;
-            if (!enc) continue;
-            
-            std::cout << "[DEBUG] Layer " << layer << " - getting weight pointers..." << std::endl << std::flush;
-            float* w_qkv = enc->attnWqkv().data;
-            std::cout << "[DEBUG] Layer " << layer << " - w_qkv=" << w_qkv << std::endl << std::flush;
-            float* w_o = enc->attnWo().data;
-            float* w1 = enc->ffnW1().data;
-            float* w2 = enc->ffnW2().data;
-            std::cout << "[DEBUG] Layer " << layer << " - got all weight pointers" << std::endl << std::flush;
-            
-            // GQA dimension calculation using TensorContract
-            std::cout << "[DEBUG] Layer " << layer << " - calculating GQA dims..." << std::endl << std::flush;
-            const int head_dim = cfg.head_dim;  // Use pre-computed value from config
-            std::cout << "[DEBUG] Layer " << layer << " - head_dim=" << head_dim << std::endl << std::flush;
-            TensorContract::GQADims gqa_dims{cfg.num_heads, cfg.num_kv_heads, head_dim};
-            std::cout << "[DEBUG] Layer " << layer << " - created gqa_dims" << std::endl << std::flush;
-            const int total_qkv_dim = gqa_dims.total_qkv_dim();
-            std::cout << "[DEBUG] Layer " << layer << " - total_qkv_dim=" << total_qkv_dim << std::endl << std::flush;
-            const size_t qkv_size = static_cast<size_t>(total_qkv_dim) * cfg.d_model;
-            std::cout << "[DEBUG] Layer " << layer << " - qkv_size=" << qkv_size << std::endl << std::flush;
-            
-            // Issue #108 FIX: REMOVE Issue #106 scaling now that Issue #107 fixed PRNG correlation!
-            // 
-            // History:
-            // - Issue #106 added 1/sqrt(d_model) scaling to compensate for "coherent summation"
-            // - Issue #107 fixed the root cause: LCG PRNG correlation (avg|cosine|=0.37)
-            // - Now that PRNG is decorrelated (avg|cosine|≈0.03), partial cancellation happens
-            //   naturally, so the extra scaling causes Q/K to be 10x BELOW target!
-            //
-            // Current (broken): QKV row_norm ≈ 0.87, TARGET = 8.0 (sqrt(head_dim))
-            // Fix: Use standard Xavier init WITHOUT 1/sqrt(d_model) scaling
-            //
-            // Math:
-            // - ln1_out row_norm ≈ 27.7 (RMSNorm)
-            // - Standard Xavier W_qkv: elem_std = sqrt(2/(768+1280)) ≈ 0.031
-            // - W_qkv row_norm ≈ elem_std * sqrt(d_model) ≈ 0.031 * 27.7 ≈ 0.87
-            // - With partial cancellation in GEMM (decorrelated PRNG):
-            //   QKV row_norm ≈ ln1_row_norm * W_row_norm / sqrt(d_model)
-            //                ≈ 27.7 * 0.87 / 27.7 ≈ 0.87 (matches observation!)
-            // - But we WANT QKV row_norm ≈ 8.0 for healthy attention
-            // - So we need W_qkv to produce Q/K row_norm ≈ 8.0
-            // - Actually with ln1_row_norm ≈ 27.7 and W_qkv standard Xavier:
-            //   Expected QKV = 27.7 * 0.031 * sqrt(768) = 23.8 (way too high!)
-            //   But with partial cancellation: Expected ≈ 8-10 (close to target!)
-            //
-            // ============================================================================
-            // Issue #106 DIAGNOSTIC: Prove W_qkv stats in exact GEMM layout
-            // W_qkv shape: [total_qkv_dim, d_model] row-major
-            // GEMM reads: A[M,K] × B[K,N] → C[M,N]
-            // For QKV: input[tokens, d_model] × W_qkv^T[d_model, total_qkv_dim] → qkv[tokens, total_qkv_dim]
-            // So W_qkv is stored as [total_qkv_dim rows, d_model cols]
-            //
-            // NOTE: Weights are now initialized ONCE by TrainingTensors.cu via Tensor::xavier_uniform_()
-            // which uses Philox PRNG (Issue #107 fix). No reinitialization needed here.
-            // ============================================================================
-            if (layer == 0 && w_qkv) {
-                cudaDeviceSynchronize();  // Ensure Xavier init complete
-                
-                const int num_rows = total_qkv_dim;  // 1280
-                const int num_cols = cfg.d_model;    // 768
-                
-                // Copy W_qkv to host for analysis
-                std::vector<float> h_wqkv(qkv_size);
-                cudaMemcpy(h_wqkv.data(), w_qkv, qkv_size * sizeof(float), cudaMemcpyDeviceToHost);
-                
-                // === Per-row RMS (rows are W_qkv[i, :], size d_model) ===
-                std::vector<float> row_rms(num_rows);
-                for (int r = 0; r < num_rows; ++r) {
-                    double sum_sq = 0.0;
-                    for (int c = 0; c < num_cols; ++c) {
-                        float val = h_wqkv[r * num_cols + c];
-                        sum_sq += val * val;
-                    }
-                    row_rms[r] = std::sqrt(sum_sq / num_cols);
-                }
-                
-                // === Per-column RMS (cols are W_qkv[:, j], size total_qkv_dim) ===
-                std::vector<float> col_rms(num_cols);
-                for (int c = 0; c < num_cols; ++c) {
-                    double sum_sq = 0.0;
-                    for (int r = 0; r < num_rows; ++r) {
-                        float val = h_wqkv[r * num_cols + c];
-                        sum_sq += val * val;
-                    }
-                    col_rms[c] = std::sqrt(sum_sq / num_rows);
-                }
-                
-                // === Row statistics ===
-                float row_rms_min = *std::min_element(row_rms.begin(), row_rms.end());
-                float row_rms_max = *std::max_element(row_rms.begin(), row_rms.end());
-                double row_rms_sum = 0.0;
-                for (float v : row_rms) row_rms_sum += v;
-                float row_rms_mean = row_rms_sum / num_rows;
-                
-                // === Column statistics ===
-                float col_rms_min = *std::min_element(col_rms.begin(), col_rms.end());
-                float col_rms_max = *std::max_element(col_rms.begin(), col_rms.end());
-                double col_rms_sum = 0.0;
-                for (float v : col_rms) col_rms_sum += v;
-                float col_rms_mean = col_rms_sum / num_cols;
-                
-                // === Cosine similarity between rows ===
-                auto cosine_rows = [&](int r1, int r2) -> float {
-                    double dot = 0.0, norm1_sq = 0.0, norm2_sq = 0.0;
-                    for (int c = 0; c < num_cols; ++c) {
-                        float v1 = h_wqkv[r1 * num_cols + c];
-                        float v2 = h_wqkv[r2 * num_cols + c];
-                        dot += v1 * v2;
-                        norm1_sq += v1 * v1;
-                        norm2_sq += v2 * v2;
-                    }
-                    return dot / (std::sqrt(norm1_sq) * std::sqrt(norm2_sq) + 1e-10);
-                };
-                
-                // === Cosine similarity between columns ===
-                auto cosine_cols = [&](int c1, int c2) -> float {
-                    double dot = 0.0, norm1_sq = 0.0, norm2_sq = 0.0;
-                    for (int r = 0; r < num_rows; ++r) {
-                        float v1 = h_wqkv[r * num_cols + c1];
-                        float v2 = h_wqkv[r * num_cols + c2];
-                        dot += v1 * v2;
-                        norm1_sq += v1 * v1;
-                        norm2_sq += v2 * v2;
-                    }
-                    return dot / (std::sqrt(norm1_sq) * std::sqrt(norm2_sq) + 1e-10);
-                };
-                
-                // Sample cosine similarities
-                float cos_row_0_1 = cosine_rows(0, 1);
-                float cos_row_0_100 = cosine_rows(0, 100);
-                float cos_row_0_500 = cosine_rows(0, 500);
-                float cos_row_100_500 = cosine_rows(100, 500);
-                
-                float cos_col_0_1 = cosine_cols(0, 1);
-                float cos_col_0_100 = cosine_cols(0, 100);
-                float cos_col_0_500 = cosine_cols(0, 500);
-                float cos_col_100_500 = cosine_cols(100, 500);
-                
-                // === Compute average absolute cosine across many row pairs ===
-                double row_cos_sum = 0.0;
-                int row_pairs = 0;
-                for (int i = 0; i < std::min(50, num_rows); ++i) {
-                    for (int j = i + 1; j < std::min(50, num_rows); ++j) {
-                        row_cos_sum += std::abs(cosine_rows(i, j));
-                        row_pairs++;
-                    }
-                }
-                float avg_row_cos = row_cos_sum / (row_pairs > 0 ? row_pairs : 1);
-                
-                // === Compute average absolute cosine across many column pairs ===
-                double col_cos_sum = 0.0;
-                int col_pairs = 0;
-                for (int i = 0; i < std::min(50, num_cols); ++i) {
-                    for (int j = i + 1; j < std::min(50, num_cols); ++j) {
-                        col_cos_sum += std::abs(cosine_cols(i, j));
-                        col_pairs++;
-                    }
-                }
-                float avg_col_cos = col_cos_sum / (col_pairs > 0 ? col_pairs : 1);
-                
-                // === Column variance (to check isotropy) ===
-                std::vector<float> col_var(num_cols);
-                for (int c = 0; c < num_cols; ++c) {
-                    double mean = 0.0;
-                    for (int r = 0; r < num_rows; ++r) {
-                        mean += h_wqkv[r * num_cols + c];
-                    }
-                    mean /= num_rows;
-                    double var = 0.0;
-                    for (int r = 0; r < num_rows; ++r) {
-                        float diff = h_wqkv[r * num_cols + c] - mean;
-                        var += diff * diff;
-                    }
-                    col_var[c] = var / num_rows;
-                }
-                float col_var_min = *std::min_element(col_var.begin(), col_var.end());
-                float col_var_max = *std::max_element(col_var.begin(), col_var.end());
-                float col_var_ratio = col_var_max / (col_var_min + 1e-10f);
-                
-                fprintf(stderr, "\n[Issue106-WQKV-GEMM-LAYOUT] Layer 0 W_qkv analysis (EXACT GEMM memory layout):\n");
-                fprintf(stderr, "  SHAPE: [%d rows, %d cols] = [total_qkv_dim, d_model]\n", num_rows, num_cols);
-                fprintf(stderr, "  GEMM: input[tokens,%d] @ W_qkv^T[%d,%d] -> qkv[tokens,%d]\n", 
-                        num_cols, num_cols, num_rows, num_rows);
-                fprintf(stderr, "  \n");
-                fprintf(stderr, "  ROW RMS (each row is a d_model-dim output vector):\n");
-                fprintf(stderr, "    min=%.10f max=%.10f mean=%.10f ratio=%.4fx\n",
-                        row_rms_min, row_rms_max, row_rms_mean, row_rms_max / (row_rms_min + 1e-10f));
-                fprintf(stderr, "  \n");
-                fprintf(stderr, "  COLUMN RMS (each col is a total_qkv_dim-dim input weight vector):\n");
-                fprintf(stderr, "    min=%.10f max=%.10f mean=%.10f ratio=%.4fx\n",
-                        col_rms_min, col_rms_max, col_rms_mean, col_rms_max / (col_rms_min + 1e-10f));
-                fprintf(stderr, "  \n");
-                fprintf(stderr, "  COLUMN VARIANCE (isotropy check - should vary if NOT isotropic):\n");
-                fprintf(stderr, "    min=%.10f max=%.10f ratio=%.4fx\n", col_var_min, col_var_max, col_var_ratio);
-                fprintf(stderr, "    %s\n", col_var_ratio < 1.5f ? "WARNING: ISOTROPIC (ratio < 1.5x)" : "OK: Heterogeneous");
-                fprintf(stderr, "  \n");
-                fprintf(stderr, "  ROW COSINE SIMILARITY (expect ~0 for independent rows):\n");
-                fprintf(stderr, "    cos(row0,row1)=%.6f cos(row0,row100)=%.6f\n", cos_row_0_1, cos_row_0_100);
-                fprintf(stderr, "    cos(row0,row500)=%.6f cos(row100,row500)=%.6f\n", cos_row_0_500, cos_row_100_500);
-                fprintf(stderr, "    avg|cos| over %d pairs: %.6f\n", row_pairs, avg_row_cos);
-                fprintf(stderr, "  \n");
-                fprintf(stderr, "  COLUMN COSINE SIMILARITY (expect ~0 for independent cols):\n");
-                fprintf(stderr, "    cos(col0,col1)=%.6f cos(col0,col100)=%.6f\n", cos_col_0_1, cos_col_0_100);
-                fprintf(stderr, "    cos(col0,col500)=%.6f cos(col100,col500)=%.6f\n", cos_col_0_500, cos_col_100_500);
-                fprintf(stderr, "    avg|cos| over %d pairs: %.6f\n", col_pairs, avg_col_cos);
-                fprintf(stderr, "  \n");
-                // Expected row_rms for Xavier uniform: scale/sqrt(3) where scale = sqrt(6/(fan_in+fan_out))
-                // For W_qkv [total_qkv_dim, d_model]: scale = sqrt(6/(768+1280)) ≈ 0.054, rms ≈ 0.031
-                const float expected_qkv_rms = std::sqrt(6.0f / (cfg.d_model + total_qkv_dim)) / std::sqrt(3.0f);
-                fprintf(stderr, "  EXPECTED for good init: row_rms~%.4f, cosines~0.0, col_var_ratio>2x\n", expected_qkv_rms);
-                fprintf(stderr, "\n");
+            if (!enc) {
+                throw std::runtime_error("Encoder layer " + std::to_string(layer) + " is NULL after initGPU");
             }
-            // ============================================================================
         }
-        std::cout << "[DEBUG] Xavier loop completed, exiting scope..." << std::endl << std::flush;
+        logger.log("✓ All " + std::to_string(cfg.num_layers) + " encoder layers verified");
     }
-    std::cout << "[DEBUG] Xavier check section done!" << std::endl << std::flush;
 #endif
     
-    std::cout << "[DEBUG-A] About to check checkpoint..." << std::endl << std::flush;
-    
-    // Try to load checkpoint
-    std::string latest_checkpoint = config.paths.checkpoint_dir + "/checkpoint_epoch_1.bin";
-    std::cout << "[DEBUG-B] checkpoint_dir=" << config.paths.checkpoint_dir << std::endl << std::flush;
-    std::cout << "[DEBUG-C] Checking if checkpoint exists..." << std::endl << std::flush;
-    if (fs::exists(latest_checkpoint)) {
-        std::cout << "[DEBUG-D] Found checkpoint, loading..." << std::endl << std::flush;
+    // Try to load checkpoint - scan for latest
+    std::string latest_checkpoint;
+    {
+        std::string best_path;
+        int best_epoch = -1;
+        if (fs::exists(config.paths.checkpoint_dir) && fs::is_directory(config.paths.checkpoint_dir)) {
+            for (const auto& entry : fs::directory_iterator(config.paths.checkpoint_dir)) {
+                const auto& p = entry.path();
+                if (p.extension() == ".bin" && p.stem().string().rfind("checkpoint_epoch_", 0) == 0) {
+                    // Extract epoch number from "checkpoint_epoch_N"
+                    std::string stem = p.stem().string();
+                    std::string epoch_str = stem.substr(std::string("checkpoint_epoch_").size());
+                    try {
+                        int epoch = std::stoi(epoch_str);
+                        if (epoch > best_epoch) {
+                            best_epoch = epoch;
+                            best_path = p.string();
+                        }
+                    } catch (const std::exception& e) {
+                        logger.log("[WARNING] Skipping malformed checkpoint filename: " + stem + " (" + e.what() + ")");
+                    }
+                }
+            }
+        }
+        latest_checkpoint = best_path;
+    }
+    if (!latest_checkpoint.empty() && fs::exists(latest_checkpoint)) {
         logger.log("Found checkpoint: " + latest_checkpoint);
         if (model->load(latest_checkpoint)) {
             logger.log("✓ Loaded weights from checkpoint");
@@ -1347,13 +1036,10 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
             logger.log("⚠ Failed to load checkpoint, starting fresh");
         }
     } else {
-        std::cout << "[DEBUG-E] No checkpoint found" << std::endl << std::flush;
         logger.log("No checkpoint found, starting fresh");
     }
     
-    std::cout << "[DEBUG-F] About to log 'Model initialized'" << std::endl << std::flush;
     logger.log("✓ Model initialized");
-    std::cout << "[DEBUG-G] Returning model from initializeModel" << std::endl << std::flush;
     return model;
 }
 
@@ -1362,19 +1048,14 @@ OptimizerContext initializeOptimizer(
     const StartupConfig& config,
     TrainingLogger& logger) {
     
-    std::cout << "[DEBUG-H] ENTERED initializeOptimizer" << std::endl << std::flush;
-    
     OptimizerContext ctx;
     const auto& hp = config.hyperparameters;
     
-    std::cout << "[DEBUG-I] About to log 'Initializing optimizer state'" << std::endl << std::flush;
     logger.log("Initializing optimizer state...");
-    std::cout << "[DEBUG-J] Logged successfully" << std::endl << std::flush;
     
     // Optimizer state (AdamW hyperparameters are defined as constants in AdamW_Kernal_GPU.cu)
     ctx.optimizer_state.step = 0;
     
-    std::cout << "[DEBUG-K] Setting up SoftRestart controller..." << std::endl << std::flush;
     // Soft restart controller
     GRIM::SoftRestart::SoftRestartConfig sr_cfg;
     sr_cfg.loss_increase_threshold = hp.soft_restart_loss_increase_threshold;
@@ -1382,7 +1063,6 @@ OptimizerContext initializeOptimizer(
     sr_cfg.cooldown_steps = hp.soft_restart_cooldown_steps;
     ctx.soft_restart_controller = GRIM::SoftRestart::SoftRestartController(sr_cfg);
     
-    std::cout << "[DEBUG-L] Setting up DynamicLR controller..." << std::endl << std::flush;
     // Dynamic LR controller
     GRIM::DynamicLR::DynamicLRConfig lr_cfg;
     lr_cfg.base_learning_rate = hp.learning_rate;
@@ -1429,9 +1109,7 @@ OptimizerContext initializeOptimizer(
     lr_cfg.safety_gain = hp.dynamic_lr_safety_gain;
     lr_cfg.safety_scale = hp.dynamic_lr_safety_scale;
     
-    std::cout << "[DEBUG-M] Creating DynamicLRController..." << std::endl << std::flush;
     ctx.dynamic_lr_controller = GRIM::DynamicLR::DynamicLRController(lr_cfg);
-    std::cout << "[DEBUG-N] Setting runtime limits..." << std::endl << std::flush;
     ctx.dynamic_lr_controller.setRuntimeLimits(hp.dynamic_lr_min, hp.dynamic_lr_max);
     ctx.dynamic_lr_controller.setEnabled(hp.dynamic_lr_enabled);
     
@@ -1443,7 +1121,6 @@ OptimizerContext initializeOptimizer(
     ctx.current_micro_step = 0;
     
     // Verify ALL encoder layers initialized (prevents lazy init during forward pass)
-    std::cout << "[DEBUG-Y] Verifying encoder layers..." << std::endl << std::flush;
     auto* gpu_encoder = &model.getGpuEncoder();
     for (int layer = 0; layer < model.getConfig().num_layers; ++layer) {
         if (!gpu_encoder->getLayer(layer)) {
@@ -1451,7 +1128,6 @@ OptimizerContext initializeOptimizer(
                                      "ensure model.initGPU() completes all layers before training");
         }
     }
-    std::cout << "[DEBUG-Z] All encoder layers verified" << std::endl << std::flush;
     
     logger.log("✓ Optimizer state initialized");
     return ctx;
@@ -1510,121 +1186,6 @@ std::vector<float> computeRareTokenScores(
     return sequence_rarity;
 }
 
-// Issue #38 FIX: Compute per-token class weights to prevent mode collapse on frequent tokens
-// Returns GPU-allocated buffer with weights indexed by token ID
-// Frequent tokens (like SPACE=277) get LOWER weight to reduce their gradient contribution
-float* computeAndUploadTokenWeights(
-    const std::vector<TrainingSequence*>& train_views,
-    uint32_t vocab_size,
-    cudaStream_t stream,
-    TrainingLogger& logger) {
-    
-    if (vocab_size == 0) {
-        throw std::runtime_error("computeAndUploadTokenWeights: vocab_size must be > 0");
-    }
-    
-    logger.log("[Issue38Fix] Computing per-token class weights to prevent mode collapse...");
-    
-    // Step 1: Count token frequencies
-    std::vector<uint64_t> token_counts(vocab_size, 0);
-    uint64_t total_tokens = 0;
-    for (const auto* seq : train_views) {
-        if (!seq) continue;
-        for (int token_id : seq->token_ids) {
-            if (token_id >= 0 && static_cast<uint32_t>(token_id) < vocab_size) {
-                token_counts[static_cast<size_t>(token_id)]++;
-                total_tokens++;
-            }
-        }
-    }
-    
-    if (total_tokens == 0) {
-        logger.log("  ⚠ WARNING: No tokens found in training data, skipping token weights");
-        return nullptr;
-    }
-    
-    // Step 2: Compute inverse frequency weights
-    // Formula: weight[t] = sqrt(total_tokens / (vocab_size * freq[t] + smoothing))
-    // This gives lower weight to frequent tokens, higher weight to rare tokens
-    // The sqrt prevents extreme weights while still providing meaningful differentiation
-    const float smoothing = 1.0f;  // Prevent division by zero
-    std::vector<float> host_weights(vocab_size);
-    
-    float min_weight = FLT_MAX;
-    float max_weight = 0.0f;
-    uint32_t token_277_count = token_counts[277];
-    float token_277_weight = 0.0f;
-    
-    for (uint32_t t = 0; t < vocab_size; ++t) {
-        float freq = static_cast<float>(token_counts[t]);
-        // Inverse frequency with sqrt dampening
-        float weight = sqrtf(static_cast<float>(total_tokens) / 
-                            (static_cast<float>(vocab_size) * freq + smoothing));
-        // Cap weights to prevent extreme values
-        weight = std::min(weight, 10.0f);  // Max 10x boost for very rare tokens
-        weight = std::max(weight, 0.1f);   // Min 0.1x for very frequent tokens
-        host_weights[t] = weight;
-        
-        min_weight = std::min(min_weight, weight);
-        max_weight = std::max(max_weight, weight);
-        
-        if (t == 277) {
-            token_277_weight = weight;
-        }
-    }
-    
-    // Normalize so mean weight = 1.0 (preserves overall gradient scale)
-    float mean_weight = 0.0f;
-    for (float w : host_weights) {
-        mean_weight += w;
-    }
-    mean_weight /= static_cast<float>(vocab_size);
-    
-    for (float& w : host_weights) {
-        w /= mean_weight;
-    }
-    token_277_weight /= mean_weight;
-    min_weight /= mean_weight;
-    max_weight /= mean_weight;
-    
-    // Log statistics
-    {
-        std::ostringstream msg;
-        float token_277_freq_pct = 100.0f * static_cast<float>(token_277_count) / static_cast<float>(total_tokens);
-        msg << "[Issue38Fix] Token weight stats:\n"
-            << "  Total tokens: " << total_tokens << "\n"
-            << "  Token 277 (SPACE): count=" << token_277_count 
-            << " (" << std::fixed << std::setprecision(2) << token_277_freq_pct << "% of all tokens)\n"
-            << "  Token 277 weight: " << std::setprecision(4) << token_277_weight 
-            << " (lower = less gradient contribution)\n"
-            << "  Weight range: [" << min_weight << ", " << max_weight << "]";
-        logger.log(msg.str());
-    }
-    
-    // Step 3: Upload to GPU
-    float* d_token_weights = nullptr;
-    size_t weights_bytes = vocab_size * sizeof(float);
-    
-    cudaError_t err = cudaMalloc(&d_token_weights, weights_bytes);
-    if (err != cudaSuccess) {
-        throw std::runtime_error(std::string("cudaMalloc failed for token_weights: ") + 
-                                 cudaGetErrorString(err));
-    }
-    
-    err = cudaMemcpyAsync(d_token_weights, host_weights.data(), weights_bytes,
-                          cudaMemcpyHostToDevice, stream);
-    if (err != cudaSuccess) {
-        cudaFree(d_token_weights);
-        throw std::runtime_error(std::string("cudaMemcpy failed for token_weights: ") + 
-                                 cudaGetErrorString(err));
-    }
-    
-    logger.log("✓ Token weights uploaded to GPU (" + 
-               std::to_string(weights_bytes / 1024) + " KB)");
-    
-    return d_token_weights;
-}
-
 RNGContext initializeRNG(
     const StartupConfig& config,
     TrainingLogger& logger) {
@@ -1659,28 +1220,22 @@ RNGContext initializeRNG(
     ctx.data_rng = std::mt19937_64(ctx.data_seed);
     
 #ifdef USE_CUDA
-    // Initialize CUDA RNG for GPU dropout/sampling
+    // Initialize CUDA RNG for GPU dropout/sampling (Rule 20: throw on failure, no silent degradation)
     curandGenerator_t cuda_gen;
     curandStatus_t status = curandCreateGenerator(&cuda_gen, CURAND_RNG_PSEUDO_DEFAULT);
     if (status != CURAND_STATUS_SUCCESS) {
-        logger.log("⚠ WARNING: Failed to create CUDA RNG generator (status=" + 
-                   std::to_string(status) + "). GPU dropout will use uncontrolled randomness.");
-        ctx.cuda_rng_generator = nullptr;
-        ctx.cuda_rng_initialized = false;
-    } else {
-        status = curandSetPseudoRandomGeneratorSeed(cuda_gen, ctx.cuda_seed);
-        if (status != CURAND_STATUS_SUCCESS) {
-            logger.log("⚠ WARNING: Failed to set CUDA RNG seed (status=" + 
-                       std::to_string(status) + "). GPU dropout will use default seed.");
-            curandDestroyGenerator(cuda_gen);
-            ctx.cuda_rng_generator = nullptr;
-            ctx.cuda_rng_initialized = false;
-        } else {
-            ctx.cuda_rng_generator = static_cast<void*>(cuda_gen);
-            ctx.cuda_rng_initialized = true;
-            logger.log("✓ CUDA RNG initialized (seed=" + std::to_string(ctx.cuda_seed) + ")");
-        }
+        throw std::runtime_error("FATAL: Failed to create CUDA RNG generator (curandStatus=" + 
+                                 std::to_string(status) + "). Training requires controlled GPU randomness.");
     }
+    status = curandSetPseudoRandomGeneratorSeed(cuda_gen, ctx.cuda_seed);
+    if (status != CURAND_STATUS_SUCCESS) {
+        curandDestroyGenerator(cuda_gen);
+        throw std::runtime_error("FATAL: Failed to set CUDA RNG seed (curandStatus=" + 
+                                 std::to_string(status) + "). Training requires controlled GPU randomness.");
+    }
+    ctx.cuda_rng_generator = static_cast<void*>(cuda_gen);
+    ctx.cuda_rng_initialized = true;
+    logger.log("✓ CUDA RNG initialized (seed=" + std::to_string(ctx.cuda_seed) + ")");
 #else
     ctx.cuda_rng_generator = nullptr;
     ctx.cuda_rng_initialized = false;
@@ -1712,7 +1267,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     
     EmitModuleInfo(ModuleId::Training, "========================================", 0);
     EmitModuleInfo(ModuleId::Training, "  Phase 1: Startup & Initialization", 0);
-    EmitModuleInfo(ModuleId::Training, "  GRIM-text GPU Training v2.0.0", 0);
+    EmitModuleInfo(ModuleId::Training, "  GRIM-text GPU Training v3.0.0", 0);
     EmitModuleInfo(ModuleId::Training, "========================================", 0);
     
     // Enable verbose module logging
@@ -1742,88 +1297,39 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing logging...", 0);
     ctx->logging = Internal::initializeLogging(ctx->config.paths);
     
+    // Create standard module log formatter (Rule 21: centralized logging setup)
+    auto log_fn = [logger = ctx->logging.logger.get()](const std::string& msg) {
+        logger->log(msg);
+    };
+    auto formatter = GRIM::Logging::CreateStandardModuleLogFormatter(log_fn);
+    
     // Forward BackwardPass module logs to training logger (MUST persist!)
     ctx->logging.backward_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    auto backward_formatter = [logger = ctx->logging.logger.get()](const GRIM::Logging::ModuleLogEvent& evt) {
-        const char* level = "INFO";
-        switch (evt.level) {
-            case GRIM::Logging::ModuleLogLevel::Warning: level = "WARN"; break;
-            case GRIM::Logging::ModuleLogLevel::Error: level = "ERR"; break;
-            default: break;
-        }
-        std::ostringstream msg;
-        msg << "[" << evt.module << "][" << level << "] " << evt.message;
-        logger->log(msg.str());
-    };
-    if (!ctx->logging.backward_sink->bind("BackwardPass", backward_formatter)) {
+    if (!ctx->logging.backward_sink->bind("BackwardPass", formatter)) {
         ctx->logging.logger->log("[WARNING] Failed to bind BackwardPass module logger - backward diagnostics may not appear in logs");
     }
     
     // Forward StreamController module logs to training logger (CRITICAL for init debugging!)
     ctx->logging.stream_controller_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    auto stream_formatter = [logger = ctx->logging.logger.get()](const GRIM::Logging::ModuleLogEvent& evt) {
-        const char* level = "INFO";
-        switch (evt.level) {
-            case GRIM::Logging::ModuleLogLevel::Warning: level = "WARN"; break;
-            case GRIM::Logging::ModuleLogLevel::Error: level = "ERR"; break;
-            default: break;
-        }
-        std::ostringstream msg;
-        msg << "[" << evt.module << "][" << level << "] " << evt.message;
-        logger->log(msg.str());
-    };
-    if (!ctx->logging.stream_controller_sink->bind("StreamController", stream_formatter)) {
+    if (!ctx->logging.stream_controller_sink->bind("StreamController", formatter)) {
         ctx->logging.logger->log("[WARNING] Failed to bind StreamController module logger - stream diagnostics may not appear in logs");
     }
     
     // Forward Checkpoint module logs to training logger (CRITICAL for save/load debugging!)
     ctx->logging.checkpoint_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    auto checkpoint_formatter = [logger = ctx->logging.logger.get()](const GRIM::Logging::ModuleLogEvent& evt) {
-        const char* level = "INFO";
-        switch (evt.level) {
-            case GRIM::Logging::ModuleLogLevel::Warning: level = "WARN"; break;
-            case GRIM::Logging::ModuleLogLevel::Error: level = "ERR"; break;
-            default: break;
-        }
-        std::ostringstream msg;
-        msg << "[" << evt.module << "][" << level << "] " << evt.message;
-        logger->log(msg.str());
-    };
-    if (!ctx->logging.checkpoint_sink->bind("Checkpoint", checkpoint_formatter)) {
+    if (!ctx->logging.checkpoint_sink->bind("Checkpoint", formatter)) {
         ctx->logging.logger->log("[WARNING] Failed to bind Checkpoint module logger - save/load diagnostics may not appear in logs");
     }
 
     // Forward Activations module logs to training logger (Flash Attention diagnostics)
     ctx->logging.activations_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    auto activations_formatter = [logger = ctx->logging.logger.get()](const GRIM::Logging::ModuleLogEvent& evt) {
-        const char* level = "INFO";
-        switch (evt.level) {
-            case GRIM::Logging::ModuleLogLevel::Warning: level = "WARN"; break;
-            case GRIM::Logging::ModuleLogLevel::Error: level = "ERR"; break;
-            default: break;
-        }
-        std::ostringstream msg;
-        msg << "[" << evt.module << "][" << level << "] " << evt.message;
-        logger->log(msg.str());
-    };
-    if (!ctx->logging.activations_sink->bind("Activations", activations_formatter)) {
+    if (!ctx->logging.activations_sink->bind("Activations", formatter)) {
         ctx->logging.logger->log("[WARNING] Failed to bind Activations module logger - Flash Attention diagnostics may not appear in logs");
     }
 
     // Forward GuessCache module logs to training logger (GRIM-TS cache diagnostics)
     ctx->logging.guess_cache_sink = std::make_unique<GRIM::Logging::ModuleLogSink>();
-    auto guess_cache_formatter = [logger = ctx->logging.logger.get()](const GRIM::Logging::ModuleLogEvent& evt) {
-        const char* level = "INFO";
-        switch (evt.level) {
-            case GRIM::Logging::ModuleLogLevel::Warning: level = "WARN"; break;
-            case GRIM::Logging::ModuleLogLevel::Error: level = "ERR"; break;
-            default: break;
-        }
-        std::ostringstream msg;
-        msg << "[" << evt.module << "][" << level << "] " << evt.message;
-        logger->log(msg.str());
-    };
-    if (!ctx->logging.guess_cache_sink->bind("GuessCache", guess_cache_formatter)) {
+    if (!ctx->logging.guess_cache_sink->bind("GuessCache", formatter)) {
         ctx->logging.logger->log("[WARNING] Failed to bind GuessCache module logger - cache diagnostics may not appear in logs");
     }
     
@@ -1897,8 +1403,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
                     grim_paths,
                     training_path,
                     vocab_path_str,
-                    ctx->config.force_rebuild_vocab,
-                    ctx->config.clear_merged_cache);
+                    ctx->config.force_rebuild_vocab);
             } catch (const std::exception& e) {
                 if (ctx->logging.logger) {
                     ctx->logging.logger->log(std::string("[Phase1] Auto-prepare exception: ") + e.what());
@@ -1941,7 +1446,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
             tok_cfg = snapshot->tokenizer_config;
         }
     }
-    ctx->tokenizer = Internal::initializeTokenizer(ctx->config.paths.vocab_path, tok_cfg, *ctx->logging.logger);
+    ctx->tokenizer = Internal::initializeTokenizer(ctx->config.paths.vocab_path, tok_cfg, ctx->config.hyperparameters, *ctx->logging.logger);
     
     ctx->logging.logger->log("[DEBUG] Starting training data load...");
     // 5. Load training data
@@ -1950,15 +1455,13 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         ctx->config.max_seq_len,
         ctx->config.hyperparameters.min_seq_valid_tokens,
         ctx->config.sliding_window_stride,
+        tok_cfg.add_bos,
+        tok_cfg.add_eos,
         ctx->tokenizer,
         *ctx->logging.logger);
     
-    // Get vocab size from data loader (authoritative source)
-    GRMTDataLoader loader;
-    if (!loader.load(ctx->config.paths.data_path)) {
-        throw std::runtime_error("FATAL: Failed to reload training data for vocab size");
-    }
-    ctx->config.actual_vocab_size = loader.vocabSize();
+    // Use vocab size extracted during data loading (no second load needed)
+    ctx->config.actual_vocab_size = ctx->data.vocab_size;
     if (ctx->config.actual_vocab_size == 0) {
         throw std::runtime_error("FATAL: training data missing vocab_size; regenerate GRMT with tokenizer.totalVocabSize()");
     }
@@ -1968,13 +1471,16 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     
     // CRITICAL: Validate vocab size matches tokenizer (detects stale .grmt files after atom encoding changes)
     const uint32_t tokenizer_vocab_size = ctx->tokenizer.totalVocabSize();
-    if (!loader.validateVocabSize(tokenizer_vocab_size, std::cerr)) {
-        throw std::runtime_error("FATAL: Vocab size mismatch between tokenizer and training data - see error above");
+    if (ctx->config.actual_vocab_size != tokenizer_vocab_size) {
+        std::ostringstream err;
+        err << "FATAL: Vocab size mismatch!\n"
+            << "  Training data (.grmt): " << ctx->config.actual_vocab_size << " tokens\n"
+            << "  Current tokenizer:     " << tokenizer_vocab_size << " tokens\n"
+            << "Delete .grmt files to force regeneration.";
+        throw std::runtime_error(err.str());
     }
     ctx->logging.logger->log("✓ Vocab size validated: tokenizer and training data match (" + 
                             std::to_string(tokenizer_vocab_size) + " tokens)");
-    
-    ctx->logging.logger->log("✓ Vocab size from training data: " + std::to_string(ctx->config.actual_vocab_size));
     
     // 6. Compute rare token scores
     ctx->data.sequence_rarity = Internal::computeRareTokenScores(
@@ -2040,31 +1546,6 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     // 10. Initialize optimizer
     ctx->optimizer = Internal::initializeOptimizer(*ctx->model, ctx->config, *ctx->logging.logger);
     
-    // Token weighting removed - standard transformers use uniform loss weights
-    
-    // 10c. Issue #39 FIX: Allocate and initialize logit bias buffer for output bias correction
-    // This prevents tokens like SPACE from having systematically higher pre-softmax activations.
-    // The bias tracks EMA of mean logit per token and is subtracted before softmax.
-    {
-        auto& ts = ctx->model->getTrainingState();
-        const int vocab_size = static_cast<int>(ctx->config.actual_vocab_size);
-        cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
-        
-        // Allocate main bias buffer (stores running EMA) using Tensor::zeros
-        ts.logit_bias_tensor = GRIM::Tensor::zeros({vocab_size}, stream);
-        
-        // Allocate scratch buffer for batch mean computation
-        ts.logit_bias_update_tensor = GRIM::Tensor::zeros({vocab_size}, stream);
-        
-        ts.logit_bias_count = vocab_size;
-        ts.logit_bias_update_step = 0;
-        
-        const size_t bias_bytes = vocab_size * sizeof(float);
-        ctx->logging.logger->log("✓ Logit bias buffer allocated: " + 
-                                 std::to_string(2 * bias_bytes / 1024) + " KB total (EMA + scratch)");
-        ctx->logging.logger->log("  Issue #39: Output logit bias correction ENABLED");
-    }
-    
     // 10d. Issue #60 DEBUG: Allocate gradient attribution buffers if enabled
     // This lets us separately track LM head vs embedding backward contributions
     // to debug the positive feedback loop causing mode collapse to token 277
@@ -2072,9 +1553,9 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         auto& ts = ctx->model->getTrainingState();
         const auto& model_cfg = ctx->model->getConfig();
         
-        // PRODUCTION: Disable debug gradient attribution (causes GPU sync + D2H copies)
+        // PRODUCTION: Disabled (causes GPU sync + D2H copies every backward pass)
         // Set to true only when debugging tied embedding gradient issues
-        ts.debug_gradient_attribution = true;  // ENABLED for Issue #60 debugging
+        ts.debug_gradient_attribution = false;
         
         if (ts.debug_gradient_attribution) {
             const int vocab_size = static_cast<int>(model_cfg.vocab_size);

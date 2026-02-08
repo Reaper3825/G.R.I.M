@@ -18,8 +18,29 @@ void TrainingTensors::initializeParams(
     HyperParameters::PositionalEncodingType positional_encoding,
     bool use_layer_scale_flag,
     float layer_scale_init_val,
+    uint64_t seed,
     cudaStream_t stream
 ) {
+    // ── Validate parameters (Rule 20: crash loud, no silent truncation) ──
+    if (n_heads <= 0) {
+        throw std::invalid_argument("TrainingTensors::initializeParams: num_heads must be > 0, got " + std::to_string(n_heads));
+    }
+    if (d_mod % n_heads != 0) {
+        throw std::invalid_argument("TrainingTensors::initializeParams: d_model (" + std::to_string(d_mod)
+            + ") must be divisible by num_heads (" + std::to_string(n_heads) + ")");
+    }
+    if (n_kv_heads <= 0) {
+        throw std::invalid_argument("TrainingTensors::initializeParams: num_kv_heads must be > 0, got " + std::to_string(n_kv_heads));
+    }
+    if (n_kv_heads > n_heads) {
+        throw std::invalid_argument("TrainingTensors::initializeParams: num_kv_heads (" + std::to_string(n_kv_heads)
+            + ") must be <= num_heads (" + std::to_string(n_heads) + ")");
+    }
+    if (n_heads % n_kv_heads != 0) {
+        throw std::invalid_argument("TrainingTensors::initializeParams: num_heads (" + std::to_string(n_heads)
+            + ") must be divisible by num_kv_heads (" + std::to_string(n_kv_heads) + ") for GQA");
+    }
+
     // Store config
     vocab_size = vocab_sz;
     d_model = d_mod;
@@ -33,6 +54,7 @@ void TrainingTensors::initializeParams(
     use_bias = bias;
     use_layer_scale = use_layer_scale_flag;
     layer_scale_init = layer_scale_init_val;
+    positional_encoding_type = positional_encoding;
     
     // GQA dimensions
     const int kv_dim = num_kv_heads * head_dim;
@@ -46,7 +68,7 @@ void TrainingTensors::initializeParams(
     embedding_weights = Tensor::zeros({vocab_size, d_model}, stream);
     embedding_weights.requires_grad_();
     embedding_weights.ensure_grad();  // Allocate grad NOW so share_grad() works
-    Tensor::xavier_uniform_(embedding_weights, stream);
+    Tensor::xavier_uniform_(embedding_weights, seed + 0, stream);
     
     // ISSUE #96 FIX: Position embeddings ONLY allocated for LEARNED positional encoding.
     // Current modes (NONE, ALIBI, ROPE, ALIBI_ROPE) all use attention-based position
@@ -95,7 +117,7 @@ void TrainingTensors::initializeParams(
         // Separate LM head weights
         lm_head_weights = Tensor::zeros({vocab_size, d_model}, stream);
         lm_head_weights.requires_grad_();
-        Tensor::xavier_uniform_(lm_head_weights, stream);
+        Tensor::xavier_uniform_(lm_head_weights, seed + 1, stream);
     }
     
     if (use_bias) {
@@ -109,9 +131,9 @@ void TrainingTensors::initializeParams(
     
     numeric_head_weights = Tensor::zeros({d_model}, stream);
     numeric_head_weights.requires_grad_();
-    // Initialize with small values
-    const float numeric_scale = 1.0f / std::sqrt(static_cast<float>(d_model));
-    // TODO: Fill with uniform(-scale, scale)
+    // Xavier uniform: U[-sqrt(6/(fan_in+fan_out)), +sqrt(6/(fan_in+fan_out))]
+    // For 1D shape {d_model}: fan_in=d_model, fan_out=1 → scale=sqrt(6/(d_model+1))
+    Tensor::xavier_uniform_(numeric_head_weights, seed + 99, stream);
     
     numeric_head_bias = Tensor::zeros({1}, stream);
     numeric_head_bias.requires_grad_();
@@ -160,7 +182,7 @@ void TrainingTensors::initializeParams(
         // Attention QKV projection [total_qkv_dim, d_model]
         params.attn_qkv_weight = Tensor::zeros({total_qkv_dim, d_model}, stream);
         params.attn_qkv_weight.requires_grad_();
-        Tensor::xavier_uniform_(params.attn_qkv_weight, stream);
+        Tensor::xavier_uniform_(params.attn_qkv_weight, seed + 2 + layer * 10, stream);
         
         if (use_bias) {
             params.attn_qkv_bias = Tensor::zeros({total_qkv_dim}, stream);
@@ -170,7 +192,7 @@ void TrainingTensors::initializeParams(
         // Attention output projection [d_model, d_model]
         params.attn_out_weight = Tensor::zeros({d_model, d_model}, stream);
         params.attn_out_weight.requires_grad_();
-        Tensor::xavier_uniform_(params.attn_out_weight, stream);
+        Tensor::xavier_uniform_(params.attn_out_weight, seed + 2 + layer * 10 + 1, stream);
         
         if (use_bias) {
             params.attn_out_bias = Tensor::zeros({d_model}, stream);
@@ -197,22 +219,22 @@ void TrainingTensors::initializeParams(
                             cudaMemcpyHostToDevice, stream);
         }
         
-        // FFN W1 [d_model, d_ff] - up-projection (matches FeedForwardLayer::useExternalWeights)
+        // FFN W1 [d_model, d_ff] - up-projection (passed to FeedForwardLayer constructor)
         // Issue #89 FIX: Was [d_ff, d_model] - swapped to match consumer's expectation
         params.ffn_w1 = Tensor::zeros({d_model, d_ff}, stream);
         params.ffn_w1.requires_grad_();
-        Tensor::xavier_uniform_(params.ffn_w1, stream);
+        Tensor::xavier_uniform_(params.ffn_w1, seed + 2 + layer * 10 + 2, stream);
         
         if (use_bias) {
             params.ffn_b1 = Tensor::zeros({d_ff}, stream);
             params.ffn_b1.requires_grad_();
         }
         
-        // FFN W2 [d_ff, d_model] - down-projection (matches FeedForwardLayer::useExternalWeights)
+        // FFN W2 [d_ff, d_model] - down-projection (passed to FeedForwardLayer constructor)
         // Issue #89 FIX: Was [d_model, d_ff] - swapped to match consumer's expectation
         params.ffn_w2 = Tensor::zeros({d_ff, d_model}, stream);
         params.ffn_w2.requires_grad_();
-        Tensor::xavier_uniform_(params.ffn_w2, stream);
+        Tensor::xavier_uniform_(params.ffn_w2, seed + 2 + layer * 10 + 3, stream);
         
         if (use_bias) {
             params.ffn_b2 = Tensor::zeros({d_model}, stream);
@@ -238,8 +260,9 @@ void TrainingTensors::initializeParams(
     initialized_ = true;
     
     // PRE-ALLOCATE ALL GRADIENT BUFFERS
-    // This is required because GradAccumulationController::bindToModel() reads
-    // the .grad pointers at startup, and lazy allocation won't have happened yet.
+    // Required because buildParameterGroups() reads tensor.has_grad() at startup,
+    // and ParameterGroup::grads() dereferences tensor->grad_data(). Without eager
+    // allocation, grad pointers would be nullptr until the first backward pass.
     allocateAllGradients();
     
     // Sync to ensure all initialization is complete
@@ -251,7 +274,7 @@ void TrainingTensors::initializeParams(
 void TrainingTensors::allocateAllGradients() {
     // Global tensors
     embedding_weights.ensure_grad();
-    position_embedding_weights.ensure_grad();
+    if (position_embedding_weights.data) position_embedding_weights.ensure_grad();
     lm_head_weights.ensure_grad();
     if (lm_head_bias.data) lm_head_bias.ensure_grad();
     if (numeric_head_weights.data) numeric_head_weights.ensure_grad();
@@ -362,14 +385,26 @@ void TrainingTensors::allocateCaches(int batch_size, int seq_len, cudaStream_t s
 void TrainingTensors::zeroGrad(cudaStream_t stream) {
     if (!initialized_) return;
     
+    // ── Verify tied-weight grad aliasing invariant (Rule 20: detect broken aliasing) ──
+    if (tie_embeddings) {
+        if (embedding_weights.grad_data() != lm_head_weights.grad_data()) {
+            throw std::runtime_error("TrainingTensors::zeroGrad: CRITICAL - tie_embeddings=true but "
+                "embedding_weights.grad (" + std::to_string(reinterpret_cast<uintptr_t>(embedding_weights.grad_data()))
+                + ") != lm_head_weights.grad (" + std::to_string(reinterpret_cast<uintptr_t>(lm_head_weights.grad_data()))
+                + "). Grad aliasing is broken!");
+        }
+    }
+    
     // Zero embedding grads
     embedding_weights.zero_grad(stream);
-    position_embedding_weights.zero_grad(stream);
+    if (position_embedding_weights.data) position_embedding_weights.zero_grad(stream);
     
     // Zero LM head grads
     if (!tie_embeddings) {
         lm_head_weights.zero_grad(stream);
     }
+    // NOTE: When tie_embeddings=true, lm_head_weights.grad IS embedding_weights.grad
+    // (verified above). Zeroing embedding_weights.grad already zeroed both.
     if (lm_head_bias.data) {
         lm_head_bias.zero_grad(stream);
     }
@@ -395,38 +430,11 @@ void TrainingTensors::zeroGrad(cudaStream_t stream) {
         if (layer.ffn_b1.data) layer.ffn_b1.zero_grad(stream);
         layer.ffn_w2.zero_grad(stream);
         if (layer.ffn_b2.data) layer.ffn_b2.zero_grad(stream);
+        if (layer.layer_scale1.data) layer.layer_scale1.zero_grad(stream);
+        if (layer.layer_scale2.data) layer.layer_scale2.zero_grad(stream);
     }
 }
 
-
-float* TrainingTensors::getParamData(const std::string& name) {
-    // Legacy compatibility - map name to tensor
-    if (name == "embedding_weights") return embedding_weights.data;
-    if (name == "position_embedding_weights") return position_embedding_weights.data;
-    if (name == "lm_head_weights") return lm_head_weights.data;
-    if (name == "lm_head_bias") return lm_head_bias.data;
-    if (name == "numeric_head_weights") return numeric_head_weights.data;
-    if (name == "numeric_head_bias") return numeric_head_bias.data;
-    if (name == "final_rms_gamma") return final_rms_gamma.data;
-    
-    // For per-layer params, use getLayerParamData(name, layer)
-    throw std::runtime_error("TrainingTensors::getParamData: unknown param '" + name + "'");
-}
-
-
-float* TrainingTensors::getGradData(const std::string& name) {
-    // Legacy compatibility - map name to gradient
-    // ISSUE #59: Use grad_data() accessor
-    if (name == "embedding_weights") return embedding_weights.grad_data();
-    if (name == "position_embedding_weights") return position_embedding_weights.grad_data();
-    if (name == "lm_head_weights") return lm_head_weights.grad_data();
-    if (name == "lm_head_bias") return lm_head_bias.grad_data();
-    if (name == "numeric_head_weights") return numeric_head_weights.grad_data();
-    if (name == "numeric_head_bias") return numeric_head_bias.grad_data();
-    if (name == "final_rms_gamma") return final_rms_gamma.grad_data();
-    
-    throw std::runtime_error("TrainingTensors::getGradData: unknown param '" + name + "'");
-}
 
 }  // namespace GRIM
 

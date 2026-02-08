@@ -23,7 +23,6 @@
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/Gradients/GradStatsCollector.hpp"
-#include "../../Shared/Gradients/GradientCC_Host_GPU.hpp"
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../../Shared/EquationLogging/EquationLogging.hpp"
 #include "../../Layers/FlashAttention/AttentionDiagnostics.hpp"
@@ -943,6 +942,15 @@ struct FeedbackLoopDiagnostic {
     float contribution_from_w_norm = 0.0f;    // Factor: ||W|| / ||W||_prev
     float contribution_from_cosine = 0.0f;    // Factor: cos / cos_prev
     
+    // ==========================================
+    // CRITICAL FIX: Split logit[277] by target class
+    // Compares APPLES TO APPLES, not self-consistent math
+    // ==========================================
+    float logit_277_when_target_is_277 = 0.0f;     // At positions where target=277 (should be HIGH)
+    float logit_277_when_target_not_277 = 0.0f;    // At positions where target≠277 (should be LOW)
+    int count_277_targets = 0;                      // Number of positions with target=277
+    int count_non_277_targets = 0;                  // Number of positions with target≠277
+    
     // Statistics
     int valid_position_count = 0;
     
@@ -1048,6 +1056,10 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
     double sum_cosine = 0.0;
     double sum_actual_logit = 0.0;
     double sum_predicted_logit = 0.0;
+    double sum_logit_277_for_277_targets = 0.0;    // logit[277] when target IS 277
+    double sum_logit_277_for_non_277_targets = 0.0; // logit[277] when target is NOT 277
+    int count_277_targets_local = 0;
+    int count_non_277_targets_local = 0;
     int valid_count = 0;
     
     // For hidden cosine sampling (pairwise)
@@ -1091,9 +1103,22 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
         sum_predicted_logit += predicted_logit;
         
         // Actual logit from forward pass
+        float actual = 0.0f;
         if (ts.logits_tensor.data) {
-            float actual = h_logits[static_cast<size_t>(t) * vocab_size + kToken277];
+            actual = h_logits[static_cast<size_t>(t) * vocab_size + kToken277];
             sum_actual_logit += actual;
+        }
+        
+        // ==========================================
+        // CRITICAL: Split by whether target IS 277 or NOT
+        // This shows if model discriminates between correct vs incorrect token
+        // ==========================================
+        if (targets[t] == kToken277) {
+            sum_logit_277_for_277_targets += actual;
+            count_277_targets_local++;
+        } else {
+            sum_logit_277_for_non_277_targets += actual;
+            count_non_277_targets_local++;
         }
         
         valid_count++;
@@ -1111,6 +1136,19 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
     diag.cosine_h_w277_mean = static_cast<float>(sum_cosine / valid_count);
     diag.predicted_logit_277 = static_cast<float>(sum_predicted_logit / valid_count);
     diag.actual_logit_277_mean = static_cast<float>(sum_actual_logit / valid_count);
+    
+    // ==========================================
+    // CRITICAL: Store split logits
+    // ==========================================
+    diag.count_277_targets = count_277_targets_local;
+    diag.count_non_277_targets = count_non_277_targets_local;
+    
+    if (count_277_targets_local > 0) {
+        diag.logit_277_when_target_is_277 = static_cast<float>(sum_logit_277_for_277_targets / count_277_targets_local);
+    }
+    if (count_non_277_targets_local > 0) {
+        diag.logit_277_when_target_not_277 = static_cast<float>(sum_logit_277_for_non_277_targets / count_non_277_targets_local);
+    }
     
     // ==========================================
     // Decomposition error check
@@ -1231,13 +1269,13 @@ std::string formatFeedbackLoopDiagnostic(const FeedbackLoopDiagnostic& d, int ba
     oss << "  ALIGNMENT: cos(h, W[277])_mean=" << d.cosine_h_w277_mean << "\n";
     
     oss << std::setprecision(4);
-    oss << "  EXPECTED logit_277 = " << d.hidden_norm_mean << " × " << d.weight_277_norm 
-        << " × " << d.cosine_h_w277_mean << " = " << d.predicted_logit_277 << "\n";
-    oss << "  ACTUAL logit_277_mean = " << d.actual_logit_277_mean;
-    if (d.decomposition_error_pct > 5.0f) {
-        oss << " [DECOMPOSITION_ERROR: " << d.decomposition_error_pct << "%]";
-    }
-    oss << "\n";
+    oss << "  DISCRIMINATION TEST (APPLES TO APPLES):\n";
+    oss << "    When target=277: logit[277]_mean=" << d.logit_277_when_target_is_277 
+        << " (n=" << d.count_277_targets << ")\n";
+    oss << "    When target≠277: logit[277]_mean=" << d.logit_277_when_target_not_277 
+        << " (n=" << d.count_non_277_targets << ")\n";
+    oss << "    DELTA = " << (d.logit_277_when_target_is_277 - d.logit_277_when_target_not_277)
+        << " (should be POSITIVE and LARGE)\n";
     
     // ==========================================
     // Growth Rates - Issue #114 Anomaly Detection
@@ -1706,8 +1744,6 @@ void maybeRunMicroValidation(
     // GRMT v4: text features for validation (optional)
     std::vector<std::vector<uint16_t>> micro_text_features;
     std::vector<std::vector<uint8_t>> micro_text_mask;
-    // GRMT v6: byte lengths for loss weighting
-    std::vector<std::vector<uint16_t>> micro_byte_lengths;
     std::vector<float> micro_weights;
     
     for (int i = 0; i < batches_to_eval; ++i) {
@@ -1722,14 +1758,12 @@ void maybeRunMicroValidation(
         micro_numeric_mask.clear();
         micro_text_features.clear();
         micro_text_mask.clear();
-        micro_byte_lengths.clear();
         micro_inputs.reserve(dyn_batch.seq_ids.size());
         micro_targets.reserve(dyn_batch.seq_ids.size());
         micro_numeric_values.reserve(dyn_batch.seq_ids.size());
         micro_numeric_mask.reserve(dyn_batch.seq_ids.size());
         micro_text_features.reserve(dyn_batch.seq_ids.size());
         micro_text_mask.reserve(dyn_batch.seq_ids.size());
-        micro_byte_lengths.reserve(dyn_batch.seq_ids.size());
         micro_weights.clear();
         micro_weights.reserve(dyn_batch.seq_ids.size());
         
@@ -1742,8 +1776,6 @@ void maybeRunMicroValidation(
             // GRMT v4: text features
             micro_text_features.push_back(ctx.data.val_views[sid]->token_text_features);
             micro_text_mask.push_back(ctx.data.val_views[sid]->token_text_mask);
-            // GRMT v6: byte lengths
-            micro_byte_lengths.push_back(ctx.data.val_views[sid]->token_byte_lengths);
             // BUG FIX Issue #30: Removed val_sequence_rarity weighting
         }
         
@@ -1756,8 +1788,7 @@ void maybeRunMicroValidation(
             micro_numeric_values,
             micro_numeric_mask,
             micro_text_features,
-            micro_text_mask,
-            micro_byte_lengths);
+            micro_text_mask);
         ctx.model->clearSequenceLossWeights();
         // NOTE: No device sync here - computeLossBatch returns synchronously
         // Loss value is already on CPU after the call returns
@@ -2117,8 +2148,6 @@ ValidationResult runValidation(TrainingContext& ctx) {
     // GRMT v4: text features for validation
     std::vector<std::vector<uint16_t>> val_text_features;
     std::vector<std::vector<uint8_t>> val_text_mask;
-    // GRMT v6: byte lengths for validation
-    std::vector<std::vector<uint16_t>> val_byte_lengths;
     std::vector<float> val_weights;
     
     for (const auto& val_batch : val_schedule.batches) {
@@ -2128,7 +2157,6 @@ ValidationResult runValidation(TrainingContext& ctx) {
         val_numeric_mask.clear();
         val_text_features.clear();
         val_text_mask.clear();
-        val_byte_lengths.clear();
         val_weights.clear();
         
         for (uint32_t sid : val_batch.seq_ids) {
@@ -2140,8 +2168,6 @@ ValidationResult runValidation(TrainingContext& ctx) {
             // GRMT v4: text features
             val_text_features.push_back(seq->token_text_features);
             val_text_mask.push_back(seq->token_text_mask);
-            // GRMT v6: byte lengths
-            val_byte_lengths.push_back(seq->token_byte_lengths);
             // BUG FIX Issue #30: Removed val_sequence_rarity weighting
         }
         // BUG FIX Issue #30: Always clear sequence weights - no rarity weighting
@@ -2152,8 +2178,7 @@ ValidationResult runValidation(TrainingContext& ctx) {
             val_numeric_values,
             val_numeric_mask,
             val_text_features,
-            val_text_mask,
-            val_byte_lengths);
+            val_text_mask);
         ctx.model->clearSequenceLossWeights();
         
         val_loss += batch_val_loss * static_cast<int>(val_batch.seq_ids.size());
@@ -2190,7 +2215,20 @@ BatchResult processBatch(
     
     const auto& hp = ctx.config.hyperparameters;
     const bool logit_trace_enabled = shouldLogLogitTrace(ctx, batch_idx);
-    const std::uint64_t batch_step = ctx.global_step;
+    
+    // ========================================================================
+    // RULE 20: Step Counter Clarity
+    // Three step counters exist:
+    // 1. batch_number = batch_idx + 1 (increases every batch: 1,2,3,...,N)
+    // 2. ctx.global_step = training token counter (increments with every batch)
+    // 3. ctx.optimizer.optimizer_state.step = actual optimizer updates (every accum_steps)
+    //
+    // CONVENTION: Log ONLY the relevant counter:
+    // - During FORWARD/BACKWARD: use batch_number (most relevant to user)
+    // - During OPTIMIZER step: use optimizer_step (shows actual weight updates)
+    // - Remove global_step from logs (creates confusion with near-duplicate batch_number)
+    // ========================================================================
+    const std::uint64_t global_step_at_batch_start = ctx.global_step;  // Token counter (informational only)
     
     // Construct batch inputs
     std::vector<std::vector<int>> batch_inputs;
@@ -2200,8 +2238,6 @@ BatchResult processBatch(
     // GRMT v4: text features
     std::vector<std::vector<uint16_t>> batch_text_features;
     std::vector<std::vector<uint8_t>> batch_text_mask;
-    // GRMT v6: byte lengths
-    std::vector<std::vector<uint16_t>> batch_byte_lengths;
     std::vector<uint32_t> filtered_seq_ids;
     
     for (uint32_t sid : batch.seq_ids) {
@@ -2213,8 +2249,6 @@ BatchResult processBatch(
         // GRMT v4: get text features from view
         batch_text_features.push_back(seq->token_text_features);
         batch_text_mask.push_back(seq->token_text_mask);
-        // GRMT v6: byte lengths for loss weighting
-        batch_byte_lengths.push_back(seq->token_byte_lengths);
         filtered_seq_ids.push_back(sid);
         
         // DIAGNOSTIC: Validate targets for invalid token IDs (root cause of loss=165)
@@ -2542,8 +2576,7 @@ BatchResult processBatch(
         batch_numeric_values,
         batch_numeric_mask,
         batch_text_features,
-        batch_text_mask,
-        batch_byte_lengths);
+        batch_text_mask);
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] computeLossBatch returned, loss=%f\n", result.loss);
     ctx.model->clearSequenceLossWeights();
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] clearSequenceLossWeights completed\n");
@@ -2848,7 +2881,6 @@ BatchResult processBatch(
                 trace_msg << std::fixed << std::setprecision(6);
                 trace_msg << "[LogitTrace][PostLoss] source=cached_logits"
                           << " batch=" << (batch_idx + 1)
-                          << " step=" << batch_step
                           << " pos=" << debug_pos
                           << " b=" << debug_b
                           << " t=" << debug_t
@@ -2892,7 +2924,7 @@ BatchResult processBatch(
                     space_logit_min = std::min(space_logit_min, space_logit);
                     
                     // Find argmax for this position
-                    float pos_max = -INFINITY;
+                    float pos_max = -std::numeric_limits<float>::infinity();
                     int pos_argmax = 0;
                     for (int v = 0; v < vocab_size; ++v) {
                         float logit = logit_sample[pos * vocab_size + v];
@@ -3440,9 +3472,10 @@ BatchResult processBatch(
     // Use centralized EquationLogger to gate expensive diagnostics
     // Issue #134: Run EXPENSIVE diagnostics every N batches to avoid sync bottleneck
     // These copy GB of data D2H (logits are 7168*50377*4 = 1.4GB per call!)
-    constexpr int kExpensiveDiagFrequency = 50;  // Every 50 batches instead of every batch
+    static int debug_token277_diag_interval = 1;  // Debug knob: set to N for every N batches
+    const int diag_interval = std::max(debug_token277_diag_interval, 1);
     const bool kToken277DiagEnabled = GRIM::getEquationLogger().isEnabled() &&
-        (batch_idx == 0 || (batch_idx + 1) % kExpensiveDiagFrequency == 0);
+        (batch_idx == 0 || (batch_idx + 1) % diag_interval == 0);
     
     if (kToken277DiagEnabled) {
         const auto& ts = ctx.model->getTrainingState();
@@ -3747,7 +3780,6 @@ BatchResult processBatch(
                 trace_msg << "[LogitTrace][PostBackward] source=grad_metrics"
                           << " tied=" << (tied ? "yes" : "no")
                           << " batch=" << (batch_idx + 1)
-                          << " step=" << batch_step
                           << " preclip_grad_norm=" << Internal::formatScalar(preclip_grad_norm, 6)
                           << " total_norm=" << Internal::formatScalar(gm.total_norm, 6)
                           << " lm_head_norm=" << Internal::formatScalar(gm.lm_head_norm, 6)
@@ -4437,7 +4469,7 @@ BatchResult processBatch(
             std::ostringstream trace_msg;
             trace_msg << "[LogitTrace][PostOptimizer] source=update_probe"
                       << " batch=" << (batch_idx + 1)
-                      << " step=" << batch_step
+                      << " opt_step=" << ctx.optimizer.optimizer_state.step
                       << " group=" << probe.group_name
                       << " upd_rms=" << std::fixed << std::setprecision(6) << probe.update_rms
                       << " grad_rms=" << std::fixed << std::setprecision(6) << probe.grad_rms
@@ -4445,7 +4477,6 @@ BatchResult processBatch(
                       << " rel=" << std::fixed << std::setprecision(5) << probe.relative_update
                       << " max_abs=" << std::scientific << std::setprecision(3) << probe.max_abs_update
                       << " lr=" << std::scientific << std::setprecision(6) << probe.learning_rate
-                      << " opt_step=" << probe.optimizer_step
                       << " n=" << probe.sample_size;
             ctx.logging.logger->log(trace_msg.str());
         }
@@ -4738,8 +4769,8 @@ EpochResult runEpoch(
     // at epoch granularity (once per ~100-1000 batches)
     size_t free_mem = 0, total_mem = 0;
     cudaMemGetInfo(&free_mem, &total_mem);
-    float gpu_used_mb = static_cast<float>((total_mem - free_mem) / (1024*1024));
-    float gpu_total_mb = static_cast<float>(total_mem / (1024*1024));
+    float gpu_used_mb = static_cast<float>((total_mem - free_mem)) / (1024.0f*1024.0f);
+    float gpu_total_mb = static_cast<float>(total_mem) / (1024.0f*1024.0f);
     
     ctx.logging.status_writer->writeStatus(
         GRIMText::Control::TrainingState_Training,

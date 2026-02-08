@@ -102,8 +102,6 @@ def main():
     # Check GRMT files
     grmt_files = {
         "training_data.grmt": data_dir / "training_data.grmt",
-        "validation_data.grmt": data_dir / "validation_data.grmt",
-        "test_data.grmt": data_dir / "test_data.grmt",
     }
     
     grmt_vocab_sizes = {}

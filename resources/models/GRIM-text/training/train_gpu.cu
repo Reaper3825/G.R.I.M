@@ -24,17 +24,10 @@
 #include "Phases/Phase3_Cleanup.hpp"
 #include "../Shared/LogRecorder/LogRecorder.hpp"
 
-#include <iostream>
 #include <sstream>
-#include <exception>
-
-#ifdef USE_CUDA
-#include <cuda_runtime.h>
-#endif
 
 using GRIM::Logging::ModuleId;
 using GRIM::Logging::EmitModuleInfo;
-using GRIM::Logging::EmitModuleWarning;
 using GRIM::Logging::EmitModuleError;
 
 namespace {
@@ -89,7 +82,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--autograd-verbose") {
             g_autograd_verbose = true;
-            fprintf(stderr, "[train_gpu] Autograd verbose logging ENABLED\n");
+            EmitModuleInfo(ModuleId::TrainingOrchestrator, "Autograd verbose logging ENABLED", 0);
         }
     }
 

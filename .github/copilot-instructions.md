@@ -297,7 +297,7 @@ Training loop refactored into debuggable phases ([resources/models/GRIM-text/tra
     - Status file updates (FlatBuffer)
     - Resource cleanup (GPU/CPU)
 
-**Orchestrator** ([train_gpu_orchestrator.cu](resources/models/GRIM-text/training/train_gpu_orchestrator.cu))
+**Orchestrator** ([train_gpu.cu](resources/models/GRIM-text/training/train_gpu.cu))
 
 - Simple `main()` that calls `executePhase1()` → `executePhase2()` → `executePhase3()`
 - Clear phase boundaries for debugging
@@ -566,7 +566,7 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
 - Rationale: Standard scaled dot-product attention (score = `Q · K^T / sqrt(d)`) avoids the `1/||Q||` or `1/||K||` singularities introduced by per-head L2 normalization, and is the approach used in large production models (LLaMA, Mistral, Gemma). Use this when you prioritize robustness over the representational geometry benefits of QK-normalization.
 
 20. **NEVER Keep Backwards Compatibility**: When removing functionality, DELETE all compatibility shims, legacy APIs, and fallback code paths. If code fails after removal, that's GOOD - it exposes misconnects and incorrect assumptions. Backwards compatibility hides bugs and creates maintenance debt. Let it fail loud and fix the root cause. Example: Removed `computeOptimalBlockSizes()` from Flash Attention - any caller should be updated to use constants directly from `HyperParameters::FLASH_ATTN_BLOCK_Q/KV`.
-21. **Three-Phase Training Files**: The old monolithic `train_gpu.cu` (3569 lines) is kept as backup. The new build uses `train_gpu_orchestrator.cu` + `Phases/Phase{1,2,3}_{Startup,TrainingLoop,Cleanup}.{cu,hpp}`. If modifying training logic, edit the appropriate phase file, not the old train_gpu.cu. CMakeLists.txt in `training/TrainingLoop/` defines the build.
+21. **Three-Phase Training Files**: The entry point is `train_gpu.cu` which orchestrates `Phases/Phase{1,2,3}_{Startup,TrainingLoop,Cleanup}.{cu,hpp}`. If modifying training logic, edit the appropriate phase file, not the orchestrator. CMakeLists.txt in `training/TrainingLoop/` defines the build.
 
 22. **Unified Loss System**: Use `autograd::unified_loss()` in `AutogradLoss.cu` for training loss computation. This is the ONLY loss path - it combines focal loss, label smoothing, entropy regularization, and cross-entropy into a single autograd-enabled kernel. The `cross_entropy_loss()` function is a convenience wrapper that calls `unified_loss()` with plain CE config. **DELETED**: `UnifiedLoss_GPU.cu`, `ComputeLoss_GPU.cu` - these old modules had the bug where loss computation was disconnected from gradients.
 

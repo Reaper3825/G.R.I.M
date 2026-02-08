@@ -5,9 +5,11 @@
 
 #include "AdamW_Kernal_GPU.hpp"
 #include "../../HyperParameters/HyperParameters_GPU.hpp"
+#include "../../TensorContract/TensorContract_GPU.hpp"
 
 #include <cuda_runtime.h>
 #include <cstdio>
+#include <stdexcept>
 
 namespace GRIM {
 
@@ -58,17 +60,25 @@ inline int computeGridSize(std::size_t elements, int block_size) {
 
 } // namespace
 
-void launchAdamWKernel(float* params,
-					   const float* grads,
-					   float* moments1,
-					   float* moments2,
-					   std::size_t size,
+void launchAdamWKernel(ParameterGroup& group,
 					   float learning_rate,
 					   float weight_decay,
 					   int step,
 					   cudaStream_t stream) {
+	float* params   = group.weights();
+	const float* grads = group.grads();
+	float* moments1 = group.m_state();
+	float* moments2 = group.v_state();
+	const std::size_t size = group.size();
+
 	if (!params || !grads || !moments1 || !moments2 || size == 0) {
-		return;
+		throw std::runtime_error(
+			"[launchAdamWKernel] NULL buffer in group '" + group.name +
+			"' params=" + std::to_string(reinterpret_cast<uintptr_t>(params)) +
+			" grads=" + std::to_string(reinterpret_cast<uintptr_t>(grads)) +
+			" m=" + std::to_string(reinterpret_cast<uintptr_t>(moments1)) +
+			" v=" + std::to_string(reinterpret_cast<uintptr_t>(moments2)) +
+			" size=" + std::to_string(size));
 	}
 
 	// Compute bias corrections from step count

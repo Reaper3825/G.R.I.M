@@ -782,36 +782,42 @@ enum class ParamGroupType : uint8_t {
 //  Parameter Group (Weights + Gradients + Optimizer State)
 //======================================================//
 
+// Forward declaration (full definition below GradFn)
+struct Tensor;
+
 /**
  * @brief A group of parameters with associated gradient and optimizer state
  * 
- * This struct holds pointers to GPU memory for:
- * - weights:  The actual model parameters [size elements]
- * - grads:    Accumulated gradients [size elements]
- * - m_state:  Adam first moment (momentum) [size elements]
- * - v_state:  Adam second moment (variance) [size elements]
+ * Holds a pointer to the owning Tensor for weights/grads/size (single source
+ * of truth — no cached raw-pointer copies that can go stale).  Optimizer
+ * moment buffers (m_state, v_state) are NOT part of Tensor so they remain
+ * raw float* here.
  * 
- * OWNERSHIP: ParameterGroup does NOT own the memory. The TrainingState
- * or LanguageModel that creates it owns the underlying buffers.
+ * OWNERSHIP: ParameterGroup does NOT own the Tensor or moment memory.
+ * The TrainingState/LanguageModel that creates it owns the underlying buffers.
  * 
  * WEIGHT TYING: When tie_embeddings=true, embedding and LM head share
- * the same weights/grads pointers (aliased). The optimizer must NOT
- * update aliased parameters twice.
+ * the same Tensor data/grad.  The optimizer must NOT update aliased
+ * parameters twice.
  */
 struct ParameterGroup {
     std::string name;        ///< Human-readable name (e.g., "layer0_attn_W_qkv")
-    float* weights;          ///< Pointer to GPU weights [size elements]
-    float* grads;            ///< Pointer to GPU gradients [size elements]
-    size_t size;             ///< Number of elements (not bytes)
-    float* m_state;          ///< Adam first moment (can be nullptr until optimizer init)
-    float* v_state;          ///< Adam second moment (can be nullptr until optimizer init)
+    Tensor* tensor;          ///< Non-owning pointer to the parameter Tensor
+    Tensor* m_tensor = nullptr;  ///< Adam first moment Tensor (nullptr until optimizer init)
+    Tensor* v_tensor = nullptr;  ///< Adam second moment Tensor (nullptr until optimizer init)
     ParamGroupType type;     ///< Category for optimizer and analysis
     int layer_index = -1;    ///< Encoder layer index (0-based), -1 for non-layer params
     float upsilon = 1.0f;    ///< Depth-aware regularization scale: Υ_l = 0.1 * sqrt(L_ref / L)
     
-    // Convenience accessors
-    size_t size_bytes() const { return size * sizeof(float); }
-    bool has_optimizer_state() const { return m_state != nullptr && v_state != nullptr; }
+    // Live accessors — always read through the Tensor, never stale
+    // Defined after struct Tensor (forward-declared only here)
+    inline float* weights() const;
+    inline float* grads() const;
+    inline float* m_state() const;
+    inline float* v_state() const;
+    inline size_t size() const;
+    inline size_t size_bytes() const;
+    bool has_optimizer_state() const { return m_tensor != nullptr && v_tensor != nullptr; }
 };
 
 //======================================================//
@@ -999,7 +1005,7 @@ struct Tensor {
                                  cudaStream_t stream = nullptr);
     
     /// In-place Xavier uniform initialization
-    static void xavier_uniform_(Tensor& t, cudaStream_t stream = nullptr);
+    static void xavier_uniform_(Tensor& t, uint64_t seed, cudaStream_t stream = nullptr);
     
     //--------------------------------------------------//
     // Gradient Management
@@ -1160,6 +1166,17 @@ struct Tensor {
         owns_grad_fn = false;  // Prevent double-delete on repeated release()
     }
 };
+
+//======================================================//
+//  ParameterGroup accessor definitions (need full Tensor)
+//======================================================//
+
+inline float* ParameterGroup::weights() const   { return tensor->data; }
+inline float* ParameterGroup::grads()   const   { return tensor->grad_data(); }
+inline float* ParameterGroup::m_state() const   { return m_tensor ? m_tensor->data : nullptr; }
+inline float* ParameterGroup::v_state() const   { return v_tensor ? v_tensor->data : nullptr; }
+inline size_t ParameterGroup::size()    const   { return tensor->numel(); }
+inline size_t ParameterGroup::size_bytes() const { return size() * sizeof(float); }
 
 }  // namespace GRIM (temporarily close for cuBLAS forward decl)
 
@@ -1360,10 +1377,11 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens,
                  cudaStream_t stream = nullptr, float embedding_scale = 1.0f);
 
 /**
- * Softmax: y[i] = exp(x[i] - max(x)) / sum(exp(x - max(x)))
- * Input: [tokens, dim] - softmax computed along dim axis
+ * Log-Softmax: y[i] = x[i] - logsumexp(x) — numerically stable log(softmax(x))
+ * Input: [tokens, dim] - log_softmax computed along dim axis
+ * Creates LogSoftmaxGradFn if input.requires_grad
  */
-Tensor softmax(const Tensor& x, cudaStream_t stream = nullptr);
+Tensor log_softmax(const Tensor& x, cudaStream_t stream = nullptr);
 
 /**
  * Dropout with external mask: y = x * mask / (1 - p), where mask is binary

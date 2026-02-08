@@ -371,6 +371,15 @@ struct TrainingHyperparameters {
     bool attention_diag_enabled;
     int attention_diag_layer;
     int attention_diag_head;
+    
+    // Scratch block reasoning configuration - NO DEFAULTS
+    bool tokenizer_enable_scratch_block_reasoning;
+    bool tokenizer_detect_numbers;
+    bool tokenizer_detect_urls;
+    bool tokenizer_detect_emails;
+    bool tokenizer_detect_paths;
+    bool tokenizer_detect_dates;
+    bool tokenizer_detect_code_literals;
 };
 
 /**
@@ -403,15 +412,6 @@ struct TokenizerConfig {
     bool enable_byte_fallback = true;
     uint32_t expected_checksum = 0;
     bool save_text_vocab = true;  // Also save human-readable .txt alongside .bin
-    
-    // Scratch block reasoning configuration
-    bool enable_scratch_block_reasoning = true;
-    bool detect_numbers = true;
-    bool detect_urls = true;
-    bool detect_emails = true;
-    bool detect_paths = true;
-    bool detect_dates = true;
-    bool detect_code_literals = true;
 };
 
 struct AiConfigSnapshot {
@@ -1241,7 +1241,7 @@ inline bool populateDataCollectionConfigFromConfig(const nlohmann::json& config,
     return true;
 }
 
-inline bool populateTokenizerConfigFromConfig(const nlohmann::json& config, TokenizerConfig& tokenizer_config) {
+inline bool populateTokenizerConfigFromConfig(const nlohmann::json& config, TokenizerConfig& tokenizer_config, TrainingHyperparameters& hyperparameters) {
     if (!config.contains("tokenizer")) {
         return false;
     }
@@ -1270,16 +1270,16 @@ inline bool populateTokenizerConfigFromConfig(const nlohmann::json& config, Toke
     assignTrainingField(tokenizer_config.expected_checksum, tok, "expected_checksum");
     assignTrainingField(tokenizer_config.save_text_vocab, tok, "save_text_vocab");
 
-    // Scratch block reasoning configuration
+    // Scratch block reasoning configuration - load into hyperparameters (single source of truth)
     if (tok.contains("scratch_block_reasoning") && tok["scratch_block_reasoning"].is_object()) {
         const auto& sbr = tok["scratch_block_reasoning"];
-        assignTrainingField(tokenizer_config.enable_scratch_block_reasoning, sbr, "enabled");
-        assignTrainingField(tokenizer_config.detect_numbers, sbr, "detect_numbers");
-        assignTrainingField(tokenizer_config.detect_urls, sbr, "detect_urls");
-        assignTrainingField(tokenizer_config.detect_emails, sbr, "detect_emails");
-        assignTrainingField(tokenizer_config.detect_paths, sbr, "detect_paths");
-        assignTrainingField(tokenizer_config.detect_dates, sbr, "detect_dates");
-        assignTrainingField(tokenizer_config.detect_code_literals, sbr, "detect_code_literals");
+        assignTrainingField(hyperparameters.tokenizer_enable_scratch_block_reasoning, sbr, "enabled");
+        assignTrainingField(hyperparameters.tokenizer_detect_numbers, sbr, "detect_numbers");
+        assignTrainingField(hyperparameters.tokenizer_detect_urls, sbr, "detect_urls");
+        assignTrainingField(hyperparameters.tokenizer_detect_emails, sbr, "detect_emails");
+        assignTrainingField(hyperparameters.tokenizer_detect_paths, sbr, "detect_paths");
+        assignTrainingField(hyperparameters.tokenizer_detect_dates, sbr, "detect_dates");
+        assignTrainingField(hyperparameters.tokenizer_detect_code_literals, sbr, "detect_code_literals");
     }
 
     if (tok.contains("special_tokens") && tok["special_tokens"].is_array()) {
@@ -1319,7 +1319,7 @@ inline std::optional<AiConfigSnapshot> loadAiConfigSnapshot(const std::string& c
         snapshot.document = std::move(config);
         snapshot.has_grim_paths = detail::populateGrimTextPathsFromConfig(snapshot.document, snapshot.grim_paths);
         snapshot.has_training = detail::populateTrainingHyperparametersFromConfig(snapshot.document, snapshot.hyperparameters);
-        snapshot.has_tokenizer = detail::populateTokenizerConfigFromConfig(snapshot.document, snapshot.tokenizer_config);
+        snapshot.has_tokenizer = detail::populateTokenizerConfigFromConfig(snapshot.document, snapshot.tokenizer_config, snapshot.hyperparameters);
         snapshot.has_data_collection = detail::populateDataCollectionConfigFromConfig(snapshot.document, snapshot.data_collection_config);
         return snapshot;
     } catch (const std::exception& e) {

@@ -11,7 +11,6 @@
 //======================================================//
 
 #include "Encoding_GPU.hpp"
-#include "../../GRIM/grim_language_model_cuda.hpp"  // EncoderLayerCache definition
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../FeedForward/Feed_Forward_GPU.hpp"
@@ -1545,22 +1544,10 @@ void EncodingLayer::allocateWeights() {
     // FFN layer
     FeedForwardConfig ffn_cfg;
     ffn_cfg.d_model = d_model;
-    ffn_cfg.d_ff = d_ff;
-    ffn_cfg.stream = config_.stream;
-    ffn_cfg.cublas_handle = config_.cublas_handle;  // CRITICAL: Must pass handle to FFN (Rule 22)
-    ffn_ = std::make_unique<FeedForwardLayer>(ffn_cfg);
-    ffn_->ensureWeightStorage();
+    // Note: FFN will be created in useExternalWeights() with external weights
+    // (Rule 20: FFN requires weights at construction time, no allocation path)
     
     // AUTOGRAD MIGRATION: Allocate gradient buffers for all trainable tensors
-    // This replaces the legacy cudaMalloc in InitTrainingState.cu
-    rms1_gamma_.ensure_grad();
-    rms2_gamma_.ensure_grad();
-    W_qkv_.ensure_grad();
-    b_qkv_.ensure_grad();
-    W_o_.ensure_grad();
-    b_o_.ensure_grad();
-    // FFN gradients allocated via ffn_->ensureWeightStorage() -> FFN's own ensure_grad() calls
-    // LayerScale: Allocated via TrainingTensors, wired via useExternalWeights()
     
     weights_allocated_ = true;
 }
@@ -1653,16 +1640,14 @@ void EncodingLayer::useExternalWeights(
         b_o_.owns_data = false;
     }
     
-    // FFN - need to create the layer and set its external weights
-    if (!ffn_) {
-        FeedForwardConfig ffn_cfg;
-        ffn_cfg.d_model = d_model;
-        ffn_cfg.d_ff = d_ff;
-        ffn_cfg.stream = config_.stream;
-        ffn_cfg.cublas_handle = config_.cublas_handle;
-        ffn_ = std::make_unique<FeedForwardLayer>(ffn_cfg);
-    }
-    ffn_->useExternalWeights(ffn_w1, ffn_b1, ffn_w2, ffn_b2);
+    // FFN - create with external weights now available
+    FeedForwardConfig ffn_cfg;
+    ffn_cfg.d_model = d_model;
+    ffn_cfg.d_ff = d_ff;
+    ffn_cfg.stream = config_.stream;
+    ffn_cfg.cublas_handle = config_.cublas_handle;  // CRITICAL: Must pass handle to FFN (Rule 22)
+    // Rule 20: FFN constructor requires weights (Option A)
+    ffn_ = std::make_unique<FeedForwardLayer>(ffn_cfg, ffn_w1, ffn_b1, ffn_w2, ffn_b2);
     
     // Issue #109: LayerScale tensors (optional, gated by config_.use_layer_scale)
     if (layer_scale1 && layer_scale1->data) {
@@ -2003,7 +1988,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     {
         const int qkv_dim_local = config_.d_model + 2 * config_.kvDim();
         const int d_model_local = config_.d_model;
-        const int kv_dim_local = config_.kvDim();
+        const int num_heads_local = config_.num_heads;
         const int head_dim_local = d_model_local / config_.num_heads;
         
         // Sample first N tokens for statistics (to avoid huge GPU->CPU transfers)
@@ -2011,15 +1996,24 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         
         // Allocate host buffers
         std::vector<float> h_ln1_sample(static_cast<size_t>(n_sample) * d_model_local);
-        std::vector<float> h_wqkv_sample(static_cast<size_t>(qkv_dim_local) * 64);  // First 64 cols of W_qkv
+        const int w_sample_cols = std::min(64, d_model_local);
+        std::vector<float> h_wqkv_sample(static_cast<size_t>(qkv_dim_local) * w_sample_cols);  // First N cols per row
         std::vector<float> h_qkv_sample(static_cast<size_t>(n_sample) * qkv_dim_local);
         std::vector<float> h_bias_sample(qkv_dim_local);
         
         // Copy data from GPU
         cudaMemcpyAsync(h_ln1_sample.data(), intermediates.ln1_out.data,
                         h_ln1_sample.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
-        cudaMemcpyAsync(h_wqkv_sample.data(), W_qkv_.data,
-                        h_wqkv_sample.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        // Copy first `w_sample_cols` columns for EVERY W_qkv row (2D copy, row-major [qkv_dim, d_model]).
+        cudaMemcpy2DAsync(
+            h_wqkv_sample.data(),                                   // dst
+            static_cast<size_t>(w_sample_cols) * sizeof(float),     // dst pitch
+            W_qkv_.data,                                            // src
+            static_cast<size_t>(d_model_local) * sizeof(float),     // src pitch
+            static_cast<size_t>(w_sample_cols) * sizeof(float),     // row bytes
+            qkv_dim_local,                                          // rows
+            cudaMemcpyDeviceToHost,
+            stream);
         cudaMemcpyAsync(h_qkv_sample.data(), intermediates.qkv_out.data,
                         h_qkv_sample.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
         if (b_qkv_.data) {
@@ -2050,7 +2044,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         float wqkv_min = FLT_MAX, wqkv_max = -FLT_MAX;
         double wqkv_sum_sq = 0.0;
         double wqkv_row_norm_sum = 0.0;
-        const int w_sample_cols = 64;
+        double wq_row_norm_sum = 0.0;
         for (int row = 0; row < qkv_dim_local; ++row) {
             double row_sum_sq = 0.0;
             for (int col = 0; col < w_sample_cols; ++col) {
@@ -2061,15 +2055,22 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
                 row_sum_sq += v * v;
             }
             // Scale row norm to full d_model (assuming similar variance)
-            wqkv_row_norm_sum += sqrtf(static_cast<float>(row_sum_sq * d_model_local / w_sample_cols));
+            const float row_norm_scaled = sqrtf(static_cast<float>(row_sum_sq * d_model_local / w_sample_cols));
+            wqkv_row_norm_sum += row_norm_scaled;
+            if (row < d_model_local) {
+                // Q rows occupy [0, d_model) in unified W_qkv layout.
+                wq_row_norm_sum += row_norm_scaled;
+            }
         }
         float wqkv_rms = sqrtf(static_cast<float>(wqkv_sum_sq / (qkv_dim_local * w_sample_cols)));
         float wqkv_row_norm_mean = static_cast<float>(wqkv_row_norm_sum / qkv_dim_local);
+        float wq_row_norm_mean = static_cast<float>(wq_row_norm_sum / d_model_local);
         
         // Compute qkv_out statistics (Q portion only - first d_model columns)
         float qkv_min = FLT_MAX, qkv_max = -FLT_MAX;
         double qkv_sum_sq = 0.0;
         double qkv_row_norm_sum = 0.0;
+        double qkv_head_row_norm_sum = 0.0;
         for (int t = 0; t < n_sample; ++t) {
             double row_sum_sq = 0.0;
             for (int d = 0; d < d_model_local; ++d) {  // Q portion only
@@ -2080,9 +2081,20 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
                 row_sum_sq += v * v;
             }
             qkv_row_norm_sum += sqrtf(static_cast<float>(row_sum_sq));
+            // Measure true per-head Q norms directly (no balanced-head assumption).
+            for (int h = 0; h < num_heads_local; ++h) {
+                double head_sum_sq = 0.0;
+                const int head_base = t * qkv_dim_local + h * head_dim_local;
+                for (int d = 0; d < head_dim_local; ++d) {
+                    const float v = h_qkv_sample[head_base + d];
+                    head_sum_sq += v * v;
+                }
+                qkv_head_row_norm_sum += sqrtf(static_cast<float>(head_sum_sq));
+            }
         }
         float qkv_rms = sqrtf(static_cast<float>(qkv_sum_sq / (n_sample * d_model_local)));
         float qkv_row_norm_mean = static_cast<float>(qkv_row_norm_sum / n_sample);
+        float qkv_head_row_norm_mean = static_cast<float>(qkv_head_row_norm_sum / (n_sample * num_heads_local));
         
         // Compute bias statistics
         float bias_min = 0.0f, bias_max = 0.0f, bias_rms = 0.0f;
@@ -2097,16 +2109,23 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
             bias_rms = sqrtf(static_cast<float>(bias_sum_sq / qkv_dim_local));
         }
         
-        // Compute EXPECTED qkv_out magnitude
+        // Compute EXPECTED Q magnitude in CONSISTENT units.
         // GEMM: Y = X @ W^T where X is [N, d_model], W is [qkv_dim, d_model]
-        // For random orthogonal vectors: E[||Y_row||] = ||X_row|| * ||W_row|| / sqrt(d_model)
-        float expected_qkv_row_norm = ln1_row_norm_mean * wqkv_row_norm_mean / sqrtf(static_cast<float>(d_model_local));
-        float expected_qkv_elem_rms = expected_qkv_row_norm / sqrtf(static_cast<float>(d_model_local));
-        
-        // What Q row norm SHOULD be for healthy attention scores
-        // Attention score = Q_row · K_row / sqrt(head_dim) should be O(1)
-        // So Q_row_norm and K_row_norm should each be ~sqrt(head_dim) = 8.0
-        float target_qkv_row_norm = sqrtf(static_cast<float>(head_dim_local));
+        // For random rows, each output element has:
+        //   E[elem_rms] ≈ ||x_row|| * ||w_row|| / sqrt(d_model)
+        const float expected_q_elem_rms =
+            ln1_row_norm_mean * wq_row_norm_mean / sqrtf(static_cast<float>(d_model_local));
+        const float expected_q_full_row_norm = expected_q_elem_rms * sqrtf(static_cast<float>(d_model_local));
+        const float expected_q_head_row_norm = expected_q_elem_rms * sqrtf(static_cast<float>(head_dim_local));
+
+        // Actual Q magnitudes in matching units.
+        const float actual_q_elem_rms = qkv_rms;
+        const float actual_q_full_row_norm = qkv_row_norm_mean;
+        const float actual_q_head_row_norm = qkv_head_row_norm_mean;
+
+        // Healthy-attention targets (same units as comparisons).
+        const float target_q_head_row_norm = sqrtf(static_cast<float>(head_dim_local));
+        const float target_q_full_row_norm = sqrtf(static_cast<float>(d_model_local));
         
         // Get layer index
         const int layer_idx_local = (g_issue77_fwd_layer_count > 0) 
@@ -2118,39 +2137,60 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
             fprintf(stderr, "  ln1_out (sample %d tokens): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
                     n_sample, n_sample, d_model_local, ln1_min, ln1_max, ln1_rms);
             fprintf(stderr, "  ln1_out row_norms: mean=%.10f\n", ln1_row_norm_mean);
-            fprintf(stderr, "  W_qkv (sample 64 cols): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
-                    qkv_dim_local, d_model_local, wqkv_min, wqkv_max, wqkv_rms);
-            fprintf(stderr, "  W_qkv row_norms (scaled to d_model): mean=%.10f\n", wqkv_row_norm_mean);
+            fprintf(stderr, "  W_qkv (sample %d cols): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
+                    w_sample_cols, qkv_dim_local, d_model_local, wqkv_min, wqkv_max, wqkv_rms);
+            fprintf(stderr, "  W_q row_norms (scaled to d_model): mean=%.10f\n", wq_row_norm_mean);
+            fprintf(stderr, "  W_qkv row_norms (all rows, scaled): mean=%.10f\n", wqkv_row_norm_mean);
             if (b_qkv_.data) {
                 fprintf(stderr, "  b_qkv: shape=[%d] min=%.10f max=%.10f rms=%.10f\n",
                         qkv_dim_local, bias_min, bias_max, bias_rms);
             } else {
                 fprintf(stderr, "  b_qkv: [nullptr]\n");
             }
-            fprintf(stderr, "  EXPECTED qkv_row_norm = ln1_row_norm * wqkv_row_norm / sqrt(d_model)\n");
-            fprintf(stderr, "                       = %.4f * %.4f / sqrt(%d) = %.4f\n",
-                    ln1_row_norm_mean, wqkv_row_norm_mean, d_model_local, expected_qkv_row_norm);
+            fprintf(stderr, "  EXPECTED qkv_elem_rms = ln1_row_norm * wq_row_norm / sqrt(d_model)\n");
+            fprintf(stderr, "                        = %.4f * %.4f / sqrt(%d) = %.4f\n",
+                    ln1_row_norm_mean, wq_row_norm_mean, d_model_local, expected_q_elem_rms);
             fprintf(stderr, "  ACTUAL qkv_out (Q portion): min=%.10f max=%.10f rms=%.10f\n",
                     qkv_min, qkv_max, qkv_rms);
-            fprintf(stderr, "  ACTUAL qkv_row_norms (Q portion): mean=%.10f\n", qkv_row_norm_mean);
-            fprintf(stderr, "  TARGET qkv_row_norm for healthy attention: ~%.1f (sqrt(head_dim=%d))\n",
-                    target_qkv_row_norm, head_dim_local);
+            fprintf(stderr, "  EXPECTED Q row_norm (full/head): %.4f / %.4f\n",
+                    expected_q_full_row_norm, expected_q_head_row_norm);
+            fprintf(stderr, "  ACTUAL   Q row_norm (full/head): %.4f / %.4f\n",
+                    actual_q_full_row_norm, actual_q_head_row_norm);
+            fprintf(stderr, "  TARGET   Q row_norm (full/head): %.4f / %.4f (sqrt(d_model=%d) / sqrt(head_dim=%d))\n",
+                    target_q_full_row_norm, target_q_head_row_norm, d_model_local, head_dim_local);
+            fprintf(stderr, "  INFLATION(full/head): %.4fx / %.4fx\n",
+                    actual_q_full_row_norm / target_q_full_row_norm,
+                    actual_q_head_row_norm / target_q_head_row_norm);
+
+            // Best-available IDs in this layer scope.
+            // NOTE: Global optimizer step is not available here.
+            const int batch_idx_local = g_issue77_fwd_batch_count;
+            const int step_idx_local = g_issue77_fwd_batch_count;
             
             // Structured logging via centralized EquationLogger
             EQ_LOG_HOST(
                 "QKV_PROJECTION_EQUATION",
                 "qkv_out = ln1_out @ W_qkv^T + b_qkv",
-                "ln1_rms=" + std::to_string(ln1_rms) + " ln1_row_norm=" + std::to_string(ln1_row_norm_mean) + " wqkv_rms=" + std::to_string(wqkv_rms),
-                "qkv_rms=" + std::to_string(qkv_rms) + " qkv_row_norm=" + std::to_string(qkv_row_norm_mean),
-                "expected_row_norm=" + std::to_string(expected_qkv_row_norm) + " target=" + std::to_string(target_qkv_row_norm),
-                "actual_row_norm=" + std::to_string(qkv_row_norm_mean) + " inflation=" + std::to_string(qkv_row_norm_mean / target_qkv_row_norm),
-                0, layer_idx_local, 0, GRIM::EquationPhase::QKV_PROJECTION);
+                "ln1_rms=" + std::to_string(ln1_rms) +
+                    " ln1_row_norm=" + std::to_string(ln1_row_norm_mean) +
+                    " wqkv_rms=" + std::to_string(wqkv_rms) +
+                    " wq_row_norm=" + std::to_string(wq_row_norm_mean),
+                "qkv_elem_rms=" + std::to_string(actual_q_elem_rms) +
+                    " q_row_norm_full=" + std::to_string(actual_q_full_row_norm) +
+                    " q_row_norm_head=" + std::to_string(actual_q_head_row_norm),
+                "expected_elem_rms=" + std::to_string(expected_q_elem_rms) +
+                    " expected_row_norm_head=" + std::to_string(expected_q_head_row_norm) +
+                    " target_row_norm_head=" + std::to_string(target_q_head_row_norm),
+                "actual_row_norm=" + std::to_string(actual_q_full_row_norm) +
+                    " inflation=" + std::to_string(actual_q_head_row_norm / target_q_head_row_norm) +
+                    " inflation_full=" + std::to_string(actual_q_full_row_norm / target_q_full_row_norm),
+                batch_idx_local, layer_idx_local, step_idx_local, GRIM::EquationPhase::QKV_PROJECTION);
             
             // Anomaly detection
-            float inflation_ratio = qkv_row_norm_mean / target_qkv_row_norm;
+            const float inflation_ratio = actual_q_head_row_norm / target_q_head_row_norm;
             if (inflation_ratio > 5.0f) {
-                fprintf(stderr, "  *** ANOMALY: qkv_row_norm=%.2f is %.1fx larger than target=%.1f! ***\n",
-                        qkv_row_norm_mean, inflation_ratio, target_qkv_row_norm);
+                fprintf(stderr, "  *** ANOMALY: per-head q_row_norm=%.2f is %.1fx larger than target=%.1f! ***\n",
+                        actual_q_head_row_norm, inflation_ratio, target_q_head_row_norm);
                 fprintf(stderr, "      This will cause attention score explosion (score ~ %.1f instead of ~1)\n",
                         inflation_ratio * inflation_ratio);
             }
@@ -2159,9 +2199,9 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
                         ln1_row_norm_mean);
                 fprintf(stderr, "      Input to QKV projection is already too large!\n");
             }
-            if (wqkv_row_norm_mean > 5.0f) {
-                fprintf(stderr, "  *** ANOMALY: W_qkv row_norm=%.2f >> expected ~1.0 (Xavier init) ***\n",
-                        wqkv_row_norm_mean);
+            if (wq_row_norm_mean > 5.0f) {
+                fprintf(stderr, "  *** ANOMALY: W_q row_norm=%.2f >> expected ~1.0 (Xavier init) ***\n",
+                        wq_row_norm_mean);
                 fprintf(stderr, "      Weight magnitudes are too large!\n");
             }
             fprintf(stderr, "\n");
@@ -2270,6 +2310,21 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         throw std::runtime_error(
             "EncodingLayer::forward: config_.pos_encoding->alibi_slopes is NULL - "
             "PBM ALiBi slopes not initialized");
+    }
+    
+    // [ROPE_ALIBI_INTERACTION] Log configuration once at first call (no stream blocking)
+    static bool logged_rope_alibi_config = true;
+    if (!logged_rope_alibi_config && config_.pos_encoding->alibi_slopes) {
+        float slopes_host[12];
+        cudaMemcpy(slopes_host, config_.pos_encoding->alibi_slopes, num_heads * sizeof(float), cudaMemcpyDeviceToHost);
+        
+        fprintf(stderr, "[ROPE_ALIBI_INTERACTION] Hybrid positional encoding active:\n");
+        fprintf(stderr, "  RoPE: rotary_dim=%d (rotates Q/K by position-dependent angle, preserves norm)\n",
+                config_.pos_encoding->rotary_dim);
+        fprintf(stderr, "  ALiBi: slopes=[%.6f, %.6f, ... %.6f] (adds distance penalty to attention scores)\n",
+                slopes_host[0], slopes_host[5], slopes_host[11]);
+        fprintf(stderr, "  Combined: RoPE encodes relative position directionally, ALiBi provides distance bias\n");
+        logged_rope_alibi_config = true;
     }
     
     // Issue #56: Store attention output in intermediates

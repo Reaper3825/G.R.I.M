@@ -594,8 +594,7 @@ public:
                            const std::vector<std::vector<float>>& batch_numeric_values,
                            const std::vector<std::vector<uint8_t>>& batch_numeric_mask,
                            const std::vector<std::vector<uint16_t>>& batch_text_features = {},
-                           const std::vector<std::vector<uint8_t>>& batch_text_mask = {},
-                           const std::vector<std::vector<uint16_t>>& batch_byte_lengths = {});  // GRMT v6
+                           const std::vector<std::vector<uint8_t>>& batch_text_mask = {});
     Vector forwardWithCache(const std::vector<int>& token_ids,
                             const std::vector<float>& token_numeric_values,
                             const std::vector<uint8_t>& token_numeric_mask,
@@ -942,34 +941,6 @@ using StreamCallback = GenerationStreamCallback;
 // GPUEmbeddingStack removed - use EmbeddingRuntime from Layers/Embedding/ instead
 
 // Forward declarations for GPU classes
-struct EncoderLayerCache {
-    // RMSNorm caches
-    float* ln1_input = nullptr;        // Input to RMS1 (layer input)
-    float* ln1_output = nullptr;       // RMS1 output
-    float* attn_input = nullptr;       // Input to attention (same as ln1_output)
-    float* ln2_input = nullptr;        // Input to RMS2 (residual1)
-    float* ln2_output = nullptr;       // RMS2 output
-    
-    // Attention caches (BHSD format)
-    float* q = nullptr;                // [batch, num_heads, seq, head_dim]
-    float* k = nullptr;                // [batch, num_kv_heads, seq, head_dim]
-    float* v = nullptr;                // [batch, num_kv_heads, seq, head_dim]
-    float* attn_bhsd = nullptr;        // [batch, num_heads, seq, head_dim] - attention output before W_o
-    float* softmax_lse = nullptr;      // [batch, num_heads, seq] - FP32 dense LSE (FA v2)
-    float* attn_output = nullptr;      // [total_tokens, d_model] - after W_o projection
-    
-    // Residual
-    float* residual1 = nullptr;        // After first residual add
-    
-    // FFN caches
-    float* ffn_input = nullptr;        // FFN input (same as ln2_output)
-    float* ffn_pre_gelu = nullptr;     // FFN pre-GELU activations
-    float* ffn_output = nullptr;       // FFN output
-    
-    // Layer output
-    float* layer_output = nullptr;     // Final layer output
-};
-
 struct FlashAttentionBF16Scratch {
     __nv_bfloat16* q = nullptr;
     __nv_bfloat16* k = nullptr;

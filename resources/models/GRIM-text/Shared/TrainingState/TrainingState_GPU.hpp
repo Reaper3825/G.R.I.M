@@ -33,9 +33,6 @@ namespace GRIM {
         struct AutogradContext;  // Issue #47: Forward context persists for backward
     }
     
-    // Forward declare EncoderLayerCache - full definition in grim_language_model_cuda.hpp
-    // NOTE: Definition is INSIDE namespace GRIM, so forward decl must be too!
-    struct EncoderLayerCache;
     struct FlashAttentionBF16Scratch;
 }
 
@@ -61,9 +58,6 @@ struct EncoderLayerCacheTensors {
     Tensor K;                 // [batch, num_kv_heads, seq, head_dim] 
     Tensor V;                 // [batch, num_kv_heads, seq, head_dim]
 };
-
-// NOTE: EncoderLayerCache (raw pointer version) is defined in grim_language_model_cuda.hpp
-// It will be populated with raw pointers into EncoderLayerCacheTensors via setupLegacyCachePointers()
 
 struct TrainingState {
     TrainingState();
@@ -122,11 +116,6 @@ struct TrainingState {
     
     // Per-layer activation caches (Tensor-based)
     std::vector<EncoderLayerCacheTensors> encoder_layer_caches;
-    
-    // Forward layer caches - raw pointer interface for CUDA kernels
-    // Points into encoder_layer_caches[layer].*.data
-    EncoderLayerCache* forward_layer_caches = nullptr;
-    int forward_layer_cache_count = 0;
 
     // Output layer caches
     Tensor cached_encoder_output;       // [max_tokens, d_model] Final encoder output
@@ -143,9 +132,6 @@ struct TrainingState {
     // GRMT v4: text features for ScratchBlock
     Tensor cached_token_text_features;  // [max_tokens * kTextFeatureDim] FP16
     Tensor cached_token_text_mask;      // [max_tokens] uint8
-    
-    // GRMT v6: per-token byte lengths for loss weighting
-    Tensor cached_token_byte_lengths;   // [max_tokens] uint16
     
     int cached_batch_size = 0;
     int cached_seq_len = 0;
@@ -175,15 +161,10 @@ struct TrainingState {
     int sequence_weight_capacity = 0;
     
     //======================================================//
-    //  ISSUE #38/39: Token weighting and logit bias correction
+    //  ISSUE #38: Token weighting (DEPRECATED - not used)
     //======================================================//
     Tensor token_weights_tensor;       // [vocab_size] inverse frequency weights
     int token_weights_count = 0;
-    
-    Tensor logit_bias_tensor;          // [vocab_size] EMA of per-token mean logit
-    Tensor logit_bias_update_tensor;   // [vocab_size] scratch for batch mean
-    int logit_bias_count = 0;
-    uint64_t logit_bias_update_step = 0;
 
     //======================================================//
     //  AUTOGRAD LOSS TENSORS (Issue #46 FIX)
@@ -294,6 +275,7 @@ struct TrainingState {
                                    HyperParameters::PositionalEncodingType positional_encoding,
                                    bool use_layer_scale = false,
                                    float layer_scale_init = 0.1f,
+                                   uint64_t seed = 0,
                                    cudaStream_t stream = nullptr);
 
     //======================================================//
@@ -366,7 +348,6 @@ struct TrainingState {
     std::vector<uint8_t> batch_prep_numeric_mask;
     std::vector<uint16_t> batch_prep_text_features;
     std::vector<uint8_t> batch_prep_text_mask;
-    std::vector<uint16_t> batch_prep_byte_lengths;
     std::vector<int> batch_prep_sequence_lengths;
     size_t batch_prep_capacity = 0;
     
@@ -384,8 +365,6 @@ struct TrainingState {
                                        int num_heads, int num_kv_heads, int head_dim,
                                        cudaStream_t stream = nullptr);
     
-    /// Set up legacy EncoderLayerCache pointers from Tensor data
-    void setupLegacyCachePointers();
 };
 
 } // namespace GRIM

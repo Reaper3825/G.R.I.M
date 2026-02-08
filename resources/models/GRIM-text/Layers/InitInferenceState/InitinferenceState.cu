@@ -223,32 +223,6 @@ void LanguageModel::initInferenceState() {
     }
     std::cout << "  ✓ Allocated per-layer activation caches using Tensor API (" << cfg.num_layers << " layers)" << std::endl;
 
-    // Set up forward_layer_caches to point into Tensor data for CUDA kernel compatibility
-    // Note: GRIM::EncoderLayerCache is defined in grim_language_model_cuda.hpp (inside namespace GRIM)
-    if (!training_state_.forward_layer_caches) {
-        training_state_.forward_layer_cache_count = cfg.num_layers;
-        training_state_.forward_layer_caches = new GRIM::EncoderLayerCache[cfg.num_layers]();
-    }
-    for (int layer = 0; layer < cfg.num_layers; ++layer) {
-        const auto& tc = training_state_.encoder_layer_caches[layer];
-        GRIM::EncoderLayerCache& cache = training_state_.forward_layer_caches[layer];
-        cache.ln1_output = tc.ln1_output.data;
-        cache.attn_input = tc.attn_input.data;
-        cache.attn_bhsd = tc.attn_bhsd.data;
-        cache.softmax_lse = tc.softmax_lse.data;
-        cache.attn_output = tc.attn_output.data;
-        cache.residual1 = tc.residual1.data;
-        cache.ln2_input = tc.residual1.data;  // Same as residual1 (pre-LN2)
-        cache.ln2_output = tc.ln2_output.data;
-        cache.ffn_input = tc.ln2_output.data;  // Same as ln2_output (post-LN2)
-        cache.ffn_pre_gelu = tc.ffn_pre_gelu.data;
-        cache.ffn_output = tc.ffn_output.data;
-        cache.layer_output = tc.layer_output.data;
-        cache.q = tc.Q.data;
-        cache.k = tc.K.data;
-        cache.v = tc.V.data;
-    }
-
     // Flash Attention BF16 buffers - use Tensor API
     // Note: Tensor manages bf16 via raw allocation + element count tracking
     const size_t fa_q_elems = static_cast<size_t>(max_batch_size) *

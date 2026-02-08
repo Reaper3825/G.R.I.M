@@ -832,6 +832,7 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
         if (config_.execution_mode == ModelExecutionMode::TRAINING) {
             initTrainingState();
         } else {
+            throw std::runtime_error("getNextTokenLogitsGPU: ModelExecutionMode must be TRAINING for training");
             initInferenceState();
         }
     }
@@ -893,6 +894,7 @@ TokenBufferView LanguageModel::getTokenBufferView() {
         if (config_.execution_mode == ModelExecutionMode::TRAINING) {
             initTrainingState();
         } else {
+            throw std::runtime_error("getTokenBufferView: ModelExecutionMode must be TRAINING for training");
             initInferenceState();
         }
     }
@@ -1094,9 +1096,10 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             applyBadWordMask(logits, cfg.bad_words_ids);
         }
         
-        if (static_cast<int>(logits.size()) > vocab_size) {
-            // Zero out logits for invalid token positions
-            std::fill(logits.begin() + vocab_size, logits.end(), kNegInf);
+        if (static_cast<int>(logits.size()) != vocab_size) {
+            throw std::runtime_error(
+                "generateSequenceGPU: logits size mismatch (logits.size=" +
+                std::to_string(logits.size()) + ", vocab_size=" + std::to_string(vocab_size) + ")");
         }
         
         const bool allow_sampling = cfg.do_sample &&
@@ -1104,7 +1107,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
                                     cfg.strategy != SamplingStrategy::BEAM_SEARCH &&
                                     cfg.temperature > 0.0f;
         
-        // Pass vocab_size for validation
+        // sampleFromLogits enforces the same strict vocab contract.
         SampleResult sample = sampleFromLogits(logits, cfg, allow_sampling, rng, vocab_size);
         
         // Validate sampled token (no fallback)

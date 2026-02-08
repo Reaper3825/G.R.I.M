@@ -11,15 +11,11 @@
 
 namespace GRIM {
 
-// Production AdamW update kernel
-// - learning_rate: Step size (typically 1e-4 to 1e-3)
-// - weight_decay: Decoupled L2 regularization (typically 0.01)
-// - step: Optimizer step count for bias correction (1-indexed)
-void launchAdamWKernel(float* params,
-					   const float* grads,
-					   float* moments1,
-					   float* moments2,
-					   std::size_t size,
+struct ParameterGroup;  // Forward declaration
+
+/// AdamW update operating directly on a ParameterGroup.
+/// Reads weights/grads/m/v from the group's Tensors — no cached raw pointers.
+void launchAdamWKernel(ParameterGroup& group,
 					   float learning_rate,
 					   float weight_decay,
 					   int step,

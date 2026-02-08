@@ -7,7 +7,7 @@
 #include "HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../../Layers/Attention/QKV_Projector.hpp"  // ISSUE #62: For launchReshapeFromBHSD
-#include "../../Layers/FeedForward/Feed_Forward_GPU.hpp"  // ISSUE #97: For launchFFNBiasAdd/Backward
+// Bias kernel declarations (moved from Feed_Forward_GPU.cu - Rule 20: no reverse dependencies)
 #include "../PBM/PositionalBiasMethod.hpp"  // ISSUE #119: For RoPE autograd backward
 #include "../EquationLogging/PyTorchVerify.hpp"  // PyTorch verification for side-by-side comparison
 #include <cuda_runtime.h>
@@ -1425,7 +1425,7 @@ Tensor Tensor::xavier_uniform(TensorContract::TensorShape shape, bool requires_g
     return t;
 }
 
-void Tensor::xavier_uniform_(Tensor& t, cudaStream_t stream) {
+void Tensor::xavier_uniform_(Tensor& t, uint64_t seed, cudaStream_t stream) {
     if (!t.data) {
         throw std::invalid_argument("Tensor::xavier_uniform_: tensor has no data");
     }
@@ -1448,7 +1448,6 @@ void Tensor::xavier_uniform_(Tensor& t, cudaStream_t stream) {
     }
     
     float scale = std::sqrt(6.0f / (fan_in + fan_out));
-    uint64_t seed = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(t.data));
     
     const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
     kernel_xavier_uniform<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count, scale, seed);
@@ -2035,58 +2034,140 @@ __global__ void kernel_pcgrad_combine(
     }
 }
 
-// Softmax backward: grad_x = softmax(x) * (grad_y - sum(grad_y * softmax(x)))
-// Input: saved softmax output (not original input!)
-// This is the efficient form that reuses softmax output
-__global__ void kernel_softmax_backward(
-    const float* grad_output,   // [tokens, dim]
-    const float* softmax_out,   // [tokens, dim] - saved from forward
-    float* grad_input,          // [tokens, dim]
+//========================================================================
+// Log-Softmax Forward: log_softmax(x)[i] = x[i] - logsumexp(x)
+// Stays in log space — no exp→log roundtrip (numerically superior to softmax→log)
+// One block per row. dim = vocab_size (50K+).
+//========================================================================
+__global__ void kernel_log_softmax_forward(
+    const float* __restrict__ input,    // [tokens, dim]
+    float* __restrict__ output,         // [tokens, dim] - log-probabilities
     int tokens,
     int dim
 ) {
     const int token_idx = blockIdx.x;
     if (token_idx >= tokens) return;
-    
-    const float* dy = grad_output + static_cast<size_t>(token_idx) * dim;
-    const float* y = softmax_out + static_cast<size_t>(token_idx) * dim;
-    float* dx = grad_input + static_cast<size_t>(token_idx) * dim;
-    
-    extern __shared__ float shared[];
-    
-    // Step 1: Compute dot(grad_y, softmax_y)
-    float local_dot = 0.0f;
+
+    const float* row = input  + static_cast<size_t>(token_idx) * dim;
+    float* out_row   = output + static_cast<size_t>(token_idx) * dim;
+
+    // ── Step 1: max(x) via deterministic warp→shared reduction ──
+    constexpr int kMaxWarps = 8;  // 256 threads / 32
+    __shared__ float s_warp[kMaxWarps];
+    __shared__ float s_val;
+
+    float local_max = -FLT_MAX;
     for (int i = threadIdx.x; i < dim; i += blockDim.x) {
-        local_dot += dy[i] * y[i];
+        local_max = fmaxf(local_max, row[i]);
     }
-    
-    // Warp reduction
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        local_dot += __shfl_down_sync(0xffffffff, local_dot, offset);
-    }
-    
-    // Block reduction
-    if (threadIdx.x % 32 == 0) {
-        shared[threadIdx.x / 32] = local_dot;
+    for (int off = warpSize / 2; off > 0; off >>= 1)
+        local_max = fmaxf(local_max, __shfl_down_sync(0xffffffff, local_max, off));
+
+    const int warp_id = threadIdx.x / warpSize;
+    const int lane_id = threadIdx.x % warpSize;
+    const int num_warps = (blockDim.x + warpSize - 1) / warpSize;
+
+    if (lane_id == 0 && warp_id < kMaxWarps) s_warp[warp_id] = local_max;
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        float m = s_warp[0];
+        for (int w = 1; w < num_warps && w < kMaxWarps; w++) m = fmaxf(m, s_warp[w]);
+        s_val = m;
     }
     __syncthreads();
-    
-    if (threadIdx.x < blockDim.x / 32) {
-        local_dot = shared[threadIdx.x];
-        for (int offset = blockDim.x / 64; offset > 0; offset >>= 1) {
-            local_dot += __shfl_down_sync(0xffffffff, local_dot, offset);
-        }
-    }
-    
-    __shared__ float s_dot;
-    if (threadIdx.x == 0) s_dot = local_dot;
+    const float max_val = s_val;
+
+    // ── Step 2: sum_exp = Σ exp(x - max) ──
+    float local_sum = 0.0f;
+    for (int i = threadIdx.x; i < dim; i += blockDim.x)
+        local_sum += expf(row[i] - max_val);
+
+    for (int off = warpSize / 2; off > 0; off >>= 1)
+        local_sum += __shfl_down_sync(0xffffffff, local_sum, off);
+
+    if (lane_id == 0 && warp_id < kMaxWarps) s_warp[warp_id] = local_sum;
     __syncthreads();
-    
-    // Step 2: grad_x = softmax * (grad_y - dot)
-    const float dot_sum = s_dot;
-    for (int i = threadIdx.x; i < dim; i += blockDim.x) {
-        dx[i] = y[i] * (dy[i] - dot_sum);
+    if (threadIdx.x == 0) {
+        float s = 0.0f;
+        for (int w = 0; w < num_warps && w < kMaxWarps; w++) s += s_warp[w];
+        s_val = s;
     }
+    __syncthreads();
+    const float sum_exp = s_val;
+
+    // Rule 20: sum_exp >= 1.0 is a mathematical invariant (exp(max-max)=1).
+    // Diagnostic: Print to stderr if invariant violated; kernel produces NaN/Inf that
+    // gets caught by downstream validation (GradFn diagnostic sampling in AutogradLoss.cu)
+    if (threadIdx.x == 0 && (sum_exp < 1e-6f || isnan(sum_exp) || isinf(sum_exp))) {
+        printf("[LOG_SOFTMAX_EQUATION] FATAL: sum_exp=%e at token %d — logits corrupted! "
+               "max_val=%e, dim=%d\n", sum_exp, token_idx, max_val, dim);
+    }
+
+    const float log_sum_exp = logf(sum_exp) + max_val;  // logsumexp(x)
+
+    // ── Step 3: output[i] = x[i] - logsumexp(x)  (stays in log space!) ──
+    for (int i = threadIdx.x; i < dim; i += blockDim.x)
+        out_row[i] = row[i] - log_sum_exp;
+}
+
+//========================================================================
+// Log-Softmax Backward
+// Given saved log_p = log_softmax(x) and upstream grad_output (dL/d(log_p)):
+//
+//   grad_input[i] = grad_output[i] - exp(log_p[i]) * Σ_j grad_output[j]
+//
+// Derivation: log_softmax = x - logsumexp(x)
+//   ∂log_softmax_i/∂x_j = δ_{ij} - softmax_j
+//   ⇒ grad_x[j] = Σ_i grad_y[i] * (δ_{ij} - p_j)
+//                = grad_y[j] - p_j * Σ_i grad_y[i]
+//
+// Key: uses saved log_p, computes p = exp(log_p) on-the-fly.
+// No separate softmax buffer needed.
+//========================================================================
+__global__ void kernel_log_softmax_backward(
+    const float* __restrict__ grad_output,   // [tokens, dim] dL/d(log_p)
+    const float* __restrict__ log_softmax,   // [tokens, dim] saved log-probabilities
+    float* __restrict__ grad_input,          // [tokens, dim] dL/d(logits)
+    int tokens,
+    int dim
+) {
+    const int token_idx = blockIdx.x;
+    if (token_idx >= tokens) return;
+
+    const float* dy    = grad_output + static_cast<size_t>(token_idx) * dim;
+    const float* log_p = log_softmax + static_cast<size_t>(token_idx) * dim;
+    float* dx          = grad_input  + static_cast<size_t>(token_idx) * dim;
+
+    // ── Step 1: Σ_j grad_output[j]  (sum of upstream gradient) ──
+    constexpr int kMaxWarps = 8;
+    __shared__ float s_warp[kMaxWarps];
+    __shared__ float s_sum;
+
+    float local_sum = 0.0f;
+    for (int i = threadIdx.x; i < dim; i += blockDim.x)
+        local_sum += dy[i];
+
+    for (int off = warpSize / 2; off > 0; off >>= 1)
+        local_sum += __shfl_down_sync(0xffffffff, local_sum, off);
+
+    const int warp_id = threadIdx.x / warpSize;
+    const int lane_id = threadIdx.x % warpSize;
+    const int num_warps = (blockDim.x + warpSize - 1) / warpSize;
+
+    if (lane_id == 0 && warp_id < kMaxWarps) s_warp[warp_id] = local_sum;
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        float s = 0.0f;
+        for (int w = 0; w < num_warps && w < kMaxWarps; w++) s += s_warp[w];
+        s_sum = s;
+    }
+    __syncthreads();
+
+    const float sum_dy = s_sum;
+
+    // ── Step 2: grad_x[i] = grad_y[i] - exp(log_p[i]) * sum_dy ──
+    for (int i = threadIdx.x; i < dim; i += blockDim.x)
+        dx[i] = dy[i] - expf(log_p[i]) * sum_dy;
 }
 
 // Dropout forward: y = x * mask / (1 - p)
@@ -2919,6 +3000,79 @@ struct AddGradFn : public GradFn {
     }
 };
 
+//======================================================//
+//  Bias Add/Backward Kernels (owned by autograd layer)
+//  Moved from Feed_Forward_GPU.cu - these are generic tensor ops
+//  used by BiasAddGradFn, not FFN-specific.
+//======================================================//
+
+__global__ void biasAddKernel(float* __restrict__ tensor,
+                              const float* __restrict__ bias,
+                              int total_elements,
+                              int features) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < total_elements) {
+        const int feature_idx = idx % features;
+        tensor[idx] += bias[feature_idx];
+    }
+}
+
+__global__ void biasBackwardKernel(const float* __restrict__ grad_output,
+                                   float* __restrict__ grad_bias,
+                                   int total_tokens,
+                                   int features) {
+    extern __shared__ float sdata[];
+
+    const int feature_idx = blockIdx.x;
+    const int tid = threadIdx.x;
+
+    if (feature_idx >= features) return;
+
+    float local_sum = 0.0f;
+    for (int t = tid; t < total_tokens; t += blockDim.x) {
+        local_sum += grad_output[t * features + feature_idx];
+    }
+    sdata[tid] = local_sum;
+    __syncthreads();
+
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        grad_bias[feature_idx] += sdata[0];
+    }
+}
+
+static void launchBiasAdd(float* tensor, const float* bias,
+                          int total_tokens, int features,
+                          cudaStream_t stream) {
+    if (!tensor) throw std::runtime_error("launchBiasAdd: tensor is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    if (!bias) throw std::runtime_error("launchBiasAdd: bias is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    if (total_tokens <= 0 || features <= 0) throw std::runtime_error("launchBiasAdd: invalid dimensions (" + std::to_string(total_tokens) + ", " + std::to_string(features) + ")");
+
+    const int total_elements = total_tokens * features;
+    constexpr int kBlockSize = 256;
+    const int grid = (total_elements + kBlockSize - 1) / kBlockSize;
+    biasAddKernel<<<grid, kBlockSize, 0, stream>>>(tensor, bias, total_elements, features);
+}
+
+static void launchBiasBackward(const float* grad_output, float* grad_bias,
+                               int total_tokens, int features,
+                               cudaStream_t stream) {
+    if (!grad_output) throw std::runtime_error("launchBiasBackward: grad_output is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    if (!grad_bias) throw std::runtime_error("launchBiasBackward: grad_bias is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    if (total_tokens <= 0 || features <= 0) throw std::runtime_error("launchBiasBackward: invalid dimensions (" + std::to_string(total_tokens) + ", " + std::to_string(features) + ")");
+
+    constexpr int kBlockSize = 256;
+    const int shared_bytes = kBlockSize * sizeof(float);
+    biasBackwardKernel<<<features, kBlockSize, shared_bytes, stream>>>(
+        grad_output, grad_bias, total_tokens, features);
+}
+
 /**
  * BiasAddGradFn - Backward for broadcast add: output = input + bias
  * Forward: output[i,j] = input[i,j] + bias[j]  (bias broadcasted)
@@ -2926,7 +3080,7 @@ struct AddGradFn : public GradFn {
  *           grad_bias[j] = sum_i(grad_output[i,j]) (reduction over tokens)
  *
  * ISSUE #97: Encoder biases (b_qkv, b_o, b1, b2) were frozen because
- * launchFFNBiasAdd is a raw CUDA kernel with NO autograd tracking.
+ * bias add was a raw CUDA kernel with NO autograd tracking.
  */
 struct BiasAddGradFn : public GradFn {
     // ISSUE #48: Store stable data, NOT Tensor* pointers
@@ -3054,8 +3208,8 @@ struct BiasAddGradFn : public GradFn {
         // Backward for bias: grad_bias[j] = sum_i(grad_output[i,j])
         // Use the existing bias backward kernel from Feed_Forward_GPU.cu
         if (bias_requires_grad && grad_bias) {
-            launchFFNBiasBackward(grad_output.data, grad_bias, 
-                                  static_cast<int>(total_tokens), static_cast<int>(features), stream);
+            launchBiasBackward(grad_output.data, grad_bias, 
+                               static_cast<int>(total_tokens), static_cast<int>(features), stream);
 #if TENSOR_VERBOSE_DEBUG
             // ISSUE #97 DIAGNOSTIC: Read back and report bias gradient after computation
             {
@@ -3856,95 +4010,113 @@ struct EmbeddingGradFn : public GradFn {
 };
 
 /**
- * SoftmaxGradFn - Backward for softmax operation (ISSUE #48 FIX)
- * DOES NOT store Tensor* - stores stable data instead
+ * LogSoftmaxGradFn - Backward for log_softmax operation
+ * Saves log-probabilities from forward for exact backward (no recomputation).
+ *
+ * Gradient: grad_x[i] = grad_y[i] - exp(log_p[i]) * Σ_j grad_y[j]
+ *
+ * DOES NOT store Tensor* - stores stable data instead (ISSUE #48 pattern)
  */
-struct SoftmaxGradFn : public GradFn {
-    // ISSUE #48: Store stable data, NOT Tensor* pointers
+struct LogSoftmaxGradFn : public GradFn {
     bool input_requires_grad = false;
     float* input_grad = nullptr;
+    bool owns_input_grad = false;
     TensorContract::TensorShape input_shape;
     GradFn* input_grad_fn = nullptr;
-    float* saved_softmax = nullptr;  // Saved softmax output
+    float* saved_log_softmax = nullptr;  // Saved log-probabilities from forward
     int num_tokens = 0;
     int dim = 0;
-    
-    SoftmaxGradFn() { op_name = "softmax"; }
-    
-    ~SoftmaxGradFn() override {
-        if (saved_softmax) cudaFree(saved_softmax);
-        // ISSUE #50: Delete owned grad_fn to complete the chain cleanup
+
+    LogSoftmaxGradFn() { op_name = "log_softmax"; }
+
+    ~LogSoftmaxGradFn() override {
+        if (saved_log_softmax) cudaFree(saved_log_softmax);
+        if (owns_input_grad && input_grad) { cudaFree(input_grad); input_grad = nullptr; }
         if (owns_input_grad_fn && input_grad_fn) { delete input_grad_fn; input_grad_fn = nullptr; }
     }
-    
-    bool owns_input_grad_fn = false;  // ISSUE #50: Take ownership to prevent use-after-free
-    
+
+    bool owns_input_grad_fn = false;
+
     void capture_input(Tensor& x) {
         input_requires_grad = x.requires_grad;
         input_shape = x.shape;
-        
-        // ISSUE #50 FIX: Take ownership of captured grad_fn to prevent use-after-free
+
+        // Take ownership of captured grad_fn (ISSUE #50 pattern)
         input_grad_fn = x.grad_fn;
         if (x.grad_fn && x.owns_grad_fn) {
             owns_input_grad_fn = true;
-            x.owns_grad_fn = false;  // Transfer ownership to us
+            x.owns_grad_fn = false;
         }
-        
+
         if (input_requires_grad) {
+            // ISSUE #126 pattern: allocate OWN gradient buffer to avoid dangling pointer
+            // when input tensor is a temporary that gets destroyed before backward()
+            const size_t bytes = x.shape.total_elements() * sizeof(float);
+            cudaMalloc(&input_grad, bytes);
+            cudaMemset(input_grad, 0, bytes);
+            owns_input_grad = true;
+
+            // Also register with the input tensor so upstream can find it
             x.ensure_grad();
-            input_grad = x.grad_data();  // ISSUE #59: Use accessor
+            // Store pointer to our buffer in the tensor's grad field
+            // so the chain continues correctly
+            if (x.grad_data()) {
+                // Input already has grad — we'll accumulate into it during apply()
+                input_grad = x.grad_data();
+                owns_input_grad = false;
+            }
         }
     }
-    
-    void save(const float* softmax_output, int tokens, int d, cudaStream_t stream) {
+
+    void save(const float* log_softmax_output, int tokens, int d, cudaStream_t stream) {
         num_tokens = tokens;
         dim = d;
-        
-        size_t bytes = static_cast<size_t>(tokens) * d * sizeof(float);
-        cudaMalloc(&saved_softmax, bytes);
-        cudaMemcpyAsync(saved_softmax, softmax_output, bytes, cudaMemcpyDeviceToDevice, stream);
+        const size_t bytes = static_cast<size_t>(tokens) * d * sizeof(float);
+        cudaMalloc(&saved_log_softmax, bytes);
+        cudaMemcpyAsync(saved_log_softmax, log_softmax_output, bytes,
+                        cudaMemcpyDeviceToDevice, stream);
     }
-    
-    void apply(const Tensor& grad_output, cudaStream_t stream) override {
-        // RULE 20: Track current operation for error context
-        setCurrentGradFnOp("softmax", this);
-        
-        // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
-        if (applied) {
-            return;
-        }
-        applied = true;
-        
-        if (!input_requires_grad || !saved_softmax) {
-            return;
-        }
-        if (!input_grad) {
-            throw std::runtime_error("SoftmaxGradFn::apply: input_grad is NULL - capture_input() must be called first");
-        }
-        
-        // Shared memory for dot product reduction: one float per warp
-        const int shared_mem = (AUTOGRAD_BLOCK_SIZE / 32 + 1) * sizeof(float);
-        
-        kernel_softmax_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, shared_mem, stream>>>(
-            grad_output.data, saved_softmax, input_grad, num_tokens, dim);
-        trackKernelLaunch("kernel_softmax_backward", stream);
 
-        // CONTINUE AUTOGRAD CHAIN using stored grad_fn
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        setCurrentGradFnOp("log_softmax", this);
+
+        if (applied) return;
+        applied = true;
+
+        if (!input_requires_grad || !saved_log_softmax) return;
+        if (!input_grad) {
+            throw std::runtime_error(
+                "LogSoftmaxGradFn::apply: input_grad is NULL — "
+                "capture_input() must be called first");
+        }
+
+        kernel_log_softmax_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            grad_output.data, saved_log_softmax, input_grad, num_tokens, dim);
+        trackKernelLaunch("kernel_log_softmax_backward", stream);
+
+        // Continue autograd chain
         if (input_grad_fn) {
             Tensor view;
-            view.data = input_grad; view.shape = input_shape;
-            view.owns_data = false; view.owns_grad_fn = false; view.stream = stream;
+            view.data = input_grad;
+            view.shape = input_shape;
+            view.owns_data = false;
+            view.owns_grad_fn = false;
+            view.stream = stream;
             input_grad_fn->apply(view, stream);
             input_grad_fn->release_saved();
         }
     }
-    
+
     void release_saved() override {
         GradFn::release_saved();
-        if (saved_softmax) { cudaFree(saved_softmax); saved_softmax = nullptr; }
-        input_grad = nullptr;
-        // ISSUE #50: Set ownership false BEFORE delete
-        if (owns_input_grad_fn && input_grad_fn) { owns_input_grad_fn = false; delete input_grad_fn; input_grad_fn = nullptr; }
+        if (saved_log_softmax) { cudaFree(saved_log_softmax); saved_log_softmax = nullptr; }
+        if (owns_input_grad && input_grad) { cudaFree(input_grad); input_grad = nullptr; }
+        owns_input_grad = false;
+        if (owns_input_grad_fn && input_grad_fn) {
+            owns_input_grad_fn = false;
+            delete input_grad_fn;
+            input_grad_fn = nullptr;
+        }
     }
 };
 
@@ -4268,8 +4440,8 @@ Tensor broadcast_add(const Tensor& input, const Tensor& bias, cudaStream_t strea
     const size_t total_bytes = static_cast<size_t>(total_tokens) * features * sizeof(float);
     cudaMemcpyAsync(result.data, input.data, total_bytes, cudaMemcpyDeviceToDevice, stream);
     
-    // Use the existing FFN bias add kernel for the forward pass
-    launchFFNBiasAdd(result.data, bias.data, total_tokens, features, stream);
+    // Bias add forward (owned by autograd layer, not FFN-specific)
+    launchBiasAdd(result.data, bias.data, total_tokens, features, stream);
     
     // Set up backward - ISSUE #97: This was missing for encoder biases!
     if (result.requires_grad) {
@@ -4510,34 +4682,36 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cud
     return result;
 }
 
-Tensor softmax(const Tensor& x, cudaStream_t stream) {
+Tensor log_softmax(const Tensor& x, cudaStream_t stream) {
     if (!x.shape.is_flat()) {
-        throw std::invalid_argument("autograd::softmax: input must be 2D [tokens, dim]");
+        throw std::invalid_argument("autograd::log_softmax: input must be 2D [tokens, dim]");
     }
-    
+    if (!x.data) {
+        throw std::invalid_argument("autograd::log_softmax: input data is NULL");
+    }
+
     const auto dims = x.shape.as_2d();
     const int num_tokens = dims.rows;
     const int dim = dims.cols;
-    
+
     Tensor result = Tensor::empty(x.shape, x.requires_grad, stream);
-    
-    // Forward: compute softmax
-    // For each row: y = exp(x - max(x)) / sum(exp(x - max(x)))
-    // Would use existing softmax kernel here
-    // Placeholder: copy input
-    cudaMemcpyAsync(result.data, x.data, x.size_bytes(), cudaMemcpyDeviceToDevice, stream);
-    
-    // Set up backward - save the softmax OUTPUT for efficient backward
-    // ISSUE #48: capture stable data, not Tensor*
+
+    // Forward: log_softmax(x)[i] = x[i] - logsumexp(x)
+    // Numerically superior to softmax→log: stays in log space entirely.
+    kernel_log_softmax_forward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        x.data, result.data, num_tokens, dim);
+    trackKernelLaunch("kernel_log_softmax_forward", stream);
+
+    // Set up backward — save log-probabilities for exact gradient computation
     if (x.requires_grad) {
         result.is_leaf = false;
-        auto* grad_fn = new SoftmaxGradFn();
+        auto* grad_fn = new LogSoftmaxGradFn();
         grad_fn->capture_input(const_cast<Tensor&>(x));
         grad_fn->save(result.data, num_tokens, dim, stream);
         result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;  // ISSUE #54 FIX: Result owns its grad_fn
+        result.owns_grad_fn = true;
     }
-    
+
     return result;
 }
 

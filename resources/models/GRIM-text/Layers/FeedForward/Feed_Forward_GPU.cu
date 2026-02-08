@@ -12,128 +12,115 @@
 //======================================================//
 
 #include "Feed_Forward_GPU.hpp"
-#include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"  // Issue #97: autograd::broadcast_add
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <stdexcept>
-#include <algorithm>
 #include <cstdio>
 
 namespace GRIM {
 
 //======================================================//
-//  FFN-specific CUDA Kernels (Bias operations)
-//======================================================//
-
-namespace {
-
-__global__ void ffnBiasAddKernel(float* __restrict__ tensor,
-                                 const float* __restrict__ bias,
-                                 int total_elements,
-                                 int features) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < total_elements) {
-        const int feature_idx = idx % features;
-        tensor[idx] += bias[feature_idx];
-    }
-}
-
-// Bias backward: one block per feature; reduction within block.
-// No atomic needed because each feature is handled by exactly one block.
-__global__ void ffnBiasBackwardKernel(const float* __restrict__ grad_output,
-                                      float* __restrict__ grad_bias,
-                                      int total_tokens,
-                                      int features) {
-    extern __shared__ float sdata[];
-
-    const int feature_idx = blockIdx.x;
-    const int tid = threadIdx.x;
-
-    if (feature_idx >= features) return;
-
-    float local_sum = 0.0f;
-    for (int t = tid; t < total_tokens; t += blockDim.x) {
-        local_sum += grad_output[t * features + feature_idx];
-    }
-    sdata[tid] = local_sum;
-    __syncthreads();
-
-    // Reduction in shared memory (assumes blockDim.x is power-of-two)
-    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-        if (tid < s) {
-            sdata[tid] += sdata[tid + s];
-        }
-        __syncthreads();
-    }
-
-    if (tid == 0) {
-        // Accumulate into grad_bias (caller may be doing grad accumulation)
-        grad_bias[feature_idx] += sdata[0];
-    }
-}
-
-} // anonymous namespace
-
-//======================================================//
-//  FFN Kernel Launch Functions
-//======================================================//
-
-void launchFFNBiasAdd(float* tensor, const float* bias,
-                      int total_tokens, int features,
-                      cudaStream_t stream) {
-    // Rule 20: Crash on invalid input
-    if (!tensor) {
-        throw std::runtime_error("launchFFNBiasAdd: tensor is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
-    }
-    if (!bias) {
-        throw std::runtime_error("launchFFNBiasAdd: bias is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
-    }
-    if (total_tokens <= 0 || features <= 0) {
-        throw std::runtime_error("launchFFNBiasAdd: invalid dimensions (" + std::to_string(total_tokens) + ", " + std::to_string(features) + ")");
-    }
-
-    const int total_elements = total_tokens * features;
-    constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
-    const int grid = (total_elements + kBlockSize - 1) / kBlockSize;
-
-    ffnBiasAddKernel<<<grid, kBlockSize, 0, stream>>>(tensor, bias, total_elements, features);
-}
-
-void launchFFNBiasBackward(const float* grad_output, float* grad_bias,
-                           int total_tokens, int features,
-                           cudaStream_t stream) {
-    // Rule 20: Crash on invalid input
-    if (!grad_output) {
-        throw std::runtime_error("launchFFNBiasBackward: grad_output is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
-    }
-    if (!grad_bias) {
-        throw std::runtime_error("launchFFNBiasBackward: grad_bias is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
-    }
-    if (total_tokens <= 0 || features <= 0) {
-        throw std::runtime_error("launchFFNBiasBackward: invalid dimensions (" + std::to_string(total_tokens) + ", " + std::to_string(features) + ")");
-    }
-
-    constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
-    const int shared_bytes = kBlockSize * sizeof(float);
-
-    ffnBiasBackwardKernel<<<features, kBlockSize, shared_bytes, stream>>>(
-        grad_output, grad_bias, total_tokens, features);
-}
-
-//======================================================//
 //  FeedForwardLayer Implementation
 //======================================================//
 
-FeedForwardLayer::FeedForwardLayer(const FeedForwardConfig& config)
+FeedForwardLayer::FeedForwardLayer(const FeedForwardConfig& config,
+                                   Tensor& w1, Tensor& b1, Tensor& w2, Tensor& b2)
     : config_(config) {
     if (!config_.cublas_handle) {
         throw std::runtime_error("FeedForwardLayer: cublas_handle is NULL - caller MUST provide handle");
     }
+    if (!config_.stream) {
+        throw std::runtime_error("FeedForwardLayer: stream is NULL");
+    }
+    if (config_.d_model <= 0 || config_.d_ff <= 0) {
+        throw std::runtime_error("FeedForwardLayer: d_model and d_ff must be positive");
+    }
+
+    // Rule 20: Strong shape validation - external weights REQUIRED
+    const int d_model = config_.d_model;
+    const int d_ff = config_.d_ff;
+
+    // W1: [d_model, d_ff] for matmul: input [T, d_model] @ W1 [d_model, d_ff] = [T, d_ff]
+    {
+        const auto& s1 = w1.shape.as_2d();
+        if (s1.rows != d_model || s1.cols != d_ff) {
+            throw std::invalid_argument(
+                "FeedForwardLayer: W1 shape mismatch. Expected [" +
+                std::to_string(d_model) + "," + std::to_string(d_ff) + "], got [" +
+                std::to_string(s1.rows) + "," + std::to_string(s1.cols) + "]"
+            );
+        }
+    }
+
+    // W2: [d_ff, d_model] for matmul: hidden [T, d_ff] @ W2 [d_ff, d_model] = [T, d_model]
+    {
+        const auto& s2 = w2.shape.as_2d();
+        if (s2.rows != d_ff || s2.cols != d_model) {
+            throw std::invalid_argument(
+                "FeedForwardLayer: W2 shape mismatch. Expected [" +
+                std::to_string(d_ff) + "," + std::to_string(d_model) + "], got [" +
+                std::to_string(s2.rows) + "," + std::to_string(s2.cols) + "]"
+            );
+        }
+    }
+
+    // Biases optional, but if provided enforce shapes
+    if (b1.data) {
+        const auto& sb1 = b1.shape.as_2d();
+        if (sb1.rows != 1 || sb1.cols != d_ff) {
+            throw std::invalid_argument(
+                "FeedForwardLayer: b1 shape mismatch. Expected [1," +
+                std::to_string(d_ff) + "], got [" +
+                std::to_string(sb1.rows) + "," + std::to_string(sb1.cols) + "]"
+            );
+        }
+    }
+
+    if (b2.data) {
+        const auto& sb2 = b2.shape.as_2d();
+        if (sb2.rows != 1 || sb2.cols != d_model) {
+            throw std::invalid_argument(
+                "FeedForwardLayer: b2 shape mismatch. Expected [1," +
+                std::to_string(d_model) + "], got [" +
+                std::to_string(sb2.rows) + "," + std::to_string(sb2.cols) + "]"
+            );
+        }
+    }
+
+    // Create view Tensors referencing external buffers
+    // ISSUE #59: Use share_grad() for proper shared_ptr semantics
+    W1_ = Tensor::from_ptr(w1.data, w1.shape, false, true);
+    W1_.share_grad(w1);
+    W1_.owns_data = false;
+    W1_.name = "ffn.W1";
+
+    if (b1.data) {
+        b1_ = Tensor::from_ptr(b1.data, b1.shape, false, true);
+        b1_.share_grad(b1);
+        b1_.owns_data = false;
+        b1_.name = "ffn.b1";
+    }
+
+    W2_ = Tensor::from_ptr(w2.data, w2.shape, false, true);
+    W2_.share_grad(w2);
+    W2_.owns_data = false;
+    W2_.name = "ffn.W2";
+
+    if (b2.data) {
+        b2_ = Tensor::from_ptr(b2.data, b2.shape, false, true);
+        b2_.share_grad(b2);
+        b2_.owns_data = false;
+        b2_.name = "ffn.b2";
+    }
+
     // Set cuBLAS handle for autograd
     autograd::set_autograd_cublas_handle(config_.cublas_handle);
+
+    std::fprintf(stderr, "[FeedForwardLayer] Initialized with external weights: W1=[%zu], W2=[%zu]\n",
+                 W1_.numel(), W2_.numel());
 }
 
 FeedForwardLayer::~FeedForwardLayer() {
@@ -168,143 +155,16 @@ void FeedForwardLayer::setConfig(const FeedForwardConfig& cfg) {
     }
 }
 
-void FeedForwardLayer::ensureWeightStorage() {
-    if (config_.d_model <= 0 || config_.d_ff <= 0) {
-        throw std::runtime_error("FeedForwardLayer: d_model and d_ff must be positive");
-    }
-    if (!config_.stream) {
-        throw std::runtime_error("FeedForwardLayer: stream is NULL");
-    }
-    StreamController::fatalIfDefaultStream(config_.stream, "FeedForwardLayer::ensureWeightStorage");
 
-    // W1: stored as [d_model, d_ff] for matmul: input [T, d_model] @ W1 [d_model, d_ff] = [T, d_ff]
-    if (W1_.numel() == 0) {
-        auto w1_shape = TensorContract::TensorShape::make_BSM(config_.d_model, config_.d_ff);
-        W1_ = Tensor::xavier_uniform(w1_shape, true, config_.stream);
-        W1_.name = "ffn.W1";
-    }
-
-    if (b1_.numel() == 0) {
-        auto b1_shape = TensorContract::TensorShape::make_BSM(1, config_.d_ff);
-        b1_ = Tensor::zeros(b1_shape, true, config_.stream);
-        b1_.name = "ffn.b1";
-    }
-
-    // W2: stored as [d_ff, d_model] for matmul: hidden [T, d_ff] @ W2 [d_ff, d_model] = [T, d_model]
-    if (W2_.numel() == 0) {
-        auto w2_shape = TensorContract::TensorShape::make_BSM(config_.d_ff, config_.d_model);
-        W2_ = Tensor::xavier_uniform(w2_shape, true, config_.stream);
-        W2_.name = "ffn.W2";
-    }
-
-    if (b2_.numel() == 0) {
-        auto b2_shape = TensorContract::TensorShape::make_BSM(1, config_.d_model);
-        b2_ = Tensor::zeros(b2_shape, true, config_.stream);
-        b2_.name = "ffn.b2";
-    }
-
-    // AUTOGRAD MIGRATION: Allocate gradient buffers for all trainable tensors
-    W1_.ensure_grad();
-    b1_.ensure_grad();
-    W2_.ensure_grad();
-    b2_.ensure_grad();
-}
-
-void FeedForwardLayer::useExternalWeights(Tensor& w1, Tensor& b1, Tensor& w2, Tensor& b2) {
-    const int d_model = config_.d_model;
-    const int d_ff = config_.d_ff;
-
-    // Strong shape enforcement (numel alone is not enough; orientation matters)
-    // Expected internal layout:
-    //   W1: [d_model, d_ff]
-    //   b1: [1, d_ff] (optional)
-    //   W2: [d_ff, d_model]
-    //   b2: [1, d_model] (optional)
-    {
-        const auto& s1 = w1.shape.as_2d();
-        if (s1.rows != d_model || s1.cols != d_ff) {
-            throw std::invalid_argument(
-                "FeedForwardLayer::useExternalWeights: W1 shape mismatch. Expected [" +
-                std::to_string(d_model) + "," + std::to_string(d_ff) + "], got [" +
-                std::to_string(s1.rows) + "," + std::to_string(s1.cols) + "]"
-            );
-        }
-    }
-    {
-        const auto& s2 = w2.shape.as_2d();
-        if (s2.rows != d_ff || s2.cols != d_model) {
-            throw std::invalid_argument(
-                "FeedForwardLayer::useExternalWeights: W2 shape mismatch. Expected [" +
-                std::to_string(d_ff) + "," + std::to_string(d_model) + "], got [" +
-                std::to_string(s2.rows) + "," + std::to_string(s2.cols) + "]"
-            );
-        }
-    }
-
-    // Biases are optional but if provided, enforce expected shapes.
-    if (b1.data) {
-        const auto& sb1 = b1.shape.as_2d();
-        if (sb1.rows != 1 || sb1.cols != d_ff) {
-            throw std::invalid_argument(
-                "FeedForwardLayer::useExternalWeights: b1 shape mismatch. Expected [1," +
-                std::to_string(d_ff) + "], got [" +
-                std::to_string(sb1.rows) + "," + std::to_string(sb1.cols) + "]"
-            );
-        }
-    }
-
-    if (b2.data) {
-        const auto& sb2 = b2.shape.as_2d();
-        if (sb2.rows != 1 || sb2.cols != d_model) {
-            throw std::invalid_argument(
-                "FeedForwardLayer::useExternalWeights: b2 shape mismatch. Expected [1," +
-                std::to_string(d_model) + "], got [" +
-                std::to_string(sb2.rows) + "," + std::to_string(sb2.cols) + "]"
-            );
-        }
-    }
-
-    // Create view Tensors that reference external buffers
-    // ISSUE #59: Use share_grad() for proper shared_ptr semantics
-    W1_ = Tensor::from_ptr(w1.data, w1.shape, false, true);
-    W1_.share_grad(w1);
-    W1_.owns_data = false;
-    W1_.name = "ffn.W1_ext";
-
-    if (b1.data) {
-        b1_ = Tensor::from_ptr(b1.data, b1.shape, false, true);
-        b1_.share_grad(b1);
-        b1_.owns_data = false;
-        b1_.name = "ffn.b1_ext";
-    }
-
-    W2_ = Tensor::from_ptr(w2.data, w2.shape, false, true);
-    W2_.share_grad(w2);
-    W2_.owns_data = false;
-    W2_.name = "ffn.W2_ext";
-
-    if (b2.data) {
-        b2_ = Tensor::from_ptr(b2.data, b2.shape, false, true);
-        b2_.share_grad(b2);
-        b2_.owns_data = false;
-        b2_.name = "ffn.b2_ext";
-    }
-
-    std::fprintf(stderr, "[FeedForwardLayer] Using external weights: W1=[%zu], W2=[%zu]\n",
-                 W1_.numel(), W2_.numel());
-}
 
 //======================================================//
 //  Forward Pass - Autograd with ForwardIntermediates (Issue #56 Fix)
 //======================================================//
 
 Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& intermediates) {
-    // Rule 20: Crash on invalid input
-    if (!input.data) {
-        throw std::runtime_error("FeedForwardLayer::forward: input.data is NULL");
-    }
+    // Rule 20: Crash on invalid weights
     if (!W1_.data || !W2_.data) {
-        throw std::runtime_error("FeedForwardLayer::forward: weights not initialized - call ensureWeightStorage() first");
+        throw std::runtime_error("FeedForwardLayer::forward: weights not set - constructor requires external weights");
     }
     if (!config_.stream) {
         throw std::runtime_error("FeedForwardLayer::forward: stream is NULL");

@@ -63,7 +63,6 @@ add_library(grim_training_kernels STATIC
     ../../Layers/Embedding/Embedding_GPU.cu
     ../../Shared/Loss/CrossEntropy/CrossEntropy_GPU.cu
     ../../Shared/Gradients/GradientCC_GPU.cu
-    ../../Shared/Gradients/GradientCC_Host_GPU.cu
     ../../Shared/GPUBuffer/GPUBuffer.cu
     ../../Shared/GradNorm/GradNormGPU.cu
     ../../Shared/Telemetry/TelemetryLattice_GPU.cu
@@ -580,9 +579,6 @@ target_include_directories(diagnostic_train_minimal PRIVATE
 # ============================================================================
 # EMBEDDING AUTOGRAD TEST SUITE
 # Autograd-enabled embedding tests using TensorContract system
-# DELETED: embedding_autograd_test target (Issue #92 / Rule 20)
-# Legacy embedding tests deleted - production uses autograd::embedding() in TensorContract_GPU.cu
-
 message(STATUS "TrainingLoop configured:")
 message(STATUS "  - train_gpu: GPU-accelerated training with comprehensive logging")
 message(STATUS "  - diagnostic_train_minimal: Barebones training for plateau debugging")

@@ -668,7 +668,9 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     //  PyTorch transformers do this - we weren't, which caused mode collapse.
     // ═══════════════════════════════════════════════════════════════════════════
     if (cfg->dropout_rate > 0.0f) {
-        const uint64_t emb_dropout_seed = ctx.step * 1000 + 999;  // Unique seed for embedding dropout
+        // Seeded reproducibility: Use fixed offset seed for embedding dropout
+        // (Makes dropout deterministic - same dropout pattern every training run)
+        const uint64_t emb_dropout_seed = 42 + 500;  // Fixed seed + embedding offset
         ctx.embedding_tensor = autograd::dropout(ctx.embedding_tensor, cfg->dropout_rate, 
                                                   emb_dropout_seed, true, ctx.stream);
         AG_INFO("Step 1c: Embedding dropout applied (p=" << cfg->dropout_rate << ")");
@@ -953,7 +955,9 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         //  transformer implementations and prevents mode collapse.
         // ═══════════════════════════════════════════════════════════════════════
         if (cfg->dropout_rate > 0.0f) {
-            const uint64_t layer_dropout_seed = ctx.step * 1000 + layer_idx;  // Unique seed per layer per step
+            // Seeded reproducibility: Use fixed offset seed for layer dropout
+            // Different offset per layer ensures different dropout patterns per layer
+            const uint64_t layer_dropout_seed = 42 + 500 + layer_idx + 1;  // Fixed base + unique per layer
             layer_output = autograd::dropout(layer_output, cfg->dropout_rate,
                                              layer_dropout_seed, true, ctx.stream);
         }

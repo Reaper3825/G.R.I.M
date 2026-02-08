@@ -146,7 +146,6 @@ struct StartupConfig {
     // Flags
     bool save_test_mode = false;
     bool force_rebuild_vocab = false;
-    bool clear_merged_cache = false;
 };
 
 //======================================================//
@@ -165,6 +164,7 @@ struct SequenceData {
     GRIM::DynaSeq::Catalog val_catalog;
     std::vector<float> sequence_rarity;
     std::vector<float> val_sequence_rarity;
+    uint32_t vocab_size = 0;  // Vocab size from training data file
 };
 
 /**
@@ -174,8 +174,6 @@ struct OptimizerContext {
     GRIM::OptimizerState optimizer_state;
     GRIM::DynamicLR::DynamicLRController dynamic_lr_controller;
     GRIM::SoftRestart::SoftRestartController soft_restart_controller;
-    // Gradient accumulation now tracked via ctx.config.hyperparameters.gradient_accumulation_steps
-    // and current_micro_step counter in TrainingContext (not a separate controller)
     int current_micro_step = 0;  // Tracks position within accumulation window [0, accum_steps)
 };
 
@@ -396,15 +394,22 @@ LoggingContext initializeLogging(const PathConfig& paths);
 GRIM::Tokenizer::UniByte initializeTokenizer(
     const std::string& vocab_path,
     const GRIM::Config::TokenizerConfig& tok_config,
+    const GRIM::Config::TrainingHyperparameters& hyperparameters,
     TrainingLogger& logger);
 
 /**
  * @brief Load and preprocess training data
+ * 
+ * @param add_bos_token If true, adds BOS token to start of sequences (from config)
+ * @param add_eos_token If true, adds EOS token to end of sequences (from config)
  */
 SequenceData loadTrainingData(
     const std::string& data_path,
     int max_seq_len,
+    int min_seq_valid_tokens,
     int sliding_window_stride,
+    bool add_bos_token,
+    bool add_eos_token,
     const GRIM::Tokenizer::UniByte& tokenizer,
     TrainingLogger& logger);
 

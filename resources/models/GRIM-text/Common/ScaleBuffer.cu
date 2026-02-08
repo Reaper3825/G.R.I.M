@@ -3,7 +3,8 @@
 #include <cmath>
 #include <cuda_runtime.h>
 
-#include "../GRIM/grim_language_model_cuda.hpp"
+#include "../Shared/GPUBuffer/GPUBuffer.hpp"
+#include "../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "grim_scale_buffer.hpp"
 
 namespace GRIM {
@@ -24,6 +25,16 @@ void scaleDeviceBuffer(float* data, size_t count, float scale, cudaStream_t stre
     int grid = static_cast<int>((count + block - 1) / block);
     scaleBufferKernel<<<grid, block, 0, stream>>>(data, count, scale);
     CUDA_CHECK(cudaGetLastError());
+}
+
+void scaleDeviceBuffer(Tensor& tensor, float scale, cudaStream_t stream) {
+    if (!tensor.data || tensor.numel() == 0) return;
+    scaleDeviceBuffer(tensor.data, tensor.numel(), scale, stream);
+}
+
+void scaleGradBuffer(Tensor& tensor, float scale, cudaStream_t stream) {
+    if (!tensor.has_grad() || tensor.numel() == 0) return;
+    scaleDeviceBuffer(tensor.grad_data(), tensor.numel(), scale, stream);
 }
 
 #endif // USE_CUDA

@@ -285,9 +285,11 @@ void LanguageModel::initTrainingState() {
             TC::make_BSM(1, 1), true, primary_stream);
         training_state_.numeric_head_bias.ensure_grad();  // Allocate grad buffer NOW
         
-        // Initialize numeric head with Xavier uniform
+        // Initialize numeric head with Xavier uniform using deterministic seed
         // Shape [1, d_model]: fan_in = d_model (columns), fan_out = 1 (rows)
-        Tensor::xavier_uniform_(training_state_.numeric_head_weights, primary_stream);
+        // Use seed + 100 to avoid collision with encoder weight seeds
+        const uint64_t numeric_head_seed = 12345ULL + 100;
+        Tensor::xavier_uniform_(training_state_.numeric_head_weights, numeric_head_seed, primary_stream);
         // expected_rms = sqrt(6 / (fan_in + fan_out)) / sqrt(3) where fan_in=d_model, fan_out=1
         const float expected_rms = std::sqrt(6.0f / static_cast<float>(cfg.d_model + 1)) / std::sqrt(3.0f);
         std::cout << "📦 Numeric head allocated (expected_rms=" << expected_rms << ")" << std::endl;
@@ -502,34 +504,6 @@ void LanguageModel::initTrainingState() {
         cache.V = Tensor::empty(
             TensorContract::TensorShape::make_BHSD(max_batch_size, training_state_.num_kv_heads, max_seq_len_cache, head_dim_cache), false, primary_stream);
     }
-
-    // Allocate raw pointer cache array for CUDA kernel interface
-    if (!training_state_.forward_layer_caches) {
-        training_state_.forward_layer_cache_count = cfg.num_layers;
-        training_state_.forward_layer_caches = new EncoderLayerCache[cfg.num_layers]();
-    }
-    
-    // Populate raw pointer interface from Tensor caches
-    for (int layer = 0; layer < cfg.num_layers; ++layer) {
-        auto& tensor_cache = training_state_.encoder_layer_caches[layer];
-        auto& raw_cache = training_state_.forward_layer_caches[layer];
-        
-        raw_cache.ln1_output = tensor_cache.ln1_output.data;
-        raw_cache.attn_input = tensor_cache.attn_input.data;
-        raw_cache.attn_bhsd = tensor_cache.attn_bhsd.data;
-        raw_cache.softmax_lse = tensor_cache.softmax_lse.data;
-        raw_cache.attn_output = tensor_cache.attn_output.data;
-        raw_cache.residual1 = tensor_cache.residual1.data;
-        raw_cache.ln2_input = tensor_cache.residual1.data;  // ln2_input aliases residual1
-        raw_cache.ln2_output = tensor_cache.ln2_output.data;
-        raw_cache.ffn_input = tensor_cache.ln2_output.data;  // ffn_input aliases ln2_output
-        raw_cache.ffn_pre_gelu = tensor_cache.ffn_pre_gelu.data;
-        raw_cache.ffn_output = tensor_cache.ffn_output.data;
-        raw_cache.layer_output = tensor_cache.layer_output.data;
-        raw_cache.q = tensor_cache.Q.data;
-        raw_cache.k = tensor_cache.K.data;
-        raw_cache.v = tensor_cache.V.data;
-    }
     
     // Output layer caches - using Tensor API
     training_state_.cached_encoder_output = Tensor::empty(
@@ -599,16 +573,8 @@ void LanguageModel::initTrainingState() {
     );
     std::cout << "✓ Allocated token text mask cache (Tensor API)" << std::endl;
     
-    // GRMT v6: Allocate byte length buffer for loss weighting - Rule 20: Tensor API
-    training_state_.cached_token_byte_lengths = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
-        false,  // no grad
-        primary_stream
-    );
-    std::cout << "✓ Allocated token byte lengths cache (Tensor API)" << std::endl;
-    
-    std::cout << "✓ Allocated numeric/text/byte_length feature buffers (" 
-              << (max_tokens * (sizeof(float) + sizeof(uint8_t) + kTextFeatureDim * sizeof(uint16_t) + sizeof(uint8_t) + sizeof(uint16_t)) / 1024 / 1024) 
+    std::cout << "✓ Allocated numeric/text feature buffers (" 
+              << (max_tokens * (sizeof(float) + sizeof(uint8_t) + kTextFeatureDim * sizeof(uint16_t) + sizeof(uint8_t)) / 1024 / 1024) 
               << " MB)" << std::endl;
 
     // Allocate entropy output buffer (per-layer, per-batch, per-head)

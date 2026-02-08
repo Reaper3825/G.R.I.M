@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -24,14 +25,9 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr const char* kDefaultLogsPath = "D:\\G.R.I.M\\resources\\models\\GRIM-text\\training\\logs";
-
 std::mutex g_host_mutex;
 bool g_initialized = false;
 std::string g_logs_root;
-DeviceLogBuffer g_device_buffer{};
-LayerLogEntry* g_host_stage = nullptr;
-std::size_t g_stage_capacity = 0;
 
 std::unordered_map<std::string, std::FILE*> g_log_handles;
 
@@ -63,52 +59,6 @@ bool g_layer_enables[static_cast<int>(LayerType::kCount)] = {
     true,   // kEncoding
     true    // kSerialization
 };
-
-// Device symbols -----------------------------------------------------------
-__device__ DeviceLogBuffer d_device_buffer;
-__device__ DeviceLogDelegate d_device_delegate;
-
-__device__ void DeviceBufferLogger(const LayerLogEntry& entry) {
-    DeviceLogBuffer buffer = d_device_buffer;
-    if (!buffer.entries || !buffer.cursor || buffer.capacity <= 0) {
-        return;
-    }
-    int idx = atomicAdd(buffer.cursor, 1);
-    if (idx >= buffer.capacity) {
-        atomicSub(buffer.cursor, 1);
-        return;
-    }
-    buffer.entries[idx] = entry;
-}
-
-__global__ void InitializeDeviceLoggingKernel(DeviceLogBuffer buffer) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        d_device_buffer = buffer;
-        if (buffer.cursor) {
-            *buffer.cursor = 0;
-        }
-        d_device_delegate.Clear();
-        d_device_delegate.Add(DeviceBufferLogger);
-    }
-}
-
-__global__ void ResetDeviceCursorKernel(DeviceLogBuffer buffer) {
-    if (threadIdx.x == 0 && blockIdx.x == 0 && buffer.cursor) {
-        *buffer.cursor = 0;
-    }
-}
-
-__global__ void RegisterCallbackKernel(DeviceLogDelegate::Callback callback) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        d_device_delegate.Add(callback);
-    }
-}
-
-__global__ void ClearCallbacksKernel() {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        d_device_delegate.Clear();
-    }
-}
 
 std::string SafeString(const char* buffer, std::size_t max_len) {
     if (!buffer || max_len == 0) {
@@ -239,20 +189,6 @@ void CleanupResources() {
         g_log_worker.join();
     }
     
-    if (g_device_buffer.entries) {
-        cudaFree(g_device_buffer.entries);
-        g_device_buffer.entries = nullptr;
-    }
-    if (g_device_buffer.cursor) {
-        cudaFree(g_device_buffer.cursor);
-        g_device_buffer.cursor = nullptr;
-    }
-    g_device_buffer.capacity = 0;
-    if (g_host_stage) {
-        cudaFreeHost(g_host_stage);
-        g_host_stage = nullptr;
-    }
-    g_stage_capacity = 0;
     CloseAllFiles();
     g_initialized = false;
 }
@@ -300,10 +236,6 @@ bool CreateLayerFolder(const std::string& absolutePath, LayerType type) {
     return !ec;
 }
 
-void InitLogRecorder() {
-    Logging::InitLogRecorder();
-}
-
 } // namespace GRIM
 
 namespace GRIM::Logging {
@@ -339,47 +271,19 @@ const char* ModuleLogLevelToString(ModuleLogLevel level) {
     }
 }
 
-bool InitLogRecorder(const std::string& rootPath, std::size_t maxDeviceEntries) {
+bool InitLogRecorder(const std::string& rootPath, std::size_t /*maxDeviceEntries*/) {
     std::lock_guard<std::mutex> lock(g_host_mutex);
     if (g_initialized) {
         return true;
     }
-    if (maxDeviceEntries == 0) {
-        maxDeviceEntries = 1024;
-    }
 
-    g_logs_root = rootPath.empty() ? std::string(kDefaultLogsPath) : rootPath;
+    if (rootPath.empty()) {
+        throw std::runtime_error("InitLogRecorder: rootPath is EMPTY - caller MUST provide valid logs directory");
+    }
+    g_logs_root = rootPath;
     fs::create_directories(g_logs_root);
     for (int i = 1; i < static_cast<int>(LayerType::kCount); ++i) {
         CreateLayerFolder(g_logs_root, static_cast<LayerType>(i));
-    }
-
-    cudaError_t err = cudaMalloc(&g_device_buffer.entries, maxDeviceEntries * sizeof(LayerLogEntry));
-    if (err != cudaSuccess) {
-        CleanupResources();
-        return false;
-    }
-    err = cudaMalloc(&g_device_buffer.cursor, sizeof(int));
-    if (err != cudaSuccess) {
-        CleanupResources();
-        return false;
-    }
-    cudaMemset(g_device_buffer.cursor, 0, sizeof(int));
-    g_device_buffer.capacity = static_cast<int>(maxDeviceEntries);
-
-    err = cudaMallocHost(reinterpret_cast<void**>(&g_host_stage), maxDeviceEntries * sizeof(LayerLogEntry));
-    if (err != cudaSuccess) {
-        CleanupResources();
-        return false;
-    }
-    g_stage_capacity = maxDeviceEntries;
-
-    // INTENTIONAL: Stream 0 used for synchronous initialization (cudaDeviceSynchronize follows)
-    InitializeDeviceLoggingKernel<<<1, 32, 0, 0>>>(g_device_buffer);
-    err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-        CleanupResources();
-        return false;
     }
 
     g_initialized = true;
@@ -401,35 +305,12 @@ void ShutdownLogRecorder() {
 }
 
 void FlushDeviceLogs() {
-    std::lock_guard<std::mutex> lock(g_host_mutex);
-    if (!g_initialized || !g_device_buffer.entries || !g_device_buffer.cursor) {
-        return;
-    }
-    int count = 0;
-    cudaMemcpy(&count, g_device_buffer.cursor, sizeof(int), cudaMemcpyDeviceToHost);
-    if (count <= 0) {
-        return;
-    }
-    count = std::min(count, g_device_buffer.capacity);
-    if (static_cast<std::size_t>(count) > g_stage_capacity) {
-        cudaFreeHost(g_host_stage);
-        cudaMallocHost(reinterpret_cast<void**>(&g_host_stage), count * sizeof(LayerLogEntry));
-        g_stage_capacity = count;
-    }
-    cudaMemcpy(g_host_stage, g_device_buffer.entries, count * sizeof(LayerLogEntry), cudaMemcpyDeviceToHost);
-    ResetDeviceLogs();
-    for (int i = 0; i < count; ++i) {
-        WriteEntryToDisk(g_host_stage[i]);
-    }
+    // No-op: Device-side logging was removed (zero callers in production).
+    // Only host-side RecordLayerLogHost() is used.
 }
 
 void ResetDeviceLogs() {
-    if (!g_initialized || !g_device_buffer.cursor) {
-        return;
-    }
-    // INTENTIONAL: Stream 0 used for synchronous reset (cudaDeviceSynchronize follows)
-    ResetDeviceCursorKernel<<<1, 32, 0, 0>>>(g_device_buffer);
-    cudaDeviceSynchronize();
+    // No-op: Device-side logging was removed (zero callers in production).
 }
 
 bool LogsInitialized() {
@@ -439,79 +320,6 @@ bool LogsInitialized() {
 
 const std::string& GetLogsRoot() {
     return g_logs_root;
-}
-
-DeviceLogBuffer GetDeviceLogBuffer() {
-    return g_device_buffer;
-}
-
-cudaError_t InstallDefaultDeviceLogger() {
-    if (!g_initialized) {
-        return cudaErrorInitializationError;
-    }
-    // INTENTIONAL: Stream 0 used for synchronous logger install (cudaDeviceSynchronize follows)
-    InitializeDeviceLoggingKernel<<<1, 32, 0, 0>>>(g_device_buffer);
-    return cudaDeviceSynchronize();
-}
-
-cudaError_t RegisterDeviceLogCallback(DeviceLogDelegate::Callback callback) {
-    if (!g_initialized || callback == nullptr) {
-        return cudaErrorInvalidValue;
-    }
-    // INTENTIONAL: Stream 0 used for synchronous callback registration (cudaDeviceSynchronize follows)
-    RegisterCallbackKernel<<<1, 32, 0, 0>>>(callback);
-    return cudaDeviceSynchronize();
-}
-
-cudaError_t ClearDeviceLogCallbacks() {
-    if (!g_initialized) {
-        return cudaErrorInitializationError;
-    }
-    // INTENTIONAL: Stream 0 used for synchronous callback clear (cudaDeviceSynchronize follows)
-    ClearCallbacksKernel<<<1, 32, 0, 0>>>();
-    return cudaDeviceSynchronize();
-}
-
-__device__ void RecordLayerLog(const LayerLogEntry& entry) {
-    d_device_delegate.Broadcast(entry);
-}
-
-__device__ int DeviceStrnlen(const char* src, int max_len) {
-    int len = 0;
-    while (len < max_len && src && src[len] != '\0') {
-        ++len;
-    }
-    return len;
-}
-
-__device__ void RecordLayerLogSimple(LayerType type,
-                                     int layer_index,
-                                     std::uint64_t global_step,
-                                     float primary_value,
-                                     float secondary_value,
-                                     const char* tag,
-                                     const char* message) {
-    LayerLogEntry entry{};
-    entry.type = type;
-    entry.layer_index = layer_index;
-    entry.global_step = global_step;
-    entry.primary_value = primary_value;
-    entry.secondary_value = secondary_value;
-    if (tag) {
-        const int len = DeviceStrnlen(tag, static_cast<int>(kMaxTagLength) - 1);
-        for (int i = 0; i < len; ++i) {
-            entry.tag[i] = tag[i];
-        }
-        entry.tag[len] = '\0';
-    }
-    if (message) {
-        const int len = DeviceStrnlen(message, static_cast<int>(kMaxMessageLength) - 1);
-        for (int i = 0; i < len; ++i) {
-            entry.message[i] = message[i];
-        }
-        entry.message[len] = '\0';
-    }
-    RecordLayerLog(entry);
 }
 
 bool RecordLayerLogHost(LayerType type,
@@ -781,153 +589,7 @@ void ScopedLogRecorder::flush() const {
     FlushDeviceLogs();
 }
 
-//======================================================//
-//  LogMirrorScope Implementation
-//======================================================//
 
-LogMirrorScope::LogMirrorScope(const std::string& log_path)
-#ifdef _WIN32
-    : console_out_(GetStdHandle(STD_OUTPUT_HANDLE))
-#else
-    : console_fd_(dup(STDOUT_FILENO))
-#endif
-{
-    if (!start(log_path)) {
-        stop_.store(true);
-    }
-}
-
-LogMirrorScope::~LogMirrorScope() {
-    stop_.store(true);
-    if (worker_.joinable()) {
-        worker_.join();
-    }
-#ifndef _WIN32
-    if (console_fd_ >= 0) {
-        close(console_fd_);
-    }
-#endif
-}
-
-bool LogMirrorScope::start(const std::string& log_path) {
-#ifdef _WIN32
-    if (console_out_ == nullptr || console_out_ == INVALID_HANDLE_VALUE) {
-        return false;
-    }
-#else
-    if (console_fd_ < 0) {
-        return false;
-    }
-#endif
-    log_stream_.open(log_path);
-    if (!log_stream_.is_open()) {
-        return false;
-    }
-    log_stream_.seekg(0, std::ios::end);
-    worker_ = std::thread([this]() { mirrorLoop(); });
-    return true;
-}
-
-void LogMirrorScope::mirrorLoop() {
-    std::string line;
-    while (!stop_.load()) {
-        auto position = log_stream_.tellg();
-        if (std::getline(log_stream_, line)) {
-            line.push_back('\n');
-            writeToConsole(line);
-        } else {
-            log_stream_.clear();
-            log_stream_.seekg(position);
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-    }
-}
-
-void LogMirrorScope::writeToConsole(const std::string& text) {
-#ifdef _WIN32
-    DWORD written = 0;
-    WriteConsoleA(console_out_, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
-#else
-    if (console_fd_ >= 0) {
-        ::write(console_fd_, text.data(), text.size());
-    }
-#endif
-}
-
-//======================================================//
-//  Logging Configuration Parsing Implementation
-//======================================================//
-
-ModuleLogLevel ParseModuleLogLevelString(const std::string& text, ModuleLogLevel fallback) {
-    const std::string normalized = ToLowerCopyInternal(TrimCopyInternal(text));
-    if (normalized == "info" || normalized == "verbose" || normalized == "all") {
-        return ModuleLogLevel::Info;
-    }
-    if (normalized == "warn" || normalized == "warning") {
-        return ModuleLogLevel::Warning;
-    }
-    if (normalized == "err" || normalized == "error" || normalized == "fatal") {
-        return ModuleLogLevel::Error;
-    }
-    std::fprintf(stderr, "[LogRecorder] FATAL: Unknown module log level '%s'\n", text.c_str());
-    throw std::runtime_error("LogRecorder: unknown module log level");
-}
-
-bool ParseModuleOverrideSpec(const std::string& spec, ModuleLogOverride& out) {
-    const std::string trimmed = TrimCopyInternal(spec);
-    if (trimmed.empty()) {
-        return false;
-    }
-    const auto colon = trimmed.find(':');
-    std::string module = TrimCopyInternal(trimmed.substr(0, colon));
-    if (module.empty()) {
-        return false;
-    }
-    ModuleLogLevel level = ModuleLogLevel::Info;
-    if (colon != std::string::npos) {
-        const std::string level_text = TrimCopyInternal(trimmed.substr(colon + 1));
-        if (!level_text.empty()) {
-            level = ParseModuleLogLevelString(level_text, level);
-        }
-    }
-    out.module = std::move(module);
-    out.level = level;
-    return true;
-}
-
-void RegisterDefaultLoggingProfiles() {
-    static bool registered = false;
-    if (registered) {
-        return;
-    }
-    registered = true;
-
-    RegisterModuleLogProfile("forward_pass",
-                             {
-                                 MakeOverride(ModuleId::ForwardPass, ModuleLogLevel::Info),
-                                 MakeOverride(ModuleId::Activations, ModuleLogLevel::Info),
-                                 MakeOverride(ModuleId::GuessCache, ModuleLogLevel::Info),
-                                 MakeOverride(ModuleId::DataLoader, ModuleLogLevel::Info),
-                             });
-
-    RegisterModuleLogProfile("backward_pass",
-                             {
-                                 MakeOverride(ModuleId::BackwardPass, ModuleLogLevel::Info),
-                                 MakeOverride(ModuleId::Optimizer, ModuleLogLevel::Info),
-                             });
-
-    RegisterModuleLogProfile("optimizer",
-                             {
-                                 MakeOverride(ModuleId::Optimizer, ModuleLogLevel::Info),
-                                 MakeOverride(ModuleId::Scheduler, ModuleLogLevel::Info),
-                             });
-
-    RegisterModuleLogProfile("validation",
-                             {
-                                 MakeOverride(ModuleId::Validation, ModuleLogLevel::Info),
-                                 MakeOverride(ModuleId::Checkpoint, ModuleLogLevel::Info),
-                             });
-}
 
 void SetModuleLogAsync(bool enabled) {
     g_async_logging_enabled.store(enabled);
@@ -984,6 +646,30 @@ bool IsLayerLoggingEnabled(LayerType type) {
         return false;
     }
     return g_layer_enables[idx];
+}
+
+//======================================================//
+//  Module Log Formatting Helpers
+//======================================================//
+
+ModuleLogCallback CreateStandardModuleLogFormatter(std::function<void(const std::string&)> log_fn) {
+    if (!log_fn) {
+        // Return a no-op callback if log_fn is null
+        return [](const ModuleLogEvent&) {};
+    }
+    
+    // Return a formatter that converts ModuleLogEvent to string and logs via log_fn
+    return [log_fn](const ModuleLogEvent& evt) {
+        const char* level = "INFO";
+        switch (evt.level) {
+            case ModuleLogLevel::Warning: level = "WARN"; break;
+            case ModuleLogLevel::Error: level = "ERR"; break;
+            default: break;
+        }
+        std::ostringstream msg;
+        msg << "[" << evt.module << "][" << level << "] " << evt.message;
+        log_fn(msg.str());
+    };
 }
 
 } // namespace GRIM::Logging

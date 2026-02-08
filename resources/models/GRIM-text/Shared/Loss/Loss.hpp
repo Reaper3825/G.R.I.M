@@ -90,8 +90,7 @@ struct LossContext {
 	// Issue #38 FIX: Per-token class weighting to prevent mode collapse on frequent tokens
 	// weight[token_id] = inverse frequency based weight (frequent tokens get lower weight)
 	const float* token_weights = nullptr;  // [vocab_size] - Per-token weight (nullptr = 1.0 for all)
-	// GRMT v6: Per-position byte length weight for loss (prevents atoms being "free")
-	const uint16_t* position_byte_lengths = nullptr;  // [batch * seq] - Byte length per position
+
 	// Issue #39 FIX: Output logit bias correction to prevent mode collapse
 	// Subtracts running EMA of mean logit per token BEFORE softmax.
 	// This prevents tokens like SPACE from having systematically higher logits.

@@ -67,15 +67,15 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
     // Count actual allocated parameters from parameter groups (ground truth)
     for (const auto& group : parameter_groups_) {
         if (group.name == "embedding" || group.name == "embedding_lm_head_tied") {
-            stats.embedding_params += group.size;
+            stats.embedding_params += group.size();
         } else if (group.name == "position_embedding") {
-            stats.position_embedding_params += group.size;
+            stats.position_embedding_params += group.size();
         } else if (group.name.find("lm_head") != std::string::npos) {
-            stats.lm_head_params += group.size;
+            stats.lm_head_params += group.size();
         } else if (group.name == "numeric_head_weight") {
-            stats.numeric_head_params += group.size;
+            stats.numeric_head_params += group.size();
         } else {
-            stats.encoder_params += group.size;
+            stats.encoder_params += group.size();
         }
     }
 

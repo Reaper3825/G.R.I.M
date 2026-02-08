@@ -63,7 +63,6 @@ BatchPreparationResult prepareLossBatchInputs(
 	const std::vector<std::vector<uint8_t>>& batch_numeric_mask,
 	const std::vector<std::vector<uint16_t>>& batch_text_features,
 	const std::vector<std::vector<uint8_t>>& batch_text_mask,
-	const std::vector<std::vector<uint16_t>>& batch_byte_lengths,
 	size_t max_cached_batch,
 	size_t max_cached_seq_len)
 {
@@ -113,7 +112,6 @@ BatchPreparationResult prepareLossBatchInputs(
 	result.padded_numeric_mask.resize(total_tokens, 0);
 	result.padded_text_features.resize(text_feat_size, 0);
 	result.padded_text_mask.resize(total_tokens, 0);
-	result.padded_byte_lengths.resize(total_tokens, 0);
 	result.sequence_lengths.resize(result.batch_size, 0);
 	
 	// NOTE: NOT using training_state.batch_prep_* due to memory corruption bug
@@ -173,14 +171,6 @@ BatchPreparationResult prepareLossBatchInputs(
 				result.padded_text_mask[b * result.max_seq_len + t] = batch_text_mask[b][t];
 			}
 		}
-		// GRMT v6: copy per-token byte lengths
-		if (b < batch_byte_lengths.size()) {
-			const size_t byte_len_count = batch_byte_lengths[b].size();
-			const size_t copy_len = std::min(byte_len_count, seq_len);
-			for (size_t t = 0; t < copy_len; ++t) {
-				result.padded_byte_lengths[b * result.max_seq_len + t] = batch_byte_lengths[b][t];
-			}
-		}
 
 		if (b < batch_target_ids.size()) {
 			for (size_t t = 0; t < target_len; ++t) {
@@ -202,8 +192,7 @@ float LanguageModel::computeLossBatch(
 	const std::vector<std::vector<float>>& batch_numeric_values,
 	const std::vector<std::vector<uint8_t>>& batch_numeric_mask,
 	const std::vector<std::vector<uint16_t>>& batch_text_features,
-	const std::vector<std::vector<uint8_t>>& batch_text_mask,
-	const std::vector<std::vector<uint16_t>>& batch_byte_lengths)
+	const std::vector<std::vector<uint8_t>>& batch_text_mask)
 {
 	fprintf(stderr, "[DEBUG-LOSS] ENTER computeLossBatch\n");
 	fprintf(stderr, "[DEBUG-LOSS] Checking batch_input_ids.size()...\n");
@@ -229,10 +218,6 @@ float LanguageModel::computeLossBatch(
 	fprintf(stderr, "[DEBUG-LOSS] Checking batch_text_mask.size()...\n");
 	size_t text_mask_size = batch_text_mask.size();
 	fprintf(stderr, "[DEBUG-LOSS] batch_text_mask.size()=%zu\n", text_mask_size);
-	
-	fprintf(stderr, "[DEBUG-LOSS] Checking batch_byte_lengths.size()...\n");
-	size_t byte_len_size = batch_byte_lengths.size();
-	fprintf(stderr, "[DEBUG-LOSS] batch_byte_lengths.size()=%zu\n", byte_len_size);
 	
 	fprintf(stderr, "[DEBUG-LOSS] About to call orderLog...\n");
 	orderLog("computeLossBatch.enter",
@@ -323,7 +308,6 @@ float LanguageModel::computeLossBatch(
 		batch_numeric_mask,
 		batch_text_features,
 		batch_text_mask,
-		batch_byte_lengths,
 		cache_batch_limit,
 		cache_seq_limit);
 	fprintf(stderr, "[DEBUG-LOSS] prepareLossBatchInputs returned (batch_size=%zu, max_seq_len=%zu)\n",
@@ -533,25 +517,6 @@ float LanguageModel::computeLossBatch(
 			fprintf(stderr, "[GPU_COPY] text_mask copy initiated\n");
 		}
 	}
-	// GRMT v6: copy byte lengths for per-position loss weighting
-	float* cached_byte_lengths_ptr = training_state_.cached_token_byte_lengths.data;
-	if (cached_byte_lengths_ptr && !prep.padded_byte_lengths.empty()) {
-		if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
-			fprintf(stderr, "[GPU_COPY] Copying byte_lengths: dst=%p src=%p size=%zu bytes\n",
-			        static_cast<void*>(cached_byte_lengths_ptr),
-			        prep.padded_byte_lengths.data(),
-			        total_tokens * sizeof(uint16_t));
-		}
-		CUDA_CHECK(cudaMemcpyAsync(
-			reinterpret_cast<uint16_t*>(cached_byte_lengths_ptr),
-			prep.padded_byte_lengths.data(),
-			total_tokens * sizeof(uint16_t),
-			cudaMemcpyHostToDevice,
-			training_state_.stream_ctrl.getPrimaryStream()));
-		if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
-			fprintf(stderr, "[GPU_COPY] byte_lengths copy initiated\n");
-		}
-	}
 	auto copy_end = std::chrono::high_resolution_clock::now();
 	auto copy_ms = std::chrono::duration<double, std::milli>(copy_end - copy_start).count();
 	if constexpr (VerboseLogging::ENABLE_VOCAB_TIMING_LOGS) {
@@ -671,8 +636,6 @@ float LanguageModel::computeLossBatch(
 	                            ? training_state_.sequence_weights_tensor.data 
 	                            : nullptr;
 	ctx_views.sequence_weight_count = training_state_.sequence_weight_count;
-	// GRMT v6: Per-position byte length for loss weighting
-	ctx_views.position_byte_lengths = reinterpret_cast<const uint16_t*>(training_state_.cached_token_byte_lengths.data);
 	ctx_views.stream = training_state_.stream_ctrl.getPrimaryStream();
 
 	// Build loss config inline (Issue #136: removed LossContext.cu module)

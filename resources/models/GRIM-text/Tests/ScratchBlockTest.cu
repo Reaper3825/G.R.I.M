@@ -1364,7 +1364,7 @@ int main() {
     std::cout << "  Total Memory: " << (prop.totalGlobalMem / (1024 * 1024)) << " MB\n\n";
     
     // Initialize LogRecorder for diagnostic output
-    bool log_initialized = GRIM::Logging::InitLogRecorder();
+    bool log_initialized = GRIM::Logging::InitLogRecorder("logs");
     if (log_initialized) {
         std::cout << "LogRecorder initialized at: " << GRIM::Logging::GetLogsRoot() << "\n\n";
         

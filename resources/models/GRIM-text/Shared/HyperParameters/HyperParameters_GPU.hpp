@@ -167,6 +167,21 @@ constexpr int ATOM_TOKEN_END = ATOM_TOKEN_START + (NUM_ATOM_TYPES * ATOM_SLOTS_P
 constexpr uint32_t MAX_REASONABLE_VOCAB_SIZE = 2000000; // Sanity check for vocab detection
 
 //======================================================//
+// UnigramByte Tokenizer Initialization Constants
+// Single source of truth for tokenizer configuration
+// (Overridable per-run via ai_config.json [tokenizer] section)
+//======================================================//
+constexpr float TOKENIZER_CHARACTER_COVERAGE = 0.9995f;  // Character coverage for SentencePiece-style vocab building
+constexpr bool TOKENIZER_PREFER_GPU = true;              // GPU acceleration for tokenization
+
+// BOS/EOS Token Insertion Control
+// These flags are loaded from ai_config.json [tokenizer] section:
+//   add_bos: true/false - Controls whether to prepend BOS token to sequences
+//   add_eos: true/false - Controls whether to append EOS token to sequences
+// Used in Phase1_Startup.cu::loadTrainingData() to conditionally add boundary tokens
+// See: ai_config.json [tokenizer] { "add_bos": true, "add_eos": true }
+
+//======================================================//
 // Flash Attention Constants
 // These MUST match Flash_Attention_Kernal.cu exactly!
 //======================================================//

@@ -278,7 +278,7 @@
                     "tag": ""
                 },
                 "numeric_head": {
-                    "enabled": false,
+                    "enabled": true,
                     "weight": 1.0,
                     "huber_delta": 1.0,
                     "log_scale": true
@@ -420,7 +420,7 @@
                 }
             },
             "guess_cache": {
-                "enabled": false,
+                "enabled": true,
                 "initial_capacity": 16384,
                 "min_capacity": 4096,
                 "max_capacity": 262144,

@@ -76,7 +76,6 @@ struct UniByteResult {
     std::vector<uint8_t> token_numeric_mask;    // Per-token numeric mask (1 if valid)
     std::vector<uint16_t> token_text_features;  // Per-token text features [tokens * kTextFeatureDim] (FP16)
     std::vector<uint8_t> token_text_mask;       // Per-token text feature mask (1 if valid)
-    std::vector<uint16_t> token_byte_lengths;   // Per-token: byte length of original text (atoms use content_length)
     size_t unigram_tokens = 0;
     size_t byte_tokens = 0;
     size_t atom_tokens = 0;

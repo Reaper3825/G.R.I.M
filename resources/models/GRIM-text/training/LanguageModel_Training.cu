@@ -48,11 +48,6 @@
 #include "../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "Autograd/AutogradTraining.hpp"  // Pure autograd backward - replaces legacy 3-phase system
 
-extern "C" {
-    void launchXavierInit(float* weights, int size, float stddev,
-                         unsigned int seed, cudaStream_t stream);
-}
-
 namespace GRIM {
 
 #ifdef USE_CUDA
@@ -162,7 +157,7 @@ bool getGroupShape(const ParameterGroup& group,
         return false;
     }
     const size_t expected = static_cast<size_t>(r) * static_cast<size_t>(c);
-    if (expected != group.size) {
+    if (expected != group.size()) {
         return false;
     }
     *rows = r;
@@ -415,19 +410,11 @@ void LanguageModel::backward(float loss, bool accumulate, float grad_scale, uint
         const float scale = grad_scale;
         auto* ts = &training_state_;
         
-        // Helper lambda to scale a Tensor's gradient
-        // ISSUE #59: Use has_grad() and grad_data() accessors
-        auto scaleGrad = [stream, scale](Tensor& t) {
-            if (t.has_grad() && t.numel() > 0) {
-                GRIM::scaleDeviceBuffer(t.grad_data(), t.numel(), scale, stream);
-            }
-        };
-        
-        scaleGrad(ts->embedding_weights);
-        scaleGrad(ts->position_embedding_weights);
-        scaleGrad(ts->lm_head_weights);
-        scaleGrad(ts->lm_head_bias);
-        scaleGrad(ts->final_rms_gamma);
+        GRIM::scaleGradBuffer(ts->embedding_weights, scale, stream);
+        GRIM::scaleGradBuffer(ts->position_embedding_weights, scale, stream);
+        GRIM::scaleGradBuffer(ts->lm_head_weights, scale, stream);
+        GRIM::scaleGradBuffer(ts->lm_head_bias, scale, stream);
+        GRIM::scaleGradBuffer(ts->final_rms_gamma, scale, stream);
         
         // NOTE: Encoder layer gradients are in encoder's internal Tensors.
         // The optimizer accesses them via Tensor& accessors (enc->attnWqkv() etc.).
@@ -480,11 +467,9 @@ void LanguageModel::buildParameterGroups() {
         }
         ParameterGroup group;
         group.name = name;
-        group.weights = tensor.data;
-        group.grads = tensor.grad_data();
-        group.size = tensor.numel();
-        group.m_state = nullptr;
-        group.v_state = nullptr;
+        group.tensor = &tensor;
+        group.m_tensor = nullptr;
+        group.v_tensor = nullptr;
         group.type = type;
         group.layer_index = layer;
         if (layer >= 0) {
@@ -567,16 +552,16 @@ void LanguageModel::buildParameterGroups() {
     std::vector<size_t> sizes;
     sizes.reserve(parameter_groups_.size());
     for (const auto& group : parameter_groups_) {
-        sizes.push_back(group.size);
+        sizes.push_back(group.size());
     }
     
     // Allocate optimizer states via TrainingState (centralized ownership)
     training_state_.allocateOptimizerStates(sizes);
     
-    // Bind pointers back to parameter groups (groups hold pointers, NOT ownership)
+    // Bind optimizer Tensors to parameter groups (groups hold pointers, NOT ownership)
     for (size_t i = 0; i < parameter_groups_.size(); ++i) {
-        parameter_groups_[i].m_state = training_state_.optimizer_m_states[i].data;
-        parameter_groups_[i].v_state = training_state_.optimizer_v_states[i].data;
+        parameter_groups_[i].m_tensor = &training_state_.optimizer_m_states[i];
+        parameter_groups_[i].v_tensor = &training_state_.optimizer_v_states[i];
     }
     
     // Note: Gradient norm computation moved to TrainingState::gradnorm_ctrl (GradNormController)
@@ -636,8 +621,8 @@ void LanguageModel::configureUpdateProbe(const std::string& group_name, size_t s
     }
 
     const auto& probe_group = parameter_groups_[update_probe_group_index_];
-    if (update_probe_sample_elems_ == 0 || update_probe_sample_elems_ > probe_group.size) {
-        update_probe_sample_elems_ = std::min<size_t>(probe_group.size, 2048);
+    if (update_probe_sample_elems_ == 0 || update_probe_sample_elems_ > probe_group.size()) {
+        update_probe_sample_elems_ = std::min<size_t>(probe_group.size(), 2048);
     }
     update_probe_weights_before_.assign(update_probe_sample_elems_, 0.0f);
     update_probe_weights_after_.assign(update_probe_sample_elems_, 0.0f);
@@ -662,100 +647,6 @@ void LanguageModel::recordGradientClip(float clip_threshold, bool clipped) {
     last_grad_clip_limit_ = clip_threshold;
     grad_metrics_.clip_threshold = clip_threshold;
     grad_metrics_.clipped = clipped;
-}
-
-//======================================================//
-//  Token 277 (SPACE) Weight Tracking Diagnostic
-//  Tracks the W[277] row in embedding/LM head weights before/after optimizer
-//======================================================//
-static int s_token277_track_count = 0;
-
-static void logToken277WeightUpdate(
-    const float* weights_gpu,     // embedding/LM head weights on GPU
-    const float* grads_gpu,       // gradients for the weights
-    const float* m_state_gpu,     // AdamW first moment
-    const float* v_state_gpu,     // AdamW second moment
-    int d_model,
-    int vocab_size,
-    int optimizer_step,
-    const char* phase,            // "BEFORE" or "AFTER"
-    cudaStream_t stream
-) {
-    constexpr int kToken277 = 277;
-    // DISABLED for performance (User request to remove printf syncs)
-    return;
-    
-    if (kToken277 >= vocab_size) return;
-    
-    ++s_token277_track_count;
-    // Only log first 30 calls per run
-    if (s_token277_track_count > 30) return;
-    
-    cudaStreamSynchronize(stream);
-    
-    // W[277] is at offset kToken277 * d_model in the weight matrix
-    // Weight layout: [vocab_size, d_model] row-major
-    const size_t row_offset = static_cast<size_t>(kToken277) * d_model;
-    
-    std::vector<float> w277(d_model);
-    std::vector<float> g277(d_model);
-    std::vector<float> m277(d_model);
-    std::vector<float> v277(d_model);
-    
-    cudaMemcpy(w277.data(), weights_gpu + row_offset, d_model * sizeof(float), cudaMemcpyDeviceToHost);
-    if (grads_gpu) {
-        cudaMemcpy(g277.data(), grads_gpu + row_offset, d_model * sizeof(float), cudaMemcpyDeviceToHost);
-    }
-    if (m_state_gpu) {
-        cudaMemcpy(m277.data(), m_state_gpu + row_offset, d_model * sizeof(float), cudaMemcpyDeviceToHost);
-    }
-    if (v_state_gpu) {
-        cudaMemcpy(v277.data(), v_state_gpu + row_offset, d_model * sizeof(float), cudaMemcpyDeviceToHost);
-    }
-    
-    // Compute statistics for W[277]
-    float w_sum = 0, w_sq = 0, w_min = w277[0], w_max = w277[0];
-    float g_sum = 0, g_sq = 0;
-    float m_sum = 0, v_sum = 0;
-    
-    for (int i = 0; i < d_model; ++i) {
-        w_sum += w277[i];
-        w_sq += w277[i] * w277[i];
-        w_min = std::min(w_min, w277[i]);
-        w_max = std::max(w_max, w277[i]);
-        g_sum += g277[i];
-        g_sq += g277[i] * g277[i];
-        m_sum += m277[i];
-        v_sum += v277[i];
-    }
-    
-    float w_norm = std::sqrt(w_sq);
-    float w_mean = w_sum / d_model;
-    float g_norm = std::sqrt(g_sq);
-    float g_mean = g_sum / d_model;
-    float m_mean = m_sum / d_model;
-    float v_mean = v_sum / d_model;
-    
-    fprintf(stderr, "[Token277Weight] %s step=%d W[277]: norm=%.6f mean=%.6f min=%.6f max=%.6f\n",
-            phase, optimizer_step, w_norm, w_mean, w_min, w_max);
-    fprintf(stderr, "[Token277Weight] %s step=%d G[277]: norm=%.6f mean=%.6f (grad sum=%.6f)\n",
-            phase, optimizer_step, g_norm, g_mean, g_sum);
-    if (m_state_gpu && v_state_gpu) {
-        fprintf(stderr, "[Token277Weight] %s step=%d M[277]_mean=%.6f V[277]_mean=%.6f\n",
-                phase, optimizer_step, m_mean, v_mean);
-    }
-    
-    // Log first 10 values for detailed inspection
-    fprintf(stderr, "[Token277Weight] %s W[277][0:10]=[", phase);
-    for (int i = 0; i < std::min(10, d_model); ++i) {
-        fprintf(stderr, "%.4f%s", w277[i], (i < 9) ? ", " : "");
-    }
-    fprintf(stderr, "]\n");
-    fprintf(stderr, "[Token277Weight] %s G[277][0:10]=[", phase);
-    for (int i = 0; i < std::min(10, d_model); ++i) {
-        fprintf(stderr, "%.4f%s", g277[i], (i < 9) ? ", " : "");
-    }
-    fprintf(stderr, "]\n");
 }
 
 //======================================================//
@@ -803,18 +694,18 @@ void LanguageModel::updateWeights(float learning_rate,
     if (update_probe_group_index_ != static_cast<size_t>(-1) && 
         update_probe_group_index_ < parameter_groups_.size()) {
         const auto& probe_group = parameter_groups_[update_probe_group_index_];
-        if (probe_group.weights && update_probe_sample_elems_ > 0) {
+        if (probe_group.weights() && update_probe_sample_elems_ > 0) {
             // For embedding/LM head buffers [vocab_size, d_model], sample from token 277 row
             // Token 277 offset = 277 * d_model = 277 * 768 = 212736
             constexpr size_t kToken277Offset = 277 * 768;  // Token 277 (SPACE) row start
             const size_t sample_offset = (probe_group.type == ParamGroupType::LM_HEAD || 
                                           probe_group.type == ParamGroupType::EMBEDDING)
                                          ? std::min(kToken277Offset, 
-                                                    static_cast<size_t>(probe_group.size) - update_probe_sample_elems_)
+                                                    static_cast<size_t>(probe_group.size()) - update_probe_sample_elems_)
                                          : 0;
             
             cudaMemcpyAsync(update_probe_weights_before_.data(), 
-                          probe_group.weights + sample_offset, 
+                          probe_group.weights() + sample_offset, 
                           update_probe_sample_elems_ * sizeof(float),
                           cudaMemcpyDeviceToHost, training_state_.stream_ctrl.getPrimaryStream());
             
@@ -825,7 +716,7 @@ void LanguageModel::updateWeights(float learning_rate,
             if (optimizer_state->step == 0) {
                 BWD_INFO("[UpdateProbe] Sampling from offset " << sample_offset 
                          << " (token " << (sample_offset / 768) << " of vocab_size=" 
-                         << probe_group.size / 768 << ") for group '" << probe_group.name << "'");
+                         << probe_group.size() / 768 << ") for group '" << probe_group.name << "'");
             }
         }
     }
@@ -838,53 +729,44 @@ void LanguageModel::updateWeights(float learning_rate,
     
     for (size_t i = 0; i < parameter_groups_.size(); ++i) {
         auto& group = parameter_groups_[i];
-        if (!group.weights || !group.grads || group.size == 0) continue;
+        if (!group.weights() || !group.grads() || group.size() == 0) continue;
         
         // Issue #110: Log EVERY encoder group being updated on first step
         if (optimizer_state->step == 0) {
-            fprintf(stderr, "[updateWeights] Group %zu/%zu: '%s' size=%d weights=%p grads=%p m=%p v=%p\n",
-                    i, parameter_groups_.size(), group.name.c_str(), group.size,
-                    static_cast<const void*>(group.weights),
-                    static_cast<const void*>(group.grads),
-                    static_cast<const void*>(group.m_state),
-                    static_cast<const void*>(group.v_state));
+            fprintf(stderr, "[updateWeights] Group %zu/%zu: '%s' size=%zu weights=%p grads=%p m=%p v=%p\n",
+                    i, parameter_groups_.size(), group.name.c_str(), group.size(),
+                    static_cast<const void*>(group.weights()),
+                    static_cast<const void*>(group.grads()),
+                    static_cast<const void*>(group.m_state()),
+                    static_cast<const void*>(group.v_state()));
         }
         
-        if (!group.m_state || !group.v_state) {
+        if (!group.m_state() || !group.v_state()) {
             BWD_ERROR("[updateWeights] FATAL: Missing optimizer state for group '"
                       << group.name << "' idx=" << i
-                      << " size=" << group.size
-                      << " weights=" << static_cast<const void*>(group.weights)
-                      << " grads=" << static_cast<const void*>(group.grads)
-                      << " m_state=" << static_cast<const void*>(group.m_state)
-                      << " v_state=" << static_cast<const void*>(group.v_state)
+                      << " size=" << group.size()
+                      << " weights=" << static_cast<const void*>(group.weights())
+                      << " grads=" << static_cast<const void*>(group.grads())
+                      << " m_state=" << static_cast<const void*>(group.m_state())
+                      << " v_state=" << static_cast<const void*>(group.v_state())
                       << " step=" << optimizer_state->step);
             std::abort();
         }
         
-        // === TOKEN 277 TRACKING: Log W[277] BEFORE optimizer for LM head group ===
-        const bool is_lm_head_group = (group.type == ParamGroupType::LM_HEAD);
-        if (is_lm_head_group) {
-            logToken277WeightUpdate(
-                group.weights, group.grads, group.m_state, group.v_state,
-                config_.d_model, config_.vocab_size, optimizer_state->step,
-                "BEFORE", stream);
-        }
-        
         if (!logged_optimizer_io) {
-            sample_count = std::min(kOptimizerIoSample, static_cast<size_t>(group.size));
+            sample_count = std::min(kOptimizerIoSample, static_cast<size_t>(group.size()));
             sample_group_name = group.name;
             if (sample_count > 0) {
-                cudaMemcpyAsync(w_before.data(), group.weights,
+                cudaMemcpyAsync(w_before.data(), group.weights(),
                                 sample_count * sizeof(float),
                                 cudaMemcpyDeviceToHost, stream);
-                cudaMemcpyAsync(g_before.data(), group.grads,
+                cudaMemcpyAsync(g_before.data(), group.grads(),
                                 sample_count * sizeof(float),
                                 cudaMemcpyDeviceToHost, stream);
-                cudaMemcpyAsync(m_before.data(), group.m_state,
+                cudaMemcpyAsync(m_before.data(), group.m_state(),
                                 sample_count * sizeof(float),
                                 cudaMemcpyDeviceToHost, stream);
-                cudaMemcpyAsync(v_before.data(), group.v_state,
+                cudaMemcpyAsync(v_before.data(), group.v_state(),
                                 sample_count * sizeof(float),
                                 cudaMemcpyDeviceToHost, stream);
                 cudaError_t sync_err = cudaStreamSynchronize(stream);
@@ -900,33 +782,21 @@ void LanguageModel::updateWeights(float learning_rate,
         const float effective_weight_decay = weight_decay * group.upsilon;
         
         launchAdamWKernel(
-            group.weights,
-            group.grads,
-            group.m_state,
-            group.v_state,
-            group.size,
+            group,
             learning_rate,
             effective_weight_decay,
             optimizer_state->step,
             stream
         );
         
-        // === TOKEN 277 TRACKING: Log W[277] AFTER optimizer for LM head group ===
-        if (is_lm_head_group) {
-            logToken277WeightUpdate(
-                group.weights, group.grads, group.m_state, group.v_state,
-                config_.d_model, config_.vocab_size, optimizer_state->step,
-                "AFTER", stream);
-        }
-
         if (!logged_optimizer_io && sample_count > 0) {
-            cudaMemcpyAsync(w_after.data(), group.weights,
+            cudaMemcpyAsync(w_after.data(), group.weights(),
                             sample_count * sizeof(float),
                             cudaMemcpyDeviceToHost, stream);
-            cudaMemcpyAsync(m_after.data(), group.m_state,
+            cudaMemcpyAsync(m_after.data(), group.m_state(),
                             sample_count * sizeof(float),
                             cudaMemcpyDeviceToHost, stream);
-            cudaMemcpyAsync(v_after.data(), group.v_state,
+            cudaMemcpyAsync(v_after.data(), group.v_state(),
                             sample_count * sizeof(float),
                             cudaMemcpyDeviceToHost, stream);
             cudaError_t sync_err = cudaStreamSynchronize(stream);
@@ -1018,16 +888,16 @@ void LanguageModel::updateWeights(float learning_rate,
         update_probe_group_index_ < parameter_groups_.size()) {
         const auto& probe_group = parameter_groups_[update_probe_group_index_];
         
-        if (probe_group.weights && probe_group.grads && update_probe_sample_elems_ > 0) {
+        if (probe_group.weights() && probe_group.grads() && update_probe_sample_elems_ > 0) {
             // Copy weights after update (use same offset as pre-update copy)
             cudaMemcpy(update_probe_weights_after_.data(), 
-                      probe_group.weights + update_probe_sample_offset_, 
+                      probe_group.weights() + update_probe_sample_offset_, 
                       update_probe_sample_elems_ * sizeof(float),
                       cudaMemcpyDeviceToHost);
             
             // Copy gradient sample (use same offset to sample from token 277 region)
             cudaMemcpy(update_probe_grad_sample_.data(), 
-                      probe_group.grads + update_probe_sample_offset_, 
+                      probe_group.grads() + update_probe_sample_offset_, 
                       update_probe_sample_elems_ * sizeof(float),
                       cudaMemcpyDeviceToHost);
 
@@ -1065,15 +935,15 @@ void LanguageModel::updateWeights(float learning_rate,
             // Log a small sample of optimizer state (m/v) for the probe group
             // BUG FIX: Use SAME offset as weights/grads for consistent sampling!
             // Previously was sampling m_state[0] while grad was from token 277 (offset 212736)
-            if (probe_group.m_state && probe_group.v_state) {
+            if (probe_group.m_state() && probe_group.v_state()) {
                 constexpr size_t kProbeStateSamples = 4;
                 const size_t state_samples = std::min(kProbeStateSamples, update_probe_sample_elems_);
                 std::array<float, kProbeStateSamples> m_sample{};
                 std::array<float, kProbeStateSamples> v_sample{};
                 // Use update_probe_sample_offset_ to read from SAME position as weights/grads
-                cudaMemcpy(m_sample.data(), probe_group.m_state + update_probe_sample_offset_,
+                cudaMemcpy(m_sample.data(), probe_group.m_state() + update_probe_sample_offset_,
                            state_samples * sizeof(float), cudaMemcpyDeviceToHost);
-                cudaMemcpy(v_sample.data(), probe_group.v_state + update_probe_sample_offset_,
+                cudaMemcpy(v_sample.data(), probe_group.v_state() + update_probe_sample_offset_,
                            state_samples * sizeof(float), cudaMemcpyDeviceToHost);
 
                 std::ostringstream state_oss;
@@ -1140,11 +1010,11 @@ void LanguageModel::resetOptimizerMoments() {
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
     
     for (auto& group : parameter_groups_) {
-        if (group.m_state && group.size > 0) {
-            cudaMemsetAsync(group.m_state, 0, group.size * sizeof(float), stream);
+        if (group.m_state() && group.size() > 0) {
+            cudaMemsetAsync(group.m_state(), 0, group.size() * sizeof(float), stream);
         }
-        if (group.v_state && group.size > 0) {
-            cudaMemsetAsync(group.v_state, 0, group.size * sizeof(float), stream);
+        if (group.v_state() && group.size() > 0) {
+            cudaMemsetAsync(group.v_state(), 0, group.size() * sizeof(float), stream);
         }
     }
 }
@@ -1157,11 +1027,11 @@ void LanguageModel::scaleOptimizerMoments(float scale) {
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
     
     for (auto& group : parameter_groups_) {
-        if (group.m_state && group.size > 0) {
-            scaleDeviceBuffer(group.m_state, group.size, scale, stream);
+        if (group.m_state() && group.size() > 0) {
+            scaleDeviceBuffer(group.m_state(), group.size(), scale, stream);
         }
-        if (group.v_state && group.size > 0) {
-            scaleDeviceBuffer(group.v_state, group.size, scale, stream);
+        if (group.v_state() && group.size() > 0) {
+            scaleDeviceBuffer(group.v_state(), group.size(), scale, stream);
         }
     }
 }
@@ -1185,22 +1055,22 @@ void LanguageModel::dumpGradientValues(int step, const std::string& filepath) {
     std::vector<float> host_buffer(NUM_TO_PRINT);
     
     for (const auto& group : parameter_groups_) {
-        if (!group.grads || group.size == 0) continue;
+        if (!group.grads() || group.size() == 0) continue;
         
         // Copy first N values to host
-        size_t copy_count = std::min(group.size, (size_t)NUM_TO_PRINT);
-        cudaMemcpy(host_buffer.data(), group.grads, copy_count * sizeof(float), cudaMemcpyDeviceToHost);
+        size_t copy_count = std::min(group.size(), (size_t)NUM_TO_PRINT);
+        cudaMemcpy(host_buffer.data(), group.grads(), copy_count * sizeof(float), cudaMemcpyDeviceToHost);
         
         // Compute stats on GPU (norm, min, max, mean)
         float norm = 0.0f;
         {
             // Simple norm computation for stats
-            std::vector<float> full_buffer(group.size);
-            cudaMemcpy(full_buffer.data(), group.grads, group.size * sizeof(float), cudaMemcpyDeviceToHost);
+            std::vector<float> full_buffer(group.size());
+            cudaMemcpy(full_buffer.data(), group.grads(), group.size() * sizeof(float), cudaMemcpyDeviceToHost);
             double sum_sq = 0.0;
             float min_val = full_buffer[0], max_val = full_buffer[0];
             double sum = 0.0;
-            for (size_t i = 0; i < group.size; ++i) {
+            for (size_t i = 0; i < group.size(); ++i) {
                 sum_sq += (double)full_buffer[i] * full_buffer[i];
                 sum += full_buffer[i];
                 if (full_buffer[i] < min_val) min_val = full_buffer[i];
@@ -1208,13 +1078,13 @@ void LanguageModel::dumpGradientValues(int step, const std::string& filepath) {
             }
             norm = std::sqrt((float)sum_sq);
             
-            file << "\n[" << group.name << "] size=" << group.size 
+            file << "\n[" << group.name << "] size=" << group.size() 
                  << " norm=" << std::scientific << std::setprecision(6) << norm << "\n";
             file << "  first " << copy_count << " values: ";
             for (size_t i = 0; i < copy_count; ++i) {
                 file << host_buffer[i] << " ";
             }
-            file << "\n  min=" << min_val << " max=" << max_val << " mean=" << (sum / group.size) << "\n";
+            file << "\n  min=" << min_val << " max=" << max_val << " mean=" << (sum / group.size()) << "\n";
         }
     }
     
@@ -1268,8 +1138,8 @@ float LanguageModel::computeGradNorm(bool sync_for_host_read) {
     types.reserve(parameter_groups_.size());
     
     for (const auto& group : parameter_groups_) {
-        grads_ptrs.push_back(group.grads);
-        sizes.push_back(group.size);
+        grads_ptrs.push_back(group.grads());
+        sizes.push_back(group.size());
         types.push_back(group.type);
     }
     
@@ -1333,7 +1203,7 @@ float LanguageModel::computeGradNorm(bool sync_for_host_read) {
             const auto& group = parameter_groups_[gm.first_nan_group];
             char buffer[256];
             snprintf(buffer, sizeof(buffer), "[computeGradNorm] WARNING: first NaN group=%d name=%s size=%zu norm=%g",
-                     gm.first_nan_group, group.name.c_str(), group.size, gm.first_nan_value);
+                     gm.first_nan_group, group.name.c_str(), group.size(), gm.first_nan_value);
             GRIM::Logging::EmitModuleWarning(GRIM::Logging::ModuleId::Optimizer, buffer);
         } else {
             char buffer[256];
@@ -1349,7 +1219,7 @@ float LanguageModel::computeGradNorm(bool sync_for_host_read) {
             const auto& group = parameter_groups_[gm.first_inf_group];
             char buffer[256];
             snprintf(buffer, sizeof(buffer), "[computeGradNorm] WARNING: first Inf group=%d name=%s size=%zu norm=%g",
-                     gm.first_inf_group, group.name.c_str(), group.size, gm.first_inf_value);
+                     gm.first_inf_group, group.name.c_str(), group.size(), gm.first_inf_value);
             GRIM::Logging::EmitModuleWarning(GRIM::Logging::ModuleId::Optimizer, buffer);
         } else {
             char buffer[256];
@@ -1368,7 +1238,7 @@ float LanguageModel::computeGradNorm(bool sync_for_host_read) {
             return;
         }
         const auto& group = parameter_groups_[group_idx];
-        if (!group.grads || group.size == 0) {
+        if (!group.grads() || group.size() == 0) {
             char buffer[256];
             snprintf(buffer, sizeof(buffer), "[computeGradNorm] WARNING: %s group '%s' has no grad buffer",
                      trigger, group.name.c_str());
@@ -1376,7 +1246,7 @@ float LanguageModel::computeGradNorm(bool sync_for_host_read) {
             return;
         }
         NonFiniteScanResult scan{};
-        if (!scanFirstNonFinite(group.grads, group.size, &scan, stream)) {
+        if (!scanFirstNonFinite(group.grads(), group.size(), &scan, stream)) {
             char buffer[256];
             snprintf(buffer, sizeof(buffer), "[computeGradNorm] WARNING: %s group '%s' scan found no non-finite values",
                      trigger, group.name.c_str());
@@ -1434,11 +1304,11 @@ void LanguageModel::scaleGradients(float scale) {
     const int threads = 256;
     
     for (auto& group : parameter_groups_) {
-        if (!group.grads || group.size == 0) continue;
+        if (!group.grads() || group.size() == 0) continue;
         
-        const int blocks = (group.size + threads - 1) / threads;
+        const int blocks = (group.size() + threads - 1) / threads;
         scaleKernel<<<blocks, threads, 0, training_state_.stream_ctrl.getPrimaryStream()>>>(
-            group.grads, scale, static_cast<int>(group.size)
+            group.grads(), scale, static_cast<int>(group.size())
         );
     }
     
@@ -1459,12 +1329,12 @@ void LanguageModel::scaleGradientsByType(float scale, ParamGroupType type) {
     const int threads = 256;
     
     for (auto& group : parameter_groups_) {
-        if (!group.grads || group.size == 0) continue;
+        if (!group.grads() || group.size() == 0) continue;
         if (group.type != type) continue;
         
-        const int blocks = (group.size + threads - 1) / threads;
+        const int blocks = (group.size() + threads - 1) / threads;
         scaleKernel<<<blocks, threads, 0, training_state_.stream_ctrl.getPrimaryStream()>>>(
-            group.grads, scale, static_cast<int>(group.size)
+            group.grads(), scale, static_cast<int>(group.size())
         );
     }
 }
@@ -1482,12 +1352,12 @@ void LanguageModel::scaleGradientsExcludingType(float scale, ParamGroupType excl
     const int threads = 256;
     
     for (auto& group : parameter_groups_) {
-        if (!group.grads || group.size == 0) continue;
+        if (!group.grads() || group.size() == 0) continue;
         if (group.type == exclude_type) continue;
         
-        const int blocks = (group.size + threads - 1) / threads;
+        const int blocks = (group.size() + threads - 1) / threads;
         scaleKernel<<<blocks, threads, 0, training_state_.stream_ctrl.getPrimaryStream()>>>(
-            group.grads, scale, static_cast<int>(group.size)
+            group.grads(), scale, static_cast<int>(group.size())
         );
     }
 }
@@ -1547,11 +1417,11 @@ void LanguageModel::clampGradients(float min_val, float max_val) {
     const int threads = 256;
     
     for (auto& group : parameter_groups_) {
-        if (!group.grads || group.size == 0) continue;
+        if (!group.grads() || group.size() == 0) continue;
         
-        const int blocks = (group.size + threads - 1) / threads;
+        const int blocks = (group.size() + threads - 1) / threads;
         clampKernel<<<blocks, threads, 0, training_state_.stream_ctrl.getPrimaryStream()>>>(
-            group.grads, min_val, max_val, static_cast<int>(group.size)
+            group.grads(), min_val, max_val, static_cast<int>(group.size())
         );
     }
     

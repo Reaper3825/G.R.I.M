@@ -62,35 +62,11 @@ namespace {
 		return result.substr(start, end - start + 1);
 	}
 	
-	// Strip literal BOS/EOS markers that may have been added during data collection
-	std::string stripBosEosMarkers(const std::string& text) {
-		std::string result = text;
-		
-		// Strip leading <s> (with optional trailing space)
-		if (result.substr(0, 4) == "<s> ") {
-			result = result.substr(4);
-		} else if (result.substr(0, 3) == "<s>") {
-			result = result.substr(3);
-		}
-		
-		// Strip trailing </s> (with optional leading space)
-		if (result.length() >= 5 && result.substr(result.length() - 5) == " </s>") {
-			result = result.substr(0, result.length() - 5);
-		} else if (result.length() >= 4 && result.substr(result.length() - 4) == "</s>") {
-			result = result.substr(0, result.length() - 4);
-		}
-		
-		return result;
-	}
-	
 	// Full cleaning pipeline
 	std::string cleanText(const std::string& text) {
 		std::string cleaned = stripHtmlTags(text);
 		cleaned = decodeHtmlEntities(cleaned);
-		// BUG FIX Issue #35: Strip literal <s> and </s> markers from source data
-		// These markers were added by data pipeline but should NOT be tokenized
-		// as they become BOS/EOS tokens mid-sequence, causing mode collapse to EOS
-		cleaned = stripBosEosMarkers(cleaned);
+		// Issue #35: <s>/</s> markers stripped by stripHtmlTags (matches <[^>]+>)
 		cleaned = normalizeWhitespace(cleaned);
 		return cleaned;
 	}
@@ -136,7 +112,7 @@ bool PrepareTrainingDataFromCache(
 		// Read vocab size from GRMT file
 		std::ifstream grmt_file(out_training_data_path, std::ios::binary);
 		if (grmt_file.is_open()) {
-			constexpr uint32_t kExpectedGrmtVersion = 6;  // GRMT v6: adds per-token byte_lengths
+			constexpr uint32_t kExpectedGrmtVersion = 5;  // GRMT v5: pre-computed targets
 			uint32_t magic = 0, version = 0, num_sequences = 0, grmt_vocab_size = 0;
 			grmt_file.read(reinterpret_cast<char*>(&magic), 4);
 			grmt_file.read(reinterpret_cast<char*>(&version), 4);
@@ -227,6 +203,7 @@ bool PrepareTrainingDataFromCache(
 
 	// Load cleaned texts from cache
 	std::vector<std::string> texts;
+	size_t malformed_lines = 0;
 	{
 		std::ifstream in(cache_path);
 		if (!in.is_open()) {
@@ -247,11 +224,16 @@ bool PrepareTrainingDataFromCache(
 						texts.push_back(cleaned);
 					}
 				}
-			} catch (...) {
-				// Skip malformed lines
+			} catch (const std::exception&) {
+				++malformed_lines;
 				continue;
 			}
 		}
+	}
+
+	if (malformed_lines > 0) {
+		std::cerr << "[DataLoader] Skipped " << malformed_lines 
+				  << " malformed JSONL lines in cache file" << std::endl;
 	}
 
 	if (texts.empty()) {
@@ -259,19 +241,8 @@ bool PrepareTrainingDataFromCache(
 		return false;
 	}
 
-	// Simple split: 80/10/10 as in the old merge logic.
-	size_t total = texts.size();
-	size_t train_count = static_cast<size_t>(total * 0.8f);
-	size_t val_count = static_cast<size_t>(total * 0.1f);
-	if (train_count + val_count > total) {
-		val_count = total > train_count ? total - train_count : 0;
-	}
-
-	std::vector<std::string> train(texts.begin(), texts.begin() + train_count);
-	std::vector<std::string> val(texts.begin() + train_count,
-		texts.begin() + train_count + val_count);
-	std::vector<std::string> test(texts.begin() + train_count + val_count,
-		texts.end());
+	// No train/val/test split here — Phase1_Startup owns that decision.
+	// DataLoader writes ALL sequences to a single GRMT file.
 
 	// Load tokenizer config from ai_config.json
 	GRIM::Tokenizer::UniByteConfig tok_config;
@@ -286,18 +257,18 @@ bool PrepareTrainingDataFromCache(
 	}
 	const int target_vocab_size = config_tok.vocab_size;
 	tok_config.target_vocab_size = target_vocab_size;
-	tok_config.character_coverage = 0.9995f;
+	tok_config.character_coverage = GRIM::HyperParameters::TOKENIZER_CHARACTER_COVERAGE;
 	tok_config.min_subword_freq = config_tok.min_subword_freq;
 	tok_config.prune_during_mining = config_tok.prune_during_mining;
 	
-	// Load scratch block reasoning settings from config
-	tok_config.enable_scratch_block_reasoning = config_tok.enable_scratch_block_reasoning;
-	tok_config.detect_numbers = config_tok.detect_numbers;
-	tok_config.detect_urls = config_tok.detect_urls;
-	tok_config.detect_emails = config_tok.detect_emails;
-	tok_config.detect_paths = config_tok.detect_paths;
-	tok_config.detect_dates = config_tok.detect_dates;
-	tok_config.detect_code_literals = config_tok.detect_code_literals;
+	// Load scratch block reasoning settings from training hyperparameters (single source of truth)
+	tok_config.enable_scratch_block_reasoning = train_config.tokenizer_enable_scratch_block_reasoning;
+	tok_config.detect_numbers = train_config.tokenizer_detect_numbers;
+	tok_config.detect_urls = train_config.tokenizer_detect_urls;
+	tok_config.detect_emails = train_config.tokenizer_detect_emails;
+	tok_config.detect_paths = train_config.tokenizer_detect_paths;
+	tok_config.detect_dates = train_config.tokenizer_detect_dates;
+	tok_config.detect_code_literals = train_config.tokenizer_detect_code_literals;
 	
 	tok_config.enable_byte_fallback = config_tok.enable_byte_fallback;
 	tok_config.prefer_gpu = true;
@@ -322,7 +293,7 @@ bool PrepareTrainingDataFromCache(
 	if (!vocab_loaded) {
 		std::cout << "[DataLoader] Training new tokenizer vocab from cache (target: " 
 				  << target_vocab_size << " tokens)..." << std::endl;
-		tokenizer.train(train);
+		tokenizer.train(texts);
 		if (!out_vocab_path.empty()) {
 			std::cout << "[DataLoader] Saving vocab to " << out_vocab_path << "..." << std::endl << std::flush;
 			if (!tokenizer.save(out_vocab_path, save_text_vocab)) {
@@ -344,18 +315,17 @@ bool PrepareTrainingDataFromCache(
 		std::vector<uint8_t> numeric_mask;
 		std::vector<uint16_t> text_features;  // [tokens * kTextFeatureDim] FP16
 		std::vector<uint8_t> text_feature_mask;  // Per-token mask
-		std::vector<uint16_t> byte_lengths;  // GRMT v6: per-token byte length of original text
 	};
 
 	// Get BOS/EOS IDs for target masking
 	const int bos_id = tokenizer.bosId();
 	const int eos_id = tokenizer.eosId();
 
-	auto encode_split = [&](const std::vector<std::string>& split) -> std::vector<TokenizedSequence> {
+	auto encode_texts = [&](const std::vector<std::string>& corpus) -> std::vector<TokenizedSequence> {
 		std::vector<TokenizedSequence> tokens;
-		tokens.reserve(split.size());
+		tokens.reserve(corpus.size());
 
-		for (const auto& text : split) {
+		for (const auto& text : corpus) {
 			auto result = tokenizer.encodeWithMetadata(text);
 			TokenizedSequence seq;
 			seq.token_ids = std::move(result.token_ids);
@@ -363,12 +333,10 @@ bool PrepareTrainingDataFromCache(
 			seq.numeric_mask = std::move(result.token_numeric_mask);
 			seq.text_features = std::move(result.token_text_features);
 			seq.text_feature_mask = std::move(result.token_text_mask);
-			seq.byte_lengths = std::move(result.token_byte_lengths);  // GRMT v6: byte lengths
 			if (seq.numeric_values.size() != seq.token_ids.size() ||
 				seq.numeric_mask.size() != seq.token_ids.size() ||
 				seq.text_features.size() != seq.token_ids.size() * GRIM::Tokenizer::kTextFeatureDim ||
-				seq.text_feature_mask.size() != seq.token_ids.size() ||
-				seq.byte_lengths.size() != seq.token_ids.size()) {
+				seq.text_feature_mask.size() != seq.token_ids.size()) {
 				throw std::runtime_error("[DataLoader] Token/numeric side-channel length mismatch");
 			}
 			
@@ -390,162 +358,53 @@ bool PrepareTrainingDataFromCache(
 				}
 			}
 			
-			// Mask position 0: Can't predict what comes after BOS from nothing
-			if (seq_len > 0) {
-				seq.targets[0] = -1;
-			}
-			
-			// REMOVED: Old EOS masking only handled final position
-			// The loop above now masks ALL EOS predictions
-			
 			tokens.push_back(std::move(seq));
 		}
 
 		return tokens;
 	};
 
-	std::cout << "[DataLoader] Encoding training data (" << train.size() << " samples)..." << std::endl << std::flush;
-	auto train_tokens = encode_split(train);
-	std::cout << "[DataLoader] Encoding validation data (" << val.size() << " samples)..." << std::endl << std::flush;
-	auto val_tokens = encode_split(val);
-	std::cout << "[DataLoader] Encoding test data (" << test.size() << " samples)..." << std::endl << std::flush;
-	auto test_tokens = encode_split(test);
+	std::cout << "[DataLoader] Encoding " << texts.size() << " sequences..." << std::endl << std::flush;
+	auto all_tokens = encode_texts(texts);
 
-	// Write GRMT files alongside the configured training_data path.
+	// Write single GRMT file — Phase1_Startup handles train/val splitting
 	fs::create_directories(cache_dir);
 	fs::path train_grmt = training_path;
-	fs::path val_grmt = cache_dir / "validation_data.grmt";
-	fs::path test_grmt = cache_dir / "test_data.grmt";
 
-	// Get max_seq_len from training config
-	const uint32_t max_seq_len = train_config.max_seq_len;
-	
-	// First pass: compute average sequence length to determine optimal chunk size
+	// Log sequence statistics
 	size_t total_tokens = 0;
-	size_t total_sequences = 0;
-	for (const auto& seq : train_tokens) {
+	for (const auto& seq : all_tokens) {
 		total_tokens += seq.token_ids.size();
-		total_sequences++;
 	}
-	for (const auto& seq : val_tokens) {
-		total_tokens += seq.token_ids.size();
-		total_sequences++;
-	}
-	for (const auto& seq : test_tokens) {
-		total_tokens += seq.token_ids.size();
-		total_sequences++;
-	}
-	
-	const uint32_t avg_seq_len = total_sequences > 0 
-		? static_cast<uint32_t>(total_tokens / total_sequences) 
-		: max_seq_len;
-	
-	// Use the smaller of max_seq_len or average length as chunk size
-	// This ensures we don't create unnecessarily small chunks
-	const uint32_t chunk_size = std::min(max_seq_len, std::max(avg_seq_len, 128u));
-	
-	std::cout << "[DataLoader] Sequence statistics: avg_len=" << avg_seq_len 
-			  << " max_seq_len=" << max_seq_len 
-			  << " -> chunk_size=" << chunk_size << std::endl;
+	std::cout << "[DataLoader] " << all_tokens.size() << " sequences, "
+			  << total_tokens << " total tokens" << std::endl;
 
-	// Helper to split a sequence into chunks of chunk_size
-	auto split_sequence = [chunk_size](const TokenizedSequence& seq) -> std::vector<TokenizedSequence> {
-		std::vector<TokenizedSequence> chunks;
-		const size_t total_len = seq.token_ids.size();
-		
-		if (total_len <= chunk_size) {
-			// No splitting needed
-			chunks.push_back(seq);
-			return chunks;
-		}
-		
-		// Split into chunks
-		for (size_t start = 0; start < total_len; start += chunk_size) {
-			size_t end = std::min(start + chunk_size, total_len);
-			
-			TokenizedSequence chunk;
-			chunk.token_ids.assign(seq.token_ids.begin() + start, 
-								   seq.token_ids.begin() + end);
-			chunk.numeric_values.assign(seq.numeric_values.begin() + start,
-									    seq.numeric_values.begin() + end);
-			chunk.numeric_mask.assign(seq.numeric_mask.begin() + start,
-									  seq.numeric_mask.begin() + end);
-			chunk.text_feature_mask.assign(seq.text_feature_mask.begin() + start,
-										   seq.text_feature_mask.begin() + end);
-			
-			// Text features are [tokens * kTextFeatureDim]
-			size_t feat_start = start * GRIM::Tokenizer::kTextFeatureDim;
-			size_t feat_end = end * GRIM::Tokenizer::kTextFeatureDim;
-			chunk.text_features.assign(seq.text_features.begin() + feat_start,
-									   seq.text_features.begin() + feat_end);
-			
-			// GRMT v5: Copy targets for this chunk
-			chunk.targets.assign(seq.targets.begin() + start,
-								 seq.targets.begin() + end);
-			
-			// GRMT v6: Copy byte_lengths for this chunk
-			chunk.byte_lengths.assign(seq.byte_lengths.begin() + start,
-									  seq.byte_lengths.begin() + end);
-			
-			// Mask the last target in each chunk (can't predict across chunk boundary)
-			if (!chunk.targets.empty()) {
-				chunk.targets.back() = -1;
-			}
-			
-			chunks.push_back(std::move(chunk));
-		}
-		
-		return chunks;
-	};
-
-	auto save_grmt = [&tokenizer, &split_sequence, chunk_size](const fs::path& path,
+	// Write all sequences to single GRMT file (no chunking — Phase1_Startup
+	// handles sliding windows with stride and BOS prepending for long sequences)
+	auto save_grmt = [&tokenizer](const fs::path& path,
 		const std::vector<TokenizedSequence>& data) {
 		std::ofstream file(path, std::ios::binary);
 		if (!file.is_open()) return false;
 
-		// Split all sequences into chunks
-		std::vector<TokenizedSequence> chunked_data;
-		size_t sequences_split = 0;
-		size_t original_sequences = data.size();
 		size_t sequences_with_no_valid_targets = 0;
-		
 		for (const auto& seq : data) {
-			auto chunks = split_sequence(seq);
-			if (chunks.size() > 1) {
-				sequences_split++;
-			}
-			for (auto& chunk : chunks) {
-				// GRMT v5 validation: Check for sequences with all targets masked
-				size_t valid_targets = 0;
-				for (int t : chunk.targets) {
-					if (t >= 0) valid_targets++;
-				}
-				if (valid_targets == 0) {
-					sequences_with_no_valid_targets++;
-					std::cerr << "[DataLoader] WARNING: Sequence with " << chunk.token_ids.size()
-							  << " tokens has 0 valid targets (all masked to -1)" << std::endl;
-					// Still include it - training will skip, but log here for debugging
-				}
-				chunked_data.push_back(std::move(chunk));
+			size_t valid = 0;
+			for (int t : seq.targets) { if (t >= 0) valid++; }
+			if (valid == 0) {
+				sequences_with_no_valid_targets++;
+				std::cerr << "[DataLoader] WARNING: Sequence with " << seq.token_ids.size()
+						  << " tokens has 0 valid targets (all masked to -1)" << std::endl;
 			}
 		}
-
-		if (sequences_split > 0) {
-			std::cout << "[DataLoader] Split " << sequences_split << "/" << original_sequences
-					  << " sequences into " << chunked_data.size() 
-					  << " chunks (chunk_size=" << chunk_size << ")" << std::endl;
-		}
-		
 		if (sequences_with_no_valid_targets > 0) {
 			std::cerr << "[DataLoader] WARNING: " << sequences_with_no_valid_targets
 					  << " sequences have NO valid targets - these will be skipped during training" << std::endl;
 		}
 
 		uint32_t magic = 0x474D5254; // "GRMT"
-		uint32_t version = 6;  // GRMT v6: adds per-token byte_lengths for loss weighting
-		uint32_t num_sequences = static_cast<uint32_t>(chunked_data.size());
+		uint32_t version = 5;  // GRMT v5: pre-computed targets
+		uint32_t num_sequences = static_cast<uint32_t>(data.size());
 		// CRITICAL: Use totalVocabSize() to include byte (256) + atom (256) + unigram tokens
-		// vocabSize() only returns unigram count, but token IDs go up to (512 + unigram_count - 1)
 		uint32_t vocab_size = static_cast<uint32_t>(tokenizer.totalVocabSize());
 
 		file.write(reinterpret_cast<const char*>(&magic), 4);
@@ -553,41 +412,32 @@ bool PrepareTrainingDataFromCache(
 		file.write(reinterpret_cast<const char*>(&num_sequences), 4);
 		file.write(reinterpret_cast<const char*>(&vocab_size), 4);
 
-		for (const auto& seq : chunked_data) {
+		for (const auto& seq : data) {
 			uint32_t len = static_cast<uint32_t>(seq.token_ids.size());
 			file.write(reinterpret_cast<const char*>(&len), 4);
 			file.write(reinterpret_cast<const char*>(seq.token_ids.data()),
 					len * sizeof(int));
-			// GRMT v5: Write targets immediately after token_ids
 			file.write(reinterpret_cast<const char*>(seq.targets.data()),
 					len * sizeof(int));
 			file.write(reinterpret_cast<const char*>(seq.numeric_values.data()),
 					len * sizeof(float));
 			file.write(reinterpret_cast<const char*>(seq.numeric_mask.data()),
 					len * sizeof(uint8_t));
-			// GRMT v4+: Text features (16-dim FP16 per token) + mask
 			file.write(reinterpret_cast<const char*>(seq.text_features.data()),
 					len * GRIM::Tokenizer::kTextFeatureDim * sizeof(uint16_t));
 			file.write(reinterpret_cast<const char*>(seq.text_feature_mask.data()),
 					len * sizeof(uint8_t));
-			// GRMT v6: Per-token byte lengths for loss weighting
-			file.write(reinterpret_cast<const char*>(seq.byte_lengths.data()),
-					len * sizeof(uint16_t));
 		}
 		return file.good();
 	};
 
-	if (!save_grmt(train_grmt, train_tokens) ||
-		!save_grmt(val_grmt, val_tokens) ||
-		!save_grmt(test_grmt, test_tokens)) {
-		std::cerr << "[DataLoader] Failed to write GRMT files." << std::endl;
+	if (!save_grmt(train_grmt, all_tokens)) {
+		std::cerr << "[DataLoader] Failed to write GRMT file." << std::endl;
 		return false;
 	}
 
-	std::cout << "[DataLoader] Wrote GRMT files:\n  train="
-			  << train_grmt.string() << "\n  val="
-			  << val_grmt.string() << "\n  test="
-			  << test_grmt.string() << std::endl;
+	std::cout << "[DataLoader] Wrote " << all_tokens.size() << " sequences to "
+			  << train_grmt.string() << std::endl;
 
 	// Optionally clear the cache now that it has been consumed.
 	if (clear_cache) {

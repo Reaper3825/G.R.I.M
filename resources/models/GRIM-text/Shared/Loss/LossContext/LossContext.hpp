@@ -42,8 +42,6 @@ struct TensorViews {
     const float* token_mask = nullptr;
     const float* sequence_weights = nullptr;
     int sequence_weight_count = 0;
-    // GRMT v6: Per-position byte length weight
-    const uint16_t* position_byte_lengths = nullptr;
     int valid_tokens = 0;  // optional override
     int batch_size = 0;
     int seq_len = 0;

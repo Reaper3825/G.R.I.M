@@ -12,6 +12,7 @@
 #include <thread>
 #include <cstring>
 #include <stdexcept>
+#include <windows.h>
 #include "grim-ts.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"

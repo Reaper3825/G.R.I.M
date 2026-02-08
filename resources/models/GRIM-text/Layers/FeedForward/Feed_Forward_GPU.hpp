@@ -43,7 +43,9 @@ class FeedForwardLayer {
 public:
     // Rule 20: Default constructor deleted - config with valid cublas_handle REQUIRED
     FeedForwardLayer() = delete;
-    explicit FeedForwardLayer(const FeedForwardConfig& config);
+    // Constructor takes external weights (required) - no allocation path
+    explicit FeedForwardLayer(const FeedForwardConfig& config, 
+                             Tensor& w1, Tensor& b1, Tensor& w2, Tensor& b2);
     ~FeedForwardLayer();
 
     // Prevent copy (cuBLAS handle, Tensor ownership)
@@ -61,22 +63,9 @@ public:
     const FeedForwardConfig& config() const noexcept { return config_; }
 
     //--------------------------------------------------
-    // Weight Management
+    // Weight Management (external weights only)
     //--------------------------------------------------
-    void ensureWeightStorage();
-    
-    /**
-     * Use external weight Tensors from TrainingState instead of allocating own.
-     * 
-     * Similar to EncodingLayer::useExternalWeights(), this makes the FFN layer
-     * use TrainingState's weight buffers directly for autograd compatibility.
-     * 
-     * @param w1 [d_ff, d_model] - up-projection weights
-     * @param b1 [d_ff] - up-projection bias (can be empty Tensor if no bias)
-     * @param w2 [d_model, d_ff] - down-projection weights
-     * @param b2 [d_model] - down-projection bias (can be empty Tensor if no bias)
-     */
-    void useExternalWeights(Tensor& w1, Tensor& b1, Tensor& w2, Tensor& b2);
+    // Weights are set via constructor - no separate allocation/configuration methods
     
     // Tensor weight accessors (for training/serialization)
     Tensor& W1() { return W1_; }
@@ -123,20 +112,6 @@ private:
     Tensor W2_;    // [d_model, d_ff]
     Tensor b2_;    // [d_model]
 };
-
-//======================================================//
-//  FFN-specific kernel declarations (bias ops)
-//======================================================//
-
-// Bias addition: tensor[i] += bias[i % features]
-void launchFFNBiasAdd(float* tensor, const float* bias,
-                      int total_tokens, int features,
-                      cudaStream_t stream);
-
-// Bias gradient: grad_bias = sum(grad_output, axis=0)
-void launchFFNBiasBackward(const float* grad_output, float* grad_bias,
-                           int total_tokens, int features,
-                           cudaStream_t stream);
 
 } // namespace GRIM
 

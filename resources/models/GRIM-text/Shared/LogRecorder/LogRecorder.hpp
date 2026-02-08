@@ -1,24 +1,14 @@
 #pragma once
-#include <cuda_runtime_api.h>
 #include <atomic>
 #include <cstdint>
-#include <fstream>
 #include <functional>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
-
 #include "../../Layers/grim_layer_gpu.hpp"
-#include "../Delegate/Delegate.hpp"
 
 namespace GRIM {
 
@@ -85,7 +75,6 @@ private:
 
 std::string layerTypeToString(LayerType type);
 bool CreateLayerFolder(const std::string& absolutePath, LayerType type);
-void InitLogRecorder();
 
 } // namespace GRIM
 
@@ -230,7 +219,6 @@ inline void EmitModuleError(ModuleId id,
 
 constexpr std::size_t kMaxTagLength = 32;
 constexpr std::size_t kMaxMessageLength = 96;
-constexpr int kMaxDeviceLogCallbacks = 8;
 
 struct LayerLogEntry {
     LayerType type = LayerType::kUnknown;
@@ -242,35 +230,13 @@ struct LayerLogEntry {
     char message[kMaxMessageLength] = {0};
 };
 
-struct DeviceLogBuffer {
-    LayerLogEntry* entries = nullptr;
-    int* cursor = nullptr;
-    int capacity = 0;
-};
-
-using DeviceLogDelegate = GPUMulticastDelegate<kMaxDeviceLogCallbacks, const LayerLogEntry&>;
-
-bool InitLogRecorder(const std::string& rootPath = std::string(),
+bool InitLogRecorder(const std::string& rootPath,
                      std::size_t maxDeviceEntries = 4096);
 void ShutdownLogRecorder();
 void FlushDeviceLogs();
 void ResetDeviceLogs();
 bool LogsInitialized();
 const std::string& GetLogsRoot();
-DeviceLogBuffer GetDeviceLogBuffer();
-
-cudaError_t InstallDefaultDeviceLogger();
-cudaError_t RegisterDeviceLogCallback(DeviceLogDelegate::Callback callback);
-cudaError_t ClearDeviceLogCallbacks();
-
-__device__ void RecordLayerLog(const LayerLogEntry& entry);
-__device__ void RecordLayerLogSimple(LayerType type,
-                                     int layer_index,
-                                     std::uint64_t global_step,
-                                     float primary_value,
-                                     float secondary_value,
-                                     const char* tag,
-                                     const char* message);
 
 // Host-side helper to write a single entry immediately (bypasses the device buffer).
 bool RecordLayerLogHost(LayerType type,
@@ -313,47 +279,12 @@ private:
 };
 
 //======================================================//
-//  LogMirrorScope - Mirrors log file to console
-//  Background thread tails a log file and writes to stdout
+//  Module Log Formatting Helpers
 //======================================================//
 
-class LogMirrorScope {
-public:
-    explicit LogMirrorScope(const std::string& log_path);
-    LogMirrorScope(const LogMirrorScope&) = delete;
-    LogMirrorScope& operator=(const LogMirrorScope&) = delete;
-    ~LogMirrorScope();
-
-    bool active() const { return !stop_.load(); }
-
-private:
-    bool start(const std::string& log_path);
-    void mirrorLoop();
-    void writeToConsole(const std::string& text);
-
-    std::ifstream log_stream_;
-    std::thread worker_;
-    std::atomic<bool> stop_{false};
-#ifdef _WIN32
-    HANDLE console_out_ = INVALID_HANDLE_VALUE;
-#else
-    int console_fd_ = -1;
-#endif
-};
-
-//======================================================//
-//  Logging Configuration Parsing Utilities
-//======================================================//
-
-// Parse a string representation of log level (e.g., "info", "warn", "error")
-ModuleLogLevel ParseModuleLogLevelString(
-    const std::string& text,
-    ModuleLogLevel fallback = ModuleLogLevel::Info);
-
-// Parse a module:level spec string (e.g., "ForwardPass:warn")
-bool ParseModuleOverrideSpec(const std::string& spec, ModuleLogOverride& out);
-
-// Register standard logging profiles (forward_pass, backward_pass, optimizer, validation)
-void RegisterDefaultLoggingProfiles();
+// Create a standard module log formatter that routes events to a logging function.
+// The log_fn parameter is called with formatted log strings.
+// The returned callback converts ModuleLogEvent to formatted string and logs via log_fn.
+ModuleLogCallback CreateStandardModuleLogFormatter(std::function<void(const std::string&)> log_fn);
 
 } // namespace GRIM::Logging

@@ -156,6 +156,7 @@ struct TrainingTensors {
     bool use_bias = true;
     bool use_layer_scale = false;  // Issue #109: LayerScale to reduce correlation buildup
     float layer_scale_init = 0.1f;  // Initial value (CaiT paper uses 0.1)
+    HyperParameters::PositionalEncodingType positional_encoding_type = HyperParameters::PositionalEncodingType::NONE;  // Stored for downstream queries
     
     //======================================================//
     //  INITIALIZATION
@@ -175,6 +176,7 @@ struct TrainingTensors {
                           HyperParameters::PositionalEncodingType positional_encoding,
                           bool use_layer_scale_flag = false,
                           float layer_scale_init_val = 0.1f,
+                          uint64_t seed = 0,
                           cudaStream_t stream = nullptr);
     
     /**
@@ -193,13 +195,6 @@ struct TrainingTensors {
      * Zero all gradients before backward pass
      */
     void zeroGrad(cudaStream_t stream = nullptr);
-    
-    /**
-     * Get raw pointer to parameter data (for legacy code compatibility)
-     * Use sparingly - prefer working with Tensor objects
-     */
-    float* getParamData(const std::string& name);
-    float* getGradData(const std::string& name);
     
     /**
      * Check if tensors are initialized

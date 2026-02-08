@@ -3,9 +3,7 @@
 //  TrainingState implementation details
 //======================================================//
 
-// Include grim_language_model_cuda.hpp FIRST to get complete EncoderLayerCache definition
-// before TrainingState_GPU.hpp which forward-declares it.
-// This fixes C++2c warning about deleting pointer to incomplete type.
+// Include grim_language_model_cuda.hpp for GPUGrimEncoder, FlashAttentionBF16Scratch, etc.
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "TrainingState_GPU.hpp"
 #include "TrainingTensors.hpp"  // Autograd tensor system
@@ -27,13 +25,6 @@ TrainingState::~TrainingState() {
 	// After Rule 20 migration, all float* buffers are GRIM::Tensor objects.
 	// Tensor::~Tensor() calls release() to free GPU memory.
 	// DO NOT manually cudaFree any Tensor member - they own their data.
-	
-	// Free legacy forward layer cache array (raw pointer into Tensor.data)
-	if (forward_layer_caches) {
-		delete[] forward_layer_caches;
-		forward_layer_caches = nullptr;
-		forward_layer_cache_count = 0;
-	}
 	
 	// encoder_layer_caches is std::vector<EncoderLayerCacheTensors>
 	// Each EncoderLayerCacheTensors contains Tensor members that auto-cleanup.
@@ -269,6 +260,7 @@ void TrainingState::initializeAutogradTensors(
 	HyperParameters::PositionalEncodingType positional_encoding,
 	bool use_layer_scale,
 	float layer_scale_init,
+	uint64_t seed,
 	cudaStream_t stream
 ) {
 	// Rule 20: Fail loud if already initialized
@@ -295,6 +287,7 @@ void TrainingState::initializeAutogradTensors(
 		positional_encoding,
 		use_layer_scale,
 		layer_scale_init,
+		seed,
 		stream
 	);
 	
@@ -562,66 +555,6 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream) {
 	        raw_emb_sum > 0 ? "DECREASE" : "INCREASE");
 	fprintf(stdout, "\n");
 	fflush(stdout);
-}
-
-//======================================================//
-//  Legacy Cache Pointer Setup (Rule 20 Bridge)
-//======================================================//
-
-void TrainingState::setupLegacyCachePointers() {
-	// This method sets up forward_layer_caches (raw EncoderLayerCache*)
-	// to point into the Tensor.data buffers of encoder_layer_caches.
-	//
-	// WHY: CUDA kernels need raw float* for pointer arithmetic.
-	// The Tensor API owns the memory, this just creates a pointer interface.
-	//
-	// NOTE: EncoderLayerCache is defined inside namespace GRIM in grim_language_model_cuda.hpp.
-	// This file includes it FIRST, so we have the full definition.
-	
-	const int num_layers = static_cast<int>(encoder_layer_caches.size());
-	if (num_layers == 0) {
-		throw std::runtime_error("[setupLegacyCachePointers] encoder_layer_caches is empty! "
-		                         "Call allocation first.");
-	}
-	
-	// Allocate the raw pointer array if needed
-	if (!forward_layer_caches) {
-		forward_layer_cache_count = num_layers;
-		forward_layer_caches = new EncoderLayerCache[num_layers]();
-	} else if (forward_layer_cache_count != num_layers) {
-		// Mismatch - delete and reallocate
-		delete[] forward_layer_caches;
-		forward_layer_cache_count = num_layers;
-		forward_layer_caches = new EncoderLayerCache[num_layers]();
-	}
-	
-	// Set up raw pointers into Tensor.data for each layer
-	for (int layer = 0; layer < num_layers; ++layer) {
-		const auto& tc = encoder_layer_caches[layer];
-		EncoderLayerCache& cache = forward_layer_caches[layer];
-		
-		// Main activation caches
-		cache.ln1_output = tc.ln1_output.data;
-		cache.attn_input = tc.attn_input.data;
-		cache.attn_bhsd = tc.attn_bhsd.data;
-		cache.softmax_lse = tc.softmax_lse.data;
-		cache.attn_output = tc.attn_output.data;
-		cache.residual1 = tc.residual1.data;
-		cache.ln2_input = tc.residual1.data;  // Alias: same buffer (pre-LN2 = post-residual1)
-		cache.ln2_output = tc.ln2_output.data;
-		cache.ffn_input = tc.ln2_output.data;  // Alias: same buffer (post-LN2 = FFN input)
-		cache.ffn_pre_gelu = tc.ffn_pre_gelu.data;
-		cache.ffn_output = tc.ffn_output.data;
-		cache.layer_output = tc.layer_output.data;
-		
-		// Q/K/V projections
-		cache.q = tc.Q.data;
-		cache.k = tc.K.data;
-		cache.v = tc.V.data;
-	}
-	
-	fprintf(stdout, "[INFO] setupLegacyCachePointers: %d layers bridged (Tensor → EncoderLayerCache*)\n",
-	        num_layers);
 }
 
 } // namespace GRIM

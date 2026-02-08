@@ -761,10 +761,6 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
             result.token_numeric_mask.push_back(0);
             appendZeroTextFeatures();  // Non-atom tokens get zero text features
             
-            // Store byte length of this token's text representation
-            uint16_t byte_len = static_cast<uint16_t>(std::min(piece.text.size(), size_t(65535)));
-            result.token_byte_lengths.push_back(byte_len);
-            
             if (tid < BYTE_VOCAB_SIZE) {
                 result.is_byte_fallback.push_back(true);
                 result.byte_tokens++;
@@ -831,13 +827,6 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
             result.is_byte_fallback.push_back(false);
             result.token_numeric_values.push_back(numeric_value);
             result.token_numeric_mask.push_back(numeric_mask);
-            
-            // Store byte length of the atom's original content (NOT 0!)
-            // This is CRITICAL for loss weighting - atoms must "cost" what they represent
-            uint16_t atom_byte_len = static_cast<uint16_t>(std::min(
-                static_cast<size_t>(span.content_length), 
-                size_t(65535)));
-            result.token_byte_lengths.push_back(atom_byte_len);
             
             // Encode text features for atom token
             uint16_t text_features[kTextFeatureDim];
