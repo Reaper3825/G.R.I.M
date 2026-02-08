@@ -974,35 +974,41 @@ struct Tensor {
     /// Create zero-initialized tensor with explicit layout
     static Tensor zeros(TensorContract::TensorShape shape, 
                         bool requires_grad = false,
-                        cudaStream_t stream = nullptr);
+                        cudaStream_t stream = nullptr,
+                        const char* name = nullptr);
     
     /// Create zero-initialized tensor with raw dimensions (convenience)
     /// 1D: treated as [1, dim] BSM
     /// 2D: treated as BSM [tokens, features]
     /// 4D: treated as BHSD [batch, heads, seq, head_dim]
     static Tensor zeros(std::initializer_list<int> dims,
-                        cudaStream_t stream = nullptr);
+                        cudaStream_t stream = nullptr,
+                        const char* name = nullptr);
     
     /// Create uninitialized tensor (values undefined)
     static Tensor empty(TensorContract::TensorShape shape,
                         bool requires_grad = false,
-                        cudaStream_t stream = nullptr);
+                        cudaStream_t stream = nullptr,
+                        const char* name = nullptr);
     
     /// Wrap existing GPU pointer (takes ownership if specified)
     static Tensor from_ptr(float* ptr, 
                            TensorContract::TensorShape shape,
                            bool takes_ownership = false,
-                           bool requires_grad = false);
+                           bool requires_grad = false,
+                           const char* name = nullptr);
     
     /// Wrap existing GPU pointer with raw dimensions (convenience)
     static Tensor from_ptr(float* ptr,
                            std::initializer_list<int> dims,
-                           cudaStream_t stream = nullptr);
+                           cudaStream_t stream = nullptr,
+                           const char* name = nullptr);
     
     /// Xavier uniform initialization (for weights)
     static Tensor xavier_uniform(TensorContract::TensorShape shape,
                                  bool requires_grad = true,
-                                 cudaStream_t stream = nullptr);
+                                 cudaStream_t stream = nullptr,
+                                 const char* name = nullptr);
     
     /// In-place Xavier uniform initialization
     static void xavier_uniform_(Tensor& t, uint64_t seed, cudaStream_t stream = nullptr);
@@ -1157,7 +1163,18 @@ struct Tensor {
     //--------------------------------------------------//
     
     void release() {
-        if (owns_data && data) { cudaFree(data); }
+        if (owns_grad_fn && grad_fn) {
+            fprintf(stderr, "[Tensor::release] deleting grad_fn=%p op=%s (data=%p owns_data=%d name=%s)\n",
+                    (void*)grad_fn, grad_fn->op_name ? grad_fn->op_name : "null",
+                    (void*)data, (int)owns_data, name ? name : "unnamed");
+            fflush(stderr);
+        }
+        if (owns_data && data) {
+            fprintf(stderr, "[Tensor::release] cudaFree data=%p name=%s\n",
+                    (void*)data, name ? name : "unnamed");
+            fflush(stderr);
+            cudaFree(data);
+        }
         // grad_ is shared_ptr - will auto-release when ref count drops to 0
         grad_.reset();
         if (owns_grad_fn && grad_fn) { delete grad_fn; }
@@ -1337,37 +1354,9 @@ Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps = 1e-5f,
 // NOTE: cross_entropy() removed - use autograd::cross_entropy_loss() from AutogradLoss.hpp
 // See: #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 
-/**
- * Focal loss with automatic gradient tracking
- * Focal loss formula: L = α(1-p_t)^γ * CE
- * @param logits Input logits [tokens, vocab_size] - MUST have Layout::LOGITS
- * @param targets Target token IDs [tokens]
- * @param focal_alpha Weighting factor for positive class (default 1.0)
- * @param focal_gamma Focusing parameter (default 2.0, higher = more focus on hard examples)
- * @return scalar loss tensor with backward graph attached
- */
-Tensor focal_loss(const Tensor& logits, const int* targets,
-                  int num_tokens, int vocab_size,
-                  float focal_alpha = 1.0f,
-                  float focal_gamma = 2.0f,
-                  cudaStream_t stream = nullptr);
-
-/**
- * Unified loss: focal + label smoothing with automatic gradient tracking
- * Combines focal loss weighting with label smoothing regularization
- * @param logits Input logits [tokens, vocab_size] - MUST have Layout::LOGITS
- * @param targets Target token IDs [tokens]
- * @param focal_alpha Focal loss alpha parameter
- * @param focal_gamma Focal loss gamma parameter
- * @param smoothing Label smoothing epsilon (fraction of probability mass to spread)
- * @return scalar loss tensor with backward graph attached
- */
-Tensor unified_loss(const Tensor& logits, const int* targets,
-                    int num_tokens, int vocab_size,
-                    float focal_alpha = 1.0f,
-                    float focal_gamma = 2.0f,
-                    float smoothing = 0.1f,
-                    cudaStream_t stream = nullptr);
+// DELETED: Old focal_loss, unified_loss declarations (Rule 20).
+// Use AutogradLoss.hpp for the authoritative API:
+//   autograd::unified_loss(Tensor&, targets, valid_mask, ...LossConfig...)
 
 /**
  * Embedding lookup: output[i] = weight[token_ids[i]] * embedding_scale
@@ -1380,8 +1369,12 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens,
  * Log-Softmax: y[i] = x[i] - logsumexp(x) — numerically stable log(softmax(x))
  * Input: [tokens, dim] - log_softmax computed along dim axis
  * Creates LogSoftmaxGradFn if input.requires_grad
+ * @param save_output_copy When true (default), LogSoftmaxGradFn copies the
+ *   log-probs for backward. When false, stores a non-owning pointer — caller
+ *   must guarantee the data lives until after backward completes.
+ *   OOM FIX: unified_loss() passes false because NLLLossGradFn owns the data.
  */
-Tensor log_softmax(const Tensor& x, cudaStream_t stream = nullptr);
+Tensor log_softmax(const Tensor& x, cudaStream_t stream = nullptr, bool save_output_copy = true);
 
 /**
  * Dropout with external mask: y = x * mask / (1 - p), where mask is binary

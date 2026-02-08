@@ -191,7 +191,9 @@ void LanguageModel::initGPU() {
 
     // NOTE: Cannot use ForwardLog here - LogRecorder not initialized yet during Phase1 startup.
     std::cout << "[initGPU] Entry, use_gpu=" << (cfg.use_gpu ? "true" : "false") << std::endl;
-    if (!cfg.use_gpu) return;
+    if (!cfg.use_gpu) {
+        throw std::runtime_error("[initGPU] use_gpu=false but GRIM-text REQUIRES GPU - fix ai_config.json");
+    }
 
     try {
         std::cout << "[initGPU] Initializing GPU-accelerated transformer layers..." << std::endl;

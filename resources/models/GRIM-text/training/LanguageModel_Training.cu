@@ -287,8 +287,7 @@ void LanguageModel::zeroGrad() {
 
 void LanguageModel::backward(float loss, bool accumulate, float grad_scale, uint64_t step) {
     if (!training_state_.initialized) {
-        BWD_ERROR("[backward] ERROR: Training state not initialized!");
-        return;
+        throw std::runtime_error("[backward] Training state not initialized - caller MUST call initTrainingState() first");
     }
 
     ++backward_call_count_;
@@ -303,8 +302,7 @@ void LanguageModel::backward(float loss, bool accumulate, float grad_scale, uint
              << " num_kv_heads=" << training_state_.num_kv_heads);
     
     if (batch_size <= 0 || seq_len <= 0) {
-        BWD_ERROR("[backward] FATAL: Invalid batch dimensions: batch_size=" << batch_size << " seq_len=" << seq_len);
-        return;
+        throw std::runtime_error("[backward] Invalid batch dimensions: batch_size=" + std::to_string(batch_size) + " seq_len=" + std::to_string(seq_len));
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -439,11 +437,14 @@ void LanguageModel::backward(float loss, bool accumulate, float grad_scale, uint
 //======================================================//
 
 void LanguageModel::buildParameterGroups() {
+    fprintf(stderr, "[buildParameterGroups] ENTER\n"); fflush(stderr);
     // Clear parameter group metadata (optimizer states are managed by TrainingState)
     parameter_groups_.clear();
     
     const auto& cfg = config_;
     const int num_kv_heads = training_state_.num_kv_heads;
+    fprintf(stderr, "[buildParameterGroups] cfg: num_layers=%d num_heads=%d head_dim=%d num_kv_heads=%d d_model=%d vocab=%u tie=%d numeric=%d\n",
+            cfg.num_layers, cfg.num_heads, cfg.head_dim, num_kv_heads, cfg.d_model, cfg.vocab_size, (int)cfg.tie_embeddings, (int)cfg.numeric_head_enabled); fflush(stderr);
     
     // Validate GQA dimensions using TensorContract
     TensorContract::GQADims gqa_dims{cfg.num_heads, num_kv_heads, cfg.head_dim};
@@ -459,11 +460,10 @@ void LanguageModel::buildParameterGroups() {
     auto registerTensor = [&](const std::string& name, Tensor& tensor,
                               ParamGroupType type, int layer = -1) {
         if (!tensor.data || !tensor.has_grad()) {
-            if (layer >= 0) {
-                fprintf(stderr, "[buildParameterGroups] WARNING: %s SKIPPED! data=%p has_grad=%d\n",
-                        name.c_str(), (void*)tensor.data, tensor.has_grad());
-            }
-            return;
+            throw std::runtime_error("[buildParameterGroups] " + name + " has no data or grad! data=" 
+                                     + std::to_string(reinterpret_cast<uintptr_t>(tensor.data)) 
+                                     + " has_grad=" + std::to_string(tensor.has_grad()) 
+                                     + " layer=" + std::to_string(layer));
         }
         ParameterGroup group;
         group.name = name;
@@ -488,14 +488,21 @@ void LanguageModel::buildParameterGroups() {
         registerTensor("embedding", training_state_.embedding_weights, ParamGroupType::EMBEDDING);
     }
 
-    // Issue #36 FIX: Position embeddings MUST be trainable
-    registerTensor("position_embedding", training_state_.position_embedding_weights, ParamGroupType::EMBEDDING);
+    // Issue #113: Sinusoidal position embeddings are FIXED (not learned).
+    // Only register if they have allocated data (i.e., learned position embeddings are in use).
+    if (training_state_.position_embedding_weights.data && training_state_.position_embedding_weights.has_grad()) {
+        registerTensor("position_embedding", training_state_.position_embedding_weights, ParamGroupType::EMBEDDING);
+    } else {
+        fprintf(stderr, "[buildParameterGroups] position_embedding skipped (sinusoidal/fixed, not learned)\n");
+    }
 
     // LM head weights (includes tied embedding grads when tie_embeddings=true)
+    fprintf(stderr, "[buildParameterGroups] DIAG-A: about to register LM head\n"); fflush(stderr);
     {
         std::string lm_name = cfg.tie_embeddings ? "embedding_lm_head_tied" : "lm_head_weight";
         registerTensor(lm_name, training_state_.lm_head_weights, ParamGroupType::LM_HEAD);
     }
+    fprintf(stderr, "[buildParameterGroups] DIAG-B: LM head done, registering numeric/log_var\n"); fflush(stderr);
 
     // Numeric head
     if (cfg.numeric_head_enabled) {
@@ -506,6 +513,7 @@ void LanguageModel::buildParameterGroups() {
     registerTensor("log_var_text", training_state_.log_var_text, ParamGroupType::NUMERIC_HEAD);
     registerTensor("log_var_numeric", training_state_.log_var_numeric, ParamGroupType::NUMERIC_HEAD);
 
+    fprintf(stderr, "[buildParameterGroups] DIAG-C: numeric/log_var done, starting %d layers\n", cfg.num_layers); fflush(stderr);
     // ── Per-layer encoder parameters ─────────────────────────────────────────
     for (int layer = 0; layer < cfg.num_layers; ++layer) {
         GPUEncoderLayer* enc = gpu_encoder.getLayer(layer);
@@ -533,21 +541,48 @@ void LanguageModel::buildParameterGroups() {
         registerTensor(prefix + "_rms2_gamma", enc->rms2Gamma(), ParamGroupType::RMSNORM, layer);
     }
 
+    fprintf(stderr, "[buildParameterGroups] DIAG-D: all %d layers done, registering scratchblock/final_rms\n", cfg.num_layers); fflush(stderr);
     // ── ScratchBlock parameters ──
+    fprintf(stderr, "[buildParameterGroups] DIAG-D0: scratch_block_layer_=%p\n", (void*)scratch_block_layer_.get()); fflush(stderr);
+    if (scratch_block_layer_) {
+        fprintf(stderr, "[buildParameterGroups] DIAG-D0a: isEnabled=%d\n", (int)scratch_block_layer_->isEnabled()); fflush(stderr);
+    }
     if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
-        registerTensor("scratch_block_atom_type_embeddings",
-                       scratch_block_layer_->atomTypeEmbeddings(), ParamGroupType::SCRATCHBLOCK);
-        
-        registerTensor("scratch_block_atom_projection",
-                       scratch_block_layer_->atomProjection(), ParamGroupType::SCRATCHBLOCK);
-        
-        registerTensor("scratch_block_text_feature_projection",
-                       scratch_block_layer_->textFeatureProjection(), ParamGroupType::SCRATCHBLOCK);
+        try {
+            auto& ate = scratch_block_layer_->atomTypeEmbeddings();
+            fprintf(stderr, "[buildParameterGroups] DIAG-D1: atom_type_embeddings data=%p grad=%d numel=%zu\n",
+                    (void*)ate.data, (int)ate.has_grad(), ate.numel()); fflush(stderr);
+            registerTensor("scratch_block_atom_type_embeddings", ate, ParamGroupType::SCRATCHBLOCK);
+            fprintf(stderr, "[buildParameterGroups] DIAG-D1: registered OK\n"); fflush(stderr);
+
+            auto& ap = scratch_block_layer_->atomProjection();
+            fprintf(stderr, "[buildParameterGroups] DIAG-D2: atom_projection data=%p grad=%d numel=%zu\n",
+                    (void*)ap.data, (int)ap.has_grad(), ap.numel()); fflush(stderr);
+            registerTensor("scratch_block_atom_projection", ap, ParamGroupType::SCRATCHBLOCK);
+            fprintf(stderr, "[buildParameterGroups] DIAG-D2: registered OK\n"); fflush(stderr);
+
+            auto& tfp = scratch_block_layer_->textFeatureProjection();
+            fprintf(stderr, "[buildParameterGroups] DIAG-D3: text_feature_projection data=%p grad=%d numel=%zu\n",
+                    (void*)tfp.data, (int)tfp.has_grad(), tfp.numel()); fflush(stderr);
+            registerTensor("scratch_block_text_feature_projection", tfp, ParamGroupType::SCRATCHBLOCK);
+            fprintf(stderr, "[buildParameterGroups] DIAG-D3: registered OK\n"); fflush(stderr);
+        } catch (const std::exception& ex) {
+            fprintf(stderr, "[buildParameterGroups] DIAG-D-EXCEPTION in scratchblock: %s\n", ex.what()); fflush(stderr);
+            throw;
+        }
+        fprintf(stderr, "[buildParameterGroups] DIAG-D4: scratchblock done\n"); fflush(stderr);
+    } else {
+        fprintf(stderr, "[buildParameterGroups] DIAG-D-SKIP: scratchblock not enabled\n"); fflush(stderr);
     }
 
     // Final RMSNorm (between encoder output and LM head)
+    fprintf(stderr, "[buildParameterGroups] DIAG-D5: about to register final_rms_gamma data=%p grad=%d numel=%zu\n",
+            (void*)training_state_.final_rms_gamma.data, (int)training_state_.final_rms_gamma.has_grad(),
+            training_state_.final_rms_gamma.numel()); fflush(stderr);
     registerTensor("final_rms_gamma", training_state_.final_rms_gamma, ParamGroupType::RMSNORM);
+    fprintf(stderr, "[buildParameterGroups] DIAG-D5: registered OK\n"); fflush(stderr);
 
+    fprintf(stderr, "[buildParameterGroups] DIAG-E: %zu groups registered, allocating optimizer states\n", parameter_groups_.size()); fflush(stderr);
     // Collect sizes for centralized optimizer state allocation
     std::vector<size_t> sizes;
     sizes.reserve(parameter_groups_.size());
@@ -558,11 +593,14 @@ void LanguageModel::buildParameterGroups() {
     // Allocate optimizer states via TrainingState (centralized ownership)
     training_state_.allocateOptimizerStates(sizes);
     
+    fprintf(stderr, "[buildParameterGroups] DIAG-F: optimizer states allocated (m=%zu v=%zu), binding tensors\n",
+            training_state_.optimizer_m_states.size(), training_state_.optimizer_v_states.size()); fflush(stderr);
     // Bind optimizer Tensors to parameter groups (groups hold pointers, NOT ownership)
     for (size_t i = 0; i < parameter_groups_.size(); ++i) {
         parameter_groups_[i].m_tensor = &training_state_.optimizer_m_states[i];
         parameter_groups_[i].v_tensor = &training_state_.optimizer_v_states[i];
     }
+    fprintf(stderr, "[buildParameterGroups] DIAG-G: all bindings done\n"); fflush(stderr);
     
     // Note: Gradient norm computation moved to TrainingState::gradnorm_ctrl (GradNormController)
     // Old d_grad_norm_sums_/h_grad_norm_sums_ buffers removed per Rule 20 (no backwards compatibility)
@@ -589,13 +627,16 @@ void LanguageModel::buildParameterGroups() {
 //======================================================//
 
 void LanguageModel::configureUpdateProbe(const std::string& group_name, size_t sample_elems) {
+    fprintf(stderr, "[configureUpdateProbe] ENTER group='%s' sample_elems=%zu\n", group_name.c_str(), sample_elems); fflush(stderr);
     update_probe_group_name_ = group_name;
     update_probe_sample_elems_ = sample_elems;
     update_probe_ready_ = false;
     
     // Ensure parameter groups are built before configuring probe
     if (parameter_groups_.empty()) {
+        fprintf(stderr, "[configureUpdateProbe] parameter_groups_ is empty, calling buildParameterGroups()\n"); fflush(stderr);
         buildParameterGroups();
+        fprintf(stderr, "[configureUpdateProbe] buildParameterGroups() returned, groups=%zu\n", parameter_groups_.size()); fflush(stderr);
     }
     
     if (parameter_groups_.empty()) {
@@ -627,6 +668,10 @@ void LanguageModel::configureUpdateProbe(const std::string& group_name, size_t s
     update_probe_weights_before_.assign(update_probe_sample_elems_, 0.0f);
     update_probe_weights_after_.assign(update_probe_sample_elems_, 0.0f);
     update_probe_grad_sample_.assign(update_probe_sample_elems_, 0.0f);
+    fprintf(stderr, "[configureUpdateProbe] EXIT: group_index=%zu sample_elems=%zu probe_group_size=%zu\n",
+            update_probe_group_index_, update_probe_sample_elems_,
+            update_probe_group_index_ != static_cast<size_t>(-1) ? parameter_groups_[update_probe_group_index_].size() : 0);
+    fflush(stderr);
 }
 
 void LanguageModel::disableUpdateProbe() {
@@ -657,13 +702,11 @@ void LanguageModel::updateWeights(float learning_rate,
                                   OptimizerState* optimizer_state,
                                   float weight_decay) {
     if (!training_state_.initialized) {
-        BWD_ERROR("[updateWeights] ERROR: Training state not initialized!");
-        return;
+        throw std::runtime_error("[updateWeights] Training state not initialized - caller MUST call initTrainingState() first");
     }
     
     if (!optimizer_state) {
-        BWD_ERROR("[updateWeights] ERROR: Optimizer state is null!");
-        return;
+        throw std::runtime_error("[updateWeights] optimizer_state is NULL - caller MUST provide valid OptimizerState");
     }
     
     // NOTE: step is incremented in training loop after this function returns
@@ -1004,7 +1047,7 @@ void LanguageModel::updateWeights(float learning_rate,
 
 void LanguageModel::resetOptimizerMoments() {
     if (parameter_groups_.empty()) {
-        return;
+        throw std::runtime_error("[resetOptimizerMoments] parameter_groups_ is empty - buildParameterGroups() MUST be called first");
     }
 
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();

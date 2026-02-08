@@ -85,6 +85,9 @@ Tensor unified_loss(
 /**
  * NLL loss forward on log-probabilities (output of log_softmax)
  * @param log_probs [num_tokens, vocab_size] — log-probabilities from log_softmax()
+ * @param focal_enabled True if focal loss should be applied (rules out checking focal_gamma > 0)
+ * @param smoothing_enabled True if label smoothing should be applied (rules out checking smoothing_epsilon > 0)
+ * @param entropy_reg_enabled True if entropy regularization should be applied (rules out checking entropy_reg_lambda > 0)
  */
 void launchUnifiedLossForward(
     const float* log_probs,
@@ -97,8 +100,11 @@ void launchUnifiedLossForward(
     int vocab_size,
     float focal_alpha,
     float focal_gamma,
+    bool focal_enabled,
     float smoothing_epsilon,
+    bool smoothing_enabled,
     float entropy_reg_lambda,
+    bool entropy_reg_enabled,
     cudaStream_t stream
 );
 
@@ -106,6 +112,9 @@ void launchUnifiedLossForward(
  * NLL loss backward — gradient w.r.t. log-probabilities
  * @param log_probs      [num_tokens, vocab_size] — saved log-probabilities
  * @param grad_log_probs [num_tokens, vocab_size] — OUTPUT: gradient w.r.t. log_probs
+ * @param focal_enabled True if focal loss should be applied (rules out checking focal_gamma > 0)
+ * @param smoothing_enabled True if label smoothing should be applied (rules out checking smoothing_epsilon > 0)
+ * @param entropy_reg_enabled True if entropy regularization should be applied (rules out checking entropy_reg_lambda > 0)
  */
 void launchUnifiedLossBackward(
     const float* log_probs,
@@ -117,8 +126,11 @@ void launchUnifiedLossBackward(
     int valid_count,
     float focal_alpha,
     float focal_gamma,
+    bool focal_enabled,
     float smoothing_epsilon,
+    bool smoothing_enabled,
     float entropy_reg_lambda,
+    bool entropy_reg_enabled,
     cudaStream_t stream
 );
 

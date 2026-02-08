@@ -99,7 +99,8 @@ void LanguageModel::initInferenceState() {
                 embedding_runtime->token_buffer,
                 TC::make_BSM(cfg.vocab_size, cfg.d_model),
                 false,  // doesn't own data
-                false   // no grad for inference
+                false,   // no grad for inference
+                "lm_head_weights_tied_inference"
             );
             std::cout << "  ✓ LM head weights tied to embeddings (Tensor API)" << std::endl;
         } else {
@@ -111,7 +112,8 @@ void LanguageModel::initInferenceState() {
         training_state_.lm_head_weights = Tensor::zeros(
             TC::make_BSM(cfg.vocab_size, cfg.d_model),
             false,  // no grad for inference
-            primary_stream
+            primary_stream,
+            "lm_head_weights_inf"
         );
         std::cout << "  ✓ Allocated LM head weights (Tensor API)" << std::endl;
     }
@@ -121,7 +123,8 @@ void LanguageModel::initInferenceState() {
         training_state_.lm_head_bias = Tensor::zeros(
             TC::make_BSM(1, cfg.vocab_size),
             false,  // no grad for inference
-            primary_stream
+            primary_stream,
+            "lm_head_bias_inf"
         );
         std::cout << "  ✓ Allocated LM head bias (Tensor API)" << std::endl;
     }
@@ -130,13 +133,15 @@ void LanguageModel::initInferenceState() {
         training_state_.numeric_head_weights = Tensor::zeros(
             TC::make_BSM(1, cfg.d_model),
             false,  // no grad for inference
-            primary_stream
+            primary_stream,
+            "numeric_head_weights_inf"
         );
         if (cfg.use_bias) {
             training_state_.numeric_head_bias = Tensor::zeros(
                 TC::make_BSM(1, 1),
                 false,  // no grad for inference
-                primary_stream
+                primary_stream,
+                "numeric_head_bias_inf"
             );
         }
         std::cout << "  ✓ Allocated numeric head weights (Tensor API)" << std::endl;
@@ -160,7 +165,8 @@ void LanguageModel::initInferenceState() {
     training_state_.cached_token_ids_tensor = Tensor::zeros(
         TC::make_BSM(1, static_cast<int>(max_tokens)),
         false,  // no grad for inference
-        primary_stream
+        primary_stream,
+        "cached_token_ids_tensor_inf"
     );
     // Mark as int32 type via allocation size (Tensor internally tracks)
     std::cout << "  ✓ Allocated token ID cache (Tensor API)" << std::endl;
@@ -168,14 +174,16 @@ void LanguageModel::initInferenceState() {
     training_state_.cached_token_numeric_values = Tensor::zeros(
         TC::make_BSM(1, static_cast<int>(max_tokens)),
         false,  // no grad for inference
-        primary_stream
+        primary_stream,
+        "cached_token_numeric_values_inf"
     );
     std::cout << "  ✓ Allocated numeric values cache (Tensor API)" << std::endl;
     
     training_state_.cached_token_numeric_mask = Tensor::zeros(
         TC::make_BSM(1, static_cast<int>(max_tokens)),
         false,  // no grad for inference
-        primary_stream
+        primary_stream,
+        "cached_token_numeric_mask_inf"
     );
     std::cout << "  ✓ Allocated numeric mask cache (Tensor API)" << std::endl;
     
@@ -183,7 +191,8 @@ void LanguageModel::initInferenceState() {
     training_state_.cached_embeddings_tensor = Tensor::zeros(
         TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model),
         false,  // no grad for inference
-        primary_stream
+        primary_stream,
+        "cached_embeddings_tensor_inf"
     );
     std::cout << "  ✓ Allocated embeddings cache (Tensor API)" << std::endl;
     
@@ -206,20 +215,20 @@ void LanguageModel::initInferenceState() {
     for (int layer = 0; layer < cfg.num_layers; ++layer) {
         auto& cache = training_state_.encoder_layer_caches[layer];
         
-        cache.ln1_output = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream);
-        cache.attn_input = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream);
-        cache.attn_bhsd = Tensor::zeros(TC::make_BSM(1, static_cast<int>(attn_bhsd_elems)), false, primary_stream);
-        cache.softmax_lse = Tensor::zeros(TC::make_BSM(1, static_cast<int>(softmax_lse_elems)), false, primary_stream);
-        cache.attn_output = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream);
-        cache.residual1 = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream);
-        cache.ln2_output = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream);
-        cache.ffn_pre_gelu = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_ff), false, primary_stream);
-        cache.ffn_output = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_ff), false, primary_stream);
-        cache.layer_output = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream);
+        cache.ln1_output = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream, "inf_cache_ln1_output");
+        cache.attn_input = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream, "inf_cache_attn_input");
+        cache.attn_bhsd = Tensor::zeros(TC::make_BSM(1, static_cast<int>(attn_bhsd_elems)), false, primary_stream, "inf_cache_attn_bhsd");
+        cache.softmax_lse = Tensor::zeros(TC::make_BSM(1, static_cast<int>(softmax_lse_elems)), false, primary_stream, "inf_cache_softmax_lse");
+        cache.attn_output = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream, "inf_cache_attn_output");
+        cache.residual1 = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream, "inf_cache_residual1");
+        cache.ln2_output = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream, "inf_cache_ln2_output");
+        cache.ffn_pre_gelu = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_ff), false, primary_stream, "inf_cache_ffn_pre_gelu");
+        cache.ffn_output = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_ff), false, primary_stream, "inf_cache_ffn_output");
+        cache.layer_output = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream, "inf_cache_layer_output");
         
-        cache.Q = Tensor::zeros(TC::make_BSM(1, static_cast<int>(attn_bhsd_elems)), false, primary_stream);
-        cache.K = Tensor::zeros(TC::make_BSM(1, static_cast<int>(kv_bhsd_elems)), false, primary_stream);
-        cache.V = Tensor::zeros(TC::make_BSM(1, static_cast<int>(kv_bhsd_elems)), false, primary_stream);
+        cache.Q = Tensor::zeros(TC::make_BSM(1, static_cast<int>(attn_bhsd_elems)), false, primary_stream, "inf_cache_Q");
+        cache.K = Tensor::zeros(TC::make_BSM(1, static_cast<int>(kv_bhsd_elems)), false, primary_stream, "inf_cache_K");
+        cache.V = Tensor::zeros(TC::make_BSM(1, static_cast<int>(kv_bhsd_elems)), false, primary_stream, "inf_cache_V");
     }
     std::cout << "  ✓ Allocated per-layer activation caches using Tensor API (" << cfg.num_layers << " layers)" << std::endl;
 
@@ -269,7 +278,8 @@ void LanguageModel::initInferenceState() {
     training_state_.cached_encoder_output = Tensor::zeros(
         TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model),
         false,  // no grad for inference
-        primary_stream
+        primary_stream,
+        "cached_encoder_output_inf"
     );
     std::cout << "  ✓ Allocated encoder output cache (Tensor API)" << std::endl;
     
@@ -277,7 +287,8 @@ void LanguageModel::initInferenceState() {
     training_state_.cached_logits_tensor = Tensor::zeros(
         TC::make_BSM(static_cast<int>(max_tokens), cfg.vocab_size),
         false,  // no grad for inference
-        primary_stream
+        primary_stream,
+        "cached_logits_tensor_inf"
     );
     std::cout << "  ✓ Allocated logits cache (Tensor API)" << std::endl;
 
@@ -285,7 +296,8 @@ void LanguageModel::initInferenceState() {
         training_state_.cached_numeric_predictions = Tensor::zeros(
             TC::make_BSM(1, static_cast<int>(max_tokens)),
             false,  // no grad for inference
-            primary_stream
+            primary_stream,
+            "cached_numeric_predictions_inf"
         );
         std::cout << "  ✓ Allocated numeric predictions cache (Tensor API)" << std::endl;
     }
@@ -294,19 +306,22 @@ void LanguageModel::initInferenceState() {
     training_state_.single_token_embedding = Tensor::zeros(
         TC::make_BSM(1, cfg.d_model),
         false,  // no grad for inference
-        primary_stream
+        primary_stream,
+        "single_token_embedding_inf"
     );
     
     training_state_.single_token_hidden = Tensor::zeros(
         TC::make_BSM(1, cfg.d_model),
         false,  // no grad for inference
-        primary_stream
+        primary_stream,
+        "single_token_hidden_inf"
     );
     
     training_state_.single_token_logits = Tensor::zeros(
         TC::make_BSM(1, cfg.vocab_size),
         false,  // no grad for inference
-        primary_stream
+        primary_stream,
+        "single_token_logits_inf"
     );
     
     training_state_.kv_cache_len = 0;
@@ -320,7 +335,8 @@ void LanguageModel::initInferenceState() {
     training_state_.encoder_workspace = Tensor::zeros(
         TC::make_BSM(1, static_cast<int>(workspace_elems)),
         false,  // no grad for inference
-        primary_stream
+        primary_stream,
+        "encoder_workspace_inf"
     );
     training_state_.encoder_workspace_size = workspace_elems * sizeof(float);
     std::cout << "  ✓ Allocated encoder workspace (Tensor API): " << (training_state_.encoder_workspace_size / (1024.0 * 1024.0)) << " MB" << std::endl;
@@ -335,19 +351,22 @@ void LanguageModel::initInferenceState() {
             training_state_.cached_scratch_block_embeddings = Tensor::zeros(
                 TC::make_BSM(static_cast<int>(max_tokens), static_cast<int>(atom_emb_dim)),
                 false,  // no grad for inference
-                primary_stream
+                primary_stream,
+                "cached_scratch_block_embeddings_inf"
             );
             
             training_state_.cached_scratch_block_positions = Tensor::zeros(
                 TC::make_BSM(1, static_cast<int>(max_tokens)),
                 false,  // no grad for inference
-                primary_stream
+                primary_stream,
+                "cached_scratch_block_positions_inf"
             );
             
             training_state_.cached_scratch_block_num_atoms = Tensor::zeros(
                 TC::make_BSM(1, static_cast<int>(max_batch_size)),
                 false,  // no grad for inference
-                primary_stream
+                primary_stream,
+                "cached_scratch_block_num_atoms_inf"
             );
             
             // Initialize scratch pool for pinned memory transfers (simplified for inference)

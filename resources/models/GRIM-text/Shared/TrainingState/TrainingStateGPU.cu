@@ -55,6 +55,7 @@ TrainingState::~TrainingState() {
 //======================================================//
 
 void TrainingState::allocateOptimizerStates(const std::vector<size_t>& sizes, cudaStream_t stream) {
+	fprintf(stderr, "[allocateOptimizerStates] ENTER: %zu groups\n", sizes.size()); fflush(stderr);
 	// Free any existing states first
 	freeOptimizerStates();
 	
@@ -70,8 +71,8 @@ void TrainingState::allocateOptimizerStates(const std::vector<size_t>& sizes, cu
 	for (size_t i = 0; i < sizes.size(); ++i) {
 		if (sizes[i] > 0) {
 			// Create Tensor with flat shape and zero-initialize
-			optimizer_m_states.push_back(Tensor::zeros({static_cast<int>(sizes[i])}, primary_stream));
-			optimizer_v_states.push_back(Tensor::zeros({static_cast<int>(sizes[i])}, primary_stream));
+			optimizer_m_states.push_back(Tensor::zeros({static_cast<int>(sizes[i])}, primary_stream, "optimizer_m"));
+			optimizer_v_states.push_back(Tensor::zeros({static_cast<int>(sizes[i])}, primary_stream, "optimizer_v"));
 		} else {
 			// Empty placeholder Tensor for zero-size groups
 			optimizer_m_states.emplace_back();
@@ -79,6 +80,7 @@ void TrainingState::allocateOptimizerStates(const std::vector<size_t>& sizes, cu
 		}
 	}
 	optimizer_states_allocated = true;
+	fprintf(stderr, "[allocateOptimizerStates] EXIT: m=%zu v=%zu\n", optimizer_m_states.size(), optimizer_v_states.size()); fflush(stderr);
 }
 
 void TrainingState::freeOptimizerStates() {
@@ -297,7 +299,8 @@ void TrainingState::initializeAutogradTensors(
 		tensors_->embedding_weights.data,
 		tensors_->embedding_weights.shape,
 		false,  // doesn't take ownership (TrainingTensors owns it)
-		true    // requires_grad
+		true,    // requires_grad
+		"embedding_weights_ref"
 	);
 	// ISSUE #59: Share the grad Tensor object (shared_ptr) for proper reference counting
 	embedding_weights.share_grad(tensors_->embedding_weights);
@@ -309,7 +312,8 @@ void TrainingState::initializeAutogradTensors(
 			tensors_->position_embedding_weights.data,
 			tensors_->position_embedding_weights.shape,
 			false,
-			true
+			true,
+			"position_embedding_weights_ref"
 		);
 		// ISSUE #59: Share the grad Tensor object
 		position_embedding_weights.share_grad(tensors_->position_embedding_weights);
@@ -323,7 +327,8 @@ void TrainingState::initializeAutogradTensors(
 		tensors_->lm_head_weights.data,
 		tensors_->lm_head_weights.shape,
 		false,
-		true
+		true,
+		"lm_head_weights_ref"
 	);
 	// BUG FIX: When tie_embeddings=true, lm_head_weights.grad MUST alias embedding_weights.grad!
 	// TrainingTensors sets this up, but we must preserve it when copying to TrainingState.
@@ -405,7 +410,7 @@ void TrainingState::allocatePCGradBuffer(int vocab_size, int d_model, cudaStream
 		(stream_ctrl.isInitialized() ? stream_ctrl.getPrimaryStream() : nullptr);
 	
 	// Allocate as Tensor [vocab_size, d_model]
-	pcgrad_temp_buffer = Tensor::zeros({vocab_size, d_model}, primary_stream);
+	pcgrad_temp_buffer = Tensor::zeros({vocab_size, d_model}, primary_stream, "pcgrad_temp_buffer");
 	
 	// Set global pointers for EmbeddingGradFn to use
 	extern float* g_pcgrad_temp_buffer;
@@ -444,8 +449,8 @@ void TrainingState::allocateDebugGradBuffers(int vocab_size, int d_model, cudaSt
 		(stream_ctrl.isInitialized() ? stream_ctrl.getPrimaryStream() : nullptr);
 	
 	// Allocate as Tensors [vocab_size, d_model]
-	debug_lm_head_only_grad = Tensor::zeros({vocab_size, d_model}, primary_stream);
-	debug_embedding_only_grad = Tensor::zeros({vocab_size, d_model}, primary_stream);
+	debug_lm_head_only_grad = Tensor::zeros({vocab_size, d_model}, primary_stream, "debug_lm_head_only_grad");
+	debug_embedding_only_grad = Tensor::zeros({vocab_size, d_model}, primary_stream, "debug_embedding_only_grad");
 	
 	const size_t buffer_size = static_cast<size_t>(vocab_size) * d_model;
 	fprintf(stdout, "[DEBUG] Allocated gradient attribution buffers: %zu elements (%zu MB each)\n",
@@ -460,6 +465,7 @@ void TrainingState::freeDebugGradBuffers() {
 
 void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream) {
 	if (!debug_gradient_attribution || !debug_lm_head_only_grad.data || !debug_embedding_only_grad.data) {
+		
 		return;  // Debug mode not enabled or buffers not allocated
 	}
 	
@@ -467,7 +473,7 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream) {
 	constexpr int TARGET_TOKEN = 277;
 	
 	// Get d_model from the embedding shape - BSM layout uses Shape2D with (rows=vocab, cols=d_model)
-	int d_model = 768;  // Default fallback
+	int d_model = 768;  // Default fallback only for DEBUGGING
 	if (embedding_weights.shape.is_flat()) {
 		d_model = embedding_weights.shape.flat.cols;
 	}

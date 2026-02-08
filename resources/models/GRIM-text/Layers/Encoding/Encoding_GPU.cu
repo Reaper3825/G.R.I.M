@@ -1524,8 +1524,8 @@ void EncodingLayer::allocateWeights() {
     TensorContract::TensorShape o_bias_shape(TensorContract::Layout::BSM, o_bias_2d);
     
     // RMSNorm gamma - initialized to 1.0, then set requires_grad
-    rms1_gamma_ = Tensor::zeros(gamma_shape, true, config_.stream);
-    rms2_gamma_ = Tensor::zeros(gamma_shape, true, config_.stream);
+    rms1_gamma_ = Tensor::zeros(gamma_shape, true, config_.stream, "enc_rms1_gamma");
+    rms2_gamma_ = Tensor::zeros(gamma_shape, true, config_.stream, "enc_rms2_gamma");
     
     // Fill gamma with ones via kernel
     int threads = 256;
@@ -1534,12 +1534,12 @@ void EncodingLayer::allocateWeights() {
     fillOnesKernel<<<blocks, threads, 0, config_.stream>>>(rms2_gamma_.data, d_model);
     
     // Xavier initialization for attention weights
-    W_qkv_ = Tensor::xavier_uniform(qkv_weight_shape, true, config_.stream);
-    b_qkv_ = Tensor::zeros(qkv_bias_shape, true, config_.stream);
+    W_qkv_ = Tensor::xavier_uniform(qkv_weight_shape, true, config_.stream, "enc_W_qkv");
+    b_qkv_ = Tensor::zeros(qkv_bias_shape, true, config_.stream, "enc_b_qkv");
     
     // W_o: [d_model, d_model] output projection
-    W_o_ = Tensor::xavier_uniform(o_weight_shape, true, config_.stream);
-    b_o_ = Tensor::zeros(o_bias_shape, true, config_.stream);
+    W_o_ = Tensor::xavier_uniform(o_weight_shape, true, config_.stream, "enc_W_o");
+    b_o_ = Tensor::zeros(o_bias_shape, true, config_.stream, "enc_b_o");
     
     // FFN layer
     FeedForwardConfig ffn_cfg;
@@ -1608,34 +1608,34 @@ void EncodingLayer::useExternalWeights(
     // ISSUE #59: Use share_grad() for proper shared_ptr semantics
     
     // RMSNorm gammas
-    rms1_gamma_ = Tensor::from_ptr(rms1_gamma.data, rms1_gamma.shape, false, true);
+    rms1_gamma_ = Tensor::from_ptr(rms1_gamma.data, rms1_gamma.shape, false, true, "enc_rms1_gamma");
     rms1_gamma_.share_grad(rms1_gamma);
     rms1_gamma_.owns_data = false;
     
-    rms2_gamma_ = Tensor::from_ptr(rms2_gamma.data, rms2_gamma.shape, false, true);
+    rms2_gamma_ = Tensor::from_ptr(rms2_gamma.data, rms2_gamma.shape, false, true, "enc_rms2_gamma");
     rms2_gamma_.share_grad(rms2_gamma);
     rms2_gamma_.owns_data = false;
     
 
     
-    W_qkv_ = Tensor::from_ptr(qkv_weight.data, qkv_weight.shape, false, true);
+    W_qkv_ = Tensor::from_ptr(qkv_weight.data, qkv_weight.shape, false, true, "enc_W_qkv");
     W_qkv_.share_grad(qkv_weight);
     W_qkv_.owns_data = false;
     
 
     if (qkv_bias.data) {
-        b_qkv_ = Tensor::from_ptr(qkv_bias.data, qkv_bias.shape, false, true);
+        b_qkv_ = Tensor::from_ptr(qkv_bias.data, qkv_bias.shape, false, true, "enc_b_qkv");
         b_qkv_.share_grad(qkv_bias);
         b_qkv_.owns_data = false;
     }
     
     // Output projection
-    W_o_ = Tensor::from_ptr(out_weight.data, out_weight.shape, false, true);
+    W_o_ = Tensor::from_ptr(out_weight.data, out_weight.shape, false, true, "enc_W_o");
     W_o_.share_grad(out_weight);
     W_o_.owns_data = false;
     
     if (out_bias.data) {
-        b_o_ = Tensor::from_ptr(out_bias.data, out_bias.shape, false, true);
+        b_o_ = Tensor::from_ptr(out_bias.data, out_bias.shape, false, true, "enc_b_o");
         b_o_.share_grad(out_bias);
         b_o_.owns_data = false;
     }
@@ -1651,12 +1651,12 @@ void EncodingLayer::useExternalWeights(
     
     // Issue #109: LayerScale tensors (optional, gated by config_.use_layer_scale)
     if (layer_scale1 && layer_scale1->data) {
-        layer_scale1_ = Tensor::from_ptr(layer_scale1->data, layer_scale1->shape, false, true);
+        layer_scale1_ = Tensor::from_ptr(layer_scale1->data, layer_scale1->shape, false, true, "enc_layer_scale1");
         layer_scale1_.share_grad(*layer_scale1);
         layer_scale1_.owns_data = false;
     }
     if (layer_scale2 && layer_scale2->data) {
-        layer_scale2_ = Tensor::from_ptr(layer_scale2->data, layer_scale2->shape, false, true);
+        layer_scale2_ = Tensor::from_ptr(layer_scale2->data, layer_scale2->shape, false, true, "enc_layer_scale2");
         layer_scale2_.share_grad(*layer_scale2);
         layer_scale2_.owns_data = false;
     }
@@ -2571,7 +2571,8 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         intermediates.output.data,
         intermediates.output.shape,
         false,  // doesn't own data - intermediates.output owns it
-        true    // requires_grad
+        true,    // requires_grad
+        "enc_layer_output"
     );
     result.is_leaf = false;
     result.grad_fn = intermediates.output.grad_fn;

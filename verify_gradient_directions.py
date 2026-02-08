@@ -1,4 +1,4 @@
- """
+"""
 Gradient Direction Verification - Parse Training Logs
 ======================================================
 

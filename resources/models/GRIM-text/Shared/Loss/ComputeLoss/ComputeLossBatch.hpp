@@ -25,7 +25,7 @@ struct BatchPreparationResult {
 	// GRMT v4: text features
 	std::vector<uint16_t> padded_text_features;  // [batch_size * max_seq_len * kTextFeatureDim]
 	std::vector<uint8_t> padded_text_mask;       // [batch_size * max_seq_len]
-	std::vector<int> sequence_lengths;
+	std::vector<int> valid_target_counts;        // [batch_size] — count of unmasked targets per sequence (NOT sequence length!)
 };
 
 // Prepares padded tensors for a batch, enforcing cache capacity limits.

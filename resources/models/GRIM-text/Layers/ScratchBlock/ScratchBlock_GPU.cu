@@ -534,9 +534,12 @@ void ScratchBlockLayer::allocateWeights() {
     TensorContract::TensorShape proj_shape(TensorContract::Layout::BSM, proj_2d);
     TensorContract::TensorShape text_proj_shape(TensorContract::Layout::BSM, text_proj_2d);
     
-    atom_type_embeddings_ = Tensor::zeros(atom_emb_shape, true, config_.stream);
-    atom_projection_ = Tensor::zeros(proj_shape, true, config_.stream);
-    text_feature_projection_ = Tensor::zeros(text_proj_shape, true, config_.stream);
+     atom_type_embeddings_ = Tensor::zeros(atom_emb_shape, true, config_.stream, "atom_type_embeddings");
+    atom_type_embeddings_.ensure_grad();
+    atom_projection_ = Tensor::zeros(proj_shape, true, config_.stream, "atom_projection");
+    atom_projection_.ensure_grad();
+    text_feature_projection_ = Tensor::zeros(text_proj_shape, true, config_.stream, "text_feature_projection");
+    text_feature_projection_.ensure_grad();
     
     // Temporary buffers (raw — not trainable parameters)
     cudaMalloc(&d_atom_positions_, config_.max_atoms * sizeof(int));

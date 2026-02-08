@@ -92,28 +92,24 @@ FeedForwardLayer::FeedForwardLayer(const FeedForwardConfig& config,
 
     // Create view Tensors referencing external buffers
     // ISSUE #59: Use share_grad() for proper shared_ptr semantics
-    W1_ = Tensor::from_ptr(w1.data, w1.shape, false, true);
+    W1_ = Tensor::from_ptr(w1.data, w1.shape, false, true, "ffn.W1");
     W1_.share_grad(w1);
     W1_.owns_data = false;
-    W1_.name = "ffn.W1";
 
     if (b1.data) {
-        b1_ = Tensor::from_ptr(b1.data, b1.shape, false, true);
+        b1_ = Tensor::from_ptr(b1.data, b1.shape, false, true, "ffn.b1");
         b1_.share_grad(b1);
         b1_.owns_data = false;
-        b1_.name = "ffn.b1";
     }
 
-    W2_ = Tensor::from_ptr(w2.data, w2.shape, false, true);
+    W2_ = Tensor::from_ptr(w2.data, w2.shape, false, true, "ffn.W2");
     W2_.share_grad(w2);
     W2_.owns_data = false;
-    W2_.name = "ffn.W2";
 
     if (b2.data) {
-        b2_ = Tensor::from_ptr(b2.data, b2.shape, false, true);
+        b2_ = Tensor::from_ptr(b2.data, b2.shape, false, true, "ffn.b2");
         b2_.share_grad(b2);
         b2_.owns_data = false;
-        b2_.name = "ffn.b2";
     }
 
     // Set cuBLAS handle for autograd

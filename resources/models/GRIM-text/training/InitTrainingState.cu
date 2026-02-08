@@ -105,7 +105,10 @@ void LanguageModel::initPBM() {
 }
 
 void LanguageModel::initTrainingState() {
-    if (training_state_.initialized) return;
+    if (training_state_.initialized) {
+        fprintf(stderr, "[initTrainingState] WARNING: Already initialized, skipping re-init\n");
+        return;
+    }
     
     const auto& cfg = getConfig();
     
@@ -125,8 +128,7 @@ void LanguageModel::initTrainingState() {
         stream_config.create_auxiliary_stream = false; // On-demand if needed
         
         if (!training_state_.stream_ctrl.initialize(stream_config)) {
-            std::cerr << "FATAL: Failed to initialize StreamController" << std::endl;
-            return;
+            throw std::runtime_error("[initTrainingState] Failed to initialize StreamController - CUDA device may be unavailable");
         }
         std::cout << "✓ StreamController initialized (Primary + Transfer streams)" << std::endl;
     } else {
@@ -271,7 +273,7 @@ void LanguageModel::initTrainingState() {
     // LM head bias [vocab_size] - optional
     if (cfg.use_bias) {
         training_state_.lm_head_bias = Tensor::zeros(
-            TC::make_BSM(1, cfg.vocab_size), true, primary_stream);
+            TC::make_BSM(1, cfg.vocab_size), true, primary_stream, "lm_head_bias");
         training_state_.lm_head_bias.ensure_grad();  // Allocate grad buffer NOW
         std::cout << "📦 LM head bias allocated: " << cfg.vocab_size << " elements" << std::endl;
     }
@@ -279,10 +281,10 @@ void LanguageModel::initTrainingState() {
     // Numeric head [d_model] - optional
     if (cfg.numeric_head_enabled) {
         training_state_.numeric_head_weights = Tensor::zeros(
-            TC::make_BSM(1, cfg.d_model), true, primary_stream);
+            TC::make_BSM(1, cfg.d_model), true, primary_stream, "numeric_head_weights");
         training_state_.numeric_head_weights.ensure_grad();  // Allocate grad buffer NOW
         training_state_.numeric_head_bias = Tensor::zeros(
-            TC::make_BSM(1, 1), true, primary_stream);
+            TC::make_BSM(1, 1), true, primary_stream, "numeric_head_bias");
         training_state_.numeric_head_bias.ensure_grad();  // Allocate grad buffer NOW
         
         // Initialize numeric head with Xavier uniform using deterministic seed
@@ -299,11 +301,11 @@ void LanguageModel::initTrainingState() {
         // To get weight = 1.0 (no scaling), need log_var = -ln(2) ≈ -0.693
         // BUG FIX: Was initialized to 0 → weight = 0.5 → HALVED the loss!
         const float init_log_var = -std::log(2.0f);  // -0.693 → weight = 1.0
-        training_state_.log_var_text = Tensor::zeros(TC::make_BSM(1, 1), true, primary_stream);
+        training_state_.log_var_text = Tensor::zeros(TC::make_BSM(1, 1), true, primary_stream, "log_var_text");
         training_state_.log_var_text.ensure_grad();
         cudaMemcpyAsync(training_state_.log_var_text.data, &init_log_var, sizeof(float), 
                         cudaMemcpyHostToDevice, primary_stream);
-        training_state_.log_var_numeric = Tensor::zeros(TC::make_BSM(1, 1), true, primary_stream);
+        training_state_.log_var_numeric = Tensor::zeros(TC::make_BSM(1, 1), true, primary_stream, "log_var_numeric");
         training_state_.log_var_numeric.ensure_grad();
         cudaMemcpyAsync(training_state_.log_var_numeric.data, &init_log_var, sizeof(float),
                         cudaMemcpyHostToDevice, primary_stream);
@@ -312,7 +314,7 @@ void LanguageModel::initTrainingState() {
     
     // Final RMSNorm gamma [d_model] - Issue #33 FIX
     training_state_.final_rms_gamma = Tensor::zeros(
-        TC::make_BSM(1, cfg.d_model), true, primary_stream);
+        TC::make_BSM(1, cfg.d_model), true, primary_stream, "final_rms_gamma");
     training_state_.final_rms_gamma.ensure_grad();  // Allocate grad buffer NOW
     // Initialize gamma to 1.0 (standard for RMSNorm)
     std::vector<float> ones(cfg.d_model, 1.0f);
@@ -340,9 +342,8 @@ void LanguageModel::initTrainingState() {
     
     // Validate GQA configuration
     if (!HyperParameters::isValidGQAConfig(cfg.num_heads, num_kv_heads)) {
-        std::cerr << "ERROR: Invalid GQA config: num_heads=" << cfg.num_heads 
-                  << " num_kv_heads=" << num_kv_heads << std::endl;
-        return;
+        throw std::runtime_error("[initTrainingState] Invalid GQA config: num_heads=" + std::to_string(cfg.num_heads) 
+                                 + " num_kv_heads=" + std::to_string(num_kv_heads));
     }
     
     // Store GQA config in training state
@@ -372,11 +373,11 @@ void LanguageModel::initTrainingState() {
         // GQA: alpha_q has num_heads entries, alpha_k has num_kv_heads entries
         // Use BSM shape with dim=1 for 1D vectors
         training_state_.attn_alpha_q[layer] = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(cfg.num_heads, 1), true, primary_stream);
+            TensorContract::TensorShape::make_BSM(cfg.num_heads, 1), true, primary_stream, "attn_alpha_q");
         training_state_.attn_alpha_q[layer].ensure_grad();
         
         training_state_.attn_alpha_k[layer] = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(num_kv_heads, 1), true, primary_stream);
+            TensorContract::TensorShape::make_BSM(num_kv_heads, 1), true, primary_stream, "attn_alpha_k");
         training_state_.attn_alpha_k[layer].ensure_grad();
         
         // Initialize alpha_q to 1.0 (num_heads entries)
@@ -443,10 +444,10 @@ void LanguageModel::initTrainingState() {
     
     // Use BSM shape with dim=1 for 1D vectors
     training_state_.single_token_hidden = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(cfg.d_model, 1), false, primary_stream);
+        TensorContract::TensorShape::make_BSM(cfg.d_model, 1), false, primary_stream, "single_token_hidden");
     
     training_state_.single_token_logits = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(cfg.vocab_size, 1), false, primary_stream);
+        TensorContract::TensorShape::make_BSM(cfg.vocab_size, 1), false, primary_stream, "single_token_logits");
     
     std::cout << "✓ Allocated single-token inference buffers for training sampling" << std::endl;
     
@@ -455,7 +456,7 @@ void LanguageModel::initTrainingState() {
     
     // Embedding cache - now uses Tensor
     training_state_.cached_embeddings_tensor = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
+        TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cached_embeddings");
     
     // Per-layer encoder activation caches using new Tensor-based architecture
     // GQA: K and V caches use num_kv_heads, Q uses num_heads
@@ -474,58 +475,58 @@ void LanguageModel::initTrainingState() {
         
         // BSM layout for [batch*seq, feature_dim] shaped tensors
         cache.ln1_output = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
+            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cache_ln1_output");
         cache.attn_input = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
+            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cache_attn_input");
         cache.attn_output = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
+            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cache_attn_output");
         cache.residual1 = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
+            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cache_residual1");
         cache.ln2_output = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
+            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cache_ln2_output");
         cache.ffn_pre_gelu = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_ff), false, primary_stream);
+            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_ff), false, primary_stream, "cache_ffn_pre_gelu");
         cache.ffn_output = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_ff), false, primary_stream);
+            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_ff), false, primary_stream, "cache_ffn_output");
         cache.layer_output = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
+            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cache_layer_output");
         
         // BHSD layout for attention tensors [batch, heads, seq, head_dim]
         cache.attn_bhsd = Tensor::empty(
-            TensorContract::TensorShape::make_BHSD(max_batch_size, cfg.num_heads, max_seq_len_cache, head_dim_cache), false, primary_stream);
+            TensorContract::TensorShape::make_BHSD(max_batch_size, cfg.num_heads, max_seq_len_cache, head_dim_cache), false, primary_stream, "cache_attn_bhsd");
         cache.softmax_lse = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_batch_size * cfg.num_heads, max_seq_len_cache), false, primary_stream);
+            TensorContract::TensorShape::make_BSM(max_batch_size * cfg.num_heads, max_seq_len_cache), false, primary_stream, "cache_softmax_lse");
         
         // Q/K/V caches - Q uses full num_heads, K/V use num_kv_heads (GQA)
         cache.Q = Tensor::empty(
-            TensorContract::TensorShape::make_BHSD(max_batch_size, cfg.num_heads, max_seq_len_cache, head_dim_cache), false, primary_stream);
+            TensorContract::TensorShape::make_BHSD(max_batch_size, cfg.num_heads, max_seq_len_cache, head_dim_cache), false, primary_stream, "cache_Q");
         cache.K = Tensor::empty(
-            TensorContract::TensorShape::make_BHSD(max_batch_size, training_state_.num_kv_heads, max_seq_len_cache, head_dim_cache), false, primary_stream);
+            TensorContract::TensorShape::make_BHSD(max_batch_size, training_state_.num_kv_heads, max_seq_len_cache, head_dim_cache), false, primary_stream, "cache_K");
         cache.V = Tensor::empty(
-            TensorContract::TensorShape::make_BHSD(max_batch_size, training_state_.num_kv_heads, max_seq_len_cache, head_dim_cache), false, primary_stream);
+            TensorContract::TensorShape::make_BHSD(max_batch_size, training_state_.num_kv_heads, max_seq_len_cache, head_dim_cache), false, primary_stream, "cache_V");
     }
     
     // Output layer caches - using Tensor API
     training_state_.cached_encoder_output = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
+        TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cached_encoder_output");
     
     // Issue #33: Final RMSNorm input cache for backward pass
     // Stores encoder output BEFORE final norm (used to compute gamma gradients)
     training_state_.cached_final_rms_input = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream);
+        TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cached_final_rms_input");
     
     // Allocate logits cache with LOGITS layout tracking (TensorContract integration)
     training_state_.cached_logits_tensor = Tensor::empty(
-        TensorContract::TensorShape::make_LOGITS(max_logit_tokens, cfg.vocab_size), false, primary_stream);
+        TensorContract::TensorShape::make_LOGITS(max_logit_tokens, cfg.vocab_size), false, primary_stream, "cached_logits");
     std::cout << "✓ Allocated cached_logits [" << max_logit_tokens << " x " << cfg.vocab_size << "] LOGITS layout" << std::endl;
 
     if (cfg.numeric_head_enabled) {
         training_state_.cached_numeric_predictions = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_logit_tokens, 1), false, primary_stream);
+            TensorContract::TensorShape::make_BSM(max_logit_tokens, 1), false, primary_stream, "cached_numeric_predictions");
     }
     
     training_state_.cached_targets_tensor = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(max_logit_tokens, 1), false, primary_stream);
+        TensorContract::TensorShape::make_BSM(max_logit_tokens, 1), false, primary_stream, "cached_targets");
     
     // BUG FIX: Token IDs cache must be sized by max_tokens (full cache capacity)
     // not max_logit_tokens. Inference sampling requires full buffer.
@@ -533,7 +534,8 @@ void LanguageModel::initTrainingState() {
     training_state_.cached_token_ids_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
         false,  // no grad for token IDs
-        primary_stream
+        primary_stream,
+        "cached_token_ids"
     );
     std::cout << "✓ Allocated token IDs cache (Tensor API) [" << max_tokens << "]" << std::endl;
     
@@ -546,14 +548,16 @@ void LanguageModel::initTrainingState() {
     training_state_.cached_token_numeric_values = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
         false,  // no grad
-        primary_stream
+        primary_stream,
+        "cached_token_numeric_values"
     );
     std::cout << "✓ Allocated token numeric values cache (Tensor API)" << std::endl;
     
     training_state_.cached_token_numeric_mask = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
         false,  // no grad
-        primary_stream
+        primary_stream,
+        "cached_token_numeric_mask"
     );
     std::cout << "✓ Allocated token numeric mask cache (Tensor API)" << std::endl;
 
@@ -562,14 +566,16 @@ void LanguageModel::initTrainingState() {
     training_state_.cached_token_text_features = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(static_cast<int>(max_tokens), kTextFeatureDim),
         false,  // no grad
-        primary_stream
+        primary_stream,
+        "cached_token_text_features"
     );
     std::cout << "✓ Allocated token text features cache (Tensor API)" << std::endl;
     
     training_state_.cached_token_text_mask = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
         false,  // no grad
-        primary_stream
+        primary_stream,
+        "cached_token_text_mask"
     );
     std::cout << "✓ Allocated token text mask cache (Tensor API)" << std::endl;
     
@@ -581,12 +587,12 @@ void LanguageModel::initTrainingState() {
     // Size: num_layers * max_batch_size * num_heads
     const size_t entropy_size = cfg.num_layers * max_batch_size * cfg.num_heads;
     training_state_.d_entropy_output = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(static_cast<int>(entropy_size), 1), false, primary_stream);
+        TensorContract::TensorShape::make_BSM(static_cast<int>(entropy_size), 1), false, primary_stream, "entropy_output");
     std::cout << "📊 Allocated entropy output buffer: " << entropy_size 
               << " floats (" << (entropy_size * sizeof(float) / 1024.0 / 1024.0) << " MB)" << std::endl;
 
     training_state_.sequence_weights_tensor = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(static_cast<int>(max_batch_size), 1), false, primary_stream);
+        TensorContract::TensorShape::make_BSM(static_cast<int>(max_batch_size), 1), false, primary_stream, "sequence_weights");
     training_state_.sequence_weight_capacity = static_cast<int>(max_batch_size);
     training_state_.sequence_weight_count = 0;
     
@@ -601,23 +607,20 @@ void LanguageModel::initTrainingState() {
     // grad_logits: [max_logit_tokens, vocab_size] LOGITS layout
     training_state_.grad_logits_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_LOGITS(static_cast<int>(max_logit_tokens), cfg.vocab_size),
-        false, grad_stream);
-    training_state_.grad_logits_tensor.name = "grad_logits";
+        false, grad_stream, "grad_logits");
     std::cout << "✓ Allocated grad_logits_tensor [" << max_logit_tokens << " x " << cfg.vocab_size << "] LOGITS layout" << std::endl;
 
     // grad_numeric: [max_logit_tokens] for numeric head
     if (cfg.numeric_head_enabled) {
         training_state_.grad_numeric_tensor = Tensor::zeros(
             TensorContract::TensorShape::make_BSM(static_cast<int>(max_logit_tokens), 1),
-            false, grad_stream);
-        training_state_.grad_numeric_tensor.name = "grad_numeric";
+            false, grad_stream, "grad_numeric");
     }
     
     // grad_encoder: [max_tokens, d_model]
     training_state_.grad_encoder_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(static_cast<int>(max_tokens), cfg.d_model),
-        false, grad_stream);
-    training_state_.grad_encoder_tensor.name = "grad_encoder_out";
+        false, grad_stream, "grad_encoder_out");
     
     const size_t tokens_per_batch = max_batch_size * max_seq_len_cache;
     EncodingConfig enc_cfg{};
@@ -643,7 +646,7 @@ void LanguageModel::initTrainingState() {
               << " workspace=" << (workspace_bytes / (1024*1024)) << "MB" << std::endl;
 
     training_state_.encoder_workspace = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(static_cast<int>(workspace_bytes / sizeof(float)), 1), false, primary_stream);
+        TensorContract::TensorShape::make_BSM(static_cast<int>(workspace_bytes / sizeof(float)), 1), false, primary_stream, "encoder_workspace");
     training_state_.encoder_workspace_size = workspace_bytes;
 
     // ═══════════════════════════════════════════════════════════════
@@ -655,72 +658,60 @@ void LanguageModel::initTrainingState() {
     // FFN backward temporaries
     training_state_.grad_ffn_input_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream);
-    training_state_.grad_ffn_input_tensor.name = "grad_ffn_input";
+        false, grad_stream, "grad_ffn_input");
     
     training_state_.grad_ffn_hidden_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_ff),
-        false, grad_stream);
-    training_state_.grad_ffn_hidden_tensor.name = "grad_ffn_hidden";
+        false, grad_stream, "grad_ffn_hidden");
     
     // Attention backward temporaries (model-width)
     training_state_.grad_attn_input_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream);
-    training_state_.grad_attn_input_tensor.name = "grad_attn_input";
+        false, grad_stream, "grad_attn_input");
     
     training_state_.grad_attn_out_proj_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream);
-    training_state_.grad_attn_out_proj_tensor.name = "grad_attn_out_before_proj";
+        false, grad_stream, "grad_attn_out_before_proj");
     
     training_state_.grad_attn_out_bhsd_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream);
-    training_state_.grad_attn_out_bhsd_tensor.name = "grad_attn_out_reshaped";
+        false, grad_stream, "grad_attn_out_reshaped");
     
     // QKV gradients (need 4D shape for attention, but stored flat for now)
     // Full shape: [batch, heads, seq, head_dim] - using BSM as [tokens, d_model]
     training_state_.grad_q_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream);
-    training_state_.grad_q_tensor.name = "grad_Q";
+        false, grad_stream, "grad_Q");
     
     training_state_.grad_k_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream);
-    training_state_.grad_k_tensor.name = "grad_K";
+        false, grad_stream, "grad_K");
     
     training_state_.grad_v_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream);
-    training_state_.grad_v_tensor.name = "grad_V";
+        false, grad_stream, "grad_V");
     
     // QKV fused [tokens, 3*d_model]
     training_state_.grad_qkv_concat_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_QKV_FUSED(max_tokens_int, 3 * cfg.d_model),
-        false, grad_stream);
-    training_state_.grad_qkv_concat_tensor.name = "grad_qkv_concat";
+        false, grad_stream, "grad_qkv_concat");
     
     training_state_.grad_qkv_input_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream);
-    training_state_.grad_qkv_input_tensor.name = "grad_qkv_input";
+        false, grad_stream, "grad_qkv_input");
     
     // DEDICATED scratch buffer for attention output BSM conversion (W_o gradient computation)
     // CRITICAL: Do NOT reuse grad_qkv_input - prevents temporal aliasing bugs
     training_state_.grad_attn_bsm_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(max_tokens_int, cfg.d_model),
-        false, grad_stream);
-    training_state_.grad_attn_bsm_tensor.name = "grad_attn_bsm_scratch";
+        false, grad_stream, "grad_attn_bsm_scratch");
     
     // Issue #43 FIX: Centering scratch buffer for encoder weight gradients
     // Size: max(d_model, d_ff) to handle both model and FFN width activations
     const int centering_width = std::max(cfg.d_model, cfg.d_ff);
     training_state_.centering_scratch_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(max_tokens_int, centering_width),
-        false, grad_stream);
-    training_state_.centering_scratch_tensor.name = "centered_activation_scratch";
+        false, grad_stream, "centered_activation_scratch");
     std::cout << "📐 Issue #43: Allocated centering scratch tensor (" 
               << (training_state_.centering_scratch_tensor.numel() * sizeof(float) / (1024*1024)) << " MB)" << std::endl;
 
@@ -743,14 +734,14 @@ void LanguageModel::initTrainingState() {
             TensorContract::TensorShape::make_BHSD(
                 static_cast<int>(max_batch_size), cfg.num_heads, 
                 static_cast<int>(max_seq_len_cache), head_dim),
-            false, primary_stream);
+            false, primary_stream, "fa_dq_accum");
     }
     if (fa_dsoftmax_sum_elems > 0) {
         training_state_.fa_dsoftmax_sum = Tensor::zeros(
             TensorContract::TensorShape::make_BSM(
                 static_cast<int>(max_batch_size * cfg.num_heads),
                 static_cast<int>(max_seq_len_cache)),
-            false, primary_stream);
+            false, primary_stream, "fa_dsoftmax_sum");
     }
 
     const size_t fa_q_elems = static_cast<size_t>(max_batch_size) *
@@ -769,51 +760,51 @@ void LanguageModel::initTrainingState() {
     training_state_.fa_q_bf16 = Tensor::empty(
         TensorContract::TensorShape::make_BSHD(
             static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
-            cfg.num_heads, head_dim), false, primary_stream);
+            cfg.num_heads, head_dim), false, primary_stream, "fa_q_bf16");
     training_state_.fa_k_bf16 = Tensor::empty(
         TensorContract::TensorShape::make_BSHD(
             static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
-            training_state_.num_kv_heads, head_dim), false, primary_stream);
+            training_state_.num_kv_heads, head_dim), false, primary_stream, "fa_k_bf16");
     training_state_.fa_v_bf16 = Tensor::empty(
         TensorContract::TensorShape::make_BSHD(
             static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
-            training_state_.num_kv_heads, head_dim), false, primary_stream);
+            training_state_.num_kv_heads, head_dim), false, primary_stream, "fa_v_bf16");
     training_state_.fa_out_bf16 = Tensor::empty(
         TensorContract::TensorShape::make_BSHD(
             static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
-            cfg.num_heads, head_dim), false, primary_stream);
+            cfg.num_heads, head_dim), false, primary_stream, "fa_out_bf16");
     training_state_.fa_dout_bf16 = Tensor::empty(
         TensorContract::TensorShape::make_BSHD(
             static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
-            cfg.num_heads, head_dim), false, primary_stream);
+            cfg.num_heads, head_dim), false, primary_stream, "fa_dout_bf16");
     training_state_.fa_dq_bf16 = Tensor::empty(
         TensorContract::TensorShape::make_BSHD(
             static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
-            cfg.num_heads, head_dim), false, primary_stream);
+            cfg.num_heads, head_dim), false, primary_stream, "fa_dq_bf16");
     training_state_.fa_dk_bf16 = Tensor::empty(
         TensorContract::TensorShape::make_BSHD(
             static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
-            training_state_.num_kv_heads, head_dim), false, primary_stream);
+            training_state_.num_kv_heads, head_dim), false, primary_stream, "fa_dk_bf16");
     training_state_.fa_dv_bf16 = Tensor::empty(
         TensorContract::TensorShape::make_BSHD(
             static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
-            training_state_.num_kv_heads, head_dim), false, primary_stream);
+            training_state_.num_kv_heads, head_dim), false, primary_stream, "fa_dv_bf16");
     
     // Loss scratch buffers using Tensor API (Rule 20: no raw cudaMalloc)
     training_state_.d_loss_scratch = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(static_cast<int>(max_logit_tokens), 1),
-        false, primary_stream);
+        false, primary_stream, "d_loss_scratch");
     training_state_.d_loss_sum_scratch = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(1, 1),  // Scalar
-        false, primary_stream);
+        false, primary_stream, "d_loss_sum_scratch");
 
     if (cfg.numeric_head_enabled) {
         training_state_.d_numeric_loss_sum = Tensor::zeros(
             TensorContract::TensorShape::make_BSM(1, 1),  // Scalar
-            false, primary_stream);
+            false, primary_stream, "d_numeric_loss_sum");
         training_state_.d_numeric_loss_count = Tensor::zeros(
             TensorContract::TensorShape::make_BSM(1, 1),  // Scalar (int stored as float, cast at usage)
-            false, primary_stream);
+            false, primary_stream, "d_numeric_loss_count");
     }
     
     // Initialize scratch block pool for pinned memory transfers (if enabled in config)
@@ -877,16 +868,16 @@ void LanguageModel::initTrainingState() {
             TensorContract::TensorShape::make_BSM(
                 static_cast<int>(cfg.scratch_block_max_atoms),
                 static_cast<int>(cfg.scratch_block_atom_embedding_dim)),
-            false, primary_stream);
+            false, primary_stream, "cached_scratch_block_embeddings");
         training_state_.cached_scratch_block_positions = Tensor::zeros(
             TensorContract::TensorShape::make_BSM(static_cast<int>(cfg.scratch_block_max_atoms), 1),
-            false, primary_stream);  // int32 stored as float, cast at usage
+            false, primary_stream, "cached_scratch_block_positions");  // int32 stored as float, cast at usage
         training_state_.cached_scratch_block_types = Tensor::zeros(
             TensorContract::TensorShape::make_BSM(static_cast<int>(cfg.scratch_block_max_atoms), 1),
-            false, primary_stream);  // int32 stored as float, cast at usage
+            false, primary_stream, "cached_scratch_block_types");  // int32 stored as float, cast at usage
         training_state_.cached_scratch_block_num_atoms = Tensor::zeros(
             TensorContract::TensorShape::make_BSM(1, 1),
-            false, primary_stream);  // Scalar int32 stored as float
+            false, primary_stream, "cached_scratch_block_num_atoms");  // Scalar int32 stored as float
         
         std::cout << "✓ ScratchBlock reasoning layer initialized (d_model="
                   << cfg.d_model << ", atom_dim=" << cfg.scratch_block_atom_embedding_dim

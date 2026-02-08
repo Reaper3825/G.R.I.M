@@ -112,7 +112,7 @@ BatchPreparationResult prepareLossBatchInputs(
 	result.padded_numeric_mask.resize(total_tokens, 0);
 	result.padded_text_features.resize(text_feat_size, 0);
 	result.padded_text_mask.resize(total_tokens, 0);
-	result.sequence_lengths.resize(result.batch_size, 0);
+	result.valid_target_counts.resize(result.batch_size, 0);
 	
 	// NOTE: NOT using training_state.batch_prep_* due to memory corruption bug
 
@@ -121,6 +121,22 @@ BatchPreparationResult prepareLossBatchInputs(
 		const size_t target_len = (b < batch_target_ids.size())
 			                          ? std::min(batch_target_ids[b].size(), result.max_seq_len)
 			                          : seq_len;
+
+		// Rule 20: Input and target sequences MUST be aligned.
+		// A mismatch means the data pipeline produced misaligned windows.
+		if (b < batch_target_ids.size() && seq_len != target_len) {
+			throw std::runtime_error(
+				"prepareLossBatchInputs: seq_len (" + std::to_string(seq_len) +
+				") != target_len (" + std::to_string(target_len) +
+				") for batch element " + std::to_string(b) +
+				" — data pipeline produced misaligned input/target windows");
+		}
+
+		// INVARIANT: Numeric side-channel arrays must be token-aligned in length.
+		// Only atom tokens (256-511) carry real numeric values (mask=1).
+		// Non-atom tokens have value=0.0, mask=0 — but the arrays MUST exist
+		// at full seq_len size because the tokenizer always emits one entry per token.
+		// If you refactor to sparse atom-only storage, remove this length check.
 		const size_t numeric_len = (b < batch_numeric_values.size())
 			                           ? std::min(batch_numeric_values[b].size(), result.max_seq_len)
 			                           : 0;
@@ -148,7 +164,7 @@ BatchPreparationResult prepareLossBatchInputs(
 		} else {
 			valid_len = static_cast<int>(seq_len > 0 ? seq_len - 1 : 0);
 		}
-		result.sequence_lengths[b] = std::max(valid_len, 0);
+		result.valid_target_counts[b] = std::max(valid_len, 0);
 
 		for (size_t t = 0; t < seq_len; ++t) {
 			result.padded_input_ids[b * result.max_seq_len + t] = batch_input_ids[b][t];
@@ -177,7 +193,12 @@ BatchPreparationResult prepareLossBatchInputs(
 				result.padded_target_ids[b * result.max_seq_len + t] = batch_target_ids[b][t];
 			}
 			if (target_len > 0) {
-				// Mask the final position so loss/gradients ignore the window boundary.
+				// ASSUMPTION: Strictly autoregressive (next-token prediction) training.
+				// The final position in each window has no valid next-token target,
+				// so we mask it with -1 to exclude from loss and gradients.
+				// WARNING: This is INCORRECT for span prediction, bidirectional loss,
+				// or masked LM objectives. If switching training mode, this line
+				// must be gated on training_mode == AUTOREGRESSIVE.
 				result.padded_target_ids[b * result.max_seq_len + target_len - 1] = -1;
 			}
 		}
@@ -322,7 +343,7 @@ float LanguageModel::computeLossBatch(
 	orderLog("computeLossBatch.prep",
 		prep.batch_size, prep.max_seq_len,
 		prep.batch_size * prep.max_seq_len,
-		std::accumulate(prep.sequence_lengths.begin(), prep.sequence_lengths.end(), 0));
+		std::accumulate(prep.valid_target_counts.begin(), prep.valid_target_counts.end(), 0));
 
 	if (!prep.fits_in_cache) {
 		const char* reason = (batch_input_ids.size() > cache_batch_limit) 
@@ -373,8 +394,8 @@ float LanguageModel::computeLossBatch(
 
 	// PRE-VALIDATE: Calculate valid_tokens BEFORE forward pass (CPU data only)
 	const int valid_tokens = std::accumulate(
-		prep.sequence_lengths.begin(),
-		prep.sequence_lengths.end(),
+		prep.valid_target_counts.begin(),
+		prep.valid_target_counts.end(),
 		0);
 	
 	if (valid_tokens <= 0) {
@@ -877,6 +898,16 @@ float LanguageModel::computeLossBatch(
 	ag_loss_config.smoothing_epsilon = full_loss_cfg.label_smoothing.enabled ? full_loss_cfg.label_smoothing.epsilon : 0.0f;
 	ag_loss_config.entropy_reg_lambda = full_loss_cfg.entropy_reg.enabled ? full_loss_cfg.entropy_reg.lambda : 0.0f;
 	
+	fprintf(stderr, "[ComputeLossBatch] STEP-A: calling autograd::unified_loss (total_tokens=%zu, vocab=%d)...\n",
+	        total_tokens, cfg.vocab_size);
+	fflush(stderr);
+	
+	// CRITICAL: Release old loss tensor BEFORE unified_loss() allocates new one.
+	// unified_loss() allocates ~4 GB (log_probs + grad_buffer + LogSoftmaxGradFn saved data).
+	// Without releasing first, both old and new buffers coexist in GPU memory during
+	// unified_loss() execution = ~8 GB for loss alone on a 12 GB GPU → OOM at batch ~22.
+	training_state_.loss_tensor.release();
+	
 	training_state_.loss_tensor = autograd::unified_loss(
 		training_state_.logits_tensor,
 		reinterpret_cast<int*>(training_state_.cached_targets_tensor.data),
@@ -886,6 +917,13 @@ float LanguageModel::computeLossBatch(
 		ag_loss_config,
 		stream
 	);
+	
+	fprintf(stderr, "[ComputeLossBatch] STEP-B: unified_loss returned, loss_tensor.data=%p grad_fn=%p owns_data=%d owns_grad_fn=%d\n",
+	        (void*)training_state_.loss_tensor.data,
+	        (void*)training_state_.loss_tensor.grad_fn,
+	        (int)training_state_.loss_tensor.owns_data,
+	        (int)training_state_.loss_tensor.owns_grad_fn);
+	fflush(stderr);
 	
 	// Read scalar loss value to host (needed for return value and diagnostics)
 	float autograd_loss = 0.0f;
@@ -897,9 +935,13 @@ float LanguageModel::computeLossBatch(
 	// Issue #62 DEBUG: Verify the loss value matches what unified_loss computed
 	fprintf(stderr, "[ComputeLossBatch] READ BACK: autograd_loss=%.6f from loss_tensor.data=%p\n",
 	        autograd_loss, (void*)training_state_.loss_tensor.data);
+	fprintf(stderr, "[ComputeLossBatch] STEP-C: setting cached values...\n");
+	fflush(stderr);
 	training_state_.cached_loss_value = autograd_loss;
 	training_state_.cached_text_loss = autograd_loss;    // Store for learned weighting backward
 	// Note: cached_numeric_loss is set later after numeric_loss_avg is computed
+	fprintf(stderr, "[ComputeLossBatch] STEP-D: cached values set, checking spike diag...\n");
+	fflush(stderr);
 	
 	// Diagnostic: If loss is suspiciously high, dump detailed diagnostics
 	if (autograd_loss > 20.0f) {
@@ -977,6 +1019,9 @@ float LanguageModel::computeLossBatch(
 		fprintf(stderr, "[SPIKE_DIAG] ========================================\n\n");
 	}
 	
+	fprintf(stderr, "[ComputeLossBatch] STEP-E: spike diag done, checking isfinite...\n");
+	fflush(stderr);
+	
 	// Autograd loss computation doesn't have a "success" flag - if it didn't throw, it succeeded.
 	// Validate the loss value is finite
 	if (!std::isfinite(autograd_loss)) {
@@ -986,12 +1031,19 @@ float LanguageModel::computeLossBatch(
 		throw std::runtime_error("autograd loss is non-finite");
 	}
 
+	fprintf(stderr, "[ComputeLossBatch] STEP-F: loss validated, setting cached_valid_tokens=%d\n", valid_tokens);
+	fflush(stderr);
+	
 	// Scratch buffers remain in training_state_ (no need to update - they're already there)
 	training_state_.cached_valid_tokens = valid_tokens;
 
 	orderLog("computeLossBatch.loss_done",
 		batch_size, seq_len, total_tokens, valid_tokens);
 
+	fprintf(stderr, "[ComputeLossBatch] STEP-G: entering numeric loss section (enabled=%d)\n",
+	        (int)cfg.numeric_head_enabled);
+	fflush(stderr);
+	
 	float numeric_loss_sum = 0.0f;
 	int numeric_loss_count = 0;
 	if (cfg.numeric_head_enabled) {
@@ -1035,6 +1087,10 @@ float LanguageModel::computeLossBatch(
 		}
 	}
 
+	fprintf(stderr, "[ComputeLossBatch] STEP-H: numeric loss done (sum=%.6f count=%d), entering learned weighting\n",
+	        numeric_loss_sum, numeric_loss_count);
+	fflush(stderr);
+	
 	// Learned loss weighting (homoscedastic uncertainty)
 	// L_total = L_text / (2*σ_text²) + L_numeric / (2*σ_numeric²) + 0.5*log(σ_text²) + 0.5*log(σ_numeric²)
 	// We learn log_var = log(σ²), so: L = L / (2*exp(log_var)) + 0.5*log_var
@@ -1088,6 +1144,8 @@ float LanguageModel::computeLossBatch(
 		        autograd_loss, numeric_loss_avg);
 		throw std::runtime_error("computeLossBatch: avg_loss is non-finite");
 	}
+	fprintf(stderr, "[ComputeLossBatch] STEP-J: returning avg_loss=%.6f\n", avg_loss);
+	fflush(stderr);
 	return avg_loss;
 }
 

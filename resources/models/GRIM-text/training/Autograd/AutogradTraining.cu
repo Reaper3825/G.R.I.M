@@ -994,7 +994,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             encoder_output,
             TensorContract::TensorShape::make_BSM(total_tokens, cfg->d_model),
             false,
-            true
+            true,
+            "final_rms_input"
         );
         rms_input.is_leaf = false;
         rms_input.grad_fn = ctx.encoder_layer_outputs.back().grad_fn;
@@ -1011,7 +1012,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         normalized_output = Tensor::from_ptr(
             encoder_output,
             TensorContract::TensorShape::make_BSM(total_tokens, cfg->d_model),
-            false, true
+            false, true, "encoder_output_passthrough"
         );
         normalized_output.is_leaf = false;
         normalized_output.grad_fn = ctx.encoder_layer_outputs.back().grad_fn;
@@ -1129,7 +1130,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         lm_input_ptr,  // May point to centered scratch or raw encoder output
         TensorContract::TensorShape::make_BSM(total_tokens, cfg->d_model),
         false,  // doesn't own data
-        true    // requires_grad
+        true,    // requires_grad
+        "lm_input"
     );
     ctx.lm_input_tensor.is_leaf = false;
     
@@ -1421,7 +1423,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             ts->numeric_head_weights.data,
             TensorContract::TensorShape::make_BSM(cfg->d_model, 1),
             false,  // doesn't own
-            true    // requires_grad
+            true,    // requires_grad
+            "numeric_head_weights_ref"
         );
         weights_tensor.is_leaf = true;
         // ISSUE #59: Use share_grad() for proper shared_ptr semantics
@@ -1434,7 +1437,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 ts->numeric_head_bias.data,
                 TensorContract::TensorShape::make_BSM(1, 1),
                 false,  // doesn't own
-                true    // requires_grad
+                true,    // requires_grad
+                "numeric_head_bias_ref"
             );
             bias_tensor.is_leaf = true;
             // ISSUE #59: Use share_grad()
@@ -1447,7 +1451,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             encoder_output,
             TensorContract::TensorShape::make_BSM(total_tokens, cfg->d_model),
             false,  // doesn't own
-            true    // requires_grad
+            true,    // requires_grad
+            "encoder_for_numeric"
         );
         encoder_for_numeric.is_leaf = false;
         // ISSUE #127 FIX: Use correct grad_fn based on whether centering is enabled
@@ -1829,14 +1834,14 @@ float autogradTrainingStep(
     GPUGrimEncoder* gpu_encoder = nullptr;
     try {
         gpu_encoder = &model.getGpuEncoder();
+    } catch (const std::exception& e) {
+        throw std::runtime_error(std::string("autogradTrainingStep: Failed to get encoder from model: ") + e.what());
     } catch (...) {
-        AG_ERROR("autogradTrainingStep: Failed to get encoder from model");
-        return -1.0f;
+        throw std::runtime_error("autogradTrainingStep: Failed to get encoder from model (unknown exception)");
     }
     
     if (!gpu_encoder) {
-        AG_ERROR("autogradTrainingStep: Encoder is NULL");
-        return -1.0f;
+        throw std::runtime_error("autogradTrainingStep: Encoder is NULL after getGpuEncoder() - model not initialized");
     }
     
     // Get ScratchBlock (optional - nullptr if not enabled)

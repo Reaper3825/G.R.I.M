@@ -1248,10 +1248,10 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
 //  Tensor Factory Methods
 //======================================================//
 
-Tensor Tensor::zeros(TensorContract::TensorShape shape, bool requires_grad, cudaStream_t stream) {
+Tensor Tensor::zeros(TensorContract::TensorShape shape, bool requires_grad, cudaStream_t stream, const char* name) {
     // RULE 20: Fail loud on invalid stream - default stream causes race conditions
     if (stream == nullptr || stream == 0) {
-        throw std::runtime_error("Tensor::zeros: stream is NULL - caller MUST provide valid stream");
+        throw std::runtime_error(std::string("Tensor::zeros: ") + (name ? name : "unknown") + " stream is NULL - caller MUST provide valid stream");
     }
     
     if (!shape.is_valid()) {
@@ -1263,6 +1263,7 @@ Tensor Tensor::zeros(TensorContract::TensorShape shape, bool requires_grad, cuda
     t.requires_grad = requires_grad;
     t.is_leaf = true;
     t.stream = stream;
+    t.name = name;
     
     const size_t count = shape.total_elements();
     const size_t bytes = count * sizeof(float);
@@ -1288,7 +1289,7 @@ Tensor Tensor::zeros(TensorContract::TensorShape shape, bool requires_grad, cuda
     return t;
 }
 
-Tensor Tensor::zeros(std::initializer_list<int> dims, cudaStream_t stream) {
+Tensor Tensor::zeros(std::initializer_list<int> dims, cudaStream_t stream, const char* name) {
     // Convert raw dimensions to TensorShape with default layouts
     std::vector<int> d(dims);
     TensorContract::TensorShape shape;
@@ -1310,13 +1311,13 @@ Tensor Tensor::zeros(std::initializer_list<int> dims, cudaStream_t stream) {
     }
     
     // requires_grad defaults to false for this convenience overload
-    return zeros(shape, false, stream);
+    return zeros(shape, false, stream, name);
 }
 
-Tensor Tensor::empty(TensorContract::TensorShape shape, bool requires_grad, cudaStream_t stream) {
+Tensor Tensor::empty(TensorContract::TensorShape shape, bool requires_grad, cudaStream_t stream, const char* name) {
     // RULE 20: Fail loud on invalid stream - default stream causes race conditions
     if (stream == nullptr || stream == 0) {
-        throw std::runtime_error("Tensor::empty: stream is NULL - caller MUST provide valid stream");
+        throw std::runtime_error(std::string("Tensor::empty: ") + (name ? name : "unknown") + " stream is NULL - caller MUST provide valid stream");
     }
     
     if (!shape.is_valid()) {
@@ -1328,6 +1329,7 @@ Tensor Tensor::empty(TensorContract::TensorShape shape, bool requires_grad, cuda
     t.requires_grad = requires_grad;
     t.is_leaf = true;
     t.stream = stream;
+    t.name = name;
     
     const size_t bytes = shape.total_elements() * sizeof(float);
     
@@ -1341,7 +1343,7 @@ Tensor Tensor::empty(TensorContract::TensorShape shape, bool requires_grad, cuda
     return t;
 }
 
-Tensor Tensor::from_ptr(float* ptr, TensorContract::TensorShape shape, bool takes_ownership, bool requires_grad) {
+Tensor Tensor::from_ptr(float* ptr, TensorContract::TensorShape shape, bool takes_ownership, bool requires_grad, const char* name) {
     if (!ptr) {
         throw std::invalid_argument("Tensor::from_ptr: null pointer");
     }
@@ -1355,11 +1357,12 @@ Tensor Tensor::from_ptr(float* ptr, TensorContract::TensorShape shape, bool take
     t.owns_data = takes_ownership;
     t.requires_grad = requires_grad;
     t.is_leaf = true;
+    t.name = name;
     
     return t;
 }
 
-Tensor Tensor::from_ptr(float* ptr, std::initializer_list<int> dims, cudaStream_t stream) {
+Tensor Tensor::from_ptr(float* ptr, std::initializer_list<int> dims, cudaStream_t stream, const char* name) {
     std::vector<int> d(dims);
     TensorContract::TensorShape shape;
     
@@ -1375,12 +1378,12 @@ Tensor Tensor::from_ptr(float* ptr, std::initializer_list<int> dims, cudaStream_
         throw std::invalid_argument("Tensor::from_ptr: unsupported dimension count " + std::to_string(d.size()));
     }
     
-    Tensor t = from_ptr(ptr, shape, false, false);
+    Tensor t = from_ptr(ptr, shape, false, false, name);
     t.stream = stream;
     return t;
 }
 
-Tensor Tensor::xavier_uniform(TensorContract::TensorShape shape, bool requires_grad, cudaStream_t stream) {
+Tensor Tensor::xavier_uniform(TensorContract::TensorShape shape, bool requires_grad, cudaStream_t stream, const char* name) {
     if (!shape.is_valid()) {
         throw std::invalid_argument("Tensor::xavier_uniform: invalid shape");
     }
@@ -1390,6 +1393,7 @@ Tensor Tensor::xavier_uniform(TensorContract::TensorShape shape, bool requires_g
     t.requires_grad = requires_grad;
     t.is_leaf = true;
     t.stream = stream;
+    t.name = name;
     
     const size_t count = shape.total_elements();
     const size_t bytes = count * sizeof(float);
@@ -1476,9 +1480,9 @@ void Tensor::ensure_grad() {
     grad_tensor->is_leaf = true;
     grad_tensor->stream = stream;
     grad_tensor->device_id = device_id;
-    // NOTE: Don't copy name to avoid dangling pointer issues (temporary std::string)
-    // The name field is const char* so we can't safely append ".grad" without allocation
-    grad_tensor->name = nullptr;
+    // Propagate parent name to grad tensor so release() logs are identifiable.
+    // Safe because all names are string literals with static storage duration.
+    grad_tensor->name = name;
     
     const size_t count = shape.total_elements();
     const size_t bytes = count * sizeof(float);
@@ -1494,7 +1498,7 @@ void Tensor::ensure_grad() {
     kernel_zero_autograd<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(grad_tensor->data, count);
     
     grad_ = std::move(grad_tensor);
-}
+} 
 
 void Tensor::zero_grad(cudaStream_t exec_stream) {
     if (!grad_ || !grad_->data) {
@@ -4024,15 +4028,23 @@ struct LogSoftmaxGradFn : public GradFn {
     TensorContract::TensorShape input_shape;
     GradFn* input_grad_fn = nullptr;
     float* saved_log_softmax = nullptr;  // Saved log-probabilities from forward
+    bool owns_saved_log_softmax = true;  // OOM FIX: false when borrowing from NLLLossGradFn
     int num_tokens = 0;
     int dim = 0;
 
     LogSoftmaxGradFn() { op_name = "log_softmax"; }
 
     ~LogSoftmaxGradFn() override {
-        if (saved_log_softmax) cudaFree(saved_log_softmax);
-        if (owns_input_grad && input_grad) { cudaFree(input_grad); input_grad = nullptr; }
-        if (owns_input_grad_fn && input_grad_fn) { delete input_grad_fn; input_grad_fn = nullptr; }
+        fprintf(stderr, "[LogSoftmaxGradFn] DTOR ENTER: this=%p saved=%p input_grad=%p(owns=%d) input_grad_fn=%p(owns=%d)\n",
+                (void*)this, (void*)saved_log_softmax, (void*)input_grad, (int)owns_input_grad,
+                (void*)input_grad_fn, (int)owns_input_grad_fn);
+        fflush(stderr);
+        if (owns_saved_log_softmax && saved_log_softmax) { fprintf(stderr, "[LogSoftmaxGradFn] DTOR: freeing saved_log_softmax=%p\n", (void*)saved_log_softmax); fflush(stderr); cudaFree(saved_log_softmax); }
+        else if (saved_log_softmax) { fprintf(stderr, "[LogSoftmaxGradFn] DTOR: saved_log_softmax=%p NOT freed (borrowed)\n", (void*)saved_log_softmax); fflush(stderr); }
+        if (owns_input_grad && input_grad) { fprintf(stderr, "[LogSoftmaxGradFn] DTOR: freeing input_grad=%p\n", (void*)input_grad); fflush(stderr); cudaFree(input_grad); input_grad = nullptr; }
+        if (owns_input_grad_fn && input_grad_fn) { fprintf(stderr, "[LogSoftmaxGradFn] DTOR: deleting input_grad_fn=%p\n", (void*)input_grad_fn); fflush(stderr); delete input_grad_fn; input_grad_fn = nullptr; }
+        fprintf(stderr, "[LogSoftmaxGradFn] DTOR EXIT\n");
+        fflush(stderr);
     }
 
     bool owns_input_grad_fn = false;
@@ -4049,32 +4061,55 @@ struct LogSoftmaxGradFn : public GradFn {
         }
 
         if (input_requires_grad) {
-            // ISSUE #126 pattern: allocate OWN gradient buffer to avoid dangling pointer
-            // when input tensor is a temporary that gets destroyed before backward()
-            const size_t bytes = x.shape.total_elements() * sizeof(float);
-            cudaMalloc(&input_grad, bytes);
-            cudaMemset(input_grad, 0, bytes);
-            owns_input_grad = true;
-
-            // Also register with the input tensor so upstream can find it
+            // OOM FIX: Check tensor's grad buffer FIRST, only allocate if missing.
+            // OLD CODE leaked 1.37GB/batch: cudaMalloc'd a buffer, then overwrote
+            // the pointer with x.grad_data() without freeing the malloc'd buffer.
             x.ensure_grad();
-            // Store pointer to our buffer in the tensor's grad field
-            // so the chain continues correctly
             if (x.grad_data()) {
-                // Input already has grad — we'll accumulate into it during apply()
+                // Input has grad buffer — accumulate into it during apply()
                 input_grad = x.grad_data();
                 owns_input_grad = false;
+            } else {
+                // Issue #126 fallback: allocate OWN buffer when input tensor
+                // is a temporary that can't provide a grad buffer
+                const size_t bytes = x.shape.total_elements() * sizeof(float);
+                cudaError_t err = cudaMalloc(&input_grad, bytes);
+                if (err != cudaSuccess) {
+                    throw std::runtime_error(std::string("[LogSoftmaxGradFn::capture_input] cudaMalloc failed for input_grad (")
+                        + std::to_string(bytes) + " bytes): " + cudaGetErrorString(err));
+                }
+                cudaMemset(input_grad, 0, bytes);
+                owns_input_grad = true;
             }
         }
     }
 
-    void save(const float* log_softmax_output, int tokens, int d, cudaStream_t stream) {
+    /// Save log-softmax output for backward pass.
+    /// @param copy  When true (default), allocates GPU buffer and copies data.
+    ///              When false, stores non-owning pointer — caller guarantees
+    ///              the data lives until after apply() completes.
+    ///              OOM FIX: unified_loss() passes false because NLLLossGradFn
+    ///              owns the same data and keeps it alive through backward.
+    void save(const float* log_softmax_output, int tokens, int d, cudaStream_t stream, bool copy = true) {
+        fprintf(stderr, "[LogSoftmaxGradFn::save] this=%p copy=%d input_ptr=%p\n", (void*)this, (int)copy, (const void*)log_softmax_output);
+        fflush(stderr);
         num_tokens = tokens;
         dim = d;
-        const size_t bytes = static_cast<size_t>(tokens) * d * sizeof(float);
-        cudaMalloc(&saved_log_softmax, bytes);
-        cudaMemcpyAsync(saved_log_softmax, log_softmax_output, bytes,
-                        cudaMemcpyDeviceToDevice, stream);
+        if (copy) {
+            const size_t bytes = static_cast<size_t>(tokens) * d * sizeof(float);
+            cudaError_t err = cudaMalloc(&saved_log_softmax, bytes);
+            if (err != cudaSuccess) {
+                throw std::runtime_error(std::string("[LogSoftmaxGradFn::save] cudaMalloc failed for saved_log_softmax (")
+                    + std::to_string(bytes) + " bytes): " + cudaGetErrorString(err));
+            }
+            cudaMemcpyAsync(saved_log_softmax, log_softmax_output, bytes,
+                            cudaMemcpyDeviceToDevice, stream);
+            owns_saved_log_softmax = true;
+        } else {
+            // Non-owning reference — saves 1.37GB by avoiding duplicate copy
+            saved_log_softmax = const_cast<float*>(log_softmax_output);
+            owns_saved_log_softmax = false;
+        }
     }
 
     void apply(const Tensor& grad_output, cudaStream_t stream) override {
@@ -4109,7 +4144,8 @@ struct LogSoftmaxGradFn : public GradFn {
 
     void release_saved() override {
         GradFn::release_saved();
-        if (saved_log_softmax) { cudaFree(saved_log_softmax); saved_log_softmax = nullptr; }
+        if (owns_saved_log_softmax && saved_log_softmax) { cudaFree(saved_log_softmax); saved_log_softmax = nullptr; }
+        else { saved_log_softmax = nullptr; }  // Clear borrowed pointer without freeing
         if (owns_input_grad && input_grad) { cudaFree(input_grad); input_grad = nullptr; }
         owns_input_grad = false;
         if (owns_input_grad_fn && input_grad_fn) {
@@ -4367,7 +4403,7 @@ Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream) {
         throw std::invalid_argument("autograd::add: tensor size mismatch");
     }
     
-    Tensor result = Tensor::empty(a.shape, a.requires_grad || b.requires_grad, stream);
+    Tensor result = Tensor::empty(a.shape, a.requires_grad || b.requires_grad, stream, "add_result");
     
     // c = a + b
     const size_t count = a.numel();
@@ -4434,7 +4470,7 @@ Tensor broadcast_add(const Tensor& input, const Tensor& bias, cudaStream_t strea
     }
     
     // Create output tensor (same shape as input)
-    Tensor result = Tensor::empty(input.shape, input.requires_grad || bias.requires_grad, stream);
+    Tensor result = Tensor::empty(input.shape, input.requires_grad || bias.requires_grad, stream, "broadcast_add_result");
     
     // Forward: Copy input to output, then add bias in-place
     const size_t total_bytes = static_cast<size_t>(total_tokens) * features * sizeof(float);
@@ -4485,7 +4521,7 @@ Tensor gelu(const Tensor& x, cudaStream_t stream, const float* input_cache) {
         throw std::runtime_error("autograd::gelu: stream is NULL - caller MUST provide valid stream");
     }
     
-    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream);
+    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "gelu_result");
     
     // Forward: y = gelu(x)
     // gelu(x) = x * 0.5 * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
@@ -4543,7 +4579,7 @@ Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, cudaStream_t st
     const int tokens = dims.rows;
     const int d_model = dims.cols;
     
-    Tensor result = Tensor::empty(x.shape, x.requires_grad || gamma.requires_grad, stream);
+    Tensor result = Tensor::empty(x.shape, x.requires_grad || gamma.requires_grad, stream, "rms_norm_result");
     
     // Forward: y = x / rms(x) * gamma
     // Shared memory: one float per warp for reduction
@@ -4661,7 +4697,7 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cud
     
     const int d_model = weight.shape.as_2d().cols;
     auto output_shape = TensorContract::TensorShape::make_BSM(num_tokens, d_model);
-    Tensor result = Tensor::empty(output_shape, weight.requires_grad, stream);
+    Tensor result = Tensor::empty(output_shape, weight.requires_grad, stream, "embedding_result");
     
     // Forward: gather from weight table with scaling
     // Issue #92: Scale by sqrt(d_model) to match AIAYN-style embeddings
@@ -4682,7 +4718,7 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cud
     return result;
 }
 
-Tensor log_softmax(const Tensor& x, cudaStream_t stream) {
+Tensor log_softmax(const Tensor& x, cudaStream_t stream, bool save_output_copy) {
     if (!x.shape.is_flat()) {
         throw std::invalid_argument("autograd::log_softmax: input must be 2D [tokens, dim]");
     }
@@ -4694,7 +4730,7 @@ Tensor log_softmax(const Tensor& x, cudaStream_t stream) {
     const int num_tokens = dims.rows;
     const int dim = dims.cols;
 
-    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream);
+    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "log_softmax_result");
 
     // Forward: log_softmax(x)[i] = x[i] - logsumexp(x)
     // Numerically superior to softmax→log: stays in log space entirely.
@@ -4707,7 +4743,12 @@ Tensor log_softmax(const Tensor& x, cudaStream_t stream) {
         result.is_leaf = false;
         auto* grad_fn = new LogSoftmaxGradFn();
         grad_fn->capture_input(const_cast<Tensor&>(x));
-        grad_fn->save(result.data, num_tokens, dim, stream);
+        // OOM FIX: When save_output_copy=false (used by unified_loss), store
+        // non-owning reference instead of copying 1.37GB. NLLLossGradFn owns
+        // the same data and guarantees lifetime through backward.
+        fprintf(stderr, "[log_softmax] save_output_copy=%d result.data=%p\n", (int)save_output_copy, (void*)result.data);
+        fflush(stderr);
+        grad_fn->save(result.data, num_tokens, dim, stream, save_output_copy);
         result.grad_fn = grad_fn;
         result.owns_grad_fn = true;
     }
@@ -4716,7 +4757,7 @@ Tensor log_softmax(const Tensor& x, cudaStream_t stream) {
 }
 
 Tensor dropout(const Tensor& x, float p, bool training, const uint8_t* mask, cudaStream_t stream) {
-    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream);
+    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "dropout_result");
     
     if (!training || p == 0.0f) {
         // No dropout during inference or when p=0
@@ -4770,7 +4811,7 @@ Tensor dropout(const Tensor& x, float p, bool training, const uint8_t* mask, cud
  * @param stream CUDA stream
  */
 Tensor dropout(const Tensor& x, float p, uint64_t seed, bool training, cudaStream_t stream) {
-    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream);
+    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "dropout_seeded_result");
     
     if (!training || p == 0.0f) {
         // No dropout during inference or when p=0
@@ -4828,7 +4869,7 @@ Tensor residual_add(const Tensor& x, const Tensor& residual, cudaStream_t stream
         throw std::invalid_argument("autograd::residual_add: tensor size mismatch");
     }
     
-    Tensor result = Tensor::empty(x.shape, x.requires_grad || residual.requires_grad, stream);
+    Tensor result = Tensor::empty(x.shape, x.requires_grad || residual.requires_grad, stream, "residual_add_result");
     
     // Forward: y = x + residual
     TensorContract::TensorView x_view(const_cast<float*>(x.data), x.shape);
@@ -4858,7 +4899,7 @@ Tensor residual_add(const Tensor& x, const Tensor& residual, cudaStream_t stream
  * must also scale by sqrt(d_model) to maintain gradient flow symmetry.
  */
 Tensor scale(const Tensor& x, float scale_factor, cudaStream_t stream) {
-    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream);
+    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "scale_result");
     
     // Forward: y = x * scale_factor
     TensorContract::TensorView x_view(const_cast<float*>(x.data), x.shape);
@@ -4899,7 +4940,7 @@ Tensor layer_scale(const Tensor& x, Tensor& scale_param, cudaStream_t stream) {
     cudaStreamSynchronize(stream);
     
     const bool track_grad = x.requires_grad || scale_param.requires_grad;
-    Tensor result = Tensor::empty(x.shape, track_grad, stream);
+    Tensor result = Tensor::empty(x.shape, track_grad, stream, "layer_scale_result");
     
     // Forward: y = x * scale_value  (broadcast)
     TensorContract::TensorView x_view(const_cast<float*>(x.data), x.shape);
@@ -4946,7 +4987,7 @@ Tensor center_rows(const Tensor& x, cudaStream_t stream) {
     const int row_dim = x.shape.as_2d().cols;   // d_model (768)
     
     const bool track_grad = x.requires_grad;
-    Tensor result = Tensor::empty(x.shape, track_grad, stream);
+    Tensor result = Tensor::empty(x.shape, track_grad, stream, "center_rows_result");
     
     // Forward: y = x - mean(x)  (per-row)
     kernel_center_rows<<<num_rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
@@ -5002,7 +5043,7 @@ Tensor center_columns(const Tensor& x, cudaStream_t stream) {
     const int num_cols = x.shape.as_2d().cols;  // d_model (768 features)
     
     const bool track_grad = x.requires_grad;
-    Tensor result = Tensor::empty(x.shape, track_grad, stream);
+    Tensor result = Tensor::empty(x.shape, track_grad, stream, "center_columns_result");
     
     // Forward: y[t,d] = x[t,d] - mean_t(x[:,d])  (per-column mean subtraction)
     // Launch one block per column (768 blocks for d_model=768)
@@ -5931,7 +5972,7 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
     
     // Output shape: [M, N]
     auto output_shape = TensorContract::TensorShape::make_BSM(M, N);
-    Tensor result = Tensor::zeros(output_shape, a.requires_grad || b.requires_grad, stream);
+    Tensor result = Tensor::zeros(output_shape, a.requires_grad || b.requires_grad, stream, "matmul_result");
     
     // Forward: C = A @ B  (or C = A @ B^T if transpose_b)
     // Row-major storage: for cuBLAS we compute C^T = B^T @ A^T (or C^T = B @ A^T if transpose_b)
@@ -6617,7 +6658,7 @@ Tensor scaled_dot_product_attention(
     // Output shape: same as Q [B, H, S, D]
     auto output_shape = TensorContract::TensorShape::make_BHSD(batch_size, num_heads, seq_len, head_dim);
     bool requires_grad = q.requires_grad || k.requires_grad || v.requires_grad;
-    Tensor result = Tensor::zeros(output_shape, requires_grad, stream);
+    Tensor result = Tensor::zeros(output_shape, requires_grad, stream, "sdpa_result");
     
     // Compute default scale if not provided
     if (scale == 0.0f) {
@@ -6926,7 +6967,7 @@ Tensor reshape_bhsd_to_flat(
     const int d_model = num_heads * head_dim;
     
     // Allocate output tensor in flat layout
-    Tensor result = Tensor::empty(TensorContract::TensorShape::make_BSM(tokens, d_model), bhsd_input.requires_grad, stream);
+    Tensor result = Tensor::empty(TensorContract::TensorShape::make_BSM(tokens, d_model), bhsd_input.requires_grad, stream, "reshape_bhsd_to_flat_result");
     
     // Call the existing reshape kernel (declared in Encoding_GPU.hpp)
     // This reshapes [B, H, S, D] to [B*S, H*D]
@@ -7322,14 +7363,14 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     auto v_shape = TensorContract::TensorShape::make_BHSD(batch, num_kv_heads, seq, head_dim);
     
     bool requires_grad = qkv_out.requires_grad;
-    Tensor Q_bhsd = Tensor::zeros(q_shape, requires_grad, stream);
-    Tensor K_bhsd = Tensor::zeros(k_shape, requires_grad, stream);
-    Tensor V_bhsd = Tensor::zeros(v_shape, requires_grad, stream);
+    Tensor Q_bhsd = Tensor::zeros(q_shape, requires_grad, stream, "qkv_split_Q");
+    Tensor K_bhsd = Tensor::zeros(k_shape, requires_grad, stream, "qkv_split_K");
+    Tensor V_bhsd = Tensor::zeros(v_shape, requires_grad, stream, "qkv_split_V");
     
     // Intermediate BSM tensors for split (using Tensor for RAII)
-    Tensor Q_bsm = Tensor::zeros(TensorContract::TensorShape::make_BSM(tokens, d_model), false, stream);
-    Tensor K_bsm = Tensor::zeros(TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream);
-    Tensor V_bsm = Tensor::zeros(TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream);
+    Tensor Q_bsm = Tensor::zeros(TensorContract::TensorShape::make_BSM(tokens, d_model), false, stream, "qkv_split_Q_bsm");
+    Tensor K_bsm = Tensor::zeros(TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream, "qkv_split_K_bsm");
+    Tensor V_bsm = Tensor::zeros(TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream, "qkv_split_V_bsm");
     
     // Forward: split qkv_out into Q, K, V (BSM layout)
     const int threads = std::max(d_model, kv_dim);
@@ -7370,7 +7411,7 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
         
         // Store reference to qkv_out (for grad buffer access via ensure_grad/grad_data)
         shared->qkv_out_ref = Tensor::from_ptr(
-            qkv_out.data, qkv_out.shape, false, qkv_out.requires_grad);
+            qkv_out.data, qkv_out.shape, false, qkv_out.requires_grad, "qkv_out_ref");
         shared->qkv_out_ref.share_grad(qkv_out);  // Share gradient buffer with original
         
         // Take ownership of upstream grad_fn
@@ -7382,11 +7423,11 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
         
         // Allocate gradient Tensors for BSM intermediate results
         shared->grad_Q_bsm = Tensor::zeros(
-            TensorContract::TensorShape::make_BSM(tokens, d_model), false, stream);
+            TensorContract::TensorShape::make_BSM(tokens, d_model), false, stream, "grad_Q_bsm");
         shared->grad_K_bsm = Tensor::zeros(
-            TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream);
+            TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream, "grad_K_bsm");
         shared->grad_V_bsm = Tensor::zeros(
-            TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream);
+            TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream, "grad_V_bsm");
         
         // Create GradFns for each output
         auto q_grad_fn = new SplitAndReshapeQKVGradFn();

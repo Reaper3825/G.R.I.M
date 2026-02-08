@@ -65,7 +65,7 @@ void TrainingTensors::initializeParams(
     //==================================================//
     
     // Token embeddings [vocab_size, d_model]
-    embedding_weights = Tensor::zeros({vocab_size, d_model}, stream);
+    embedding_weights = Tensor::zeros({vocab_size, d_model}, stream, "embedding_weights");
     embedding_weights.requires_grad_();
     embedding_weights.ensure_grad();  // Allocate grad NOW so share_grad() works
     Tensor::xavier_uniform_(embedding_weights, seed + 0, stream);
@@ -98,7 +98,8 @@ void TrainingTensors::initializeParams(
         lm_head_weights = Tensor::from_ptr(
             embedding_weights.data,
             {vocab_size, d_model},
-            stream
+            stream,
+            "lm_head_weights_tied"
         );
         // CRITICAL: Share the grad Tensor object, NOT separate allocation!
         // ISSUE #59: Use share_grad() for proper shared_ptr semantics
@@ -115,13 +116,13 @@ void TrainingTensors::initializeParams(
                 (embedding_weights.grad_data() == lm_head_weights.grad_data()) ? "YES" : "NO");
     } else {
         // Separate LM head weights
-        lm_head_weights = Tensor::zeros({vocab_size, d_model}, stream);
+        lm_head_weights = Tensor::zeros({vocab_size, d_model}, stream, "lm_head_weights");
         lm_head_weights.requires_grad_();
         Tensor::xavier_uniform_(lm_head_weights, seed + 1, stream);
     }
     
     if (use_bias) {
-        lm_head_bias = Tensor::zeros({vocab_size}, stream);
+        lm_head_bias = Tensor::zeros({vocab_size}, stream, "lm_head_bias");
         lm_head_bias.requires_grad_();
     }
     
@@ -129,20 +130,20 @@ void TrainingTensors::initializeParams(
     //  NUMERIC HEAD (optional)
     //==================================================//
     
-    numeric_head_weights = Tensor::zeros({d_model}, stream);
+    numeric_head_weights = Tensor::zeros({d_model}, stream, "numeric_head_weights");
     numeric_head_weights.requires_grad_();
     // Xavier uniform: U[-sqrt(6/(fan_in+fan_out)), +sqrt(6/(fan_in+fan_out))]
     // For 1D shape {d_model}: fan_in=d_model, fan_out=1 → scale=sqrt(6/(d_model+1))
     Tensor::xavier_uniform_(numeric_head_weights, seed + 99, stream);
     
-    numeric_head_bias = Tensor::zeros({1}, stream);
+    numeric_head_bias = Tensor::zeros({1}, stream, "numeric_head_bias");
     numeric_head_bias.requires_grad_();
     
     //==================================================//
     //  FINAL RMSNORM
     //==================================================//
     
-    final_rms_gamma = Tensor::zeros({d_model}, stream);
+    final_rms_gamma = Tensor::zeros({d_model}, stream, "final_rms_gamma");
     final_rms_gamma.requires_grad_();
     // Initialize to 1.0
     {
@@ -162,10 +163,10 @@ void TrainingTensors::initializeParams(
         EncoderLayerParams& params = encoder_layers[layer];
         
         // RMSNorm gammas initialized to 1.0
-        params.rms1_gamma = Tensor::zeros({d_model}, stream);
+        params.rms1_gamma = Tensor::zeros({d_model}, stream, "rms1_gamma");
         params.rms1_gamma.requires_grad_();
         
-        params.rms2_gamma = Tensor::zeros({d_model}, stream);
+        params.rms2_gamma = Tensor::zeros({d_model}, stream, "rms2_gamma");
         params.rms2_gamma.requires_grad_();
         
         // Fill with 1.0
@@ -180,27 +181,27 @@ void TrainingTensors::initializeParams(
         }
         
         // Attention QKV projection [total_qkv_dim, d_model]
-        params.attn_qkv_weight = Tensor::zeros({total_qkv_dim, d_model}, stream);
+        params.attn_qkv_weight = Tensor::zeros({total_qkv_dim, d_model}, stream, "attn_qkv_weight");
         params.attn_qkv_weight.requires_grad_();
         Tensor::xavier_uniform_(params.attn_qkv_weight, seed + 2 + layer * 10, stream);
         
         if (use_bias) {
-            params.attn_qkv_bias = Tensor::zeros({total_qkv_dim}, stream);
+            params.attn_qkv_bias = Tensor::zeros({total_qkv_dim}, stream, "attn_qkv_bias");
             params.attn_qkv_bias.requires_grad_();
         }
         
         // Attention output projection [d_model, d_model]
-        params.attn_out_weight = Tensor::zeros({d_model, d_model}, stream);
+        params.attn_out_weight = Tensor::zeros({d_model, d_model}, stream, "attn_out_weight");
         params.attn_out_weight.requires_grad_();
         Tensor::xavier_uniform_(params.attn_out_weight, seed + 2 + layer * 10 + 1, stream);
         
         if (use_bias) {
-            params.attn_out_bias = Tensor::zeros({d_model}, stream);
+            params.attn_out_bias = Tensor::zeros({d_model}, stream, "attn_out_bias");
             params.attn_out_bias.requires_grad_();
         }
         
         // QK-norm learned scales (nGPT)
-        params.alpha_q = Tensor::zeros({num_heads}, stream);
+        params.alpha_q = Tensor::zeros({num_heads}, stream, "alpha_q");
         params.alpha_q.requires_grad_();
         // Initialize to 1.0
         {
@@ -210,7 +211,7 @@ void TrainingTensors::initializeParams(
                             cudaMemcpyHostToDevice, stream);
         }
         
-        params.alpha_k = Tensor::zeros({num_kv_heads}, stream);
+        params.alpha_k = Tensor::zeros({num_kv_heads}, stream, "alpha_k");
         params.alpha_k.requires_grad_();
         {
             std::vector<float> ones(num_kv_heads, 1.0f);
@@ -221,36 +222,36 @@ void TrainingTensors::initializeParams(
         
         // FFN W1 [d_model, d_ff] - up-projection (passed to FeedForwardLayer constructor)
         // Issue #89 FIX: Was [d_ff, d_model] - swapped to match consumer's expectation
-        params.ffn_w1 = Tensor::zeros({d_model, d_ff}, stream);
+        params.ffn_w1 = Tensor::zeros({d_model, d_ff}, stream, "ffn_w1");
         params.ffn_w1.requires_grad_();
         Tensor::xavier_uniform_(params.ffn_w1, seed + 2 + layer * 10 + 2, stream);
         
         if (use_bias) {
-            params.ffn_b1 = Tensor::zeros({d_ff}, stream);
+            params.ffn_b1 = Tensor::zeros({d_ff}, stream, "ffn_b1");
             params.ffn_b1.requires_grad_();
         }
         
         // FFN W2 [d_ff, d_model] - down-projection (passed to FeedForwardLayer constructor)
         // Issue #89 FIX: Was [d_model, d_ff] - swapped to match consumer's expectation
-        params.ffn_w2 = Tensor::zeros({d_ff, d_model}, stream);
+        params.ffn_w2 = Tensor::zeros({d_ff, d_model}, stream, "ffn_w2");
         params.ffn_w2.requires_grad_();
         Tensor::xavier_uniform_(params.ffn_w2, seed + 2 + layer * 10 + 3, stream);
         
         if (use_bias) {
-            params.ffn_b2 = Tensor::zeros({d_model}, stream);
+            params.ffn_b2 = Tensor::zeros({d_model}, stream, "ffn_b2");
             params.ffn_b2.requires_grad_();
         }
         
         // LayerScale (Issue #109) - learnable scalars that multiply sublayer outputs before residual
         if (use_layer_scale) {
             // layer_scale1: scales attention output before residual
-            params.layer_scale1 = Tensor::zeros({1}, stream);
+            params.layer_scale1 = Tensor::zeros({1}, stream, "layer_scale1");
             params.layer_scale1.requires_grad_();
             cudaMemcpyAsync(params.layer_scale1.data, &layer_scale_init, sizeof(float),
                             cudaMemcpyHostToDevice, stream);
             
             // layer_scale2: scales FFN output before residual
-            params.layer_scale2 = Tensor::zeros({1}, stream);
+            params.layer_scale2 = Tensor::zeros({1}, stream, "layer_scale2");
             params.layer_scale2.requires_grad_();
             cudaMemcpyAsync(params.layer_scale2.data, &layer_scale_init, sizeof(float),
                             cudaMemcpyHostToDevice, stream);
@@ -317,7 +318,7 @@ void TrainingTensors::allocateCaches(int batch_size, int seq_len, cudaStream_t s
     //  INPUT LAYER CACHES
     //==================================================//
     
-    cached_embeddings = Tensor::zeros({total_tokens, d_model}, stream);
+    cached_embeddings = Tensor::zeros({total_tokens, d_model}, stream, "cached_embeddings");
     
     //==================================================//
     //  ENCODER LAYER CACHES
@@ -328,57 +329,57 @@ void TrainingTensors::allocateCaches(int batch_size, int seq_len, cudaStream_t s
     for (int layer = 0; layer < num_layers; ++layer) {
         EncoderLayerCache& cache = encoder_caches[layer];
         
-        cache.ln1_output = Tensor::zeros({total_tokens, d_model}, stream);
-        cache.attn_output = Tensor::zeros({total_tokens, d_model}, stream);
-        cache.residual1_output = Tensor::zeros({total_tokens, d_model}, stream);
-        cache.ln2_output = Tensor::zeros({total_tokens, d_model}, stream);
-        cache.ffn_pre_gelu = Tensor::zeros({total_tokens, d_ff}, stream);
-        cache.ffn_output = Tensor::zeros({total_tokens, d_model}, stream);
-        cache.layer_output = Tensor::zeros({total_tokens, d_model}, stream);
+        cache.ln1_output = Tensor::zeros({total_tokens, d_model}, stream, "cache_ln1_output");
+        cache.attn_output = Tensor::zeros({total_tokens, d_model}, stream, "cache_attn_output");
+        cache.residual1_output = Tensor::zeros({total_tokens, d_model}, stream, "cache_residual1_output");
+        cache.ln2_output = Tensor::zeros({total_tokens, d_model}, stream, "cache_ln2_output");
+        cache.ffn_pre_gelu = Tensor::zeros({total_tokens, d_ff}, stream, "cache_ffn_pre_gelu");
+        cache.ffn_output = Tensor::zeros({total_tokens, d_model}, stream, "cache_ffn_output");
+        cache.layer_output = Tensor::zeros({total_tokens, d_model}, stream, "cache_layer_output");
         
         // QKV caches in BHSD format
-        cache.Q = Tensor::zeros({batch_size, num_heads, seq_len, head_dim}, stream);
-        cache.K = Tensor::zeros({batch_size, num_kv_heads, seq_len, head_dim}, stream);
-        cache.V = Tensor::zeros({batch_size, num_kv_heads, seq_len, head_dim}, stream);
-        cache.attn_input = Tensor::zeros({total_tokens, d_model}, stream);
-        cache.attn_bhsd = Tensor::zeros({batch_size, num_heads, seq_len, head_dim}, stream);
+        cache.Q = Tensor::zeros({batch_size, num_heads, seq_len, head_dim}, stream, "cache_Q");
+        cache.K = Tensor::zeros({batch_size, num_kv_heads, seq_len, head_dim}, stream, "cache_K");
+        cache.V = Tensor::zeros({batch_size, num_kv_heads, seq_len, head_dim}, stream, "cache_V");
+        cache.attn_input = Tensor::zeros({total_tokens, d_model}, stream, "cache_attn_input");
+        cache.attn_bhsd = Tensor::zeros({batch_size, num_heads, seq_len, head_dim}, stream, "cache_attn_bhsd");
         
         // Softmax LSE for FlashAttention
-        cache.softmax_lse = Tensor::zeros({batch_size, num_heads, seq_len}, stream);
+        cache.softmax_lse = Tensor::zeros({batch_size, num_heads, seq_len}, stream, "cache_softmax_lse");
     }
     
     //==================================================//
     //  OUTPUT LAYER CACHES
     //==================================================//
     
-    cached_encoder_output = Tensor::zeros({total_tokens, d_model}, stream);
-    cached_logits = Tensor::zeros({total_tokens, vocab_size}, stream);
-    cached_final_rms_input = Tensor::zeros({total_tokens, d_model}, stream);
+    cached_encoder_output = Tensor::zeros({total_tokens, d_model}, stream, "cached_encoder_output");
+    cached_logits = Tensor::zeros({total_tokens, vocab_size}, stream, "cached_logits");
+    cached_final_rms_input = Tensor::zeros({total_tokens, d_model}, stream, "cached_final_rms_input");
     
     //==================================================//
     //  GRADIENT TEMPORARIES
     //==================================================//
     
-    grad_logits = Tensor::zeros({total_tokens, vocab_size}, stream);
-    grad_encoder_out = Tensor::zeros({total_tokens, d_model}, stream);
+    grad_logits = Tensor::zeros({total_tokens, vocab_size}, stream, "grad_logits");
+    grad_encoder_out = Tensor::zeros({total_tokens, d_model}, stream, "grad_encoder_out");
     
-    grad_ffn_input = Tensor::zeros({total_tokens, d_model}, stream);
-    grad_ffn_hidden = Tensor::zeros({total_tokens, d_ff}, stream);
-    grad_attn_input = Tensor::zeros({total_tokens, d_model}, stream);
-    grad_attn_out_before_proj = Tensor::zeros({total_tokens, d_model}, stream);
-    grad_attn_out_reshaped = Tensor::zeros({batch_size, num_heads, seq_len, head_dim}, stream);
-    grad_q = Tensor::zeros({batch_size, num_heads, seq_len, head_dim}, stream);
-    grad_k = Tensor::zeros({batch_size, num_kv_heads, seq_len, head_dim}, stream);
-    grad_v = Tensor::zeros({batch_size, num_kv_heads, seq_len, head_dim}, stream);
+    grad_ffn_input = Tensor::zeros({total_tokens, d_model}, stream, "grad_ffn_input");
+    grad_ffn_hidden = Tensor::zeros({total_tokens, d_ff}, stream, "grad_ffn_hidden");
+    grad_attn_input = Tensor::zeros({total_tokens, d_model}, stream, "grad_attn_input");
+    grad_attn_out_before_proj = Tensor::zeros({total_tokens, d_model}, stream, "grad_attn_out_before_proj");
+    grad_attn_out_reshaped = Tensor::zeros({batch_size, num_heads, seq_len, head_dim}, stream, "grad_attn_out_reshaped");
+    grad_q = Tensor::zeros({batch_size, num_heads, seq_len, head_dim}, stream, "grad_q");
+    grad_k = Tensor::zeros({batch_size, num_kv_heads, seq_len, head_dim}, stream, "grad_k");
+    grad_v = Tensor::zeros({batch_size, num_kv_heads, seq_len, head_dim}, stream, "grad_v");
     
     const int total_qkv_dim = d_model + 2 * kv_dim;
-    grad_qkv_concat = Tensor::zeros({total_tokens, total_qkv_dim}, stream);
-    grad_qkv_input = Tensor::zeros({total_tokens, d_model}, stream);
-    grad_attn_bsm_scratch = Tensor::zeros({batch_size, seq_len, d_model}, stream);
+    grad_qkv_concat = Tensor::zeros({total_tokens, total_qkv_dim}, stream, "grad_qkv_concat");
+    grad_qkv_input = Tensor::zeros({total_tokens, d_model}, stream, "grad_qkv_input");
+    grad_attn_bsm_scratch = Tensor::zeros({batch_size, seq_len, d_model}, stream, "grad_attn_bsm_scratch");
     
     // Issue #43 centering scratch (max of d_model and d_ff)
     const int scratch_dim = (d_ff > d_model) ? d_ff : d_model;
-    centered_activation_scratch = Tensor::zeros({total_tokens, scratch_dim}, stream);
+    centered_activation_scratch = Tensor::zeros({total_tokens, scratch_dim}, stream, "centered_activation_scratch");
 }
 
 

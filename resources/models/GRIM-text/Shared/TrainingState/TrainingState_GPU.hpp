@@ -348,7 +348,7 @@ struct TrainingState {
     std::vector<uint8_t> batch_prep_numeric_mask;
     std::vector<uint16_t> batch_prep_text_features;
     std::vector<uint8_t> batch_prep_text_mask;
-    std::vector<int> batch_prep_sequence_lengths;
+    std::vector<int> batch_prep_valid_target_counts;
     size_t batch_prep_capacity = 0;
     
     //======================================================//
