@@ -2,8 +2,8 @@
 //  Encoding_GPU.hpp
 //  PRODUCTION-READY Transformer Encoder Layer
 //  
-//  Architecture: Pre-norm with RMSNorm (NOT LayerNorm)
-//    Input -> RMSNorm -> Attention -> Residual -> RMSNorm -> FFN -> Residual -> Output
+//  Architecture: Sandwich Norm with RMSNorm (NOT LayerNorm)
+//    Input -> RMSNorm -> Attention -> Residual -> RMSNorm(sandwich) -> RMSNorm -> FFN -> Residual -> RMSNorm(sandwich) -> Output
 //  
 //  Features:
 //    - GQA (Grouped Query Attention) native support
@@ -73,6 +73,7 @@ struct EncodingConfig {
     float softmax_temperature = 1.0f;
     bool qk_norm_enabled = false;
     float qk_norm_scale = 8.0f;
+    float attention_dropout = 1.0f;   // Attention dropout DROP rate (0.0 = disabled, 0.15 = 15% dropped)
     
     // Positional encoding (ALiBi+RoPE hybrid) - pointer to shared state
     // WARNING: If nullptr, attention sees no positional info - all positions equivalent!
@@ -186,10 +187,12 @@ public:
      * @param seq_len sequence length (for attention masking)
      * @param stream CUDA stream for execution
      * @param intermediates Storage for this layer's intermediate tensors (REQUIRED for autograd)
+     * @param training_step Current training step for per-step dropout seed generation (0 = no dropout)
      * @return output [total_tokens, d_model] with grad_fn attached
      */
     Tensor forward(const Tensor& input, int seq_len, cudaStream_t stream,
-                   struct ForwardIntermediates& intermediates);
+                   struct ForwardIntermediates& intermediates,
+                   uint64_t training_step = 0);
     
     //--------------------------------------------------
     // Weight Management
@@ -222,6 +225,8 @@ public:
      * @param ffn_b1 [d_ff] - FFN bias 1 (can be empty)
      * @param ffn_w2 [d_model, d_ff] - FFN down-projection
      * @param ffn_b2 [d_model] - FFN bias 2 (can be empty)
+     * @param rms_post_attn_gamma [d_model] - sandwich norm after attention residual
+     * @param rms_post_ffn_gamma [d_model] - sandwich norm after FFN residual
      */
     void useExternalWeights(
         Tensor& rms1_gamma,
@@ -234,6 +239,8 @@ public:
         Tensor& ffn_b1,
         Tensor& ffn_w2,
         Tensor& ffn_b2,
+        Tensor& rms_post_attn_gamma,
+        Tensor& rms_post_ffn_gamma,
         Tensor* layer_scale1 = nullptr,  // Issue #109: optional LayerScale for attention residual
         Tensor* layer_scale2 = nullptr   // Issue #109: optional LayerScale for FFN residual
     );
@@ -242,9 +249,13 @@ public:
     // Tensor Accessors (use these for ALL access)
     //--------------------------------------------------
     
-    // RMSNorm
+    // RMSNorm (pre-norm)
     Tensor& rms1Gamma() { return rms1_gamma_; }
     Tensor& rms2Gamma() { return rms2_gamma_; }
+    
+    // Sandwich norm (post-residual)
+    Tensor& rmsPostAttnGamma() { return rms_post_attn_gamma_; }
+    Tensor& rmsPostFfnGamma() { return rms_post_ffn_gamma_; }
     
     // Attention weights/biases
     Tensor& attnWqkv() { return W_qkv_; }
@@ -295,8 +306,12 @@ private:
     // NOTE: cuBLAS handle is in config_.cublas_handle (NOT owned - Rule 22)
     
     // RMSNorm weights (Tensor with requires_grad=true)
-    Tensor rms1_gamma_;    // [d_model]
-    Tensor rms2_gamma_;    // [d_model]
+    Tensor rms1_gamma_;    // [d_model] - pre-attention norm
+    Tensor rms2_gamma_;    // [d_model] - pre-FFN norm
+    
+    // Sandwich norm weights (post-residual normalization)
+    Tensor rms_post_attn_gamma_;  // [d_model] - after attention residual
+    Tensor rms_post_ffn_gamma_;   // [d_model] - after FFN residual
     
     // Attention weights (Tensor with requires_grad=true)
     // W_qkv layout: [W_q: d_model x d_model][W_k: kv_dim x d_model][W_v: kv_dim x d_model]

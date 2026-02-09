@@ -60,7 +60,6 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})               # TrainingLoop/
 
 # GPU training kernels library (from parent directory)
 add_library(grim_training_kernels STATIC 
-    ../../Layers/Embedding/Embedding_GPU.cu
     ../../Shared/Loss/CrossEntropy/CrossEntropy_GPU.cu
     ../../Shared/Gradients/GradientCC_GPU.cu
     ../../Shared/GPUBuffer/GPUBuffer.cu

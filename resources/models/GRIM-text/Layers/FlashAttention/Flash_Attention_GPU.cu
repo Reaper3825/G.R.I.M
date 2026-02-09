@@ -183,6 +183,8 @@ void FlashAttentionLayer::forward(const FlashAttentionForwardArgs& args,
         cfg.head_dim,
         cfg.causal,
         true,
+        0.0f,  // No attention dropout in inference path
+        0,     // No dropout seed needed
         cfg.stream);
 
     TensorConversion::convert_BSHD_bf16_to_BHSD(
@@ -285,6 +287,8 @@ void FlashAttentionLayer::backward(const FlashAttentionBackwardArgs& args,
         cfg.head_dim,
         cfg.causal,
         true,
+        0.0f,  // No attention dropout in inference path
+        0,     // No dropout seed needed
         cfg.stream);
 
     TensorConversion::convert_BSHD_bf16_to_BHSD(

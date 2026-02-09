@@ -78,61 +78,6 @@ inline void generatePositionIds(int* position_ids, int total_tokens, int seq_len
     generatePositionIdsKernel<<<blocks, kBlockSize, 0, stream>>>(position_ids, total_tokens, seq_len);
 }
 
-//======================================================//
-// ISSUE #113 FIX: Sinusoidal Position Embeddings
-// ROOT CAUSE: Issue #103 removed learned pos_emb (caused isotropic QKV explosion)
-// but without ANY position embedding, same tokens at different positions have
-// IDENTICAL representations => avg_cos=0.90 => mode collapse!
-//
-// SOLUTION: Add sinusoidal position embeddings (AIAYN original design):
-// - Fixed (not learned) => no training instability
-// - Non-isotropic by design => each dim has different frequency
-// - Works WITH ALiBi/RoPE (they handle attention, this handles residual stream)
-//
-// Formula: PE(pos, 2i) = sin(pos / 10000^(2i/d_model))
-//          PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
-//======================================================//
-
-__global__ void addSinusoidalPositionEmbeddingsKernel(
-    float* __restrict__ embeddings,  // [total_tokens, d_model] - MODIFIED IN-PLACE
-    int total_tokens,
-    int d_model,
-    int seq_len,
-    float scale  // Amplitude scale (default 1.0, can reduce if needed)
-) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    const int total_elements = total_tokens * d_model;
-    if (idx >= total_elements) return;
-    
-    const int token_idx = idx / d_model;
-    const int dim = idx % d_model;
-    
-    // Position within sequence
-    const int pos = token_idx % seq_len;
-    
-    // Compute AIAYN divisor for this dimension:
-    // angle = pos / (10000^(2i/d_model)), with dim_pair = 2i.
-    const int dim_pair = (dim / 2) * 2;  // Even index shared by the sin/cos pair.
-    const float exponent = static_cast<float>(dim_pair) / static_cast<float>(d_model);
-    const float div_term = powf(10000.0f, exponent);
-    
-    // Keep this as division by a positive-power divisor to avoid sign inversions.
-    const float angle = static_cast<float>(pos) / div_term;
-    const float pe_value = (dim % 2 == 0) ? sinf(angle) : cosf(angle);
-    
-    // Add to embedding (in-place)
-    embeddings[idx] += scale * pe_value;
-}
-
-inline void addSinusoidalPositionEmbeddings(float* embeddings, int total_tokens, 
-                                             int d_model, int seq_len, 
-                                             float scale, cudaStream_t stream) {
-    const int total_elements = total_tokens * d_model;
-    const int blocks = (total_elements + kBlockSize - 1) / kBlockSize;
-    addSinusoidalPositionEmbeddingsKernel<<<blocks, kBlockSize, 0, stream>>>(
-        embeddings, total_tokens, d_model, seq_len, scale);
-}
-
 //======================================================================
 // Broadcast Bias Add Kernel
 // Adds a [1, vocab_size] bias to each row of [total_tokens, vocab_size] logits
@@ -592,69 +537,11 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         
         AG_INFO("Step 1b: Position embeddings added (Issue #57 FIX)");
     } else {
-        // ═══════════════════════════════════════════════════════════════════════
-        // ISSUE #113 FIX: Add SINUSOIDAL position embeddings when using ALIBI/RoPE!
-        // 
-        // ROOT CAUSE of mode collapse (Issue #108, avg_cos=0.90):
-        //   - Issue #103 correctly removed LEARNED position embeddings (they were isotropic)
-        //   - BUT this left same tokens at different positions with IDENTICAL embeddings!
-        //   - ALiBi/RoPE provide position info ONLY inside attention, not in residual stream
-        //   - Result: hidden states are 90% correlated → mode collapse to any W[v] row
-        // 
-        // FIX: Add SINUSOIDAL position embeddings (from original "Attention Is All You Need"):
-        //   - Fixed (not learned) → no training instability
-        //   - Non-isotropic by design → each dimension has different frequency
-        //   - Different positions get DIFFERENT vectors → breaks the 90% correlation
-        //   - Works WITH ALiBi/RoPE (they complement each other)
-        // ═══════════════════════════════════════════════════════════════════════
-        
-        const float sinusoidal_scale = 1.0f;  // Full scale (can reduce if needed)
-        
-        fprintf(stderr, "[Issue113-SINUSOIDAL] Adding SINUSOIDAL position embeddings (scale=%.2f)\n", sinusoidal_scale);
-        fprintf(stderr, "[Issue113-SINUSOIDAL] This fixes Issue #108 (avg_cos=0.90) by giving different positions different representations\n");
-        fprintf(stderr, "[Issue113-SINUSOIDAL] Works WITH %s - they provide attention bias, this provides residual stream differentiation\n",
-                HyperParameters::positionalEncodingTypeToString(cfg->positional_encoding));
-        
-        // Add sinusoidal position embeddings IN-PLACE to token embeddings
-        addSinusoidalPositionEmbeddings(
-            emb_output.data,
-            total_tokens,
-            cfg->d_model,
-            ctx.seq_len,
-            sinusoidal_scale,
-            ctx.stream
-        );
-        
-        // Diagnostic: Check embedding variance after sinusoidal addition
-        #ifdef DEBUG_ISSUE113
-        {
-            std::vector<float> h_emb(total_tokens * cfg->d_model);
-            cudaMemcpy(h_emb.data(), emb_output.data, h_emb.size() * sizeof(float), cudaMemcpyDeviceToHost);
-            
-            // Sample pairwise cosine similarities
-            float cos_sum = 0.0f;
-            int num_pairs = 0;
-            for (int i = 0; i < std::min(20, total_tokens); i++) {
-                for (int j = i + 1; j < std::min(20, total_tokens); j++) {
-                    float dot = 0.0f, norm_i = 0.0f, norm_j = 0.0f;
-                    for (int d = 0; d < cfg->d_model; d++) {
-                        float vi = h_emb[i * cfg->d_model + d];
-                        float vj = h_emb[j * cfg->d_model + d];
-                        dot += vi * vj;
-                        norm_i += vi * vi;
-                        norm_j += vj * vj;
-                    }
-                    float cos = dot / (sqrtf(norm_i) * sqrtf(norm_j) + 1e-8f);
-                    cos_sum += fabsf(cos);
-                    num_pairs++;
-                }
-            }
-            fprintf(stderr, "[Issue113-DIAG] Post-sinusoidal avg_cos = %.6f (target: < 0.5)\n", 
-                    cos_sum / num_pairs);
-        }
-        #endif
-        
-        AG_INFO("Step 1b: SINUSOIDAL position embeddings added (Issue #113 FIX for avg_cos=0.90)");
+        // ALiBi/RoPE: No position embedding added to residual stream.
+        // Position information is injected directly inside attention via bias/rotary.
+        AG_INFO("Step 1b: No position embeddings (using " 
+                << HyperParameters::positionalEncodingTypeToString(cfg->positional_encoding)
+                << " inside attention)");
     }
     
     // Store in context for backward
@@ -668,12 +555,12 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     //  PyTorch transformers do this - we weren't, which caused mode collapse.
     // ═══════════════════════════════════════════════════════════════════════════
     if (cfg->dropout_rate > 0.0f) {
-        // Seeded reproducibility: Use fixed offset seed for embedding dropout
-        // (Makes dropout deterministic - same dropout pattern every training run)
-        const uint64_t emb_dropout_seed = 42 + 500;  // Fixed seed + embedding offset
+        // Vary seed per step so each batch sees a DIFFERENT dropout mask.
+        // Fixed seed = permanently zeroed dimensions = NOT real dropout.
+        const uint64_t emb_dropout_seed = ctx.step * 2654435761ULL + 500;
         ctx.embedding_tensor = autograd::dropout(ctx.embedding_tensor, cfg->dropout_rate, 
                                                   emb_dropout_seed, true, ctx.stream);
-        AG_INFO("Step 1c: Embedding dropout applied (p=" << cfg->dropout_rate << ")");
+        AG_INFO("Step 1c: Embedding dropout applied (p=" << cfg->dropout_rate << ", step=" << ctx.step << ")");
     }
     
     AG_INFO("Step 1: Embedding complete, shape=[" << total_tokens << ", " << cfg->d_model << "]");
@@ -915,7 +802,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     ctx.embedding_tensor.is_leaf = false;  // Ensure it's not treated as a leaf
     
     AG_INFO("Step 2: Running " << num_layers << " encoder layers with autograd...");
-    AG_INFO("  embedding_tensor.grad_fn=" << (void*)ctx.embedding_tensor.grad_fn 
+    AG_INFO("  embedding_tensor.grad_fn=" << (void*)ctx.embedding_tensor.grad_fn.get() 
             << " requires_grad=" << ctx.embedding_tensor.requires_grad);
     
     for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
@@ -946,7 +833,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             : ctx.encoder_layer_outputs.back();
         
         // Run layer forward with intermediates storage
-        Tensor layer_output = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, layer_storage);
+        // Pass ctx.step for per-step attention dropout seed generation
+        Tensor layer_output = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, layer_storage, ctx.step);
         
         // ═══════════════════════════════════════════════════════════════════════
         //  ENCODER LAYER DROPOUT (Issue #133)
@@ -955,9 +843,10 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         //  transformer implementations and prevents mode collapse.
         // ═══════════════════════════════════════════════════════════════════════
         if (cfg->dropout_rate > 0.0f) {
-            // Seeded reproducibility: Use fixed offset seed for layer dropout
-            // Different offset per layer ensures different dropout patterns per layer
-            const uint64_t layer_dropout_seed = 42 + 500 + layer_idx + 1;  // Fixed base + unique per layer
+            // Per-step dropout seed: varies each batch to ensure different dropout masks.
+            // Fixed seed = same dropped features every batch = encoder learns around it = NOT real dropout.
+            // Combine ctx.step (varies per batch) with layer offset (unique per layer) for maximum diversity.
+            const uint64_t layer_dropout_seed = ctx.step * 2654435761ULL + (42 + 500 + layer_idx);
             layer_output = autograd::dropout(layer_output, cfg->dropout_rate,
                                              layer_dropout_seed, true, ctx.stream);
         }
@@ -998,8 +887,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             "final_rms_input"
         );
         rms_input.is_leaf = false;
+        rms_input.stream = ctx.stream;
         rms_input.grad_fn = ctx.encoder_layer_outputs.back().grad_fn;
-        rms_input.owns_grad_fn = false;  // Borrowed from encoder output
         
         // Apply autograd RMSNorm
         normalized_output = autograd::rms_norm(rms_input, ts->final_rms_gamma, 
@@ -1015,8 +904,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             false, true, "encoder_output_passthrough"
         );
         normalized_output.is_leaf = false;
+        normalized_output.stream = ctx.stream;
         normalized_output.grad_fn = ctx.encoder_layer_outputs.back().grad_fn;
-        normalized_output.owns_grad_fn = false;  // Borrowed, not owned
     }
     
     // Store for backward
@@ -1077,25 +966,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     // Check if centering is enabled in config and scratch buffer is available
     const bool use_centering = cfg->lm_head_center_hidden_states;
     
-    // ========================================================================
-    // ISSUE #125 FIX: Use autograd::center_columns() instead of row centering!
-    // 
-    // OLD (WRONG - launchCenterHiddenStates):
-    //   centered[t,d] = hidden[t,d] - mean_d(hidden[t,:])
-    //   This makes each row's feature sum = 0, but does NOT change cos(h_i, h_j)!
-    //
-    // NEW (CORRECT - center_columns):
-    //   centered[t,d] = hidden[t,d] - mean_t(hidden[:,d])
-    //   This removes the shared direction that ALL positions have, REDUCING cos(h_i, h_j)!
-    //
-    // Math proof:
-    //   Row centering shifts vectors but doesn't change angle between them
-    //   Column centering removes the common component, reducing correlation
-    // ========================================================================
-     // ISSUE #127 FIX: Store in ctx so it persists until backward!
-    // CenterColumnsGradFn takes ownership of encoder_output_tensor's grad_fn,
-    // so ctx.centered_encoder_output must live until backward completes.
-    
     if (use_centering) {
         // ISSUE #125 FIX: Column centering - removes common direction, reduces cos(h_i, h_j)
         // center_columns: centered[t,d] = hidden[t,d] - mean_t(hidden[:,d])
@@ -1134,6 +1004,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         "lm_input"
     );
     ctx.lm_input_tensor.is_leaf = false;
+    ctx.lm_input_tensor.stream = ctx.stream;
     
     // ISSUE #127 FIX: Use the CORRECT grad_fn based on whether centering is enabled!
     // When centering is enabled, CenterColumnsGradFn takes ownership of encoder_output_tensor's
@@ -1145,7 +1016,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     } else {
         ctx.lm_input_tensor.grad_fn = ctx.encoder_output_tensor.grad_fn;  // Link directly to RMSNorm or last encoder
     }
-    ctx.lm_input_tensor.owns_grad_fn = false;  // Borrowed, not owned
     
     // RULE 20: Validate shapes
     ctx.lm_input_tensor.shape.require("lm_input");
@@ -1455,6 +1325,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             "encoder_for_numeric"
         );
         encoder_for_numeric.is_leaf = false;
+        encoder_for_numeric.stream = ctx.stream;
         // ISSUE #127 FIX: Use correct grad_fn based on whether centering is enabled
         // When centering is enabled, the RMSNormGradFn is owned by CenterColumnsGradFn
         if (use_centering && ctx.centered_encoder_output.grad_fn) {
@@ -1462,7 +1333,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         } else {
             encoder_for_numeric.grad_fn = ctx.encoder_output_tensor.grad_fn;
         }
-        encoder_for_numeric.owns_grad_fn = false;  // ctx owns it
+
         
         // Call autograd numeric_head_forward
         ctx.numeric_head_output = numeric_head_forward(

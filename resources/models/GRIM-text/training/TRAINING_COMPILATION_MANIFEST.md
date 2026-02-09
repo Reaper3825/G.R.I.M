@@ -132,13 +132,16 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.6 Embedding Initialization
 
-- [ ] **Shared/TensorContract/TensorContract_GPU.cu** (autograd::embedding)
-  - Production embedding forward/backward (replaces Embedding_GPU.cu)
-  - **Issue #92**: Embedding scale √d_model applied - VERIFY in forward pass
-  - **Issue #92**: Backward gradient scaling includes 1/sqrt(d_model) - VERIFY in backward
-  - Pattern to check: Search for `embedding_scale = sqrt(d_model)` parameter
-  - Pattern to check: Verify Constructor does NOT call buildTrie() lazily (must be in Phase1)
-  - **STALE CODE CHECK**: Verify `Layers/Embedding/Embedding_GPU.cu` is NOT called (dead code per Rule 20)
+- [x] **Shared/TensorContract/TensorContract_GPU.cu** (autograd::embedding) ✅ AUDITED & FIXED
+  - `autograd::embedding()` forward/backward: correct scaling, OOB checks, GradFn wiring ✅
+  - `EmbeddingGradFn`: Issues #48/#50/#54 patterns correct (stable data, ownership, result owns grad_fn) ✅
+  - PCGrad path: buffer allocation, global pointer wiring, kernel math all correct ✅
+  - Tied weights: same Tensor object used for both embedding and LM head ✅
+  - **FIX**: Embedding dropout seed was FIXED (`42+500`) — same mask every batch = permanent feature deletion, NOT dropout. Changed to `ctx.step * 2654435761ULL + 500` for per-batch variation.
+  - **DELETED**: `addSinusoidalPositionEmbeddingsKernel` + wrapper — raw in-place CUDA kernel bypassing autograd graph. ALiBi/RoPE provide position info inside attention; residual stream position differentiation is handled by learned or no pos embeddings.
+  - **DELETED**: `ScaleGradFn` struct + `autograd::scale()` function + hpp declaration — dead code from reverted Issue #98 (Rule 20)
+  - **CLEANED**: `LogSoftmaxGradFn` destructor stripped of 7x fprintf debug spew; `log_softmax` forward fprintf removed; `MatMulGradFn::apply` unconditional fprintf/fflush/cudaStreamSynchronize/cudaMemcpy diagnostic block removed (kept vtable corruption check as throw)
+
 
 ---
 
@@ -147,8 +150,6 @@ Use this checklist to systematically audit each file in the order it's used duri
 - [ ] **Shared/StreamController/StreamController_GPU.cu**
   - CUDA stream creation and synchronization
   - **Rule 22**: All streams created via TrainingState controller, never raw `cudaStream_t`
-  - Pattern to check: Search for any standalone `cudaStreamCreate()` calls (should be in TrainingState)
-  - No known issues in this module itself
 
 ---
 

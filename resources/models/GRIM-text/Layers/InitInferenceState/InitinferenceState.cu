@@ -24,7 +24,6 @@
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../Encoding/Encoding_GPU.hpp"
-#include "../Embedding/Embedding_GPU.hpp"
 #include "../ScratchBlock/ScratchBlock_GPU.hpp"
 #include "../FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
@@ -92,21 +91,18 @@ void LanguageModel::initInferenceState() {
     // 2. Setup LM head weights (tied to embeddings for inference)
     // Tensor API: Use from_ptr for tied embeddings, zeros for separate allocation
     if (cfg.tie_embeddings) {
-        auto* embedding_runtime = &getGpuEmbedder();
-        if (embedding_runtime && embedding_runtime->token_buffer) {
-            // Use from_ptr: doesn't own the data, just wraps the embedding buffer
-            training_state_.lm_head_weights = Tensor::from_ptr(
-                embedding_runtime->token_buffer,
-                TC::make_BSM(cfg.vocab_size, cfg.d_model),
-                false,  // doesn't own data
-                false,   // no grad for inference
-                "lm_head_weights_tied_inference"
-            );
-            std::cout << "  ✓ LM head weights tied to embeddings (Tensor API)" << std::endl;
-        } else {
-            std::cerr << "[InitInferenceState] ERROR: Cannot tie embeddings, buffer not available" << std::endl;
-            return;
+        if (!training_state_.embedding_weights.data) {
+            throw std::runtime_error("[InitInferenceState] Cannot tie embeddings — training_state_.embedding_weights not initialized");
         }
+        // Use from_ptr: doesn't own the data, just wraps the embedding buffer
+        training_state_.lm_head_weights = Tensor::from_ptr(
+            training_state_.embedding_weights.data,
+            TC::make_BSM(cfg.vocab_size, cfg.d_model),
+            false,  // doesn't own data
+            false,   // no grad for inference
+            "lm_head_weights_tied_inference"
+        );
+        std::cout << "  ✓ LM head weights tied to embeddings (Tensor API)" << std::endl;
     } else {
         // Allocate separate LM head weights (will be loaded from model file)
         training_state_.lm_head_weights = Tensor::zeros(

@@ -84,8 +84,7 @@ struct NumericHeadGradFn : public GradFn {
 	float* grad_bias = nullptr;     // Points to leaf tensor's grad buffer (optional)
 	
 	// Chain continuation
-	GradFn* encoder_grad_fn = nullptr;
-	bool owns_encoder_grad_fn = false;
+	std::shared_ptr<GradFn> encoder_grad_fn;
 	TensorContract::TensorShape encoder_shape;
 	
 	// Dimensions
@@ -100,10 +99,7 @@ struct NumericHeadGradFn : public GradFn {
 	NumericHeadGradFn() { op_name = "numeric_head"; }
 	
 	~NumericHeadGradFn() {
-		if (owns_encoder_grad_fn && encoder_grad_fn) {
-			delete encoder_grad_fn;
-			encoder_grad_fn = nullptr;
-		}
+		encoder_grad_fn.reset();
 	}
 	
 	void capture_inputs(
@@ -158,10 +154,6 @@ struct NumericHeadGradFn : public GradFn {
 		
 		// Capture encoder's grad_fn for chain continuation
 		encoder_grad_fn = encoder_output.grad_fn;
-		if (encoder_output.grad_fn && encoder_output.owns_grad_fn) {
-			owns_encoder_grad_fn = true;
-			encoder_output.owns_grad_fn = false;
-		}
 	}
 	
 	void apply(const Tensor& grad_output, cudaStream_t str) override {
@@ -325,10 +317,9 @@ Tensor numeric_head_forward(
 	
 	// Setup autograd if needed
 	if (predictions.requires_grad) {
-		auto* grad_fn = new NumericHeadGradFn();
+		auto grad_fn = std::make_shared<NumericHeadGradFn>();
 		grad_fn->capture_inputs(encoder_output, weights, bias, handle, stream);
 		predictions.grad_fn = grad_fn;
-		predictions.owns_grad_fn = true;
 	}
 	
 	return predictions;

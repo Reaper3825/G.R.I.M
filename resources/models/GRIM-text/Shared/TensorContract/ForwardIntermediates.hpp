@@ -31,7 +31,7 @@ namespace GRIM {
  * CRITICAL INVARIANT: All Tensors stored here MUST have their autograd state preserved:
  *   - owns_data = true (they own their GPU memory)
  *   - grad_fn != nullptr (linked to computation graph)
- *   - owns_grad_fn = true (they own their grad_fn node)
+ *   - grad_fn is a shared_ptr<GradFn> (lifetime managed automatically)
  * 
  * When forward() stores a Tensor here via std::move(), the Tensor is transferred
  * from the local stack to this storage. The grad_fn chain remains intact because

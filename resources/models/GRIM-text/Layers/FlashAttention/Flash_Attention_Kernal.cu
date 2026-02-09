@@ -31,10 +31,11 @@ inline bool isEquationLoggingEnabled() {
 }
 }
 
-#define FLASHATTENTION_DISABLE_DROPOUT
 #define FLASHATTENTION_DISABLE_LOCAL
 #define FLASHATTENTION_DISABLE_SOFTCAP
 #define FLASHATTENTION_DISABLE_UNEVEN_K
+// NOTE: FLASHATTENTION_DISABLE_DROPOUT removed per Rule 20 - feature dropout is now enabled
+// (was silently ignored before despite config having attention_dropout parameter)
 
 #define FLASH_NAMESPACE grim_flash
 #include "../../../../../external/flash-attention/csrc/flash_attn/src/namespace_config.h"
@@ -325,8 +326,11 @@ void run_flash_fwd(Flash_fwd_params& params, cudaStream_t stream) {
     BOOL_SWITCH(is_even_MN, IsEvenMNConst, [&] {
         EVENK_SWITCH(is_even_K, IsEvenKConst, [&] {
             ALIBI_SWITCH(params.alibi_slopes_ptr != nullptr, HasAlibi, [&] {
+                // Attention dropout: switch template based on p_dropout
+                const bool use_dropout = params.p_dropout < 1.0f;
+                BOOL_SWITCH(use_dropout, IsDropout, [&] {
                 auto kernel = &flash_fwd_kernel<Kernel_traits,
-                                                /*Is_dropout=*/false,
+                                                IsDropout,
                                                 Is_causal,
                                                 /*Is_local=*/false,
                                                 HasAlibi,
@@ -342,6 +346,7 @@ void run_flash_fwd(Flash_fwd_params& params, cudaStream_t stream) {
                 }
                 kernel<<<grid, Kernel_traits::kNThreads, smem_size, stream>>>(params);
                 check_cuda(cudaGetLastError(), "flash_fwd_kernel launch");
+                });
             });
         });
     });
@@ -385,8 +390,11 @@ void run_flash_bwd(Flash_bwd_params& params, cudaStream_t stream) {
     BOOL_SWITCH(is_even_MN, IsEvenMNConst, [&] {
         EVENK_SWITCH(is_even_K, IsEvenKConst, [&] {
             ALIBI_SWITCH(params.alibi_slopes_ptr != nullptr, HasAlibi, [&] {
+                // Attention dropout: switch template based on p_dropout
+                const bool use_dropout = params.p_dropout < 1.0f;
+                BOOL_SWITCH(use_dropout, IsDropout, [&] {
                 auto kernel = &flash_bwd_dq_dk_dv_loop_kernel<Kernel_traits,
-                                                              /*Is_dropout=*/false,
+                                                              IsDropout,
                                                               Is_causal,
                                                               HasAlibi,
                                                               IsEvenMNConst,
@@ -399,6 +407,7 @@ void run_flash_bwd(Flash_bwd_params& params, cudaStream_t stream) {
                 }
                 kernel<<<grid, Kernel_traits::kNThreads, smem_size, stream>>>(params);
                 check_cuda(cudaGetLastError(), "flash_bwd_kernel launch");
+                });
             });
         });
     });
@@ -443,7 +452,8 @@ void init_fwd_params_contiguous(Flash_fwd_params& params,
                                 void* out, void* softmax_lse,
                                 const float* alibi_slopes,
                                 int batch, int seqlen, int n_heads, int n_kv_heads, int head_dim,
-                                bool is_bf16, bool is_causal) {
+                                bool is_bf16, bool is_causal,
+                                float attention_dropout_p, uint64_t dropout_seed) {
     params = {};
     params.is_bf16 = is_bf16;
     params.q_ptr = const_cast<void*>(q);
@@ -511,10 +521,24 @@ void init_fwd_params_contiguous(Flash_fwd_params& params,
     params.block_table_batch_stride = 0;
     params.page_block_size = 0;
 
-    params.p_dropout = 1.0f;
-    params.p_dropout_in_uint8_t = 255;
-    params.rp_dropout = 1.0f;
-    params.scale_softmax_rp_dropout = scale;
+    // Dropout setup: p_dropout in the struct is KEEP probability (1.0 = no dropout)
+    // attention_dropout_p is DROP probability from config (e.g., 0.15 = drop 15%)
+    if (attention_dropout_p > 0.0f && attention_dropout_p < 1.0f) {
+        const float keep_prob = 1.0f - attention_dropout_p;
+        params.p_dropout = keep_prob;
+        params.p_dropout_in_uint8_t = static_cast<uint8_t>(std::floor(keep_prob * 255.0f));
+        params.rp_dropout = 1.0f / keep_prob;
+        params.scale_softmax_rp_dropout = scale * params.rp_dropout;
+        params.philox_args = {dropout_seed, 0ull};
+    } else {
+        // No dropout (p=0 or invalid)
+        params.p_dropout = 1.0f;
+        params.p_dropout_in_uint8_t = 255;
+        params.rp_dropout = 1.0f;
+        params.scale_softmax_rp_dropout = scale;
+        params.philox_args = {0ull, 0ull};
+    }
+    params.rng_state = nullptr;
 
     params.window_size_left = is_causal ? -1 : -1;
     params.window_size_right = is_causal ? 0 : -1;
@@ -527,9 +551,6 @@ void init_fwd_params_contiguous(Flash_fwd_params& params,
     params.alibi_slopes_batch_stride = 0;
     params.unpadded_lse = false;
     params.seqlenq_ngroups_swapped = false;
-
-    params.philox_args = {0ull, 0ull};
-    params.rng_state = nullptr;
 }
 
 void init_bwd_params_contiguous(Flash_bwd_params& params,
@@ -540,11 +561,13 @@ void init_bwd_params_contiguous(Flash_bwd_params& params,
                                 void* dq, void* dk, void* dv,
                                 void* dq_accum, void* dsoftmax_sum,
                                 int batch, int seqlen, int n_heads, int n_kv_heads, int head_dim,
-                                bool is_bf16, bool is_causal) {
+                                bool is_bf16, bool is_causal,
+                                float attention_dropout_p, uint64_t dropout_seed) {
     init_fwd_params_contiguous(params, q, k, v,
                                const_cast<void*>(out), const_cast<void*>(softmax_lse),
                                alibi_slopes,
-                               batch, seqlen, n_heads, n_kv_heads, head_dim, is_bf16, is_causal);
+                               batch, seqlen, n_heads, n_kv_heads, head_dim, is_bf16, is_causal,
+                               attention_dropout_p, dropout_seed);
     params.do_ptr = const_cast<void*>(dout);
     params.dq_ptr = dq;
     params.dk_ptr = dk;
@@ -607,6 +630,8 @@ extern "C" void flash_attn_fwd_ex(
     int head_dim,
     bool causal,
     bool is_bf16,
+    float attention_dropout_p,
+    uint64_t dropout_seed,
     cudaStream_t stream) {
     if (!q || !k || !v || !out || !softmax_lse) {
         FlashAttentionLog::error("[FlashAttention] FATAL: flash_attn_fwd received null pointer input");
@@ -649,7 +674,8 @@ extern "C" void flash_attn_fwd_ex(
     grim_flash::detail::init_fwd_params_contiguous(params, q, k, v, out, softmax_lse,
                                                    alibi_slopes,
                                                    batch, seqlen, n_heads, n_kv_heads, head_dim,
-                                                   is_bf16, causal);
+                                                   is_bf16, causal,
+                                                   attention_dropout_p, dropout_seed);
 
     // ISSUE #76: Log ALiBi slopes for this sequence - CRITICAL for max_seq_len boundary debugging
     static int s_fwd_call_count = 0;
@@ -1077,6 +1103,8 @@ extern "C" void flash_attn_bwd_ex(
     int head_dim,
     bool causal,
     bool is_bf16,
+    float attention_dropout_p,
+    uint64_t dropout_seed,
     cudaStream_t stream) {
     if (!q || !k || !v || !out || !dout || !softmax_lse || !dq || !dk || !dv) {
         FlashAttentionLog::error("[FlashAttention] FATAL: flash_attn_bwd received null pointer input");
@@ -1169,7 +1197,8 @@ extern "C" void flash_attn_bwd_ex(
                                                    dq, dk, dv,
                                                    dq_accum, dsoftmax_sum,
                                                    batch, seqlen, n_heads, n_kv_heads, head_dim,
-                                                   is_bf16, causal);
+                                                   is_bf16, causal,
+                                                   attention_dropout_p, dropout_seed);
     {
         char stride_msg[512];
         snprintf(stride_msg, sizeof(stride_msg),

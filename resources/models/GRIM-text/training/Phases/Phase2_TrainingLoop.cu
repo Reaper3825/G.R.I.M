@@ -2295,13 +2295,10 @@ BatchResult processBatch(
     
     // Start gradient accumulation window only when at micro_step 0
     // (i.e., first micro-batch after an optimizer step or at very start)
-    // This is critical for gradient accumulation: we must NOT zero gradients
-    // between micro-batches, only at the start of each accumulation window.
+    // Gradient zeroing is handled by backward() method based on accumulate parameter.
+    // When micro_step=0, backward() is called with accumulate=false → zeros gradients.
+    // When micro_step>0, backward() is called with accumulate=true → accumulates.
     const int accum_steps = std::max(1, ctx.config.hyperparameters.gradient_accumulation_steps);
-    if (ctx.optimizer.current_micro_step == 0) {
-        // Zero gradients at window start via autograd system
-        ctx.model->zeroGrad();
-    }
     
     // BUG FIX: beginBatch() must be called EVERY batch to clear previous entries,
     // not just at accumulation window start. Otherwise micro-batches 1+ have stale entries.

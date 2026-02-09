@@ -256,6 +256,9 @@ const char* ModuleIdToString(ModuleId id) {
         case ModuleId::Training: return "Training";
         case ModuleId::TrainingOrchestrator: return "TrainingOrchestrator";
         case ModuleId::StreamController: return "StreamController";
+        case ModuleId::Loss: return "Loss";
+        case ModuleId::Attention: return "Attention";
+        case ModuleId::Autograd: return "Autograd";
         case ModuleId::Custom:
         default:
             return "Custom";

@@ -107,6 +107,34 @@ void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream
 #include <algorithm>  // for std::max in merge_qkv_grads_gqa
 #include <memory>     // for std::shared_ptr (ISSUE #59: grad as Tensor)
 #include <tuple>      // for std::tuple (ISSUE #61: split_and_reshape_qkv return type)
+#include <atomic>     // for tensor lifecycle counters
+
+//======================================================//
+//  Tensor Lifecycle Counters
+//  Sequential IDs for every alloc/free/delete to trace memory lifecycle.
+//  Each log line gets a monotonic counter so you can correlate across operations.
+//  Define TENSOR_LIFECYCLE_LOGGING=1 to enable (adds overhead from fprintf + atomics).
+//======================================================//
+#ifndef TENSOR_LIFECYCLE_LOGGING
+#define TENSOR_LIFECYCLE_LOGGING 0
+#endif
+
+struct TensorLifecycleCounters {
+    static std::atomic<int> alloc_counter;   // Incremented on cudaMalloc (zeros/empty)
+    static std::atomic<int> free_counter;    // Incremented on cudaFree (release)
+    static std::atomic<int> gradfn_del_counter; // Incremented on grad_fn delete
+    static std::atomic<int> move_counter;    // Incremented on move-construct/assign
+};
+
+#if TENSOR_LIFECYCLE_LOGGING
+#define TENSOR_LOG_LIFECYCLE(counter, fmt, ...) \
+    do { \
+        const int _tlc_id = TensorLifecycleCounters::counter.fetch_add(1); \
+        fprintf(stderr, fmt, _tlc_id, ##__VA_ARGS__); \
+    } while(0)
+#else
+#define TENSOR_LOG_LIFECYCLE(counter, fmt, ...) ((void)0)
+#endif
 
 //======================================================//
 //  ISSUE #53 FIX: Deferred GPU Memory Cleanup (GLOBAL SCOPE)
@@ -932,8 +960,7 @@ struct Tensor {
     // - Use grad() to access Tensor* for autograd operations
     std::shared_ptr<Tensor> grad_ = nullptr;  ///< Gradient tensor (lazy-allocated, shared for weight tying)
     
-    GradFn* grad_fn = nullptr;          ///< Backward function (null for leaf tensors)
-    bool owns_grad_fn = true;           ///< RAII ownership flag for grad_fn (default true for backward compat)
+    std::shared_ptr<GradFn> grad_fn;    ///< Backward function (null for leaf tensors). shared_ptr manages lifetime.
     bool requires_grad = false;         ///< Track in compute graph?
     bool is_leaf = true;                ///< Created by user (not from operation)?
     bool retain_grad = false;           ///< Keep grad even if non-leaf?
@@ -1047,21 +1074,17 @@ struct Tensor {
         grad_ = other.grad_;  // shared_ptr copy = shared ownership
     }
     
-    /// Set gradient from external buffer (for compatibility with legacy code)
-    /// Creates a non-owning Tensor that wraps the external buffer
-    /// @param external_grad Raw pointer to gradient buffer (must stay valid)
-    /// @param owns_memory If true, the Tensor will free this memory on destruction
-    void set_grad_from_external(float* external_grad, bool owns_memory = false) {
+    /// Set gradient from an externally-owned buffer (non-owning view).
+    /// The caller MUST keep external_grad alive for the lifetime of this Tensor's grad.
+    void set_grad_from_buffer(float* external_grad) {
         if (!external_grad) {
-            grad_.reset();
-            return;
+            throw std::runtime_error("set_grad_from_buffer: external_grad is NULL - caller MUST provide valid pointer");
         }
-        // Create a new Tensor that wraps the external buffer
         grad_ = std::make_shared<Tensor>();
         grad_->data = external_grad;
-        grad_->shape = shape;  // Gradient has same shape as data
-        grad_->owns_data = owns_memory;
-        grad_->requires_grad = false;  // Gradients don't themselves need gradients
+        grad_->shape = shape;
+        grad_->owns_data = false;  // Always non-owning. Caller manages lifetime.
+        grad_->requires_grad = false;
         grad_->is_leaf = true;
     }
     
@@ -1163,24 +1186,22 @@ struct Tensor {
     //--------------------------------------------------//
     
     void release() {
-        if (owns_grad_fn && grad_fn) {
-            fprintf(stderr, "[Tensor::release] deleting grad_fn=%p op=%s (data=%p owns_data=%d name=%s)\n",
-                    (void*)grad_fn, grad_fn->op_name ? grad_fn->op_name : "null",
-                    (void*)data, (int)owns_data, name ? name : "unnamed");
-            fflush(stderr);
+        if (grad_fn) {
+            TENSOR_LOG_LIFECYCLE(gradfn_del_counter,
+                "[Tensor::release] #D%d releasing grad_fn=%p op=%s refcount=%ld (data=%p owns_data=%d name=%s)\n",
+                (void*)grad_fn.get(), grad_fn->op_name ? grad_fn->op_name : "null",
+                grad_fn.use_count(),
+                (void*)data, (int)owns_data, name ? name : "unnamed");
         }
         if (owns_data && data) {
-            fprintf(stderr, "[Tensor::release] cudaFree data=%p name=%s\n",
-                    (void*)data, name ? name : "unnamed");
-            fflush(stderr);
+            TENSOR_LOG_LIFECYCLE(free_counter,
+                "[Tensor::release] #F%d cudaFree data=%p name=%s\n",
+                (void*)data, name ? name : "unnamed");
             cudaFree(data);
         }
-        // grad_ is shared_ptr - will auto-release when ref count drops to 0
         grad_.reset();
-        if (owns_grad_fn && grad_fn) { delete grad_fn; }
+        grad_fn.reset();
         data = nullptr;
-        grad_fn = nullptr;
-        owns_grad_fn = false;  // Prevent double-delete on repeated release()
     }
 };
 
@@ -1244,21 +1265,7 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr,
  */
 Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
 
-/**
- * Scale tensor by constant scalar: y = x * scale_factor
- * Backward: grad_x = grad_y * scale_factor (chain rule)
- *
- * ISSUE #98: Added to fix gradient vanishing when tie_embeddings=true.
- * When embeddings are scaled by sqrt(d_model) (Issue #92), the LM head
- * must also scale by sqrt(d_model) to maintain gradient flow symmetry.
- * Without this, gradients to encoder are ~27.7x smaller than they should be.
- *
- * @param x Input tensor
- * @param scale_factor Scalar multiplier
- * @param stream CUDA stream
- * @return Scaled tensor with autograd tracking
- */
-Tensor scale(const Tensor& x, float scale_factor, cudaStream_t stream = nullptr);
+// autograd::scale() DELETED — dead code from reverted Issue #98 (Rule 20)
 
 /**
  * LayerScale: Scale tensor by a learned scalar parameter (tensor of shape [1])
@@ -1409,15 +1416,18 @@ Tensor residual_add(const Tensor& x, const Tensor& residual,
 /**
  * Scaled dot-product attention with optional mask and ALiBi
  * 
- * @param cache_softmax_lse If provided, the softmax LSE values will be copied here
- *                          for use by legacy backward passes. Must have size
- *                          [batch, num_heads, seq] (fp32).
+ * @param causal If true, applies causal mask (autoregressive). If false, all positions attend all others.
+ * @param attention_dropout_p Attention dropout DROP rate (0.0 = disabled, 0.15 = 15% drop rate).
+ *        Converted internally to keep probability for FlashAttention (keep_p = 1.0 - attention_dropout_p).
+ * @param dropout_seed Per-step Philox RNG seed for reproducible dropout masks.
+ *        Use ctx.step * 2654435761ULL + layer_offset for per-step, per-layer uniqueness.
  */
 Tensor scaled_dot_product_attention(
     const Tensor& q, const Tensor& k, const Tensor& v,
     const float* alibi_slopes = nullptr, float scale = 0.0f,
     cudaStream_t stream = nullptr,
-    float* cache_softmax_lse = nullptr);
+    bool causal = true,
+    float attention_dropout_p = 0.0f, uint64_t dropout_seed = 0);
 
 /**
  * Split QKV projection output and reshape to BHSD layout with autograd tracking.

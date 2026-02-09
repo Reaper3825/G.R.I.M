@@ -12,7 +12,6 @@
 #include "../Shared/LogRecorder/LogRecorder.hpp"
 #include "../training/schemas/grim_transformer_model_generated.h"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
-#include "../Layers/Embedding/Embedding_GPU.hpp"
 #include "../Layers/Serialization/Serialization_GPU.hpp"
 #include "grim_model_serialization_version.hpp"
 
@@ -134,16 +133,17 @@ bool LanguageModel::save(const std::string& path) {
     EmitModuleInfo(ModuleId::Checkpoint, "Request initialized with version " + std::to_string(GRIM_MODEL_VERSION));
 
     EmitModuleInfo(ModuleId::Checkpoint, "Processing embeddings");
-    auto* gpu_embedder = &getGpuEmbedder();
-    if (config_.use_gpu && gpu_embedder && gpu_embedder->token_buffer) {
-        EmitModuleInfo(ModuleId::Checkpoint, "Using GPU embedder (vocab=" + std::to_string(config_.vocab_size) + ", d_model=" + std::to_string(config_.d_model) + ")");
+    if (config_.use_gpu && training_state_.embedding_weights.data) {
+        EmitModuleInfo(ModuleId::Checkpoint, "Using training_state_ embedding weights (vocab=" + std::to_string(config_.vocab_size) + ", d_model=" + std::to_string(config_.d_model) + ")");
         assignRead(request.sources.gpu_embedding.token_embeddings,
-                   gpu_embedder->token_buffer,
+                   training_state_.embedding_weights.data,
                    embeddingElementCount(config_));
-        if (gpu_embedder->gamma_buffer) {
+        // final_rms_gamma is already serialized separately (line ~260), but legacy
+        // checkpoint format also stores it under gpu_embedding.rms_gamma for compat.
+        if (training_state_.final_rms_gamma.data) {
             EmitModuleInfo(ModuleId::Checkpoint, "Including embedding RMSNorm gamma");
             assignRead(request.sources.gpu_embedding.rms_gamma,
-                       gpu_embedder->gamma_buffer,
+                       training_state_.final_rms_gamma.data,
                        static_cast<std::size_t>(config_.d_model));
             request.sources.gpu_embedding.has_rms_norm = true;
         }
@@ -197,6 +197,8 @@ bool LanguageModel::save(const std::string& path) {
         assignRead(view.ffn_b2, enc->ffnB2().data, d_model);
         assignRead(view.rms1_gamma, enc->rms1Gamma().data, d_model);
         assignRead(view.rms2_gamma, enc->rms2Gamma().data, d_model);
+        assignRead(view.rms_post_attn_gamma, enc->rmsPostAttnGamma().data, d_model);
+        assignRead(view.rms_post_ffn_gamma, enc->rmsPostFfnGamma().data, d_model);
     }
 
     EmitModuleInfo(ModuleId::Checkpoint, "Processing LM head (projection=" + std::string(training_state_.lm_head_weights.data ? "yes" : "no") + ", bias=" + std::string(training_state_.lm_head_bias.data ? "yes" : "no") + ")");
@@ -276,18 +278,17 @@ bool LanguageModel::load(const std::string& path) {
     request.path = path;
     request.config = makeConfigView(config_);
 
-    auto* gpu_embedder = &getGpuEmbedder();
     if (config_.use_gpu) {
-        if (!gpu_embedder || !gpu_embedder->token_buffer) {
-            std::cerr << "[LanguageModel::load] Error: GPU embedder not initialized" << std::endl;
+        if (!training_state_.embedding_weights.data) {
+            std::cerr << "[LanguageModel::load] Error: training_state_.embedding_weights not initialized" << std::endl;
             return false;
         }
         assignWrite(request.gpu_embedding.token_embeddings,
-                    gpu_embedder->token_buffer,
+                    training_state_.embedding_weights.data,
                     embeddingElementCount(config_));
-        if (gpu_embedder->gamma_buffer) {
+        if (training_state_.final_rms_gamma.data) {
             assignWrite(request.gpu_embedding.rms_gamma,
-                        gpu_embedder->gamma_buffer,
+                        training_state_.final_rms_gamma.data,
                         static_cast<std::size_t>(config_.d_model));
             request.gpu_embedding.has_rms_norm = true;
         }
@@ -335,6 +336,8 @@ bool LanguageModel::load(const std::string& path) {
         assignWrite(view.ffn_b2, enc->ffnB2().data, d_model);
         assignWrite(view.rms1_gamma, enc->rms1Gamma().data, d_model);
         assignWrite(view.rms2_gamma, enc->rms2Gamma().data, d_model);
+        assignWrite(view.rms_post_attn_gamma, enc->rmsPostAttnGamma().data, d_model);
+        assignWrite(view.rms_post_ffn_gamma, enc->rmsPostFfnGamma().data, d_model);
     }
 
     if (!training_state_.initialized) {

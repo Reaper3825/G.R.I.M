@@ -365,17 +365,14 @@ float LanguageModel::computeLossBatch(
 	}
 
 	GPUGrimEncoder* gpu_encoder = nullptr;
-	EmbeddingRuntime* embedding_runtime = nullptr;
 	try {
 		gpu_encoder = &getGpuEncoder();
-		embedding_runtime = &getGpuEmbedder();
 	} catch (const std::exception& ex) {
-		fprintf(stderr, "[ComputeLossBatch] FATAL: GPU components not initialized: %s\n", ex.what());
-		throw std::runtime_error("computeLossBatch: GPU components not initialized");
+		fprintf(stderr, "[ComputeLossBatch] FATAL: GPU encoder not initialized: %s\n", ex.what());
+		throw std::runtime_error("computeLossBatch: GPU encoder not initialized");
 	}
-	if (!gpu_encoder || !embedding_runtime) {
-		fprintf(stderr, "[ComputeLossBatch] FATAL: GPU components not initialized\n");
-		throw std::runtime_error("computeLossBatch: GPU components not initialized");
+	if (!gpu_encoder) {
+		throw std::runtime_error("computeLossBatch: GPU encoder is NULL after getGpuEncoder()");
 	}
 
 	const size_t batch_size = prep.batch_size;
@@ -877,16 +874,13 @@ float LanguageModel::computeLossBatch(
 	// This is what makes backward() propagate through the entire model!
 	// NOTE: We borrow the grad_fn, the autograd_ctx owns it
 	training_state_.logits_tensor.grad_fn = training_state_.autograd_ctx->logits_tensor.grad_fn;
-	training_state_.logits_tensor.owns_grad_fn = false;  // Borrowed from autograd_ctx
 	
 	// Setup gradient buffer for logits (reuse pre-allocated buffer)
-	// ISSUE #59: Use set_grad_from_external() for proper Tensor-based grad
 	if (!training_state_.grad_logits_tensor.data) {
 		throw std::runtime_error("[ComputeLossBatch] grad_logits_tensor.data not allocated!");
 	}
-	training_state_.logits_tensor.set_grad_from_external(
-		training_state_.grad_logits_tensor.data,
-		false  // TrainingState owns this buffer, not the grad Tensor
+	training_state_.logits_tensor.set_grad_from_buffer(
+		training_state_.grad_logits_tensor.data
 	);
 	
 	// Compute loss using AUTOGRAD - this attaches grad_fn for backward pass
@@ -918,11 +912,10 @@ float LanguageModel::computeLossBatch(
 		stream
 	);
 	
-	fprintf(stderr, "[ComputeLossBatch] STEP-B: unified_loss returned, loss_tensor.data=%p grad_fn=%p owns_data=%d owns_grad_fn=%d\n",
+	fprintf(stderr, "[ComputeLossBatch] STEP-B: unified_loss returned, loss_tensor.data=%p grad_fn=%p owns_data=%d\n",
 	        (void*)training_state_.loss_tensor.data,
-	        (void*)training_state_.loss_tensor.grad_fn,
-	        (int)training_state_.loss_tensor.owns_data,
-	        (int)training_state_.loss_tensor.owns_grad_fn);
+	        (void*)training_state_.loss_tensor.grad_fn.get(),
+	        (int)training_state_.loss_tensor.owns_data);
 	fflush(stderr);
 	
 	// Read scalar loss value to host (needed for return value and diagnostics)

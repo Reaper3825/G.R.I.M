@@ -5,6 +5,8 @@
 
 #include "TensorContract_GPU.hpp"
 #include "HyperParameters/HyperParameters_GPU.hpp"
+#include "../TensorConversion/TensorConversion.hpp"  // Layout conversions - single source of truth
+#include "../LogRecorder/LogRecorder.hpp"
 #include "../../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../../Layers/Attention/QKV_Projector.hpp"  // ISSUE #62: For launchReshapeFromBHSD
 // Bias kernel declarations (moved from Feed_Forward_GPU.cu - Rule 20: no reverse dependencies)
@@ -15,6 +17,7 @@
 #include <cuda_bf16.h>
 #include <curand_kernel.h>  // Issue #107: Philox PRNG for Xavier init
 #include <device_launch_parameters.h>
+#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
@@ -24,6 +27,7 @@
 #include <mutex>
 #include <vector>
 #include <atomic>
+#include <chrono>
 
 // DEBUG LOGGING - set to 1 to enable verbose tensor operation logging
 #define TENSOR_VERBOSE_DEBUG 0
@@ -38,6 +42,14 @@
 // AUTOGRAD DEBUG TOGGLE - Set to true to trace autograd chain execution
 // ═══════════════════════════════════════════════════════════════════════════
 bool g_autograd_verbose = false;  // DEBUG: Set true to trace autograd chain (KILLS PERF with fflush!)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tensor Lifecycle Counters - sequential IDs for alloc/free/delete tracking
+// ═══════════════════════════════════════════════════════════════════════════
+std::atomic<int> TensorLifecycleCounters::alloc_counter{0};
+std::atomic<int> TensorLifecycleCounters::free_counter{0};
+std::atomic<int> TensorLifecycleCounters::gradfn_del_counter{0};
+std::atomic<int> TensorLifecycleCounters::move_counter{0};
 
 #define AG_TRACE(...) do { if (g_autograd_verbose) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while(0)
 
@@ -444,156 +456,9 @@ __global__ void kernel_scale(const float* __restrict__ src,
 }
 
 //======================================================//
-//  CUDA Kernels - Layout Conversions
-//======================================================//
-
-// BSM to BHSD: [tokens, d_model] -> [batch, heads, seq, head_dim]
-__global__ void kernel_BSM_to_BHSD(
-    const float* __restrict__ src,
-    float* __restrict__ dst,
-    int batch, int seq, int heads, int head_dim)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int d_model = heads * head_dim;
-    int tokens = batch * seq;
-    int total = tokens * d_model;
-    
-    if (idx >= total) return;
-    
-    // Decode from BSM: [token, feature]
-    int feature = idx % d_model;
-    int token = idx / d_model;
-    
-    // Convert token to (b, s)
-    int b = token / seq;
-    int s = token % seq;
-    
-    // Convert feature to (h, d)
-    int h = feature / head_dim;
-    int d = feature % head_dim;
-    
-    // Write to BHSD: [b, h, s, d]
-    int dst_idx = ((b * heads + h) * seq + s) * head_dim + d;
-    dst[dst_idx] = src[idx];
-}
-
-// BHSD to BSM: [batch, heads, seq, head_dim] -> [tokens, d_model]
-__global__ void kernel_BHSD_to_BSM(
-    const float* __restrict__ src,
-    float* __restrict__ dst,
-    int batch, int heads, int seq, int head_dim)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = batch * heads * seq * head_dim;
-    
-    if (idx >= total) return;
-    
-    // Decode from BHSD
-    int d = idx % head_dim;
-    int s = (idx / head_dim) % seq;
-    int h = (idx / (head_dim * seq)) % heads;
-    int b = idx / (head_dim * seq * heads);
-    
-    // Write to BSM: [b*seq + s, h*head_dim + d]
-    int d_model = heads * head_dim;
-    int token = b * seq + s;
-    int feature = h * head_dim + d;
-    int dst_idx = token * d_model + feature;
-    
-    dst[dst_idx] = src[idx];
-}
-
-// BHSD to BHDS: Transpose last two dimensions
-__global__ void kernel_BHSD_to_BHDS(
-    const float* __restrict__ src,
-    float* __restrict__ dst,
-    int batch, int heads, int seq, int head_dim)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = batch * heads * seq * head_dim;
-    
-    if (idx >= total) return;
-    
-    // Decode from BHSD
-    int d = idx % head_dim;
-    int s = (idx / head_dim) % seq;
-    int h = (idx / (head_dim * seq)) % heads;
-    int b = idx / (head_dim * seq * heads);
-    
-    // Write to BHDS: [b, h, d, s]
-    int dst_idx = ((b * heads + h) * head_dim + d) * seq + s;
-    dst[dst_idx] = src[idx];
-}
-
-// BHDS to BHSD: Transpose last two dimensions
-__global__ void kernel_BHDS_to_BHSD(
-    const float* __restrict__ src,
-    float* __restrict__ dst,
-    int batch, int heads, int head_dim, int seq)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = batch * heads * head_dim * seq;
-    
-    if (idx >= total) return;
-    
-    // Decode from BHDS
-    int s = idx % seq;
-    int d = (idx / seq) % head_dim;
-    int h = (idx / (seq * head_dim)) % heads;
-    int b = idx / (seq * head_dim * heads);
-    
-    // Write to BHSD: [b, h, s, d]
-    int dst_idx = ((b * heads + h) * seq + s) * head_dim + d;
-    dst[dst_idx] = src[idx];
-}
-
-// BHSD to BSHD: Swap heads and seq dimensions
-__global__ void kernel_BHSD_to_BSHD(
-    const float* __restrict__ src,
-    float* __restrict__ dst,
-    int batch, int heads, int seq, int head_dim)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = batch * heads * seq * head_dim;
-    
-    if (idx >= total) return;
-    
-    // Decode from BHSD
-    int d = idx % head_dim;
-    int s = (idx / head_dim) % seq;
-    int h = (idx / (head_dim * seq)) % heads;
-    int b = idx / (head_dim * seq * heads);
-    
-    // Write to BSHD: [b, s, h, d]
-    int dst_idx = ((b * seq + s) * heads + h) * head_dim + d;
-    dst[dst_idx] = src[idx];
-}
-
-// BSHD to BHSD: Swap seq and heads dimensions
-__global__ void kernel_BSHD_to_BHSD(
-    const float* __restrict__ src,
-    float* __restrict__ dst,
-    int batch, int seq, int heads, int head_dim)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = batch * seq * heads * head_dim;
-    
-    if (idx >= total) return;
-    
-    // Decode from BSHD
-    int d = idx % head_dim;
-    int h = (idx / head_dim) % heads;
-    int s = (idx / (head_dim * heads)) % seq;
-    int b = idx / (head_dim * heads * seq);
-    
-    // Write to BHSD: [b, h, s, d]
-    int dst_idx = ((b * heads + h) * seq + s) * head_dim + d;
-    dst[dst_idx] = src[idx];
-}
-
-//======================================================//
 //  CUDA Kernels - GQA Operations
-//======================================================//
+//  (Layout conversion kernels live in TensorConversion.cu)
+//======================================================
 
 // Split fused QKV into separate Q, K, V tensors (GQA-aware)
 // Input:  [batch*seq, q_dim + 2*kv_dim] where q_dim = num_heads * head_dim, kv_dim = num_kv_heads * head_dim
@@ -889,39 +754,28 @@ void convert(const TensorView& src, TensorView& dst, cudaStream_t stream) {
         throw ContractViolation("convert: cannot determine 4D dimensions");
     }
     
-    const size_t total = src.size_elements();
-    const int blocks = (total + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    
-    // Dispatch to appropriate kernel
+    // Dispatch to TensorConversion (single source of truth for layout kernels)
     if (src_layout == Layout::BSM && dst_layout == Layout::BHSD) {
-        kernel_BSM_to_BHSD<<<blocks, BLOCK_SIZE, 0, stream>>>(
-            src.ptr, dst.ptr, batch, seq, heads, head_dim);
+        TensorConversion::convert_BSM_to_BHSD(src.ptr, dst.ptr, batch, seq, heads, head_dim, stream);
     }
     else if (src_layout == Layout::BHSD && dst_layout == Layout::BSM) {
-        kernel_BHSD_to_BSM<<<blocks, BLOCK_SIZE, 0, stream>>>(
-            src.ptr, dst.ptr, batch, heads, seq, head_dim);
+        TensorConversion::convert_BHSD_to_BSM(src.ptr, dst.ptr, batch, heads, seq, head_dim, stream);
     }
     else if (src_layout == Layout::BHSD && dst_layout == Layout::BHDS) {
-        kernel_BHSD_to_BHDS<<<blocks, BLOCK_SIZE, 0, stream>>>(
-            src.ptr, dst.ptr, batch, heads, seq, head_dim);
+        TensorConversion::convert_BHSD_to_BHDS(src.ptr, dst.ptr, batch, heads, seq, head_dim, stream);
     }
     else if (src_layout == Layout::BHDS && dst_layout == Layout::BHSD) {
-        kernel_BHDS_to_BHSD<<<blocks, BLOCK_SIZE, 0, stream>>>(
-            src.ptr, dst.ptr, batch, heads, head_dim, seq);
+        TensorConversion::convert_BHDS_to_BHSD(src.ptr, dst.ptr, batch, heads, head_dim, seq, stream);
     }
     else if (src_layout == Layout::BHSD && dst_layout == Layout::BSHD) {
-        kernel_BHSD_to_BSHD<<<blocks, BLOCK_SIZE, 0, stream>>>(
-            src.ptr, dst.ptr, batch, heads, seq, head_dim);
+        TensorConversion::convert_BHSD_to_BSHD(src.ptr, dst.ptr, batch, heads, seq, head_dim, stream);
     }
     else if (src_layout == Layout::BSHD && dst_layout == Layout::BHSD) {
-        kernel_BSHD_to_BHSD<<<blocks, BLOCK_SIZE, 0, stream>>>(
-            src.ptr, dst.ptr, batch, seq, heads, head_dim);
+        TensorConversion::convert_BSHD_to_BHSD(src.ptr, dst.ptr, batch, seq, heads, head_dim, stream);
     }
     else {
         throw ContractViolation("convert: internal error - unhandled conversion");
     }
-    
-    TC_CUDA_CHECK(cudaGetLastError());
 }
 
 bool can_convert_inplace(const TensorView& tensor, Layout target_layout) {
@@ -1195,9 +1049,8 @@ Tensor::Tensor(Tensor&& other) noexcept
     : data(other.data)
     , shape(other.shape)
     , owns_data(other.owns_data)
-    , grad_(std::move(other.grad_))  // ISSUE #59: Transfer shared_ptr ownership
-    , grad_fn(other.grad_fn)
-    , owns_grad_fn(other.owns_grad_fn)  // ISSUE #54 FIX: Transfer grad_fn ownership
+    , grad_(std::move(other.grad_))
+    , grad_fn(std::move(other.grad_fn))
     , requires_grad(other.requires_grad)
     , is_leaf(other.is_leaf)
     , retain_grad(other.retain_grad)
@@ -1206,26 +1059,19 @@ Tensor::Tensor(Tensor&& other) noexcept
     , name(other.name)
     , version(other.version)
 {
-    // Null out other's pointers to prevent double-free
     other.data = nullptr;
-    // grad_ already moved via std::move
-    other.grad_fn = nullptr;
     other.owns_data = false;
-    other.owns_grad_fn = false;  // ISSUE #54 FIX: Clear ownership flag
 }
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
     if (this != &other) {
-        // Release current resources
         release();
         
-        // Move from other
         data = other.data;
         shape = other.shape;
         owns_data = other.owns_data;
-        grad_ = std::move(other.grad_);  // ISSUE #59: Transfer shared_ptr ownership
-        grad_fn = other.grad_fn;
-        owns_grad_fn = other.owns_grad_fn;  // ISSUE #54 FIX: Transfer grad_fn ownership
+        grad_ = std::move(other.grad_);
+        grad_fn = std::move(other.grad_fn);
         requires_grad = other.requires_grad;
         is_leaf = other.is_leaf;
         retain_grad = other.retain_grad;
@@ -1233,13 +1079,8 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
         device_id = other.device_id;
         name = other.name;
         version = other.version;
-        
-        // Null out other's pointers
         other.data = nullptr;
-        // grad_ already moved
-        other.grad_fn = nullptr;
         other.owns_data = false;
-        other.owns_grad_fn = false;  // ISSUE #54 FIX: Clear ownership flag
     }
     return *this;
 }
@@ -1273,6 +1114,9 @@ Tensor Tensor::zeros(TensorContract::TensorShape shape, bool requires_grad, cuda
         throw std::runtime_error(std::string("Tensor::zeros cudaMalloc failed: ") + cudaGetErrorString(err));
     }
     t.owns_data = true;
+    TENSOR_LOG_LIFECYCLE(alloc_counter,
+        "[Tensor::alloc] #A%d cudaMalloc data=%p bytes=%zu name=%s\n",
+        (void*)t.data, bytes, name ? name : "unnamed");
     
     // Zero-initialize
     const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
@@ -1338,6 +1182,9 @@ Tensor Tensor::empty(TensorContract::TensorShape shape, bool requires_grad, cuda
         throw std::runtime_error(std::string("Tensor::empty cudaMalloc failed: ") + cudaGetErrorString(err));
     }
     t.owns_data = true;
+    TENSOR_LOG_LIFECYCLE(alloc_counter,
+        "[Tensor::alloc] #A%d cudaMalloc data=%p bytes=%zu name=%s\n",
+        (void*)t.data, bytes, name ? name : "unnamed");
     
     // NOTE: Memory is NOT initialized (undefined values)
     return t;
@@ -1358,6 +1205,12 @@ Tensor Tensor::from_ptr(float* ptr, TensorContract::TensorShape shape, bool take
     t.requires_grad = requires_grad;
     t.is_leaf = true;
     t.name = name;
+
+    if (takes_ownership) {
+        TENSOR_LOG_LIFECYCLE(alloc_counter,
+            "[Tensor::alloc] #A%d from_ptr data=%p bytes=%zu name=%s (takes_ownership)\n",
+            (void*)ptr, shape.total_elements() * sizeof(float), name ? name : "unnamed");
+    }
     
     return t;
 }
@@ -1403,29 +1256,15 @@ Tensor Tensor::xavier_uniform(TensorContract::TensorShape shape, bool requires_g
         throw std::runtime_error(std::string("Tensor::xavier_uniform cudaMalloc failed: ") + cudaGetErrorString(err));
     }
     t.owns_data = true;
+    TENSOR_LOG_LIFECYCLE(alloc_counter,
+        "[Tensor::alloc] #A%d cudaMalloc data=%p bytes=%zu name=%s (xavier)\n",
+        (void*)t.data, bytes, name ? name : "unnamed");
     
     // Xavier uniform: U[-sqrt(6/(fan_in+fan_out)), +sqrt(6/(fan_in+fan_out))]
     // For 2D [rows, cols]: fan_in=cols, fan_out=rows
     // For 4D [B,H,S,D]: treat as [B*H*S, D] => fan_in=D, fan_out=B*H*S
-    float fan_in = 1.0f, fan_out = 1.0f;
-    if (shape.is_flat()) {
-        const auto& s = shape.as_2d();
-        fan_in = static_cast<float>(s.cols);
-        fan_out = static_cast<float>(s.rows);
-    } else if (shape.is_4d()) {
-        const auto& s = shape.as_4d();
-        fan_in = static_cast<float>(s.head_dim);
-        fan_out = static_cast<float>(s.batch * s.heads * s.seq);
-    }
-    
-    float scale = std::sqrt(6.0f / (fan_in + fan_out));
-    
-    // Use current time as seed for reproducibility across runs
-    uint64_t seed = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(t.data));
-    
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    kernel_xavier_uniform<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count, scale, seed);
-    
+    auto seed = static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    xavier_uniform_(t, seed, stream);
     return t;
 }
 
@@ -1471,33 +1310,43 @@ void Tensor::ensure_grad() {
     if (grad_ != nullptr && grad_->data != nullptr) {
         return;  // Already allocated
     }
-    
-    // ISSUE #59: Create gradient as a proper Tensor object
-    // The grad Tensor has the same shape as this tensor but doesn't track gradients itself
-    auto grad_tensor = std::make_shared<Tensor>();
-    grad_tensor->shape = shape;
-    grad_tensor->requires_grad = false;  // Gradient tensor doesn't track its own gradient
-    grad_tensor->is_leaf = true;
-    grad_tensor->stream = stream;
-    grad_tensor->device_id = device_id;
-    // Propagate parent name to grad tensor so release() logs are identifiable.
-    // Safe because all names are string literals with static storage duration.
-    grad_tensor->name = name;
+
+    // RULE 20: Stream must be valid. Tensor::zeros() rejects stream==0, so we
+    // avoid it here — but still validate. from_ptr() callers that set
+    // requires_grad=true MUST also set .stream before ensure_grad() runs.
+    if (stream == nullptr) {
+        throw std::runtime_error(std::string("ensure_grad: stream is NULL on tensor '") +
+                                 (name ? name : "unnamed") +
+                                 "' - caller MUST set .stream before ensure_grad()");
+    }
     
     const size_t count = shape.total_elements();
     const size_t bytes = count * sizeof(float);
     
-    cudaError_t err = cudaMalloc(&grad_tensor->data, bytes);
+    float* ptr = nullptr;
+    cudaError_t err = cudaMalloc(&ptr, bytes);
     if (err != cudaSuccess) {
-        throw std::runtime_error(std::string("Tensor::ensure_grad cudaMalloc failed: ") + cudaGetErrorString(err));
+        throw std::runtime_error(std::string("ensure_grad cudaMalloc failed for ") +
+                                 (name ? name : "unnamed") + ": " + cudaGetErrorString(err));
     }
+    
+    cudaMemsetAsync(ptr, 0, bytes, stream);
+    
+    TENSOR_LOG_LIFECYCLE(alloc_counter,
+        "[Tensor::alloc] #A%d cudaMalloc data=%p bytes=%zu name=%s\n",
+        (void*)ptr, bytes, name ? name : "unnamed");
+    
+    // Wrap in a Tensor shared_ptr for proper RAII ownership
+    auto grad_tensor = std::make_shared<Tensor>();
+    grad_tensor->data = ptr;
+    grad_tensor->shape = shape;
     grad_tensor->owns_data = true;
-    
-    // Zero-initialize gradient
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    kernel_zero_autograd<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(grad_tensor->data, count);
-    
-    grad_ = std::move(grad_tensor);
+    grad_tensor->requires_grad = false;
+    grad_tensor->is_leaf = true;
+    grad_tensor->stream = stream;
+    grad_tensor->device_id = device_id;
+    grad_tensor->name = name;
+    grad_ = grad_tensor;
 } 
 
 void Tensor::zero_grad(cudaStream_t exec_stream) {
@@ -1919,12 +1768,15 @@ __global__ void kernel_embedding_forward(
     float* output,              // [tokens, d_model]
     int tokens,
     int d_model,
+    int vocab_size,             // RULE 20: Bounds check parameter
     float embedding_scale       // Scale factor (sqrt(d_model) for AIAYN-style)
 ) {
     const int token_idx = blockIdx.x;
     if (token_idx >= tokens) return;
     
     const int token_id = token_ids[token_idx];
+    // RULE 20: Crash loud on OOB token ID — do NOT silently skip
+    assert(token_id >= 0 && token_id < vocab_size && "OOB token_id in kernel_embedding_forward");
     const float* weight_row = weight + static_cast<size_t>(token_id) * d_model;
     float* output_row = output + static_cast<size_t>(token_idx) * d_model;
     
@@ -1943,12 +1795,15 @@ __global__ void kernel_embedding_backward(
     float* grad_weight,         // [vocab_size, d_model]
     int tokens,
     int d_model,
+    int vocab_size,             // RULE 20: Bounds check parameter
     float embedding_scale       // Scale factor from forward (for chain rule)
 ) {
     const int token_idx = blockIdx.x;
     if (token_idx >= tokens) return;
     
     const int token_id = token_ids[token_idx];
+    // RULE 20: Crash loud on OOB token ID — do NOT silently skip
+    assert(token_id >= 0 && token_id < vocab_size && "OOB token_id in kernel_embedding_backward");
     const float* token_grad = grad_output + static_cast<size_t>(token_idx) * d_model;
     float* weight_grad = grad_weight + static_cast<size_t>(token_id) * d_model;
     
@@ -2342,104 +2197,7 @@ __global__ void kernel_center_columns(
 //  GradFn Subclasses
 //======================================================//
 
-/**
- * ScaleGradFn - Backward for scalar multiplication
- * Forward: y = x * scale
- * Backward: grad_x = grad_y * scale (scale is constant, chain rule)
- *
- * ISSUE #98: Added to fix gradient vanishing when tie_embeddings=true.
- * When embeddings are scaled by sqrt(d_model) (Issue #92), the LM head
- * must also scale by sqrt(d_model) to maintain gradient flow symmetry.
- * Without this, gradients to encoder are ~27.7x smaller than they should be.
- */
-struct ScaleGradFn : public GradFn {
-    float scale_factor = 1.0f;
-    float* input_grad = nullptr;
-    std::shared_ptr<float> owned_input_grad;
-    GradFn* input_grad_fn = nullptr;
-    bool owns_input_grad_fn = false;
-    TensorContract::TensorShape input_shape;
-    size_t element_count = 0;
-    bool applied = false;
-    
-    ScaleGradFn() { op_name = "scale"; }
-    
-    ~ScaleGradFn() {
-        if (owns_input_grad_fn && input_grad_fn) {
-            delete input_grad_fn;
-            input_grad_fn = nullptr;
-        }
-    }
-    
-    void capture_input(Tensor& input, float scale, cudaStream_t stream) {
-        scale_factor = scale;
-        input_shape = input.shape;
-        element_count = input.numel();
-        
-        // Take ownership of input's grad_fn
-        input_grad_fn = input.grad_fn;
-        if (input.grad_fn && input.owns_grad_fn) {
-            owns_input_grad_fn = true;
-            input.owns_grad_fn = false;
-        }
-        
-        // Setup gradient buffer
-        if (input.requires_grad) {
-            input.ensure_grad();
-            if (input.is_leaf) {
-                input_grad = input.grad_data();
-                AG_TRACE("[ScaleGradFn] Using persistent input_grad buffer (leaf): %p\n", (void*)input_grad);
-            } else {
-                float* buffer = nullptr;
-                cudaMalloc(&buffer, element_count * sizeof(float));
-                cudaMemsetAsync(buffer, 0, element_count * sizeof(float), stream);
-                owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) {
-                    queueForDeferredCleanup(p);
-                });
-                input_grad = owned_input_grad.get();
-                AG_TRACE("[ScaleGradFn] Allocated owned input_grad buffer (non-leaf): %zu floats at %p\n", element_count, (void*)input_grad);
-            }
-        }
-    }
-    
-    __host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
-        if (applied) {
-            AG_TRACE("[ScaleGradFn] apply() SKIPPED (already applied)\n");
-            return;
-        }
-        applied = true;
-        
-        // Backward: grad_input = grad_output * scale_factor
-        // The scale is a constant, so it multiplies the incoming gradient
-        if (input_grad && grad_output.data) {
-            const size_t n = element_count;
-            const int blocks = (n + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-            
-            AG_TRACE("[ScaleGradFn] apply() scale_factor=%f n=%zu input_grad=%p\n", 
-                     scale_factor, n, (void*)input_grad);
-            
-            // grad_input += grad_output * scale  (accumulate mode)
-            kernel_accumulate_grad<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-                input_grad, grad_output.data, n, scale_factor);
-        }
-        
-        // Continue backward chain
-        if (input_grad_fn) {
-            Tensor input_grad_tensor;
-            input_grad_tensor.data = input_grad;
-            input_grad_tensor.shape = input_shape;
-            input_grad_tensor.owns_data = false;
-            input_grad_tensor.stream = stream;
-            
-            input_grad_fn->apply(input_grad_tensor, stream);
-            input_grad_fn->release_saved();
-        }
-    }
-    
-    __host__ void release_saved() override {
-        owned_input_grad.reset();
-    }
-};
+// ScaleGradFn DELETED — dead code from reverted Issue #98 (Rule 20)
 
 /**
  * LayerScaleGradFn - Backward for learnable scalar multiplication (Issue #109)
@@ -2455,8 +2213,7 @@ struct LayerScaleGradFn : public GradFn {
     float* input_grad = nullptr;
     std::shared_ptr<float> owned_input_data;  // If we need to copy input
     std::shared_ptr<float> owned_input_grad;
-    GradFn* input_grad_fn = nullptr;
-    bool owns_input_grad_fn = false;
+    std::shared_ptr<GradFn> input_grad_fn;
     TensorContract::TensorShape input_shape;
     size_t element_count = 0;
     
@@ -2468,13 +2225,6 @@ struct LayerScaleGradFn : public GradFn {
     
     LayerScaleGradFn() { op_name = "layer_scale"; }
     
-    ~LayerScaleGradFn() {
-        if (owns_input_grad_fn && input_grad_fn) {
-            delete input_grad_fn;
-            input_grad_fn = nullptr;
-        }
-    }
-    
     void capture_inputs(Tensor& input, Tensor& scale_param, cudaStream_t stream) {
         input_shape = input.shape;
         element_count = input.numel();
@@ -2484,12 +2234,8 @@ struct LayerScaleGradFn : public GradFn {
                         cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);  // Need sync to read value
         
-        // Take ownership of input's grad_fn
+        // Copy shared_ptr to input's grad_fn
         input_grad_fn = input.grad_fn;
-        if (input.grad_fn && input.owns_grad_fn) {
-            owns_input_grad_fn = true;
-            input.owns_grad_fn = false;
-        }
         
         // Setup gradient buffer for input
         if (input.requires_grad) {
@@ -2606,8 +2352,7 @@ struct LayerScaleGradFn : public GradFn {
 struct CenterRowsGradFn : public GradFn {
     // Stable data (ISSUE #48 pattern - don't store Tensor* pointers)
     float* input_grad = nullptr;
-    GradFn* input_grad_fn = nullptr;
-    bool owns_input_grad_fn = false;
+    std::shared_ptr<GradFn> input_grad_fn;
     TensorContract::TensorShape input_shape;
     size_t element_count = 0;
     int row_dim = 0;
@@ -2619,13 +2364,6 @@ struct CenterRowsGradFn : public GradFn {
     
     CenterRowsGradFn() { op_name = "center_rows"; }
     
-    ~CenterRowsGradFn() {
-        if (owns_input_grad_fn && input_grad_fn) {
-            delete input_grad_fn;
-            input_grad_fn = nullptr;
-        }
-    }
-    
     __host__ void capture_input(Tensor& input, int dim, int rows, cudaStream_t stream) {
         input_requires_grad = input.requires_grad;
         if (!input.requires_grad) return;
@@ -2635,12 +2373,8 @@ struct CenterRowsGradFn : public GradFn {
         row_dim = dim;
         num_rows = rows;
         
-        // Take ownership of input's grad_fn (Issue #50 pattern)
+        // Copy shared_ptr to input's grad_fn
         input_grad_fn = input.grad_fn;
-        if (input.grad_fn && input.owns_grad_fn) {
-            owns_input_grad_fn = true;
-            input.owns_grad_fn = false;
-        }
         
         // Setup gradient buffer (Issue #54 pattern)
         input.ensure_grad();
@@ -2707,18 +2441,10 @@ struct CenterColumnsGradFn : public GradFn {
     
     // Input gradient chain
     float* input_grad = nullptr;
-    GradFn* input_grad_fn = nullptr;
-    bool owns_input_grad_fn = false;
+    std::shared_ptr<GradFn> input_grad_fn;
     std::shared_ptr<float> owned_input_grad;
     
     CenterColumnsGradFn() { op_name = "center_columns"; }
-    
-    ~CenterColumnsGradFn() {
-        if (owns_input_grad_fn && input_grad_fn) {
-            delete input_grad_fn;
-            input_grad_fn = nullptr;
-        }
-    }
     
     __host__ void capture_input(Tensor& input, int cols, int rows, cudaStream_t stream) {
         input_requires_grad = input.requires_grad;
@@ -2729,12 +2455,8 @@ struct CenterColumnsGradFn : public GradFn {
         num_cols = cols;
         num_rows = rows;
         
-        // Take ownership of input's grad_fn (Issue #50 pattern)
+        // Copy shared_ptr to input's grad_fn
         input_grad_fn = input.grad_fn;
-        if (input.grad_fn && input.owns_grad_fn) {
-            owns_input_grad_fn = true;
-            input.owns_grad_fn = false;
-        }
         
         // Setup gradient buffer (Issue #54 pattern)
         input.ensure_grad();
@@ -2804,25 +2526,11 @@ struct AddGradFn : public GradFn {
     std::shared_ptr<float> owned_grad_b;
     TensorContract::TensorShape a_shape;
     TensorContract::TensorShape b_shape;
-    GradFn* a_grad_fn = nullptr;
-    GradFn* b_grad_fn = nullptr;
-    bool owns_a_grad_fn = false;  // ISSUE #50: Take ownership to prevent use-after-free
-    bool owns_b_grad_fn = false;
+    std::shared_ptr<GradFn> a_grad_fn;
+    std::shared_ptr<GradFn> b_grad_fn;
     size_t element_count = 0;
     
     AddGradFn() { op_name = "add"; }
-    
-    ~AddGradFn() {
-        // ISSUE #50: Delete owned grad_fns to complete the chain cleanup
-        if (owns_a_grad_fn && a_grad_fn) { 
-            delete a_grad_fn; 
-            a_grad_fn = nullptr; 
-        }
-        if (owns_b_grad_fn && b_grad_fn) { 
-            delete b_grad_fn; 
-            b_grad_fn = nullptr; 
-        }
-    }
     
     void capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
         a_requires_grad = a.requires_grad;
@@ -2830,19 +2538,9 @@ struct AddGradFn : public GradFn {
         a_shape = a.shape;
         b_shape = b.shape;
         
-        // ISSUE #50 FIX: Take ownership of captured grad_fns to prevent use-after-free
-        // When the input tensor goes out of scope, it must NOT delete its grad_fn
-        // because we need it for the backward chain
+        // Copy shared_ptrs to captured grad_fns
         a_grad_fn = a.grad_fn;
-        if (a.grad_fn && a.owns_grad_fn) {
-            owns_a_grad_fn = true;
-            a.owns_grad_fn = false;  // Transfer ownership to us
-        }
         b_grad_fn = b.grad_fn;
-        if (b.grad_fn && b.owns_grad_fn) {
-            owns_b_grad_fn = true;
-            b.owns_grad_fn = false;  // Transfer ownership to us
-        }
         
         element_count = a.numel();
         
@@ -2890,12 +2588,8 @@ struct AddGradFn : public GradFn {
         b_requires_grad = false;
         a_shape = a.shape;
         
-        // ISSUE #50 FIX: Take ownership of captured grad_fn
+        // Copy shared_ptr to captured grad_fn
         a_grad_fn = a.grad_fn;
-        if (a.grad_fn && a.owns_grad_fn) {
-            owns_a_grad_fn = true;
-            a.owns_grad_fn = false;
-        }
         
         element_count = a.numel();
         
@@ -2968,7 +2662,7 @@ struct AddGradFn : public GradFn {
             // ISSUE #58 FIX: Pass grad_output.data (incoming gradient), NOT grad_a (local accumulator)
             Tensor view;
             view.data = grad_output.data; view.shape = a_shape;
-            view.owns_data = false; view.owns_grad_fn = false; view.stream = stream;
+            view.owns_data = false; view.stream = stream;
             a_grad_fn->apply(view, stream);
             // ISSUE #52 FIX: Do NOT call release_saved() here!
         }
@@ -2977,7 +2671,7 @@ struct AddGradFn : public GradFn {
             // ISSUE #58 FIX: Pass grad_output.data (incoming gradient), NOT grad_b (local accumulator)
             Tensor view;
             view.data = grad_output.data; view.shape = b_shape;
-            view.owns_data = false; view.owns_grad_fn = false; view.stream = stream;
+            view.owns_data = false; view.stream = stream;
             b_grad_fn->apply(view, stream);
             // ISSUE #52 FIX: Do NOT call release_saved() here!
         }
@@ -2990,17 +2684,8 @@ struct AddGradFn : public GradFn {
         grad_a = nullptr;
         grad_b = nullptr;
         
-        // ISSUE #50: Set ownership false BEFORE delete to prevent double-delete in destructor
-        if (owns_a_grad_fn && a_grad_fn) {
-            owns_a_grad_fn = false;
-            delete a_grad_fn;
-            a_grad_fn = nullptr;
-        }
-        if (owns_b_grad_fn && b_grad_fn) {
-            owns_b_grad_fn = false;
-            delete b_grad_fn;
-            b_grad_fn = nullptr;
-        }
+        a_grad_fn.reset();
+        b_grad_fn.reset();
     }
 };
 
@@ -3097,20 +2782,11 @@ struct BiasAddGradFn : public GradFn {
     std::shared_ptr<float> owned_grad_bias;
     TensorContract::TensorShape input_shape;
     TensorContract::TensorShape bias_shape;
-    GradFn* input_grad_fn = nullptr;
-    bool owns_input_grad_fn = false;
+    std::shared_ptr<GradFn> input_grad_fn;
     size_t total_tokens = 0;
     size_t features = 0;
     
     BiasAddGradFn() { op_name = "bias_add"; }
-    
-    ~BiasAddGradFn() {
-        // ISSUE #50: Delete owned grad_fn to complete the chain cleanup
-        if (owns_input_grad_fn && input_grad_fn) {
-            delete input_grad_fn;
-            input_grad_fn = nullptr;
-        }
-    }
     
     void capture_inputs(Tensor& input, Tensor& bias, int num_tokens, int num_features, cudaStream_t stream) {
         input_requires_grad = input.requires_grad;
@@ -3120,12 +2796,8 @@ struct BiasAddGradFn : public GradFn {
         total_tokens = static_cast<size_t>(num_tokens);
         features = static_cast<size_t>(num_features);
         
-        // ISSUE #50 FIX: Take ownership of captured grad_fn
+        // Copy shared_ptr to captured grad_fn
         input_grad_fn = input.grad_fn;
-        if (input.grad_fn && input.owns_grad_fn) {
-            owns_input_grad_fn = true;
-            input.owns_grad_fn = false;  // Transfer ownership to us
-        }
         
         // Handle input gradient buffer (typically non-leaf activation)
         if (input_requires_grad) {
@@ -3246,7 +2918,6 @@ struct BiasAddGradFn : public GradFn {
             view.data = grad_output.data;  // ISSUE #58: Pass incoming gradient
             view.shape = input_shape;
             view.owns_data = false;
-            view.owns_grad_fn = false;
             view.stream = stream;
             input_grad_fn->apply(view, stream);
         }
@@ -3256,11 +2927,7 @@ struct BiasAddGradFn : public GradFn {
         GradFn::release_saved();
         grad_input = nullptr;
         grad_bias = nullptr;
-        if (owns_input_grad_fn && input_grad_fn) {
-            owns_input_grad_fn = false;
-            delete input_grad_fn;
-            input_grad_fn = nullptr;
-        }
+        input_grad_fn.reset();
     }
 };
 
@@ -3282,8 +2949,7 @@ struct GeluGradFn : public GradFn {
     // ISSUE #56 FIX: Owned gradient buffer for non-leaf tensors
     std::shared_ptr<float> owned_input_grad;
     TensorContract::TensorShape input_shape;
-    GradFn* input_grad_fn = nullptr;
-    bool owns_input_grad_fn = false;  // ISSUE #50: Take ownership to prevent use-after-free
+    std::shared_ptr<GradFn> input_grad_fn;
     // ISSUE #51 FIX: Own a copy of cached data instead of non-owning pointer
     std::shared_ptr<float> owned_cache;
     const float* cached_input = nullptr;  // Points to owned_cache.get()
@@ -3291,25 +2957,12 @@ struct GeluGradFn : public GradFn {
     
     GeluGradFn() { op_name = "gelu"; }
     
-    ~GeluGradFn() {
-        // ISSUE #50: Delete owned grad_fn to complete the chain cleanup
-        if (owns_input_grad_fn && input_grad_fn) { 
-            delete input_grad_fn; 
-            input_grad_fn = nullptr; 
-        }
-        // shared_ptr members destruct automatically after this
-    }
-    
     void capture_input(Tensor& x, cudaStream_t stream) {
         input_requires_grad = x.requires_grad;
         input_shape = x.shape;
         
-        // ISSUE #50 FIX: Take ownership of captured grad_fn to prevent use-after-free
+        // Copy shared_ptr to captured grad_fn
         input_grad_fn = x.grad_fn;
-        if (x.grad_fn && x.owns_grad_fn) {
-            owns_input_grad_fn = true;
-            x.owns_grad_fn = false;  // Transfer ownership to us
-        }
         
         // ISSUE #56 FIX: Handle grad buffer ownership for non-leaf tensors
         if (input_requires_grad) {
@@ -3402,7 +3055,7 @@ struct GeluGradFn : public GradFn {
         if (input_grad_fn) {
             Tensor view;
             view.data = input_grad; view.shape = input_shape;
-            view.owns_data = false; view.owns_grad_fn = false; view.stream = stream;
+            view.owns_data = false; view.stream = stream;
             input_grad_fn->apply(view, stream);
             // ISSUE #52 FIX: Do NOT call release_saved() here - cudaFree blocks while GPU busy
         }
@@ -3413,8 +3066,7 @@ struct GeluGradFn : public GradFn {
         cached_input = nullptr;
         cached_size = 0;
         input_grad = nullptr;
-        // ISSUE #50: Set ownership false BEFORE delete
-        if (owns_input_grad_fn && input_grad_fn) { owns_input_grad_fn = false; delete input_grad_fn; input_grad_fn = nullptr; }
+        input_grad_fn.reset();
     }
 };
 
@@ -3436,8 +3088,7 @@ struct RMSNormGradFn : public GradFn {
     float* gamma_grad_ptr = nullptr;  // For gamma gradient
     float* gamma_data = nullptr;      // Gamma weights data (for forward values)
     TensorContract::TensorShape input_shape;
-    GradFn* input_grad_fn = nullptr;
-    bool owns_input_grad_fn = false;  // ISSUE #50: Take ownership to prevent use-after-free
+    std::shared_ptr<GradFn> input_grad_fn;
     // ISSUE #51 FIX: Own a copy of cached data instead of non-owning pointer
     std::shared_ptr<float> owned_cache;
     const float* cached_input = nullptr;  // Points to owned_cache.get()
@@ -3448,11 +3099,6 @@ struct RMSNormGradFn : public GradFn {
     RMSNormGradFn() { op_name = "rms_norm"; }
     
     ~RMSNormGradFn() {
-        // ISSUE #50: Delete owned grad_fn to complete the chain cleanup
-        if (owns_input_grad_fn && input_grad_fn) { 
-            delete input_grad_fn; 
-            input_grad_fn = nullptr; 
-        }
         // ISSUE #126: Free owned input_grad buffer
         if (owns_input_grad && input_grad) {
             queueForDeferredCleanup(input_grad);
@@ -3472,12 +3118,8 @@ struct RMSNormGradFn : public GradFn {
         fflush(stderr);
 #endif
         
-        // ISSUE #50 FIX: Take ownership of captured grad_fn to prevent use-after-free
+        // Copy shared_ptr to captured grad_fn
         input_grad_fn = x.grad_fn;
-        if (x.grad_fn && x.owns_grad_fn) {
-            owns_input_grad_fn = true;
-            x.owns_grad_fn = false;  // Transfer ownership to us
-        }
         
         gamma_data = gamma_tensor.data;
         
@@ -3638,7 +3280,7 @@ struct RMSNormGradFn : public GradFn {
             if (input_grad_fn && input_grad_fn->op_name) {
                 Tensor view;
                 view.data = input_grad; view.shape = input_shape;
-                view.owns_data = false; view.owns_grad_fn = false; view.stream = stream;
+                view.owns_data = false; view.stream = stream;
                 input_grad_fn->apply(view, stream);
                 // ISSUE #52 FIX: Do NOT call release_saved() here - cudaFree blocks while GPU busy
             }
@@ -3656,8 +3298,7 @@ struct RMSNormGradFn : public GradFn {
         }
         input_grad = nullptr;
         gamma_grad_ptr = nullptr;
-        // ISSUE #50: Set ownership false BEFORE delete
-        if (owns_input_grad_fn && input_grad_fn) { owns_input_grad_fn = false; delete input_grad_fn; input_grad_fn = nullptr; }
+        input_grad_fn.reset();
     }
 };
 
@@ -3670,32 +3311,26 @@ struct EmbeddingGradFn : public GradFn {
     bool weight_requires_grad = false;
     float* weight_grad = nullptr;
     TensorContract::TensorShape weight_shape;
-    GradFn* weight_grad_fn = nullptr;
-    bool owns_weight_grad_fn = false;  // ISSUE #50: Take ownership to prevent use-after-free
+    std::shared_ptr<GradFn> weight_grad_fn;
     int* token_ids = nullptr;
     bool owns_token_ids = false;
     int num_tokens = 0;
     int d_model = 0;
+    int vocab_size = 0;            // RULE 20: Stored for OOB bounds checking in backward kernel
     float embedding_scale = 1.0f;  // ISSUE #92: Scale factor for AIAYN-style embeddings
     
     EmbeddingGradFn() { op_name = "embedding"; }
     
     ~EmbeddingGradFn() override {
         if (owns_token_ids && token_ids) cudaFree(token_ids);
-        // ISSUE #50: Delete owned grad_fn to complete the chain cleanup
-        if (owns_weight_grad_fn && weight_grad_fn) { delete weight_grad_fn; weight_grad_fn = nullptr; }
     }
     
     void capture_weight(Tensor& w) {
         weight_requires_grad = w.requires_grad;
         weight_shape = w.shape;
         
-        // ISSUE #50 FIX: Take ownership of captured grad_fn to prevent use-after-free
+        // Copy shared_ptr to captured grad_fn
         weight_grad_fn = w.grad_fn;
-        if (w.grad_fn && w.owns_grad_fn) {
-            owns_weight_grad_fn = true;
-            w.owns_grad_fn = false;  // Transfer ownership to us
-        }
         
         if (weight_requires_grad) {
             w.ensure_grad();
@@ -3707,276 +3342,101 @@ struct EmbeddingGradFn : public GradFn {
         num_tokens = tokens;
         d_model = d;
         
-        fprintf(stdout, "[EmbeddingGradFn::save] ENTER - ids=%p tokens=%d d=%d copy_ids=%s stream=%p\n",
-                (void*)ids, tokens, d, copy_ids ? "true" : "false", (void*)stream);
-        fflush(stdout);
+        AG_TRACE("[EmbeddingGradFn::save] ids=%p tokens=%d d=%d copy_ids=%s\n",
+                (void*)ids, tokens, d, copy_ids ? "true" : "false");
         
         if (copy_ids) {
             cudaMalloc(&token_ids, tokens * sizeof(int));
             cudaMemcpyAsync(token_ids, ids, tokens * sizeof(int), cudaMemcpyDeviceToDevice, stream);
             owns_token_ids = true;
-            
-            // Validate token IDs at save time (sync required but helpful for debugging)
-            cudaStreamSynchronize(stream);
-            std::vector<int> h_tokens(std::min(20, tokens));
-            cudaMemcpy(h_tokens.data(), token_ids, h_tokens.size() * sizeof(int), cudaMemcpyDeviceToHost);
-            fprintf(stdout, "[EmbeddingGradFn::save] First %zu token_ids after copy: ", h_tokens.size());
-            for (size_t i = 0; i < h_tokens.size(); i++) {
-                fprintf(stdout, "%d ", h_tokens[i]);
-            }
-            fprintf(stdout, "\n");
-            fprintf(stdout, "[EmbeddingGradFn::save] Allocated owned buffer at %p\n", (void*)token_ids);
-            fflush(stdout);
         } else {
             token_ids = const_cast<int*>(ids);
             owns_token_ids = false;
-            fprintf(stdout, "[EmbeddingGradFn::save] Using borrowed pointer %p\n", (void*)token_ids);
-            fflush(stdout);
         }
     }
     
     void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        using namespace GRIM::Logging;
         // RULE 20: Track current operation for error context
         setCurrentGradFnOp("embedding", this);
         
-        // ISSUE #60 DEBUG: Confirm EmbeddingGradFn is being called (stdout for training log)
-        fprintf(stdout, "[EmbeddingGradFn::apply] ENTER - num_tokens=%d d_model=%d pcgrad_buffer=%p pcgrad_size=%zu\n",
-                num_tokens, d_model, (void*)g_pcgrad_temp_buffer, g_pcgrad_buffer_size);
-        fflush(stdout);
-        
-        // DEBUG CRASH DIAGNOSIS: Check all pointers immediately
-        fprintf(stdout, "[EmbeddingGradFn::apply] PHASE1: applied=%d weight_requires_grad=%d token_ids=%p weight_grad=%p\n",
-                applied, weight_requires_grad, (void*)token_ids, (void*)weight_grad);
-        fprintf(stdout, "[EmbeddingGradFn::apply] PHASE2: grad_output.data=%p stream=%p\n",
-                (void*)grad_output.data, (void*)stream);
-        fflush(stdout);
+        AG_TRACE("[EmbeddingGradFn::apply] ENTER - tokens=%d d=%d pcgrad=%p\n",
+                num_tokens, d_model, (void*)g_pcgrad_temp_buffer);
         
         // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
         if (applied) {
-            fprintf(stdout, "[EmbeddingGradFn::apply] SKIP - already applied\n");
-            fflush(stdout);
+            AG_TRACE("[EmbeddingGradFn::apply] SKIP - already applied\n");
             return;
         }
         applied = true;
-        fprintf(stdout, "[EmbeddingGradFn::apply] PHASE3: passed applied check\n");
-        fflush(stdout);
         
         if (!weight_requires_grad || !token_ids) {
-            fprintf(stdout, "[EmbeddingGradFn::apply] SKIP - no grad needed (requires_grad=%d, ids=%p)\n",
-                    weight_requires_grad, (void*)token_ids);
-            fflush(stdout);
+            AG_TRACE("[EmbeddingGradFn::apply] SKIP - no grad needed\n");
             return;
         }
-        fprintf(stdout, "[EmbeddingGradFn::apply] PHASE4: passed requires_grad check\n");
-        fflush(stdout);
         
         if (!weight_grad) {
             throw std::runtime_error("EmbeddingGradFn::apply: weight_grad is NULL - capture_weight() must be called first");
         }
-        fprintf(stdout, "[EmbeddingGradFn::apply] PHASE5: passed weight_grad check\n");
-        fflush(stdout);
         
         // ═══════════════════════════════════════════════════════════════════════════
         // ISSUE #60 FIX: PCGrad for tied embedding/lm_head weights
         // ═══════════════════════════════════════════════════════════════════════════
         // Problem: LM head backward and embedding backward produce OPPOSITE gradients!
-        //   LM_HEAD:    wants token 277 to INCREASE (positive gradient)
-        //   EMBEDDING:  wants token 277 to DECREASE (negative gradient)
-        //   COMBINED:   cancels to ZERO!
-        //
         // Solution: PCGrad - project out the conflicting component:
         //   g_final = g_lm + (g_emb - proj_{g_lm}(g_emb))
         //           = g_lm + orthogonal_component(g_emb)
-        //
-        // This preserves the LM head signal while keeping any NOVEL information
-        // from embedding gradient that isn't redundant or conflicting.
         // ═══════════════════════════════════════════════════════════════════════════
         
-        // Embedding shape is [vocab_size, d_model] in BSM layout
-        const int vocab_size = weight_shape.as_2d().rows;
-        fprintf(stdout, "[EmbeddingGradFn::apply] PHASE6: vocab_size=%d about to enter PCGrad check\n", vocab_size);
-        fprintf(stdout, "[EmbeddingGradFn::apply] PHASE6a: g_pcgrad_temp_buffer=%p\n", (void*)g_pcgrad_temp_buffer);
-        fprintf(stdout, "[EmbeddingGradFn::apply] PHASE6b: g_pcgrad_buffer_size=%zu required=%zu\n", 
-                g_pcgrad_buffer_size, static_cast<size_t>(vocab_size) * d_model);
-        fflush(stdout);
+        if (!vocab_size) {
+            throw std::runtime_error("EmbeddingGradFn::apply: vocab_size is 0 — save() was not called or weight_shape is invalid");
+        }
         
         if (g_pcgrad_temp_buffer && g_pcgrad_buffer_size >= static_cast<size_t>(vocab_size) * d_model) {
             // PCGrad mode: compute embedding gradient into temp buffer, then combine
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE7: Inside PCGrad branch\n");
-            fflush(stdout);
-            AG_TRACE("[EmbeddingGradFn] Using PCGrad mode for tied weights\n");
+            AG_TRACE("[EmbeddingGradFn] Using PCGrad mode (vocab=%d d=%d)\n", vocab_size, d_model);
             
             // Step 1: Zero the temp buffer
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE8: About to cudaMemsetAsync (bytes=%zu)\n",
-                    static_cast<size_t>(vocab_size) * d_model * sizeof(float));
-            fflush(stdout);
             cudaMemsetAsync(g_pcgrad_temp_buffer, 0, 
                            static_cast<size_t>(vocab_size) * d_model * sizeof(float), stream);
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE8a: cudaMemsetAsync returned\n");
-            fflush(stdout);
             
-            // Step 2: Compute embedding backward into temp buffer (NOT shared grad buffer)
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9: About to launch kernel_embedding_backward\n");
-            fflush(stdout);
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9-LAUNCH: grid=%d block=%d stream=%p\n", 
-                    num_tokens, AUTOGRAD_BLOCK_SIZE, (void*)stream);
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9-PTRS: grad=%p tokens=%p temp=%p\n",
-                    (void*)grad_output.data, (void*)token_ids, (void*)g_pcgrad_temp_buffer);
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9-DIMS: num_tokens=%d d_model=%d emb_scale=%.4f\n",
-                    num_tokens, d_model, embedding_scale);
-            fflush(stdout);
-            
-            // PHASE9-VALIDATE: Check for invalid token IDs that could cause OOB access
-            {
-                int max_token_id = -1;
-                int min_token_id = INT_MAX;
-                std::vector<int> h_tokens(num_tokens);
-  
-                cudaError_t memcpy_err = cudaMemcpy(h_tokens.data(), token_ids, num_tokens * sizeof(int), cudaMemcpyDeviceToHost);
-                fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9-VALIDATE: cudaMemcpy result=%d (%s)\n",
-                        (int)memcpy_err, cudaGetErrorString(memcpy_err));
-                
-                // Count zeros and show first 20 token IDs
-                int zero_count = 0;
-                fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9-VALIDATE: First 20 token_ids: ");
-                for (int i = 0; i < std::min(20, num_tokens); i++) {
-                    fprintf(stdout, "%d ", h_tokens[i]);
-                    if (h_tokens[i] == 0) zero_count++;
-                }
-                fprintf(stdout, "\n");
-                
-                // Count total zeros
-                for (int i = 0; i < num_tokens; i++) {
-                    if (h_tokens[i] > max_token_id) max_token_id = h_tokens[i];
-                    if (h_tokens[i] < min_token_id) min_token_id = h_tokens[i];
-                    if (h_tokens[i] == 0) zero_count++;
-                }
-                // Subtract double-counted first 20
-                zero_count -= std::min(20, num_tokens);
-                for (int i = 0; i < std::min(20, num_tokens); i++) {
-                    if (h_tokens[i] == 0) zero_count++;
-                }
-                
-                fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9-VALIDATE: token_id range [%d, %d] vs vocab_size=%d\n",
-                        min_token_id, max_token_id, vocab_size);
-                fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9-VALIDATE: zero_count=%d/%d (%.1f%%)\n",
-                        zero_count, num_tokens, 100.0f * zero_count / num_tokens);
-                fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9-VALIDATE: token_ids ptr=%p owns=%s\n",
-                        (void*)token_ids, owns_token_ids ? "true" : "false");
-                fflush(stdout);
-                
-                if (max_token_id >= vocab_size || min_token_id < 0) {
-                    fprintf(stderr, "[EmbeddingGradFn] FATAL: Token ID out of bounds! max=%d min=%d vocab=%d\n",
-                            max_token_id, min_token_id, vocab_size);
-                    fflush(stderr);
-                    return;
-                }
-                
-                // NEW: Warn if ALL tokens are zero - likely memory corruption
-                if (min_token_id == 0 && max_token_id == 0) {
-                    fprintf(stderr, "[EmbeddingGradFn] WARNING: ALL token IDs are 0! Possible causes:\n");
-                    fprintf(stderr, "  1. token_ids buffer was never populated (check forward pass)\n");
-                    fprintf(stderr, "  2. token_ids pointer changed after save() (check owns_token_ids=%s)\n", 
-                            owns_token_ids ? "true" : "false");
-                    fprintf(stderr, "  3. Memory corruption from earlier CUDA error\n");
-                    fflush(stderr);
-                }
-            }
-            
-            // CRITICAL: Check for pre-existing CUDA errors from PREVIOUS kernels
-            // CUDA errors are sticky - an error from an earlier kernel persists until checked
+            // RULE 20: Check for pre-existing CUDA errors (sticky errors from earlier kernels)
             cudaError_t pre_check = cudaGetLastError();
             if (pre_check != cudaSuccess) {
-                fprintf(stderr, "[EmbeddingGradFn] FATAL: Pre-existing CUDA error before kernel launch: %d (%s)\n",
-                        (int)pre_check, cudaGetErrorString(pre_check));
-                fprintf(stderr, "  This error came from a PREVIOUS kernel, not embedding_backward!\n");
-                fflush(stderr);
-                // Force sync to surface the actual error location
-                cudaDeviceSynchronize();
-                return;  // Don't proceed with corrupted state
+                std::string msg = std::string("[EmbeddingGradFn] Pre-existing CUDA error before kernel launch: ")
+                    + cudaGetErrorString(pre_check);
+                EmitModuleError(ModuleId::Autograd, msg);
+                throw std::runtime_error(msg);
             }
             
+            // Step 2: Compute embedding backward into temp buffer (NOT shared grad buffer)
             kernel_embedding_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-                grad_output.data, token_ids, g_pcgrad_temp_buffer, num_tokens, d_model, embedding_scale);
+                grad_output.data, token_ids, g_pcgrad_temp_buffer, num_tokens, d_model, vocab_size, embedding_scale);
             
-            // Immediate error check BEFORE trackKernelLaunch
             cudaError_t launch_err = cudaGetLastError();
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9a: kernel launched, cudaGetLastError=%d (%s)\n",
-                    (int)launch_err, cudaGetErrorString(launch_err));
-            fflush(stdout);
-            
             if (launch_err != cudaSuccess) {
-                fprintf(stderr, "[EmbeddingGradFn] FATAL: kernel_embedding_backward launch failed: %s\n",
-                        cudaGetErrorString(launch_err));
-                fflush(stderr);
-                return;  // Don't crash, just exit apply()
+                std::string msg = std::string("[EmbeddingGradFn] kernel_embedding_backward launch failed: ")
+                    + cudaGetErrorString(launch_err);
+                EmitModuleError(ModuleId::Autograd, msg);
+                throw std::runtime_error(msg);
             }
-            
-            // PHASE9a-SYNC: Force sync to catch kernel execution errors (not just launch errors)
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9a-SYNC: Syncing to catch kernel errors...\n");
-            fflush(stdout);
-            cudaError_t sync_err = cudaStreamSynchronize(stream);
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9a-SYNC: sync returned %d (%s)\n",
-                    (int)sync_err, cudaGetErrorString(sync_err));
-            fflush(stdout);
-            
-            if (sync_err != cudaSuccess) {
-                fprintf(stderr, "[EmbeddingGradFn] FATAL: kernel_embedding_backward execution failed: %s\n",
-                        cudaGetErrorString(sync_err));
-                fflush(stderr);
-                return;
-            }
-            
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9b: about to call trackKernelLaunch\n");
-            fflush(stdout);
             trackKernelLaunch("kernel_embedding_backward_pcgrad", stream);
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE9c: trackKernelLaunch returned\n");
-            fflush(stdout);
             
             // ISSUE #60 DEBUG: Capture RAW embedding gradient BEFORE PCGrad projection
-            // Need sync to ensure kernel completes before capture
-            fprintf(stdout, "[EmbeddingGradFn] PCGrad: embedding backward kernel launched, checking debug capture...\n");
-            fprintf(stdout, "  g_debug_capture_enabled=%d g_debug_embedding_only_grad=%p\n",
-                    g_debug_capture_enabled, (void*)g_debug_embedding_only_grad);
-            fflush(stdout);
-            
             if (g_debug_capture_enabled && g_debug_embedding_only_grad) {
-                cudaStreamSynchronize(stream);  // Ensure embedding backward completes
+                cudaStreamSynchronize(stream);
                 const size_t total_size = weight_shape.total_elements();
-                fprintf(stdout, "[EmbeddingGradFn] DEBUG: Capturing raw emb grad from pcgrad_temp (size=%zu, vocab=%d, d=%d, tokens=%d)\n",
-                        total_size, vocab_size, d_model, num_tokens);
-                fflush(stdout);
-                
-                // Sample a few values from pcgrad_temp to verify it's not empty
-                float sample[5];
-                cudaMemcpy(sample, g_pcgrad_temp_buffer + 277 * d_model, 5 * sizeof(float), cudaMemcpyDeviceToHost);
-                fprintf(stdout, "[EmbeddingGradFn] Token 277 first 5 values in pcgrad_temp: [%.6e, %.6e, %.6e, %.6e, %.6e]\n",
-                        sample[0], sample[1], sample[2], sample[3], sample[4]);
-                fflush(stdout);
-                
                 debugCaptureEmbeddingGrad(g_pcgrad_temp_buffer, total_size, stream);
-                fprintf(stdout, "[EmbeddingGradFn] DEBUG: Captured raw embedding gradient (pre-PCGrad)\n");
-                fflush(stdout);
             }
             
             // Step 3: Apply PCGrad - combine LM head grad (in weight_grad) with orthogonal 
             //         component of embedding grad (in temp buffer)
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE10: About to launch kernel_pcgrad_combine\n");
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE10a: vocab_size=%d d_model=%d\n", vocab_size, d_model);
-            fflush(stdout);
             const int shared_mem = 2 * ((AUTOGRAD_BLOCK_SIZE / 32) + 1) * sizeof(float);
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE10b: shared_mem=%d blocks=%d threads=%d\n", 
-                    shared_mem, vocab_size, AUTOGRAD_BLOCK_SIZE);
-            fflush(stdout);
             kernel_pcgrad_combine<<<vocab_size, AUTOGRAD_BLOCK_SIZE, shared_mem, stream>>>(
                 weight_grad, g_pcgrad_temp_buffer, vocab_size, d_model);
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE10c: kernel_pcgrad_combine launched\n");
-            fflush(stdout);
             trackKernelLaunch("kernel_pcgrad_combine", stream);
             
-            fprintf(stdout, "[EmbeddingGradFn] PCGrad combination complete\n");
-            fprintf(stdout, "[EmbeddingGradFn::apply] PHASE11: PCGrad complete, exiting if block\n");
-            fflush(stdout);
+            AG_TRACE("[EmbeddingGradFn] PCGrad combination complete\n");
             
         } else if (g_skip_embedding_backward_for_tied_weights) {
             // Fallback: skip embedding backward entirely (previous fix)
@@ -3984,7 +3444,7 @@ struct EmbeddingGradFn : public GradFn {
         } else {
             // No PCGrad, no skip: run embedding backward normally (will cancel!)
             kernel_embedding_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-                grad_output.data, token_ids, weight_grad, num_tokens, d_model, embedding_scale);
+                grad_output.data, token_ids, weight_grad, num_tokens, d_model, vocab_size, embedding_scale);
             trackKernelLaunch("kernel_embedding_backward", stream);
             
             // DEBUG: Capture embedding gradient (non-PCGrad path)
@@ -3998,7 +3458,7 @@ struct EmbeddingGradFn : public GradFn {
         if (weight_grad_fn) {
             Tensor view;
             view.data = weight_grad; view.shape = weight_shape;
-            view.owns_data = false; view.owns_grad_fn = false; view.stream = stream;
+            view.owns_data = false; view.stream = stream;
             weight_grad_fn->apply(view, stream);
             weight_grad_fn->release_saved();
         }
@@ -4008,8 +3468,7 @@ struct EmbeddingGradFn : public GradFn {
         GradFn::release_saved();
         if (owns_token_ids && token_ids) { cudaFree(token_ids); token_ids = nullptr; }
         weight_grad = nullptr;
-        // ISSUE #50: Set ownership false BEFORE delete
-        if (owns_weight_grad_fn && weight_grad_fn) { owns_weight_grad_fn = false; delete weight_grad_fn; weight_grad_fn = nullptr; }
+        weight_grad_fn.reset();
     }
 };
 
@@ -4026,7 +3485,7 @@ struct LogSoftmaxGradFn : public GradFn {
     float* input_grad = nullptr;
     bool owns_input_grad = false;
     TensorContract::TensorShape input_shape;
-    GradFn* input_grad_fn = nullptr;
+    std::shared_ptr<GradFn> input_grad_fn;
     float* saved_log_softmax = nullptr;  // Saved log-probabilities from forward
     bool owns_saved_log_softmax = true;  // OOM FIX: false when borrowing from NLLLossGradFn
     int num_tokens = 0;
@@ -4035,30 +3494,16 @@ struct LogSoftmaxGradFn : public GradFn {
     LogSoftmaxGradFn() { op_name = "log_softmax"; }
 
     ~LogSoftmaxGradFn() override {
-        fprintf(stderr, "[LogSoftmaxGradFn] DTOR ENTER: this=%p saved=%p input_grad=%p(owns=%d) input_grad_fn=%p(owns=%d)\n",
-                (void*)this, (void*)saved_log_softmax, (void*)input_grad, (int)owns_input_grad,
-                (void*)input_grad_fn, (int)owns_input_grad_fn);
-        fflush(stderr);
-        if (owns_saved_log_softmax && saved_log_softmax) { fprintf(stderr, "[LogSoftmaxGradFn] DTOR: freeing saved_log_softmax=%p\n", (void*)saved_log_softmax); fflush(stderr); cudaFree(saved_log_softmax); }
-        else if (saved_log_softmax) { fprintf(stderr, "[LogSoftmaxGradFn] DTOR: saved_log_softmax=%p NOT freed (borrowed)\n", (void*)saved_log_softmax); fflush(stderr); }
-        if (owns_input_grad && input_grad) { fprintf(stderr, "[LogSoftmaxGradFn] DTOR: freeing input_grad=%p\n", (void*)input_grad); fflush(stderr); cudaFree(input_grad); input_grad = nullptr; }
-        if (owns_input_grad_fn && input_grad_fn) { fprintf(stderr, "[LogSoftmaxGradFn] DTOR: deleting input_grad_fn=%p\n", (void*)input_grad_fn); fflush(stderr); delete input_grad_fn; input_grad_fn = nullptr; }
-        fprintf(stderr, "[LogSoftmaxGradFn] DTOR EXIT\n");
-        fflush(stderr);
+        if (owns_saved_log_softmax && saved_log_softmax) { cudaFree(saved_log_softmax); }
+        if (owns_input_grad && input_grad) { cudaFree(input_grad); input_grad = nullptr; }
     }
-
-    bool owns_input_grad_fn = false;
 
     void capture_input(Tensor& x) {
         input_requires_grad = x.requires_grad;
         input_shape = x.shape;
 
-        // Take ownership of captured grad_fn (ISSUE #50 pattern)
+        // Copy shared_ptr to captured grad_fn
         input_grad_fn = x.grad_fn;
-        if (x.grad_fn && x.owns_grad_fn) {
-            owns_input_grad_fn = true;
-            x.owns_grad_fn = false;
-        }
 
         if (input_requires_grad) {
             // OOM FIX: Check tensor's grad buffer FIRST, only allocate if missing.
@@ -4135,7 +3580,6 @@ struct LogSoftmaxGradFn : public GradFn {
             view.data = input_grad;
             view.shape = input_shape;
             view.owns_data = false;
-            view.owns_grad_fn = false;
             view.stream = stream;
             input_grad_fn->apply(view, stream);
             input_grad_fn->release_saved();
@@ -4148,11 +3592,7 @@ struct LogSoftmaxGradFn : public GradFn {
         else { saved_log_softmax = nullptr; }  // Clear borrowed pointer without freeing
         if (owns_input_grad && input_grad) { cudaFree(input_grad); input_grad = nullptr; }
         owns_input_grad = false;
-        if (owns_input_grad_fn && input_grad_fn) {
-            owns_input_grad_fn = false;
-            delete input_grad_fn;
-            input_grad_fn = nullptr;
-        }
+        input_grad_fn.reset();
     }
 };
 
@@ -4167,8 +3607,7 @@ struct DropoutGradFn : public GradFn {
     float* input_grad = nullptr;
     bool owns_input_grad = false;  // ISSUE #133: Track if we own the buffer
     TensorContract::TensorShape input_shape;
-    GradFn* input_grad_fn = nullptr;
-    bool owns_input_grad_fn = false;  // ISSUE #50: Take ownership to prevent use-after-free
+    std::shared_ptr<GradFn> input_grad_fn;
     uint8_t* saved_mask = nullptr;  // Binary mask from forward
     float scale = 1.0f;             // 1.0 / (1.0 - dropout_prob)
     size_t count = 0;
@@ -4179,20 +3618,14 @@ struct DropoutGradFn : public GradFn {
         if (saved_mask) cudaFree(saved_mask);
         // ISSUE #133: Free owned gradient buffer
         if (owns_input_grad && input_grad) { cudaFree(input_grad); input_grad = nullptr; }
-        // ISSUE #50: Delete owned grad_fn to complete the chain cleanup
-        if (owns_input_grad_fn && input_grad_fn) { delete input_grad_fn; input_grad_fn = nullptr; }
     }
     
     void capture_input(Tensor& x) {
         input_requires_grad = x.requires_grad;
         input_shape = x.shape;
         
-        // ISSUE #50 FIX: Take ownership of captured grad_fn to prevent use-after-free
+        // Copy shared_ptr to captured grad_fn
         input_grad_fn = x.grad_fn;
-        if (x.grad_fn && x.owns_grad_fn) {
-            owns_input_grad_fn = true;
-            x.owns_grad_fn = false;  // Transfer ownership to us
-        }
         
         // ISSUE #133 FIX: Allocate our OWN gradient buffer (same as Issue #126 for RMSNormGradFn)
         // The input tensor x may be destroyed before backward() runs, so we can't borrow its buffer
@@ -4238,7 +3671,7 @@ struct DropoutGradFn : public GradFn {
         if (input_grad_fn) {
             Tensor view;
             view.data = input_grad; view.shape = input_shape;
-            view.owns_data = false; view.owns_grad_fn = false; view.stream = stream;
+            view.owns_data = false; view.stream = stream;
             input_grad_fn->apply(view, stream);
             input_grad_fn->release_saved();
         }
@@ -4250,8 +3683,7 @@ struct DropoutGradFn : public GradFn {
         // ISSUE #133: Free owned gradient buffer
         if (owns_input_grad && input_grad) { cudaFree(input_grad); owns_input_grad = false; }
         input_grad = nullptr;
-        // ISSUE #50: Set ownership false BEFORE delete
-        if (owns_input_grad_fn && input_grad_fn) { owns_input_grad_fn = false; delete input_grad_fn; input_grad_fn = nullptr; }
+        input_grad_fn.reset();
     }
 };
 
@@ -4278,19 +3710,11 @@ struct ResidualAddGradFn : public GradFn {
     std::shared_ptr<float> owned_residual_grad;
     TensorContract::TensorShape input_shape;
     TensorContract::TensorShape residual_shape;
-    GradFn* input_grad_fn = nullptr;
-    GradFn* residual_grad_fn = nullptr;
-    bool owns_input_grad_fn = false;     // ISSUE #50: Take ownership to prevent use-after-free
-    bool owns_residual_grad_fn = false;
+    std::shared_ptr<GradFn> input_grad_fn;
+    std::shared_ptr<GradFn> residual_grad_fn;
     size_t element_count = 0;
     
     ResidualAddGradFn() { op_name = "residual_add"; }
-    
-    ~ResidualAddGradFn() {
-        // ISSUE #50: Delete owned grad_fns to complete the chain cleanup
-        if (owns_input_grad_fn && input_grad_fn) { delete input_grad_fn; input_grad_fn = nullptr; }
-        if (owns_residual_grad_fn && residual_grad_fn) { delete residual_grad_fn; residual_grad_fn = nullptr; }
-    }
     
     void capture_inputs(Tensor& x, Tensor& r, cudaStream_t stream) {
         input_requires_grad = x.requires_grad;
@@ -4298,17 +3722,9 @@ struct ResidualAddGradFn : public GradFn {
         input_shape = x.shape;
         residual_shape = r.shape;
         
-        // ISSUE #50 FIX: Take ownership of captured grad_fns to prevent use-after-free
+        // Copy shared_ptrs to captured grad_fns
         input_grad_fn = x.grad_fn;
-        if (x.grad_fn && x.owns_grad_fn) {
-            owns_input_grad_fn = true;
-            x.owns_grad_fn = false;  // Transfer ownership to us
-        }
         residual_grad_fn = r.grad_fn;
-        if (r.grad_fn && r.owns_grad_fn) {
-            owns_residual_grad_fn = true;
-            r.owns_grad_fn = false;  // Transfer ownership to us
-        }
         
         element_count = x.numel();
         
@@ -4369,14 +3785,14 @@ struct ResidualAddGradFn : public GradFn {
         if (input_requires_grad && input_grad_fn) {
             Tensor view;
             view.data = input_grad; view.shape = input_shape;
-            view.owns_data = false; view.owns_grad_fn = false; view.stream = stream;
+            view.owns_data = false; view.stream = stream;
             input_grad_fn->apply(view, stream);
             input_grad_fn->release_saved();
         }
         if (residual_requires_grad && residual_grad_fn && residual_grad_fn != input_grad_fn) {
             Tensor view;
             view.data = residual_grad; view.shape = residual_shape;
-            view.owns_data = false; view.owns_grad_fn = false; view.stream = stream;
+            view.owns_data = false; view.stream = stream;
             residual_grad_fn->apply(view, stream);
             residual_grad_fn->release_saved();
         }
@@ -4386,9 +3802,8 @@ struct ResidualAddGradFn : public GradFn {
         GradFn::release_saved();
         input_grad = nullptr;
         residual_grad = nullptr;
-        // ISSUE #50: Set ownership false BEFORE delete
-        if (owns_input_grad_fn && input_grad_fn) { owns_input_grad_fn = false; delete input_grad_fn; input_grad_fn = nullptr; }
-        if (owns_residual_grad_fn && residual_grad_fn) { owns_residual_grad_fn = false; delete residual_grad_fn; residual_grad_fn = nullptr; }
+        input_grad_fn.reset();
+        residual_grad_fn.reset();
     }
 };
 
@@ -4423,10 +3838,9 @@ Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream) {
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
     if (result.requires_grad) {
         result.is_leaf = false;
-        auto* grad_fn = new AddGradFn();
+        auto grad_fn = std::make_shared<AddGradFn>();
         grad_fn->capture_inputs(const_cast<Tensor&>(a), const_cast<Tensor&>(b), stream);  // ISSUE #56 FIX
         result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;  // ISSUE #54 FIX: Result owns its grad_fn
     }
     
     return result;
@@ -4482,11 +3896,10 @@ Tensor broadcast_add(const Tensor& input, const Tensor& bias, cudaStream_t strea
     // Set up backward - ISSUE #97: This was missing for encoder biases!
     if (result.requires_grad) {
         result.is_leaf = false;
-        auto* grad_fn = new BiasAddGradFn();
+        auto grad_fn = std::make_shared<BiasAddGradFn>();
         grad_fn->capture_inputs(const_cast<Tensor&>(input), const_cast<Tensor&>(bias), 
                                 total_tokens, features, stream);
         result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;  // ISSUE #54 FIX: Result owns its grad_fn
     }
     
     AG_TRACE("[autograd::broadcast_add] input[%d,%d] + bias[%d] -> output[%d,%d] requires_grad=%d\n",
@@ -4537,14 +3950,13 @@ Tensor gelu(const Tensor& x, cudaStream_t stream, const float* input_cache) {
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
     if (x.requires_grad) {
         result.is_leaf = false;
-        auto* grad_fn = new GeluGradFn();
+        auto grad_fn = std::make_shared<GeluGradFn>();
         grad_fn->capture_input(const_cast<Tensor&>(x), stream);
         
         // ISSUE #51 FIX: Copy cache to owned buffer
         const float* effective_cache = input_cache ? input_cache : x.data;
         grad_fn->set_cache_copy(effective_cache, count, stream);
         result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;  // ISSUE #54 FIX: Result owns its grad_fn
     }
     
     return result;
@@ -4661,14 +4073,13 @@ Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, cudaStream_t st
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
     if (result.requires_grad) {
         result.is_leaf = false;
-        auto* grad_fn = new RMSNormGradFn();
+        auto grad_fn = std::make_shared<RMSNormGradFn>();
         grad_fn->capture_inputs(const_cast<Tensor&>(x), const_cast<Tensor&>(gamma), stream);  // ISSUE #126: pass stream
         
         // ISSUE #51 FIX: Copy cache to owned buffer
         const float* effective_cache = input_cache ? input_cache : x.data;
         grad_fn->set_cache_copy(effective_cache, static_cast<size_t>(tokens) * d_model, d_model, eps, stream);
         result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;  // ISSUE #54 FIX: Result owns its grad_fn
     }
     
     return result;
@@ -4701,18 +4112,19 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cud
     
     // Forward: gather from weight table with scaling
     // Issue #92: Scale by sqrt(d_model) to match AIAYN-style embeddings
+    const int vocab_size = weight.shape.as_2d().rows;
     kernel_embedding_forward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        token_ids, weight.data, result.data, num_tokens, d_model, embedding_scale);
+        token_ids, weight.data, result.data, num_tokens, d_model, vocab_size, embedding_scale);
     
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
     if (weight.requires_grad) {
         result.is_leaf = false;
-        auto* grad_fn = new EmbeddingGradFn();
+        auto grad_fn = std::make_shared<EmbeddingGradFn>();
         grad_fn->capture_weight(const_cast<Tensor&>(weight));
         grad_fn->save(token_ids, num_tokens, d_model, true, stream);
-        grad_fn->embedding_scale = embedding_scale;  // Store for backward scaling
+        grad_fn->vocab_size = vocab_size;             // RULE 20: Store for backward OOB checking
+        grad_fn->embedding_scale = embedding_scale;   // Store for backward scaling
         result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;  // ISSUE #54 FIX: Result owns its grad_fn
     }
     
     return result;
@@ -4741,16 +4153,13 @@ Tensor log_softmax(const Tensor& x, cudaStream_t stream, bool save_output_copy) 
     // Set up backward — save log-probabilities for exact gradient computation
     if (x.requires_grad) {
         result.is_leaf = false;
-        auto* grad_fn = new LogSoftmaxGradFn();
+        auto grad_fn = std::make_shared<LogSoftmaxGradFn>();
         grad_fn->capture_input(const_cast<Tensor&>(x));
         // OOM FIX: When save_output_copy=false (used by unified_loss), store
         // non-owning reference instead of copying 1.37GB. NLLLossGradFn owns
         // the same data and guarantees lifetime through backward.
-        fprintf(stderr, "[log_softmax] save_output_copy=%d result.data=%p\n", (int)save_output_copy, (void*)result.data);
-        fflush(stderr);
         grad_fn->save(result.data, num_tokens, dim, stream, save_output_copy);
         result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;
     }
 
     return result;
@@ -4766,10 +4175,9 @@ Tensor dropout(const Tensor& x, float p, bool training, const uint8_t* mask, cud
         if (x.requires_grad) {
             result.is_leaf = false;
             // Identity backward - ISSUE #48: capture stable data
-            auto* grad_fn = new AddGradFn();
+            auto grad_fn = std::make_shared<AddGradFn>();
             grad_fn->capture_single_input(const_cast<Tensor&>(x), stream);  // ISSUE #56 FIX
             result.grad_fn = grad_fn;
-            result.owns_grad_fn = true;  // ISSUE #54 FIX: Result owns its grad_fn
         }
         return result;
     }
@@ -4790,11 +4198,10 @@ Tensor dropout(const Tensor& x, float p, bool training, const uint8_t* mask, cud
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
     if (x.requires_grad) {
         result.is_leaf = false;
-        auto* grad_fn = new DropoutGradFn();
+        auto grad_fn = std::make_shared<DropoutGradFn>();
         grad_fn->capture_input(const_cast<Tensor&>(x));
         grad_fn->save(mask, p, count, stream);
         result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;  // ISSUE #54 FIX: Result owns its grad_fn
     }
     
     return result;
@@ -4819,10 +4226,9 @@ Tensor dropout(const Tensor& x, float p, uint64_t seed, bool training, cudaStrea
         
         if (x.requires_grad) {
             result.is_leaf = false;
-            auto* grad_fn = new AddGradFn();
+            auto grad_fn = std::make_shared<AddGradFn>();
             grad_fn->capture_single_input(const_cast<Tensor&>(x), stream);
             result.grad_fn = grad_fn;
-            result.owns_grad_fn = true;
         }
         return result;
     }
@@ -4848,12 +4254,11 @@ Tensor dropout(const Tensor& x, float p, uint64_t seed, bool training, cudaStrea
     // Set up backward - ISSUE #48: capture stable data
     if (x.requires_grad) {
         result.is_leaf = false;
-        auto* grad_fn = new DropoutGradFn();
+        auto grad_fn = std::make_shared<DropoutGradFn>();
         grad_fn->capture_input(const_cast<Tensor&>(x));
         // save() copies the mask and takes ownership - we must free our copy
         grad_fn->save(mask, p, count, stream);
         result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;
     }
     
     // Free our mask copy (DropoutGradFn::save() made its own copy)
@@ -4880,43 +4285,15 @@ Tensor residual_add(const Tensor& x, const Tensor& residual, cudaStream_t stream
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
     if (result.requires_grad) {
         result.is_leaf = false;
-        auto* grad_fn = new ResidualAddGradFn();
+        auto grad_fn = std::make_shared<ResidualAddGradFn>();
         grad_fn->capture_inputs(const_cast<Tensor&>(x), const_cast<Tensor&>(residual), stream);  // ISSUE #56 FIX
         result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;  // ISSUE #54 FIX: Result owns its grad_fn
     }
     
     return result;
 }
 
-/**
- * autograd::scale - Scale tensor by constant scalar with gradient tracking
- * Forward: y = x * scale_factor
- * Backward: grad_x = grad_y * scale_factor (chain rule)
- *
- * ISSUE #98: Added to fix gradient vanishing when tie_embeddings=true.
- * When embeddings are scaled by sqrt(d_model) (Issue #92), the LM head
- * must also scale by sqrt(d_model) to maintain gradient flow symmetry.
- */
-Tensor scale(const Tensor& x, float scale_factor, cudaStream_t stream) {
-    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "scale_result");
-    
-    // Forward: y = x * scale_factor
-    TensorContract::TensorView x_view(const_cast<float*>(x.data), x.shape);
-    TensorContract::TensorView out_view(result.data, result.shape);
-    TensorContract::scale(x_view, scale_factor, out_view, stream);
-    
-    // Set up backward
-    if (x.requires_grad) {
-        result.is_leaf = false;
-        auto* grad_fn = new ScaleGradFn();
-        grad_fn->capture_input(const_cast<Tensor&>(x), scale_factor, stream);
-        result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;
-    }
-    
-    return result;
-}
+// autograd::scale() DELETED — dead code from reverted Issue #98 (Rule 20)
 
 /**
  * layer_scale - Element-wise multiply by learnable scalar (Issue #109)
@@ -4950,10 +4327,9 @@ Tensor layer_scale(const Tensor& x, Tensor& scale_param, cudaStream_t stream) {
     // Set up backward
     if (track_grad) {
         result.is_leaf = false;
-        auto* grad_fn = new LayerScaleGradFn();
+        auto grad_fn = std::make_shared<LayerScaleGradFn>();
         grad_fn->capture_inputs(const_cast<Tensor&>(x), scale_param, stream);
         result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;
     }
     
     return result;
@@ -4996,10 +4372,9 @@ Tensor center_rows(const Tensor& x, cudaStream_t stream) {
     // Set up backward
     if (track_grad) {
         result.is_leaf = false;
-        auto* grad_fn = new CenterRowsGradFn();
+        auto grad_fn = std::make_shared<CenterRowsGradFn>();
         grad_fn->capture_input(const_cast<Tensor&>(x), row_dim, num_rows, stream);
         result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;
     }
     
     return result;
@@ -5053,10 +4428,9 @@ Tensor center_columns(const Tensor& x, cudaStream_t stream) {
     // Set up backward
     if (track_grad) {
         result.is_leaf = false;
-        auto* grad_fn = new CenterColumnsGradFn();
+        auto grad_fn = std::make_shared<CenterColumnsGradFn>();
         grad_fn->capture_input(const_cast<Tensor&>(x), num_cols, num_rows, stream);
         result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;
     }
     
     return result;
@@ -5323,10 +4697,8 @@ struct MatMulGradFn : public GradFn {
     
     TensorContract::TensorShape a_shape;  // Shape of A for chain continuation
     TensorContract::TensorShape b_shape;  // Shape of B for chain continuation
-    GradFn* a_grad_fn = nullptr;   // Chain continuation for A
-    GradFn* b_grad_fn = nullptr;   // Chain continuation for B
-    bool owns_a_grad_fn = false;   // ISSUE #50: Take ownership to prevent use-after-free
-    bool owns_b_grad_fn = false;
+    std::shared_ptr<GradFn> a_grad_fn;   // Chain continuation for A
+    std::shared_ptr<GradFn> b_grad_fn;   // Chain continuation for B
     
     // ISSUE #51 FIX: Own copies of cached data to prevent dangling pointers
     // Previously: stored non-owning pointers that became stale when input tensors freed
@@ -5342,18 +4714,7 @@ struct MatMulGradFn : public GradFn {
     
     MatMulGradFn() { op_name = "matmul"; }
     
-    ~MatMulGradFn() {
-        // ISSUE #50: Delete owned grad_fns to complete the chain cleanup
-        if (owns_a_grad_fn && a_grad_fn) {
-            delete a_grad_fn;
-            a_grad_fn = nullptr;
-        }
-        if (owns_b_grad_fn && b_grad_fn) {
-            delete b_grad_fn;
-            b_grad_fn = nullptr;
-        }
-        // shared_ptrs will be destroyed automatically after this
-    }
+    // shared_ptr members destruct automatically
     
     // ISSUE #48 FIX: Store stable info from tensors during forward, before they go out of scope
     // ISSUE #55 FIX: For non-leaf (intermediate) tensors, allocate OWNED grad buffers
@@ -5365,17 +4726,9 @@ struct MatMulGradFn : public GradFn {
         a_shape = a.shape;
         b_shape = b.shape;
         
-        // ISSUE #50 FIX: Take ownership of captured grad_fns to prevent use-after-free
+        // Copy shared_ptrs to captured grad_fns
         a_grad_fn = a.grad_fn;
-        if (a.grad_fn && a.owns_grad_fn) {
-            owns_a_grad_fn = true;
-            a.owns_grad_fn = false;  // Transfer ownership to us
-        }
         b_grad_fn = b.grad_fn;
-        if (b.grad_fn && b.owns_grad_fn) {
-            owns_b_grad_fn = true;
-            b.owns_grad_fn = false;  // Transfer ownership to us
-        }
         
         // ISSUE #55 FIX: Handle grad buffer ownership based on tensor type
         // - Leaf tensors (weights): persist in TrainingState, use their grad buffer directly
@@ -5793,97 +5146,37 @@ struct MatMulGradFn : public GradFn {
             if (g_debug_capture_enabled && N > 10000 && K < 2000) {
                 debugCaptureLMHeadGrad(grad_b, static_cast<size_t>(N) * K, stream);
                 AG_TRACE("[MatMulGradFn] DEBUG: Captured LM head grad, N=%d K=%d\n", N, K);
-                fflush(stderr);
             }
         }
 
         // If LM head centering was applied outside autograd,
         // correct grad_A before passing it to the encoder backward chain.
-        fprintf(stderr, "[MATMUL-CHAIN] Before applyLmHeadGradCorrections check: a_requires_grad=%d transpose_b=%d N=%d\n",
-                a_requires_grad ? 1 : 0, transpose_b ? 1 : 0, N);
-        fflush(stderr);
-        
         if (a_requires_grad && transpose_b && N > 10000) {
-            fprintf(stderr, "[MATMUL-CHAIN] CALLING applyLmHeadGradCorrections...\n");
-            fflush(stderr);
-            applyLmHeadGradCorrections(
-                grad_a,
-                M,
-                K,
-                stream);
-            fprintf(stderr, "[MATMUL-CHAIN] applyLmHeadGradCorrections RETURNED\n");
-            fflush(stderr);
+            applyLmHeadGradCorrections(grad_a, M, K, stream);
         }
 
         // CONTINUE AUTOGRAD CHAIN (Recursive) - ISSUE #48 FIX: Use stored grad_fn pointers
-        fprintf(stderr, "[MATMUL-CHAIN] Before autograd chain: a_requires_grad=%d a_grad_fn=%p\n",
-                a_requires_grad ? 1 : 0, (void*)a_grad_fn);
-        fflush(stderr);
-        
         if (a_requires_grad && a_grad_fn) {
-            fprintf(stderr, "[MATMUL-CHAIN] a_grad_fn->op_name=%s\n", 
-                    a_grad_fn->op_name ? a_grad_fn->op_name : "NULL");
-            fflush(stderr);
-            
             if (a_grad_fn->op_name) {
                 Tensor view;
                 view.data = grad_a; view.shape = a_shape;
-                view.owns_data = false; view.owns_grad_fn = false; view.stream = stream;
-                
-                fprintf(stderr, "[MATMUL-CHAIN] About to sync stream (this may hang if kernel failed)...\n");
-                fflush(stderr);
-                
-                // DIAGNOSTIC: Log grad_a that we're passing to next grad_fn
-                {
-                    cudaError_t pre_sync_err = cudaGetLastError();
-                    fprintf(stderr, "[MATMUL-CHAIN] Pre-sync cudaGetLastError: %d (%s)\n",
-                            (int)pre_sync_err, cudaGetErrorString(pre_sync_err));
-                    fflush(stderr);
-                    
-                    cudaError_t sync_err = cudaStreamSynchronize(stream);
-                    fprintf(stderr, "[MATMUL-CHAIN] cudaStreamSynchronize returned: %d (%s)\n",
-                            (int)sync_err, cudaGetErrorString(sync_err));
-                    fflush(stderr);
-                    
-                    const size_t grad_elems = view.numel();
-                    std::vector<float> samp(std::min(grad_elems, static_cast<size_t>(10000)));
-                    cudaMemcpy(samp.data(), grad_a, samp.size() * sizeof(float), cudaMemcpyDeviceToHost);
-                    float mx = 0.0f; double sq = 0.0;
-                    for (auto& v : samp) { if (!std::isnan(v) && !std::isinf(v)) { mx = std::max(mx, std::abs(v)); sq += v*v; } }
-                    float rms = std::sqrt(static_cast<float>(sq / samp.size()));
-                    fprintf(stderr, "[MATMUL-BWD-TO-A] op=%s | grad_a: numel=%zu max=%.10f rms=%.10f\n",
-                            a_grad_fn->op_name ? a_grad_fn->op_name : "?", grad_elems, mx, rms);
-                }
-                
-                fprintf(stderr, "[MATMUL-BWD-TO-A] About to call a_grad_fn->apply(), ptr=%p op=%s\n",
-                        (void*)a_grad_fn, a_grad_fn->op_name ? a_grad_fn->op_name : "NULL");
-                fflush(stderr);
+                view.owns_data = false; view.stream = stream;
                 
                 // ISSUE #127: Validate GradFn to detect use-after-free
                 {
-                    // On MSVC debug heap, freed memory is filled with 0xDD or 0xFEEE patterns
-                    // Check if the vtable pointer looks valid (not freed pattern)
-                    void** vtable_ptr = *(void***)a_grad_fn;
-                    fprintf(stderr, "[MATMUL-BWD-TO-A] vtable_ptr=%p\n", (void*)vtable_ptr);
-                    
-                    // Check for common freed memory patterns
+                    void** vtable_ptr = *(void***)a_grad_fn.get();
                     uint64_t vtable_value = (uint64_t)vtable_ptr;
                     if (vtable_value == 0xDDDDDDDDDDDDDDDDull ||
                         vtable_value == 0xFEEEFEEEFEEEFEEEull ||
                         vtable_value == 0xCDCDCDCDCDCDCDCDull ||
                         vtable_value == 0x0000000000000000ull) {
-                        fprintf(stderr, "[MATMUL-BWD-TO-A] ERROR: vtable pointer looks like freed memory! value=0x%llx\n",
-                                (unsigned long long)vtable_value);
-                        fflush(stderr);
-                        throw std::runtime_error("Use-after-free detected: a_grad_fn vtable is corrupted");
+                        throw std::runtime_error("Use-after-free detected: a_grad_fn vtable is corrupted (value=0x" +
+                            std::to_string(vtable_value) + ", op=" +
+                            std::string(a_grad_fn->op_name ? a_grad_fn->op_name : "NULL") + ")");
                     }
-                    fflush(stderr);
                 }
                 
                 a_grad_fn->apply(view, stream);
-                
-                fprintf(stderr, "[MATMUL-BWD-TO-A] a_grad_fn->apply() returned\n");
-                fflush(stderr);
                 // ISSUE #52 FIX: Do NOT call release_saved() here - cudaFree blocks while GPU busy
             }
         }
@@ -5891,7 +5184,7 @@ struct MatMulGradFn : public GradFn {
             if (b_grad_fn->op_name) {
                 Tensor view;
                 view.data = grad_b; view.shape = b_shape;
-                view.owns_data = false; view.owns_grad_fn = false; view.stream = stream;
+                view.owns_data = false; view.stream = stream;
                 b_grad_fn->apply(view, stream);
                 // ISSUE #52 FIX: Do NOT call release_saved() here - cudaFree blocks while GPU busy
             }
@@ -5905,9 +5198,8 @@ struct MatMulGradFn : public GradFn {
         cached_b = nullptr;
         grad_a = nullptr;
         grad_b = nullptr;
-        // ISSUE #50: Set ownership false BEFORE delete
-        if (owns_a_grad_fn && a_grad_fn) { owns_a_grad_fn = false; delete a_grad_fn; a_grad_fn = nullptr; }
-        if (owns_b_grad_fn && b_grad_fn) { owns_b_grad_fn = false; delete b_grad_fn; b_grad_fn = nullptr; }
+        a_grad_fn.reset();
+        b_grad_fn.reset();
     }
 };
 
@@ -6044,7 +5336,7 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
     // Set up backward (TAPE-BASED)
     if (result.requires_grad) {
         result.is_leaf = false;
-        auto* grad_fn = new MatMulGradFn();
+        auto grad_fn = std::make_shared<MatMulGradFn>();
         
         // ISSUE #48 FIX: Capture stable data from tensors NOW, before they go out of scope
         // Don't store Tensor* - the tensors may be stack variables that become dangling
@@ -6060,7 +5352,6 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
         
         grad_fn->set_cache_copy(effective_a_cache, effective_b_cache, M, K, N, handle, stream, transpose_b);
         result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;  // ISSUE #54 FIX: Result owns its grad_fn
     }
     
     return result;
@@ -6068,78 +5359,9 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
 
 //======================================================//
 //  BF16 Conversion Kernels (for FlashAttention integration)
-//======================================================//
-
-// Simple FP32 <-> BF16 conversion (same layout)
-__global__ void kernel_fp32_to_bf16(const float* __restrict__ src, 
-                                     __nv_bfloat16* __restrict__ dst, 
-                                     size_t n) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx < n) {
-        dst[idx] = __float2bfloat16(src[idx]);
-    }
-}
-
-__global__ void kernel_bf16_to_fp32(const __nv_bfloat16* __restrict__ src,
-                                     float* __restrict__ dst,
-                                     size_t n) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx < n) {
-        dst[idx] = __bfloat162float(src[idx]);
-    }
-}
-
-// Layout conversion: BHSD (FP32) -> BSHD (BF16)
-// FlashAttention uses BSHD (batch, seq, head, dim) layout
-__global__ void kernel_BHSD_fp32_to_BSHD_bf16(
-    const float* __restrict__ src,   // [B, H, S, D]
-    __nv_bfloat16* __restrict__ dst, // [B, S, H, D]
-    int batch, int heads, int seq_len, int head_dim
-) {
-    const size_t total = static_cast<size_t>(batch) * heads * seq_len * head_dim;
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx >= total) return;
-    
-    // Decode BHSD source index
-    const int d = idx % head_dim;
-    const int s = (idx / head_dim) % seq_len;
-    const int h = (idx / (head_dim * seq_len)) % heads;
-    const int b = idx / (head_dim * seq_len * heads);
-    
-    // Compute BSHD destination index
-    const size_t dst_idx = (static_cast<size_t>(b) * seq_len * heads * head_dim) +
-                           (static_cast<size_t>(s) * heads * head_dim) +
-                           (static_cast<size_t>(h) * head_dim) + d;
-    
-    dst[dst_idx] = __float2bfloat16(src[idx]);
-}
-
-// Layout conversion: BSHD (BF16) -> BHSD (FP32)
-// ISSUE #68 FIX: Correctly compute source index from decoded destination coordinates
-__global__ void kernel_BSHD_bf16_to_BHSD_fp32(
-    const __nv_bfloat16* __restrict__ src, // [B, S, H, D]
-    float* __restrict__ dst,               // [B, H, S, D]
-    int batch, int heads, int seq_len, int head_dim
-) {
-    const size_t total = static_cast<size_t>(batch) * heads * seq_len * head_dim;
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx >= total) return;
-    
-    // Decode BHSD destination index (idx iterates over output layout)
-    const int d = idx % head_dim;
-    const int s = (idx / head_dim) % seq_len;
-    const int h = (idx / (head_dim * seq_len)) % heads;
-    const int b = idx / (head_dim * seq_len * heads);
-    
-    // Compute BSHD source index from (b, s, h, d) coordinates
-    // Source layout: [B, S, H, D] = b*S*H*D + s*H*D + h*D + d
-    const size_t src_idx = (static_cast<size_t>(b) * seq_len * heads * head_dim) +
-                           (static_cast<size_t>(s) * heads * head_dim) +
-                           (static_cast<size_t>(h) * head_dim) + d;
-    
-    // idx is already the BHSD destination index (linear iteration over output)
-    dst[idx] = __bfloat162float(src[src_idx]);
-}
+//  NOTE: Layout conversion kernels (BHSD<->BSHD bf16) live in TensorConversion.cu
+//  Only GQA-specific reduction kernel remains here.
+//======================================================
 
 // ISSUE #72 FIX: Reduce GQA gradients from num_heads to num_kv_heads
 // FlashAttention backward writes dK/dV for each query head separately (12 heads).
@@ -6209,12 +5431,9 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
     float* k_grad = nullptr;
     float* v_grad = nullptr;
     TensorContract::TensorShape q_shape, k_shape, v_shape;
-    GradFn* q_grad_fn = nullptr;
-    GradFn* k_grad_fn = nullptr;
-    GradFn* v_grad_fn = nullptr;
-    bool owns_q_grad_fn = false;  // ISSUE #50: Take ownership to prevent use-after-free
-    bool owns_k_grad_fn = false;
-    bool owns_v_grad_fn = false;
+    std::shared_ptr<GradFn> q_grad_fn;
+    std::shared_ptr<GradFn> k_grad_fn;
+    std::shared_ptr<GradFn> v_grad_fn;
     
     // Saved tensors for backward (in bf16 for FlashAttention)
     __nv_bfloat16* saved_q_bf16 = nullptr;
@@ -6242,14 +5461,14 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
     // ALiBi slopes (pointer to device memory, not owned - do NOT free)
     const float* alibi_slopes = nullptr;
     
+    // Attention dropout (saved for backward to reproduce same mask)
+    float attention_dropout_p = 0.0f;
+    uint64_t dropout_seed = 0;
+    
     ScaledDotProductAttentionGradFn() { op_name = "scaled_dot_product_attention"; }
     
     ~ScaledDotProductAttentionGradFn() override {
         release_saved();
-        // ISSUE #50: Delete owned grad_fns to complete the chain cleanup
-        if (owns_q_grad_fn && q_grad_fn) { delete q_grad_fn; q_grad_fn = nullptr; }
-        if (owns_k_grad_fn && k_grad_fn) { delete k_grad_fn; k_grad_fn = nullptr; }
-        if (owns_v_grad_fn && v_grad_fn) { delete v_grad_fn; v_grad_fn = nullptr; }
     }
     
     void capture_inputs(Tensor& q, Tensor& k, Tensor& v) {
@@ -6260,22 +5479,10 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         k_shape = k.shape;
         v_shape = v.shape;
         
-        // ISSUE #50 FIX: Take ownership of captured grad_fns to prevent use-after-free
+        // Copy shared_ptrs to captured grad_fns
         q_grad_fn = q.grad_fn;
-        if (q.grad_fn && q.owns_grad_fn) {
-            owns_q_grad_fn = true;
-            q.owns_grad_fn = false;  // Transfer ownership to us
-        }
         k_grad_fn = k.grad_fn;
-        if (k.grad_fn && k.owns_grad_fn) {
-            owns_k_grad_fn = true;
-            k.owns_grad_fn = false;
-        }
         v_grad_fn = v.grad_fn;
-        if (v.grad_fn && v.owns_grad_fn) {
-            owns_v_grad_fn = true;
-            v.owns_grad_fn = false;
-        }
         
         if (q_requires_grad) { q.ensure_grad(); q_grad = q.grad_data(); }  // ISSUE #59: Use accessor
         if (k_requires_grad) { k.ensure_grad(); k_grad = k.grad_data(); }  // ISSUE #59: Use accessor
@@ -6328,25 +5535,14 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         cudaMemset(dv_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16));  // ISSUE #72: Zero full buffer
         
         // Convert FP32 BHSD inputs to BF16 BSHD for FlashAttention
-        const int block_size = 256;
-        const int q_blocks = static_cast<int>((q_elems + block_size - 1) / block_size);
-        const int kv_blocks = static_cast<int>((kv_elems + block_size - 1) / block_size);
-        
         // Q: [B, H, S, D] FP32 -> [B, S, H, D] BF16
-        kernel_BHSD_fp32_to_BSHD_bf16<<<q_blocks, block_size, 0, stream>>>(
-            q.data, saved_q_bf16, b, nh, s, hd);
-        
+        TensorConversion::convert_BHSD_to_BSHD_bf16(q.data, saved_q_bf16, b, nh, s, hd, stream);
         // K: [B, Hkv, S, D] FP32 -> [B, S, Hkv, D] BF16
-        kernel_BHSD_fp32_to_BSHD_bf16<<<kv_blocks, block_size, 0, stream>>>(
-            k.data, saved_k_bf16, b, nkv, s, hd);
-        
+        TensorConversion::convert_BHSD_to_BSHD_bf16(k.data, saved_k_bf16, b, nkv, s, hd, stream);
         // V: [B, Hkv, S, D] FP32 -> [B, S, Hkv, D] BF16
-        kernel_BHSD_fp32_to_BSHD_bf16<<<kv_blocks, block_size, 0, stream>>>(
-            v.data, saved_v_bf16, b, nkv, s, hd);
-        
+        TensorConversion::convert_BHSD_to_BSHD_bf16(v.data, saved_v_bf16, b, nkv, s, hd, stream);
         // Output: [B, H, S, D] FP32 -> [B, S, H, D] BF16
-        kernel_BHSD_fp32_to_BSHD_bf16<<<q_blocks, block_size, 0, stream>>>(
-            out.data, saved_out_bf16, b, nh, s, hd);
+        TensorConversion::convert_BHSD_to_BSHD_bf16(out.data, saved_out_bf16, b, nh, s, hd, stream);
     }
     
     void apply(const Tensor& grad_output, cudaStream_t stream) override {
@@ -6419,8 +5615,8 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         }
         
         // Convert grad_output (FP32 BHSD) to BF16 BSHD
-        kernel_BHSD_fp32_to_BSHD_bf16<<<q_blocks, block_size, 0, stream>>>(
-            grad_output.data, dout_bf16, batch_size, num_heads, seq_len, head_dim);
+        TensorConversion::convert_BHSD_to_BSHD_bf16(
+            grad_output.data, dout_bf16, batch_size, num_heads, seq_len, head_dim, stream);
         
         // ISSUE #79 DIAGNOSTIC: Log saved attention output O before FA backward
         // The FA backward computes dP_sum = sum(dO * O), so O magnitude matters
@@ -6463,6 +5659,8 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             head_dim,
             causal,
             true,              // is_bf16
+            attention_dropout_p,  // Same dropout rate as forward
+            dropout_seed,         // Same seed as forward (reproduces identical mask)
             stream
         );
         
@@ -6515,7 +5713,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         }
         
         // =========================================================================
-        // ISSUE #83 REMOVAL: Issue #84 fixed the root cause (missing preprocessing kernel)
+        // ISSUE #83 REMOVAL: Issue #84 (missing preprocessing kernel)
         // =========================================================================
         // The dQ/dK normalization below was a BANDAID for the gradient explosion bug.
         // With Issue #84's preprocessing kernel fix, dQ/dK are now at proper magnitude.
@@ -6536,8 +5734,8 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             cudaMalloc(&grad_q_fp32, q_elems * sizeof(float));
             cudaMemsetAsync(grad_q_fp32, 0, q_elems * sizeof(float), stream);
             
-            kernel_BSHD_bf16_to_BHSD_fp32<<<q_blocks, block_size, 0, stream>>>(
-                dq_bf16, grad_q_fp32, batch_size, num_heads, seq_len, head_dim);
+            TensorConversion::convert_BSHD_bf16_to_BHSD(
+                dq_bf16, grad_q_fp32, batch_size, seq_len, num_heads, head_dim, stream);
             
             // Scale = 1.0 (no normalization - Issue #84 fixed root cause)
             const int acc_blocks = (q_elems + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
@@ -6580,21 +5778,21 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         if (q_requires_grad && q_grad_fn) {
             Tensor q_view;
             q_view.data = q_grad; q_view.shape = q_shape;
-            q_view.owns_data = false; q_view.owns_grad_fn = false; q_view.stream = stream;
+            q_view.owns_data = false; q_view.stream = stream;
             q_grad_fn->apply(q_view, stream);
             q_grad_fn->release_saved();
         }
         if (k_requires_grad && k_grad_fn) {
             Tensor k_view;
             k_view.data = k_grad; k_view.shape = k_shape;
-            k_view.owns_data = false; k_view.owns_grad_fn = false; k_view.stream = stream;
+            k_view.owns_data = false; k_view.stream = stream;
             k_grad_fn->apply(k_view, stream);
             k_grad_fn->release_saved();
         }
         if (v_requires_grad && v_grad_fn) {
             Tensor v_view;
             v_view.data = v_grad; v_view.shape = v_shape;
-            v_view.owns_data = false; v_view.owns_grad_fn = false; v_view.stream = stream;
+            v_view.owns_data = false; v_view.stream = stream;
             v_grad_fn->apply(v_view, stream);
             v_grad_fn->release_saved();
         }
@@ -6614,17 +5812,17 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         if (dv_bf16) { cudaFree(dv_bf16); dv_bf16 = nullptr; }
         if (dout_bf16) { cudaFree(dout_bf16); dout_bf16 = nullptr; }
         q_grad = nullptr; k_grad = nullptr; v_grad = nullptr;
-        // ISSUE #50: Set ownership false BEFORE delete
-        if (owns_q_grad_fn && q_grad_fn) { owns_q_grad_fn = false; delete q_grad_fn; q_grad_fn = nullptr; }
-        if (owns_k_grad_fn && k_grad_fn) { owns_k_grad_fn = false; delete k_grad_fn; k_grad_fn = nullptr; }
-        if (owns_v_grad_fn && v_grad_fn) { owns_v_grad_fn = false; delete v_grad_fn; v_grad_fn = nullptr; }
+        q_grad_fn.reset();
+        k_grad_fn.reset();
+        v_grad_fn.reset();
     }
 };
 
 Tensor scaled_dot_product_attention(
     const Tensor& q, const Tensor& k, const Tensor& v,
     const float* alibi_slopes, float scale, cudaStream_t stream,
-    float* cache_softmax_lse  // NEW: Optional cache for legacy backward
+    bool causal,
+    float attention_dropout_p, uint64_t dropout_seed
 ) {
     // Validate inputs are 4D BHSD layout
     if (!q.shape.is_4d() || !k.shape.is_4d() || !v.shape.is_4d()) {
@@ -6683,16 +5881,12 @@ Tensor scaled_dot_product_attention(
     cudaMalloc(&softmax_lse, lse_elems * sizeof(float));
     
     // Convert FP32 BHSD -> BF16 BSHD
-    const int block_size = 256;
-    const int q_blocks = static_cast<int>((q_elems + block_size - 1) / block_size);
-    const int kv_blocks = static_cast<int>((kv_elems + block_size - 1) / block_size);
-    
-    kernel_BHSD_fp32_to_BSHD_bf16<<<q_blocks, block_size, 0, stream>>>(
-        q.data, q_bf16, batch_size, num_heads, seq_len, head_dim);
-    kernel_BHSD_fp32_to_BSHD_bf16<<<kv_blocks, block_size, 0, stream>>>(
-        k.data, k_bf16, batch_size, num_kv_heads, seq_len, head_dim);
-    kernel_BHSD_fp32_to_BSHD_bf16<<<kv_blocks, block_size, 0, stream>>>(
-        v.data, v_bf16, batch_size, num_kv_heads, seq_len, head_dim);
+    TensorConversion::convert_BHSD_to_BSHD_bf16(
+        q.data, q_bf16, batch_size, num_heads, seq_len, head_dim, stream);
+    TensorConversion::convert_BHSD_to_BSHD_bf16(
+        k.data, k_bf16, batch_size, num_kv_heads, seq_len, head_dim, stream);
+    TensorConversion::convert_BHSD_to_BSHD_bf16(
+        v.data, v_bf16, batch_size, num_kv_heads, seq_len, head_dim, stream);
     
     // Forward pass with FlashAttention
     // Note: FlashAttention expects scale=1/sqrt(d) internally via softmax_scale
@@ -6709,22 +5903,21 @@ Tensor scaled_dot_product_attention(
         num_heads,
         num_kv_heads,
         head_dim,
-        true,        // causal
+        causal,      // Use parameter instead of hardcoded true
         true,        // is_bf16
+        attention_dropout_p, // Attention dropout rate (0.0 = disabled)
+        dropout_seed,        // Per-step Philox seed for reproducible masks
         stream
     );
     
     // Convert BF16 BSHD -> FP32 BHSD for output
-    kernel_BSHD_bf16_to_BHSD_fp32<<<q_blocks, block_size, 0, stream>>>(
-        out_bf16, result.data, batch_size, num_heads, seq_len, head_dim);
-    
-    // cache_softmax_lse is deprecated - autograd backward doesn't need external cache
-    (void)cache_softmax_lse;
+    TensorConversion::convert_BSHD_bf16_to_BHSD(
+        out_bf16, result.data, batch_size, seq_len, num_heads, head_dim, stream);
     
     // Set up backward if needed - ISSUE #48: capture stable data, not Tensor*
     if (requires_grad) {
         result.is_leaf = false;
-        auto* grad_fn = new ScaledDotProductAttentionGradFn();
+        auto grad_fn = std::make_shared<ScaledDotProductAttentionGradFn>();
         
         // ISSUE #48 FIX: Capture stable data instead of storing dangling Tensor*
         grad_fn->capture_inputs(const_cast<Tensor&>(q), const_cast<Tensor&>(k), const_cast<Tensor&>(v));
@@ -6740,8 +5933,10 @@ Tensor scaled_dot_product_attention(
         grad_fn->num_heads = num_heads;
         grad_fn->num_kv_heads = num_kv_heads;
         grad_fn->head_dim = head_dim;
-        grad_fn->causal = true;
+        grad_fn->causal = causal;  // Use parameter
         grad_fn->alibi_slopes = alibi_slopes;  // Save for backward pass (not owned)
+        grad_fn->attention_dropout_p = attention_dropout_p;  // Same dropout for backward mask reproduction
+        grad_fn->dropout_seed = dropout_seed;                // Same seed reproduces identical Philox mask
         
         // Allocate backward workspace
         const size_t dq_accum_bytes = flash_attn_dq_accum_bytes(batch_size, seq_len, num_heads, head_dim);
@@ -6767,14 +5962,12 @@ Tensor scaled_dot_product_attention(
         cudaMemset(grad_fn->dv_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16));  // ISSUE #72: Zero full buffer
         
         result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;  // ISSUE #54 FIX: Result owns its grad_fn
         
-        // Don't free bf16 buffers - ownership transferred to grad_fn
-        q_bf16 = nullptr;
-        k_bf16 = nullptr;
-        v_bf16 = nullptr;
-        out_bf16 = nullptr;
-        softmax_lse = nullptr; 
+        // Ownership of bf16 buffers transferred to grad_fn for backward pass.
+        // DO NOT nullify pointers - if someone accidentally frees them after transfer,
+        // let the double-free crash loudly (Rule 20: fail loud).
+        // Any accidental cudaFree(q_bf16) here will produce a clear double-free error
+        // that immediately reveals the bug instead of silently succeeding. 
     } else {
         // Free bf16 buffers if no backward needed
         cudaFree(q_bf16);
@@ -6831,8 +6024,7 @@ __global__ void kernel_reshape_flat_to_BHSD(
 
 struct ReshapeFromBHSDGradFn : public GradFn {
     // Input tensor info
-    GradFn* input_grad_fn = nullptr;
-    bool owns_input_grad_fn = false;
+    std::shared_ptr<GradFn> input_grad_fn;
     bool input_requires_grad = false;
     float* input_grad = nullptr;  // Pre-allocated gradient buffer
     TensorContract::TensorShape input_shape;
@@ -6847,22 +6039,14 @@ struct ReshapeFromBHSDGradFn : public GradFn {
     
     ~ReshapeFromBHSDGradFn() override {
         release_saved();
-        if (owns_input_grad_fn && input_grad_fn) {
-            delete input_grad_fn;
-            input_grad_fn = nullptr;
-        }
     }
     
     void capture_input(Tensor& bhsd_input) {
         input_requires_grad = bhsd_input.requires_grad;
         input_shape = bhsd_input.shape;
         
-        // Take ownership of captured grad_fn to prevent use-after-free
+        // Copy shared_ptr to captured grad_fn
         input_grad_fn = bhsd_input.grad_fn;
-        if (bhsd_input.grad_fn && bhsd_input.owns_grad_fn) {
-            owns_input_grad_fn = true;
-            bhsd_input.owns_grad_fn = false;  // Transfer ownership to us
-        }
         
         if (input_requires_grad) {
             bhsd_input.ensure_grad();
@@ -6898,7 +6082,7 @@ struct ReshapeFromBHSDGradFn : public GradFn {
         }
         
         fprintf(stderr, "[ReshapeBHSDtoFlat] apply() called, input_grad_fn=%p, input_requires_grad=%d\n",
-                (void*)input_grad_fn, input_requires_grad);
+                (void*)input_grad_fn.get(), input_requires_grad);
         
         if (!input_requires_grad) {
             fprintf(stderr, "[ReshapeBHSDtoFlat] input doesn't require grad, skipping\n");
@@ -6932,7 +6116,6 @@ struct ReshapeFromBHSDGradFn : public GradFn {
             bhsd_grad_tensor.data = bhsd_grad;
             bhsd_grad_tensor.shape = input_shape;
             bhsd_grad_tensor.owns_data = false;
-            bhsd_grad_tensor.owns_grad_fn = false;
             bhsd_grad_tensor.stream = stream;
             
             input_grad_fn->apply(bhsd_grad_tensor, stream);
@@ -6976,7 +6159,7 @@ Tensor reshape_bhsd_to_flat(
     // Set up backward if needed
     if (bhsd_input.requires_grad) {
         result.is_leaf = false;
-        auto* grad_fn = new ReshapeFromBHSDGradFn();
+        auto grad_fn = std::make_shared<ReshapeFromBHSDGradFn>();
         
         // Capture input for backward
         grad_fn->capture_input(bhsd_input);
@@ -6986,7 +6169,6 @@ Tensor reshape_bhsd_to_flat(
         grad_fn->head_dim = head_dim;
         
         result.grad_fn = grad_fn;
-        result.owns_grad_fn = true;
     }
     
     return result;
@@ -7094,50 +6276,7 @@ __global__ void kernel_merge_qkv_grad(
     }
 }
 
-// Reshape from BSM to BHSD
-__global__ void kernel_reshape_BSM_to_BHSD(
-    const float* __restrict__ input,    // [batch*seq, heads*head_dim] BSM layout
-    float* __restrict__ output,          // [batch, heads, seq, head_dim] BHSD layout
-    int batch, int seq, int heads, int head_dim
-) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    const int total_elems = batch * heads * seq * head_dim;
-    if (idx >= total_elems) return;
-    
-    // Decode BHSD index
-    const int d = idx % head_dim;
-    const int s = (idx / head_dim) % seq;
-    const int h = (idx / (head_dim * seq)) % heads;
-    const int b = idx / (head_dim * seq * heads);
-    
-    // BSM: [batch*seq, heads*head_dim] row-major
-    // Row = b*seq + s, Col = h*head_dim + d
-    const int bsm_idx = (b * seq + s) * (heads * head_dim) + h * head_dim + d;
-    
-    output[idx] = input[bsm_idx];
-}
-
-// Backward reshape: BHSD grad to BSM grad
-__global__ void kernel_reshape_BHSD_to_BSM(
-    const float* __restrict__ grad_bhsd,  // [batch, heads, seq, head_dim] BHSD layout
-    float* __restrict__ grad_bsm,          // [batch*seq, heads*head_dim] BSM layout
-    int batch, int seq, int heads, int head_dim
-) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    const int total_elems = batch * heads * seq * head_dim;
-    if (idx >= total_elems) return;
-    
-    // Decode BHSD index
-    const int d = idx % head_dim;
-    const int s = (idx / head_dim) % seq;
-    const int h = (idx / (head_dim * seq)) % heads;
-    const int b = idx / (head_dim * seq * heads);
-    
-    // BSM: [batch*seq, heads*head_dim] row-major
-    const int bsm_idx = (b * seq + s) * (heads * head_dim) + h * head_dim + d;
-    
-    grad_bsm[bsm_idx] = grad_bhsd[idx];
-}
+// NOTE: Reshape kernels (BSM<->BHSD) live in TensorConversion.cu - single source of truth
 
 /**
  * GradFn for split_and_reshape_qkv operation
@@ -7154,8 +6293,7 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
     
     // Shared state for all three outputs (only one instance owns the upstream chain)
     struct SharedState {
-        GradFn* qkv_grad_fn = nullptr;       // Grad fn of qkv_out (the matmul result)
-        bool owns_qkv_grad_fn = false;
+        std::shared_ptr<GradFn> qkv_grad_fn;       // Grad fn of qkv_out (the matmul result)
         Tensor qkv_out_ref;                  // Reference to qkv_out (for grad buffer access)
         
         // Gradients from Q, K, V (accumulated before calling upstream)
@@ -7178,11 +6316,7 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
         std::atomic<int> apply_count{0};
         
         ~SharedState() {
-            if (owns_qkv_grad_fn && qkv_grad_fn) {
-                delete qkv_grad_fn;
-                qkv_grad_fn = nullptr;
-            }
-            // Tensor members will be cleaned up automatically via RAII
+            // shared_ptr members destruct automatically
         }
     };
     
@@ -7207,26 +6341,19 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
         auto& state = *shared;
         fprintf(stderr, "[SplitQKV-%s] apply() called, current count=%d\n", type_str, state.apply_count.load());
         
-        const int total_elems_q = state.batch * state.num_heads * state.seq * state.head_dim;
-        const int total_elems_kv = state.batch * state.num_kv_heads * state.seq * state.head_dim;
-        const int block_size = 256;
-        
-        // Reshape this output's gradient from BHSD to BSM
+        // Reshape this output's gradient from BHSD to BSM using TensorConversion
         if (output_type == OutputType::Q) {
-            const int blocks = (total_elems_q + block_size - 1) / block_size;
-            kernel_reshape_BHSD_to_BSM<<<blocks, block_size, 0, stream>>>(
+            TensorConversion::convert_BHSD_to_BSM(
                 grad_output.data, state.grad_Q_bsm.data,
-                state.batch, state.seq, state.num_heads, state.head_dim);
+                state.batch, state.seq, state.num_heads, state.head_dim, stream);
         } else if (output_type == OutputType::K) {
-            const int blocks = (total_elems_kv + block_size - 1) / block_size;
-            kernel_reshape_BHSD_to_BSM<<<blocks, block_size, 0, stream>>>(
+            TensorConversion::convert_BHSD_to_BSM(
                 grad_output.data, state.grad_K_bsm.data,
-                state.batch, state.seq, state.num_kv_heads, state.head_dim);
+                state.batch, state.seq, state.num_kv_heads, state.head_dim, stream);
         } else {  // V
-            const int blocks = (total_elems_kv + block_size - 1) / block_size;
-            kernel_reshape_BHSD_to_BSM<<<blocks, block_size, 0, stream>>>(
+            TensorConversion::convert_BHSD_to_BSM(
                 grad_output.data, state.grad_V_bsm.data,
-                state.batch, state.seq, state.num_kv_heads, state.head_dim);
+                state.batch, state.seq, state.num_kv_heads, state.head_dim, stream);
         }
         
         // Check if all three outputs have been processed
@@ -7289,7 +6416,7 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
             float* qkv_grad = state.qkv_out_ref.grad_data();
             
             fprintf(stderr, "[SplitQKV-%s] qkv_grad=%p qkv_grad_fn=%p requires_grad=%d\n", 
-                    type_str, (void*)qkv_grad, (void*)state.qkv_grad_fn, state.qkv_out_ref.requires_grad);
+                    type_str, (void*)qkv_grad, (void*)state.qkv_grad_fn.get(), state.qkv_out_ref.requires_grad);
             
             const int threads = std::max(state.d_model, state.kv_dim);
             kernel_merge_qkv_grad<<<state.tokens, threads, 0, stream>>>(
@@ -7304,7 +6431,6 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
                 qkv_grad_tensor.data = qkv_grad;
                 qkv_grad_tensor.shape = state.qkv_out_ref.shape;
                 qkv_grad_tensor.owns_data = false;
-                qkv_grad_tensor.owns_grad_fn = false;
                 qkv_grad_tensor.stream = stream;
                 
                 state.qkv_grad_fn->apply(qkv_grad_tensor, stream);
@@ -7312,7 +6438,7 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
                 fprintf(stderr, "[SplitQKV-%s] qkv_grad_fn->apply() complete\n", type_str);
             } else {
                 fprintf(stderr, "[SplitQKV-%s] SKIP qkv_grad_fn: requires_grad=%d qkv_grad_fn=%p\n", 
-                        type_str, state.qkv_out_ref.requires_grad, (void*)state.qkv_grad_fn);
+                        type_str, state.qkv_out_ref.requires_grad, (void*)state.qkv_grad_fn.get());
             }
         }
     }
@@ -7377,19 +6503,10 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     kernel_split_qkv_all<<<tokens, threads, 0, stream>>>(
         qkv_out.data, Q_bsm.data, K_bsm.data, V_bsm.data, tokens, d_model, kv_dim);
     
-    // Reshape BSM -> BHSD
-    const int total_q_elems = batch * num_heads * seq * head_dim;
-    const int total_kv_elems = batch * num_kv_heads * seq * head_dim;
-    const int block_size = 256;
-    const int q_blocks = (total_q_elems + block_size - 1) / block_size;
-    const int kv_blocks = (total_kv_elems + block_size - 1) / block_size;
-    
-    kernel_reshape_BSM_to_BHSD<<<q_blocks, block_size, 0, stream>>>(
-        Q_bsm.data, Q_bhsd.data, batch, seq, num_heads, head_dim);
-    kernel_reshape_BSM_to_BHSD<<<kv_blocks, block_size, 0, stream>>>(
-        K_bsm.data, K_bhsd.data, batch, seq, num_kv_heads, head_dim);
-    kernel_reshape_BSM_to_BHSD<<<kv_blocks, block_size, 0, stream>>>(
-        V_bsm.data, V_bhsd.data, batch, seq, num_kv_heads, head_dim);
+    // Reshape BSM -> BHSD using TensorConversion (handles block sizing internally)
+    TensorConversion::convert_BSM_to_BHSD(Q_bsm.data, Q_bhsd.data, batch, seq, num_heads, head_dim, stream);
+    TensorConversion::convert_BSM_to_BHSD(K_bsm.data, K_bhsd.data, batch, seq, num_kv_heads, head_dim, stream);
+    TensorConversion::convert_BSM_to_BHSD(V_bsm.data, V_bhsd.data, batch, seq, num_kv_heads, head_dim, stream);
     
     // Q_bsm, K_bsm, V_bsm will be freed automatically when they go out of scope (RAII)
     
@@ -7414,12 +6531,8 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
             qkv_out.data, qkv_out.shape, false, qkv_out.requires_grad, "qkv_out_ref");
         shared->qkv_out_ref.share_grad(qkv_out);  // Share gradient buffer with original
         
-        // Take ownership of upstream grad_fn
+        // Copy shared_ptr to upstream grad_fn
         shared->qkv_grad_fn = qkv_out.grad_fn;
-        if (qkv_out.grad_fn && qkv_out.owns_grad_fn) {
-            shared->owns_qkv_grad_fn = true;
-            qkv_out.owns_grad_fn = false;  // Transfer ownership
-        }
         
         // Allocate gradient Tensors for BSM intermediate results
         shared->grad_Q_bsm = Tensor::zeros(
@@ -7430,29 +6543,26 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
             TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream, "grad_V_bsm");
         
         // Create GradFns for each output
-        auto q_grad_fn = new SplitAndReshapeQKVGradFn();
+        auto q_grad_fn = std::make_shared<SplitAndReshapeQKVGradFn>();
         q_grad_fn->output_type = SplitAndReshapeQKVGradFn::OutputType::Q;
         q_grad_fn->shared = shared;
         
-        auto k_grad_fn = new SplitAndReshapeQKVGradFn();
+        auto k_grad_fn = std::make_shared<SplitAndReshapeQKVGradFn>();
         k_grad_fn->output_type = SplitAndReshapeQKVGradFn::OutputType::K;
         k_grad_fn->shared = shared;
         
-        auto v_grad_fn = new SplitAndReshapeQKVGradFn();
+        auto v_grad_fn = std::make_shared<SplitAndReshapeQKVGradFn>();
         v_grad_fn->output_type = SplitAndReshapeQKVGradFn::OutputType::V;
         v_grad_fn->shared = shared;
         
         Q_bhsd.is_leaf = false;
         Q_bhsd.grad_fn = q_grad_fn;
-        Q_bhsd.owns_grad_fn = true;
         
         K_bhsd.is_leaf = false;
         K_bhsd.grad_fn = k_grad_fn;
-        K_bhsd.owns_grad_fn = true;
         
         V_bhsd.is_leaf = false;
         V_bhsd.grad_fn = v_grad_fn;
-        V_bhsd.owns_grad_fn = true;
     }
     
     return {std::move(Q_bhsd), std::move(K_bhsd), std::move(V_bhsd)};
@@ -7488,10 +6598,8 @@ struct RoPEGradFn : public GradFn {
      */
     struct SharedState {
         // Upstream grad_fns for Q and K (from split_and_reshape_qkv output)
-        GradFn* q_upstream_grad_fn = nullptr;
-        GradFn* k_upstream_grad_fn = nullptr;
-        bool owns_q_upstream = false;
-        bool owns_k_upstream = false;
+        std::shared_ptr<GradFn> q_upstream_grad_fn;
+        std::shared_ptr<GradFn> k_upstream_grad_fn;
         
         // ISSUE #48 FIX: Don't store Tensor by value - operator= is deleted
         // Instead, store only what we need for backward: requires_grad flags
@@ -7511,12 +6619,7 @@ struct RoPEGradFn : public GradFn {
         std::atomic<int> apply_count{0};
         
         ~SharedState() {
-            if (owns_q_upstream && q_upstream_grad_fn) {
-                delete q_upstream_grad_fn;
-            }
-            if (owns_k_upstream && k_upstream_grad_fn) {
-                delete k_upstream_grad_fn;
-            }
+            // shared_ptr members destruct automatically
         }
     };
     
@@ -7673,16 +6776,12 @@ void rope_rotation(
         // Create shared state for coordinating Q and K backward
         auto shared = std::make_shared<RoPEGradFn::SharedState>();
         
-        // Capture upstream grad_fns (transfer ownership from input tensors)
+        // Copy shared_ptrs to upstream grad_fns
         if (Q.grad_fn) {
             shared->q_upstream_grad_fn = Q.grad_fn;
-            shared->owns_q_upstream = Q.owns_grad_fn;
-            Q.owns_grad_fn = false;  // Transfer ownership to SharedState
         }
         if (K.grad_fn) {
             shared->k_upstream_grad_fn = K.grad_fn;
-            shared->owns_k_upstream = K.owns_grad_fn;
-            K.owns_grad_fn = false;  // Transfer ownership to SharedState
         }
         
         // ISSUE #48 FIX: Store requires_grad flags, not Tensor copies
@@ -7700,23 +6799,21 @@ void rope_rotation(
         shared->rotary_dim = rotary_dim;
         
         // Create and attach GradFn for Q
-        auto q_grad_fn = new RoPEGradFn();
+        auto q_grad_fn = std::make_shared<RoPEGradFn>();
         q_grad_fn->output_type = RoPEGradFn::OutputType::Q;
         q_grad_fn->shared = shared;
         Q.is_leaf = false;
         Q.grad_fn = q_grad_fn;
-        Q.owns_grad_fn = true;
         
         // Create and attach GradFn for K
-        auto k_grad_fn = new RoPEGradFn();
+        auto k_grad_fn = std::make_shared<RoPEGradFn>();
         k_grad_fn->output_type = RoPEGradFn::OutputType::K;
         k_grad_fn->shared = shared;
         K.is_leaf = false;
         K.grad_fn = k_grad_fn;
-        K.owns_grad_fn = true;
         
         AG_TRACE("[rope_rotation] RoPEGradFn attached: Q.grad_fn=%p K.grad_fn=%p\n",
-                 Q.grad_fn, K.grad_fn);
+                 (void*)Q.grad_fn.get(), (void*)K.grad_fn.get());
     }
     
     AG_TRACE("[rope_rotation] EXIT\n");

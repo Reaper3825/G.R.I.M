@@ -169,13 +169,26 @@ void TrainingTensors::initializeParams(
         params.rms2_gamma = Tensor::zeros({d_model}, stream, "rms2_gamma");
         params.rms2_gamma.requires_grad_();
         
-        // Fill with 1.0
+        // Sandwich norm gammas (post-residual normalization) initialized to 1.0
+        params.rms_post_attn_gamma = Tensor::zeros({d_model}, stream, "rms_post_attn_gamma");
+        params.rms_post_attn_gamma.requires_grad_();
+        
+        params.rms_post_ffn_gamma = Tensor::zeros({d_model}, stream, "rms_post_ffn_gamma");
+        params.rms_post_ffn_gamma.requires_grad_();
+        
+        // Fill all RMSNorm gammas with 1.0
         {
             std::vector<float> ones(d_model, 1.0f);
             cudaMemcpyAsync(params.rms1_gamma.data, ones.data(),
                             d_model * sizeof(float),
                             cudaMemcpyHostToDevice, stream);
             cudaMemcpyAsync(params.rms2_gamma.data, ones.data(),
+                            d_model * sizeof(float),
+                            cudaMemcpyHostToDevice, stream);
+            cudaMemcpyAsync(params.rms_post_attn_gamma.data, ones.data(),
+                            d_model * sizeof(float),
+                            cudaMemcpyHostToDevice, stream);
+            cudaMemcpyAsync(params.rms_post_ffn_gamma.data, ones.data(),
                             d_model * sizeof(float),
                             cudaMemcpyHostToDevice, stream);
         }
@@ -286,6 +299,8 @@ void TrainingTensors::allocateAllGradients() {
     for (auto& layer : encoder_layers) {
         layer.rms1_gamma.ensure_grad();
         layer.rms2_gamma.ensure_grad();
+        layer.rms_post_attn_gamma.ensure_grad();
+        layer.rms_post_ffn_gamma.ensure_grad();
         layer.attn_qkv_weight.ensure_grad();
         if (layer.attn_qkv_bias.data) layer.attn_qkv_bias.ensure_grad();
         layer.attn_out_weight.ensure_grad();
@@ -421,6 +436,8 @@ void TrainingTensors::zeroGrad(cudaStream_t stream) {
     for (auto& layer : encoder_layers) {
         layer.rms1_gamma.zero_grad(stream);
         layer.rms2_gamma.zero_grad(stream);
+        layer.rms_post_attn_gamma.zero_grad(stream);
+        layer.rms_post_ffn_gamma.zero_grad(stream);
         layer.attn_qkv_weight.zero_grad(stream);
         if (layer.attn_qkv_bias.data) layer.attn_qkv_bias.zero_grad(stream);
         layer.attn_out_weight.zero_grad(stream);

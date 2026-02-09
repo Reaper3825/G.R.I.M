@@ -670,7 +670,9 @@ struct EncoderLayerWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tabl
     VT_RMS2 = 10,
     VT_LAYER_SCALE1 = 12,
     VT_LAYER_SCALE2 = 14,
-    VT_LAYER_ID = 16
+    VT_RMS_POST_ATTN = 16,
+    VT_RMS_POST_FFN = 18,
+    VT_LAYER_ID = 20
   };
   const GRIMTransformer::AttentionWeights *attention() const {
     return GetPointer<const GRIMTransformer::AttentionWeights *>(VT_ATTENTION);
@@ -690,6 +692,12 @@ struct EncoderLayerWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tabl
   const ::flatbuffers::Vector<float> *layer_scale2() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_LAYER_SCALE2);
   }
+  const GRIMTransformer::RMSNormWeights *rms_post_attn() const {
+    return GetPointer<const GRIMTransformer::RMSNormWeights *>(VT_RMS_POST_ATTN);
+  }
+  const GRIMTransformer::RMSNormWeights *rms_post_ffn() const {
+    return GetPointer<const GRIMTransformer::RMSNormWeights *>(VT_RMS_POST_FFN);
+  }
   uint32_t layer_id() const {
     return GetField<uint32_t>(VT_LAYER_ID, 0);
   }
@@ -707,6 +715,10 @@ struct EncoderLayerWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tabl
            verifier.VerifyVector(layer_scale1()) &&
            VerifyOffset(verifier, VT_LAYER_SCALE2) &&
            verifier.VerifyVector(layer_scale2()) &&
+           VerifyOffset(verifier, VT_RMS_POST_ATTN) &&
+           verifier.VerifyTable(rms_post_attn()) &&
+           VerifyOffset(verifier, VT_RMS_POST_FFN) &&
+           verifier.VerifyTable(rms_post_ffn()) &&
            VerifyField<uint32_t>(verifier, VT_LAYER_ID, 4) &&
            verifier.EndTable();
   }
@@ -734,6 +746,12 @@ struct EncoderLayerWeightsBuilder {
   void add_layer_scale2(::flatbuffers::Offset<::flatbuffers::Vector<float>> layer_scale2) {
     fbb_.AddOffset(EncoderLayerWeights::VT_LAYER_SCALE2, layer_scale2);
   }
+  void add_rms_post_attn(::flatbuffers::Offset<GRIMTransformer::RMSNormWeights> rms_post_attn) {
+    fbb_.AddOffset(EncoderLayerWeights::VT_RMS_POST_ATTN, rms_post_attn);
+  }
+  void add_rms_post_ffn(::flatbuffers::Offset<GRIMTransformer::RMSNormWeights> rms_post_ffn) {
+    fbb_.AddOffset(EncoderLayerWeights::VT_RMS_POST_FFN, rms_post_ffn);
+  }
   void add_layer_id(uint32_t layer_id) {
     fbb_.AddElement<uint32_t>(EncoderLayerWeights::VT_LAYER_ID, layer_id, 0);
   }
@@ -760,9 +778,13 @@ inline ::flatbuffers::Offset<EncoderLayerWeights> CreateEncoderLayerWeights(
     ::flatbuffers::Offset<GRIMTransformer::RMSNormWeights> rms2 = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> layer_scale1 = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> layer_scale2 = 0,
+    ::flatbuffers::Offset<GRIMTransformer::RMSNormWeights> rms_post_attn = 0,
+    ::flatbuffers::Offset<GRIMTransformer::RMSNormWeights> rms_post_ffn = 0,
     uint32_t layer_id = 0) {
   EncoderLayerWeightsBuilder builder_(_fbb);
   builder_.add_layer_id(layer_id);
+  builder_.add_rms_post_ffn(rms_post_ffn);
+  builder_.add_rms_post_attn(rms_post_attn);
   builder_.add_layer_scale2(layer_scale2);
   builder_.add_layer_scale1(layer_scale1);
   builder_.add_rms2(rms2);
@@ -780,6 +802,8 @@ inline ::flatbuffers::Offset<EncoderLayerWeights> CreateEncoderLayerWeightsDirec
     ::flatbuffers::Offset<GRIMTransformer::RMSNormWeights> rms2 = 0,
     const std::vector<float> *layer_scale1 = nullptr,
     const std::vector<float> *layer_scale2 = nullptr,
+    ::flatbuffers::Offset<GRIMTransformer::RMSNormWeights> rms_post_attn = 0,
+    ::flatbuffers::Offset<GRIMTransformer::RMSNormWeights> rms_post_ffn = 0,
     uint32_t layer_id = 0) {
   auto layer_scale1__ = layer_scale1 ? _fbb.CreateVector<float>(*layer_scale1) : 0;
   auto layer_scale2__ = layer_scale2 ? _fbb.CreateVector<float>(*layer_scale2) : 0;
@@ -791,6 +815,8 @@ inline ::flatbuffers::Offset<EncoderLayerWeights> CreateEncoderLayerWeightsDirec
       rms2,
       layer_scale1__,
       layer_scale2__,
+      rms_post_attn,
+      rms_post_ffn,
       layer_id);
 }
 

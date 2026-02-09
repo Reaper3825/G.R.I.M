@@ -14,7 +14,6 @@
 
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
-#include "../Layers/Embedding/Embedding_GPU.hpp"
 #include "../Layers/ScratchBlock/ScratchBlock_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../Shared/StreamController/StreamController_GPU.hpp"

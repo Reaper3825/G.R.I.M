@@ -103,7 +103,8 @@ enum class ModuleId : int {
     StreamController = 13,
     Loss = 14,
     Attention = 15,
-    Custom = 16
+    Custom = 16,
+    Autograd = 17
 };
 
 struct ModuleLogOverride {

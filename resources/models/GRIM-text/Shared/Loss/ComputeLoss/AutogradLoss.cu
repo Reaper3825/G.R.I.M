@@ -917,7 +917,7 @@ void launchToken277DiagnosticActual(
  *
  * Memory management:
  *   - Takes ownership of log_probs.data (no copy — old Tensor gives up owns_data)
- *   - Takes ownership of LogSoftmaxGradFn (old Tensor gives up owns_grad_fn)
+ *   - Shares LogSoftmaxGradFn via shared_ptr
  *   - Allocates grad_log_probs_buffer for backward output
  */
 struct NLLLossGradFn : public GradFn {
@@ -941,7 +941,7 @@ struct NLLLossGradFn : public GradFn {
     bool entropy_reg_enabled;
     
     // Upstream gradient chain
-    GradFn* log_probs_grad_fn;      // OWNED — LogSoftmaxGradFn
+    std::shared_ptr<GradFn> log_probs_grad_fn;
     TensorContract::TensorShape grad_shape;
     
     cudaStream_t async_stream;
@@ -954,7 +954,7 @@ struct NLLLossGradFn : public GradFn {
         float focal_alpha_, float focal_gamma_, bool focal_enabled_,
         float smoothing_epsilon_, bool smoothing_enabled_,
         float entropy_reg_lambda_, bool entropy_reg_enabled_,
-        GradFn* upstream_grad_fn,   // Takes ownership
+        std::shared_ptr<GradFn> upstream_grad_fn,
         const TensorContract::TensorShape& shape,
         cudaStream_t stream_
     )
@@ -966,7 +966,7 @@ struct NLLLossGradFn : public GradFn {
         , focal_alpha(focal_alpha_), focal_gamma(focal_gamma_), focal_enabled(focal_enabled_)
         , smoothing_epsilon(smoothing_epsilon_), smoothing_enabled(smoothing_enabled_)
         , entropy_reg_lambda(entropy_reg_lambda_), entropy_reg_enabled(entropy_reg_enabled_)
-        , log_probs_grad_fn(upstream_grad_fn)
+        , log_probs_grad_fn(std::move(upstream_grad_fn))
         , grad_shape(shape)
         , async_stream(stream_), cleanup_event(nullptr)
     {
@@ -980,14 +980,9 @@ struct NLLLossGradFn : public GradFn {
     
     __host__ ~NLLLossGradFn() {
         fprintf(stderr, "[NLLLossGradFn] DTOR ENTER: this=%p log_probs_data=%p grad_buf=%p upstream=%p\n",
-                (void*)this, (void*)log_probs_data, (void*)grad_log_probs_buffer, (void*)log_probs_grad_fn);
+                (void*)this, (void*)log_probs_data, (void*)grad_log_probs_buffer, (void*)log_probs_grad_fn.get());
         fflush(stderr);
-        // We own the upstream LogSoftmaxGradFn
-        fprintf(stderr, "[NLLLossGradFn] DTOR: deleting log_probs_grad_fn=%p...\n", (void*)log_probs_grad_fn);
-        fflush(stderr);
-        delete log_probs_grad_fn;
-        fprintf(stderr, "[NLLLossGradFn] DTOR: log_probs_grad_fn deleted\n");
-        fflush(stderr);
+        log_probs_grad_fn.reset();  // Release shared_ptr to upstream LogSoftmaxGradFn
         
         if (cleanup_event) {
             fprintf(stderr, "[NLLLossGradFn] DTOR: syncing cleanup_event...\n");
@@ -1007,7 +1002,7 @@ struct NLLLossGradFn : public GradFn {
     
     __host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
         AG_TRACE("[NLLLossGradFn::apply] ENTER: log_probs_data=%p upstream=%p\n",
-                 (void*)log_probs_data, (void*)log_probs_grad_fn);
+                 (void*)log_probs_data, (void*)log_probs_grad_fn.get());
         
         // OOM FIX: Lazy allocation — only allocate grad buffer when actually
         // needed for backward, not during forward pass. Saves 1.37GB peak memory.
@@ -1073,7 +1068,6 @@ struct NLLLossGradFn : public GradFn {
             grad_log_probs_tensor.data = grad_log_probs_buffer;
             grad_log_probs_tensor.shape = grad_shape;
             grad_log_probs_tensor.owns_data = false;
-            grad_log_probs_tensor.owns_grad_fn = false;
             grad_log_probs_tensor.stream = stream;
             
             {
@@ -1227,10 +1221,10 @@ __host__ Tensor unified_loss(
         // DEBUG: Log log_probs.data for correlation with LogSoftmaxGradFn::save() output
         fprintf(stderr, "[unified_loss] log_probs.data=%p grad_fn=%p — if save_output_copy=false works, "
                 "LogSoftmaxGradFn::save() should show same ptr with copy=0\n",
-                (void*)log_probs.data, (void*)log_probs.grad_fn);
+                (void*)log_probs.data, (void*)log_probs.grad_fn.get());
         fflush(stderr);
         
-        auto* grad_fn = new NLLLossGradFn(
+        auto grad_fn = std::make_shared<NLLLossGradFn>(
             log_probs.data,       // Takes ownership of log_probs GPU buffer
             targets, valid_mask,
             num_tokens, vocab_size, h_valid_count,
@@ -1241,12 +1235,10 @@ __host__ Tensor unified_loss(
             log_probs.shape,
             stream
         );
-        // Transfer ownership from Tensor to NLLLossGradFn
+        // Transfer data ownership from Tensor to NLLLossGradFn
         log_probs.owns_data = false;     // NLLLossGradFn now owns log_probs.data
-        log_probs.owns_grad_fn = false;  // NLLLossGradFn now owns LogSoftmaxGradFn
         
         loss.grad_fn = grad_fn;
-        loss.owns_grad_fn = true;
     }
     
     // ── Step 6: Cleanup temporary buffers ──

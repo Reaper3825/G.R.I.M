@@ -73,6 +73,8 @@ struct SerializationEncoderLayerReadView {
 	DeviceReadView ffn_b2;
 	DeviceReadView rms1_gamma;
 	DeviceReadView rms2_gamma;
+	DeviceReadView rms_post_attn_gamma;
+	DeviceReadView rms_post_ffn_gamma;
 };
 
 struct SerializationEncoderLayerWriteView {
@@ -86,6 +88,8 @@ struct SerializationEncoderLayerWriteView {
 	DeviceWriteView ffn_b2;
 	DeviceWriteView rms1_gamma;
 	DeviceWriteView rms2_gamma;
+	DeviceWriteView rms_post_attn_gamma;
+	DeviceWriteView rms_post_ffn_gamma;
 };
 
 struct SerializationLMHeadReadView {

@@ -211,6 +211,22 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
             !upload_device_vector(h_rms2_gamma, layer_view.rms2_gamma, "rms2.gamma")) {
             return false;
         }
+        
+        // Sandwich norm gammas (optional in checkpoint — initialize to 1.0 if missing)
+        const auto* fb_rms_post_attn = fb_layer->rms_post_attn();
+        const auto* fb_rms_post_ffn = fb_layer->rms_post_ffn();
+        if (fb_rms_post_attn && fb_rms_post_attn->gamma() && layer_view.rms_post_attn_gamma.ptr) {
+            std::vector<float> h_rms_post_attn(fb_rms_post_attn->gamma()->begin(), fb_rms_post_attn->gamma()->end());
+            if (!upload_device_vector(h_rms_post_attn, layer_view.rms_post_attn_gamma, "rms_post_attn.gamma")) {
+                return false;
+            }
+        }
+        if (fb_rms_post_ffn && fb_rms_post_ffn->gamma() && layer_view.rms_post_ffn_gamma.ptr) {
+            std::vector<float> h_rms_post_ffn(fb_rms_post_ffn->gamma()->begin(), fb_rms_post_ffn->gamma()->end());
+            if (!upload_device_vector(h_rms_post_ffn, layer_view.rms_post_ffn_gamma, "rms_post_ffn.gamma")) {
+                return false;
+            }
+        }
     }
 
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -495,7 +511,31 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             builder,
             builder.CreateVector(h_rms2_gamma));
 
-        fb_layers.push_back(GRIMTransformer::CreateEncoderLayerWeights(builder, fb_attn, fb_ffn, fb_rms1, fb_rms2, static_cast<uint32_t>(layer_idx)));
+        // Sandwich norm gammas (post-residual)
+        flatbuffers::Offset<GRIMTransformer::RMSNormWeights> fb_rms_post_attn = 0;
+        flatbuffers::Offset<GRIMTransformer::RMSNormWeights> fb_rms_post_ffn = 0;
+        if (layer_view.rms_post_attn_gamma.ptr) {
+            std::vector<float> h_rms_post_attn_gamma;
+            if (!download_into(h_rms_post_attn_gamma, layer_view.rms_post_attn_gamma, "rms_post_attn.gamma")) {
+                return false;
+            }
+            fb_rms_post_attn = GRIMTransformer::CreateRMSNormWeights(
+                builder, builder.CreateVector(h_rms_post_attn_gamma));
+        }
+        if (layer_view.rms_post_ffn_gamma.ptr) {
+            std::vector<float> h_rms_post_ffn_gamma;
+            if (!download_into(h_rms_post_ffn_gamma, layer_view.rms_post_ffn_gamma, "rms_post_ffn.gamma")) {
+                return false;
+            }
+            fb_rms_post_ffn = GRIMTransformer::CreateRMSNormWeights(
+                builder, builder.CreateVector(h_rms_post_ffn_gamma));
+        }
+
+        fb_layers.push_back(GRIMTransformer::CreateEncoderLayerWeights(
+            builder, fb_attn, fb_ffn, fb_rms1, fb_rms2,
+            0, 0,  // layer_scale1, layer_scale2 (not currently serialized)
+            fb_rms_post_attn, fb_rms_post_ffn,
+            static_cast<uint32_t>(layer_idx)));
     }
 
     auto fb_encoder_layers = builder.CreateVector(fb_layers);

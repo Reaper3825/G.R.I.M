@@ -37,7 +37,6 @@
 
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
-#include "../Layers/Embedding/Embedding_GPU.hpp"
 #include "../Shared/GradNorm/GradNormGPU.hpp"
 #include "../Common/grim_scale_buffer.hpp"
 #include "../Shared/LogRecorder/LogRecorder.hpp"
@@ -338,8 +337,9 @@ void LanguageModel::backward(float loss, bool accumulate, float grad_scale, uint
              << (accumulate ? " (ACCUMULATING to existing gradients)" : " (OVERWRITING with fresh gradients)"));
     
     if (!accumulate) {
-        // Autograd will zero Tensor.grad fields, but we also zero legacy buffers
-        // for any code paths that still expect them
+        // Zero all parameter gradients before backward pass.
+        // The autograd system accumulates by default, so we must zero explicitly
+        // when starting a fresh gradient accumulation window (accumulate=false).
         zeroGrad();  
     }
     
@@ -536,9 +536,11 @@ void LanguageModel::buildParameterGroups() {
         registerTensor(prefix + "_ffn_w2", enc->ffnW2(), ParamGroupType::FFN, layer);
         registerTensor(prefix + "_ffn_b2", enc->ffnB2(), ParamGroupType::FFN, layer);
         
-        // RMSNorm gamma
+        // RMSNorm gamma (pre-norm + sandwich post-residual)
         registerTensor(prefix + "_rms1_gamma", enc->rms1Gamma(), ParamGroupType::RMSNORM, layer);
         registerTensor(prefix + "_rms2_gamma", enc->rms2Gamma(), ParamGroupType::RMSNORM, layer);
+        registerTensor(prefix + "_rms_post_attn_gamma", enc->rmsPostAttnGamma(), ParamGroupType::RMSNORM, layer);
+        registerTensor(prefix + "_rms_post_ffn_gamma", enc->rmsPostFfnGamma(), ParamGroupType::RMSNORM, layer);
     }
 
     fprintf(stderr, "[buildParameterGroups] DIAG-D: all %d layers done, registering scratchblock/final_rms\n", cfg.num_layers); fflush(stderr);

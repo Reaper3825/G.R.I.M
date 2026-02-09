@@ -31,7 +31,6 @@
 
 #include "grim_scale_buffer.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
-#include "../Layers/Embedding/Embedding_GPU.hpp"
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"    // For Flash Attention kernels
@@ -46,20 +45,6 @@ namespace GRIM {
 //======================================================//
 //  GPU Runtime Accessors (StreamController pattern)
 //======================================================//
-
-EmbeddingRuntime& LanguageModel::getGpuEmbedder() {
-    if (!gpu_embedder_) {
-        throw std::runtime_error("GPU embedder not initialized - call initGPU() first");
-    }
-    return *gpu_embedder_;
-}
-
-const EmbeddingRuntime& LanguageModel::getGpuEmbedder() const {
-    if (!gpu_embedder_) {
-        throw std::runtime_error("GPU embedder not initialized - call initGPU() first");
-    }
-    return *gpu_embedder_;
-}
 
 GPUGrimEncoder& LanguageModel::getGpuEncoder() {
     if (!gpu_encoder_) {
@@ -703,7 +688,7 @@ const Matrix& GrimEmbeddingStack::getTokenEmbeddings() const {
     return token_embed;
 }
 
-// getBatchEmbeddings removed - pure GPU training uses EmbeddingRuntime directly
+// getBatchEmbeddings removed - pure GPU training uses autograd::embedding() directly
 
 // MultiHeadAttention removed - pure GPU training uses Flash Attention with GQA
 // See: Layers/FlashAttention/Flash_Attention_Kernal.cu

@@ -17,7 +17,6 @@
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
-#include "../Layers/Embedding/Embedding_GPU.hpp"
 #include "../Common/grim_scale_buffer.hpp"
 #include "../Shared/Loss/NumericLoss/NumericLoss_GPU.hpp"
 #include "../Shared/StreamController/StreamController_GPU.hpp"
@@ -45,12 +44,6 @@ inline void cudaFailLast(const char* where) {
     }
 }
 
-// EmbeddingRuntime is managed by destroyEmbeddingRuntime()
-struct EmbeddingRuntimeDeleter {
-    void operator()(GRIM::EmbeddingRuntime* p) const noexcept {
-        if (p) GRIM::destroyEmbeddingRuntime(p);
-    }
-};
 } // namespace
 
 namespace GRIM {
@@ -237,84 +230,7 @@ void LanguageModel::initGPU() {
         }
 
         //======================================================//
-        //  3) Build GPU embedding runtime (RAII-managed)
-        //======================================================//
-        std::unique_ptr<EmbeddingRuntime, EmbeddingRuntimeDeleter> embedding_runtime(new EmbeddingRuntime());
-
-        // Keep config consistent with your prior behavior
-        embedding_runtime->config.vocab_size = cfg.vocab_size;
-        embedding_runtime->config.max_position = cfg.max_seq_len;
-        embedding_runtime->config.d_model = cfg.d_model;
-        // ISSUE #91 FIX: Disable fused embedding RMSNorm!
-        // With apply_rms_norm=true, embeddings have rms≈0.035 (tiny values).
-        // ScratchBlock then ADDS atom projections at scale=1.0, creating a 
-        // 20-30x scale mismatch between atom and non-atom tokens.
-        // This causes Layer 0's K values to explode → LSE explosion → ZERO gradients.
-        // Standard transformers do NOT pre-normalize embeddings - the encoder's
-        // first RMSNorm handles normalization AFTER any injection (like ScratchBlock).
-        embedding_runtime->config.apply_rms_norm = false;
-        embedding_runtime->config.rms_epsilon = 1e-5f;
-        // ISSUE #92 FIX: Scale embeddings by sqrt(d_model) to bring Xavier-initialized 
-        // values (~0.036 rms) to unit scale (~1.0 rms). This matches:
-        // 1. The "Attention is All You Need" approach (Section 3.4 Embeddings)
-        // 2. ScratchBlock atom injection which adds at scale=1.0
-        // Without this, atom tokens have 28x larger values than regular tokens.
-        embedding_runtime->config.embedding_scale = std::sqrt(static_cast<float>(cfg.d_model));
-
-        embedding_runtime->stream = primary_stream;
-        embedding_runtime->owns_stream = false; // TrainingState owns it
-        embedding_runtime->config.stream = embedding_runtime->stream;
-
-        std::cout << "✓ Embedding runtime using TrainingState primary stream\n";
-
-        // Helper: fail-loud cleanup with message
-        auto fail_embedding = [&](const std::string& msg) -> void {
-            std::cerr << msg << std::endl;
-            embedding_runtime.reset(); // calls destroyEmbeddingRuntime()
-            gpu_embedder_.reset();
-            throw std::runtime_error("Failed to initialize GPU embeddings");
-        };
-
-        // ═══════════════════════════════════════════════════════════════
-        // RULE 20: TrainingTensors is the ONLY initialization path.
-        // No legacy paths, no conditionals, no CPU embedder.
-        // ═══════════════════════════════════════════════════════════════
-        // TrainingTensors owns GPU memory (Xavier-initialized).
-        // EmbeddingRuntime just POINTS to that memory (doesn't own it).
-        
-        if (!training_state_.tensors_) {
-            fail_embedding("❌ FATAL: TrainingTensors not initialized! Call initTrainingTensors() first.");
-        }
-        
-        // --- Token embeddings (TrainingTensors owns, already Xavier-initialized) ---
-        embedding_runtime->token_buffer = training_state_.tensors_->embedding_weights.data;
-        embedding_runtime->owns_token_buffer = false;  // TrainingTensors owns this memory
-        embedding_runtime->weights.token_embeddings = TensorContract::TensorView::make_BSM(
-            embedding_runtime->token_buffer, cfg.vocab_size, cfg.d_model, "token_embeddings");
-        std::cout << "✓ Token embeddings: TrainingTensors memory (Xavier-initialized)\n";
-
-        // --- Position embeddings (TrainingTensors owns, already Xavier-initialized) ---
-        embedding_runtime->position_buffer = training_state_.tensors_->position_embedding_weights.data;
-        embedding_runtime->owns_position_buffer = false;  // TrainingTensors owns this memory
-        embedding_runtime->weights.position_embeddings = TensorContract::TensorView::make_BSM(
-            embedding_runtime->position_buffer, cfg.max_seq_len, cfg.d_model, "position_embeddings");
-        std::cout << "✓ Position embeddings: TrainingTensors memory (Xavier-initialized)\n";
-
-        // --- RMSNorm gamma (TrainingTensors owns, initialized to 1.0) ---
-        embedding_runtime->gamma_buffer = training_state_.tensors_->final_rms_gamma.data;
-        embedding_runtime->owns_gamma_buffer = false;  // TrainingTensors owns this memory
-        embedding_runtime->weights.gamma = TensorContract::TensorView::make_BSM(
-            embedding_runtime->gamma_buffer, 1, cfg.d_model, "rmsnorm_gamma");
-        std::cout << "✓ RMSNorm gamma: TrainingTensors memory (initialized to 1.0)\n";
-
-        // Ensure embedding uploads complete before exposing runtime
-        cudaFail(cudaStreamSynchronize(primary_stream), "[initGPU] cudaStreamSynchronize(embedding uploads)");
-
-        gpu_embedder_.reset(embedding_runtime.release()); // transfer ownership to class’ unique_ptr (existing design)
-        ForwardLog::info("✓ GPU embeddings initialized");
-
-        //======================================================//
-        //  4) Build GPU encoder
+        //  3) Build GPU encoder
         //======================================================//
         EncoderConfig enc_config;
         enc_config.d_model = cfg.d_model;
@@ -402,6 +318,8 @@ void LanguageModel::initGPU() {
                 params.ffn_b1,
                 params.ffn_w2,
                 params.ffn_b2,
+                params.rms_post_attn_gamma,
+                params.rms_post_ffn_gamma,
                 ls1_ptr,
                 ls2_ptr
             );

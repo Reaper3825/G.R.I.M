@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 
 #include <cstddef>
+#include <cstdint>
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,6 +44,8 @@ void flash_attn_fwd_ex(const void* q,
                        int head_dim,
                        bool causal,
                        bool is_bf16,
+                       float attention_dropout_p,
+                       uint64_t dropout_seed,
                        cudaStream_t stream);
 
 // FlashAttention v2 backward.
@@ -66,6 +69,8 @@ void flash_attn_bwd_ex(const void* q,
                        int head_dim,
                        bool causal,
                        bool is_bf16,
+                       float attention_dropout_p,
+                       uint64_t dropout_seed,
                        cudaStream_t stream);
 
 #ifdef __cplusplus

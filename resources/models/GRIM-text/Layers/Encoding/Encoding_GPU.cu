@@ -1420,6 +1420,8 @@ EncodingLayer::EncodingLayer(EncodingLayer&& other) noexcept
     , weights_allocated_(other.weights_allocated_)
     , rms1_gamma_(std::move(other.rms1_gamma_))
     , rms2_gamma_(std::move(other.rms2_gamma_))
+    , rms_post_attn_gamma_(std::move(other.rms_post_attn_gamma_))
+    , rms_post_ffn_gamma_(std::move(other.rms_post_ffn_gamma_))
     , W_qkv_(std::move(other.W_qkv_))
     , b_qkv_(std::move(other.b_qkv_))
     , W_o_(std::move(other.W_o_))
@@ -1445,6 +1447,8 @@ EncodingLayer& EncodingLayer::operator=(EncodingLayer&& other) noexcept {
         config_.cublas_handle = other.config_.cublas_handle;
         rms1_gamma_ = std::move(other.rms1_gamma_);
         rms2_gamma_ = std::move(other.rms2_gamma_);
+        rms_post_attn_gamma_ = std::move(other.rms_post_attn_gamma_);
+        rms_post_ffn_gamma_ = std::move(other.rms_post_ffn_gamma_);
         W_qkv_ = std::move(other.W_qkv_);
         b_qkv_ = std::move(other.b_qkv_);
         W_o_ = std::move(other.W_o_);
@@ -1471,6 +1475,8 @@ void EncodingLayer::freeWeights() {
     // Reset to empty tensors
     rms1_gamma_ = Tensor();
     rms2_gamma_ = Tensor();
+    rms_post_attn_gamma_ = Tensor();
+    rms_post_ffn_gamma_ = Tensor();
     W_qkv_ = Tensor();
     b_qkv_ = Tensor();
     W_o_ = Tensor();
@@ -1527,11 +1533,17 @@ void EncodingLayer::allocateWeights() {
     rms1_gamma_ = Tensor::zeros(gamma_shape, true, config_.stream, "enc_rms1_gamma");
     rms2_gamma_ = Tensor::zeros(gamma_shape, true, config_.stream, "enc_rms2_gamma");
     
+    // Sandwich norm gammas (post-residual)
+    rms_post_attn_gamma_ = Tensor::zeros(gamma_shape, true, config_.stream, "enc_rms_post_attn_gamma");
+    rms_post_ffn_gamma_ = Tensor::zeros(gamma_shape, true, config_.stream, "enc_rms_post_ffn_gamma");
+    
     // Fill gamma with ones via kernel
     int threads = 256;
     int blocks = (d_model + threads - 1) / threads;
     fillOnesKernel<<<blocks, threads, 0, config_.stream>>>(rms1_gamma_.data, d_model);
     fillOnesKernel<<<blocks, threads, 0, config_.stream>>>(rms2_gamma_.data, d_model);
+    fillOnesKernel<<<blocks, threads, 0, config_.stream>>>(rms_post_attn_gamma_.data, d_model);
+    fillOnesKernel<<<blocks, threads, 0, config_.stream>>>(rms_post_ffn_gamma_.data, d_model);
     
     // Xavier initialization for attention weights
     W_qkv_ = Tensor::xavier_uniform(qkv_weight_shape, true, config_.stream, "enc_W_qkv");
@@ -1563,6 +1575,8 @@ void EncodingLayer::useExternalWeights(
     Tensor& ffn_b1,
     Tensor& ffn_w2,
     Tensor& ffn_b2,
+    Tensor& rms_post_attn_gamma,
+    Tensor& rms_post_ffn_gamma,
     Tensor* layer_scale1,    // Issue #109: optional LayerScale for attention residual
     Tensor* layer_scale2     // Issue #109: optional LayerScale for FFN residual
 ) {
@@ -1586,6 +1600,14 @@ void EncodingLayer::useExternalWeights(
     }
     if (rms2_gamma.numel() != d_model) {
         throw std::invalid_argument("useExternalWeights: rms2_gamma size mismatch");
+    }
+    if (rms_post_attn_gamma.numel() != d_model) {
+        throw std::invalid_argument("useExternalWeights: rms_post_attn_gamma size mismatch. Expected " + 
+                                    std::to_string(d_model) + ", got " + std::to_string(rms_post_attn_gamma.numel()));
+    }
+    if (rms_post_ffn_gamma.numel() != d_model) {
+        throw std::invalid_argument("useExternalWeights: rms_post_ffn_gamma size mismatch. Expected " + 
+                                    std::to_string(d_model) + ", got " + std::to_string(rms_post_ffn_gamma.numel()));
     }
     if (qkv_weight.numel() != static_cast<std::size_t>(qkv_out_dim) * d_model) {
         throw std::invalid_argument("useExternalWeights: qkv_weight size mismatch. Expected " +
@@ -1616,7 +1638,14 @@ void EncodingLayer::useExternalWeights(
     rms2_gamma_.share_grad(rms2_gamma);
     rms2_gamma_.owns_data = false;
     
-
+    // Sandwich norm gammas (post-residual)
+    rms_post_attn_gamma_ = Tensor::from_ptr(rms_post_attn_gamma.data, rms_post_attn_gamma.shape, false, true, "enc_rms_post_attn_gamma");
+    rms_post_attn_gamma_.share_grad(rms_post_attn_gamma);
+    rms_post_attn_gamma_.owns_data = false;
+    
+    rms_post_ffn_gamma_ = Tensor::from_ptr(rms_post_ffn_gamma.data, rms_post_ffn_gamma.shape, false, true, "enc_rms_post_ffn_gamma");
+    rms_post_ffn_gamma_.share_grad(rms_post_ffn_gamma);
+    rms_post_ffn_gamma_.owns_data = false;
     
     W_qkv_ = Tensor::from_ptr(qkv_weight.data, qkv_weight.shape, false, true, "enc_W_qkv");
     W_qkv_.share_grad(qkv_weight);
@@ -1737,7 +1766,8 @@ void EncodingLayer::setWorkspace(float* workspace, std::size_t bytes) {
 //======================================================//
 
 Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t stream,
-                               ForwardIntermediates& intermediates) {
+                               ForwardIntermediates& intermediates,
+                               uint64_t training_step) {
     if constexpr (kEnableEncoderStepLogs) {
         fprintf(stderr, "[EncoderFwd] START total_tokens=%d seq_len=%d\n", 
                 input.shape.flat.rows, seq_len);
@@ -2328,9 +2358,16 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     }
     
     // Issue #56: Store attention output in intermediates
+    // Compute per-step per-layer dropout seed using Knuth multiplicative hash
+    // training_step=0 + attention_dropout=0.0 means no dropout (inference mode)
+    const int layer_idx_for_seed = g_issue77_fwd_layer_count % 12;
+    const uint64_t attn_dropout_seed = (training_step > 0 && config_.attention_dropout > 0.0f)
+        ? (training_step * 2654435761ULL + 42 + 1000 * static_cast<uint64_t>(layer_idx_for_seed))
+        : 0;
     intermediates.attn_out_bhsd = autograd::scaled_dot_product_attention(
         intermediates.Q_bhsd, intermediates.K_bhsd, intermediates.V_bhsd, 
-        config_.pos_encoding->alibi_slopes, 0.0f, stream, nullptr);
+        config_.pos_encoding->alibi_slopes, 0.0f, stream, true,
+        config_.attention_dropout, attn_dropout_seed);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 4: Flash Attention DONE\n");
     if (qkv_debug > 0) {
         const bool always_log = (qkv_debug >= 2);
@@ -2390,26 +2427,20 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         : intermediates.proj_out;
     
     // ========================================================================
-    // ISSUE #126 FIX: Center the COMBINED residual output, not just the layer contribution!
-    // GUARDED by config_.center_encoder_residuals (default: false)
-    //
-    // When enabled (24 centerings total across 12 layers):
-    //   raw_residual1 = add(input, proj_for_residual)
-    //   residual1 = center_columns(raw_residual1)
-    //   Prevents per-layer correlation buildup but attenuates gradient signal
-    //   through 24 CenterColumnsGradFn backward projections.
-    //
-    // When disabled (standard pre-norm):
-    //   residual1 = add(input, proj_for_residual)
-    //   Mode collapse prevention relies on LM head centering (center_hidden_states).
+    // SANDWICH NORM: Residual add + post-residual RMSNorm
+    // 
+    // Architecture: residual1 = RMSNorm(input + LayerScale(attn_out))
+    // 
+    // The post-residual RMSNorm constrains residual stream magnitude,
+    // preventing the unbounded norm growth inherent in standard pre-norm
+    // transformers where output = input + f(RMSNorm(input)).
+    // 
+    // This replaces center_encoder_residuals (Issue #126) which only removed
+    // the mean direction but didn't control magnitude.
     // ========================================================================
     Tensor raw_residual1 = autograd::add(input, proj_for_residual, stream);
-    if (config_.center_encoder_residuals) {
-        intermediates.residual1 = autograd::center_columns(raw_residual1, stream);
-    } else {
-        intermediates.residual1 = std::move(raw_residual1);
-    }
-    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 DONE\n");
+    intermediates.residual1 = autograd::rms_norm(raw_residual1, rms_post_attn_gamma_, config_.rms_epsilon, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 + SandwichNorm DONE\n");
     
     // ISSUE #93 DIAGNOSTIC: Log residual1 = input + proj_out
     {
@@ -2456,16 +2487,15 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         : intermediates.ffn_out;
     
     // ========================================================================
-    // ISSUE #126 FIX: Center the COMBINED residual output (GUARDED)
-    // Same guard as attention residual above. See config_.center_encoder_residuals.
+    // SANDWICH NORM: Residual add + post-residual RMSNorm
+    // 
+    // Architecture: output = RMSNorm(residual1 + LayerScale(ffn_out))
+    // 
+    // Same principle as attention residual: constrains stream magnitude.
     // ========================================================================
     Tensor raw_output = autograd::add(intermediates.residual1, ffn_for_residual, stream);
-    if (config_.center_encoder_residuals) {
-        intermediates.output = autograd::center_columns(raw_output, stream);
-    } else {
-        intermediates.output = std::move(raw_output);
-    }
-    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2 DONE - layer COMPLETE\n");
+    intermediates.output = autograd::rms_norm(raw_output, rms_post_ffn_gamma_, config_.rms_epsilon, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2 + SandwichNorm DONE - layer COMPLETE\n");
     
     // ISSUE #93 DIAGNOSTIC: Log final layer output
     {
@@ -2476,7 +2506,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     // ═══════════════════════════════════════════════════════════════════════════
     // RULE 21 DIAGNOSTIC: Per-Layer Cosine Similarity (correlation tracking)
     //
-    // EQUATION (Issue #126): output = center(center(input + LS1*attn) + LS2*ffn)
+    // EQUATION (Sandwich Norm): output = RMSNorm(RMSNorm(input + LS1*attn) + LS2*ffn)
     //
     // Centering after each residual removes the common direction (mean across tokens),
     // which prevents correlation accumulation through layers.
@@ -2576,7 +2606,6 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     );
     result.is_leaf = false;
     result.grad_fn = intermediates.output.grad_fn;
-    result.owns_grad_fn = false;  // Borrowed, intermediates.output owns it
     result.stream = stream;
     
     return result;

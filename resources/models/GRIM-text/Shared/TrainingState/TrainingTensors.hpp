@@ -58,9 +58,14 @@ struct TrainingTensors {
     
     // Per-layer encoder parameters
     struct EncoderLayerParams {
-        // Layer normalization
+        // Layer normalization (pre-norm)
         Tensor rms1_gamma;  // [d_model] - pre-attention norm
         Tensor rms2_gamma;  // [d_model] - pre-FFN norm
+        
+        // Sandwich norm (post-residual normalization)
+        // Controls residual stream magnitude after each residual add
+        Tensor rms_post_attn_gamma;  // [d_model] - post-attention residual norm
+        Tensor rms_post_ffn_gamma;   // [d_model] - post-FFN residual norm
         
         // Attention
         Tensor attn_qkv_weight;  // [total_qkv_dim, d_model] where total_qkv_dim = d_model + 2*kv_dim

@@ -29,7 +29,6 @@
 #include <cublas_v2.h>
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
-#include "../Layers/Embedding/Embedding_GPU.hpp"
 #include "../Layers/Quantization/Quantization_GPU.hpp"
 #include "../Layers/ScratchBlock/ScratchBlock_GPU.hpp"
 #include "../Shared/GPUBuffer/GPUBuffer.hpp"
@@ -408,7 +407,7 @@ public:
     void enableHybridPositionalEncoding(int num_heads, int d_head, int num_kv_heads, int max_seq_len);
     const ALiBiPositionalBias* getALiBiBias() const;
     const Matrix& getTokenEmbeddings() const;
-    // NOTE: getBatchEmbeddings removed - pure GPU training uses EmbeddingRuntime directly
+    // NOTE: getBatchEmbeddings removed - pure GPU training uses autograd::embedding() directly
     
     // Public members needed by GPU code
     Matrix token_embed;        // Token embedding matrix [vocab_size x d_model]
@@ -493,7 +492,6 @@ class EncoderLayer;
 class GrimEncoder;
 class LanguageModelHead;
 class TextGenerator;
-struct EmbeddingRuntime;
 struct TrainingState;  // Forward declare for methods that return references
 
 // Forward declare LossContext namespace and nested struct
@@ -705,8 +703,6 @@ public:
     
 #ifdef USE_CUDA
     // GPU runtime accessors - return references to owned objects (fail loud if not initialized)
-    EmbeddingRuntime& getGpuEmbedder();
-    const EmbeddingRuntime& getGpuEmbedder() const;
     GPUGrimEncoder& getGpuEncoder();
     const GPUGrimEncoder& getGpuEncoder() const;
     // Activation quantization helper for forward phases
@@ -754,7 +750,6 @@ private:
     
 #ifdef USE_CUDA
     // GPU runtime ownership (StreamController model - proper typed ownership, no void*)
-    std::unique_ptr<EmbeddingRuntime> gpu_embedder_;
     std::unique_ptr<GPUGrimEncoder> gpu_encoder_;
 #endif
     
@@ -938,7 +933,7 @@ using StreamCallback = GenerationStreamCallback;
 //======================================================//
 
 #ifdef USE_CUDA
-// GPUEmbeddingStack removed - use EmbeddingRuntime from Layers/Embedding/ instead
+// GPUEmbeddingStack removed - use autograd::embedding() from TensorContract instead
 
 // Forward declarations for GPU classes
 struct FlashAttentionBF16Scratch {
