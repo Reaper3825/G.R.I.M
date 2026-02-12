@@ -68,6 +68,9 @@ struct EncodingConfig {
     // When false: output = input + branch — standard pre-norm, better gradient flow
     bool center_encoder_residuals = false;
     
+    // Bias control - when false, skip bias addition in attention projections (b_qkv, b_o)
+    bool use_bias = true;
+    
     // Attention
     bool causal_mask = true;
     float softmax_temperature = 1.0f;

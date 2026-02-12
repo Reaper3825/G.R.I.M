@@ -210,7 +210,9 @@ Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& inte
                                                      nullptr);    // W1 persists, no cache needed
 
     // ISSUE #97 FIX: Add bias b1 with autograd tracking (was bypassing gradient computation)
-    intermediates.ffn_linear1_out = autograd::broadcast_add(intermediates.ffn_linear1_out, b1_, stream);
+    if (config_.use_bias && b1_.data) {
+        intermediates.ffn_linear1_out = autograd::broadcast_add(intermediates.ffn_linear1_out, b1_, stream);
+    }
 
     // GELU activation - stores result in intermediates
     intermediates.ffn_gelu_out = autograd::gelu(intermediates.ffn_linear1_out, stream, 
@@ -227,7 +229,9 @@ Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& inte
                                      nullptr);                          // W2 persists
     
     // ISSUE #97 FIX: Add bias b2 with autograd tracking (was bypassing gradient computation)
-    output = autograd::broadcast_add(output, b2_, stream);
+    if (config_.use_bias && b2_.data) {
+        output = autograd::broadcast_add(output, b2_, stream);
+    }
     
     // CRITICAL (Issue #56 root cause fix): Return the output tensor!
     // Without this return statement, `output` is destroyed at function end,

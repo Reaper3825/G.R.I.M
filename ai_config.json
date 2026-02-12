@@ -81,7 +81,7 @@
             "epochs": 3,
             "seed": 1,
             "batch_size": 7,
-            "gradient_accumulation_steps": 3,
+            "gradient_accumulation_steps": 1,
             "batch_strategy": "RANDOM",
             "learning_rate": 3e-4,
             "weight_decay": 0.01,
@@ -106,8 +106,8 @@
             "dynamic_lr": {
                 "enabled": false,
                 "auto_generate": false,
-                "min": 5.0e-5,
-                "max": 3.0e-4,
+                "min": 1e-3,
+                "max": 1e-3,
                 "increase_factor": 1.1,
                 "decrease_factor": 0.1,
                 "upper_grad_norm": 12.0,
@@ -118,7 +118,7 @@
                 "warmup_steps": 0,
                 "max_step_up_ratio": 1.12,
                 "max_step_down_ratio": 0.72,
-                "auto_band": true,
+                "auto_band": false,
                 "band_sigma": 1.5,
                 "band_floor": 3.0,
                 "band_ceiling": 250.0,
@@ -252,7 +252,7 @@
 
             "loss": {
                 "label_smoothing": {
-                    "enabled": true,
+                    "enabled": false,
                     "epsilon": 0.1
                 },
                 "focal": {
@@ -292,7 +292,7 @@
                 "max_tokens_per_batch": 32768,
                 "clip_abs": 12.0,
                 "clip_per_token": 0.025,
-                "lr_min": 3e-5
+                "lr_min": 1e-3
             },
 
             "scratch_blocks": {

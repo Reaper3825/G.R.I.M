@@ -41,6 +41,7 @@
 // Core model
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
+#include "../Shared/TrainingState/TrainingTensors.hpp"
 
 // Tokenizer  
 #include "../Shared/UnigramByte/UniByte.hpp"
@@ -121,9 +122,9 @@ void traceGradientComponents(GRIM::LanguageModel& model, int batch, cudaStream_t
     auto* gpu_encoder = &model.getGpuEncoder();
     
     // 1. LM Head gradients (output layer - should be largest)
-    if (ts.lm_head_weights.grad_data()) {
+    if (ts.tensors_->lm_head_weights.grad_data()) {
         size_t lm_size = static_cast<size_t>(config.vocab_size) * config.d_model;
-        float lm_head_norm = computeGradNormSync(ts.lm_head_weights.grad_data(), lm_size, stream);
+        float lm_head_norm = computeGradNormSync(ts.tensors_->lm_head_weights.grad_data(), lm_size, stream);
         std::cout << "  LM_HEAD: " << std::scientific << std::setprecision(4) << lm_head_norm 
                   << " (should be largest - closest to loss)" << std::endl;
     }
@@ -166,9 +167,9 @@ void traceGradientComponents(GRIM::LanguageModel& model, int batch, cudaStream_t
     }
     
     // 3. Embedding gradients (input layer - should be attenuated from output)
-    if (ts.embedding_weights.grad_data()) {
+    if (ts.tensors_->embedding_weights.grad_data()) {
         const size_t embedding_grad_size = config.vocab_size * config.d_model;
-        float emb_norm = computeGradNormSync(ts.embedding_weights.grad_data(), embedding_grad_size, stream);
+        float emb_norm = computeGradNormSync(ts.tensors_->embedding_weights.grad_data(), embedding_grad_size, stream);
         std::cout << "  EMBEDDING: " << emb_norm 
                   << " (most attenuated - farthest from loss)" << std::endl;
     }
@@ -512,8 +513,6 @@ int main(int argc, char** argv) {
     {
         GRIM::StreamControllerConfig stream_config;
         stream_config.verbose = true;
-        stream_config.create_transfer_stream = true;
-        stream_config.create_auxiliary_stream = false;
         
         if (!model.getTrainingState().stream_ctrl.initialize(stream_config)) {
             std::cerr << "  ✗ Failed to initialize StreamController" << std::endl;

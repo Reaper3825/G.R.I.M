@@ -223,17 +223,12 @@ constexpr float ROPE_THETA = 10000.0f;        // RoPE base frequency (standard: 
 constexpr float ROPE_SCALING = 1.0f;          // NTK scaling factor (1.0 = no scaling)
 constexpr float ALIBI_SLOPE_EXPONENT = -8.0f; // Controls ALiBi slope decay across heads
 
-// ISSUE #78 FIX: Maximum ALiBi bias cap (prevents gradient explosion in softmax backward)
-// Standard ALiBi with max_seq_len=1024 can produce biases up to -256, causing:
-// - exp(-256) ≈ 0 (underflow, near-zero attention probabilities)
-// - Softmax backward amplifies dQ/dK by 100,000x vs dV (gradient explosion!)
+// ISSUE #78: ALiBi bias capping (optional safety net for softmax backward stability)
+// Issue #84 fixed the ROOT CAUSE of dQ/dK explosion (missing FlashAttention preprocessing
+// kernel), so capping is no longer required for correctness.
 // 
-// With ALIBI_MAX_BIAS=-10:
-// - exp(-10) ≈ 0.000045 (computable, not underflow)
-// - Softmax backward stays numerically stable
-// - Preserves ALiBi's distance-decay within the capped range
-//
-// Set to 0.0f to disable capping (NOT RECOMMENDED - causes Issue #78 gradient explosion)
+// Set to -10.0f to enable capping (limits exp(bias) ≥ exp(-10) ≈ 0.000045).
+// Set to 0.0f to disable capping (current: disabled, safe after Issue #84 fix).
 constexpr float ALIBI_MAX_BIAS = 0.0f;
 
 //======================================================//

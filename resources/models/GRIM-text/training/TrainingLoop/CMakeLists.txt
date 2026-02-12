@@ -199,6 +199,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/Quantization/Quantization_GPU.cu
     ../../Shared/DynaSeqs/DynaSeq_GPU.cu
     ../../Shared/Batching/Batching_GPU.cu
+    ../../Shared/Batching/BatchPayload.cu
     ../../Shared/Loss/NumericLoss/NumericLoss_GPU.cu
     ../../Layers/Encoding/Encoding_GPU.cu
     ../../Layers/ScratchBlock/ScratchBlock_GPU.cu
@@ -287,7 +288,6 @@ add_executable(train_gpu
     ../../Shared/SoftRestart/SoftRestart.cu
     ../../Layers/GRIMTS/GRIM-TS.cu
     ../../Shared/Stability/StabilityOverrides.cpp
-    ../../Shared/RareTokens/RareTokens_GPU.cu
 )
 
 set_target_properties(train_gpu PROPERTIES

@@ -512,7 +512,6 @@ float GeneratedSequence::getNormalizedScore(float length_penalty) const {
 
 ALiBiPositionalBias::ALiBiPositionalBias()
     : num_heads(0),
-      d_head(0),
       initialized(false),
       type(PositionalEncodingType::NONE) {}
 
@@ -543,7 +542,6 @@ ALiBiPositionalBias& ALiBiPositionalBias::operator=(ALiBiPositionalBias&& other)
         other.pbm_state_.rope_inv_freq_host.clear();
 #endif
         num_heads = other.num_heads;
-        d_head = other.d_head;
         initialized = other.initialized;
         type = other.type;
     }
@@ -567,7 +565,6 @@ void ALiBiPositionalBias::computeSlopes(int num_heads_, int num_kv_heads_, int d
 
     num_heads = num_heads_;
     type = type_;
-    d_head = d_head_;
 #ifdef USE_CUDA
     // Use unified PBM - always allocates both ALiBi + RoPE
     PBM::PBMConfig config{};
@@ -623,7 +620,6 @@ void ALiBiPositionalBias::cleanup() {
     initialized = false;
     type = PositionalEncodingType::NONE;
     num_heads = 0;
-    d_head = 0;
 }
 
 // Legacy extern declarations removed - pure GPU training uses:
@@ -675,7 +671,6 @@ void GrimEmbeddingStack::enableHybridPositionalEncoding(int num_heads, int d_hea
         throw std::runtime_error("GrimEmbeddingStack::enableHybridPositionalEncoding: d_head must match d_model/num_heads");
     }
     alibi_ = std::make_unique<ALiBiPositionalBias>();
-    alibi_->d_head = d_head;
     // Pass through num_kv_heads so PBM and encoder GQA settings match
     alibi_->computeSlopes(num_heads, num_kv_heads, d_head, max_seq_len, PositionalEncodingType::ALIBI_ROPE);
 }

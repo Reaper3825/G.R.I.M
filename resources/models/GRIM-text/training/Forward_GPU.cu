@@ -41,6 +41,7 @@ struct GPUGrimEncoder::Impl {
         enc_cfg.use_layer_scale = config.use_layer_scale;
         enc_cfg.layer_scale_init = config.layer_scale_init;
         enc_cfg.center_encoder_residuals = config.center_encoder_residuals;
+        enc_cfg.use_bias = config.use_bias;
 
         if (!config.pos_encoding) {
             FWD_ERROR("[GPUGrimEncoder] FATAL: pos_encoding is NULL");

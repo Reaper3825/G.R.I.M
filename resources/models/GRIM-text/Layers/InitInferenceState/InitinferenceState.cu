@@ -28,6 +28,7 @@
 #include "../FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Shared/TrainingState/TrainingTensors.hpp"
 
 using GRIM::Tensor;
 
@@ -53,8 +54,6 @@ void LanguageModel::initInferenceState() {
     // StreamController manages CUDA streams - initialize it first
     GRIM::StreamControllerConfig stream_config;
     stream_config.verbose = false;
-    stream_config.create_transfer_stream = false;  // Inference doesn't need transfer stream
-    stream_config.create_auxiliary_stream = false;
     
     if (!training_state_.stream_ctrl.initialize(stream_config)) {
         std::cerr << "[InitInferenceState] Failed to initialize StreamController" << std::endl;
@@ -88,24 +87,37 @@ void LanguageModel::initInferenceState() {
     // TensorContract shape helpers
     using TC = TensorContract::TensorShape;
     
-    // 2. Setup LM head weights (tied to embeddings for inference)
-    // Tensor API: Use from_ptr for tied embeddings, zeros for separate allocation
+    // Create TrainingTensors container FIRST — all weight tensors live here
+    // (no gradients for inference, but same container as training for uniform access)
+    training_state_.tensors_ = std::make_unique<TrainingTensors>();
+    
+    // 2. Allocate embedding weights (will be populated by model load)
+    training_state_.tensors_->embedding_weights = Tensor::zeros(
+        TC::make_BSM(cfg.vocab_size, cfg.d_model),
+        false,  // no grad for inference
+        primary_stream,
+        "embedding_weights_inf"
+    );
+    std::cout << "  ✓ Allocated embedding weights (Tensor API)" << std::endl;
+    
+    // 3. Setup LM head weights (tied to embeddings or separate allocation)
     if (cfg.tie_embeddings) {
-        if (!training_state_.embedding_weights.data) {
-            throw std::runtime_error("[InitInferenceState] Cannot tie embeddings — training_state_.embedding_weights not initialized");
+        if (!training_state_.tensors_->embedding_weights.data) {
+            throw std::runtime_error("[InitInferenceState] embedding_weights allocation failed — cannot tie");
         }
-        // Use from_ptr: doesn't own the data, just wraps the embedding buffer
-        training_state_.lm_head_weights = Tensor::from_ptr(
-            training_state_.embedding_weights.data,
+        // from_ptr: wraps embedding buffer, doesn't own data
+        training_state_.tensors_->lm_head_weights = Tensor::from_ptr(
+            training_state_.tensors_->embedding_weights.data,
             TC::make_BSM(cfg.vocab_size, cfg.d_model),
             false,  // doesn't own data
             false,   // no grad for inference
             "lm_head_weights_tied_inference"
         );
+        training_state_.tensors_->lm_head_weights.owns_data = false;
         std::cout << "  ✓ LM head weights tied to embeddings (Tensor API)" << std::endl;
     } else {
         // Allocate separate LM head weights (will be loaded from model file)
-        training_state_.lm_head_weights = Tensor::zeros(
+        training_state_.tensors_->lm_head_weights = Tensor::zeros(
             TC::make_BSM(cfg.vocab_size, cfg.d_model),
             false,  // no grad for inference
             primary_stream,
@@ -116,32 +128,46 @@ void LanguageModel::initInferenceState() {
     
     // Optional: LM head bias
     if (cfg.use_bias) {
-        training_state_.lm_head_bias = Tensor::zeros(
+        training_state_.tensors_->lm_head_bias = Tensor::zeros(
             TC::make_BSM(1, cfg.vocab_size),
             false,  // no grad for inference
             primary_stream,
             "lm_head_bias_inf"
         );
-        std::cout << "  ✓ Allocated LM head bias (Tensor API)" << std::endl;
+        std::cout << "  Allocated LM head bias (Tensor API)" << std::endl;
     }
 
     if (cfg.numeric_head_enabled) {
-        training_state_.numeric_head_weights = Tensor::zeros(
+        training_state_.tensors_->numeric_head_weights = Tensor::zeros(
             TC::make_BSM(1, cfg.d_model),
             false,  // no grad for inference
             primary_stream,
             "numeric_head_weights_inf"
         );
         if (cfg.use_bias) {
-            training_state_.numeric_head_bias = Tensor::zeros(
+            training_state_.tensors_->numeric_head_bias = Tensor::zeros(
                 TC::make_BSM(1, 1),
                 false,  // no grad for inference
                 primary_stream,
                 "numeric_head_bias_inf"
             );
         }
-        std::cout << "  ✓ Allocated numeric head weights (Tensor API)" << std::endl;
+        std::cout << "  Allocated numeric head weights (Tensor API)" << std::endl;
     }
+    
+    // Final RMSNorm gamma [d_model] - needed for inference forward pass
+    training_state_.tensors_->final_rms_gamma = Tensor::zeros(
+        TC::make_BSM(1, cfg.d_model),
+        false,  // no grad for inference
+        primary_stream,
+        "final_rms_gamma_inf"
+    );
+    {
+        std::vector<float> ones(cfg.d_model, 1.0f);
+        cudaMemcpyAsync(training_state_.tensors_->final_rms_gamma.data, ones.data(),
+                        cfg.d_model * sizeof(float), cudaMemcpyHostToDevice, primary_stream);
+    }
+    std::cout << "  Allocated final RMSNorm gamma (Tensor API)" << std::endl;
     
     // 3. Allocate minimal activation caches
     const size_t max_batch_size = static_cast<size_t>(std::max(1, cfg.max_cached_batch));
@@ -183,92 +209,11 @@ void LanguageModel::initInferenceState() {
     );
     std::cout << "  ✓ Allocated numeric mask cache (Tensor API)" << std::endl;
     
-    // Embeddings cache - use Tensor API
-    training_state_.cached_embeddings_tensor = Tensor::zeros(
-        TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model),
-        false,  // no grad for inference
-        primary_stream,
-        "cached_embeddings_tensor_inf"
-    );
-    std::cout << "  ✓ Allocated embeddings cache (Tensor API)" << std::endl;
+    // DELETED: cached_embeddings_tensor - not used in inference (encoder output computed on-the-fly)
+    // DELETED: encoder_layer_caches - intermediate tensor caching moved to AutogradIntermediates
     
-    // Per-layer activation caches using Tensor-based EncoderLayerCacheTensors
-    training_state_.encoder_layer_caches.resize(cfg.num_layers);
-    
-    const size_t softmax_lse_elems = static_cast<size_t>(max_batch_size) *
-                                     static_cast<size_t>(cfg.num_heads) *
-                                     static_cast<size_t>(max_seq_len_cache);
-    const int head_dim = cfg.head_dim;  // Use pre-computed value from config
-    const size_t attn_bhsd_elems = static_cast<size_t>(max_batch_size) *
-                                   static_cast<size_t>(cfg.num_heads) *
-                                   static_cast<size_t>(max_seq_len_cache) *
-                                   static_cast<size_t>(head_dim);
-    const size_t kv_bhsd_elems = static_cast<size_t>(max_batch_size) *
-                                 static_cast<size_t>(training_state_.num_kv_heads) *
-                                 static_cast<size_t>(max_seq_len_cache) *
-                                 static_cast<size_t>(head_dim);
-
-    for (int layer = 0; layer < cfg.num_layers; ++layer) {
-        auto& cache = training_state_.encoder_layer_caches[layer];
-        
-        cache.ln1_output = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream, "inf_cache_ln1_output");
-        cache.attn_input = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream, "inf_cache_attn_input");
-        cache.attn_bhsd = Tensor::zeros(TC::make_BSM(1, static_cast<int>(attn_bhsd_elems)), false, primary_stream, "inf_cache_attn_bhsd");
-        cache.softmax_lse = Tensor::zeros(TC::make_BSM(1, static_cast<int>(softmax_lse_elems)), false, primary_stream, "inf_cache_softmax_lse");
-        cache.attn_output = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream, "inf_cache_attn_output");
-        cache.residual1 = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream, "inf_cache_residual1");
-        cache.ln2_output = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream, "inf_cache_ln2_output");
-        cache.ffn_pre_gelu = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_ff), false, primary_stream, "inf_cache_ffn_pre_gelu");
-        cache.ffn_output = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_ff), false, primary_stream, "inf_cache_ffn_output");
-        cache.layer_output = Tensor::zeros(TC::make_BSM(static_cast<int>(max_tokens), cfg.d_model), false, primary_stream, "inf_cache_layer_output");
-        
-        cache.Q = Tensor::zeros(TC::make_BSM(1, static_cast<int>(attn_bhsd_elems)), false, primary_stream, "inf_cache_Q");
-        cache.K = Tensor::zeros(TC::make_BSM(1, static_cast<int>(kv_bhsd_elems)), false, primary_stream, "inf_cache_K");
-        cache.V = Tensor::zeros(TC::make_BSM(1, static_cast<int>(kv_bhsd_elems)), false, primary_stream, "inf_cache_V");
-    }
-    std::cout << "  ✓ Allocated per-layer activation caches using Tensor API (" << cfg.num_layers << " layers)" << std::endl;
-
-    // Flash Attention BF16 buffers - use Tensor API
-    // Note: Tensor manages bf16 via raw allocation + element count tracking
-    const size_t fa_q_elems = static_cast<size_t>(max_batch_size) *
-                              static_cast<size_t>(cfg.num_heads) *
-                              static_cast<size_t>(max_seq_len_cache) *
-                              static_cast<size_t>(head_dim);
-    const size_t fa_kv_elems = static_cast<size_t>(max_batch_size) *
-                               static_cast<size_t>(training_state_.num_kv_heads) *
-                               static_cast<size_t>(max_seq_len_cache) *
-                               static_cast<size_t>(head_dim);
-    training_state_.fa_q_bf16_elems = fa_q_elems;
-    training_state_.fa_kv_bf16_elems = fa_kv_elems;
-
-    // Allocate BF16 Tensors - use bf16 allocation helper
-    // Note: Using Tensor::zeros for float, then bf16 will be allocated separately below
-    // For now, allocate via cudaMalloc to BF16 Tensor's data pointer
-    auto alloc_bf16_tensor = [&](Tensor& tensor, const char* label, size_t elems) -> bool {
-        __nv_bfloat16* ptr = nullptr;
-        cudaError_t berr = cudaMalloc(&ptr, elems * sizeof(__nv_bfloat16));
-        if (berr != cudaSuccess) {
-            std::cerr << "[InitInferenceState] Failed to allocate " << label << ": "
-                      << cudaGetErrorString(berr) << std::endl;
-            return false;
-        }
-        // Create tensor wrapper around bf16 allocation
-        tensor.data = reinterpret_cast<float*>(ptr);  // Store bf16 ptr cast to float*
-        tensor.shape = TC::make_BSM(1, static_cast<int>(elems));
-        tensor.owns_data = true;
-        tensor.requires_grad = false;
-        return true;
-    };
-
-    if (!alloc_bf16_tensor(training_state_.fa_q_bf16, "fa_q_bf16", fa_q_elems)) return;
-    if (!alloc_bf16_tensor(training_state_.fa_k_bf16, "fa_k_bf16", fa_kv_elems)) return;
-    if (!alloc_bf16_tensor(training_state_.fa_v_bf16, "fa_v_bf16", fa_kv_elems)) return;
-    if (!alloc_bf16_tensor(training_state_.fa_out_bf16, "fa_out_bf16", fa_q_elems)) return;
-    if (!alloc_bf16_tensor(training_state_.fa_dout_bf16, "fa_dout_bf16", fa_q_elems)) return;
-    if (!alloc_bf16_tensor(training_state_.fa_dq_bf16, "fa_dq_bf16", fa_q_elems)) return;
-    if (!alloc_bf16_tensor(training_state_.fa_dk_bf16, "fa_dk_bf16", fa_kv_elems)) return;
-    if (!alloc_bf16_tensor(training_state_.fa_dv_bf16, "fa_dv_bf16", fa_kv_elems)) return;
-    std::cout << "  ✓ Allocated Flash Attention BF16 buffers (Tensor API)" << std::endl;
+    // DELETED: FA bf16 buffers — FlashAttentionLayer::ensureScratch() self-manages.
+    // Autograd ScaledDotProductAttentionGradFn also self-allocates backward buffers.
     
     // Encoder outputs cache - use Tensor API
     training_state_.cached_encoder_output = Tensor::zeros(

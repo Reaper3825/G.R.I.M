@@ -13,7 +13,6 @@
 //  - computeGradNorm() - L2 norm of all gradients
 //  - scaleGradients() - Gradient clipping helper
 //  - zeroGrad() - Zero all gradient buffers
-//  - setSequenceLossWeights() / clearSequenceLossWeights()
 //  - recordGradientClip() - Gradient metrics tracking
 //  - resetOptimizerMoments() - Reset optimizer state
 //  - configureUpdateProbe() / disableUpdateProbe() - Debug probes
@@ -44,6 +43,7 @@
 #include "../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
 #include "../../../control/ai_config_paths.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../Shared/TrainingState/TrainingTensors.hpp"
 #include "../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "Autograd/AutogradTraining.hpp"  // Pure autograd backward - replaces legacy 3-phase system
 
@@ -233,13 +233,13 @@ void LanguageModel::zeroGrad() {
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
     
     // ── Top-level parameter Tensors ──────────────────────────────────────────
-    training_state_.embedding_weights.zero_grad(stream);
-    training_state_.position_embedding_weights.zero_grad(stream);
-    training_state_.lm_head_weights.zero_grad(stream);
-    training_state_.lm_head_bias.zero_grad(stream);
-    training_state_.numeric_head_weights.zero_grad(stream);
-    training_state_.numeric_head_bias.zero_grad(stream);
-    training_state_.final_rms_gamma.zero_grad(stream);  // BUG FIX: was missing from zeroGrad!
+    training_state_.tensors_->embedding_weights.zero_grad(stream);
+    training_state_.tensors_->position_embedding_weights.zero_grad(stream);
+    training_state_.tensors_->lm_head_weights.zero_grad(stream);
+    training_state_.tensors_->lm_head_bias.zero_grad(stream);
+    training_state_.tensors_->numeric_head_weights.zero_grad(stream);
+    training_state_.tensors_->numeric_head_bias.zero_grad(stream);
+    training_state_.tensors_->final_rms_gamma.zero_grad(stream);  // BUG FIX: was missing from zeroGrad!
     
     // ── Encoder layer Tensors ────────────────────────────────────────────────
     GPUGrimEncoder& gpu_encoder = getGpuEncoder();
@@ -316,85 +316,40 @@ void LanguageModel::backward(float loss, bool accumulate, float grad_scale, uint
     // ═══════════════════════════════════════════════════════════════════════════
     
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
-    
+
     // RULE 20: Fail loud - loss tensor MUST have grad_fn from forward pass
-    if (!training_state_.loss_tensor.grad_fn) {
+    if (!training_state_.autograd_intermediates.loss_tensor.grad_fn) {
         throw std::runtime_error("[backward] loss_tensor.grad_fn is NULL - forward pass (computeLossBatch) MUST be called first!");
     }
-    
-    BWD_INFO("[backward] Executing pure autograd backward pass");
-    
-    // Zero gradients if not accumulating
-    // The autograd system's executeAutogradBackward handles this, but we also need to zero
-    // any raw gradient buffers that might still be referenced by the optimizer
-    // 
-    // beta_accum decision:
-    //   accumulate=false → zeroGrad() called → beta_accum effectively 0 (start fresh)
-    //   accumulate=true  → skip zeroGrad()   → beta_accum effectively 1 (add to existing)
-    const float effective_beta = accumulate ? 1.0f : 0.0f;
-    BWD_INFO("[backward] beta_accum decision: accumulate=" << (accumulate ? "true" : "false") 
-             << " → effective_beta=" << effective_beta 
-             << (accumulate ? " (ACCUMULATING to existing gradients)" : " (OVERWRITING with fresh gradients)"));
-    
-    if (!accumulate) {
-        // Zero all parameter gradients before backward pass.
-        // The autograd system accumulates by default, so we must zero explicitly
-        // when starting a fresh gradient accumulation window (accumulate=false).
-        zeroGrad();  
+
+    BWD_INFO("[backward] Delegating to Autograd::executeAutogradBackward()");
+
+    const float effective_grad_scale = (grad_scale > 0.0f) ? grad_scale : 1.0f;
+    Autograd::AutogradContext autograd_ctx = Autograd::initAutogradContext(
+        &config_,
+        &training_state_,
+        &getGpuEncoder(),
+        getScratchBlockLayer(),
+        training_state_.cublas_handle,
+        stream,
+        batch_size,
+        seq_len,
+        effective_grad_scale,
+        step,
+        true
+    );
+
+    // ScratchBlock backward reads side-channel token buffers via context.
+    autograd_ctx.token_numeric_values = training_state_.cached_token_numeric_values.data;
+    autograd_ctx.token_numeric_mask = reinterpret_cast<const uint8_t*>(training_state_.cached_token_numeric_mask.data);
+    autograd_ctx.token_text_features = reinterpret_cast<const uint16_t*>(training_state_.cached_token_text_features.data);
+    autograd_ctx.token_text_mask = reinterpret_cast<const uint8_t*>(training_state_.cached_token_text_mask.data);
+
+    Autograd::BackwardResult bwd_result = Autograd::executeAutogradBackward(autograd_ctx, accumulate);
+    if (!bwd_result.success) {
+        throw std::runtime_error("[backward] executeAutogradBackward failed: " + bwd_result.error_message);
     }
-    
-    // Issue #87 DEBUG: Verify grad buffer addresses match between zeroGrad and autograd
-    BWD_INFO("[backward] GRAD BUFFER VERIFICATION:");
-    BWD_INFO("[backward]   ts.embedding_weights.grad_data() = " << (void*)training_state_.embedding_weights.grad_data());
-    BWD_INFO("[backward]   ts.lm_head_weights.grad_data()   = " << (void*)training_state_.lm_head_weights.grad_data());
-    BWD_INFO("[backward]   (both should be IDENTICAL if weight tying is correct)");
-    
-    // Call backward on the loss tensor from forward pass
-    // The grad_fn chain is already attached - this propagates through entire graph:
-    // loss → logits → encoder_output → encoder_layers → embeddings
-    training_state_.loss_tensor.backward(nullptr);
-    
-    // ═══════════════════════════════════════════════════════════════════════════
-    //  ISSUE #71 FIX: NumericHead backward was NEVER CALLED!
-    //  
-    //  The numeric head forward creates ctx.numeric_head_output with a grad_fn.
-    //  The numeric loss kernel (launchNumericLoss) computes grad_predictions and
-    //  stores them in training_state_.grad_numeric_tensor.data. BUT this gradient
-    //  was never backpropagated through the NumericHead autograd graph!
-    //  
-    //  Result: numeric_head_weights received ZERO gradients.
-    //  
-    //  Fix: Call numeric_head_output.backward() with the gradients from launchNumericLoss.
-    // ═══════════════════════════════════════════════════════════════════════════
-    if (config_.numeric_head_enabled && 
-        training_state_.autograd_ctx && 
-        training_state_.autograd_ctx->numeric_head_output.data &&
-        training_state_.autograd_ctx->numeric_head_output.grad_fn &&
-        training_state_.grad_numeric_tensor.data) {
-        
-        BWD_INFO("[backward] Issue #71 FIX: Calling numeric_head_output.backward() with numeric loss gradients");
-        
-        // Create a Tensor wrapper around the gradient from launchNumericLoss
-        // This gradient is d(numeric_loss)/d(predictions) already computed by the kernel
-        Tensor numeric_grad;
-        numeric_grad.data = training_state_.grad_numeric_tensor.data;
-        numeric_grad.shape = training_state_.autograd_ctx->numeric_head_output.shape;
-        numeric_grad.owns_data = false;  // grad_numeric_tensor owns the memory
-        numeric_grad.stream = stream;
-        
-        // Call backward on the numeric head output with the loss gradients
-        // This propagates through NumericHeadGradFn::apply() to compute:
-        //   - grad_numeric_head_weights = encoder_output^T @ grad_predictions
-        //   - grad_encoder_output += weights @ grad_predictions (accumulated to encoder path)
-        training_state_.autograd_ctx->numeric_head_output.backward(&numeric_grad);
-        
-        BWD_INFO("[backward] Issue #71: numeric_head_output.backward() completed");
-    }
-    
-    // ISSUE #62: Sync stream after backward to ensure all async CUDA operations complete
-    // before any GradFn destructors run (which might free buffers still in use)
-    cudaStreamSynchronize(stream);
-    // NOTE: Removed "[backward] Stream synced" fprintf - runs every batch, no value
+    BWD_INFO("[backward] Autograd backward complete: grad_norm=" << bwd_result.grad_norm);
     
     // Issue #60 DEBUG: Log gradient attribution for debugging token 277 mode collapse
     // This shows LM head vs embedding backward contributions separately
@@ -402,31 +357,12 @@ void LanguageModel::backward(float loss, bool accumulate, float grad_scale, uint
         training_state_.logGradientAttribution(static_cast<int>(step), stream);
     }
     
-    // Apply gradient scaling if needed
-    if (grad_scale != 1.0f) {
-        // Scale all parameter gradients by grad_scale
-        const float scale = grad_scale;
-        auto* ts = &training_state_;
-        
-        GRIM::scaleGradBuffer(ts->embedding_weights, scale, stream);
-        GRIM::scaleGradBuffer(ts->position_embedding_weights, scale, stream);
-        GRIM::scaleGradBuffer(ts->lm_head_weights, scale, stream);
-        GRIM::scaleGradBuffer(ts->lm_head_bias, scale, stream);
-        GRIM::scaleGradBuffer(ts->final_rms_gamma, scale, stream);
-        
-        // NOTE: Encoder layer gradients are in encoder's internal Tensors.
-        // The optimizer accesses them via Tensor& accessors (enc->attnWqkv() etc.).
-        // Gradient scaling for encoder is handled by the autograd system.
-    }
-    
     // ALWAYS clear sequence weights after backward
     training_state_.sequence_weight_count = 0;
     
-    // Issue #47: Clear autograd context to free GPU memory from intermediate tensors
-    // The next computeLossBatch() will create a new context anyway
-    if (training_state_.autograd_ctx) {
-        training_state_.autograd_ctx->clearIntermediates();
-    }
+    // Clear autograd intermediates to free GPU memory from intermediate tensors
+    // The next computeLossBatch() will create new intermediates anyway
+    training_state_.autograd_intermediates.clear();
     
     BWD_INFO("[backward] AUTOGRAD COMPLETE");
 }
@@ -458,7 +394,8 @@ void LanguageModel::buildParameterGroups() {
     // Eliminates manual size computation — uses Tensor::numel() directly.
     // Rule 20: tensor MUST have data and grad, otherwise skip with warning.
     auto registerTensor = [&](const std::string& name, Tensor& tensor,
-                              ParamGroupType type, int layer = -1) {
+                              ParamGroupType type, int layer = -1,
+                              float wd_mult = 1.0f) {
         if (!tensor.data || !tensor.has_grad()) {
             throw std::runtime_error("[buildParameterGroups] " + name + " has no data or grad! data=" 
                                      + std::to_string(reinterpret_cast<uintptr_t>(tensor.data)) 
@@ -472,11 +409,29 @@ void LanguageModel::buildParameterGroups() {
         group.v_tensor = nullptr;
         group.type = type;
         group.layer_index = layer;
+        group.weight_decay_multiplier = wd_mult;
         if (layer >= 0) {
             group.upsilon = HyperParameters::UPSILON_BASE * 
                 sqrtf(static_cast<float>(HyperParameters::UPSILON_REFERENCE_LAYERS) / static_cast<float>(layer + 1));
         }
         parameter_groups_.push_back(group);
+    };
+
+    // Helper: Register a bias or norm tensor (weight_decay = 0.0)
+    // Standard AdamW practice: biases and normalization parameters should NOT have weight decay
+    auto registerNonDecayTensor = [&](const std::string& name, Tensor& tensor,
+                                      ParamGroupType type, int layer = -1) {
+        registerTensor(name, tensor, type, layer, 0.0f);
+    };
+
+    // Helper: Try to register a bias tensor if it has been allocated (guards use_bias=false case)
+    auto tryRegisterBias = [&](const std::string& name, Tensor& tensor,
+                               ParamGroupType type, int layer = -1) {
+        if (tensor.data && tensor.has_grad()) {
+            registerNonDecayTensor(name, tensor, type, layer);
+        } else {
+            fprintf(stderr, "[buildParameterGroups] %s skipped (use_bias=false or not allocated)\n", name.c_str());
+        }
     };
 
     // ── Top-level parameters ─────────────────────────────────────────────────
@@ -485,13 +440,13 @@ void LanguageModel::buildParameterGroups() {
     // When tie_embeddings=true, embedding grad buffer == lm_head grad buffer (same pointer)
     // Registering both would double-count gradients and corrupt optimizer state
     if (!cfg.tie_embeddings) {
-        registerTensor("embedding", training_state_.embedding_weights, ParamGroupType::EMBEDDING);
+        registerTensor("embedding", training_state_.tensors_->embedding_weights, ParamGroupType::EMBEDDING);
     }
 
     // Issue #113: Sinusoidal position embeddings are FIXED (not learned).
     // Only register if they have allocated data (i.e., learned position embeddings are in use).
-    if (training_state_.position_embedding_weights.data && training_state_.position_embedding_weights.has_grad()) {
-        registerTensor("position_embedding", training_state_.position_embedding_weights, ParamGroupType::EMBEDDING);
+    if (training_state_.tensors_->position_embedding_weights.data && training_state_.tensors_->position_embedding_weights.has_grad()) {
+        registerTensor("position_embedding", training_state_.tensors_->position_embedding_weights, ParamGroupType::EMBEDDING);
     } else {
         fprintf(stderr, "[buildParameterGroups] position_embedding skipped (sinusoidal/fixed, not learned)\n");
     }
@@ -500,18 +455,22 @@ void LanguageModel::buildParameterGroups() {
     fprintf(stderr, "[buildParameterGroups] DIAG-A: about to register LM head\n"); fflush(stderr);
     {
         std::string lm_name = cfg.tie_embeddings ? "embedding_lm_head_tied" : "lm_head_weight";
-        registerTensor(lm_name, training_state_.lm_head_weights, ParamGroupType::LM_HEAD);
+        registerTensor(lm_name, training_state_.tensors_->lm_head_weights, ParamGroupType::LM_HEAD);
     }
+    // LM head bias — no weight decay
+    tryRegisterBias("lm_head_bias", training_state_.tensors_->lm_head_bias, ParamGroupType::LM_HEAD);
     fprintf(stderr, "[buildParameterGroups] DIAG-B: LM head done, registering numeric/log_var\n"); fflush(stderr);
 
     // Numeric head
     if (cfg.numeric_head_enabled) {
-        registerTensor("numeric_head_weight", training_state_.numeric_head_weights, ParamGroupType::NUMERIC_HEAD);
+        registerTensor("numeric_head_weight", training_state_.tensors_->numeric_head_weights, ParamGroupType::NUMERIC_HEAD);
+        // Numeric head bias — no weight decay
+        tryRegisterBias("numeric_head_bias", training_state_.tensors_->numeric_head_bias, ParamGroupType::NUMERIC_HEAD);
     }
     
-    // Learned loss weighting (log-variance for text and numeric losses)
-    registerTensor("log_var_text", training_state_.log_var_text, ParamGroupType::NUMERIC_HEAD);
-    registerTensor("log_var_numeric", training_state_.log_var_numeric, ParamGroupType::NUMERIC_HEAD);
+    // Learned loss weighting (log-variance for text and numeric losses) — no weight decay
+    registerNonDecayTensor("log_var_text", training_state_.log_var_text, ParamGroupType::NUMERIC_HEAD);
+    registerNonDecayTensor("log_var_numeric", training_state_.log_var_numeric, ParamGroupType::NUMERIC_HEAD);
 
     fprintf(stderr, "[buildParameterGroups] DIAG-C: numeric/log_var done, starting %d layers\n", cfg.num_layers); fflush(stderr);
     // ── Per-layer encoder parameters ─────────────────────────────────────────
@@ -526,21 +485,21 @@ void LanguageModel::buildParameterGroups() {
         
         // Attention weights/biases
         registerTensor(prefix + "_qkv_weight", enc->attnWqkv(), ParamGroupType::ATTENTION, layer);
-        registerTensor(prefix + "_qkv_bias",   enc->attnBqkv(), ParamGroupType::ATTENTION, layer);
+        tryRegisterBias(prefix + "_qkv_bias",  enc->attnBqkv(), ParamGroupType::ATTENTION, layer);
         registerTensor(prefix + "_wo_weight",   enc->attnWo(),   ParamGroupType::ATTENTION, layer);
-        registerTensor(prefix + "_wo_bias",     enc->attnBo(),   ParamGroupType::ATTENTION, layer);
+        tryRegisterBias(prefix + "_wo_bias",    enc->attnBo(),   ParamGroupType::ATTENTION, layer);
         
         // FFN weights/biases
         registerTensor(prefix + "_ffn_w1", enc->ffnW1(), ParamGroupType::FFN, layer);
-        registerTensor(prefix + "_ffn_b1", enc->ffnB1(), ParamGroupType::FFN, layer);
+        tryRegisterBias(prefix + "_ffn_b1", enc->ffnB1(), ParamGroupType::FFN, layer);
         registerTensor(prefix + "_ffn_w2", enc->ffnW2(), ParamGroupType::FFN, layer);
-        registerTensor(prefix + "_ffn_b2", enc->ffnB2(), ParamGroupType::FFN, layer);
+        tryRegisterBias(prefix + "_ffn_b2", enc->ffnB2(), ParamGroupType::FFN, layer);
         
-        // RMSNorm gamma (pre-norm + sandwich post-residual)
-        registerTensor(prefix + "_rms1_gamma", enc->rms1Gamma(), ParamGroupType::RMSNORM, layer);
-        registerTensor(prefix + "_rms2_gamma", enc->rms2Gamma(), ParamGroupType::RMSNORM, layer);
-        registerTensor(prefix + "_rms_post_attn_gamma", enc->rmsPostAttnGamma(), ParamGroupType::RMSNORM, layer);
-        registerTensor(prefix + "_rms_post_ffn_gamma", enc->rmsPostFfnGamma(), ParamGroupType::RMSNORM, layer);
+        // RMSNorm gamma (pre-norm + sandwich post-residual) — no weight decay
+        registerNonDecayTensor(prefix + "_rms1_gamma", enc->rms1Gamma(), ParamGroupType::RMSNORM, layer);
+        registerNonDecayTensor(prefix + "_rms2_gamma", enc->rms2Gamma(), ParamGroupType::RMSNORM, layer);
+        registerNonDecayTensor(prefix + "_rms_post_attn_gamma", enc->rmsPostAttnGamma(), ParamGroupType::RMSNORM, layer);
+        registerNonDecayTensor(prefix + "_rms_post_ffn_gamma", enc->rmsPostFfnGamma(), ParamGroupType::RMSNORM, layer);
     }
 
     fprintf(stderr, "[buildParameterGroups] DIAG-D: all %d layers done, registering scratchblock/final_rms\n", cfg.num_layers); fflush(stderr);
@@ -577,11 +536,11 @@ void LanguageModel::buildParameterGroups() {
         fprintf(stderr, "[buildParameterGroups] DIAG-D-SKIP: scratchblock not enabled\n"); fflush(stderr);
     }
 
-    // Final RMSNorm (between encoder output and LM head)
+    // Final RMSNorm (between encoder output and LM head) — no weight decay
     fprintf(stderr, "[buildParameterGroups] DIAG-D5: about to register final_rms_gamma data=%p grad=%d numel=%zu\n",
-            (void*)training_state_.final_rms_gamma.data, (int)training_state_.final_rms_gamma.has_grad(),
-            training_state_.final_rms_gamma.numel()); fflush(stderr);
-    registerTensor("final_rms_gamma", training_state_.final_rms_gamma, ParamGroupType::RMSNORM);
+            (void*)training_state_.tensors_->final_rms_gamma.data, (int)training_state_.tensors_->final_rms_gamma.has_grad(),
+            training_state_.tensors_->final_rms_gamma.numel()); fflush(stderr);
+    registerNonDecayTensor("final_rms_gamma", training_state_.tensors_->final_rms_gamma, ParamGroupType::RMSNORM);
     fprintf(stderr, "[buildParameterGroups] DIAG-D5: registered OK\n"); fflush(stderr);
 
     fprintf(stderr, "[buildParameterGroups] DIAG-E: %zu groups registered, allocating optimizer states\n", parameter_groups_.size()); fflush(stderr);
@@ -710,7 +669,7 @@ void LanguageModel::updateWeights(float learning_rate,
     if (!optimizer_state) {
         throw std::runtime_error("[updateWeights] optimizer_state is NULL - caller MUST provide valid OptimizerState");
     }
-    
+
     // NOTE: step is incremented in training loop after this function returns
     // Do NOT increment here to avoid double-counting
 
@@ -720,112 +679,31 @@ void LanguageModel::updateWeights(float learning_rate,
     }
 
     const cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
-    constexpr size_t kOptimizerIoSample = 6;
-    static bool logged_optimizer_io = true;  // Static so we only log once per training run
-    size_t sample_count = 0;
-    std::string sample_group_name;
-    std::array<float, kOptimizerIoSample> w_before{};
-    std::array<float, kOptimizerIoSample> g_before{};
-    std::array<float, kOptimizerIoSample> m_before{};
-    std::array<float, kOptimizerIoSample> v_before{};
-    std::array<float, kOptimizerIoSample> w_after{};
-    std::array<float, kOptimizerIoSample> m_after{};
-    std::array<float, kOptimizerIoSample> v_after{};
-    
-    // Sample weights before update (for update probe)
-    // BUG FIX: Sample from token 277 (SPACE, ~11% of training data) instead of token 0-2
-    // Token 0-2 are BYTE TOKENS which rarely appear, causing grad_rms=0.000000 artifacts
-    // Token 277 is guaranteed to have meaningful gradients in every batch
-    if (update_probe_group_index_ != static_cast<size_t>(-1) && 
-        update_probe_group_index_ < parameter_groups_.size()) {
-        const auto& probe_group = parameter_groups_[update_probe_group_index_];
-        if (probe_group.weights() && update_probe_sample_elems_ > 0) {
-            // For embedding/LM head buffers [vocab_size, d_model], sample from token 277 row
-            // Token 277 offset = 277 * d_model = 277 * 768 = 212736
-            constexpr size_t kToken277Offset = 277 * 768;  // Token 277 (SPACE) row start
-            const size_t sample_offset = (probe_group.type == ParamGroupType::LM_HEAD || 
-                                          probe_group.type == ParamGroupType::EMBEDDING)
-                                         ? std::min(kToken277Offset, 
-                                                    static_cast<size_t>(probe_group.size()) - update_probe_sample_elems_)
-                                         : 0;
-            
-            cudaMemcpyAsync(update_probe_weights_before_.data(), 
-                          probe_group.weights() + sample_offset, 
-                          update_probe_sample_elems_ * sizeof(float),
-                          cudaMemcpyDeviceToHost, training_state_.stream_ctrl.getPrimaryStream());
-            
-            // Store offset for consistent sampling in post-update copy
-            update_probe_sample_offset_ = sample_offset;
-            
-            // One-time log to verify token 277 sampling (only first step)
-            if (optimizer_state->step == 0) {
-                BWD_INFO("[UpdateProbe] Sampling from offset " << sample_offset 
-                         << " (token " << (sample_offset / 768) << " of vocab_size=" 
-                         << probe_group.size() / 768 << ") for group '" << probe_group.name << "'");
-            }
-        }
-    }
-    
-    // Issue #110 diagnostic: Log every group being processed on first step
-    if (optimizer_state->step == 0) {
-        fprintf(stderr, "\n[updateWeights] STEP 0: Processing %zu parameter groups...\n", 
-                parameter_groups_.size());
-    }
     
     for (size_t i = 0; i < parameter_groups_.size(); ++i) {
         auto& group = parameter_groups_[i];
         if (!group.weights() || !group.grads() || group.size() == 0) continue;
         
-        // Issue #110: Log EVERY encoder group being updated on first step
-        if (optimizer_state->step == 0) {
-            fprintf(stderr, "[updateWeights] Group %zu/%zu: '%s' size=%zu weights=%p grads=%p m=%p v=%p\n",
-                    i, parameter_groups_.size(), group.name.c_str(), group.size(),
-                    static_cast<const void*>(group.weights()),
-                    static_cast<const void*>(group.grads()),
-                    static_cast<const void*>(group.m_state()),
-                    static_cast<const void*>(group.v_state()));
-        }
-        
+        // Validate optimizer state exists before update
         if (!group.m_state() || !group.v_state()) {
-            BWD_ERROR("[updateWeights] FATAL: Missing optimizer state for group '"
-                      << group.name << "' idx=" << i
-                      << " size=" << group.size()
-                      << " weights=" << static_cast<const void*>(group.weights())
-                      << " grads=" << static_cast<const void*>(group.grads())
-                      << " m_state=" << static_cast<const void*>(group.m_state())
-                      << " v_state=" << static_cast<const void*>(group.v_state())
-                      << " step=" << optimizer_state->step);
-            std::abort();
-        }
-        
-        if (!logged_optimizer_io) {
-            sample_count = std::min(kOptimizerIoSample, static_cast<size_t>(group.size()));
-            sample_group_name = group.name;
-            if (sample_count > 0) {
-                cudaMemcpyAsync(w_before.data(), group.weights(),
-                                sample_count * sizeof(float),
-                                cudaMemcpyDeviceToHost, stream);
-                cudaMemcpyAsync(g_before.data(), group.grads(),
-                                sample_count * sizeof(float),
-                                cudaMemcpyDeviceToHost, stream);
-                cudaMemcpyAsync(m_before.data(), group.m_state(),
-                                sample_count * sizeof(float),
-                                cudaMemcpyDeviceToHost, stream);
-                cudaMemcpyAsync(v_before.data(), group.v_state(),
-                                sample_count * sizeof(float),
-                                cudaMemcpyDeviceToHost, stream);
-                cudaError_t sync_err = cudaStreamSynchronize(stream);
-                if (sync_err != cudaSuccess) {
-                    BWD_ERROR("[updateWeights] pre-sample sync failed: " << cudaGetErrorString(sync_err));
-                }
-            }
+            throw std::runtime_error(
+                "[updateWeights] FATAL: Missing optimizer state for group '" + group.name +
+                "' idx=" + std::to_string(i) +
+                " size=" + std::to_string(group.size()) +
+                " weights=" + std::to_string(reinterpret_cast<uintptr_t>(group.weights())) +
+                " grads=" + std::to_string(reinterpret_cast<uintptr_t>(group.grads())) +
+                " m_state=" + std::to_string(reinterpret_cast<uintptr_t>(group.m_state())) +
+                " v_state=" + std::to_string(reinterpret_cast<uintptr_t>(group.v_state())) +
+                " step=" + std::to_string(optimizer_state->step));
         }
 
         // Apply depth-aware upsilon (Υ) regularization to weight decay
         // Formula: Υ_l = 0.1 * sqrt(L_ref / L) where L is 1-indexed layer
         // Deeper layers get LESS regularization (smaller effective weight_decay)
-        const float effective_weight_decay = weight_decay * group.upsilon;
+        // weight_decay_multiplier = 0.0 for biases/norms (standard AdamW practice)
+        const float effective_weight_decay = weight_decay * group.upsilon * group.weight_decay_multiplier;
         
+        // Launch AdamW optimizer kernel to update this parameter group
         launchAdamWKernel(
             group,
             learning_rate,
@@ -833,213 +711,6 @@ void LanguageModel::updateWeights(float learning_rate,
             optimizer_state->step,
             stream
         );
-        
-        if (!logged_optimizer_io && sample_count > 0) {
-            cudaMemcpyAsync(w_after.data(), group.weights(),
-                            sample_count * sizeof(float),
-                            cudaMemcpyDeviceToHost, stream);
-            cudaMemcpyAsync(m_after.data(), group.m_state(),
-                            sample_count * sizeof(float),
-                            cudaMemcpyDeviceToHost, stream);
-            cudaMemcpyAsync(v_after.data(), group.v_state(),
-                            sample_count * sizeof(float),
-                            cudaMemcpyDeviceToHost, stream);
-            cudaError_t sync_err = cudaStreamSynchronize(stream);
-            if (sync_err != cudaSuccess) {
-                BWD_ERROR("[updateWeights] post-sample sync failed: " << cudaGetErrorString(sync_err));
-            }
-
-            const int iteration = static_cast<int>(optimizer_state->step) + 1;
-            const float bias_correction2 =
-                1.0f - std::pow(HyperParameters::ADAMW_BETA2, static_cast<float>(iteration));
-            const float inv_bias_correction2 =
-                (bias_correction2 > 0.0f) ? (1.0f / bias_correction2) : 1.0f;
-
-
-            std::ostringstream io_oss;
-            io_oss << "[OptIO] group='" << sample_group_name
-                   << "' step=" << optimizer_state->step
-                   << " lr=" << learning_rate
-                   << " weight_decay=" << weight_decay
-                   << " n=" << sample_count
-                   << " w_before=[";
-            for (size_t i = 0; i < sample_count; ++i) {
-                if (i) io_oss << ", ";
-                io_oss << w_before[i];
-            }
-            io_oss << "] grad=[";
-            for (size_t i = 0; i < sample_count; ++i) {
-                if (i) io_oss << ", ";
-                io_oss << g_before[i];
-            }
-            io_oss << "] m_before=[";
-            for (size_t i = 0; i < sample_count; ++i) {
-                if (i) io_oss << ", ";
-                io_oss << m_before[i];
-            }
-            io_oss << "] v_before=[";
-            for (size_t i = 0; i < sample_count; ++i) {
-                if (i) io_oss << ", ";
-                io_oss << v_before[i];
-            }
-            io_oss << "] w_after=[";
-            for (size_t i = 0; i < sample_count; ++i) {
-                if (i) io_oss << ", ";
-                io_oss << w_after[i];
-            }
-            io_oss << "] m_after=[";
-            for (size_t i = 0; i < sample_count; ++i) {
-                if (i) io_oss << ", ";
-                io_oss << m_after[i];
-            }
-            io_oss << "] v_after=[";
-            for (size_t i = 0; i < sample_count; ++i) {
-                if (i) io_oss << ", ";
-                io_oss << v_after[i];
-            }
-            io_oss << "] denom=[";
-            for (size_t i = 0; i < sample_count; ++i) {
-                if (i) io_oss << ", ";
-                const float v_hat = v_after[i] * inv_bias_correction2;
-                const float denom = std::sqrt(v_hat + HyperParameters::ADAMW_EPSILON);
-                io_oss << denom;
-            }
-            io_oss << "]";
-            std::cout << io_oss.str() << std::endl;
-            logged_optimizer_io = true;
-        
-        }
-    }
-    
-    // Issue #110: Log completion of all groups on first step
-    if (optimizer_state->step == 0) {
-        fprintf(stderr, "[updateWeights] STEP 0 COMPLETE: All %zu groups processed by optimizer!\n\n",
-                parameter_groups_.size());
-    }
-    
-    // //old_sync: cudaStreamSynchronize(training_state_.stream_ctrl.getPrimaryStream());
-    // Sync removed - update probe disabled, next operation will implicitly sync if needed
-    // DEPRECATED: probe-only sync to guarantee update probe samples observe weight updates.
-    if (update_probe_group_index_ != static_cast<size_t>(-1) &&
-        update_probe_group_index_ < parameter_groups_.size()) {
-        cudaError_t sync_err = cudaStreamSynchronize(training_state_.stream_ctrl.getPrimaryStream());
-        if (sync_err != cudaSuccess) {
-            BWD_ERROR("[updateWeights] probe sync failed: " << cudaGetErrorString(sync_err));
-        }
-    }
-    
-    // Sample weights after update and compute probe metrics
-    if (update_probe_group_index_ != static_cast<size_t>(-1) && 
-        update_probe_group_index_ < parameter_groups_.size()) {
-        const auto& probe_group = parameter_groups_[update_probe_group_index_];
-        
-        if (probe_group.weights() && probe_group.grads() && update_probe_sample_elems_ > 0) {
-            // Copy weights after update (use same offset as pre-update copy)
-            cudaMemcpy(update_probe_weights_after_.data(), 
-                      probe_group.weights() + update_probe_sample_offset_, 
-                      update_probe_sample_elems_ * sizeof(float),
-                      cudaMemcpyDeviceToHost);
-            
-            // Copy gradient sample (use same offset to sample from token 277 region)
-            cudaMemcpy(update_probe_grad_sample_.data(), 
-                      probe_group.grads() + update_probe_sample_offset_, 
-                      update_probe_sample_elems_ * sizeof(float),
-                      cudaMemcpyDeviceToHost);
-
-            // Log raw samples that feed update_rms/rel/max_abs
-            {
-                constexpr size_t kProbeValueSamples = 4;
-                const size_t value_samples = std::min(kProbeValueSamples, update_probe_sample_elems_);
-                std::ostringstream val_oss;
-                val_oss << "[UpdateProbeValues] group='" << probe_group.name
-                        << "' step=" << optimizer_state->step
-                        << " w_before[0:" << value_samples << "]=[";
-                for (size_t i = 0; i < value_samples; ++i) {
-                    if (i) val_oss << ", ";
-                    val_oss << update_probe_weights_before_[i];
-                }
-                val_oss << "] w_after[0:" << value_samples << "]=[";
-                for (size_t i = 0; i < value_samples; ++i) {
-                    if (i) val_oss << ", ";
-                    val_oss << update_probe_weights_after_[i];
-                }
-                val_oss << "] grad[0:" << value_samples << "]=[";
-                for (size_t i = 0; i < value_samples; ++i) {
-                    if (i) val_oss << ", ";
-                    val_oss << update_probe_grad_sample_[i];
-                }
-                val_oss << "] update[0:" << value_samples << "]=[";
-                for (size_t i = 0; i < value_samples; ++i) {
-                    if (i) val_oss << ", ";
-                    val_oss << (update_probe_weights_after_[i] - update_probe_weights_before_[i]);
-                }
-                val_oss << "]";
-                std::cout << val_oss.str() << std::endl;
-            }
-
-            // Log a small sample of optimizer state (m/v) for the probe group
-            // BUG FIX: Use SAME offset as weights/grads for consistent sampling!
-            // Previously was sampling m_state[0] while grad was from token 277 (offset 212736)
-            if (probe_group.m_state() && probe_group.v_state()) {
-                constexpr size_t kProbeStateSamples = 4;
-                const size_t state_samples = std::min(kProbeStateSamples, update_probe_sample_elems_);
-                std::array<float, kProbeStateSamples> m_sample{};
-                std::array<float, kProbeStateSamples> v_sample{};
-                // Use update_probe_sample_offset_ to read from SAME position as weights/grads
-                cudaMemcpy(m_sample.data(), probe_group.m_state() + update_probe_sample_offset_,
-                           state_samples * sizeof(float), cudaMemcpyDeviceToHost);
-                cudaMemcpy(v_sample.data(), probe_group.v_state() + update_probe_sample_offset_,
-                           state_samples * sizeof(float), cudaMemcpyDeviceToHost);
-
-                std::ostringstream state_oss;
-                state_oss << "[UpdateProbeState] group='" << probe_group.name
-                          << "' step=" << optimizer_state->step
-                          << " offset=" << update_probe_sample_offset_
-                          << " (token " << (update_probe_sample_offset_ / 768) << ")"
-                          << " m_state[0:" << state_samples << "]=[";                for (size_t i = 0; i < state_samples; ++i) {
-                    if (i) state_oss << ", ";
-                    state_oss << m_sample[i];
-                }
-                state_oss << "] v_state[0:" << state_samples << "]=[";
-                for (size_t i = 0; i < state_samples; ++i) {
-                    if (i) state_oss << ", ";
-                    state_oss << v_sample[i];
-                }
-                state_oss << "]";
-                std::cout << state_oss.str() << std::endl;
-            }
-            
-            // Compute metrics
-            float param_sum_sq = 0.0f, grad_sum_sq = 0.0f, update_sum_sq = 0.0f;
-            float max_abs_update = 0.0f;
-            
-            for (size_t i = 0; i < update_probe_sample_elems_; ++i) {
-                float w_before = update_probe_weights_before_[i];
-                float w_after = update_probe_weights_after_[i];
-                float grad = update_probe_grad_sample_[i];
-                float update = w_after - w_before;
-                
-                param_sum_sq += w_after * w_after;
-                grad_sum_sq += grad * grad;
-                update_sum_sq += update * update;
-                max_abs_update = std::max(max_abs_update, std::abs(update));
-            }
-
-            const float n = static_cast<float>(update_probe_sample_elems_);
-            update_probe_result_.group_name = update_probe_group_name_;
-            update_probe_result_.parameter_rms = std::sqrt(param_sum_sq / n);
-            update_probe_result_.grad_rms = std::sqrt(grad_sum_sq / n);
-            update_probe_result_.update_rms = std::sqrt(update_sum_sq / n);
-            update_probe_result_.relative_update = update_probe_result_.parameter_rms > 1e-10f 
-                ? update_probe_result_.update_rms / update_probe_result_.parameter_rms 
-                : 0.0f;
-            update_probe_result_.max_abs_update = max_abs_update;
-            update_probe_result_.learning_rate = learning_rate;
-            update_probe_result_.optimizer_step = optimizer_state->step;
-            update_probe_result_.sample_size = static_cast<uint32_t>(update_probe_sample_elems_);
-
-            update_probe_ready_ = true;
-        }
     }
 }
 
@@ -1065,8 +736,11 @@ void LanguageModel::resetOptimizerMoments() {
 }
 
 void LanguageModel::scaleOptimizerMoments(float scale) {
-    if (parameter_groups_.empty() || scale <= 0.0f) {
-        return;
+    if (parameter_groups_.empty()) {
+        throw std::runtime_error("[scaleOptimizerMoments] parameter_groups_ is empty - buildParameterGroups() MUST be called first");
+    }
+    if (scale <= 0.0f) {
+        throw std::runtime_error("[scaleOptimizerMoments] scale MUST be > 0.0f, got " + std::to_string(scale));
     }
 
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
@@ -1173,27 +847,10 @@ float LanguageModel::computeGradNorm(bool sync_for_host_read) {
         }
     }
     
-    // Build arrays for GradNormController (separate grads, sizes, types)
-    std::vector<float*> grads_ptrs;
-    std::vector<size_t> sizes;
-    std::vector<ParamGroupType> types;
-    
-    grads_ptrs.reserve(parameter_groups_.size());
-    sizes.reserve(parameter_groups_.size());
-    types.reserve(parameter_groups_.size());
-    
-    for (const auto& group : parameter_groups_) {
-        grads_ptrs.push_back(group.grads());
-        sizes.push_back(group.size());
-        types.push_back(group.type);
-    }
-    
     // Compute norms on GPU (non-blocking)
     // Clipping is done separately in Phase2 via scaleGradients() after CPU-side decision
     auto status = training_state_.gradnorm_ctrl.computeNorms(
-        grads_ptrs.data(),
-        sizes.data(),
-        types.data(),
+        parameter_groups_.data(),
         parameter_groups_.size(),
         stream
     );
@@ -1208,8 +865,15 @@ float LanguageModel::computeGradNorm(bool sync_for_host_read) {
     // Most batches don't need this - skip the expensive GPU-CPU sync
     if (!sync_for_host_read) {
         // Kernel launched, norms computed on GPU, no CPU stall
-        // Return cached value from last sync (persists across batches)
-        return grad_metrics_ready_ ? grad_metrics_.total_norm : 0.0f;
+        // RULE 20: Require caller to have synced recently via sync_for_host_read=true
+        // (e.g., every 10 batches). Do NOT silently return cached/stale data.
+        if (!grad_metrics_ready_) {
+            throw std::runtime_error(
+                "[computeGradNorm] sync_for_host_read=false but no valid cached metrics! "
+                "Caller MUST call with sync_for_host_read=true periodically (e.g., every 10 batches) "
+                "to populate grad_metrics_. At line " + std::to_string(__LINE__));
+        }
+        return grad_metrics_.total_norm;
     }
     
     // Caller needs metrics (for logging/clipping decisions) - async copy + sync
@@ -1405,42 +1069,6 @@ void LanguageModel::scaleGradientsExcludingType(float scale, ParamGroupType excl
             group.grads(), scale, static_cast<int>(group.size())
         );
     }
-}
-
-//======================================================//
-//  setSequenceLossWeights / clearSequenceLossWeights
-//======================================================//
-// NOTE: Currently unused (sample_weight=1.0 always) but INTENTIONALLY KEPT
-// for future use cases:
-//   - Curriculum learning: weight easy examples higher early, hard examples later
-//   - Data quality weighting: upweight high-quality sources (academic papers, etc.)
-//   - Importance sampling: variance reduction via per-sample weights
-//   - Deduplication soft-weighting: downweight near-duplicate sequences
-// When count=0, loss kernel defaults to sample_weight=1.0f (standard LLM training)
-//======================================================//
-
-void LanguageModel::setSequenceLossWeights(const std::vector<float>& weights) {
-    if (weights.empty()) {
-        training_state_.sequence_weight_count = 0;
-        return;
-    }
-    
-    size_t copy_size = std::min(weights.size(), 
-                                static_cast<size_t>(training_state_.max_cached_tokens));
-    
-    cudaMemcpyAsync(
-        training_state_.sequence_weights_tensor.data,
-        weights.data(),
-        copy_size * sizeof(float),
-        cudaMemcpyHostToDevice,
-        training_state_.stream_ctrl.getPrimaryStream()
-    );
-    
-    training_state_.sequence_weight_count = static_cast<int>(copy_size);
-}
-
-void LanguageModel::clearSequenceLossWeights() {
-    training_state_.sequence_weight_count = 0;
 }
 
 //======================================================//

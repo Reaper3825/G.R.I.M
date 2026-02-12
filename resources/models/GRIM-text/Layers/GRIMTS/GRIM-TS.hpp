@@ -111,6 +111,10 @@ struct GuessRecord {
     GuessRewardStats stats;
 };
 
+// Enforce size assumptions used by TrainingStateGPU.cu::allocateGuessCacheBuffers()
+static_assert(sizeof(GuessMetadata) == 32, "GuessMetadata size changed — update GUESS_METADATA_SIZE in TrainingStateGPU.cu");
+static_assert(sizeof(GuessRecord) == 96, "GuessRecord size changed — update GUESS_RECORD_SIZE in TrainingStateGPU.cu");
+
 //------------------------------------------------------------------------------
 // Device-Side State (accessed by CUDA kernels)
 //------------------------------------------------------------------------------

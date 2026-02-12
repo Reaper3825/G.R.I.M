@@ -29,35 +29,13 @@
 // Forward declaration for autograd tensor system
 namespace GRIM {
     struct TrainingTensors;
-    namespace Autograd {
-        struct AutogradContext;  // Issue #47: Forward context persists for backward
-    }
-    
     struct FlashAttentionBF16Scratch;
 }
 
-namespace GRIM {
+// AutogradIntermediates: owns all intermediate tensors during forward→backward
+#include "../../training/Autograd/AutogradIntermediates.hpp"
 
-//======================================================//
-//  Per-Layer Encoder Cache (Tensor-based)
-//======================================================//  
-struct EncoderLayerCacheTensors {
-    Tensor ln1_output;        // [batch*seq, d_model] After first layer norm 
-    Tensor attn_input;        // [batch*seq, d_model] Input to attention (after LN1)
-    Tensor attn_bhsd;         // [batch, heads, seq, head_dim] Attention output before W_o
-    Tensor softmax_lse;       // [batch, num_heads, seq] Log-sum-exp for FA backward
-    Tensor attn_output;       // [batch*seq, d_model] After attention
-    Tensor residual1;         // [batch*seq, d_model] After first residual
-    Tensor ln2_output;        // [batch*seq, d_model] After second layer norm
-    Tensor ffn_pre_gelu;      // [batch*seq, d_ff] Before GELU activation
-    Tensor ffn_output;        // [batch*seq, d_ff] After FFN
-    Tensor layer_output;      // [batch*seq, d_model] Final layer output
-    
-    // QKV cache for attention backward (BHSD format)
-    Tensor Q;                 // [batch, num_heads, seq, head_dim]
-    Tensor K;                 // [batch, num_kv_heads, seq, head_dim] 
-    Tensor V;                 // [batch, num_kv_heads, seq, head_dim]
-};
+namespace GRIM {
 
 struct TrainingState {
     TrainingState();
@@ -72,30 +50,25 @@ struct TrainingState {
     //  PARAMETER TENSORS (weights + gradients via autograd)
     //======================================================//
     // Rule 20: NO raw float* for gradients - use GRIM::Tensor with autograd
+    //
+    // All weight tensors live in TrainingTensors (tensors_->), for BOTH training and inference.
+    // Training: TrainingTensors::initializeParams() allocates with gradients.
+    // Inference: InitinferenceState.cu allocates without gradients.
+    // Use these accessors for uniform access — crash if tensors_ is null:
+    Tensor& getEmbeddingWeights();
+    const Tensor& getEmbeddingWeights() const;
+    Tensor& getPositionEmbeddingWeights();
+    const Tensor& getPositionEmbeddingWeights() const;
+    Tensor& getLmHeadWeights();
+    const Tensor& getLmHeadWeights() const;
     
-    // Embedding weights [vocab_size, d_model]
-    // NOTE: When tie_embeddings=true, lm_head_weights shares data with embedding_weights
-    Tensor embedding_weights;
-    
-    // Position embedding weights [max_seq_len, d_model]
-    // Issue #36 FIX: Position embeddings MUST be trainable to match PyTorch baseline
-    Tensor position_embedding_weights;
-
-    // LM head weights [vocab_size, d_model] and optional bias [vocab_size]
-    Tensor lm_head_weights;
-    Tensor lm_head_bias;  // [vocab_size] - optional, only if use_bias=true
-
-    // Numeric head for number prediction
-    Tensor numeric_head_weights;  // [d_model]
-    Tensor numeric_head_bias;     // [1]
+    // NOTE: lm_head_bias, numeric_head_weights, numeric_head_bias, final_rms_gamma
+    // are owned by TrainingTensors (tensors_->). Access via tensors_->X.
     
     // Learned loss weighting (homoscedastic uncertainty)
     // log_var = log(σ²), loss = L / (2*exp(log_var)) + 0.5*log_var
     Tensor log_var_text;     // [1] - learned log-variance for text CE loss
     Tensor log_var_numeric;  // [1] - learned log-variance for numeric loss
-
-    // Final RMSNorm before LM head (Issue #33 fix)
-    Tensor final_rms_gamma;  // [d_model]
     
     //======================================================//
     //  QK-NORM LEARNED SCALES (nGPT-style)
@@ -108,19 +81,12 @@ struct TrainingState {
     int num_kv_heads = 0;        // K,V heads (GQA: num_kv_heads < num_heads)
 
     //======================================================//
-    //  ACTIVATION CACHES (Tensor-managed for backward pass)
+    //  SCRATCH BUFFERS (pre-allocated GPU memory for forward/backward)
+    //  NOTE: Autograd Tensors (with grad_fn) live in autograd_intermediates.
+    //  These are just raw pre-allocated buffers that autograd wraps via from_ptr.
     //======================================================//
-    
-    // Input layer embedding cache
-    Tensor cached_embeddings_tensor;    // [max_tokens, d_model]
-    
-    // Per-layer activation caches (Tensor-based)
-    std::vector<EncoderLayerCacheTensors> encoder_layer_caches;
-
-    // Output layer caches
-    Tensor cached_encoder_output;       // [max_tokens, d_model] Final encoder output
-    Tensor cached_final_rms_input;      // [max_tokens, d_model] Issue #33: Input to final RMSNorm
-    Tensor cached_logits_tensor;        // [max_tokens, vocab_size]
+    Tensor cached_encoder_output;       // [max_tokens, d_model] Pre-allocated scratch
+    Tensor cached_logits_tensor;        // [max_tokens, vocab_size] Pre-allocated scratch
     Tensor cached_numeric_predictions;  // [max_tokens]
     
     // Target/input ID caches (int typed)
@@ -159,24 +125,18 @@ struct TrainingState {
     Tensor sequence_weights_tensor;    // [max_sequences]
     int sequence_weight_count = 0;
     int sequence_weight_capacity = 0;
-    
-    //======================================================//
-    //  ISSUE #38: Token weighting (DEPRECATED - not used)
-    //======================================================//
-    Tensor token_weights_tensor;       // [vocab_size] inverse frequency weights
-    int token_weights_count = 0;
 
     //======================================================//
-    //  AUTOGRAD LOSS TENSORS (Issue #46 FIX)
+    //  AUTOGRAD STATE
     //======================================================//
-    Tensor loss_tensor;                   // Scalar [1] - loss value + grad_fn
-    Tensor logits_tensor;                 // [total_tokens, vocab_size]
     float cached_loss_value = 0.0f;
     float cached_text_loss = 0.0f;
     float cached_numeric_loss = 0.0f;
+    int   cached_numeric_count = 0;     // Issue #137: atom count for weight grad normalization
     
-    // Issue #47: Full computation graph for backward
-    std::unique_ptr<Autograd::AutogradContext> autograd_ctx;
+    // Owns ALL intermediate tensors during forward→backward cycle
+    // Replaces old autograd_ctx (which mixed input args with tensor storage)
+    Autograd::AutogradIntermediates autograd_intermediates;
 
     //======================================================//
     //  INTERMEDIATE GRADIENT TENSORS (Issue #45 FIX)
@@ -199,23 +159,8 @@ struct TrainingState {
     /// Zero all intermediate gradient tensors
     void zeroIntermediateGrads(cudaStream_t stream);
     
-    //======================================================//
-    //  FLASH ATTENTION WORKSPACE
-    //======================================================//
-    Tensor fa_dq_accum;         // [batch, heads, seq, head_dim] FP32
-    Tensor fa_dsoftmax_sum;     // [batch, heads, seq] FP32
-    
-    // BF16 conversion buffers for FA v2 (use bf16 typed Tensor)
-    Tensor fa_q_bf16;           // BSHD layout
-    Tensor fa_k_bf16;
-    Tensor fa_v_bf16;
-    Tensor fa_out_bf16;
-    Tensor fa_dout_bf16;
-    Tensor fa_dq_bf16;
-    Tensor fa_dk_bf16;
-    Tensor fa_dv_bf16;
-    size_t fa_q_bf16_elems = 0;
-    size_t fa_kv_bf16_elems = 0;
+    // DELETED: FA bf16/dq_accum/dsoftmax_sum buffers — FlashAttentionLayer::ensureScratch() self-manages.
+    // Autograd ScaledDotProductAttentionGradFn also self-allocates backward buffers.
     
     //======================================================//
     //  Issue #43 FIX: Centering Scratch Buffer
@@ -232,9 +177,6 @@ struct TrainingState {
     Tensor d_numeric_loss_sum;     // Numeric loss sum (scalar)
     Tensor d_numeric_loss_count;   // Numeric loss count (scalar int)
     
-    // Attention entropy output
-    Tensor d_entropy_output;       // [batch_size * num_heads]
-
     // Encoder workspace for GPU-native forward pass
     Tensor encoder_workspace;
     size_t encoder_workspace_size = 0;
@@ -264,17 +206,18 @@ struct TrainingState {
     Tensor cached_scratch_block_num_atoms;   // [1] int32
 
     //======================================================//
-    //  AUTOGRAD SYSTEM FLAGS
+    //  AUTOGRAD SYSTEM STATE
     //======================================================//
-    std::unique_ptr<TrainingTensors> tensors_;  // DEPRECATED - always nullptr
+    std::unique_ptr<TrainingTensors> tensors_;
     bool use_autograd_tensors = false;
     
     void initializeAutogradTensors(int vocab_size, int d_model, int d_ff,
                                    int num_layers, int num_heads, int num_kv_heads,
                                    int max_seq_len, bool tie_embeddings, bool use_bias,
                                    HyperParameters::PositionalEncodingType positional_encoding,
+                                   bool numeric_head_enabled = false,
                                    bool use_layer_scale = false,
-                                   float layer_scale_init = 0.1f,
+                                   float layer_scale_init = 1.0f,
                                    uint64_t seed = 0,
                                    cudaStream_t stream = nullptr);
 
@@ -289,7 +232,6 @@ struct TrainingState {
     void freeOptimizerStates();
 
     bool initialized = false;
-    uint64_t architecture_config_hash = 0;
     
     //======================================================//
     //  DEBUG GRADIENT ATTRIBUTION (Issue #60)
@@ -335,35 +277,11 @@ struct TrainingState {
     };
     GuessCacheBuffers guess_cache_buffers;
     
-    bool allocateGuessCacheBuffers(size_t capacity, bool enable_diversity, 
+    void allocateGuessCacheBuffers(size_t capacity, bool enable_diversity, 
                                    size_t diversity_bloom_bits, size_t pinned_buffer_size);
     void freeGuessCacheBuffers();
     
-    //======================================================//
-    //  BATCH PREPARATION BUFFERS (CPU-side, not GPU Tensors)
-    //======================================================//
-    std::vector<int> batch_prep_input_ids;
-    std::vector<int> batch_prep_target_ids;
-    std::vector<float> batch_prep_numeric_values;
-    std::vector<uint8_t> batch_prep_numeric_mask;
-    std::vector<uint16_t> batch_prep_text_features;
-    std::vector<uint8_t> batch_prep_text_mask;
-    std::vector<int> batch_prep_valid_target_counts;
-    size_t batch_prep_capacity = 0;
-    
-    //======================================================//
-    //  CACHE ALLOCATION
-    //======================================================//
-    
-    /// Allocate all activation caches for given dimensions
-    void allocateActivationCaches(int max_batch, int max_seq_len, int num_layers,
-                                  int d_model, int d_ff, int num_heads, int num_kv_heads,
-                                  int vocab_size, cudaStream_t stream = nullptr);
-    
-    /// Allocate Flash Attention BF16 scratch buffers
-    void allocateFlashAttentionBuffers(int max_batch, int max_seq_len, 
-                                       int num_heads, int num_kv_heads, int head_dim,
-                                       cudaStream_t stream = nullptr);
+    // DELETED: batch_prep_* vectors (Rule 20) — replaced by BatchPayload struct
     
 };
 

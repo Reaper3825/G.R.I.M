@@ -147,20 +147,48 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.7 Stream & Resource Initialization
 
-- [ ] **Shared/StreamController/StreamController_GPU.cu**
+- [x] **Shared/StreamController/StreamController_GPU.cu** ✅ AUDITED
   - CUDA stream creation and synchronization
   - **Rule 22**: All streams created via TrainingState controller, never raw `cudaStream_t`
+  - **Audit Summary (7 findings fixed):**
+    - Deleted dead code: StreamType enum (Transfer/Auxiliary), StreamEvent class, StreamDescriptor, event pool, 12+ unused methods (getTransferStream, getAuxiliaryStream, getStream, setExternalPrimaryStream, setExternalStream, syncStream, syncAllStreams, recordEvent, waitEvent, logStatus, resetStats, checkCudaError). HPP: 365→160 lines, CU: 530→180 lines.
+    - Rule 20: `initialize()` now throws on double-init (was silent no-op). `getPrimaryStream()` throws if not initialized or null (was returning nullptr).
+    - Rule 20: Fixed 4 ternary fallback patterns in TrainingStateGPU.cu (`stream ? stream : ...getPrimaryStream() : nullptr` → direct `getPrimaryStream()` call).
+    - Rule 20: Fixed 2 ternary+nullptr-guard patterns in Phase2_TrainingLoop.cu (lines ~1393, ~2592).
+    - Simplified StreamControllerConfig: removed transfer/auxiliary config fields. Updated 4 callers (Phase1_Startup.cu, InitTrainingState.cu, diagnostic_train_minimal.cu, InitinferenceState.cu).
+    - **Noted but not fixed**: `g_cleanup_stream` in TensorContract_GPU.cu (raw cudaStreamCreate for cudaFreeAsync cleanup — valid use case). `log_stream_` in EquationLogging.hpp (separate logging infrastructure).
 
 ---
 
 ### 1.8 Training State GPU Setup
 
-- [ ] **Shared/TrainingState/TrainingStateGPU.cu**
+- [x] **Shared/TrainingState/TrainingStateGPU.cu** ✅ AUDITED & FIXED (4 passes)
   - Allocates GPU buffers, cuBLAS handle, CUDA streams
   - Allocates: gradient buffers, optimizer state (m, v), intermediate tensors
-  - **Rule 22**: All GPU resources managed centrally - VERIFY no stragglers in other modules
-  - Pattern to check: Verify `allocatePCGradBuffer()` called when tie_embeddings=true
-  - Pattern to check: Search for `cudaMalloc()` calls - should NOT be in layer/kernel modules
+  - **Audit Summary (8 prior findings, all fixed):**
+    - Removed silent `catch(...)` in `zeroIntermediateGrads()` — if unallocated tensors occur, that's now a real error, not swallowed.
+    - Removed hardcoded `d_model=768` fallback in `logGradientAttribution()` — now throws if embedding shape is invalid.
+    - Fixed Rule 20 violation in `kernel_pcgrad_combine()` — replaced ternary `norm_sq > 1e-12f ?... : 0` with `assert()` to fail loud if LM gradient is near-zero (masking/backward bug detection).
+    - Removed wrong comment "DEPRECATED - always nullptr" from `tensors_` — it's actively used by `initializeAutogradTensors()`.
+    - Deleted dead token weighting members (`token_weights_tensor`, `token_weights_count`) marked DEPRECATED.
+    - Deleted dead method declarations (`allocateActivationCaches()`, `allocateFlashAttentionBuffers()`) — never defined, never called.
+    - Changed `allocateGuessCacheBuffers()` return type from `bool→void` (always throws or returns, never returns false), removed dead caller check in Phase2_TrainingLoop.cu.
+    - **Noted**: `1e-12f` threshold in PCGrad is now an assert — tokens reaching it with zero LM norm will crash with clear message.
+  - **Re-audit findings (5 more, all fixed):**
+    - Fixed `GUESS_RECORD_SIZE = 128` → `96` (was 33% too large, wasting GPU memory). `sizeof(GuessRecord)` = 96. Added `static_assert` in GRIM-TS.hpp to enforce at compile time.
+    - Deleted dead `architecture_config_hash` member from TrainingState_GPU.hpp — zero usages anywhere in codebase.
+    - Deleted dead `d_entropy_output` Tensor from TrainingState_GPU.hpp + its allocation in InitTrainingState.cu — allocated but never read by any computation.
+    - Guarded QK-norm alpha allocation (`attn_alpha_q`, `attn_alpha_k`) behind `if constexpr (HyperParameters::QK_NORMALIZATION_ENABLED)` — was allocating 12 layers × 2 Tensors + ensure_grad for a disabled feature.
+    - Removed leftover debug spew from InitTrainingState.cu: `[DEBUG-LAYER-ALLOC]`, `[DEBUG-CORRUPTION-CHECK]` fprintf blocks (investigation artifacts).
+  - **Third audit findings (7 found, 5 fixed, 1 pending, 1 deferred):**
+    - **FINDING 1 — OWNERSHIP REFACTOR: TrainingTensors owns ALL parameter Tensors** ✅ FIXED: The 4 auxiliary tensors (`lm_head_bias`, `numeric_head_weights`, `numeric_head_bias`, `final_rms_gamma`) were previously double-allocated — once in `TrainingTensors::initializeParams()` (unused) and again in `InitTrainingState.cu`. Resolution: Removed duplicate allocations from `InitTrainingState.cu`, kept sole ownership in `TrainingTensors::initializeParams()`. Removed the 4 member declarations from `TrainingState_GPU.hpp` entirely — they are now accessed exclusively via `tensors_->X`. Updated ALL access sites across 7 files (AutogradTraining.cu, LanguageModel_Training.cu, grim_model_serialization.cu, Phase2_TrainingLoop.cu, InitInferenceState.cu, TrainingStateGPU.cu, Phase1_Startup.cu). Added `numeric_head_enabled` parameter through the init chain so TrainingTensors can conditionally allocate numeric head tensors. Also fixed InitInferenceState.cu which was missing `final_rms_gamma` allocation entirely — inference would have crashed loading checkpoints with rms_gamma.
+    - **FINDING 2 — `TrainingTensors::zeroGrad()` was DEAD CODE** ✅ FIXED: Deleted from TrainingTensors.cu and .hpp. `LanguageModel::zeroGrad()` handles all gradient zeroing.
+    - **FINDING 3 — `single_token_{logits,hidden}` dead allocations** ✅ FIXED: Removed from InitTrainingState.cu. Leftover from planned incremental KV cache never implemented.
+    - **FINDING 4 — `layer_scale_init` misleading default** ✅ FIXED: Changed default from `0.1f` to `1.0f` in TrainingState_GPU.hpp to match production config (Issue #129).
+    - **FINDING 5 — `allocateOptimizerStates` debug fprintf** ✅ FIXED: Removed `[allocateOptimizerStates] ENTER:` and `EXIT:` fprintf lines from TrainingStateGPU.cu.
+    - **FINDING 6 — `batch_prep_*` vectors NOT dead**: ✅ RESOLVED (original claim was WRONG). The 7 `batch_prep_*` vectors (`batch_prep_input_ids`, `batch_prep_target_ids`, `batch_prep_numeric_values`, `batch_prep_numeric_mask`, `batch_prep_text_features`, `batch_prep_text_mask`, `batch_prep_valid_target_counts`) ARE actively used by `ComputeLossBatch.cu::prepareLossBatchInputs()` for assembling padded batch data. `DEBUG_BATCH_PREP_CORRUPTION` flag was already deleted (Phase1 audit). The vectors use lazy allocation (`batch_prep_capacity=0`, `.assign()` on first use) as a workaround for a memory corruption bug where `batch_prep_target_ids.capacity()` contained garbage before `initTrainingState()`. No action required — vectors are production code.
+    - **FINDING 7 — `stream ? stream : stream_ctrl.getPrimaryStream()` x3**: Lines 63, 400, 438. Functions accept `stream = nullptr` default and fallback to centralized controller. Rule 22 compliant (fallback IS to centralized controller, which throws if uninitialized). Low priority — pedantic Rule 20 says make parameter required. DEFERRED.
+  - **Rule 22**: All GPU resources managed via `TrainingState.stream_ctrl.getPrimaryStream()` (no raw streams).
 
 - [ ] **Shared/GPUBuffer/GPUBuffer.cu**
   - Low-level GPU buffer memory management utilities
@@ -173,51 +201,54 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.9 Positional Bias Initialization
 
-- [ ] **Shared/PBM/PositionalBiasMethod.cu**
+- [x] **Shared/PBM/PositionalBiasMethod.cu** ✅ AUDITED & FIXED
   - Initializes ALiBi slopes and RoPE frequencies
-  - **Issue #47**: ALiBi slopes scale relative to max_seq_len - VERIFY implementation
-  - **Issue #70**: RoPE NTK scaling for context > 2048 - VERIFY implemented
-  - **Issue #78**: ALiBi max bias clamping (ALIBI_MAX_BIAS = -10.0) - VERIFY present
-  - Pattern to check: Search for `m_max = target_bias / d_min` and slope interpolation
-  - Pattern to check: Search for `ALIBI_MAX_BIAS = -10.0f` constant definition
-  - Pattern to check: Verify slopes are NEGATIVE (library uses `+= slope * col_idx`)
+  - **Issue #47**: ALiBi slopes scale relative to max_seq_len - VERIFIED ✅ (`m_max = target_bias / d_min`, geometric interpolation)
+  - **Issue #78**: ALIBI_MAX_BIAS = 0.0f (capping DISABLED) - correct after Issue #84 root cause fix. Stale "NOT RECOMMENDED" comment in HyperParameters FIXED.
+  - **FIXED**: Rule 20 — `launchRoPERotationGQA()` and `launchRoPERotationGQA_backward()` had silent `return` on null pointers/invalid params → changed to `throw std::runtime_error()`
+  - **FIXED**: Rule 20 — Duplicate PBM init fallback in `InitTrainingState.cu::initTrainingState()` REMOVED. Now throws if PBM not pre-initialized by `initPBM()`.
+  - Slopes are NEGATIVE (FlashAttention uses `+= slope * col_idx`) ✅
+  - Non-GQA launcher properly DELETED (Rule 20) ✅
+  - `ensurePBM()` float equality safe (config assignment, no arithmetic) ✅
+  - No stale code found ✅
 
 ---
 
 ### 1.9a Tensor Conversion Utilities
 
-- [ ] **Shared/TensorConversion/TensorConversion.cu**
-  - Tensor format conversion utilities (e.g., FP32 ↔ FP16, host ↔ device)
-  - Used for moving tensors between CPU/GPU or precision conversions
-  - Pattern to check: Verify proper synchronization after async copies
-  - Pattern to check: Check for memory leaks in temporary conversion buffers
-  - **STALE CODE CHECK**: Verify actually used in production, or mark as dead code
+- [x] **Shared/TensorConversion/TensorConversion.cu** ✅ AUDITED & CLEANED
+  - Tensor format conversion utilities (BHSD↔BSM, BHSD↔BSHD bf16, QKV split/merge GQA)
+  - **DELETED**: Dead float-only conversions (BHSD↔BHDS, BHSD↔BSHD float, BSHD→BHSD float) — only reachable via unused dispatcher
+  - **DELETED**: Unused `convert()` dispatcher, `can_convert_inplace()`, `convert_inplace()`, `is_conversion_supported()` from TensorContract_GPU.cu
+  - **DELETED**: `Layout::BHDS` enum value, `make_BHDS()` factory from TensorContract_GPU.hpp
+  - Remaining functions all have direct production callers (bf16 for FlashAttention, BSM for head merge/split, QKV split/merge for GQA)
+  - Rule 20 compliant: `split_qkv_gqa`/`merge_qkv_grads_gqa` throw on null pointers and invalid dims
 
 ---
 
 ### 1.10 Training State Initialization
 
-- [ ] **InitTrainingState.cu**
-  - Detailed training state initialization
-  - Coordinates allocation of all GPU resources
-  - Pattern to check: Verify calls to TrainingState allocation methods
-  - Pattern to check: Verify proper initialization order (streams → cuBLAS → PBM → tensors)
+- [x] **InitTrainingState.cu** ✅ AUDITED & CLEANED
+  - Coordinates allocation of all GPU resources for training
+  - **FIXED**: `num_kv_heads` sourced from compile-time `HyperParameters::DEFAULT_NUM_KV_HEADS` instead of `cfg.num_kv_heads` — latent desync bug from agent corruption. Now reads JSON config like every other callsite.
+  - **DELETED**: 10 dead FlashAttention bf16 Tensor fields + 2 size_t fields from TrainingState (~56MB dead GPU). `FlashAttentionLayer::ensureScratch()` self-manages these buffers; autograd `ScaledDotProductAttentionGradFn` self-allocates backward buffers. Same dead code deleted from `InitInferenceState.cu`.
+  - **FIXED**: Hardcoded `kTextFeatureDim = 16` → `Batching::BatchPayload::kTextFeatureDim` (canonical source)
+  - Initialization order verified: StreamController → cuBLAS → PBM → TrainingTensors → activation caches → gradient buffers → loss scratch → ScratchBlock
+  - Rule 20 compliant: throws on uninitialized cuBLAS, PBM, TrainingTensors
+  - Rule 22 compliant: all streams via `stream_ctrl.getPrimaryStream()`
 
 ---
 
 ### 1.11 GPU Layer Initialization & Wiring
 
-- [ ] **TrainingOps.cu** (initGPU method)
-  - Wires GPU encoder layers to TrainingTensors memory
-  - Creates EmbeddingRuntime pointing to TrainingTensors buffers
-  - **Rule 20**: TrainingTensors is ONLY initialization path - NO legacy CPU paths
-  - **Issue #91**: apply_rms_norm=false (fused embedding norm DISABLED)
-  - **Issue #92**: embedding_scale = sqrt(d_model) - VERIFY present
-  - Pattern to check: Search for `embedding_runtime->token_buffer = training_state_.tensors_->` - MUST point to TrainingTensors
-  - Pattern to check: Verify `owns_token_buffer = false` (TrainingTensors owns memory)
-  - Pattern to check: Verify NO CPU embedder fallback paths
-  - Pattern to check: Search for `useExternalWeights()` call - wires encoder layers to TrainingTensors
-  - **STALE CODE CHECK**: Verify NO allocations in EmbeddingRuntime (just pointers to TrainingTensors)
+- [x] **TrainingOps.cu** (initGPU method) — ✅ AUDITED & CLEANED
+  - `useExternalWeights()` correctly wires all 14 params (including LayerScale, gated by nullptr)
+  - `enc_config.num_kv_heads = cfg.num_kv_heads` — CORRECT (runtime JSON, not HyperParameters)
+  - `HyperParameters::NUM_ATOM_TYPES` in `getModelStats()` — LEGITIMATE (compile-time tokenizer struct layout)
+  - Rule 20 compliance: throws on use_gpu=false, missing CUDA, missing StreamController/cuBLAS, null tensors
+  - NO EmbeddingRuntime code in this file (manifest checklist items misattributed — EmbeddingRuntime/embedding_scale/apply_rms_norm are in AutogradTraining.cu)
+  - **DELETED**: Dead `launchBiasSumGradient` extern (declared but never called in this file)
+  - **FIXED**: PBM check converted from `fprintf+std::abort()` → `throw std::runtime_error()` (Rule 20)
 
 ---
 
@@ -225,9 +256,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 - [ ] **Common/grim_language_model_gpu.cu**
   - High-level language model orchestration on GPU
-  - Contains model-level methods and coordination logic
-  - Pattern to check: Verify proper initialization sequence
-  - Pattern to check: Verify error handling is fail-loud (Rule 20)
+
 
 - [ ] **Common/ScaleBuffer.cu**
   - Buffer scaling utilities (e.g., for embedding/logit scaling)
@@ -259,7 +288,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 ### 1.15 GRIM-TS Layer Initialization
 
 - [ ] **Layers/GRIMTS/GRIM-TS.cu**
-  - GRIM-TS (Training Signal) specific layer implementation
+  - GRIM-TS (Teacher-Student) specific layer implementation
   - Additional training-specific layers or signals
   - Pattern to check: Verify integration with main model forward/backward
   - Pattern to check: Check if this is actually used (might be dead code)

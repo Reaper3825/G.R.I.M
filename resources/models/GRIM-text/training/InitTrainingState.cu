@@ -17,6 +17,7 @@
 #include "../Layers/ScratchBlock/ScratchBlock_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../Shared/StreamController/StreamController_GPU.hpp"
+#include "../Shared/TrainingState/TrainingTensors.hpp"
 #include "../Shared/UnigramByte/Unigram.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"
 
@@ -111,11 +112,6 @@ void LanguageModel::initTrainingState() {
     
     const auto& cfg = getConfig();
     
-    // NOTE: batch_prep_* vectors may be corrupted due to memory overwrite bug.
-    // We use local vectors in prepareLossBatchInputs() instead (Issue #59+ workaround).
-    // Do NOT attempt to resize/use batch_prep_* vectors until root cause is found.
-
-    
     // ═══════════════════════════════════════════════════════════════════════
     //  STEP 1: Initialize StreamController if not already done
     //  (May be pre-initialized by Phase1_Startup before initGPU)
@@ -123,13 +119,11 @@ void LanguageModel::initTrainingState() {
     if (!training_state_.stream_ctrl.isInitialized()) {
         StreamControllerConfig stream_config;
         stream_config.verbose = true;
-        stream_config.create_transfer_stream = true;   // For async H2D/D2H
-        stream_config.create_auxiliary_stream = false; // On-demand if needed
         
         if (!training_state_.stream_ctrl.initialize(stream_config)) {
             throw std::runtime_error("[initTrainingState] Failed to initialize StreamController - CUDA device may be unavailable");
         }
-        std::cout << "✓ StreamController initialized (Primary + Transfer streams)" << std::endl;
+        std::cout << "✓ StreamController initialized (Primary stream)" << std::endl;
     } else {
         std::cout << "✓ StreamController already initialized" << std::endl;
     }
@@ -148,41 +142,15 @@ void LanguageModel::initTrainingState() {
     std::cout << "[DEBUG-INIT-1] After cuBLAS, before PBM check" << std::endl << std::flush;
     
     // ═══════════════════════════════════════════════════════════════════════
-    //  STEP 3: Initialize PBM (Unified ALiBi+RoPE Hybrid)
-    //  CRITICAL: Without positional encoding, attention has no position info!
-    //  - RoPE: Rotary Position Embedding rotates Q,K to encode position
-    //  - ALiBi: Attention-Linear-Biases adds position-dependent bias to scores
-    //  Missing PBM causes position-blind attention → training plateau!
+    //  STEP 3: Verify PBM (Unified ALiBi+RoPE Hybrid) is initialized
+    //  RULE 20: PBM MUST be initialized by initPBM() before this point.
+    //  NO silent fallback — if PBM is missing, it's a bug in the call order.
     // ═══════════════════════════════════════════════════════════════════════
     if (!training_state_.pbm_initialized) {
-        const int head_dim = cfg.head_dim;  // Use pre-computed value from config
-        
-        PBM::PBMConfig pbm_config{};  // Uses HyperParameters defaults
-        pbm_config.num_heads = cfg.num_heads;
-        pbm_config.num_kv_heads = cfg.num_kv_heads;
-        pbm_config.max_seq_len = cfg.max_seq_len;  // CRITICAL: Set from model config for context-aware scaling
-        // alibi_slope_exponent uses default from HyperParameters::ALIBI_SLOPE_EXPONENT
-        // rope_theta/rope_scaling use defaults from HyperParameters (NTK scaling auto-applies if max_seq_len > 2048)
-        pbm_config.head_dim = head_dim;
-        pbm_config.rotary_dim = head_dim;  // Full rotation
-        pbm_config.verbose = true;
-        pbm_config.stream = training_state_.stream_ctrl.getPrimaryStream();
-        
-        if (!PBM::initializePBM(pbm_config, training_state_.pbm_state)) {
-            std::cerr << "FATAL: Failed to initialize PBM (ALiBi+RoPE)" << std::endl;
-            throw std::runtime_error("PBM initialization failed");
-        }
-        
-        // Build the spec that will be passed to encoder layers
-        training_state_.pbm_spec = PBM::getPBMSpec(training_state_.pbm_state);
-        
-        training_state_.pbm_initialized = true;
-        std::cout << "✓ PBM (Hybrid ALiBi+RoPE) initialized:" << std::endl;
-        std::cout << "    ALiBi: " << cfg.num_heads << " heads with position-decaying slopes" << std::endl;
-        std::cout << "    RoPE:  head_dim=" << head_dim 
-                  << ", rotary_dim=" << training_state_.pbm_spec.rotary_dim
-                  << ", theta=10000" << std::endl;
+        throw std::runtime_error("[initTrainingState] PBM not initialized! "
+            "Call initPBM() before initTrainingState() — Rule 20: no silent fallbacks");
     }
+    std::cout << "✓ PBM (Hybrid ALiBi+RoPE) pre-initialized" << std::endl;
 
      training_state_.cached_num_layers = cfg.num_layers;
     cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
@@ -196,8 +164,6 @@ void LanguageModel::initTrainingState() {
     // Weight tying: When tie_embeddings=true, lm_head_weights.data points to embedding buffer
     // but lm_head_weights.grad is shared with embedding_weights.grad.
     
-    const size_t embedding_size = static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
-    const size_t position_size = static_cast<size_t>(cfg.max_seq_len) * cfg.d_model;
     using TC = TensorContract::TensorShape;
     
     // ═══════════════════════════════════════════════════════════════
@@ -211,7 +177,7 @@ void LanguageModel::initTrainingState() {
         throw std::runtime_error(
             "[InitTrainingState] FATAL: TrainingTensors not initialized!\n"
             "Phase1_Startup must call initializeAutogradTensors() in step 2.75 before initTrainingState().\n"
-            "Legacy wrapping code has been DELETED per Rule 20 - no backwards compatibility.");
+            "Legacy wrapping code has been DELETED.");
     }
     
     // TrainingTensors owns the memory - tensors already set up by initializeAutogradTensors()
@@ -220,27 +186,27 @@ void LanguageModel::initTrainingState() {
     // CRASH DEBUG: Step-by-step pointer access to find exact crash point
     // ISSUE #59: Use grad_data() accessor
     std::cout << "[DEBUG-INIT-4a] About to read embedding_weights.data..." << std::endl << std::flush;
-    float* emb_data = training_state_.embedding_weights.data;
+    float* emb_data = training_state_.tensors_->embedding_weights.data;
     std::cout << "[DEBUG-INIT-4b] emb_data=" << (void*)emb_data << std::endl << std::flush;
     
     std::cout << "[DEBUG-INIT-4c] About to read embedding_weights.grad_data()..." << std::endl << std::flush;
-    float* emb_grad = training_state_.embedding_weights.grad_data();
+    float* emb_grad = training_state_.tensors_->embedding_weights.grad_data();
     std::cout << "[DEBUG-INIT-4d] emb_grad=" << (void*)emb_grad << std::endl << std::flush;
     
     std::cout << "[DEBUG-INIT-4e] About to read position_embedding_weights.data..." << std::endl << std::flush;
-    float* pos_data = training_state_.position_embedding_weights.data;
+    float* pos_data = training_state_.tensors_->position_embedding_weights.data;
     std::cout << "[DEBUG-INIT-4f] pos_data=" << (void*)pos_data << std::endl << std::flush;
     
     std::cout << "[DEBUG-INIT-4g] About to read position_embedding_weights.grad_data()..." << std::endl << std::flush;
-    float* pos_grad = training_state_.position_embedding_weights.grad_data();
+    float* pos_grad = training_state_.tensors_->position_embedding_weights.grad_data();
     std::cout << "[DEBUG-INIT-4h] pos_grad=" << (void*)pos_grad << std::endl << std::flush;
     
     std::cout << "[DEBUG-INIT-4i] About to read lm_head_weights.data..." << std::endl << std::flush;
-    float* lm_data = training_state_.lm_head_weights.data;
+    float* lm_data = training_state_.tensors_->lm_head_weights.data;
     std::cout << "[DEBUG-INIT-4j] lm_data=" << (void*)lm_data << std::endl << std::flush;
     
     std::cout << "[DEBUG-INIT-4k] About to read lm_head_weights.grad_data()..." << std::endl << std::flush;
-    float* lm_grad = training_state_.lm_head_weights.grad_data();
+    float* lm_grad = training_state_.tensors_->lm_head_weights.grad_data();
     std::cout << "[DEBUG-INIT-4l] lm_grad=" << (void*)lm_grad << std::endl << std::flush;
     
     std::cout << "✓ Embeddings initialized via TrainingTensors (proper ownership)\n";
@@ -254,47 +220,29 @@ void LanguageModel::initTrainingState() {
     // Verify weight tying aliasing if enabled
     // ISSUE #59: Use grad_data() accessor
     if (cfg.tie_embeddings) {
-        if (training_state_.embedding_weights.data != training_state_.lm_head_weights.data) {
+        if (training_state_.tensors_->embedding_weights.data != training_state_.tensors_->lm_head_weights.data) {
             throw std::runtime_error(
                 "[InitTrainingState] FATAL: tie_embeddings=true but data pointers NOT aliased!\n"
-                "embedding_weights.data=" + std::to_string(reinterpret_cast<uintptr_t>(training_state_.embedding_weights.data)) +
-                " lm_head_weights.data=" + std::to_string(reinterpret_cast<uintptr_t>(training_state_.lm_head_weights.data)));
+                "embedding_weights.data=" + std::to_string(reinterpret_cast<uintptr_t>(training_state_.tensors_->embedding_weights.data)) +
+                " lm_head_weights.data=" + std::to_string(reinterpret_cast<uintptr_t>(training_state_.tensors_->lm_head_weights.data)));
         }
-        if (training_state_.embedding_weights.grad_data() != training_state_.lm_head_weights.grad_data()) {
+        if (training_state_.tensors_->embedding_weights.grad_data() != training_state_.tensors_->lm_head_weights.grad_data()) {
             throw std::runtime_error(
                 "[InitTrainingState] FATAL: tie_embeddings=true but grad pointers NOT aliased!\n"
-                "embedding_weights.grad=" + std::to_string(reinterpret_cast<uintptr_t>(training_state_.embedding_weights.grad_data())) +
-                " lm_head_weights.grad=" + std::to_string(reinterpret_cast<uintptr_t>(training_state_.lm_head_weights.grad_data())));
+                "embedding_weights.grad=" + std::to_string(reinterpret_cast<uintptr_t>(training_state_.tensors_->embedding_weights.grad_data())) +
+                " lm_head_weights.grad=" + std::to_string(reinterpret_cast<uintptr_t>(training_state_.tensors_->lm_head_weights.grad_data())));
         }
         std::cout << "✓ Weight tying verified: embedding and lm_head share data AND grad pointers\n";
     }
     
-    // LM head bias [vocab_size] - optional
-    if (cfg.use_bias) {
-        training_state_.lm_head_bias = Tensor::zeros(
-            TC::make_BSM(1, cfg.vocab_size), true, primary_stream, "lm_head_bias");
-        training_state_.lm_head_bias.ensure_grad();  // Allocate grad buffer NOW
-        std::cout << "📦 LM head bias allocated: " << cfg.vocab_size << " elements" << std::endl;
-    }
+    // lm_head_bias, numeric_head_weights, numeric_head_bias, final_rms_gamma
+    // are owned by TrainingTensors (allocated in initializeParams()). 
+    // Access via training_state_.tensors_->X.
     
-    // Numeric head [d_model] - optional
+    // Learned loss weighting: homoscedastic uncertainty (stays on TrainingState — not a model parameter)
+    // Numeric head WEIGHTS are in TrainingTensors (atom value prediction layer).
+    // These log_var scalars balance text CE vs numeric Huber loss magnitudes.
     if (cfg.numeric_head_enabled) {
-        training_state_.numeric_head_weights = Tensor::zeros(
-            TC::make_BSM(1, cfg.d_model), true, primary_stream, "numeric_head_weights");
-        training_state_.numeric_head_weights.ensure_grad();  // Allocate grad buffer NOW
-        training_state_.numeric_head_bias = Tensor::zeros(
-            TC::make_BSM(1, 1), true, primary_stream, "numeric_head_bias");
-        training_state_.numeric_head_bias.ensure_grad();  // Allocate grad buffer NOW
-        
-        // Initialize numeric head with Xavier uniform using deterministic seed
-        // Shape [1, d_model]: fan_in = d_model (columns), fan_out = 1 (rows)
-        // Use seed + 100 to avoid collision with encoder weight seeds
-        const uint64_t numeric_head_seed = 12345ULL + 100;
-        Tensor::xavier_uniform_(training_state_.numeric_head_weights, numeric_head_seed, primary_stream);
-        // expected_rms = sqrt(6 / (fan_in + fan_out)) / sqrt(3) where fan_in=d_model, fan_out=1
-        const float expected_rms = std::sqrt(6.0f / static_cast<float>(cfg.d_model + 1)) / std::sqrt(3.0f);
-        std::cout << "📦 Numeric head allocated (expected_rms=" << expected_rms << ")" << std::endl;
-        
         // Learned loss weighting (homoscedastic uncertainty)
         // Formula: weight = 0.5 * exp(-log_var)
         // To get weight = 1.0 (no scaling), need log_var = -ln(2) ≈ -0.693
@@ -311,16 +259,6 @@ void LanguageModel::initTrainingState() {
         std::cout << "📦 Learned loss weights allocated (log_var=" << init_log_var << " → weight=1.0)" << std::endl;
     }
     
-    // Final RMSNorm gamma [d_model] - Issue #33 FIX
-    training_state_.final_rms_gamma = Tensor::zeros(
-        TC::make_BSM(1, cfg.d_model), true, primary_stream, "final_rms_gamma");
-    training_state_.final_rms_gamma.ensure_grad();  // Allocate grad buffer NOW
-    // Initialize gamma to 1.0 (standard for RMSNorm)
-    std::vector<float> ones(cfg.d_model, 1.0f);
-    cudaMemcpyAsync(training_state_.final_rms_gamma.data, ones.data(),
-                    cfg.d_model * sizeof(float), cudaMemcpyHostToDevice, primary_stream);
-    std::cout << "📦 Final RMSNorm gamma allocated: " << cfg.d_model << " elements" << std::endl;
-    
     // ═══════════════════════════════════════════════════════════════
     // AUTOGRAD MIGRATION COMPLETE - Legacy vectors REMOVED
     // ═══════════════════════════════════════════════════════════════
@@ -330,14 +268,8 @@ void LanguageModel::initTrainingState() {
     //   - enc->rms1Gamma().grad_data(), enc->rms2Gamma().grad_data()
     // Allocated via ensure_grad() in encoder's allocateWeights().
     
-    // Learnable QK-norm scales (nGPT-style) - now Tensor-based with autograd
-    training_state_.attn_alpha_q.resize(cfg.num_layers);
-    training_state_.attn_alpha_k.resize(cfg.num_layers);
-    
-    // GQA configuration: determine number of KV heads
-    // Use HyperParameters default if config doesn't specify, or equal to num_heads for MHA
-    const int num_kv_heads = HyperParameters::GQA_ENABLED ? 
-                             HyperParameters::DEFAULT_NUM_KV_HEADS : cfg.num_heads;
+    // GQA configuration: source from JSON config (NOT compile-time HyperParameters)
+    const int num_kv_heads = cfg.num_kv_heads;
     
     // Validate GQA configuration
     if (!HyperParameters::isValidGQAConfig(cfg.num_heads, num_kv_heads)) {
@@ -349,63 +281,37 @@ void LanguageModel::initTrainingState() {
     training_state_.num_heads = cfg.num_heads;
     training_state_.num_kv_heads = num_kv_heads;
     
-    std::cout << "🔧 GQA Configuration: num_heads=" << cfg.num_heads 
+    std::cout << "GQA Configuration: num_heads=" << cfg.num_heads 
               << " num_kv_heads=" << num_kv_heads 
               << " (heads_per_kv_group=" << (cfg.num_heads / num_kv_heads) << ")" << std::endl;
-    std::cout.flush();
     
-    std::cout << "[DEBUG-LAYER-ALLOC] About to allocate QK-norm scales for " << cfg.num_layers << " layers..." << std::endl;
-    std::cout.flush();
-    
-    // CHECK: Are batch_prep vectors intact BEFORE the QK-norm loop?
-    std::cout << "[DEBUG-CORRUPTION-CHECK] BEFORE QK-norm loop:" << std::endl;
-    std::cout << "[DEBUG-CORRUPTION-CHECK] target_ids: size=" << training_state_.batch_prep_target_ids.size()
-              << " capacity=" << training_state_.batch_prep_target_ids.capacity()
-              << " data=" << (void*)training_state_.batch_prep_target_ids.data() << std::endl;
-    std::cout.flush();
-    
-    for (int layer = 0; layer < cfg.num_layers; ++layer) {
-        // AUTOGRAD MIGRATION COMPLETE: All encoder layer gradients now use encoder's Tensor.grad
-        // (allocated via ensure_grad() in encoder's allocateWeights())
+    // Learnable QK-norm scales (nGPT-style) — only allocated when QK normalization is enabled
+    if constexpr (HyperParameters::QK_NORMALIZATION_ENABLED) {
+        training_state_.attn_alpha_q.resize(cfg.num_layers);
+        training_state_.attn_alpha_k.resize(cfg.num_layers);
         
-        // Allocate and initialize learnable QK-norm scales using Tensor
-        // GQA: alpha_q has num_heads entries, alpha_k has num_kv_heads entries
-        // Use BSM shape with dim=1 for 1D vectors
-        training_state_.attn_alpha_q[layer] = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(cfg.num_heads, 1), true, primary_stream, "attn_alpha_q");
-        training_state_.attn_alpha_q[layer].ensure_grad();
-        
-        training_state_.attn_alpha_k[layer] = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(num_kv_heads, 1), true, primary_stream, "attn_alpha_k");
-        training_state_.attn_alpha_k[layer].ensure_grad();
-        
-        // Initialize alpha_q to 1.0 (num_heads entries)
-        std::vector<float> alpha_q_init(cfg.num_heads, HyperParameters::QK_NORM_ALPHA_INIT);
-        cudaMemcpy(training_state_.attn_alpha_q[layer].data, alpha_q_init.data(), 
-                   cfg.num_heads * sizeof(float), cudaMemcpyHostToDevice);
-        
-        // Initialize alpha_k to 1.0 (num_kv_heads entries for GQA)
-        std::vector<float> alpha_k_init(num_kv_heads, HyperParameters::QK_NORM_ALPHA_INIT);
-        cudaMemcpy(training_state_.attn_alpha_k[layer].data, alpha_k_init.data(), 
-                   num_kv_heads * sizeof(float), cudaMemcpyHostToDevice);
-        
-        if (layer == 0 || layer == cfg.num_layers - 1) {
-            std::cout << "[DEBUG-LAYER-ALLOC] Layer " << layer << " QK-norm allocated OK" << std::endl;
-            std::cout.flush();
+        for (int layer = 0; layer < cfg.num_layers; ++layer) {
+            // GQA: alpha_q has num_heads entries, alpha_k has num_kv_heads entries
+            training_state_.attn_alpha_q[layer] = Tensor::empty(
+                TensorContract::TensorShape::make_BSM(cfg.num_heads, 1), true, primary_stream, "attn_alpha_q");
+            training_state_.attn_alpha_q[layer].ensure_grad();
+            
+            training_state_.attn_alpha_k[layer] = Tensor::empty(
+                TensorContract::TensorShape::make_BSM(num_kv_heads, 1), true, primary_stream, "attn_alpha_k");
+            training_state_.attn_alpha_k[layer].ensure_grad();
+            
+            // Initialize alpha_q to 1.0 (num_heads entries)
+            std::vector<float> alpha_q_init(cfg.num_heads, HyperParameters::QK_NORM_ALPHA_INIT);
+            cudaMemcpy(training_state_.attn_alpha_q[layer].data, alpha_q_init.data(), 
+                       cfg.num_heads * sizeof(float), cudaMemcpyHostToDevice);
+            
+            // Initialize alpha_k to 1.0 (num_kv_heads entries for GQA)
+            std::vector<float> alpha_k_init(num_kv_heads, HyperParameters::QK_NORM_ALPHA_INIT);
+            cudaMemcpy(training_state_.attn_alpha_k[layer].data, alpha_k_init.data(), 
+                       num_kv_heads * sizeof(float), cudaMemcpyHostToDevice);
         }
+        std::cout << "QK-norm scales allocated for " << cfg.num_layers << " layers" << std::endl;
     }
-    std::cout << "[DEBUG-LAYER-ALLOC] All " << cfg.num_layers << " layers allocated successfully" << std::endl;
-    std::cout.flush();
-    
-    // CHECK: Are the batch_prep vectors already corrupt after the QK-norm loop?
-    std::cout << "[DEBUG-CORRUPTION-CHECK] After QK-norm loop, checking batch_prep vectors..." << std::endl;
-    std::cout << "[DEBUG-CORRUPTION-CHECK] input_ids: size=" << training_state_.batch_prep_input_ids.size()
-              << " capacity=" << training_state_.batch_prep_input_ids.capacity()
-              << " data=" << (void*)training_state_.batch_prep_input_ids.data() << std::endl;
-    std::cout << "[DEBUG-CORRUPTION-CHECK] target_ids: size=" << training_state_.batch_prep_target_ids.size()
-              << " capacity=" << training_state_.batch_prep_target_ids.capacity()
-              << " data=" << (void*)training_state_.batch_prep_target_ids.data() << std::endl;
-    std::cout.flush();
 
     // NOTE: Encoder layer weight initialization is handled in TrainingOps.cu::initGPU()
     // with proper GQA-aware dimensions and GPT-2 residual scaling.
@@ -423,96 +329,33 @@ void LanguageModel::initTrainingState() {
     training_state_.max_cached_tokens = max_tokens;
     training_state_.max_logit_tokens = max_logit_tokens;
     
-    // ========== REMOVED: batch_prep pre-allocation (CAUSES CRASH) ==========
-    // batch_prep_target_ids vector is corrupted BEFORE initTrainingState() is called
-    // (capacity = garbage value 1113289828100734976).
-    // Something is writing over TrainingState memory. 
-    // WORKAROUND: Let prepareLossBatchInputs() allocate on first use.
-    // The 0.02s allocation cost is acceptable vs crash.
-    // =========================================================================
-    training_state_.batch_prep_capacity = 0;  // Signal to prepareLossBatchInputs: allocate on first use
+    // DELETED: batch_prep_* lazy allocation (Rule 20) — replaced by BatchPayload struct
     
     // BUG FIX: Set kv_cache_capacity for inference sampling during training
     // Previously missing - caused forwardInit() to fail with capacity=0
     training_state_.kv_cache_capacity = static_cast<int>(max_seq_len_cache);
     training_state_.kv_cache_len = 0;  // Start with empty cache
     
-    // BUG FIX: Allocate single-token inference buffers for training-time sampling
-    // These are required by forwardInit() for incremental generation during training
-    // Rule 20: Fail loud if allocation fails - no silent fallbacks
-    
-    // Use BSM shape with dim=1 for 1D vectors
-    training_state_.single_token_hidden = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(cfg.d_model, 1), false, primary_stream, "single_token_hidden");
-    
-    training_state_.single_token_logits = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(cfg.vocab_size, 1), false, primary_stream, "single_token_logits");
-    
-    std::cout << "✓ Allocated single-token inference buffers for training sampling" << std::endl;
+    // NOTE: single_token_hidden/logits/embedding are inference-only buffers.
+    // Allocated in InitInferenceState.cu when inference is initialized.
+    // NOT needed during training — removed dead allocations (Finding 3).
     
     std::cout << "📊 Allocating activation caches for max_tokens=" << max_tokens
               << " (batch=" << max_batch_size << ", seq_len=" << max_seq_len_cache << ")" << std::endl;
     
-    // Embedding cache - now uses Tensor
-    training_state_.cached_embeddings_tensor = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cached_embeddings");
+    // DELETED: cached_embeddings_tensor - DEAD CODE (Rule 20)
+    // Was allocated but never read. Intermediates stored in AutogradIntermediates.
     
-    // Per-layer encoder activation caches using new Tensor-based architecture
-    // GQA: K and V caches use num_kv_heads, Q uses num_heads
-    const int head_dim_cache = cfg.head_dim;  // Use pre-computed value from config
-    const int kv_dim_cache = training_state_.num_kv_heads * head_dim_cache;
+    // DELETED: encoder_layer_caches - DEAD CODE (Rule 20)
+    // Was allocated but never accessed during training or inference.
+    // TrainingTensors.hpp defines the future per-layer cache system but it's not integrated yet.
     
-    const size_t softmax_lse_elems = static_cast<size_t>(max_batch_size) *
-                                     static_cast<size_t>(cfg.num_heads) *
-                                     static_cast<size_t>(max_seq_len_cache);
-
-    // Initialize encoder_layer_caches vector with Tensors for each layer
-    training_state_.encoder_layer_caches.resize(cfg.num_layers);
-    
-    for (int layer = 0; layer < cfg.num_layers; ++layer) {
-        auto& cache = training_state_.encoder_layer_caches[layer];
-        
-        // BSM layout for [batch*seq, feature_dim] shaped tensors
-        cache.ln1_output = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cache_ln1_output");
-        cache.attn_input = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cache_attn_input");
-        cache.attn_output = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cache_attn_output");
-        cache.residual1 = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cache_residual1");
-        cache.ln2_output = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cache_ln2_output");
-        cache.ffn_pre_gelu = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_ff), false, primary_stream, "cache_ffn_pre_gelu");
-        cache.ffn_output = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_ff), false, primary_stream, "cache_ffn_output");
-        cache.layer_output = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cache_layer_output");
-        
-        // BHSD layout for attention tensors [batch, heads, seq, head_dim]
-        cache.attn_bhsd = Tensor::empty(
-            TensorContract::TensorShape::make_BHSD(max_batch_size, cfg.num_heads, max_seq_len_cache, head_dim_cache), false, primary_stream, "cache_attn_bhsd");
-        cache.softmax_lse = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_batch_size * cfg.num_heads, max_seq_len_cache), false, primary_stream, "cache_softmax_lse");
-        
-        // Q/K/V caches - Q uses full num_heads, K/V use num_kv_heads (GQA)
-        cache.Q = Tensor::empty(
-            TensorContract::TensorShape::make_BHSD(max_batch_size, cfg.num_heads, max_seq_len_cache, head_dim_cache), false, primary_stream, "cache_Q");
-        cache.K = Tensor::empty(
-            TensorContract::TensorShape::make_BHSD(max_batch_size, training_state_.num_kv_heads, max_seq_len_cache, head_dim_cache), false, primary_stream, "cache_K");
-        cache.V = Tensor::empty(
-            TensorContract::TensorShape::make_BHSD(max_batch_size, training_state_.num_kv_heads, max_seq_len_cache, head_dim_cache), false, primary_stream, "cache_V");
-    }
-    
-    // Output layer caches - using Tensor API
+    // Output layer cache - using Tensor API (actively used by inference and Phase2 diagnostics)
     training_state_.cached_encoder_output = Tensor::empty(
         TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cached_encoder_output");
     
-    // Issue #33: Final RMSNorm input cache for backward pass
-    // Stores encoder output BEFORE final norm (used to compute gamma gradients)
-    training_state_.cached_final_rms_input = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cached_final_rms_input");
+    // DELETED: cached_final_rms_input - DEAD CODE (Rule 20)
+    // Was allocated but never read by any code.
     
     // Allocate logits cache with LOGITS layout tracking (TensorContract integration)
     training_state_.cached_logits_tensor = Tensor::empty(
@@ -542,7 +385,7 @@ void LanguageModel::initTrainingState() {
     // not max_logit_tokens (training optimization). Inference sampling requires
     // the full buffer for sequences up to max_cached_seq_len.
     // BUG FIX: Always allocate numeric/text buffers even when ScratchBlock is disabled
-    // because prepareLossBatchInputs() always populates these fields from tokenizer
+    // because buildBatchPayload() always populates these fields from tokenizer
     // Rule 20: Use Tensor API instead of raw cudaMalloc
     training_state_.cached_token_numeric_values = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
@@ -561,7 +404,7 @@ void LanguageModel::initTrainingState() {
     std::cout << "✓ Allocated token numeric mask cache (Tensor API)" << std::endl;
 
     // GRMT v4: Allocate text feature buffers - Rule 20: Tensor API
-    constexpr int kTextFeatureDim = 16;  // Must match GRIM::Tokenizer::kTextFeatureDim
+    constexpr int kTextFeatureDim = Batching::BatchPayload::kTextFeatureDim;
     training_state_.cached_token_text_features = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(static_cast<int>(max_tokens), kTextFeatureDim),
         false,  // no grad
@@ -581,14 +424,6 @@ void LanguageModel::initTrainingState() {
     std::cout << "✓ Allocated numeric/text feature buffers (" 
               << (max_tokens * (sizeof(float) + sizeof(uint8_t) + kTextFeatureDim * sizeof(uint16_t) + sizeof(uint8_t)) / 1024 / 1024) 
               << " MB)" << std::endl;
-
-    // Allocate entropy output buffer (per-layer, per-batch, per-head)
-    // Size: num_layers * max_batch_size * num_heads
-    const size_t entropy_size = cfg.num_layers * max_batch_size * cfg.num_heads;
-    training_state_.d_entropy_output = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(static_cast<int>(entropy_size), 1), false, primary_stream, "entropy_output");
-    std::cout << "📊 Allocated entropy output buffer: " << entropy_size 
-              << " floats (" << (entropy_size * sizeof(float) / 1024.0 / 1024.0) << " MB)" << std::endl;
 
     training_state_.sequence_weights_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(static_cast<int>(max_batch_size), 1), false, primary_stream, "sequence_weights");
@@ -630,6 +465,7 @@ void LanguageModel::initTrainingState() {
     enc_cfg.rms_epsilon = 1e-5f;
     enc_cfg.causal_mask = cfg.causal_mask;
     enc_cfg.use_flash_attention = true;
+    enc_cfg.use_bias = cfg.use_bias;
     enc_cfg.stream = training_state_.stream_ctrl.getPrimaryStream();
     enc_cfg.cublas_handle = training_state_.cublas_handle;  // Rule 22: centralized handle
     EncodingLayer enc_layer(enc_cfg);
@@ -717,77 +553,8 @@ void LanguageModel::initTrainingState() {
     // Rule 20: NO BACKWARDS COMPATIBILITY - callers must use tensor.data directly
     // Removed raw pointer alias assignments
 
-    // Flash Attention workspace allocation (using Tensor API)
-    const size_t fa_dq_accum_elems = flash_attn_dq_accum_bytes(
-        static_cast<int>(max_batch_size),
-        static_cast<int>(max_seq_len_cache),
-        cfg.num_heads,
-        head_dim) / sizeof(float);  // Convert bytes to float elems
-    const size_t fa_dsoftmax_sum_elems = flash_attn_dsoftmax_sum_bytes(
-        static_cast<int>(max_batch_size),
-        static_cast<int>(max_seq_len_cache),
-        cfg.num_heads) / sizeof(float);
-
-    if (fa_dq_accum_elems > 0) {
-        training_state_.fa_dq_accum = Tensor::zeros(
-            TensorContract::TensorShape::make_BHSD(
-                static_cast<int>(max_batch_size), cfg.num_heads, 
-                static_cast<int>(max_seq_len_cache), head_dim),
-            false, primary_stream, "fa_dq_accum");
-    }
-    if (fa_dsoftmax_sum_elems > 0) {
-        training_state_.fa_dsoftmax_sum = Tensor::zeros(
-            TensorContract::TensorShape::make_BSM(
-                static_cast<int>(max_batch_size * cfg.num_heads),
-                static_cast<int>(max_seq_len_cache)),
-            false, primary_stream, "fa_dsoftmax_sum");
-    }
-
-    const size_t fa_q_elems = static_cast<size_t>(max_batch_size) *
-                              static_cast<size_t>(cfg.num_heads) *
-                              static_cast<size_t>(max_seq_len_cache) *
-                              static_cast<size_t>(head_dim);
-    const size_t fa_kv_elems = static_cast<size_t>(max_batch_size) *
-                               static_cast<size_t>(training_state_.num_kv_heads) *
-                               static_cast<size_t>(max_seq_len_cache) *
-                               static_cast<size_t>(head_dim);
-    training_state_.fa_q_bf16_elems = fa_q_elems;
-    training_state_.fa_kv_bf16_elems = fa_kv_elems;
-
-    // BF16 buffers for FlashAttention v2 - using Tensor API with BSHD layout
-    // Note: Tensors use float but these need bf16 - must cast at usage site
-    training_state_.fa_q_bf16 = Tensor::empty(
-        TensorContract::TensorShape::make_BSHD(
-            static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
-            cfg.num_heads, head_dim), false, primary_stream, "fa_q_bf16");
-    training_state_.fa_k_bf16 = Tensor::empty(
-        TensorContract::TensorShape::make_BSHD(
-            static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
-            training_state_.num_kv_heads, head_dim), false, primary_stream, "fa_k_bf16");
-    training_state_.fa_v_bf16 = Tensor::empty(
-        TensorContract::TensorShape::make_BSHD(
-            static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
-            training_state_.num_kv_heads, head_dim), false, primary_stream, "fa_v_bf16");
-    training_state_.fa_out_bf16 = Tensor::empty(
-        TensorContract::TensorShape::make_BSHD(
-            static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
-            cfg.num_heads, head_dim), false, primary_stream, "fa_out_bf16");
-    training_state_.fa_dout_bf16 = Tensor::empty(
-        TensorContract::TensorShape::make_BSHD(
-            static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
-            cfg.num_heads, head_dim), false, primary_stream, "fa_dout_bf16");
-    training_state_.fa_dq_bf16 = Tensor::empty(
-        TensorContract::TensorShape::make_BSHD(
-            static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
-            cfg.num_heads, head_dim), false, primary_stream, "fa_dq_bf16");
-    training_state_.fa_dk_bf16 = Tensor::empty(
-        TensorContract::TensorShape::make_BSHD(
-            static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
-            training_state_.num_kv_heads, head_dim), false, primary_stream, "fa_dk_bf16");
-    training_state_.fa_dv_bf16 = Tensor::empty(
-        TensorContract::TensorShape::make_BSHD(
-            static_cast<int>(max_batch_size), static_cast<int>(max_seq_len_cache),
-            training_state_.num_kv_heads, head_dim), false, primary_stream, "fa_dv_bf16");
+    // DELETED: FA bf16/dq_accum/dsoftmax_sum buffers — FlashAttentionLayer::ensureScratch() self-manages
+    // (was ~56MB dead GPU allocation). Autograd ScaledDotProductAttentionGradFn also self-allocates backward buffers.
     
     // Loss scratch buffers using Tensor API (Rule 20: no raw cudaMalloc)
     training_state_.d_loss_scratch = Tensor::zeros(
@@ -862,7 +629,6 @@ void LanguageModel::initTrainingState() {
         scratch_block_layer_ = std::make_unique<ScratchBlockLayer>(sb_config);
         
         // Allocate activation caches for ScratchBlock forward/backward pass (Rule 20: Tensor API)
-        const size_t atom_emb_size = cfg.scratch_block_max_atoms * cfg.scratch_block_atom_embedding_dim;
         training_state_.cached_scratch_block_embeddings = Tensor::zeros(
             TensorContract::TensorShape::make_BSM(
                 static_cast<int>(cfg.scratch_block_max_atoms),
@@ -896,6 +662,7 @@ void LanguageModel::initTrainingState() {
     //  that caused problems because EmbeddingRuntime already allocated memory.
     //  Now tensors_ OWNS memory BEFORE initGPU(), so no duplicate allocation.
     // ═══════════════════════════════════════════════════════════════════════════
+    
     if (!training_state_.use_autograd_tensors || !training_state_.tensors_) {
         throw std::runtime_error(
             "[InitTrainingState] FATAL: use_autograd_tensors not enabled! "

@@ -239,7 +239,6 @@ GRIM::Batching::BatchSchedule buildEpochBatches(
     int global_step,
     int epoch,
     int max_tokens_override,
-    const std::vector<float>* rarity_scores,
     TrainingLogger& logger);
 
 /**

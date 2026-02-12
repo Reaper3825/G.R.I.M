@@ -18,7 +18,6 @@ struct SequenceView {
     uint32_t seq_id;
     uint32_t length;
     uint32_t bucket_key;
-    float rarity_score;
     float sort_key;  // combined sorting metric
 };
 
@@ -269,16 +268,10 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
     for (const auto& entry : entries) {
         if (entry.seq_length == 0) continue;
         
-        float rarity = 0.0f;
-        if (opts.rarity_scores && entry.seq_id < opts.rarity_scores->size()) {
-            rarity = (*opts.rarity_scores)[entry.seq_id];
-        }
-        
         views.push_back({
             entry.seq_id, 
             entry.seq_length, 
             bucketize(entry.seq_length, bucket_step),
-            rarity,
             0.0f  // sort_key computed below
         });
         all_lengths.push_back(entry.seq_length);
@@ -298,12 +291,7 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
             ? static_cast<float>(v.length) 
             : -static_cast<float>(v.length);
         
-        if (opts.prioritize_rare && opts.rarity_scores) {
-            // Blend rarity and length
-            v.sort_key = opts.rarity_weight * (-v.rarity_score) + (1.0f - opts.rarity_weight) * len_key;
-        } else {
-            v.sort_key = len_key;
-        }
+        v.sort_key = len_key;
         
         // Apply curriculum: filter long sequences early in training
         if (opts.curriculum_progress < 1.0f) {

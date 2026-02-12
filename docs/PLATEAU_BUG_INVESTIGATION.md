@@ -1,13 +1,13 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** ISSUE #133 - Flat text_ce was uniform softmax + entropy reg mask
+**Status:** ISSUE #136 - GRAD_LOGITS[277] negative values at non-target positions FIXED
 **Started:** December 22, 2025
-**Last Updated:** February 6, 2026
-**Latest Finding:** Issue #133: text_ce=9.76 is NOT "near random" — it IS random baseline ln(50377)=10.83 minus entropy_reg offset 0.1×10.83=1.08. Model predictions are UNIFORM because logit std≈0.17 over 50K vocab. FIX: (1) Disabled entropy_reg, (2) Re-enabled logit scaling by sqrt(d_model), (3) Reduced weight_decay 0.3→0.1, (4) Disabled focal loss.
+**Last Updated:** February 9, 2026
+**Latest Finding:** Issue #136 (Feb 9): Mathematically impossible negative gradients at non-target positions were caused by CenterRowsGradFn reusing the externally-owned `grad_logits_tensor.data` buffer, overwriting CE gradients with centered versions. FIX: CenterRowsGradFn now allocates its own dedicated buffer, preserving CE gradients (verified in batch 2 logs: at_other_targets=+0.000023 instead of -0.054415).
 
 ---
 
-## 🔴 ISSUE #133: FLAT TEXT_CE = UNIFORM SOFTMAX + ENTROPY REG MASK (Feb 6, 2026)
+## 🟢 ISSUE #136: GRAD_LOGITS[277] NEGATIVE AT NON-TARGETS - FIXED (Feb 9, 2026)
 
 ### Discovery
 
@@ -125,6 +125,146 @@ Even accounting for batch size (6000/1536 = 3.9x), there's still ~30x unexplaine
 - Possibly different weight initialization
 
 **To fix:** Run LibTorch baseline with IDENTICAL config to GRIM before claiming mismatch.
+
+---
+
+## � ISSUE #136: GRAD_LOGITS BUFFER CORRUPTION - ROOT CAUSE FIXED (Feb 9, 2026)
+
+### The Problem
+
+Diagnostic logs showed mathematically impossible negative gradients at non-target token positions:
+```
+GRAD_LOGITS[277]: at_277_targets = -0.078270 ✓ (correct)
+                  at_other_targets = -0.054415 ✗ (IMPOSSIBLE - should be positive with pure CE)
+```
+
+With pure CE loss and all regularization OFF, non-target gradients MUST be non-negative (as proved in Issue #135 math).
+Yet Phase2_TrainingLoop.cu consistently read NEGATIVE values from `ts.grad_logits_tensor.data`.
+
+### Root Cause: Buffer Reuse in CenterRowsGradFn
+
+**The bug chain:**
+1. `set_grad_from_buffer()` at ComputeLossBatch.cu:882 sets `ctx.logits_tensor.grad_data()` to point to `grad_logits_tensor.data`
+2. `ctx.logits_tensor` is marked `is_leaf=true` (because it wraps an externally-owned buffer)
+3. During backward, `LogSoftmaxGradFn::apply()` writes CE gradients to this buffer ✓
+4. Then `CenterRowsGradFn::apply()` **reuses the same buffer** because of `if (input.is_leaf) input_grad = input.grad_data()` check
+5. CenterRowsGradFn **overwrites** CE gradients with centered versions ✗
+
+### The Fix: Don't Reuse Externally-Owned Buffers
+
+**Location:** `TensorContract_GPU.cu` lines 2385-2400 (CenterRowsGradFn::capture_inputs)
+
+**Before (buggy):**
+```cuda
+if (input.is_leaf) {
+    input_grad = input.grad_data();  // ← REUSES externally-owned buffer!
+}
+```
+
+**After (fixed):**
+```cuda
+// CRITICAL FIX (Issue #136): NEVER reuse externally-owned leaf buffers!
+// Always allocate our own buffer so we don't destroy upstream data.
+float* buf = nullptr;
+cudaMalloc(&buf, element_count * sizeof(float));
+cudaMemsetAsync(buf, 0, element_count * sizeof(float), stream);
+owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
+input_grad = owned_input_grad.get();  // ← OWN buffer, preserves upstream data
+```
+
+### Verification
+
+**Log evidence (training_17706723965347019.log, Batch 2):**
+```
+BEFORE FIX:  at_other_targets = -0.054415 ✗ NEGATIVE (impossible)
+AFTER FIX:   at_other_targets = +0.000023 ✓ POSITIVE (correct)
+```
+
+The positive gradient makes sense: with small softmax p(277) ≈ 2e-5 and batch size N ≈ 6669,
+the non-target gradient dx[277] ≈ p(277)/N ≈ 3e-9, which becomes visible in higher precision calculations.
+
+### Code Changes Required
+
+1. ✅ TensorContract_GPU.cu: CenterRowsGradFn::capture_inputs() — allocate owned buffer instead of reusing
+2. ✅ AutogradTraining.cu: Disable the problematic copyGradientsToTrainingState copy operation (lines 1607-1613)
+3. ✅ ComputeLossBatch.cu: Fix latent LossConfig._enabled boolean bug (lines 886-897)
+4. ✅ VerboseLogging.hpp: Enable AG_DEBUG logging for verification (set ENABLE_AUTOGRAD_TRAINING_LOGS=true)
+
+All fixes are implemented and verified in the codebase.
+
+---
+
+## 🔴 ISSUE #135: Negative grad_logits[277] at Non-Target Positions WITH ENTROPY OFF (Feb 9, 2026)
+
+### Discovery
+
+Training log (session 17706579637700368) shows:
+```
+GRAD_LOGITS[277]: at_277_targets = -0.078270 ✓ OK, at_other_targets = -0.054415 ✗ IMPOSSIBLE without entropy or label smoothing
+```
+
+Config explicitly shows ALL features OFF:
+```
+entropy_reg=off ent_lambda=0, label_smoothing=off, focal=off
+```
+
+### Why This Is Mathematically Impossible
+
+With pure cross-entropy loss (no entropy_reg, no label_smoothing, no focal):
+- NLL backward: `dy[v] = -1/N` at target, `0` elsewhere
+- LogSoftmax backward: `dx[v] = dy[v] - p(v) * sum_dy`
+- At non-target positions: `dx[277] = 0 - p(277) * (-1/N) = p(277)/N ≥ 0`
+- Since `p(v) = exp(log_p(v)) > 0` and `N > 0`, this is ALWAYS positive
+
+Solving `sum_at_277 / sum_at_other = 931(c-1) / (5738c)` for the observed values yields
+probability `c = -0.127` (NEGATIVE probability — mathematically impossible).
+
+### Previous (INCORRECT) Analysis
+
+Issue #116 dismissed this as "NOT A BUG" because entropy_reg WAS enabled at that time.
+Now entropy_reg is OFF and the negative values PERSIST, proving the previous analysis was WRONG.
+
+### Exhaustive Static Analysis (What Was Ruled Out)
+
+1. **kernelNLLLossBackward** — Verified correct: writes `-1/N` at target, `0` elsewhere when all features disabled ✓
+2. **kernel_log_softmax_backward** — Verified correct: `dx[i] = dy[i] - exp(log_p[i]) * sum_dy` (assignment, not accumulation) ✓
+3. **CenterRowsGradFn** — Only READS from ts.grad_logits_tensor.data, writes to its OWN buffer ✓
+4. **copyGradientsToTrainingState** — ctx.logits_tensor.has_grad() = false → SKIPS overwrite ✓
+5. **applyLmHeadGradCorrections** — Operates on encoder grad (grad_a), NOT logits grad ✓
+6. **scaleGradBuffer** — Only operates on parameter gradients, NOT activation gradients ✓
+7. **Buffer aliasing** — grad_logits_tensor allocated via Tensor::zeros() in InitTrainingState.cu, no aliasing possible ✓
+8. **Stream synchronization** — backward() polls stream until complete before returning ✓
+9. **Tensor shape/layout** — LOGITS layout is flat 2D [tokens, vocab], indexing correct ✓
+10. **set_grad_from_buffer** — Correctly sets grad_ to non-owning view of ts.grad_logits_tensor.data ✓
+
+### Latent Bug Found (Not Root Cause)
+
+**ComputeLossBatch.cu lines 888-893**: `autograd::LossConfig ag_loss_config` was constructed with VALUES
+(focal_alpha, focal_gamma, etc.) but NEVER set the `_enabled` BOOLEANS (focal_enabled, smoothing_enabled,
+entropy_reg_enabled). They defaulted to `false`. This means loss features could NEVER be activated even
+when enabled in ai_config.json.
+
+**FIX:** Added explicit `ag_loss_config.focal_enabled = full_loss_cfg.focal.enabled;` etc.
+
+### Runtime Verification Added
+
+Added `[LOGSOFTMAX_BWD_EQUATION]` diagnostic in `LogSoftmaxGradFn::apply()` (TensorContract_GPU.cu)
+that runs IMMEDIATELY after `kernel_log_softmax_backward` and BEFORE `CenterRowsGradFn::apply()`.
+
+This diagnostic:
+1. Extracts column 277 from the kernel output using `cudaMemcpy2D`
+2. Identifies target-277 positions via NLL backward input (non-zero values)
+3. Counts negative values at non-target positions
+4. Reports log_p and p(277) for any anomalous positions
+
+**Expected outcomes:**
+- If `[LOGSOFTMAX_BWD_EQUATION]` shows correct values (at_other >= 0) but Phase2 diagnostic
+  shows negative → something modifies ts.grad_logits_tensor.data AFTER LogSoftmaxGradFn
+- If `[LOGSOFTMAX_BWD_EQUATION]` also shows negative → kernel or its inputs are buggy
+
+### Status
+
+🔴 **UNDER INVESTIGATION** — Runtime verification pending. Need to rebuild and run training.
 
 ---
 

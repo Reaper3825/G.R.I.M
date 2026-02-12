@@ -18,7 +18,7 @@ constexpr bool ENABLE_ORDER_LOGS = false;              ///< "[ORDER] ForwardPhas
 constexpr bool ENABLE_VOCAB_TIMING_LOGS = false;       ///< "[VOCAB_TIMING]" embedding/LM head timing
 constexpr bool ENABLE_FORWARD_DIAG_LOGS = false;       ///< "[ForwardDiag]" pre-loss logit diagnostics
 constexpr bool ENABLE_GPU_COPY_LOGS = false;           ///< "[GPU_COPY]" H2D copy progress logs
-constexpr bool ENABLE_AUTOGRAD_TRAINING_LOGS = false;  ///< "[AutogradTraining]" forward/backward step info
+constexpr bool ENABLE_AUTOGRAD_TRAINING_LOGS = false;   ///< "[AutogradTraining]" forward/backward step info
 
 // Backward pass logging - DISABLED FOR PRODUCTION
 constexpr bool ENABLE_BACKWARD_LAYER_LOGS = false;     ///< "[BACKWARD] Starting layer=X"

@@ -43,7 +43,6 @@
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/Dynamic_LR/DynamicLR.hpp"
 #include "../../Shared/SoftRestart/SoftRestart.hpp"
-#include "../../Shared/RareTokens/RareTokens_GPU.hpp"
 #include "../../Shared/Loss/LossContext/LossContext.hpp"
 #include "../../Shared/Telemetry/TelemetryLattice_GPU.hpp"
 #include "../../Shared/Telemetry/TelemetryControl_GPU.hpp"
@@ -162,8 +161,6 @@ struct SequenceData {
     std::vector<TrainingSequence*> val_views;
     GRIM::DynaSeq::Catalog train_catalog;
     GRIM::DynaSeq::Catalog val_catalog;
-    std::vector<float> sequence_rarity;
-    std::vector<float> val_sequence_rarity;
     uint32_t vocab_size = 0;  // Vocab size from training data file
 };
 
@@ -430,14 +427,6 @@ OptimizerContext initializeOptimizer(
     const StartupConfig& config,
     TrainingLogger& logger);
 
-/**
- * @brief Compute rare token scores for prioritized batching
- */
-std::vector<float> computeRareTokenScores(
-    const std::vector<TrainingSequence*>& train_views,
-    uint32_t vocab_size,
-    size_t train_count,
-    TrainingLogger& logger);
 /**
  * @brief Initialize production-grade RNG system with hierarchical seeding
  * 

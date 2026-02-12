@@ -16,6 +16,7 @@ void TrainingTensors::initializeParams(
     int n_layers, int n_heads, int n_kv_heads,
     int max_seq, bool tie_emb, bool bias,
     HyperParameters::PositionalEncodingType positional_encoding,
+    bool numeric_head_enabled,
     bool use_layer_scale_flag,
     float layer_scale_init_val,
     uint64_t seed,
@@ -121,36 +122,29 @@ void TrainingTensors::initializeParams(
         Tensor::xavier_uniform_(lm_head_weights, seed + 1, stream);
     }
     
+    // LM head bias [vocab_size] - optional
     if (use_bias) {
         lm_head_bias = Tensor::zeros({vocab_size}, stream, "lm_head_bias");
         lm_head_bias.requires_grad_();
     }
     
-    //==================================================//
-    //  NUMERIC HEAD (optional)
-    //==================================================//
+    // Numeric head [d_model → 1] - optional
+    if (numeric_head_enabled) {
+        numeric_head_weights = Tensor::zeros({d_model}, stream, "numeric_head_weights");
+        numeric_head_weights.requires_grad_();
+        Tensor::xavier_uniform_(numeric_head_weights, seed + 99, stream);
+        
+        numeric_head_bias = Tensor::zeros({1}, stream, "numeric_head_bias");
+        numeric_head_bias.requires_grad_();
+    }
     
-    numeric_head_weights = Tensor::zeros({d_model}, stream, "numeric_head_weights");
-    numeric_head_weights.requires_grad_();
-    // Xavier uniform: U[-sqrt(6/(fan_in+fan_out)), +sqrt(6/(fan_in+fan_out))]
-    // For 1D shape {d_model}: fan_in=d_model, fan_out=1 → scale=sqrt(6/(d_model+1))
-    Tensor::xavier_uniform_(numeric_head_weights, seed + 99, stream);
-    
-    numeric_head_bias = Tensor::zeros({1}, stream, "numeric_head_bias");
-    numeric_head_bias.requires_grad_();
-    
-    //==================================================//
-    //  FINAL RMSNORM
-    //==================================================//
-    
+    // Final RMSNorm gamma [d_model] - initialized to 1.0
     final_rms_gamma = Tensor::zeros({d_model}, stream, "final_rms_gamma");
     final_rms_gamma.requires_grad_();
-    // Initialize to 1.0
     {
         std::vector<float> ones(d_model, 1.0f);
         cudaMemcpyAsync(final_rms_gamma.data, ones.data(),
-                        d_model * sizeof(float),
-                        cudaMemcpyHostToDevice, stream);
+                        d_model * sizeof(float), cudaMemcpyHostToDevice, stream);
     }
     
     //==================================================//
@@ -293,7 +287,7 @@ void TrainingTensors::allocateAllGradients() {
     if (lm_head_bias.data) lm_head_bias.ensure_grad();
     if (numeric_head_weights.data) numeric_head_weights.ensure_grad();
     if (numeric_head_bias.data) numeric_head_bias.ensure_grad();
-    if (final_rms_gamma.data) final_rms_gamma.ensure_grad();
+    final_rms_gamma.ensure_grad();
     
     // Encoder layer tensors
     for (auto& layer : encoder_layers) {
@@ -395,62 +389,6 @@ void TrainingTensors::allocateCaches(int batch_size, int seq_len, cudaStream_t s
     // Issue #43 centering scratch (max of d_model and d_ff)
     const int scratch_dim = (d_ff > d_model) ? d_ff : d_model;
     centered_activation_scratch = Tensor::zeros({total_tokens, scratch_dim}, stream, "centered_activation_scratch");
-}
-
-
-void TrainingTensors::zeroGrad(cudaStream_t stream) {
-    if (!initialized_) return;
-    
-    // ── Verify tied-weight grad aliasing invariant (Rule 20: detect broken aliasing) ──
-    if (tie_embeddings) {
-        if (embedding_weights.grad_data() != lm_head_weights.grad_data()) {
-            throw std::runtime_error("TrainingTensors::zeroGrad: CRITICAL - tie_embeddings=true but "
-                "embedding_weights.grad (" + std::to_string(reinterpret_cast<uintptr_t>(embedding_weights.grad_data()))
-                + ") != lm_head_weights.grad (" + std::to_string(reinterpret_cast<uintptr_t>(lm_head_weights.grad_data()))
-                + "). Grad aliasing is broken!");
-        }
-    }
-    
-    // Zero embedding grads
-    embedding_weights.zero_grad(stream);
-    if (position_embedding_weights.data) position_embedding_weights.zero_grad(stream);
-    
-    // Zero LM head grads
-    if (!tie_embeddings) {
-        lm_head_weights.zero_grad(stream);
-    }
-    // NOTE: When tie_embeddings=true, lm_head_weights.grad IS embedding_weights.grad
-    // (verified above). Zeroing embedding_weights.grad already zeroed both.
-    if (lm_head_bias.data) {
-        lm_head_bias.zero_grad(stream);
-    }
-    
-    // Zero numeric head grads
-    numeric_head_weights.zero_grad(stream);
-    numeric_head_bias.zero_grad(stream);
-    
-    // Zero final RMSNorm grad
-    final_rms_gamma.zero_grad(stream);
-    
-    // Zero encoder layer grads
-    for (auto& layer : encoder_layers) {
-        layer.rms1_gamma.zero_grad(stream);
-        layer.rms2_gamma.zero_grad(stream);
-        layer.rms_post_attn_gamma.zero_grad(stream);
-        layer.rms_post_ffn_gamma.zero_grad(stream);
-        layer.attn_qkv_weight.zero_grad(stream);
-        if (layer.attn_qkv_bias.data) layer.attn_qkv_bias.zero_grad(stream);
-        layer.attn_out_weight.zero_grad(stream);
-        if (layer.attn_out_bias.data) layer.attn_out_bias.zero_grad(stream);
-        layer.alpha_q.zero_grad(stream);
-        layer.alpha_k.zero_grad(stream);
-        layer.ffn_w1.zero_grad(stream);
-        if (layer.ffn_b1.data) layer.ffn_b1.zero_grad(stream);
-        layer.ffn_w2.zero_grad(stream);
-        if (layer.ffn_b2.data) layer.ffn_b2.zero_grad(stream);
-        if (layer.layer_scale1.data) layer.layer_scale1.zero_grad(stream);
-        if (layer.layer_scale2.data) layer.layer_scale2.zero_grad(stream);
-    }
 }
 
 

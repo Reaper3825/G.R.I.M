@@ -101,11 +101,6 @@ struct BatchOptions {
     bool prefer_short_first = false;       // process shorter sequences first
     float curriculum_progress = 1.0f;      // 0.0 = start (short only), 1.0 = full curriculum
     
-    // === Rarity weighting ===
-    const std::vector<float>* rarity_scores = nullptr;
-    bool prioritize_rare = false;
-    float rarity_weight = 0.5f;            // blend between rarity and length sorting
-    
     // === Adaptive budgeting ===
     bool adaptive_token_budget = false;    // auto-adjust based on sequence distribution
     float target_packing_efficiency = 0.85f; // aim for this efficiency

@@ -31,6 +31,7 @@ struct FeedForwardConfig {
     int d_model = 0;           // Input/output dimension debug was 768
     int d_ff = 0;             // Hidden (intermediate) dimension debug was 3072
     float dropout_rate = 0.1f;   // Dropout probability
+    bool use_bias = true;        // When false, skip bias addition (b1, b2)
     cudaStream_t stream = nullptr;
     cublasHandle_t cublas_handle = nullptr;  // Rule 22: MUST be training_state.cublas_handle
 };

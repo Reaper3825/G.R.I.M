@@ -16,6 +16,37 @@
 
 namespace GRIM {
 
+//======================================================//
+//  Weight tensor accessors — always via tensors_->
+//  Both training and inference create TrainingTensors.
+//  Rule 20: crash if tensors_ is null (caller bug).
+//======================================================//
+
+Tensor& TrainingState::getEmbeddingWeights() {
+	if (!tensors_) throw std::runtime_error("getEmbeddingWeights: tensors_ is NULL — init not called");
+	return tensors_->embedding_weights;
+}
+const Tensor& TrainingState::getEmbeddingWeights() const {
+	if (!tensors_) throw std::runtime_error("getEmbeddingWeights: tensors_ is NULL — init not called");
+	return tensors_->embedding_weights;
+}
+Tensor& TrainingState::getPositionEmbeddingWeights() {
+	if (!tensors_) throw std::runtime_error("getPositionEmbeddingWeights: tensors_ is NULL — init not called");
+	return tensors_->position_embedding_weights;
+}
+const Tensor& TrainingState::getPositionEmbeddingWeights() const {
+	if (!tensors_) throw std::runtime_error("getPositionEmbeddingWeights: tensors_ is NULL — init not called");
+	return tensors_->position_embedding_weights;
+}
+Tensor& TrainingState::getLmHeadWeights() {
+	if (!tensors_) throw std::runtime_error("getLmHeadWeights: tensors_ is NULL — init not called");
+	return tensors_->lm_head_weights;
+}
+const Tensor& TrainingState::getLmHeadWeights() const {
+	if (!tensors_) throw std::runtime_error("getLmHeadWeights: tensors_ is NULL — init not called");
+	return tensors_->lm_head_weights;
+}
+
 TrainingState::TrainingState() = default;
 
 TrainingState::~TrainingState() {
@@ -26,9 +57,8 @@ TrainingState::~TrainingState() {
 	// Tensor::~Tensor() calls release() to free GPU memory.
 	// DO NOT manually cudaFree any Tensor member - they own their data.
 	
-	// encoder_layer_caches is std::vector<EncoderLayerCacheTensors>
-	// Each EncoderLayerCacheTensors contains Tensor members that auto-cleanup.
-	encoder_layer_caches.clear();
+	// Rule 20: NO encoder_layer_caches - intermediate tensors now managed via AutogradIntermediates
+	// (owned and zero'd separately during training, NOT in destructor)
 	
 	// TeacherLogits has its own release function (not Tensor-based yet)
 	TeacherLogits::release(teacher_logits);
@@ -55,14 +85,12 @@ TrainingState::~TrainingState() {
 //======================================================//
 
 void TrainingState::allocateOptimizerStates(const std::vector<size_t>& sizes, cudaStream_t stream) {
-	fprintf(stderr, "[allocateOptimizerStates] ENTER: %zu groups\n", sizes.size()); fflush(stderr);
 	// Free any existing states first
 	freeOptimizerStates();
 	
-	// Get stream from centralized controller if not provided
-	cudaStream_t primary_stream = stream ? stream :
-		(stream_ctrl.isInitialized() ? stream_ctrl.getPrimaryStream() : nullptr);
-	StreamController::fatalIfDefaultStream(primary_stream, "TrainingState::allocateOptimizerStates");
+	// Rule 22: Get stream from centralized controller if not provided.
+	// getPrimaryStream() throws if not initialized (Rule 20).
+	cudaStream_t primary_stream = stream ? stream : stream_ctrl.getPrimaryStream();
 	
 	// Allocate Tensor objects for each parameter group
 	optimizer_m_states.reserve(sizes.size());
@@ -80,7 +108,6 @@ void TrainingState::allocateOptimizerStates(const std::vector<size_t>& sizes, cu
 		}
 	}
 	optimizer_states_allocated = true;
-	fprintf(stderr, "[allocateOptimizerStates] EXIT: m=%zu v=%zu\n", optimizer_m_states.size(), optimizer_v_states.size()); fflush(stderr);
 }
 
 void TrainingState::freeOptimizerStates() {
@@ -94,7 +121,7 @@ void TrainingState::freeOptimizerStates() {
 //  Guess Cache Buffer Management (GRIM-TS Rule 22)
 //======================================================//
 
-bool TrainingState::allocateGuessCacheBuffers(
+void TrainingState::allocateGuessCacheBuffers(
 	size_t capacity, 
 	bool enable_diversity, 
 	size_t diversity_bloom_bits,
@@ -111,16 +138,17 @@ bool TrainingState::allocateGuessCacheBuffers(
 		throw std::runtime_error("[TrainingState::allocateGuessCacheBuffers] capacity cannot be zero!");
 	}
 	
-	// GuessRecord is defined in grim-ts.hpp, we need its size
-	// For now, use a conservative estimate: 128 bytes per record
-	// CRITICAL: This MUST match sizeof(GRIMTS::GuessRecord) exactly
-	constexpr size_t GUESS_RECORD_SIZE = 128;  // sizeof(GuessMetadata) + sizeof(GuessRewardStats)
+	// GuessRecord is defined in GRIM-TS.hpp, we need its size.
+	// CRITICAL: This MUST match sizeof(GRIMTS::GuessRecord) exactly.
+	// A static_assert in GRIM-TS.hpp enforces this at compile time.
+	// GuessMetadata: 8+8+4+2+2+4 = 28 → padded to 32 (alignment 8)
+	// GuessRewardStats: 15×4+1 = 61 → padded to 64 (alignment 4)
+	// GuessRecord: 32+64 = 96
+	constexpr size_t GUESS_RECORD_SIZE = 96;
 	constexpr size_t GUESS_METADATA_SIZE = 32; // sizeof(GuessMetadata)
 	
-	cudaStream_t primary_stream = stream_ctrl.isInitialized() 
-		? stream_ctrl.getPrimaryStream() 
-		: nullptr;
-	StreamController::fatalIfDefaultStream(primary_stream, "TrainingState::allocateGuessCacheBuffers");
+	// Rule 22: getPrimaryStream() throws if not initialized (Rule 20)
+	cudaStream_t primary_stream = stream_ctrl.getPrimaryStream();
 	
 	// Allocate records
 	cudaError_t err = cudaMalloc(&guess_cache_buffers.records, capacity * GUESS_RECORD_SIZE);
@@ -227,8 +255,6 @@ bool TrainingState::allocateGuessCacheBuffers(
 	fprintf(stdout, "[INFO] TrainingState: Guess cache buffers allocated. capacity=%zu, "
 	        "diversity=%s, bloom_bits=%zu, pinned=%zu\n",
 	        capacity, enable_diversity ? "ON" : "OFF", diversity_bloom_bits, pinned_buffer_size);
-	
-	return true;  // Return kept for API compatibility, but failures throw
 }
 
 void TrainingState::freeGuessCacheBuffers() {
@@ -260,6 +286,7 @@ void TrainingState::initializeAutogradTensors(
 	int n_layers, int n_heads, int n_kv_heads,
 	int max_seq, bool tie_emb, bool bias,
 	HyperParameters::PositionalEncodingType positional_encoding,
+	bool numeric_head_enabled,
 	bool use_layer_scale,
 	float layer_scale_init,
 	uint64_t seed,
@@ -287,58 +314,12 @@ void TrainingState::initializeAutogradTensors(
 		n_layers, n_heads, n_kv_heads,
 		max_seq, tie_emb, bias,
 		positional_encoding,
+		numeric_head_enabled,
 		use_layer_scale,
 		layer_scale_init,
 		seed,
 		stream
 	);
-	
-	// Also copy references to the TrainingState Tensor members for backwards compatibility
-	// with code that accesses training_state_.embedding_weights directly
-	embedding_weights = Tensor::from_ptr(
-		tensors_->embedding_weights.data,
-		tensors_->embedding_weights.shape,
-		false,  // doesn't take ownership (TrainingTensors owns it)
-		true,    // requires_grad
-		"embedding_weights_ref"
-	);
-	// ISSUE #59: Share the grad Tensor object (shared_ptr) for proper reference counting
-	embedding_weights.share_grad(tensors_->embedding_weights);
-	
-	// ISSUE #96 FIX: Only copy position embeddings if they were allocated
-	// (they are NULL when using ALIBI/ROPE/ALIBI_ROPE positional encoding)
-	if (tensors_->position_embedding_weights.data) {
-		position_embedding_weights = Tensor::from_ptr(
-			tensors_->position_embedding_weights.data,
-			tensors_->position_embedding_weights.shape,
-			false,
-			true,
-			"position_embedding_weights_ref"
-		);
-		// ISSUE #59: Share the grad Tensor object
-		position_embedding_weights.share_grad(tensors_->position_embedding_weights);
-	} else {
-		// Leave position_embedding_weights uninitialized (data=nullptr)
-		// AutogradTraining.cu will check this and skip position embedding addition
-		fprintf(stdout, "[TrainingState] position_embedding_weights: SKIPPED (not using learned position embeddings)\n");
-	}
-	
-	lm_head_weights = Tensor::from_ptr(
-		tensors_->lm_head_weights.data,
-		tensors_->lm_head_weights.shape,
-		false,
-		true,
-		"lm_head_weights_ref"
-	);
-	// BUG FIX: When tie_embeddings=true, lm_head_weights.grad MUST alias embedding_weights.grad!
-	// TrainingTensors sets this up, but we must preserve it when copying to TrainingState.
-	if (tie_emb) {
-		// Weight tying: share grad Tensor with embedding_weights (which we just set above)
-		// ISSUE #59: Use share_grad() for proper shared_ptr semantics
-		lm_head_weights.share_grad(embedding_weights);
-	} else {
-		lm_head_weights.share_grad(tensors_->lm_head_weights);
-	}
 	
 	use_autograd_tensors = true;
 	
@@ -356,21 +337,15 @@ void TrainingState::zeroIntermediateGrads(cudaStream_t stream) {
 	StreamController::fatalIfDefaultStream(stream, "TrainingState::zeroIntermediateGrads");
 	
 	// Zero all intermediate gradient tensors at start of accumulation window
-	// This replaces the GradAccumulationController registration approach
 	// NOTE: Only zero tensors that are actually allocated (data != nullptr)
-	// Use try-catch to prevent crashes from uninitialized tensors
 	
 	// BUG FIX Issue #45: zero_grad() zeros tensor.grad, but intermediate gradient tensors
 	// store their gradient DATA in tensor.data (NOT tensor.grad)!
 	// Must use cudaMemsetAsync on tensor.data instead.
 	auto safe_zero = [stream](Tensor& t, const char* name) {
-		try {
-			if (t.data && t.numel() > 0) {
-				// Zero the DATA field, not the grad field!
-				cudaMemsetAsync(t.data, 0, t.numel() * sizeof(float), stream);
-			}
-		} catch (...) {
-			// Silently skip - tensor not properly initialized
+		if (t.data && t.numel() > 0) {
+			// Zero the DATA field, not the grad field!
+			cudaMemsetAsync(t.data, 0, t.numel() * sizeof(float), stream);
 		}
 	};
 	
@@ -405,9 +380,8 @@ void TrainingState::allocatePCGradBuffer(int vocab_size, int d_model, cudaStream
 		freePCGradBuffer();
 	}
 	
-	// Get stream from centralized controller if not provided
-	cudaStream_t primary_stream = stream ? stream :
-		(stream_ctrl.isInitialized() ? stream_ctrl.getPrimaryStream() : nullptr);
+	// Rule 22: getPrimaryStream() throws if not initialized (Rule 20)
+	cudaStream_t primary_stream = stream ? stream : stream_ctrl.getPrimaryStream();
 	
 	// Allocate as Tensor [vocab_size, d_model]
 	pcgrad_temp_buffer = Tensor::zeros({vocab_size, d_model}, primary_stream, "pcgrad_temp_buffer");
@@ -444,9 +418,8 @@ void TrainingState::allocateDebugGradBuffers(int vocab_size, int d_model, cudaSt
 		freeDebugGradBuffers();  // Clean up any existing buffers
 	}
 	
-	// Get stream from centralized controller if not provided
-	cudaStream_t primary_stream = stream ? stream :
-		(stream_ctrl.isInitialized() ? stream_ctrl.getPrimaryStream() : nullptr);
+	// Rule 22: getPrimaryStream() throws if not initialized (Rule 20)
+	cudaStream_t primary_stream = stream ? stream : stream_ctrl.getPrimaryStream();
 	
 	// Allocate as Tensors [vocab_size, d_model]
 	debug_lm_head_only_grad = Tensor::zeros({vocab_size, d_model}, primary_stream, "debug_lm_head_only_grad");
@@ -464,19 +437,24 @@ void TrainingState::freeDebugGradBuffers() {
 }
 
 void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream) {
-	if (!debug_gradient_attribution || !debug_lm_head_only_grad.data || !debug_embedding_only_grad.data) {
-		
-		return;  // Debug mode not enabled or buffers not allocated
+	if (!debug_gradient_attribution) {
+		return;  // Debug mode not enabled
+	}
+	// Rule 20: If debug is enabled, buffers MUST exist — crash if they don't
+	if (!debug_lm_head_only_grad.data || !debug_embedding_only_grad.data) {
+		throw std::runtime_error("[TrainingState::logGradientAttribution] debug_gradient_attribution=true but "
+			"debug grad buffers are NULL! Call allocateDebugGradBuffers() first.");
 	}
 	
 	// TOKEN 277 = SPACE (the one causing mode collapse)
 	constexpr int TARGET_TOKEN = 277;
 	
 	// Get d_model from the embedding shape - BSM layout uses Shape2D with (rows=vocab, cols=d_model)
-	int d_model = 768;  // Default fallback only for DEBUGGING
-	if (embedding_weights.shape.is_flat()) {
-		d_model = embedding_weights.shape.flat.cols;
+	if (!tensors_->embedding_weights.shape.is_flat()) {
+		throw std::runtime_error("[TrainingState::logGradientAttribution] embedding_weights shape is not flat - "
+			"cannot determine d_model. Shape must be initialized before calling logGradientAttribution.");
 	}
+	const int d_model = tensors_->embedding_weights.shape.flat.cols;
 	const int vocab_size = static_cast<int>(debug_lm_head_only_grad.numel() / d_model);
 	
 	if (TARGET_TOKEN >= vocab_size) {
@@ -503,7 +481,7 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream) {
 	
 	// Get the ACTUAL final gradient from the shared buffer (this is post-PCGrad!)
 	std::vector<float> final_grad_277(d_model);
-	float* shared_grad_ptr = embedding_weights.grad_data();
+	float* shared_grad_ptr = tensors_->embedding_weights.grad_data();
 	if (shared_grad_ptr) {
 		cudaMemcpy(final_grad_277.data(), shared_grad_ptr + row_offset, row_bytes, cudaMemcpyDeviceToHost);
 	}
@@ -537,13 +515,22 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream) {
 	for (int i = 0; i < d_model; ++i) {
 		lm_emb_dot += lm_grad_277[i] * raw_emb_grad_277[i];
 	}
-	const float cosine_sim = (lm_norm > 1e-8f && raw_emb_norm > 1e-8f) 
-	                       ? lm_emb_dot / (lm_norm * raw_emb_norm) : 0.0f;
 	
-	// Check if they're canceling or reinforcing
-	const char* interaction = (cosine_sim > 0.5f) ? "REINFORCING" 
-	                        : (cosine_sim < -0.5f) ? "CANCELING" 
-	                        : "ORTHOGONAL";
+	const char* interaction;
+	float cosine_sim;
+	if (lm_norm < 1e-8f || raw_emb_norm < 1e-8f) {
+		// Near-zero norm means no meaningful gradient — log it explicitly
+		cosine_sim = 0.0f;
+		interaction = "DEGENERATE_NORM";
+		fprintf(stderr, "[GRAD_ATTRIB_TOKEN277] [ANOMALY] Near-zero gradient norm! "
+			"lm_norm=%.10e raw_emb_norm=%.10e — gradient is effectively zero\n",
+			lm_norm, raw_emb_norm);
+	} else {
+		cosine_sim = lm_emb_dot / (lm_norm * raw_emb_norm);
+		interaction = (cosine_sim > 0.5f) ? "REINFORCING" 
+		            : (cosine_sim < -0.5f) ? "CANCELING" 
+		            : "ORTHOGONAL";
+	}
 	
 	// Check if PCGrad preserved the gradient (final should ≈ lm when emb opposes)
 	const char* pcgrad_status = (final_norm > lm_norm * 0.5f) ? "PRESERVED" : "LOST";

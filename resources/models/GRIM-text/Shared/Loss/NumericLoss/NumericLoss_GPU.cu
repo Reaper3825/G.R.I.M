@@ -97,26 +97,19 @@ __global__ void numericLossKernel(const float* __restrict__ predictions,
 __global__ void scaleNumericGradKernel(
 	float* __restrict__ grad_predictions,
 	int total_tokens,
-	int valid_count,
-	int valid_text_tokens  // UNUSED - kept for API compatibility
+	int valid_text_tokens
 ) {
 	const int idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= total_tokens) return;
 	
-	if (valid_count <= 0) return;
+	if (valid_text_tokens <= 0) return;
 	
-	// Two-level scaling to match text CE gradient scale:
-	// 1. Mean reduction over valid atoms: 1/valid_count
-	// 2. Scale to text token count: valid_text_tokens measures the overall batch scale
-	//
-	// Both text and numeric losses update the same encoder. Without this scaling,
-	// numeric gradients dominate because they're only divided by atom count (~400),
-	// while text CE is divided by token count (~6000+).
-	//
-	// Combined scale makes them comparable: grad *= 1 / (valid_count * valid_text_tokens)^0.5
-	const float atom_reduction = 1.0f / static_cast<float>(valid_count);
-	const float token_scale_factor = 1.0f / sqrtf(static_cast<float>(valid_text_tokens));
-	const float scale = atom_reduction * token_scale_factor;
+	// Issue #137 FIX: Scale by 1/valid_text_tokens to match text CE mean reduction.
+	// Text CE: grad = (softmax - target) / valid_tokens
+	// Numeric: grad = huber_grad * loss_weight / valid_text_tokens
+	// Both paths feed into the same encoder, so using the same denominator
+	// ensures comparable gradient magnitudes without heuristic sqrt factors.
+	const float scale = 1.0f / static_cast<float>(valid_text_tokens);
 	
 	grad_predictions[idx] *= scale;
 }
@@ -140,13 +133,10 @@ bool launchNumericLoss(const NumericLossInputs& inputs,
 		return false;
 	}
 	
-	// RULE 20: FAIL LOUD - valid_text_tokens MUST be provided by caller
-	// This is NOT optional. If caller doesn't know valid_text_tokens, that's a BUG in the caller.
 	if (inputs.valid_text_tokens <= 0) {
-		throw std::runtime_error("launchNumericLoss: valid_text_tokens is " + 
-		                         std::to_string(inputs.valid_text_tokens) + 
-		                         " but MUST be > 0. Caller MUST provide valid text token count " +
-		                         "for proper gradient scaling (Issue #136).");
+		throw std::runtime_error("launchNumericLoss: valid_text_tokens is " +
+		                         std::to_string(inputs.valid_text_tokens) +
+		                         " but MUST be > 0. Caller MUST provide total valid token count.");
 	}
 
 	cudaMemsetAsync(outputs.loss_sum, 0, sizeof(float), stream);
@@ -168,25 +158,14 @@ bool launchNumericLoss(const NumericLossInputs& inputs,
 		inputs.log_max,
 		inputs.loss_weight);
 
-	// Issue #74b: Must sync before reading count — atomicAdd in kernel 1 must complete
-	// before kernel 2 reads it. Both on same stream so kernel ordering is guaranteed,
-	// but we need the count on HOST to pass as a kernel parameter.
-	cudaStreamSynchronize(stream);
-	
-	int h_count = 0;
-	cudaMemcpy(&h_count, outputs.count, sizeof(int), cudaMemcpyDeviceToHost);
-	
-	if (h_count <= 0) {
-		// No valid numeric tokens in this batch — gradients are already all 0, nothing to scale
-		return cudaGetLastError() == cudaSuccess;
-	}
-	
-	// Scale by 1/h_count — each loss divides by its OWN valid count (not total_tokens)
-	// ISSUE #136: Also apply compensation for token count mismatch
+	// Scale by 1/valid_text_tokens to match text CE mean reduction denominator.
+	// Both text and numeric gradients flow into the same encoder — using the same
+	// denominator ensures comparable magnitude without heuristic scaling.
+	// No sync needed — valid_text_tokens is host-side, and kernel ordering on
+	// the same stream guarantees numericLossKernel completes before this runs.
 	scaleNumericGradKernel<<<blocks, kBlockSize, 0, stream>>>(
 		outputs.grad_predictions,
 		inputs.total_tokens,
-		h_count,
 		inputs.valid_text_tokens);
 
 	return cudaGetLastError() == cudaSuccess;

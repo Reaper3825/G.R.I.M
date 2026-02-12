@@ -1675,6 +1675,7 @@ void EncodingLayer::useExternalWeights(
     ffn_cfg.d_ff = d_ff;
     ffn_cfg.stream = config_.stream;
     ffn_cfg.cublas_handle = config_.cublas_handle;  // CRITICAL: Must pass handle to FFN (Rule 22)
+    ffn_cfg.use_bias = config_.use_bias;  // Propagate bias control to FFN
     // Rule 20: FFN constructor requires weights (Option A)
     ffn_ = std::make_unique<FeedForwardLayer>(ffn_cfg, ffn_w1, ffn_b1, ffn_w2, ffn_b2);
     
@@ -2263,7 +2264,9 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     // ISSUE #97 FIX: Use autograd::broadcast_add for proper gradient tracking
     // Previously: launchFFNBiasAdd bypassed autograd, so b_qkv never received gradients
     // Now: autograd::broadcast_add creates BiasAddGradFn which computes grad_bias = sum(grad_output)
-    intermediates.qkv_out = autograd::broadcast_add(intermediates.qkv_out, b_qkv_, stream);
+    if (config_.use_bias && b_qkv_.data) {
+        intermediates.qkv_out = autograd::broadcast_add(intermediates.qkv_out, b_qkv_, stream);
+    }
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 2: QKV bias DONE\n");
     if (qkv_debug > 0) {
         const bool always_log = (qkv_debug >= 2);
@@ -2401,7 +2404,9 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     // Use transpose_b=true to compute attn_out @ W_o^T
     intermediates.proj_out = autograd::matmul(intermediates.attn_out, W_o_, stream, nullptr, nullptr, true);
     // ISSUE #97 FIX: Use autograd::broadcast_add for proper gradient tracking on b_o
-    intermediates.proj_out = autograd::broadcast_add(intermediates.proj_out, b_o_, stream);
+    if (config_.use_bias && b_o_.data) {
+        intermediates.proj_out = autograd::broadcast_add(intermediates.proj_out, b_o_, stream);
+    }
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 6: Output projection DONE\n");
     
     // ISSUE #93 DIAGNOSTIC: Log attention-related intermediate values

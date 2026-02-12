@@ -2,19 +2,20 @@
 //  AutogradTraining.hpp
 //  Full autograd-based training flow using TensorContract
 //  
-//  This module provides autograd-enabled forward+backward that
-//  properly builds the computation graph and propagates gradients.
+//  REFACTORED: AutogradContext is now a THIN INPUT STRUCT.
+//  All intermediate tensor ownership lives in TrainingState
+//  (via its autograd_intermediates member). This eliminates:
+//  - Dual-buffer sync (cached_embeddings_tensor is DELETED)
+//  - Fragile clearIntermediates() lifecycle
+//  - 30+ field bloated context struct
 //  
-//  REPLACES the legacy 3-phase backward system which reads from
-//  cached_* buffers that are never populated by the autograd forward.
-//  
-//  ISSUE #56 FIX: Uses ForwardIntermediates to keep all intermediate
-//  tensors alive during forward-backward cycle. Without this, grad_fn
-//  objects are destroyed when intermediate tensors go out of scope.
+//  Rule 20: No backwards compatibility. Old AutogradContext
+//  with intermediate tensor storage is DELETED.
 //======================================================//
 
 #pragma once
 
+#include "AutogradIntermediates.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/TensorContract/ForwardIntermediates.hpp"
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
@@ -33,36 +34,30 @@
 
 namespace GRIM {
 
-// LanguageModel, LanguageModelConfig, GPUGrimEncoder are now fully defined from included header
 namespace Autograd {
 
-// Use GRIM:: prefix to refer to outer namespace types
 using ::GRIM::GPUGrimEncoder;
 using ::GRIM::LanguageModelConfig;
 using ::GRIM::LanguageModel;
 
 /**
  * Result of autograd forward pass
- * Contains the logits Tensor with grad_fn attached for backward propagation
  */
 struct ForwardResult {
-    Tensor logits;           // [total_tokens, vocab_size] with requires_grad=true
-    float* encoder_output;   // Raw pointer for compatibility (data lives in Tensor)
-    int total_tokens;
-    int vocab_size;
-    bool success;
+    float* encoder_output = nullptr;  // Raw pointer to encoder output data
+    int total_tokens = 0;
+    int vocab_size = 0;
+    bool success = false;
     std::string error_message;
 };
 
 /**
  * Result of autograd loss computation
- * Contains the scalar loss Tensor with grad_fn attached
  */
 struct LossResult {
-    Tensor loss;             // Scalar loss with grad_fn chain
-    float loss_value;        // Host-side loss value
-    int valid_tokens;        // Number of valid (non-padding) tokens
-    bool success;
+    float loss_value = 0.0f;         // Host-side loss value
+    int valid_tokens = 0;            // Number of valid (non-padding) tokens
+    bool success = false;
     std::string error_message;
 };
 
@@ -70,153 +65,88 @@ struct LossResult {
  * Result of autograd backward pass
  */
 struct BackwardResult {
-    bool success;
-    float grad_norm;         // Total gradient norm
+    bool success = false;
+    float grad_norm = 0.0f;         // Total gradient norm
     std::string error_message;
 };
 
-// NOTE: GPUGrimEncoder is brought in via 'using' declaration above
-
 /**
- * Context for autograd training operations
+ * AutogradContext - THIN INPUT STRUCT
  * 
- * PRODUCTION-READY (Issue #56 Fix): Stores ALL intermediate Tensors from 
- * forward pass so the autograd graph stays alive for backward propagation.
+ * Contains ONLY what the forward/backward functions need as INPUT.
+ * All intermediate tensors are stored in TrainingState::autograd_intermediates.
  * 
- * The AllLayerIntermediates struct keeps each encoder layer's intermediate
- * tensors alive. Without this, when EncodingLayer::forward() returns, all
- * local tensors are destroyed, cascading the grad_fn destructor chain and
- * invalidating the autograd graph before backward() runs.
+ * Rule 20: No tensor ownership here. If you need to store a Tensor for
+ * backward, put it in AutogradIntermediates (owned by TrainingState).
  */
 struct AutogradContext {
-    // Model and config
-    const LanguageModelConfig* config;
-    TrainingState* training_state;
-    GPUGrimEncoder* gpu_encoder;      // Encoder layers for autograd forward
-    cublasHandle_t cublas_handle;
-    cudaStream_t stream;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MODEL REFERENCES (non-owning pointers)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const LanguageModelConfig* config = nullptr;
+    TrainingState* training_state = nullptr;
+    GPUGrimEncoder* gpu_encoder = nullptr;
+    cublasHandle_t cublas_handle = nullptr;
+    cudaStream_t stream = nullptr;
     
     // ═══════════════════════════════════════════════════════════════════════════
-    // OPTIONAL COMPONENTS (ScratchBlock, NumericHead)
-    // These can be nullptr if not enabled in config
+    // OPTIONAL COMPONENTS (nullptr if disabled)
     // ═══════════════════════════════════════════════════════════════════════════
-    ScratchBlockLayer* scratch_block = nullptr;    // Numeric/code processing layer
+    ScratchBlockLayer* scratch_block = nullptr;
     
-    // ScratchBlock forward inputs (from DataLoader)
-    // These are raw pointers matching TrainingState cached buffers
-    const float* token_numeric_values = nullptr;   // [total_tokens] numeric values
-    const uint8_t* token_numeric_mask = nullptr;   // [total_tokens] 1=has_value, 0=no_value
-    const uint16_t* token_text_features = nullptr; // [total_tokens, TEXT_FEATURE_DIM] text features
-    const uint8_t* token_text_mask = nullptr;      // [total_tokens] 1=has_text_feature
-    
-    // NumericHead outputs - stored for backward
-    Tensor numeric_head_output;        // [total_tokens, 1] numeric predictions
-    
-    // Batch info
-    int batch_size;
-    int seq_len;
+    // ScratchBlock forward inputs (raw pointers into TrainingState buffers)
+    const float* token_numeric_values = nullptr;
+    const uint8_t* token_numeric_mask = nullptr;
+    const uint16_t* token_text_features = nullptr;
+    const uint8_t* token_text_mask = nullptr;
     
     // ═══════════════════════════════════════════════════════════════════════════
-    // ISSUE #56 FIX: ForwardIntermediates storage
-    // Keeps ALL intermediate tensors alive during forward-backward cycle.
-    // This is the PRIMARY mechanism for autograd graph preservation.
+    // BATCH PARAMETERS
     // ═══════════════════════════════════════════════════════════════════════════
-    AllLayerIntermediates layer_intermediates;
+    int batch_size = 0;
+    int seq_len = 0;
+    float grad_scale = 1.0f;
+    uint64_t step = 0;
+    bool is_training = true;
     
     // ═══════════════════════════════════════════════════════════════════════════
-    // INTERMEDIATE TENSORS (kept alive during forward-backward cycle)
-    // These preserve the autograd graph so backward() propagates through all ops
+    // VALIDATION (Rule 20: Fail loud)
     // ═══════════════════════════════════════════════════════════════════════════
-    
-    // Embedding outputs
-    Tensor embedding_tensor;     // [total_tokens, d_model] - output of embedding lookup
-    
-    // Encoder layer outputs (one per layer)
-    // Each Tensor has grad_fn pointing to the operations that created it
-    // NOTE: These are non-owning views - actual data lives in layer_intermediates
-    std::vector<Tensor> encoder_layer_outputs;
-    
-    // Final encoder output (after final RMSNorm)
-    Tensor encoder_output_tensor;  // [total_tokens, d_model]
-    
-    // Centered encoder output (if centering enabled) - MUST persist until backward!
-    // ISSUE #127 FIX: CenterColumnsGradFn takes ownership of encoder_output_tensor's grad_fn,
-    // so this tensor must live until backward completes to keep the grad_fn chain alive.
-    Tensor centered_encoder_output;  // [total_tokens, d_model]
-    
-    // LM head input (view of encoder output with grad_fn linked)
-    // MUST persist until backward completes - grad_fn stores pointer to this
-    Tensor lm_input_tensor;        // [total_tokens, d_model] - input to LM head matmul
-    
-    // LM head outputs
-    Tensor logits_tensor;        // [total_tokens, vocab_size] - output of forward, input to loss
-    Tensor loss_tensor;          // Scalar loss - output of loss, drives backward
-    
-    // Gradient scale (for gradient accumulation)
-    float grad_scale;
-    
-    // Step counter
-    uint64_t step;
-    
-    // Error tracking
-    std::string error_message;
-    int error_layer;
-    
-    // Validation
-    bool isValid() const {
-        return config != nullptr && training_state != nullptr 
-            && cublas_handle != nullptr && batch_size > 0 && seq_len > 0;
-    }
-    
-    // Clear all intermediate tensors (call after backward to free memory)
-    // Issue #56: MUST clear layer_intermediates - this is where grad_fn ownership lives
-    void clearIntermediates() {
-        // Issue #56: Clear layer intermediates FIRST - they own the grad_fn objects
-        layer_intermediates.clear();
-        
-        embedding_tensor = Tensor();
-        encoder_layer_outputs.clear();
-        encoder_output_tensor = Tensor();
-        centered_encoder_output = Tensor();  // Issue #127: Clear centering tensor
-        lm_input_tensor = Tensor();  // Issue #48: Must clear this too
-        logits_tensor = Tensor();
-        loss_tensor = Tensor();
-        numeric_head_output = Tensor();  // Clear NumericHead output
+    void validate(const char* caller) const {
+        if (!config) throw std::runtime_error(std::string(caller) + ": config is NULL");
+        if (!training_state) throw std::runtime_error(std::string(caller) + ": training_state is NULL");
+        if (!gpu_encoder) throw std::runtime_error(std::string(caller) + ": gpu_encoder is NULL");
+        if (!cublas_handle) throw std::runtime_error(std::string(caller) + ": cublas_handle is NULL");
+        if (batch_size <= 0) throw std::runtime_error(std::string(caller) + ": batch_size <= 0");
+        if (seq_len <= 0) throw std::runtime_error(std::string(caller) + ": seq_len <= 0");
     }
 };
 
-// NOTE: linkEncoderWeightsToTrainingState was removed.
-// Encoder owns its weights internally; optimizer accesses gradients via
-// Tensor& accessors (enc->attnWqkv().grad_data() etc.).
-
 /**
- * Initialize autograd context
- * 
- * @param gpu_encoder Encoder for running layer forward passes
+ * Initialize autograd context (thin input struct only)
  */
 AutogradContext initAutogradContext(
     const LanguageModelConfig* config,
     TrainingState* training_state,
     GPUGrimEncoder* gpu_encoder,
-    ScratchBlockLayer* scratch_block,   // Optional: nullptr if disabled
+    ScratchBlockLayer* scratch_block,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     int batch_size,
     int seq_len,
     float grad_scale,
-    uint64_t step
+    uint64_t step,
+    bool is_training = true
 );
 
 /**
  * Execute forward pass with autograd
  * 
- * This differs from legacy forward by:
- * 1. Building computation graph via grad_fn nodes
- * 2. Storing intermediate Tensors (not just raw pointers)
- * 3. Returning logits as Tensor for loss computation
+ * Builds computation graph via grad_fn nodes.
+ * Intermediate tensors stored in training_state->autograd_intermediates.
  * 
- * @param ctx Autograd context (modified in-place to store tensors)
- * @return Forward result with logits Tensor
+ * @param ctx Thin input context
+ * @return Forward result (success/error only, tensors in TrainingState)
  */
 ForwardResult executeAutogradForward(AutogradContext& ctx);
 
@@ -224,12 +154,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx);
  * Compute loss with autograd
  * 
  * Creates loss Tensor with CrossEntropyGradFn attached.
- * When backward() is called on loss, gradients propagate to all inputs.
- * 
- * @param ctx Autograd context (must have valid logits_tensor from forward)
- * @param targets Device pointer to target token IDs [total_tokens]
- * @param valid_mask Device pointer to validity mask [total_tokens] (optional)
- * @return Loss result with loss Tensor
+ * Loss tensor stored in training_state->autograd_intermediates.loss_tensor.
  */
 LossResult computeAutogradLoss(
     AutogradContext& ctx,
@@ -240,12 +165,7 @@ LossResult computeAutogradLoss(
 /**
  * Execute backward pass with autograd
  * 
- * Calls loss.backward() to propagate gradients through the entire graph.
- * Then copies gradients from Tensor.grad to TrainingState buffers for optimizer.
- * 
- * @param ctx Autograd context (must have valid loss_tensor from computeLoss)
- * @param accumulate If true, accumulates gradients instead of overwriting
- * @return Backward result with success status and gradient norm
+ * Calls loss.backward() to propagate gradients through entire graph.
  */
 BackwardResult executeAutogradBackward(
     AutogradContext& ctx,
@@ -253,15 +173,10 @@ BackwardResult executeAutogradBackward(
 );
 
 /**
- * Copy gradients from Tensor.grad to TrainingState raw buffers
- * 
- * The optimizer expects gradients in specific TrainingState buffers.
- * This function copies from autograd Tensor.grad fields.
- * 
- * @param ctx Autograd context with computed gradients
- * @return true on success
+ * Verify that gradients are properly wired up and accessible to optimizer
+ * (Diagnostic function - does not copy, checks connectivity)
  */
-bool copyGradientsToTrainingState(AutogradContext& ctx);
+bool verifyGradientsAreConnected(AutogradContext& ctx);
 
 /**
  * Compute gradient norm from all parameter gradients
@@ -270,18 +185,6 @@ float computeGradientNorm(const AutogradContext& ctx);
 
 /**
  * Full autograd training step: forward → loss → backward
- * 
- * This is the main entry point for autograd-based training.
- * It combines forward, loss, and backward into a single call.
- * 
- * @param model Language model
- * @param training_state Training state with cached inputs/targets
- * @param batch_size Batch size
- * @param seq_len Sequence length
- * @param accumulate Whether to accumulate gradients
- * @param grad_scale Gradient scaling factor
- * @param step Current training step
- * @return Loss value (negative on error)
  */
 float autogradTrainingStep(
     LanguageModel& model,

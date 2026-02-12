@@ -12,8 +12,11 @@
 
 #include <cuda_runtime.h>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <algorithm>
+#include <stdexcept>
+#include <string>
 
 namespace GRIM::PBM {
 
@@ -36,11 +39,14 @@ bool checkCuda(cudaError_t err, const char* what) {
 //  Parameters:
 //    d_min = locality distance (tied to rotary_dim/2 or minimum 16)
 //    d_max = context length (max_seq_len)
-//    target_bias = |alibi_slope_exponent| (e.g., 8.0 for standard ALiBi)
+//    target_bias = |alibi_slope_exponent| (interpreted as MAX bias at max_seq_len)
 //  
-//  Formula:
-//    m_max = target_bias / d_min  (penalty slope for NEAR distances - strongest head)
-//    m_min = target_bias / d_max  (penalty slope for FAR distances - weakest head)
+//  Formula (scaled to enforce max bias at max_seq_len for strongest head):
+//    base_m_max = target_bias / d_min
+//    base_m_min = target_bias / d_max
+//    scale = d_min / d_max
+//    m_max = base_m_max * scale  (strongest head reaches -target_bias at max distance)
+//    m_min = base_m_min * scale  (weakest head is proportionally gentler)
 //    slopes interpolated geometrically across heads
 //  
 //  WARNING: If you scale slopes for max_seq_len=2048 but run 8192 tokens,
@@ -78,10 +84,13 @@ bool computeAlibiSlopes(const PBMConfig& config, std::vector<float>& out_slopes)
     }
     
     // Compute slope range based on context length
-    // m_max: strongest head (penalizes even nearby tokens)
+    // m_max: strongest head (reaches -target_bias at max distance)
     // m_min: weakest head (only penalizes very distant tokens)
-    const float m_max = target_bias / static_cast<float>(d_min);
-    const float m_min = target_bias / static_cast<float>(d_max);
+    const float base_m_max = target_bias / static_cast<float>(d_min);
+    const float base_m_min = target_bias / static_cast<float>(d_max);
+    const float max_bias_scale = static_cast<float>(d_min) / static_cast<float>(d_max);
+    const float m_max = base_m_max * max_bias_scale;
+    const float m_min = base_m_min * max_bias_scale;
     
     // Safety check: m_min > m_max means d_min > d_max (inverted, should never happen)
     if (m_min > m_max) {
@@ -91,13 +100,17 @@ bool computeAlibiSlopes(const PBMConfig& config, std::vector<float>& out_slopes)
     }
     
     // ISSUE #76: Log context-aware ALiBi penalty computation for debugging
-    // At max_seq_len boundary, the ALiBi penalty for the weakest head scales with 1/max_seq_len
-    // Example: max_seq_len=1024, target_bias=8 -> m_min = 8/1024 = 0.0078
-    //          At position 1024, penalty = -0.0078 * 1024 = -8.0 (as designed)
-    // If max_seq_len changes, penalties scale! This is intentional behavior.
+    // By design, head 0 reaches -target_bias at max_seq_len (not -target_bias * d_max/d_min).
+    // Example: max_seq_len=1024, d_min=32, target_bias=8
+    //   base_m_max = 8/32 = 0.25, scale = 32/1024 = 0.03125
+    //   m_max = 0.25 * 0.03125 = 0.0078125
+    //   At position 1024, bias = -0.0078125 * 1024 = -8.0 (as designed)
     std::cerr << "[PBM-ALIBI-ISSUE76] max_seq_len=" << config.max_seq_len 
               << " d_min=" << d_min 
               << " target_bias=" << target_bias
+              << " base_m_max=" << base_m_max
+              << " base_m_min=" << base_m_min
+              << " scale=" << max_bias_scale
               << " => m_max=" << m_max << " m_min=" << m_min << std::endl;
     std::cerr << "[PBM-ALIBI-ISSUE76] At position " << config.max_seq_len << ":\n"
               << "    Head 0 (strongest): bias = -" << m_max << " * " << config.max_seq_len 
@@ -577,22 +590,23 @@ void launchRoPERotationGQA(
     int rotary_dim,
     cudaStream_t stream
 ) {
+    // Rule 20: Crash loud on invalid inputs — silent return hides bugs
     if (Q == nullptr || K == nullptr || inv_freq == nullptr) {
-        std::cerr << kTag << " ERROR: Null pointer passed to launchRoPERotationGQA" << std::endl;
-        return;
+        throw std::runtime_error(std::string(kTag) + " Null pointer passed to launchRoPERotationGQA"
+            " (Q=" + std::to_string((uintptr_t)Q) +
+            " K=" + std::to_string((uintptr_t)K) +
+            " inv_freq=" + std::to_string((uintptr_t)inv_freq) + ")");
     }
     
     if (rotary_dim <= 0 || (rotary_dim & 1) != 0 || rotary_dim > head_dim) {
-        std::cerr << kTag << " ERROR: Invalid rotary_dim=" << rotary_dim 
-                  << " (head_dim=" << head_dim << ")" << std::endl;
-        return;
+        throw std::runtime_error(std::string(kTag) + " Invalid rotary_dim=" + std::to_string(rotary_dim)
+            + " (head_dim=" + std::to_string(head_dim) + ")");
     }
     
     // Validate GQA configuration: num_q_heads must be divisible by num_kv_heads
     if (num_q_heads <= 0 || num_kv_heads <= 0 || (num_q_heads % num_kv_heads) != 0) {
-        std::cerr << kTag << " ERROR: Invalid GQA config - num_q_heads=" << num_q_heads
-                  << " must be divisible by num_kv_heads=" << num_kv_heads << std::endl;
-        return;
+        throw std::runtime_error(std::string(kTag) + " Invalid GQA config - num_q_heads=" + std::to_string(num_q_heads)
+            + " must be divisible by num_kv_heads=" + std::to_string(num_kv_heads));
     }
     
     const int threads_per_block = 256;
@@ -656,26 +670,23 @@ void launchRoPERotationGQA_backward(
     // passes nullptr for one of grad_Q or grad_K because Q and K have independent
     // gradient paths in the autograd system. We should allow processing either one
     // individually. The validation should only fail if BOTH are null.
+    // Rule 20: Crash loud on invalid inputs
     if (grad_Q == nullptr && grad_K == nullptr) {
-        std::cerr << kTag << " ERROR: Both grad_Q and grad_K are null in launchRoPERotationGQA_backward" << std::endl;
-        return;
+        throw std::runtime_error(std::string(kTag) + " Both grad_Q and grad_K are null in launchRoPERotationGQA_backward");
     }
     if (inv_freq == nullptr) {
-        std::cerr << kTag << " ERROR: inv_freq is null in launchRoPERotationGQA_backward" << std::endl;
-        return;
+        throw std::runtime_error(std::string(kTag) + " inv_freq is null in launchRoPERotationGQA_backward");
     }
     
     if (rotary_dim <= 0 || (rotary_dim & 1) != 0 || rotary_dim > head_dim) {
-        std::cerr << kTag << " ERROR: Invalid rotary_dim=" << rotary_dim 
-                  << " (head_dim=" << head_dim << ")" << std::endl;
-        return;
+        throw std::runtime_error(std::string(kTag) + " Invalid rotary_dim=" + std::to_string(rotary_dim)
+            + " (head_dim=" + std::to_string(head_dim) + ")");
     }
     
     // Validate GQA configuration: num_q_heads must be divisible by num_kv_heads
     if (num_q_heads <= 0 || num_kv_heads <= 0 || (num_q_heads % num_kv_heads) != 0) {
-        std::cerr << kTag << " ERROR: Invalid GQA config - num_q_heads=" << num_q_heads
-                  << " must be divisible by num_kv_heads=" << num_kv_heads << std::endl;
-        return;
+        throw std::runtime_error(std::string(kTag) + " Invalid GQA config - num_q_heads=" + std::to_string(num_q_heads)
+            + " must be divisible by num_kv_heads=" + std::to_string(num_kv_heads));
     }
     
     const int threads_per_block = 256;

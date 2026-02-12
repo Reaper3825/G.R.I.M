@@ -71,7 +71,6 @@ void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream
 //
 //  4D LAYOUTS (attention tensors):
 //    BHSD = [batch, heads, seq, head_dim]  - Standard attention format
-//    BHDS = [batch, heads, head_dim, seq]  - Key transposed for Q @ K^T
 //    BSHD = [batch, seq, heads, head_dim]  - Merged head format
 //
 //  GQA SUPPORT
@@ -181,7 +180,6 @@ enum class Layout : uint8_t {
     
     // 4D formats (attention tensors) - use Shape4D
     BHSD,              // [batch, heads, seq, head_dim] - Standard attention format
-    BHDS,              // [batch, heads, head_dim, seq] - Key transposed for Q @ K^T
     BSHD,              // [batch, seq, heads, head_dim] - Merged head format
     
     // Unknown/invalid
@@ -196,7 +194,7 @@ constexpr bool is_flat_layout(Layout l) {
 }
 
 constexpr bool is_4d_layout(Layout l) {
-    return l == Layout::BHSD || l == Layout::BHDS || l == Layout::BSHD;
+    return l == Layout::BHSD || l == Layout::BSHD;
 }
 
 //======================================================//
@@ -361,12 +359,6 @@ struct TensorShape {
     
     static TensorShape make_BHSD(int batch, int heads, int seq, int head_dim) {
         return TensorShape(Layout::BHSD, Shape4D{batch, heads, seq, head_dim});
-    }
-    
-    static TensorShape make_BHDS(int batch, int heads, int head_dim, int seq) {
-        // Note: BHDS stores head_dim before seq in the logical name,
-        // but Shape4D always stores in BHSD order for consistency
-        return TensorShape(Layout::BHDS, Shape4D{batch, heads, seq, head_dim});
     }
     
     static TensorShape make_BSHD(int batch, int seq, int heads, int head_dim) {
@@ -547,59 +539,6 @@ void validate_conversion(const TensorView& src, const TensorView& dst, const cha
 bool tensors_alias(const TensorView& a, const TensorView& b);
 
 //======================================================//
-//  Layout Conversion Operations
-//======================================================//
-
-/**
- * Convert tensor from one layout to another
- * 
- * Supported conversions:
- *   - BSM <-> BHSD (embedding to multi-head and back)
- *   - BHSD <-> BHDS (key transpose for attention)
- *   - BHSD <-> BSHD (head dimension reordering)
- * 
- * NOTE: This operation is ASYNCHRONOUS. The kernel is launched on the given stream
- * but does not synchronize. Caller must cudaStreamSynchronize() if the result is
- * needed immediately, or chain subsequent operations on the same stream.
- * 
- * @param src Source tensor view
- * @param dst Destination tensor view (must be pre-allocated)
- * @param stream CUDA stream for async execution
- * @throws ContractViolation if conversion is invalid
- */
-void convert(const TensorView& src, TensorView& dst, cudaStream_t stream = nullptr);
-
-/**
- * Check if in-place conversion is possible between two layouts
- * 
- * CRITICAL: Call this BEFORE calling convert_inplace to avoid data corruption.
- * In-place conversion requires specific geometric conditions that are NOT
- * generally satisfied for arbitrary tensor dimensions.
- * 
- * @param tensor Current tensor
- * @param target_layout Desired output layout
- * @return true if in-place conversion is safe, false otherwise
- */
-bool can_convert_inplace(const TensorView& tensor, Layout target_layout);
-
-/**
- * In-place layout conversion (when possible)
- * 
- * WARNING: Only call this after can_convert_inplace() returns true!
- * Calling this when in-place conversion is not possible leads to data corruption.
- * 
- * Some conversions can be done in-place (e.g., BHSD <-> BSHD for certain dims).
- * Returns false if in-place conversion failed.
- * 
- * @param tensor Tensor to convert (layout field is updated on success)
- * @param target_layout Desired output layout
- * @param stream CUDA stream for async execution
- * @return true if in-place conversion succeeded, false otherwise
- * @pre can_convert_inplace(tensor, target_layout) == true
- */
-bool convert_inplace(TensorView& tensor, Layout target_layout, cudaStream_t stream = nullptr);
-
-//======================================================//
 //  Common Tensor Operations
 //======================================================//
 
@@ -736,11 +675,6 @@ const char* layout_name(Layout layout);
  */
 size_t compute_buffer_size(const TensorShape& shape);
 
-/**
- * Check if a conversion between two layouts is supported
- */
-bool is_conversion_supported(Layout from, Layout to);
-
 //======================================================//
 //  Debug Utilities (disabled in release builds)
 //======================================================//
@@ -836,6 +770,7 @@ struct ParameterGroup {
     ParamGroupType type;     ///< Category for optimizer and analysis
     int layer_index = -1;    ///< Encoder layer index (0-based), -1 for non-layer params
     float upsilon = 1.0f;    ///< Depth-aware regularization scale: Υ_l = 0.1 * sqrt(L_ref / L)
+    float weight_decay_multiplier = 1.0f;  ///< 0.0 for biases/norms (no weight decay), 1.0 for weights
     
     // Live accessors — always read through the Tensor, never stale
     // Defined after struct Tensor (forward-declared only here)

@@ -747,7 +747,8 @@ extern "C" void flash_attn_fwd_ex(
     // ========================================================================
     {
         // Sample a small subset for detailed analysis (avoid O(seqlen^2) cost)
-        const int sample_tokens = std::min(32, seqlen);
+        // Use full sequence for diagnostics (reduced from 32 to capture full attention dynamics)
+        const int sample_tokens = seqlen;  // Full sequence for complete attention matrix
         const int sample_heads = std::min(4, n_heads);
         const size_t q_sample_size = static_cast<size_t>(sample_tokens) * head_dim;
         const size_t k_sample_size = static_cast<size_t>(sample_tokens) * head_dim;
@@ -875,11 +876,11 @@ extern "C" void flash_attn_fwd_ex(
             fprintf(stderr, "  Q_row_norms: mean=%.4f | K_row_norms: mean=%.4f\n", q_norm_mean, k_norm_mean);
             fprintf(stderr, "  scale = 1/sqrt(%d) = %.6f\n", head_dim, scale);
             fprintf(stderr, "  alibi_slope[head0] = %.6f (max_distance=%d -> max_bias=%.4f)\n",
-                    h_slopes[0], seqlen - 1, h_slopes[0] * static_cast<float>(-(seqlen - 1)));
+                    h_slopes[0], seqlen - 1, h_slopes[0] * static_cast<float>(seqlen - 1));
             fprintf(stderr, "  EXPECTED score = Q_row_norm * K_row_norm * scale = %.4f * %.4f * %.6f ≈ %.4f\n",
                     q_norm_mean, k_norm_mean, scale, q_norm_mean * k_norm_mean * scale);
-            fprintf(stderr, "  ACTUAL score (computed %d samples): min=%.4f max=%.4f rms=%.4f\n",
-                    valid_scores, score_min, score_max, score_rms);
+            fprintf(stderr, "  ACTUAL score (FULL SEQUENCE %d positions, %d samples): min=%.4f max=%.4f rms=%.4f\n",
+                    sample_tokens, valid_scores, score_min, score_max, score_rms);
             fprintf(stderr, "  EXPECTED LSE (from sampled scores): min=%.4f max=%.4f mean=%.4f\n",
                     expected_lse_min, expected_lse_max, expected_lse_mean);
             fprintf(stderr, "  (Normal LSE for random init: ~6-10, depending on seqlen)\n");

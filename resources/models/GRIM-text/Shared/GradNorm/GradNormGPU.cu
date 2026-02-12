@@ -266,6 +266,7 @@ GradNormController::GradNormController(GradNormController&& other) noexcept
     , d_metrics_(other.d_metrics_)
     , d_types_temp_(other.d_types_temp_)
     , h_metrics_(other.h_metrics_)
+    , h_types_temp_(other.h_types_temp_)
     , last_stream_(other.last_stream_)
 {
     other.initialized_ = false;
@@ -274,6 +275,7 @@ GradNormController::GradNormController(GradNormController&& other) noexcept
     other.d_metrics_ = nullptr;
     other.d_types_temp_ = nullptr;
     other.h_metrics_ = nullptr;
+    other.h_types_temp_ = nullptr;
 }
 
 GradNormController& GradNormController::operator=(GradNormController&& other) noexcept {
@@ -286,6 +288,7 @@ GradNormController& GradNormController::operator=(GradNormController&& other) no
         d_metrics_ = other.d_metrics_;
         d_types_temp_ = other.d_types_temp_;
         h_metrics_ = other.h_metrics_;
+        h_types_temp_ = other.h_types_temp_;
         last_stream_ = other.last_stream_;
         
         other.initialized_ = false;
@@ -294,6 +297,7 @@ GradNormController& GradNormController::operator=(GradNormController&& other) no
         other.d_metrics_ = nullptr;
         other.d_types_temp_ = nullptr;
         other.h_metrics_ = nullptr;
+        other.h_types_temp_ = nullptr;
     }
     return *this;
 }
@@ -357,6 +361,22 @@ GradNormStatus GradNormController::initialize(size_t max_groups, cudaStream_t st
         return GradNormStatus::ALLOC_FAILED;
     }
     
+    // Allocate pinned host buffer for types (avoid repeated malloc per batch)
+    err = cudaMallocHost(&h_types_temp_, max_groups_ * sizeof(GRIM::ParamGroupType));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[GradNorm] FATAL: cudaMallocHost h_types_temp_ failed: %s\n",
+                cudaGetErrorString(err));
+        cudaFree(d_partial_sums_);
+        cudaFree(d_group_norms_);
+        cudaFree(d_metrics_);
+        cudaFree(d_types_temp_);
+        d_partial_sums_ = nullptr;
+        d_group_norms_ = nullptr;
+        d_metrics_ = nullptr;
+        d_types_temp_ = nullptr;
+        return GradNormStatus::ALLOC_FAILED;
+    }
+    
     // Allocate pinned host memory for async copy
     err = cudaMallocHost(&h_metrics_, sizeof(GradMetrics));
     if (err != cudaSuccess) {
@@ -410,14 +430,16 @@ void GradNormController::shutdown() {
         cudaFreeHost(h_metrics_);
         h_metrics_ = nullptr;
     }
+    if (h_types_temp_) {
+        cudaFreeHost(h_types_temp_);
+        h_types_temp_ = nullptr;
+    }
     initialized_ = false;
     max_groups_ = 0;
 }
 
 GradNormStatus GradNormController::computeNorms(
-    float* const* grads,
-    const size_t* sizes,
-    const GRIM::ParamGroupType* types,
+    const GRIM::ParameterGroup* groups,
     size_t num_groups,
     cudaStream_t stream
 ) {
@@ -425,7 +447,7 @@ GradNormStatus GradNormController::computeNorms(
         return GradNormStatus::NOT_INITIALIZED;
     }
     
-    if (!grads || !sizes || !types || num_groups == 0) {
+    if (!groups || num_groups == 0) {
         return GradNormStatus::INVALID_PARAM;
     }
     
@@ -451,19 +473,26 @@ GradNormStatus GradNormController::computeNorms(
         return GradNormStatus::KERNEL_LAUNCH_FAILED;
     }
     
-    // Phase 1: Sum of squares for each group
+    // Extract types directly to pinned host buffer (no temp allocation)
     for (size_t g = 0; g < num_groups; ++g) {
-        if (!grads[g] || sizes[g] == 0) {
+        h_types_temp_[g] = groups[g].type;
+    }
+    
+    // Phase 1: Sum of squares for each group (extract from ParameterGroup directly)
+    for (size_t g = 0; g < num_groups; ++g) {
+        float* grads = groups[g].grads();
+        size_t sz = groups[g].size();
+        if (!grads || sz == 0) {
             continue;
         }
         
         // Compute grid size for this buffer
-        int blocks = static_cast<int>((sizes[g] + kBlockSize - 1) / kBlockSize);
+        int blocks = static_cast<int>((sz + kBlockSize - 1) / kBlockSize);
         blocks = min(blocks, kMaxBlocksPerGroup);
         
         sumSquaresBlockKernel<<<blocks, kBlockSize, 0, stream>>>(
-            grads[g],
-            sizes[g],
+            grads,
+            sz,
             &d_partial_sums_[g]
         );
     }
@@ -476,8 +505,8 @@ GradNormStatus GradNormController::computeNorms(
     }
     
     // Phase 2: Finalize norms
-    // PERFORMANCE FIX: Reuse pre-allocated d_types_temp_ buffer (allocated in initialize())
-    err = cudaMemcpyAsync(d_types_temp_, types, num_groups * sizeof(GRIM::ParamGroupType),
+    // PERFORMANCE FIX: Reuse pre-allocated h_types_temp_ (pinned) and d_types_temp_ (device)
+    err = cudaMemcpyAsync(d_types_temp_, h_types_temp_, num_groups * sizeof(GRIM::ParamGroupType),
                           cudaMemcpyHostToDevice, stream);
     if (err != cudaSuccess) {
         fprintf(stderr, "[GradNorm] FATAL: cudaMemcpyAsync d_types_temp_ failed: %s\n",

@@ -179,6 +179,7 @@ struct TrainingTensors {
                           int num_layers, int num_heads, int num_kv_heads,
                           int max_seq_len, bool tie_embeddings, bool use_bias,
                           HyperParameters::PositionalEncodingType positional_encoding,
+                          bool numeric_head_enabled = false,
                           bool use_layer_scale_flag = false,
                           float layer_scale_init_val = 0.1f,
                           uint64_t seed = 0,
@@ -195,11 +196,6 @@ struct TrainingTensors {
      * Allocate activation cache tensors for given batch/sequence dimensions
      */
     void allocateCaches(int batch_size, int seq_len, cudaStream_t stream = nullptr);
-    
-    /**
-     * Zero all gradients before backward pass
-     */
-    void zeroGrad(cudaStream_t stream = nullptr);
     
     /**
      * Check if tensors are initialized

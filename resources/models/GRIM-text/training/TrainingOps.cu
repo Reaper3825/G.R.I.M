@@ -24,10 +24,6 @@
 #include "../Shared/TrainingState/TrainingTensors.hpp"  // For proper memory ownership
 #include "module_logger.hpp"
 
-// External kernel declaration (C++ linkage - can throw exceptions)
-void launchBiasSumGradient(const float* grad_output, float* grad_bias,
-                           int total_tokens, int hidden_dim, cudaStream_t stream);
-
 namespace {
 using ForwardLog = ModuleLogger<GRIM::Logging::ModuleId::ForwardPass>;
 
@@ -257,16 +253,16 @@ void LanguageModel::initGPU() {
         enc_config.use_layer_scale = cfg.use_layer_scale;
         enc_config.layer_scale_init = cfg.layer_scale_init;
         enc_config.center_encoder_residuals = cfg.center_encoder_residuals;
+        enc_config.use_bias = cfg.use_bias;
 
         enc_config.stream = primary_stream;
         enc_config.cublas_handle = training_state_.cublas_handle;
 
         // PBM must be initialized before encoder creation
         if (!training_state_.pbm_initialized) {
-            fprintf(stderr, "\n[LanguageModel::initGPU] FATAL: PBM not initialized before encoder construction!\n");
-            fprintf(stderr, "[LanguageModel::initGPU] Call initPBM() BEFORE createGPUEncoder().\n");
-            fprintf(stderr, "[LanguageModel::initGPU] Fix initialization order in TrainingOps.cu\n");
-            std::abort();
+            throw std::runtime_error(
+                "[initGPU] FATAL: PBM not initialized before encoder construction! "
+                "Call initPBM() BEFORE createGPUEncoder()");
         }
         enc_config.pos_encoding = &training_state_.pbm_spec;
 

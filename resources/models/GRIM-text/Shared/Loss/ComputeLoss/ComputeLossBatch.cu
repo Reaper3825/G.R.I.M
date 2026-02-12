@@ -1,4 +1,5 @@
 #include "ComputeLossBatch.hpp"
+#include "../../Batching/BatchPayload.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -20,12 +21,6 @@
 #include "../../LogRecorder/LogRecorder.hpp"
 #include "../../../training/Autograd/AutogradTraining.hpp"  // Issue #47: Full autograd forward pass
 #include "../../VerboseLogging.hpp"  // Guards for expensive debug prints
-
-// Debug flag for batch_prep_* corruption investigation
-// MUST match Phase1_Startup.cu setting (both files independently compiled)
-#ifndef DEBUG_BATCH_PREP_CORRUPTION
-#define DEBUG_BATCH_PREP_CORRUPTION 1
-#endif
 
 namespace GRIM {
 
@@ -55,492 +50,137 @@ void orderLog(const char* stage,
 
 }  // namespace
 
-BatchPreparationResult prepareLossBatchInputs(
-	TrainingState& training_state,
-	const std::vector<std::vector<int>>& batch_input_ids,
-	const std::vector<std::vector<int>>& batch_target_ids,
-	const std::vector<std::vector<float>>& batch_numeric_values,
-	const std::vector<std::vector<uint8_t>>& batch_numeric_mask,
-	const std::vector<std::vector<uint16_t>>& batch_text_features,
-	const std::vector<std::vector<uint8_t>>& batch_text_mask,
-	size_t max_cached_batch,
-	size_t max_cached_seq_len)
-{
-#if DEBUG_BATCH_PREP_CORRUPTION
-	fprintf(stderr, "[CORRUPT-USE-ENTRY] prepareLossBatchInputs called: capacity=%zu data=%p\n",
-	        training_state.batch_prep_target_ids.capacity(),
-	        (void*)training_state.batch_prep_target_ids.data());
-#endif
-
-	// NOTE: training_state.batch_prep_* vectors are CORRUPT due to memory corruption 
-	// elsewhere. Using local vectors as workaround until root cause found.
-	// The 0.02s allocation cost per batch is acceptable vs crashing.
-	
-	constexpr int kTextFeatureDim = 16;  // Must match GRIM::Tokenizer::kTextFeatureDim
-	BatchPreparationResult result{};
-	result.batch_size = batch_input_ids.size();
-
-	for (const auto& seq : batch_input_ids) {
-		result.max_seq_len = std::max(result.max_seq_len, seq.size());
-	}
-
-	if (result.batch_size == 0 || result.max_seq_len == 0) {
-		result.fits_in_cache = false;
-		return result;
-	}
-
-	if (result.batch_size > max_cached_batch ||
-		result.max_seq_len > max_cached_seq_len) {
-		result.fits_in_cache = false;
-		return result;
-	}
-
-	const size_t total_tokens = result.batch_size * result.max_seq_len;
-	const size_t text_feat_size = total_tokens * kTextFeatureDim;
-	
-#if DEBUG_BATCH_PREP_CORRUPTION
-	fprintf(stderr, "[CORRUPT-USE-BEFORE-ALLOC] About to resize local vectors (NOT touching training_state): total_tokens=%zu\n", total_tokens);
-	fprintf(stderr, "[CORRUPT-USE-BEFORE-ALLOC] training_state vector state: capacity=%zu data=%p\n",
-	        training_state.batch_prep_target_ids.capacity(),
-	        (void*)training_state.batch_prep_target_ids.data());
-#endif
-
-	// WORKAROUND: Allocate fresh local vectors (training_state members are corrupted)
-	result.padded_input_ids.resize(total_tokens, 0);
-	result.padded_target_ids.resize(total_tokens, -1);
-	result.padded_numeric_values.resize(total_tokens, 0.0f);
-	result.padded_numeric_mask.resize(total_tokens, 0);
-	result.padded_text_features.resize(text_feat_size, 0);
-	result.padded_text_mask.resize(total_tokens, 0);
-	result.valid_target_counts.resize(result.batch_size, 0);
-	
-	// NOTE: NOT using training_state.batch_prep_* due to memory corruption bug
-
-	for (size_t b = 0; b < result.batch_size; ++b) {
-		const size_t seq_len = std::min(batch_input_ids[b].size(), result.max_seq_len);
-		const size_t target_len = (b < batch_target_ids.size())
-			                          ? std::min(batch_target_ids[b].size(), result.max_seq_len)
-			                          : seq_len;
-
-		// Rule 20: Input and target sequences MUST be aligned.
-		// A mismatch means the data pipeline produced misaligned windows.
-		if (b < batch_target_ids.size() && seq_len != target_len) {
-			throw std::runtime_error(
-				"prepareLossBatchInputs: seq_len (" + std::to_string(seq_len) +
-				") != target_len (" + std::to_string(target_len) +
-				") for batch element " + std::to_string(b) +
-				" — data pipeline produced misaligned input/target windows");
-		}
-
-		// INVARIANT: Numeric side-channel arrays must be token-aligned in length.
-		// Only atom tokens (256-511) carry real numeric values (mask=1).
-		// Non-atom tokens have value=0.0, mask=0 — but the arrays MUST exist
-		// at full seq_len size because the tokenizer always emits one entry per token.
-		// If you refactor to sparse atom-only storage, remove this length check.
-		const size_t numeric_len = (b < batch_numeric_values.size())
-			                           ? std::min(batch_numeric_values[b].size(), result.max_seq_len)
-			                           : 0;
-		const size_t numeric_mask_len = (b < batch_numeric_mask.size())
-			                                ? std::min(batch_numeric_mask[b].size(), result.max_seq_len)
-			                                : 0;
-		if (numeric_len < seq_len || numeric_mask_len < seq_len) {
-			throw std::runtime_error("prepareLossBatchInputs: numeric side-channel length mismatch");
-		}
-
-		// IMPORTANT: valid_tokens must count ONLY unmasked targets (>=0). Many call sites
-		// keep targets padded with -1; assuming target_len-1 would massively over-count
-		// valid tokens, collapsing avg_loss (and gradient scale) toward 0.
-		int valid_len = 0;
-		if (b < batch_target_ids.size()) {
-			for (size_t t = 0; t < target_len; ++t) {
-				if (batch_target_ids[b][t] >= 0) {
-					++valid_len;
-				}
-			}
-			// We will mask the final position below.
-			if (target_len > 0 && batch_target_ids[b][target_len - 1] >= 0) {
-				--valid_len;
-			}
-		} else {
-			valid_len = static_cast<int>(seq_len > 0 ? seq_len - 1 : 0);
-		}
-		result.valid_target_counts[b] = std::max(valid_len, 0);
-
-		for (size_t t = 0; t < seq_len; ++t) {
-			result.padded_input_ids[b * result.max_seq_len + t] = batch_input_ids[b][t];
-		}
-		for (size_t t = 0; t < seq_len; ++t) {
-			const size_t offset = b * result.max_seq_len + t;
-			result.padded_numeric_values[offset] = batch_numeric_values[b][t];
-			result.padded_numeric_mask[offset] = batch_numeric_mask[b][t];
-		}
-		// GRMT v4: copy text features (kTextFeatureDim values per token)
-		if (b < batch_text_features.size() && b < batch_text_mask.size()) {
-			const size_t text_feat_len = batch_text_features[b].size() / kTextFeatureDim;
-			const size_t copy_len = std::min(text_feat_len, seq_len);
-			for (size_t t = 0; t < copy_len; ++t) {
-				const size_t dst_offset = (b * result.max_seq_len + t) * kTextFeatureDim;
-				const size_t src_offset = t * kTextFeatureDim;
-				for (int f = 0; f < kTextFeatureDim; ++f) {
-					result.padded_text_features[dst_offset + f] = batch_text_features[b][src_offset + f];
-				}
-				result.padded_text_mask[b * result.max_seq_len + t] = batch_text_mask[b][t];
-			}
-		}
-
-		if (b < batch_target_ids.size()) {
-			for (size_t t = 0; t < target_len; ++t) {
-				result.padded_target_ids[b * result.max_seq_len + t] = batch_target_ids[b][t];
-			}
-			if (target_len > 0) {
-				// ASSUMPTION: Strictly autoregressive (next-token prediction) training.
-				// The final position in each window has no valid next-token target,
-				// so we mask it with -1 to exclude from loss and gradients.
-				// WARNING: This is INCORRECT for span prediction, bidirectional loss,
-				// or masked LM objectives. If switching training mode, this line
-				// must be gated on training_mode == AUTOREGRESSIVE.
-				result.padded_target_ids[b * result.max_seq_len + target_len - 1] = -1;
-			}
-		}
-	}
-
-	return result;
-}
-
 float LanguageModel::computeLossBatch(
-	const std::vector<std::vector<int>>& batch_input_ids,
-	const std::vector<std::vector<int>>& batch_target_ids,
-	const std::vector<std::vector<float>>& batch_numeric_values,
-	const std::vector<std::vector<uint8_t>>& batch_numeric_mask,
-	const std::vector<std::vector<uint16_t>>& batch_text_features,
-	const std::vector<std::vector<uint8_t>>& batch_text_mask)
+	const GRIM::Batching::BatchPayload& payload)
 {
-	fprintf(stderr, "[DEBUG-LOSS] ENTER computeLossBatch\n");
-	fprintf(stderr, "[DEBUG-LOSS] Checking batch_input_ids.size()...\n");
-	size_t input_size = batch_input_ids.size();
-	fprintf(stderr, "[DEBUG-LOSS] batch_input_ids.size()=%zu\n", input_size);
-	
-	fprintf(stderr, "[DEBUG-LOSS] Checking batch_target_ids.size()...\n");
-	size_t target_size = batch_target_ids.size();
-	fprintf(stderr, "[DEBUG-LOSS] batch_target_ids.size()=%zu\n", target_size);
-	
-	fprintf(stderr, "[DEBUG-LOSS] Checking batch_numeric_values.size()...\n");
-	size_t numeric_val_size = batch_numeric_values.size();
-	fprintf(stderr, "[DEBUG-LOSS] batch_numeric_values.size()=%zu\n", numeric_val_size);
-	
-	fprintf(stderr, "[DEBUG-LOSS] Checking batch_numeric_mask.size()...\n");
-	size_t numeric_mask_size = batch_numeric_mask.size();
-	fprintf(stderr, "[DEBUG-LOSS] batch_numeric_mask.size()=%zu\n", numeric_mask_size);
-	
-	fprintf(stderr, "[DEBUG-LOSS] Checking batch_text_features.size()...\n");
-	size_t text_feat_size = batch_text_features.size();
-	fprintf(stderr, "[DEBUG-LOSS] batch_text_features.size()=%zu\n", text_feat_size);
-	
-	fprintf(stderr, "[DEBUG-LOSS] Checking batch_text_mask.size()...\n");
-	size_t text_mask_size = batch_text_mask.size();
-	fprintf(stderr, "[DEBUG-LOSS] batch_text_mask.size()=%zu\n", text_mask_size);
-	
-	fprintf(stderr, "[DEBUG-LOSS] About to call orderLog...\n");
+	// ═══════════════════════════════════════════════════════════════════════════
+	// BatchPayload is the SINGLE SOURCE OF TRUTH for all batch metadata.
+	// All padding, masking, sequence lengths, valid token counts, and cache fit
+	// checks were computed ONCE in buildBatchPayload(). No recomputation here.
+	// ═══════════════════════════════════════════════════════════════════════════
+
 	orderLog("computeLossBatch.enter",
-		input_size, 0, 0, 0);
-	fprintf(stderr, "[DEBUG-LOSS] orderLog completed\n");
-	
-	fprintf(stderr, "[DEBUG-LOSS] Checking 'this' pointer: this=%p\n", (void*)this);
-	fprintf(stderr, "[DEBUG-LOSS] Checking training_state_ address: &training_state_=%p\n", (void*)&training_state_);
-	fprintf(stderr, "[DEBUG-LOSS] About to read training_state_.initialized...\n");
-	
-	bool is_initialized = training_state_.initialized;
-	fprintf(stderr, "[DEBUG-LOSS] training_state_.initialized=%d\n", is_initialized ? 1 : 0);
-	
-	// Ensure training state is initialized before computing batch loss
-	if (!is_initialized) {
+		payload.batch_size, payload.max_seq_len, payload.total_tokens, payload.valid_tokens);
+
+	// Ensure training state is initialized
+	if (!training_state_.initialized) {
 		orderLog("computeLossBatch.init_start",
-			batch_input_ids.size(), 0, 0, 0);
-		try {
-			fprintf(stderr, "[computeLossBatch] Training state not initialized, attempting initTrainingState()\n");
-			const_cast<LanguageModel*>(this)->initTrainingState();
-			if (!training_state_.initialized) {
-				fprintf(stderr, "[computeLossBatch] FATAL: initTrainingState() completed but flag still false\n");
-				throw std::runtime_error("computeLossBatch: training state initialization failed");
-			}
-			fprintf(stderr, "[computeLossBatch] Training state initialized successfully\n");
-		} catch (const std::exception& e) {
-			fprintf(stderr, "[computeLossBatch] FATAL: Failed to initialize training state: %s\n", e.what());
-			throw std::runtime_error(std::string("computeLossBatch: initTrainingState() failed: ") + e.what());
-		} catch (...) {
-			fprintf(stderr, "[computeLossBatch] FATAL: Unknown error during training state initialization\n");
-			throw std::runtime_error("computeLossBatch: initTrainingState() failed with unknown error");
+			payload.batch_size, 0, 0, 0);
+		initTrainingState();
+		if (!training_state_.initialized) {
+			throw std::runtime_error("computeLossBatch: initTrainingState() completed but flag still false");
 		}
 		orderLog("computeLossBatch.init_done",
-			batch_input_ids.size(), 0, 0, 0);
+			payload.batch_size, 0, 0, 0);
 	}
 
-	fprintf(stderr, "[DEBUG-LOSS] After init check, validating batch sizes...\n");
-	if (batch_input_ids.empty() || batch_target_ids.empty()) {
-		fprintf(stderr,
-			"[ComputeLossBatch] FATAL: empty batch (inputs=%zu, targets=%zu)\n",
-			batch_input_ids.size(), batch_target_ids.size());
-		throw std::runtime_error("computeLossBatch: empty batch");
-	}
-	fprintf(stderr, "[DEBUG-LOSS] Batch not empty, checking numeric sizes...\n");
-	if (batch_numeric_values.size() != batch_input_ids.size() ||
-		batch_numeric_mask.size() != batch_input_ids.size()) {
-		throw std::runtime_error("computeLossBatch: numeric side-channel batch size mismatch");
-	}
-	fprintf(stderr, "[DEBUG-LOSS] Numeric batch sizes OK, checking per-sequence lengths...\n");
-	for (size_t b = 0; b < batch_input_ids.size(); ++b) {
-		if (batch_numeric_values[b].size() != batch_input_ids[b].size() ||
-			batch_numeric_mask[b].size() != batch_input_ids[b].size()) {
-			throw std::runtime_error("computeLossBatch: numeric side-channel sequence length mismatch");
-		}
-	}
-	fprintf(stderr, "[DEBUG-LOSS] Per-sequence validation OK\n");
+	// Rule 20: payload was already validated by buildBatchPayload, but re-validate here
+	// to catch any corruption between build and use
+	payload.validate("computeLossBatch");
 
-	fprintf(stderr, "[DEBUG-LOSS] About to call getConfig()...\n");
 	const auto& cfg = getConfig();
-	fprintf(stderr, "[DEBUG-LOSS] getConfig() returned cfg at address %p\n", (void*)&cfg);
-	
-	fprintf(stderr, "[DEBUG-LOSS] About to read cfg.max_cached_batch (address %p)...\n", (void*)&cfg.max_cached_batch);
-	const size_t cache_batch_limit = static_cast<size_t>(std::max(1, cfg.max_cached_batch));
-	fprintf(stderr, "[DEBUG-LOSS] Read cfg.max_cached_batch=%d, computing cache_seq_limit...\n", cfg.max_cached_batch);
-	
-	const size_t cache_seq_limit = static_cast<size_t>(
-		std::max(1, std::min(cfg.max_seq_len, cfg.max_cached_seq_len)));
-	fprintf(stderr, "[DEBUG-LOSS] Cache limits computed successfully (batch=%zu, seq=%zu)\n", 
-		cache_batch_limit, cache_seq_limit);
-
-	fprintf(stderr, "[DEBUG-LOSS] About to call orderLog for prep_start...\n");
-	orderLog("computeLossBatch.prep_start",
-		batch_input_ids.size(), 0, 0, 0);
-	fprintf(stderr, "[DEBUG-LOSS] orderLog completed, calling prepareLossBatchInputs...\n");
-	
-#if DEBUG_BATCH_PREP_CORRUPTION
-	fprintf(stderr, "[CORRUPT-USE-BEFORE-PREP] About to call prepareLossBatchInputs: capacity=%zu data=%p\n",
-	        training_state_.batch_prep_target_ids.capacity(),
-	        (void*)training_state_.batch_prep_target_ids.data());
-#endif
-	
-	auto prep_start = std::chrono::high_resolution_clock::now();
-	const auto prep = prepareLossBatchInputs(
-		training_state_,
-		batch_input_ids,
-		batch_target_ids,
-		batch_numeric_values,
-		batch_numeric_mask,
-		batch_text_features,
-		batch_text_mask,
-		cache_batch_limit,
-		cache_seq_limit);
-	fprintf(stderr, "[DEBUG-LOSS] prepareLossBatchInputs returned (batch_size=%zu, max_seq_len=%zu)\n",
-		prep.batch_size, prep.max_seq_len);
-	
-	auto prep_end = std::chrono::high_resolution_clock::now();
-	auto prep_ms = std::chrono::duration<double, std::milli>(prep_end - prep_start).count();
-	if constexpr (VerboseLogging::ENABLE_VOCAB_TIMING_LOGS) {
-		fprintf(stderr, "[VOCAB_TIMING] prepareLossBatchInputs: %.2f ms\n", prep_ms);
-	}
-
-	orderLog("computeLossBatch.prep",
-		prep.batch_size, prep.max_seq_len,
-		prep.batch_size * prep.max_seq_len,
-		std::accumulate(prep.valid_target_counts.begin(), prep.valid_target_counts.end(), 0));
-
-	if (!prep.fits_in_cache) {
-		const char* reason = (batch_input_ids.size() > cache_batch_limit) 
-			? "BATCH_SIZE" 
-			: (prep.max_seq_len > cache_seq_limit) ? "SEQ_LEN" : "UNKNOWN";
-		fprintf(stderr,
-			"[ComputeLossBatch] FATAL: batch does not fit cache (%s): batch=%zu [limit=%zu], seq_len=%zu [limit=%zu]\n",
-			reason,
-			batch_input_ids.size(), cache_batch_limit,
-			prep.max_seq_len, cache_seq_limit);
-		orderLog("computeLossBatch.prep_fail",
-			prep.batch_size, prep.max_seq_len,
-			prep.batch_size * prep.max_seq_len, 0);
-		throw std::runtime_error("computeLossBatch: batch does not fit cache");
-	}
-
-	if (!training_state_.initialized) {
-		initTrainingState();
-	}
 
 	GPUGrimEncoder* gpu_encoder = nullptr;
 	try {
 		gpu_encoder = &getGpuEncoder();
 	} catch (const std::exception& ex) {
-		fprintf(stderr, "[ComputeLossBatch] FATAL: GPU encoder not initialized: %s\n", ex.what());
-		throw std::runtime_error("computeLossBatch: GPU encoder not initialized");
+		throw std::runtime_error(std::string("computeLossBatch: GPU encoder not initialized: ") + ex.what());
 	}
 	if (!gpu_encoder) {
 		throw std::runtime_error("computeLossBatch: GPU encoder is NULL after getGpuEncoder()");
 	}
 
-	const size_t batch_size = prep.batch_size;
-	const size_t seq_len = prep.max_seq_len;
-	const size_t total_tokens = batch_size * seq_len;
+	const size_t batch_size = static_cast<size_t>(payload.batch_size);
+	const size_t seq_len = static_cast<size_t>(payload.max_seq_len);
+	const size_t total_tokens = static_cast<size_t>(payload.total_tokens);
+	const int valid_tokens = payload.valid_tokens;
+
 	const size_t logit_limit = training_state_.max_logit_tokens > 0
 		? training_state_.max_logit_tokens
 		: training_state_.max_cached_tokens;
 	if (total_tokens > logit_limit) {
-		fprintf(stderr,
-		        "[ComputeLossBatch] FATAL: total_tokens=%zu exceeds logit buffer capacity=%zu\n",
-		        total_tokens,
-		        logit_limit);
-		throw std::runtime_error("computeLossBatch: token count exceeds logit buffer capacity");
+		throw std::runtime_error(
+			"computeLossBatch: total_tokens=" + std::to_string(total_tokens) +
+			" exceeds logit buffer capacity=" + std::to_string(logit_limit));
 	}
 
-	// PRE-VALIDATE: Calculate valid_tokens BEFORE forward pass (CPU data only)
-	const int valid_tokens = std::accumulate(
-		prep.valid_target_counts.begin(),
-		prep.valid_target_counts.end(),
-		0);
-	
-	if (valid_tokens <= 0) {
-		std::cerr << "[ComputeLossBatch] FATAL: valid_tokens=" << valid_tokens 
-		          << " (must be > 0 before forward pass)" << std::endl << std::flush;
-		orderLog("computeLossBatch.valid_tokens_fail",
-			batch_size, seq_len, total_tokens, valid_tokens);
-		throw std::runtime_error("computeLossBatch: valid_tokens <= 0");
-	}
-
-	// Copy input/target data to GPU
+	// ═══════════════════════════════════════════════════════════════════════════
+	// GPU COPIES: Transfer padded data from payload to GPU tensors
+	// ═══════════════════════════════════════════════════════════════════════════
 	auto copy_start = std::chrono::high_resolution_clock::now();
 	orderLog("computeLossBatch.copy_inputs",
 		batch_size, seq_len, total_tokens, 0);
-	// Rule 20: Access Tensor data via .data and cast for int* storage
+
+	cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
+
+	// Token IDs
 	int* cached_token_ids_ptr = reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data);
-	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
-		fprintf(stderr, "[GPU_COPY] Copying token_ids: dst=%p src=%p size=%zu bytes\n",
-		        static_cast<void*>(cached_token_ids_ptr),
-		        prep.padded_input_ids.data(),
-		        total_tokens * sizeof(int));
+	if (!cached_token_ids_ptr) {
+		throw std::runtime_error("computeLossBatch: cached_token_ids_tensor.data is NULL");
 	}
 	CUDA_CHECK(cudaMemcpyAsync(
 		cached_token_ids_ptr,
-		prep.padded_input_ids.data(),
+		payload.input_ids.data(),
 		total_tokens * sizeof(int),
-		cudaMemcpyHostToDevice,
-		training_state_.stream_ctrl.getPrimaryStream()));
-	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
-		fprintf(stderr, "[GPU_COPY] token_ids copy initiated\n");
-	}
+		cudaMemcpyHostToDevice, stream));
 
-	orderLog("computeLossBatch.copy_targets",
-		batch_size, seq_len, total_tokens, 0);
-	// Rule 20: Access Tensor data via .data and cast for int* storage
+	// Targets
 	int* cached_targets_ptr = reinterpret_cast<int*>(training_state_.cached_targets_tensor.data);
-	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
-		fprintf(stderr, "[GPU_COPY] Copying targets: dst=%p src=%p size=%zu bytes\n",
-		        static_cast<void*>(cached_targets_ptr),
-		        prep.padded_target_ids.data(),
-		        total_tokens * sizeof(int));
+	if (!cached_targets_ptr) {
+		throw std::runtime_error("computeLossBatch: cached_targets_tensor.data is NULL");
 	}
 	CUDA_CHECK(cudaMemcpyAsync(
 		cached_targets_ptr,
-		prep.padded_target_ids.data(),
+		payload.target_ids.data(),
 		total_tokens * sizeof(int),
-		cudaMemcpyHostToDevice,
-		training_state_.stream_ctrl.getPrimaryStream()));
-	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
-		fprintf(stderr, "[GPU_COPY] targets copy initiated\n");
-	}
+		cudaMemcpyHostToDevice, stream));
 
-	orderLog("computeLossBatch.copy_numeric",
-		batch_size, seq_len, total_tokens, 0);
-	// Rule 20: Access Tensor data via .data
+	// Numeric values
 	float* cached_numeric_values_ptr = training_state_.cached_token_numeric_values.data;
-	float* cached_numeric_mask_ptr = training_state_.cached_token_numeric_mask.data;  // stored as float
-	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
-		fprintf(stderr, "[GPU_COPY] Checking numeric buffers: values=%p mask=%p\n",
-		        static_cast<void*>(cached_numeric_values_ptr),
-		        static_cast<void*>(cached_numeric_mask_ptr));
-	}
-	if (!cached_numeric_values_ptr || !cached_numeric_mask_ptr) {
-		throw std::runtime_error("computeLossBatch: numeric side-channel buffers not initialized");
-	}
-	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
-		fprintf(stderr, "[GPU_COPY] Copying numeric_values: dst=%p src=%p size=%zu bytes\n",
-		        static_cast<void*>(cached_numeric_values_ptr),
-		        prep.padded_numeric_values.data(),
-		        total_tokens * sizeof(float));
+	if (!cached_numeric_values_ptr) {
+		throw std::runtime_error("computeLossBatch: cached_token_numeric_values.data is NULL");
 	}
 	CUDA_CHECK(cudaMemcpyAsync(
 		cached_numeric_values_ptr,
-		prep.padded_numeric_values.data(),
+		payload.numeric_values.data(),
 		total_tokens * sizeof(float),
-		cudaMemcpyHostToDevice,
-		training_state_.stream_ctrl.getPrimaryStream()));
-	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
-		fprintf(stderr, "[GPU_COPY] numeric_values copy initiated\n");
+		cudaMemcpyHostToDevice, stream));
+
+	// Numeric mask (uint8_t stored in float Tensor — cast needed)
+	float* cached_numeric_mask_ptr = training_state_.cached_token_numeric_mask.data;
+	if (!cached_numeric_mask_ptr) {
+		throw std::runtime_error("computeLossBatch: cached_token_numeric_mask.data is NULL");
 	}
-	
-	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
-		fprintf(stderr, "[GPU_COPY] Copying numeric_mask: dst=%p src=%p size=%zu bytes\n",
-		        static_cast<void*>(cached_numeric_mask_ptr),
-		        prep.padded_numeric_mask.data(),
-		        total_tokens * sizeof(uint8_t));
-	}
-	// Note: numeric mask stored as float Tensor but source is uint8_t - need to convert or store differently
-	// For now, cast the float pointer to uint8_t* (Tensor memory is large enough)
 	CUDA_CHECK(cudaMemcpyAsync(
 		reinterpret_cast<uint8_t*>(cached_numeric_mask_ptr),
-		prep.padded_numeric_mask.data(),
+		payload.numeric_mask.data(),
 		total_tokens * sizeof(uint8_t),
-		cudaMemcpyHostToDevice,
-		training_state_.stream_ctrl.getPrimaryStream()));
-	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
-		fprintf(stderr, "[GPU_COPY] numeric_mask copy initiated\n");
-	}
+		cudaMemcpyHostToDevice, stream));
 
-	// GRMT v4: copy text features
-	constexpr int kTextFeatureDim = 16;  // Must match GRIM::Tokenizer::kTextFeatureDim
+	// Text features (uint16_t stored in float Tensor — cast needed)
+	constexpr int kTextFeatureDim = 16;
 	float* cached_text_features_ptr = training_state_.cached_token_text_features.data;
-	float* cached_text_mask_ptr = training_state_.cached_token_text_mask.data;  // stored as float
-	if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
-		fprintf(stderr, "[GPU_COPY] Checking text feature buffers: features=%p mask=%p\n",
-		        static_cast<void*>(cached_text_features_ptr),
-		        static_cast<void*>(cached_text_mask_ptr));
-	}
+	float* cached_text_mask_ptr = training_state_.cached_token_text_mask.data;
 	if (cached_text_features_ptr && cached_text_mask_ptr) {
-		if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
-			fprintf(stderr, "[GPU_COPY] Copying text_features: dst=%p src=%p size=%zu bytes\n",
-			        static_cast<void*>(cached_text_features_ptr),
-			        prep.padded_text_features.data(),
-			        total_tokens * kTextFeatureDim * sizeof(uint16_t));
-		}
-		// Note: text features are uint16_t, stored in float Tensor - cast needed
 		CUDA_CHECK(cudaMemcpyAsync(
 			reinterpret_cast<uint16_t*>(cached_text_features_ptr),
-			prep.padded_text_features.data(),
+			payload.text_features.data(),
 			total_tokens * kTextFeatureDim * sizeof(uint16_t),
-			cudaMemcpyHostToDevice,
-			training_state_.stream_ctrl.getPrimaryStream()));
-		if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
-			fprintf(stderr, "[GPU_COPY] text_features copy initiated\n");
-		}
-		
-		if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
-			fprintf(stderr, "[GPU_COPY] Copying text_mask: dst=%p src=%p size=%zu bytes\n",
-			        static_cast<void*>(cached_text_mask_ptr),
-			        prep.padded_text_mask.data(),
-			        total_tokens * sizeof(uint8_t));
-		}
+			cudaMemcpyHostToDevice, stream));
 		CUDA_CHECK(cudaMemcpyAsync(
 			reinterpret_cast<uint8_t*>(cached_text_mask_ptr),
-			prep.padded_text_mask.data(),
+			payload.text_mask.data(),
 			total_tokens * sizeof(uint8_t),
-			cudaMemcpyHostToDevice,
-			training_state_.stream_ctrl.getPrimaryStream()));
-		if constexpr (VerboseLogging::ENABLE_GPU_COPY_LOGS) {
-			fprintf(stderr, "[GPU_COPY] text_mask copy initiated\n");
-		}
+			cudaMemcpyHostToDevice, stream));
 	}
+
 	auto copy_end = std::chrono::high_resolution_clock::now();
 	auto copy_ms = std::chrono::duration<double, std::milli>(copy_end - copy_start).count();
 	if constexpr (VerboseLogging::ENABLE_VOCAB_TIMING_LOGS) {
 		fprintf(stderr, "[VOCAB_TIMING] GPU copies complete: %.2f ms\n", copy_ms);
 	}
 
+	// Store dimensions in TrainingState for downstream consumers
 	training_state_.cached_batch_size = static_cast<int>(batch_size);
 	training_state_.cached_seq_len = static_cast<int>(seq_len);
 	training_state_.cached_num_layers = cfg.num_layers;
@@ -549,64 +189,37 @@ float LanguageModel::computeLossBatch(
 		batch_size, seq_len, total_tokens, 0);
 
 	// ═══════════════════════════════════════════════════════════════════════════
-	// Issue #47 FIX: USE FULL AUTOGRAD FORWARD PASS
+	// AUTOGRAD FORWARD PASS
 	// ═══════════════════════════════════════════════════════════════════════════
-	// The legacy Forward::executeForward() does NOT build the computation graph!
-	// This caused loss.backward() to only propagate through the loss computation,
-	// NOT through the entire model (encoder layers, embeddings, etc.).
-	// 
-	// Now we use Autograd::executeAutogradForward() which:
-	//   1. Builds computation graph via grad_fn nodes at each operation
-	//   2. Stores intermediate Tensors (not just raw pointers) so graph stays alive
-	//   3. Returns logits Tensor with full grad_fn chain back to embeddings
-	// ═══════════════════════════════════════════════════════════════════════════
-	
 	orderLog("computeLossBatch.autograd_ctx",
 		batch_size, seq_len, total_tokens, 0);
 	
-	// Get encoder for autograd forward
 	GPUGrimEncoder* autograd_encoder = gpu_encoder;
-	
-	// Get ScratchBlock layer (optional - nullptr if not enabled)
 	ScratchBlockLayer* scratch_block = getScratchBlockLayer();
 	
-	// NOTE: linkEncoderWeightsToTrainingState was removed because TrainingState.encoder_layers
-	// is not populated in the current architecture. The autograd forward uses the encoder's
-	// existing weights directly. Gradients will be written to Tensor.grad fields and copied
-	// to the optimizer's buffers after backward.
+	static uint64_t s_autograd_forward_step = 0;
+	const uint64_t autograd_forward_step = s_autograd_forward_step++;
 	
-	// Initialize autograd context
-	cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
-	
-	// Issue #47: Store autograd context in training_state_ so it persists for backward()
-	// The context contains intermediate Tensors (encoder_layer_outputs, etc.) that keep
-	// the grad_fn chain alive. Without persisting, backward() would have dangling pointers.
-	training_state_.autograd_ctx = std::make_unique<GRIM::Autograd::AutogradContext>(
-		GRIM::Autograd::initAutogradContext(
-			&cfg,
-			&training_state_,
-			autograd_encoder,
-			scratch_block,
-			training_state_.cublas_handle,
-			stream,
-			static_cast<int>(batch_size),
-			static_cast<int>(seq_len),
-			1.0f,  // grad_scale (will be applied later in backward)
-			0      // step (not used in forward)
-		)
+	GRIM::Autograd::AutogradContext autograd_ctx = GRIM::Autograd::initAutogradContext(
+		&cfg,
+		&training_state_,
+		autograd_encoder,
+		scratch_block,
+		training_state_.cublas_handle,
+		stream,
+		static_cast<int>(batch_size),
+		static_cast<int>(seq_len),
+		1.0f,
+		autograd_forward_step,
+		true
 	);
+	autograd_ctx.validate("computeLossBatch");
 	
-	if (!training_state_.autograd_ctx || !training_state_.autograd_ctx->isValid()) {
-		fprintf(stderr, "[ComputeLossBatch] FATAL: Failed to init autograd context\n");
-		throw std::runtime_error("computeLossBatch: autograd context init failed");
-	}
-	
-	// Set ScratchBlock input buffers from TrainingState (populated by prepareLossBatchInputs)
-	// Rule 20: Access Tensor data via .data with proper cast for non-float types
-	training_state_.autograd_ctx->token_numeric_values = training_state_.cached_token_numeric_values.data;
-	training_state_.autograd_ctx->token_numeric_mask = reinterpret_cast<const uint8_t*>(training_state_.cached_token_numeric_mask.data);
-	training_state_.autograd_ctx->token_text_features = reinterpret_cast<const uint16_t*>(training_state_.cached_token_text_features.data);
-	training_state_.autograd_ctx->token_text_mask = reinterpret_cast<const uint8_t*>(training_state_.cached_token_text_mask.data);
+	// Set ScratchBlock input buffers (already on GPU from copies above)
+	autograd_ctx.token_numeric_values = training_state_.cached_token_numeric_values.data;
+	autograd_ctx.token_numeric_mask = reinterpret_cast<const uint8_t*>(training_state_.cached_token_numeric_mask.data);
+	autograd_ctx.token_text_features = reinterpret_cast<const uint16_t*>(training_state_.cached_token_text_features.data);
+	autograd_ctx.token_text_mask = reinterpret_cast<const uint8_t*>(training_state_.cached_token_text_mask.data);
 
 	orderLog("computeLossBatch.forward_start",
 		batch_size, seq_len, total_tokens, 0);
@@ -616,16 +229,16 @@ float LanguageModel::computeLossBatch(
 		        batch_size, seq_len, cfg.vocab_size);
 	}
 	auto fwd_start = std::chrono::high_resolution_clock::now();
-	
+
 	// Execute autograd forward (builds computation graph)
-	GRIM::Autograd::ForwardResult fwd_result = GRIM::Autograd::executeAutogradForward(*training_state_.autograd_ctx);
+	GRIM::Autograd::ForwardResult fwd_result = GRIM::Autograd::executeAutogradForward(autograd_ctx);
 
 	auto fwd_end = std::chrono::high_resolution_clock::now();
 	auto fwd_ms = std::chrono::duration<double, std::milli>(fwd_end - fwd_start).count();
 	if constexpr (VerboseLogging::ENABLE_VOCAB_TIMING_LOGS) {
 		fprintf(stderr, "[VOCAB_TIMING] AUTOGRAD forward pass complete: %.2f ms\n", fwd_ms);
 	}
-	
+
 	if (!fwd_result.success) {
 		fprintf(stderr, "[ComputeLossBatch] FATAL: autograd forward failed: %s\n",
 		        fwd_result.error_message.c_str());
@@ -856,30 +469,18 @@ float LanguageModel::computeLossBatch(
 	// 'stream' already defined above when setting up autograd context
 	
 	// ═══════════════════════════════════════════════════════════════════════════
-	// Issue #47: Use the logits_tensor from autograd forward pass
-	// The autograd_ctx now contains logits_tensor with full grad_fn chain back to embeddings
-	// We set up training_state_.logits_tensor to reference the same data and grad_fn
+	// Autograd intermediates now stored in training_state_.autograd_intermediates
+	// The logits_tensor there has the full grad_fn chain back to embeddings
 	// ═══════════════════════════════════════════════════════════════════════════
 	
-	// Setup training_state_.logits_tensor to reference the autograd forward output
-	// The data is in cached_logits (autograd forward copies there for compatibility)
-	training_state_.logits_tensor.data = training_state_.cached_logits_tensor.data;
-	training_state_.logits_tensor.shape = training_state_.autograd_ctx->logits_tensor.shape;
-	training_state_.logits_tensor.requires_grad = true;
-	training_state_.logits_tensor.is_leaf = false;
-	training_state_.logits_tensor.stream = stream;
-	training_state_.logits_tensor.owns_data = false;  // Memory owned by training_state_.cached_logits
-	
-	// CRITICAL Issue #47: Link the grad_fn from autograd forward
-	// This is what makes backward() propagate through the entire model!
-	// NOTE: We borrow the grad_fn, the autograd_ctx owns it
-	training_state_.logits_tensor.grad_fn = training_state_.autograd_ctx->logits_tensor.grad_fn;
+	// Intermediates reference (owned by training_state_)
+	auto& intermediates = training_state_.autograd_intermediates;
 	
 	// Setup gradient buffer for logits (reuse pre-allocated buffer)
 	if (!training_state_.grad_logits_tensor.data) {
 		throw std::runtime_error("[ComputeLossBatch] grad_logits_tensor.data not allocated!");
 	}
-	training_state_.logits_tensor.set_grad_from_buffer(
+	intermediates.logits_tensor.set_grad_from_buffer(
 		training_state_.grad_logits_tensor.data
 	);
 	
@@ -887,9 +488,14 @@ float LanguageModel::computeLossBatch(
 	// Build autograd LossConfig from the full LossConfig
 	autograd::LossConfig ag_loss_config;
 	const auto& full_loss_cfg = loss_config;
+	// Issue #135 FIX: MUST set _enabled booleans! Previously only set the values
+	// but never the enable flags, so features could NEVER activate via config.
+	ag_loss_config.focal_enabled = full_loss_cfg.focal.enabled;
 	ag_loss_config.focal_alpha = full_loss_cfg.focal.enabled ? full_loss_cfg.focal.alpha : 1.0f;
 	ag_loss_config.focal_gamma = full_loss_cfg.focal.enabled ? full_loss_cfg.focal.gamma : 0.0f;
+	ag_loss_config.smoothing_enabled = full_loss_cfg.label_smoothing.enabled;
 	ag_loss_config.smoothing_epsilon = full_loss_cfg.label_smoothing.enabled ? full_loss_cfg.label_smoothing.epsilon : 0.0f;
+	ag_loss_config.entropy_reg_enabled = full_loss_cfg.entropy_reg.enabled;
 	ag_loss_config.entropy_reg_lambda = full_loss_cfg.entropy_reg.enabled ? full_loss_cfg.entropy_reg.lambda : 0.0f;
 	
 	fprintf(stderr, "[ComputeLossBatch] STEP-A: calling autograd::unified_loss (total_tokens=%zu, vocab=%d)...\n",
@@ -900,10 +506,10 @@ float LanguageModel::computeLossBatch(
 	// unified_loss() allocates ~4 GB (log_probs + grad_buffer + LogSoftmaxGradFn saved data).
 	// Without releasing first, both old and new buffers coexist in GPU memory during
 	// unified_loss() execution = ~8 GB for loss alone on a 12 GB GPU → OOM at batch ~22.
-	training_state_.loss_tensor.release();
+	intermediates.loss_tensor.release();
 	
-	training_state_.loss_tensor = autograd::unified_loss(
-		training_state_.logits_tensor,
+	intermediates.loss_tensor = autograd::unified_loss(
+		intermediates.logits_tensor,
 		reinterpret_cast<int*>(training_state_.cached_targets_tensor.data),
 		nullptr,  // valid_mask (nullptr = all valid, padding handled by target=-1)
 		static_cast<int>(total_tokens),
@@ -913,21 +519,21 @@ float LanguageModel::computeLossBatch(
 	);
 	
 	fprintf(stderr, "[ComputeLossBatch] STEP-B: unified_loss returned, loss_tensor.data=%p grad_fn=%p owns_data=%d\n",
-	        (void*)training_state_.loss_tensor.data,
-	        (void*)training_state_.loss_tensor.grad_fn.get(),
-	        (int)training_state_.loss_tensor.owns_data);
+	        (void*)intermediates.loss_tensor.data,
+	        (void*)intermediates.loss_tensor.grad_fn.get(),
+	        (int)intermediates.loss_tensor.owns_data);
 	fflush(stderr);
 	
 	// Read scalar loss value to host (needed for return value and diagnostics)
 	float autograd_loss = 0.0f;
-	if (training_state_.loss_tensor.data) {
-		cudaMemcpyAsync(&autograd_loss, training_state_.loss_tensor.data, sizeof(float), 
+	if (intermediates.loss_tensor.data) {
+		cudaMemcpyAsync(&autograd_loss, intermediates.loss_tensor.data, sizeof(float), 
 		                cudaMemcpyDeviceToHost, stream);
 		cudaStreamSynchronize(stream);
 	}
 	// Issue #62 DEBUG: Verify the loss value matches what unified_loss computed
 	fprintf(stderr, "[ComputeLossBatch] READ BACK: autograd_loss=%.6f from loss_tensor.data=%p\n",
-	        autograd_loss, (void*)training_state_.loss_tensor.data);
+	        autograd_loss, (void*)intermediates.loss_tensor.data);
 	fprintf(stderr, "[ComputeLossBatch] STEP-C: setting cached values...\n");
 	fflush(stderr);
 	training_state_.cached_loss_value = autograd_loss;
@@ -1053,7 +659,7 @@ float LanguageModel::computeLossBatch(
 		num_inputs.targets = reinterpret_cast<int*>(training_state_.cached_targets_tensor.data);
 		num_inputs.total_tokens = static_cast<int>(total_tokens);
 		num_inputs.seq_len = static_cast<int>(seq_len);
-		num_inputs.valid_text_tokens = static_cast<int>(valid_tokens);  // Issue #136: Compensation scaling
+		num_inputs.valid_text_tokens = static_cast<int>(valid_tokens);  // Issue #137: match text CE denominator
 		num_inputs.huber_delta = cfg.numeric_head_huber_delta;
 		num_inputs.log_scale = cfg.numeric_head_log_scale;
 		num_inputs.loss_weight = cfg.numeric_head_loss_weight;
@@ -1123,6 +729,7 @@ float LanguageModel::computeLossBatch(
 	
 	// Store for learned weighting backward pass
 	training_state_.cached_numeric_loss = numeric_loss_avg;
+	training_state_.cached_numeric_count = numeric_loss_count;  // Issue #137: store for weight grad normalization
 	
 	avg_loss = weight_text * autograd_loss + reg_text
 	         + weight_numeric * numeric_loss_avg + reg_numeric;

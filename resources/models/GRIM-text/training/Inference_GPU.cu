@@ -39,7 +39,8 @@ static Vector executeInferenceForward(
         1,          // batch_size = 1 for inference
         seq_len,
         1.0f,       // grad_scale (unused for inference)
-        0           // step (unused for inference)
+        0,          // step
+        false       // is_training (disable dropout)
     );
     
     // Copy token IDs to cached buffer - Rule 20: use Tensor .data accessor
@@ -241,7 +242,8 @@ Vector LanguageModel::forwardWithCache(const std::vector<int>& token_ids,
         1,          // batch_size
         seq_len,
         1.0f,       // grad_scale
-        0           // step
+        0,          // step
+        false       // is_training (disable dropout)
     );
     
     // Run autograd forward

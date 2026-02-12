@@ -1,0 +1,378 @@
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:78:
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:79:// Call this after LM head matmul backward to capture its contribution
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:80:void debugCaptureLMHeadGrad(float* grad_ptr, size_t size, cudaStream_t stream) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:81:    if (!g_debug_capture_enabled || !g_debug_lm_head_only_grad || !grad_ptr) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:82:    const size_t copy_size = (size < g_debug_grad_buffer_size ? size : g_debug_grad_buffer_size);
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:83:    cudaMemcpyAsync(g_debug_lm_head_only_grad, grad_ptr, copy_size * sizeof(float), 
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:84:                    cudaMemcpyDeviceToDevice, stream);
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:86:
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:87:// Call this after embedding backward to capture its contribution
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:88:void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:89:    if (!g_debug_capture_enabled || !g_debug_embedding_only_grad || !grad_ptr) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:90:    const size_t copy_size = (size < g_debug_grad_buffer_size ? size : g_debug_grad_buffer_size);
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:91:    cudaMemcpyAsync(g_debug_embedding_only_grad, grad_ptr, copy_size * sizeof(float), 
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:92:                    cudaMemcpyDeviceToDevice, stream);
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:479:    const int total_tokens = batch * seq;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:480:    const int D4 = head_dim >> 2;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:481:    
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:482:    if (token >= total_tokens || d4 >= D4) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:483:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:484:    const int b = token / seq;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:485:    const int s = token % seq;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:524:    int total_qkv_dim = q_dim + 2 * kv_dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:525:    int total = total_tokens * total_qkv_dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:526:    
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:527:    if (idx >= total) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:528:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:529:    int feature = idx % total_qkv_dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:530:    int token = idx / total_qkv_dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:574:    const int total_tokens = batch * seq;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:575:    const int D4 = head_dim >> 2;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:576:    
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:577:    if (token >= total_tokens || d4 >= D4) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:578:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:579:    const int b = token / seq;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:580:    const int s = token % seq;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:619:    int total_qkv_dim = q_dim + 2 * kv_dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:620:    int total = total_tokens * total_qkv_dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:621:    
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:622:    if (idx >= total) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:623:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:624:    int feature = idx % total_qkv_dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:625:    int token = idx / total_qkv_dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:736:    if (src_layout == dst_layout) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:737:        TC_CUDA_CHECK(cudaMemcpyAsync(dst.ptr, src.ptr, src.size_bytes(),
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:738:                                       cudaMemcpyDeviceToDevice, stream));
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:739:        return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:740:    }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:741:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:742:    // BSM <-> BHSD requires the destination to provide 4D shape info
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:931:void debug_print_stats(const TensorView& tensor, const char* label, cudaStream_t stream) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:932:    if (!tensor.is_valid()) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:933:        printf("[TensorContract] %s: INVALID TENSOR\n", label);
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:934:        return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:935:    }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:936:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:937:    // Sample a subset for performance (CPU-side for simplicity)
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1018:// counter-based PRNG with excellent statistical properties used by PyTorch/TensorFlow.
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1019:__global__ void kernel_xavier_uniform(float* data, size_t count, float scale, uint64_t seed) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1020:    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1021:    if (idx >= count) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1022:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1023:    // Initialize Philox4_32_10 state - each thread gets unique sequence via idx
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1024:    curandStatePhilox4_32_10_t state;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1304:
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1305:void Tensor::ensure_grad() {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1306:    if (!requires_grad) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1307:        return;  // No gradient tracking needed
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1308:    }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1309:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1310:    if (grad_ != nullptr && grad_->data != nullptr) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1311:        return;  // Already allocated
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1312:    }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1313:
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1314:    // RULE 20: Stream must be valid. Tensor::zeros() rejects stream==0, so we
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1351:
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1352:void Tensor::zero_grad(cudaStream_t exec_stream) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1353:    if (!grad_ || !grad_->data) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1354:        return;  // Nothing to zero
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1355:    }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1356:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1357:    cudaStream_t s = exec_stream ? exec_stream : stream;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1362:
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1363:void Tensor::accumulate_grad(const float* incoming_grad, size_t count, float scale, cudaStream_t exec_stream) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1364:    if (!requires_grad) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1365:        return;  // Not tracking gradients
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1366:    }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1367:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1368:    // Ensure gradient buffer exists
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1555:    float eps
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1556:) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1557:    const int token_idx = blockIdx.x;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1558:    if (token_idx >= tokens) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1559:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1560:    extern __shared__ float shared[];
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1561:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1666:) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1667:    // Each block handles one token
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1668:    const int token_idx = blockIdx.x;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1669:    if (token_idx >= tokens) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1670:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1671:    extern __shared__ float shared[];
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1672:    float* s_warp_vals = shared;  // For warp reduction results
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1772:    float embedding_scale       // Scale factor (sqrt(d_model) for AIAYN-style)
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1773:) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1774:    const int token_idx = blockIdx.x;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1775:    if (token_idx >= tokens) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1776:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1777:    const int token_id = token_ids[token_idx];
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1778:    // RULE 20: Crash loud on OOB token ID — do NOT silently skip
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1799:    float embedding_scale       // Scale factor from forward (for chain rule)
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1800:) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1801:    const int token_idx = blockIdx.x;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1802:    if (token_idx >= tokens) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1803:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1804:    const int token_id = token_ids[token_idx];
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1805:    // RULE 20: Crash loud on OOB token ID — do NOT silently skip
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1834:    int d_model
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1835:) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1836:    const int vocab_idx = blockIdx.x;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1837:    if (vocab_idx >= vocab_size) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1838:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1839:    float* lm_row = g_lm + static_cast<size_t>(vocab_idx) * d_model;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1840:    const float* emb_row = g_emb + static_cast<size_t>(vocab_idx) * d_model;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1905:    int dim
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1906:) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1907:    const int token_idx = blockIdx.x;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1908:    if (token_idx >= tokens) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1909:
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1910:    const float* row = input  + static_cast<size_t>(token_idx) * dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1911:    float* out_row   = output + static_cast<size_t>(token_idx) * dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1991:    int dim
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1992:) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1993:    const int token_idx = blockIdx.x;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1994:    if (token_idx >= tokens) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1995:
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1996:    const float* dy    = grad_output + static_cast<size_t>(token_idx) * dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:1997:    const float* log_p = log_softmax + static_cast<size_t>(token_idx) * dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2101:    int num_rows
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2102:) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2103:    const int row_idx = blockIdx.x;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2104:    if (row_idx >= num_rows) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2105:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2106:    const float* in_row = input + static_cast<size_t>(row_idx) * row_dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2107:    float* out_row = output + static_cast<size_t>(row_idx) * row_dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2157:    int num_rows                       // total_tokens (e.g., 3500)
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2158:) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2159:    const int col_idx = blockIdx.x;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2160:    if (col_idx >= num_cols) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2161:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2162:    // Compute column mean via parallel reduction across rows
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2163:    __shared__ float s_sum;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2278:    __host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2279:        if (applied) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2280:            AG_TRACE("[LayerScaleGradFn] apply() SKIPPED (already applied)\n");
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2281:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2282:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2283:        applied = true;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2284:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2366:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2367:    __host__ void capture_input(Tensor& input, int dim, int rows, cudaStream_t stream) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2368:        input_requires_grad = input.requires_grad;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2369:        if (!input.requires_grad) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2370:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2371:        input_shape = input.shape;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2372:        element_count = input.numel();
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2393:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2394:    __host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2395:        if (applied || !input_requires_grad || !input_grad || !grad_output.data) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2396:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2397:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2398:        applied = true;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2399:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2448:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2449:    __host__ void capture_input(Tensor& input, int cols, int rows, cudaStream_t stream) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2450:        input_requires_grad = input.requires_grad;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2451:        if (!input.requires_grad) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2452:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2453:        input_shape = input.shape;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2454:        element_count = input.numel();
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2475:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2476:    __host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2477:        if (applied || !input_requires_grad || !input_grad || !grad_output.data) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2478:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2479:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2480:        applied = true;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2481:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2617:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2618:        // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2619:        if (applied) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2620:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2621:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2622:        applied = true;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2623:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2641:#endif
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2642:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2643:        if (!grad_output.data) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2644:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2645:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2646:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2647:        const size_t count = grad_output.numel();
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2715:    const int feature_idx = blockIdx.x;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2716:    const int tid = threadIdx.x;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2717:
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2718:    if (feature_idx >= features) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2719:
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2720:    float local_sum = 0.0f;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2721:    for (int t = tid; t < total_tokens; t += blockDim.x) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2843:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2844:        // ISSUE #49: Prevent infinite loops
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2845:        if (applied) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2846:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2847:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2848:        applied = true;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2849:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2869:#endif
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2870:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2871:        if (!grad_output.data) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2872:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2873:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2874:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:2875:        const size_t count = grad_output.numel();
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3008:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3009:        // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3010:        if (applied) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3011:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3012:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3013:        applied = true;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3014:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3030:#endif
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3031:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3032:        if (!input_requires_grad) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3033:            return;  // Nothing to do
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3034:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3035:        if (!input_grad) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3036:            throw std::runtime_error("GeluGradFn::apply: input_grad is NULL - capture_input() must be called first");
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3184:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3185:        // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3186:        if (applied) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3187:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3188:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3189:        applied = true;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3190:
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3366:        // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3367:        if (applied) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3368:            AG_TRACE("[EmbeddingGradFn::apply] SKIP - already applied\n");
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3369:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3370:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3371:        applied = true;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3372:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3373:        if (!weight_requires_grad || !token_ids) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3374:            AG_TRACE("[EmbeddingGradFn::apply] SKIP - no grad needed\n");
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3375:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3376:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3377:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3378:        if (!weight_grad) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3560:    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3561:        setCurrentGradFnOp("log_softmax", this);
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3562:
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3563:        if (applied) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3564:        applied = true;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3565:
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3566:        if (!input_requires_grad || !saved_log_softmax) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3567:        if (!input_grad) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3568:            throw std::runtime_error(
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3569:                "LogSoftmaxGradFn::apply: input_grad is NULL — "
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3651:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3652:        // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3653:        if (applied) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3654:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3655:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3656:        applied = true;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3657:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3658:        if (!input_requires_grad || !saved_mask) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3659:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3660:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3661:        if (!input_grad) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3662:            throw std::runtime_error("DropoutGradFn::apply: input_grad is NULL - capture_input() must be called first");
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3763:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3764:        // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3765:        if (applied) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3766:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3767:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3768:        applied = true;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:3769:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4586:    int total_tokens
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4587:) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4588:    const int token_idx = blockIdx.x;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4589:    if (token_idx >= total_tokens) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4590:
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4591:    float* row = data + static_cast<size_t>(token_idx) * d_model;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4592:
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4626:    if (!grad_a || total_tokens <= 0 || d_model <= 0) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4627:        fprintf(stderr, "[applyLmHeadGradCorrections] SKIP - invalid args\n");
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4628:        fflush(stderr);
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4629:        return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4630:    }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4631:    if (!g_lm_head_recenter_gradients) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4632:        fprintf(stderr, "[applyLmHeadGradCorrections] SKIP - recentering disabled\n");
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4633:        fflush(stderr);
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4634:        return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4635:    }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4636:
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4637:    fprintf(stderr, "[applyLmHeadGradCorrections] Launching centerGradientsKernel\n");
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4852:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4853:        // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4854:        if (applied) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4855:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4856:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4857:        applied = true;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:4858:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5382:    // Each thread handles one element in the output [B, num_kv_heads, S, D]
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5383:    const size_t total = static_cast<size_t>(batch) * num_kv_heads * seq_len * head_dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5384:    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5385:    if (idx >= total) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5386:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5387:    // Decode destination BHSD index where H = num_kv_heads
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5388:    const int d = idx % head_dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5574:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5575:        // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5576:        if (applied) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5577:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5578:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5579:        applied = true;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5580:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5581:        if (!saved_q_bf16 || !saved_k_bf16 || !saved_v_bf16 || !saved_out_bf16) {
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5582:            return;  // No saved state
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5583:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5584:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:5585:        // ISSUE #76: Detect max_seq_len boundary - assume typical max_seq_len values
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6005:) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6006:    const int total = batch_size * num_heads * seq_len * head_dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6007:    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6008:    if (idx >= total) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6009:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6010:    // Decode BHSD position
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6011:    const int d = idx % head_dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6057:    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6058:        setCurrentGradFnOp("reshape_bhsd_to_flat", this);
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6059:        
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6060:        if (applied) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6061:        applied = true;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6062:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6063:        // DIAGNOSTIC: Log incoming gradient to Reshape backward
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6086:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6087:        if (!input_requires_grad) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6088:            fprintf(stderr, "[ReshapeBHSDtoFlat] input doesn't require grad, skipping\n");
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6089:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6090:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6091:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6092:        // Reshape gradient from flat [tokens, d_model] to BHSD [B, H, S, D]
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6224:) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6225:    const int token = blockIdx.x;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6226:    const int col = threadIdx.x;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6227:    if (token >= tokens) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6228:    
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6229:    const int total_qkv_dim = d_model + 2 * kv_dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6230:    const float* row = qkv + token * total_qkv_dim;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6257:) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6258:    const int token = blockIdx.x;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6259:    const int col = threadIdx.x;
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6260:    if (token >= batch * seq) return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6261:
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6262:    const int b = token / seq;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6263:    const int s = token % seq;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6346:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6347:        if (applied) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6348:            fprintf(stderr, "[SplitQKV-%s] SKIP: already applied\n", type_str);
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6349:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6350:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6351:        applied = true;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6352:        
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6582:    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6583:        if (!shared) {
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6584:            fprintf(stderr, "[RoPEGradFn] ERROR: shared state is null!\n");
+> D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6585:            return;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6586:        }
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6587:        auto& state = *shared;
+  D:\G.R.I.M\resources\models\GRIM-text\Shared\TensorContract\TensorContract_GPU.cu:6588:        

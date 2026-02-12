@@ -24,10 +24,12 @@
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/Gradients/GradStatsCollector.hpp"
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
+#include "../../Shared/TrainingState/TrainingTensors.hpp"
 #include "../../Shared/EquationLogging/EquationLogging.hpp"
 #include "../../Layers/FlashAttention/AttentionDiagnostics.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
+#include "../../Shared/Batching/BatchPayload.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -235,7 +237,7 @@ bool shouldLogAtomStats(const TrainingContext& ctx, int batch_idx) {
 // Helper to sample weight state for optimizer diagnostics
 // NOTE: sync_for_host=false skips sampling to avoid extra syncs.
 // Set sync_for_host=true ONLY when accurate values are critical (e.g., debugging NaNs)
-constexpr int kWeightSampleSize = 5;
+constexpr int kWeightSampleSize = 10;
 
 struct WeightSample {
     bool valid = false;
@@ -245,7 +247,7 @@ struct WeightSample {
 
 WeightSample sampleWeightStats(const GRIM::TrainingState& ts, bool sync_for_host = false) {
     WeightSample sample{};
-    if (!ts.lm_head_weights.data) {
+    if (!ts.tensors_->lm_head_weights.data) {
         return sample;
     }
 
@@ -257,7 +259,7 @@ WeightSample sampleWeightStats(const GRIM::TrainingState& ts, bool sync_for_host
     cudaDeviceSynchronize();
 
     cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
-    cudaMemcpyAsync(sample.values, ts.lm_head_weights.data,
+    cudaMemcpyAsync(sample.values, ts.tensors_->lm_head_weights.data,
                     kWeightSampleSize * sizeof(float),
                     cudaMemcpyDeviceToHost, stream);
     // Need a sync point to read the values, but only for this small copy
@@ -278,7 +280,7 @@ std::string formatWeightSample(const WeightSample& sample) {
     }
     
     std::ostringstream oss;
-    oss << "lm_w[0:5]=[";
+    oss << "lm_w[0:10]=[";
     for (int i = 0; i < kWeightSampleSize; ++i) {
         oss << std::fixed << std::setprecision(6) << sample.values[i];
         if (i + 1 < kWeightSampleSize) oss << ",";
@@ -552,15 +554,15 @@ Token277Diagnostic computeToken277Diagnostic(
     
     // Copy gradient row (if embedding grad buffer is aliased to lm_head grad buffer for tied weights)
     // The gradient buffer contains BOTH embedding backward + LM head backward contributions
-    const float* emb_grads_ptr = ts.embedding_weights.grad_data();
+    const float* emb_grads_ptr = ts.tensors_->embedding_weights.grad_data();
     if (emb_grads_ptr) {
         cudaMemcpyAsync(grad_row.data(), emb_grads_ptr + row_offset,
                         row_bytes, cudaMemcpyDeviceToHost, stream);
     }
     
     // Copy weight row from actual embeddings
-    if (ts.lm_head_weights.data) {
-        cudaMemcpyAsync(weight_row.data(), ts.lm_head_weights.data + row_offset,
+    if (ts.tensors_->lm_head_weights.data) {
+        cudaMemcpyAsync(weight_row.data(), ts.tensors_->lm_head_weights.data + row_offset,
                         row_bytes, cudaMemcpyDeviceToHost, stream);
     }
     
@@ -644,23 +646,21 @@ struct HiddenState277Analysis {
     float hidden_std = 0.0f;          // Std dev of hidden values
     
     // Split by target type
-    float hidden_277_mean = 0.0f;     // Mean hidden at positions targeting 277
     float hidden_277_norm = 0.0f;     // Mean norm at positions targeting 277
-    float hidden_other_mean = 0.0f;   // Mean hidden at positions targeting other
     float hidden_other_norm = 0.0f;   // Mean norm at positions targeting other
     
     // Gradient logits for token 277
-    // NOTE: With entropy regularization (lambda > 0), the gradient formula is:
-    //   grad = (p - q) + lambda * p * (log(p) + 1)
-    // The entropy term is NEGATIVE when p < e^(-1) ≈ 0.368 (i.e., most tokens!)
-    // For small p, the entropy term dominates, making the total gradient NEGATIVE.
-    // This is EXPECTED behavior - entropy reg pushes small probs DOWN to encourage uniformity.
     float grad_277_at_277_targets = 0.0f;    // Sum of grad_logits[t,277] where target=277 (negative: p_t - 1)
-    float grad_277_at_other_targets = 0.0f;  // Sum of grad_logits[t,277] where target≠277 (can be negative with entropy reg!)
+    float grad_277_at_other_targets = 0.0f;  // Sum of grad_logits[t,277] where target≠277 (positive for pure CE)
     
-    // The key: dot product contributions to grad_W[277]
-    float contribution_from_277_targets = 0.0f;   // hidden @ grad when target=277
-    float contribution_from_other_targets = 0.0f; // hidden @ grad when target≠277
+    // Issue #137: Per-dimension grad_W[277] decomposition by target type
+    // grad_W[277,i] = Σ_{t:tgt=277} h[t,i]*g[t] + Σ_{t:tgt≠277} h[t,i]*g[t]
+    // Unlike the old scalar hidden_sum reduction, this captures the full 768-dim gradient.
+    float grad_w277_norm_from_277 = 0.0f;    // ||Σ_{t:tgt=277} h[t]*g[t]||
+    float grad_w277_norm_from_other = 0.0f;  // ||Σ_{t:tgt≠277} h[t]*g[t]||
+    float grad_w277_sum_from_277 = 0.0f;     // Σ_i (Σ_{t:tgt=277} h[t,i]*g[t])
+    float grad_w277_sum_from_other = 0.0f;   // Σ_i (Σ_{t:tgt≠277} h[t,i]*g[t])
+    float grad_w277_cosine = 0.0f;           // cos(grad_from_277, grad_from_other)
     
     // Counts
     int count_277_targets = 0;
@@ -714,13 +714,9 @@ HiddenState277Analysis computeHiddenState277Analysis(
                     grad_logits_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
     cudaStreamSynchronize(stream);
     
-    // Also get W[277] for contribution analysis
-    std::vector<float> w277(d_model);
-    if (ts.lm_head_weights.data) {
-        cudaMemcpyAsync(w277.data(), ts.lm_head_weights.data + static_cast<size_t>(kToken277) * d_model,
-                        d_model * sizeof(float), cudaMemcpyDeviceToHost, stream);
-        cudaStreamSynchronize(stream);
-    }
+    // Issue #137: Per-dimension accumulation of grad_W[277] split by target type
+    std::vector<double> grad_w277_from_277(d_model, 0.0);
+    std::vector<double> grad_w277_from_other(d_model, 0.0);
     
     // Analyze per-position
     double sum_hidden = 0.0, sum_hidden_sq = 0.0;
@@ -728,7 +724,6 @@ HiddenState277Analysis computeHiddenState277Analysis(
     double sum_hidden_277 = 0.0, sum_norm_277 = 0.0;
     double sum_hidden_other = 0.0, sum_norm_other = 0.0;
     double sum_grad_277_at_277 = 0.0, sum_grad_277_at_other = 0.0;
-    double contribution_277 = 0.0, contribution_other = 0.0;
     
     const int PAD_ID = 274;
     
@@ -752,27 +747,21 @@ HiddenState277Analysis computeHiddenState277Analysis(
         // Grad_logits[t, 277]
         const float grad_277_t = h_grad_logits[static_cast<size_t>(t) * vocab_size + kToken277];
         
-        // Contribution to grad_W[277] = hidden[t] · grad_277_t (scalar for the row sum)
-        // Full formula: grad_W[277,i] = Σ_t (hidden[t,i] * grad_logits[t,277])
-        // Sum contribution: Σ_i grad_W[277,i] = Σ_t (Σ_i hidden[t,i] * grad_277_t) = Σ_t (hidden_sum[t] * grad_277_t)
-        double hidden_sum_t = 0.0;
-        for (int i = 0; i < d_model; ++i) {
-            hidden_sum_t += hidden_t[i];
-        }
-        double contribution_t = hidden_sum_t * grad_277_t;
-        
         if (target == kToken277) {
             analysis.count_277_targets++;
-            sum_hidden_277 += hidden_sum_t;
             sum_norm_277 += norm;
             sum_grad_277_at_277 += grad_277_t;
-            contribution_277 += contribution_t;
+            // Accumulate per-dimension: grad_W[277,i] += h[t,i] * g[t,277]
+            for (int i = 0; i < d_model; ++i) {
+                grad_w277_from_277[i] += hidden_t[i] * grad_277_t;
+            }
         } else {
             analysis.count_other_targets++;
-            sum_hidden_other += hidden_sum_t;
             sum_norm_other += norm;
             sum_grad_277_at_other += grad_277_t;
-            contribution_other += contribution_t;
+            for (int i = 0; i < d_model; ++i) {
+                grad_w277_from_other[i] += hidden_t[i] * grad_277_t;
+            }
         }
     }
     
@@ -786,18 +775,31 @@ HiddenState277Analysis computeHiddenState277Analysis(
         sum_hidden_sq / (total_valid * d_model) - analysis.hidden_mean * analysis.hidden_mean));
     
     if (analysis.count_277_targets > 0) {
-        analysis.hidden_277_mean = static_cast<float>(sum_hidden_277 / (analysis.count_277_targets * d_model));
         analysis.hidden_277_norm = static_cast<float>(sum_norm_277 / analysis.count_277_targets);
     }
     if (analysis.count_other_targets > 0) {
-        analysis.hidden_other_mean = static_cast<float>(sum_hidden_other / (analysis.count_other_targets * d_model));
         analysis.hidden_other_norm = static_cast<float>(sum_norm_other / analysis.count_other_targets);
     }
     
     analysis.grad_277_at_277_targets = static_cast<float>(sum_grad_277_at_277);
     analysis.grad_277_at_other_targets = static_cast<float>(sum_grad_277_at_other);
-    analysis.contribution_from_277_targets = static_cast<float>(contribution_277);
-    analysis.contribution_from_other_targets = static_cast<float>(contribution_other);
+    
+    // Issue #137: Compute per-dimension gradient norms, sums, and cosine between the two sources
+    double norm_sq_277 = 0.0, norm_sq_other = 0.0, dot = 0.0;
+    double sum_277 = 0.0, sum_other = 0.0;
+    for (int i = 0; i < d_model; ++i) {
+        norm_sq_277 += grad_w277_from_277[i] * grad_w277_from_277[i];
+        norm_sq_other += grad_w277_from_other[i] * grad_w277_from_other[i];
+        dot += grad_w277_from_277[i] * grad_w277_from_other[i];
+        sum_277 += grad_w277_from_277[i];
+        sum_other += grad_w277_from_other[i];
+    }
+    analysis.grad_w277_norm_from_277 = static_cast<float>(std::sqrt(norm_sq_277));
+    analysis.grad_w277_norm_from_other = static_cast<float>(std::sqrt(norm_sq_other));
+    analysis.grad_w277_sum_from_277 = static_cast<float>(sum_277);
+    analysis.grad_w277_sum_from_other = static_cast<float>(sum_other);
+    const double denom = std::sqrt(norm_sq_277) * std::sqrt(norm_sq_other);
+    analysis.grad_w277_cosine = (denom > 1e-12) ? static_cast<float>(dot / denom) : 0.0f;
     
     return analysis;
 }
@@ -817,55 +819,28 @@ std::string formatHiddenState277Analysis(const HiddenState277Analysis& a, int ba
         << " std=" << a.hidden_std << "\n";
     
     // Breakdown by target type (Issue #37 root cause: hidden_sum × grad contribution)
-    oss << "  AT_277_TARGETS (n=" << a.count_277_targets << "): hidden_mean=" << a.hidden_277_mean
-        << " ||h||=" << a.hidden_277_norm << "\n";
-    oss << "  AT_OTHER_TARGETS (n=" << a.count_other_targets << "): hidden_mean=" << a.hidden_other_mean
-        << " ||h||=" << a.hidden_other_norm << "\n";
+    oss << "  AT_277_TARGETS (n=" << a.count_277_targets << "): ||h||=" << a.hidden_277_norm << "\n";
+    oss << "  AT_OTHER_TARGETS (n=" << a.count_other_targets << "): ||h||=" << a.hidden_other_norm << "\n";
     
-    // Gradient contribution analysis - THE KEY EQUATION
-    // NOTE: With entropy regularization, at_other_targets can be NEGATIVE for small p_277
-    // Formula: grad = (p - q) + lambda * p * (log(p) + 1)
-    // When p_277 < e^(-(1+1/lambda)), the entropy term dominates and grad becomes negative
+    // Gradient at column 277
     oss << "  GRAD_LOGITS[277]: at_277_targets=" << a.grad_277_at_277_targets 
         << " (p_t - 1, always negative), at_other_targets=" << a.grad_277_at_other_targets 
-        << " (p_v + entropy_term, may be negative for small p with entropy_reg)\n";
+        << " (p_v/N, always positive for pure CE)\n";
     
-    // Contribution decomposition (Issue #37: this reveals the sign flip bug)
-    float total_contribution = a.contribution_from_277_targets + a.contribution_from_other_targets;
-    oss << "  CONTRIBUTION TO Σ grad_W[277,i] = Σ_t (hidden_sum[t] × grad[t,277]):\n";
-    oss << "    from_277_targets: " << a.contribution_from_277_targets << " = Σ_{t:target=277} hidden_sum[t] × grad[t,277]\n";
-    oss << "    from_other_targets: " << a.contribution_from_other_targets << " = Σ_{t:target≠277} hidden_sum[t] × grad[t,277]\n";
-    oss << "    TOTAL: " << total_contribution << " (POSITIVE → W[277] INCREASES, NEGATIVE → W[277] DECREASES)\n";
-    
-    // Anomaly detection per Rule 21
-    // Issue #132 FIX: With row centering, contribution ≈ 0. Only flag if SIGNIFICANTLY positive (>0.01).
-    const float kContributionThreshold = 0.01f;
-    if (total_contribution > kContributionThreshold && a.grad_277_at_277_targets < 0) {
-        oss << "  [ANOMALY] WEIGHT_PARADOX_SOURCE: grad[277] at 277-targets is negative (model wants to DECREASE)";
-        oss << " but total contribution is POSITIVE (W[277] will INCREASE!)\n";
-        
-        // Issue #125: Diagnose the ACTUAL root cause based on the data
-        if (a.contribution_from_other_targets > std::abs(a.contribution_from_277_targets)) {
-            // Other targets dominate - this is the entropy regularization case
-            oss << "    ROOT_CAUSE: contribution_from_other_targets=" << a.contribution_from_other_targets 
-                << " dominates contribution_from_277_targets=" << a.contribution_from_277_targets << "\n";
-            if (a.grad_277_at_other_targets < 0) {
-                oss << "    ENTROPY_REG_EFFECT: grad_277_at_other=" << a.grad_277_at_other_targets 
-                    << " < 0 (entropy term dominates when p(277) < 0.368)\n";
-                oss << "    When hidden_sum[t] < 0 AND grad < 0: negative × negative = POSITIVE contribution\n";
-            } else {
-                oss << "    hidden_sum at other-target positions is positive, amplifying positive grad\n";
-            }
-        } else if (std::abs(a.hidden_mean) > 0.001f) {
-            // Non-zero hidden mean case (Issue #37 original root cause)
-            oss << "    ROOT_CAUSE: Non-zero hidden_mean=" << a.hidden_mean 
-                << " causes sign flip: negative_hidden × negative_grad = POSITIVE\n";
-        } else {
-            // Hidden_mean is near zero but individual positions have non-zero hidden_sum
-            oss << "    ROOT_CAUSE: Per-position hidden_sum[t] variance (hidden_mean=" << a.hidden_mean 
-                << " ≈ 0 but individual positions have |hidden_sum[t]| >> 0)\n";
-        }
-    }
+    // Issue #137: Per-dimension gradient decomposition
+    // grad_W[277] = grad_from_277_targets + grad_from_other_targets (each is a 768-dim vector)
+    // NOTE: sum across dimensions is always ~0 with row centering (by construction).
+    // The ||g|| norm is the meaningful metric here — it shows gradient MAGNITUDE per source.
+    // The actual gradient sum driving W[277] changes comes from [WEIGHT_GRADIENT_EQUATION]
+    // which reads the real gradient buffer (includes embedding backward via PCGrad).
+    oss << "  GRAD_W[277] PER-DIMENSION DECOMPOSITION:\n";
+    oss << "    from_277_targets: ||g||=" << a.grad_w277_norm_from_277 << "\n";
+    oss << "    from_other_targets: ||g||=" << a.grad_w277_norm_from_other << "\n";
+    float ratio = (a.grad_w277_norm_from_other > 1e-12f) 
+        ? a.grad_w277_norm_from_277 / a.grad_w277_norm_from_other : 0.0f;
+    oss << "    ||g_277||/||g_other||=" << std::setprecision(1) << ratio << "x"
+        << std::setprecision(6) << " cos(g_277, g_other)=" << a.grad_w277_cosine 
+        << " (negative=opposing, positive=reinforcing)\n";
     
     if (std::abs(a.hidden_mean) > 0.001f) {
         oss << "  [ANOMALY] NON_ZERO_HIDDEN_MEAN: hidden_mean=" << a.hidden_mean 
@@ -985,7 +960,7 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
     const bool have_hidden_data = use_centering 
         ? (ts.centering_scratch_tensor.data != nullptr)
         : (ts.cached_encoder_output.data != nullptr);
-    if (total_tokens == 0 || !have_hidden_data || !ts.lm_head_weights.data) {
+    if (total_tokens == 0 || !have_hidden_data || !ts.tensors_->lm_head_weights.data) {
         return diag;
     }
     
@@ -1008,20 +983,20 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
     
     cudaMemcpyAsync(h_hidden.data(), hidden_source,
                     hidden_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
-    cudaMemcpyAsync(w277.data(), ts.lm_head_weights.data + static_cast<size_t>(kToken277) * d_model,
+    cudaMemcpyAsync(w277.data(), ts.tensors_->lm_head_weights.data + static_cast<size_t>(kToken277) * d_model,
                     d_model * sizeof(float), cudaMemcpyDeviceToHost, stream);
     
     // Get logits if available (from forward pass cache)
-    if (ts.logits_tensor.data) {
-        cudaMemcpyAsync(h_logits.data(), ts.logits_tensor.data,
+    if (ts.autograd_intermediates.logits_tensor.data) {
+        cudaMemcpyAsync(h_logits.data(), ts.autograd_intermediates.logits_tensor.data,
                         static_cast<size_t>(total_tokens) * vocab_size * sizeof(float),
                         cudaMemcpyDeviceToHost, stream);
     }
     
     // Get gradient of W[277] row if available
-    if (ts.lm_head_weights.grad_data()) {
+    if (ts.tensors_->lm_head_weights.grad_data()) {
         cudaMemcpyAsync(grad_w277.data(), 
-                        ts.lm_head_weights.grad_data() + static_cast<size_t>(kToken277) * d_model,
+                        ts.tensors_->lm_head_weights.grad_data() + static_cast<size_t>(kToken277) * d_model,
                         d_model * sizeof(float), cudaMemcpyDeviceToHost, stream);
     }
     
@@ -1104,7 +1079,7 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
         
         // Actual logit from forward pass
         float actual = 0.0f;
-        if (ts.logits_tensor.data) {
+        if (ts.autograd_intermediates.logits_tensor.data) {
             actual = h_logits[static_cast<size_t>(t) * vocab_size + kToken277];
             sum_actual_logit += actual;
         }
@@ -1352,6 +1327,514 @@ std::string formatFeedbackLoopDiagnostic(const FeedbackLoopDiagnostic& d, int ba
     return oss.str();
 }
 
+// ========================================================================
+// PC1 CAUSALITY TEST DIAGNOSTIC (Issue #134)
+// ========================================================================
+// Answers: Is the top principal component (PC1) of hidden states the ROOT
+// CAUSE of Token 277 mode collapse?
+//
+// Observation: avg|cos(h_i,h_j)| ≈ 0.14 >> expected 0.036 (1/sqrt(768))
+// Centering (removing mean) is insufficient — a dominant variance direction
+// (PC1) persists in the hidden state covariance.
+//
+// Test: Estimate PC1 via power iteration, project it out of hidden states,
+// recompute logits, compare Token 277 deflation and entropy improvement.
+// If Token 277 deflates and entropy improves → PC1 is the mechanism.
+// ========================================================================
+
+struct PC1CausalityTest {
+    bool valid = false;
+
+    // PC1 estimation
+    float pc1_variance_explained = 0.0f;     // λ_1 / trace(H^T H) — fraction of total variance
+    float pc1_norm = 0.0f;                   // Should be ~1.0 (unit vector)
+    int   power_iterations = 0;              // Number of iterations used
+
+    // Before projection (original hidden states)
+    float before_logit_277_mean = 0.0f;      // Mean logit[277] across all non-pad positions
+    float before_entropy_mean = 0.0f;        // Mean softmax entropy (bits)
+    float before_top1_mass_mean = 0.0f;      // Mean max(softmax) — top-1 probability
+    float before_top5_mass_mean = 0.0f;      // Mean sum(top-5 softmax)
+    float before_avg_cos = 0.0f;             // avg|cos(h_i, h_j)| before projection
+
+    // After projection (PC1 removed)
+    float after_logit_277_mean = 0.0f;
+    float after_entropy_mean = 0.0f;
+    float after_top1_mass_mean = 0.0f;
+    float after_top5_mass_mean = 0.0f;
+    float after_avg_cos = 0.0f;             // avg|cos(h'_i, h'_j)| after projection
+
+    // Deltas (after - before)
+    float delta_logit_277 = 0.0f;            // Negative = deflation (GOOD)
+    float delta_entropy = 0.0f;              // Positive = more discriminative (GOOD)
+    float delta_top1_mass = 0.0f;            // Depends: better discrimination could raise OR lower
+    float delta_avg_cos = 0.0f;              // Negative = decorrelation (GOOD)
+
+    // PC1 alignment with W[277]
+    float cos_pc1_w277 = 0.0f;              // cos(g, W[277]) — how aligned is PC1 with the 277 weight row
+
+    int n_positions = 0;                     // Valid (non-pad) positions analyzed
+};
+
+PC1CausalityTest computePC1CausalityTest(
+    const GRIM::TrainingState& ts,
+    const std::vector<int>& targets,
+    int d_model,
+    int vocab_size,
+    bool use_centering,
+    cudaStream_t stream
+) {
+    PC1CausalityTest result{};
+
+    const int total_tokens = static_cast<int>(targets.size());
+    const bool have_hidden = use_centering
+        ? (ts.centering_scratch_tensor.data != nullptr)
+        : (ts.cached_encoder_output.data != nullptr);
+
+    if (total_tokens == 0 || !have_hidden || !ts.tensors_->lm_head_weights.data) {
+        return result;
+    }
+
+    // ==========================================
+    // D2H Copy: Hidden states + W[277] row + cached logits
+    // Forward pass already computed logits = h @ W^T (cached in
+    // autograd_intermediates.logits_tensor). Use those for BEFORE stats.
+    //
+    // AFTER stats use the analytical delta from linearity of projection:
+    //   logit_after[t,v] = logit_before[t,v] - (h_t · g)(g · W[v])
+    // So we need g · W[v] for all v, computed as gW = W @ g [V-vector].
+    // This eliminates any CPU matmul for AFTER logits.
+    // ==========================================
+    const size_t hidden_size = static_cast<size_t>(total_tokens) * d_model;
+    const size_t logits_size = static_cast<size_t>(total_tokens) * vocab_size;
+    // Full weight matrix needed to compute gW[v] = g · W[v] for all v
+    const size_t weight_size = static_cast<size_t>(vocab_size) * d_model;
+
+    std::vector<float> h_hidden(hidden_size);
+    std::vector<float> h_weights(weight_size);
+    std::vector<float> h_cached_logits;  // Forward-pass logits (BEFORE)
+
+    const float* hidden_source = use_centering && ts.centering_scratch_tensor.data
+        ? ts.centering_scratch_tensor.data
+        : ts.cached_encoder_output.data;
+
+    const bool have_cached_logits = (ts.autograd_intermediates.logits_tensor.data != nullptr);
+    if (!have_cached_logits) {
+        // No cached logits = can't do the test without recomputing (pointless)
+        return result;
+    }
+    h_cached_logits.resize(logits_size);
+    cudaMemcpyAsync(h_cached_logits.data(), ts.autograd_intermediates.logits_tensor.data,
+                    logits_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
+
+    cudaMemcpyAsync(h_hidden.data(), hidden_source,
+                    hidden_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
+    cudaMemcpyAsync(h_weights.data(), ts.tensors_->lm_head_weights.data,
+                    weight_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+
+    // ==========================================
+    // Identify valid (non-PAD) positions
+    // ==========================================
+    constexpr int PAD_ID = 274;
+    std::vector<int> valid_positions;
+    valid_positions.reserve(total_tokens);
+    for (int t = 0; t < total_tokens; ++t) {
+        if (targets[t] != PAD_ID) {
+            valid_positions.push_back(t);
+        }
+    }
+    const int N = static_cast<int>(valid_positions.size());
+    if (N < 2) return result;
+    result.n_positions = N;
+
+    // ==========================================
+    // Step 1: Estimate PC1 via Power Iteration
+    // v_{k+1} = H^T (H v_k) / || H^T (H v_k) ||
+    // where H is [N x d_model] matrix of valid hidden states
+    // ==========================================
+    const int D = d_model;
+    std::vector<float> v(D);
+
+    // Initialize v with deterministic pseudo-random values (seeded by N for reproducibility)
+    {
+        uint32_t seed = static_cast<uint32_t>(N * 7919 + D * 104729);
+        for (int d = 0; d < D; ++d) {
+            seed = seed * 1103515245u + 12345u;
+            v[d] = static_cast<float>(static_cast<int>(seed >> 16) & 0x7FFF) / 32768.0f - 0.5f;
+        }
+        // Normalize
+        float norm = 0.0f;
+        for (int d = 0; d < D; ++d) norm += v[d] * v[d];
+        norm = std::sqrt(norm);
+        if (norm < 1e-12f) { v[0] = 1.0f; norm = 1.0f; }
+        for (int d = 0; d < D; ++d) v[d] /= norm;
+    }
+
+    constexpr int kPowerIters = 5;
+    float eigenvalue = 0.0f;
+
+    for (int iter = 0; iter < kPowerIters; ++iter) {
+        // Compute Hv = H @ v   [N-vector]
+        std::vector<float> Hv(N, 0.0f);
+        for (int i = 0; i < N; ++i) {
+            const int t = valid_positions[i];
+            const float* h_t = &h_hidden[static_cast<size_t>(t) * D];
+            float dot = 0.0f;
+            for (int d = 0; d < D; ++d) dot += h_t[d] * v[d];
+            Hv[i] = dot;
+        }
+
+        // Compute w = H^T @ Hv  [D-vector]  (this is H^T H v)
+        std::vector<float> w(D, 0.0f);
+        for (int i = 0; i < N; ++i) {
+            const int t = valid_positions[i];
+            const float* h_t = &h_hidden[static_cast<size_t>(t) * D];
+            for (int d = 0; d < D; ++d) {
+                w[d] += h_t[d] * Hv[i];
+            }
+        }
+
+        // Eigenvalue estimate = ||w|| (since v is unit, w = λv approximately)
+        float w_norm = 0.0f;
+        for (int d = 0; d < D; ++d) w_norm += w[d] * w[d];
+        w_norm = std::sqrt(w_norm);
+        eigenvalue = w_norm;
+
+        // Normalize: v = w / ||w||
+        if (w_norm < 1e-12f) break;
+        for (int d = 0; d < D; ++d) v[d] = w[d] / w_norm;
+    }
+
+    result.power_iterations = kPowerIters;
+
+    // Normalize PC1 direction (should already be unit but enforce)
+    {
+        float norm = 0.0f;
+        for (int d = 0; d < D; ++d) norm += v[d] * v[d];
+        norm = std::sqrt(norm);
+        if (norm > 1e-12f) {
+            for (int d = 0; d < D; ++d) v[d] /= norm;
+        }
+        result.pc1_norm = norm;
+    }
+
+    // ==========================================
+    // Step 2: Compute variance explained by PC1
+    // variance_explained = λ_1 / trace(H^T H)
+    // trace(H^T H) = Σ_t ||h_t||^2
+    // ==========================================
+    float trace = 0.0f;
+    for (int i = 0; i < N; ++i) {
+        const int t = valid_positions[i];
+        const float* h_t = &h_hidden[static_cast<size_t>(t) * D];
+        for (int d = 0; d < D; ++d) trace += h_t[d] * h_t[d];
+    }
+    result.pc1_variance_explained = (trace > 1e-12f) ? (eigenvalue / trace) : 0.0f;
+
+    // ==========================================
+    // Step 3: cos(PC1, W[277])
+    // ==========================================
+    {
+        const float* w277 = &h_weights[static_cast<size_t>(kToken277) * D];
+        float dot = 0.0f, w_norm = 0.0f;
+        for (int d = 0; d < D; ++d) {
+            dot += v[d] * w277[d];
+            w_norm += w277[d] * w277[d];
+        }
+        w_norm = std::sqrt(w_norm);
+        result.cos_pc1_w277 = (w_norm > 1e-12f) ? (dot / w_norm) : 0.0f;
+    }
+
+    // ==========================================
+    // Step 4: Compute PC1 coefficients per position
+    // coeff_t = h_t · g  (projection of h_t onto PC1)
+    // No need to actually project — we use the analytical delta instead.
+    // ==========================================
+    std::vector<float> pc1_coeffs(N);
+    for (int i = 0; i < N; ++i) {
+        const int t = valid_positions[i];
+        const float* h_t = &h_hidden[static_cast<size_t>(t) * D];
+        float coeff = 0.0f;
+        for (int d = 0; d < D; ++d) coeff += h_t[d] * v[d];
+        pc1_coeffs[i] = coeff;
+    }
+
+    // ==========================================
+    // Step 5: Compute gW[v] = g · W[v] for all vocab tokens
+    // This is the per-token logit shift from removing PC1:
+    //   Δlogit[t,v] = -coeff_t × gW[v]
+    //   logit_after[t,v] = logit_before[t,v] + Δlogit[t,v]
+    //
+    // No CPU matmul needed — just one dot product per vocab row.
+    // ==========================================
+    std::vector<float> gW(vocab_size);
+    for (int j = 0; j < vocab_size; ++j) {
+        const float* w_j = &h_weights[static_cast<size_t>(j) * D];
+        float dot = 0.0f;
+        for (int d = 0; d < D; ++d) dot += w_j[d] * v[d];
+        gW[j] = dot;
+    }
+
+    // ==========================================
+    // Step 6: BEFORE/AFTER logit[277] from cached logits + analytical delta
+    // BEFORE: cached_logits[t, 277]  (from actual forward pass)
+    // AFTER:  cached_logits[t, 277] - coeff_t × gW[277]
+    // ==========================================
+    const float gW_277 = gW[kToken277];
+
+    float sum_logit277_before = 0.0f;
+    float sum_logit277_after = 0.0f;
+    for (int i = 0; i < N; ++i) {
+        const int t = valid_positions[i];
+        const float before = h_cached_logits[static_cast<size_t>(t) * vocab_size + kToken277];
+        sum_logit277_before += before;
+        sum_logit277_after += before - pc1_coeffs[i] * gW_277;
+    }
+    result.before_logit_277_mean = sum_logit277_before / N;
+    result.after_logit_277_mean = sum_logit277_after / N;
+
+    // ==========================================
+    // Step 7: BEFORE/AFTER entropy + top-k mass at sampled positions
+    // AFTER logits = cached logits - coeff_t × gW  (element-wise)
+    // ==========================================
+
+    // Helper: softmax entropy from a logit vector
+    auto computeSoftmaxStats = [&](const float* logits_row, int V,
+                                    float& out_logit_277, float& out_entropy,
+                                    float& out_top1_mass, float& out_top5_mass) {
+        float max_logit = logits_row[0];
+        for (int j = 1; j < V; ++j) {
+            if (logits_row[j] > max_logit) max_logit = logits_row[j];
+        }
+
+        float sum_exp = 0.0f;
+        float top5[5] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+        for (int j = 0; j < V; ++j) {
+            float e = std::exp(logits_row[j] - max_logit);
+            sum_exp += e;
+            if (e > top5[4]) {
+                top5[4] = e;
+                for (int k = 3; k >= 0; --k) {
+                    if (top5[k+1] > top5[k]) std::swap(top5[k], top5[k+1]);
+                    else break;
+                }
+            }
+        }
+
+        float inv_sum = 1.0f / sum_exp;
+        out_logit_277 = logits_row[kToken277];
+
+        out_entropy = 0.0f;
+        for (int j = 0; j < V; ++j) {
+            float p = std::exp(logits_row[j] - max_logit) * inv_sum;
+            if (p > 1e-12f) {
+                out_entropy -= p * std::log2(p);
+            }
+        }
+
+        out_top1_mass = top5[0] * inv_sum;
+        float top5_sum = 0.0f;
+        for (int k = 0; k < 5; ++k) top5_sum += top5[k];
+        out_top5_mass = top5_sum * inv_sum;
+    };
+
+    constexpr int kMaxEntropyPositions = 64;
+    const int n_entropy = std::min(N, kMaxEntropyPositions);
+    const int entropy_stride = std::max(1, N / n_entropy);
+
+    float sum_ent_before = 0.0f, sum_top1_before = 0.0f, sum_top5_before = 0.0f;
+    float sum_ent_after = 0.0f, sum_top1_after = 0.0f, sum_top5_after = 0.0f;
+    int entropy_count = 0;
+
+    std::vector<float> logits_after_row(vocab_size);
+
+    for (int si = 0; si < n_entropy; ++si) {
+        const int idx = std::min(si * entropy_stride, N - 1);
+        const int t = valid_positions[idx];
+
+        // BEFORE: cached forward-pass logits (actual output of the model)
+        const float* logits_before_row = &h_cached_logits[static_cast<size_t>(t) * vocab_size];
+
+        // AFTER: cached logits + analytical delta from PC1 removal
+        // logit_after[v] = logit_before[v] - coeff_t × gW[v]
+        const float coeff = pc1_coeffs[idx];
+        for (int j = 0; j < vocab_size; ++j) {
+            logits_after_row[j] = logits_before_row[j] - coeff * gW[j];
+        }
+
+        float l277_b, ent_b, t1_b, t5_b;
+        float l277_a, ent_a, t1_a, t5_a;
+        computeSoftmaxStats(logits_before_row, vocab_size, l277_b, ent_b, t1_b, t5_b);
+        computeSoftmaxStats(logits_after_row.data(), vocab_size, l277_a, ent_a, t1_a, t5_a);
+
+        sum_ent_before += ent_b;  sum_top1_before += t1_b; sum_top5_before += t5_b;
+        sum_ent_after += ent_a;   sum_top1_after += t1_a;  sum_top5_after += t5_a;
+        ++entropy_count;
+    }
+
+    if (entropy_count > 0) {
+        const float inv = 1.0f / entropy_count;
+        result.before_entropy_mean = sum_ent_before * inv;
+        result.before_top1_mass_mean = sum_top1_before * inv;
+        result.before_top5_mass_mean = sum_top5_before * inv;
+        result.after_entropy_mean = sum_ent_after * inv;
+        result.after_top1_mass_mean = sum_top1_after * inv;
+        result.after_top5_mass_mean = sum_top5_after * inv;
+    }
+
+    // ==========================================
+    // Step 8: Pairwise cosine BEFORE vs AFTER projection
+    // AFTER uses analytical projection: h'_t = h_t - coeff_t × g
+    // cos(h'_i, h'_j) computed directly without materializing h_projected
+    // ==========================================
+    constexpr int kCosineSamples = 50;
+    {
+        const int step = std::max(1, N / kCosineSamples);
+
+        // BEFORE: pairwise cosine on original hidden states
+        float sum_cos_before = 0.0f;
+        int count_before = 0;
+        for (int i = 0; i < N && count_before < kCosineSamples; i += step) {
+            const int j = (i + step / 2) % N;
+            if (i == j) continue;
+            const int t_i = valid_positions[i];
+            const int t_j = valid_positions[j];
+            const float* a = &h_hidden[static_cast<size_t>(t_i) * D];
+            const float* b = &h_hidden[static_cast<size_t>(t_j) * D];
+            float dot = 0.0f, na = 0.0f, nb = 0.0f;
+            for (int d = 0; d < D; ++d) {
+                dot += a[d] * b[d];
+                na += a[d] * a[d];
+                nb += b[d] * b[d];
+            }
+            float denom = std::sqrt(na) * std::sqrt(nb);
+            if (denom > 1e-12f) {
+                sum_cos_before += std::abs(dot / denom);
+                ++count_before;
+            }
+        }
+        result.before_avg_cos = (count_before > 0) ? (sum_cos_before / count_before) : 0.0f;
+
+        // AFTER: pairwise cosine on projected hidden states (analytical)
+        // h'_t = h_t - c_t × g, so:
+        //   h'_i · h'_j = (h_i - c_i g) · (h_j - c_j g)
+        //               = h_i·h_j - c_i(g·h_j) - c_j(g·h_i) + c_i c_j
+        //               = h_i·h_j - c_i c_j - c_j c_i + c_i c_j
+        //               = h_i·h_j - c_i c_j
+        //   ||h'_t||^2  = ||h_t||^2 - c_t^2
+        float sum_cos_after = 0.0f;
+        int count_after = 0;
+        for (int i = 0; i < N && count_after < kCosineSamples; i += step) {
+            const int j = (i + step / 2) % N;
+            if (i == j) continue;
+            const int t_i = valid_positions[i];
+            const int t_j = valid_positions[j];
+            const float* a = &h_hidden[static_cast<size_t>(t_i) * D];
+            const float* b = &h_hidden[static_cast<size_t>(t_j) * D];
+            float dot_ab = 0.0f, na = 0.0f, nb = 0.0f;
+            for (int d = 0; d < D; ++d) {
+                dot_ab += a[d] * b[d];
+                na += a[d] * a[d];
+                nb += b[d] * b[d];
+            }
+            const float c_i = pc1_coeffs[i];
+            const float c_j = pc1_coeffs[j];
+            const float proj_dot = dot_ab - c_i * c_j;
+            const float proj_na = na - c_i * c_i;
+            const float proj_nb = nb - c_j * c_j;
+            float denom = std::sqrt(std::max(0.0f, proj_na)) * std::sqrt(std::max(0.0f, proj_nb));
+            if (denom > 1e-12f) {
+                sum_cos_after += std::abs(proj_dot / denom);
+                ++count_after;
+            }
+        }
+        result.after_avg_cos = (count_after > 0) ? (sum_cos_after / count_after) : 0.0f;
+    }
+
+    // ==========================================
+    // Deltas
+    // ==========================================
+    result.delta_logit_277 = result.after_logit_277_mean - result.before_logit_277_mean;
+    result.delta_entropy = result.after_entropy_mean - result.before_entropy_mean;
+    result.delta_top1_mass = result.after_top1_mass_mean - result.before_top1_mass_mean;
+    result.delta_avg_cos = result.after_avg_cos - result.before_avg_cos;
+
+    result.valid = true;
+    return result;
+}
+
+std::string formatPC1CausalityTest(const PC1CausalityTest& r, int batch_idx) {
+    if (!r.valid) {
+        return "[PC1_CAUSALITY_TEST] batch=" + std::to_string(batch_idx + 1) + " INVALID (missing data)";
+    }
+
+    std::ostringstream oss;
+    oss << std::fixed;
+
+    // ==========================================
+    // Rule 21: Equation-Based Diagnostic Format
+    // ==========================================
+    oss << "[PC1_CAUSALITY_TEST] HIDDEN_STATE_GEOMETRY: h'_t = h_t - (h_t · g) g  (g = PC1 unit vector)\n";
+
+    oss << std::setprecision(6);
+    oss << "  PC1 ESTIMATION (" << r.power_iterations << " power iterations):\n";
+    oss << "    variance_explained = λ_1/trace(H^T H) = " << r.pc1_variance_explained
+        << " (" << std::setprecision(1) << (r.pc1_variance_explained * 100.0f) << "% of total)\n";
+    oss << std::setprecision(6);
+    oss << "    ||g|| = " << r.pc1_norm << " (should be 1.0)\n";
+    oss << "    cos(PC1, W[277]) = " << r.cos_pc1_w277 << "\n";
+
+    oss << "  BEFORE PROJECTION (original hidden states, n=" << r.n_positions << "):\n";
+    oss << std::setprecision(4);
+    oss << "    logit[277]_mean = " << r.before_logit_277_mean << "\n";
+    oss << "    entropy_mean = " << r.before_entropy_mean << " bits\n";
+    oss << "    top1_mass_mean = " << r.before_top1_mass_mean << "\n";
+    oss << "    top5_mass_mean = " << r.before_top5_mass_mean << "\n";
+    oss << "    avg|cos(h_i,h_j)| = " << r.before_avg_cos << "\n";
+
+    oss << "  AFTER PROJECTION (PC1 removed):\n";
+    oss << "    logit[277]_mean = " << r.after_logit_277_mean << "\n";
+    oss << "    entropy_mean = " << r.after_entropy_mean << " bits\n";
+    oss << "    top1_mass_mean = " << r.after_top1_mass_mean << "\n";
+    oss << "    top5_mass_mean = " << r.after_top5_mass_mean << "\n";
+    oss << "    avg|cos(h_i,h_j)| = " << r.after_avg_cos << "\n";
+
+    oss << "  DELTAS (after - before):\n";
+    oss << std::showpos;
+    oss << "    Δlogit[277] = " << r.delta_logit_277
+        << (r.delta_logit_277 < 0 ? " (DEFLATED ✓)" : " (INFLATED ✗)") << "\n";
+    oss << "    Δentropy = " << r.delta_entropy
+        << (r.delta_entropy > 0 ? " bits (MORE DISCRIMINATIVE ✓)" : " bits (LESS DISCRIMINATIVE ✗)") << "\n";
+    oss << "    Δtop1_mass = " << r.delta_top1_mass << "\n";
+    oss << "    Δavg_cos = " << r.delta_avg_cos
+        << (r.delta_avg_cos < 0 ? " (DECORRELATED ✓)" : " (STILL CORRELATED ✗)") << "\n";
+    oss << std::noshowpos;
+
+    // ==========================================
+    // VERDICT
+    // ==========================================
+    const bool logit_deflated = r.delta_logit_277 < -0.01f;
+    const bool entropy_improved = r.delta_entropy > 0.01f;
+    const bool decorrelated = r.delta_avg_cos < -0.01f;
+
+    if (logit_deflated && entropy_improved && decorrelated) {
+        oss << "  [VERDICT] PC1 IS THE MECHANISM: Token 277 deflates, entropy improves, correlation drops.\n";
+        oss << "           → Implement project_out_pc1 as autograd operation for production fix.\n";
+    } else if (logit_deflated && entropy_improved) {
+        oss << "  [VERDICT] PC1 IS LIKELY THE MECHANISM: Token 277 deflates and entropy improves.\n";
+        oss << "           avg_cos improvement: " << std::setprecision(4) << r.delta_avg_cos << "\n";
+    } else if (logit_deflated) {
+        oss << "  [VERDICT] PC1 PARTIALLY EXPLAINS 277: logit deflates but entropy unchanged.\n";
+        oss << "           Higher-rank structure may also contribute.\n";
+    } else {
+        oss << "  [VERDICT] PC1 IS NOT THE PRIMARY MECHANISM: Token 277 did NOT deflate.\n";
+        oss << "           Investigate: rank-2+ components, weight norm, or loss landscape.\n";
+    }
+
+    return oss.str();
+}
+
 } // anonymous namespace
 
 //======================================================//
@@ -1368,11 +1851,8 @@ GuessCacheScope::GuessCacheScope(::GRIM::TrainingState& training_state,
     const std::size_t diversity_bloom_bits = 65536;
     const std::size_t pinned_buffer_size = enable_async ? 8192 : 0;
     
-    if (!training_state_.allocateGuessCacheBuffers(
-            capacity, enable_diversity, diversity_bloom_bits, pinned_buffer_size)) {
-        fprintf(stderr, "[ERROR] GuessCacheScope: Failed to allocate buffers in TrainingState\n");
-        return;
-    }
+    training_state_.allocateGuessCacheBuffers(
+            capacity, enable_diversity, diversity_bloom_bits, pinned_buffer_size);
     buffers_allocated_ = true;
     
     // Build GRIMTS config
@@ -1390,16 +1870,8 @@ GuessCacheScope::GuessCacheScope(::GRIM::TrainingState& training_state,
     config.enable_histograms = false;
     
     // RULE 22: Get stream from centralized controller
-    cudaStream_t primary_stream = training_state_.stream_ctrl.isInitialized()
-        ? training_state_.stream_ctrl.getPrimaryStream()
-        : nullptr;
-    
-    if (!primary_stream) {
-        fprintf(stderr, "[ERROR] GuessCacheScope: TrainingState stream controller not initialized!\n");
-        training_state_.freeGuessCacheBuffers();
-        buffers_allocated_ = false;
-        return;
-    }
+    // getPrimaryStream() throws if not initialized (Rule 20)
+    cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
     
     // Convert TrainingState::GuessCacheBuffers to GRIMTS::GuessCacheBuffers
     GRIMTS::GuessCacheBuffers grimts_buffers{};
@@ -1607,7 +2079,6 @@ GRIM::Batching::BatchSchedule buildEpochBatches(
     int global_step,
     int epoch,
     int max_tokens_override,
-    const std::vector<float>* rarity_scores,
     TrainingLogger& logger) {
     
     PHASE2_DEBUG_STDERR("[DEBUG-BUILD] ENTER buildEpochBatches batch_size=%d\n", batch_size);
@@ -1649,9 +2120,6 @@ GRIM::Batching::BatchSchedule buildEpochBatches(
     opts.similarity_threshold = 0.30f;
     opts.prefer_short_first = curriculum_active;
     opts.curriculum_progress = curriculum_active ? static_cast<float>(epoch + 1) / kCurriculumEpochs : 1.0f;
-    opts.rarity_scores = rarity_scores;
-    opts.prioritize_rare = (rarity_scores != nullptr && !rarity_scores->empty());
-    opts.rarity_weight = 0.3f;
     opts.target_effective_batch_size = 32;
     opts.adaptive_token_budget = !warmup_phase;
     // Issue #90: Pass RNG seed for reproducible shuffling in GREEDY mode
@@ -1737,14 +2205,9 @@ void maybeRunMicroValidation(
     const int batches_to_eval = std::min(hp.micro_validation_batch_limit,
                                          static_cast<int>(state.micro_validation_batches.size()));
     
-    std::vector<std::vector<int>> micro_inputs;
-    std::vector<std::vector<int>> micro_targets;
-    std::vector<std::vector<float>> micro_numeric_values;
-    std::vector<std::vector<uint8_t>> micro_numeric_mask;
-    // GRMT v4: text features for validation (optional)
-    std::vector<std::vector<uint16_t>> micro_text_features;
-    std::vector<std::vector<uint8_t>> micro_text_mask;
-    std::vector<float> micro_weights;
+    const auto& mv_model_cfg = ctx.model->getConfig();
+    const size_t mv_max_cached_batch = static_cast<size_t>(std::max(1, mv_model_cfg.max_cached_batch));
+    const size_t mv_max_cached_seq = static_cast<size_t>(std::max(1, std::min(mv_model_cfg.max_seq_len, mv_model_cfg.max_cached_seq_len)));
     
     for (int i = 0; i < batches_to_eval; ++i) {
         if (state.micro_validation_cursor >= state.micro_validation_batches.size()) {
@@ -1752,49 +2215,17 @@ void maybeRunMicroValidation(
         }
         const auto& dyn_batch = state.micro_validation_batches[state.micro_validation_cursor++];
         
-        micro_inputs.clear();
-        micro_targets.clear();
-        micro_numeric_values.clear();
-        micro_numeric_mask.clear();
-        micro_text_features.clear();
-        micro_text_mask.clear();
-        micro_inputs.reserve(dyn_batch.seq_ids.size());
-        micro_targets.reserve(dyn_batch.seq_ids.size());
-        micro_numeric_values.reserve(dyn_batch.seq_ids.size());
-        micro_numeric_mask.reserve(dyn_batch.seq_ids.size());
-        micro_text_features.reserve(dyn_batch.seq_ids.size());
-        micro_text_mask.reserve(dyn_batch.seq_ids.size());
-        micro_weights.clear();
-        micro_weights.reserve(dyn_batch.seq_ids.size());
+        auto mv_payload = GRIM::Batching::buildBatchPayload(
+            dyn_batch, ctx.data.val_views, ctx.config.actual_vocab_size,
+            mv_max_cached_batch, mv_max_cached_seq);
+        if (mv_payload.batch_size == 0) continue;
         
-        for (uint32_t sid : dyn_batch.seq_ids) {
-            if (sid >= ctx.data.val_views.size() || ctx.data.val_views[sid] == nullptr) continue;
-            micro_inputs.push_back(ctx.data.val_views[sid]->token_ids);
-            micro_targets.push_back(ctx.data.val_views[sid]->targets);
-            micro_numeric_values.push_back(ctx.data.val_views[sid]->token_numeric_values);
-            micro_numeric_mask.push_back(ctx.data.val_views[sid]->token_numeric_mask);
-            // GRMT v4: text features
-            micro_text_features.push_back(ctx.data.val_views[sid]->token_text_features);
-            micro_text_mask.push_back(ctx.data.val_views[sid]->token_text_mask);
-            // BUG FIX Issue #30: Removed val_sequence_rarity weighting
-        }
-        
-        if (micro_inputs.empty()) continue;
-        // BUG FIX Issue #30: Always clear sequence weights - no rarity weighting
-        ctx.model->clearSequenceLossWeights();
-        float micro_batch_loss = ctx.model->computeLossBatch(
-            micro_inputs,
-            micro_targets,
-            micro_numeric_values,
-            micro_numeric_mask,
-            micro_text_features,
-            micro_text_mask);
-        ctx.model->clearSequenceLossWeights();
+        float micro_batch_loss = ctx.model->computeLossBatch(mv_payload);
         // NOTE: No device sync here - computeLossBatch returns synchronously
         // Loss value is already on CPU after the call returns
         
-        accumulated_loss += micro_batch_loss * static_cast<float>(micro_inputs.size());
-        sequences_processed += static_cast<int>(micro_inputs.size());
+        accumulated_loss += micro_batch_loss * static_cast<float>(mv_payload.batch_size);
+        sequences_processed += mv_payload.batch_size;
         batches_executed++;
     }
     
@@ -1948,12 +2379,7 @@ struct NumericalGradCheckResult {
 
 NumericalGradCheckResult performNumericalGradientCheck(
     TrainingContext& ctx,
-    const std::vector<std::vector<int>>& batch_inputs,
-    const std::vector<std::vector<int>>& batch_targets,
-    const std::vector<std::vector<float>>& batch_numeric_values,
-    const std::vector<std::vector<uint8_t>>& batch_numeric_mask,
-    const std::vector<std::vector<uint16_t>>& batch_text_features,
-    const std::vector<std::vector<uint8_t>>& batch_text_mask,
+    const GRIM::Batching::BatchPayload& payload,
     int batch_idx)
 {
     NumericalGradCheckResult result;
@@ -1979,8 +2405,8 @@ NumericalGradCheckResult performNumericalGradientCheck(
     
     // Choose a parameter to check - use embedding weight at a specific index
     // This is a good choice because it's directly involved in both forward and backward
-    float* weight_ptr = ts.lm_head_weights.data;  // [vocab_size, d_model]
-    const float* grad_ptr = ts.lm_head_weights.grad_data();
+    float* weight_ptr = ts.tensors_->lm_head_weights.data;  // [vocab_size, d_model]
+    const float* grad_ptr = ts.tensors_->lm_head_weights.grad_data();
     
     if (!weight_ptr || !grad_ptr) {
         ctx.logging.logger->log("[NumGradCheck] ERROR: lm_head weights or grads not available");
@@ -2016,10 +2442,7 @@ NumericalGradCheckResult performNumericalGradientCheck(
     
     // Forward pass with perturbed weight (no gradient computation needed)
     // NOTE: We use the same batch data to ensure consistency
-    result.loss_plus = ctx.model->computeLossBatch(
-        batch_inputs, batch_targets,
-        batch_numeric_values, batch_numeric_mask,
-        batch_text_features, batch_text_mask);
+    result.loss_plus = ctx.model->computeLossBatch(payload);
     
     // === Perturb -ε ===
     float perturbed_minus = original_weight - eps;
@@ -2028,10 +2451,7 @@ NumericalGradCheckResult performNumericalGradientCheck(
     cudaStreamSynchronize(stream);
     
     // Forward pass with perturbed weight
-    result.loss_minus = ctx.model->computeLossBatch(
-        batch_inputs, batch_targets,
-        batch_numeric_values, batch_numeric_mask,
-        batch_text_features, batch_text_mask);
+    result.loss_minus = ctx.model->computeLossBatch(payload);
     
     // === Restore original weight ===
     cudaMemcpyAsync(weight_ptr + result.param_index, &original_weight, 
@@ -2141,48 +2561,20 @@ ValidationResult runValidation(TrainingContext& ctx) {
     float val_loss = 0.0f;
     int val_sequences_processed = 0;
     
-    std::vector<std::vector<int>> val_inputs;
-    std::vector<std::vector<int>> val_targets;
-    std::vector<std::vector<float>> val_numeric_values;
-    std::vector<std::vector<uint8_t>> val_numeric_mask;
-    // GRMT v4: text features for validation
-    std::vector<std::vector<uint16_t>> val_text_features;
-    std::vector<std::vector<uint8_t>> val_text_mask;
-    std::vector<float> val_weights;
+    const auto& val_model_cfg = ctx.model->getConfig();
+    const size_t val_max_cached_batch = static_cast<size_t>(std::max(1, val_model_cfg.max_cached_batch));
+    const size_t val_max_cached_seq = static_cast<size_t>(std::max(1, std::min(val_model_cfg.max_seq_len, val_model_cfg.max_cached_seq_len)));
     
     for (const auto& val_batch : val_schedule.batches) {
-        val_inputs.clear();
-        val_targets.clear();
-        val_numeric_values.clear();
-        val_numeric_mask.clear();
-        val_text_features.clear();
-        val_text_mask.clear();
-        val_weights.clear();
+        auto val_payload = GRIM::Batching::buildBatchPayload(
+            val_batch, ctx.data.val_views, ctx.config.actual_vocab_size,
+            val_max_cached_batch, val_max_cached_seq);
+        if (val_payload.batch_size == 0) continue;
         
-        for (uint32_t sid : val_batch.seq_ids) {
-            auto* seq = ctx.data.val_views[sid];
-            val_inputs.push_back(seq->token_ids);
-            val_targets.push_back(seq->targets);
-            val_numeric_values.push_back(seq->token_numeric_values);
-            val_numeric_mask.push_back(seq->token_numeric_mask);
-            // GRMT v4: text features
-            val_text_features.push_back(seq->token_text_features);
-            val_text_mask.push_back(seq->token_text_mask);
-            // BUG FIX Issue #30: Removed val_sequence_rarity weighting
-        }
-        // BUG FIX Issue #30: Always clear sequence weights - no rarity weighting
-        ctx.model->clearSequenceLossWeights();
-        float batch_val_loss = ctx.model->computeLossBatch(
-            val_inputs,
-            val_targets,
-            val_numeric_values,
-            val_numeric_mask,
-            val_text_features,
-            val_text_mask);
-        ctx.model->clearSequenceLossWeights();
+        float batch_val_loss = ctx.model->computeLossBatch(val_payload);
         
-        val_loss += batch_val_loss * static_cast<int>(val_batch.seq_ids.size());
-        val_sequences_processed += static_cast<int>(val_batch.seq_ids.size());
+        val_loss += batch_val_loss * val_payload.batch_size;
+        val_sequences_processed += val_payload.batch_size;
     }
     
     result.loss = val_loss / val_sequences_processed;
@@ -2230,45 +2622,21 @@ BatchResult processBatch(
     // ========================================================================
     const std::uint64_t global_step_at_batch_start = ctx.global_step;  // Token counter (informational only)
     
-    // Construct batch inputs
-    std::vector<std::vector<int>> batch_inputs;
-    std::vector<std::vector<int>> batch_targets;
-    std::vector<std::vector<float>> batch_numeric_values;
-    std::vector<std::vector<uint8_t>> batch_numeric_mask;
-    // GRMT v4: text features
-    std::vector<std::vector<uint16_t>> batch_text_features;
-    std::vector<std::vector<uint8_t>> batch_text_mask;
-    std::vector<uint32_t> filtered_seq_ids;
+    // Build unified batch payload — single source of truth for all metadata
+    const auto& model_cfg = ctx.model->getConfig();
+    auto payload = GRIM::Batching::buildBatchPayload(
+        batch, ctx.data.train_views, ctx.config.actual_vocab_size,
+        static_cast<size_t>(std::max(1, model_cfg.max_cached_batch)),
+        static_cast<size_t>(std::max(1, std::min(model_cfg.max_seq_len, model_cfg.max_cached_seq_len))));
     
-    for (uint32_t sid : batch.seq_ids) {
-        auto* seq = ctx.data.train_views[sid];
-        batch_inputs.push_back(seq->token_ids);
-        batch_targets.push_back(seq->targets);
-        batch_numeric_values.push_back(seq->token_numeric_values);
-        batch_numeric_mask.push_back(seq->token_numeric_mask);
-        // GRMT v4: get text features from view
-        batch_text_features.push_back(seq->token_text_features);
-        batch_text_mask.push_back(seq->token_text_mask);
-        filtered_seq_ids.push_back(sid);
-        
-        // DIAGNOSTIC: Validate targets for invalid token IDs (root cause of loss=165)
-        for (size_t i = 0; i < seq->targets.size(); ++i) {
-            int tid = seq->targets[i];
-            if (tid >= 0 && tid >= static_cast<int>(ctx.config.actual_vocab_size)) {
-                std::ostringstream err;
-                err << "[FATAL] Sequence " << sid << " has invalid target token " << tid 
-                    << " at position " << i << " (vocab_size=" << ctx.config.actual_vocab_size << ")";
-                ctx.logging.logger->log(err.str());
-                throw std::runtime_error(err.str());
-            }
-        }
-    }
-    
-    if (batch_inputs.empty()) {
+    if (payload.batch_size == 0) {
         result.skipped = true;
         result.skip_reason = "filtered";
         return result;
     }
+
+    // Extract filtered_seq_ids for quarantine check
+    std::vector<uint32_t> filtered_seq_ids(batch.seq_ids.begin(), batch.seq_ids.end());
     
     // Check quarantine
     if (Internal::isBatchQuarantined(filtered_seq_ids, state.quarantined_seqs)) {
@@ -2287,8 +2655,8 @@ BatchResult processBatch(
                                 " lm_head_params=" + std::to_string(model_stats.lm_head_params));
     }
     
-    // Compute token stats for clipping
-    const auto token_stats = GRIM::TNC::computeBatchTokenStats(batch_inputs);
+    // Token stats already computed in payload — single source of truth
+    const auto& token_stats = payload.token_stats;
     const int long_seq_threshold = ctx.config.max_seq_len;
     const auto clip_selection = GRIM::TNC::computeClipSelection(
         hp.grad_clip_norm, token_stats, 1.0f, long_seq_threshold);
@@ -2322,9 +2690,9 @@ BatchResult processBatch(
             if (i + 1 < batch.seq_ids.size()) batch_info << ",";
         }
         batch_info << "] lens=[";
-        for (size_t i = 0; i < batch_inputs.size(); ++i) {
-            batch_info << batch_inputs[i].size();
-            if (i + 1 < batch_inputs.size()) batch_info << ",";
+        for (int i = 0; i < payload.batch_size; ++i) {
+            batch_info << payload.seq_lengths[i];
+            if (i + 1 < payload.batch_size) batch_info << ",";
         }
         batch_info << "]";
         ctx.logging.logger->log(batch_info.str());
@@ -2335,11 +2703,21 @@ BatchResult processBatch(
         PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] shouldLogAtomStats=true, creating vectors...\n");
         std::vector<int> per_seq_atoms;
         std::vector<int> per_seq_lengths;
-        per_seq_atoms.reserve(batch_inputs.size());
-        per_seq_lengths.reserve(batch_inputs.size());
+        per_seq_atoms.reserve(payload.batch_size);
+        per_seq_lengths.reserve(payload.batch_size);
 
+        // Reconstruct per-sequence views from flat payload for atom detection
+        std::vector<std::vector<int>> seq_views;
+        seq_views.reserve(payload.batch_size);
+        int offset = 0;
+        for (int i = 0; i < payload.batch_size; ++i) {
+            const int len = payload.seq_lengths[i];
+            seq_views.emplace_back(payload.input_ids.begin() + offset,
+                                   payload.input_ids.begin() + offset + len);
+            offset += payload.max_seq_len; // stride is padded length
+        }
         PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to call computeAtomStats...\n");
-        const AtomStats stats = computeAtomStats(batch_inputs, ctx.tokenizer,
+        const AtomStats stats = computeAtomStats(seq_views, ctx.tokenizer,
                                                  &per_seq_atoms, &per_seq_lengths);
         PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] computeAtomStats returned\n");
         const double atom_ratio = stats.total_tokens > 0
@@ -2349,7 +2727,7 @@ BatchResult processBatch(
         PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] Building atom_msg...\n");
         std::ostringstream atom_msg;
         atom_msg << "[AtomStats] batch=" << (batch_idx + 1)
-                 << " seqs=" << batch_inputs.size()
+                 << " seqs=" << payload.batch_size
                  << " atoms=" << stats.total_atoms
                  << " tokens=" << stats.total_tokens
                  << " atom_ratio=" << std::fixed << std::setprecision(4) << atom_ratio
@@ -2396,19 +2774,14 @@ BatchResult processBatch(
     // - Token ID validity (vocab bounds)
     // ========================================================================
     {
-        // Find max sequence length in this batch
-        size_t max_seq_len = 0;
-        size_t total_tokens = 0;
-        for (const auto& seq : batch_inputs) {
-            max_seq_len = std::max(max_seq_len, seq.size());
-            total_tokens += seq.size();
-        }
-        
+        // Use payload geometry — single source of truth
+        const size_t max_seq_len = static_cast<size_t>(payload.max_seq_len);
+        const size_t total_tokens = static_cast<size_t>(payload.actual_tokens);
 
         
-        const auto& model_cfg = ctx.model->getConfig();
+        const auto& model_cfg_bd = ctx.model->getConfig();
         static bool logged_max_seq = false;
-        const bool is_boundary_max_seq = (max_seq_len >= static_cast<size_t>(model_cfg.max_seq_len) && !logged_max_seq);
+        const bool is_boundary_max_seq = (max_seq_len >= static_cast<size_t>(model_cfg_bd.max_seq_len) && !logged_max_seq);
 
         
         if (is_boundary_max_seq) {
@@ -2417,46 +2790,46 @@ BatchResult processBatch(
             diag << "[BOUNDARY_DIAGNOSTIC] Batch " << (batch_idx + 1) << " CROSSING BOUNDARY\n";
             
             // Identify which boundary was crossed
-            if (is_boundary_max_seq) diag << "[BOUNDARY_DIAGNOSTIC] *** REACHED model.max_seq_len=" << model_cfg.max_seq_len << " ***\n";
+            if (is_boundary_max_seq) diag << "[BOUNDARY_DIAGNOSTIC] *** REACHED model.max_seq_len=" << model_cfg_bd.max_seq_len << " ***\n";
 
             diag << "[BOUNDARY_DIAGNOSTIC] max_seq_len=" << max_seq_len 
                  << " total_tokens=" << total_tokens 
-                 << " batch_size=" << batch_inputs.size() << "\n";
+                 << " batch_size=" << payload.batch_size << "\n";
             
             diag << "[BOUNDARY_DIAGNOSTIC] MODEL CONFIG:\n";
-            diag << "  d_model=" << model_cfg.d_model << "\n";
-            diag << "  max_seq_len=" << model_cfg.max_seq_len << "\n";
-            diag << "  num_heads=" << model_cfg.num_heads << "\n";
-            diag << "  num_layers=" << model_cfg.num_layers << "\n";
-            diag << "  vocab_size=" << model_cfg.vocab_size << "\n";
+            diag << "  d_model=" << model_cfg_bd.d_model << "\n";
+            diag << "  max_seq_len=" << model_cfg_bd.max_seq_len << "\n";
+            diag << "  num_heads=" << model_cfg_bd.num_heads << "\n";
+            diag << "  num_layers=" << model_cfg_bd.num_layers << "\n";
+            diag << "  vocab_size=" << model_cfg_bd.vocab_size << "\n";
             
             // Position embedding checks (this IS a valid concern)
             diag << "[BOUNDARY_DIAGNOSTIC] POSITION EMBEDDING CHECKS:\n";
             diag << "  Current max_seq_len in batch: " << max_seq_len << "\n";
-            diag << "  Model max_seq_len: " << model_cfg.max_seq_len << "\n";
+            diag << "  Model max_seq_len: " << model_cfg_bd.max_seq_len << "\n";
             diag << "  Position index range needed: [0, " << (max_seq_len - 1) << "]\n";
-            if (max_seq_len > static_cast<size_t>(model_cfg.max_seq_len)) {
+            if (max_seq_len > static_cast<size_t>(model_cfg_bd.max_seq_len)) {
                 diag << "  *** ERROR: Sequence exceeds model max_seq_len! Position embeddings will OOB! ***\n";
             }
             
-            // Per-sequence breakdown
+            // Per-sequence breakdown using payload geometry
             diag << "[BOUNDARY_DIAGNOSTIC] PER-SEQUENCE BREAKDOWN:\n";
-            for (size_t s = 0; s < batch_inputs.size(); ++s) {
-                const auto& seq = batch_inputs[s];
-                diag << "  seq[" << s << "]: len=" << seq.size();
+            for (int s = 0; s < payload.batch_size; ++s) {
+                const int seq_len = payload.seq_lengths[s];
+                diag << "  seq[" << s << "]: len=" << seq_len;
                 
                 // Check for position IDs that would overflow
-                size_t positions_needed = seq.size();
-                if (positions_needed > static_cast<size_t>(model_cfg.max_seq_len)) {
-                    diag << " *** OVERFLOW pos=" << positions_needed 
-                         << " > max=" << model_cfg.max_seq_len << " ***";
+                if (seq_len > model_cfg_bd.max_seq_len) {
+                    diag << " *** OVERFLOW pos=" << seq_len 
+                         << " > max=" << model_cfg_bd.max_seq_len << " ***";
                 }
                 
-                // Sample first and last tokens
-                if (!seq.empty()) {
-                    diag << " tokens[0]=" << seq[0];
-                    if (seq.size() > 1) {
-                        diag << " tokens[" << (seq.size()-1) << "]=" << seq[seq.size()-1];
+                // Sample first and last tokens from flat payload
+                if (seq_len > 0) {
+                    const int flat_start = s * payload.max_seq_len;
+                    diag << " tokens[0]=" << payload.input_ids[flat_start];
+                    if (seq_len > 1) {
+                        diag << " tokens[" << (seq_len-1) << "]=" << payload.input_ids[flat_start + seq_len - 1];
                     }
                 }
                 diag << "\n";
@@ -2468,21 +2841,17 @@ BatchResult processBatch(
             diag << "  cached_batch_size=" << ts.cached_batch_size << "\n";
             diag << "  cached_seq_len=" << ts.cached_seq_len << "\n";
             diag << "  cached_valid_tokens=" << ts.cached_valid_tokens << "\n";
-            // These are for INFERENCE only, not training:
-            // diag << "  kv_cache_len=" << ts.kv_cache_len << "\n";
-            // diag << "  kv_cache_capacity=" << ts.kv_cache_capacity << "\n";
             
             // Training cache allocation check (the correct fields!)
             diag << "  max_cached_batch=" << ts.max_cached_batch << "\n";
             diag << "  max_cached_seq_len=" << ts.max_cached_seq_len << "\n";
             diag << "  max_cached_tokens=" << ts.max_cached_tokens << "\n";
             
-            // Check if sequence fits in TRAINING cache
-            size_t required_tokens = batch_inputs.size() * max_seq_len;
-            diag << "  Required tokens for this batch: " << required_tokens << "\n";
-            if (required_tokens > ts.max_cached_tokens) {
+            // Check if sequence fits in TRAINING cache — use payload.total_tokens (already batch*max_seq)
+            diag << "  Required tokens for this batch: " << payload.total_tokens << "\n";
+            if (static_cast<size_t>(payload.total_tokens) > ts.max_cached_tokens) {
                 diag << "  *** WARNING: Batch exceeds training cache capacity! ***\n";
-                diag << "  *** Need " << required_tokens << " but have " << ts.max_cached_tokens << " ***\n";
+                diag << "  *** Need " << payload.total_tokens << " but have " << ts.max_cached_tokens << " ***\n";
             }
             if (max_seq_len > static_cast<size_t>(ts.max_cached_seq_len)) {
                 diag << "  *** WARNING: Sequence exceeds max_cached_seq_len! ***\n";
@@ -2493,19 +2862,22 @@ BatchResult processBatch(
             // No attention buffer check needed - memory scales linearly with seq_len.
             diag << "[BOUNDARY_DIAGNOSTIC] ATTENTION: Using FlashAttention v2 (O(N) memory)\n";
             
-            // Token ID sanity check
+            // Token ID sanity check — scan flat payload
             diag << "[BOUNDARY_DIAGNOSTIC] TOKEN ID SANITY:\n";
             int max_token_id = 0;
             int min_token_id = INT_MAX;
-            for (const auto& seq : batch_inputs) {
-                for (int tok : seq) {
+            for (int s = 0; s < payload.batch_size; ++s) {
+                const int flat_start = s * payload.max_seq_len;
+                const int len = payload.seq_lengths[s];
+                for (int t = 0; t < len; ++t) {
+                    const int tok = payload.input_ids[flat_start + t];
                     max_token_id = std::max(max_token_id, tok);
                     min_token_id = std::min(min_token_id, tok);
                 }
             }
             diag << "  Token ID range: [" << min_token_id << ", " << max_token_id << "]\n";
-            diag << "  Vocab size: " << model_cfg.vocab_size << "\n";
-            if (max_token_id >= static_cast<int>(model_cfg.vocab_size)) {
+            diag << "  Vocab size: " << model_cfg_bd.vocab_size << "\n";
+            if (max_token_id >= static_cast<int>(model_cfg_bd.vocab_size)) {
                 diag << "  *** ERROR: Token ID exceeds vocab size! ***\n";
             }
             
@@ -2525,13 +2897,16 @@ BatchResult processBatch(
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] forward_call_count=%d, building target distribution...\n", forward_call_count);
     // Log target and prediction distributions (uses ForwardPass module for filtering)
     {
-        // Log target distribution - count occurrences of each target ID
+        // Log target distribution using flat payload target_ids
         std::map<int, int> target_counts;
         int total_valid = 0;
-        int total_tokens = 0;
-        for (const auto& targets : batch_targets) {
-            for (int tid : targets) {
-                total_tokens++;
+        int total_tokens_td = 0;
+        for (int s = 0; s < payload.batch_size; ++s) {
+            const int flat_start = s * payload.max_seq_len;
+            const int len = payload.seq_lengths[s];
+            for (int t = 0; t < len; ++t) {
+                const int tid = payload.target_ids[flat_start + t];
+                total_tokens_td++;
                 if (tid >= 0) {
                     target_counts[tid]++;
                     total_valid++;
@@ -2546,7 +2921,7 @@ BatchResult processBatch(
         
         std::ostringstream target_info;
         target_info << "BATCH_TARGET_DIST batch=" << (batch_idx + 1)
-                    << " total_tokens=" << total_tokens 
+                    << " total_tokens=" << total_tokens_td 
                     << " valid=" << total_valid 
                     << " unique=" << target_counts.size()
                     << " top10=[";
@@ -2559,24 +2934,9 @@ BatchResult processBatch(
         EmitModuleInfo(ModuleId::ForwardPass, target_info.str(), ctx.global_step);
     }
     
-    PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] After target distribution, clearing loss weights...\n");
-    // BUG FIX Issue #30: sequence_rarity was scaling down ALL losses by ~0.66x,
-    // causing initial loss to be ~6.8 instead of expected ~10.8 (ln(vocab_size)).
-    // This broke the loss baseline and made training plateau investigation misleading.
-    // REMOVE sequence_rarity weighting entirely - all sequences weighted equally.
-    ctx.model->clearSequenceLossWeights();
-    
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to call computeLossBatch...\n");
-    result.loss = ctx.model->computeLossBatch(
-        batch_inputs,
-        batch_targets,
-        batch_numeric_values,
-        batch_numeric_mask,
-        batch_text_features,
-        batch_text_mask);
+    result.loss = ctx.model->computeLossBatch(payload);
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] computeLossBatch returned, loss=%f\n", result.loss);
-    ctx.model->clearSequenceLossWeights();
-    PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] clearSequenceLossWeights completed\n");
 
     if (std::isfinite(result.loss) &&
         ctx.config.hyperparameters.guess_aux_enabled &&
@@ -2585,14 +2945,11 @@ BatchResult processBatch(
             state.guess_cache_buffers = std::make_unique<GuessCacheBatchBuffers>();
         }
 
-        const std::size_t guess_count = batch_inputs.size();
+        const std::size_t guess_count = static_cast<std::size_t>(payload.batch_size);
         if (guess_count > 0 && state.guess_cache_buffers) {
             auto& buffers = *state.guess_cache_buffers;
             auto& training_state = ctx.model->getTrainingState();
-            cudaStream_t stream = training_state.stream_ctrl.isInitialized()
-                ? training_state.stream_ctrl.getPrimaryStream()
-                : nullptr;
-            if (!stream) {
+            if (!training_state.stream_ctrl.isInitialized()) {
                 state.guess_cache_faulted = true;
                 EmitModuleError(ModuleId::GuessCache,
                                 "Guess cache update failed: stream controller not initialized",
@@ -2604,16 +2961,19 @@ BatchResult processBatch(
                                   "Guess cache skipped: cached logits not ready for prediction-based pass",
                                   ctx.global_step);
             } else {
+                cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
                 const int batch_size = static_cast<int>(guess_count);
                 const int vocab_size = ctx.config.actual_vocab_size;
                 const int cached_seq_len = training_state.cached_seq_len;
                 std::vector<int> guess_positions(batch_size, -1);
                 for (int i = 0; i < batch_size; ++i) {
-                    if (batch_targets[i].empty() || batch_inputs[i].empty()) {
+                    const int seq_len = payload.seq_lengths[i];
+                    if (seq_len <= 0) {
                         continue;
                     }
-                    int pos = static_cast<int>(batch_targets[i].size()) - 1;
-                    while (pos >= 0 && batch_targets[i][pos] < 0) {
+                    const int flat_start = i * payload.max_seq_len;
+                    int pos = seq_len - 1;
+                    while (pos >= 0 && payload.target_ids[flat_start + pos] < 0) {
                         --pos;
                     }
                     if (pos >= 0 && pos < cached_seq_len) {
@@ -2662,7 +3022,8 @@ BatchResult processBatch(
                         if (pos < 0) {
                             continue;
                         }
-                        const int target_token = batch_targets[i][pos];
+                        const int flat_start_i = i * payload.max_seq_len;
+                        const int target_token = payload.target_ids[flat_start_i + pos];
                         if (target_token < 0 || target_token >= vocab_size) {
                             continue;
                         }
@@ -2685,18 +3046,18 @@ BatchResult processBatch(
                         const float confidence = 1.0f / (1.0f + std::exp(-margin));
                         const float clamped_confidence = std::min(1.0f, std::max(0.0f, confidence));
                         const std::uint64_t prompt_hash = GRIMTS::HashSignature(
-                            batch_inputs[i].data(),
-                            batch_inputs[i].size() * sizeof(int));
+                            payload.input_ids.data() + flat_start_i,
+                            payload.seq_lengths[i] * sizeof(int));
 
                         GRIMTS::GuessMetadata pred_meta{};
                         pred_meta.prompt_hash = prompt_hash;
                         pred_meta.guess_hash = GRIMTS::HashSignature(&pred_token, sizeof(int));
                         pred_meta.confidence = clamped_confidence;
                         pred_meta.sequence_length = static_cast<std::uint16_t>(
-                            std::min<std::size_t>(batch_targets[i].size(),
+                            std::min<std::size_t>(payload.seq_lengths[i],
                                                   std::numeric_limits<std::uint16_t>::max()));
                         pred_meta.prompt_length = static_cast<std::uint16_t>(
-                            std::min<std::size_t>(batch_inputs[i].size(),
+                            std::min<std::size_t>(payload.seq_lengths[i],
                                                   std::numeric_limits<std::uint16_t>::max()));
                         pred_meta.epoch = static_cast<std::uint32_t>(epoch_idx + 1);
                         pred_metadata.push_back(pred_meta);
@@ -2825,9 +3186,9 @@ BatchResult processBatch(
                 for (int pos = 0; pos < sample_positions; ++pos) {
                     const int b = pos / ts.cached_seq_len;
                     const int t = pos % ts.cached_seq_len;
-                    if (b < static_cast<int>(batch_targets.size()) &&
-                        t < static_cast<int>(batch_targets[b].size())) {
-                        const int candidate = batch_targets[b][t];
+                    if (b < payload.batch_size &&
+                        t < payload.seq_lengths[b]) {
+                        const int candidate = payload.target_ids[b * payload.max_seq_len + t];
                         if (candidate >= 0 && candidate < vocab_size) {
                             debug_pos = pos;
                             debug_b = b;
@@ -2841,8 +3202,8 @@ BatchResult processBatch(
                     debug_pos = 0;
                     debug_b = 0;
                     debug_t = 0;
-                    if (!batch_targets.empty() && !batch_targets[0].empty()) {
-                        target_token = batch_targets[0][0];
+                    if (payload.batch_size > 0 && payload.seq_lengths[0] > 0) {
+                        target_token = payload.target_ids[0];
                     }
                 }
 
@@ -2892,9 +3253,16 @@ BatchResult processBatch(
                 } else {
                     trace_msg << " p_277=N/A";
                 }
+                // sum_exp = Σ exp(logit[v] - max_logit), NOT Σ exp(logit[v])!
+                // This is the SHIFTED partition function. Low values (e.g. 5.5) mean
+                // the distribution is PEAKED (only ~5 tokens have significant mass).
+                // logsumexp = log(sum_exp) + max_logit = log(Σ exp(logit[v]))
+                const double logsumexp = std::log(sum_exp) + static_cast<double>(max_logit);
                 trace_msg << " max_logit=" << max_logit
                           << " argmax=" << argmax
-                          << " sum_exp=" << sum_exp
+                          << " sum_exp_shifted=" << sum_exp
+                          << " logsumexp=" << logsumexp
+                          << " logit_range=" << Internal::formatScalar(max_logit - static_cast<float>(*std::min_element(logits, logits + vocab_size)), 4)
                           << " loss=" << Internal::formatScalar(result.loss, 4);
                 ctx.logging.logger->log(trace_msg.str());
             }
@@ -2950,6 +3318,103 @@ BatchResult processBatch(
                            << " global_max_logit=" << global_max_logit
                            << " global_argmax_token=" << global_argmax_token;
                 ctx.logging.logger->log(space_diag.str());
+            }
+            
+            // ================================================================
+            // PERIODIC p_t / p_v DUMP
+            // p_t = softmax probability assigned to the CORRECT target token
+            // p_v = softmax probability assigned to token 277 (SPACE) at
+            //       positions where 277 is NOT the target
+            // Fires every kPtPvDumpInterval batches for a configurable number
+            // of positions so we can track whether the model is learning.
+            // ================================================================
+            constexpr int kPtPvDumpInterval   = 1;   // every N batches (set higher to reduce noise)
+            constexpr int kPtPvDumpPositions  = 20;  // how many positions to dump
+            constexpr int kToken277_dump      = 277;
+            
+            if ((batch_idx % kPtPvDumpInterval) == 0) {
+                const int dump_n = std::min(sample_positions, kPtPvDumpPositions);
+                
+                // Accumulators for summary stats
+                double sum_p_t = 0.0, sum_p_v = 0.0;
+                int    count_p_t = 0, count_p_v = 0;
+                float  max_p_t = 0.0f, min_p_t = 1.0f;
+                float  max_p_v = 0.0f, min_p_v = 1.0f;
+                
+                std::ostringstream pt_pv;
+                pt_pv << std::fixed << std::setprecision(8);
+                pt_pv << "[PtPvDump] batch=" << (batch_idx + 1) << " positions=" << dump_n << "\n";
+                
+                for (int pos = 0; pos < dump_n; ++pos) {
+                    const float* logits_pos = logit_sample.data() + static_cast<size_t>(pos) * vocab_size;
+                    
+                    // Stable softmax: subtract max
+                    float lmax = -1e30f;
+                    for (int v = 0; v < vocab_size; ++v) {
+                        if (logits_pos[v] > lmax) lmax = logits_pos[v];
+                    }
+                    double denom = 0.0;
+                    for (int v = 0; v < vocab_size; ++v) {
+                        denom += std::exp(static_cast<double>(logits_pos[v] - lmax));
+                    }
+                    if (denom <= 0.0) denom = 1.0;
+                    
+                    // Resolve target for this position from flat payload
+                    const int b = pos / ts.cached_seq_len;
+                    const int t = pos % ts.cached_seq_len;
+                    int target = -1;
+                    if (b < payload.batch_size &&
+                        t < payload.seq_lengths[b]) {
+                        target = payload.target_ids[b * payload.max_seq_len + t];
+                    }
+                    
+                    // p_t: probability of correct target
+                    float p_t_val = 0.0f;
+                    if (target >= 0 && target < vocab_size) {
+                        p_t_val = static_cast<float>(
+                            std::exp(static_cast<double>(logits_pos[target] - lmax)) / denom);
+                        sum_p_t += p_t_val;
+                        max_p_t = std::max(max_p_t, p_t_val);
+                        min_p_t = std::min(min_p_t, p_t_val);
+                        count_p_t++;
+                    }
+                    
+                    // p_v: probability of token 277 at this position
+                    float p_v_val = 0.0f;
+                    if (vocab_size > kToken277_dump) {
+                        p_v_val = static_cast<float>(
+                            std::exp(static_cast<double>(logits_pos[kToken277_dump] - lmax)) / denom);
+                        if (target != kToken277_dump) {
+                            sum_p_v += p_v_val;
+                            max_p_v = std::max(max_p_v, p_v_val);
+                            min_p_v = std::min(min_p_v, p_v_val);
+                            count_p_v++;
+                        }
+                    }
+                    
+                    // Find argmax for context
+                    int am = 0; float am_val = logits_pos[0];
+                    for (int v = 1; v < vocab_size; ++v) {
+                        if (logits_pos[v] > am_val) { am_val = logits_pos[v]; am = v; }
+                    }
+                    
+                    pt_pv << "  pos=" << pos
+                           << " target=" << target
+                           << " p_t=" << p_t_val
+                           << " p_277=" << p_v_val
+                           << " argmax=" << am
+                           << (target == kToken277_dump ? " [TGT=277]" : "")
+                           << "\n";
+                }
+                
+                // Summary line
+                pt_pv << "  SUMMARY: "
+                       << "avg_p_t=" << (count_p_t > 0 ? sum_p_t / count_p_t : 0.0)
+                       << " [" << min_p_t << ".." << max_p_t << "] (n=" << count_p_t << ")"
+                       << " | avg_p_277_at_other=" << (count_p_v > 0 ? sum_p_v / count_p_v : 0.0)
+                       << " [" << min_p_v << ".." << max_p_v << "] (n=" << count_p_v << ")"
+                       << " | uniform_baseline=" << (1.0 / vocab_size);
+                ctx.logging.logger->log(pt_pv.str());
             }
         }
     }
@@ -3080,6 +3545,159 @@ BatchResult processBatch(
             ctx.logging.logger->log(logit_stats.str());
             
             // ================================================================
+            // LOGIT SCALE EQUATION DIAGNOSTIC (Rule 21)
+            //
+            // logit[v] = Σ_d hidden[t,d] × W[v,d] = h · W[v]^T
+            // |logit[v]| ≤ ||h|| × ||W[v]||
+            // logit_range = logit_max - logit_min
+            // logit_std = sqrt(Var(logits))
+            //
+            // EXPECTED: With RMSNorm'd hidden (rms≈1 → ||h||≈sqrt(d)), and
+            //   Xavier W (||W_row||≈√(d/V) for random init), logit_std should
+            //   start small and grow SLOWLY as model learns.
+            //   If logit_range > 20, logit scale is BLOWING UP.
+            //
+            // This diagnostic traces:
+            //   1. Logit std/range across sampled positions×vocab
+            //   2. Hidden state norms at LM head input (sampled)
+            //   3. Weight norms for top-5 + random-10 vocab tokens
+            //   4. Expected vs actual logit magnitude
+            // ================================================================
+            {
+                // --- Logit statistics ---
+                const float logit_range = logit_max - logit_min;
+                // Compute logit variance (already have logit_mean from above)
+                double logit_var_sum = 0.0;
+                for (int pos = 0; pos < sample_positions; ++pos) {
+                    for (int v = 0; v < vocab_size; ++v) {
+                        const float diff = logit_sample[pos * vocab_size + v] - logit_mean;
+                        logit_var_sum += static_cast<double>(diff) * diff;
+                    }
+                }
+                const float logit_std = std::sqrt(static_cast<float>(logit_var_sum / (static_cast<double>(sample_positions) * vocab_size)));
+                
+                // --- Per-position logit range ---
+                float per_pos_range_sum = 0.0f;
+                float per_pos_range_max = 0.0f;
+                for (int pos = 0; pos < sample_positions; ++pos) {
+                    float pos_max = -1e30f, pos_min = 1e30f;
+                    for (int v = 0; v < vocab_size; ++v) {
+                        const float l = logit_sample[pos * vocab_size + v];
+                        pos_max = std::max(pos_max, l);
+                        pos_min = std::min(pos_min, l);
+                    }
+                    const float pos_range = pos_max - pos_min;
+                    per_pos_range_sum += pos_range;
+                    per_pos_range_max = std::max(per_pos_range_max, pos_range);
+                }
+                const float avg_per_pos_range = per_pos_range_sum / sample_positions;
+                
+                // --- Hidden state norms at LM head input ---
+                const bool use_centered_src = ctx.model->getConfig().lm_head_center_hidden_states;
+                const float* h_src = (use_centered_src && ts.centering_scratch_tensor.data)
+                    ? ts.centering_scratch_tensor.data
+                    : ts.cached_encoder_output.data;
+                
+                float h_norm_mean = 0.0f, h_norm_max = 0.0f, h_norm_min = 1e30f;
+                float h_rms_mean = 0.0f;
+                if (h_src) {
+                    const size_t h_bytes = static_cast<size_t>(sample_positions) * d_model * sizeof(float);
+                    std::vector<float> h_sample(sample_positions * d_model);
+                    cudaMemcpy(h_sample.data(), h_src, h_bytes, cudaMemcpyDeviceToHost);
+                    
+                    for (int pos = 0; pos < sample_positions; ++pos) {
+                        float sum_sq = 0.0f;
+                        for (int d = 0; d < d_model; ++d) {
+                            const float val = h_sample[pos * d_model + d];
+                            sum_sq += val * val;
+                        }
+                        const float norm = std::sqrt(sum_sq);
+                        const float rms = std::sqrt(sum_sq / d_model);
+                        h_norm_mean += norm;
+                        h_norm_max = std::max(h_norm_max, norm);
+                        h_norm_min = std::min(h_norm_min, norm);
+                        h_rms_mean += rms;
+                    }
+                    h_norm_mean /= sample_positions;
+                    h_rms_mean /= sample_positions;
+                }
+                
+                // --- Weight norm statistics (sample random + top tokens) ---
+                // Issue #138 FIX: Compute E[||W||²] (mean of squared norms) for correct expected logit_std.
+                // Old code used E[||W||] (mean of norms) which underestimates by Jensen's inequality
+                // when ||W|| distribution is skewed (e.g., tok277 has ||W||=1.67 vs mean=0.20).
+                float w_norm_mean = 0.0f, w_norm_sq_mean = 0.0f, w_norm_max = 0.0f;
+                int w_norm_max_tok = -1;
+                const int w_sample_count = std::min(500, vocab_size);  // Sample 500 rows for better coverage
+                if (ts.tensors_->lm_head_weights.data) {
+                    std::vector<float> w_row(d_model);
+                    
+                    // Sample evenly-spaced vocab tokens
+                    const int stride = std::max(1, vocab_size / w_sample_count);
+                    int sampled = 0;
+                    for (int tok = 0; tok < vocab_size && sampled < w_sample_count; tok += stride, ++sampled) {
+                        const size_t row_offset = static_cast<size_t>(tok) * d_model;
+                        cudaMemcpy(w_row.data(),
+                                   static_cast<float*>(ts.tensors_->lm_head_weights.data) + row_offset,
+                                   d_model * sizeof(float), cudaMemcpyDeviceToHost);
+                        float norm_sq = 0.0f;
+                        for (int d = 0; d < d_model; ++d) {
+                            norm_sq += w_row[d] * w_row[d];
+                        }
+                        const float norm = std::sqrt(norm_sq);
+                        w_norm_mean += norm;
+                        w_norm_sq_mean += norm_sq;  // E[||W||²] for correct variance formula
+                        if (norm > w_norm_max) {
+                            w_norm_max = norm;
+                            w_norm_max_tok = tok;
+                        }
+                    }
+                    w_norm_mean /= sampled;
+                    w_norm_sq_mean /= sampled;
+                }
+                
+                // --- Expected logit magnitude ---
+                // Issue #138 FIX: Correct formula for dot product variance.
+                // Var(h·W) = d × Var(h_i) × Var(W_j) = h_rms² × E[||W||²]
+                // Old code used h_rms × E[||W||] which underestimates due to Jensen's inequality.
+                // Correct: logit_std ≈ h_rms × sqrt(E[||W||²]) = h_rms × ||W||_rms
+                const float w_norm_rms = std::sqrt(w_norm_sq_mean);  // sqrt(E[||W||²])
+                const float expected_logit_std = h_rms_mean * w_norm_rms;
+                const float logit_std_ratio = (expected_logit_std > 1e-10f) ? logit_std / expected_logit_std : 0.0f;
+                
+                std::ostringstream scale_eq;
+                scale_eq << std::fixed << std::setprecision(6);
+                scale_eq << "[LOGIT_SCALE_EQUATION] logit[v] = h · W[v]^T, logit_range = max - min\n";
+                scale_eq << "  LOGIT STATS: std=" << logit_std << " range=" << logit_range
+                         << " avg_per_pos_range=" << avg_per_pos_range
+                         << " max_per_pos_range=" << per_pos_range_max << "\n";
+                scale_eq << "  HIDDEN (LM input): ||h||_mean=" << h_norm_mean
+                         << " ||h||_max=" << h_norm_max << " ||h||_min=" << h_norm_min
+                         << " h_rms_mean=" << h_rms_mean << "\n";
+                scale_eq << "  WEIGHTS (LM head): ||W||_mean=" << w_norm_mean
+                         << " ||W||_rms=" << w_norm_rms
+                         << " ||W||_max=" << w_norm_max << " (tok=" << w_norm_max_tok << ")"
+                         << " d_model=" << d_model << "\n";
+                scale_eq << "  EXPECTED logit_std = h_rms × ||W||_rms = " << h_rms_mean
+                         << " × " << w_norm_rms << " = " << expected_logit_std << "\n";
+                scale_eq << "  ACTUAL logit_std = " << logit_std
+                         << " ratio(actual/expected)=" << logit_std_ratio << "\n";
+                if (logit_range > 20.0f) {
+                    scale_eq << "  [ANOMALY] LOGIT_RANGE_EXPLOSION: range=" << logit_range
+                             << " >> 20.0 threshold. Weights or hidden norms growing unboundedly.\n";
+                }
+                if (w_norm_max > 2.0f) {
+                    scale_eq << "  [ANOMALY] WEIGHT_NORM_EXPLOSION: ||W||_max=" << w_norm_max
+                             << " (tok=" << w_norm_max_tok << ") >> 2.0. Weight decay too weak or gradient bias.\n";
+                }
+                if (logit_std_ratio > 3.0f) {
+                    scale_eq << "  [ANOMALY] LOGIT_STD_MISMATCH: actual/expected=" << logit_std_ratio
+                             << " >> 3.0. Possible hidden-weight alignment or missing 1/sqrt(d) scaling.\n";
+                }
+                ctx.logging.logger->log(scale_eq.str());
+            }
+            
+            // ================================================================
             // HIDDEN STATE DIAGNOSTICS: Cosine similarity between positions
             // Issue #115 FIX: Use centered buffer when centering is enabled!
             // ts.cached_encoder_output = RAW encoder output BEFORE centering
@@ -3142,7 +3760,7 @@ BatchResult processBatch(
             // ================================================================
             // LM HEAD DIAGNOSTICS: Row norms ||W[v]|| for top predicted tokens
             // ================================================================
-            if (ts.lm_head_weights.data) {
+            if (ts.tensors_->lm_head_weights.data) {
                 // Copy LM head rows for top-5 predicted tokens
                 std::ostringstream lm_stats;
                 lm_stats << "[LMHeadNorm] batch=" << (batch_idx + 1) << " ||W[v]||=[";
@@ -3153,7 +3771,7 @@ BatchResult processBatch(
                     // Copy row [tok_id, :] from W [vocab_size, d_model]
                     const size_t row_offset = static_cast<size_t>(tok_id) * d_model;
                     cudaMemcpy(row_buffer.data(), 
-                               static_cast<float*>(ts.lm_head_weights.data) + row_offset,
+                               static_cast<float*>(ts.tensors_->lm_head_weights.data) + row_offset,
                                d_model * sizeof(float), cudaMemcpyDeviceToHost);
                     
                     // Compute L2 norm of row
@@ -3181,10 +3799,10 @@ BatchResult processBatch(
         spike_diag << "[LossDiag] SPIKE DETECTED loss=" << result.loss << " batch=" << (batch_idx + 1) << "\n";
         spike_diag << "  Sequences: ";
         size_t max_seq_in_batch = 0;
-        for (size_t i = 0; i < batch.seq_ids.size(); ++i) {
-            spike_diag << batch.seq_ids[i] << "(len=" << batch_inputs[i].size() << ")";
-            max_seq_in_batch = std::max(max_seq_in_batch, batch_inputs[i].size());
-            if (i + 1 < batch.seq_ids.size()) spike_diag << ", ";
+        for (int i = 0; i < payload.batch_size; ++i) {
+            spike_diag << payload.seq_ids[i] << "(len=" << payload.seq_lengths[i] << ")";
+            max_seq_in_batch = std::max(max_seq_in_batch, static_cast<size_t>(payload.seq_lengths[i]));
+            if (i + 1 < payload.batch_size) spike_diag << ", ";
         }
         const bool stability_seq_override = ctx.config.stability.enabled && ctx.config.stability.max_seq_len > 0;
         const int config_seq_len_limit = stability_seq_override
@@ -3206,11 +3824,13 @@ BatchResult processBatch(
                        << ") ***";
         }
         spike_diag << "\n  First 10 targets per seq: ";
-        for (size_t s = 0; s < batch_targets.size(); ++s) {
+        for (int s = 0; s < payload.batch_size; ++s) {
             spike_diag << "[";
-            for (size_t t = 0; t < std::min<size_t>(10, batch_targets[s].size()); ++t) {
-                spike_diag << batch_targets[s][t];
-                if (t + 1 < std::min<size_t>(10, batch_targets[s].size())) spike_diag << ",";
+            const int flat_start = s * payload.max_seq_len;
+            const int len = payload.seq_lengths[s];
+            for (int t = 0; t < std::min(10, len); ++t) {
+                spike_diag << payload.target_ids[flat_start + t];
+                if (t + 1 < std::min(10, len)) spike_diag << ",";
             }
             spike_diag << "] ";
         }
@@ -3249,25 +3869,29 @@ BatchResult processBatch(
         bool has_nan_loss = !std::isfinite(result.loss);
         bool has_invalid_tokens = false;
         
-        // Scan for token IDs outside vocab range (actual corruption)
-        for (const auto& seq : batch_inputs) {
-            for (int tid : seq) {
-                if (tid < 0 || tid >= static_cast<int>(ctx.config.actual_vocab_size)) {
+        // Scan for token IDs outside vocab range (actual corruption) — using flat payload
+        for (int s = 0; s < payload.batch_size && !has_invalid_tokens; ++s) {
+            const int flat_start = s * payload.max_seq_len;
+            const int len = payload.seq_lengths[s];
+            for (int t = 0; t < len; ++t) {
+                if (payload.input_ids[flat_start + t] < 0 ||
+                    payload.input_ids[flat_start + t] >= static_cast<int>(ctx.config.actual_vocab_size)) {
                     has_invalid_tokens = true;
                     break;
                 }
             }
-            if (has_invalid_tokens) break;
         }
-        for (const auto& seq : batch_targets) {
-            for (int tid : seq) {
+        for (int s = 0; s < payload.batch_size && !has_invalid_tokens; ++s) {
+            const int flat_start = s * payload.max_seq_len;
+            const int len = payload.seq_lengths[s];
+            for (int t = 0; t < len; ++t) {
+                const int tid = payload.target_ids[flat_start + t];
                 // targets can be -1 for masked positions, but not other negatives or OOB
                 if (tid < -1 || tid >= static_cast<int>(ctx.config.actual_vocab_size)) {
                     has_invalid_tokens = true;
                     break;
                 }
             }
-            if (has_invalid_tokens) break;
         }
         
         // Only skip on confirmed corruption, NOT on high loss alone
@@ -3344,7 +3968,6 @@ BatchResult processBatch(
             ctx.model->zeroGrad();
             ctx.optimizer.current_micro_step = 0;  // Reset accumulation window
             
-            ctx.model->clearSequenceLossWeights();
             result.skipped = true;
             result.skip_reason = "data_corruption";
             ctx.global_step++;
@@ -3359,8 +3982,7 @@ BatchResult processBatch(
         if (result.loss > loss_threshold) {
             ctx.logging.logger->log("[LossMonitor] HIGH_LOSS batch=" + std::to_string(batch_idx + 1) +
                                     " loss=" + Internal::formatScalar(result.loss) +
-                                    " threshold=" + Internal::formatScalar(loss_threshold) +
-                                    " (NOT skipping - hard examples are valuable)");
+                                    " threshold=" + Internal::formatScalar(loss_threshold));
         }
     }
     
@@ -3395,13 +4017,7 @@ BatchResult processBatch(
     //     grad_scale = 1.0f / static_cast<float>(safe_tokens);
     // }
     
-    // DIAGNOSTIC: Print config flag value (first 3 batches only)
-    if (batch_idx < 3) {
-        ctx.logging.logger->log("[GradScaleDiag] batch=" + std::to_string(batch_idx + 1) +
-                                " per_token_grad_scale=" + (per_token_grad_scale ? "TRUE" : "FALSE") +
-                                " valid_tokens=" + std::to_string(valid_tokens) +
-                                " computed_grad_scale=" + Internal::formatScalar(grad_scale, 8));
-    }
+
     
     // PRE-BACKWARD log removed - adds no actionable information
     
@@ -3469,7 +4085,7 @@ BatchResult processBatch(
     // Use centralized EquationLogger to gate expensive diagnostics
     // Issue #134: Run EXPENSIVE diagnostics every N batches to avoid sync bottleneck
     // These copy GB of data D2H (logits are 7168*50377*4 = 1.4GB per call!)
-    static int debug_token277_diag_interval = 1;  // Debug knob: set to N for every N batches
+    static int debug_token277_diag_interval = 10;  // Debug knob: set to N for every N batches
     const int diag_interval = std::max(debug_token277_diag_interval, 1);
     const bool kToken277DiagEnabled = GRIM::getEquationLogger().isEnabled() &&
         (batch_idx == 0 || (batch_idx + 1) % diag_interval == 0);
@@ -3479,10 +4095,22 @@ BatchResult processBatch(
         const auto& cfg = ctx.model->getConfig();
         cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
         
-        // Flatten batch_targets for analysis
-        std::vector<int> flat_targets;
-        for (const auto& seq_targets : batch_targets) {
-            flat_targets.insert(flat_targets.end(), seq_targets.begin(), seq_targets.end());
+        // ====================================================================
+        // Issue #137: Use GPU's cached_targets_tensor directly.
+        //
+        // GPU buffers (grad_logits, hidden states, logits) are laid out as
+        // [batch_size × max_seq_len] where shorter sequences are padded.
+        // The GPU targets buffer (cached_targets_tensor) is ALREADY in this
+        // exact layout — just D2H copy it instead of reconstructing from
+        // payload.target_ids (which is already flat-padded).
+        // ====================================================================
+        const int diag_total_tokens = ts.cached_batch_size * ts.cached_seq_len;
+        std::vector<int> flat_targets(diag_total_tokens);
+        if (ts.cached_targets_tensor.data && diag_total_tokens > 0) {
+            cudaMemcpy(flat_targets.data(),
+                       reinterpret_cast<const int*>(ts.cached_targets_tensor.data),
+                       diag_total_tokens * sizeof(int),
+                       cudaMemcpyDeviceToHost);
         }
         
         Token277Diagnostic tok277 = computeToken277Diagnostic(
@@ -3523,10 +4151,10 @@ BatchResult processBatch(
             "h_mean=" + std::to_string(hidden277.hidden_mean) + 
             " h_norm=" + std::to_string(hidden277.hidden_norm_mean) + 
             " h_std=" + std::to_string(hidden277.hidden_std),
-            "contrib_277=" + std::to_string(hidden277.contribution_from_277_targets) + 
-            " contrib_other=" + std::to_string(hidden277.contribution_from_other_targets),
-            "total_contrib=" + std::to_string(hidden277.contribution_from_277_targets + 
-                                              hidden277.contribution_from_other_targets),
+            "grad_w277_from_277_norm=" + std::to_string(hidden277.grad_w277_norm_from_277) + 
+            " grad_w277_from_other_norm=" + std::to_string(hidden277.grad_w277_norm_from_other),
+            "cos(g277,gOther)=" + std::to_string(hidden277.grad_w277_cosine) +
+            " total_sum=" + std::to_string(hidden277.grad_w277_sum_from_277 + hidden277.grad_w277_sum_from_other),
             "grad_at_277=" + std::to_string(hidden277.grad_277_at_277_targets) + 
             " grad_at_other=" + std::to_string(hidden277.grad_277_at_other_targets),
             static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::GRADIENT_CLIP);
@@ -3562,6 +4190,36 @@ BatchResult processBatch(
             0,                                                           // layer_idx (N/A for global diagnostic)
             0,                                                           // head_idx (N/A)
             GRIM::EquationPhase::GRADIENT_CLIP);                        // phase (runs POST-BACKWARD, before optimizer)
+
+        // ========================================================================
+        // DIAGNOSTIC: Issue #134 - PC1 Causality Test (Rule 21 Equation-Based)
+        // Estimates top principal component of hidden states via power iteration,
+        // projects it out, recomputes logits, measures Token 277 deflation and
+        // entropy improvement to determine if PC1 is the mode collapse mechanism.
+        // NOTE: This is EXPENSIVE (copies full weight matrix + N×V logit recompute
+        // at sampled positions). Runs at same frequency as other expensive diagnostics.
+        // ========================================================================
+        PC1CausalityTest pc1_test = computePC1CausalityTest(
+            ts, flat_targets, cfg.d_model, cfg.vocab_size,
+            cfg.lm_head_center_hidden_states,
+            stream);
+        ctx.logging.logger->log(formatPC1CausalityTest(pc1_test, batch_idx));
+
+        EQ_LOG_HOST(
+            "PC1_CAUSALITY_TEST",
+            "h'_t = h_t - (h_t · g) g, logits' = h' @ W^T",
+            "PC1: var_explained=" + std::to_string(pc1_test.pc1_variance_explained) +
+            " cos(PC1,W[277])=" + std::to_string(pc1_test.cos_pc1_w277),
+            "BEFORE: logit277=" + std::to_string(pc1_test.before_logit_277_mean) +
+            " entropy=" + std::to_string(pc1_test.before_entropy_mean) +
+            " avg_cos=" + std::to_string(pc1_test.before_avg_cos),
+            "AFTER: logit277=" + std::to_string(pc1_test.after_logit_277_mean) +
+            " entropy=" + std::to_string(pc1_test.after_entropy_mean) +
+            " avg_cos=" + std::to_string(pc1_test.after_avg_cos),
+            "DELTAS: d_logit277=" + std::to_string(pc1_test.delta_logit_277) +
+            " d_entropy=" + std::to_string(pc1_test.delta_entropy) +
+            " d_avg_cos=" + std::to_string(pc1_test.delta_avg_cos),
+            static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::GRADIENT_CLIP);
     }
     
     // ========================================================================
@@ -3605,7 +4263,7 @@ BatchResult processBatch(
         printf("========================================\n");
         
         // Embedding grads
-        exportBuffer("embedding_grads", ts.embedding_weights.grad_data(), 
+        exportBuffer("embedding_grads", ts.tensors_->embedding_weights.grad_data(), 
                      static_cast<size_t>(cfg.vocab_size) * cfg.d_model);
         
         // Per-layer gradients (via encoder's Tensor.grad per AUTOGRAD MIGRATION)
@@ -3671,11 +4329,7 @@ BatchResult processBatch(
     Internal::NumericalGradCheckResult grad_check_result{};
     if (is_last_micro_batch) {
         grad_check_result = Internal::performNumericalGradientCheck(
-            ctx,
-            batch_inputs, batch_targets,
-            batch_numeric_values, batch_numeric_mask,
-            batch_text_features, batch_text_mask,
-            batch_idx);
+            ctx, payload, batch_idx);
         
         // DEBUG: Log whether check was performed
         ctx.logging.logger->log("[GradCheckDebug] performed=" + 
@@ -3699,11 +4353,13 @@ BatchResult processBatch(
     //     ctx.logging.logger->log("[GradDiag] AFTER_BACKWARD: " + sampleEmbeddingGrads(ts, ts.stream_ctrl.getPrimaryStream()));
     // }
     
-    // FIX Issue #23: MUST sync gradient norms EVERY batch for correct clipping!
-    // Previously: only synced every 10th batch, used stale cached values for clipping.
+    // FIX Issue #23: Sync gradient norms EVERY batch for accurate diagnostics.
+    // Previously: only synced every 10th batch (batch_idx % 10 == 0), used stale cached values.
     // Evidence: Batches 611-620 all showed grad_norm=2.5877 despite actual norms varying 2.1-5.3.
-    // Impact: 90% of batches were clipped with WRONG norm, corrupting optimization trajectory.
+    // Impact: Diagnostics showed wrong values, spike detection used stale data.
     // NOTE: Performance cost is ~1ms per batch (acceptable for correctness).
+    // NOTE: After Issue #135, clipping happens LATER (in should_step block) and recomputes
+    //       its own norm on scaled gradients. This norm is for diagnostics/spike detection only.
     const bool should_sync = true;  // Was: (batch_idx % 10 == 0) - WRONG!
 
     ctx.logging.logger->log("[GradTrace] PRE-GRADNORM batch=" + std::to_string(batch_idx + 1) +
@@ -3991,11 +4647,11 @@ BatchResult processBatch(
                 
                 size_t total_params_perturbed = 0;
                 
-                // Inject into LM head weights (always accessible via TrainingState)
-                if (training_state.lm_head_weights.data) {
+                // Inject into LM head weights (always accessible via TrainingTensors)
+                if (training_state.tensors_->lm_head_weights.data) {
                     size_t lm_size = static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
                     GRIM::Telemetry::launchPlateauNoiseInjection(
-                        training_state.lm_head_weights.data,
+                        training_state.tensors_->lm_head_weights.data,
                         lm_size,
                         tc_cfg.plateau_noise_std,
                         tc_cfg.plateau_noise_proportional,
@@ -4008,9 +4664,9 @@ BatchResult processBatch(
                 }
                 
                 // Inject into LM head bias if present
-                if (training_state.lm_head_bias.data) {
+                if (training_state.tensors_->lm_head_bias.data) {
                     GRIM::Telemetry::launchPlateauNoiseInjection(
-                        training_state.lm_head_bias.data,
+                        training_state.tensors_->lm_head_bias.data,
                         static_cast<size_t>(cfg.vocab_size),
                         tc_cfg.plateau_noise_std,
                         tc_cfg.plateau_noise_proportional,
@@ -4208,9 +4864,9 @@ BatchResult processBatch(
             const auto& cfg = ctx.model->getConfig();
             cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
             
-            if (ts.lm_head_weights.data && kToken277 < cfg.vocab_size) {
+            if (ts.tensors_->lm_head_weights.data && kToken277 < cfg.vocab_size) {
                 std::vector<float> w277_row(static_cast<size_t>(cfg.d_model));
-                const float* w277_ptr = ts.lm_head_weights.data + static_cast<size_t>(kToken277) * cfg.d_model;
+                const float* w277_ptr = ts.tensors_->lm_head_weights.data + static_cast<size_t>(kToken277) * cfg.d_model;
                 cudaMemcpyAsync(w277_row.data(), w277_ptr, 
                                 static_cast<size_t>(cfg.d_model) * sizeof(float),
                                 cudaMemcpyDeviceToHost, stream);
@@ -4275,9 +4931,9 @@ BatchResult processBatch(
             const auto& cfg = ctx.model->getConfig();
             cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
             
-            if (ts.lm_head_weights.data && kToken277 < cfg.vocab_size) {
+            if (ts.tensors_->lm_head_weights.data && kToken277 < cfg.vocab_size) {
                 std::vector<float> w277_row(static_cast<size_t>(cfg.d_model));
-                const float* w277_ptr = ts.lm_head_weights.data + static_cast<size_t>(kToken277) * cfg.d_model;
+                const float* w277_ptr = ts.tensors_->lm_head_weights.data + static_cast<size_t>(kToken277) * cfg.d_model;
                 cudaMemcpyAsync(w277_row.data(), w277_ptr, 
                                 static_cast<size_t>(cfg.d_model) * sizeof(float),
                                 cudaMemcpyDeviceToHost, stream);
@@ -4339,7 +4995,7 @@ BatchResult processBatch(
         }
     }
     
-    result.sequences_processed = static_cast<int>(batch_inputs.size());
+    result.sequences_processed = payload.batch_size;
     result.tokens_processed = clip_selection.stats.total_tokens;
     
     // Flush device logs on the diagnostic sync interval.
@@ -4528,27 +5184,16 @@ EpochResult runEpoch(
         std::vector<TrainingSequence*> shuffled;
         shuffled.reserve(ctx.data.train_views.size());
         GRIM::DynaSeq::Catalog shuffled_catalog;
-        std::vector<float> shuffled_rarity;
-        
-        if (!ctx.data.sequence_rarity.empty()) {
-            shuffled_rarity.resize(ctx.data.sequence_rarity.size(), 0.0f);
-        }
         
         for (size_t new_idx = 0; new_idx < perm.size(); ++new_idx) {
             auto* seq = ctx.data.train_views[perm[new_idx]];
             shuffled.push_back(seq);
             const uint32_t len = static_cast<uint32_t>(seq->token_ids.size());
             shuffled_catalog.add(len, len, 0, 0, 0);
-            if (!shuffled_rarity.empty()) {
-                shuffled_rarity[new_idx] = ctx.data.sequence_rarity[perm[new_idx]];
-            }
         }
         
         ctx.data.train_views.swap(shuffled);
         ctx.data.train_catalog = std::move(shuffled_catalog);
-        if (!shuffled_rarity.empty()) {
-            ctx.data.sequence_rarity.swap(shuffled_rarity);
-        }
         PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] Shuffle complete\n");
     }
     
@@ -4561,7 +5206,6 @@ EpochResult runEpoch(
         ctx.global_step,
         epoch_idx,
         ctx.config.stability.max_tokens_per_batch,
-        ctx.data.sequence_rarity.empty() ? nullptr : &ctx.data.sequence_rarity,
         *ctx.logging.logger);
     
     const int total_batches = static_cast<int>(schedule.batches.size());

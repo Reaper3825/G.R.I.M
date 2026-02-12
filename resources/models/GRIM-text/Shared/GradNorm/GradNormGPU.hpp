@@ -162,17 +162,13 @@ public:
      * FULLY GPU-RESIDENT: No CPU sync during this call.
      * Clipping is done separately via scaleGradients() after CPU-side decision.
      * 
-     * @param grads         Array of gradient buffer pointers
-     * @param sizes         Array of buffer sizes (element count)
-     * @param types         Array of parameter types (for per-type aggregation)
+     * @param groups        Array of ParameterGroup structs
      * @param num_groups    Number of groups
      * @param stream        CUDA stream
      * @return              Status code
      */
     GradNormStatus computeNorms(
-        float* const* grads,
-        const size_t* sizes,
-        const GRIM::ParamGroupType* types,
+        const GRIM::ParameterGroup* groups,
         size_t num_groups,
         cudaStream_t stream
     );
@@ -212,6 +208,7 @@ private:
     
     // Host pinned memory (for async copy)
     GradMetrics* h_metrics_ = nullptr;
+    GRIM::ParamGroupType* h_types_temp_ = nullptr;  // [max_groups] - pinned host buffer for types
     
     // Last stream used (for debugging)
     cudaStream_t last_stream_ = nullptr;

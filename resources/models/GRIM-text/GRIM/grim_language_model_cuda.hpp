@@ -24,6 +24,9 @@
 // TensorContract - Autograd system (includes ParamGroupType, ParameterGroup, Tensor)
 #include "../Shared/TensorContract/TensorContract_GPU.hpp"
 
+// BatchPayload - Single source of truth for per-batch metadata
+#include "../Shared/Batching/BatchPayload.hpp"
+
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -178,6 +181,9 @@ struct EncoderConfig {
     // This prevents mode collapse but attenuates gradient signal through 24 centering projections.
     // When false, only the LM head centering (center_hidden_states) prevents mode collapse.
     bool center_encoder_residuals = false;
+    
+    // Bias control - when false, encoder layers skip bias addition (b_qkv, b_o not used)
+    bool use_bias = true;
     
     // CUDA execution
     cudaStream_t stream = nullptr;       // CUDA stream for async execution
@@ -362,14 +368,10 @@ private:
 
     PBM::PBMState pbm_state_{};   // Unified PBM state (both ALiBi + RoPE)
     int num_heads;                // Number of attention heads
-    int head_dim_;                // Dimension per head (= d_model / num_heads)
     bool initialized;             // Initialization status
     PositionalEncodingType type;  // Encoding type
 
 public:
-    // DEPRECATED: Use head_dim from LanguageModelConfig instead
-    // Kept for backwards compatibility during transition
-    int d_head;                   // Dimension per head (for RoPE) - public for initialization
     
     ALiBiPositionalBias();
     ALiBiPositionalBias(const ALiBiPositionalBias&) = delete;
@@ -586,13 +588,8 @@ public:
     
     // Training
     // Legacy computeLoss() single-sequence function DELETED per Rule 20.
-    // Production code uses computeLossBatch() which supports batching and uses autograd.
-    float computeLossBatch(const std::vector<std::vector<int>>& batch_input_ids,
-                           const std::vector<std::vector<int>>& batch_target_ids,
-                           const std::vector<std::vector<float>>& batch_numeric_values,
-                           const std::vector<std::vector<uint8_t>>& batch_numeric_mask,
-                           const std::vector<std::vector<uint16_t>>& batch_text_features = {},
-                           const std::vector<std::vector<uint8_t>>& batch_text_mask = {});
+    // Production code uses computeLossBatch() with BatchPayload (single source of truth).
+    float computeLossBatch(const GRIM::Batching::BatchPayload& payload);
     Vector forwardWithCache(const std::vector<int>& token_ids,
                             const std::vector<float>& token_numeric_values,
                             const std::vector<uint8_t>& token_numeric_mask,
@@ -652,8 +649,6 @@ public:
     void dumpGradients(const std::string& path);  // Dump gradients to binary file for inspection
     void dumpGradientValues(int step, const std::string& filepath);  // Dump gradient values to text file for comparison
     void logEmbeddingDiagnostics(const std::string& tag);
-    void setSequenceLossWeights(const std::vector<float>& weights);
-    void clearSequenceLossWeights();
     
 #ifdef USE_CUDA
     void setLossOptions(const LossContext::LossOptions& opts) { loss_options_ = opts; }

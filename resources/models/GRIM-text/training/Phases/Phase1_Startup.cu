@@ -683,7 +683,7 @@ SequenceData loadTrainingData(
             std::remove_if(sequences.begin(), sequences.end(),
                 [min_seq_valid_tokens](const TrainingSequence& seq) {
                     // Count valid targets: excludes position 0 (BOS) and final position (boundary)
-                    // Mirrors the masking logic in ComputeLossBatch.cu::prepareLossBatchInputs()
+                    // Mirrors the masking logic in BatchPayload.cu::buildBatchPayload()
                     int valid = 0;
                     for (size_t i = 1; i + 1 < seq.targets.size(); ++i) {
                         if (seq.targets[i] >= 0) valid++;
@@ -885,13 +885,13 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     
     auto model = std::make_unique<GRIM::LanguageModel>(model_config);
     
+    // ═══════════════════════════════════════════════════════════════
+    // CORRUPTION DIAGNOSTIC: Check batch_prep vector integrity after each step
     // STEP 1: Initialize just the stream controller part of TrainingState
     // This creates CUDA streams (CUDA context must exist from STEP 0)
     {
         GRIM::StreamControllerConfig stream_config;
         stream_config.verbose = true;
-        stream_config.create_transfer_stream = true;
-        stream_config.create_auxiliary_stream = false;
         
         if (!model->getTrainingState().stream_ctrl.initialize(stream_config)) {
             throw std::runtime_error("FATAL: Failed to initialize StreamController");
@@ -933,6 +933,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
             cfg.num_layers, cfg.num_heads, num_kv_heads,
             cfg.max_seq_len, cfg.tie_embeddings, cfg.use_bias,
             cfg.positional_encoding,  // Issue #96: Only allocate pos_emb for LEARNED mode
+            cfg.numeric_head_enabled, // Numeric head allocation flag
             cfg.use_layer_scale,      // Issue #109: LayerScale gating flag
             cfg.layer_scale_init,     // Issue #109: Initial value for layer scale params
             xavier_seed,              // Use parameter (derived init_seed), not config.hyperparameters.seed
@@ -1136,59 +1137,6 @@ OptimizerContext initializeOptimizer(
     
     logger.log("✓ Optimizer state initialized");
     return ctx;
-}
-
-std::vector<float> computeRareTokenScores(
-    const std::vector<TrainingSequence*>& train_views,
-    uint32_t vocab_size,
-    size_t train_count,
-    TrainingLogger& logger) {
-    if (vocab_size == 0) {
-        throw std::runtime_error("RareTokens: vocab_size must be explicitly provided by the call site");
-    }
-    if (vocab_size < static_cast<uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET)) {
-        throw std::runtime_error("RareTokens: vocab_size must include byte+atom token ranges (>= 512)");
-    }
-
-    GRIM::RareTokens::Config rare_cfg;
-    rare_cfg.vocab_size = vocab_size;
-    rare_cfg.rare_threshold = std::max<uint64_t>(16, train_count / 32);
-    rare_cfg.smoothing = 4.0f;
-    rare_cfg.max_boost = 12.0f;
-    rare_cfg.rarity_exponent = 0.5f;
-    
-    std::vector<const std::vector<int>*> rare_token_sequences;
-    rare_token_sequences.reserve(train_views.size());
-    for (auto* seq : train_views) {
-        if (!seq) {
-            throw std::runtime_error("RareTokens: train view pointer is null");
-        }
-        rare_token_sequences.push_back(&seq->token_ids);
-    }
-    
-    auto rare_token_freqs = GRIM::RareTokens::computeFrequencies(rare_token_sequences, rare_cfg.vocab_size);
-    auto rare_inv_table = GRIM::RareTokens::buildInverseFrequencyTable(rare_token_freqs, rare_cfg);
-    std::vector<float> sequence_rarity = GRIM::RareTokens::scoreSequences(rare_token_sequences, rare_inv_table, rare_cfg);
-    
-    if (!sequence_rarity.empty()) {
-        float min_r = sequence_rarity.front();
-        float max_r = sequence_rarity.front();
-        float mean_r = 0.0f;
-        for (float r : sequence_rarity) {
-            min_r = std::min(min_r, r);
-            max_r = std::max(max_r, r);
-            mean_r += r;
-        }
-        mean_r /= static_cast<float>(sequence_rarity.size());
-        
-        std::ostringstream msg;
-        msg << "[RareTokens] rarity scores: min=" << std::fixed << std::setprecision(4)
-            << min_r << " max=" << max_r << " mean=" << mean_r
-            << " threshold=" << rare_cfg.rare_threshold;
-        logger.log(msg.str());
-    }
-    
-    return sequence_rarity;
 }
 
 RNGContext initializeRNG(
@@ -1487,23 +1435,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     ctx->logging.logger->log("✓ Vocab size validated: tokenizer and training data match (" + 
                             std::to_string(tokenizer_vocab_size) + " tokens)");
     
-    // 6. Compute rare token scores
-    ctx->data.sequence_rarity = Internal::computeRareTokenScores(
-        ctx->data.train_views,
-        ctx->config.actual_vocab_size,
-        ctx->data.train_seqs.size(),
-        *ctx->logging.logger);
-
-    if (!ctx->data.val_views.empty()) {
-        ctx->logging.logger->log("Computing validation rarity scores...");
-        ctx->data.val_sequence_rarity = Internal::computeRareTokenScores(
-            ctx->data.val_views,
-            ctx->config.actual_vocab_size,
-            ctx->data.val_seqs.size(),
-            *ctx->logging.logger);
-    }
-    
-    // 7. Harmonize hyperparameters
+    // 6. Harmonize hyperparameters
     GRIM::HyperParameters::DerivationContext hp_ctx;
     hp_ctx.train_sequence_count = static_cast<int>(ctx->data.train_seqs.size());
     hp_ctx.validation_interval = ctx->config.hyperparameters.validation_interval;
