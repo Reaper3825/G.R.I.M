@@ -213,6 +213,18 @@ AutogradContext initAutogradContext(
     ctx.grad_scale = grad_scale;
     ctx.step = step;
     ctx.is_training = is_training;
+    // Default ScratchBlock side-channel pointers from TrainingState caches.
+    // Callers may overwrite these if they stage alternate buffers.
+    ctx.token_numeric_values = training_state ? training_state->cached_token_numeric_values.data : nullptr;
+    ctx.token_numeric_mask = training_state
+        ? reinterpret_cast<const uint8_t*>(training_state->cached_token_numeric_mask.data)
+        : nullptr;
+    ctx.token_text_features = training_state
+        ? reinterpret_cast<const uint16_t*>(training_state->cached_token_text_features.data)
+        : nullptr;
+    ctx.token_text_mask = training_state
+        ? reinterpret_cast<const uint8_t*>(training_state->cached_token_text_mask.data)
+        : nullptr;
     
     // Rule 20: Fail loud on invalid context
     ctx.validate("initAutogradContext(payload)");
@@ -247,13 +259,25 @@ AutogradContext initAutogradContext(
     ctx.grad_scale = grad_scale;
     ctx.step = step;
     ctx.is_training = is_training;
+    // Inference/sample paths also use ScratchBlock forward, which requires
+    // numeric side-channel pointers when ScratchBlock is enabled.
+    ctx.token_numeric_values = training_state ? training_state->cached_token_numeric_values.data : nullptr;
+    ctx.token_numeric_mask = training_state
+        ? reinterpret_cast<const uint8_t*>(training_state->cached_token_numeric_mask.data)
+        : nullptr;
+    ctx.token_text_features = training_state
+        ? reinterpret_cast<const uint16_t*>(training_state->cached_token_text_features.data)
+        : nullptr;
+    ctx.token_text_mask = training_state
+        ? reinterpret_cast<const uint8_t*>(training_state->cached_token_text_mask.data)
+        : nullptr;
     
     // Rule 20: Fail loud on invalid context
     ctx.validate("initAutogradContext(inference)");
     
     return ctx;
 }
-
+  
 //======================================================================
 // Autograd Forward Pass
 // PRODUCTION-READY: Runs entire model with autograd graph intact
@@ -351,7 +375,11 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     // Config says use_learned=false but code was ignoring it!
     // ═══════════════════════════════════════════════════════════════════════════
     const bool use_learned_pos_emb = (cfg->positional_encoding == HyperParameters::PositionalEncodingType::NONE);
-    if (use_learned_pos_emb && ts->tensors_->position_embedding_weights.data) {
+    if (use_learned_pos_emb) {
+        if (!ts->tensors_->position_embedding_weights.data) {
+            throw std::runtime_error(
+                "AutogradForward: positional_encoding=NONE requires position_embedding_weights.data, but it is NULL");
+        }
         ts->tensors_->position_embedding_weights.requires_grad = true;
         
         // Ensure position embedding weights have correct shape [max_seq_len, d_model]

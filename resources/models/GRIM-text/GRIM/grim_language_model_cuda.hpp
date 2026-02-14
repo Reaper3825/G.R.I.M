@@ -544,10 +544,6 @@ public:
     
     // Training
     float computeLossBatch(const GRIM::Batching::BatchPayload& payload);
-    Vector forwardWithCache(const std::vector<int>& token_ids,
-                            const std::vector<float>& token_numeric_values,
-                            const std::vector<uint8_t>& token_numeric_mask,
-                            bool tokens_on_device = false);  // Forward pass with activation caching
     
     // =========================================================================
     // INCREMENTAL GENERATION API (KV-Cache Autoregressive)
@@ -668,6 +664,12 @@ public:
                                           std::mt19937& rng);
     
 private:
+    // Core inference forward: assumes data already in cached_* tensors.
+    // Runs autograd forward, extracts last-token logits, returns them.
+    // All public inference methods (forwardGPU, getNextTokenLogitsGPU,
+    // forwardInit, forwardStep) copy their data to cached tensors then call this.
+    Vector executeInferenceForward_(int seq_len);
+
     void buildParameterGroups();  // Build parameter groups for optimizer
     
     LanguageModelConfig config_;

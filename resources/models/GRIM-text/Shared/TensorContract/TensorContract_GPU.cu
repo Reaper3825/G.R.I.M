@@ -171,8 +171,8 @@ std::string getCurrentGradFnContext() {
 }
 
 // DEBUG FLAG: Set to true to sync after EVERY kernel to find which one crashes
-// WARNING: This is VERY slow but helps find elusive CUDA errors
-static bool g_debug_sync_after_every_kernel = true;  // ENABLE FOR DEBUGGING
+// WARNING: This is VERY slow (~10-50x) — only enable for debugging elusive CUDA errors
+static bool g_debug_sync_after_every_kernel = false;
 
 void trackKernelLaunch(const char* kernel_name, cudaStream_t stream) {
     ++g_kernel_launch_count;
@@ -1460,20 +1460,22 @@ __global__ void kernel_embedding_forward(
     int tokens,
     int d_model,
     int vocab_size,             // RULE 20: Bounds check parameter
-    float embedding_scale       // Scale factor (sqrt(d_model) for AIAYN-style)
+    float embedding_scale       // Scale factor (1.0 for production — Issue #140 removed sqrt(d_model))
 ) {
     const int token_idx = blockIdx.x;
     if (token_idx >= tokens) return;
     
     const int token_id = token_ids[token_idx];
-    // RULE 20: Crash loud on OOB token ID — do NOT silently skip
-    assert(token_id >= 0 && token_id < vocab_size && "OOB token_id in kernel_embedding_forward");
+    // RULE 20: Crash loud on OOB token ID — __trap() works in Release (assert compiles out)
+    if (token_id < 0 || token_id >= vocab_size) {
+        printf("FATAL: OOB token_id=%d (vocab_size=%d) at token_idx=%d in kernel_embedding_forward\n",
+               token_id, vocab_size, token_idx);
+        __trap();
+    }
     const float* weight_row = weight + static_cast<size_t>(token_id) * d_model;
     float* output_row = output + static_cast<size_t>(token_idx) * d_model;
     
     // Gather with scaling: output[token_idx] = weight[token_id] * scale
-    // Issue #92: Scale embeddings by sqrt(d_model) to bring Xavier-initialized
-    // embeddings (~0.036 rms) to unit scale (~1.0 rms), matching atom injection.
     for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
         output_row[i] = weight_row[i] * embedding_scale;
     }
@@ -1493,14 +1495,17 @@ __global__ void kernel_embedding_backward(
     if (token_idx >= tokens) return;
     
     const int token_id = token_ids[token_idx];
-    // RULE 20: Crash loud on OOB token ID — do NOT silently skip
-    assert(token_id >= 0 && token_id < vocab_size && "OOB token_id in kernel_embedding_backward");
+    // RULE 20: Crash loud on OOB token ID — __trap() works in Release (assert compiles out)
+    if (token_id < 0 || token_id >= vocab_size) {
+        printf("FATAL: OOB token_id=%d (vocab_size=%d) at token_idx=%d in kernel_embedding_backward\n",
+               token_id, vocab_size, token_idx);
+        __trap();
+    }
     const float* token_grad = grad_output + static_cast<size_t>(token_idx) * d_model;
     float* weight_grad = grad_weight + static_cast<size_t>(token_id) * d_model;
     
     // Scatter-add: weight_grad[token_id] += grad_output[token_idx] * scale
     // Chain rule: if forward was y = w * scale, then grad_w = grad_y * scale
-    // Issue #92: Embedding scale propagates through backward pass
     for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
         atomicAdd(&weight_grad[i], token_grad[i] * embedding_scale);
     }
@@ -3041,7 +3046,7 @@ struct EmbeddingGradFn : public GradFn {
     int num_tokens = 0;
     int d_model = 0;
     int vocab_size = 0;            // RULE 20: Stored for OOB bounds checking in backward kernel
-    float embedding_scale = 1.0f;  // ISSUE #92: Scale factor for AIAYN-style embeddings
+    float embedding_scale = 1.0f;  // Issue #140: No scaling (1.0f) — AIAYN sqrt(d_model) removed
     
     // PCGrad buffer — snapshotted at construction, NOT read from globals
     // Eliminates fragile extern global coupling (Finding A audit)
@@ -3691,14 +3696,6 @@ Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream) {
     Tensor result = Tensor::empty(a.shape, a.requires_grad || b.requires_grad, stream, "add_result");
     
     // c = a + b
-    const size_t count = a.numel();
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    
-    // Simple element-wise add kernel
-    auto kernel = [](float* c, const float* a, const float* b, size_t n) {
-        // Launched via lambda won't work - need explicit kernel
-    };
-    
     // Use TensorContract::add for the forward
     TensorContract::TensorView a_view(const_cast<float*>(a.data), a.shape);
     TensorContract::TensorView b_view(const_cast<float*>(b.data), b.shape);
@@ -3910,7 +3907,7 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cud
     Tensor result = Tensor::empty(output_shape, weight.requires_grad, stream, "embedding_result");
     
     // Forward: gather from weight table with scaling
-    // Issue #92: Scale by sqrt(d_model) to match AIAYN-style embeddings
+    // Issue #140: Scale is 1.0f in production (AIAYN sqrt(d_model) removed for tied weights)
     const int vocab_size = weight.shape.as_2d().rows;
     kernel_embedding_forward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
         token_ids, weight.data, result.data, num_tokens, d_model, vocab_size, embedding_scale);
@@ -4063,10 +4060,14 @@ Tensor dropout(const Tensor& x, float p, uint64_t seed, bool training, cudaStrea
         result.grad_fn = grad_fn;
     }
     
-    // Free our mask copy (DropoutGradFn::save() made its own copy)
-    // Sync first to ensure kernel finished reading the mask
-    cudaStreamSynchronize(stream);
-    cudaFree(mask);
+    // Free our mask copy (DropoutGradFn::save() made its own copy).
+    // Use stream-ordered async free to avoid host-side synchronization.
+    const cudaError_t free_err = cudaFreeAsync(mask, stream);
+    if (free_err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string("autograd::dropout: cudaFreeAsync(mask) failed: ") +
+            cudaGetErrorString(free_err));
+    }
     
     return result;
 }

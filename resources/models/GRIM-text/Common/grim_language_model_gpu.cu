@@ -763,10 +763,10 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
         context_numeric_mask.size() != context_tokens.size()) {
         throw std::runtime_error("getNextTokenLogitsGPU: numeric side-channel length mismatch");
     }
-    const size_t context_len = context_tokens.size();
-    if (context_len > static_cast<size_t>(config_.max_seq_len)) {
+    const int seq_len = static_cast<int>(context_tokens.size());
+    if (seq_len > config_.max_seq_len) {
         throw std::runtime_error("getNextTokenLogitsGPU: context length " +
-                                 std::to_string(context_len) + " exceeds max_seq_len " +
+                                 std::to_string(seq_len) + " exceeds max_seq_len " +
                                  std::to_string(config_.max_seq_len));
     }
     if (!training_state_.initialized) {
@@ -780,47 +780,38 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
         }
     }
     if (training_state_.max_cached_seq_len > 0 &&
-        context_len > static_cast<size_t>(training_state_.max_cached_seq_len)) {
+        seq_len > training_state_.max_cached_seq_len) {
         throw std::runtime_error("getNextTokenLogitsGPU: context length " +
-                                 std::to_string(context_len) + " exceeds max_cached_seq_len " +
+                                 std::to_string(seq_len) + " exceeds max_cached_seq_len " +
                                  std::to_string(training_state_.max_cached_seq_len));
     }
     if (!training_state_.stream_ctrl.isInitialized()) {
         throw std::runtime_error("getNextTokenLogitsGPU: StreamController not initialized");
     }
     
-    forwardWithCache(context_tokens, context_numeric_values, context_numeric_mask);
-    
-    const auto& cfg = getConfig();
-    if (cfg.vocab_size <= 0) {
-        throw std::runtime_error("getNextTokenLogitsGPU: invalid vocab_size");
-    }
-    Vector logits(cfg.vocab_size);
-    if (training_state_.cached_seq_len != static_cast<int>(context_len)) {
-        throw std::runtime_error("getNextTokenLogitsGPU: cached_seq_len mismatch after forwardWithCache");
-    }
-    if (!training_state_.cached_logits_tensor.data) {
-        throw std::runtime_error("getNextTokenLogitsGPU: cached_logits not initialized");
-    }
-    const size_t seq_len = static_cast<size_t>(training_state_.cached_seq_len);
-    const size_t column_offset = (seq_len - 1) * static_cast<size_t>(cfg.vocab_size);
-    
+    // Copy host data to cached GPU tensors
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
-    CUDA_CHECK(cudaMemcpyAsync(logits.data.data(),
-                               training_state_.cached_logits_tensor.data + column_offset,
-                               static_cast<size_t>(cfg.vocab_size) * sizeof(float),
-                               cudaMemcpyDeviceToHost,
-                               stream));
-    if (!training_state_.stream_ctrl.syncPrimaryStream()) {
-        throw std::runtime_error("getNextTokenLogitsGPU: failed to sync primary stream");
-    }
-    return logits;
+    cudaMemcpyAsync(reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data),
+                    context_tokens.data(),
+                    seq_len * sizeof(int),
+                    cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(training_state_.cached_token_numeric_values.data,
+                    context_numeric_values.data(),
+                    seq_len * sizeof(float),
+                    cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_numeric_mask.data),
+                    context_numeric_mask.data(),
+                    seq_len * sizeof(uint8_t),
+                    cudaMemcpyHostToDevice, stream);
+    
+    // Single inference forward path
+    return executeInferenceForward_(seq_len);
 }
 
 Vector LanguageModel::forwardGPU(const std::vector<int>& token_ids,
                                  const std::vector<float>& token_numeric_values,
                                  const std::vector<uint8_t>& token_numeric_mask) {
-    return forwardWithCache(token_ids, token_numeric_values, token_numeric_mask);
+    return getNextTokenLogitsGPU(token_ids, token_numeric_values, token_numeric_mask);
 }
 
 TokenBufferView LanguageModel::getTokenBufferView() {

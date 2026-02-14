@@ -690,6 +690,80 @@ Use this checklist to systematically audit each file in the order it's used duri
   - `TrainingTensors.cu`: Allocate/init `position_embedding_weights` when `positional_encoding == NONE`
   - `Phase1_Startup.cu`: Parse `training.config.positional_encoding` in both object and string forms, with fail-loud type validation
 
+  ---
+
+  **🔴 RE-AUDIT FINDING 1 (PERF CRITICAL): `g_debug_sync_after_every_kernel = true` — [FIXED]**
+
+  `TensorContract_GPU.cu` line 175 had debug flag hardcoded to `true`, causing
+  `cudaStreamSynchronize()` after EVERY kernel launch via `trackKernelLaunch()`.
+  This serializes the entire GPU pipeline — ~10-50x throughput reduction.
+
+  **Fix:** Changed to `false`. Comment updated to warn about performance impact.
+
+  ---
+
+  **🟡 RE-AUDIT FINDING 2: Stale Issue #92 AIAYN comments in embedding kernels — [FIXED]**
+
+  4 locations in `TensorContract_GPU.cu` referenced deleted Issue #92 sqrt(d_model) scaling.
+  Updated to reference Issue #140 (scale=1.0f, AIAYN removed).
+
+  ---
+
+  **🟡 RE-AUDIT FINDING 3 (RULE 20): `assert()` in embedding kernels compiled out in Release — [FIXED]**
+
+  `kernel_embedding_forward` and `kernel_embedding_backward` used `assert()` for OOB
+  token ID bounds checking. In Release builds (`NDEBUG`), `assert()` is a no-op —
+  OOB access would silently corrupt GPU memory. Replaced with `if + printf + __trap()`
+  which works in both Debug and Release builds. `__trap()` causes `cudaErrorLaunchFailure`
+  which is caught by `trackKernelLaunch()` host-side error checking.
+
+  ---
+
+  **🟡 RE-AUDIT FINDING 4: Dead lambda in `autograd::add()` — [FIXED]**
+
+  3-line unused lambda declared but never invoked (actual addition uses `TensorContract::add()`).
+  Deleted.
+
+  ---
+
+  **🔴 RE-AUDIT FINDING 5 (CORRECTNESS): Inference autograd context omitted ScratchBlock side-channel pointers — [FIXED]**
+
+  `initAutogradContext(..., batch_size, seq_len, ...)` did not populate
+  `token_numeric_values` / `token_numeric_mask` (or text-feature pointers) from
+  `TrainingState` caches. With ScratchBlock enabled this caused:
+  `ScratchBlockLayer::forward requires token numeric side-channel` during sampling/inference.
+
+  **Fix (implemented):**
+  - `AutogradTraining.cu`: both `initAutogradContext` overloads now default
+    ScratchBlock side-channel pointers from `TrainingState` cached buffers.
+
+  ---
+
+  **🟡 RE-AUDIT FINDING 6 (RULE 20): Learned positional mode could silently skip position embeddings in inference — [FIXED]**
+
+  `InitinferenceState.cu` did not allocate `position_embedding_weights` for
+  `positional_encoding == NONE` (learned/additive mode). Forward used:
+  `if (use_learned_pos_emb && position_embedding_weights.data)` so a null table
+  silently degraded to "no additive position embeddings".
+
+  **Fix (implemented):**
+  - `InitinferenceState.cu`: allocate `position_embedding_weights` when
+    `cfg.positional_encoding == NONE`.
+  - `AutogradTraining.cu`: fail loud (`throw`) when learned mode is selected
+    but `position_embedding_weights.data` is null.
+
+  ---
+
+  **🟡 RE-AUDIT FINDING 7 (PERF CRITICAL): Seeded dropout forced host synchronization per call — [FIXED]**
+
+  `autograd::dropout(x, p, seed, ...)` called `cudaStreamSynchronize(stream)`
+  before `cudaFree(mask)`. This serialized execution for every dropout call
+  (embedding + per-layer dropout), causing avoidable throughput collapse.
+
+  **Fix (implemented):**
+  - `TensorContract_GPU.cu`: replaced sync+free with stream-ordered
+    `cudaFreeAsync(mask, stream)` and explicit error checking.
+
 ---
 
 ### 2.3 ScratchBlock Atom Substitution

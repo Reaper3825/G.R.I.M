@@ -96,6 +96,17 @@ void LanguageModel::initInferenceState() {
         "embedding_weights_inf"
     );
     std::cout << "  ✓ Allocated embedding weights (Tensor API)" << std::endl;
+
+    // Learned/additive positional mode requires a position embedding table.
+    if (cfg.positional_encoding == HyperParameters::PositionalEncodingType::NONE) {
+        training_state_.tensors_->position_embedding_weights = Tensor::zeros(
+            TC::make_BSM(cfg.max_seq_len, cfg.d_model),
+            false,  // no grad for inference
+            primary_stream,
+            "position_embedding_weights_inf"
+        );
+        std::cout << "  ✓ Allocated position embeddings (Tensor API, learned mode)" << std::endl;
+    }
     
     // 3. Setup LM head weights (tied to embeddings or separate allocation)
     if (cfg.tie_embeddings) {
@@ -334,7 +345,7 @@ void LanguageModel::initInferenceState() {
         std::cout << "    - Apply to encoder outputs: " << (quant_cfg.apply_to_encoder_outputs ? "YES" : "NO") << std::endl;
         std::cout << "    - Apply to logits: " << (quant_cfg.apply_to_logits ? "YES" : "NO") << std::endl;
         
-        // Quantization layer will be initialized on first use in forwardWithCache
+        // Quantization layer will be initialized on first use in executeInferenceForward_
     } else {
         std::cout << "  ℹ Activation quantization DISABLED" << std::endl;
     }
@@ -358,7 +369,7 @@ void LanguageModel::initInferenceState() {
     
     std::cout << "  📊 Total GPU activation memory: ~" << (total_bytes / 1024.0 / 1024.0) << " MB" << std::endl;
     std::cout << "      (excludes model weights loaded from checkpoint)" << std::endl;
-    
+     
     // Ensure all initialization is complete before returning
     cudaError_t sync_err = cudaDeviceSynchronize();
     if (sync_err != cudaSuccess) {
