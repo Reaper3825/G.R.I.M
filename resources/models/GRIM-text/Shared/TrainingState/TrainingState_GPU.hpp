@@ -253,6 +253,13 @@ struct TrainingState {
     void freePCGradBuffer();
     
     //======================================================//
+    //  ISSUE #141 FIX: SCRATCHBLOCK GRADIENT TAP BUFFER
+    //  Captures encoder input gradient before dropout consumes it.
+    //  Used by ScratchBlock backward to compute parameter gradients.
+    //======================================================//
+    Tensor scratchblock_grad_tap;
+    
+    //======================================================//
     //  GUESS CACHE BUFFERS (GRIM-TS - typed buffers, NOT Tensors)
     //======================================================//
     struct GuessCacheBuffers {

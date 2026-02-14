@@ -8,7 +8,11 @@
 #include "../../TensorContract/TensorContract_GPU.hpp"
 
 #include <cuda_runtime.h>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <limits>
+#include <string>
 #include <stdexcept>
 
 namespace GRIM {
@@ -55,7 +59,17 @@ __global__ void AdamWKernel(float* __restrict__ params,
 }
 
 inline int computeGridSize(std::size_t elements, int block_size) {
-	return static_cast<int>((elements + block_size - 1) / block_size);
+	if (block_size <= 0) {
+		throw std::runtime_error("[launchAdamWKernel] block_size must be > 0");
+	}
+	const std::size_t grid = (elements + static_cast<std::size_t>(block_size) - 1) /
+		static_cast<std::size_t>(block_size);
+	if (grid == 0 || grid > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+		throw std::runtime_error(
+			"[launchAdamWKernel] invalid grid size for elements=" + std::to_string(elements) +
+			" block_size=" + std::to_string(block_size));
+	}
+	return static_cast<int>(grid);
 }
 
 } // namespace
@@ -70,6 +84,26 @@ void launchAdamWKernel(ParameterGroup& group,
 	float* moments1 = group.m_state();
 	float* moments2 = group.v_state();
 	const std::size_t size = group.size();
+
+	if (!std::isfinite(learning_rate) || learning_rate < 0.0f) {
+		throw std::runtime_error(
+			"[launchAdamWKernel] invalid learning_rate for group '" + group.name +
+			"': " + std::to_string(learning_rate));
+	}
+	if (!std::isfinite(weight_decay) || weight_decay < 0.0f) {
+		throw std::runtime_error(
+			"[launchAdamWKernel] invalid weight_decay for group '" + group.name +
+			"': " + std::to_string(weight_decay));
+	}
+	if (step < 0) {
+		throw std::runtime_error(
+			"[launchAdamWKernel] step must be >= 0 for group '" + group.name +
+			"', got " + std::to_string(step));
+	}
+	if (stream == nullptr) {
+		throw std::runtime_error(
+			"[launchAdamWKernel] stream is NULL for group '" + group.name + "'");
+	}
 
 	if (!params || !grads || !moments1 || !moments2 || size == 0) {
 		throw std::runtime_error(
@@ -87,6 +121,14 @@ void launchAdamWKernel(ParameterGroup& group,
 	const int iteration = step + 1;
 	const float bias_correction1 = 1.0f - powf(HyperParameters::ADAMW_BETA1, static_cast<float>(iteration));
 	const float bias_correction2 = 1.0f - powf(HyperParameters::ADAMW_BETA2, static_cast<float>(iteration));
+	if (!std::isfinite(bias_correction1) || !std::isfinite(bias_correction2) ||
+		bias_correction1 <= 0.0f || bias_correction2 <= 0.0f) {
+		throw std::runtime_error(
+			"[launchAdamWKernel] invalid bias correction for group '" + group.name +
+			"' step=" + std::to_string(step) +
+			" bc1=" + std::to_string(bias_correction1) +
+			" bc2=" + std::to_string(bias_correction2));
+	}
 	const float inv_bias_correction1 = 1.0f / bias_correction1;
 	const float inv_bias_correction2 = 1.0f / bias_correction2;
 
@@ -100,6 +142,12 @@ void launchAdamWKernel(ParameterGroup& group,
 												 weight_decay,
 												 inv_bias_correction1,
 												 inv_bias_correction2);
+	const cudaError_t launch_error = cudaGetLastError();
+	if (launch_error != cudaSuccess) {
+		throw std::runtime_error(
+			"[launchAdamWKernel] kernel launch failed for group '" + group.name +
+			"': " + std::string(cudaGetErrorString(launch_error)));
+	}
 }
 
 } // namespace GRIM

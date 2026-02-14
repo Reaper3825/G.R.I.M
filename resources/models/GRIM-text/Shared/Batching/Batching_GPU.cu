@@ -14,13 +14,6 @@ namespace GRIM::Batching {
 // =============================================================================
 namespace {
 
-struct SequenceView {
-    uint32_t seq_id;
-    uint32_t length;
-    uint32_t bucket_key;
-    float sort_key;  // combined sorting metric
-};
-
 inline uint32_t bucketize(uint32_t len, uint32_t step) {
     step = std::max(step, 1u);
     return (len + step - 1) / step;
@@ -88,161 +81,7 @@ std::string BatchSchedule::summary() const {
     ss << "  Overflow batches: " << overflow_batches << "\n";
     ss << "  Max seq len: " << max_seq_len_observed << "\n";
     ss << "  Seq len percentiles: p50=" << p50_seq_len << " p90=" << p90_seq_len << " p99=" << p99_seq_len << "\n";
-    if (num_accumulation_groups > 0) {
-        ss << "  Gradient accumulation: " << num_accumulation_groups << " groups";
-        ss << " (effective batch: " << effective_batch_size << ")\n";
-    }
     return ss.str();
-}
-
-// =============================================================================
-// Analyze and Recommend
-// =============================================================================
-BatchOptions analyzeAndRecommend(const Catalog& catalog, uint32_t target_effective_batch) {
-    BatchOptions opts;
-    
-    const auto& entries = catalog.entries();
-    if (entries.empty()) return opts;
-    
-    // Collect and sort lengths
-    std::vector<uint32_t> lengths;
-    lengths.reserve(entries.size());
-    for (const auto& e : entries) {
-        if (e.seq_length > 0) lengths.push_back(e.seq_length);
-    }
-    if (lengths.empty()) return opts;
-    
-    std::sort(lengths.begin(), lengths.end());
-    
-    // Compute statistics
-    uint32_t p50 = percentile(lengths, 0.50f);
-    uint32_t p75 = percentile(lengths, 0.75f);
-    uint32_t p90 = percentile(lengths, 0.90f);
-    uint32_t p99 = percentile(lengths, 0.99f);
-    uint32_t max_len = lengths.back();
-    
-    uint64_t sum = 0;
-    for (auto l : lengths) sum += l;
-    float mean = static_cast<float>(sum) / lengths.size();
-    
-    // Recommend token budget: aim for 2-4 average sequences per batch
-    // Use p75 as reference to handle typical sequences well
-    uint32_t recommended_budget = std::max(p75 * 3, p50 * 4);
-    recommended_budget = std::max(recommended_budget, 2048u);  // minimum floor
-    recommended_budget = std::min(recommended_budget, 16384u); // maximum cap
-    
-    // Round to nice number
-    recommended_budget = ((recommended_budget + 511) / 512) * 512;
-    
-    opts.max_tokens_per_batch = recommended_budget;
-    opts.max_batch_size = 8; // reasonable default, will be limited by token budget anyway
-    
-    // Set hard cap only for extreme outliers (>p99)
-    if (p99 > recommended_budget) {
-        opts.hard_seq_len_cap = p99;
-    }
-    
-    // Bucket step: finer granularity for more uniform data
-    float cv = (p90 - p50) / std::max(1.0f, mean); // coefficient of variation proxy
-    opts.bucket_step = cv > 0.5f ? 256 : 128;
-    
-    // Strategy based on data characteristics
-    if (cv < 0.3f) {
-        // Uniform lengths - similarity grouping works great
-        opts.strategy = PackingStrategy::SIMILARITY_GROUPED;
-        opts.similarity_threshold = 0.15f;
-    } else if (cv < 0.6f) {
-        // Moderate variance - best-fit works well
-        opts.strategy = PackingStrategy::BEST_FIT_DECREASING;
-    } else {
-        // High variance - greedy is simpler and works fine
-        opts.strategy = PackingStrategy::GREEDY;
-    }
-    
-    // Gradient accumulation
-    if (target_effective_batch > 0) {
-        opts.target_effective_batch_size = target_effective_batch;
-    }
-    
-    return opts;
-}
-
-// =============================================================================
-// Estimate Batching (Quick Analysis)
-// =============================================================================
-BatchEstimate estimateBatching(const Catalog& catalog, const BatchOptions& opts) {
-    BatchEstimate est{0, 0, 0.0f, opts.max_tokens_per_batch};
-    
-    const auto& entries = catalog.entries();
-    if (entries.empty()) return est;
-    
-    std::vector<uint32_t> lengths;
-    lengths.reserve(entries.size());
-    for (const auto& e : entries) {
-        if (e.seq_length > 0) lengths.push_back(e.seq_length);
-    }
-    if (lengths.empty()) return est;
-    
-    std::sort(lengths.begin(), lengths.end(), std::greater<uint32_t>());
-    
-    uint32_t budget = opts.max_tokens_per_batch;
-    uint32_t max_size = opts.max_batch_size;
-    uint64_t total_actual = 0;
-    uint64_t total_compute = 0;
-    
-    // Simple first-fit estimate
-    uint32_t current_max = 0;
-    uint32_t current_count = 0;
-    
-    for (uint32_t len : lengths) {
-        total_actual += len;
-        
-        // Check overflow
-        if (len > budget) {
-            est.estimated_overflow++;
-            est.estimated_batches++;
-            total_compute += len;
-            continue;
-        }
-        
-        uint32_t new_max = std::max(current_max, len);
-        uint32_t new_count = current_count + 1;
-        
-        if (new_count > max_size || new_max * new_count > budget) {
-            // Finalize current batch
-            if (current_count > 0) {
-                total_compute += current_max * current_count;
-                est.estimated_batches++;
-            }
-            current_max = len;
-            current_count = 1;
-        } else {
-            current_max = new_max;
-            current_count = new_count;
-        }
-    }
-    
-    if (current_count > 0) {
-        total_compute += current_max * current_count;
-        est.estimated_batches++;
-    }
-    
-    est.estimated_efficiency = total_compute > 0 
-        ? static_cast<float>(total_actual) / total_compute 
-        : 0.0f;
-    
-    // Recommend budget if efficiency is poor
-    if (est.estimated_efficiency < opts.target_packing_efficiency) {
-        // Try doubling budget
-        BatchOptions test_opts = opts;
-        test_opts.max_tokens_per_batch = budget * 2;
-        BatchEstimate test_est = estimateBatching(catalog, test_opts);
-        if (test_est.estimated_efficiency > est.estimated_efficiency + 0.05f) {
-            est.recommended_token_budget = test_opts.max_tokens_per_batch;
-        }
-    }
-    
-    return est;
 }
 
 // =============================================================================
@@ -251,73 +90,77 @@ BatchEstimate estimateBatching(const Catalog& catalog, const BatchOptions& opts)
 BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
     BatchSchedule schedule{};
     
-    if (catalog.entries().empty() || opts.max_tokens_per_batch == 0 || opts.max_batch_size == 0) {
+    if (catalog.entries().empty()) {
         return schedule;
+    }
+    if (opts.max_tokens_per_batch == 0) {
+        throw std::runtime_error("buildBatches: max_tokens_per_batch=0 — caller MUST set token budget");
+    }
+    if (opts.max_batch_size == 0) {
+        throw std::runtime_error("buildBatches: max_batch_size=0 — caller MUST set batch size limit");
     }
 
     const auto& entries = catalog.entries();
-    
-    // Build sequence views with all metadata
-    std::vector<SequenceView> views;
-    views.reserve(entries.size());
     const uint32_t bucket_step = std::max(1u, opts.bucket_step);
     
+    // Build indices of valid sequences + compute length percentiles in ONE pass
+    std::vector<uint32_t> view_indices;
     std::vector<uint32_t> all_lengths;
+    
+    view_indices.reserve(entries.size());
     all_lengths.reserve(entries.size());
 
-    for (const auto& entry : entries) {
-        if (entry.seq_length == 0) continue;
-        
-        views.push_back({
-            entry.seq_id, 
-            entry.seq_length, 
-            bucketize(entry.seq_length, bucket_step),
-            0.0f  // sort_key computed below
-        });
-        all_lengths.push_back(entry.seq_length);
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].seq_length > 0) {
+            view_indices.push_back(static_cast<uint32_t>(i));
+            all_lengths.push_back(entries[i].seq_length);
+        }
     }
 
-    if (views.empty()) return schedule;
+    if (view_indices.empty()) return schedule;
     
-    // Compute length percentiles for schedule stats
-    std::sort(all_lengths.begin(), all_lengths.end());
-    schedule.p50_seq_len = percentile(all_lengths, 0.50f);
-    schedule.p90_seq_len = percentile(all_lengths, 0.90f);
-    schedule.p99_seq_len = percentile(all_lengths, 0.99f);
+    // Compute length percentiles for schedule stats (ALL lengths, not just finalized batches)
+    std::vector<uint32_t> sorted_lengths = all_lengths;
+    std::sort(sorted_lengths.begin(), sorted_lengths.end());
+    schedule.p50_seq_len = percentile(sorted_lengths, 0.50f);
+    schedule.p90_seq_len = percentile(sorted_lengths, 0.90f);
+    schedule.p99_seq_len = percentile(sorted_lengths, 0.99f);
     
-    // Compute sort keys based on strategy
-    for (auto& v : views) {
-        float len_key = opts.prefer_short_first 
-            ? static_cast<float>(v.length) 
-            : -static_cast<float>(v.length);
-        
-        v.sort_key = len_key;
+    // Lambda to compute sort key for a sequence by index
+    auto computeSortKey = [&](uint32_t entry_idx) -> float {
+        const uint32_t len = entries[entry_idx].seq_length;
+        float len_key = opts.prefer_short_first ? static_cast<float>(len) : -static_cast<float>(len);
         
         // Apply curriculum: filter long sequences early in training
         if (opts.curriculum_progress < 1.0f) {
             uint32_t max_allowed = static_cast<uint32_t>(
                 schedule.p50_seq_len + opts.curriculum_progress * (schedule.p99_seq_len - schedule.p50_seq_len)
             );
-            if (v.length > max_allowed) {
-                v.sort_key += 1e6f;  // push to end
+            if (len > max_allowed) {
+                len_key += 1e6f;  // push to end
             }
         }
-    }
+        return len_key;
+    };
     
-    // Sort based on strategy
+    // Sort indices based on strategy
     if (opts.strategy == PackingStrategy::SIMILARITY_GROUPED) {
         // Sort by bucket (groups similar lengths together)
-        std::stable_sort(views.begin(), views.end(), [&](const SequenceView& a, const SequenceView& b) {
-            if (a.bucket_key != b.bucket_key) {
-                return opts.prefer_short_first ? (a.bucket_key < b.bucket_key) : (a.bucket_key > b.bucket_key);
-            }
-            return a.sort_key < b.sort_key;
-        });
+        std::stable_sort(view_indices.begin(), view_indices.end(),
+            [&](uint32_t idx_a, uint32_t idx_b) {
+                uint32_t bucket_a = bucketize(entries[idx_a].seq_length, bucket_step);
+                uint32_t bucket_b = bucketize(entries[idx_b].seq_length, bucket_step);
+                if (bucket_a != bucket_b) {
+                    return opts.prefer_short_first ? (bucket_a < bucket_b) : (bucket_a > bucket_b);
+                }
+                return computeSortKey(idx_a) < computeSortKey(idx_b);
+            });
     } else if (opts.strategy == PackingStrategy::BEST_FIT_DECREASING) {
         // Sort longest first (FFD algorithm)
-        std::stable_sort(views.begin(), views.end(), [](const SequenceView& a, const SequenceView& b) {
-            return a.length > b.length;
-        });
+        std::stable_sort(view_indices.begin(), view_indices.end(),
+            [&](uint32_t idx_a, uint32_t idx_b) {
+                return entries[idx_a].seq_length > entries[idx_b].seq_length;
+            });
     } else {
         // GREEDY / Gradient-balanced: SHUFFLE to mix short and long sequences!
         // Issue #90: Length-sorted batching caused mode collapse at max_seq_len boundary.
@@ -326,25 +169,17 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
         if (opts.rng_seed != 0) {
             // Deterministic shuffle using provided seed
             std::mt19937_64 shuffle_rng(opts.rng_seed);
-            std::shuffle(views.begin(), views.end(), shuffle_rng);
+            std::shuffle(view_indices.begin(), view_indices.end(), shuffle_rng);
         } else {
             // Non-deterministic shuffle (fallback)
             std::random_device rd;
             std::mt19937_64 shuffle_rng(rd());
-            std::shuffle(views.begin(), views.end(), shuffle_rng);
+            std::shuffle(view_indices.begin(), view_indices.end(), shuffle_rng);
         }
     }
     
-    // Determine effective token budget
-    uint32_t token_budget = opts.max_tokens_per_batch;
-    if (opts.adaptive_token_budget) {
-        // Start with p75 * 3 as baseline, adjust based on target efficiency
-        uint32_t adaptive_budget = percentile(all_lengths, 0.75f) * 3;
-        adaptive_budget = std::max(adaptive_budget, opts.min_tokens_per_batch);
-        token_budget = std::max(token_budget, adaptive_budget);
-    }
-    
-    const uint32_t hard_cap = opts.hard_seq_len_cap > 0 ? opts.hard_seq_len_cap : UINT32_MAX;
+    // Use pre-computed token budget from analyzeAndRecommend() (Phase2 sets opts.max_tokens_per_batch)
+    const uint32_t token_budget = opts.max_tokens_per_batch;
     
     // =======================================================================
     // Packing algorithm
@@ -360,13 +195,14 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
         };
         std::vector<OpenBatch> open_batches;
         
-        for (const auto& view : views) {
-            const uint32_t seq_len = view.length;
+        for (uint32_t entry_idx : view_indices) {
+            const uint32_t seq_len = entries[entry_idx].seq_length;
+            const uint32_t seq_id = entries[entry_idx].seq_id;
             
-            // Check for hard-cap overflow
-            if (seq_len > token_budget || seq_len > hard_cap) {
+            // Check for overflow
+            if (seq_len > token_budget) {
                 BatchAssignment overflow{};
-                overflow.seq_ids.push_back(view.seq_id);
+                overflow.seq_ids.push_back(seq_id);
                 overflow.max_seq_len = seq_len;
                 overflow.min_seq_len = seq_len;
                 overflow.actual_tokens = seq_len;
@@ -411,7 +247,7 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
             if (best_batch >= 0) {
                 // Add to existing batch
                 auto& ob = open_batches[best_batch];
-                ob.assignment.seq_ids.push_back(view.seq_id);
+                ob.assignment.seq_ids.push_back(seq_id);
                 ob.assignment.max_seq_len = std::max(ob.assignment.max_seq_len, seq_len);
                 ob.assignment.min_seq_len = std::min(ob.assignment.min_seq_len, seq_len);
                 ob.assignment.actual_tokens += seq_len;
@@ -430,7 +266,7 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
             } else {
                 // Start new batch
                 OpenBatch new_batch;
-                new_batch.assignment.seq_ids.push_back(view.seq_id);
+                new_batch.assignment.seq_ids.push_back(seq_id);
                 new_batch.assignment.max_seq_len = seq_len;
                 new_batch.assignment.min_seq_len = seq_len;
                 new_batch.assignment.actual_tokens = seq_len;
@@ -450,7 +286,7 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
         }
         
     } else {
-        // GREEDY / SIMILARITY_GROUPED / GRADIENT_BALANCED
+        // GREEDY / SIMILARITY_GROUPED
         // Standard first-fit with similarity constraints
         
         BatchAssignment current{};
@@ -464,14 +300,15 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
             current_lengths.clear();
         };
         
-        for (const auto& view : views) {
-            const uint32_t seq_len = view.length;
+        for (uint32_t entry_idx : view_indices) {
+            const uint32_t seq_len = entries[entry_idx].seq_length;
+            const uint32_t seq_id = entries[entry_idx].seq_id;
             
-            // Check for hard-cap overflow
-            if (seq_len > token_budget || seq_len > hard_cap) {
+            // Check for overflow
+            if (seq_len > token_budget) {
                 finalizeCurrent();
                 BatchAssignment overflow{};
-                overflow.seq_ids.push_back(view.seq_id);
+                overflow.seq_ids.push_back(seq_id);
                 overflow.max_seq_len = seq_len;
                 overflow.min_seq_len = seq_len;
                 overflow.actual_tokens = seq_len;
@@ -500,7 +337,7 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
             }
             
             // Add to current batch
-            current.seq_ids.push_back(view.seq_id);
+            current.seq_ids.push_back(seq_id);
             current.max_seq_len = std::max(current.max_seq_len, seq_len);
             current.min_seq_len = current.min_seq_len == 0 ? seq_len : std::min(current.min_seq_len, seq_len);
             current.actual_tokens += seq_len;
@@ -606,8 +443,11 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
             }
                 
             case BatchOrdering::RANDOM: {
-                // Fisher-Yates shuffle with deterministic seed for reproducibility
-                std::mt19937 rng(42);
+                // Fisher-Yates shuffle — use opts.rng_seed for reproducibility
+                const uint64_t order_seed = (opts.rng_seed != 0)
+                    ? opts.rng_seed + 0x9E3779B97F4A7C15ULL  // derive distinct seed from packing seed
+                    : std::random_device{}();
+                std::mt19937_64 rng(order_seed);
                 for (size_t i = normal_batches.size() - 1; i > 0; --i) {
                     std::uniform_int_distribution<size_t> dist(0, i);
                     std::swap(normal_batches[i], normal_batches[dist(rng)]);
@@ -658,29 +498,6 @@ BatchSchedule buildBatches(const Catalog& catalog, const BatchOptions& opts) {
         }
     }
     
-    // =======================================================================
-    // Gradient accumulation grouping
-    // =======================================================================
-    
-    if (opts.target_effective_batch_size > 0 && !schedule.batches.empty()) {
-        // Group batches so each group has ~target sequences
-        uint32_t target = opts.target_effective_batch_size;
-        uint32_t group_id = 0;
-        uint32_t group_seqs = 0;
-        
-        for (auto& batch : schedule.batches) {
-            if (group_seqs >= target) {
-                group_id++;
-                group_seqs = 0;
-            }
-            batch.accumulation_group = group_id;
-            group_seqs += static_cast<uint32_t>(batch.seq_ids.size());
-        }
-        
-        schedule.num_accumulation_groups = group_id + 1;
-        schedule.effective_batch_size = 
-            static_cast<uint32_t>(batch_size_sum / std::max(1u, schedule.num_accumulation_groups));
-    }
     
     return schedule;
 }

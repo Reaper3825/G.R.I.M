@@ -68,6 +68,7 @@ struct EntropyRegConfig {
 	float lambda = 0.0f;  // Regularization strength (try 0.1-1.0)
 };
 
+
 struct LossConfig {
 	LabelSmoothingConfig label_smoothing{};
 	DistillationConfig distillation{};
@@ -77,6 +78,7 @@ struct LossConfig {
 	GuessFeedbackConfig guess_feedback{};
 	LimitsConfig limits{};
 	EntropyRegConfig entropy_reg{};  // Issue #44: Entropy regularization
+
 };
 
 struct LossContext {

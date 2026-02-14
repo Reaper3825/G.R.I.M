@@ -20,108 +20,12 @@ void launchBiasSumGradient(const float* grad_output,
 namespace GRIM {
 
 // ============================================================================
-// Token 277 (SPACE) Mode Collapse Diagnostic
-// Logs the actual values that determine logit[277] = hidden_state · W[277]
+// Token 277 (SPACE) Mode Collapse Diagnostic — host-side, via EQ_LOG
 // ============================================================================
-static int s_lm_head_call_count = 0;
-
-static void logToken277Inputs(const LMHeadForwardParams& params) {
-    // Extract dimensions from TensorViews
-    const int d_model = params.d_model();
-    const int vocab_size = params.vocab_size();
-    const int total_tokens = params.total_tokens();
-    
-    constexpr int kToken277 = 277;
-    if (kToken277 >= vocab_size) return;
-    
-    ++s_lm_head_call_count;
-    
-    // Only log first 20 calls to avoid spam
-    if (s_lm_head_call_count > 20) return;
-    
-    cudaStreamSynchronize(params.stream);
-    
-    const int num_sample = std::min(5, total_tokens);
-    
-    // Extract raw pointers from TensorViews
-    const float* weights_ptr = params.weights.ptr;
-    const float* encoder_output_ptr = params.encoder_output.ptr;
-    
-    // Read W[277] row (the weight row for token 277)
-    // Weights are [vocab_size, d_model] row-major, so W[277] starts at offset 277*d_model
-    std::vector<float> w277(d_model);
-    cudaMemcpy(w277.data(), 
-               weights_ptr + static_cast<size_t>(kToken277) * d_model,
-               d_model * sizeof(float), cudaMemcpyDeviceToHost);
-    
-    // Compute W[277] statistics
-    float w277_sum = 0.0f, w277_sq_sum = 0.0f;
-    float w277_min = w277[0], w277_max = w277[0];
-    for (int i = 0; i < d_model; ++i) {
-        w277_sum += w277[i];
-        w277_sq_sum += w277[i] * w277[i];
-        w277_min = std::min(w277_min, w277[i]);
-        w277_max = std::max(w277_max, w277[i]);
-    }
-    float w277_mean = w277_sum / d_model;
-    float w277_var = (w277_sq_sum / d_model) - (w277_mean * w277_mean);
-    float w277_norm = std::sqrt(w277_sq_sum);
-    
-    fprintf(stderr, "[Token277Input] call=%d W[277]: norm=%.6f mean=%.6f var=%.6f min=%.6f max=%.6f\n",
-            s_lm_head_call_count, w277_norm, w277_mean, w277_var, w277_min, w277_max);
-    
-    // Read first few hidden states and compute their dot product with W[277]
-    std::vector<float> hidden_sample(num_sample * d_model);
-    cudaMemcpy(hidden_sample.data(), encoder_output_ptr,
-               num_sample * d_model * sizeof(float), cudaMemcpyDeviceToHost);
-    
-    fprintf(stderr, "[Token277Input] call=%d Hidden states for %d tokens:\n", s_lm_head_call_count, num_sample);
-    
-    for (int t = 0; t < num_sample; ++t) {
-        float* h = hidden_sample.data() + t * d_model;
-        
-        // Hidden state statistics
-        float h_sum = 0.0f, h_sq_sum = 0.0f;
-        float h_min = h[0], h_max = h[0];
-        for (int i = 0; i < d_model; ++i) {
-            h_sum += h[i];
-            h_sq_sum += h[i] * h[i];
-            h_min = std::min(h_min, h[i]);
-            h_max = std::max(h_max, h[i]);
-        }
-        float h_norm = std::sqrt(h_sq_sum);
-        float h_mean = h_sum / d_model;
-        
-        // Compute dot product h · W[277] = logit[277] (before bias)
-        float dot_277 = 0.0f;
-        for (int i = 0; i < d_model; ++i) {
-            dot_277 += h[i] * w277[i];
-        }
-        
-        // Compute cosine similarity between h and W[277]
-        float cos_sim = (w277_norm > 1e-8f && h_norm > 1e-8f) ? 
-                        (dot_277 / (h_norm * w277_norm)) : 0.0f;
-        
-        fprintf(stderr, "  [t=%d] h_norm=%.4f h_mean=%.4f h_min=%.4f h_max=%.4f | "
-                        "dot(h,W277)=%.4f cos_sim=%.4f\n",
-                t, h_norm, h_mean, h_min, h_max, dot_277, cos_sim);
-    }
-    
-    // Also sample a few other weight rows for comparison
-    constexpr int kCompareTokens[] = {0, 100, 500, 1000};  // Compare with other tokens
-    fprintf(stderr, "[Token277Input] call=%d Weight row norms for comparison:\n", s_lm_head_call_count);
-    for (int tok : kCompareTokens) {
-        if (tok >= vocab_size) continue;
-        std::vector<float> w_other(d_model);
-        cudaMemcpy(w_other.data(),
-                   weights_ptr + static_cast<size_t>(tok) * d_model,
-                   d_model * sizeof(float), cudaMemcpyDeviceToHost);
-        float norm = 0.0f;
-        for (int i = 0; i < d_model; ++i) norm += w_other[i] * w_other[i];
-        norm = std::sqrt(norm);
-        fprintf(stderr, "  W[%d] norm=%.6f\n", tok, norm);
-    }
-}
+// NOTE: logToken277Inputs (fprintf), kernelToken277LogitDiagnostic (device ring buffer),
+// and launchToken277LogitDiagnostic (device buffer accessor) were DELETED per Rule 26
+// (zero callers / dead code). If kernel-side Token277 diagnostics are needed in the
+// future, implement as a host-side cudaMemcpy + EQ_LOG pattern.
 
 namespace {
 
@@ -346,8 +250,12 @@ void launchLMHeadForward(const LMHeadForwardParams& params) {
 			float orig_mean = orig_sum / d_model;
 			float centered_mean = centered_sum / d_model;
 			
-			fprintf(stderr, "[Issue37-Centering] call=%d tokens=%d pos0: orig_mean=%.6f centered_mean=%.6f (should be ~0)\n",
-					s_centering_diag_count, total_tokens, orig_mean, centered_mean);
+			std::ostringstream eq;
+			eq << "[CENTERING_VERIFY] call=" << s_centering_diag_count 
+			   << " tokens=" << total_tokens
+			   << " pos0: orig_mean=" << orig_mean 
+			   << " centered_mean=" << centered_mean << " (should be ~0)\n";
+			EQ_LOG("CENTERING_VERIFY", eq.str(), 0, -1, 0, GRIM::EquationPhase::LM_HEAD_PROJECTION);
 		}
 	}
 
@@ -384,149 +292,9 @@ void launchLMHeadForward(const LMHeadForwardParams& params) {
 		addBias(logits_ptr, bias_ptr, vocab_size, total_tokens, stream);
 	}
 
-	// ============================================================================
-	// Token 277 Equation Diagnostic (Rule 21 - Mandatory Equation-Based Logging)
-	// ============================================================================
-	// Track all components contributing to Token 277 (SPACE) becoming argmax.
-	// This is ASYNC logging using the ring buffer - does NOT add cudaStreamSynchronize.
-	// Log entries are flushed to disk periodically by the LogRecorder system.
-	// ============================================================================
-#ifdef DEBUG_TOKEN277_EQUATIONS
-	launchToken277LogitDiagnostic(
-		logits_ptr,
-		projection_input,  // centered hidden states (Issue #37)
-		weights_ptr,
-		total_tokens,
-		d_model,
-		vocab_size,
-		stream
-	);
-#endif  // DEBUG_TOKEN277_EQUATIONS
-}
-
-// ============================================================================
-// Token 277 Logit Diagnostic Kernel (Rule 21 Equation Logging)
-// ============================================================================
-// Logs the decomposition: logit[277] = ||h|| × ||W[277]|| × cos(h, W[277])
-// Also tracks hidden state alignment with W[277] row vector.
-// ============================================================================
-
-__global__ void kernelToken277LogitDiagnostic(
-	const float* __restrict__ logits,         // [total_tokens, vocab_size] row-major
-	const float* __restrict__ hidden_states,  // [total_tokens, d_model] row-major
-	const float* __restrict__ weights,        // [vocab_size, d_model] row-major
-	int total_tokens,
-	int d_model,
-	int vocab_size,
-	int batch_idx,
-	int step_idx,
-	GRIM::EquationLogEntryDevice* d_eq_buffer,
-	GRIM::EquationLogBufferState* d_eq_state
-) {
-	const int token_idx = blockIdx.x * blockDim.x + threadIdx.x;
-	if (token_idx >= total_tokens) return;
-
-	// Only process every 100th token to reduce log volume
-	// (Token 277 logging is expensive even with async writes)
-	if (token_idx % 100 != 0) return;
-
-	constexpr int TOKEN_277 = 277;
-	if (TOKEN_277 >= vocab_size) return;
-
-	// Get pointers to this token's hidden state and W[277] row
-	const float* h = hidden_states + static_cast<size_t>(token_idx) * d_model;
-	const float* w_277 = weights + static_cast<size_t>(TOKEN_277) * d_model;
-
-	// Compute ||h||, ||W[277]||, and h·W[277]
-	float h_norm_sq = 0.0f;
-	float w_norm_sq = 0.0f;
-	float h_dot_w = 0.0f;
-	for (int i = 0; i < d_model; ++i) {
-		h_norm_sq += h[i] * h[i];
-		w_norm_sq += w_277[i] * w_277[i];
-		h_dot_w += h[i] * w_277[i];
-	}
-	const float h_norm = sqrtf(h_norm_sq + 1e-8f);
-	const float w_norm = sqrtf(w_norm_sq + 1e-8f);
-	const float cosine = h_dot_w / (h_norm * w_norm + 1e-8f);
-
-	// Get actual logit[277] from SGEMM output
-	const float logit_277 = logits[static_cast<size_t>(token_idx) * vocab_size + TOKEN_277];
-
-	// Expected logit from decomposition
-	const float expected_logit = h_norm * w_norm * cosine;
-
-	// Find max logit among tokens OTHER than 277 (for comparison)
-	float max_other_logit = -1e30f;
-	int max_other_token = -1;
-	const float* token_logits = logits + static_cast<size_t>(token_idx) * vocab_size;
-	for (int v = 0; v < vocab_size; ++v) {
-		if (v != TOKEN_277 && token_logits[v] > max_other_logit) {
-			max_other_logit = token_logits[v];
-			max_other_token = v;
-		}
-	}
-
-	// Log the decomposition equation (Rule 21 format)
-	// logit[277] = ||h|| × ||W[277]|| × cos(h, W[277])
-	logToken277LogitDecomposition(
-		d_eq_buffer,
-		d_eq_state,
-		h_norm,
-		w_norm,
-		cosine,
-		expected_logit,
-		logit_277,
-		max_other_logit,
-		max_other_token,
-		token_idx,
-		batch_idx,
-		step_idx
-	);
-
-	// NOTE: logToken277HiddenAlignment is for AGGREGATE statistics across all positions,
-	// not per-token logging. Compute alignment stats in a separate host-side reduction
-	// if needed for mode collapse diagnosis.
-}
-
-void launchToken277LogitDiagnostic(
-	const float* logits,
-	const float* hidden_states,
-	const float* weights,
-	int total_tokens,
-	int d_model,
-	int vocab_size,
-	int batch_idx,
-	int step_idx,
-	cudaStream_t stream
-) {
-	if (!logits || !hidden_states || !weights) return;
-	if (total_tokens <= 0 || d_model <= 0 || vocab_size <= 0) return;
-
-	// Get equation logger buffer and state (Rule 21 pattern from AutogradLoss.cu)
-	auto& logger = GRIM::getEquationLogger();
-	if (!logger.isEnabled()) return;
-
-	auto* d_eq_buffer = logger.getDeviceBuffer();
-	auto* d_eq_state = logger.getDeviceState();
-	if (!d_eq_buffer || !d_eq_state) return;
-
-	constexpr int kBlockSize = 256;
-	const int num_blocks = (total_tokens + kBlockSize - 1) / kBlockSize;
-
-	kernelToken277LogitDiagnostic<<<num_blocks, kBlockSize, 0, stream>>>(
-		logits,
-		hidden_states,
-		weights,
-		total_tokens,
-		d_model,
-		vocab_size,
-		batch_idx,
-		step_idx,
-		d_eq_buffer,
-		d_eq_state
-	);
-	// NOTE: No cudaStreamSynchronize - this is async diagnostic logging (Rule 21)
+	// Token 277 equation diagnostic removed (Rule 26: dead code behind unset #ifdef).
+	// Host-side Token277 diagnostics are in Phase2_TrainingLoop.cu via
+	// computeToken277Diagnostic() + formatToken277Diagnostic() + EQ_LOG.
 }
 
 // NOTE: launchLMHeadBackward() REMOVED (Issue #58 cleanup)
@@ -539,7 +307,7 @@ void launchToken277LogitDiagnostic(
 //
 // If you need LM head backward in the future, use:
 //   Tensor logits = autograd::matmul(encoder_output, lm_weights, stream, ...)
-//   Tensor loss = autograd::cross_entropy_loss(logits, targets, ...)
+//   Tensor loss = autograd::unified_loss(logits, targets, ...LossConfig...)
 //   loss.backward()  // Gradients flow automatically to lm_weights.grad
 
 } // namespace GRIM

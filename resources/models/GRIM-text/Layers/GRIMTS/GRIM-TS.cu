@@ -12,7 +12,6 @@
 #include <thread>
 #include <cstring>
 #include <stdexcept>
-#include <windows.h>
 #include "grim-ts.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
@@ -20,7 +19,6 @@
 namespace {
 
 using namespace GRIMTS;
-namespace CacheEvents = GRIMTS::Delegates;
 namespace CacheLog = GRIMTS::Logging;
 
 //==============================================================================
@@ -96,67 +94,6 @@ struct CacheStatsMoment {
 
 __device__ CacheStatsMoment d_cache_moment;
 CacheStatsMoment h_cache_moment{};
-
-//==============================================================================
-// Delegate Storage (Device-Side)
-//==============================================================================
-
-__device__ CacheEvents::CacheRewardDelegate d_cache_reward_delegate;
-__device__ CacheEvents::CacheMutationDelegate d_cache_mutation_delegate;
-__device__ CacheEvents::CacheEvictionDelegate d_cache_eviction_delegate;
-__device__ CacheEvents::CacheResizeDelegate d_cache_resize_delegate;
-
-//==============================================================================
-// Delegate Registration Kernels
-//==============================================================================
-
-__global__ void RegisterRewardCallbackKernel(CacheEvents::CacheRewardDelegate::Callback cb) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        d_cache_reward_delegate.Add(cb);
-    }
-}
-
-__global__ void RegisterMutationCallbackKernel(CacheEvents::CacheMutationDelegate::Callback cb) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        d_cache_mutation_delegate.Add(cb);
-    }
-}
-
-__global__ void RegisterEvictionCallbackKernel(CacheEvents::CacheEvictionDelegate::Callback cb) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        d_cache_eviction_delegate.Add(cb);
-    }
-}
-
-__global__ void RegisterResizeCallbackKernel(CacheEvents::CacheResizeDelegate::Callback cb) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        d_cache_resize_delegate.Add(cb);
-    }
-}
-
-__global__ void ClearRewardCallbacksKernel() {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        d_cache_reward_delegate.Clear();
-    }
-}
-
-__global__ void ClearMutationCallbacksKernel() {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        d_cache_mutation_delegate.Clear();
-    }
-}
-
-__global__ void ClearEvictionCallbacksKernel() {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        d_cache_eviction_delegate.Clear();
-    }
-}
-
-__global__ void ClearResizeCallbacksKernel() {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        d_cache_resize_delegate.Clear();
-    }
-}
 
 //==============================================================================
 // Telemetry Reset
@@ -338,25 +275,6 @@ __device__ void InitializeRecord(GuessRecord& record, const GuessMetadata& metad
     record.stats.eviction_priority = 128;
 }
 
-__device__ inline void NotifyMutation(GuessRecord& record,
-                                      int slot_index,
-                                      CacheEvents::CacheMutationKind kind) {
-    if (d_cache_mutation_delegate.Count() > 0) {
-        d_cache_mutation_delegate.Broadcast(&record,
-                                            slot_index,
-                                            static_cast<int>(kind));
-    }
-}
-
-__device__ inline void NotifyEviction(GuessRecord& record,
-                                       int slot_index,
-                                       CacheEvents::EvictionReason reason) {
-    if (d_cache_eviction_delegate.Count() > 0) {
-        d_cache_eviction_delegate.Broadcast(&record, slot_index, static_cast<int>(reason));
-    }
-    atomicAdd(&d_cache_moment.evictions, 1u);
-}
-
 //==============================================================================
 // Reward Application (In-Place)
 //==============================================================================
@@ -394,10 +312,6 @@ __device__ void ApplyRewardInPlace(GuessRecord& record, float reward, float mome
     stats.last_updated_ts = now;
 
     AccumulateCacheTelemetry(record, reward, stale_event, is_hit);
-
-    if (d_cache_reward_delegate.Count() > 0) {
-        d_cache_reward_delegate.Broadcast(&record, reward, stats.normalized_last);
-    }
 }
 
 //==============================================================================
@@ -585,8 +499,7 @@ __device__ int EvictSlot(GuessCacheDeviceState state, std::uint64_t key,
         const std::uint64_t prev = AtomicCASKey(key_ptr, expected_key, key);
         if (prev == expected_key) {
             // Successfully claimed slot
-            NotifyEviction(state.records[worst_idx], worst_idx,
-                           CacheEvents::EvictionReason::kCapacityLimit);
+            atomicAdd(&d_cache_moment.evictions, 1u);
             return worst_idx;
         }
         // Another thread evicted this slot - retry would require loop redesign
@@ -668,16 +581,13 @@ __global__ void CacheGuessKernel(const GuessMetadata* metadata_batch,
         InitializeRecord(record, metadata);
         record.stats.diversity_score = diversity;
         atomicAdd(state.size, 1u);
-        NotifyMutation(record, slot.index, CacheEvents::CacheMutationKind::kInserted);
     } else if (slot.existing) {
         record.metadata.confidence = metadata.confidence;
         record.stats.diversity_score = fminf(record.stats.diversity_score, diversity);
-        NotifyMutation(record, slot.index, CacheEvents::CacheMutationKind::kUpdated);
     } else {
         // Eviction replacement
         InitializeRecord(record, metadata);
         record.stats.diversity_score = diversity;
-        NotifyMutation(record, slot.index, CacheEvents::CacheMutationKind::kReplaced);
     }
 }
 
@@ -737,15 +647,12 @@ __global__ void ApplyRewardKernel(const GuessMetadata* metadata_batch,
         InitializeRecord(record, metadata);
         record.stats.diversity_score = diversity;
         atomicAdd(state.size, 1u);
-        NotifyMutation(record, slot.index, CacheEvents::CacheMutationKind::kInserted);
     } else if (slot.existing) {
         record.metadata.confidence = metadata.confidence;
         record.stats.diversity_score = fminf(record.stats.diversity_score, diversity);
-        NotifyMutation(record, slot.index, CacheEvents::CacheMutationKind::kUpdated);
     } else {
         InitializeRecord(record, metadata);
         record.stats.diversity_score = diversity;
-        NotifyMutation(record, slot.index, CacheEvents::CacheMutationKind::kReplaced);
     }
 
     const bool is_hit = slot.existing;
@@ -810,7 +717,6 @@ __global__ void WarmCacheKernel(const WarmingEntry* entries, std::size_t count,
         if (slot.inserted) {
             atomicAdd(state.size, 1u);
         }
-        NotifyMutation(record, slot.index, CacheEvents::CacheMutationKind::kWarmed);
     }
 }
 
@@ -885,60 +791,49 @@ bool InitializeGuessCache(const CacheConfig& config,
                           cudaStream_t primary_stream) {
     // FAIL LOUD: Already initialized
     if (g_initialized) {
-        fprintf(stderr, "[FATAL] GRIMTS::InitializeGuessCache: Already initialized! "
-                "Call ShutdownGuessCache() first.\n");
-        return false;
+        throw std::runtime_error("[FATAL] GRIMTS::InitializeGuessCache: Already initialized! "
+                "Call ShutdownGuessCache() first.");
     }
     
     // FAIL LOUD: Null stream (Rule 22 - must come from StreamController)
     if (!primary_stream) {
-        fprintf(stderr, "[FATAL] GRIMTS::InitializeGuessCache: primary_stream is nullptr! "
-                "Stream must be obtained from TrainingState.stream_ctrl.getPrimaryStream().\n");
-        return false;
+        throw std::runtime_error("[FATAL] GRIMTS::InitializeGuessCache: primary_stream is nullptr! "
+                "Stream must be obtained from TrainingState.stream_ctrl.getPrimaryStream().");
     }
     GRIM::StreamController::fatalIfDefaultStream(primary_stream, "GRIMTS::InitializeGuessCache");
     
     // FAIL LOUD: Buffers not allocated
     if (!buffers.allocated) {
-        fprintf(stderr, "[FATAL] GRIMTS::InitializeGuessCache: buffers.allocated is false! "
-                "Call TrainingState::allocateGuessCacheBuffers() first.\n");
-        return false;
+        throw std::runtime_error("[FATAL] GRIMTS::InitializeGuessCache: buffers.allocated is false! "
+                "Call TrainingState::allocateGuessCacheBuffers() first.");
     }
     
     // FAIL LOUD: Null required buffer pointers
     if (!buffers.records) {
-        fprintf(stderr, "[FATAL] GRIMTS::InitializeGuessCache: buffers.records is nullptr!\n");
-        return false;
+        throw std::runtime_error("[FATAL] GRIMTS::InitializeGuessCache: buffers.records is nullptr!");
     }
     if (!buffers.keys) {
-        fprintf(stderr, "[FATAL] GRIMTS::InitializeGuessCache: buffers.keys is nullptr!\n");
-        return false;
+        throw std::runtime_error("[FATAL] GRIMTS::InitializeGuessCache: buffers.keys is nullptr!");
     }
     if (!buffers.size) {
-        fprintf(stderr, "[FATAL] GRIMTS::InitializeGuessCache: buffers.size is nullptr!\n");
-        return false;
+        throw std::runtime_error("[FATAL] GRIMTS::InitializeGuessCache: buffers.size is nullptr!");
     }
     if (!buffers.evict_cursor) {
-        fprintf(stderr, "[FATAL] GRIMTS::InitializeGuessCache: buffers.evict_cursor is nullptr!\n");
-        return false;
+        throw std::runtime_error("[FATAL] GRIMTS::InitializeGuessCache: buffers.evict_cursor is nullptr!");
     }
     if (!buffers.calibration_offset) {
-        fprintf(stderr, "[FATAL] GRIMTS::InitializeGuessCache: buffers.calibration_offset is nullptr!\n");
-        return false;
+        throw std::runtime_error("[FATAL] GRIMTS::InitializeGuessCache: buffers.calibration_offset is nullptr!");
     }
     if (!buffers.single_meta_buffer) {
-        fprintf(stderr, "[FATAL] GRIMTS::InitializeGuessCache: buffers.single_meta_buffer is nullptr!\n");
-        return false;
+        throw std::runtime_error("[FATAL] GRIMTS::InitializeGuessCache: buffers.single_meta_buffer is nullptr!");
     }
     if (!buffers.single_reward_buffer) {
-        fprintf(stderr, "[FATAL] GRIMTS::InitializeGuessCache: buffers.single_reward_buffer is nullptr!\n");
-        return false;
+        throw std::runtime_error("[FATAL] GRIMTS::InitializeGuessCache: buffers.single_reward_buffer is nullptr!");
     }
     
     // FAIL LOUD: Zero capacity
     if (buffers.capacity == 0) {
-        fprintf(stderr, "[FATAL] GRIMTS::InitializeGuessCache: buffers.capacity is 0!\n");
-        return false;
+        throw std::runtime_error("[FATAL] GRIMTS::InitializeGuessCache: buffers.capacity is 0!");
     }
     
     g_primary_stream = primary_stream;
@@ -965,9 +860,8 @@ bool InitializeGuessCache(const CacheConfig& config,
     // Copy to device constant memory
     cudaError_t err = cudaMemcpyToSymbol(d_cache_state, &h_cache_state, sizeof(h_cache_state));
     if (err != cudaSuccess) {
-        fprintf(stderr, "[FATAL] GRIMTS::InitializeGuessCache: cudaMemcpyToSymbol failed! error=%s\n",
+        throw std::runtime_error(std::string("[FATAL] GRIMTS::InitializeGuessCache: cudaMemcpyToSymbol failed! error=") +
                 cudaGetErrorString(err));
-        return false;
     }
     
     // Issue 1 FIX: Calibrate device timestamp
@@ -1060,24 +954,12 @@ void ShutdownGuessCache() {
 //==============================================================================
 
 void ResetGuessCache(cudaStream_t stream) {
-    // Get stack trace to identify caller
-    void* callstack[128];
-    unsigned short frames = CaptureStackBackTrace(0, 128, callstack, NULL);
-    fprintf(stderr, "[DEBUG] ResetGuessCache called - ENTER (g_initialized=%d) - %d stack frames\n", 
-            g_initialized ? 1 : 0, frames);
-    for (unsigned short i = 0; i < std::min((int)frames, 5); i++) {
-        fprintf(stderr, "[STACK %d] %p\n", i, callstack[i]);
-    }
-    
     if (!g_initialized) {
-        fprintf(stderr, "[DEBUG] ResetGuessCache - early return (not initialized)\n");
         return;
     }
     
-    fprintf(stderr, "[DEBUG] ResetGuessCache - about to call cudaMemsetAsync for records\n");
     cudaMemsetAsync(h_cache_state.records, 0, 
                     h_cache_state.capacity * sizeof(GuessRecord), stream);
-    fprintf(stderr, "[DEBUG] ResetGuessCache - records reset complete\n");
     
     cudaMemsetAsync(h_cache_state.size, 0, sizeof(unsigned int), stream);
     cudaMemsetAsync(h_cache_state.keys, 0xFF, 
@@ -1807,106 +1689,6 @@ void PrintCacheSummary() {
 }
 
 } // namespace GRIMTS
-
-//==============================================================================
-// Delegate Registration (GRIMTS::Delegates)
-//==============================================================================
-
-namespace GRIMTS::Delegates {
-
-cudaError_t RegisterCacheRewardCallback(CacheRewardDelegate::Callback callback, cudaStream_t stream) {
-    if (callback == nullptr) {
-        return cudaErrorInvalidValue;
-    }
-    if (!stream) {
-        fprintf(stderr, "[FATAL] RegisterCacheRewardCallback: stream is nullptr!\n");
-        return cudaErrorInvalidValue;
-    }
-    RegisterRewardCallbackKernel<<<1, 32, 0, stream>>>(callback);
-    return cudaStreamSynchronize(stream);
-}
-
-cudaError_t RegisterCacheMutationCallback(CacheMutationDelegate::Callback callback, cudaStream_t stream) {
-    if (callback == nullptr) {
-        return cudaErrorInvalidValue;
-    }
-    if (!stream) {
-        fprintf(stderr, "[FATAL] RegisterCacheMutationCallback: stream is nullptr!\n");
-        return cudaErrorInvalidValue;
-    }
-    RegisterMutationCallbackKernel<<<1, 32, 0, stream>>>(callback);
-    return cudaStreamSynchronize(stream);
-}
-
-cudaError_t RegisterCacheEvictionCallback(CacheEvictionDelegate::Callback callback, cudaStream_t stream) {
-    if (callback == nullptr) {
-        return cudaErrorInvalidValue;
-    }
-    if (!stream) {
-        fprintf(stderr, "[FATAL] RegisterCacheEvictionCallback: stream is nullptr!\n");
-        return cudaErrorInvalidValue;
-    }
-    RegisterEvictionCallbackKernel<<<1, 32, 0, stream>>>(callback);
-    return cudaStreamSynchronize(stream);
-}
-
-cudaError_t RegisterCacheResizeCallback(CacheResizeDelegate::Callback callback, cudaStream_t stream) {
-    if (callback == nullptr) {
-        return cudaErrorInvalidValue;
-    }
-    if (!stream) {
-        fprintf(stderr, "[FATAL] RegisterCacheResizeCallback: stream is nullptr!\n");
-        return cudaErrorInvalidValue;
-    }
-    RegisterResizeCallbackKernel<<<1, 32, 0, stream>>>(callback);
-    return cudaStreamSynchronize(stream);
-}
-
-cudaError_t ClearCacheRewardCallbacks(cudaStream_t stream) {
-    if (!stream) {
-        fprintf(stderr, "[FATAL] ClearCacheRewardCallbacks: stream is nullptr!\n");
-        return cudaErrorInvalidValue;
-    }
-    ClearRewardCallbacksKernel<<<1, 32, 0, stream>>>();
-    return cudaStreamSynchronize(stream);
-}
-
-cudaError_t ClearCacheMutationCallbacks(cudaStream_t stream) {
-    if (!stream) {
-        fprintf(stderr, "[FATAL] ClearCacheMutationCallbacks: stream is nullptr!\n");
-        return cudaErrorInvalidValue;
-    }
-    ClearMutationCallbacksKernel<<<1, 32, 0, stream>>>();
-    return cudaStreamSynchronize(stream);
-}
-
-cudaError_t ClearCacheEvictionCallbacks(cudaStream_t stream) {
-    if (!stream) {
-        fprintf(stderr, "[FATAL] ClearCacheEvictionCallbacks: stream is nullptr!\n");
-        return cudaErrorInvalidValue;
-    }
-    ClearEvictionCallbacksKernel<<<1, 32, 0, stream>>>();
-    return cudaStreamSynchronize(stream);
-}
-
-cudaError_t ClearCacheResizeCallbacks(cudaStream_t stream) {
-    if (!stream) {
-        fprintf(stderr, "[FATAL] ClearCacheResizeCallbacks: stream is nullptr!\n");
-        return cudaErrorInvalidValue;
-    }
-    ClearResizeCallbacksKernel<<<1, 32, 0, stream>>>();
-    return cudaStreamSynchronize(stream);
-}
-
-cudaError_t ClearAllCallbacks(cudaStream_t stream) {
-    ClearCacheRewardCallbacks(stream);
-    ClearCacheMutationCallbacks(stream);
-    ClearCacheEvictionCallbacks(stream);
-    ClearCacheResizeCallbacks(stream);
-    return cudaSuccess;
-}
-
-} // namespace GRIMTS::Delegates
 
 //======================================================//
 //  GRIM-TS Logging Implementation

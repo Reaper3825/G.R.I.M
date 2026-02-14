@@ -60,7 +60,7 @@
         "enable_byte_fallback": true,
         "enable_lowercasing": true,
         "enable_nfkc_normalization": true,
-        "max_length": 8192,
+        "max_length": 1024,
         "max_vocab_size": 50000,
         "min_subword_freq": 3,
         "prune_during_mining": false,
@@ -97,6 +97,7 @@
             "checkpoint_interval": 1000,
             "use_gpu": true,
             "use_flash_attention": true,
+            "min_seq_len_for_flash": 512,
             "use_mixed_precision": true,
             "single_batch": {
                 "enabled": false,
@@ -163,11 +164,6 @@
                 "plateau_min_delta": 0.005,
                 "high_loss_threshold": 5.5,
                 "high_loss_patience": 8
-            },
-
-            "cache_limits": {
-                "max_cached_batch": 24,
-                "max_cached_seq_len": 2048
             },
 
             "micro_validation": {
@@ -289,8 +285,6 @@
             "stability_overrides": {
                 "batch_size": 3,
                 "max_seq_len": 1024,
-                "max_tokens_per_batch": 32768,
-                "clip_abs": 12.0,
                 "clip_per_token": 0.025,
                 "lr_min": 1e-3
             },
@@ -353,7 +347,7 @@
                 "default_level": "Info",
                 "modules": {
                     "ForwardPass": "WARN",
-                    "BackwardPass": "WARN",
+                    "BackwardPass": "Info",
                     "Optimizer": "Info",
                     "Scheduler": "Info",
                     "Activations": "WARN",
@@ -399,7 +393,6 @@
             "lm_head_centering": {
                 "enabled": true,
                 "center_hidden_states": true,
-                "recenter_gradients": true,
                 "center_logits": true,
                 "center_encoder_residuals": false
             },

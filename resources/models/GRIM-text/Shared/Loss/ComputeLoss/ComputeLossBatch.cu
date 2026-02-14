@@ -1,4 +1,3 @@
-#include "ComputeLossBatch.hpp"
 #include "../../Batching/BatchPayload.hpp"
 
 #include <algorithm>
@@ -14,10 +13,8 @@
 #include <cuda_runtime.h>
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
-#include "AutogradLoss.hpp"  // Issue #46: Unified autograd loss system
-#include "../LossContext/LossContext.hpp"
-#include "../NumericLoss/NumericLoss_GPU.hpp"
-#include "../../TeacherLogits/TeacherLogits_GPU.hpp"
+// AutogradLoss.hpp, LossContext.hpp, NumericLoss_GPU.hpp, TeacherLogits_GPU.hpp
+// removed — now handled by computeAutogradLoss() in AutogradTraining.hpp
 #include "../../LogRecorder/LogRecorder.hpp"
 #include "../../../training/Autograd/AutogradTraining.hpp"  // Issue #47: Full autograd forward pass
 #include "../../VerboseLogging.hpp"  // Guards for expensive debug prints
@@ -158,7 +155,7 @@ float LanguageModel::computeLossBatch(
 		cudaMemcpyHostToDevice, stream));
 
 	// Text features (uint16_t stored in float Tensor — cast needed)
-	constexpr int kTextFeatureDim = 16;
+	constexpr int kTextFeatureDim = GRIM::Batching::BatchPayload::kTextFeatureDim;
 	float* cached_text_features_ptr = training_state_.cached_token_text_features.data;
 	float* cached_text_mask_ptr = training_state_.cached_token_text_mask.data;
 	if (cached_text_features_ptr && cached_text_mask_ptr) {
@@ -207,13 +204,11 @@ float LanguageModel::computeLossBatch(
 		scratch_block,
 		training_state_.cublas_handle,
 		stream,
-		static_cast<int>(batch_size),
-		static_cast<int>(seq_len),
+		payload,
 		1.0f,
 		autograd_forward_step,
 		true
 	);
-	autograd_ctx.validate("computeLossBatch");
 	
 	// Set ScratchBlock input buffers (already on GPU from copies above)
 	autograd_ctx.token_numeric_values = training_state_.cached_token_numeric_values.data;
@@ -250,90 +245,8 @@ float LanguageModel::computeLossBatch(
 	orderLog("computeLossBatch.forward_done",
 		batch_size, seq_len, total_tokens, valid_tokens);
 
-	// LossScratch struct deleted - scratch buffers managed directly in training_state_
-
-	LossContext::TensorViews ctx_views{};
-	ctx_views.logits = training_state_.cached_logits_tensor.data;
-	ctx_views.targets = reinterpret_cast<int*>(training_state_.cached_targets_tensor.data);
-	ctx_views.teacher_logits = training_state_.teacher_logits.device;
-	ctx_views.reference_logits = training_state_.reference_logits.device;
-	ctx_views.batch_size = training_state_.cached_batch_size;
-	ctx_views.seq_len = training_state_.cached_seq_len;
-	ctx_views.valid_tokens = valid_tokens;
-	ctx_views.vocab_size = cfg.vocab_size;
-	// Only pass sequence_weights if we actually have weights set (count > 0)
-	// Otherwise pass nullptr so kernel uses default sample_weight=1.0f
-	ctx_views.sequence_weights = (training_state_.sequence_weight_count > 0) 
-	                            ? training_state_.sequence_weights_tensor.data 
-	                            : nullptr;
-	ctx_views.sequence_weight_count = training_state_.sequence_weight_count;
-	ctx_views.stream = training_state_.stream_ctrl.getPrimaryStream();
-
-	// Build loss config inline (Issue #136: removed LossContext.cu module)
-	Loss::LossConfig loss_config{};
-	loss_config.label_smoothing.enabled = loss_options_.label_smoothing_enabled;
-	loss_config.label_smoothing.epsilon = loss_options_.label_smoothing_epsilon;
-	loss_config.focal.enabled = loss_options_.focal_enabled;
-	loss_config.focal.gamma = loss_options_.focal_gamma;
-	loss_config.focal.alpha = loss_options_.focal_alpha;
-	loss_config.preference.enabled = loss_options_.preference_enabled;
-	loss_config.preference.beta = loss_options_.preference_beta;
-	loss_config.distillation.enabled = loss_options_.distillation_enabled;
-	loss_config.distillation.temperature = loss_options_.distillation_temperature;
-	loss_config.distillation.lambda = loss_options_.distillation_lambda;
-	loss_config.masking.enabled = loss_options_.masking_enabled;
-	loss_config.masking.tag = loss_options_.masking_tag;
-	loss_config.entropy_reg.enabled = loss_options_.entropy_reg_enabled;
-	loss_config.entropy_reg.lambda = loss_options_.entropy_reg_lambda;
-	float* grad_logits_ptr = training_state_.grad_logits_tensor.data;  // Pass pre-allocated buffer
-	// If distillation/preference are enabled and no teacher/reference logits are present,
-	// mirror the current logits into the teacher/reference buffers. This keeps the call
-	// sites simple; a real teacher model can overwrite these buffers before loss compute.
-	if (loss_config.distillation.enabled) {
-		orderLog("computeLossBatch.distill_copy",
-			batch_size, seq_len, total_tokens, valid_tokens);
-		if (!TeacherLogits::copyFromDevice(training_state_.teacher_logits,
-		                                   training_state_.cached_logits_tensor.data,
-		                                   total_tokens,
-		                                   cfg.vocab_size,
-		                                   training_state_.stream_ctrl.getPrimaryStream())) {
-			fprintf(stderr, "[ComputeLossBatch] FATAL: distillation enabled but teacher_logits missing\n");
-			throw std::runtime_error("computeLossBatch: distillation enabled without teacher logits");
-		}
-	}
-	if (loss_config.preference.enabled) {
-		orderLog("computeLossBatch.preference_copy",
-			batch_size, seq_len, total_tokens, valid_tokens);
-		if (!TeacherLogits::copyFromDevice(training_state_.reference_logits,
-		                                   training_state_.cached_logits_tensor.data,
-		                                   total_tokens,
-		                                   cfg.vocab_size,
-		                                   training_state_.stream_ctrl.getPrimaryStream())) {
-			fprintf(stderr, "[ComputeLossBatch] FATAL: preference enabled but reference_logits missing\n");
-			throw std::runtime_error("computeLossBatch: preference enabled without reference logits");
-		}
-	}
-
-	// Skip stream sync/probe here for performance; errors will surface downstream.
-	// Disable distillation/preference if teacher/reference logits are unavailable.
-	static bool logged_teacher_warn = false;
-	static bool logged_ref_warn = false;
-	if (loss_config.distillation.enabled && !training_state_.teacher_logits.device) {
-		if (!logged_teacher_warn) {
-			GRIM::Logging::EmitModuleError("Loss", "[LossConfig] distillation enabled but teacher_logits missing; aborting");
-			logged_teacher_warn = true;
-		}
-		throw std::runtime_error("computeLossBatch: distillation enabled without teacher logits");
-	}
-	if (loss_config.preference.enabled && !training_state_.reference_logits.device) {
-		if (!logged_ref_warn) {
-			GRIM::Logging::EmitModuleError("Loss", "[LossConfig] preference KL enabled but reference_logits missing; aborting");
-			logged_ref_warn = true;
-		}
-		throw std::runtime_error("computeLossBatch: preference enabled without reference logits");
-	}
-	loss_config.limits.max_tokens = logit_limit;
-	size_t valid_token_count = static_cast<size_t>(valid_tokens);
+	// Build loss config via centralized helper (Issue #142: single conversion point)
+	autograd_ctx.loss_config = GRIM::Autograd::buildLossConfig(loss_options_);
 
 	static int loss_call_count = 0;
 	++loss_call_count;
@@ -438,7 +351,7 @@ float LanguageModel::computeLossBatch(
 			// z-score of target logit: how many std devs above/below mean?
 			float target_zscore = (pos_std > 1e-6f && target >= 0) ? (target_logit - pos_mean) / pos_std : 0.0f;
 			
-			fprintf(stderr, "  pos=%zu: target=%d logit_range=[%.3f,%.3f] std=%.4f target_logit=%.3f(z=%.2f) max_logit=%.3f(tok=%d) p(target)=%.6f loss=%.3f %s\n",
+			fprintf(stderr, "  pos=%zu: target=%d logit_range=[%.8f,%.8f] std=%.8f target_logit=%.8f(z=%.8f) max_logit=%.8f(tok=%d) p(target)=%.8f loss=%.8f %s\n",
 			        pos, target, pos_min, pos_max, pos_std, target_logit, target_zscore, max_logit, max_idx, target_prob, expected_loss,
 			        (target < 0) ? "[MASKED]" : "");
 		}
@@ -455,298 +368,20 @@ float LanguageModel::computeLossBatch(
 	// === END FORWARD DIAGNOSTIC ===
 
 	// ═══════════════════════════════════════════════════════════════════════════
-	// Issue #46 FIX: UNIFIED AUTOGRAD LOSS SYSTEM
+	// Compute loss via centralized autograd path (Issue #142)
+	// Handles: text CE, numeric regression, learned loss weighting
 	// ═══════════════════════════════════════════════════════════════════════════
-	// Use autograd::cross_entropy_loss() for BOTH:
-	//   1. Forward: Compute loss value (returned for logging)
-	//   2. Backward: grad_fn attached to loss_tensor enables backward()
-	// This replaces the OLD dual-system approach where:
-	//   - UnifiedLoss computed loss in forward
-	//   - Autograd computed gradients in backward (by recreating the loss computation!)
-	// Now loss is computed ONCE and the grad_fn is cached for backward.
-	// ═══════════════════════════════════════════════════════════════════════════
-
-	// 'stream' already defined above when setting up autograd context
-	
-	// ═══════════════════════════════════════════════════════════════════════════
-	// Autograd intermediates now stored in training_state_.autograd_intermediates
-	// The logits_tensor there has the full grad_fn chain back to embeddings
-	// ═══════════════════════════════════════════════════════════════════════════
-	
-	// Intermediates reference (owned by training_state_)
-	auto& intermediates = training_state_.autograd_intermediates;
-	
-	// Setup gradient buffer for logits (reuse pre-allocated buffer)
-	if (!training_state_.grad_logits_tensor.data) {
-		throw std::runtime_error("[ComputeLossBatch] grad_logits_tensor.data not allocated!");
-	}
-	intermediates.logits_tensor.set_grad_from_buffer(
-		training_state_.grad_logits_tensor.data
-	);
-	
-	// Compute loss using AUTOGRAD - this attaches grad_fn for backward pass
-	// Build autograd LossConfig from the full LossConfig
-	autograd::LossConfig ag_loss_config;
-	const auto& full_loss_cfg = loss_config;
-	// Issue #135 FIX: MUST set _enabled booleans! Previously only set the values
-	// but never the enable flags, so features could NEVER activate via config.
-	ag_loss_config.focal_enabled = full_loss_cfg.focal.enabled;
-	ag_loss_config.focal_alpha = full_loss_cfg.focal.enabled ? full_loss_cfg.focal.alpha : 1.0f;
-	ag_loss_config.focal_gamma = full_loss_cfg.focal.enabled ? full_loss_cfg.focal.gamma : 0.0f;
-	ag_loss_config.smoothing_enabled = full_loss_cfg.label_smoothing.enabled;
-	ag_loss_config.smoothing_epsilon = full_loss_cfg.label_smoothing.enabled ? full_loss_cfg.label_smoothing.epsilon : 0.0f;
-	ag_loss_config.entropy_reg_enabled = full_loss_cfg.entropy_reg.enabled;
-	ag_loss_config.entropy_reg_lambda = full_loss_cfg.entropy_reg.enabled ? full_loss_cfg.entropy_reg.lambda : 0.0f;
-	
-	fprintf(stderr, "[ComputeLossBatch] STEP-A: calling autograd::unified_loss (total_tokens=%zu, vocab=%d)...\n",
-	        total_tokens, cfg.vocab_size);
-	fflush(stderr);
-	
-	// CRITICAL: Release old loss tensor BEFORE unified_loss() allocates new one.
-	// unified_loss() allocates ~4 GB (log_probs + grad_buffer + LogSoftmaxGradFn saved data).
-	// Without releasing first, both old and new buffers coexist in GPU memory during
-	// unified_loss() execution = ~8 GB for loss alone on a 12 GB GPU → OOM at batch ~22.
-	intermediates.loss_tensor.release();
-	
-	intermediates.loss_tensor = autograd::unified_loss(
-		intermediates.logits_tensor,
-		reinterpret_cast<int*>(training_state_.cached_targets_tensor.data),
-		nullptr,  // valid_mask (nullptr = all valid, padding handled by target=-1)
-		static_cast<int>(total_tokens),
-		cfg.vocab_size,
-		ag_loss_config,
-		stream
-	);
-	
-	fprintf(stderr, "[ComputeLossBatch] STEP-B: unified_loss returned, loss_tensor.data=%p grad_fn=%p owns_data=%d\n",
-	        (void*)intermediates.loss_tensor.data,
-	        (void*)intermediates.loss_tensor.grad_fn.get(),
-	        (int)intermediates.loss_tensor.owns_data);
-	fflush(stderr);
-	
-	// Read scalar loss value to host (needed for return value and diagnostics)
-	float autograd_loss = 0.0f;
-	if (intermediates.loss_tensor.data) {
-		cudaMemcpyAsync(&autograd_loss, intermediates.loss_tensor.data, sizeof(float), 
-		                cudaMemcpyDeviceToHost, stream);
-		cudaStreamSynchronize(stream);
-	}
-	// Issue #62 DEBUG: Verify the loss value matches what unified_loss computed
-	fprintf(stderr, "[ComputeLossBatch] READ BACK: autograd_loss=%.6f from loss_tensor.data=%p\n",
-	        autograd_loss, (void*)intermediates.loss_tensor.data);
-	fprintf(stderr, "[ComputeLossBatch] STEP-C: setting cached values...\n");
-	fflush(stderr);
-	training_state_.cached_loss_value = autograd_loss;
-	training_state_.cached_text_loss = autograd_loss;    // Store for learned weighting backward
-	// Note: cached_numeric_loss is set later after numeric_loss_avg is computed
-	fprintf(stderr, "[ComputeLossBatch] STEP-D: cached values set, checking spike diag...\n");
-	fflush(stderr);
-	
-	// Diagnostic: If loss is suspiciously high, dump detailed diagnostics
-	if (autograd_loss > 20.0f) {
-		cudaStreamSynchronize(training_state_.stream_ctrl.getPrimaryStream());
-		fprintf(stderr, "\n[SPIKE_DIAG] ========== LOSS SPIKE DETECTED ==========\n");
-		fprintf(stderr, "[SPIKE_DIAG] Loss=%.4f batch_size=%zu seq_len=%zu total_tokens=%zu valid_tokens=%d\n",
-		        autograd_loss, batch_size, seq_len, total_tokens, valid_tokens);
-		
-		// Sample encoder outputs
-		const size_t enc_sample_size = std::min<size_t>(1000, total_tokens * cfg.d_model);
-		std::vector<float> enc_sample(enc_sample_size);
-		cudaMemcpy(enc_sample.data(), training_state_.cached_encoder_output.data, 
-		           enc_sample_size * sizeof(float), cudaMemcpyDeviceToHost);
-		
-		float enc_max = -1e30f, enc_min = 1e30f, enc_sum = 0.0f;
-		int enc_nan = 0, enc_inf = 0;
-		for (float v : enc_sample) {
-			if (std::isnan(v)) { enc_nan++; continue; }
-			if (std::isinf(v)) { enc_inf++; continue; }
-			enc_max = std::max(enc_max, v);
-			enc_min = std::min(enc_min, v);
-			enc_sum += v;
-		}
-		fprintf(stderr, "[SPIKE_DIAG] Encoder out: min=%.4f max=%.4f mean=%.4f nan=%d inf=%d\n",
-		        enc_min, enc_max, enc_sum / enc_sample_size, enc_nan, enc_inf);
-		
-		// Sample logits
-		const size_t logit_sample_size = std::min<size_t>(50000, total_tokens * cfg.vocab_size);
-		std::vector<float> logit_sample(logit_sample_size);
-		cudaMemcpy(logit_sample.data(), training_state_.cached_logits_tensor.data, 
-		           logit_sample_size * sizeof(float), cudaMemcpyDeviceToHost);
-		
-		float logit_max = -1e30f, logit_min = 1e30f, logit_sum = 0.0f;
-		int logit_nan = 0, logit_inf = 0;
-		for (float v : logit_sample) {
-			if (std::isnan(v)) { logit_nan++; continue; }
-			if (std::isinf(v)) { logit_inf++; continue; }
-			logit_max = std::max(logit_max, v);
-			logit_min = std::min(logit_min, v);
-			logit_sum += v;
-		}
-		fprintf(stderr, "[SPIKE_DIAG] Logits: min=%.4f max=%.4f mean=%.4f range=%.4f nan=%d inf=%d\n",
-		        logit_min, logit_max, logit_sum / logit_sample_size, logit_max - logit_min, logit_nan, logit_inf);
-		
-		// Check first few targets
-		std::vector<int> target_sample(std::min<size_t>(20, total_tokens));
-		cudaMemcpy(target_sample.data(), reinterpret_cast<int*>(training_state_.cached_targets_tensor.data), 
-		           target_sample.size() * sizeof(int), cudaMemcpyDeviceToHost);
-		fprintf(stderr, "[SPIKE_DIAG] First targets: ");
-		for (int t : target_sample) fprintf(stderr, "%d ", t);
-		fprintf(stderr, "\n");
-		
-		// Check logits at target positions
-		fprintf(stderr, "[SPIKE_DIAG] Logit at target[i] for first 10 positions:\n");
-		for (size_t i = 0; i < std::min<size_t>(10, target_sample.size()); ++i) {
-			int target = target_sample[i];
-			if (target >= 0 && target < cfg.vocab_size) {
-				size_t logit_idx = i * cfg.vocab_size + target;
-				if (logit_idx < logit_sample_size) {
-					// Also get max logit at this position
-					float max_logit = -1e30f;
-					int max_idx = 0;
-					for (int v = 0; v < std::min(cfg.vocab_size, 1000); ++v) {
-						size_t idx = i * cfg.vocab_size + v;
-						if (idx < logit_sample_size && logit_sample[idx] > max_logit) {
-							max_logit = logit_sample[idx];
-							max_idx = v;
-						}
-					}
-					fprintf(stderr, "  pos=%zu target=%d logit[target]=%.4f max_logit=%.4f(tok=%d) diff=%.4f\n",
-					        i, target, logit_sample[logit_idx], max_logit, max_idx, max_logit - logit_sample[logit_idx]);
-				}
-			}
-		}
-		fprintf(stderr, "[SPIKE_DIAG] ========================================\n\n");
-	}
-	
-	fprintf(stderr, "[ComputeLossBatch] STEP-E: spike diag done, checking isfinite...\n");
-	fflush(stderr);
-	
-	// Autograd loss computation doesn't have a "success" flag - if it didn't throw, it succeeded.
-	// Validate the loss value is finite
-	if (!std::isfinite(autograd_loss)) {
-		fprintf(stderr, "ERROR: autograd loss is non-finite (%.6f). Breaking.\n", autograd_loss);
+	auto loss_result = GRIM::Autograd::computeAutogradLoss(autograd_ctx);
+	if (!loss_result.success) {
 		orderLog("computeLossBatch.loss_fail",
 			batch_size, seq_len, total_tokens, valid_tokens);
-		throw std::runtime_error("autograd loss is non-finite");
+		throw std::runtime_error("computeLossBatch: loss computation failed - " + loss_result.error_message);
 	}
-
-	fprintf(stderr, "[ComputeLossBatch] STEP-F: loss validated, setting cached_valid_tokens=%d\n", valid_tokens);
-	fflush(stderr);
-	
-	// Scratch buffers remain in training_state_ (no need to update - they're already there)
-	training_state_.cached_valid_tokens = valid_tokens;
 
 	orderLog("computeLossBatch.loss_done",
 		batch_size, seq_len, total_tokens, valid_tokens);
 
-	fprintf(stderr, "[ComputeLossBatch] STEP-G: entering numeric loss section (enabled=%d)\n",
-	        (int)cfg.numeric_head_enabled);
-	fflush(stderr);
-	
-	float numeric_loss_sum = 0.0f;
-	int numeric_loss_count = 0;
-	if (cfg.numeric_head_enabled) {
-		if (!training_state_.cached_numeric_predictions.data ||
-		    !training_state_.grad_numeric_tensor.data ||
-		    !training_state_.d_numeric_loss_sum.data ||
-		    !training_state_.d_numeric_loss_count.data) {
-			throw std::runtime_error("computeLossBatch: numeric head enabled but buffers missing");
-		}
-		NumericLossInputs num_inputs{};
-		num_inputs.predictions = training_state_.cached_numeric_predictions.data;
-		num_inputs.token_numeric_values = training_state_.cached_token_numeric_values.data;
-		num_inputs.token_numeric_mask = reinterpret_cast<uint8_t*>(training_state_.cached_token_numeric_mask.data);
-		num_inputs.targets = reinterpret_cast<int*>(training_state_.cached_targets_tensor.data);
-		num_inputs.total_tokens = static_cast<int>(total_tokens);
-		num_inputs.seq_len = static_cast<int>(seq_len);
-		num_inputs.valid_text_tokens = static_cast<int>(valid_tokens);  // Issue #137: match text CE denominator
-		num_inputs.huber_delta = cfg.numeric_head_huber_delta;
-		num_inputs.log_scale = cfg.numeric_head_log_scale;
-		num_inputs.loss_weight = cfg.numeric_head_loss_weight;
-
-		NumericLossOutputs num_outputs{};
-		num_outputs.loss_sum = training_state_.d_numeric_loss_sum.data;
-		num_outputs.count = reinterpret_cast<int*>(training_state_.d_numeric_loss_count.data);
-		num_outputs.grad_predictions = training_state_.grad_numeric_tensor.data;
-
-		if (!launchNumericLoss(num_inputs, num_outputs, training_state_.stream_ctrl.getPrimaryStream())) {
-			throw std::runtime_error("computeLossBatch: numeric loss kernel launch failed");
-		}
-
-		cudaMemcpyAsync(&numeric_loss_sum, training_state_.d_numeric_loss_sum.data,
-		                sizeof(float), cudaMemcpyDeviceToHost,
-		                training_state_.stream_ctrl.getPrimaryStream());
-		cudaMemcpyAsync(&numeric_loss_count, reinterpret_cast<int*>(training_state_.d_numeric_loss_count.data),
-		                sizeof(int), cudaMemcpyDeviceToHost,
-		                training_state_.stream_ctrl.getPrimaryStream());
-		training_state_.stream_ctrl.syncPrimaryStream();
-		if (!std::isfinite(numeric_loss_sum)) {
-			numeric_loss_sum = 0.0f;
-			numeric_loss_count = 0;
-		}
-	}
-
-	fprintf(stderr, "[ComputeLossBatch] STEP-H: numeric loss done (sum=%.6f count=%d), entering learned weighting\n",
-	        numeric_loss_sum, numeric_loss_count);
-	fflush(stderr);
-	
-	// Learned loss weighting (homoscedastic uncertainty)
-	// L_total = L_text / (2*σ_text²) + L_numeric / (2*σ_numeric²) + 0.5*log(σ_text²) + 0.5*log(σ_numeric²)
-	// We learn log_var = log(σ²), so: L = L / (2*exp(log_var)) + 0.5*log_var
-	float avg_loss = 0.0f;
-	float weight_text = 1.0f;
-	float weight_numeric = cfg.numeric_head_loss_weight;
-	float reg_text = 0.0f;
-	float reg_numeric = 0.0f;
-	float log_var_text_val = 0.0f;
-	float log_var_numeric_val = 0.0f;
-	
-	const bool use_learned_weights = training_state_.log_var_text.data && training_state_.log_var_numeric.data;
-	
-	if (use_learned_weights) {
-		// Read learned log-variances from GPU
-		cudaMemcpyAsync(&log_var_text_val, training_state_.log_var_text.data, 
-		                sizeof(float), cudaMemcpyDeviceToHost, stream);
-		cudaMemcpyAsync(&log_var_numeric_val, training_state_.log_var_numeric.data,
-		                sizeof(float), cudaMemcpyDeviceToHost, stream);
-		cudaStreamSynchronize(stream);
-		
-		// Clamp log_var to prevent numerical issues
-		log_var_text_val = std::clamp(log_var_text_val, -4.0f, 4.0f);      // σ² in [0.018, 54.6]
-		log_var_numeric_val = std::clamp(log_var_numeric_val, -4.0f, 4.0f);
-		
-		// Compute weights: 1 / (2 * exp(log_var)) = 0.5 * exp(-log_var)
-		weight_text = 0.5f * std::exp(-log_var_text_val);
-		weight_numeric = 0.5f * std::exp(-log_var_numeric_val);
-		
-		// Regularization terms: 0.5 * log_var (prevents σ → ∞)
-		reg_text = 0.5f * log_var_text_val;
-		reg_numeric = 0.5f * log_var_numeric_val;
-	}
-	
-	const float numeric_loss_avg = (numeric_loss_count > 0) 
-		? (numeric_loss_sum / numeric_loss_count) : 0.0f;
-	
-	// Store for learned weighting backward pass
-	training_state_.cached_numeric_loss = numeric_loss_avg;
-	training_state_.cached_numeric_count = numeric_loss_count;  // Issue #137: store for weight grad normalization
-	
-	avg_loss = weight_text * autograd_loss + reg_text
-	         + weight_numeric * numeric_loss_avg + reg_numeric;
-	
-	// Log both loss components separately for debugging
-	fprintf(stderr, "[LossComponents] text_ce=%.4f (w=%.3f) numeric=%.4f (w=%.3f) reg=%.4f total=%.4f\n",
-	        autograd_loss, weight_text, numeric_loss_avg, weight_numeric, 
-	        reg_text + reg_numeric, avg_loss);
-	
-	if (!std::isfinite(avg_loss)) {
-		fprintf(stderr, "[ComputeLossBatch] FATAL: avg_loss is non-finite (autograd=%.6f, numeric=%.6f)\n",
-		        autograd_loss, numeric_loss_avg);
-		throw std::runtime_error("computeLossBatch: avg_loss is non-finite");
-	}
-	fprintf(stderr, "[ComputeLossBatch] STEP-J: returning avg_loss=%.6f\n", avg_loss);
-	fflush(stderr);
-	return avg_loss;
+	return loss_result.loss_value;
 }
 
 }  // namespace GRIM

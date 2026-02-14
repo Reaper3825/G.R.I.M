@@ -52,7 +52,7 @@ struct EncodingConfig {
     
     // Flash Attention
     bool use_flash_attention = true;   // Use Flash Attention 2 for memory efficiency
-    int min_seq_len_for_flash = 128;   // Minimum seq len to activate Flash Attention
+    int min_seq_len_for_flash = 0;     // REQUIRED - set from hyperparameters (no defaults)
     
     // Normalization
     float rms_epsilon = 1e-5f;
@@ -283,7 +283,10 @@ public:
     //--------------------------------------------------
     // Flash Attention Control
     //--------------------------------------------------
-    void setFlashAttention(bool enable, int min_seq_len = 128) {
+    void setFlashAttention(bool enable, int min_seq_len) {
+        if (min_seq_len <= 0) {
+            throw std::runtime_error("setFlashAttention: min_seq_len must be > 0 (configured from hyperparameters)");
+        }
         config_.use_flash_attention = enable;
         config_.min_seq_len_for_flash = min_seq_len;
     }

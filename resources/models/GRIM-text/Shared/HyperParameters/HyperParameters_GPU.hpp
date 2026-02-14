@@ -273,7 +273,7 @@ inline bool isValidFlashAttentionHeadDim(int head_dim) {
 // Supports ALiBi, RoPE, and Hybrid (ALiBi+RoPE)
 //======================================================//
 enum class PositionalEncodingType {
-    NONE,       // No positional encoding
+    NONE,       // Learned/additive position embeddings (no ALiBi/RoPE inside attention)
     ALIBI,      // Attention with Linear Biases (bias-based, good for long-range)
     ROPE,       // Rotary Position Embedding (rotation-based, good for local patterns)
     ALIBI_ROPE  // Hybrid: ALiBi for long-range + RoPE for local patterns (recommended)
@@ -374,6 +374,7 @@ struct ModelArchitecture {
     float dropout_rate = DEFAULT_DROPOUT_RATE;
     float attention_dropout = DEFAULT_ATTENTION_DROPOUT;
     bool tie_embeddings = true;  // Weight tying: share embedding/LM head weights
+    PositionalEncodingType positional_encoding = DEFAULT_POSITIONAL_ENCODING;
     
     // Derived (computed from above)
     int head_dim = DEFAULT_HEAD_DIM;
@@ -638,15 +639,6 @@ inline DerivedScheduleInfo harmonizeTrainingHyperparameters(
         params.dynamic_lr_cooldown_max);
     log_adjustment("dynamic_lr_cooldown_steps", original_cooldown_steps, params.dynamic_lr_cooldown_steps);
 
-    const int original_cache_batch = params.cache_max_batch;
-    params.cache_max_batch = std::max(params.cache_max_batch, safe_batch_size);
-    log_adjustment("cache_max_batch", original_cache_batch, params.cache_max_batch);
-
-    const int original_cache_seq = params.cache_max_seq_len;
-    const int max_allowed_seq = std::max(1, params.max_seq_len);
-    params.cache_max_seq_len = std::clamp(params.cache_max_seq_len, 1, max_allowed_seq);
-    log_adjustment("cache_max_seq_len", original_cache_seq, params.cache_max_seq_len);
-
     const int original_auto_plateau = params.auto_stop_plateau_patience;
     params.auto_stop_plateau_patience = std::clamp(params.auto_stop_plateau_patience, 0, params.epochs);
     log_adjustment("auto_stop_plateau_patience", original_auto_plateau, params.auto_stop_plateau_patience);
@@ -723,17 +715,51 @@ inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& co
         if (cfg.contains("num_heads") && cfg["num_heads"].is_number()) {
             arch.num_heads = cfg["num_heads"].get<int>();
         }
+        if (cfg.contains("num_kv_heads") && cfg["num_kv_heads"].is_number()) {
+            arch.num_kv_heads = cfg["num_kv_heads"].get<int>();
+        }
         if (cfg.contains("d_ff") && cfg["d_ff"].is_number()) {
             arch.d_ff = cfg["d_ff"].get<int>();
         } else {
             // Compute d_ff from d_model if not explicitly set
             arch.d_ff = arch.d_model * DEFAULT_D_FF_MULTIPLIER;
         }
+        if (cfg.contains("tie_embeddings") && cfg["tie_embeddings"].is_boolean()) {
+            arch.tie_embeddings = cfg["tie_embeddings"].get<bool>();
+        }
         if (cfg.contains("dropout_rate") && cfg["dropout_rate"].is_number()) {
             arch.dropout_rate = cfg["dropout_rate"].get<float>();
         }
         if (cfg.contains("attention_dropout") && cfg["attention_dropout"].is_number()) {
             arch.attention_dropout = cfg["attention_dropout"].get<float>();
+        }
+
+        // Issue #142: Parse positional encoding from shared architecture loader.
+        // This path is used by runtime inference/server startup and must match
+        // Phase1 training config semantics.
+        if (cfg.contains("positional_encoding")) {
+            const auto& pe = cfg["positional_encoding"];
+            if (pe.is_object()) {
+                const bool use_rope = pe.value("use_rope", false);
+                const bool use_alibi = pe.value("use_alibi", false);
+                const bool use_learned = pe.value("use_learned", false);
+                if (use_learned) {
+                    arch.positional_encoding = PositionalEncodingType::NONE;
+                } else if (use_rope && use_alibi) {
+                    arch.positional_encoding = PositionalEncodingType::ALIBI_ROPE;
+                } else if (use_rope) {
+                    arch.positional_encoding = PositionalEncodingType::ROPE;
+                } else if (use_alibi) {
+                    arch.positional_encoding = PositionalEncodingType::ALIBI;
+                } else {
+                    arch.positional_encoding = PositionalEncodingType::NONE;
+                }
+            } else if (pe.is_string()) {
+                arch.positional_encoding = parsePositionalEncodingType(pe.get<std::string>());
+            } else {
+                throw std::runtime_error(
+                    "loadModelArchitecture: training.config.positional_encoding must be object or string");
+            }
         }
     }
     

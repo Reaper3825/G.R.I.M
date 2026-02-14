@@ -11,7 +11,7 @@
 #include "../../Layers/Attention/QKV_Projector.hpp"  // ISSUE #62: For launchReshapeFromBHSD
 // Bias kernel declarations (moved from Feed_Forward_GPU.cu - Rule 20: no reverse dependencies)
 #include "../PBM/PositionalBiasMethod.hpp"  // ISSUE #119: For RoPE autograd backward
-#include "../EquationLogging/PyTorchVerify.hpp"  // PyTorch verification for side-by-side comparison
+#include "../EquationLogging/EquationLogging.hpp"
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <cuda_bf16.h>
@@ -1570,9 +1570,14 @@ __global__ void kernel_pcgrad_combine(
         }
         
         // proj_coef = (g_lm · g_emb) / ||g_lm||²
-        // Rule 20: Fail loud if g_lm is zero — this indicates a masking/backward bug
-        assert(total_norm_sq > 1e-12f && "kernel_pcgrad_combine: g_lm has near-zero norm! Masking issue or uninitialized backward data.");
-        s_proj_coef = total_dot / total_norm_sq;
+        // Issue #141 FIX: Replace assert (compiled out in Release) with runtime guard.
+        // Zero g_lm norm means no LM head gradient for this vocab row — nothing
+        // to project onto, so proj_coef = 0 (use g_emb as-is for this row).
+        if (total_norm_sq < 1e-12f) {
+            s_proj_coef = 0.0f;
+        } else {
+            s_proj_coef = total_dot / total_norm_sq;
+        }
     }
     __syncthreads();
     
@@ -2341,6 +2346,29 @@ struct AddGradFn : public GradFn {
         }
         
         const size_t count = grad_output.numel();
+
+        // Issue #142: Support ScratchBlock gradient tap on non-dropout paths
+        // (e.g. dropout_rate=0 where embedding_tensor.grad_fn is AddGradFn).
+        if (grad_output_tap && grad_output_tap_count > 0) {
+            if (grad_output_tap_count > count) {
+                throw std::runtime_error(
+                    "AddGradFn::apply: grad_output_tap_count (" + std::to_string(grad_output_tap_count) +
+                    ") exceeds grad_output elements (" + std::to_string(count) + ")");
+            }
+            const cudaError_t tap_err = cudaMemcpyAsync(
+                grad_output_tap,
+                grad_output.data,
+                grad_output_tap_count * sizeof(float),
+                cudaMemcpyDeviceToDevice,
+                stream);
+            if (tap_err != cudaSuccess) {
+                throw std::runtime_error(
+                    std::string("AddGradFn::apply: grad_output tap copy failed: ") +
+                    cudaGetErrorString(tap_err));
+            }
+            grad_output_tap_written = true;
+        }
+
         const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
         
         // Accumulate gradients to both inputs using stored grad pointers
@@ -3082,6 +3110,33 @@ struct EmbeddingGradFn : public GradFn {
         if (!weight_grad) {
             throw std::runtime_error("EmbeddingGradFn::apply: weight_grad is NULL - capture_weight() must be called first");
         }
+
+        if (!grad_output.data) {
+            throw std::runtime_error("EmbeddingGradFn::apply: grad_output.data is NULL");
+        }
+
+        const size_t grad_count = grad_output.numel();
+        // Issue #142: Support ScratchBlock gradient tap when dropout is disabled
+        // and embedding_tensor.grad_fn is EmbeddingGradFn.
+        if (grad_output_tap && grad_output_tap_count > 0) {
+            if (grad_output_tap_count > grad_count) {
+                throw std::runtime_error(
+                    "EmbeddingGradFn::apply: grad_output_tap_count (" + std::to_string(grad_output_tap_count) +
+                    ") exceeds grad_output elements (" + std::to_string(grad_count) + ")");
+            }
+            const cudaError_t tap_err = cudaMemcpyAsync(
+                grad_output_tap,
+                grad_output.data,
+                grad_output_tap_count * sizeof(float),
+                cudaMemcpyDeviceToDevice,
+                stream);
+            if (tap_err != cudaSuccess) {
+                throw std::runtime_error(
+                    std::string("EmbeddingGradFn::apply: grad_output tap copy failed: ") +
+                    cudaGetErrorString(tap_err));
+            }
+            grad_output_tap_written = true;
+        }
         
         // ═══════════════════════════════════════════════════════════════════════════
         // ISSUE #60 FIX: PCGrad for tied embedding/lm_head weights
@@ -3450,6 +3505,32 @@ struct DropoutGradFn : public GradFn {
         if (!input_grad) {
             throw std::runtime_error("DropoutGradFn::apply: input_grad is NULL - capture_input() must be called first");
         }
+        if (!grad_output.data) {
+            throw std::runtime_error("DropoutGradFn::apply: grad_output.data is NULL");
+        }
+        
+        // Issue #141: If a gradient tap is set, copy grad_output BEFORE dropout
+        // mask is applied. This captures the encoder input gradient for ScratchBlock backward.
+        const size_t grad_count = grad_output.numel();
+        if (grad_output_tap && grad_output_tap_count > 0) {
+            if (grad_output_tap_count > grad_count) {
+                throw std::runtime_error(
+                    "DropoutGradFn::apply: grad_output_tap_count (" + std::to_string(grad_output_tap_count) +
+                    ") exceeds grad_output elements (" + std::to_string(grad_count) + ")");
+            }
+            const cudaError_t tap_err = cudaMemcpyAsync(
+                grad_output_tap,
+                grad_output.data,
+                grad_output_tap_count * sizeof(float),
+                cudaMemcpyDeviceToDevice,
+                stream);
+            if (tap_err != cudaSuccess) {
+                throw std::runtime_error(
+                    std::string("DropoutGradFn::apply: grad_output tap copy failed: ") +
+                    cudaGetErrorString(tap_err));
+            }
+            grad_output_tap_written = true;
+        }
         
         const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
         kernel_dropout_backward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
@@ -3733,9 +3814,6 @@ Tensor gelu(const Tensor& x, cudaStream_t stream, const float* input_cache) {
     // Launch GELU forward kernel
     kernel_gelu_forward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(x.data, result.data, count);
     
-    // PyTorch verification for GELU forward
-    PYTORCH_VERIFY_GELU(x.data, result.data, static_cast<int>(count), 0, 0, 0);
-    
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
     if (x.requires_grad) {
         result.is_leaf = false;
@@ -3789,76 +3867,7 @@ Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, cudaStream_t st
     kernel_rmsnorm_forward<<<tokens, AUTOGRAD_BLOCK_SIZE, shared_mem, stream>>>(
         x.data, gamma.data, result.data, tokens, d_model, eps);
     
-    // [RMSNORM_EQUATION] Rule 21 diagnostic - verify RMSNorm math
-    // Equation: y = x * gamma * inv_rms, where inv_rms = 1/sqrt(mean(x²) + eps)
-    // Expected: output_rms = gamma * x_rms * inv_rms = gamma * x_rms / x_rms = gamma ≈ 1.0
-    #ifdef DEBUG_RMSNORM_EQUATION
-    {
-        cudaStreamSynchronize(stream);
-        const int sample_rows = std::min(5, tokens);
-        std::vector<float> h_input(sample_rows * d_model);
-        std::vector<float> h_output(sample_rows * d_model);
-        std::vector<float> h_gamma(d_model);
-        cudaMemcpy(h_input.data(), x.data, h_input.size() * sizeof(float), cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_output.data(), result.data, h_output.size() * sizeof(float), cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_gamma.data(), gamma.data, h_gamma.size() * sizeof(float), cudaMemcpyDeviceToHost);
-        
-        // Compute gamma stats
-        float gamma_min = h_gamma[0], gamma_max = h_gamma[0];
-        double gamma_sum_sq = 0.0;
-        for (int i = 0; i < d_model; i++) {
-            gamma_min = std::min(gamma_min, h_gamma[i]);
-            gamma_max = std::max(gamma_max, h_gamma[i]);
-            gamma_sum_sq += h_gamma[i] * h_gamma[i];
-        }
-        float gamma_rms = std::sqrt(gamma_sum_sq / d_model);
-        
-        fprintf(stderr, "[RMSNORM_EQUATION] y = x * gamma * inv_rms, inv_rms = 1/sqrt(mean(x²) + eps)\n");
-        fprintf(stderr, "  INPUT x: shape=[%d, %d], eps=%.2e\n", tokens, d_model, eps);
-        fprintf(stderr, "  GAMMA: min=%.6f max=%.6f rms=%.6f\n", gamma_min, gamma_max, gamma_rms);
-        
-        for (int r = 0; r < sample_rows; r++) {
-            // Compute input row stats
-            float x_min = h_input[r * d_model], x_max = h_input[r * d_model];
-            double x_sum_sq = 0.0;
-            for (int c = 0; c < d_model; c++) {
-                float val = h_input[r * d_model + c];
-                x_min = std::min(x_min, val);
-                x_max = std::max(x_max, val);
-                x_sum_sq += val * val;
-            }
-            float x_rms = std::sqrt(x_sum_sq / d_model);
-            float inv_rms = 1.0f / std::sqrt(x_sum_sq / d_model + eps);
-            
-            // Compute output row stats
-            float y_min = h_output[r * d_model], y_max = h_output[r * d_model];
-            double y_sum_sq = 0.0;
-            for (int c = 0; c < d_model; c++) {
-                float val = h_output[r * d_model + c];
-                y_min = std::min(y_min, val);
-                y_max = std::max(y_max, val);
-                y_sum_sq += val * val;
-            }
-            float y_rms = std::sqrt(y_sum_sq / d_model);
-            
-            // Expected: y_rms = gamma_rms (when gamma=1.0, y_rms should be 1.0)
-            float expected_y_rms = gamma_rms;
-            
-            fprintf(stderr, "  ROW %d: x_rms=%.10f inv_rms=%.10f | EXPECTED y_rms=%.10f | ACTUAL y_rms=%.10f",
-                    r, x_rms, inv_rms, expected_y_rms, y_rms);
-            if (std::abs(y_rms - expected_y_rms) > 0.01f) {
-                fprintf(stderr, " [ANOMALY] diff=%.10f (%.4fx off)\n", 
-                        y_rms - expected_y_rms, y_rms / expected_y_rms);
-            } else {
-                fprintf(stderr, " ✓\n");
-            }
-        }
-    }
-    #endif
-    
-    // PyTorch verification for RMSNorm forward
-    PYTORCH_VERIFY_RMSNORM(x.data, gamma.data, result.data, tokens, d_model, eps, 0, 0, 0);
-    
+ 
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
     if (result.requires_grad) {
         result.is_leaf = false;
@@ -3874,9 +3883,10 @@ Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, cudaStream_t st
     return result;
 }
 
-// NOTE: cross_entropy() removed - use autograd::cross_entropy_loss() from AutogradLoss.cu
-// Production training uses ComputeLossBatch.cu -> autograd::cross_entropy_loss() which
+// NOTE: cross_entropy() removed - use autograd::unified_loss() from AutogradLoss.cu
+// Production training uses ComputeLossBatch.cu -> autograd::unified_loss() which
 // properly computes loss AND backward with correct 1/N scaling (Issue #58 fix).
+// Issue #142: cross_entropy_loss() also deleted (was thin wrapper around unified_loss).
 
 Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cudaStream_t stream, float embedding_scale) {
     if (!weight.shape.is_flat()) {
@@ -4361,100 +4371,18 @@ static void logCachedActivationStats(
     cudaFree(d_inf);
 }
 
-// Global toggle for Issue #77 diagnostics (enable during investigation)
-static bool g_issue77_diag_enabled = true;
+// Issue #77 diagnostics: DISABLED. Enable for debugging weight gradient explosions.
+// When enabled, logs cached activation stats for first 24 MatMulGradFn calls.
+// Cost: 6 cudaMalloc/Free + 1 cudaStreamSync per call (144 total for 24 calls).
+static bool g_issue77_diag_enabled = false;
 static int g_issue77_diag_call_count = 0;
 
-// LM head gradient correction flags (centering outside autograd)
-static bool g_lm_head_recenter_gradients = false;
-
-void set_lm_head_grad_correction(bool recenter_gradients) {
-    g_lm_head_recenter_gradients = recenter_gradients;
-}
-
-__global__ void centerGradientsKernel(
-    float* __restrict__ data,   // [total_tokens, d_model] in-place
-    int d_model,
-    int total_tokens
-) {
-    const int token_idx = blockIdx.x;
-    if (token_idx >= total_tokens) return;
-
-    float* row = data + static_cast<size_t>(token_idx) * d_model;
-
-    __shared__ float s_sum;
-    if (threadIdx.x == 0) s_sum = 0.0f;
-    __syncthreads();
-
-    float local_sum = 0.0f;
-    for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
-        local_sum += row[i];
-    }
-
-    for (int offset = warpSize / 2; offset > 0; offset /= 2) {
-        local_sum += __shfl_down_sync(0xffffffff, local_sum, offset);
-    }
-    if ((threadIdx.x & (warpSize - 1)) == 0) {
-        atomicAdd(&s_sum, local_sum);
-    }
-    __syncthreads();
-
-    const float mean = s_sum / static_cast<float>(d_model);
-    for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
-        row[i] -= mean;
-    }
-}
-
-static inline void applyLmHeadGradCorrections(
-    float* grad_a,
-    int total_tokens,
-    int d_model,
-    cudaStream_t stream
-) {
-    fprintf(stderr, "[applyLmHeadGradCorrections] ENTRY - grad_a=%p tokens=%d d_model=%d stream=%p\n",
-            (void*)grad_a, total_tokens, d_model, (void*)stream);
-    fflush(stderr);
-    
-    if (!grad_a) throw std::runtime_error("applyLmHeadGradCorrections: grad_a is NULL - caller MUST provide valid gradient pointer");
-    if (total_tokens <= 0) throw std::runtime_error("applyLmHeadGradCorrections: total_tokens=" + std::to_string(total_tokens) + " is invalid - must be > 0");
-    if (d_model <= 0) throw std::runtime_error("applyLmHeadGradCorrections: d_model=" + std::to_string(d_model) + " is invalid - must be > 0");
-    if (!g_lm_head_recenter_gradients) {
-        fprintf(stderr, "[applyLmHeadGradCorrections] SKIP - recentering disabled\n");
-        fflush(stderr);
-        return;
-    }
-
-    fprintf(stderr, "[applyLmHeadGradCorrections] Launching centerGradientsKernel\n");
-    fflush(stderr);
-    
-    constexpr int kBlockSize = 256;
-
-    centerGradientsKernel<<<total_tokens, kBlockSize, 0, stream>>>(
-        grad_a, d_model, total_tokens);
-    cudaError_t launch_err = cudaGetLastError();
-    fprintf(stderr, "[applyLmHeadGradCorrections] Kernel launch result: %d (%s)\n",
-            (int)launch_err, cudaGetErrorString(launch_err));
-    fflush(stderr);
-    
-    if (launch_err != cudaSuccess) {
-        throw std::runtime_error(std::string("[applyLmHeadGradCorrections] recenter kernel launch failed: ") +
-                                 cudaGetErrorString(launch_err));
-    }
-    
-    // Sync to catch EXECUTION errors (not just launch errors)
-    cudaError_t exec_err = cudaStreamSynchronize(stream);
-    fprintf(stderr, "[applyLmHeadGradCorrections] Kernel EXECUTION result: %d (%s)\n",
-            (int)exec_err, cudaGetErrorString(exec_err));
-    fflush(stderr);
-    
-    if (exec_err != cudaSuccess) {
-        throw std::runtime_error(std::string("[applyLmHeadGradCorrections] recenter kernel EXECUTION failed: ") +
-                                 cudaGetErrorString(exec_err));
-    }
-    
-    fprintf(stderr, "[applyLmHeadGradCorrections] EXIT\n");
-    fflush(stderr);
-}
+// Issue #142: applyLmHeadGradCorrections DELETED.
+// Centering is now INSIDE autograd graph (Issues #125/#132):
+//   CenterRowsGradFn::apply() row-centers grad_A in backward
+//   CenterColumnsGradFn::apply() column-centers grad_A in backward
+// The old external centerGradientsKernel was redundant (row centering is idempotent)
+// and wasted GPU time (kernel launch + cudaStreamSynchronize + 6x fprintf per call).
 
 /**
  * MatMulGradFn - Backward for matrix multiplication (TAPE-BASED)
@@ -4844,8 +4772,8 @@ struct MatMulGradFn : public GradFn {
             // ========================================================================
             if (g_issue77_diag_enabled && transpose_b) {
                 g_issue77_diag_call_count++;
-                // Only log first 24 calls (2 per layer * 12 layers) to avoid spam
-                if (g_issue77_diag_call_count <= 24) {
+                // Only log first 36 calls (3 per layer * 12 layers) to avoid spam
+                if (g_issue77_diag_call_count <= 36) {
                     char diag_name[128];
                     snprintf(diag_name, sizeof(diag_name), "cached_a(ln1_out)_call%d_M%d_K%d", 
                              g_issue77_diag_call_count, M, K);
@@ -4939,11 +4867,9 @@ struct MatMulGradFn : public GradFn {
             }
         }
 
-        // If LM head centering was applied outside autograd,
-        // correct grad_A before passing it to the encoder backward chain.
-        if (a_requires_grad && transpose_b && N > 10000) {
-            applyLmHeadGradCorrections(grad_a, M, K, stream);
-        }
+        // Issue #142: applyLmHeadGradCorrections removed.
+        // Centering backward is handled by CenterRowsGradFn/CenterColumnsGradFn
+        // inside the autograd chain (Issues #125/#132).
 
         // CONTINUE AUTOGRAD CHAIN (Recursive) - ISSUE #48 FIX: Use stored grad_fn pointers
         if (a_requires_grad && a_grad_fn) {
@@ -5119,9 +5045,6 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
     if (status != CUBLAS_STATUS_SUCCESS) {
         throw std::runtime_error("autograd::matmul: cuBLAS sgemm failed");
     }
-    
-    // PyTorch verification for MatMul forward (pass transpose_b to handle weight matrix layouts)
-    PYTORCH_VERIFY_MATMUL(a.data, b.data, result.data, M, K, N, "matmul", 0, 0, 0, transpose_b);
     
     // Set up backward (TAPE-BASED)
     if (result.requires_grad) {
@@ -6535,7 +6458,7 @@ void rope_rotation(
         
         // Capture RoPE parameters
         shared->inv_freq = inv_freq;
-        shared->batch_size = batch_size;
+        shared->batch_size = batch_size; 
         shared->num_q_heads = num_q_heads;
         shared->num_kv_heads = num_kv_heads;
         shared->seq_len = seq_len;

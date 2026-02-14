@@ -108,9 +108,7 @@ struct StabilityOverrides {
     bool enabled = false;
     int batch_size = 0;
     int max_seq_len = 0;
-    int max_tokens_per_batch = 0;
-    float clip_abs = 0.0f;
-    float clip_norm = 0.0f;
+    float clip_per_token = 0.0f;
     float lr_min = 0.0f;
 };
 

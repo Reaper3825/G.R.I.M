@@ -847,6 +847,17 @@ float LanguageModel::computeGradNorm(bool sync_for_host_read) {
         }
     }
     
+    // Issue #138: Record CUDA event BEFORE launching grad norm kernels.
+    // This lets us measure how much time cudaStreamSynchronize spends draining
+    // upstream backward kernels vs computing the actual grad norms.
+    // Without this, the wall-clock timer misleadingly shows 3ms-53ms variance
+    // that is actually backward pipeline drain time, not norm computation time.
+    cudaEvent_t pre_norm_event = nullptr;
+    if (sync_for_host_read) {
+        cudaEventCreate(&pre_norm_event);
+        cudaEventRecord(pre_norm_event, stream);
+    }
+    
     // Compute norms on GPU (non-blocking)
     // Clipping is done separately in Phase2 via scaleGradients() after CPU-side decision
     auto status = training_state_.gradnorm_ctrl.computeNorms(
@@ -858,6 +869,7 @@ float LanguageModel::computeGradNorm(bool sync_for_host_read) {
     if (status != GradNorm::GradNormStatus::SUCCESS) {
         fprintf(stderr, "[computeGradNorm] FATAL: computeNorms failed: %s\n",
                 GradNorm::statusToString(status));
+        if (pre_norm_event) cudaEventDestroy(pre_norm_event);
         return -1.0f;
     }
     
@@ -876,11 +888,18 @@ float LanguageModel::computeGradNorm(bool sync_for_host_read) {
         return grad_metrics_.total_norm;
     }
     
+    // Record event AFTER norm kernels launched, BEFORE sync
+    cudaEvent_t post_norm_event = nullptr;
+    cudaEventCreate(&post_norm_event);
+    cudaEventRecord(post_norm_event, stream);
+    
     // Caller needs metrics (for logging/clipping decisions) - async copy + sync
     status = training_state_.gradnorm_ctrl.asyncCopyToHost(stream);
     if (status != GradNorm::GradNormStatus::SUCCESS) {
         fprintf(stderr, "[computeGradNorm] FATAL: asyncCopyToHost failed: %s\n",
                 GradNorm::statusToString(status));
+        cudaEventDestroy(pre_norm_event);
+        cudaEventDestroy(post_norm_event);
         return -1.0f;
     }
     
@@ -889,8 +908,19 @@ float LanguageModel::computeGradNorm(bool sync_for_host_read) {
     if (sync_err != cudaSuccess) {
         fprintf(stderr, "[computeGradNorm] FATAL: cudaStreamSynchronize failed: %s\n",
                 cudaGetErrorString(sync_err));
+        cudaEventDestroy(pre_norm_event);
+        cudaEventDestroy(post_norm_event);
         return -1.0f;
     }
+    
+    // Measure GPU-side timing: how long did the norm kernels themselves take?
+    // pre_norm_event fires when GPU reaches our kernels (after backward drains)
+    // post_norm_event fires when norm kernels are done
+    float gpu_norm_ms = 0.0f;
+    cudaEventElapsedTime(&gpu_norm_ms, pre_norm_event, post_norm_event);
+    last_gpu_norm_ms_ = gpu_norm_ms;
+    cudaEventDestroy(pre_norm_event);
+    cudaEventDestroy(post_norm_event);
     
     // Copy from pinned host buffer to grad_metrics_
     const auto& gm = training_state_.gradnorm_ctrl.getHostMetrics();

@@ -168,22 +168,9 @@ void launchToken277Diagnostic(
     cudaStream_t stream
 );
 
-//=============================================================================
-// LEGACY API (for existing call sites - forwards to unified_loss)
-//=============================================================================
-
-/**
- * Plain cross-entropy loss (legacy wrapper)
- * Calls unified_loss with default LossConfig (no focal, smoothing, or entropy reg)
- */
-Tensor cross_entropy_loss(
-    Tensor& logits,
-    const int* targets,
-    const float* valid_mask,
-    int num_tokens,
-    int vocab_size,
-    cudaStream_t stream
-);
+// Issue #142: cross_entropy_loss() DELETED (Rule 26: dead code).
+// Was a thin wrapper calling unified_loss() with hardcoded plain CE config.
+// All callers now use unified_loss() directly with real config from model.
 
 }  // namespace autograd
 }  // namespace GRIM

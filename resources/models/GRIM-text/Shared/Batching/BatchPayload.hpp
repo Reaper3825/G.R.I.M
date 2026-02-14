@@ -45,7 +45,6 @@ struct BatchPayload {
     // IDENTITY (from BatchAssignment — carried through, not recomputed)
     // ═══════════════════════════════════════════════════════════════════════════
     std::vector<uint32_t> seq_ids;           // which sequences are in this batch
-    uint32_t accumulation_group = 0;         // gradient accumulation group
 
     // ═══════════════════════════════════════════════════════════════════════════
     // GEOMETRY (computed ONCE during buildBatchPayload)

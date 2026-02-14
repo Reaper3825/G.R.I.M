@@ -279,14 +279,12 @@ StartupConfig loadConfiguration(int argc, char** argv) {
     // Issue #44 FIX: Entropy regularization to prevent mode collapse
     config.loss_options.entropy_reg_enabled = config.hyperparameters.loss_entropy_reg_enabled;
     config.loss_options.entropy_reg_lambda = config.hyperparameters.loss_entropy_reg_lambda;
-    
+
     // Map stability overrides
     config.stability.enabled = config.hyperparameters.stability_overrides_enabled;
     config.stability.batch_size = config.hyperparameters.stability_override_batch_size;
     config.stability.max_seq_len = config.hyperparameters.stability_override_max_seq_len;
-    config.stability.max_tokens_per_batch = config.hyperparameters.stability_override_max_tokens_per_batch;
-    config.stability.clip_abs = config.hyperparameters.stability_override_clip_abs;
-    config.stability.clip_norm = config.hyperparameters.stability_override_clip_norm;
+    config.stability.clip_per_token = config.hyperparameters.stability_override_clip_per_token;
     config.stability.lr_min = config.hyperparameters.stability_override_lr_min;
     
     // Map scratch block configuration
@@ -330,6 +328,34 @@ StartupConfig loadConfiguration(int argc, char** argv) {
         // Load tie_embeddings config (affects memory layout and parameter count)
         if (cfg.contains("tie_embeddings") && cfg["tie_embeddings"].is_boolean())
             config.architecture.tie_embeddings = cfg["tie_embeddings"].get<bool>();
+
+        // Parse positional_encoding from JSON config (object or string form).
+        if (cfg.contains("positional_encoding")) {
+            const auto& pe = cfg["positional_encoding"];
+            if (pe.is_object()) {
+                const bool use_rope = pe.value("use_rope", false);
+                const bool use_alibi = pe.value("use_alibi", false);
+                const bool use_learned = pe.value("use_learned", false);
+                if (use_learned) {
+                    // Learned overrides rope/alibi (different code path)
+                    config.architecture.positional_encoding = GRIM::HyperParameters::PositionalEncodingType::NONE;
+                } else if (use_rope && use_alibi) {
+                    config.architecture.positional_encoding = GRIM::HyperParameters::PositionalEncodingType::ALIBI_ROPE;
+                } else if (use_rope) {
+                    config.architecture.positional_encoding = GRIM::HyperParameters::PositionalEncodingType::ROPE;
+                } else if (use_alibi) {
+                    config.architecture.positional_encoding = GRIM::HyperParameters::PositionalEncodingType::ALIBI;
+                } else {
+                    config.architecture.positional_encoding = GRIM::HyperParameters::PositionalEncodingType::NONE;
+                }
+            } else if (pe.is_string()) {
+                config.architecture.positional_encoding =
+                    GRIM::HyperParameters::parsePositionalEncodingType(pe.get<std::string>());
+            } else {
+                throw std::runtime_error(
+                    "Phase1_Startup::loadConfiguration: training.config.positional_encoding must be object or string");
+            }
+        }
             
         config.force_rebuild_vocab = cfg.value("force_rebuild_vocab", false);
     }
@@ -356,6 +382,9 @@ StartupConfig loadConfiguration(int argc, char** argv) {
         }
         config.hyperparameters.batch_size = config.stability.batch_size;
         config.hyperparameters.dynamic_lr_min = config.stability.lr_min;
+        if (config.stability.clip_per_token > 0.0f) {
+            config.hyperparameters.grad_clip_norm = config.stability.clip_per_token;
+        }
     }
  
     // Parse command line arguments
@@ -744,7 +773,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.attention_dropout = arch.attention_dropout;
     model_config.vocab_path = config.paths.vocab_path;
     model_config.infer_vocab_from_file = true;
-    model_config.positional_encoding = GRIM::HyperParameters::DEFAULT_POSITIONAL_ENCODING;
+    model_config.positional_encoding = arch.positional_encoding;  // Issue #141: From parsed JSON config
     model_config.causal_mask = true;
     model_config.use_pre_norm = true;
     model_config.fuse_qkv = true;
@@ -752,7 +781,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.use_bias = true;
     model_config.use_gpu = true;
     model_config.use_flash_attention = hp.use_flash_attention;
-    model_config.min_seq_len_for_flash = 512;
+    model_config.min_seq_len_for_flash = hp.min_seq_len_for_flash;
     logger.log("Flash attention: enabled=" + std::string(model_config.use_flash_attention ? "true" : "false") +
                ", min_seq_len=" + std::to_string(model_config.min_seq_len_for_flash));
     
@@ -782,12 +811,10 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     
     // LM Head centering configuration (Issue #37 / #40)
     model_config.lm_head_center_hidden_states = hp.lm_head_center_hidden_states;
-    model_config.lm_head_recenter_gradients = hp.lm_head_recenter_gradients;
     model_config.center_logits = hp.center_logits;
     model_config.center_encoder_residuals = hp.center_encoder_residuals;
     
     logger.log("LM Head centering: center_hidden_states=" + std::string(model_config.lm_head_center_hidden_states ? "true" : "false") +
-              ", recenter_gradients=" + std::string(model_config.lm_head_recenter_gradients ? "true" : "false") +
               ", center_logits=" + std::string(model_config.center_logits ? "true" : "false") +
               ", center_encoder_residuals=" + std::string(model_config.center_encoder_residuals ? "true" : "false"));
     
@@ -811,10 +838,8 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     // Cache sizing - Use configured batch_size directly (stability override already applied in loadConfiguration)
     const int actual_batch_size = config.hyperparameters.batch_size;
     
-    // Sequence length cap from cache_limits
-    const uint32_t seq_cap = std::min<uint32_t>(
-        static_cast<uint32_t>(model_config.max_seq_len),
-        static_cast<uint32_t>(hp.cache_max_seq_len));
+    // Cache sequence length derives directly from configured max_seq_len
+    const uint32_t seq_cap = static_cast<uint32_t>(model_config.max_seq_len);
     
     // Cache allocation: allocate for the ACTUAL batch size, not some derived "max"
     // No arbitrary margins - if you need more, increase batch_size in config
@@ -990,6 +1015,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
                  << " pref=" << (config.loss_options.preference_enabled ? "ON" : "off")
                  << " entropy_reg=" << (config.loss_options.entropy_reg_enabled ? "ON" : "off")
                  << " ent_lambda=" << config.loss_options.entropy_reg_lambda;
+
         logger.log(loss_msg.str());
     }
     
@@ -1558,6 +1584,27 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
             // Skip flag MUST be false so embedding backward runs (through PCGrad path)
             g_skip_embedding_backward_for_tied_weights = false;
             ctx->logging.logger->log("✓ Issue #109: Embedding backward ENABLED via PCGrad");
+        }
+        
+        // Issue #141 FIX: Allocate ScratchBlock gradient tap buffer
+        // This captures the encoder input gradient before dropout consumes it,
+        // so ScratchBlock backward can compute parameter gradients.
+        if (model_cfg.use_scratch_block) {
+            auto& ts = ctx->model->getTrainingState();
+            const size_t tap_elems = static_cast<size_t>(ts.max_cached_tokens) * model_cfg.d_model;
+            ts.scratchblock_grad_tap = GRIM::Tensor();
+            const cudaError_t tap_alloc_err =
+                cudaMalloc(&ts.scratchblock_grad_tap.data, tap_elems * sizeof(float));
+            if (tap_alloc_err != cudaSuccess) {
+                throw std::runtime_error(
+                    std::string("Phase1_Startup: Failed to allocate ScratchBlock gradient tap buffer: ") +
+                    cudaGetErrorString(tap_alloc_err));
+            }
+            ts.scratchblock_grad_tap.shape = TensorContract::TensorShape::make_BSM(
+                static_cast<int>(ts.max_cached_tokens), model_cfg.d_model);
+            ts.scratchblock_grad_tap.owns_data = true;
+            ctx->logging.logger->log("Issue #141: ScratchBlock gradient tap buffer allocated ("
+                                     + std::to_string(tap_elems * sizeof(float) / 1024) + " KB)");
         }
     }
     

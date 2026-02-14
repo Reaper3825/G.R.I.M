@@ -32,7 +32,6 @@
 #include <cublas_v2.h>
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
-#include "../Layers/Quantization/Quantization_GPU.hpp"
 #include "../Layers/ScratchBlock/ScratchBlock_GPU.hpp"
 #include "../Shared/GPUBuffer/GPUBuffer.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"
@@ -165,7 +164,7 @@ struct EncoderConfig {
     
     // Flash Attention settings
     bool use_flash_attention = true;  // Use Flash Attention 2 for memory efficiency
-    int min_seq_len_for_flash = 128;  // Minimum seq len to activate Flash Attention
+    int min_seq_len_for_flash = 0;    // REQUIRED - set from hyperparameters (no defaults)
     
     // Positional encoding (ALiBi+RoPE hybrid) - pointer to shared state in TrainingState
     // WARNING: If nullptr, attention sees no positional info - positions become equivalent!
@@ -215,12 +214,13 @@ struct GenerationConfig {
     int top_k = 50;
     float top_p = 0.9f;
     float repetition_penalty = 1.0f;
+    int repetition_penalty_window = 64;
     float length_penalty = 1.0f;
     int num_beams = 1;
     int num_return_sequences = 1;
     bool early_stopping = false;
     int eos_token_id = 0;
-    int pad_token_id = 0;
+    int pad_token_id = 0; 
     int no_repeat_ngram_size = 0;
     bool do_sample = true;
     float diversity_penalty = 0.0f;
@@ -295,7 +295,7 @@ struct LanguageModelConfig {
     
     bool use_gpu = true;
     bool use_flash_attention = true;  // Use Flash Attention 2 for memory efficiency
-    int min_seq_len_for_flash = 512;   // Minimum sequence length to activate Flash Attention
+    int min_seq_len_for_flash = 0;     // REQUIRED - set from hyperparameters (no defaults)
     std::string vocab_path;            // Optional: source vocab file for auto-detection
     bool infer_vocab_from_file = false; // When true, read vocab size from vocab_path at init
     
@@ -315,11 +315,10 @@ struct LanguageModelConfig {
     bool numeric_head_log_scale = true;
     
     // LM Head centering config (Issue #37 / #40 fixes)
-    // When enabled, centers hidden states before LM head projection and recenters
-    // gradients after GEMM to compensate for FP32 precision loss.
-    // Set to false to use standard (PyTorch-style) implementation.
+    // When enabled, centers hidden states before LM head projection.
+    // Centering backward is handled automatically by CenterRowsGradFn/CenterColumnsGradFn
+    // inside the autograd graph (Issues #125/#132).
     bool lm_head_center_hidden_states = false;  // Center encoder output before projection
-    bool lm_head_recenter_gradients = false;    // Recenter grad_weight rows after GEMM
     bool center_logits = true;                 // Center logits per position (row-wise, mean→0)
     bool center_encoder_residuals = false;        // Center residuals INSIDE encoder layers (attenuates gradient signal)
     
@@ -347,7 +346,7 @@ struct GPUConfig {
     bool use_cuda_graphs = true;         // Use CUDA graphs for repeated inference
     bool use_pinned_memory = true;       // Pinned host buffers
     bool use_dynamic_batching = true;    // Merge micro-batches
-    int max_batch_size = 512;            // Max dynamic batch size
+    int max_batch_size = 1024;            // Max dynamic batch size
     int micro_batch_size = 64;           // Micro-batch for long sequences
     cudaStream_t stream = 0;             // CUDA stream for async ops
     int device_id = 0;                   // CUDA device to use
@@ -356,9 +355,6 @@ struct GPUConfig {
 //======================================================//
 //  Forward Declarations
 //======================================================//
-
-class FeedForwardNetwork;
-class RMSNorm;
 
 // Positional Encoding Type - re-exported from HyperParameters_GPU.hpp
 using HyperParameters::PositionalEncodingType;
@@ -404,12 +400,11 @@ class GrimEmbeddingStack {
 public:
     GrimEmbeddingStack(int vocab_size, int d_model, int max_seq_len);
     
-    // num_kv_heads REQUIRED - only GQA is supported (no MHA fallback)
+    // num_kv_heads REQUIRED - only GQA is supported
     void enableALiBi(int num_heads, int num_kv_heads, int max_seq_len);
     void enableHybridPositionalEncoding(int num_heads, int d_head, int num_kv_heads, int max_seq_len);
     const ALiBiPositionalBias* getALiBiBias() const;
     const Matrix& getTokenEmbeddings() const;
-    // NOTE: getBatchEmbeddings removed - pure GPU training uses autograd::embedding() directly
     
     // Public members needed by GPU code
     Matrix token_embed;        // Token embedding matrix [vocab_size x d_model]
@@ -421,43 +416,6 @@ private:
     int d_model_;
     int max_seq_len_;
     std::unique_ptr<ALiBiPositionalBias> alibi_;
-};
-
-// FeedForwardNetwork - minimal interface
-class FeedForwardNetwork {
-public:
-    explicit FeedForwardNetwork(const EncoderConfig& config);
-    
-    std::vector<Vector> forwardBatch(const std::vector<Vector>& input);
-    
-    // Accessors for GPU weight uploads
-    const Matrix& getW1() const;
-    const Vector& getB1() const;
-    const Matrix& getW2() const;
-    const Vector& getB2() const;
-    
-private:
-    struct Impl;
-    Impl* pImpl = nullptr;
-};
-
-// RMSNorm - minimal interface
-// IMPORTANT: This implements RMSNorm (Root Mean Square Layer Normalization)!
-// RMSNorm uses only gamma (scale) parameter - no bias term.
-class RMSNorm {
-public:
-    RMSNorm(int d_model, float eps);
-    
-    std::vector<Vector> forwardBatch(const std::vector<Vector>& input);  // Copy semantics
-    std::vector<Vector> forwardBatchMove(std::vector<Vector>&& input);    // Move semantics (zero-copy optimization)
-    
-    // Accessors for GPU weight uploads
-    const Vector& getGamma() const;  // RMSNorm scale parameter
-
-    
-private:
-    struct Impl;
-    Impl* pImpl = nullptr;
 };
 
 //======================================================//
@@ -491,8 +449,6 @@ struct OptimizerState {
 //======================================================//
 
 class EncoderLayer;
-class GrimEncoder;
-class LanguageModelHead;
 class TextGenerator;
 struct TrainingState;  // Forward declare for methods that return references
 
@@ -587,15 +543,11 @@ public:
                                      const GenerationConfig* gen_config = nullptr);
     
     // Training
-    // Legacy computeLoss() single-sequence function DELETED per Rule 20.
-    // Production code uses computeLossBatch() with BatchPayload (single source of truth).
     float computeLossBatch(const GRIM::Batching::BatchPayload& payload);
     Vector forwardWithCache(const std::vector<int>& token_ids,
                             const std::vector<float>& token_numeric_values,
                             const std::vector<uint8_t>& token_numeric_mask,
-                            bool tokens_on_device = false,
-                            const std::vector<uint16_t>& token_text_features = {},
-                            const std::vector<uint8_t>& token_text_mask = {});  // Forward pass with activation caching for training
+                            bool tokens_on_device = false);  // Forward pass with activation caching
     
     // =========================================================================
     // INCREMENTAL GENERATION API (KV-Cache Autoregressive)
@@ -615,13 +567,8 @@ public:
     
     // Process a single new token using cached K,V (decode phase)  
     // Returns logits for this token position (ready for next sampling)
-    // Automatically appends new K,V to the cache
-    // 
-    // forwardStep(): Full recompute (O(n²)) - uses FlashAttention, always correct
-    // forwardStepIncremental(): True incremental (O(n)) - uses manual attention kernels
-    //                           Faster but may have minor numerical differences
+    // Appends new token to cached sequence and recomputes full forward pass
     Vector forwardStep(int new_token, float numeric_value, uint8_t numeric_mask);
-    Vector forwardStepIncremental(int new_token, float numeric_value, uint8_t numeric_mask);  // O(n) with GQA support
     
     // Clear KV cache (call before starting new generation)
     void resetKVCache();
@@ -633,7 +580,6 @@ public:
     void initPBM();            // Initialize PBM (ALiBi+RoPE hybrid) - MUST be called before initGPU
     void initTrainingState();  // Initialize training state (allocate GPU buffers + gradients)
     void initInferenceState();  // Initialize inference state (allocate GPU buffers WITHOUT gradients)
-    bool parameterGroupsStale() const;
     void backward(float loss, bool accumulate = false, float grad_scale = 1.0f, uint64_t step = 0);
     void updateWeights(float learning_rate,
                        OptimizerState* optimizer_state,
@@ -652,6 +598,7 @@ public:
     
 #ifdef USE_CUDA
     void setLossOptions(const LossContext::LossOptions& opts) { loss_options_ = opts; }
+    const LossContext::LossOptions& getLossOptions() const { return loss_options_; }
 
     // Training state access (for debugging/diagnostics)
     const TrainingState& getTrainingState() const { return training_state_; }
@@ -663,6 +610,7 @@ public:
     bool hasGradientMetrics() const { return grad_metrics_ready_; }
     void clearGradientMetricsFlag() { grad_metrics_ready_ = false; }
     void recordGradientClip(float clip_threshold, bool clipped);
+    float lastGpuNormMs() const { return last_gpu_norm_ms_; }  // Issue #138: GPU-side kernel time only
 
     const UpdateProbeResult& updateProbe() const { return update_probe_result_; }
     bool hasUpdateProbe() const { return update_probe_ready_; }
@@ -694,14 +642,11 @@ public:
     
     // Helper accessors for GPU implementation
     GrimEmbeddingStack* getEmbedderPtr() { return embedder_.get(); }
-    ALiBiPositionalBias* getAlibiPtr() { return alibi_.get(); }
     
 #ifdef USE_CUDA
     // GPU runtime accessors - return references to owned objects (fail loud if not initialized)
     GPUGrimEncoder& getGpuEncoder();
     const GPUGrimEncoder& getGpuEncoder() const;
-    // Activation quantization helper for forward phases
-    void applyActivationQuantization(float* device_buffer, std::size_t elements);
 
     
     // ScratchBlock reasoning layer access
@@ -714,14 +659,6 @@ public:
     void configureScratchPool(bool enabled);
     bool isScratchPoolInitialized() const;
 #endif
-
-#ifndef USE_CUDA
-    // CPU component accessors (non-CUDA builds)
-    GrimEmbeddingStack& getEmbedder() { return *embedder_; }
-    GrimEncoder& getEncoder() { return *encoder_; }
-    LanguageModelHead& getLMHead() { return *lm_head_; }
-    TextGenerator& getGenerator() { return *generator_; }
-#endif
     
     GeneratedSequence generateSequenceGPU(const std::vector<int>& prompt_tokens,
                                           const std::vector<float>& prompt_numeric_values,
@@ -732,16 +669,9 @@ public:
     
 private:
     void buildParameterGroups();  // Build parameter groups for optimizer
-    std::vector<Vector> addResidual(const std::vector<Vector>& x, const std::vector<Vector>& residual) const;
     
     LanguageModelConfig config_;
     std::unique_ptr<GrimEmbeddingStack> embedder_;
-#ifndef USE_CUDA
-    std::unique_ptr<GrimEncoder> encoder_;
-    std::unique_ptr<LanguageModelHead> lm_head_;
-    std::unique_ptr<TextGenerator> generator_;
-#endif
-    std::unique_ptr<ALiBiPositionalBias> alibi_;
     
 #ifdef USE_CUDA
     // GPU runtime ownership (StreamController model - proper typed ownership, no void*)
@@ -757,6 +687,7 @@ private:
     bool update_probe_ready_ = false;
     float last_grad_scale_ = 1.0f;
     float last_grad_clip_limit_ = 0.0f;
+    float last_gpu_norm_ms_ = 0.0f;  // Issue #138: GPU-side norm kernel time (excludes backward drain)
     std::string update_probe_group_name_;
     size_t update_probe_group_index_ = static_cast<size_t>(-1);
     size_t update_probe_sample_elems_ = 0;
@@ -768,168 +699,23 @@ private:
 #ifdef USE_CUDA
     TrainingState training_state_;
     std::vector<ParameterGroup> parameter_groups_;  // Parameter groups for optimizer
-    uint64_t last_param_group_arch_hash_ = 0;       // Architecture hash when groups were last built
     uint32_t backward_call_count_ = 0;              // Tracks backward() calls for deterministic diagnostics
     LossContext::LossOptions loss_options_{};
     
     // NOTE: Gradient norm computation moved to TrainingState::gradnorm_ctrl (GradNormController)
-    // Old buffers (d_grad_norm_sums_, h_grad_norm_sums_) removed per Rule 20
-    std::unique_ptr<Quantization::QuantizationLayer> activation_quantizer_;
     
     // ScratchBlock reasoning layer (togglable)
     std::unique_ptr<ScratchBlockLayer> scratch_block_layer_;
 #endif
 };
 
-#ifndef USE_CUDA
-class EncoderLayer {
-public:
-    explicit EncoderLayer(const EncoderConfig& config);
-    
-    std::vector<Vector> forward(const std::vector<Vector>& input,
-                                const ALiBiPositionalBias* alibi = nullptr,
-                                std::vector<Vector>* kv_cache_k = nullptr,
-                                std::vector<Vector>* kv_cache_v = nullptr);
-    
-    // Accessors for GPU implementation
-    FeedForwardNetwork* getFFN() { return ffn_.get(); }
-    RMSNorm* getRMSNorm1() { return rms1_.get(); }
-    RMSNorm* getRMSNorm2() { return rms2_.get(); }
-    
-    const FeedForwardNetwork* getFFN() const { return ffn_.get(); }
-    const RMSNorm* getRMSNorm1() const { return rms1_.get(); }
-    const RMSNorm* getRMSNorm2() const { return rms2_.get(); }
-    
-private:
-    EncoderConfig config_;
-    std::unique_ptr<FeedForwardNetwork> ffn_;
-    std::unique_ptr<RMSNorm> rms1_;
-    std::unique_ptr<RMSNorm> rms2_;
-    std::mt19937 rng_;
-};
-
-//======================================================//
-//  GrimEncoder Class Declaration
-//======================================================//
-
-class GrimEncoder {
-public:
-    struct EncoderStats {
-        size_t total_forward_passes = 0;
-        size_t total_tokens_processed = 0;
-        double avg_tokens_per_pass = 0.0;
-    };
-    
-    explicit GrimEncoder(const EncoderConfig& config);
-    
-    std::vector<Vector> forward(const std::vector<Vector>& embeddings,
-                                const ALiBiPositionalBias* alibi = nullptr);
-    
-    std::vector<Vector> forwardWithCache(const std::vector<Vector>& embeddings,
-                                         const ALiBiPositionalBias* alibi,
-                                         std::vector<std::vector<std::vector<Vector>>>& kv_cache);
-    
-    Vector getPooledOutput(const std::vector<Vector>& encoder_output,
-                          const std::string& pooling = "mean");
-    
-    const EncoderConfig& getConfig() const { return config_; }
-    const EncoderStats& getStats() const { return stats_; }
-    
-    // Accessors for GPU implementation
-    int getNumLayers() const { return static_cast<int>(layers_.size()); }
-    EncoderLayer* getLayer(int idx) { return layers_[idx].get(); }
-    
-private:
-    EncoderConfig config_;
-    std::vector<std::unique_ptr<EncoderLayer>> layers_;
-    EncoderStats stats_;
-};
-
-//======================================================//
-//  LanguageModelHead Class Declaration
-//======================================================//
-
-class LanguageModelHead {
-public:
-    explicit LanguageModelHead(const LMHeadConfig& config);
-    
-    Vector forward(const Vector& hidden_state);
-    std::vector<Vector> forwardBatch(const std::vector<Vector>& hidden_states);
-    Vector getProbabilities(const Vector& logits, float temperature = 1.0f);
-    std::vector<std::pair<int, float>> getTopK(const Vector& logits, int k);
-    
-    const LMHeadConfig& getConfig() const { return config_; }
-    const Matrix& getWeights() const;
-    const Vector& getBias() const { return b_out_; }
-    
-    void updateWeights(const std::vector<Vector>& grad_W, const Vector& grad_b, float lr);
-    
-private:
-    void matmulSIMD(const float* input, const Matrix& weight, float* output,
-                   int input_size, int output_size, const float* bias, bool transpose) const;
-    void softmaxSIMD(float* values, int size, float temperature) const;
-    
-    LMHeadConfig config_;
-    bool tie_weights_;
-    Matrix W_out_;
-    Vector b_out_;
-};
-#endif // USE_CUDA
-
-//======================================================//
-//  TextGenerator Class Declaration
-//======================================================//
-
-#ifndef USE_CUDA
-class TextGenerator {
-public:
-    using StreamCallback = std::function<void(int token_id, float score)>;
-    
-    TextGenerator(GrimEncoder& encoder, LanguageModelHead& lm_head, const GenerationConfig& config);
-    
-    std::vector<GeneratedSequence> generate(const std::vector<Vector>& prompt_embeddings,
-                                           const ALiBiPositionalBias* alibi = nullptr);
-    
-    GeneratedSequence generateStream(const std::vector<Vector>& prompt_embeddings,
-                                    StreamCallback callback,
-                                    const ALiBiPositionalBias* alibi = nullptr);
-    
-    void setConfig(const GenerationConfig& config) { config_ = config; }
-    const GenerationConfig& getConfig() const { return config_; }
-    
-private:
-    GeneratedSequence sampleGenerate(const std::vector<Vector>& prompt_embeddings,
-                                    const ALiBiPositionalBias* alibi,
-                                    StreamCallback* callback = nullptr);
-    
-    std::vector<GeneratedSequence> beamSearch(const std::vector<Vector>& prompt_embeddings,
-                                             const ALiBiPositionalBias* alibi);
-    
-    int sampleGreedy(const Vector& logits);
-    int sampleTopK(const Vector& logits, int k, float temperature);
-    int sampleTopP(const Vector& logits, float p, float temperature);
-    
-    void applyRepetitionPenalty(Vector& logits, const std::vector<int>& generated_ids);
-    void applyBadWords(Vector& logits);
-    bool shouldStop(const GeneratedSequence& seq, int current_length);
-    
-    GrimEncoder& encoder_;
-    LanguageModelHead& lm_head_;
-    GenerationConfig config_;
-    std::mt19937 rng_;
-};
-#else
-class TextGenerator;  // Placeholder to keep pointer type for GPU-only build
 using StreamCallback = GenerationStreamCallback;
-#endif
 
 //======================================================//
 //  GPU Classes (Forward Declarations Only)
 //======================================================//
 
 #ifdef USE_CUDA
-// GPUEmbeddingStack removed - use autograd::embedding() from TensorContract instead
-
 // Forward declarations for GPU classes
 struct FlashAttentionBF16Scratch {
     __nv_bfloat16* q = nullptr;
@@ -955,7 +741,7 @@ public:
     int getNumLayers() const;
     
     // Configure Flash Attention for all layers
-    void setFlashAttention(bool enable, int min_seq_len = 128);
+    void setFlashAttention(bool enable, int min_seq_len);
     
 private:
     struct Impl;

@@ -48,16 +48,13 @@ void LanguageModel::initInferenceState() {
     std::cout << "  → Skipping optimizer state" << std::endl;
     std::cout << "  → Minimal activation caches only" << std::endl;
     
-    cudaError_t err;  // Declare error variable for CUDA calls
-    
     // 1. Initialize StreamController and cuBLAS handle
     // StreamController manages CUDA streams - initialize it first
     GRIM::StreamControllerConfig stream_config;
     stream_config.verbose = false;
     
     if (!training_state_.stream_ctrl.initialize(stream_config)) {
-        std::cerr << "[InitInferenceState] Failed to initialize StreamController" << std::endl;
-        return;
+        throw std::runtime_error("[InitInferenceState] Failed to initialize StreamController");
     }
     
     cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
@@ -65,8 +62,8 @@ void LanguageModel::initInferenceState() {
 
     cublasStatus_t cublas_err = cublasCreate(&training_state_.cublas_handle);
     if (cublas_err != CUBLAS_STATUS_SUCCESS) {
-        std::cerr << "[InitInferenceState] Failed to create cuBLAS handle" << std::endl;
-        return;
+        throw std::runtime_error("[InitInferenceState] Failed to create cuBLAS handle, cublasStatus=" +
+                                 std::to_string(static_cast<int>(cublas_err)));
     }
     // Enable Tensor Core acceleration for Ampere+ GPUs
     cublasSetMathMode(training_state_.cublas_handle, CUBLAS_TF32_TENSOR_OP_MATH);
@@ -77,9 +74,9 @@ void LanguageModel::initInferenceState() {
 
     const int num_kv_heads = (cfg.num_kv_heads > 0) ? cfg.num_kv_heads : cfg.num_heads;
     if (cfg.num_heads % num_kv_heads != 0) {
-        std::cerr << "[InitInferenceState] ERROR: Invalid GQA config: num_heads="
-                  << cfg.num_heads << " num_kv_heads=" << num_kv_heads << std::endl;
-        return;
+        throw std::runtime_error("[InitInferenceState] Invalid GQA config: num_heads=" +
+                                 std::to_string(cfg.num_heads) + " not divisible by num_kv_heads=" +
+                                 std::to_string(num_kv_heads));
     }
     training_state_.num_heads = cfg.num_heads;
     training_state_.num_kv_heads = num_kv_heads;
@@ -310,21 +307,20 @@ void LanguageModel::initInferenceState() {
                 "cached_scratch_block_num_atoms_inf"
             );
             
-            // Initialize scratch pool for pinned memory transfers (simplified for inference)
+            // ScratchBlock does not use ScratchBlockPool during inference — atom detection
+            // and substitution run synchronously without pinned-memory staging.
             training_state_.scratch_enabled = true;
-            training_state_.scratch_pool = nullptr;  // Pool will be initialized on first use if needed
             
             std::cout << "  ✓ ScratchBlock cache buffers allocated (Tensor API)" << std::endl;
             
-            // Create ScratchBlock layer instance
             if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
                 std::cout << "  ✓ ScratchBlock reasoning layer enabled (d_model="
                           << cfg.d_model << ", atom_dim=" << atom_emb_dim
                           << ", max_atoms=" << max_atoms << ")" << std::endl;
             }
         } catch (const std::exception& e) {
-            std::cerr << "[InitInferenceState] WARNING: ScratchBlock init failed: " << e.what() << std::endl;
-            // Non-fatal, continue without ScratchBlock
+            throw std::runtime_error("[InitInferenceState] ScratchBlock init failed (config says use_scratch_block=true): "
+                                     + std::string(e.what()));
         }
     }
     
@@ -348,30 +344,26 @@ void LanguageModel::initInferenceState() {
     std::cout << "  Memory allocated for: batch=" << training_state_.max_cached_batch
               << ", seq_len=" << training_state_.max_cached_seq_len
               << ", tokens=" << training_state_.max_cached_tokens << std::endl;
-    const size_t token_cache_bytes = max_tokens * sizeof(int);
-    const size_t embedding_cache_bytes = max_tokens * cfg.d_model * sizeof(float);
-    const size_t layer_cache_bytes = cfg.num_layers * max_tokens * (
-        5 * cfg.d_model +  // ln1, attn_out, residual1, ln2, layer_out
-        2 * cfg.d_ff +     // ffn_pre_gelu, ffn_out
-        5 * cfg.d_model    // Q, K, V, attn_in, attn_raw_out
-    ) * sizeof(float);
+    
+    // Compute actual allocated activation buffer sizes (weights excluded — loaded separately)
+    const size_t token_cache_bytes = max_tokens * sizeof(float) * 3;  // token_ids + numeric_values + numeric_mask (all float Tensors)
     const size_t encoder_out_bytes = max_tokens * cfg.d_model * sizeof(float);
     const size_t logits_bytes = max_tokens * cfg.vocab_size * sizeof(float);
-    const size_t lm_head_bytes = cfg.tie_embeddings ? 0 : (cfg.vocab_size * cfg.d_model * sizeof(float));
+    const size_t single_token_bytes = (2 * cfg.d_model + cfg.vocab_size) * sizeof(float);  // embedding + hidden + logits
+    const size_t workspace_bytes = static_cast<size_t>(cfg.d_ff) * max_seq_len_cache * 4 * sizeof(float);
+    const size_t numeric_pred_bytes = cfg.numeric_head_enabled ? (max_tokens * sizeof(float)) : 0;
     
-    const size_t total_bytes = token_cache_bytes + embedding_cache_bytes + layer_cache_bytes +
-                               encoder_out_bytes + logits_bytes + lm_head_bytes;
+    const size_t total_bytes = token_cache_bytes + encoder_out_bytes + logits_bytes +
+                               single_token_bytes + workspace_bytes + numeric_pred_bytes;
     
-    std::cout << "  📊 Total GPU memory: ~" << (total_bytes / 1024.0 / 1024.0) << " MB" << std::endl;
-    std::cout << "      (excludes model weights and workspace)" << std::endl;
+    std::cout << "  📊 Total GPU activation memory: ~" << (total_bytes / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "      (excludes model weights loaded from checkpoint)" << std::endl;
     
     // Ensure all initialization is complete before returning
     cudaError_t sync_err = cudaDeviceSynchronize();
     if (sync_err != cudaSuccess) {
-        std::cerr << "[InitInferenceState] ERROR: cudaDeviceSynchronize failed: " 
-                  << cudaGetErrorString(sync_err) << std::endl;
-        training_state_.initialized = false;
-        return;
+        throw std::runtime_error("[InitInferenceState] cudaDeviceSynchronize failed: " +
+                                 std::string(cudaGetErrorString(sync_err)));
     }
     
     std::cout << "[InitInferenceState] ✓ GPU synchronization complete" << std::endl;

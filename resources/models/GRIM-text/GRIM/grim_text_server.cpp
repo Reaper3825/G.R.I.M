@@ -120,10 +120,13 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
         config.d_model = arch.d_model;
         config.num_layers = arch.num_layers;
         config.num_heads = arch.num_heads;
+        config.num_kv_heads = arch.num_kv_heads;
         config.d_ff = arch.d_ff;
         config.max_seq_len = arch.max_seq_len;
         config.dropout_rate = arch.dropout_rate;
         config.attention_dropout = arch.attention_dropout;
+        config.tie_embeddings = arch.tie_embeddings;
+        config.positional_encoding = arch.positional_encoding;
         
         // vocab_size comes from actual tokenizer (from .grmt data)
         config.vocab_size = g_tokenizer->totalVocabSize();
@@ -150,6 +153,7 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
         if (GRIM::Config::loadTrainingHyperparameters(hyperparams)) {
             config.max_seq_len = hyperparams.max_seq_len;
             config.use_flash_attention = hyperparams.use_flash_attention;
+            config.min_seq_len_for_flash = hyperparams.min_seq_len_for_flash;
         }
 
         config.computeDerivedValues();  // Compute head_dim = d_model / num_heads

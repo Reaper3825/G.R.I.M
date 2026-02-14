@@ -4,7 +4,7 @@
 
 **NEVER generate these patterns. If you see them, DELETE THEM:**
 
-❌ `x ? x : fallback` - NO fallbacks. Require x, crash if null  
+❌ `x ? x : fallback` - NO fallbacks. NO Stubs. Require x, crash if null  
 ❌ `if (ptr) { use(ptr); }` - Require ptr, crash if null with clear error  
 ❌ `if (args.stream) { ... } else { use_config_stream(); }` - NO silent fallbacks  
 ❌ `try { } catch { /* ignore */ }` - NEVER swallow errors silently  
@@ -31,9 +31,11 @@
 
 **Why:** Silent failures waste weeks debugging. If code is wrong, crash immediately with clear error. Backwards compatibility hides bugs and creates maintenance debt.
 
+**Severity Hierarchy:** Architectural problems (wrong data flow, dead code paths, disconnected subsystems, silent fallbacks at system boundaries) are the **MOST SEVERE** class of bug. A single architectural misconnect (e.g., loss not connected to gradients, embeddings not scaled, weights tied but gradients canceling) can waste weeks of GPU compute producing meaningless training runs. Always prioritize architectural correctness over local code quality. Rule 26 (YAGNI/delete dead code) is the architectural arm of Rule 20 — dead code creates false confidence that a subsystem is functional when it isn't.
+
 ---
 
-## � MANDATORY: Equation-Based Diagnostic Logging (Rule 21)
+## 🟡 MANDATORY: Equation-Based Diagnostic Logging (Rule 21)
 
 **When adding diagnostic logging for AI/ML math operations, ALWAYS use the `[*_EQUATION]` format:**
 
@@ -572,12 +574,13 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
 
 23. **Batched Embedding Position Bug (FIXED)**: Prior to fix, when `positions=nullptr` was passed to embedding kernels, position was computed as `token_idx` (global index) instead of `token_idx % seq_len` (within-sequence position). This caused 2/3 of every batch to use wrong position embeddings (e.g., batch 1 tokens got positions 720-1439 instead of 0-719). Symptoms: loss starts at 10.5 (correct random baseline) but increases to 15-20 as sequence length grows, with catastrophic spikes (77-259) for long sequences. Fix in `kernel_embedding_forward` (TensorContract_GPU.cu) now computes `pos_id = token_idx % seq_len` when positions is null.
 
-24. **Embedding Scale Missing (AIAYN √d_model) - Issue #92, Jan 2026**: The "Attention Is All You Need" paper states: "we multiply those weights by √d_model" for embedding scaling. GRIM-text was MISSING this scaling - embeddings were used raw (scale=1.0). Without scaling, embedding vectors are too small relative to attention scores (which scale by 1/√d), causing the softmax to be overly flat.
+24. **Embedding Scale Missing (AIAYN √d_model) - Issue #92, Jan 2026 — SUPERSEDED BY #140**: The "Attention Is All You Need" paper states: "we multiply those weights by √d_model" for embedding scaling. GRIM-text was MISSING this scaling - embeddings were used raw (scale=1.0). Without scaling, embedding vectors are too small relative to attention scores (which scale by 1/√d), causing the softmax to be overly flat.
 
 - **Root Cause**: Legacy `Embedding_GPU.cu` was DEAD CODE - never called in production. The embedding_scale parameter was added to the legacy path but production uses `autograd::embedding()` in `TensorContract_GPU.cu`.
 - **Fix**: Added `float embedding_scale = 1.0f` parameter to `autograd::embedding()` with proper chain rule handling in backward: `grad_weight[token_id] += grad_output * scale`.
 - **Implementation**: `AutogradTraining.cu` passes `sqrt(d_model)` for both token and position embeddings.
 - **Legacy Cleanup (Rule 20)**: Deleted ALL dead code from `Embedding_GPU.cu` (kernels, launchers, EmbeddingLayer class). Also deleted `embedding_self_test.cu` and `embedding_autograd_test.cu`. File now only contains `destroyEmbeddingRuntime()` for memory management.
+- **⚠️ SUPERSEDED**: Issue #140 removed the sqrt(d_model) scaling entirely because GRIM-text uses ALiBi/RoPE (position info inside attention, NOT residual stream), making the AIAYN scaling purposeless. With tied weights, the scaling created a 27.7x gradient asymmetry causing structural-token weight row divergence.
 
 48. **Hardcoded Defaults in Config Structs Violate Rule 20 (Feb 2026)**: Configuration structs with hardcoded default values create silent fallbacks that hide initialization failures. Example: `StartupConfig` had `int max_seq_len = 512` which violated Rule 20 (No Fallbacks).
 
@@ -630,7 +633,7 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
 - **Implementation**: `Phase1_Startup.cu` - `qkv_std = qkv_std_base * (1.0f / sqrt(d_model))`
 - **Expected Result**: Q/K row_norm ≈ 265 × 0.036 ≈ 9.6 (close to target 8), LSE in normal range 6-10
 
-98. **LM Head Scale Mismatch with Tied Embeddings - Issue #98, Jan 2026**: When `tie_embeddings=true`, Issue #92 scales embedding forward by `sqrt(d_model)≈27.7`, but LM head used RAW weights. This created **27.7x gradient attenuation** in backward pass.
+98. **LM Head Scale Mismatch with Tied Embeddings - Issue #98, Jan 2026 — REVERTED, SUPERSEDED BY #140**: When `tie_embeddings=true`, Issue #92 scales embedding forward by `sqrt(d_model)≈27.7`, but LM head used RAW weights. This created **27.7x gradient attenuation** in backward pass.
 
 - **Root Cause**: AIAYN states "multiply weights by sqrt(d_model)" - this applies to BOTH embedding lookup AND output projection with tied weights. GRIM only did the embedding side.
 - **Symptom**: FlashAttention dQ gradients were ~0.0000004 (should be ~0.00001). LM head backward `grad_encoder = grad_logits @ weights` used raw weights rms≈0.006 instead of scaled weights.
@@ -641,6 +644,7 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
     - `AutogradTraining.cu`: Apply scaling to LM head output when tie_embeddings=true
 - **Math**: `logits_scaled = logits * scale` → backward: `grad_input = grad_output * scale`. This restores gradient magnitude to match embedding forward scaling.
 - **PyTorch Note**: PyTorch baseline does NOT scale embeddings at all (plain lookup), so no mismatch exists there.
+- **⚠️ REVERTED**: `ScaleGradFn` and `autograd::scale()` deleted as dead code (Rule 20). Issue #140 takes the opposite approach: removing embedding scaling entirely (like PyTorch) instead of adding matching LM head scaling.
 
 97. **Encoder Biases Frozen (No Autograd Tracking) - Issue #97, Jan 2026**: All encoder biases (b_qkv, b_o, b1, b2) received **ZERO gradients** because bias addition used raw CUDA kernels (`launchFFNBiasAdd`) that bypassed autograd completely.
 
@@ -724,15 +728,10 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
 - This is "dynamic NTK" / "Code Llama style" scaling for extending context
 - `rope_scaling` field provides additional manual scaling (default 1.0)
 
-113. **Sinusoidal Position Embeddings Required with ALiBi/RoPE (ROOT CAUSE FIX Feb 2026)**: Issue #103 correctly removed **learned** position embeddings (they were isotropic → QKV explosion), but this left same tokens at different positions with **IDENTICAL** representations. ALiBi/RoPE only provide position info **INSIDE attention**, not in the residual stream. Result: avg_cos=0.90 (hidden states 90% correlated) → mode collapse to whatever W[v] row aligns with the common direction.
+113. **Sinusoidal Position Embeddings DELETED (Feb 2026)**: Issue #103 correctly removed **learned** position embeddings (they were isotropic → QKV explosion). Issue #113 originally added sinusoidal position embeddings as a replacement, but the `addSinusoidalPositionEmbeddingsKernel` was subsequently **DELETED**. With ALiBi/RoPE, position information is injected **INSIDE attention** (via bias/rotary), not in the residual stream. Same tokens at different positions DO have identical residual-stream representations — this is by design for ALiBi/RoPE architectures. Position differentiation comes from the attention mechanism itself.
 
-- **Root Cause**: Without position differentiation in embeddings, token "the" at pos 0 has the SAME vector as "the" at pos 50 → cos=1.0 → all positions look similar → model can't learn positional structure
-- **Fix**: Added sinusoidal position embeddings from AIAYN paper: `PE(pos,2i) = sin(pos/10000^(2i/d_model))`, `PE(pos,2i+1) = cos(pos/10000^(2i/d_model))`
-- **Properties**: Fixed (not learned) → no training instability; Non-isotropic by design → each dimension has DIFFERENT frequency; Works WITH ALiBi/RoPE (they complement each other)
-- **Implementation**: `addSinusoidalPositionEmbeddingsKernel` in `AutogradTraining.cu`, called UNCONDITIONALLY after token embedding lookup when using ALiBi/RoPE
-- **Why Issue #112 (Gram-Schmidt orthogonalization) was WRONG**: It was a bandaid - orthogonalizing W[277] just made another token dominate. Sinusoidal embeddings fix the ROOT CAUSE by breaking the 90% hidden state correlation
-- **Expected Result**: avg_cos drops from 0.90 → ~0.3-0.5, mode collapse no longer occurs
-- **WARNING**: Position encodings will extrapolate if runtime sequence exceeds `max_seq_len`
+- **Current state**: No position embeddings added to embeddings when using ALiBi/RoPE. Only learned position embeddings are supported (via `positional_encoding.use_learned=true` in config), and those are only activated when `positional_encoding` resolves to `NONE`.
+- **WARNING**: The `positional_encoding` config was previously hardcoded and not parsed from JSON. Issue #141 fixes this.
 
 125. **LM Head Centering Used WRONG CENTERING FUNCTION (ROOT CAUSE FIX - Issue #125, Feb 2026)**: The `launchCenterHiddenStates()` function did **ROW-WISE** centering (`mean(hidden[t,:])` - per-token mean across features) instead of **COLUMN-WISE** centering (`mean(hidden[:,d])` - per-feature mean across tokens). Row centering does NOT reduce hidden state correlation - it only makes each row sum to 0 without changing the angle between vectors!
 
@@ -901,7 +900,7 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
 26. **GRIM-text vs G.R.I.M Delegate Systems - CRITICAL SEPARATION**: GRIM-text is a SEPARATE PROGRAM from G.R.I.M and MUST NOT depend on G.R.I.M's core libraries:
 
 - **WRONG**: `#include "../../../../core/delegate.hpp"` in GRIM-text files - this is G.R.I.M's main program delegate system
-- **CORRECT**: GRIM-text has its own GPU delegate system at `resources/models/GRIM-text/Shared/Delegate/Delegate.hpp` (GPU-side `__device__` functions only)
+- **CORRECT**: GRIM-text does NOT use delegates. The GPU delegate system (`Shared/Delegate/Delegate.hpp`) was deleted (Rule 26: zero registered callbacks). If GPU-side event callbacks are needed in the future, re-implement from scratch with actual callers.
 - **YAGNI Principle**: If a GRIM-text component declares delegate/callback functionality but NO code registers callbacks, DELETE the delegate code entirely
 - **Files affected**: StreamController and any Shared/ components - they should NOT use any delegate pattern
 - **Rationale**: GRIM-text trains/runs as standalone executable (`train_gpu.exe`, `grim_text_server.exe`), completely independent of G.R.I.M's main process
@@ -980,6 +979,60 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
 - **Issue #110 Fix in `Phase1_Startup.cu`**: Call `allocatePCGradBuffer()` for tied weights.
 - **Three EmbeddingGradFn paths**: (1) PCGrad mode [correct], (2) Skip mode [Issue #88], (3) Normal mode [cancels!]
 - **Evidence**: Log showed `pcgrad_buffer=0000000000000000` (NULL) for all calls, forcing PATH 3 which says "(will cancel!)" in comment.
+
+138. **computeGradNorm Timing Variance Was Pipeline Drain (DIAGNOSTIC FIX Feb 2026)**: `computeGradNorm` wall time varied 3ms-53ms between batches. The 50ms spikes occurred because `cudaStreamSynchronize` inside `computeGradNorm` was draining leftover backward pass kernels from the GPU pipeline — NOT because the norm kernels themselves were slow.
+
+- **Fix**: Added CUDA event-based timing (`cudaEventRecord` before/after norm kernels, `cudaEventElapsedTime`) to decompose the log into `kernel=Xms` (actual GPU norm computation) and `drain=Yms` (waiting for backward pipeline).
+- **Files Modified**: `LanguageModel_Training.cu` (event creation + timing), `grim_language_model_cuda.hpp` (added `last_gpu_norm_ms_` member), `Phase2_TrainingLoop.cu` (updated log format)
+- **Lesson**: Wall-time measurements of GPU operations are misleading when the stream has pending work from prior stages.
+
+139. **Per-Component Gradient Clipping (emb_lm_tied Crushing Encoder Gradients - Issue #139, Feb 2026)**: `emb_lm_tied` gradient norm dominated 88-99.6% of total gradient norm across ALL batches, drowning out attention, FFN, and RMSNorm components. The old clipping (Issue #134) grouped ALL text parameters (emb+attn+ffn+rms) and applied a single clip coefficient — when emb was 99% of text_norm, the clip_coef ≈ 0.2 scaled ALL text params equally, crushing encoder gradients to near-zero.
+
+- **Root Cause**: LM head gradient `grad_B = hidden^T @ grad_logits` has shape [50377×768] = 38.7M parameters. With high loss (~10-12), softmax gradients are large. The matmul across all token positions amplifies this. Encoder gradients (attn/ffn/rms combined) were 100-1000x smaller in magnitude.
+- **Symptom**: Batches 1-8: emb% = 60-72% (acceptable). Batches 9-14: emb% climbs to 83-95%. Batches 15+: emb% = 99.4-99.6%, attn+ffn+rms combined < 0.5, encoder layers barely learning.
+- **Fix**: Three independent clips instead of two:
+    1. **emb clip** — clips LM_HEAD (+ EMBEDDING if untied) independently
+    2. **enc clip** — clips ATTENTION + FFN + RMSNORM + SCRATCHBLOCK independently
+    3. **num clip** — clips NUMERIC_HEAD independently
+- Each component gets its own full budget (`effective_per_token_limit`). Encoder gradients can no longer be crushed by embedding spikes.
+- **Files Modified**: `Phase2_TrainingLoop.cu` (post-accumulation clipping section)
+- **Expected Result**: Encoder components maintain their natural gradient magnitude. `attn=0.03, ffn=0.07, rms=0.01` survive clipping intact instead of being scaled by 0.2.
+- **PATTERN**: When one parameter group dominates L2 norm, NEVER clip it jointly with smaller groups. Use per-component independent clipping.
+
+140. **Embedding Scale sqrt(d_model) Removed for Tied Weights (ROOT CAUSE FIX - Issue #140, Feb 2026)**: The `sqrt(d_model) = 27.7` embedding scaling (Issue #92, AIAYN paper) created a **27.7x gradient asymmetry** between the embedding and LM head backward paths when using tied weights. This was the ROOT CAUSE of escalating `emb_lm_tied` gradient magnitude (spikes growing from 0.61→5.23 over 28 batches) and structural-token weight row divergence (`||W||_max` monotonically growing 0.18→0.32).
+
+- **Root Cause**: With `tie_embeddings=true`, both embedding and LM head operate on the SAME weight W:
+    - **Embedding forward**: `emb = W[tok] * sqrt(d_model)` → backward chain rule: `grad_W_emb[tok] += grad_encoder[t] * 27.7`
+    - **LM head forward**: `logits = centered @ W^T` (raw W, no scaling) → backward: `grad_W_lm = centered^T @ grad_logits` (no extra factor)
+    - The embedding path carries a **27.7x amplification** that the LM head path does not
+    - For structural tokens (BOS=token 0, atom placeholder=token 400) appearing every batch at fixed positions, the amplified embedding gradient accumulates via AdamW momentum
+    - This caused those weight rows to diverge: `||W||_max` grew monotonically while `||W||_mean` stayed flat at 0.175
+- **Why AIAYN scaling doesn't apply to GRIM-text**:
+    - AIAYN's sqrt(d_model) scaling was designed to make embeddings large relative to **sinusoidal position encodings** in the residual stream
+    - GRIM-text uses ALiBi/RoPE which inject position **INSIDE attention**, NOT in the residual stream
+    - No competing position encoding exists → the scaling has no purpose
+    - Modern LLMs with tied weights (GPT-2, LLaMA, Mistral, Gemma) do NOT scale embeddings by sqrt(d_model)
+- **Fix**: Changed `embedding_scale = sqrt(d_model)` → `embedding_scale = 1.0f` in `AutogradTraining.cu`
+- **Effect**: Embedding backward gradient magnitude matches LM head backward magnitude (both operate on raw W). Eliminates the 27.7x asymmetry that caused structural-token weight row divergence.
+- **History**: Issue #92 added scaling → Issue #102 disabled (LSE explosion) → Issue #106 re-enabled after W_qkv init fix → **Issue #140 removes permanently** (gradient asymmetry for tied weights)
+- **Files Modified**: `AutogradTraining.cu` (embedding_scale = 1.0f)
+- **IMPORTANT**: Requires retraining from scratch (weight magnitudes fundamentally change). Old checkpoints are incompatible.
+
+141. **ScratchBlock Backward Never Called + Config Hardcoded (CRITICAL FIX - Issue #141, Feb 2026)**: Three bugs fixed:
+
+- **BUG A (CRITICAL): ScratchBlock backward NEVER executed.** `AutogradTraining.cu` guarded ScratchBlock backward with `intermediates.embedding_tensor.has_grad()` which was ALWAYS false. The embedding_tensor is a dropout output (non-leaf). Autograd writes gradients to `DropoutGradFn::input_grad` (internal buffer), not to `tensor.grad_data()`. `atom_projection_`, `atom_type_embeddings_`, `text_feature_projection_` received ZERO gradients for entire training.
+    - **Fix**: Added `grad_output_tap` field to base `GradFn` struct. `DropoutGradFn::apply()` copies `grad_output` (encoder input gradient) into the tap buffer before applying dropout mask. `Phase1_Startup.cu` allocates `scratchblock_grad_tap` buffer in TrainingState. Backward code sets tap before `loss_tensor.backward()`, then uses captured gradient for ScratchBlock backward.
+    - **Files Modified**: `TensorContract_GPU.hpp` (GradFn tap fields), `TensorContract_GPU.cu` (DropoutGradFn tap copy), `AutogradTraining.cu` (tap setup + ScratchBlock backward rewrite), `TrainingState_GPU.hpp` (tap buffer), `Phase1_Startup.cu` (tap allocation)
+
+- **BUG B: `positional_encoding` config HARDCODED.** `Phase1_Startup.cu` line 748 always set `model_config.positional_encoding = DEFAULT_POSITIONAL_ENCODING` (ALIBI_ROPE). JSON config's `positional_encoding.use_learned/use_rope/use_alibi` were NEVER parsed. `parsePositionalEncodingType()` was dead code. Rule 20 violation.
+    - **Fix**: Added parsing of `positional_encoding` object from JSON in `loadConfiguration()`. Added `PositionalEncodingType positional_encoding` field to `ModelArchitecture` struct. `initializeModel()` uses parsed value.
+    - **Files Modified**: `Phase1_Startup.cu` (JSON parsing + model init), `HyperParameters_GPU.hpp` (ModelArchitecture field)
+
+- **BUG C: PCGrad NaN on zero-norm rows.** `kernel_pcgrad_combine` divided by `||g_lm||²` with only `assert()` guard (compiled out in Release). Zero-norm rows produce `0/0 = NaN`.
+    - **Fix**: Replaced `assert` with `if (total_norm_sq < 1e-12f) { s_proj_coef = 0.0f; }` guard.
+    - **Files Modified**: `TensorContract_GPU.cu`
+
+- **Also deleted**: ~170 lines of dead Issue #93/#95 diagnostic code inside `if (use_learned_pos_emb)` block in `AutogradTraining.cu` that never executed with ALIBI_ROPE.
 
 ## Testing & Debugging
 

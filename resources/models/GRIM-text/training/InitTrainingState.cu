@@ -465,6 +465,7 @@ void LanguageModel::initTrainingState() {
     enc_cfg.rms_epsilon = 1e-5f;
     enc_cfg.causal_mask = cfg.causal_mask;
     enc_cfg.use_flash_attention = true;
+    enc_cfg.min_seq_len_for_flash = cfg.min_seq_len_for_flash;
     enc_cfg.use_bias = cfg.use_bias;
     enc_cfg.stream = training_state_.stream_ctrl.getPrimaryStream();
     enc_cfg.cublas_handle = training_state_.cublas_handle;  // Rule 22: centralized handle

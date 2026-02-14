@@ -20,6 +20,7 @@
 #include "../../Shared/TensorContract/ForwardIntermediates.hpp"
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
+#include "../../Shared/Batching/BatchPayload.hpp"
 // MUST include full definitions for types used in AutogradContext
 #include "../../GRIM/grim_language_model_cuda.hpp"
 // ScratchBlock and NumericHead for autograd forward path
@@ -53,9 +54,15 @@ struct ForwardResult {
 
 /**
  * Result of autograd loss computation
+ * Contains decomposed loss components for logging and gradient weighting.
  */
 struct LossResult {
-    float loss_value = 0.0f;         // Host-side loss value
+    float loss_value = 0.0f;         // Combined weighted loss (text + numeric + regularization)
+    float text_loss = 0.0f;          // Raw text cross-entropy loss
+    float numeric_loss = 0.0f;       // Raw numeric regression loss (0 if disabled)
+    int numeric_count = 0;           // Number of numeric tokens in batch
+    float weight_text = 1.0f;        // Learned text weight (1.0 if no learned weighting)
+    float weight_numeric = 1.0f;     // Learned numeric weight (config default if no learned weighting)
     int valid_tokens = 0;            // Number of valid (non-padding) tokens
     bool success = false;
     std::string error_message;
@@ -102,12 +109,23 @@ struct AutogradContext {
     
     // ═══════════════════════════════════════════════════════════════════════════
     // BATCH PARAMETERS
+    // For training: payload is the single source of truth; batch_size/seq_len
+    // are derived from it by initAutogradContext(const BatchPayload&, ...).
+    // For inference: payload is nullptr; batch_size/seq_len set directly.
     // ═══════════════════════════════════════════════════════════════════════════
+    const Batching::BatchPayload* payload = nullptr;  // Non-owning. Set for training, nullptr for inference.
     int batch_size = 0;
     int seq_len = 0;
     float grad_scale = 1.0f;
     uint64_t step = 0;
     bool is_training = true;
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LOSS CONFIGURATION
+    // Populated by caller from model config (LossOptions → autograd::LossConfig)
+    // Used by computeAutogradLoss() → unified_loss()
+    // ═══════════════════════════════════════════════════════════════════════════
+    autograd::LossConfig loss_config;
     
     // ═══════════════════════════════════════════════════════════════════════════
     // VALIDATION (Rule 20: Fail loud)
@@ -123,7 +141,23 @@ struct AutogradContext {
 };
 
 /**
- * Initialize autograd context (thin input struct only)
+ * Initialize autograd context for TRAINING (derives batch_size/seq_len from payload)
+ */
+AutogradContext initAutogradContext(
+    const LanguageModelConfig* config,
+    TrainingState* training_state,
+    GPUGrimEncoder* gpu_encoder,
+    ScratchBlockLayer* scratch_block,
+    cublasHandle_t cublas_handle,
+    cudaStream_t stream,
+    const Batching::BatchPayload& payload,
+    float grad_scale,
+    uint64_t step,
+    bool is_training = true
+);
+
+/**
+ * Initialize autograd context for INFERENCE (no payload, set batch_size/seq_len directly)
  */
 AutogradContext initAutogradContext(
     const LanguageModelConfig* config,
@@ -151,15 +185,29 @@ AutogradContext initAutogradContext(
 ForwardResult executeAutogradForward(AutogradContext& ctx);
 
 /**
+ * Build autograd::LossConfig from model LossOptions (single conversion point).
+ * Eliminates duplicate LossOptions → LossConfig conversions across callsites.
+ */
+autograd::LossConfig buildLossConfig(const LossContext::LossOptions& opts);
+
+/**
  * Compute loss with autograd
  * 
- * Creates loss Tensor with CrossEntropyGradFn attached.
- * Loss tensor stored in training_state->autograd_intermediates.loss_tensor.
+ * Single entry point for ALL loss computation. Creates loss Tensor with
+ * CrossEntropyGradFn attached. Loss tensor stored in
+ * training_state->autograd_intermediates.loss_tensor.
+ * 
+ * Handles:
+ *   1. Text CE via autograd::unified_loss()
+ *   2. Numeric regression loss via launchNumericLoss() (if enabled)
+ *   3. Learned loss weighting (homoscedastic uncertainty, if log_var tensors exist)
+ *   4. Caches all loss values in training_state for backward pass
+ * 
+ * @param ctx     Autograd context (must have logits populated by executeAutogradForward,
+ *                 and ctx.payload set to a valid BatchPayload)
  */
 LossResult computeAutogradLoss(
-    AutogradContext& ctx,
-    const int* targets,
-    const float* valid_mask = nullptr
+    AutogradContext& ctx
 );
 
 /**
@@ -184,13 +232,24 @@ bool verifyGradientsAreConnected(AutogradContext& ctx);
 float computeGradientNorm(const AutogradContext& ctx);
 
 /**
- * Full autograd training step: forward → loss → backward
+ * Full autograd training step: GPU copies → forward → loss → backward
+ * 
+ * This is the SINGLE entry point for a complete training iteration.
+ * Replaces the scattered computeLossBatch() + backward() two-call pattern.
+ * 
+ * @param model          LanguageModel (provides config, encoder, loss options)
+ * @param training_state TrainingState (GPU buffers, optimizer state)
+ * @param payload        BatchPayload (single source of truth for batch data)
+ * @param accumulate     Whether to accumulate gradients (true for micro-batches > 0)
+ * @param grad_scale     Gradient scaling factor
+ * @param step           Global training step counter
+ * @return LossResult with decomposed loss components and success/error status.
+ *         If loss is non-finite, backward is SKIPPED and success=false.
  */
-float autogradTrainingStep(
+LossResult autogradTrainingStep(
     LanguageModel& model,
     TrainingState& training_state,
-    int batch_size,
-    int seq_len,
+    const Batching::BatchPayload& payload,
     bool accumulate,
     float grad_scale,
     uint64_t step

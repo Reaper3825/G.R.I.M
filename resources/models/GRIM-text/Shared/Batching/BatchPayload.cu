@@ -37,7 +37,6 @@ BatchPayload buildBatchPayload(
     // PHASE 1: Identity — carry forward from assignment
     // ═════════════════════════════════════════════════════════════════════════
     payload.seq_ids = assignment.seq_ids;
-    payload.accumulation_group = assignment.accumulation_group;
     payload.batch_size = static_cast<int>(assignment.seq_ids.size());
 
     if (payload.batch_size <= 0) {

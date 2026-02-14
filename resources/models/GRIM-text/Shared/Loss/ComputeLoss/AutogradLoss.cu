@@ -9,9 +9,9 @@
 #include "AutogradLoss.hpp"
 #include "../../TensorContract/TensorContract_GPU.hpp"
 #include "../../EquationLogging/EquationLogging.hpp"
-#include "../../EquationLogging/PyTorchVerify.hpp"  // PyTorch verification for side-by-side comparison
 #include <cuda_runtime.h>
 #include <cassert>
+#include <sstream>
 #include <cfloat>
 #include <cmath>
 #include <memory>
@@ -1047,16 +1047,12 @@ struct NLLLossGradFn : public GradFn {
             }
             float rms = std::sqrt(static_cast<float>(sq / sample_sz));
             
-            char inputs_buf[256];
-            char outputs_buf[128];
-            snprintf(inputs_buf, sizeof(inputs_buf),
-                "num_tokens=%d vocab=%d valid=%d", num_tokens, vocab_size, valid_count);
-            snprintf(outputs_buf, sizeof(outputs_buf),
-                "max=%.6f rms=%.6f", mx, rms);
-            EQ_LOG_HOST("NLL-BWD-OUT", 
-                "grad_log_probs = dL/d(log_p) [NLL backward, before LogSoftmaxGradFn]",
-                inputs_buf, outputs_buf, "max~1/N rms~1e-5", outputs_buf,
-                0, 0, 0, EquationPhase::LOSS_BACKWARD);
+            std::ostringstream eq;
+            eq << "[NLL-BWD-OUT] grad_log_probs = dL/d(log_p) [NLL backward, before LogSoftmaxGradFn]\n"
+               << "  INPUTS: num_tokens=" << num_tokens << " vocab=" << vocab_size << " valid=" << valid_count << "\n"
+               << "  EXPECTED max~1/N=" << (1.0f / valid_count) << " rms~1e-5\n"
+               << "  ACTUAL max=" << mx << " rms=" << rms;
+            EQ_LOG("NLL-BWD-OUT", eq.str(), 0, -1, 0, GRIM::EquationPhase::LOSS_BACKWARD);
         }
         
         // ── Step 3: Chain to LogSoftmaxGradFn → computes grad w.r.t. raw logits ──
@@ -1071,13 +1067,10 @@ struct NLLLossGradFn : public GradFn {
             grad_log_probs_tensor.stream = stream;
             
             {
-                char inputs_buf[128];
-                snprintf(inputs_buf, sizeof(inputs_buf), "grad_log_probs.data=%p", 
-                         (void*)grad_log_probs_buffer);
-                EQ_LOG_HOST("NLL-TO-LOGSOFTMAX", 
-                    "chaining grad_log_probs to LogSoftmaxGradFn → produces grad_logits",
-                    inputs_buf, "calling upstream->apply()", "non-null ptr", inputs_buf,
-                    0, 0, 0, EquationPhase::LOSS_BACKWARD);
+                std::ostringstream eq;
+                eq << "[NLL-TO-LOGSOFTMAX] chaining grad_log_probs to LogSoftmaxGradFn -> grad_logits\n"
+                   << "  grad_log_probs.data=" << (void*)grad_log_probs_buffer;
+                EQ_LOG("NLL-TO-LOGSOFTMAX", eq.str(), 0, -1, 0, GRIM::EquationPhase::LOSS_BACKWARD);
             }
             
             AG_TRACE("[NLLLossGradFn::apply] Chaining to LogSoftmaxGradFn\n");
@@ -1250,23 +1243,9 @@ __host__ Tensor unified_loss(
     // log_probs goes out of scope: data NOT freed (transferred), grad_fn NOT deleted (transferred)
 }
 
-__host__ Tensor cross_entropy_loss(
-    Tensor& logits,
-    const int* targets,
-    const float* valid_mask,
-    int num_tokens,
-    int vocab_size,
-    cudaStream_t stream
-) {
-    // Plain CE: focal_gamma=0 (no focal), smoothing=0 (no smoothing), entropy=0
-    LossConfig plain_ce;
-    plain_ce.focal_alpha = 1.0f;
-    plain_ce.focal_gamma = 0.0f;
-    plain_ce.smoothing_epsilon = 0.0f;
-    plain_ce.entropy_reg_lambda = 0.0f;
-    
-    return unified_loss(logits, targets, valid_mask, num_tokens, vocab_size, plain_ce, stream);
-}
+// Issue #142: cross_entropy_loss() DELETED (Rule 26: dead code).
+// Was a thin wrapper calling unified_loss() with hardcoded plain CE config.
+// All callers now use unified_loss() directly with real LossConfig from model.
 
 }  // namespace autograd
 }  // namespace GRIM

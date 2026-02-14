@@ -71,20 +71,20 @@ void TrainingTensors::initializeParams(
     embedding_weights.ensure_grad();  // Allocate grad NOW so share_grad() works
     Tensor::xavier_uniform_(embedding_weights, seed + 0, stream);
     
-    // ISSUE #96 FIX: Position embeddings ONLY allocated for LEARNED positional encoding.
-    // Current modes (NONE, ALIBI, ROPE, ALIBI_ROPE) all use attention-based position
-    // encoding - they do NOT add learned position embeddings to token embeddings.
-    // The position_embedding_weights will be left UNINITIALIZED (null data pointer)
-    // which tells AutogradTraining.cu to SKIP the position embedding addition.
-    //
-    // If a LEARNED positional encoding mode is added later, add:
-    //   if (positional_encoding == PositionalEncodingType::LEARNED) { ... }
-    //
-    // For now, this block is NEVER executed because no LEARNED mode exists.
-    // Rule 20: Don't silently allocate - config must explicitly enable features.
-    fprintf(stdout, "[TrainingTensors] Position embeddings: SKIPPED (positional_encoding=%s uses attention-based encoding)\n",
-            HyperParameters::positionalEncodingTypeToString(positional_encoding));
-    // position_embedding_weights intentionally left uninitialized (data=nullptr)
+    // PositionalEncodingType::NONE is the learned/additive positional mode in this
+    // codebase (no ALiBi/RoPE inside attention). Allocate learned position table.
+    if (positional_encoding == HyperParameters::PositionalEncodingType::NONE) {
+        position_embedding_weights = Tensor::zeros({max_seq_len, d_model}, stream, "position_embedding_weights");
+        position_embedding_weights.requires_grad_();
+        position_embedding_weights.ensure_grad();
+        Tensor::xavier_uniform_(position_embedding_weights, seed + 200, stream);
+        fprintf(stdout, "[TrainingTensors] Position embeddings: ALLOCATED [%d, %d] (learned/additive mode)\n",
+                max_seq_len, d_model);
+    } else {
+        // ALiBi/RoPE modes inject position info in attention, so additive table is unnecessary.
+        fprintf(stdout, "[TrainingTensors] Position embeddings: SKIPPED (positional_encoding=%s uses attention-based encoding)\n",
+                HyperParameters::positionalEncodingTypeToString(positional_encoding));
+    }
     
     //==================================================//        
     //  LM HEAD

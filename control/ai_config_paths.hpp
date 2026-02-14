@@ -158,6 +158,7 @@ struct TrainingHyperparameters {
     int checkpoint_interval;
     bool use_gpu;
     bool use_flash_attention;
+    int min_seq_len_for_flash;
     
     // Dynamic LR - NO DEFAULTS
     bool dynamic_lr_enabled;
@@ -217,10 +218,6 @@ struct TrainingHyperparameters {
     float auto_stop_plateau_min_delta;
     float auto_stop_high_loss_threshold;
     int auto_stop_high_loss_patience;
-    
-    // Cache limits - NO DEFAULTS
-    int cache_max_batch;
-    int cache_max_seq_len;
     
     // Micro validation - NO DEFAULTS
     bool micro_validation_enabled;
@@ -294,13 +291,13 @@ struct TrainingHyperparameters {
     // reg = λ * Σ_v p_v² (penalizes logit concentration)
     bool loss_entropy_reg_enabled;
     float loss_entropy_reg_lambda;
-    
+
+
     // LM Head centering (Issue #37 / #40) - NO DEFAULTS
-    // When enabled, centers hidden states and recenters gradients.
-    // Set to false for standard PyTorch-style implementation.
+    // When enabled, centers hidden states before LM head projection.
+    // Centering backward handled by autograd GradFns (Issue #142).
     bool lm_head_centering_enabled;
     bool lm_head_center_hidden_states;
-    bool lm_head_recenter_gradients;
     bool center_logits;  // Center logits per position (row-wise) before softmax
     bool center_encoder_residuals;  // Center residuals INSIDE encoder layers (24 projections - can attenuate gradients)
     
@@ -321,9 +318,7 @@ struct TrainingHyperparameters {
     bool stability_overrides_enabled;
     int stability_override_batch_size;
     int stability_override_max_seq_len;
-    int stability_override_max_tokens_per_batch;
-    float stability_override_clip_abs;
-    float stability_override_clip_norm;
+    float stability_override_clip_per_token;
     float stability_override_lr_min;
     
     // Scratch blocks - NO DEFAULTS
@@ -538,7 +533,7 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "batch_strategy", "learning_rate", "weight_decay",
         "per_token_grad_scale", "warmup_steps", "max_seq_len", "min_seq_valid_tokens", "log_interval",
         "atom_stats_interval", "atom_stats_max_seqs",
-        "validation_interval", "checkpoint_interval", "use_gpu", "use_flash_attention",
+        "validation_interval", "checkpoint_interval", "use_gpu", "use_flash_attention", "min_seq_len_for_flash",
         
         // Single batch overfit
         "single_batch.enabled", "single_batch.max_steps",
@@ -573,9 +568,6 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         // Auto stop
         "auto_stop.enabled", "auto_stop.plateau_patience", "auto_stop.plateau_min_delta",
         "auto_stop.high_loss_threshold", "auto_stop.high_loss_patience",
-        
-        // Cache limits
-        "cache_limits.max_cached_batch", "cache_limits.max_cached_seq_len",
         
         // Micro validation
         "micro_validation.enabled", "micro_validation.interval",
@@ -633,7 +625,6 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         // Stability overrides
         "stability_overrides_enabled",
         "stability_overrides.batch_size", "stability_overrides.max_seq_len",
-        "stability_overrides.max_tokens_per_batch", "stability_overrides.clip_abs",
         "stability_overrides.clip_per_token", "stability_overrides.lr_min",
         
         // Scratch blocks
@@ -725,6 +716,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.checkpoint_interval, trainConfig, "checkpoint_interval");
     assignTrainingField(params.use_gpu, trainConfig, "use_gpu");
     assignTrainingField(params.use_flash_attention, trainConfig, "use_flash_attention");
+    assignTrainingField(params.min_seq_len_for_flash, trainConfig, "min_seq_len_for_flash");
 
     if (auto it = trainConfig.find("dynamic_lr"); it != trainConfig.end()) {
         const auto& dlr = *it;
@@ -779,11 +771,6 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
                 params.dynamic_lr_safety_scale = dlr.value("safety_scale", params.dynamic_lr_safety_scale);
             }
         }
-    }
-
-    if (auto it = trainConfig.find("cache_limits"); it != trainConfig.end() && it->is_object()) {
-        params.cache_max_batch = it->value("max_cached_batch", params.cache_max_batch);
-        params.cache_max_seq_len = it->value("max_cached_seq_len", params.cache_max_seq_len);
     }
 
     if (auto it = trainConfig.find("soft_restart"); it != trainConfig.end()) {
@@ -1027,6 +1014,8 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
                 params.loss_entropy_reg_lambda = er.value("lambda", params.loss_entropy_reg_lambda);
             }
         }
+
+
         
         if (auto pref_it = loss_cfg.find("preference"); pref_it != loss_cfg.end()) {
             const auto& pref = *pref_it;
@@ -1080,14 +1069,12 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     // Set to false for standard PyTorch-style implementation.
     params.lm_head_centering_enabled = false;  // Default to disabled (standard implementation)
     params.lm_head_center_hidden_states = false;
-    params.lm_head_recenter_gradients = false;
     params.center_logits = false;  // Default to disabled (standard implementation)
     params.center_encoder_residuals = false;  // Default: disabled (24 centering projections attenuate gradient signal)
     if (auto it = trainConfig.find("lm_head_centering"); it != trainConfig.end() && it->is_object()) {
         const auto& lmc = *it;
         params.lm_head_centering_enabled = lmc.value("enabled", false);
         params.lm_head_center_hidden_states = lmc.value("center_hidden_states", false);
-        params.lm_head_recenter_gradients = lmc.value("recenter_gradients", false);
         params.center_logits = lmc.value("center_logits", false);
         params.center_encoder_residuals = lmc.value("center_encoder_residuals", false);
     }
@@ -1131,9 +1118,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         const auto& stab = *it;
         params.stability_override_batch_size = stab.value("batch_size", params.stability_override_batch_size);
         params.stability_override_max_seq_len = stab.value("max_seq_len", params.stability_override_max_seq_len);
-        params.stability_override_max_tokens_per_batch = stab.value("max_tokens_per_batch", params.stability_override_max_tokens_per_batch);
-        params.stability_override_clip_abs = stab.value("clip_abs", params.stability_override_clip_abs);
-        params.stability_override_clip_norm = stab.value("clip_per_token", params.stability_override_clip_norm);
+        params.stability_override_clip_per_token = stab.value("clip_per_token", params.stability_override_clip_per_token);
         params.stability_override_lr_min = stab.value("lr_min", params.stability_override_lr_min);
     }
     

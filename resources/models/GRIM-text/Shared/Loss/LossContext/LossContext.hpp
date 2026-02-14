@@ -32,6 +32,8 @@ struct LossOptions {
     // reg = λ * Σ_v p_v² (penalizes logit concentration)
     bool entropy_reg_enabled = false;
     float entropy_reg_lambda = 0.0f;
+
+
 };
 
 struct TensorViews {

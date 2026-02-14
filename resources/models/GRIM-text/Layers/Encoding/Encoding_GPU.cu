@@ -23,6 +23,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <sstream>
 #include <vector>
 #include <cmath>
 #include <algorithm>  // Rule 21 diagnostic: std::min_element, std::max_element
@@ -1115,57 +1116,34 @@ namespace {
         // ISSUE #106 RULE 21 OUTPUT: INPUT-WEIGHT COSINE SIMILARITY ANALYSIS
         // ========================================================================
         if (isEquationLoggingEnabled()) {
-            fprintf(stderr, "\n[QKV_EQUATION] layer=%d: Y[i,j] = ||x_i|| × ||w_j|| × cos(θ_ij)\n", layer_idx);
-            fprintf(stderr, "  INPUT x (ln1_out): shape=[%d,%d] row_norm_mean=%.4f\n", 
-                    total_tokens, d_model, in_row_norm_mean);
-            fprintf(stderr, "  WEIGHT w (W_qkv):  shape=[%d,%d] row_norm_mean=%.4f\n",
-                    qkv_dim, d_model, w_row_norm_mean);
-            fprintf(stderr, "  PARAMETERS: d_model=%d, sampled_pairs=%d×%d=%d\n",
-                    d_model, cos_sample_input, cos_sample_weight, static_cast<int>(cos_count));
-            fprintf(stderr, "  \n");
-            fprintf(stderr, "  [COSINE DISTRIBUTION] cos(θ) between input rows and weight rows:\n");
-            fprintf(stderr, "    OBSERVED: mean=%.6f std=%.6f mean_abs=%.6f\n", cos_mean, cos_std, cos_abs_mean);
-            fprintf(stderr, "    EXPECTED (random K=%d): mean=0.0 var=%.6f mean_abs=%.6f\n",
-                    d_model, expected_cos_variance, expected_cos_abs_mean);
-            fprintf(stderr, "    RATIO: variance=%.2fx expected, |cos|=%.2fx expected\n", 
-                    cos_var_ratio, cos_abs_ratio);
-            fprintf(stderr, "  \n");
-            fprintf(stderr, "  [QKV_OUTPUT] Expected from GEMM formula:\n");
-            fprintf(stderr, "    If cos uniformly random: Y_rms ≈ ||x|| × ||w|| × √(1/K) = %.4f × %.4f × %.4f = %.4f\n",
-                    in_row_norm_mean, w_row_norm_mean, 1.0f/sqrtf(static_cast<float>(d_model)), rownorm_expected_rms);
-            fprintf(stderr, "    If cos systematic bias: Y_rms ≈ ||x|| × ||w|| × |cos_mean| + random ≈ (formula complex)\n");
-            fprintf(stderr, "    ADJUSTED formula (alignment_ratio=%.4f): %.4f\n", alignment_ratio, adjusted_expected_rms);
-            fprintf(stderr, "    ACTUAL Y_rms: %.4f\n", actual_stats.rms);
-            fprintf(stderr, "  \n");
-            
-            // Structured logging via centralized EquationLogger
-            EQ_LOG_HOST(
-                "QKV_COSINE_EQUATION",
-                "Y[i,j] = ||x_i|| * ||w_j|| * cos(theta_ij)",
-                "x_row_norm=" + std::to_string(in_row_norm_mean) + " w_row_norm=" + std::to_string(w_row_norm_mean) + " cos_mean=" + std::to_string(cos_mean),
-                "cos_var_ratio=" + std::to_string(cos_var_ratio) + " cos_abs_ratio=" + std::to_string(cos_abs_ratio),
-                "expected_rms=" + std::to_string(adjusted_expected_rms),
-                "actual_rms=" + std::to_string(actual_stats.rms),
-                0, layer_idx, 0, GRIM::EquationPhase::ATTENTION_SCORE);
-            
-            // Root cause analysis
+            std::ostringstream eq;
+            eq << "[QKV_COSINE_EQUATION] layer=" << layer_idx << ": Y[i,j] = ||x_i|| * ||w_j|| * cos(theta_ij)\n";
+            eq << "  INPUT x (ln1_out): shape=[" << total_tokens << "," << d_model 
+               << "] row_norm_mean=" << in_row_norm_mean << "\n";
+            eq << "  WEIGHT w (W_qkv):  shape=[" << qkv_dim << "," << d_model 
+               << "] row_norm_mean=" << w_row_norm_mean << "\n";
+            eq << "  PARAMETERS: d_model=" << d_model << ", sampled_pairs=" 
+               << cos_sample_input << "x" << cos_sample_weight << "=" << static_cast<int>(cos_count) << "\n";
+            eq << "  [COSINE DISTRIBUTION] cos(theta) between input rows and weight rows:\n";
+            eq << "    OBSERVED: mean=" << cos_mean << " std=" << cos_std << " mean_abs=" << cos_abs_mean << "\n";
+            eq << "    EXPECTED (random K=" << d_model << "): mean=0.0 var=" << expected_cos_variance 
+               << " mean_abs=" << expected_cos_abs_mean << "\n";
+            eq << "    RATIO: variance=" << cos_var_ratio << "x expected, |cos|=" << cos_abs_ratio << "x expected\n";
+            eq << "  [QKV_OUTPUT] Expected from GEMM formula:\n";
+            eq << "    If cos uniformly random: Y_rms = ||x|| * ||w|| * sqrt(1/K) = " 
+               << in_row_norm_mean << " * " << w_row_norm_mean << " * " 
+               << (1.0f/sqrtf(static_cast<float>(d_model))) << " = " << rownorm_expected_rms << "\n";
+            eq << "    ADJUSTED formula (alignment_ratio=" << alignment_ratio << "): " << adjusted_expected_rms << "\n";
+            eq << "    ACTUAL Y_rms: " << actual_stats.rms << "\n";
             if (cos_var_ratio > 2.0f || cos_abs_ratio > 2.0f) {
-                fprintf(stderr, "  [ANOMALY] INPUT-WEIGHT COSINE SIMILARITY IS %.1fx HIGHER THAN RANDOM!\n", 
-                        fmaxf(cos_var_ratio, cos_abs_ratio));
-                fprintf(stderr, "            This means input vectors SYSTEMATICALLY ALIGN with weight rows.\n");
-                fprintf(stderr, "            For Layer 0 (embeddings): Embedding weights and W_qkv may share structure!\n");
-                fprintf(stderr, "            Both learned from same vocabulary → similar semantic directions.\n");
+                eq << "  [ANOMALY] INPUT-WEIGHT COSINE SIMILARITY IS " << fmaxf(cos_var_ratio, cos_abs_ratio) 
+                   << "x HIGHER THAN RANDOM!\n";
             }
-            
-            // Column variance analysis (isotropic vs heterogeneous)
             float col_var_range_ratio = col_var_max / (col_var_min + 1e-8f);
             if (col_var_range_ratio < 3.0f) {
-                fprintf(stderr, "  [ANOMALY] INPUT COLUMNS ARE ISOTROPIC (range_ratio=%.2fx < 3x)!\n", col_var_range_ratio);
-                fprintf(stderr, "            Isotropic columns cause COHERENT summation in GEMM → output explosion.\n");
-                fprintf(stderr, "            Layer 0 embeddings are often isotropic (uniform variance across dimensions).\n");
+                eq << "  [ANOMALY] INPUT COLUMNS ARE ISOTROPIC (range_ratio=" << col_var_range_ratio << "x < 3x)\n";
             }
-            
-            fprintf(stderr, "\n");
+            EQ_LOG("QKV_COSINE_EQUATION", eq.str(), 0, layer_idx, 0, GRIM::EquationPhase::ATTENTION_SCORE);
         }
         
         // NEW: Alignment ratio - most important metric!
@@ -1952,32 +1930,25 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         const float eps_contribution_pct = 100.0f * eps / (input_rms_sq + eps);
         
         if (isEquationLoggingEnabled()) {
-            fprintf(stderr, "[RMSNORM_EQUATION] layer=%d: y = x * gamma / sqrt(mean(x²) + eps)\n", layer_idx);
-            fprintf(stderr, "  INPUT x: shape=[%d, %d], per_row_rms=%.6f (rms²=%.2e), eps=%.2e\n", 
-                    total_tokens, d_model, g_diag_input_avg_rms, input_rms_sq, eps);
-            fprintf(stderr, "  GAMMA: min=%.6f max=%.6f rms=%.6f\n", gamma_min, gamma_max, gamma_rms);
-            fprintf(stderr, "  EPSILON CONTRIBUTION: %.1f%% of denominator (eps / (input_rms² + eps))\n", eps_contribution_pct);
-            fprintf(stderr, "  EXPECTED output_rms = input_rms * gamma_rms / sqrt(input_rms² + eps) = %.6f\n", expected_output_rms);
-            fprintf(stderr, "  ACTUAL output_rms: min=%.6f max=%.6f avg=%.6f\n", min_row_rms, max_row_rms, avg_row_rms);
-            
-            // Structured logging via centralized EquationLogger
-            EQ_LOG_HOST(
-                "RMSNORM_EQUATION",
-                "y = x * gamma / sqrt(mean(x^2) + eps)",
-                "input_rms=" + std::to_string(g_diag_input_avg_rms) + " gamma_rms=" + std::to_string(gamma_rms) + " eps=" + std::to_string(eps),
-                "eps_contrib=" + std::to_string(eps_contribution_pct) + "%",
-                "expected_rms=" + std::to_string(expected_output_rms),
-                "actual_rms=" + std::to_string(avg_row_rms) + " min=" + std::to_string(min_row_rms) + " max=" + std::to_string(max_row_rms),
-                0, layer_idx, 0, GRIM::EquationPhase::RMSNORM);
-            
+            std::ostringstream eq;
+            eq << "[RMSNORM_EQUATION] layer=" << layer_idx << ": y = x * gamma / sqrt(mean(x^2) + eps)\n";
+            eq << "  INPUT x: shape=[" << total_tokens << ", " << d_model 
+               << "], per_row_rms=" << g_diag_input_avg_rms 
+               << " (rms^2=" << input_rms_sq << "), eps=" << eps << "\n";
+            eq << "  GAMMA: min=" << gamma_min << " max=" << gamma_max << " rms=" << gamma_rms << "\n";
+            eq << "  EPSILON CONTRIBUTION: " << eps_contribution_pct << "% of denominator\n";
+            eq << "  EXPECTED output_rms = input_rms * gamma_rms / sqrt(input_rms^2 + eps) = "
+               << g_diag_input_avg_rms << " * " << gamma_rms << " / sqrt(" << input_rms_sq << " + " << eps
+               << ") = " << expected_output_rms << "\n";
+            eq << "  ACTUAL output_rms: min=" << min_row_rms << " max=" << max_row_rms << " avg=" << avg_row_rms << "\n";
             if (std::abs(avg_row_rms - expected_output_rms) > 0.01f) {
                 float ratio = avg_row_rms / expected_output_rms;
-                fprintf(stderr, "  [ANOMALY] output_rms=%.4f != expected=%.4f (ratio=%.2fx) - CHECK KERNEL!\n",
-                        avg_row_rms, expected_output_rms, ratio);
+                eq << "  [ANOMALY] output_rms=" << avg_row_rms << " != expected=" << expected_output_rms 
+                   << " (ratio=" << ratio << "x)\n";
             } else if (eps_contribution_pct > 5.0f) {
-                fprintf(stderr, "  [INFO] Epsilon is %.1f%% of denominator - consider scaling inputs larger (e.g., sqrt(d_model) embedding scale)\n",
-                        eps_contribution_pct);
+                eq << "  [INFO] Epsilon is " << eps_contribution_pct << "% of denominator\n";
             }
+            EQ_LOG("RMSNORM_EQUATION", eq.str(), 0, layer_idx, 0, GRIM::EquationPhase::RMSNORM);
         }
     }
     
@@ -2198,44 +2169,39 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
             const int batch_idx_local = g_issue77_fwd_batch_count;
             const int step_idx_local = g_issue77_fwd_batch_count;
             
-            // Structured logging via centralized EquationLogger
-            EQ_LOG_HOST(
-                "QKV_PROJECTION_EQUATION",
-                "qkv_out = ln1_out @ W_qkv^T + b_qkv",
-                "ln1_rms=" + std::to_string(ln1_rms) +
-                    " ln1_row_norm=" + std::to_string(ln1_row_norm_mean) +
-                    " wqkv_rms=" + std::to_string(wqkv_rms) +
-                    " wq_row_norm=" + std::to_string(wq_row_norm_mean),
-                "qkv_elem_rms=" + std::to_string(actual_q_elem_rms) +
-                    " q_row_norm_full=" + std::to_string(actual_q_full_row_norm) +
-                    " q_row_norm_head=" + std::to_string(actual_q_head_row_norm),
-                "expected_elem_rms=" + std::to_string(expected_q_elem_rms) +
-                    " expected_row_norm_head=" + std::to_string(expected_q_head_row_norm) +
-                    " target_row_norm_head=" + std::to_string(target_q_head_row_norm),
-                "actual_row_norm=" + std::to_string(actual_q_full_row_norm) +
-                    " inflation=" + std::to_string(actual_q_head_row_norm / target_q_head_row_norm) +
-                    " inflation_full=" + std::to_string(actual_q_full_row_norm / target_q_full_row_norm),
-                batch_idx_local, layer_idx_local, step_idx_local, GRIM::EquationPhase::QKV_PROJECTION);
+            {
+                std::ostringstream eq;
+                eq << "[QKV_PROJECTION_EQUATION] qkv_out = ln1_out @ W_qkv^T + b_qkv\n";
+                eq << "  INPUT (ln1_out): rms=" << ln1_rms << " row_norm=" << ln1_row_norm_mean << "\n";
+                eq << "  WEIGHT (W_qkv): rms=" << wqkv_rms << " q_row_norm=" << wq_row_norm_mean << "\n";
+                eq << "  EXPECTED qkv_elem_rms = ln1_row_norm * wq_row_norm / sqrt(d_model) = "
+                   << ln1_row_norm_mean << " * " << wq_row_norm_mean << " / sqrt(" << d_model_local 
+                   << ") = " << expected_q_elem_rms << "\n";
+                eq << "  ACTUAL Q row_norm (full/head): " << actual_q_full_row_norm << " / " << actual_q_head_row_norm << "\n";
+                eq << "  TARGET Q row_norm (full/head): " << target_q_full_row_norm << " / " << target_q_head_row_norm << "\n";
+                const float inflation_ratio_eq = actual_q_head_row_norm / target_q_head_row_norm;
+                eq << "  INFLATION (full/head): " << (actual_q_full_row_norm / target_q_full_row_norm) 
+                   << "x / " << inflation_ratio_eq << "x\n";
+                if (inflation_ratio_eq > 5.0f) {
+                    eq << "  [ANOMALY] per-head q_row_norm=" << actual_q_head_row_norm 
+                       << " is " << inflation_ratio_eq << "x larger than target=" << target_q_head_row_norm << "\n";
+                }
+                if (ln1_row_norm_mean > 50.0f) {
+                    eq << "  [ANOMALY] ln1_out row_norm=" << ln1_row_norm_mean << " >> expected ~27.7\n";
+                }
+                if (wq_row_norm_mean > 5.0f) {
+                    eq << "  [ANOMALY] W_q row_norm=" << wq_row_norm_mean << " >> expected ~1.0\n";
+                }
+                EQ_LOG("QKV_PROJECTION_EQUATION", eq.str(), batch_idx_local, layer_idx_local, step_idx_local, 
+                       GRIM::EquationPhase::QKV_PROJECTION);
+            }
             
             // Anomaly detection
             const float inflation_ratio = actual_q_head_row_norm / target_q_head_row_norm;
-            if (inflation_ratio > 5.0f) {
-                fprintf(stderr, "  *** ANOMALY: per-head q_row_norm=%.2f is %.1fx larger than target=%.1f! ***\n",
-                        actual_q_head_row_norm, inflation_ratio, target_q_head_row_norm);
-                fprintf(stderr, "      This will cause attention score explosion (score ~ %.1f instead of ~1)\n",
-                        inflation_ratio * inflation_ratio);
+            // Anomaly detection — already logged in EQ_LOG body above
+            if (inflation_ratio > 5.0f || ln1_row_norm_mean > 50.0f || wq_row_norm_mean > 5.0f) {
+                // Anomaly details are in the equation log CSV
             }
-            if (ln1_row_norm_mean > 50.0f) {
-                fprintf(stderr, "  *** ANOMALY: ln1_out row_norm=%.2f >> expected ~27.7 (sqrt(d_model)*rms~1) ***\n",
-                        ln1_row_norm_mean);
-                fprintf(stderr, "      Input to QKV projection is already too large!\n");
-            }
-            if (wq_row_norm_mean > 5.0f) {
-                fprintf(stderr, "  *** ANOMALY: W_q row_norm=%.2f >> expected ~1.0 (Xavier init) ***\n",
-                        wq_row_norm_mean);
-                fprintf(stderr, "      Weight magnitudes are too large!\n");
-            }
-            fprintf(stderr, "\n");
         }
     }
     
@@ -2575,27 +2541,19 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
             }
             
             if (isEquationLoggingEnabled()) {
-                // Issue #126: Actual formula includes centering after each residual add
-                fprintf(stderr, "[LAYER_%d_COSINE_EQUATION] output = center(center(input + LS1*attn) + LS2*ffn)\n", layer_idx);
-                fprintf(stderr, "  OUTPUT h_L%d: shape=[%d, %d] row_norm_range=[%.4f, %.4f]\n",
-                        layer_idx, total_tokens, d_model, norm_min, norm_max);
-                fprintf(stderr, "  LAYERSCALE: LS1=%.4f LS2=%.4f (centering removes mean after each residual)\n",
-                        ls1_val, ls2_val);
-                fprintf(stderr, "  ACTUAL avg_cos=%.6f (pairs=%d) [|avg_cos|→1 = collapse, near 0 = diverse]\n", avg_cos, num_pairs);
-                
-                // Structured logging via centralized EquationLogger
-                EQ_LOG_HOST(
-                    "LAYER_COSINE_EQUATION",
-                    "output = center(center(input + LS1*attn) + LS2*ffn)",
-                    "LS1=" + std::to_string(ls1_val) + " LS2=" + std::to_string(ls2_val),
-                    "centering=enabled after each residual add",
-                    "|avg_cos|→1=collapse, near_0=diverse",
-                    "actual_cos=" + std::to_string(avg_cos) + " pairs=" + std::to_string(num_pairs),
-                    0, layer_idx, 0, GRIM::EquationPhase::RESIDUAL_ADD);
-                
+                std::ostringstream eq;
+                eq << "[LAYER_COSINE_EQUATION] layer=" << layer_idx 
+                   << ": output = center(center(input + LS1*attn) + LS2*ffn)\n";
+                eq << "  OUTPUT h_L" << layer_idx << ": shape=[" << total_tokens << ", " << d_model 
+                   << "] row_norm_range=[" << norm_min << ", " << norm_max << "]\n";
+                eq << "  LAYERSCALE: LS1=" << ls1_val << " LS2=" << ls2_val << "\n";
+                eq << "  ACTUAL avg_cos=" << avg_cos << " (pairs=" << num_pairs 
+                   << ") [|avg_cos|->1 = collapse, near 0 = diverse]\n";
                 if (fabs(avg_cos) > 0.8) {
-                    fprintf(stderr, "  [ANOMALY] Layer %d |avg_cos|=%.4f HIGH - possible mode collapse!\n", layer_idx, fabs(avg_cos));
+                    eq << "  [ANOMALY] Layer " << layer_idx << " |avg_cos|=" << fabs(avg_cos) 
+                       << " HIGH - possible mode collapse!\n";
                 }
+                EQ_LOG("LAYER_COSINE_EQUATION", eq.str(), 0, layer_idx, 0, GRIM::EquationPhase::RESIDUAL_ADD);
             }
         }
     }

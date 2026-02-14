@@ -8,9 +8,6 @@
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 
-// Simple logging macros (legacy ForwardOps_Logging deleted per Rule 20)
-#define FWD_ERROR(msg) do { std::cerr << msg << std::endl; } while(0)
-
 namespace GRIM {
 
 #ifdef USE_CUDA
@@ -26,6 +23,11 @@ struct GPUGrimEncoder::Impl {
     explicit Impl(const EncoderConfig& config)
         : config_(config)
     {
+        if (!config.pos_encoding) {
+            throw std::runtime_error("[GPUGrimEncoder] pos_encoding is NULL — "
+                                     "PBM must be initialized BEFORE encoder construction");
+        }
+
         EncodingConfig enc_cfg{};
         enc_cfg.d_model = config.d_model;
         enc_cfg.num_heads = config.num_heads;
@@ -34,6 +36,7 @@ struct GPUGrimEncoder::Impl {
         enc_cfg.rms_epsilon = config.rms_epsilon;
         enc_cfg.causal_mask = config.causal_mask;
         enc_cfg.use_flash_attention = config.use_flash_attention;
+        enc_cfg.min_seq_len_for_flash = config.min_seq_len_for_flash;
         enc_cfg.stream = config.stream;
         enc_cfg.cublas_handle = config.cublas_handle;
         enc_cfg.pos_encoding = config.pos_encoding;  // RoPE/ALiBi positional encoding
@@ -42,12 +45,6 @@ struct GPUGrimEncoder::Impl {
         enc_cfg.layer_scale_init = config.layer_scale_init;
         enc_cfg.center_encoder_residuals = config.center_encoder_residuals;
         enc_cfg.use_bias = config.use_bias;
-
-        if (!config.pos_encoding) {
-            FWD_ERROR("[GPUGrimEncoder] FATAL: pos_encoding is NULL");
-            FWD_ERROR("[GPUGrimEncoder] PBM must be initialized BEFORE encoder construction.");
-            std::abort();
-        }
 
         for (int i = 0; i < config.num_layers; ++i) {
             gpu_layers_.emplace_back(std::make_unique<GPUEncoderLayer>(enc_cfg));
@@ -83,7 +80,12 @@ int GPUGrimEncoder::getNumLayers() const {
 }
 
 void GPUGrimEncoder::setFlashAttention(bool enable, int min_seq_len) {
-    if (!pImpl) return;
+    if (!pImpl) {
+        throw std::runtime_error("GPUGrimEncoder::setFlashAttention called before initialization");
+    }
+    if (min_seq_len <= 0) {
+        throw std::runtime_error("GPUGrimEncoder::setFlashAttention: min_seq_len must be > 0 (configured from hyperparameters)");
+    }
     for (auto& layer : pImpl->gpu_layers_) {
         if (layer) {
             layer->setFlashAttention(enable, min_seq_len);

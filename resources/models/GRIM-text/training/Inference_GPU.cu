@@ -163,14 +163,6 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t nu
 }
 
 //======================================================//
-//  forwardStepIncremental - Same as forwardStep (no KV cache optimization)
-//======================================================//
-Vector LanguageModel::forwardStepIncremental(int new_token, float numeric_value, uint8_t numeric_mask) {
-    // Without legacy KV cache system, this is identical to forwardStep
-    return forwardStep(new_token, numeric_value, numeric_mask);
-}
-
-//======================================================//
 //  resetKVCache - Clear sequence state
 //======================================================//
 void LanguageModel::resetKVCache() {
@@ -192,9 +184,7 @@ int LanguageModel::getKVCacheLength() const {
 Vector LanguageModel::forwardWithCache(const std::vector<int>& token_ids,
                                        const std::vector<float>& token_numeric_values,
                                        const std::vector<uint8_t>& token_numeric_mask,
-                                       bool tokens_on_device,
-                                       const std::vector<uint16_t>& token_text_features,
-                                       const std::vector<uint8_t>& token_text_mask) {
+                                       bool tokens_on_device) {
     if (!training_state_.initialized) {
         throw std::runtime_error("forwardWithCache: training state not initialized");
     }

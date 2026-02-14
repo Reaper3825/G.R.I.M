@@ -28,11 +28,6 @@ struct SequenceLengthStats {
     uint32_t p99 = 0;
 };
 
-struct BatchPlan {
-    std::vector<std::vector<uint32_t>> batches; // seq_ids per batch
-    uint64_t total_tokens = 0;
-};
-
 // Catalog holds all sequences and exposes lightweight stats for planning.
 class Catalog {
 public:
@@ -109,11 +104,5 @@ private:
     SequenceLengthStats stats_{};
     bool dirty_stats_ = false;
 };
-
-// Greedy packer to group seq_ids into batches under a token budget and batch size cap.
-BatchPlan planBatches(const Catalog& catalog,
-                      uint32_t max_tokens_per_batch,
-                      uint32_t max_batch_size = 32,
-                      bool prefer_short_first = false);
 
 } // namespace GRIM::DynaSeq

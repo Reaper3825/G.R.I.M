@@ -822,6 +822,13 @@ struct GradFn {
     bool applied = false;           ///< ISSUE #49: Prevent infinite loops when grad_fn is shared
     bool released_ = false;         ///< ISSUE #50: Prevent double release_saved calls
     
+    // Issue #141: Gradient tap — if non-null, apply() copies grad_output here
+    // before processing. Used by ScratchBlock backward to capture encoder input
+    // gradients that would otherwise be consumed by the autograd chain.
+    float* grad_output_tap = nullptr;
+    size_t grad_output_tap_count = 0;
+    bool grad_output_tap_written = false;  // Set true by apply() when tap copy succeeds
+    
     //--------------------------------------------------//
     // Virtual Interface
     //--------------------------------------------------//
@@ -1173,11 +1180,9 @@ namespace autograd {
 void set_autograd_cublas_handle(cublasHandle_t handle);
 cublasHandle_t get_autograd_cublas_handle();
 
-/**
- * Configure LM head gradient recentering when centering is applied
- * outside the autograd graph.
- */
-void set_lm_head_grad_correction(bool recenter_gradients);
+// Issue #142: set_lm_head_grad_correction() DELETED.
+// Centering backward is now handled by CenterRowsGradFn/CenterColumnsGradFn
+// inside the autograd graph (Issues #125/#132).
 
 /**
  * Matrix multiplication: C = A @ B  (or C = A @ B^T if transpose_b=true)
@@ -1293,7 +1298,8 @@ Tensor gelu(const Tensor& x, cudaStream_t stream = nullptr,
 Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps = 1e-5f, 
                 cudaStream_t stream = nullptr, const float* input_cache = nullptr);
 
-// NOTE: cross_entropy() removed - use autograd::cross_entropy_loss() from AutogradLoss.hpp
+// NOTE: cross_entropy() removed - use autograd::unified_loss() from AutogradLoss.hpp
+// Issue #142: cross_entropy_loss() also deleted (was thin wrapper around unified_loss).
 // See: #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 
 // DELETED: Old focal_loss, unified_loss declarations (Rule 20).

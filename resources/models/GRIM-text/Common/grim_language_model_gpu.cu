@@ -29,7 +29,6 @@
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 
-#include "grim_scale_buffer.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
@@ -38,7 +37,6 @@
 #include "../Shared/UnigramByte/Unigram.hpp"
 #include "../Shared/UnigramByte/AtomTable.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"                 // Unified PBM (ALiBi + RoPE)
-// RMSNorm_Kernel_GPU.hpp removed - production uses autograd::rms_norm in TensorContract_GPU
 
 namespace GRIM {
 
@@ -97,18 +95,14 @@ int detectVocabSizeFromBinary(const std::string& path) {
         return -1;
     }
 
-    // Version 2+ required (Rule 20: no backwards compatibility with v1)
     if (version < 2) {
         fprintf(stderr, "[LanguageModel] Unsupported version %d, minimum required is 2\n", version);
         return -1;
     }
-    const bool has_v2_fields = true;
 
-    if (has_v2_fields) {
-        uint32_t checksum = 0;
-        if (!file.read(reinterpret_cast<char*>(&checksum), sizeof(checksum))) {
-            return -1;
-        }
+    uint32_t checksum = 0;
+    if (!file.read(reinterpret_cast<char*>(&checksum), sizeof(checksum))) {
+        return -1;
     }
 
     int config_vocab_size = 0;
@@ -121,19 +115,17 @@ int detectVocabSizeFromBinary(const std::string& path) {
         return -1;
     }
 
-    if (has_v2_fields) {
-        bool nfkc = false;
-        bool lower = false;
-        bool fallback = false;
-        if (!file.read(reinterpret_cast<char*>(&nfkc), sizeof(nfkc))) {
-            return -1;
-        }
-        if (!file.read(reinterpret_cast<char*>(&lower), sizeof(lower))) {
-            return -1;
-        }
-        if (!file.read(reinterpret_cast<char*>(&fallback), sizeof(fallback))) {
-            return -1;
-        }
+    bool nfkc = false;
+    bool lower = false;
+    bool byte_fallback = false;
+    if (!file.read(reinterpret_cast<char*>(&nfkc), sizeof(nfkc))) {
+        return -1;
+    }
+    if (!file.read(reinterpret_cast<char*>(&lower), sizeof(lower))) {
+        return -1;
+    }
+    if (!file.read(reinterpret_cast<char*>(&byte_fallback), sizeof(byte_fallback))) {
+        return -1;
     }
 
     uint32_t vocab_size = 0;
@@ -147,7 +139,12 @@ int detectVocabSizeFromBinary(const std::string& path) {
     }
 
     if (vocab_size == 0) {
-        return config_vocab_size > 0 ? config_vocab_size : -1;
+        // Rule 20: no backward-compat fallback to legacy config_vocab_size.
+        fprintf(stderr,
+                "[LanguageModel] Invalid vocab header in %s: vocab_size=0 (legacy config_vocab_size=%d)\n",
+                path.c_str(),
+                config_vocab_size);
+        return -1;
     }
 
     return static_cast<int>(vocab_size);
@@ -180,46 +177,37 @@ void applyBadWordMask(std::vector<float>& logits, const std::vector<int>& bad_wo
 void applyRepetitionPenalty(std::vector<float>& logits,
                             const std::vector<int>& history,
                             float penalty,
-                            int window = 128,
-                            float decay = 0.98f)
+                            int window)
 {
     if (penalty <= 1.0f || history.empty()) return;
 
     const int vocab = static_cast<int>(logits.size());
     const int start = std::max(0, static_cast<int>(history.size()) - window);
 
-    // Track which tokens we've already penalized
+    // Collect unique tokens in history window
     std::unordered_set<int> seen;
     seen.reserve(window);
 
-    float weight = 1.0f;
-
-    // Walk backward = most recent tokens first
-    for (int i = static_cast<int>(history.size()) - 1; i >= start; --i) {
+    for (int i = start; i < static_cast<int>(history.size()); ++i) {
         int token_id = history[i];
         if (token_id < 0 || token_id >= vocab) continue;
-
-        // Only penalize each token once
         if (!seen.insert(token_id).second) continue;
 
         float& logit = logits[token_id];
 
-        // Scaled penalty (bounded, sign-aware)
-        float scaled_penalty = 1.0f + (penalty - 1.0f) * weight;
-
+        // Standard repetition penalty (sign-aware, uniform)
+        // Positive logits are divided, negative logits are multiplied
+        // This pushes repeated tokens away from being selected
         if (logit > 0.0f) {
-            logit /= scaled_penalty;
+            logit /= penalty;
         } else {
-            logit *= scaled_penalty;
+            logit *= penalty;
         }
-
-        weight *= decay;
-        if (weight < 0.01f) break;
     }
 }
 
 
-std::vector<float> softmaxWithTemperature(const std::vector<float>& logits, // plateau debug change
+std::vector<float> softmaxWithTemperature(const std::vector<float>& logits,
                                           float temperature)
 {
     const size_t n = logits.size();
@@ -268,8 +256,9 @@ std::vector<float> softmaxWithTemperature(const std::vector<float>& logits, // p
 
 void normalizeProbabilities(std::vector<float>& probs) {
     float sum = std::accumulate(probs.begin(), probs.end(), 0.0f);
-    if (sum <= 0.0f) 
-    return;
+    if (sum <= 0.0f || !std::isfinite(sum)) {
+        throw std::runtime_error("normalizeProbabilities: invalid probability sum");
+    }
     for (float& p : probs) {
         p /= sum;
     }
@@ -286,7 +275,7 @@ void applyTopKFilter(std::vector<float>& probs, int top_k) {
     }
 }
 
-void applyTopPFilter(std::vector<float>& probs, float top_p) { // plateau debug change
+void applyTopPFilter(std::vector<float>& probs, float top_p) {
     if (top_p <= 0.0f || top_p >= 1.0f) return;
 
     std::vector<int> indices(probs.size());
@@ -368,37 +357,8 @@ SampleResult sampleFromLogits(const std::vector<float>& logits,
 
     float sum = std::accumulate(probabilities.begin(), probabilities.end(), 0.0f);
     if (sum <= 0.0f) {
-        // STRICT: Zero probability sum indicates broken model/logits
         throw std::runtime_error("sampleFromLogits: probability sum is zero (temperature=" + 
                                  std::to_string(cfg.temperature) + "). Model outputs are degenerate.");
-    }
-    
-    // DEBUG: Print top-5 logits to diagnose mode collapse
-    {
-        static int debug_sample_count = 0;
-        if (debug_sample_count < 20) {  // Only log first 20 samples per run
-            ++debug_sample_count;
-            std::vector<std::pair<int, float>> indexed_logits;
-            indexed_logits.reserve(logits.size());
-            for (int i = 0; i < static_cast<int>(logits.size()); ++i) {
-                indexed_logits.emplace_back(i, logits[i]);
-            }
-            std::partial_sort(indexed_logits.begin(), indexed_logits.begin() + 5, indexed_logits.end(),
-                              [](const auto& a, const auto& b) { return a.second > b.second; });
-            
-            fprintf(stderr, "[LOGITS_DEBUG] sample=%d top5_logits: ", debug_sample_count);
-            for (int i = 0; i < 5; ++i) {
-                fprintf(stderr, "[tid=%d logit=%.4f] ", indexed_logits[i].first, indexed_logits[i].second);
-            }
-            fprintf(stderr, "\n");
-            
-            // Also print logit statistics
-            float min_logit = *std::min_element(logits.begin(), logits.end());
-            float max_logit = *std::max_element(logits.begin(), logits.end());
-            float mean_logit = std::accumulate(logits.begin(), logits.end(), 0.0f) / logits.size();
-            fprintf(stderr, "[LOGITS_DEBUG] stats: min=%.4f max=%.4f mean=%.4f spread=%.4f\n",
-                    min_logit, max_logit, mean_logit, max_logit - min_logit);
-        }
     }
     
     if (!use_sampling) {
@@ -591,17 +551,31 @@ void ALiBiPositionalBias::computeSlopes(int num_heads_, int num_kv_heads_, int d
 
 float* ALiBiPositionalBias::getSlopes() const {
 #ifdef USE_CUDA
-    return (initialized && pbm_state_.alibi_slopes) ? pbm_state_.alibi_slopes : nullptr;
+    if (!initialized) {
+        throw std::runtime_error("ALiBiPositionalBias::getSlopes: PBM not initialized");
+    }
+    if (!pbm_state_.alibi_slopes) {
+        throw std::runtime_error("ALiBiPositionalBias::getSlopes: initialized=true but alibi_slopes is NULL — PBM state corrupted at "
+                                 + std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+    return pbm_state_.alibi_slopes;
 #else
-    return nullptr;
+    throw std::runtime_error("ALiBiPositionalBias::getSlopes requires CUDA build");
 #endif
 }
 
 float* ALiBiPositionalBias::getRoPEFreqs() const {
 #ifdef USE_CUDA
-    return (initialized && pbm_state_.rope_inv_freq) ? pbm_state_.rope_inv_freq : nullptr;
+    if (!initialized) {
+        throw std::runtime_error("ALiBiPositionalBias::getRoPEFreqs: PBM not initialized");
+    }
+    if (!pbm_state_.rope_inv_freq) {
+        throw std::runtime_error("ALiBiPositionalBias::getRoPEFreqs: initialized=true but rope_inv_freq is NULL — PBM state corrupted at "
+                                 + std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+    return pbm_state_.rope_inv_freq;
 #else
-    return nullptr;
+    throw std::runtime_error("ALiBiPositionalBias::getRoPEFreqs requires CUDA build");
 #endif
 }
 
@@ -621,11 +595,6 @@ void ALiBiPositionalBias::cleanup() {
     type = PositionalEncodingType::NONE;
     num_heads = 0;
 }
-
-// Legacy extern declarations removed - pure GPU training uses:
-// - Flash Attention with GQA (Layers/FlashAttention/Flash_Attention_Kernal.cu)
-// - GPUEncoderLayer for FFN (Layers/Encoder/GPUEncoderLayer.cu)
-// - RMSNorm kernels (Layers/LayernNorm/RMSNorm_Kernel_GPU.cu)
 
 //======================================================//
 //  Component Implementations with CUDA Kernels
@@ -683,21 +652,7 @@ const Matrix& GrimEmbeddingStack::getTokenEmbeddings() const {
     return token_embed;
 }
 
-// getBatchEmbeddings removed - pure GPU training uses autograd::embedding() directly
 
-// MultiHeadAttention removed - pure GPU training uses Flash Attention with GQA
-// See: Layers/FlashAttention/Flash_Attention_Kernal.cu
-
-// FeedForwardNetwork removed - pure GPU training uses GPUEncoderLayer FFN directly
-// See: Layers/Encoder/GPUEncoderLayer.cu
-    
-
-
-// RMSNorm, MultiHeadAttention, FeedForwardNetwork CPU wrappers removed
-// Pure GPU training uses:
-// - Layers/LayernNorm/RMSNorm_Kernel_GPU.cu for normalization
-// - Layers/FlashAttention/Flash_Attention_Kernal.cu for GQA attention
-// - Layers/Encoder/GPUEncoderLayer.cu for FFN
 
 //======================================================//
 //  Constructor - moved from header to avoid duplicates
@@ -731,6 +686,12 @@ LanguageModel::LanguageModel(const LanguageModelConfig& config)
     // 2. Enable positional encoding if requested
     if (HyperParameters::usesALiBi(config_.positional_encoding) || 
         HyperParameters::usesRoPE(config_.positional_encoding)) {
+        if (config_.num_heads <= 0) {
+            throw std::runtime_error("LanguageModel: num_heads must be > 0 before positional initialization");
+        }
+        if (config_.d_model % config_.num_heads != 0) {
+            throw std::runtime_error("LanguageModel: d_model must be divisible by num_heads before positional initialization");
+        }
         int d_head = config_.d_model / config_.num_heads;
         
         // Use appropriate initialization based on encoding type
@@ -812,8 +773,10 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
         if (config_.execution_mode == ModelExecutionMode::TRAINING) {
             initTrainingState();
         } else {
-            throw std::runtime_error("getNextTokenLogitsGPU: ModelExecutionMode must be TRAINING for training");
             initInferenceState();
+        }
+        if (!training_state_.initialized) {
+            throw std::runtime_error("getNextTokenLogitsGPU: state initialization failed");
         }
     }
     if (training_state_.max_cached_seq_len > 0 &&
@@ -843,11 +806,6 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
     const size_t column_offset = (seq_len - 1) * static_cast<size_t>(cfg.vocab_size);
     
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
-    if (!stream) {
-        std::cerr << "[FATAL] getNextTokenLogitsGPU: primary stream is null (default stream usage disallowed)"
-                  << std::endl;
-        throw std::runtime_error("getNextTokenLogitsGPU: primary stream is null");
-    }
     CUDA_CHECK(cudaMemcpyAsync(logits.data.data(),
                                training_state_.cached_logits_tensor.data + column_offset,
                                static_cast<size_t>(cfg.vocab_size) * sizeof(float),
@@ -868,15 +826,22 @@ Vector LanguageModel::forwardGPU(const std::vector<int>& token_ids,
 TokenBufferView LanguageModel::getTokenBufferView() {
     TokenBufferView view{};
     if (!config_.use_gpu) {
-        return view;
+        throw std::runtime_error("getTokenBufferView: config.use_gpu=false in GPU-only build");
     }
     if (!training_state_.initialized) {
         if (config_.execution_mode == ModelExecutionMode::TRAINING) {
             initTrainingState();
         } else {
-            throw std::runtime_error("getTokenBufferView: ModelExecutionMode must be TRAINING for training");
             initInferenceState();
         }
+        if (!training_state_.initialized) {
+            throw std::runtime_error("getTokenBufferView: state initialization failed");
+        }
+    }
+    if (!training_state_.cached_token_ids_tensor.data ||
+        !training_state_.cached_token_numeric_values.data ||
+        !training_state_.cached_token_numeric_mask.data) {
+        throw std::runtime_error("getTokenBufferView: token buffers are not allocated");
     }
     view.device_token_ids = reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data);
     view.device_token_numeric_values = training_state_.cached_token_numeric_values.data;
@@ -888,14 +853,19 @@ TokenBufferView LanguageModel::getTokenBufferView() {
 
 void LanguageModel::markDevicePromptReady(int token_count) {
     if (!config_.use_gpu) {
-        return;
+        throw std::runtime_error("markDevicePromptReady: config.use_gpu=false in GPU-only build");
+    }
+    if (token_count < 0) {
+        throw std::runtime_error("markDevicePromptReady: token_count must be >= 0");
     }
     if (!training_state_.initialized) {
         if (config_.execution_mode == ModelExecutionMode::TRAINING) {
             initTrainingState();
         } else {
-            throw std::runtime_error("markDevicePromptReady: Inference state not initialized unless in inference mode");
             initInferenceState();
+        }
+        if (!training_state_.initialized) {
+            throw std::runtime_error("markDevicePromptReady: state initialization failed");
         }
     }
     staged_prompt_ready_ = true;
@@ -1048,12 +1018,14 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             return std::numeric_limits<float>::quiet_NaN();
         }
         float pred = std::numeric_limits<float>::quiet_NaN();
-        cudaMemcpyAsync(&pred,
-                        training_state_.cached_numeric_predictions.data + logits_pos,
-                        sizeof(float),
-                        cudaMemcpyDeviceToHost,
-                        training_state_.stream_ctrl.getPrimaryStream());
-        training_state_.stream_ctrl.syncPrimaryStream();
+        CUDA_CHECK(cudaMemcpyAsync(&pred,
+                                   training_state_.cached_numeric_predictions.data + logits_pos,
+                                   sizeof(float),
+                                   cudaMemcpyDeviceToHost,
+                                   training_state_.stream_ctrl.getPrimaryStream()));
+        if (!training_state_.stream_ctrl.syncPrimaryStream()) {
+            throw std::runtime_error("generateSequenceGPU: failed to sync numeric prediction copy");
+        }
         return decodeNumericPrediction(pred);
     };
 
@@ -1070,7 +1042,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         std::vector<float> logits = logits_vec.data;
         
         if (cfg.repetition_penalty > 1.0f) {
-            applyRepetitionPenalty(logits, sequence.token_ids, cfg.repetition_penalty);
+            applyRepetitionPenalty(logits, sequence.token_ids, cfg.repetition_penalty, cfg.repetition_penalty_window);
         }
         if (!cfg.bad_words_ids.empty()) {
             applyBadWordMask(logits, cfg.bad_words_ids);
@@ -1154,9 +1126,13 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
 //======================================================//
 
 void LanguageModel::setScratchBlockEnabled(bool enabled) {
-    if (scratch_block_layer_) {
-        scratch_block_layer_->setEnabled(enabled);
+    if (!scratch_block_layer_) {
+        if (enabled) {
+            throw std::runtime_error("setScratchBlockEnabled: ScratchBlock layer is not initialized");
+        }
+        return;
     }
+    scratch_block_layer_->setEnabled(enabled);
 }
 
 bool LanguageModel::isScratchBlockEnabled() const {
@@ -1164,10 +1140,15 @@ bool LanguageModel::isScratchBlockEnabled() const {
 }
 
 void LanguageModel::configureScratchPool(bool enabled) {
-    if (training_state_.scratch_pool) {
-        training_state_.scratch_enabled = enabled;
-        training_state_.scratch_pool->setEnabled(enabled);
+    if (!training_state_.scratch_pool) {
+        if (enabled) {
+            throw std::runtime_error("configureScratchPool: scratch_pool is not initialized");
+        }
+        training_state_.scratch_enabled = false;
+        return;
     }
+    training_state_.scratch_enabled = enabled;
+    training_state_.scratch_pool->setEnabled(enabled);
 }
 
 bool LanguageModel::isScratchPoolInitialized() const {

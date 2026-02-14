@@ -6,7 +6,6 @@
 #include <functional>
 #include <array>
 #include <cuda_runtime_api.h>
-#include "../Shared/Delegate/Delegate.hpp"
 
 //==============================================================================
 // GRIM-TS (Guess-Reward Integrated Memory - Training System)
@@ -59,7 +58,7 @@ struct CacheConfig {
     float confidence_adaptation_rate = 0.01f;   // How fast calibration adjusts
     
     // EMA parameters
-    float momentum_floor = 0.55f;               // Minimum EMA momentum
+    float momentum_floor = 0.01f;               // Minimum EMA momentum
     float momentum_ceiling = 0.995f;            // Maximum EMA momentum
     float staleness_grace_period = 0.25f;       // Seconds before staleness decay
     
@@ -368,70 +367,6 @@ bool ValidateCacheIntegrity();
 void PrintCacheSummary();
 
 } // namespace GRIMTS
-
-//------------------------------------------------------------------------------
-// Delegate System (GPU-side callbacks for cache events)
-//------------------------------------------------------------------------------
-
-namespace GRIMTS::Delegates {
-
-enum class CacheMutationKind : int {
-    kInserted = 0,      // New entry added
-    kUpdated = 1,       // Existing entry metadata updated
-    kReplaced = 2,      // Entry evicted and replaced
-    kWarmed = 3,        // Entry injected via cache warming
-    kResized = 4        // Entry migrated during resize
-};
-
-enum class EvictionReason : int {
-    kCapacityLimit = 0,   // Normal eviction due to full cache
-    kStale = 1,           // Entry too old
-    kLowReward = 2,       // Consistently low rewards
-    kLowDiversity = 3,    // Too similar to other entries
-    kManualPurge = 4,     // Explicitly requested removal
-    kResize = 5           // Removed during shrink operation
-};
-
-constexpr int kMaxCacheDelegateCallbacks = 8;
-
-// Callback signatures
-using CacheRewardDelegate = GPUMulticastDelegate<kMaxCacheDelegateCallbacks, 
-    GuessRecord*,   // record pointer
-    float,          // raw reward
-    float           // normalized reward
->;
-
-using CacheMutationDelegate = GPUMulticastDelegate<kMaxCacheDelegateCallbacks,
-    GuessRecord*,   // record pointer
-    int,            // slot index
-    int             // CacheMutationKind as int
->;
-
-using CacheEvictionDelegate = GPUMulticastDelegate<kMaxCacheDelegateCallbacks,
-    GuessRecord*,   // record pointer (before eviction)
-    int,            // slot index
-    int             // EvictionReason as int
->;
-
-using CacheResizeDelegate = GPUMulticastDelegate<kMaxCacheDelegateCallbacks,
-    std::size_t,    // old capacity
-    std::size_t,    // new capacity
-    int             // 1 = grow, -1 = shrink
->;
-
-// Registration functions (all require explicit stream - no default stream allowed)
-cudaError_t RegisterCacheRewardCallback(CacheRewardDelegate::Callback callback, cudaStream_t stream);
-cudaError_t RegisterCacheMutationCallback(CacheMutationDelegate::Callback callback, cudaStream_t stream);
-cudaError_t RegisterCacheEvictionCallback(CacheEvictionDelegate::Callback callback, cudaStream_t stream);
-cudaError_t RegisterCacheResizeCallback(CacheResizeDelegate::Callback callback, cudaStream_t stream);
-
-cudaError_t ClearCacheRewardCallbacks(cudaStream_t stream);
-cudaError_t ClearCacheMutationCallbacks(cudaStream_t stream);
-cudaError_t ClearCacheEvictionCallbacks(cudaStream_t stream);
-cudaError_t ClearCacheResizeCallbacks(cudaStream_t stream);
-cudaError_t ClearAllCallbacks();
-
-} // namespace GRIMTS::Delegates
 
 //------------------------------------------------------------------------------
 // Logging Integration
