@@ -44,14 +44,26 @@ This format is non-negotiable for training/inference debugging because **you can
 **Required Format Structure:**
 
 ```
-[OPERATION_EQUATION] CONTEXT: equation = mathematical_formula
-  INPUT_A (description): shape=[dims] min=X max=Y rms=Z
-  INPUT_B (description): shape=[dims] min=X max=Y rms=Z
-  PARAMETERS: param1=value1, param2=value2
-  EXPECTED result = formula_with_values = computed_expectation
-  ACTUAL result: min=X max=Y rms=Z mean=W
-  [ANOMALY] if actual differs significantly from expected: explanation
+[OPERATION_EQUATION] operation_name: mathematical_formula
+  INPUT (description): shape=[dims] min=X max=Y rms=Z
+  ACTUAL result: shape=[dims] min=X max=Y rms=Z
 ```
+
+**Optional additions (use only when applicable):**
+```
+  PARAMETERS: param1=value1, param2=value2  // Only if operation has configurable params
+  EXPECTED result = formula                  // Only if result is predictable from inputs
+                  = substituted_values
+                  = computed_value
+  [ANOMALY] description                      // Only if something is wrong
+```
+
+**Statistics explanation:**
+- `min/max` = minimum/maximum value in tensor
+- `rms` = Root Mean Square = sqrt(mean(x²)) = typical size/scale of values in the tensor
+  - Example: rms=0.01 means values are typically ~0.01 in size
+  - Useful for detecting explosion (rms >> 1) or vanishing (rms << 0.001)
+- `shape` = tensor dimensions [batch, seq_len, features] etc.
 
 **Examples of Good Logging Tags:**
 
@@ -76,18 +88,15 @@ This format is non-negotiable for training/inference debugging because **you can
 **Example Implementation (Attention Scores):**
 
 ```cpp
-// [ATTN_SCORE_EQUATION] format for attention computation
-fprintf(stderr, "[ATTN_SCORE_EQUATION] FLASH_ATTENTION_FWD: score = (Q @ K^T) / sqrt(head_dim) + alibi_bias\n");
-fprintf(stderr, "  Q (sample tokens, head 0): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
-        n_sample, head_dim, q_min, q_max, q_rms);
-fprintf(stderr, "  K (sample tokens, head 0): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
-        n_sample, head_dim, k_min, k_max, k_rms);
-fprintf(stderr, "  PARAMETERS: scale=1/sqrt(%d)=%.10f, alibi_slope=%.10f, max_bias=%.10f\n",
-        head_dim, scale, alibi_slope, max_alibi_bias);
-fprintf(stderr, "  EXPECTED score_magnitude = Q_row_norm * K_row_norm * scale = %.10f * %.10f * %.10f ≈ %.10f\n",
-        q_row_norm, k_row_norm, scale, expected_score);
-fprintf(stderr, "  ACTUAL score: min=%.10f max=%.10f rms=%.10f\n", score_min, score_max, score_rms);
-if (fabsf(score_max) > 100.0f) {
+// Only log what's relevant for this specific operation
+fprintf(stderr, "[ATTN_SCORE_EQUATION] score = (Q @ K^T) / sqrt(head_dim) + alibi_bias\n");
+fprintf(stderr, "  Q (head 0): shape=[%d,%d] rms=%.6f\n", n_tokens, head_dim, q_rms);
+fprintf(stderr, "  K (head 0): shape=[%d,%d] rms=%.6f\n", n_tokens, head_dim, k_rms);
+fprintf(stderr, "  PARAMETERS: scale=%.6f, alibi_slope=%.6f\n", scale, alibi_slope);
+fprintf(stderr, "  ACTUAL score: min=%.6f max=%.6f rms=%.6f\n", s_min, s_max, s_rms);
+if (fabsf(s_max) > 100.0f) {
+    fprintf(stderr, "  [ANOMALY] score_max=%.1f >> 100, indicates explosion\n", s_max);
+}
     fprintf(stderr, "  [ANOMALY] score_max=%.10f >> expected=%.10f, indicates Q/K magnitude explosion\n",
             score_max, expected_score);
 }
@@ -95,11 +104,11 @@ if (fabsf(score_max) > 100.0f) {
 
 **Why This Format:**
 
-1. **Irrefutable evidence** - Math doesn't lie; discrepancies reveal bugs immediately
-2. **Self-documenting** - Log shows exactly what computation is being performed
-3. **Root cause isolation** - Expected vs actual comparison pinpoints where explosion/collapse starts
-4. **Audit trail** - Can trace anomaly propagation through computation graph
-5. **Reproducible debugging** - Same inputs + formula = same expected output
+1. **Minimal overhead** - Only log what's needed for the specific operation
+2. **Mathematical clarity** - Equation shows exactly what's computed
+3. **EXPECTED is optional** - Only use when result is predictable (e.g., GEMM output magnitude)
+4. **PARAMETERS is optional** - Only for operations with configurable settings
+5. **Anomaly detection** - Flag unexpected values for investigation
 
 **When to Add Equation Logging:**
 
@@ -415,6 +424,11 @@ json response = BridgeManager::send("tts", request);
 - Token layout: `[0-255]` = byte fallback, `[256-511]` = atom placeholders, `[512+]` = unigram vocab
 - Enables model to reason about structure before converting to text
 - Configurable via `ai_config.json` → `tokenizer.scratch_block_reasoning`
+- **Value Extraction Head** - Learned linear projection `[d_model] → scalar` that predicts numeric values from encoder hidden states at atom positions during generation. Trained end-to-end with MSE loss separate from the text CE loss.
+    - Forward (inference): `value = W_extract · hidden[pos] + b_extract`
+    - Training: `kernelExtractionTrainStep` computes MSE between predicted and ground-truth numeric values at atom positions, accumulates gradients to `value_extraction_weight_` and `value_extraction_bias_`
+    - Serialized in FlatBuffer checkpoints (`ScratchBlockWeights.value_extraction_weight/bias`)
+    - Registered as `ParamGroupType::SCRATCHBLOCK` for gradient clipping/optimizer
 
 ### Tokenization: Unigram + Byte Fallback
 
@@ -1033,6 +1047,27 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
     - **Files Modified**: `TensorContract_GPU.cu`
 
 - **Also deleted**: ~170 lines of dead Issue #93/#95 diagnostic code inside `if (use_learned_pos_emb)` block in `AutogradTraining.cu` that never executed with ALIBI_ROPE.
+
+142. **Value Extraction Head for Atom Token Generation (Feb 2026)**: When the model generates a numeric atom token (e.g., `<INT>` token 262), `decodeWithNumericSideChannel()` requires a numeric value to decode it back to text. The old numeric head was deprecated (it was inferior to ScratchBlock's encoding). The fix adds a learned linear extraction head `[d_model] → scalar` inside `ScratchBlockLayer` that reads the encoder hidden state at the generation position and predicts the numeric value.
+
+- **Architecture**: `value = W_extract · hidden[pos] + b_extract` where `W_extract ∈ R^{d_model}`, `b_extract ∈ R^1`
+- **Inference**: `extractNumericValue()` runs `kernelExtractNumericValue` (shared-memory dot product + bias)
+- **Training**: `trainExtractionStep()` runs `kernelExtractionTrainStep` (MSE loss, gradients accumulated via atomicAdd)
+- **Integration**: `generateSequenceGPU()` calls `extractNumericValue()` when sampling a numeric atom token, sets `output_numeric_mask=1`
+- **Serialization**: FlatBuffer schema `ScratchBlockWeights.value_extraction_weight/bias`, backward-compatible (old checkpoints simply don't populate these fields → Xavier-initialized defaults used)
+- **Parameter Registration**: `ParamGroupType::SCRATCHBLOCK` in `LanguageModel_Training.cu::buildParameterGroups()`
+- **Files Modified**: `ScratchBlockReasoning_GPU.{hpp,cu}`, `grim_language_model_gpu.cu`, `AutogradTraining.cu`, `LanguageModel_Training.cu`, `Serialization_GPU.{hpp,cu}`, `grim_model_serialization.cu`, `grim_transformer_model.fbs`
+
+143. **Investigation Methodology Note (Feb 2026)**: When debugging training collapse (e.g., token 262 mode collapse), if multiple causal theories are proposed and rejected (frequency amplification, tied-weight self-correlation, common direction extraction), the correct response is to STOP inventing explanations and admit being stuck rather than continuing to propose correlation-as-causation theories. Ask the user what direction they see. This produces better collaboration than cycling through increasingly speculative theories. The token 262 collapse happens with BOTH tied AND untied weights, eliminating tied-weight-specific explanations.
+
+145. **Value Extraction Off-By-One in Generation (CRITICAL BUG - Issue #145, Feb 2026)**: `extractNumericValue()` during generation read the hidden state at position `p` (the token BEFORE the atom), not position `p+1` (the atom token's own position). The extraction head was trained on `hidden[t]` where token `t` IS the atom, but inference read `hidden[t-1]`.
+
+- **Root Cause**: `generateSequenceGPU()` sampled token 262 from logits at position `p`, then called `extractNumericValue(cached_encoder_output, logits_pos=p)` BEFORE calling `forwardStep()`. Position `p`'s hidden state was produced by the token BEFORE the atom — it has no information about the atom's numeric value.
+- **Symptom**: All `<INT>` tokens decoded to the same ~0.43 float (the dot product of the extraction weight with an arbitrary non-atom hidden state).
+- **Fix**: Restructured generation loop: call `forwardStep(atom_token, 0.0f, 0)` FIRST (with no numeric injection), THEN extract from `logits_pos = kv_cache_len - 1` which now points to the atom token's own hidden state.
+- **Chicken-and-egg**: ScratchBlock's forward pass receives `numeric_value=0.0f` for atom tokens during generation because the value isn't known yet. The extraction head must learn to predict values from CONTEXT (surrounding tokens), not echo back injected values. This matches real inference where ground truth is unavailable.
+- **Train/test mismatch caveat**: During training, ScratchBlock injects the ground truth value into the embedding. During inference, it gets 0.0f. The encoder hidden state will differ. The extraction head accuracy depends on how much the encoder relies on context vs. injected value.
+- **Files Modified**: `grim_language_model_gpu.cu` (`generateSequenceGPU`)
 
 ## Testing & Debugging
 

@@ -43,7 +43,6 @@
 #include "../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
 #include "../../../control/ai_config_paths.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
-#include "../Shared/TrainingState/TrainingTensors.hpp"
 #include "../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "Autograd/AutogradTraining.hpp"  // Pure autograd backward - replaces legacy 3-phase system
 
@@ -145,9 +144,6 @@ bool getGroupShape(const ParameterGroup& group,
         constexpr int kTextFeatureDim = 16;
         r = kTextFeatureDim;
         c = cfg.d_model;
-    } else if (group.name == "numeric_head_weight") {
-        r = cfg.d_model;
-        c = 1;
     } else {
         return false;
     }
@@ -232,14 +228,14 @@ void LanguageModel::zeroGrad() {
     const auto& cfg = config_;
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
     
-    // ── Top-level parameter Tensors ──────────────────────────────────────────
-    training_state_.tensors_->embedding_weights.zero_grad(stream);
-    training_state_.tensors_->position_embedding_weights.zero_grad(stream);
-    training_state_.tensors_->lm_head_weights.zero_grad(stream);
-    training_state_.tensors_->lm_head_bias.zero_grad(stream);
-    training_state_.tensors_->numeric_head_weights.zero_grad(stream);
-    training_state_.tensors_->numeric_head_bias.zero_grad(stream);
-    training_state_.tensors_->final_rms_gamma.zero_grad(stream);  // BUG FIX: was missing from zeroGrad!
+    // ── Top-level parameter Tensors (Pattern B: owned by EmbeddingLayer) ────
+    embedding_layer_->tokenWeights().zero_grad(stream);
+    if (embedding_layer_->hasPositionEmbeddings()) {
+        embedding_layer_->positionWeights().zero_grad(stream);
+    }
+    lm_head_layer_->weights().zero_grad(stream);
+    lm_head_layer_->bias().zero_grad(stream);
+    lm_head_layer_->finalRmsGamma().zero_grad(stream);
     
     // ── Encoder layer Tensors ────────────────────────────────────────────────
     GPUGrimEncoder& gpu_encoder = getGpuEncoder();
@@ -250,6 +246,8 @@ void LanguageModel::zeroGrad() {
         // RMSNorm gamma
         enc->rms1Gamma().zero_grad(stream);
         enc->rms2Gamma().zero_grad(stream);
+        enc->rmsPostAttnGamma().zero_grad(stream);
+        enc->rmsPostFfnGamma().zero_grad(stream);
         
         // Attention weights/biases
         enc->attnWqkv().zero_grad(stream);
@@ -329,6 +327,8 @@ void LanguageModel::backward(float loss, bool accumulate, float grad_scale, uint
         &config_,
         &training_state_,
         &getGpuEncoder(),
+        getEmbeddingLayer(),
+        getLmHeadLayer(),
         getScratchBlockLayer(),
         training_state_.cublas_handle,
         stream,
@@ -339,11 +339,8 @@ void LanguageModel::backward(float loss, bool accumulate, float grad_scale, uint
         true
     );
 
-    // ScratchBlock backward reads side-channel token buffers via context.
-    autograd_ctx.token_numeric_values = training_state_.cached_token_numeric_values.data;
-    autograd_ctx.token_numeric_mask = reinterpret_cast<const uint8_t*>(training_state_.cached_token_numeric_mask.data);
-    autograd_ctx.token_text_features = reinterpret_cast<const uint16_t*>(training_state_.cached_token_text_features.data);
-    autograd_ctx.token_text_mask = reinterpret_cast<const uint8_t*>(training_state_.cached_token_text_mask.data);
+    // ScratchBlock backward is automatic via ScratchBlockGradFn in the autograd chain.
+    // No side-channel pointers needed — GradFn caches all forward data internally.
 
     Autograd::BackwardResult bwd_result = Autograd::executeAutogradBackward(autograd_ctx, accumulate);
     if (!bwd_result.success) {
@@ -351,10 +348,10 @@ void LanguageModel::backward(float loss, bool accumulate, float grad_scale, uint
     }
     BWD_INFO("[backward] Autograd backward complete: grad_norm=" << bwd_result.grad_norm);
     
-    // Issue #60 DEBUG: Log gradient attribution for debugging token 277 mode collapse
+    // Issue #60 DEBUG: Log gradient attribution for debugging tracked token mode collapse
     // This shows LM head vs embedding backward contributions separately
     if (training_state_.debug_gradient_attribution) {
-        training_state_.logGradientAttribution(static_cast<int>(step), stream);
+        training_state_.logGradientAttribution(static_cast<int>(step), stream, getEmbeddingLayer());
     }
     
     // ALWAYS clear sequence weights after backward
@@ -379,8 +376,8 @@ void LanguageModel::buildParameterGroups() {
     
     const auto& cfg = config_;
     const int num_kv_heads = training_state_.num_kv_heads;
-    fprintf(stderr, "[buildParameterGroups] cfg: num_layers=%d num_heads=%d head_dim=%d num_kv_heads=%d d_model=%d vocab=%u tie=%d numeric=%d\n",
-            cfg.num_layers, cfg.num_heads, cfg.head_dim, num_kv_heads, cfg.d_model, cfg.vocab_size, (int)cfg.tie_embeddings, (int)cfg.numeric_head_enabled); fflush(stderr);
+    fprintf(stderr, "[buildParameterGroups] cfg: num_layers=%d num_heads=%d head_dim=%d num_kv_heads=%d d_model=%d vocab=%u tie=%d\n",
+            cfg.num_layers, cfg.num_heads, cfg.head_dim, num_kv_heads, cfg.d_model, cfg.vocab_size, (int)cfg.tie_embeddings); fflush(stderr);
     
     // Validate GQA dimensions using TensorContract
     TensorContract::GQADims gqa_dims{cfg.num_heads, num_kv_heads, cfg.head_dim};
@@ -440,13 +437,13 @@ void LanguageModel::buildParameterGroups() {
     // When tie_embeddings=true, embedding grad buffer == lm_head grad buffer (same pointer)
     // Registering both would double-count gradients and corrupt optimizer state
     if (!cfg.tie_embeddings) {
-        registerTensor("embedding", training_state_.tensors_->embedding_weights, ParamGroupType::EMBEDDING);
+        registerTensor("embedding", embedding_layer_->tokenWeights(), ParamGroupType::EMBEDDING);
     }
 
     // Issue #113: Sinusoidal position embeddings are FIXED (not learned).
-    // Only register if they have allocated data (i.e., learned position embeddings are in use).
-    if (training_state_.tensors_->position_embedding_weights.data && training_state_.tensors_->position_embedding_weights.has_grad()) {
-        registerTensor("position_embedding", training_state_.tensors_->position_embedding_weights, ParamGroupType::EMBEDDING);
+    // Only register if EmbeddingLayer allocated them (i.e., learned position embeddings are in use).
+    if (embedding_layer_->hasPositionEmbeddings() && embedding_layer_->positionWeights().has_grad()) {
+        registerTensor("position_embedding", embedding_layer_->positionWeights(), ParamGroupType::EMBEDDING);
     } else {
         fprintf(stderr, "[buildParameterGroups] position_embedding skipped (sinusoidal/fixed, not learned)\n");
     }
@@ -455,24 +452,11 @@ void LanguageModel::buildParameterGroups() {
     fprintf(stderr, "[buildParameterGroups] DIAG-A: about to register LM head\n"); fflush(stderr);
     {
         std::string lm_name = cfg.tie_embeddings ? "embedding_lm_head_tied" : "lm_head_weight";
-        registerTensor(lm_name, training_state_.tensors_->lm_head_weights, ParamGroupType::LM_HEAD);
+        registerTensor(lm_name, lm_head_layer_->weights(), ParamGroupType::LM_HEAD);
     }
     // LM head bias — no weight decay
-    tryRegisterBias("lm_head_bias", training_state_.tensors_->lm_head_bias, ParamGroupType::LM_HEAD);
-    fprintf(stderr, "[buildParameterGroups] DIAG-B: LM head done, registering numeric/log_var\n"); fflush(stderr);
-
-    // Numeric head
-    if (cfg.numeric_head_enabled) {
-        registerTensor("numeric_head_weight", training_state_.tensors_->numeric_head_weights, ParamGroupType::NUMERIC_HEAD);
-        // Numeric head bias — no weight decay
-        tryRegisterBias("numeric_head_bias", training_state_.tensors_->numeric_head_bias, ParamGroupType::NUMERIC_HEAD);
-    }
-    
-    // Learned loss weighting (log-variance for text and numeric losses) — no weight decay
-    registerNonDecayTensor("log_var_text", training_state_.log_var_text, ParamGroupType::NUMERIC_HEAD);
-    registerNonDecayTensor("log_var_numeric", training_state_.log_var_numeric, ParamGroupType::NUMERIC_HEAD);
-
-    fprintf(stderr, "[buildParameterGroups] DIAG-C: numeric/log_var done, starting %d layers\n", cfg.num_layers); fflush(stderr);
+    tryRegisterBias("lm_head_bias", lm_head_layer_->bias(), ParamGroupType::LM_HEAD);
+    fprintf(stderr, "[buildParameterGroups] DIAG-B: LM head done, starting %d layers\n", cfg.num_layers); fflush(stderr);
     // ── Per-layer encoder parameters ─────────────────────────────────────────
     for (int layer = 0; layer < cfg.num_layers; ++layer) {
         GPUEncoderLayer* enc = gpu_encoder.getLayer(layer);
@@ -500,6 +484,12 @@ void LanguageModel::buildParameterGroups() {
         registerNonDecayTensor(prefix + "_rms2_gamma", enc->rms2Gamma(), ParamGroupType::RMSNORM, layer);
         registerNonDecayTensor(prefix + "_rms_post_attn_gamma", enc->rmsPostAttnGamma(), ParamGroupType::RMSNORM, layer);
         registerNonDecayTensor(prefix + "_rms_post_ffn_gamma", enc->rmsPostFfnGamma(), ParamGroupType::RMSNORM, layer);
+        
+        // LayerScale (Issue #109) — learnable scalars, no weight decay
+        // BUG FIX: These were zero_grad'd but NEVER registered with optimizer — frozen since creation!
+        // Grouped under RMSNORM since they're normalization-adjacent (24 total scalars, negligible norm)
+        tryRegisterBias(prefix + "_layer_scale1", enc->layerScale1(), ParamGroupType::RMSNORM, layer);
+        tryRegisterBias(prefix + "_layer_scale2", enc->layerScale2(), ParamGroupType::RMSNORM, layer);
     }
 
     fprintf(stderr, "[buildParameterGroups] DIAG-D: all %d layers done, registering scratchblock/final_rms\n", cfg.num_layers); fflush(stderr);
@@ -527,6 +517,18 @@ void LanguageModel::buildParameterGroups() {
                     (void*)tfp.data, (int)tfp.has_grad(), tfp.numel()); fflush(stderr);
             registerTensor("scratch_block_text_feature_projection", tfp, ParamGroupType::SCRATCHBLOCK);
             fprintf(stderr, "[buildParameterGroups] DIAG-D3: registered OK\n"); fflush(stderr);
+
+            auto& vew = scratch_block_layer_->valueExtractionWeight();
+            fprintf(stderr, "[buildParameterGroups] DIAG-D4: value_extraction_weight data=%p grad=%d numel=%zu\n",
+                    (void*)vew.data, (int)vew.has_grad(), vew.numel()); fflush(stderr);
+            registerTensor("scratch_block_value_extraction_weight", vew, ParamGroupType::SCRATCHBLOCK);
+            fprintf(stderr, "[buildParameterGroups] DIAG-D4: registered OK\n"); fflush(stderr);
+
+            auto& veb = scratch_block_layer_->valueExtractionBias();
+            fprintf(stderr, "[buildParameterGroups] DIAG-D5: value_extraction_bias data=%p grad=%d numel=%zu\n",
+                    (void*)veb.data, (int)veb.has_grad(), veb.numel()); fflush(stderr);
+            registerTensor("scratch_block_value_extraction_bias", veb, ParamGroupType::SCRATCHBLOCK);
+            fprintf(stderr, "[buildParameterGroups] DIAG-D5: registered OK\n"); fflush(stderr);
         } catch (const std::exception& ex) {
             fprintf(stderr, "[buildParameterGroups] DIAG-D-EXCEPTION in scratchblock: %s\n", ex.what()); fflush(stderr);
             throw;
@@ -538,9 +540,9 @@ void LanguageModel::buildParameterGroups() {
 
     // Final RMSNorm (between encoder output and LM head) — no weight decay
     fprintf(stderr, "[buildParameterGroups] DIAG-D5: about to register final_rms_gamma data=%p grad=%d numel=%zu\n",
-            (void*)training_state_.tensors_->final_rms_gamma.data, (int)training_state_.tensors_->final_rms_gamma.has_grad(),
-            training_state_.tensors_->final_rms_gamma.numel()); fflush(stderr);
-    registerNonDecayTensor("final_rms_gamma", training_state_.tensors_->final_rms_gamma, ParamGroupType::RMSNORM);
+            (void*)lm_head_layer_->finalRmsGamma().data, (int)lm_head_layer_->finalRmsGamma().has_grad(),
+            lm_head_layer_->finalRmsGamma().numel()); fflush(stderr);
+    registerNonDecayTensor("final_rms_gamma", lm_head_layer_->finalRmsGamma(), ParamGroupType::RMSNORM);
     fprintf(stderr, "[buildParameterGroups] DIAG-D5: registered OK\n"); fflush(stderr);
 
     fprintf(stderr, "[buildParameterGroups] DIAG-E: %zu groups registered, allocating optimizer states\n", parameter_groups_.size()); fflush(stderr);
@@ -926,7 +928,6 @@ float LanguageModel::computeGradNorm(bool sync_for_host_read) {
     const auto& gm = training_state_.gradnorm_ctrl.getHostMetrics();
     grad_metrics_.embedding_norm = gm.embedding_norm;
     grad_metrics_.lm_head_norm = gm.lm_head_norm;
-    grad_metrics_.numeric_head_norm = gm.numeric_head_norm;
     grad_metrics_.attention_norm = gm.attention_norm;
     grad_metrics_.ffn_norm = gm.ffn_norm;
     grad_metrics_.rmsnorm_norm = gm.rmsnorm_norm;

@@ -5,7 +5,7 @@
 
 #include "ScratchBlockTest.hpp"
 
-#include "../Layers/ScratchBlock/ScratchBlock_GPU.hpp"
+#include "../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 #include "../Shared/LogRecorder/LogRecorder.hpp"
 #include "../Shared/UnigramByte/AtomTable.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
@@ -80,15 +80,17 @@ bool arraysEqual(const float* a, const float* b, int size, float eps = 1e-5f) {
 
 // Create token array with some atom tokens
 void createTokensWithAtoms(int* tokens, int size, int num_atoms) {
-    // Fill with regular tokens (0-255)
+    // Fill with regular tokens in byte range [BYTE_TOKEN_OFFSET, BYTE_TOKEN_OFFSET+255]
     for (int i = 0; i < size; ++i) {
-        tokens[i] = i % 256;
+        tokens[i] = GRIM::Tokenizer::BYTE_TOKEN_OFFSET + (i % 256);
     }
     // Insert atom tokens at specific positions
-    // Atom tokens are in range [256, 512)
+    // Atom tokens are in range [ATOM_TOKEN_OFFSET, ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE)
     std::mt19937 rng(123);
     std::uniform_int_distribution<int> pos_dist(0, size - 1);
-    std::uniform_int_distribution<int> atom_dist(256, 511);
+    std::uniform_int_distribution<int> atom_dist(
+        static_cast<int>(GRIM::Tokenizer::ATOM_TOKEN_OFFSET),
+        static_cast<int>(GRIM::Tokenizer::ATOM_TOKEN_OFFSET + GRIM::Tokenizer::ATOM_VOCAB_SIZE - 1));
     
     for (int i = 0; i < num_atoms && i < size; ++i) {
         int pos = i * (size / std::max(num_atoms, 1));  // Spread evenly
@@ -369,10 +371,10 @@ bool testForwardWithNoAtoms(std::string& message) {
     std::vector<float> h_output(total_elements, 0.0f);
     fillRandom(h_input.data(), total_elements);
     
-    // Token IDs all in byte range (0-255), no atoms
+    // Token IDs all in byte range [BYTE_TOKEN_OFFSET, BYTE_TOKEN_OFFSET+255], no atoms
     std::vector<int> h_tokens(total_tokens);
     for (int i = 0; i < total_tokens; ++i) {
-        h_tokens[i] = i % 256;
+        h_tokens[i] = GRIM::Tokenizer::BYTE_TOKEN_OFFSET + (i % 256);
     }
     
     float* d_input = nullptr;
@@ -722,11 +724,11 @@ bool testAtomTableTypeMapping(std::string& message) {
     auto tok_url1 = atom_table.registerAtom(AtomType::ATOM_URL, AtomValue(url1), "https://example.com/api");
     auto tok_url2 = atom_table.registerAtom(AtomType::ATOM_URL, AtomValue(url2), "http://test.org:8080/data");
     
-    // Verify all tokens are in atom range [256, 511]
-    SB_ASSERT_TRUE(tok1 >= 256 && tok1 < 512, "Integer token should be in atom range");
-    SB_ASSERT_TRUE(tok2 >= 256 && tok2 < 512, "Integer token should be in atom range");
-    SB_ASSERT_TRUE(tok_str1 >= 256 && tok_str1 < 512, "String token should be in atom range");
-    SB_ASSERT_TRUE(tok_url1 >= 256 && tok_url1 < 512, "URL token should be in atom range");
+    // Verify all tokens are in atom range [ATOM_TOKEN_OFFSET, ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE)
+    SB_ASSERT_TRUE(tok1 >= static_cast<int>(ATOM_TOKEN_OFFSET) && tok1 < static_cast<int>(ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE), "Integer token should be in atom range");
+    SB_ASSERT_TRUE(tok2 >= static_cast<int>(ATOM_TOKEN_OFFSET) && tok2 < static_cast<int>(ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE), "Integer token should be in atom range");
+    SB_ASSERT_TRUE(tok_str1 >= static_cast<int>(ATOM_TOKEN_OFFSET) && tok_str1 < static_cast<int>(ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE), "String token should be in atom range");
+    SB_ASSERT_TRUE(tok_url1 >= static_cast<int>(ATOM_TOKEN_OFFSET) && tok_url1 < static_cast<int>(ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE), "URL token should be in atom range");
     
     // Verify different values get different tokens
     SB_ASSERT_TRUE(tok1 != tok2, "Different integers should have different tokens");
@@ -1155,10 +1157,10 @@ bool testRoundTripEncoding_FULL(std::string& message) {
     SB_ASSERT_TRUE(result.atom_tokens > 0, "Should detect atoms in test text");
     SB_ASSERT_TRUE(result.atoms.size() > 0, "Should have atom metadata");
     
-    // Verify atom token IDs are in correct range [256, 511]
+    // Verify atom token IDs are in correct range [ATOM_TOKEN_OFFSET, ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE)
     for (size_t i = 0; i < result.token_ids.size(); ++i) {
         int tok = result.token_ids[i];
-        if (tok >= 256 && tok < 512) {
+        if (tok >= static_cast<int>(ATOM_TOKEN_OFFSET) && tok < static_cast<int>(ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE)) {
             // This is an atom token - verify it's in the atoms list
             bool found = false;
             for (const auto& atom : result.atoms) {

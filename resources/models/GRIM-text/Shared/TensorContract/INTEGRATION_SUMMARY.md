@@ -35,9 +35,9 @@ enum class Layout : uint8_t {
 };
 ```
 
-#### Change 2: Updated is_flat_layout() to include LOGITS
+#### Change 2: Updated is_2d_layout() to include LOGITS
 ```cpp
-constexpr bool is_flat_layout(Layout l) {
+constexpr bool is_2d_layout(Layout l) {
     return l == Layout::BSM || l == Layout::QKV_FUSED || l == Layout::LOGITS;
 }
 ```

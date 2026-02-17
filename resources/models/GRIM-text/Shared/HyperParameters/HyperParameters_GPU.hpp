@@ -157,9 +157,9 @@ constexpr int UPSILON_REFERENCE_LAYERS = 12;      // Reference layer count (L_re
 
 //======================================================//
 // Tokenizer / Atom Token Configuration
-// Token ranges for byte fallback and atom types
+// Token layout: [0-3] Special, [4-259] Byte, [260+] Atom, [280+] Unigram
 //======================================================//
-constexpr int BYTE_TOKEN_END = 256;               // Byte tokens: [0, 256) - one per byte value
+constexpr int BYTE_TOKEN_END = Tokenizer::BYTE_TOKEN_OFFSET + Tokenizer::BYTE_VOCAB_SIZE;  // 260 (first byte to NOT be a byte token)
 constexpr int ATOM_TOKEN_START = BYTE_TOKEN_END;  // First atom token ID (immediately after bytes)
 constexpr int NUM_ATOM_TYPES = Tokenizer::kAtomTypeCount;  // Number of distinct atom types
 constexpr int ATOM_SLOTS_PER_TYPE = 1;            // One slot per atom type
@@ -345,21 +345,19 @@ constexpr float DEFAULT_LOSS_PREFERENCE_BETA = 0.1f;  // KL penalty coefficient
 // Token Masking: exclude specific tokens from loss
 constexpr bool DEFAULT_LOSS_MASKING_ENABLED = true;
 
-// Numeric head loss (side-channel regression for numeric atoms)
-constexpr bool DEFAULT_NUMERIC_HEAD_ENABLED = false;
-constexpr float DEFAULT_NUMERIC_HEAD_LOSS_WEIGHT = 1.0f;
-constexpr float DEFAULT_NUMERIC_HEAD_HUBER_DELTA = 1.0f;
-constexpr bool DEFAULT_NUMERIC_HEAD_LOG_SCALE = true;
-constexpr float DEFAULT_NUMERIC_HEAD_LOG_MAX = 20.0f;
+// Entropy Regularization: penalizes low entropy (overconfidence), encourages diversity
+// reg = -λ * H(p) = λ * Σ p*log(p)
+// Issue #133: Disabled by default (was masking true CE)
+constexpr bool DEFAULT_LOSS_ENTROPY_REG_ENABLED = false;
+constexpr float DEFAULT_LOSS_ENTROPY_REG_LAMBDA = 0.0f;  // Regularization strength when enabled (try 0.1-1.0)
 
 //======================================================//
 // Scratch Block Configuration (ScratchBlock Reasoning Layer)
-// Memory buffers for structured reasoning before text generation
+// Pool block size is computed from max_cached_tokens in InitTrainingState
 //======================================================//
 constexpr bool DEFAULT_SCRATCH_BLOCKS_ENABLED = true;
-constexpr size_t DEFAULT_SCRATCH_MAX_TOKENS_PER_BLOCK = 16384;
-constexpr size_t DEFAULT_SCRATCH_NUM_BLOCKS = 4;  // Calculated: (batch_size × max_seq_len × pipeline_depth) / tokens_per_block
-constexpr bool DEFAULT_SCRATCH_WRITE_COMBINED = true;  // Safe default; enable for performance after validation
+constexpr size_t DEFAULT_SCRATCH_NUM_BLOCKS = 2;  // Double buffer for pinned memory staging
+constexpr bool DEFAULT_SCRATCH_WRITE_COMBINED = false;
 
 //======================================================//
 // Model Architecture Validation & Computation

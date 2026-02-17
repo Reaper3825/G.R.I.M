@@ -14,6 +14,7 @@
 #include <cmath>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <queue>
 #include <random>
@@ -24,9 +25,18 @@
 namespace GRIM {
 
 //======================================================//
-//  Subword Quality Filter
-//  Rejects linguistically nonsensical patterns like "P.," 
+//  Case Normalization
+//  Enforces case-insensitive vocabulary to prevent
+//  near-duplicate tokens like 'The' vs 'the' vs ' the'
 //======================================================//
+
+static std::string toLowerASCII(const std::string& s) {
+    std::string result = s;
+    for (char& c : result) {
+        if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
+    }
+    return result;
+}
 
 // Check if character is punctuation (ASCII subset for speed)
 static inline bool isPunct(char c) {
@@ -36,6 +46,74 @@ static inline bool isPunct(char c) {
            (c >= '{' && c <= '~');    // {|}~
 }
 
+static inline bool isWhitespaceASCII(unsigned char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+// Normalize for near-duplicate detection: lowercase + strip leading/trailing whitespace
+// Used to detect pairs like " the"/"the" and repeated variants like "soooo"/"soo"
+static std::string normalizeForDedup(const std::string& s) {
+    std::string lower = toLowerASCII(s);
+    size_t start = 0;
+    while (start < lower.size() && isWhitespaceASCII(static_cast<unsigned char>(lower[start]))) {
+        ++start;
+    }
+    if (start >= lower.size()) return "";
+
+    size_t end = lower.size();
+    while (end > start && isWhitespaceASCII(static_cast<unsigned char>(lower[end - 1]))) {
+        --end;
+    }
+
+    std::string normalized;
+    normalized.reserve(end - start);
+
+    char prev = '\0';
+    int run = 0;
+    bool last_was_space = false;
+
+    for (size_t i = start; i < end; ++i) {
+        unsigned char uc = static_cast<unsigned char>(lower[i]);
+        char c = static_cast<char>(uc);
+
+        if (isWhitespaceASCII(uc)) {
+            if (!last_was_space) {
+                normalized.push_back(' ');
+                last_was_space = true;
+            }
+            prev = '\0';
+            run = 0;
+            continue;
+        }
+
+        last_was_space = false;
+        if (c == prev) {
+            run++;
+        } else {
+            prev = c;
+            run = 1;
+        }
+
+        int keep_limit = std::numeric_limits<int>::max();
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+            keep_limit = 2;
+        } else if (c < 128 && isPunct(c)) {
+            keep_limit = (c == '.') ? 3 : 2;
+        }
+
+        if (run <= keep_limit) {
+            normalized.push_back(c);
+        }
+    }
+
+    return normalized;
+}
+
+//======================================================//
+//  Subword Quality Filter
+//  Rejects linguistically nonsensical patterns like "P.," 
+//======================================================//
+
 // Check if character is alphanumeric
 static inline bool isAlnum(char c) {
     return (c >= 'A' && c <= 'Z') || 
@@ -43,11 +121,104 @@ static inline bool isAlnum(char c) {
            (c >= '0' && c <= '9');
 }
 
+// Reject long repeated runs (e.g., "aaaaaa", "!!!!!!", "word  word")
+static bool hasExcessiveRunLength(const std::string& s) {
+    if (s.empty()) return false;
+
+    char prev = s[0];
+    int run = 1;
+    for (size_t i = 1; i < s.size(); ++i) {
+        char c = s[i];
+        if (c == prev) {
+            run++;
+        } else {
+            prev = c;
+            run = 1;
+        }
+
+        unsigned char uc = static_cast<unsigned char>(c);
+        const bool is_alpha = (uc >= 'A' && uc <= 'Z') || (uc >= 'a' && uc <= 'z');
+        const bool is_digit = (uc >= '0' && uc <= '9');
+
+        if (is_alpha && run > 3) return true;
+        if (is_digit && run > 6) return true;
+        if (uc < 128 && isPunct(c) && run > 4) return true;
+        if (isWhitespaceASCII(uc) && run > 1) return true;
+    }
+
+    return false;
+}
+
+// Reject repeated whole-pattern tokens like "hahaha", "abcabcabc", "121212"
+static bool isRepeatedPatternNoise(const std::string& s) {
+    if (s.size() < 6) return false;
+
+    for (unsigned char c : s) {
+        if (isWhitespaceASCII(c)) return false;
+    }
+
+    const size_t max_pattern_len = std::min<size_t>(4, s.size() / 3);
+    for (size_t pattern_len = 1; pattern_len <= max_pattern_len; ++pattern_len) {
+        if (s.size() % pattern_len != 0) continue;
+        const size_t repeats = s.size() / pattern_len;
+        if (repeats < 3) continue;
+
+        bool repeated = true;
+        for (size_t i = pattern_len; i < s.size(); ++i) {
+            if (s[i] != s[i % pattern_len]) {
+                repeated = false;
+                break;
+            }
+        }
+        if (repeated) return true;
+    }
+
+    return false;
+}
+
+// Reject stutter-like tokens where the same word repeats 3+ times ("i i i")
+static bool isWordLevelStutter(const std::string& s) {
+    size_t i = 0;
+    while (i < s.size() && isWhitespaceASCII(static_cast<unsigned char>(s[i]))) ++i;
+    if (i >= s.size()) return false;
+
+    size_t first_start = i;
+    while (i < s.size() && !isWhitespaceASCII(static_cast<unsigned char>(s[i]))) ++i;
+    size_t first_len = i - first_start;
+    if (first_len == 0) return false;
+
+    int word_count = 1;
+    while (i < s.size()) {
+        while (i < s.size() && isWhitespaceASCII(static_cast<unsigned char>(s[i]))) ++i;
+        if (i >= s.size()) break;
+
+        size_t word_start = i;
+        while (i < s.size() && !isWhitespaceASCII(static_cast<unsigned char>(s[i]))) ++i;
+        size_t word_len = i - word_start;
+
+        if (word_len != first_len) return false;
+        for (size_t k = 0; k < word_len; ++k) {
+            if (s[word_start + k] != s[first_start + k]) return false;
+        }
+
+        word_count++;
+    }
+
+    return word_count >= 3;
+}
+
+static bool isRepetitionNoise(const std::string& s) {
+    return hasExcessiveRunLength(s) || isRepeatedPatternNoise(s) || isWordLevelStutter(s);
+}
+
 // Check if subword is linguistically valid
 // Rejects garbage patterns that shouldn't be vocabulary tokens
 static bool isValidSubword(const std::string& s) {
     if (s.empty()) return false;
     if (s.size() == 1) return true;  // Single chars always OK
+
+    // Repetition stripping: reject obvious run-length / stutter artifacts
+    if (isRepetitionNoise(s)) return false;
     
     // Count character types
     int alpha_count = 0;
@@ -56,16 +227,22 @@ static bool isValidSubword(const std::string& s) {
     int space_count = 0;
     int upper_count = 0;
     int lower_count = 0;
+    int control_count = 0;
     
     for (unsigned char c : s) {
         if (c >= 'A' && c <= 'Z') { alpha_count++; upper_count++; }
         else if (c >= 'a' && c <= 'z') { alpha_count++; lower_count++; }
         else if (c >= '0' && c <= '9') digit_count++;
-        else if (c == ' ' || c == '\t') space_count++;
+        else if (isWhitespaceASCII(c)) space_count++;
         else if (c < 128 && isPunct(static_cast<char>(c))) punct_count++;
+        else if (c < 32 || c == 127) control_count++;
     }
     
     int total = static_cast<int>(s.size());
+
+    // Reject control bytes and pure multi-whitespace fragments.
+    if (control_count > 0) return false;
+    if (space_count == total) return false;
     
     // === REJECT PATTERNS ===
     
@@ -402,14 +579,7 @@ __global__ void kernelTrieLookup(
 UnigramLM::UnigramLM() 
     : gpu_(std::make_unique<GPUData>())
 {
-    // Initialize with special tokens - explicit IDs required (no auto-ID per Rule 20)
-    addPiece("<unk>", -10.0f, UNIGRAM_VOCAB_OFFSET + 0, true);
-    addPiece("<pad>", -10.0f, UNIGRAM_VOCAB_OFFSET + 1, true);
-    addPiece("<s>", -10.0f, UNIGRAM_VOCAB_OFFSET + 2, true);
-    addPiece("</s>", -10.0f, UNIGRAM_VOCAB_OFFSET + 3, true);
-    
-    // Build trie with special tokens so encode() works even without explicit buildTrie call
-    buildTrie();
+    // Start with empty vocabulary - special tokens added by load() or trainFromCorpus()
 }
 
 UnigramLM::~UnigramLM() {
@@ -464,7 +634,7 @@ UnigramLM& UnigramLM::operator=(UnigramLM&& other) noexcept {
 void UnigramLM::addPiece(const std::string& text, float score, int token_id, bool is_user_defined) {
     if (piece_to_id_.count(text)) {
         // Update existing piece - but preserve token_id for user-defined tokens!
-        // User-defined tokens (special tokens like <unk>, <s>, space) have manually assigned IDs.
+        // User-defined tokens (special tokens like <unk>, <s>) have manually assigned IDs.
         // If we overwrite their token_id, we create gaps in the ID sequence and duplicates.
         int id = piece_to_id_[text];
         pieces_[id].score = score;
@@ -488,6 +658,8 @@ void UnigramLM::addPiece(const std::string& text, float score, int token_id, boo
 }
 
 const UnigramPiece* UnigramLM::getPiece(int token_id) const {
+    // Special tokens are not in pieces_ — they have absolute IDs 0-3
+    // Callers should check isSpecialToken() separately if they need special token info
     int idx = token_id - UNIGRAM_VOCAB_OFFSET;
     if (idx < 0 || idx >= static_cast<int>(pieces_.size())) {
         return nullptr;
@@ -496,9 +668,15 @@ const UnigramPiece* UnigramLM::getPiece(int token_id) const {
 }
 
 int UnigramLM::getPieceId(const std::string& text) const {
+    // Check special tokens by name
+    if (text == "<unk>") return UNK_TOKEN_ID;
+    if (text == "<pad>") return PAD_TOKEN_ID;
+    if (text == "<s>")   return BOS_TOKEN_ID;
+    if (text == "</s>")  return EOS_TOKEN_ID;
+    
     auto it = piece_to_id_.find(text);
     if (it == piece_to_id_.end()) {
-        return UNIGRAM_VOCAB_OFFSET + unk_id_;
+        return unk_id_;  // UNK_TOKEN_ID = 0 (absolute)
     }
     return UNIGRAM_VOCAB_OFFSET + it->second;
 }
@@ -519,13 +697,8 @@ bool UnigramLM::load(const std::string& vocab_path) {
     pieces_.clear();
     piece_to_id_.clear();
     
-    // CRITICAL: Re-add special tokens with fixed IDs before loading user vocab.
-    // This ensures unk_id_=0, pad_id_=1, bos_id_=2, eos_id_=3 remain valid.
-    // If the file contains these tokens, addPiece will update scores but preserve IDs.
-    addPiece("<unk>", -10.0f, UNIGRAM_VOCAB_OFFSET + 0, true);
-    addPiece("<pad>", -10.0f, UNIGRAM_VOCAB_OFFSET + 1, true);
-    addPiece("<s>", -10.0f, UNIGRAM_VOCAB_OFFSET + 2, true);
-    addPiece("</s>", -10.0f, UNIGRAM_VOCAB_OFFSET + 3, true);
+    // Special tokens are now at absolute IDs 0-3, NOT stored in pieces_.
+    // They are handled by getPieceId() directly.
     
     std::cout << "[UnigramLM] Reading vocab pieces..." << std::endl << std::flush;
     std::string line;
@@ -556,6 +729,11 @@ bool UnigramLM::load(const std::string& vocab_path) {
             }
             
             float score = std::stof(score_str);
+            
+            // Skip special tokens from file — they're handled as absolute IDs 0-3
+            if (piece == "<unk>" || piece == "<pad>" || piece == "<s>" || piece == "</s>") {
+                continue;
+            }
             
             if (line_count == 1) {
                 std::cout << "[UnigramLM] First piece: '" << piece.substr(0, std::min(size_t(30), piece.size())) 
@@ -658,18 +836,15 @@ bool UnigramLM::loadBinary(const std::string& vocab_path) {
         int token_id;
         bin_file.read(reinterpret_cast<char*>(&token_id), 4);
         
-        // Validate token_id matches expected offset (Rule 20: fail loud on corruption)
-        const int expected_token_id = UNIGRAM_VOCAB_OFFSET + static_cast<int>(i);
-        if (token_id != expected_token_id) {
-            throw std::runtime_error(
-                "[UnigramLM] Token ID mismatch at piece " + std::to_string(i) + 
-                ": file has " + std::to_string(token_id) + 
-                " but expected " + std::to_string(expected_token_id) + 
-                " (UNIGRAM_VOCAB_OFFSET=" + std::to_string(UNIGRAM_VOCAB_OFFSET) + 
-                "). Vocab file was created with different atom count. Delete vocab.bin and training_data.grmt to regenerate.");
+        // Skip special tokens from binary — they're at absolute IDs 0-3 now
+        if (text == "<unk>" || text == "<pad>" || text == "<s>" || text == "</s>") {
+            continue;
         }
         
-        addPiece(text, score, token_id, text[0] == '<');  // Special tokens start with <
+        // Assign new token_id based on current layout
+        int new_token_id = UNIGRAM_VOCAB_OFFSET + static_cast<int>(pieces_.size());
+        
+        addPiece(text, score, new_token_id, false);
     }
     
     if (!bin_file) {
@@ -727,9 +902,9 @@ bool UnigramLM::save(const std::string& vocab_path, bool save_text_format) const
     char flags[3] = {0, 0, 0};
     bin_file.write(flags, 3);
     
-    // Actual vocab size including byte/atom offsets (4 bytes)
+    // Actual vocab size including special+byte+atom offsets (4 bytes)
     uint32_t total_vocab_size = static_cast<uint32_t>(
-        ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE + pieces_.size());
+        NUM_SPECIAL_TOKENS + BYTE_VOCAB_SIZE + ATOM_VOCAB_SIZE + pieces_.size());
     bin_file.write(reinterpret_cast<const char*>(&total_vocab_size), 4);
     
     // Write pieces: length (4 bytes) + text + score (4 bytes float) + token_id (4 bytes)
@@ -837,6 +1012,22 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     std::cout << "[UnigramLM] Segmented " << texts.size() << " documents into " 
               << sentences.size() << " sentences for subword mining" << std::endl;
     
+    // === CASE NORMALIZATION ===
+    // Lowercase ALL training text for case-insensitive vocabulary.
+    // Uppercase characters are still encodable via byte fallback (tokens 0-255).
+    // This prevents near-duplicate tokens: 'The'/'the', ' And'/' and', etc.
+    std::cout << "[UnigramLM] Normalizing to lowercase (case-insensitive vocab)" << std::endl;
+    for (auto& sent : sentences) {
+        sent = toLowerASCII(sent);
+    }
+    
+    // Also create lowercased copy of full texts for char counting + EM iterations
+    std::vector<std::string> lowercase_texts;
+    lowercase_texts.reserve(texts.size());
+    for (const auto& text : texts) {
+        lowercase_texts.push_back(toLowerASCII(text));
+    }
+    
     // Use sentences instead of full documents for the rest of training
     const std::vector<std::string>& training_units = sentences;
     
@@ -878,11 +1069,11 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                   << (sampled_bytes / (1024*1024)) << " MB) for subword mining" << std::endl;
     }
     
-    // Step 1: Count character frequencies (use ALL texts)
+    // Step 1: Count character frequencies (use ALL texts, lowercased)
     std::unordered_map<std::string, int> char_counts;
     size_t total_chars = 0;
     
-    for (const auto& text : texts) {
+    for (const auto& text : lowercase_texts) {
         for (size_t i = 0; i < text.size(); ) {
             int seq_len = 1;
             unsigned char c = static_cast<unsigned char>(text[i]);
@@ -910,12 +1101,8 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     pieces_.clear();
     piece_to_id_.clear();
     
-    // Re-add special tokens with explicit IDs (no auto-ID per Rule 20)
-    addPiece("<unk>", -10.0f, UNIGRAM_VOCAB_OFFSET + 0, true);
-    addPiece("<pad>", -10.0f, UNIGRAM_VOCAB_OFFSET + 1, true);
-    addPiece("<s>", -10.0f, UNIGRAM_VOCAB_OFFSET + 2, true);
-    addPiece("</s>", -10.0f, UNIGRAM_VOCAB_OFFSET + 3, true);
-    addPiece(" ", -1.0f, UNIGRAM_VOCAB_OFFSET + 4, true);  // Space is important
+    // Special tokens are at absolute IDs 0-3, NOT stored in pieces_.
+    // pieces_ contains only regular unigram vocabulary.
     
     size_t covered = 0;
     size_t coverage_target = static_cast<size_t>(total_chars * character_coverage);
@@ -1012,18 +1199,47 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     
     int added = 0;
     int filtered = 0;
+    int repetition_filtered = 0;
+    int near_duplicates = 0;
     const int max_to_add = target_vocab_size > 0 ? target_vocab_size : std::numeric_limits<int>::max();
+    
+    // Track normalized forms to detect near-duplicates that differ only by
+    // whitespace/case/repetition artifacts (e.g., " the" vs "the", "soooo" vs "soo").
+    // Keep the highest-count surviving variant.
+    std::unordered_set<std::string> normalized_added;
     
     for (const auto& [subword, count] : sorted_subwords) {
         if (count < MIN_SUBWORD_FREQ) break;  // Stop when frequency too low
         if (added >= max_to_add) break;        // Stop when target reached
         if (hasPiece(subword)) continue;
+
+        // Track repetition stripping separately for better visibility.
+        if (isRepetitionNoise(subword)) {
+            repetition_filtered++;
+            continue;
+        }
         
         // Double-check quality filter (should already be filtered during mining, but be safe)
         if (!isValidSubword(subword)) {
             filtered++;
             continue;
         }
+        
+        // Near-duplicate detection: reject subwords whose normalized form
+        // (lowercase + whitespace normalization + repeat compression) matches
+        // an already-added piece.
+        // Since sorted_subwords is sorted by count DESC, the highest-count
+        // variant wins. E.g., " the" (50K) added first, then "the" (3K) rejected.
+        std::string norm = normalizeForDedup(subword);
+        if (norm.empty()) {
+            filtered++;
+            continue;
+        }
+        if (normalized_added.count(norm)) {
+            near_duplicates++;
+            continue;
+        }
+        normalized_added.insert(norm);
         
         float score = std::log(static_cast<float>(count) / total_chars);
         addPiece(subword, score, UNIGRAM_VOCAB_OFFSET + static_cast<int>(pieces_.size()), false);
@@ -1032,6 +1248,14 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     
     if (filtered > 0) {
         std::cout << "[UnigramLM] Filtered " << filtered << " invalid subword patterns" << std::endl;
+    }
+    if (repetition_filtered > 0) {
+        std::cout << "[UnigramLM] Filtered " << repetition_filtered
+                  << " repetition/stutter subword patterns" << std::endl;
+    }
+    if (near_duplicates > 0) {
+        std::cout << "[UnigramLM] Rejected " << near_duplicates 
+                  << " near-duplicate subwords (whitespace/case/repetition variants)" << std::endl;
     }
     std::cout << "[UnigramLM] Added " << added << " subwords (min_freq=" << MIN_SUBWORD_FREQ 
               << ", target=" << target_vocab_size << "), total vocab: " << pieces_.size() << std::endl;
@@ -1052,10 +1276,10 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         std::unordered_map<int, double> token_counts;  // token_id -> count
         double total_tokens = 0.0;
         
-        for (const auto& text : texts) {
+        for (const auto& text : lowercase_texts) {
             if (text.empty()) continue;
             
-            // Run Viterbi to get optimal segmentation
+            // Run Viterbi to get optimal segmentation (on lowercased text)
             auto nodes = viterbi(text);
             auto tokens = backtrack(nodes, static_cast<int>(text.size()));
             
@@ -1138,7 +1362,7 @@ std::vector<ViterbiNode> UnigramLM::viterbi(const std::string& text) const {
     for (size_t i = 1; i <= n; ++i) {
         nodes[i].score = -1e30f;
         nodes[i].prev_pos = -1;
-        nodes[i].token_id = UNIGRAM_VOCAB_OFFSET + unk_id_;
+        nodes[i].token_id = unk_id_;  // Absolute UNK_TOKEN_ID = 0
         nodes[i].piece_length = 1;
     }
     
@@ -1173,7 +1397,7 @@ std::vector<ViterbiNode> UnigramLM::viterbi(const std::string& text) const {
                 unsigned char byte_val = static_cast<unsigned char>(text[pos]);
                 nodes[pos + 1].score = byte_score;
                 nodes[pos + 1].prev_pos = static_cast<int>(pos);
-                nodes[pos + 1].token_id = static_cast<int>(byte_val);  // Byte token ID
+                nodes[pos + 1].token_id = static_cast<int>(byte_val) + BYTE_TOKEN_OFFSET;  // Byte token ID (offset by specials)
                 nodes[pos + 1].piece_length = 1;
             }
         } else {
@@ -1182,7 +1406,7 @@ std::vector<ViterbiNode> UnigramLM::viterbi(const std::string& text) const {
             if (unk_score > nodes[pos + 1].score) {
                 nodes[pos + 1].score = unk_score;
                 nodes[pos + 1].prev_pos = static_cast<int>(pos);
-                nodes[pos + 1].token_id = UNIGRAM_VOCAB_OFFSET + unk_id_;
+                nodes[pos + 1].token_id = unk_id_;  // Absolute UNK_TOKEN_ID = 0
                 nodes[pos + 1].piece_length = 1;
             }
         }
@@ -1217,16 +1441,28 @@ std::vector<UnigramPiece> UnigramLM::encodeWithPieces(const std::string& text) c
     result.reserve(token_ids.size());
     
     for (int tid : token_ids) {
-        if (tid < UNIGRAM_VOCAB_OFFSET) {
+        if (tid >= SPECIAL_TOKEN_OFFSET && tid < NUM_SPECIAL_TOKENS) {
+            // Special token
+            UnigramPiece piece;
+            piece.token_id = tid;
+            if (tid == UNK_TOKEN_ID) piece.text = "<unk>";
+            else if (tid == PAD_TOKEN_ID) piece.text = "<pad>";
+            else if (tid == BOS_TOKEN_ID) piece.text = "<s>";
+            else if (tid == EOS_TOKEN_ID) piece.text = "</s>";
+            piece.score = -10.0f;
+            piece.is_special = true;
+            piece.is_user_defined = true;
+            result.push_back(piece);
+        } else if (tid >= BYTE_TOKEN_OFFSET && tid < ATOM_TOKEN_OFFSET) {
             // Byte token
             UnigramPiece piece;
             piece.token_id = tid;
-            piece.text = std::string(1, static_cast<char>(tid));
+            piece.text = std::string(1, static_cast<char>(tid - BYTE_TOKEN_OFFSET));
             piece.score = UNKNOWN_SCORE;
             piece.is_special = false;
             piece.is_user_defined = false;
             result.push_back(piece);
-        } else {
+        } else if (tid >= UNIGRAM_VOCAB_OFFSET) {
             const UnigramPiece* p = getPiece(tid);
             if (p) {
                 result.push_back(*p);
@@ -1247,9 +1483,15 @@ std::string UnigramLM::decode(const int* token_ids, size_t count) const {
     for (size_t i = 0; i < count; ++i) {
         int tid = token_ids[i];
         
-        if (tid < BYTE_VOCAB_SIZE) {
-            // Byte token
-            result.push_back(static_cast<char>(tid));
+        if (tid >= SPECIAL_TOKEN_OFFSET && tid < NUM_SPECIAL_TOKENS) {
+            // Special token — decode as their text repr
+            if (tid == UNK_TOKEN_ID) result += "<unk>";
+            else if (tid == PAD_TOKEN_ID) { /* skip padding */ }
+            else if (tid == BOS_TOKEN_ID) result += "<s>";
+            else if (tid == EOS_TOKEN_ID) result += "</s>";
+        } else if (tid >= BYTE_TOKEN_OFFSET && tid < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE) {
+            // Byte token (subtract BYTE_TOKEN_OFFSET to get raw byte)
+            result.push_back(static_cast<char>(tid - BYTE_TOKEN_OFFSET));
         } else if (tid >= UNIGRAM_VOCAB_OFFSET) {
             // Unigram token
             const UnigramPiece* p = getPiece(tid);
@@ -1268,8 +1510,8 @@ void UnigramLM::capVocabSize(int max_size) {
         return;  // Already smaller than cap
     }
     
-    if (max_size < 256) {
-        throw std::runtime_error("capVocabSize: max_size must be >= 256 to include special tokens");
+    if (max_size < 4) {
+        throw std::runtime_error("capVocabSize: max_size must be >= 4 to include minimum vocabulary");
     }
     
     // Sort pieces by score (descending) to keep most frequent
@@ -1472,7 +1714,7 @@ bool UnigramLM::encodeGPU(const char* d_text,
         gpu_->num_nodes,
         gpu_->d_viterbi_scores, gpu_->d_viterbi_prev, gpu_->d_viterbi_tokens,
         fallback_ptr,
-        UNIGRAM_VOCAB_OFFSET + unk_id_,
+        unk_id_,  // Absolute UNK_TOKEN_ID = 0
         UNKNOWN_SCORE,
         enable_fallback
     );

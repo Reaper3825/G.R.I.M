@@ -38,9 +38,10 @@ def decode_tokens(tokens: List[int], vocab: dict) -> str:
     for tid in tokens:
         if tid in vocab:
             pieces.append(vocab[tid])
-        elif 0 <= tid < 256:
-            # Byte fallback
-            pieces.append(chr(tid) if 32 <= tid <= 126 else f"<{tid:02X}>")
+        elif 4 <= tid < 260:
+            # Byte fallback (token IDs 4-259 = byte values 0-255)
+            byte_val = tid - 4
+            pieces.append(chr(byte_val) if 32 <= byte_val <= 126 else f"<{byte_val:02X}>")
         else:
             pieces.append(f"<UNK{tid}>")
     

@@ -2,8 +2,17 @@
 
 **Status:** ISSUE #136 - GRAD_LOGITS[277] negative values at non-target positions FIXED
 **Started:** December 22, 2025
-**Last Updated:** February 9, 2026
+**Last Updated:** February 14, 2026
 **Latest Finding:** Issue #136 (Feb 9): Mathematically impossible negative gradients at non-target positions were caused by CenterRowsGradFn reusing the externally-owned `grad_logits_tensor.data` buffer, overwriting CE gradients with centered versions. FIX: CenterRowsGradFn now allocates its own dedicated buffer, preserving CE gradients (verified in batch 2 logs: at_other_targets=+0.000023 instead of -0.054415).
+
+> **⚠️ NOTE ON TOKEN VOCABULARY LAYOUT (Feb 14, 2026):**  
+> The special token vocabulary layout was refactored on Feb 14, 2026. The layout is:  
+> - **[0-3]**: Special tokens (UNK=0, PAD=1, BOS=2, EOS=3)  
+> - **[4-259]**: Byte tokens (raw UTF-8)  
+> - **[260-276]**: Atom placeholders (17 atom types: NONE, END, INT, FLOAT, HEX, BIN, ID, STR, REGEX, URL, EMAIL, PATH, DATE, TIME, IP, EQUATION, EXPR)  
+> - **[277+]**: Unigram vocabulary (token 277 = SPACE)  
+>
+> **Historical references to "token 277"** in this document refer to the OLD layout where 277 was a unigram token (SPACE character under byte+atom+unigram ordering). As of Feb 14, the mode collapse diagnostic system now **dynamically detects** the collapse token via argmax sampling instead of hardcoding any specific token ID. The tracked collapse token is stored in `g_collapse_token_id` (Phase2) and `training_state.tracked_collapse_token`. All diagnostics now use this dynamic value.
 
 ---
 
@@ -75,6 +84,8 @@ Scaling logits just amplifies backward by sqrt(d_model)=27.7x without helping es
 Implementation in AutogradTraining.cu lines 1067-1083:
 1. Column centering: Sigma_t h[t,d] = 0 for each feature d (Issue #125)
 2. Row centering: Sigma_d h[t,d] = 0 for each position t (Issue #132)
+
+> **UPDATE (Feb 14, 2026):** Following the token layout refactor, the mode collapse diagnostic system was updated to use **dynamic argmax detection** instead of hardcoding token 277. The collapse token is now detected at runtime by sampling 128 positions from cached logits and finding the most frequent argmax. This value is stored in `g_collapse_token_id` (Phase2_TrainingLoop.cu) and synchronized to `training_state.tracked_collapse_token` before each training step. All diagnostic functions (`computeToken277Diagnostic`, `computeHiddenState277Analysis`, `computeFeedbackLoopDiagnostic`, `computePC1CausalityTest`) now accept `tracked_token` as a parameter and use it dynamically in equations and log outputs.
 
 ---
 ## ⚠️ CORRECTION: Previous "Mismatches" Were Misdiagnosed
@@ -7257,7 +7268,69 @@ Step 200:  lr=0.00007793  (decay started)
 
 ---
 
-## 📁 Key Files
+## � RECENT CHANGES (Feb 14, 2026)
+
+### Token Vocabulary Layout Refactor
+
+**Old Layout (pre-Feb 14):**
+- [0-255]: Byte tokens (raw UTF-8)
+- [256-275]: Atom placeholders (20 tokens)
+- [276+]: Unigram vocabulary (special tokens mixed in)
+
+**New Layout (post-Feb 14):**
+- [0-3]: Special tokens (UNK=0, PAD=1, BOS=2, EOS=3)
+- [4-259]: Byte tokens (raw UTF-8)
+- [260-279]: Atom placeholders (20 tokens)
+- [280+]: Unigram vocabulary
+
+**Rationale:** Special tokens should be at the start of the vocabulary for cleaner separation and easier debugging.
+
+### Dynamic Collapse Token Detection
+
+**Problem:** Hardcoding token 277 as the collapse target was incorrect after the layout refactor, and also assumes the model will always collapse to the same token.
+
+**Solution:** Implemented dynamic argmax detection system:
+
+1. **Detection Logic (Phase2_TrainingLoop.cu, lines ~4340-4390):**
+   - Every diagnostic interval (10 batches), sample up to 128 non-pad positions from `cached_logits_tensor`
+   - Compute argmax for each position
+   - Find most frequent argmax across sample → this is the collapse token
+   - Log: `[COLLAPSE_DETECT] batch=X dominant_argmax_token=Y count=Z/128 (P%)`
+
+2. **Storage:**
+   - `static int g_collapse_token_id = -1` in Phase2_TrainingLoop.cu (file scope)
+   - Synced to `training_state.tracked_collapse_token` before each training step (line ~3162)
+
+3. **Diagnostic Functions Updated:**
+   - `computeToken277Diagnostic(ts, targets, d_model, tracked_token, stream)` — added `tracked_token` param
+   - `computeHiddenState277Analysis(...)` — now uses `tracked_token` in all equations/logs
+   - `computeFeedbackLoopDiagnostic(...)` — renamed all `*_277_*` members to `*_tracked_*`
+   - `computePC1CausalityTest(...)` — dynamic token in causality tests
+   - All functions guarded by `if (g_collapse_token_id >= 0)` to skip until detection
+
+4. **Gradient Attribution (TrainingStateGPU.cu):**
+   - `logGradientAttribution()` reads `tracked_collapse_token` from member instead of hardcoded constant
+   - Early return if `tracked_token < 0` (no collapse detected yet)
+   - Log tag changed from `[GRAD_ATTRIB_TOKEN277]` to `[GRAD_ATTRIB_COLLAPSE]`
+
+5. **AutogradLoss.cu Kernel:**
+   - `kernelToken277DiagnosticActual()` now accepts `int tracked_token` parameter
+   - `launchToken277DiagnosticActual()` launcher passes token through, early return if < 0
+   - Header declaration updated in AutogradLoss.hpp
+
+6. **Files Modified:**
+   - Phase2_TrainingLoop.cu — argmax detection, diagnostic function calls, p_v dump
+   - AutogradLoss.cu/hpp — kernel + launcher with tracked_token param
+   - TrainingState_GPU.hpp — added `tracked_collapse_token` member
+   - TrainingStateGPU.cu — reads member, renamed `*_277` vars to `*_tracked`
+   - Phase1_Startup.cu — updated comments (historical references)
+   - LanguageModel_Training.cu — updated comments
+
+**Benefit:** System now adapts to whatever token the model is actually collapsing to, regardless of vocabulary layout or training dynamics.
+
+---
+
+## �📁 Key Files
 
 | File                               | Purpose                                                      |
 | ---------------------------------- | ------------------------------------------------------------ |

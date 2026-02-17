@@ -217,14 +217,13 @@ __global__ void finalizeNormsKernel(
             scale = clip_threshold / total;
         }
         
-        // Write metrics (type indices match ParamGroupType enum)
+        // Write metrics (type indices match ParamGroupType enum after NUMERIC_HEAD deletion)
         metrics->embedding_norm = sqrtf(type_squared_sums[0]);     // EMBEDDING = 0
         metrics->lm_head_norm = sqrtf(type_squared_sums[1]);       // LM_HEAD = 1
-        metrics->numeric_head_norm = sqrtf(type_squared_sums[2]);  // NUMERIC_HEAD = 2
-        metrics->attention_norm = sqrtf(type_squared_sums[3]);     // ATTENTION = 3
-        metrics->ffn_norm = sqrtf(type_squared_sums[4]);           // FFN = 4
-        metrics->rmsnorm_norm = sqrtf(type_squared_sums[5]);       // RMSNORM = 5
-        metrics->scratchblock_norm = sqrtf(type_squared_sums[6]);  // SCRATCHBLOCK = 6
+        metrics->attention_norm = sqrtf(type_squared_sums[2]);     // ATTENTION = 2
+        metrics->ffn_norm = sqrtf(type_squared_sums[3]);           // FFN = 3
+        metrics->rmsnorm_norm = sqrtf(type_squared_sums[4]);       // RMSNORM = 4
+        metrics->scratchblock_norm = sqrtf(type_squared_sums[5]);  // SCRATCHBLOCK = 5
         metrics->total_norm = total;
         metrics->clip_scale = scale;
         metrics->max_norm = __int_as_float(atomicAdd(reinterpret_cast<int*>(&max_norm), 0));

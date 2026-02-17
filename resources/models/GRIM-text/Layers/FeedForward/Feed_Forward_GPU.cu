@@ -20,14 +20,25 @@
 #include <stdexcept>
 #include <cstdio>
 
+// Issue #142: In-place scaling kernel for residual projection init
+static __global__ void kernel_ffn_scale_inplace(float* data, size_t count, float scale) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        data[idx] *= scale;
+    }
+}
+
 namespace GRIM {
 
 //======================================================//
 //  FeedForwardLayer Implementation
 //======================================================//
 
-FeedForwardLayer::FeedForwardLayer(const FeedForwardConfig& config,
-                                   Tensor& w1, Tensor& b1, Tensor& w2, Tensor& b2)
+//--------------------------------------------------
+// Self-allocating constructor (Pattern B: layer self-management)
+// Follows ScratchBlockLayer pattern: allocate → ensure_grad → Xavier init
+//--------------------------------------------------
+FeedForwardLayer::FeedForwardLayer(const FeedForwardConfig& config, uint64_t seed, float residual_scale)
     : config_(config) {
     if (!config_.cublas_handle) {
         throw std::runtime_error("FeedForwardLayer: cublas_handle is NULL - caller MUST provide handle");
@@ -38,85 +49,52 @@ FeedForwardLayer::FeedForwardLayer(const FeedForwardConfig& config,
     if (config_.d_model <= 0 || config_.d_ff <= 0) {
         throw std::runtime_error("FeedForwardLayer: d_model and d_ff must be positive");
     }
-
-    // Rule 20: Strong shape validation - external weights REQUIRED
+    
     const int d_model = config_.d_model;
     const int d_ff = config_.d_ff;
-
+    const cudaStream_t stream = config_.stream;
+    
     // W1: [d_model, d_ff] for matmul: input [T, d_model] @ W1 [d_model, d_ff] = [T, d_ff]
-    {
-        const auto& s1 = w1.shape.as_2d();
-        if (s1.rows != d_model || s1.cols != d_ff) {
-            throw std::invalid_argument(
-                "FeedForwardLayer: W1 shape mismatch. Expected [" +
-                std::to_string(d_model) + "," + std::to_string(d_ff) + "], got [" +
-                std::to_string(s1.rows) + "," + std::to_string(s1.cols) + "]"
-            );
-        }
-    }
-
+    W1_ = Tensor::zeros({d_model, d_ff}, stream, "ffn_w1");
+    W1_.requires_grad_();
+    W1_.ensure_grad();
+    Tensor::xavier_uniform_(W1_, seed, stream);
+    
     // W2: [d_ff, d_model] for matmul: hidden [T, d_ff] @ W2 [d_ff, d_model] = [T, d_model]
-    {
-        const auto& s2 = w2.shape.as_2d();
-        if (s2.rows != d_ff || s2.cols != d_model) {
-            throw std::invalid_argument(
-                "FeedForwardLayer: W2 shape mismatch. Expected [" +
-                std::to_string(d_ff) + "," + std::to_string(d_model) + "], got [" +
-                std::to_string(s2.rows) + "," + std::to_string(s2.cols) + "]"
-            );
+    // Issue #142: Scaled by residual_scale after Xavier init (GPT-2 pattern)
+    W2_ = Tensor::zeros({d_ff, d_model}, stream, "ffn_w2");
+    W2_.requires_grad_();
+    W2_.ensure_grad();
+    Tensor::xavier_uniform_(W2_, seed + 1, stream);
+    
+    // Apply Issue #142 residual scaling to W2 (down-projection)
+    if (residual_scale != 1.0f) {
+        const size_t count = W2_.numel();
+        const int threads = 256;
+        const int blocks = static_cast<int>((count + threads - 1) / threads);
+        kernel_ffn_scale_inplace<<<blocks, threads, 0, stream>>>(W2_.data, count, residual_scale);
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            throw std::runtime_error("FeedForwardLayer: residual scale kernel failed: " + 
+                                     std::string(cudaGetErrorString(err)));
         }
     }
-
-    // Biases optional, but if provided enforce shapes
-    if (b1.data) {
-        const auto& sb1 = b1.shape.as_2d();
-        if (sb1.rows != 1 || sb1.cols != d_ff) {
-            throw std::invalid_argument(
-                "FeedForwardLayer: b1 shape mismatch. Expected [1," +
-                std::to_string(d_ff) + "], got [" +
-                std::to_string(sb1.rows) + "," + std::to_string(sb1.cols) + "]"
-            );
-        }
+    
+    if (config_.use_bias) {
+        b1_ = Tensor::zeros({1, d_ff}, stream, "ffn_b1");
+        b1_.requires_grad_();
+        b1_.ensure_grad();
+        // Biases initialized to zero (standard practice)
+        
+        b2_ = Tensor::zeros({1, d_model}, stream, "ffn_b2");
+        b2_.requires_grad_();
+        b2_.ensure_grad();
     }
-
-    if (b2.data) {
-        const auto& sb2 = b2.shape.as_2d();
-        if (sb2.rows != 1 || sb2.cols != d_model) {
-            throw std::invalid_argument(
-                "FeedForwardLayer: b2 shape mismatch. Expected [1," +
-                std::to_string(d_model) + "], got [" +
-                std::to_string(sb2.rows) + "," + std::to_string(sb2.cols) + "]"
-            );
-        }
-    }
-
-    // Create view Tensors referencing external buffers
-    // ISSUE #59: Use share_grad() for proper shared_ptr semantics
-    W1_ = Tensor::from_ptr(w1.data, w1.shape, false, true, "ffn.W1");
-    W1_.share_grad(w1);
-    W1_.owns_data = false;
-
-    if (b1.data) {
-        b1_ = Tensor::from_ptr(b1.data, b1.shape, false, true, "ffn.b1");
-        b1_.share_grad(b1);
-        b1_.owns_data = false;
-    }
-
-    W2_ = Tensor::from_ptr(w2.data, w2.shape, false, true, "ffn.W2");
-    W2_.share_grad(w2);
-    W2_.owns_data = false;
-
-    if (b2.data) {
-        b2_ = Tensor::from_ptr(b2.data, b2.shape, false, true, "ffn.b2");
-        b2_.share_grad(b2);
-        b2_.owns_data = false;
-    }
-
-    // Set cuBLAS handle for autograd
+    
     autograd::set_autograd_cublas_handle(config_.cublas_handle);
-
-    std::fprintf(stderr, "[FeedForwardLayer] Initialized with external weights: W1=[%zu], W2=[%zu]\n",
-                 W1_.numel(), W2_.numel());
+    
+    std::fprintf(stderr, "[FeedForwardLayer] Self-allocated weights: W1=[%d,%d], W2=[%d,%d], residual_scale=%.6f\n",
+                 d_model, d_ff, d_ff, d_model, residual_scale);
 }
 
 FeedForwardLayer::~FeedForwardLayer() {
@@ -157,7 +135,8 @@ void FeedForwardLayer::setConfig(const FeedForwardConfig& cfg) {
 //  Forward Pass - Autograd with ForwardIntermediates (Issue #56 Fix)
 //======================================================//
 
-Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& intermediates) {
+Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& intermediates,
+                                 uint64_t training_step, int layer_idx) {
     // Rule 20: Crash on invalid weights
     if (!W1_.data || !W2_.data) {
         throw std::runtime_error("FeedForwardLayer::forward: weights not set - constructor requires external weights");
@@ -217,6 +196,14 @@ Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& inte
     // GELU activation - stores result in intermediates
     intermediates.ffn_gelu_out = autograd::gelu(intermediates.ffn_linear1_out, stream, 
                                                 intermediates.ffn_linear1_out.data);
+
+    // FFN activation dropout: applied after GELU, before W2 projection.
+    // Standard practice (GPT-2, LLaMA, BERT): dropout(GELU(x @ W1 + b1)) @ W2 + b2
+    if (config_.dropout_rate > 0.0f && training_step > 0) {
+        const uint64_t ffn_act_dropout_seed = training_step * 2654435761ULL + 300 + layer_idx;
+        intermediates.ffn_gelu_out = autograd::dropout(intermediates.ffn_gelu_out, config_.dropout_rate,
+                                                       ffn_act_dropout_seed, true, stream);
+    }
 
     //--------------------------------------------------
     // Layer 2: output = post_gelu @ W2 + b2

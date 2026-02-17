@@ -45,10 +45,8 @@ struct AutogradIntermediates {
     std::vector<Tensor> encoder_layer_outputs;  // One per encoder layer
     Tensor encoder_output_tensor;      // [total_tokens, d_model] - after final RMSNorm
     Tensor centered_encoder_output;    // [total_tokens, d_model] - Issue #127
-    Tensor lm_input_tensor;            // [total_tokens, d_model] - input to LM head
     Tensor logits_tensor;              // [total_tokens, vocab_size] - autograd wrapper
     Tensor loss_tensor;                // Scalar loss driving backward
-    Tensor numeric_head_output;        // [total_tokens, 1] - numeric predictions
     
     // ═══════════════════════════════════════════════════════════════════════════
     // LIFECYCLE
@@ -61,10 +59,8 @@ struct AutogradIntermediates {
         encoder_layer_outputs.clear();
         encoder_output_tensor = Tensor();
         centered_encoder_output = Tensor();
-        lm_input_tensor = Tensor();
         logits_tensor = Tensor();
         loss_tensor = Tensor();
-        numeric_head_output = Tensor();
     }
     
     /** Check if intermediates are populated (forward has run) */

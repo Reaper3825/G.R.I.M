@@ -86,11 +86,10 @@ struct alignas(64) GradMetrics {
     // Per-group-type norms (L2) - must match ParamGroupType enum order
     float embedding_norm = 0.0f;      // ParamGroupType::EMBEDDING = 0
     float lm_head_norm = 0.0f;        // ParamGroupType::LM_HEAD = 1
-    float numeric_head_norm = 0.0f;   // ParamGroupType::NUMERIC_HEAD = 2
-    float attention_norm = 0.0f;      // ParamGroupType::ATTENTION = 3
-    float ffn_norm = 0.0f;            // ParamGroupType::FFN = 4
-    float rmsnorm_norm = 0.0f;        // ParamGroupType::RMSNORM = 5
-    float scratchblock_norm = 0.0f;   // ParamGroupType::SCRATCHBLOCK = 6
+    float attention_norm = 0.0f;      // ParamGroupType::ATTENTION = 2
+    float ffn_norm = 0.0f;            // ParamGroupType::FFN = 3
+    float rmsnorm_norm = 0.0f;        // ParamGroupType::RMSNORM = 4
+    float scratchblock_norm = 0.0f;   // ParamGroupType::SCRATCHBLOCK = 5
     
     // Global metrics
     float total_norm = 0.0f;        // sqrt(sum of all squared norms)

@@ -14,9 +14,11 @@
 #include "BatchPayload.hpp"
 #include "Batching_GPU.hpp"
 #include "../../training/training_data_loader.hpp"
+#include "../../Shared/UnigramByte/UniByte.hpp"  // TokenLayout
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -28,6 +30,7 @@ BatchPayload buildBatchPayload(
     const BatchAssignment& assignment,
     const std::vector<TrainingSequence*>& views,
     int vocab_size,
+    const GRIM::Tokenizer::TokenLayout& token_layout,
     size_t max_cached_batch,
     size_t max_cached_seq_len)
 {
@@ -196,7 +199,7 @@ BatchPayload buildBatchPayload(
     const size_t flat_size = static_cast<size_t>(payload.total_tokens);
     const size_t text_feat_flat_size = flat_size * BatchPayload::kTextFeatureDim;
 
-    payload.input_ids.assign(flat_size, 0);
+    payload.input_ids.assign(flat_size, Tokenizer::PAD_TOKEN_ID);  // PAD=1, NOT UNK=0
     payload.target_ids.assign(flat_size, -1);  // padding targets = masked
     payload.numeric_values.assign(flat_size, 0.0f);
     payload.numeric_mask.assign(flat_size, 0);
@@ -211,47 +214,60 @@ BatchPayload buildBatchPayload(
         const int seq_len = r.length;
         const size_t row_offset = static_cast<size_t>(b) * S;
 
-        // Copy token IDs
-        for (int t = 0; t < seq_len; ++t) {
-            payload.input_ids[row_offset + t] = (*r.token_ids)[t];
-        }
+        // Bulk copy token IDs (contiguous source → contiguous destination row)
+        std::memcpy(&payload.input_ids[row_offset],
+                    r.token_ids->data(),
+                    seq_len * sizeof(int));
 
-        // Copy targets and count valid (with final-position masking)
-        // ASSUMPTION: Strictly autoregressive (next-token prediction) training.
-        // The final position in each window has no valid next-token target,
-        // so we mask it with -1 to exclude from loss and gradients.
+        // Copy targets with final-position masking (autoregressive boundary).
+        // All tokens except the last get their target copied; the final position
+        // is masked with -1 since there is no valid next-token target.
+        if (seq_len > 1) {
+            std::memcpy(&payload.target_ids[row_offset],
+                        r.targets->data(),
+                        (seq_len - 1) * sizeof(int));
+        }
+        // Mask the final position of the sequence
+        payload.target_ids[row_offset + seq_len - 1] = -1;
+        // Padding positions beyond seq_len already have target=-1 from assign()
+
+        // Defense-mask non-content tokens and count valid targets — SINGLE PASS
+        // isNonContent() = UNK, PAD, BOS (never valid prediction targets).
+        // EOS IS a valid target — model must learn to predict end-of-sequence.
+        // This is a safety net; DataLoader should already mask these.
         int valid_count = 0;
-        for (int t = 0; t < seq_len; ++t) {
-            int target = (*r.targets)[t];
-            // Mask the final position of each sequence (autoregressive boundary)
-            if (t == seq_len - 1) {
-                target = -1;
-            }
-            payload.target_ids[row_offset + t] = target;
-            if (target >= 0) {
+        for (int t = 0; t < seq_len - 1; ++t) {
+            const int target = payload.target_ids[row_offset + t];
+            if (target >= 0 && token_layout.isNonContent(target)) {
+                // Non-content token leaked through DataLoader — mask it
+                payload.target_ids[row_offset + t] = -1;
+            } else if (target >= 0) {
                 ++valid_count;
             }
         }
-        // Padding positions beyond seq_len already have target=-1 from assign()
 
         payload.valid_target_counts[b] = valid_count;
         payload.valid_tokens += valid_count;
 
-        // Copy numeric side-channels
-        for (int t = 0; t < seq_len; ++t) {
-            payload.numeric_values[row_offset + t] = (*r.numeric_values)[t];
-            payload.numeric_mask[row_offset + t] = (*r.numeric_mask)[t];
-        }
+        // Bulk copy numeric side-channels
+        std::memcpy(&payload.numeric_values[row_offset],
+                    r.numeric_values->data(),
+                    seq_len * sizeof(float));
+        std::memcpy(&payload.numeric_mask[row_offset],
+                    r.numeric_mask->data(),
+                    seq_len * sizeof(uint8_t));
 
-        // Copy text features (kTextFeatureDim values per token)
-        for (int t = 0; t < seq_len; ++t) {
-            const size_t dst_offset = (row_offset + t) * BatchPayload::kTextFeatureDim;
-            const size_t src_offset = static_cast<size_t>(t) * BatchPayload::kTextFeatureDim;
-            for (int f = 0; f < BatchPayload::kTextFeatureDim; ++f) {
-                payload.text_features[dst_offset + f] = (*r.text_features)[src_offset + f];
-            }
-            payload.text_mask[row_offset + t] = (*r.text_mask)[t];
-        }
+        // Bulk copy text features (kTextFeatureDim uint16_t values per token)
+        const size_t feat_dst_offset = row_offset * BatchPayload::kTextFeatureDim;
+        const size_t feat_src_bytes  = static_cast<size_t>(seq_len) * BatchPayload::kTextFeatureDim * sizeof(uint16_t);
+        std::memcpy(&payload.text_features[feat_dst_offset],
+                    r.text_features->data(),
+                    feat_src_bytes);
+
+        // Bulk copy text mask
+        std::memcpy(&payload.text_mask[row_offset],
+                    r.text_mask->data(),
+                    seq_len * sizeof(uint8_t));
     }
 
     // ═════════════════════════════════════════════════════════════════════════

@@ -40,17 +40,19 @@ struct GPUGrimEncoder::Impl {
         enc_cfg.stream = config.stream;
         enc_cfg.cublas_handle = config.cublas_handle;
         enc_cfg.pos_encoding = config.pos_encoding;  // RoPE/ALiBi positional encoding
-        // Issue #109 FIX: Propagate LayerScale config (was relying on EncodingConfig defaults!)
         enc_cfg.use_layer_scale = config.use_layer_scale;
         enc_cfg.layer_scale_init = config.layer_scale_init;
         enc_cfg.center_encoder_residuals = config.center_encoder_residuals;
         enc_cfg.use_bias = config.use_bias;
+        enc_cfg.dropout_rate = config.dropout_rate;
+        enc_cfg.attention_dropout = config.attention_dropout;
 
         for (int i = 0; i < config.num_layers; ++i) {
-            gpu_layers_.emplace_back(std::make_unique<GPUEncoderLayer>(enc_cfg));
-            // NOTE: FeedForwardLayer now requires weights in constructor (Option A)
-            // EncodingLayer::useExternalWeights() handles FFN creation with external weights.
-            // Rule 20: No backwards compatibility - single source of truth for weights.
+            // Pattern B: Layer self-allocates and Xavier-inits its own weights.
+            // Seed offsets per layer: base + 2 + layer*10
+            const uint64_t layer_seed = config.weight_seed + 2 + i * 10;
+            gpu_layers_.emplace_back(std::make_unique<GPUEncoderLayer>(
+                enc_cfg, layer_seed, config.residual_scale, config.layer_scale_init_value));
         }
     }
 };

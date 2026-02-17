@@ -41,7 +41,7 @@
 // Core model
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
-#include "../Shared/TrainingState/TrainingTensors.hpp"
+#include "../Shared/Batching/BatchPayload.hpp"
 
 // Tokenizer  
 #include "../Shared/UnigramByte/UniByte.hpp"
@@ -122,9 +122,11 @@ void traceGradientComponents(GRIM::LanguageModel& model, int batch, cudaStream_t
     auto* gpu_encoder = &model.getGpuEncoder();
     
     // 1. LM Head gradients (output layer - should be largest)
-    if (ts.tensors_->lm_head_weights.grad_data()) {
+    auto* lm_head = model.getLmHeadLayer();
+    if (!lm_head) throw std::runtime_error("[traceGradientComponents] LMHeadLayer is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    if (lm_head->weights().grad_data()) {
         size_t lm_size = static_cast<size_t>(config.vocab_size) * config.d_model;
-        float lm_head_norm = computeGradNormSync(ts.tensors_->lm_head_weights.grad_data(), lm_size, stream);
+        float lm_head_norm = computeGradNormSync(lm_head->weights().grad_data(), lm_size, stream);
         std::cout << "  LM_HEAD: " << std::scientific << std::setprecision(4) << lm_head_norm 
                   << " (should be largest - closest to loss)" << std::endl;
     }
@@ -167,9 +169,11 @@ void traceGradientComponents(GRIM::LanguageModel& model, int batch, cudaStream_t
     }
     
     // 3. Embedding gradients (input layer - should be attenuated from output)
-    if (ts.tensors_->embedding_weights.grad_data()) {
+    auto* emb_layer = model.getEmbeddingLayer();
+    if (!emb_layer) throw std::runtime_error("[traceGradientComponents] EmbeddingLayer is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    if (emb_layer->tokenWeights().grad_data()) {
         const size_t embedding_grad_size = config.vocab_size * config.d_model;
-        float emb_norm = computeGradNormSync(ts.tensors_->embedding_weights.grad_data(), embedding_grad_size, stream);
+        float emb_norm = computeGradNormSync(emb_layer->tokenWeights().grad_data(), embedding_grad_size, stream);
         std::cout << "  EMBEDDING: " << emb_norm 
                   << " (most attenuated - farthest from loss)" << std::endl;
     }
@@ -714,16 +718,34 @@ int main(int argc, char** argv) {
                     std::vector<float> train_numeric_values = numeric_values;
                     std::vector<uint8_t> train_numeric_mask = numeric_mask;
                     
-                    // Wrap in batch
-                    std::vector<std::vector<int>> train_batch_inputs = { train_input_ids };
-                    std::vector<std::vector<int>> train_batch_targets = { train_target_ids };
-                    std::vector<std::vector<float>> train_batch_numeric = { train_numeric_values };
-                    std::vector<std::vector<uint8_t>> train_batch_mask = { train_numeric_mask };
+                    // Construct BatchPayload for single-sequence batch
+                    GRIM::Batching::BatchPayload payload;
+                    payload.batch_size = 1;
+                    payload.max_seq_len = static_cast<int>(train_input_ids.size());
+                    payload.total_tokens = payload.max_seq_len;
+                    payload.actual_tokens = payload.max_seq_len;
+                    payload.padding_tokens = 0;
+                    payload.packing_efficiency = 1.0f;
+                    payload.seq_lengths = { payload.max_seq_len };
                     
-                    float loss = model.computeLossBatch(train_batch_inputs, 
-                                                        train_batch_targets,
-                                                        train_batch_numeric, 
-                                                        train_batch_mask);
+                    // Count valid targets (non-masked, non-pad)
+                    int valid_count = 0;
+                    for (int tid : train_target_ids) {
+                        if (tid >= 0) valid_count++;
+                    }
+                    payload.valid_tokens = valid_count;
+                    payload.valid_target_counts = { valid_count };
+                    
+                    // Copy data (no padding needed for single-sequence batch)
+                    payload.input_ids = train_input_ids;
+                    payload.target_ids = train_target_ids;
+                    payload.numeric_values = train_numeric_values;
+                    payload.numeric_mask = train_numeric_mask;
+                    payload.text_features.resize(payload.total_tokens * GRIM::Batching::BatchPayload::kTextFeatureDim, 0);
+                    payload.text_mask.resize(payload.total_tokens, 0);
+                    payload.fits_in_cache = true;  // Assume fits for diagnostic purposes
+                    
+                    float loss = model.computeLossBatch(payload);
                     
                     std::cout << "  → Training on target (loss=" << std::fixed << std::setprecision(4) 
                               << loss << ", context_len=" << context_len << ")" << std::endl;

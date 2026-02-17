@@ -19,7 +19,7 @@ bool PrepareTrainingDataFromCache(
 	std::string& out_training_data_path,
 	std::string& out_vocab_path,
 	bool force_rebuild = false,
-	bool clear_cache = true);
+	bool clear_cache = false);
 
 } // namespace GRIM
 

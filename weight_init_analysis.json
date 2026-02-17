@@ -73,7 +73,7 @@
       "layer": null
     },
     {
-      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlockReasoning_GPU.cu",
       "line": 346,
       "code": "// Kernel: Xavier initialization",
       "type": "xavier_init",
@@ -82,7 +82,7 @@
       "layer": null
     },
     {
-      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlockReasoning_GPU.cu",
       "line": 347,
       "code": "__global__ void kernelXavierInit(",
       "type": "xavier_init",
@@ -91,7 +91,7 @@
       "layer": null
     },
     {
-      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlockReasoning_GPU.cu",
       "line": 381,
       "code": "initializeWeights();",
       "type": "init_weights",
@@ -100,7 +100,7 @@
       "layer": null
     },
     {
-      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlockReasoning_GPU.cu",
       "line": 449,
       "code": "initializeWeights();",
       "type": "init_weights",
@@ -109,7 +109,7 @@
       "layer": null
     },
     {
-      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlockReasoning_GPU.cu",
       "line": 460,
       "code": "initializeWeights();",
       "type": "init_weights",
@@ -118,7 +118,7 @@
       "layer": null
     },
     {
-      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlockReasoning_GPU.cu",
       "line": 509,
       "code": "void ScratchBlockLayer::initializeWeights() {",
       "type": "init_weights",
@@ -127,7 +127,7 @@
       "layer": null
     },
     {
-      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlockReasoning_GPU.cu",
       "line": 516,
       "code": "// Xavier init for atom type embeddings",
       "type": "xavier_init",
@@ -136,7 +136,7 @@
       "layer": null
     },
     {
-      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlockReasoning_GPU.cu",
       "line": 518,
       "code": "float atom_stddev = std::sqrt(2.0f / (NUM_ATOM_TYPES + config_.atom_embedding_dim));",
       "type": "stddev_calc",
@@ -145,7 +145,7 @@
       "layer": null
     },
     {
-      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlockReasoning_GPU.cu",
       "line": 522,
       "code": "kernelXavierInit<<<grid_size, block_size, 0, stream>>>(",
       "type": "xavier_init",
@@ -154,7 +154,7 @@
       "layer": null
     },
     {
-      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlockReasoning_GPU.cu",
       "line": 525,
       "code": "// Xavier init for projection",
       "type": "xavier_init",
@@ -163,7 +163,7 @@
       "layer": null
     },
     {
-      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlockReasoning_GPU.cu",
       "line": 527,
       "code": "float proj_stddev = std::sqrt(2.0f / (config_.atom_embedding_dim + config_.d_model));",
       "type": "stddev_calc",
@@ -172,7 +172,7 @@
       "layer": null
     },
     {
-      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.cu",
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlockReasoning_GPU.cu",
       "line": 530,
       "code": "kernelXavierInit<<<grid_size, block_size, 0, stream>>>(",
       "type": "xavier_init",
@@ -181,7 +181,7 @@
       "layer": null
     },
     {
-      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlock_GPU.hpp",
+      "file": "D:\\G.R.I.M\\resources\\models\\GRIM-text\\Layers\\ScratchBlock\\ScratchBlockReasoning_GPU.hpp",
       "line": 172,
       "code": "void initializeWeights();",
       "type": "init_weights",

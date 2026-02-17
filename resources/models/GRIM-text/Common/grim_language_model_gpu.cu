@@ -33,7 +33,7 @@
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"    // For Flash Attention kernels
-#include "../Layers/ScratchBlock/ScratchBlock_GPU.hpp"            // For ScratchBlock reasoning layer
+#include "../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"   // For ScratchBlock reasoning layer
 #include "../Shared/UnigramByte/Unigram.hpp"
 #include "../Shared/UnigramByte/AtomTable.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"                 // Unified PBM (ALiBi + RoPE)
@@ -985,41 +985,6 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         throw std::runtime_error("generateSequenceGPU: forwardInit returned empty logits");
     }
 
-    const auto decodeNumericPrediction = [&](float pred) -> float {
-        if (!std::isfinite(pred)) {
-            return std::numeric_limits<float>::quiet_NaN();
-        }
-        if (!config_.numeric_head_log_scale) {
-            return pred;
-        }
-        constexpr float kLogMax = 20.0f;
-        float sign = pred < 0.0f ? -1.0f : 1.0f;
-        float abs_pred = std::fabs(pred);
-        if (abs_pred > kLogMax) {
-            abs_pred = kLogMax;
-        }
-        return sign * (std::exp(abs_pred) - 1.0f);
-    };
-
-    auto fetchNumericPrediction = [&](int logits_pos) -> float {
-        if (!config_.numeric_head_enabled || !training_state_.cached_numeric_predictions.data) {
-            return std::numeric_limits<float>::quiet_NaN();
-        }
-        if (logits_pos < 0) {
-            return std::numeric_limits<float>::quiet_NaN();
-        }
-        float pred = std::numeric_limits<float>::quiet_NaN();
-        CUDA_CHECK(cudaMemcpyAsync(&pred,
-                                   training_state_.cached_numeric_predictions.data + logits_pos,
-                                   sizeof(float),
-                                   cudaMemcpyDeviceToHost,
-                                   training_state_.stream_ctrl.getPrimaryStream()));
-        if (!training_state_.stream_ctrl.syncPrimaryStream()) {
-            throw std::runtime_error("generateSequenceGPU: failed to sync numeric prediction copy");
-        }
-        return decodeNumericPrediction(pred);
-    };
-
     int logits_pos = static_cast<int>(prompt_tokens.size()) - 1;
     
     for (int step = 0; step < max_steps; ++step) {
@@ -1038,7 +1003,15 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         if (!cfg.bad_words_ids.empty()) {
             applyBadWordMask(logits, cfg.bad_words_ids);
         }
-        
+
+        // Mask non-content tokens: UNK(0), PAD(1), BOS(2) → -inf
+        // These tokens should NEVER be generated. EOS(3) stays valid.
+        if (vocab_size > 3) {
+            logits[0] = -std::numeric_limits<float>::infinity();  // UNK
+            logits[1] = -std::numeric_limits<float>::infinity();  // PAD
+            logits[2] = -std::numeric_limits<float>::infinity();  // BOS
+        }
+
         if (static_cast<int>(logits.size()) != vocab_size) {
             throw std::runtime_error(
                 "generateSequenceGPU: logits size mismatch (logits.size=" +
@@ -1060,29 +1033,52 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             throw std::runtime_error("LanguageModel: sampled token out of range");
         }
         
-        float step_numeric_value = 0.0f;
-        uint8_t step_numeric_mask = 0;
-        float output_numeric_value = 0.0f;
-        uint8_t output_numeric_mask = 0;
-        if (isNumericAtomToken(sample.token_id)) {
-            // Emit numeric prediction side-channel; keep generation inputs neutral.
-            output_numeric_mask = 1;
-            output_numeric_value = fetchNumericPrediction(logits_pos);
-        }
-
         // Check for EOS BEFORE processing next step
+        // EOS (token 3) can never be an atom token (atoms are 260+), so no numeric extraction needed.
         if (sample.token_id == cfg.eos_token_id &&
             step + 1 >= cfg.min_new_tokens) {
             sequence.token_ids.push_back(sample.token_id);
             sequence.token_scores.push_back(sample.log_probability);
-            sequence.token_numeric_values.push_back(output_numeric_value);
-            sequence.token_numeric_mask.push_back(output_numeric_mask);
+            sequence.token_numeric_values.push_back(0.0f);
+            sequence.token_numeric_mask.push_back(0);
             sequence.score += sample.log_probability;
             sequence.finished = true;
             if (stream_callback) {
                 (*stream_callback)(sample.token_id, sample.probability);
             }
             break;
+        }
+        
+        // Run forward pass for this token FIRST (no numeric injection).
+        // Issue #145: The extraction head was trained on hidden states where the
+        // atom token IS the input at position t:
+        //   Training:  hidden[t] = encoder(atom_token_at_t) → extract(h[t]) ≈ value
+        //   Inference:  must read hidden[t] for the atom, NOT hidden[t-1]
+        // We must call forwardStep BEFORE extraction so the atom token's own
+        // hidden state exists in cached_encoder_output.
+        // Numeric injection is 0 because we don't know the value yet — the
+        // extraction head must learn to predict from context, not echo injection.
+        logits_vec = forwardStep(sample.token_id, 0.0f, 0);
+        if (logits_vec.data.empty()) {
+            throw std::runtime_error("generateSequenceGPU: forwardStep returned empty logits");
+        }
+        logits_pos = training_state_.kv_cache_len - 1;
+        
+        // Now extract numeric value from the atom token's OWN hidden state
+        float output_numeric_value = 0.0f;
+        uint8_t output_numeric_mask = 0;
+        if (isNumericAtomToken(sample.token_id)) {
+            if (!scratch_block_layer_) {
+                throw std::runtime_error(
+                    "generateSequenceGPU: atom token " + std::to_string(sample.token_id) +
+                    " sampled but ScratchBlock layer is NULL — cannot extract numeric value");
+            }
+            cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
+            output_numeric_value = scratch_block_layer_->extractNumericValue(
+                training_state_.cached_encoder_output.data,
+                logits_pos,
+                stream);
+            output_numeric_mask = 1;
         }
         
         // Add token to sequence
@@ -1095,14 +1091,6 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         if (stream_callback) {
             (*stream_callback)(sample.token_id, sample.probability);
         }
-        
-        // Get logits for NEXT step using incremental forward
-        // This only processes the new token, reusing cached K,V
-        logits_vec = forwardStep(sample.token_id, step_numeric_value, step_numeric_mask);
-        if (logits_vec.data.empty()) {
-            throw std::runtime_error("generateSequenceGPU: forwardStep returned empty logits");
-        }
-        logits_pos = training_state_.kv_cache_len - 1;
     }
     
     if (!sequence.finished) {

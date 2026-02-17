@@ -263,6 +263,8 @@ void flashAttnForwardBHSD(const float* q, const float* k, const float* v,
         head_dim,
         causal,
         true,
+        0.0f,
+        0,
         stream);
 
     TensorConversion::convert_BSHD_bf16_to_BHSD(scratch.out, out, batch, seq, heads, head_dim, stream);
@@ -300,6 +302,8 @@ void flashAttnBackwardBHSD(const float* q, const float* k, const float* v,
         head_dim,
         causal,
         true,
+        0.0f,
+        0,
         stream);
 
     TensorConversion::convert_BSHD_bf16_to_BHSD(scratch.dq, dq, batch, seq, heads, head_dim, stream);
@@ -630,14 +634,14 @@ bool GRIM::Test::testFlashLargeSequence(std::string& message) {
 
     // Warmup
     flash_attn_fwd_ex(scratch.q, scratch.k, scratch.v, scratch.out, scratch.softmax_lse,
-                      nullptr, batch, seq, heads, heads, dim, true, true, nullptr);
+                      nullptr, batch, seq, heads, heads, dim, true, true, 0.0f, 0, nullptr);
     cudaDeviceSynchronize();
     
     // Timed run
     auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < 10; ++i) {
         flash_attn_fwd_ex(scratch.q, scratch.k, scratch.v, scratch.out, scratch.softmax_lse,
-                          nullptr, batch, seq, heads, heads, dim, true, true, nullptr);
+                          nullptr, batch, seq, heads, heads, dim, true, true, 0.0f, 0, nullptr);
     }
     cudaDeviceSynchronize();
     auto end = std::chrono::high_resolution_clock::now();

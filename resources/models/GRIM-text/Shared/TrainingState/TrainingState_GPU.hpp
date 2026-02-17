@@ -20,7 +20,7 @@
 #include <cuda_bf16.h>
 
 #include "../TeacherLogits/TeacherLogits_GPU.hpp"
-#include "../ScratchBlock/ScratchBlock_GPU.hpp"
+#include "../ScratchBlock/ScratchBlockPool_GPU.hpp"
 #include "../StreamController/StreamController_GPU.hpp"
 #include "../GradNorm/GradNormGPU.hpp"
 #include "../PBM/PositionalBiasMethod.hpp"
@@ -28,7 +28,7 @@
 
 // Forward declaration for autograd tensor system
 namespace GRIM {
-    struct TrainingTensors;
+    class EmbeddingLayer;
     struct FlashAttentionBF16Scratch;
 }
 
@@ -51,24 +51,15 @@ struct TrainingState {
     //======================================================//
     // Rule 20: NO raw float* for gradients - use GRIM::Tensor with autograd
     //
-    // All weight tensors live in TrainingTensors (tensors_->), for BOTH training and inference.
-    // Training: TrainingTensors::initializeParams() allocates with gradients.
-    // Inference: InitinferenceState.cu allocates without gradients.
-    // Use these accessors for uniform access — crash if tensors_ is null:
-    Tensor& getEmbeddingWeights();
-    const Tensor& getEmbeddingWeights() const;
-    Tensor& getPositionEmbeddingWeights();
-    const Tensor& getPositionEmbeddingWeights() const;
-    Tensor& getLmHeadWeights();
-    const Tensor& getLmHeadWeights() const;
-    
-    // NOTE: lm_head_bias, numeric_head_weights, numeric_head_bias, final_rms_gamma
-    // are owned by TrainingTensors (tensors_->). Access via tensors_->X.
-    
-    // Learned loss weighting (homoscedastic uncertainty)
-    // log_var = log(σ²), loss = L / (2*exp(log_var)) + 0.5*log_var
-    Tensor log_var_text;     // [1] - learned log-variance for text CE loss
-    Tensor log_var_numeric;  // [1] - learned log-variance for numeric loss
+    // ALL weight tensors are owned by Pattern B layers (self-managing):
+    //   - Embedding: LanguageModel::getEmbeddingLayer()->tokenWeights() / positionWeights()
+    //   - LM Head: LanguageModel::getLmHeadLayer()->weights() / bias() / finalRmsGamma()
+    //   - Encoder: Each EncodingLayer self-allocates in constructor
+    //   - ScratchBlock: ScratchBlockLayer self-allocates in constructor
+    //
+    // Session 7: TrainingTensors deleted — zero weight parameters remain in god object.
+    // weight_init_seed stored directly on TrainingState for Pattern B layer construction.
+    uint64_t weight_init_seed = 0;
     
     //======================================================//
     //  QK-NORM LEARNED SCALES (nGPT-style)
@@ -87,7 +78,6 @@ struct TrainingState {
     //======================================================//
     Tensor cached_encoder_output;       // [max_tokens, d_model] Pre-allocated scratch
     Tensor cached_logits_tensor;        // [max_tokens, vocab_size] Pre-allocated scratch
-    Tensor cached_numeric_predictions;  // [max_tokens]
     
     // Target/input ID caches (int typed)
     Tensor cached_targets_tensor;       // [max_tokens] int32
@@ -131,8 +121,6 @@ struct TrainingState {
     //======================================================//
     float cached_loss_value = 0.0f;
     float cached_text_loss = 0.0f;
-    float cached_numeric_loss = 0.0f;
-    int   cached_numeric_count = 0;     // Issue #137: atom count for weight grad normalization
     
     // Owns ALL intermediate tensors during forward→backward cycle
     // Replaces old autograd_ctx (which mixed input args with tensor storage)
@@ -142,7 +130,6 @@ struct TrainingState {
     //  INTERMEDIATE GRADIENT TENSORS (Issue #45 FIX)
     //======================================================//
     Tensor grad_logits_tensor;            // [max_logit_tokens, vocab_size]
-    Tensor grad_numeric_tensor;           // [max_logit_tokens]
     Tensor grad_encoder_tensor;           // [max_tokens, d_model]
     Tensor grad_ffn_input_tensor;         // [max_tokens, d_model]
     Tensor grad_ffn_hidden_tensor;        // [max_tokens, d_ff]
@@ -174,12 +161,9 @@ struct TrainingState {
     //======================================================//
     Tensor d_loss_scratch;         // Per-token losses
     Tensor d_loss_sum_scratch;     // Reduced loss sum (scalar)
-    Tensor d_numeric_loss_sum;     // Numeric loss sum (scalar)
-    Tensor d_numeric_loss_count;   // Numeric loss count (scalar int)
     
-    // Encoder workspace for GPU-native forward pass
-    Tensor encoder_workspace;
-    size_t encoder_workspace_size = 0;
+    // NOTE: encoder_workspace DELETED (Rule 20/26)
+    // Autograd forward creates its own intermediate Tensors — nothing consumed the workspace.
 
     //======================================================//
     //  STREAM & GRADIENT MANAGEMENT
@@ -199,27 +183,16 @@ struct TrainingState {
     ScratchBlock::ScratchBlockPool* scratch_pool = nullptr;
     bool scratch_enabled = true;
 
-    // ScratchBlock reasoning layer caches (Tensor-based)
-    Tensor cached_scratch_block_embeddings;  // [max_atoms, atom_embedding_dim]
-    Tensor cached_scratch_block_positions;   // [max_atoms] int32
-    Tensor cached_scratch_block_types;       // [max_atoms] int32
-    Tensor cached_scratch_block_num_atoms;   // [1] int32
-
     //======================================================//
     //  AUTOGRAD SYSTEM STATE
     //======================================================//
-    std::unique_ptr<TrainingTensors> tensors_;
-    bool use_autograd_tensors = false;
+    // Sentinel: initializeAutogradSeed() must be called before initGPU().
+    // Guards against initialization order bugs (Rule 20).
+    bool seed_initialized_ = false;
     
-    void initializeAutogradTensors(int vocab_size, int d_model, int d_ff,
-                                   int num_layers, int num_heads, int num_kv_heads,
-                                   int max_seq_len, bool tie_embeddings, bool use_bias,
-                                   HyperParameters::PositionalEncodingType positional_encoding,
-                                   bool numeric_head_enabled = false,
-                                   bool use_layer_scale = false,
-                                   float layer_scale_init = 1.0f,
-                                   uint64_t seed = 0,
-                                   cudaStream_t stream = nullptr);
+    /// Store the weight init seed and mark autograd as initialized.
+    /// Called by Phase1_Startup step 2.75 before initGPU().
+    void initializeAutogradSeed(uint64_t seed);
 
     //======================================================//
     //  OPTIMIZER STATE BUFFERS
@@ -242,7 +215,11 @@ struct TrainingState {
     
     void allocateDebugGradBuffers(int vocab_size, int d_model, cudaStream_t stream);
     void freeDebugGradBuffers();
-    void logGradientAttribution(int batch_idx, cudaStream_t stream);
+    void logGradientAttribution(int batch_idx, cudaStream_t stream, const EmbeddingLayer* embedding_layer);
+    
+    // Dynamic collapse token tracking — set by Phase2 argmax detection each diagnostic interval.
+    // -1 means no collapse token detected yet.
+    int tracked_collapse_token = -1;
 
     //======================================================//
     //  ISSUE #60 FIX: PCGRAD BUFFER FOR TIED WEIGHTS
@@ -251,13 +228,6 @@ struct TrainingState {
     
     void allocatePCGradBuffer(int vocab_size, int d_model, cudaStream_t stream);
     void freePCGradBuffer();
-    
-    //======================================================//
-    //  ISSUE #141 FIX: SCRATCHBLOCK GRADIENT TAP BUFFER
-    //  Captures encoder input gradient before dropout consumes it.
-    //  Used by ScratchBlock backward to compute parameter gradients.
-    //======================================================//
-    Tensor scratchblock_grad_tap;
     
     //======================================================//
     //  GUESS CACHE BUFFERS (GRIM-TS - typed buffers, NOT Tensors)

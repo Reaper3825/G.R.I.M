@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <numeric>
 #include <stdexcept>
@@ -13,7 +14,7 @@
 #include <cuda_runtime.h>
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
-// AutogradLoss.hpp, LossContext.hpp, NumericLoss_GPU.hpp, TeacherLogits_GPU.hpp
+// AutogradLoss.hpp, LossContext.hpp, TeacherLogits_GPU.hpp
 // removed — now handled by computeAutogradLoss() in AutogradTraining.hpp
 #include "../../LogRecorder/LogRecorder.hpp"
 #include "../../../training/Autograd/AutogradTraining.hpp"  // Issue #47: Full autograd forward pass
@@ -50,6 +51,20 @@ void orderLog(const char* stage,
 float LanguageModel::computeLossBatch(
 	const GRIM::Batching::BatchPayload& payload)
 {
+	// Keep intermediates for the legacy computeLossBatch() -> backward() flow on success,
+	// but clear them if this function exits via exception.
+	struct IntermediateExceptionGuard {
+		TrainingState& ts;
+		bool active = true;
+		~IntermediateExceptionGuard() {
+			if (active) {
+				ts.autograd_intermediates.clear();
+			}
+		}
+		void dismiss() { active = false; }
+	};
+	IntermediateExceptionGuard exception_guard{training_state_};
+
 	// ═══════════════════════════════════════════════════════════════════════════
 	// BatchPayload is the SINGLE SOURCE OF TRUTH for all batch metadata.
 	// All padding, masking, sequence lengths, valid token counts, and cache fit
@@ -102,7 +117,8 @@ float LanguageModel::computeLossBatch(
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════════
-	// GPU COPIES: Transfer padded data from payload to GPU tensors
+	// GPU COPIES: Pinned-memory staged transfers via ScratchBlockPool
+	// Double-buffered: submit DMA from block A while CPU fills block B.
 	// ═══════════════════════════════════════════════════════════════════════════
 	auto copy_start = std::chrono::high_resolution_clock::now();
 	orderLog("computeLossBatch.copy_inputs",
@@ -110,71 +126,91 @@ float LanguageModel::computeLossBatch(
 
 	cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
 
-	// Token IDs
+	// Rule 20: scratch pool MUST be available — no fallback to pageable memory
+	auto* scratch_pool = training_state_.scratch_pool;
+	if (!scratch_pool || !scratch_pool->isInitialized()) {
+		throw std::runtime_error("computeLossBatch: scratch_pool not initialized — "
+			"pinned memory staging is REQUIRED for batch transfers");
+	}
+
+	// Validate GPU destination pointers (Rule 20: crash if null)
 	int* cached_token_ids_ptr = reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data);
 	if (!cached_token_ids_ptr) {
 		throw std::runtime_error("computeLossBatch: cached_token_ids_tensor.data is NULL");
 	}
-	CUDA_CHECK(cudaMemcpyAsync(
-		cached_token_ids_ptr,
-		payload.input_ids.data(),
-		total_tokens * sizeof(int),
-		cudaMemcpyHostToDevice, stream));
-
-	// Targets
 	int* cached_targets_ptr = reinterpret_cast<int*>(training_state_.cached_targets_tensor.data);
 	if (!cached_targets_ptr) {
 		throw std::runtime_error("computeLossBatch: cached_targets_tensor.data is NULL");
 	}
-	CUDA_CHECK(cudaMemcpyAsync(
-		cached_targets_ptr,
-		payload.target_ids.data(),
-		total_tokens * sizeof(int),
-		cudaMemcpyHostToDevice, stream));
-
-	// Numeric values
 	float* cached_numeric_values_ptr = training_state_.cached_token_numeric_values.data;
 	if (!cached_numeric_values_ptr) {
 		throw std::runtime_error("computeLossBatch: cached_token_numeric_values.data is NULL");
 	}
-	CUDA_CHECK(cudaMemcpyAsync(
-		cached_numeric_values_ptr,
-		payload.numeric_values.data(),
-		total_tokens * sizeof(float),
-		cudaMemcpyHostToDevice, stream));
-
-	// Numeric mask (uint8_t stored in float Tensor — cast needed)
 	float* cached_numeric_mask_ptr = training_state_.cached_token_numeric_mask.data;
 	if (!cached_numeric_mask_ptr) {
 		throw std::runtime_error("computeLossBatch: cached_token_numeric_mask.data is NULL");
 	}
-	CUDA_CHECK(cudaMemcpyAsync(
-		reinterpret_cast<uint8_t*>(cached_numeric_mask_ptr),
-		payload.numeric_mask.data(),
-		total_tokens * sizeof(uint8_t),
-		cudaMemcpyHostToDevice, stream));
 
-	// Text features (uint16_t stored in float Tensor — cast needed)
-	constexpr int kTextFeatureDim = GRIM::Batching::BatchPayload::kTextFeatureDim;
+	// Compute transfer sizes
+	// Compute transfer sizes using BatchPayload helpers
+	const size_t input_ids_bytes    = payload.inputIdBytes();
+	const size_t target_ids_bytes   = payload.targetIdBytes();
+	const size_t numeric_val_bytes  = payload.numericValueBytes();
+	const size_t numeric_mask_bytes = payload.numericMaskBytes();
+
 	float* cached_text_features_ptr = training_state_.cached_token_text_features.data;
 	float* cached_text_mask_ptr = training_state_.cached_token_text_mask.data;
-	if (cached_text_features_ptr && cached_text_mask_ptr) {
-		CUDA_CHECK(cudaMemcpyAsync(
-			reinterpret_cast<uint16_t*>(cached_text_features_ptr),
-			payload.text_features.data(),
-			total_tokens * kTextFeatureDim * sizeof(uint16_t),
-			cudaMemcpyHostToDevice, stream));
-		CUDA_CHECK(cudaMemcpyAsync(
-			reinterpret_cast<uint8_t*>(cached_text_mask_ptr),
-			payload.text_mask.data(),
-			total_tokens * sizeof(uint8_t),
-			cudaMemcpyHostToDevice, stream));
+	const bool has_text_features = (cached_text_features_ptr && cached_text_mask_ptr);
+	const size_t text_feat_bytes = payload.textFeatureBytes();
+	const size_t text_mask_bytes = payload.textMaskBytes();
+
+	// Acquire double-buffer blocks (A and B)
+	auto handleA = scratch_pool->acquire(std::max({input_ids_bytes, numeric_val_bytes, text_feat_bytes}));
+	auto handleB = scratch_pool->acquire(std::max({target_ids_bytes, numeric_mask_bytes, text_mask_bytes}));
+
+	// --- Round 1: input_ids (block A) + target_ids (block B) ---
+	std::memcpy(handleA.data, payload.input_ids.data(), input_ids_bytes);
+	CUDA_CHECK(cudaMemcpyAsync(cached_token_ids_ptr, handleA.data,
+		input_ids_bytes, cudaMemcpyHostToDevice, stream));
+
+	std::memcpy(handleB.data, payload.target_ids.data(), target_ids_bytes);
+	CUDA_CHECK(cudaMemcpyAsync(cached_targets_ptr, handleB.data,
+		target_ids_bytes, cudaMemcpyHostToDevice, stream));
+
+	// Sync before reusing blocks — GPU must finish reading A and B
+	CUDA_CHECK(cudaStreamSynchronize(stream));
+
+	// --- Round 2: numeric_values (block A) + numeric_mask (block B) ---
+	std::memcpy(handleA.data, payload.numeric_values.data(), numeric_val_bytes);
+	CUDA_CHECK(cudaMemcpyAsync(cached_numeric_values_ptr, handleA.data,
+		numeric_val_bytes, cudaMemcpyHostToDevice, stream));
+
+	std::memcpy(handleB.data, payload.numeric_mask.data(), numeric_mask_bytes);
+	CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint8_t*>(cached_numeric_mask_ptr), handleB.data,
+		numeric_mask_bytes, cudaMemcpyHostToDevice, stream));
+
+	// --- Round 3: text_features (block A) + text_mask (block B) ---
+	if (has_text_features) {
+		CUDA_CHECK(cudaStreamSynchronize(stream));
+
+		std::memcpy(handleA.data, payload.text_features.data(), text_feat_bytes);
+		CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint16_t*>(cached_text_features_ptr), handleA.data,
+			text_feat_bytes, cudaMemcpyHostToDevice, stream));
+
+		std::memcpy(handleB.data, payload.text_mask.data(), text_mask_bytes);
+		CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint8_t*>(cached_text_mask_ptr), handleB.data,
+			text_mask_bytes, cudaMemcpyHostToDevice, stream));
 	}
+
+	// Final sync ensures all DMAs complete before releasing pinned blocks
+	CUDA_CHECK(cudaStreamSynchronize(stream));
+	scratch_pool->release(handleA);
+	scratch_pool->release(handleB);
 
 	auto copy_end = std::chrono::high_resolution_clock::now();
 	auto copy_ms = std::chrono::duration<double, std::milli>(copy_end - copy_start).count();
 	if constexpr (VerboseLogging::ENABLE_VOCAB_TIMING_LOGS) {
-		fprintf(stderr, "[VOCAB_TIMING] GPU copies complete: %.2f ms\n", copy_ms);
+		fprintf(stderr, "[VOCAB_TIMING] GPU copies complete (pinned staging): %.2f ms\n", copy_ms);
 	}
 
 	// Store dimensions in TrainingState for downstream consumers
@@ -201,6 +237,8 @@ float LanguageModel::computeLossBatch(
 		&cfg,
 		&training_state_,
 		autograd_encoder,
+		getEmbeddingLayer(),
+		getLmHeadLayer(),
 		scratch_block,
 		training_state_.cublas_handle,
 		stream,
@@ -210,11 +248,8 @@ float LanguageModel::computeLossBatch(
 		true
 	);
 	
-	// Set ScratchBlock input buffers (already on GPU from copies above)
-	autograd_ctx.token_numeric_values = training_state_.cached_token_numeric_values.data;
-	autograd_ctx.token_numeric_mask = reinterpret_cast<const uint8_t*>(training_state_.cached_token_numeric_mask.data);
-	autograd_ctx.token_text_features = reinterpret_cast<const uint16_t*>(training_state_.cached_token_text_features.data);
-	autograd_ctx.token_text_mask = reinterpret_cast<const uint8_t*>(training_state_.cached_token_text_mask.data);
+	// ScratchBlock side-channel data is now accessed directly from BatchPayload
+	// inside scratch_block_inject() — no manual wiring needed.
 
 	orderLog("computeLossBatch.forward_start",
 		batch_size, seq_len, total_tokens, 0);
@@ -272,7 +307,7 @@ float LanguageModel::computeLossBatch(
 		std::vector<float> logit_sample(sample_tokens * cfg.vocab_size);
 		std::vector<int> target_sample(sample_tokens);
 		
-		cudaMemcpy(logit_sample.data(), training_state_.cached_logits_tensor.data, 
+		cudaMemcpy(logit_sample.data(), training_state_.autograd_intermediates.logits_tensor.data, 
 		           logit_sample.size() * sizeof(float), cudaMemcpyDeviceToHost);
 		cudaMemcpy(target_sample.data(), reinterpret_cast<int*>(training_state_.cached_targets_tensor.data), 
 		           target_sample.size() * sizeof(int), cudaMemcpyDeviceToHost);
@@ -281,7 +316,9 @@ float LanguageModel::computeLossBatch(
 		fprintf(stderr, "[ForwardDiag] batch=%zu seq=%zu valid_tokens=%d\n", batch_size, seq_len, valid_tokens);
 		
 		// Compute and show logit stats
-		float logit_min = 1e30f, logit_max = -1e30f, logit_sum = 0.0f, logit_sq_sum = 0.0f;
+		float logit_min = std::numeric_limits<float>::infinity();
+		float logit_max = -std::numeric_limits<float>::infinity();
+		float logit_sum = 0.0f, logit_sq_sum = 0.0f;
 		int logit_nan = 0, logit_inf = 0;
 		for (size_t i = 0; i < logit_sample.size(); ++i) {
 			float v = logit_sample[i];
@@ -306,13 +343,15 @@ float LanguageModel::computeLossBatch(
 		}
 		
 		// Show per-position logit distribution analysis
-		fprintf(stderr, "[ForwardDiag] Per-position analysis (first %zu positions):\n", sample_tokens);
+
 		for (size_t pos = 0; pos < sample_tokens; ++pos) {
 			int target = target_sample[pos];
 			float* pos_logits = logit_sample.data() + pos * cfg.vocab_size;
 			
 			// Compute per-position stats
-			float pos_min = 1e30f, pos_max = -1e30f, pos_sum = 0.0f, pos_sq_sum = 0.0f;
+			float pos_min = std::numeric_limits<float>::infinity();
+			float pos_max = -std::numeric_limits<float>::infinity();
+			float pos_sum = 0.0f, pos_sq_sum = 0.0f;
 			for (int v = 0; v < cfg.vocab_size; ++v) {
 				float lv = pos_logits[v];
 				pos_min = std::min(pos_min, lv);
@@ -325,7 +364,7 @@ float LanguageModel::computeLossBatch(
 			float pos_std = sqrtf(fmaxf(0.0f, pos_var));
 			
 			// Find max logit and its index
-			float max_logit = -1e30f;
+			float max_logit = -std::numeric_limits<float>::infinity();
 			int max_idx = 0;
 			float target_logit = 0.0f;
 			for (int v = 0; v < cfg.vocab_size; ++v) {
@@ -368,8 +407,7 @@ float LanguageModel::computeLossBatch(
 	// === END FORWARD DIAGNOSTIC ===
 
 	// ═══════════════════════════════════════════════════════════════════════════
-	// Compute loss via centralized autograd path (Issue #142)
-	// Handles: text CE, numeric regression, learned loss weighting
+	// Compute loss via centralized autograd path (text cross-entropy)
 	// ═══════════════════════════════════════════════════════════════════════════
 	auto loss_result = GRIM::Autograd::computeAutogradLoss(autograd_ctx);
 	if (!loss_result.success) {
@@ -381,6 +419,7 @@ float LanguageModel::computeLossBatch(
 	orderLog("computeLossBatch.loss_done",
 		batch_size, seq_len, total_tokens, valid_tokens);
 
+	exception_guard.dismiss();
 	return loss_result.loss_value;
 }
 

@@ -30,7 +30,6 @@
 #include "../grim_layer_gpu.hpp"
 #include "../LayernNorm/RMSNorm_GPU.hpp"
 #include "../FeedForward/Feed_Forward_GPU.hpp"
-#include "../Attention/QKV_Projector.hpp"
 #include "../FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/PBM/PositionalBiasMethod.hpp"
@@ -76,7 +75,8 @@ struct EncodingConfig {
     float softmax_temperature = 1.0f;
     bool qk_norm_enabled = false;
     float qk_norm_scale = 8.0f;
-    float attention_dropout = 1.0f;   // Attention dropout DROP rate (0.0 = disabled, 0.15 = 15% dropped)
+    float dropout_rate = 0.0f;        // Sublayer dropout DROP rate (0.0 = disabled). Applied after attention projection and FFN output.
+    float attention_dropout = 0.0f;   // Attention dropout DROP rate (0.0 = disabled, 0.15 = 15% dropped)
     
     // Positional encoding (ALiBi+RoPE hybrid) - pointer to shared state
     // WARNING: If nullptr, attention sees no positional info - all positions equivalent!
@@ -151,7 +151,16 @@ public:
     // Construction
     //--------------------------------------------------
     EncodingLayer() = default;
-    explicit EncodingLayer(const EncodingConfig& cfg);
+    
+    /// Self-allocating constructor — layer owns its weights
+    /// @param cfg       Fully-populated EncodingConfig (d_model, d_ff, num_heads, etc.)
+    /// @param seed      Base PRNG seed.  Offsets: +0 W_qkv, +1 W_o, +2 FFN W1, +3 FFN W2
+    /// @param residual_scale  Issue #142: GPT-2 init scaling for W_o (1/sqrt(2*num_layers))
+    /// @param layer_scale_init Issue #109: CaiT LayerScale initial value (only when config.use_layer_scale)
+    EncodingLayer(const EncodingConfig& cfg, uint64_t seed,
+                  float residual_scale = 1.0f,
+                  float layer_scale_init = 1.0f);
+    
     ~EncodingLayer();
     
     // No copy (cuBLAS handle)
@@ -191,62 +200,18 @@ public:
      * @param stream CUDA stream for execution
      * @param intermediates Storage for this layer's intermediate tensors (REQUIRED for autograd)
      * @param training_step Current training step for per-step dropout seed generation (0 = no dropout)
+     * @param layer_idx Layer index within encoder stack (for equation logging and dropout seed)
      * @return output [total_tokens, d_model] with grad_fn attached
      */
     Tensor forward(const Tensor& input, int seq_len, cudaStream_t stream,
                    struct ForwardIntermediates& intermediates,
-                   uint64_t training_step = 0);
+                   uint64_t training_step = 0,
+                   int layer_idx = 0);
     
     //--------------------------------------------------
-    // Weight Management
+    // Weight Management (Pattern B: self-allocated)
     //--------------------------------------------------
-    void allocateWeights();  // Call once after setConfig
-    void ensureWeightStorage() { allocateWeights(); }  // Alias for compatibility
-    bool weightsAllocated() const noexcept { return weights_allocated_; }
-    bool usingExternalWeights() const noexcept { return using_external_weights_; }
-    
-    /**
-     * Use external weight Tensors from TrainingState instead of allocating own.
-     * 
-     * CRITICAL for autograd: When this is called, the EncodingLayer's internal
-     * Tensor objects (W_qkv_, rms1_gamma_, etc.) become VIEWS of the TrainingState
-     * weight Tensors. This means:
-     *   - autograd backward writes gradients directly to TrainingState buffers
-     *   - optimizer sees correct gradients without any copying
-     *   - weight updates apply to the single shared copy
-     * 
-     * This MUST be called before forward() if using autograd training.
-     * Calling allocateWeights() after this will throw (prevents confusion).
-     * 
-     * @param rms1_gamma [d_model] - pre-attention RMSNorm gamma
-     * @param rms2_gamma [d_model] - pre-FFN RMSNorm gamma  
-     * @param qkv_weight [(d_model + 2*kv_dim), d_model] - QKV projection weights
-     * @param qkv_bias [d_model + 2*kv_dim] - QKV projection bias (can be empty)
-     * @param out_weight [d_model, d_model] - output projection weights
-     * @param out_bias [d_model] - output projection bias (can be empty)
-     * @param ffn_w1 [d_ff, d_model] - FFN up-projection
-     * @param ffn_b1 [d_ff] - FFN bias 1 (can be empty)
-     * @param ffn_w2 [d_model, d_ff] - FFN down-projection
-     * @param ffn_b2 [d_model] - FFN bias 2 (can be empty)
-     * @param rms_post_attn_gamma [d_model] - sandwich norm after attention residual
-     * @param rms_post_ffn_gamma [d_model] - sandwich norm after FFN residual
-     */
-    void useExternalWeights(
-        Tensor& rms1_gamma,
-        Tensor& rms2_gamma,
-        Tensor& qkv_weight,
-        Tensor& qkv_bias,
-        Tensor& out_weight,
-        Tensor& out_bias,
-        Tensor& ffn_w1,
-        Tensor& ffn_b1,
-        Tensor& ffn_w2,
-        Tensor& ffn_b2,
-        Tensor& rms_post_attn_gamma,
-        Tensor& rms_post_ffn_gamma,
-        Tensor* layer_scale1 = nullptr,  // Issue #109: optional LayerScale for attention residual
-        Tensor* layer_scale2 = nullptr   // Issue #109: optional LayerScale for FFN residual
-    );
+    bool weightsReady() const noexcept { return weights_ready_; }
     
     //--------------------------------------------------
     // Tensor Accessors (use these for ALL access)
@@ -292,10 +257,9 @@ public:
     }
     
     //--------------------------------------------------
-    // Workspace
+    // Workspace Budget — DELETED (Rule 20/26)
+    // The autograd forward creates its own Tensors; encoder_workspace was never consumed.
     //--------------------------------------------------
-    std::size_t requiredWorkspaceBytes(int total_tokens, int seq_len) const;
-    void setWorkspace(float* workspace, std::size_t bytes);
     
     // NOTE: CRTP interface (forwardImpl, backwardImpl, applyGradientsImpl) DELETED per Rule 20
     // Use Tensor forward(const Tensor& input, int seq_len, cudaStream_t) directly.
@@ -305,9 +269,11 @@ private:
     void freeWeights();
     void validateReady(const char* context) const;
     
+    /// Pattern B: self-allocate and Xavier-init all weights + create FFN
+    void allocateWeights(uint64_t seed, float residual_scale, float layer_scale_init);
+    
     EncodingConfig config_{};
-    bool weights_allocated_ = false;
-    bool using_external_weights_ = false;  // True if weights are views of external Tensors
+    bool weights_ready_ = false;  // Set by allocateWeights()
     
     // NOTE: cuBLAS handle is in config_.cublas_handle (NOT owned - Rule 22)
     
@@ -335,25 +301,6 @@ private:
     //   residual2 = residual1 + layer_scale2 * ffn_output
     Tensor layer_scale1_;  // [1] scalar for attention
     Tensor layer_scale2_;  // [1] scalar for FFN
-    
-    // Workspace (NOT owned - provided by caller)
-    float* workspace_ = nullptr;
-    std::size_t workspace_bytes_ = 0;
 };
-
-//======================================================//
-// Issue #37 DIAGNOSTIC: Hidden State Alignment Tracker
-// Call setEncoderW277Reference() before forward pass iteration
-// to enable per-layer alignment tracking with W[277]
-//======================================================//
-void setEncoderW277Reference(const float* lm_weights, int vocab_size, int d_model, cudaStream_t stream);
-void resetEncoderDiagCount();
-
-//======================================================//
-// Issue #77 DIAGNOSTIC: ln1_out Statistics Logging
-// Call resetIssue77FwdDiag() at start of each training batch
-// to reset per-batch diagnostic counters
-//======================================================//
-void resetIssue77FwdDiag();
 
 } // namespace GRIM

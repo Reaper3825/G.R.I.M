@@ -569,7 +569,13 @@ std::vector<int> UniByte::encode(const std::string& text) const {
 UniByteResult UniByte::encodeWithMetadata(const std::string& text) const {
     // Detect structures first
     auto structures = detectStructures(text);
-    return encodeInternal(text, structures);
+    auto result = encodeInternal(text, structures);
+    
+    // Pipeline contract: validate all per-token arrays are consistent
+    // before this result can enter BatchPayload / GPU tensor pipeline.
+    result.validate("UniByte::encodeWithMetadata");
+    
+    return result;
 }
 
 //======================================================//
@@ -734,11 +740,24 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
         return result;
     }
     
+    // Pre-allocate based on heuristic: ~1 token per 3-4 bytes + atoms
+    // This avoids repeated vector reallocation during push_back
+    const size_t estimated_tokens = (text.size() / 3) + structures.size() + 8;
+    result.token_ids.reserve(estimated_tokens);
+    result.is_byte_fallback.reserve(estimated_tokens);
+    result.token_numeric_values.reserve(estimated_tokens);
+    result.token_numeric_mask.reserve(estimated_tokens);
+    result.token_text_features.reserve(estimated_tokens * kTextFeatureDim);
+    result.token_text_mask.reserve(estimated_tokens);
+    result.atoms.reserve(structures.size());
+    
+    // Pre-computed zero text features (FP16) — avoid recomputing floatToFp16(0.0f) per token
+    static const uint16_t kZeroFp16 = floatToFp16(0.0f);
+    
     // Helper: append zeros for non-atom tokens (no text features)
     auto appendZeroTextFeatures = [&]() {
-        for (int i = 0; i < kTextFeatureDim; ++i) {
-            result.token_text_features.push_back(floatToFp16(0.0f));
-        }
+        result.token_text_features.insert(
+            result.token_text_features.end(), kTextFeatureDim, kZeroFp16);
         result.token_text_mask.push_back(0);
     };
     
@@ -761,7 +780,7 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
             result.token_numeric_mask.push_back(0);
             appendZeroTextFeatures();  // Non-atom tokens get zero text features
             
-            if (tid < BYTE_VOCAB_SIZE) {
+            if (tid >= BYTE_TOKEN_OFFSET && tid < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE) {
                 result.is_byte_fallback.push_back(true);
                 result.byte_tokens++;
             } else {
@@ -904,7 +923,13 @@ std::string UniByte::decode(const int* token_ids, size_t count) const {
     for (size_t i = 0; i < count; ++i) {
         int tid = token_ids[i];
         
-        if (isByteToken(tid)) {
+        if (tid >= SPECIAL_TOKEN_OFFSET && tid < NUM_SPECIAL_TOKENS) {
+            // Special token
+            if (tid == UNK_TOKEN_ID) result += "<unk>";
+            else if (tid == PAD_TOKEN_ID) { /* skip padding */ }
+            else if (tid == BOS_TOKEN_ID) result += "<s>";
+            else if (tid == EOS_TOKEN_ID) result += "</s>";
+        } else if (isByteToken(tid)) {
             // Byte token - direct character output
             result.push_back(static_cast<char>(tid - BYTE_TOKEN_OFFSET));
         } else if (isAtomToken(tid)) {
@@ -927,7 +952,12 @@ std::string UniByte::decodeWithAtoms(const std::vector<int>& token_ids,
     std::string result;
     
     for (int tid : token_ids) {
-        if (isByteToken(tid)) {
+        if (isSpecialToken(tid)) {
+            if (tid == UNK_TOKEN_ID) result += "<unk>";
+            else if (tid == PAD_TOKEN_ID) { /* skip padding */ }
+            else if (tid == BOS_TOKEN_ID) result += "<s>";
+            else if (tid == EOS_TOKEN_ID) result += "</s>";
+        } else if (isByteToken(tid)) {
             result.push_back(static_cast<char>(tid - BYTE_TOKEN_OFFSET));
         } else if (isAtomToken(tid)) {
             AtomType type = tokenIdToAtomType(tid);
@@ -952,16 +982,25 @@ int UniByte::vocabSize() const {
 }
 
 int UniByte::totalVocabSize() const {
-    return BYTE_VOCAB_SIZE + ATOM_VOCAB_SIZE + unigram_.vocabSize();
+    return NUM_SPECIAL_TOKENS + BYTE_VOCAB_SIZE + ATOM_VOCAB_SIZE + unigram_.vocabSize();
+}
+
+TokenLayout UniByte::tokenLayout() const {
+    TokenLayout layout;
+    layout.num_special = NUM_SPECIAL_TOKENS;          // from Byte.hpp (live constexpr)
+    layout.num_bytes   = BYTE_VOCAB_SIZE;             // from Byte.hpp (live constexpr)
+    layout.num_atoms   = ATOM_VOCAB_SIZE;             // from Unigram.hpp (inline, set by configureTokenLayout)
+    layout.num_unigram = unigram_.vocabSize();        // from UnigramLM (actual loaded piece count)
+    return layout;
 }
 
 void UniByte::capVocabSize(int max_vocab) {
-    // Cap only affects unigram vocab (bytes and atoms are always included)
-    const int fixed_size = BYTE_VOCAB_SIZE + ATOM_VOCAB_SIZE;  // Bytes + atom type slots
+    // Cap only affects unigram vocab (specials, bytes, and atoms are always included)
+    const int fixed_size = NUM_SPECIAL_TOKENS + BYTE_VOCAB_SIZE + ATOM_VOCAB_SIZE;  // Specials + Bytes + atom type slots
     
     if (max_vocab <= fixed_size) {
         throw std::runtime_error("max_vocab must be > " + std::to_string(fixed_size) + 
-                                 " to include bytes + atoms");
+                                 " to include specials + bytes + atoms");
     }
     
     const int max_unigram_size = max_vocab - fixed_size;
@@ -969,19 +1008,23 @@ void UniByte::capVocabSize(int max_vocab) {
 }
 
 int UniByte::padId() const {
-    return UNIGRAM_VOCAB_OFFSET + unigram_.padId();
+    return PAD_TOKEN_ID;  // Absolute ID = 1
 }
 
 int UniByte::unkId() const {
-    return UNIGRAM_VOCAB_OFFSET + unigram_.unkId();
+    return UNK_TOKEN_ID;  // Absolute ID = 0
 }
 
 int UniByte::bosId() const {
-    return UNIGRAM_VOCAB_OFFSET + unigram_.bosId();
+    return BOS_TOKEN_ID;  // Absolute ID = 2
 }
 
 int UniByte::eosId() const {
-    return UNIGRAM_VOCAB_OFFSET + unigram_.eosId();
+    return EOS_TOKEN_ID;  // Absolute ID = 3
+}
+
+bool UniByte::isSpecialToken(int token_id) const {
+    return token_id >= SPECIAL_TOKEN_OFFSET && token_id < NUM_SPECIAL_TOKENS;
 }
 
 bool UniByte::isByteToken(int token_id) const {
@@ -997,6 +1040,12 @@ bool UniByte::isUnigramToken(int token_id) const {
 }
 
 std::string UniByte::tokenToString(int token_id) const {
+    // Handle special tokens explicitly (before byte/atom/unigram checks)
+    if (token_id == UNK_TOKEN_ID) return "<UNK>";
+    if (token_id == PAD_TOKEN_ID) return "<PAD>";
+    if (token_id == BOS_TOKEN_ID) return "<BOS>";
+    if (token_id == EOS_TOKEN_ID) return "<EOS>";
+
     if (isByteToken(token_id)) {
         return byte_encoder_.tokenToString(token_id);
     } else if (isAtomToken(token_id)) {

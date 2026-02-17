@@ -439,15 +439,25 @@ def level5_tokenizer_loss_alignment():
     print(f"Tokens: {tokens}")
     print(f"Token count: {len(tokens)}")
     
+    # Token layout: [0-3]=Special, [4-259]=Byte, [260-279]=Atom, [280+]=Unigram
+    NUM_SPECIAL_TOKENS = 4
+    BYTE_TOKEN_OFFSET = 4
+    BYTE_VOCAB_SIZE = 256
+    ATOM_TOKEN_START = BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE  # 260
+    ATOM_VOCAB_SIZE = 20
+    UNIGRAM_TOKEN_START = ATOM_TOKEN_START + ATOM_VOCAB_SIZE  # 280
+
     # Count token types
-    byte_tokens = [t for t in tokens if 0 <= t < 256]
-    atom_tokens = [t for t in tokens if 256 <= t < 512]
-    unigram_tokens = [t for t in tokens if t >= 512]
+    special_tokens = [t for t in tokens if 0 <= t < NUM_SPECIAL_TOKENS]
+    byte_tokens = [t for t in tokens if BYTE_TOKEN_OFFSET <= t < ATOM_TOKEN_START]
+    atom_tokens = [t for t in tokens if ATOM_TOKEN_START <= t < UNIGRAM_TOKEN_START]
+    unigram_tokens = [t for t in tokens if t >= UNIGRAM_TOKEN_START]
     
     print(f"\nToken breakdown:")
-    print(f"  Byte tokens [0-255]:     {len(byte_tokens)} ({byte_tokens})")
-    print(f"  Atom tokens [256-511]:   {len(atom_tokens)} ({atom_tokens})")
-    print(f"  Unigram tokens [512+]:   {len(unigram_tokens)} ({unigram_tokens})")
+    print(f"  Special tokens [0-3]:    {len(special_tokens)} ({special_tokens})")
+    print(f"  Byte tokens [4-259]:     {len(byte_tokens)} ({byte_tokens})")
+    print(f"  Atom tokens [260-279]:   {len(atom_tokens)} ({atom_tokens})")
+    print(f"  Unigram tokens [280+]:   {len(unigram_tokens)} ({unigram_tokens})")
     
     # Check byte tokens are present
     if len(byte_tokens) == 0:
@@ -474,8 +484,12 @@ def level5_tokenizer_loss_alignment():
     grad_input_emb = np.tile(grad_hidden / len(tokens), (len(tokens), 1))
     
     # Check gradients for each token type
-    byte_grads = [np.linalg.norm(grad_input_emb[i]) for i, t in enumerate(tokens) if 0 <= t < 256]
-    unigram_grads = [np.linalg.norm(grad_input_emb[i]) for i, t in enumerate(tokens) if t >= 512]
+    # Token layout: [0-3]=Special, [4-259]=Byte, [260-279]=Atom, [280+]=Unigram
+    BYTE_TOKEN_OFFSET = 4
+    ATOM_TOKEN_START = 260
+    UNIGRAM_TOKEN_START = 280
+    byte_grads = [np.linalg.norm(grad_input_emb[i]) for i, t in enumerate(tokens) if BYTE_TOKEN_OFFSET <= t < ATOM_TOKEN_START]
+    unigram_grads = [np.linalg.norm(grad_input_emb[i]) for i, t in enumerate(tokens) if t >= UNIGRAM_TOKEN_START]
     
     print(f"\nGradient norms:")
     print(f"  Byte tokens mean:    {np.mean(byte_grads):.6f}")

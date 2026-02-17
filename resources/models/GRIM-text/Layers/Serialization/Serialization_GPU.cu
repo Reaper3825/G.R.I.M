@@ -227,6 +227,33 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
                 return false;
             }
         }
+
+        // LayerScale (Issue #109) — single scalar per sublayer
+        // Rule 20: If model expects LayerScale, checkpoint MUST have it. No silent fallback.
+        if (layer_view.layer_scale1.ptr) {
+            if (!fb_layer->layer_scale1() || fb_layer->layer_scale1()->size() == 0) {
+                GRIM::Logging::EmitModuleError(kLogModule,
+                    "[load] Checkpoint missing layer_scale1 for layer " + std::to_string(layer_idx)
+                    + " but model requires use_layer_scale=true. Cannot load incompatible checkpoint.");
+                return false;
+            }
+            std::vector<float> h_ls1(fb_layer->layer_scale1()->begin(), fb_layer->layer_scale1()->end());
+            if (!upload_device_vector(h_ls1, layer_view.layer_scale1, "layer_scale1")) {
+                return false;
+            }
+        }
+        if (layer_view.layer_scale2.ptr) {
+            if (!fb_layer->layer_scale2() || fb_layer->layer_scale2()->size() == 0) {
+                GRIM::Logging::EmitModuleError(kLogModule,
+                    "[load] Checkpoint missing layer_scale2 for layer " + std::to_string(layer_idx)
+                    + " but model requires use_layer_scale=true. Cannot load incompatible checkpoint.");
+                return false;
+            }
+            std::vector<float> h_ls2(fb_layer->layer_scale2()->begin(), fb_layer->layer_scale2()->end());
+            if (!upload_device_vector(h_ls2, layer_view.layer_scale2, "layer_scale2")) {
+                return false;
+            }
+        }
     }
 
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -254,34 +281,6 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
         }
     }
 
-    const auto* fb_numeric_head = model_fb->numeric_head();
-    if (fb_numeric_head && request.numeric_head.enabled) {
-        if (request.numeric_head.projection.ptr && fb_numeric_head->projection_data()) {
-            std::vector<float> num_proj_host(fb_numeric_head->projection_data()->begin(),
-                                             fb_numeric_head->projection_data()->end());
-            if (!upload_device_vector(num_proj_host, request.numeric_head.projection, "Numeric head projection")) {
-                return false;
-            }
-        } else {
-            GRIM::Logging::EmitModuleError(kLogModule, "[load] Numeric head projection missing");
-            return false;
-        }
-
-        if (request.numeric_head.expect_bias && request.numeric_head.bias.ptr && fb_numeric_head->bias_data()) {
-            std::vector<float> num_bias_host(fb_numeric_head->bias_data()->begin(),
-                                             fb_numeric_head->bias_data()->end());
-            if (!upload_device_vector(num_bias_host, request.numeric_head.bias, "Numeric head bias")) {
-                return false;
-            }
-        } else if (request.numeric_head.expect_bias) {
-            GRIM::Logging::EmitModuleError(kLogModule, "[load] Numeric head bias missing");
-            return false;
-        }
-    } else if (request.numeric_head.enabled) {
-        GRIM::Logging::EmitModuleError(kLogModule, "[load] Numeric head block missing in checkpoint");
-        return false;
-    }
-
     const auto* fb_scratch_block = model_fb->scratch_block();
     if (fb_scratch_block && fb_scratch_block->enabled()) {
         if (request.scratch_block.atom_type_embeddings.ptr && fb_scratch_block->atom_type_embeddings()) {
@@ -304,6 +303,22 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
             std::vector<float> sb_text_proj(fb_scratch_block->text_feature_projection()->begin(),
                                             fb_scratch_block->text_feature_projection()->end());
             if (!upload_device_vector(sb_text_proj, request.scratch_block.text_feature_projection, "ScratchBlock text_feature_projection")) {
+                return false;
+            }
+        }
+
+        // Value extraction head (optional - may not exist in older checkpoints)
+        if (request.scratch_block.value_extraction_weight.ptr && fb_scratch_block->value_extraction_weight()) {
+            std::vector<float> sb_extract_w(fb_scratch_block->value_extraction_weight()->begin(),
+                                            fb_scratch_block->value_extraction_weight()->end());
+            if (!upload_device_vector(sb_extract_w, request.scratch_block.value_extraction_weight, "ScratchBlock value_extraction_weight")) {
+                return false;
+            }
+        }
+        if (request.scratch_block.value_extraction_bias.ptr && fb_scratch_block->value_extraction_bias()) {
+            std::vector<float> sb_extract_b(fb_scratch_block->value_extraction_bias()->begin(),
+                                            fb_scratch_block->value_extraction_bias()->end());
+            if (!upload_device_vector(sb_extract_b, request.scratch_block.value_extraction_bias, "ScratchBlock value_extraction_bias")) {
                 return false;
             }
         }
@@ -531,9 +546,23 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
                 builder, builder.CreateVector(h_rms_post_ffn_gamma));
         }
 
+        // LayerScale serialization (Issue #109) — single scalar per sublayer
+        flatbuffers::Offset<flatbuffers::Vector<float>> fb_ls1 = 0;
+        flatbuffers::Offset<flatbuffers::Vector<float>> fb_ls2 = 0;
+        if (layer_view.layer_scale1.ptr) {
+            std::vector<float> h_ls1;
+            if (!download_into(h_ls1, layer_view.layer_scale1, "layer_scale1")) return false;
+            fb_ls1 = builder.CreateVector(h_ls1);
+        }
+        if (layer_view.layer_scale2.ptr) {
+            std::vector<float> h_ls2;
+            if (!download_into(h_ls2, layer_view.layer_scale2, "layer_scale2")) return false;
+            fb_ls2 = builder.CreateVector(h_ls2);
+        }
+
         fb_layers.push_back(GRIMTransformer::CreateEncoderLayerWeights(
             builder, fb_attn, fb_ffn, fb_rms1, fb_rms2,
-            0, 0,  // layer_scale1, layer_scale2 (not currently serialized)
+            fb_ls1, fb_ls2,
             fb_rms_post_attn, fb_rms_post_ffn,
             static_cast<uint32_t>(layer_idx)));
     }
@@ -576,35 +605,6 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         cfg.tie_embeddings,
         cfg.use_bias && lm_head_view.bias.ptr != nullptr);
 
-    flatbuffers::Offset<GRIMTransformer::NumericHeadWeights> fb_numeric_head = 0;
-    const auto& num_view = request.sources.numeric_head;
-    if (num_view.enabled && num_view.projection.ptr) {
-        auto num_proj = download_device_vector(num_view.projection, "Numeric head projection");
-        if (num_proj.empty() && num_view.projection.count > 0) {
-            return false;
-        }
-        flatbuffers::Offset<flatbuffers::Vector<float>> fb_num_proj = builder.CreateVector(num_proj);
-
-        flatbuffers::Offset<flatbuffers::Vector<float>> fb_num_bias = 0;
-        if (num_view.has_bias && num_view.bias.ptr) {
-            auto num_bias = download_device_vector(num_view.bias, "Numeric head bias");
-            if (num_bias.empty() && num_view.bias.count > 0) {
-                return false;
-            }
-            fb_num_bias = builder.CreateVector(num_bias);
-        }
-
-        fb_numeric_head = GRIMTransformer::CreateNumericHeadWeights(
-            builder,
-            fb_num_proj,
-            fb_num_bias,
-            static_cast<uint32_t>(cfg.d_model),
-            cfg.use_bias && num_view.bias.ptr != nullptr);
-    } else if (num_view.enabled) {
-        GRIM::Logging::EmitModuleError(kLogModule, "[save] Numeric head projection missing");
-        return false;
-    }
-
     // Save ScratchBlock weights (if enabled)
     flatbuffers::Offset<GRIMTransformer::ScratchBlockWeights> fb_scratch_block = 0;
     const auto& sb_view = request.sources.scratch_block;
@@ -612,13 +612,21 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         auto sb_atom_emb = download_device_vector(sb_view.atom_type_embeddings, "ScratchBlock atom_type_embeddings");
         auto sb_atom_proj = download_device_vector(sb_view.atom_projection, "ScratchBlock atom_projection");
         auto sb_text_proj = download_device_vector(sb_view.text_feature_projection, "ScratchBlock text_feature_projection");
+        auto sb_extract_w = (sb_view.value_extraction_weight.ptr && sb_view.value_extraction_weight.count > 0)
+            ? download_device_vector(sb_view.value_extraction_weight, "ScratchBlock value_extraction_weight")
+            : std::vector<float>{};
+        auto sb_extract_b = (sb_view.value_extraction_bias.ptr && sb_view.value_extraction_bias.count > 0)
+            ? download_device_vector(sb_view.value_extraction_bias, "ScratchBlock value_extraction_bias")
+            : std::vector<float>{};
         
         if (!sb_atom_emb.empty() || sb_view.atom_type_embeddings.count == 0) {
             fb_scratch_block = GRIMTransformer::CreateScratchBlockWeights(
                 builder,
                 builder.CreateVector(sb_atom_emb),
                 builder.CreateVector(sb_atom_proj),
-                builder.CreateVector(sb_text_proj),  // text feature projection
+                builder.CreateVector(sb_text_proj),
+                sb_extract_w.empty() ? 0 : builder.CreateVector(sb_extract_w),
+                sb_extract_b.empty() ? 0 : builder.CreateVector(sb_extract_b),
                 static_cast<uint32_t>(sb_view.num_atom_types),
                 static_cast<uint32_t>(sb_view.atom_embedding_dim),
                 static_cast<uint32_t>(sb_view.d_model),
@@ -626,7 +634,9 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
                 sb_view.enabled);
             GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[save] ScratchBlock: atom_emb=",
                                                 sb_atom_emb.size(), " atom_proj=", sb_atom_proj.size(),
-                                                " text_proj=", sb_text_proj.size()));
+                                                " text_proj=", sb_text_proj.size(),
+                                                " extract_w=", sb_extract_w.size(),
+                                                " extract_b=", sb_extract_b.size()));
         }
     }
 
@@ -669,7 +679,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         fb_embeddings,
         fb_encoder_layers,
         fb_lm_head,
-        fb_numeric_head,
+        0,                   // numeric_head removed - not used
         fb_scratch_block,
         fb_final_rms_gamma,  // Issue #33: Final RMSNorm gamma
         0,                   // loss_weighting (not used)

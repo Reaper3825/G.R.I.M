@@ -289,7 +289,7 @@ StartupConfig loadConfiguration(int argc, char** argv) {
     
     // Map scratch block configuration
     config.scratch.enabled = config.hyperparameters.scratch_blocks_enabled;
-    config.scratch.max_tokens_per_block = config.hyperparameters.scratch_max_tokens_per_block;
+    // max_tokens_per_block is computed from max_cached_tokens in InitTrainingState — not from config
     config.scratch.num_blocks = config.hyperparameters.scratch_num_blocks;
     config.scratch.write_combined = config.hyperparameters.scratch_write_combined;
     
@@ -372,7 +372,11 @@ StartupConfig loadConfiguration(int argc, char** argv) {
     } else {
         throw std::runtime_error("FATAL: max_seq_len not configured in ai_config.json (stability or hyperparameters)");
     }
-    config.sliding_window_stride = std::max(1, config.max_seq_len / 2);
+    // stride = 7/8 of max_seq_len → 12.5% overlap (128 context tokens at seq_len=1024)
+    // Previous: max_seq_len/2 = 50% overlap wasted ~30% of total GPU compute on masked tokens.
+    // 12.5% overlap is standard practice — enough context for attention continuity
+    // without burning half the token budget on zero-gradient positions.
+    config.sliding_window_stride = std::max(1, config.max_seq_len * 7 / 8);
     
     // Apply stability overrides to batch size and LR (only if stability mode enabled)
     if (config.stability.enabled) {
@@ -567,11 +571,12 @@ SequenceData loadTrainingData(
                 seq.token_text_features.push_back(0);
             }
             seq.token_text_mask.push_back(0);
-            // Mask final target (don't train to predict EOS)
+            // Fix shift: the PREVIOUS position's target was -1 (no next token existed
+            // when DataLoader ran). Now EOS follows it, so set target = eos_id.
             if (!seq.targets.empty()) {
-                seq.targets.back() = -1;
+                seq.targets.back() = eos_id;  // position before EOS → predict EOS
             }
-            seq.targets.push_back(-1);
+            seq.targets.push_back(-1);  // EOS position itself: nothing follows
             added_eos++;
         }
     }
@@ -600,10 +605,30 @@ SequenceData loadTrainingData(
         size_t long_seq_count = 0;
         size_t generated_windows = 0;
         size_t bos_prepended = 0;
+        size_t padded_count = 0;
+        
+        const int pad_id = tokenizer.padId();
+        
+        // Helper lambda to pad sequences to exactly max_seq_len
+        auto PadToSeqMaxLen = [&](TrainingSequence& seq) {
+            if (static_cast<int>(seq.token_ids.size()) < max_seq_len) {
+                seq.token_ids.resize(max_seq_len, pad_id);
+                seq.targets.resize(max_seq_len, -1);
+                seq.token_numeric_values.resize(max_seq_len, 0.0f);
+                seq.token_numeric_mask.resize(max_seq_len, 0);
+                seq.token_text_features.resize(
+                    max_seq_len * GRIM::Tokenizer::kTextFeatureDim, 0);
+                seq.token_text_mask.resize(max_seq_len, 0);
+                padded_count++;
+            }
+        };
         
         for (const auto& seq : sequences) {
             if (static_cast<int>(seq.token_ids.size()) <= max_seq_len) {
-                windowed.push_back(seq);
+                // Short sequence or exactly max_seq_len
+                TrainingSequence copy = seq;
+                PadToSeqMaxLen(copy);
+                windowed.push_back(std::move(copy));
                 continue;
             }
             
@@ -612,6 +637,7 @@ SequenceData loadTrainingData(
             size_t start = 0;
             const size_t stride = static_cast<size_t>(sliding_window_stride);
             bool is_first_window = true;
+            size_t prev_source_end = 0;  // Track previous window's source end for overlap masking
             
             while (start < seq_len) {
                 // Reserve 1 token for BOS if this is not the first window
@@ -657,14 +683,53 @@ SequenceData loadTrainingData(
                     window.targets[0] = -1;  // Mask BOS position
                 }
                 
+                // Issue #143: Mask overlap prefix targets in non-first windows.
+                // With stride < max_seq_len, the first (prev_source_end - start)
+                // tokens were already trained on in the previous window. Mask them
+                // to prevent double-training on the same targets.
+                if (!is_first_window && prev_source_end > start) {
+                    const size_t overlap_len = prev_source_end - start;
+                    const size_t bos_offset = (bos_id >= 0) ? 1 : 0;  // Skip BOS (already masked)
+                    for (size_t i = bos_offset; i < bos_offset + overlap_len && i < window.targets.size(); ++i) {
+                        window.targets[i] = -1;
+                    }
+                }
+                
                 // Mask last position for window boundary (except validation)
                 if (mask_window_last_token && !window.targets.empty()) {
                     window.targets.back() = -1;
                 }
                 
+                // Issue #146: Inject EOS at end of non-final windows.
+                // Without this, ~55% of training windows have NO EOS token,
+                // so the model never learns when to stop generating.
+                // The last position is already target-masked above, so replacing
+                // its token_id with EOS costs nothing — the model sees EOS as
+                // input and the second-to-last position learns to predict EOS.
+                const bool is_final_window = (end == seq_len);
+                if (!is_final_window && eos_id >= 0 && !window.token_ids.empty()) {
+                    window.token_ids.back() = eos_id;
+                    window.token_numeric_values.back() = 0.0f;
+                    window.token_numeric_mask.back() = 0;
+                    // Clear text features for the replaced position
+                    const size_t last_tf_start = (window.token_ids.size() - 1) * GRIM::Tokenizer::kTextFeatureDim;
+                    for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
+                        window.token_text_features[last_tf_start + i] = 0;
+                    }
+                    window.token_text_mask.back() = 0;
+                    // Second-to-last position learns to predict EOS
+                    if (window.targets.size() >= 2) {
+                        window.targets[window.targets.size() - 2] = eos_id;
+                    }
+                }
+                
+                // Pad window to max_seq_len (last windows are typically short)
+                PadToSeqMaxLen(window);
+                
                 windowed.push_back(std::move(window));
                 generated_windows++;
                 
+                prev_source_end = end;  // Track for overlap masking in next window
                 if (end == seq_len) break;
                 start += stride;
                 is_first_window = false;
@@ -677,6 +742,11 @@ SequenceData loadTrainingData(
                        std::to_string(long_seq_count) + " long sequences expanded into " +
                        std::to_string(generated_windows) + " windows" +
                        " (BOS prepended to " + std::to_string(bos_prepended) + " mid-sequence windows)");
+        }
+        if (padded_count > 0) {
+            logger.log("[Data] " + split_name + ": Padded " + std::to_string(padded_count) +
+                       " sequences to max_seq_len=" + std::to_string(max_seq_len) +
+                       " (pad_id=" + std::to_string(pad_id) + ")");
         }
     };
     
@@ -799,16 +869,6 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
               ", max_atoms=" + std::to_string(model_config.scratch_block_max_atoms) +
               ", atom_scale=" + std::to_string(model_config.scratch_block_atom_scale));
 
-    model_config.numeric_head_enabled = hp.loss_numeric_head_enabled;
-    model_config.numeric_head_loss_weight = hp.loss_numeric_head_weight;
-    model_config.numeric_head_huber_delta = hp.loss_numeric_head_huber_delta;
-    model_config.numeric_head_log_scale = hp.loss_numeric_head_log_scale;
-
-    logger.log("Numeric head: enabled=" + std::string(model_config.numeric_head_enabled ? "true" : "false") +
-              ", loss_weight=" + std::to_string(model_config.numeric_head_loss_weight) +
-              ", huber_delta=" + std::to_string(model_config.numeric_head_huber_delta) +
-              ", log_scale=" + std::string(model_config.numeric_head_log_scale ? "true" : "false"));
-    
     // LM Head centering configuration (Issue #37 / #40)
     model_config.lm_head_center_hidden_states = hp.lm_head_center_hidden_states;
     model_config.center_logits = hp.center_logits;
@@ -935,46 +995,29 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     logger.log("✓ RoPE initialized");
     
     // ═══════════════════════════════════════════════════════════════
-    // STEP 2.75: Initialize TrainingTensors (PROPER OWNERSHIP FIX)
-    // TrainingTensors creates Tensors that OWN GPU memory via Tensor::zeros().
-    // This MUST happen BEFORE initGPU() so embeddings are allocated properly.
-    // initGPU() will detect tensors_ exists and use its buffers instead of
-    // creating duplicate EmbeddingRuntime allocations.
+    // STEP 2.75: Store Autograd Seed (Session 7: TrainingTensors deleted)
+    // Weight init seed is stored on TrainingState.weight_init_seed.
+    // Pattern B layers use it for layer-specific weight seeding.
+    // layer-specific weight seeding. All weight allocation is now done by
+    // Pattern B layers (EmbeddingLayer, EncodingLayer, LMHeadLayer, ScratchBlockLayer).
     // ═══════════════════════════════════════════════════════════════
     {
-        logger.log("Initializing TrainingTensors (proper memory ownership)...");
-        const auto& cfg = model->getConfig();
-        cudaStream_t stream = model->getTrainingState().stream_ctrl.getPrimaryStream();
+        logger.log("Storing autograd weight init seed...");
         
-        // Calculate num_kv_heads (same logic as InitTrainingState.cu)
-        int num_kv_heads = cfg.num_kv_heads;
-
-        // ISSUE #96: Pass positional_encoding to control position embedding allocation
-        // ISSUE #109: Pass use_layer_scale and layer_scale_init for LayerScale support
         // CRITICAL: Use xavier_seed (derived init_seed from RNG context), not config.hyperparameters.seed
         // The xavier_seed is the computed hierarchical seed from initializeRNG()
-        model->getTrainingState().initializeAutogradTensors(
-            cfg.vocab_size, cfg.d_model, cfg.d_ff,
-            cfg.num_layers, cfg.num_heads, num_kv_heads,
-            cfg.max_seq_len, cfg.tie_embeddings, cfg.use_bias,
-            cfg.positional_encoding,  // Issue #96: Only allocate pos_emb for LEARNED mode
-            cfg.numeric_head_enabled, // Numeric head allocation flag
-            cfg.use_layer_scale,      // Issue #109: LayerScale gating flag
-            cfg.layer_scale_init,     // Issue #109: Initial value for layer scale params
-            xavier_seed,              // Use parameter (derived init_seed), not config.hyperparameters.seed
-            stream
-        );
-        logger.log("✓ TrainingTensors initialized (Tensors OWN memory)");
+        model->getTrainingState().initializeAutogradSeed(xavier_seed);
+        logger.log("✓ Autograd seed stored (weight_init_seed=" + std::to_string(xavier_seed) + ")");
     }
     
-    // STEP 3: Initialize GPU encoder (uses cuBLAS handle from step 2, RoPE from step 2.5)
-    // NOTE: initGPU() now uses TrainingTensors for embedding buffers instead of allocating new ones
+    // STEP 3: Initialize GPU encoder (uses cuBLAS handle from step 2, seed from step 2.75)
+    // NOTE: initGPU() creates Pattern B layers which self-allocate their weights
     logger.log("Initializing GPU encoder...");
     model->initGPU();
     logger.log("✓ GPU encoder fully initialized");
     
     // STEP 4: Finish TrainingState initialization (grad buffers, activation caches)
-    // NOTE: Embeddings already set up in step 2.75, this just does the rest
+    // NOTE: Layers already set up in step 3, this just does the rest
     logger.log("Initializing TrainingState (grad buffers, activation caches)...");
     model->initTrainingState();
     logger.log("✓ TrainingState fully initialized");
@@ -998,8 +1041,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
         model->configureScratchPool(config.scratch.enabled);
         if (config.scratch.enabled) {
             logger.log("✓ Scratch blocks enabled (" +
-                      std::to_string(config.scratch.num_blocks) + " blocks × " +
-                      std::to_string(config.scratch.max_tokens_per_block) + " tokens)");
+                      std::to_string(config.scratch.num_blocks) + " blocks, sized from max_cached_tokens)");
         }
     }
     
@@ -1020,7 +1062,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     }
     
 #ifdef USE_CUDA
-    // Verify encoder weights are initialized (TrainingTensors.cu handles Xavier init via Tensor::xavier_uniform_)
+    // Verify encoder weights are initialized (Pattern B layers handle Xavier init via Tensor::xavier_uniform_)
     {
         auto* gpu_encoder = &model->getGpuEncoder();
         const auto& cfg = model->getConfig();
@@ -1373,16 +1415,20 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
             GRIM::Config::GrimTextPaths grim_paths{};
             grim_paths.training_data = ctx->config.paths.data_path;
             grim_paths.vocab = ctx->config.paths.vocab_path;
-
             std::string training_path = ctx->config.paths.data_path;
             std::string vocab_path_str = ctx->config.paths.vocab_path;
             bool prepared = false;
+            // Load data_collection config to check clear_merged_cache_on_merge flag
+            GRIM::Config::DataCollectionConfig dc_config{};
+            GRIM::Config::loadDataCollectionConfig(dc_config);
+
             try {
                 prepared = GRIM::PrepareTrainingDataFromCache(
                     grim_paths,
                     training_path,
                     vocab_path_str,
-                    ctx->config.force_rebuild_vocab);
+                    ctx->config.force_rebuild_vocab,
+                    dc_config.clear_merged_cache_on_merge);
             } catch (const std::exception& e) {
                 if (ctx->logging.logger) {
                     ctx->logging.logger->log(std::string("[Phase1] Auto-prepare exception: ") + e.what());
@@ -1445,7 +1491,8 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         throw std::runtime_error("FATAL: training data missing vocab_size; regenerate GRMT with tokenizer.totalVocabSize()");
     }
     if (ctx->config.actual_vocab_size < static_cast<uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET)) {
-        throw std::runtime_error("FATAL: training data vocab_size must include byte+atom ranges (>= 512)");
+        throw std::runtime_error("FATAL: training data vocab_size must include special+byte+atom ranges (>= " + 
+            std::to_string(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET) + ")");
     }
     
     // CRITICAL: Validate vocab size matches tokenizer (detects stale .grmt files after atom encoding changes)
@@ -1511,7 +1558,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     
     // 10d. Issue #60 DEBUG: Allocate gradient attribution buffers if enabled
     // This lets us separately track LM head vs embedding backward contributions
-    // to debug the positive feedback loop causing mode collapse to token 277
+    // to debug the positive feedback loop causing mode collapse to the tracked token
     {
         auto& ts = ctx->model->getTrainingState();
         const auto& model_cfg = ctx->model->getConfig();
@@ -1535,7 +1582,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
             
             ctx->logging.logger->log("✓ Issue #60 DEBUG: Gradient attribution buffers allocated");
             ctx->logging.logger->log("  LM_HEAD_ONLY buffer: " + std::to_string(ts.debug_lm_head_only_grad.numel() * sizeof(float) / (1024*1024)) + " MB");
-            ctx->logging.logger->log("  Will log TOKEN_277 gradient sources after each backward pass");
+            ctx->logging.logger->log("  Will log tracked collapse token gradient sources after each backward pass");
         }
         
         // ═══════════════════════════════════════════════════════════════════════════
@@ -1560,51 +1607,34 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         //
         // These gradients have OPPOSITE SIGNS and CANCEL when accumulated to same buffer!
         // The "different information" claim was WRONG - they fight each other:
-        //   LM_HEAD:    wants to DECREASE token 277 probability → negative grad
-        //   EMBEDDING:  wants to INCREASE token 277 representation → positive grad
+        //   LM_HEAD:    wants to DECREASE tracked token probability → negative grad
+        //   EMBEDDING:  wants to INCREASE tracked token representation → positive grad
         //   COMBINED:   near-zero (cancellation)!
         //
         // Issue #87 INCORRECTLY removed PCGrad allocation, claiming "gradients accumulate naturally".
         // Issue #88 then skipped embedding backward to stop the cancellation.
         // Issue #109 re-enabled embedding backward but forgot to restore PCGrad!
-        // Result: Training collapses to token 277 mode (same as Issue #88 bug).
+        // Result: Training collapses to tracked token mode (same as Issue #88 bug).
         //
-        // The CORRECT solution is PCGrad (Issue #60):
-        //   g_final = g_lm + orthogonal_component(g_emb)
-        // This keeps LM head gradient direction while adding any NOVEL embedding info.
+        // Issue #143: PCGrad REMOVED — use PyTorch-style direct gradient accumulation.
+        //
+        // PCGrad preserved the FULL LM head gradient direction while discarding the
+        // conflicting embedding component. This removed the natural frequency-proportional
+        // brake that cancellation provides. Result: frequent tokens (SPACE, 'a', 'o', etc.)
+        // had unchecked gradient magnitude → AdamW momentum amplified the signal →
+        // weight rows diverged → logit_range exploded (1.4 → 21+ over 67 batches).
+        //
+        // PyTorch with tied weights: both LM head and embedding backward write to the
+        // SAME grad buffer. The ~90% cancellation for frequent tokens IS the regularizer.
+        // For rare tokens (few atomicAdds), cancellation is minimal → they still learn.
+        //
+        // With Z-loss added (Issue #143), residual logit growth is also controlled.
         // ═══════════════════════════════════════════════════════════════════════════
         if (model_cfg.tie_embeddings) {
-            // ISSUE #110 FIX: MUST allocate PCGrad buffer to prevent gradient cancellation!
-            ctx->model->getTrainingState().allocatePCGradBuffer(
-                model_cfg.vocab_size, 
-                model_cfg.d_model, 
-                ctx->model->getTrainingState().stream_ctrl.getPrimaryStream());
-            ctx->logging.logger->log("✓ Issue #110: PCGrad buffer allocated for tied weights");
-            
-            // Skip flag MUST be false so embedding backward runs (through PCGrad path)
+            // DO NOT allocate PCGrad buffer — let gradients accumulate directly (PyTorch behavior)
+            // DO NOT skip embedding backward — both gradient sources must write to shared buffer
             g_skip_embedding_backward_for_tied_weights = false;
-            ctx->logging.logger->log("✓ Issue #109: Embedding backward ENABLED via PCGrad");
-        }
-        
-        // Issue #141 FIX: Allocate ScratchBlock gradient tap buffer
-        // This captures the encoder input gradient before dropout consumes it,
-        // so ScratchBlock backward can compute parameter gradients.
-        if (model_cfg.use_scratch_block) {
-            auto& ts = ctx->model->getTrainingState();
-            const size_t tap_elems = static_cast<size_t>(ts.max_cached_tokens) * model_cfg.d_model;
-            ts.scratchblock_grad_tap = GRIM::Tensor();
-            const cudaError_t tap_alloc_err =
-                cudaMalloc(&ts.scratchblock_grad_tap.data, tap_elems * sizeof(float));
-            if (tap_alloc_err != cudaSuccess) {
-                throw std::runtime_error(
-                    std::string("Phase1_Startup: Failed to allocate ScratchBlock gradient tap buffer: ") +
-                    cudaGetErrorString(tap_alloc_err));
-            }
-            ts.scratchblock_grad_tap.shape = TensorContract::TensorShape::make_BSM(
-                static_cast<int>(ts.max_cached_tokens), model_cfg.d_model);
-            ts.scratchblock_grad_tap.owns_data = true;
-            ctx->logging.logger->log("Issue #141: ScratchBlock gradient tap buffer allocated ("
-                                     + std::to_string(tap_elems * sizeof(float) / 1024) + " KB)");
+            ctx->logging.logger->log("✓ Issue #143: Tied weight gradients use PyTorch-style direct accumulation (PCGrad disabled)");
         }
     }
     

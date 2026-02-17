@@ -45,6 +45,8 @@ Vector LanguageModel::executeInferenceForward_(int seq_len) {
         &config_,
         &training_state_,
         &getGpuEncoder(),
+        getEmbeddingLayer(),
+        getLmHeadLayer(),
         getScratchBlockLayer(),
         training_state_.cublas_handle,
         stream,

@@ -17,8 +17,12 @@ from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
 
-ATOM_TOKEN_START = 256
-ATOM_VOCAB_SIZE = 256
+# Token layout: [0-3] Special, [4-259] Byte, [260+] Atom, [280+] Unigram
+NUM_SPECIAL_TOKENS = 4           # <unk>=0, <pad>=1, <s>=2, </s>=3
+BYTE_TOKEN_OFFSET = NUM_SPECIAL_TOKENS  # 4
+BYTE_VOCAB_SIZE = 256
+ATOM_TOKEN_START = BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE  # 260
+ATOM_VOCAB_SIZE = 20  # ~kAtomTypeCount (adjusted dynamically)
 ATOM_TOKEN_END = ATOM_TOKEN_START + ATOM_VOCAB_SIZE
 UNIGRAM_TOKEN_START = ATOM_TOKEN_END
 
@@ -59,12 +63,19 @@ def load_vocab(vocab_path: str, total_vocab_size: int | None = None) -> tuple[di
     global ATOM_VOCAB_SIZE, ATOM_TOKEN_END, UNIGRAM_TOKEN_START
     vocab = {}
     try:
-        # Byte fallback tokens (0-255)
-        for i in range(256):
+        # Special tokens (0-3)
+        vocab[0] = "<unk>"
+        vocab[1] = "<pad>"
+        vocab[2] = "<s>"
+        vocab[3] = "</s>"
+        
+        # Byte fallback tokens (4-259)
+        for i in range(BYTE_VOCAB_SIZE):
+            byte_tid = BYTE_TOKEN_OFFSET + i
             if 32 <= i <= 126:
-                vocab[i] = chr(i)
+                vocab[byte_tid] = chr(i)
             else:
-                vocab[i] = f"<BYTE{i:02X}>"
+                vocab[byte_tid] = f"<BYTE{i:02X}>"
         
         # Unigram vocab from vocab.txt
         with open(vocab_path, 'r', encoding='utf-8') as f:
@@ -73,7 +84,7 @@ def load_vocab(vocab_path: str, total_vocab_size: int | None = None) -> tuple[di
         unigram_count = len(lines)
         atom_vocab_size = ATOM_VOCAB_SIZE
         if total_vocab_size is not None:
-            atom_vocab_size = max(0, total_vocab_size - 256 - unigram_count)
+            atom_vocab_size = max(0, total_vocab_size - NUM_SPECIAL_TOKENS - BYTE_VOCAB_SIZE - unigram_count)
         ATOM_VOCAB_SIZE = atom_vocab_size
         ATOM_TOKEN_END = ATOM_TOKEN_START + ATOM_VOCAB_SIZE
         UNIGRAM_TOKEN_START = ATOM_TOKEN_END
@@ -138,8 +149,9 @@ def decode_tokens(tokens: list[int],
 
         if tid in vocab:
             pieces.append(vocab[tid])
-        elif 0 <= tid < ATOM_TOKEN_START:
-            pieces.append(chr(tid) if 32 <= tid <= 126 else f"<{tid:02X}>")
+        elif BYTE_TOKEN_OFFSET <= tid < ATOM_TOKEN_START:
+            byte_val = tid - BYTE_TOKEN_OFFSET
+            pieces.append(chr(byte_val) if 32 <= byte_val <= 126 else f"<{byte_val:02X}>")
         else:
             pieces.append(f"<UNK{tid}>")
 

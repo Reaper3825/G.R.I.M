@@ -9,9 +9,10 @@
 //  - Placeholder system for ScratchBlock integration
 //  
 //  Token ID Layout:
-//    [0-255]                  = Byte tokens (fallback)
+//    [0-3]                    = Special tokens (<unk>, <pad>, <s>, </s>)
+//    [4-259]                  = Byte tokens (fallback)
 //    [ATOM_TOKEN_OFFSET..UNIGRAM_VOCAB_OFFSET-1] = Atom tokens (structural placeholders)
-//    [UNIGRAM_VOCAB_OFFSET+]  = Unigram vocabulary
+//    [UNIGRAM_VOCAB_OFFSET+]  = Unigram vocabulary (regular pieces only)
 //  
 //  Author: GRIM Team
 //  Date: December 2025
@@ -25,6 +26,7 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include <functional>
@@ -79,6 +81,57 @@ struct UniByteResult {
     size_t unigram_tokens = 0;
     size_t byte_tokens = 0;
     size_t atom_tokens = 0;
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Pipeline validation: ensures all per-token arrays are consistent before
+    // the result enters the batching/tensor pipeline.  Rule 20: crash on mismatch.
+    // ═══════════════════════════════════════════════════════════════════════════
+    void validate(const char* caller) const {
+        const size_t n = token_ids.size();
+        if (is_byte_fallback.size() != n) {
+            throw std::runtime_error(
+                std::string(caller) + ": UniByteResult.is_byte_fallback.size()=" +
+                std::to_string(is_byte_fallback.size()) + " != token_ids.size()=" +
+                std::to_string(n));
+        }
+        if (token_numeric_values.size() != n) {
+            throw std::runtime_error(
+                std::string(caller) + ": UniByteResult.token_numeric_values.size()=" +
+                std::to_string(token_numeric_values.size()) + " != token_ids.size()=" +
+                std::to_string(n));
+        }
+        if (token_numeric_mask.size() != n) {
+            throw std::runtime_error(
+                std::string(caller) + ": UniByteResult.token_numeric_mask.size()=" +
+                std::to_string(token_numeric_mask.size()) + " != token_ids.size()=" +
+                std::to_string(n));
+        }
+        const size_t expected_feat = n * kTextFeatureDim;
+        if (token_text_features.size() != expected_feat) {
+            throw std::runtime_error(
+                std::string(caller) + ": UniByteResult.token_text_features.size()=" +
+                std::to_string(token_text_features.size()) + " != token_ids.size()*kTextFeatureDim=" +
+                std::to_string(expected_feat));
+        }
+        if (token_text_mask.size() != n) {
+            throw std::runtime_error(
+                std::string(caller) + ": UniByteResult.token_text_mask.size()=" +
+                std::to_string(token_text_mask.size()) + " != token_ids.size()=" +
+                std::to_string(n));
+        }
+        if (unigram_tokens + byte_tokens + atom_tokens != n) {
+            throw std::runtime_error(
+                std::string(caller) + ": UniByteResult token count mismatch: unigram=" +
+                std::to_string(unigram_tokens) + " + byte=" +
+                std::to_string(byte_tokens) + " + atom=" +
+                std::to_string(atom_tokens) + " != total=" +
+                std::to_string(n));
+        }
+    }
+    
+    // Total token count
+    size_t size() const { return token_ids.size(); }
+    bool empty() const { return token_ids.empty(); }
 };
 
 //======================================================//
@@ -108,6 +161,47 @@ struct UniByteConfig {
     // GPU settings
     bool prefer_gpu = true;
     int gpu_batch_size = 32;
+};
+
+//======================================================//
+//  TokenLayout — runtime-queried token ID ranges
+//
+//  Built from live component sizes, NOT hardcoded constants.
+//  If you add a special token, grow AtomType, or change byte
+//  encoding, this struct automatically reflects it.
+//======================================================//
+struct TokenLayout {
+    // Per-region sizes (queried from components, not hardcoded)
+    int num_special  = 0;   // <unk>, <pad>, <s>, </s>, ...
+    int num_bytes    = 0;   // raw byte tokens (0x00-0xFF)
+    int num_atoms    = 0;   // registered atom type slots
+    int num_unigram  = 0;   // learned subword pieces
+
+    // Computed offsets — each region is [offset, offset+count)
+    int special_offset() const { return 0; }
+    int byte_offset()    const { return num_special; }
+    int atom_offset()    const { return num_special + num_bytes; }
+    int unigram_offset() const { return num_special + num_bytes + num_atoms; }
+    int total_vocab()    const { return num_special + num_bytes + num_atoms + num_unigram; }
+
+    // Classification — is this token id in a given region?
+    bool isSpecial(int id) const { return id >= special_offset() && id < byte_offset(); }
+    bool isByte(int id)    const { return id >= byte_offset()    && id < atom_offset(); }
+    bool isAtom(int id)    const { return id >= atom_offset()    && id < unigram_offset(); }
+    bool isUnigram(int id) const { return id >= unigram_offset() && id < total_vocab(); }
+
+    // The masking question: should this token NEVER be a prediction target?
+    // UNK (0): encoding failure, never a valid target
+    // PAD (1): structural batching artifact, never a valid target
+    // BOS (2): always position-0 input, never a mid-sequence target
+    // EOS (3): VALID TARGET — model MUST learn to predict end-of-sequence!
+    bool isNonContent(int id) const {
+        return id == UNK_TOKEN_ID || id == PAD_TOKEN_ID || id == BOS_TOKEN_ID;
+    }
+
+    // First token ID that represents actual content (byte tokens and above)
+    // Note: EOS (3) is below this but IS a valid target — use isNonContent() for masking.
+    int firstContentTokenId() const { return num_special; }
 };
 
 //======================================================//
@@ -217,7 +311,11 @@ public:
     int bosId() const;
     int eosId() const;
     
+    // Token layout — runtime-queried from live component sizes
+    TokenLayout tokenLayout() const;
+
     // Token type checking
+    bool isSpecialToken(int token_id) const;
     bool isByteToken(int token_id) const;
     bool isAtomToken(int token_id) const;
     bool isUnigramToken(int token_id) const;

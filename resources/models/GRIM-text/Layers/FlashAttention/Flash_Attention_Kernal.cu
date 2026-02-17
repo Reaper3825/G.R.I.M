@@ -637,11 +637,6 @@ extern "C" void flash_attn_fwd_ex(
         FlashAttentionLog::error("[FlashAttention] FATAL: flash_attn_fwd received null pointer input");
         throw std::runtime_error("flash_attn_fwd: null pointer input");
     }
-    // CRITICAL: ALiBi slopes must be provided for GRIM hybrid PBM (ALiBi+RoPE)
-    if (!alibi_slopes) {
-        FlashAttentionLog::error("[FlashAttention] FATAL: alibi_slopes is NULL - GRIM requires ALiBi for hybrid PBM");
-        throw std::runtime_error("flash_attn_fwd: alibi_slopes is NULL - GRIM requires ALiBi for hybrid PBM");
-    }
 #if defined(GRIM_FLASHATTN_HDIM64_ONLY)
     if (head_dim != 64) {
         FlashAttentionLog::error("[FlashAttention] FATAL: flash_attn_fwd head_dim must be 64 (GRIM_FLASHATTN_HDIM64_ONLY)");
@@ -677,10 +672,21 @@ extern "C" void flash_attn_fwd_ex(
                                                    is_bf16, causal,
                                                    attention_dropout_p, dropout_seed);
 
-    // ISSUE #76: Log ALiBi slopes for this sequence - CRITICAL for max_seq_len boundary debugging
+    // FIX: Allocate rng_state when dropout is enabled.
+    // The Dao FA kernel writes seed/offset to rng_state[0]/[1] when Is_dropout=true (flash_fwd_kernel.h:76-77).
+    // Without this, params.rng_state=nullptr causes illegal memory access (CUDA error 700).
+    uint64_t* rng_state_buf = nullptr;
+    if (attention_dropout_p > 0.0f && attention_dropout_p < 1.0f) {
+        cudaMalloc(&rng_state_buf, 2 * sizeof(uint64_t));
+        if (!rng_state_buf) {
+            throw std::runtime_error("flash_attn_fwd: cudaMalloc failed for rng_state (16 bytes)");
+        }
+        params.rng_state = rng_state_buf;
+    }
+
     static int s_fwd_call_count = 0;
     ++s_fwd_call_count;
-    {
+    if (isEquationLoggingEnabled()) {
         std::vector<float> h_slopes(static_cast<size_t>(n_heads));
         cudaMemcpyAsync(h_slopes.data(), alibi_slopes, n_heads * sizeof(float), cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
@@ -710,8 +716,7 @@ extern "C" void flash_attn_fwd_ex(
         }
     }
 
-    // ISSUE #67: Log Flash Attention FORWARD INPUTS
-    {
+    if (isEquationLoggingEnabled()) {
         const size_t q_elems = static_cast<size_t>(batch) * n_heads * seqlen * head_dim;
         const size_t kv_elems = static_cast<size_t>(batch) * n_kv_heads * seqlen * head_dim;
         const size_t sample_size = 100;
@@ -734,18 +739,7 @@ extern "C" void flash_attn_fwd_ex(
         }
     }
     
-    // ========================================================================
-    // [ATTN_SCORE_EQUATION] DIAGNOSTIC: Predict attention scores from Q, K math
-    // Formula: score[i,j] = (Q[i,:] @ K[j,:]^T) / sqrt(head_dim) + alibi_bias[i-j]
-    //          LSE[i] = log(sum_j(exp(score[i,j] - max_score[i]))) + max_score[i]
-    //
-    // This diagnostic computes EXPECTED values and compares to ACTUAL LSE output.
-    // Helps diagnose whether the explosion is in:
-    //   1. Q/K magnitudes (input to attention)
-    //   2. ALiBi bias computation  
-    //   3. Softmax numerical issues
-    // ========================================================================
-    {
+    if (isEquationLoggingEnabled()) {
         // Sample a small subset for detailed analysis (avoid O(seqlen^2) cost)
         // Use full sequence for diagnostics (reduced from 32 to capture full attention dynamics)
         const int sample_tokens = seqlen;  // Full sequence for complete attention matrix
@@ -1007,28 +1001,50 @@ extern "C" void flash_attn_fwd_ex(
     }
 #endif
 
-    // ISSUE #67: Log Flash Attention FORWARD OUTPUT
+    // CRITICAL: Check for async CUDA errors from the FlashAttention kernel
     {
-        const size_t out_elems = static_cast<size_t>(batch) * n_heads * seqlen * head_dim;
-        const size_t sample_size = 100;
-        std::vector<float> h_out(std::min(out_elems, sample_size));
-        cudaMemcpyAsync(h_out.data(), out, h_out.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
-        cudaStreamSynchronize(stream);
-        int nan_out = 0, inf_out = 0;
-        if (h_out.size() > 0) {
-        for (float val : h_out) { if (std::isnan(val)) nan_out++; if (std::isinf(val)) inf_out++; }
-        fprintf(stderr, "[FA-FWD-OUT] output: nan=%d inf=%d first=%.6f\n",
-                nan_out, inf_out, h_out.empty() ? 0.0f : h_out[0]);
+        cudaError_t kernel_err = cudaStreamSynchronize(stream);
+        if (rng_state_buf) { cudaFree(rng_state_buf); rng_state_buf = nullptr; }
+        if (kernel_err != cudaSuccess) {
+            fprintf(stderr, "[FA-FWD-KERNEL-ERROR] CUDA error after flash_fwd_kernel: %s (%d)\n",
+                    cudaGetErrorString(kernel_err), static_cast<int>(kernel_err));
+            fprintf(stderr, "  This means the FlashAttention kernel FAILED - output and LSE are INVALID!\n");
+            fprintf(stderr, "  batch=%d seqlen=%d n_heads=%d n_kv_heads=%d head_dim=%d\n",
+                    batch, seqlen, n_heads, n_kv_heads, head_dim);
+            // Rule 20: Crash on kernel failure - don't silently produce garbage
+            throw std::runtime_error("flash_attn_fwd: kernel execution failed: " + std::string(cudaGetErrorString(kernel_err)));
+        }
     }
+
+    if (isEquationLoggingEnabled()) {
+        // NOTE: 'out' points to bf16 data (BSHD layout). Reading as float produces garbage.
+        // To get meaningful stats, would need bf16→fp32 conversion. Skip for now.
+        // The converted FP32 BHSD output is checked by the caller after convert_BSHD_bf16_to_BHSD.
+        const size_t out_bf16_elems = static_cast<size_t>(batch) * n_heads * seqlen * head_dim;
+        const size_t sample_bf16 = std::min(out_bf16_elems, size_t(200));
+        std::vector<__nv_bfloat16> h_out_bf16(sample_bf16);
+        cudaMemcpy(h_out_bf16.data(), out, sample_bf16 * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost);
+        int nan_out = 0, zero_out = 0;
+        float first_val = 0.0f;
+        for (size_t i = 0; i < sample_bf16; ++i) {
+            // Host-side bf16 → fp32 via bit shift (always works, no device intrinsic needed)
+            uint16_t raw;
+            std::memcpy(&raw, &h_out_bf16[i], sizeof(uint16_t));
+            uint32_t f32bits = static_cast<uint32_t>(raw) << 16;
+            float v;
+            std::memcpy(&v, &f32bits, sizeof(float));
+            if (i == 0) first_val = v;
+            if (std::isnan(v)) nan_out++;
+            if (v == 0.0f) zero_out++;
+        }
+        fprintf(stderr, "[FA-FWD-OUT] output(bf16→fp32): nan=%d zero=%d/%zu first=%.6f\n",
+                nan_out, zero_out, sample_bf16, first_val);
     }
     
-    // ISSUE #76: Log softmax_lse stats - CRITICAL for max_seq_len boundary debugging
-    // softmax_lse has shape [batch, num_heads, seqlen] (FP32 dense)
-    {
+    if (isEquationLoggingEnabled()) {
         const size_t lse_elems = static_cast<size_t>(batch) * n_heads * seqlen;
         std::vector<float> h_lse(lse_elems);
-        cudaMemcpyAsync(h_lse.data(), softmax_lse, lse_elems * sizeof(float), cudaMemcpyDeviceToHost, stream);
-        cudaStreamSynchronize(stream);
+        cudaMemcpy(h_lse.data(), softmax_lse, lse_elems * sizeof(float), cudaMemcpyDeviceToHost);
         
         // Compute statistics per head to identify which head explodes first
         fprintf(stderr, "[FA-FWD-LSE] seqlen=%d batch=%d n_heads=%d total_elems=%zu\n", seqlen, batch, n_heads, lse_elems);
@@ -1122,12 +1138,7 @@ extern "C" void flash_attn_bwd_ex(
                  causal ? "true" : "false", is_bf16 ? "true" : "false");
         FlashAttentionLog::info(input_msg);
     }
-    // CRITICAL: ALiBi slopes must be provided for GRIM hybrid PBM (ALiBi+RoPE)
-    if (!alibi_slopes) {
-        FlashAttentionLog::error("[FlashAttention] FATAL: alibi_slopes is NULL - GRIM requires ALiBi for hybrid PBM");
-        throw std::runtime_error("flash_attn_bwd: alibi_slopes is NULL - GRIM requires ALiBi for hybrid PBM");
-    }
-    else {
+    if (isEquationLoggingEnabled()) {
         float alibi0 = 0.0f;
         cudaError_t copy_err = cudaMemcpyAsync(&alibi0, alibi_slopes, sizeof(float),
                                                cudaMemcpyDeviceToHost, stream);
@@ -1200,6 +1211,21 @@ extern "C" void flash_attn_bwd_ex(
                                                    batch, seqlen, n_heads, n_kv_heads, head_dim,
                                                    is_bf16, causal,
                                                    attention_dropout_p, dropout_seed);
+
+    // FIX: Allocate rng_state when dropout is enabled.
+    // The Dao FA backward kernel reads rng_state[0]/[1] to reproduce the dropout mask (flash_bwd_kernel.h:446).
+    // Pre-fill with the same seed/offset that the forward kernel wrote.
+    uint64_t* rng_state_buf_bwd = nullptr;
+    if (attention_dropout_p > 0.0f && attention_dropout_p < 1.0f) {
+        cudaMalloc(&rng_state_buf_bwd, 2 * sizeof(uint64_t));
+        if (!rng_state_buf_bwd) {
+            throw std::runtime_error("flash_attn_bwd: cudaMalloc failed for rng_state (16 bytes)");
+        }
+        uint64_t host_rng[2] = {dropout_seed, 0ull};
+        cudaMemcpyAsync(rng_state_buf_bwd, host_rng, 2 * sizeof(uint64_t), cudaMemcpyHostToDevice, stream);
+        params.rng_state = rng_state_buf_bwd;
+    }
+
     {
         char stride_msg[512];
         snprintf(stride_msg, sizeof(stride_msg),
@@ -1259,11 +1285,9 @@ extern "C" void flash_attn_bwd_ex(
     grim_flash::detail::check_cuda(cudaMemsetAsync(dq_accum, 0, dq_bytes, stream),
                                    "cudaMemsetAsync(dq_accum)");
 
-    // ISSUE #76: Log saved softmax_lse statistics BEFORE backward pass - CRITICAL for boundary debugging
-    // This is the LSE from forward pass, used to recompute softmax in backward
     static int s_bwd_call_count = 0;
     ++s_bwd_call_count;
-    {
+    if (isEquationLoggingEnabled()) {
         const size_t lse_elems = static_cast<size_t>(batch) * n_heads * seqlen;
         std::vector<float> h_lse(lse_elems);
         cudaMemcpyAsync(h_lse.data(), softmax_lse, lse_elems * sizeof(float), cudaMemcpyDeviceToHost, stream);
@@ -1321,9 +1345,7 @@ extern "C" void flash_attn_bwd_ex(
         }
     }
 
-    // ISSUE #67: Log Flash Attention BACKWARD INPUT (grad_output)
-    // ISSUE #79 FIX: dout is BF16 (not FP32)! Must read as __nv_bfloat16 and convert.
-    {
+    if (isEquationLoggingEnabled()) {
         const size_t grad_elems = static_cast<size_t>(batch) * n_heads * seqlen * head_dim;
         const size_t sample_size = std::min(grad_elems, static_cast<size_t>(10000));
         std::vector<__nv_bfloat16> h_dout_bf16(sample_size);
@@ -1457,14 +1479,10 @@ extern "C" void flash_attn_bwd_ex(
     grim_flash::detail::check_cuda(cudaGetLastError(), "flash_attn_bwd_ex launch");
     FlashAttentionLog::info("[FlashAttention] flash_attn_bwd_ex synchronizing stream for error check");
     grim_flash::detail::check_cuda(cudaStreamSynchronize(stream), "flash_attn_bwd_ex sync");
+    if (rng_state_buf_bwd) { cudaFree(rng_state_buf_bwd); rng_state_buf_bwd = nullptr; }
     FlashAttentionLog::info("[FlashAttention] flash_attn_bwd_ex stream synchronized");
 
-    // ISSUE #75: Log Flash Attention BACKWARD OUTPUTS (dQ, dK, dV) to isolate gradient explosion source
-    // NOTE: dK and dV are written using QUERY head indices (0..n_heads-1), NOT KV head indices!
-    // The Dao-AILab library writes to bidh * dk_head_stride where bidh goes from 0 to n_heads-1.
-    // So these buffers must be sized for n_heads (12), not n_kv_heads (4).
-    // ISSUE #79 FIX: dQ/dK/dV are BF16 (not FP32)! Must read as __nv_bfloat16 and convert.
-    {
+    if (isEquationLoggingEnabled()) {
         // dQ is sized for n_heads (12), layout BSHD
         const size_t dq_elems = static_cast<size_t>(batch) * seqlen * n_heads * head_dim;
         const size_t dk_elems = static_cast<size_t>(batch) * seqlen * n_heads * head_dim;

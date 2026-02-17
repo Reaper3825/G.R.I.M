@@ -41,8 +41,8 @@ struct LossOptions {
     std::string masking_tag{};
 
     // Entropy regularization: reg = -λ * H(p) = λ * Σ p*log(p)
-    bool entropy_reg_enabled = false;
-    float entropy_reg_lambda = 0.0f;
+    bool entropy_reg_enabled = HyperParameters::DEFAULT_LOSS_ENTROPY_REG_ENABLED;
+    float entropy_reg_lambda = HyperParameters::DEFAULT_LOSS_ENTROPY_REG_LAMBDA;
 };
 
 }  // namespace GRIM::LossContext

@@ -13,9 +13,10 @@
 //  - Trains on actual language model objective
 //  
 //  Token ID layout:
-//    [0-255]                  = Reserved for byte fallback
+//    [0-3]                    = Special tokens (<unk>, <pad>, <s>, </s>)
+//    [4-259]                  = Reserved for byte fallback
 //    [ATOM_TOKEN_OFFSET..UNIGRAM_VOCAB_OFFSET-1] = Reserved for atoms (ScratchBlock)
-//    [UNIGRAM_VOCAB_OFFSET+]  = Unigram vocabulary
+//    [UNIGRAM_VOCAB_OFFSET+]  = Unigram vocabulary (regular pieces only)
 //  
 //  Author: GRIM Team
 //  Date: December 2025
@@ -30,6 +31,8 @@
 #include <vector>
 #include <unordered_map>
 #include <memory>
+
+#include "Byte.hpp"  // For BYTE_TOKEN_OFFSET, BYTE_VOCAB_SIZE, special token IDs
 
 namespace GRIM {
 namespace Tokenizer {
@@ -82,7 +85,7 @@ constexpr int kAtomTypeCount = static_cast<int>(AtomType::ATOM_ACTIVE_COUNT);
 //======================================================//
 //  Constants
 //======================================================//
-constexpr int ATOM_TOKEN_OFFSET = 256;    // Atoms start after byte tokens
+constexpr int ATOM_TOKEN_OFFSET = BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE;  // Atoms start after byte tokens (260)
 inline int ATOM_VOCAB_SIZE = kAtomTypeCount;  // Atom slots derived from AtomType count
 inline int UNIGRAM_VOCAB_OFFSET = ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE;
 inline uint32_t ATOM_TOKEN_BASE = static_cast<uint32_t>(ATOM_TOKEN_OFFSET);
@@ -251,11 +254,11 @@ private:
     std::vector<UnigramPiece> pieces_;
     std::unordered_map<std::string, int> piece_to_id_;
     
-    // Special token IDs (relative to UNIGRAM_VOCAB_OFFSET)
-    int unk_id_ = 0;
-    int pad_id_ = 1;
-    int bos_id_ = 2;
-    int eos_id_ = 3;
+    // Special token IDs (ABSOLUTE token IDs, not relative to any offset)
+    int unk_id_ = UNK_TOKEN_ID;   // 0
+    int pad_id_ = PAD_TOKEN_ID;   // 1
+    int bos_id_ = BOS_TOKEN_ID;   // 2
+    int eos_id_ = EOS_TOKEN_ID;   // 3
     bool enable_byte_fallback_ = true;
     
     // Trie for fast prefix lookup (GPU-friendly)

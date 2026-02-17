@@ -10,185 +10,94 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.1 Orchestrator Entry Point
 
-- [x] **train_gpu.cu** (main entry) ✅ AUDITED
+- [] **train_gpu.cu** (main entry) 
   - Calls Phase1 → Phase2 → Phase3 sequentially
-  - Removed unused includes (`<iostream>`, `<cuda_runtime.h>`, `<exception>`), unused `EmitModuleWarning` import
-  - Fixed `fprintf(stderr)` bypass → now uses `EmitModuleInfo` for consistent logging
-  - Fixed stale `train_gpu_orchestrator.cu` reference in copilot-instructions.md
-  - Pattern to check: `throw std::runtime_error()` on config load errors
+
 
 ---
 
 ### 1.1a Logging Infrastructure (grim_log_recorder library)
 
-- [x] **Shared/LogRecorder/LogRecorder.cu** ✅ AUDITED
+- [] **Shared/LogRecorder/LogRecorder.cu** 
   - Centralized logging system used throughout training
   - Records diagnostics, equation logging, and error messages
   - Part of grim_log_recorder static library (shared by all targets)
-  - **FIXED**: Removed hardcoded fallback path `kDefaultLogsPath` (Rule 20). InitLogRecorder now throws if rootPath is empty.
-  - **FIXED**: Phase1_Startup.cu now passes `config.paths.log_dir` to InitLogRecorder().
-  - **DELETED**: All dead device-side logging code (RecordLayerLog, RecordLayerLogSimple, DeviceBufferLogger, device kernels, DeviceLogBuffer/DeviceLogDelegate types, GetDeviceLogBuffer, InstallDefaultDeviceLogger, RegisterDeviceLogCallback, ClearDeviceLogCallbacks) — zero callers in any kernel.
-  - **DELETED**: LogMirrorScope class — zero callers.
-  - **DELETED**: ParseModuleOverrideSpec — zero external callers.
-  - **DELETED**: RegisterDefaultLoggingProfiles (LogRecorder version) — never called; Phase1_Startup has its own copy that IS called.
-  - **DELETED**: ParseModuleLogLevelString (LogRecorder version with fallback param) — Phase1 has own copy without fallback that IS called.
-  - **DELETED**: GRIM::InitLogRecorder() no-arg wrapper — zero callers.
-  - **KEPT**: FlushDeviceLogs/ResetDeviceLogs as no-ops (callers exist in Phase2/Phase3/Tests).
-  - **KEPT**: RecordLayerLogHost (1 caller in Phase2_TrainingLoop.cu).
-  - File reduced from 1015 → ~676 lines.
+
 
 ---
 
 ### 1.2 Configuration Loading & Validation
 
-- [x] **Phase1_Startup.cu / Phase1_Startup.hpp** ✅ AUDITED
+- [] **Phase1_Startup.cu / Phase1_Startup.hpp** 
   - Configuration loading from ai_config.json
   - Path validation (model, data, checkpoint dirs)
-  - **Issue #106**: Reseeding W_qkv with 1/sqrt(d_model) scaling - ✅ Applied (xavier_seed passed to initializeAutogradTensors)
-  - **Issue #107**: Fixed LCG PRNG correlation with splitmix64 - ✅ Applied (Tensor::xavier_uniform_() with Philox PRNG)
-  - **Issue #110**: PCGrad buffer allocation for tied embeddings - ✅ Applied (allocatePCGradBuffer + g_skip_embedding_backward=false)
-  - **Rule 20**: max_seq_len defaults changed from 512 → 0 - ✅ Verified (defaults=0, throws if still 0)
-  - **FIXED**: Deleted `DEBUG_BATCH_PREP_CORRUPTION` define + 7 dead `#if` blocks (resolved investigation, Rule 20)
-  - **FIXED**: `catch(...)` in checkpoint scanning now catches `std::exception&` and logs filename + message
-  - **FIXED**: CUDA RNG failure now throws instead of silently degrading (Rule 20: training with uncontrolled RNG = undefined)
-  - **FIXED**: Stability override validation - throws if `batch_size <= 0` when stability enabled (Rule 20)
-  - **FIXED**: `actual_batch_size` ternary simplified - `batch_size` already overridden by loadConfiguration, no redundant access
-  - **NOTE**: `debug_gradient_attribution` block exists but hardcoded `false` (production disabled) - kept for Issue #60 debugging
-  - **NOTE**: Double ai_config.json snapshot load (once for hyperparams, once for tokenizer_config) - minor, not a training bug
-  - File reduced from ~1828 → ~1760 lines.
 
 ---
 
 ### 1.3 Training Data Loading
 
-- [x] **Shared/DataLoader/DataLoader.cu + training_data_loader.hpp** ✅ AUDITED
+- [] **Shared/DataLoader/DataLoader.cu + training_data_loader.hpp** 
   - PrepareTrainingDataFromCache: Reads merged_verified_cache.jsonl → tokenizes → writes single GRMT file
   - training_data_loader.hpp: GRMTDataLoader reads .grmt binary format for Phase1_Startup
-  - **FIXED**: `catch(...)` now `catch(const std::exception&)` + counts/logs malformed JSONL lines
-  - **FIXED**: Hardcoded `character_coverage = 0.9995f` → uses `GRIM::HyperParameters::TOKENIZER_CHARACTER_COVERAGE`
-  - **FIXED**: Deleted dead `loadBinaryFormat()` from training_data_loader.hpp (~35 lines, never called, Rule 20)
-  - **FIXED**: Deleted dead `stripBosEosMarkers()` — `stripHtmlTags(<[^>]+>)` already strips `<s>` and `</s>` 
-  - **FIXED**: Removed wrong `targets[0] = -1` unconditional masking — BOS→first_token is valid training signal
-  - **FIXED (SPAGHETTI)**: Removed 80/10/10 split + chunk_size splitting + validation_data.grmt/test_data.grmt output. DataLoader now writes ALL sequences to single GRMT. Phase1_Startup owns train/val splitting and sliding windows — clear ownership, no data waste.
-  - **FIXED**: Unsupported vocab.bin version now throws (was printing and continuing silently, Rule 20)
-  - HTML cleaning pipeline correct: static regex, entity decoding ✅
-  - GRMT v6 format with byte_lengths, vocab validation, non-finite sanitization ✅
-  - `totalVocabSize()` correctly used for header (includes byte+atom ranges) ✅
 
 ---
 
 ### 1.4 Tokenizer Initialization (UnigramByte Library)
 
-- [x] **Shared/UnigramByte/Byte.cu** ✅ AUDITED
+- [] **Shared/UnigramByte/Byte.cu** 
   - Byte fallback tokenizer (raw UTF-8 bytes 0x00-0xFF)
   - Provides 100% coverage for unknown characters/emojis
-  - Pattern to check: Verify byte token IDs are [0-255]
-  - Pattern to check: No allocations during tokenization (zero-copy std::string_view)
 
-- [x] **Shared/UnigramByte/Unigram.cu** ✅ AUDITED
+- [] **Shared/UnigramByte/Unigram.cu** 
   - Unigram Language Model tokenizer (statistical subword segmentation)
   - Viterbi decoding for optimal segmentation
-  - **CRITICAL**: Trie-based prefix matching for fast encoding
-  - Pattern to check: Verify `buildTrie()` called in constructor (NOT lazy)
-  - Pattern to check: Search for `addPiece()` with explicit token_id (Rule 20: no auto-ID fallback)
-  - Pattern to check: Verify Viterbi kernel runs SEQUENTIALLY (O(n) dependency, NOT parallelized across positions)
-  - **STALE CODE CHECK**: Auto-ID `addPiece()` overload confirmed DELETED (line 463 comment)
 
-- [x] **Shared/UnigramByte/UniByte.cu** ✅ AUDITED
+
+- [] **Shared/UnigramByte/UniByte.cu** 
   - Combined Unigram + Byte fallback (GrimTokenizer alias)
-  - Token layout: [0-255] = bytes, [256-511] = atoms, [512+] = unigram vocab
-  - Pattern to check: Verify ATOM_TOKEN_BASE = 256 offset applied
-  - Encoding: detectStructures() → segment → Unigram encode per segment → Byte fallback internal to Unigram
 
-- [x] **Shared/UnigramByte/AtomTable.cu** ✅ AUDITED
+
+- [] **Shared/UnigramByte/AtomTable.cu** 
   - Atom token management (numbers, URLs, emails, paths, dates, code)
   - Dedicated embeddings for structural elements
-  - Pattern to check: Verify `entries_[]` array access subtracts ATOM_TOKEN_BASE
-  - No `= {-1}` patterns found. No Rule 20 violations.
 
-- [x] **Shared/UnigramByte/AhoCorasick.cu** ✅ AUDITED
+- [] **Shared/UnigramByte/AhoCorasick.cu** 
   - O(n) multi-pattern matching for structural token detection
   - 50-100x faster than std::regex for URL/email/number prefixes
   - Detects: http://, https://, www., ftp://, ws://, wss://, file://, @, 0x, 0b
-  - DFA built eagerly in DetectorState constructor with build() → BFS failure links ✅
-  - Detection confirmed BEFORE Viterbi encoding (detectStructures → encodeInternal) ✅
 
 ---
 
 ### 1.5 Model Weight Initialization
 
-- [x] **Shared/TrainingState/TrainingTensors.cu** ✅ AUDITED & FIXED
+- [] **Shared/TrainingState/TrainingTensors.cu**  & FIXED
   - Weight allocation and Xavier initialization
-  - **Issue #107**: Philox PRNG (cuRAND) now used — supersedes old LCG and Issue #106 scaling
-  - **FIX**: Numeric head weights now Xavier-initialized (was all-zeros with dead TODO)
-  - **FIX**: `zeroGrad()` now zeros LayerScale grads (was missing layer_scale1/2)
-  - **FIX**: `position_embedding_weights.ensure_grad()` and `.zero_grad()` guarded with null check
-  - **FIX**: Dead `launchXavierInit` extern "C" deleted from LanguageModel_Training.cu
-  - Weight tying verified: `from_ptr()` + `share_grad()` + `owns_data=false` ✅
-  - GQA dims correct: `total_qkv_dim = d_model + 2*kv_dim` ✅
-  - FFN shapes correct per Issue #89: W1=[d_model, d_ff], W2=[d_ff, d_model] ✅
+
 
 ---
 
 ### 1.6 Embedding Initialization
 
-- [x] **Shared/TensorContract/TensorContract_GPU.cu** (autograd::embedding) ✅ AUDITED & FIXED
-  - `autograd::embedding()` forward/backward: correct scaling, OOB checks, GradFn wiring ✅
-  - `EmbeddingGradFn`: Issues #48/#50/#54 patterns correct (stable data, ownership, result owns grad_fn) ✅
-  - PCGrad path: buffer allocation, global pointer wiring, kernel math all correct ✅
-  - Tied weights: same Tensor object used for both embedding and LM head ✅
-  - **FIX**: Embedding dropout seed was FIXED (`42+500`) — same mask every batch = permanent feature deletion, NOT dropout. Changed to `ctx.step * 2654435761ULL + 500` for per-batch variation.
-  - **DELETED**: `addSinusoidalPositionEmbeddingsKernel` + wrapper — raw in-place CUDA kernel bypassing autograd graph. ALiBi/RoPE provide position info inside attention; residual stream position differentiation is handled by learned or no pos embeddings.
-  - **DELETED**: `ScaleGradFn` struct + `autograd::scale()` function + hpp declaration — dead code from reverted Issue #98 (Rule 20)
-  - **CLEANED**: `LogSoftmaxGradFn` destructor stripped of 7x fprintf debug spew; `log_softmax` forward fprintf removed; `MatMulGradFn::apply` unconditional fprintf/fflush/cudaStreamSynchronize/cudaMemcpy diagnostic block removed (kept vtable corruption check as throw)
-
+- [] **Shared/TensorContract/TensorContract_GPU.cu**
+- GPU autograd/logit system Tape Based
 
 ---
 
 ### 1.7 Stream & Resource Initialization
 
-- [x] **Shared/StreamController/StreamController_GPU.cu** ✅ AUDITED
+- [] **Shared/StreamController/StreamController_GPU.cu**
   - CUDA stream creation and synchronization
   - **Rule 22**: All streams created via TrainingState controller, never raw `cudaStream_t`
-  - **Audit Summary (7 findings fixed):**
-    - Deleted dead code: StreamType enum (Transfer/Auxiliary), StreamEvent class, StreamDescriptor, event pool, 12+ unused methods (getTransferStream, getAuxiliaryStream, getStream, setExternalPrimaryStream, setExternalStream, syncStream, syncAllStreams, recordEvent, waitEvent, logStatus, resetStats, checkCudaError). HPP: 365→160 lines, CU: 530→180 lines.
-    - Rule 20: `initialize()` now throws on double-init (was silent no-op). `getPrimaryStream()` throws if not initialized or null (was returning nullptr).
-    - Rule 20: Fixed 4 ternary fallback patterns in TrainingStateGPU.cu (`stream ? stream : ...getPrimaryStream() : nullptr` → direct `getPrimaryStream()` call).
-    - Rule 20: Fixed 2 ternary+nullptr-guard patterns in Phase2_TrainingLoop.cu (lines ~1393, ~2592).
-    - Simplified StreamControllerConfig: removed transfer/auxiliary config fields. Updated 4 callers (Phase1_Startup.cu, InitTrainingState.cu, diagnostic_train_minimal.cu, InitinferenceState.cu).
-    - **Noted but not fixed**: `g_cleanup_stream` in TensorContract_GPU.cu (raw cudaStreamCreate for cudaFreeAsync cleanup — valid use case). `log_stream_` in EquationLogging.hpp (separate logging infrastructure).
 
 ---
 
 ### 1.8 Training State GPU Setup
 
-- [x] **Shared/TrainingState/TrainingStateGPU.cu** ✅ AUDITED & FIXED (4 passes)
+- [] **Shared/TrainingState/TrainingStateGPU.cu**  & FIXED (4 passes)
   - Allocates GPU buffers, cuBLAS handle, CUDA streams
   - Allocates: gradient buffers, optimizer state (m, v), intermediate tensors
-  - **Audit Summary (8 prior findings, all fixed):**
-    - Removed silent `catch(...)` in `zeroIntermediateGrads()` — if unallocated tensors occur, that's now a real error, not swallowed.
-    - Removed hardcoded `d_model=768` fallback in `logGradientAttribution()` — now throws if embedding shape is invalid.
-    - Fixed Rule 20 violation in `kernel_pcgrad_combine()` — replaced ternary `norm_sq > 1e-12f ?... : 0` with `assert()` to fail loud if LM gradient is near-zero (masking/backward bug detection).
-    - Removed wrong comment "DEPRECATED - always nullptr" from `tensors_` — it's actively used by `initializeAutogradTensors()`.
-    - Deleted dead token weighting members (`token_weights_tensor`, `token_weights_count`) marked DEPRECATED.
-    - Deleted dead method declarations (`allocateActivationCaches()`, `allocateFlashAttentionBuffers()`) — never defined, never called.
-    - Changed `allocateGuessCacheBuffers()` return type from `bool→void` (always throws or returns, never returns false), removed dead caller check in Phase2_TrainingLoop.cu.
-    - **Noted**: `1e-12f` threshold in PCGrad is now an assert — tokens reaching it with zero LM norm will crash with clear message.
-  - **Re-audit findings (5 more, all fixed):**
-    - Fixed `GUESS_RECORD_SIZE = 128` → `96` (was 33% too large, wasting GPU memory). `sizeof(GuessRecord)` = 96. Added `static_assert` in GRIM-TS.hpp to enforce at compile time.
-    - Deleted dead `architecture_config_hash` member from TrainingState_GPU.hpp — zero usages anywhere in codebase.
-    - Deleted dead `d_entropy_output` Tensor from TrainingState_GPU.hpp + its allocation in InitTrainingState.cu — allocated but never read by any computation.
-    - Guarded QK-norm alpha allocation (`attn_alpha_q`, `attn_alpha_k`) behind `if constexpr (HyperParameters::QK_NORMALIZATION_ENABLED)` — was allocating 12 layers × 2 Tensors + ensure_grad for a disabled feature.
-    - Removed leftover debug spew from InitTrainingState.cu: `[DEBUG-LAYER-ALLOC]`, `[DEBUG-CORRUPTION-CHECK]` fprintf blocks (investigation artifacts).
-  - **Third audit findings (7 found, 5 fixed, 1 pending, 1 deferred):**
-    - **FINDING 1 — OWNERSHIP REFACTOR: TrainingTensors owns ALL parameter Tensors** ✅ FIXED: The 4 auxiliary tensors (`lm_head_bias`, `numeric_head_weights`, `numeric_head_bias`, `final_rms_gamma`) were previously double-allocated — once in `TrainingTensors::initializeParams()` (unused) and again in `InitTrainingState.cu`. Resolution: Removed duplicate allocations from `InitTrainingState.cu`, kept sole ownership in `TrainingTensors::initializeParams()`. Removed the 4 member declarations from `TrainingState_GPU.hpp` entirely — they are now accessed exclusively via `tensors_->X`. Updated ALL access sites across 7 files (AutogradTraining.cu, LanguageModel_Training.cu, grim_model_serialization.cu, Phase2_TrainingLoop.cu, InitInferenceState.cu, TrainingStateGPU.cu, Phase1_Startup.cu). Added `numeric_head_enabled` parameter through the init chain so TrainingTensors can conditionally allocate numeric head tensors. Also fixed InitInferenceState.cu which was missing `final_rms_gamma` allocation entirely — inference would have crashed loading checkpoints with rms_gamma.
-    - **FINDING 2 — `TrainingTensors::zeroGrad()` was DEAD CODE** ✅ FIXED: Deleted from TrainingTensors.cu and .hpp. `LanguageModel::zeroGrad()` handles all gradient zeroing.
-    - **FINDING 3 — `single_token_{logits,hidden}` dead allocations** ✅ FIXED: Removed from InitTrainingState.cu. Leftover from planned incremental KV cache never implemented.
-    - **FINDING 4 — `layer_scale_init` misleading default** ✅ FIXED: Changed default from `0.1f` to `1.0f` in TrainingState_GPU.hpp to match production config (Issue #129).
-    - **FINDING 5 — `allocateOptimizerStates` debug fprintf** ✅ FIXED: Removed `[allocateOptimizerStates] ENTER:` and `EXIT:` fprintf lines from TrainingStateGPU.cu.
-    - **FINDING 6 — `batch_prep_*` vectors NOT dead**: ✅ RESOLVED (original claim was WRONG). The 7 `batch_prep_*` vectors (`batch_prep_input_ids`, `batch_prep_target_ids`, `batch_prep_numeric_values`, `batch_prep_numeric_mask`, `batch_prep_text_features`, `batch_prep_text_mask`, `batch_prep_valid_target_counts`) ARE actively used by `ComputeLossBatch.cu::prepareLossBatchInputs()` for assembling padded batch data. `DEBUG_BATCH_PREP_CORRUPTION` flag was already deleted (Phase1 audit). The vectors use lazy allocation (`batch_prep_capacity=0`, `.assign()` on first use) as a workaround for a memory corruption bug where `batch_prep_target_ids.capacity()` contained garbage before `initTrainingState()`. No action required — vectors are production code.
-    - **FINDING 7 — `stream ? stream : stream_ctrl.getPrimaryStream()` x3**: Lines 63, 400, 438. Functions accept `stream = nullptr` default and fallback to centralized controller. Rule 22 compliant (fallback IS to centralized controller, which throws if uninitialized). Low priority — pedantic Rule 20 says make parameter required. DEFERRED.
-  - **Rule 22**: All GPU resources managed via `TrainingState.stream_ctrl.getPrimaryStream()` (no raw streams).
+  
+---
 
 - [ ] **Shared/GPUBuffer/GPUBuffer.cu**
   - Low-level GPU buffer memory management utilities
@@ -201,7 +110,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.9 Positional Bias Initialization
 
-- [x] **Shared/PBM/PositionalBiasMethod.cu** ✅ AUDITED & FIXED
+- [] **Shared/PBM/PositionalBiasMethod.cu**  & FIXED
   - Initializes ALiBi slopes and RoPE frequencies
   - **Issue #47**: ALiBi slopes scale relative to max_seq_len - VERIFIED ✅ (`m_max = target_bias / d_min`, geometric interpolation)
   - **Issue #78**: ALIBI_MAX_BIAS = 0.0f (capping DISABLED) - correct after Issue #84 root cause fix. Stale "NOT RECOMMENDED" comment in HyperParameters FIXED.
@@ -216,7 +125,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.9a Tensor Conversion Utilities
 
-- [x] **Shared/TensorConversion/TensorConversion.cu** ✅ AUDITED & CLEANED
+- [] **Shared/TensorConversion/TensorConversion.cu**
   - Tensor format conversion utilities (BHSD↔BSM, BHSD↔BSHD bf16, QKV split/merge GQA)
   - **DELETED**: Dead float-only conversions (BHSD↔BHDS, BHSD↔BSHD float, BSHD→BHSD float) — only reachable via unused dispatcher
   - **DELETED**: Unused `convert()` dispatcher, `can_convert_inplace()`, `convert_inplace()`, `is_conversion_supported()` from TensorContract_GPU.cu
@@ -228,7 +137,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.10 Training State Initialization
 
-- [x] **InitTrainingState.cu** ✅ AUDITED & CLEANED
+- [] **InitTrainingState.cu**
   - Coordinates allocation of all GPU resources for training
   - **FIXED**: `num_kv_heads` sourced from compile-time `HyperParameters::DEFAULT_NUM_KV_HEADS` instead of `cfg.num_kv_heads` — latent desync bug from agent corruption. Now reads JSON config like every other callsite.
   - **DELETED**: 10 dead FlashAttention bf16 Tensor fields + 2 size_t fields from TrainingState (~56MB dead GPU). `FlashAttentionLayer::ensureScratch()` self-manages these buffers; autograd `ScaledDotProductAttentionGradFn` self-allocates backward buffers. Same dead code deleted from `InitInferenceState.cu`.
@@ -241,7 +150,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.11 GPU Layer Initialization & Wiring
 
-- [x] **TrainingOps.cu** (initGPU method) — ✅ AUDITED & CLEANED
+- [] **TrainingOps.cu** (initGPU method) —
   - `useExternalWeights()` correctly wires all 14 params (including LayerScale, gated by nullptr)
   - `enc_config.num_kv_heads = cfg.num_kv_heads` — CORRECT (runtime JSON, not HyperParameters)
   - `HyperParameters::NUM_ATOM_TYPES` in `getModelStats()` — LEGITIMATE (compile-time tokenizer struct layout)
@@ -254,7 +163,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.12 Common Language Model Utilities
 
-- [x] **Common/grim_language_model_gpu.cu** ✅ AUDITED (3 passes)
+- [] **Common/grim_language_model_gpu.cu**  (3 passes)
   - High-level language model orchestration on GPU
   - **FIXED**: Removed unused `grim_scale_buffer.hpp` include (no callers in this file)
   - **FIXED**: Deleted backwards-compat scaffolding (`has_v2_fields`) and stale tombstone comments
@@ -271,7 +180,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED (Pass 3)**: Numeric prediction host copy in generation now checks `cudaMemcpyAsync` + stream sync result and throws on failure (previously ignored sync result).
   - **FIXED (Pass 3)**: Scratch toggles hardened — enabling ScratchBlock or scratch pool now throws if backing objects are uninitialized; only disable-without-init is treated as no-op.
 
-- [x] **GRIM/grim_language_model_cuda.hpp** ✅ AUDITED & CLEANED (2 passes)
+- [] **GRIM/grim_language_model_cuda.hpp** (2 passes)
   - **DELETED**: `parameterGroupsStale()` declaration — unimplemented method, zero callers, no valid purpose (intended arch-hash check was never coded)
   - **DELETED**: `last_param_group_arch_hash_` member — companion to above, never read or written
   - **DELETED**: `applyActivationQuantization()` declaration — unimplemented method for unimplemented feature, zero callers. Activation quantization config loading stays (Phase1 infrastructure), but no QuantizationLayer is wired to any forward path
@@ -281,7 +190,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **DELETED**: `getAlibiPtr()` accessor — zero callers, returned the dead `alibi_` member above
   - **NOTE (not fixed)**: `HardcodedPattern` enum is duplicated in `LanguageModelConfig` and `HardcodedStates_GPU.hpp` with `static_cast` bridge in Phase1. Fragile but diagnostic-only — defer unification.
 
-- [x] **Common/ScaleBuffer.cu** ✅ AUDITED & HARDENED
+- [] **Common/ScaleBuffer.cu**  & HARDENED
   - Buffer scaling utilities (43 lines, kernel + 3 wrappers)
   - **FIXED**: `scaleDeviceBuffer(float*, ...)` — replaced `if (!data || count == 0) return;` silent early-return with throws (Rule 20). Identity scale check (`scale ≈ 1.0`) kept as optimization.
   - **FIXED**: `scaleDeviceBuffer(Tensor&, ...)` — replaced `if (!tensor.data || numel == 0) return;` with throws.
@@ -293,7 +202,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.13 Optimizer Initialization
 
-- [x] **Shared/Optimizers/AdamW/AdamW_Kernal_GPU.cu** ✅ AUDITED & HARDENED
+- [] **Shared/Optimizers/AdamW/AdamW_Kernal_GPU.cu**  & HARDENED
   - **FIXED**: Manifest path stale in previous entry (`training/Shared/...`) — canonical path is `resources/models/GRIM-text/Shared/Optimizers/AdamW/AdamW_Kernal_GPU.cu`
   - AdamW update verified as decoupled weight decay: `param -= lr * (adam_update + wd * param)` (not L2-regularization in gradient moment path)
   - **FIXED**: Rule 20 input guards in `launchAdamWKernel()` — validates `learning_rate` finite and `>= 0`, `weight_decay` finite and `>= 0`, `step >= 0`, and non-null CUDA stream
@@ -305,7 +214,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.14 Stability Overrides & Feature Flags
 
-- [x] **Shared/Stability/StabilityOverrides.cpp** ✅ AUDITED & DELETED
+- [] **Shared/Stability/StabilityOverrides.cpp**  & DELETED
   - **DELETED**: Entire `Shared/Stability/` library was DEAD CODE — `loadStabilityOverrides()` had ZERO callers
   - Stability overrides were already loaded via `ai_config_paths.hpp` → `TrainingHyperparameters` → `Phase1_Startup.cu` → `StabilityOverrides` struct
   - Three competing data structures collapsed to one pipeline: JSON → `ai_config_paths` → `Phase1_Startup.hpp::StabilityOverrides`
@@ -320,7 +229,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.15 GRIM-TS Layer Initialization
 
-- [x] **Layers/GRIMTS/GRIM-TS.cu** ✅ AUDITED & FIXED
+- [] **Layers/GRIMTS/GRIM-TS.cu**  & FIXED
   - GRIM-TS (Guess-Reward Integrated Memory - Training System): GPU-resident speculative decoding + RL cache
   - ACTIVELY USED by Phase2_TrainingLoop.cu (InitializeGuessCache, CacheGuessBatchGPU, ApplyRewardBatchGPU, GetCacheTelemetry, BeginMicroValidation, CompleteMicroValidation). TelemetryLattice depends on this.
   - **FIXED (Rule 20)**: Converted 11× `fprintf(stderr)+return false` → `throw std::runtime_error()` in InitializeGuessCache
@@ -337,7 +246,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.16 Equation-Based Diagnostic Logging
 
-- [x] **Shared/EquationLogging/EquationLogging.cu** ✅ AUDITED
+- [] **Shared/EquationLogging/EquationLogging.cu** 
   - Centralized equation-based diagnostic logging (Rules 20 & 21)
   - [*_EQUATION] format markers with mathematical formulas
   - Expected vs Actual value comparison with anomaly detection
@@ -353,7 +262,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 2.0 Inference State Initialization (if needed)
 
-- [x] **Layers/InitInferenceState/InitinferenceState.cu** ✅ AUDITED & FIXED
+- [] **Layers/InitInferenceState/InitinferenceState.cu**  & FIXED
   - Initializes inference-specific GPU state (KV cache, etc.)
   - Used before validation batches or standalone inference
   - **FIXED**: 3x `std::cerr + return` → `throw std::runtime_error()` (Rule 20: StreamController, cuBLAS, GQA config)
@@ -379,7 +288,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 2.1 Forward Pass Orchestrator
 
-- [x] **Forward_GPU.cu** ✅ AUDITED & FIXED (103→97 lines)
+- [] **Forward_GPU.cu**  & FIXED (103→97 lines)
   - NOT a forward pass orchestrator — is `GPUGrimEncoder::Impl` layer container only
   - Creates `GPUEncoderLayer` instances, stores in `gpu_layers_` vector, exposes `getLayer()`/`setFlashAttention()`
   - Actual forward orchestration lives in `AutogradTraining.cu` (section 4.1)
@@ -387,85 +296,45 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **DELETED**: `FWD_ERROR` macro — only 2 usages, both replaced by the throw
   - No stale code, no dead functions. All 4 public methods have callers ✅
 
-- [x] **Inference_GPU.cu** ✅ AUDITED & FIXED (269→259 lines)
+- [] **Inference_GPU.cu**  & FIXED (269→259 lines)
   - Inference-mode forward pass via autograd (not legacy kernels)
-  - `executeInferenceForward()` (static): creates AutogradContext, calls `executeAutogradForward`, returns last-token logits
-  - `forwardInit()`: Prefill phase — copies prompt tokens to device, runs full forward
-  - `forwardStep()`: Decode phase — appends token, recomputes FULL sequence (O(n²), no KV cache optimization)
-  - `forwardWithCache()`: Full sequence forward, returns last-token hidden states (encoder output)
-  - **DELETED**: `forwardStepIncremental()` — zero callers, alias to `forwardStep()`, header falsely claimed "O(n)" (Rule 26)
-  - **DELETED**: `forwardWithCache()` dead params `token_text_features` and `token_text_mask` — never passed, never used
-  - **DELETED**: Misleading header comment block claiming incremental O(n) behavior
-  - Rule 20 compliant: All error paths throw ✅
-  - Correctly sets `is_training=false` in AutogradContext (disables dropout) ✅
 
 ---
 
 ### 2.1b Batch Composition & Dynamic Sequences
 
-- [x] **Shared/Batching/Batching_GPU.cu** ✅ AUDITED & CLEANED
+- [] **Shared/Batching/Batching_GPU.cu**
   - Dynamic batch composition: GREEDY, BEST_FIT_DECREASING, SIMILARITY_GROUPED packing
   - Token budget management, overflow handling, gradient accumulation grouping
-  - **DELETED**: `estimateBatching()` + `BatchEstimate` struct — zero external callers (Rule 26)
-  - **DELETED**: `GRADIENT_BALANCED` enum variant — unimplemented, fell through to GREEDY (Rule 20)
-  - **DELETED**: Runtime `adaptive_token_budget` feature — redundant with `analyzeAndRecommend()` already called in Phase2 (Rule 26)
-  - **FIXED**: `max_tokens_per_batch` default changed 8192→0 (Rule 20: caller MUST set, throws if 0)
-  - **FIXED**: `BatchOrdering::RANDOM` seed changed from hardcoded 42 → derived from `opts.rng_seed`
-  - **FIXED**: `buildBatches()` throws on `max_tokens_per_batch=0` or `max_batch_size=0` instead of silent empty return (Rule 20)
-  - BatchPayload.cu: Excellent Rule 20 compliance — thorough cross-check validation ✅
+  - BatchPayload.cu: Excellent Rule 20 compliance — thorough cross-check validation
 
-- [x] **Shared/DynaSeqs/DynaSeq_GPU.cu** ✅ AUDITED & CLEANED
-  - `Catalog` class: lightweight sequence metadata store, used by Batching and Phase1/2/3 ✅
-  - **DELETED**: `planBatches()` function + `BatchPlan` struct — ZERO callers, superseded by `Batching::buildBatches()` (Rule 26)
-  - **DELETED**: Dead config parsing in Phase2 (`batch_strategy` read+uppercase+ignore, strategy always forced GREEDY per Issue #90)
+- [] **Shared/DynaSeqs/DynaSeq_GPU.cu**
 
+- `Catalog` class: lightweight sequence metadata store, used by Batching and Phase1/2/3
 ---
 
 ### 2.1c Activation Quantization (Int8/FP16)
 
-- [x] **Layers/Quantization/Quantization_GPU.cu** ✅ AUDITED (code quality OK, fully unwired)
+- [] **Layers/Quantization/Quantization_GPU.cu**  (code quality OK, fully unwired)
   - Activation quantization for inference speedup (Int8 symmetric, FP16)
   - 280 lines total (.cu + .hpp), 3 CUDA kernels (quantize, dequantize, fused quantize-dequantize)
-  - **100% DEAD CODE**: Config loaded from `ai_config.json` → HP → `LanguageModelConfig.activation_quantization` → NEVER consumed
-  - Zero files `#include "Quantization_GPU.hpp"` outside self. Zero `QuantizationLayer` instances constructed anywhere.
-  - Old wiring (`activation_quantizer_` unique_ptr, `applyActivationQuantization()` method) was already deleted in prior audit pass
-  - `InitinferenceState.cu` L328-340 reads config for cosmetic `std::cout` log only — dead comment says "initialized on first use" but that code was never written
-  - Code quality is solid if activated: Rule 20 compliant (throws on all invalid states), proper CUDA error checking
   - **TODO**: Wire up when ready for inference optimization. Needs: construct `QuantizationLayer` in InitInferenceState, call at configured activation points, fix `stream` field to use centralized controller (Rule 22)
-
+  - Implementation postponed. Current state is clean and self-contained, with no impact on existing training or inference code paths. No Rule 20 issues found in current implementation, but not yet wired to any forward paths to first focus on training stability and correctness.
 
 ---
 
 ### 2.2 Embedding + Position Encoding
 
-- [x] **AutogradTraining.cu + TensorContract_GPU.cu** — AUDITED (full forward+backward trace)
-
-  **Audit Scope:** Exhaustive variable-path trace of embedding lifecycle from token IDs → encoder input.
-
-  **Files Audited:**
-  - `AutogradTraining.cu` lines 250-620 — Forward pass embedding orchestration
-  - `TensorContract_GPU.cu` lines 1456-1506 — `kernel_embedding_forward/backward` kernels
-  - `TensorContract_GPU.cu` lines 3005-3170 — `EmbeddingGradFn` struct (PCGrad backward)
-  - `TensorContract_GPU.cu` lines 3875-3916 — `autograd::embedding()` public API
-  - `TensorContract_GPU.cu` lines 2212-2390 — `AddGradFn` struct
-  - `TensorContract_GPU.cu` lines 3605-3636 — `autograd::add()` function
-  - `TensorContract_GPU.cu` lines 4006-4055 — `autograd::dropout()` with seed
-  - `TensorContract_GPU.cu` lines 1522-1605 — `kernel_pcgrad_combine`
-  - `TrainingTensors.cu` lines 55-120 — Weight allocation + tying
-  - `TrainingStateGPU.cu` lines 380-410 — PCGrad buffer allocation
-  - `Phase1_Startup.cu` lines 1540-1565 — PCGrad/skip flag setup
-  - `HyperParameters_GPU.hpp` lines 275-320 — PositionalEncodingType enum + parsers
-  - `ai_config.json` lines 375-395 — Config values
+- [] **AutogradTraining.cu + TensorContract_GPU.cu**
 
   **Forward Path Trace:**
-  1. `token_ids = reinterpret_cast<int*>(ts->cached_token_ids_tensor.data)` ✅ Rule 20 null check
-  2. `emb_weights = ts->tensors_->embedding_weights` ✅ Rule 20 null check + shape validation
-  3. `embedding_scale = 1.0f` ✅ Issue #140: removed √d_model (correct for tied weights + ALiBi/RoPE)
-  4. `emb_output = autograd::embedding(emb_weights, token_ids, total_tokens, stream, 1.0f)` ✅
-  5. Learned position embeddings: `use_learned_pos_emb = (positional_encoding == NONE)` → **FALSE** with ALIBI_ROPE → SKIPPED ✅
-  6. `intermediates.embedding_tensor = std::move(emb_output)` ✅ ownership transferred
-  7. Embedding dropout: `autograd::dropout(emb, 0.15, step*2654435761+500, is_training, stream)` ✅
-  8. ScratchBlock forward operates in-place on `intermediates.embedding_tensor.data` ✅ Issue #90 fixed
+  1. `token_ids = reinterpret_cast<int*>(ts->cached_token_ids_tensor.data)` Rule 20 null check
+  2. `emb_weights = ts->tensors_->embedding_weights` Rule 20 null check + shape validation
+  3. `embedding_scale = 1.0f` Issue #140: removed √d_model (correct for tied weights + ALiBi/RoPE)
+  4. `emb_output = autograd::embedding(emb_weights, token_ids, total_tokens, stream, 1.0f)`
+  5. Learned position embeddings: `use_learned_pos_emb = (positional_encoding == NONE)` → **FALSE** with ALIBI_ROPE → SKIPPED.
+  6. Embedding dropout: `autograd::dropout(emb, 0.15, step*2654435761+500, is_training, stream)` ✅
+  7. ScratchBlock forward operates in-place on `intermediates.embedding_tensor.data` ✅ Issue #90 fixed
 
   **Backward Path Trace (PCGrad for tied weights):**
   1. LM head matmul backward writes `grad_W` to `embedding_weights.grad` (shared buffer) ✅
@@ -478,22 +347,21 @@ Use this checklist to systematically audit each file in the order it's used duri
   8. `g_skip_embedding_backward_for_tied_weights = false` — correct (Issue #109/#110) ✅
 
   **Kernel Math Verification:**
-  - `kernel_embedding_forward`: `output[i] = weight[token_id][i] * scale` ✅ (scale=1.0)
-  - `kernel_embedding_backward`: `atomicAdd(&weight_grad[token_id][i], grad[i] * scale)` ✅ chain rule correct
-  - `kernel_pcgrad_combine`: verified for 4 cosine cases (opposing→g_lm only, orthogonal→sum, aligned→g_lm only, partial→weighted blend) ✅
-  - `generatePositionIds`: `position_ids[idx] = idx % seq_len` ✅ (correct for batched sequences, only used when NONE)
+  - `kernel_embedding_forward`: `output[i] = weight[token_id][i] * scale` (scale=1.0 for debugging)
+  - `kernel_embedding_backward`: `atomicAdd(&weight_grad[token_id][i], grad[i] * scale)`
+  - `generatePositionIds`: `position_ids[idx] = idx % seq_len`
 
   **Weight Initialization:**
-  - `embedding_weights = Tensor::zeros({vocab_size, d_model})` then `xavier_uniform_()` ✅
+  - `embedding_weights = Tensor::zeros({vocab_size, d_model})` then `xavier_uniform_()`
   - Position embedding weights: NOT allocated for ALIBI_ROPE (data=nullptr) ✅ Issue #96
-  - Weight tying: `lm_head_weights = Tensor::from_ptr(embedding_weights.data, ...)` + `share_grad()` ✅
-  - PCGrad buffer: `Tensor::zeros({vocab_size, d_model})` in Phase1_Startup when `tie_embeddings=true` ✅
+  - Weight tying: `lm_head_weights = Tensor::from_ptr(embedding_weights.data, ...)` + `share_grad()`
+  - PCGrad buffer: `Tensor::zeros({vocab_size, d_model})` in Phase1_Startup when `tie_embeddings=true`
 
   **Config Verified:**
   - `tie_embeddings: true` ✅
   - `positional_encoding: {use_learned:false, use_rope:true, use_alibi:true}` → ALIBI_ROPE ✅
   - `dropout_rate: 0.15` ✅
-  - `embedding_scale = 1.0f` (hardcoded, not from config) ✅
+  - `embedding_scale = 1.0f` for debugging only not to be a workaround 
 
   **Manifest Entry Corrections (stale items from pre-audit):**
   - ~~"Token embedding lookup with √d_model scaling"~~ → REMOVED (Issue #140: scale=1.0f)
@@ -768,7 +636,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 2.3 ScratchBlock Atom Substitution
 
-- [x] **Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu** ✅ AUDITED & FIXED
+- [] **Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu**  & FIXED
   - In-place token substitution for structural atoms (numbers, URLs, emails, paths, dates)
   - **Issue #90**: Buffer desync after autograd::add() (Jan 2026) - FIXED
     - **Root Cause**: `autograd::add(emb, pos_emb)` created NEW buffer, but ScratchBlock operated on `cached_embeddings` (old buffer), Layer 0 received stale pre-ScratchBlock data
@@ -786,7 +654,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 2.4 Shared/ScratchBlock (Pinned Memory Pool)
 
-- [x] **Shared/ScratchBlock/ScratchBlockPool_GPU.cu** ✅ AUDITED & FIXED
+- [] **Shared/ScratchBlock/ScratchBlockPool_GPU.cu**  & FIXED
   - NOT an alternative ScratchBlock — this is a **pinned memory pool** for CPU→GPU batch data staging (double-buffered)
   - Used by `ComputeLossBatch.cu` for async `cudaMemcpyAsync` transfers (input_ids, targets, numeric, text_features)
   - **BUG FIX (Memory Leak)**: `TrainingState::~TrainingState()` NEVER called `delete scratch_pool` — leaked ScratchBlockPool object + all pinned memory blocks. Added `delete scratch_pool; scratch_pool = nullptr;` to destructor.
@@ -805,100 +673,89 @@ For each encoding layer (Layer 0 → Layer 11):
 
 #### 2.5a Per-Token Rare Token Weighting
 
-- [x] **PHANTOM ENTRY** — `Shared/RareTokens/RareTokens_GPU.cu` DOES NOT EXIST
-  - No directory, no header, no callers, no CMakeLists entry
-  - Rare token weighting is handled via batch composition in Phase2_TrainingLoop.cu
-  - AUDITED: Confirmed non-existent (Jan 2026)
+- [ ] **Shared/RareTokens/RareTokens_GPU.cu**
+  - Weights batch composition by rare token frequency
+  - No known issues
+  - Pattern to check: Verify applied BEFORE forward pass
 
 #### 2.5b Layer Normalization (Pre-Attention)
 
-- [x] **Layers/Encoding/Encoding_GPU.cu** + **Encoding_GPU.hpp** — AUDITED + CLEANED
-  - RMSNorm forward: uses `autograd::rms_norm()` — correct
-  - Forward pass: 15 production steps all wired through autograd — verified correct
-  - **Cleanup performed (2588 → 1196 lines, 53.8% reduction):**
-    - Deleted ~1,240 lines of dead Issue #77/#91/#93/#94/#100/#106 diagnostics
-    - Deleted W277 alignment tracker (setW277Reference, resetLayerDiagCount)
-    - Deleted DebugQKVExpectations, logForwardStageStats, logLn1OutStats, logRmsNormInputStats
-    - Deleted g_issue77_fwd_diag_enabled, g_issue77_fwd_layer_count, g_issue77_fwd_batch_count globals
-    - Deleted addBiasKernel/launchAddBias (superseded by autograd::broadcast_add)
-    - Deleted launchResidualAdd extern (never called)
-  - **Bugs fixed:**
-    - RoPE/ALiBi log: `logged_rope_alibi_config` was `true` (always unreachable) → fixed to `false`
-    - QKV_EQUATION block: unconditional D2H memcpy every forward call → gated behind `isEquationLoggingEnabled()`
-    - LAYER_COSINE_EQUATION block: unconditional D2H → gated behind `isEquationLoggingEnabled()`
-    - `g_issue77_fwd_layer_count` always 0 (counter never incremented) → replaced with proper `layer_idx` parameter
-  - **API change:** `forward()` gained `int layer_idx = 0` parameter (caller updated)
-  - KEPT: qkvDebugLevel() NaN/Inf scanner (reachable via GRIM_DEBUG_QKV env var)
-  - KEPT: kEnableEncoderStepLogs (constexpr false, zero-cost)
-  - KEPT: isEquationLoggingEnabled() gated Rule 21 equation logging (QKV_EQUATION, LAYER_COSINE_EQUATION)
+- [ ] **Layers/Encoding/Encoding_GPU.cu** (RMSNorm pre-attention)
+  - RMSNorm forward: `y = (x - μ) / sqrt(σ² + ε) * γ + β`
+  - **Issue #105**: Diagnostic formula for expected RMSNorm output - correctly fixed (NOT a bug)
+  - Pattern to check: Verify RMSNorm computes `output_rms = input_rms * gamma_rms / sqrt(input_rms² + eps)`
+  - Pattern to check: Verify gamma is learned parameter (not frozen)
 
 #### 2.5c QKV Projection
 
-- [x] **Layers/Attention/QKV_Projector.cu** — AUDITED Feb 2026
-  - **643 → 45 lines (93% reduction)**
-  - 4 of 5 functions were DEAD (superseded by autograd): `launchQkvProjection`, `launchGQAProjection`, `launchQKVReshapeToBHSD`, `launchReshapeToBHSD` — all deleted (Rule 26)
-  - Anonymous namespace code (addBiasKernel, NonFiniteStats, scanNonFiniteKernel, qkvDebugLevel, logNonFiniteStats, logQkvConfig) — only used by dead functions — all deleted
-  - KEPT: `launchReshapeFromBHSD()` — called by `autograd::reshape_bhsd_to_flat` (TensorContract_GPU.cu:5808)
-  - `QKV_Projector.hpp` cleaned: `QKVProjectionConfig`, `QKVProjectionWeights` structs and 4 dead function declarations removed (118 → 25 lines)
-  - Removed vestigial `#include "../Attention/QKV_Projector.hpp"` from Encoding_GPU.hpp (not needed — Encoding uses autograd)
+- [ ] **Layers/Attention/QKV_Projector.cu**
+  - Projects hidden states to Q, K, V
+  - No known issues
+  - Pattern to check: Verify output passed to Flash Attention
 
 #### 2.5d Positional Bias Application
 
-- [x] **Shared/PBM/PositionalBiasMethod.cu** — AUDITED Feb 2026, CLEAN (739 lines)
-  - Issue #47 (max seq scaling): NTK-aware `effective_theta = theta * (ctx/base)^(dim/(dim-2))` properly implemented ✓
-  - Issue #78 (max bias clamping): `max_slope_magnitude = |ALIBI_MAX_BIAS| / max_seq_len` slope capping ✓
-  - Issue #119: backward allows nullptr for one of grad_Q/grad_K ✓
-  - Non-GQA version explicitly removed (noted in comments) — Rule 20 compliant
-  - Init-time stderr logs (`[PBM-ALIBI-ISSUE76]`) acceptable (one-time, not per-batch)
-  - No dead code, no stale diagnostics
+- [ ] **Shared/PBM/PositionalBiasMethod.cu**
+  - Adds ALiBi or RoPE bias to attention scores
+  - **Issue #47**: Max sequence length scaling - VERIFY applied
+  - **Issue #78**: Max bias clamping (-10.0) prevents underflow - VERIFY applied
+  - Pattern to check: Look for `max(abs(slope)) <= max_bias / d_min` validation
 
-#### 2.5e Flash Attention (Forward + Backward)
+#### 2.5e Flash Attention (Forward)
 
-- [x] **Layers/FlashAttention/Flash_Attention_Kernal.cu** — AUDITED Feb 2026
-  - **9 unconditional D2H diagnostic blocks gated behind `isEquationLoggingEnabled()`**
-  - Forward: ALiBi slope D2H, Q/K/V input sampling, `[ATTN_SCORE_EQUATION]` O(seqlen²) CPU computation, output sampling, LSE stats — all now gated
-  - Backward: ALiBi slope D2H, saved LSE stats, grad_output BF16 sampling, dQ/dK/dV BF16 output sampling — all now gated
-  - Issue #84 (preprocessing kernel): `flash_bwd_dot_do_o_kernel` launched before main backward kernel ✓
-  - Issue #72 (GQA dK/dV): buffer allocation uses `num_heads` (handled in TensorContract_GPU.cu, not this file)
-  - Causal mask: enforced via `GRIM_FLASHATTN_CAUSAL_ONLY` compile-time define ✓
-  - KEPT: Validation throws (Rule 20), FlashAttentionLog stride/shape logging (low cost), call counters
-  - **Deleted: `Flash_Attention_Kernal_old.cu` (1888 lines) + `_old.hpp` (238 lines)** — confirmed dead (not in CMakeLists.txt, not included anywhere)
+- [ ] **Layers/FlashAttention/Flash_Attention_Kernal.cu**
+  - Flash Attention v2 forward pass
+  - **Issue #72**: GQA dK/dV buffer allocation for num_heads - VERIFY (not num_kv_heads)
+  - **Issue #78**: ALiBi bias integration - VERIFY
+  - GQA support with heads_per_kv_group - VERIFY kernel logic
+  - Pattern to check: Verify allocates dK/dV with size `[b * seq * num_heads * hd]`, not `[b * seq * num_kv_heads * hd]`
+  - Pattern to check: Verify causal mask applied (training uses causal attention)
 
 #### 2.5f Attention Output Projection
 
-- [x] **Covered by 2.5b** (Encoding_GPU.cu cleanup)
-  - Uses `autograd::matmul(attn_out, W_o)` + `autograd::broadcast_add(proj, b_o)` ✓
+- [ ] **Layers/Encoding/Encoding_GPU.cu** (W_o projection + bias)
+  - Projects attention output back to hidden size
+  - Uses `autograd::broadcast_add()` for bias (Issue #97)
+  - **Issue #97**: Bias addition MUST use autograd::broadcast_add() - VERIFY NOT using launchFFNBiasAdd()
+  - Pattern to check: Search for `autograd::broadcast_add(attn_out, b_o)` - MUST be present
+  - Pattern to check: Search for `launchFFNBiasAdd` - should ONLY appear in deprecated paths, NOT in production forward
 
 #### 2.5g Residual + LayerScale
 
-- [x] **Covered by 2.5b** (Encoding_GPU.cu cleanup)
-  - LayerScale + residual properly connected via autograd ✓
+- [ ] **Layers/Encoding/Encoding_GPU.cu**
+  - Adds `λ * attention_output` to input (LayerScale residual)
+  - **Issue #129**: LayerScale init_value changed from 0.1 → 1.0 - VERIFY in config
+  - Pattern to check: Verify `ai_config.json` has `layer_scale.init_value = 1.0`
+  - Pattern to check: If init_value=0.1, gradients vanish (10x attenuation)
 
 #### 2.5h Layer Normalization (Pre-FFN)
 
-- [x] **Covered by 2.5b** (Encoding_GPU.cu cleanup)
-  - RMSNorm pre-FFN output feeds FFN input ✓
+- [ ] **Layers/Encoding/Encoding_GPU.cu** (RMSNorm pre-FFN)
+  - Same RMSNorm as 2.5b
+  - Pattern to check: Verify output shape matches FFN input expectation
 
 #### 2.5i Feed-Forward Network
 
-- [x] **Layers/FeedForward/Feed_Forward_GPU.cu** — AUDITED Feb 2026, CLEAN (244 lines)
-  - Issue #97: Uses `autograd::broadcast_add()` for both b1 and b2 ✓
-  - Issue #56: Stores intermediates in ForwardIntermediates ✓
-  - Issue #25 note: Old `cudaMemcpyAsync(..., args.cache_ffn_output)` pattern NOT present — autograd handles caching via `intermediates.ffn_gelu_out` (correct for autograd architecture)
-  - No dead code, no stale diagnostics, fully autograd-based
+- [ ] **Layers/FeedForward/Feed_Forward_GPU.cu**
+  - FFN: `W2 * GELU(W1 * x + b1) + b2`
+  - **Issue #97**: Bias additions MUST use autograd::broadcast_add() - VERIFY
+  - **Issue #25**: FFN post-GELU cache MUST be written - VERIFY `args.cache_ffn_output` populated
+  - Pattern to check: Search for `autograd::broadcast_add(ffn_hidden, b2)` - MUST be present
+  - Pattern to check: Search for `cudaMemcpyAsync(...post_gelu, args.cache_ffn_output)` - MUST be present
+  - Pattern to check: NO `launchFFNBiasAdd()` calls without autograd wrapper
 
 #### 2.5j GELU Activation
 
-- [x] **Shared/Activations/GELU/GELU.cu** — AUDITED Feb 2026, CLEAN (~200 lines)
-  - Accurate tanh approximation: `GELU(x) = 0.5 * x * (1 + tanh[√(2/π) * (x + 0.044715 * x³)])` ✓
-  - Proper derivative with sech² term ✓
-  - Rule 20 validation via typed args (GELUForwardArgs/GELUBackwardArgs with `.validate()`)
-  - Constants from HyperParameters (GELU_SQRT_2_OVER_PI, GELU_CUBIC_COEFF)
+- [ ] **Shared/Activations/GELU/GELU.cu**
+  - GELU forward/backward
+  - No known issues
+  - Pattern to check: Verify uses accurate approximation (not simplified)
 
 #### 2.5k Residual + LayerScale
 
-- [x] **Covered by 2.5b** (Encoding_GPU.cu cleanup)
-  - Same LayerScale mechanism as 2.5g, consistent λ value ✓
+- [ ] **Layers/Encoding/Encoding_GPU.cu**
+  - Adds `λ * ffn_output` to input (same LayerScale scalar)
+  - Same as 2.5g - verify consistent λ value
 
 ---
 
@@ -918,7 +775,9 @@ For each encoding layer (Layer 0 → Layer 11):
 ### 2.7 Numeric Head (Auxiliary Loss)
 
 - [ ] **Layers/NumericHead/numeric_head_GPU.cu**
-- Deleted No Longer Used: it was for regression not category prediction.
+  - Auxiliary prediction head for numeric values (Huber loss)
+  - No known issues in forward pass
+  - Pattern to check: Verify forward output shape matches training batch
 
 ---
 
@@ -936,23 +795,9 @@ For each encoding layer (Layer 0 → Layer 11):
 
 ### 2.8 Dropout (if enabled)
 
-- [x] **Dropout System** ✅ AUDITED & FIXED
-  - **DELETED**: `Shared/Dropout/Dropout_GPU.cu` and `Dropout_GPU.hpp` — dead code with zero callers. All production dropout uses `autograd::dropout()` in `TensorContract_GPU.cu`
-  - **FIXED**: `EncodingConfig.attention_dropout` default changed from `1.0f` (100% drop!) to `0.0f` (disabled). Value `1.0f` was converted to keep-probability internally but still confusing and wrong as a default.
-  - **ADDED**: `dropout_rate` field to `EncodingConfig`, propagated from `EncoderConfig` via `Forward_GPU.cu`
-  - **ADDED**: Post-attention-projection sublayer dropout in `Encoding_GPU.cu` (seed offset: 100+layer_idx)
-  - **ADDED**: Post-FFN sublayer dropout in `Encoding_GPU.cu` (seed offset: 200+layer_idx)
-  - **ADDED**: FFN activation dropout after GELU in `Feed_Forward_GPU.cu` (seed offset: 300+layer_idx)
-  - **FIXED**: `FeedForwardConfig.dropout_rate` now propagated from `EncodingConfig.dropout_rate` in `useExternalWeights()`
-  - **REMOVED**: Redundant post-encoder-layer dropout from `AutogradTraining.cu` (was double-regularizing with sublayer dropout)
-  - **Removed from CMakeLists.txt**: `Shared/Dropout/Dropout_GPU.cu` build reference
-  - **Dropout sites (production)**:
-    1. Embedding dropout: `AutogradTraining.cu` (seed: step*2654435761+500)
-    2. Post-attention-projection: `Encoding_GPU.cu` step 6b (seed: step*2654435761+100+layer)
-    3. FFN activation (post-GELU): `Feed_Forward_GPU.cu` (seed: step*2654435761+300+layer)
-    4. Post-FFN output: `Encoding_GPU.cu` step 9b (seed: step*2654435761+200+layer)
-    5. Attention dropout (inside FlashAttention): Philox PRNG, separate `attention_dropout` config
-  - All sublayer dropouts gated by `dropout_rate > 0.0f && training_step > 0`
+- [ ] **Shared/Dropout/Dropout_GPU.cu**
+  - Dropout regularization
+  - Pattern to check: Verify disabled during validation
 
 ---
 
@@ -961,8 +806,8 @@ For each encoding layer (Layer 0 → Layer 11):
 ## PHASE 2: TRAINING LOOP (Loss Computation)
 
 ### 3.1 Loss Computation Orchestrator
-  
-- [x] **LanguageModel_Training.cu** ✅ AUDITED & FIXED
+
+- [] **LanguageModel_Training.cu**  & FIXED
   - Backward orchestrator: delegates to `executeAutogradBackward()` in AutogradTraining.cu
   - **FIXED (Issue #138)**: Added CUDA event-based timing to decompose `computeGradNorm` into kernel time vs backward pipeline drain
   - `computeGradNorm` now logs `wall_time` (3-53ms) AND `gpu_kernel_time` (~1ms) separately — eliminates misleading timing variance
@@ -974,7 +819,7 @@ For each encoding layer (Layer 0 → Layer 11):
 
 ### 3.2 Unified Loss (Text Cross-Entropy)
 
-- [x] **Shared/Loss/ComputeLoss/AutogradLoss.cu** ✅ AUDITED
+- [] **Shared/Loss/ComputeLoss/AutogradLoss.cu** 
   - **ONLY LOSS PATH** - Combines CE + focal + label smoothing + entropy regularization
   - `autograd::unified_loss()` returns scalar Tensor with NLLLossGradFn → LogSoftmaxGradFn chain ✅
   - Gradient formula: `∂L/∂logits = (softmax - one_hot) / N` (mean reduction) ✅
@@ -994,7 +839,7 @@ For each encoding layer (Layer 0 → Layer 11):
 
 ### 3.3 Loss Batch Computation
 
-- [x] **Shared/Loss/ComputeLoss/ComputeLossBatch.cu** ✅ AUDITED & GUTTED (753→391 lines)
+- [] **Shared/Loss/ComputeLoss/ComputeLossBatch.cu**  & GUTTED (753→391 lines)
   - **FULLY REFACTORED**: Inline loss code (~400 lines) DELETED, delegates to `computeAutogradLoss(autograd_ctx, payload)` ✅
   - File now contains ONLY: GPU copies → autograd context setup → forward pass → loss config build → `computeAutogradLoss()` call → return
   - **DELETED (362 lines total)**:
@@ -1017,7 +862,7 @@ For each encoding layer (Layer 0 → Layer 11):
 
 ### 3.4 Numeric Loss (Auxiliary Head)
 
-- [x] **Shared/Loss/NumericLoss/NumericLoss_GPU.cu** ✅ AUDITED (integrated into computeAutogradLoss)
+- [] **Shared/Loss/NumericLoss/NumericLoss_GPU.cu**  (integrated into computeAutogradLoss)
   - Huber loss for numeric predictions
   - **NOW CALLED FROM**: `computeAutogradLoss()` in AutogradTraining.cu (no longer inline in ComputeLossBatch.cu) ✅
   - **FIXED (Issue #137)**: `scaleNumericGradKernel` uses `1/valid_text_tokens` (same denominator as text CE mean reduction)
@@ -1030,7 +875,7 @@ For each encoding layer (Layer 0 → Layer 11):
 
 ### 3.5 Old Loss Sub-Modules (DELETED — Rule 26)
 
-- [x] **ENTIRE OLD LOSS SYSTEM DELETED** ✅ Dead code — production uses `autograd::unified_loss()` exclusively
+- [] **ENTIRE OLD LOSS SYSTEM DELETED** ✅ Dead code — production uses `autograd::unified_loss()` exclusively
   - **Files DELETED:**
     - `Shared/Loss/CrossEntropy/CrossEntropy_GPU.cu` + `.hpp` (standalone CE kernel, zero callers)
     - `Shared/Loss/LabelSmoothing/LabelSmoothing_GPU.cu` + `.hpp` (zero callers)
@@ -1061,7 +906,7 @@ For each encoding layer (Layer 0 → Layer 11):
 
 ### 4.1 Backward Orchestrator
 
-- [x] **AutogradTraining.cu** ✅ AUDITED & FULLY REFACTORED (2070 lines, 4 major functions)
+- [] **AutogradTraining.cu**  & FULLY REFACTORED (2070 lines, 4 major functions)
   - **PRIMARY BACKWARD PATH**: `executeAutogradBackward(ctx)` — handles text loss + numeric loss + learned weighting + ScratchBlock backward
   - **PRIMARY FORWARD PATH**: `executeAutogradForward(ctx)` — full model forward through autograd graph
   - **PRIMARY LOSS PATH**: `computeAutogradLoss(ctx, payload)` — text CE + numeric + learned weighting, returns `LossResult`
@@ -1084,7 +929,7 @@ For each encoding layer (Layer 0 → Layer 11):
 
 ### 4.2 GradFn Lifecycle & Buffer Ownership
 
-- [x] **Shared/TensorContract/TensorContract_GPU.cu** (All GradFn subclasses) ✅ AUDITED & FIXED
+- [] **Shared/TensorContract/TensorContract_GPU.cu** (All GradFn subclasses)  & FIXED
   - Core autograd system
   - **Issue #126**: RMSNormGradFn stale input_grad pointer (Feb 2026) - FIXED
     - **Root Cause**: `capture_inputs()` stored raw pointer to `x.grad_data()` borrowed from input tensor. When `x` destructed (temporary from `autograd::add()`), buffer freed, leaving dangling pointer
@@ -1234,7 +1079,7 @@ For each encoding layer (Layer 0 → Layer 11):
 
 ### 5.1 Gradient Accumulation & Clipping
 
-- [x] **Phase2_TrainingLoop.cu** (post-accumulation clipping section) ✅ AUDITED & REFACTORED
+- [] **Phase2_TrainingLoop.cu** (post-accumulation clipping section)  & REFACTORED
   - **Issue #139**: Per-component gradient clipping (Feb 2026) - emb_lm_tied was dominating 88-99.6% of total gradient norm, crushing encoder gradients to near-zero when joint clipping applied single coefficient to ALL text parameters
   - **OLD**: Two-group clipping (text=emb+attn+ffn+rms, num=numeric_head) - when emb=99% of text_norm, clip_coef≈0.2 scaled ALL text params equally
   - **NEW**: Three independent clips:
@@ -1250,7 +1095,7 @@ For each encoding layer (Layer 0 → Layer 11):
   - **Batch Strategy Cleanup**: Removed SIMILARITY_GROUPED/RANDOM/WEIGHTED_RANDOM options, forced GREEDY (highest-loss tokens first) for consistent training
   - Files modified: Phase2_TrainingLoop.cu (clipping section ~lines 1650-1720, diagnostic ~lines 1800-1950)
 
-- [x] **Shared/TNC/Token-normalized_clipping.cu** ✅ VERIFIED (called by Phase2)
+- [] **Shared/TNC/Token-normalized_clipping.cu** ✅ VERIFIED (called by Phase2)
   - Token-normalized gradient clipping (divides by sqrt(valid_tokens) for per-token scaling)
   - Adaptive clipping enabled via config
   - Pattern verified: Uses token normalization, not just global norm
@@ -1325,7 +1170,7 @@ For each encoding layer (Layer 0 → Layer 11):
 
 ### 5.7 Validation & Checkpointing
 
-- [x] **Phase2_TrainingLoop.cu** (validation section) ✅ AUDITED & FIXED
+- [] **Phase2_TrainingLoop.cu** (validation section)  & FIXED
   - Periodic validation and checkpoint saving
   - **Issue #85**: Validation token budget exceeds training buffer size (Jan 2026) - FIXED
     - **Root Cause**: Hardcoded `kDefaultMaxTokensPerBatch = 8192` exceeded training allocation (batch_size × max_seq_len = 7168)
@@ -1388,7 +1233,7 @@ For each encoding layer (Layer 0 → Layer 11):
 Use this section to track stale code patterns found during audit:
 
 - [ ] Dead `Embedding_GPU.cu` - confirm NOT referenced
-- [x] Dead `CrossEntropy_GPU.cu` - ✅ DELETED (Rule 26, along with all old loss sub-modules)
+- [] Dead `CrossEntropy_GPU.cu` - ✅ DELETED (Rule 26, along with all old loss sub-modules)
 - [ ] Deprecated `launchFFNBiasAdd()` - confirm NOT in production forward pass
 - [ ] Deprecated `launchCenterHiddenStates()` - confirm NOT used (replaced by autograd)
 - [ ] Old `UnifiedLoss_GPU.cu` - confirm NOT referenced

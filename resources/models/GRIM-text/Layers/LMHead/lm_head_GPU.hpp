@@ -1,101 +1,147 @@
 //======================================================//
-//  LM Head GPU Helpers
-//  Shared CUDA helpers for projection + gradients
-//======================================================//
+//  LM Head Layer - GPU (Pattern B: Layer Ownership)
+//  Linear projection from hidden states to vocabulary logits
 //
-//  REFACTORED: Uses TensorContract::TensorView instead of raw float*
-//  All tensor views validated via require() (Rule 20: Fail Loud)
+//  Owns: weights [vocab_size, d_model], bias [vocab_size] (optional),
+//        final_rms_gamma [d_model] (pre-LM-head normalization).
 //
+//  Architecture: logits = centered(RMSNorm(encoder_output)) @ W^T + bias
+//  Where W is either tied to embedding weights or independently allocated.
+//
+//  Backward is handled automatically by the autograd tape system:
+//    grad_W = centered^T @ grad_logits
+//    grad_input = grad_logits @ W  (flows back through centering + RMSNorm ops)
+//    grad_bias = sum(grad_logits, dim=0)
+//    grad_gamma via RMSNormGradFn
 //======================================================//
 
 #pragma once
 
-#include <cublas_v2.h>
+#ifdef USE_CUDA
+
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
+#include <string>
+#include <cstdint>
+
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 namespace GRIM {
 
 //======================================================//
-//  LMHeadForwardParams - Type-safe tensor views
+//  Configuration
 //======================================================//
-struct LMHeadForwardParams {
-	// Input tensors (const views)
-	TensorContract::TensorView encoder_output;   // [total_tokens, d_model] BSM layout
-	TensorContract::TensorView weights;          // [vocab_size, d_model] BSM layout (row-major)
-	TensorContract::TensorView bias;             // [vocab_size, 1] BSM layout (optional, may be null)
-	
-	// Output tensors (mutable views)
-	TensorContract::TensorView logits;           // [total_tokens, vocab_size] LOGITS layout
-	TensorContract::TensorView centered_scratch; // [total_tokens, d_model] BSM (scratch for Issue #37, may be null)
-	
-	// Operation flags
-	bool use_bias = false;
-	bool use_centering = true;                   // Enable zero-mean centering (Issue #37 fix)
-	
-	// Execution context
-	cublasHandle_t handle = nullptr;
-	cudaStream_t stream = nullptr;
-	
-	// RULE 20: Fail loud validation
-	void validate(const char* context) const {
-		encoder_output.require(context);
-		weights.require(context);
-		logits.require(context);
-		
-		if (use_bias && !bias.is_valid()) {
-			throw std::runtime_error(std::string(context) + ": use_bias=true but bias view is invalid");
-		}
-		if (use_centering && !centered_scratch.is_valid()) {
-			throw std::runtime_error(std::string(context) + ": use_centering=true but centered_scratch is invalid");
-		}
-		if (!handle) {
-			throw std::runtime_error(std::string(context) + ": cuBLAS handle is NULL");
-		}
-		
-		// Layout validation
-		if (encoder_output.layout() != TensorContract::Layout::BSM) {
-			throw std::runtime_error(std::string(context) + ": encoder_output must have BSM layout");
-		}
-		if (logits.layout() != TensorContract::Layout::LOGITS) {
-			throw std::runtime_error(std::string(context) + ": logits must have LOGITS layout");
-		}
-	}
-	
-	// Convenience: extract dimensions from tensor shapes
-	int total_tokens() const { return encoder_output.shape.as_2d().rows; }
-	int d_model() const { return encoder_output.shape.as_2d().cols; }
-	int vocab_size() const { return logits.shape.as_2d().cols; }
+
+struct LMHeadLayerConfig {
+    int d_model = 0;           // Hidden dimension (MUST be populated)
+    int vocab_size = 0;        // Output vocabulary size (MUST be populated)
+    bool use_bias = false;     // Add learnable bias to logits
+    bool center_hidden_states = false;  // Apply column+row centering before projection (Issue #125/#132)
+    bool center_logits = false;         // Row-center logits after projection (numerical stability)
+    bool has_final_rms_norm = true;     // Apply RMSNorm before projection (pre-LM-head norm)
+    float rms_epsilon = 1e-5f;          // RMSNorm epsilon
+    cudaStream_t stream = nullptr;
+    cublasHandle_t cublas_handle = nullptr;  // Rule 22: MUST be training_state.cublas_handle
 };
 
-// Executes LM head forward projection on GPU using cuBLAS.
-// Throws std::runtime_error on invalid params or cuBLAS failure.
-void launchLMHeadForward(const LMHeadForwardParams& params);
-
-// NOTE: launchLMHeadBackward() REMOVED (Issue #58 cleanup)
-// Production training uses autograd::matmul() which has its own MatMulGradFn
-// that handles backward pass via TensorContract_GPU.cu operations.
-// See AutogradTraining.cu for usage.
-
-// ============================================================================
-// ISSUE #37/#43 FIX: Center hidden states (zero-mean each token's features)
-// 
-// This function centers the encoder output before LM head projection.
-// It MUST be called before autograd::matmul() in the autograd training path!
+//======================================================//
+//  LMHeadLayer - Self-Allocating (Pattern B: Layer Ownership)
 //
-// Why: Without centering, non-zero mean hidden states cause systematic bias
-// in weight gradients, leading to mode collapse (all predictions converge
-// to most frequent token 277 = SPACE).
+//  Owns its own weights (allocated in constructor) OR aliases
+//  embedding weights when tie_embeddings=true (Issue #60).
+//  Also owns final_rms_gamma for pre-LM-head normalization.
 //
-// Math: centered[t,i] = hidden[t,i] - mean_t  where mean_t = (1/d_model) Σ_i hidden[t,i]
-// After centering: Σ_i centered[t,i] = 0 for all positions t
-// ============================================================================
-void launchCenterHiddenStates(
-    const float* input,    // [total_tokens, d_model] - encoder output
-    float* output,         // [total_tokens, d_model] - scratch buffer for centered data
-    int d_model,
-    int total_tokens,
-    cudaStream_t stream
-);
+//  forward() applies: RMSNorm → centering → matmul → bias
+//  backward() handled by autograd chain (RMSNormGradFn → MatMulGradFn etc.)
+//======================================================//
+
+class LMHeadLayer {
+public:
+    // Rule 20: Default constructor deleted
+    LMHeadLayer() = delete;
+
+    /// Self-allocating constructor (Pattern B - Layer Ownership)
+    ///
+    /// When tied_embedding_weights is non-null, weights alias embedding (Issue #60 weight tying).
+    /// When null, weights are independently allocated with Xavier init.
+    /// final_rms_gamma is ALWAYS self-allocated (initialized to 1.0).
+    ///
+    /// @param config               Layer configuration (d_model, vocab_size, etc.)
+    /// @param seed                  Xavier init seed for independent weights
+    /// @param init_stream           CUDA stream for allocation
+    /// @param tied_embedding_weights If non-null, weights alias this tensor (from_ptr + share_grad)
+    explicit LMHeadLayer(const LMHeadLayerConfig& config,
+                         uint64_t seed,
+                         cudaStream_t init_stream,
+                         Tensor* tied_embedding_weights = nullptr);
+
+    ~LMHeadLayer() = default;
+
+    // Non-copyable (GPU resource ownership)
+    LMHeadLayer(const LMHeadLayer&) = delete;
+    LMHeadLayer& operator=(const LMHeadLayer&) = delete;
+
+    // Allow move
+    LMHeadLayer(LMHeadLayer&& other) noexcept;
+    LMHeadLayer& operator=(LMHeadLayer&& other) noexcept;
+
+    //--------------------------------------------------
+    // Configuration
+    //--------------------------------------------------
+    const LMHeadLayerConfig& config() const noexcept { return config_; }
+
+    //--------------------------------------------------
+    // Weight Accessors (for training/serialization)
+    //--------------------------------------------------
+    Tensor& weights() { return weights_; }
+    Tensor& bias() { return bias_; }
+    Tensor& finalRmsGamma() { return final_rms_gamma_; }
+    const Tensor& weights() const { return weights_; }
+    const Tensor& bias() const { return bias_; }
+    const Tensor& finalRmsGamma() const { return final_rms_gamma_; }
+
+    /// Whether this layer allocated its own weights (false = tied to embedding)
+    bool ownsWeights() const { return owns_weights_; }
+
+    /// Whether weights are initialized and ready for forward pass
+    bool weightsReady() const { return weights_.data != nullptr; }
+
+    //--------------------------------------------------
+    // Runtime Configuration (update before forward)
+    //--------------------------------------------------
+    void setStream(cudaStream_t s) { config_.stream = s; }
+    void setCublasHandle(cublasHandle_t h) { config_.cublas_handle = h; }
+
+    //--------------------------------------------------
+    // Forward Pass - Autograd
+    //--------------------------------------------------
+    /// LM head forward with autograd tracking:
+    ///   0. Optional: RMSNorm(input, final_rms_gamma_) — pre-LM-head normalization
+    ///   1. Optional: center_columns + center_rows on normalized input (Issue #125/#132)
+    ///   2. logits = input @ weights^T  (autograd::matmul, transpose_b=true)
+    ///   3. Optional: center_rows on logits (numerical stability)
+    ///   4. Optional: logits += bias  (autograd::broadcast_add)
+    ///
+    /// Builds compute graph for automatic backward().
+    ///
+    /// @param input                    [total_tokens, d_model] - encoder output (MUST have grad_fn if training)
+    /// @param out_centered_hidden      Output: centered hidden states (valid only if centering enabled, for diagnostics)
+    /// @return logits [total_tokens, vocab_size] with grad_fn attached
+    Tensor forward(const Tensor& input, Tensor& out_centered_hidden);
+
+
+
+private:
+    LMHeadLayerConfig config_{};
+
+    // Weight Tensors with autograd (requires_grad=true)
+    Tensor weights_;          // [vocab_size, d_model] — owned or aliased from embedding
+    Tensor bias_;             // [vocab_size] — optional, always owned
+    Tensor final_rms_gamma_;  // [d_model] — pre-LM-head RMSNorm gamma, always owned
+
+    bool owns_weights_ = true;  // false when tied to embedding weights
+};
 
 } // namespace GRIM
+
+#endif // USE_CUDA

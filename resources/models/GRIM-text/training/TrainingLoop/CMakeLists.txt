@@ -60,7 +60,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})               # TrainingLoop/
 
 # GPU training kernels library (from parent directory)
 add_library(grim_training_kernels STATIC 
-    ../../Shared/Loss/CrossEntropy/CrossEntropy_GPU.cu
+    # Rule 26: CrossEntropy_GPU.cu DELETED — dead code. Production loss uses autograd::unified_loss() in AutogradLoss.cu
     ../../Shared/Gradients/GradientCC_GPU.cu
     ../../Shared/GPUBuffer/GPUBuffer.cu
     ../../Shared/GradNorm/GradNormGPU.cu
@@ -113,8 +113,6 @@ target_link_libraries(grim_log_recorder PUBLIC
 # Flash Attention kernels library
 add_library(grim_flash_attention STATIC 
     ../../Layers/FlashAttention/Flash_Attention_Kernal.cu
-    ../../Layers/FlashAttention/AttentionDiagnostics.cu
-    # Rule 20: RoPE_Verification.cu DELETED - no backwards compatibility
 )
 set_target_properties(grim_flash_attention PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
@@ -149,13 +147,13 @@ target_link_libraries(grim_flash_attention PUBLIC
 
 # GPU transformer kernels object library
 add_library(grim_cuda_kernels OBJECT
-    ../../Layers/Attention/QKV_Projector.cu
-    # Embedding_GPU.cu removed - compiled in grim_training_kernels to avoid duplicate symbols
+    # QKV_Projector.cu MOVED to grim_language_model_gpu_impl — depends on TensorConversion (same library)
+    # Old Embedding_GPU.cu (dead code) removed. New Embedding_GPU.cu in grim_training_kernels (Pattern B layer).
     ../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.cu
     ../BiasGradientKernel.cu  # Bias gradient kernel (was in deleted BackwardKernels.cu)
 )
 set_target_properties(grim_cuda_kernels PROPERTIES
-    CUDA_SEPARABLE_COMPILATION OFF
+    CUDA_SEPARABLE_COMPILATION OFF  # OFF: QKV_Projector only CALLS TensorConversion (doesn't export device symbols)
     CUDA_ARCHITECTURES "86"
     POSITION_INDEPENDENT_CODE ON
 )
@@ -165,6 +163,7 @@ target_include_directories(grim_cuda_kernels PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared             # Shared/ folder for TrainingState, etc.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared/TensorContract  # TensorContract module
     ${CMAKE_CURRENT_SOURCE_DIR}/../../archive
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../control  # control/ for ai_config_paths.hpp
 )
@@ -181,29 +180,27 @@ target_link_libraries(grim_cuda_kernels PUBLIC
 add_library(grim_language_model_gpu_impl OBJECT
     ../../Common/grim_language_model_gpu.cu
     ../../Common/ScaleBuffer.cu
+    ../../Layers/Attention/QKV_Projector.cu  # Moved from grim_cuda_kernels — depends on TensorConversion (this library)
     ../Inference_GPU.cu
     ../Forward_GPU.cu
     ../InitTrainingState.cu
     ../TrainingOps.cu
     ../../Shared/Loss/ComputeLoss/ComputeLossBatch.cu
     ../../Shared/TrainingState/TrainingStateGPU.cu
-    ../../Shared/TrainingState/TrainingTensors.cu
     ../../Shared/TeacherLogits/TeacherLogits_GPU.cu
-    ../../Shared/Dropout/Dropout_GPU.cu
     ../LanguageModel_Training.cu
     ../../Shared/Gradients/GradStatsCollector.cu
     ../Autograd/AutogradTraining.cu
     ../../Layers/HardcodedStates/HardcodedStates_GPU.cu
+    ../../Layers/Embedding/Embedding_GPU.cu
     ../../Layers/LMHead/lm_head_GPU.cu
-    ../../Layers/NumericHead/numeric_head_GPU.cu
     ../../Layers/Quantization/Quantization_GPU.cu
     ../../Shared/DynaSeqs/DynaSeq_GPU.cu
     ../../Shared/Batching/Batching_GPU.cu
     ../../Shared/Batching/BatchPayload.cu
-    ../../Shared/Loss/NumericLoss/NumericLoss_GPU.cu
     ../../Layers/Encoding/Encoding_GPU.cu
-    ../../Layers/ScratchBlock/ScratchBlock_GPU.cu
-    ../../Shared/ScratchBlock/ScratchBlock_GPU.cu
+    ../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu
+    ../../Shared/ScratchBlock/ScratchBlockPool_GPU.cu
     ../../Layers/InitInferenceState/InitinferenceState.cu
     ../../Shared/TensorConversion/TensorConversion.cu
     ../../Shared/TensorContract/TensorContract_GPU.cu
@@ -211,7 +208,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Activations/GELU/GELU.cu
     ../../Shared/StreamController/StreamController_GPU.cu
     ../../Shared/Loss/ComputeLoss/AutogradLoss.cu
-    # ../Autograd/AutogradTraining.cu  # DISABLED: Dead code, replaced by HYBRID approach in LanguageModel_Training.cu
 )
 set_target_properties(grim_language_model_gpu_impl PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
@@ -275,6 +271,8 @@ add_executable(train_gpu
     ../Phases/Phase1_Startup.hpp
     ../Phases/Phase2_TrainingLoop.cu
     ../Phases/Phase2_TrainingLoop.hpp
+    ../Diagnostics/TrainingDiagnostics.cu
+    ../Diagnostics/TrainingDiagnostics.hpp
     ../Phases/Phase3_Cleanup.cu
     ../Phases/Phase3_Cleanup.hpp
     ../training_status_writer.hpp

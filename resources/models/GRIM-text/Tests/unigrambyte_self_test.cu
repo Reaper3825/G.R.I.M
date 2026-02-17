@@ -628,8 +628,8 @@ bool testUniBytePlaceholderInjection(std::string& message) {
     // Check that placeholder token was injected
     bool found_placeholder = false;
     for (int token : result.token_ids) {
-        // Atom tokens are in range [256, 511]
-        if (token >= 256 && token < 512) {
+        // Atom tokens are in range [ATOM_TOKEN_OFFSET, ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE)
+        if (token >= static_cast<int>(ATOM_TOKEN_OFFSET) && token < static_cast<int>(ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE)) {
             found_placeholder = true;
             break;
         }
@@ -707,8 +707,10 @@ bool testUniByteRoundTrip(std::string& message) {
     for (size_t i = 0; i < tokens.size(); ++i) {
         int tid = tokens[i];
         std::cout << "  tokens[" << i << "] = " << tid;
-        if (tid < 256) {
-            std::cout << " (byte: '" << static_cast<char>(tid) << "')\n";
+        if (tid < static_cast<int>(GRIM::Tokenizer::NUM_SPECIAL_TOKENS)) {
+            std::cout << " (special)\n";
+        } else if (tid >= static_cast<int>(GRIM::Tokenizer::BYTE_TOKEN_OFFSET) && tid < static_cast<int>(ATOM_TOKEN_OFFSET)) {
+            std::cout << " (byte: '" << static_cast<char>(tid - GRIM::Tokenizer::BYTE_TOKEN_OFFSET) << "')\n";
         } else if (tid >= UNIGRAM_VOCAB_OFFSET) {
             const auto* piece = tokenizer.unigramLM().getPiece(tid);
             if (piece) {
@@ -1643,7 +1645,7 @@ bool testVocabCapSize(std::string& message) {
     int original_size = unigram.vocabSize();
     ASSERT_TRUE(original_size > 50, "Should have many pieces");
     
-    // Cap to smaller size (must be >= 256 for special tokens)
+    // Cap to smaller size (must be >= NUM_SPECIAL_TOKENS for special tokens)
     unigram.capVocabSize(260);
     
     int new_size = unigram.vocabSize();

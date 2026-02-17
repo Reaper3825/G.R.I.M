@@ -117,7 +117,6 @@ struct StabilityOverrides {
  */
 struct ScratchBlockConfig {
     bool enabled = false;
-    size_t max_tokens_per_block = 0;
     size_t num_blocks = 0;
     bool write_combined = false;
 };

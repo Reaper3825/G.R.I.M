@@ -1,5 +1,5 @@
 //======================================================//
-//  ScratchBlock_GPU.hpp
+//  ScratchBlockPool_GPU.hpp
 //  Pinned Memory Scratch Blocks for Zero-Copy GPU Transfers
 //  
 //  Provides togglable pinned memory pools for async CPU→GPU
@@ -106,9 +106,6 @@ public:
     // Release a block back to the pool (thread-safe)
     void release(const ScratchBlockHandle& handle);
     
-    // Check if a specific block is available
-    bool isAvailable(uint32_t block_id) const;
-    
     //--------------------------------------------------//
     // Statistics
     //--------------------------------------------------//
@@ -185,58 +182,6 @@ private:
     // Initialization
     bool initializeBlocks();
     void cleanupBlocks();
-    
-    // Find available block
-    int findAvailableBlock() const;
-};
-
-//======================================================//
-//  RAII Scratch Block Guard
-//======================================================//
-
-class ScratchBlockGuard {
-public:
-    ScratchBlockGuard(ScratchBlockPool& pool, size_t min_tokens)
-        : pool_(pool)
-        , handle_(pool.acquire(min_tokens))
-        , released_(false) {}
-    
-    ~ScratchBlockGuard() {
-        if (!released_) {
-            pool_.release(handle_);
-        }
-    }
-    
-    // Disable copy
-    ScratchBlockGuard(const ScratchBlockGuard&) = delete;
-    ScratchBlockGuard& operator=(const ScratchBlockGuard&) = delete;
-    
-    // Move support
-    ScratchBlockGuard(ScratchBlockGuard&& other) noexcept
-        : pool_(other.pool_)
-        , handle_(other.handle_)
-        , released_(other.released_) {
-        other.released_ = true;
-    }
-    
-    // Access handle
-    const ScratchBlockHandle& handle() const { return handle_; }
-    int* data() const { return handle_.data; }
-    size_t capacity() const { return handle_.capacity_tokens; }
-    bool isPinned() const { return handle_.is_pinned; }
-    
-    // Manual release (if needed before destruction)
-    void release() {
-        if (!released_) {
-            pool_.release(handle_);
-            released_ = true;
-        }
-    }
-    
-private:
-    ScratchBlockPool& pool_;
-    ScratchBlockHandle handle_;
-    bool released_;
 };
 
 } // namespace ScratchBlock

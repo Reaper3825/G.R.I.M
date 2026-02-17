@@ -26,6 +26,10 @@
 
 #include <sstream>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 using GRIM::Logging::ModuleId;
 using GRIM::Logging::EmitModuleInfo;
 using GRIM::Logging::EmitModuleError;
@@ -74,7 +78,65 @@ extern bool g_autograd_verbose;
 //  Main Entry Point
 //======================================================//
 
+#ifdef _WIN32
+// Issue #142b: Windows SEH handler to catch CUDA device errors that bypass C++ exceptions.
+// With default /EHsc, CUDA access violations trigger SEH that C++ catch(...) cannot catch.
+// This handler ensures we get a log message instead of silent exit.
+static LONG WINAPI GrimSEHHandler(EXCEPTION_POINTERS* ep) {
+    DWORD code = ep ? ep->ExceptionRecord->ExceptionCode : 0;
+    void* addr = ep ? ep->ExceptionRecord->ExceptionAddress : nullptr;
+    
+    // Log to stderr (most reliable path during crash)
+    fprintf(stderr, "\n[FATAL-SEH] Unhandled structured exception!\n");
+    fprintf(stderr, "[FATAL-SEH] Exception code: 0x%08lX\n", code);
+    fprintf(stderr, "[FATAL-SEH] Exception address: %p\n", addr);
+    
+    switch (code) {
+        case EXCEPTION_ACCESS_VIOLATION:
+            fprintf(stderr, "[FATAL-SEH] EXCEPTION_ACCESS_VIOLATION — likely CUDA device error or buffer overflow\n");
+            if (ep && ep->ExceptionRecord->NumberParameters >= 2) {
+                fprintf(stderr, "[FATAL-SEH] %s address: 0x%p\n",
+                    ep->ExceptionRecord->ExceptionInformation[0] == 0 ? "Read from" : "Write to",
+                    (void*)ep->ExceptionRecord->ExceptionInformation[1]);
+            }
+            break;
+        case EXCEPTION_STACK_OVERFLOW:
+            fprintf(stderr, "[FATAL-SEH] EXCEPTION_STACK_OVERFLOW\n");
+            break;
+        case 0xC0000409:  // STATUS_STACK_BUFFER_OVERRUN (fast-fail)
+            fprintf(stderr, "[FATAL-SEH] STATUS_STACK_BUFFER_OVERRUN — buffer overrun detected by /GS\n");
+            break;
+        default:
+            fprintf(stderr, "[FATAL-SEH] Unknown exception code\n");
+            break;
+    }
+    
+    // Check CUDA state
+    cudaError_t cuda_err = cudaPeekAtLastError();
+    if (cuda_err != cudaSuccess) {
+        fprintf(stderr, "[FATAL-SEH] Last CUDA error: %s (code=%d)\n",
+            cudaGetErrorString(cuda_err), static_cast<int>(cuda_err));
+    }
+    
+    // Also try to log via module system (may fail if state is corrupted)
+    EmitModuleError(ModuleId::TrainingOrchestrator,
+        std::string("[FATAL-SEH] Exception code=0x") +
+        ([](DWORD c) { char buf[16]; snprintf(buf, sizeof(buf), "%08lX", c); return std::string(buf); })(code) +
+        " addr=" + ([](void* a) { char buf[24]; snprintf(buf, sizeof(buf), "%p", a); return std::string(buf); })(addr), 0);
+    
+    fflush(stderr);
+    return EXCEPTION_CONTINUE_SEARCH;  // Let default handler terminate
+}
+#endif
+
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    // Install SEH handler FIRST — before any CUDA calls.
+    // Without this, CUDA device errors (illegal memory access, buffer overflow)
+    // cause silent process exit because /EHsc C++ catch(...) cannot catch SEH.
+    SetUnhandledExceptionFilter(GrimSEHHandler);
+#endif
+    
     // Initialize LogRecorder for modular logging
     GRIM::Logging::SetDefaultModuleLogLevel(GRIM::Logging::ModuleLogLevel::Info);
     

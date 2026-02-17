@@ -32,7 +32,9 @@
 #include <cublas_v2.h>
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
-#include "../Layers/ScratchBlock/ScratchBlock_GPU.hpp"
+#include "../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
+#include "../Layers/Embedding/Embedding_GPU.hpp"
+#include "../Layers/LMHead/lm_head_GPU.hpp"
 #include "../Shared/GPUBuffer/GPUBuffer.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../Shared/TrainingState/TrainingState_GPU.hpp"
@@ -128,7 +130,7 @@ struct ContextState {
 
 // Model execution mode - determines memory allocation strategy
 enum class ModelExecutionMode {
-    TRAINING,    // Full training state with gradient buffers (~15GB+)
+    TRAINING,    // Full training state with gradient buffers (~1GB+)
     INFERENCE    // Lightweight inference state with only forward caches (~385MB)
 };
 
@@ -145,8 +147,8 @@ struct EncoderConfig {
     float attention_dropout = 0.0f; // Use HyperParameters::DEFAULT_ATTENTION_DROPOUT
     
     // Cache limits
-    int max_cached_batch = 4;
-    int max_cached_seq_len = 8192;
+    int max_cached_batch = 0;
+    int max_cached_seq_len = 0;
     
     // Fixed config values (not architecture-dependent)
     // Issue #104 FIX: Changed from 1e-3 to 1e-5. The old value was too large for Layer 0 embeddings:
@@ -183,6 +185,11 @@ struct EncoderConfig {
     
     // Bias control - when false, encoder layers skip bias addition (b_qkv, b_o not used)
     bool use_bias = true;
+    
+    // Layer self-allocation (Pattern B): seed and scaling config for weight initialization
+    uint64_t weight_seed = 0;         // Base seed for Xavier init (per-layer offset: seed + layer*10)
+    float residual_scale = 1.0f;      // Issue #142: 1/sqrt(2*num_layers) for W_o and W2
+    float layer_scale_init_value = 1.0f;  // Issue #109: CaiT LayerScale initial scalar value
     
     // CUDA execution
     cudaStream_t stream = nullptr;       // CUDA stream for async execution
@@ -269,8 +276,8 @@ struct LanguageModelConfig {
     }
     
     // Cache limits
-    int max_cached_batch = 4;
-    int max_cached_seq_len = 8192;
+    int max_cached_batch = 0;
+    int max_cached_seq_len = 0;
     int max_tokens_per_batch = 0;  // Optional token budget for training logits/loss
     
     // Positional encoding configuration
@@ -307,12 +314,6 @@ struct LanguageModelConfig {
     int scratch_block_atom_embedding_dim = 64; // Atom embedding dimension
     int scratch_block_max_atoms = 256;         // Max atoms per sequence
     float scratch_block_atom_scale = 1.0f;     // Scale factor for atom injection (unit scale)
-
-    // Numeric head (side-channel regression for numeric atoms)
-    bool numeric_head_enabled = true;
-    float numeric_head_loss_weight = 1.0f;
-    float numeric_head_huber_delta = 1.0f;
-    bool numeric_head_log_scale = true;
     
     // LM Head centering config (Issue #37 / #40 fixes)
     // When enabled, centers hidden states before LM head projection.
@@ -489,7 +490,6 @@ public:
         size_t position_embedding_params = 0;  // Position embeddings (max_seq_len * d_model)
         size_t encoder_params = 0;
         size_t lm_head_params = 0;
-        size_t numeric_head_params = 0;
         size_t scratchblock_params = 0;  // Atom type embeddings + projection
         float model_size_mb = 0.0f;
     };
@@ -498,7 +498,6 @@ public:
         float total_norm = 0.0f;
         float embedding_norm = 0.0f;
         float lm_head_norm = 0.0f;
-        float numeric_head_norm = 0.0f;
         float attention_norm = 0.0f;
         float ffn_norm = 0.0f;
         float rmsnorm_norm = 0.0f;      // RMSNorm gamma gradients
@@ -650,6 +649,14 @@ public:
     const ScratchBlockLayer* getScratchBlockLayer() const { return scratch_block_layer_.get(); }
     void setScratchBlockEnabled(bool enabled);
     bool isScratchBlockEnabled() const;
+
+    // Embedding layer access (Pattern B: persistent, self-allocating, owns token + pos weights)
+    EmbeddingLayer* getEmbeddingLayer() { return embedding_layer_.get(); }
+    const EmbeddingLayer* getEmbeddingLayer() const { return embedding_layer_.get(); }
+
+    // LM Head layer access (Pattern B: persistent, self-allocating)
+    LMHeadLayer* getLmHeadLayer() { return lm_head_layer_.get(); }
+    const LMHeadLayer* getLmHeadLayer() const { return lm_head_layer_.get(); }
     
     // Scratch pool configuration (pinned memory transfers)
     void configureScratchPool(bool enabled);
@@ -708,6 +715,12 @@ private:
     
     // ScratchBlock reasoning layer (togglable)
     std::unique_ptr<ScratchBlockLayer> scratch_block_layer_;
+
+    // Embedding layer (Pattern B: persistent, self-allocating, owns token + position weights)
+    std::unique_ptr<EmbeddingLayer> embedding_layer_;
+
+    // LM Head layer (Pattern B: persistent, self-allocating, owns final_rms_gamma)
+    std::unique_ptr<LMHeadLayer> lm_head_layer_;
 #endif
 };
 

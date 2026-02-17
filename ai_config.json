@@ -79,7 +79,7 @@
     "training": {
         "config": {
             "epochs": 3,
-            "seed": 1,
+            "seed": 2,
             "batch_size": 7,
             "gradient_accumulation_steps": 1,
             "batch_strategy": "RANDOM",
@@ -107,8 +107,8 @@
             "dynamic_lr": {
                 "enabled": false,
                 "auto_generate": false,
-                "min": 1e-3,
-                "max": 1e-3,
+                "min": 5e-4,
+                "max": 5e-4,
                 "increase_factor": 1.1,
                 "decrease_factor": 0.1,
                 "upper_grad_norm": 12.0,
@@ -272,12 +272,6 @@
                 "masking": {
                     "enabled": true,
                     "tag": ""
-                },
-                "numeric_head": {
-                    "enabled": true,
-                    "weight": 1.0,
-                    "huber_delta": 1.0,
-                    "log_scale": true
                 }
             },
 
@@ -383,8 +377,8 @@
                 "use_rope": true,
                 "use_alibi": true
             },
-            "attention_dropout": 0.15,
-            "dropout_rate": 0.15,
+            "attention_dropout": 0.125,
+            "dropout_rate": 0.125,
             "force_rebuild_vocab": false,
             "qk_normalization": {
                 "enabled": false,

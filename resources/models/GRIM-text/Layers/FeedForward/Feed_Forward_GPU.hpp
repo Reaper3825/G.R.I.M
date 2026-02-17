@@ -44,9 +44,15 @@ class FeedForwardLayer {
 public:
     // Rule 20: Default constructor deleted - config with valid cublas_handle REQUIRED
     FeedForwardLayer() = delete;
-    // Constructor takes external weights (required) - no allocation path
-    explicit FeedForwardLayer(const FeedForwardConfig& config, 
-                             Tensor& w1, Tensor& b1, Tensor& w2, Tensor& b2);
+    
+    /// Self-allocating constructor (Pattern B: layer self-management)
+    /// Allocates and Xavier-initializes W1, b1, W2, b2 on GPU.
+    /// Layer OWNS the memory (owns_data=true). Registers with autograd via ensure_grad().
+    /// @param config Layer configuration (d_model, d_ff, cublas_handle, stream REQUIRED)
+    /// @param seed   Xavier initialization seed
+    /// @param residual_scale Issue #142: Scale W2 by 1/sqrt(2*num_layers) after Xavier init
+    explicit FeedForwardLayer(const FeedForwardConfig& config, uint64_t seed, float residual_scale = 1.0f);
+    
     ~FeedForwardLayer();
 
     // Prevent copy (cuBLAS handle, Tensor ownership)
@@ -64,11 +70,10 @@ public:
     const FeedForwardConfig& config() const noexcept { return config_; }
 
     //--------------------------------------------------
-    // Weight Management (external weights only)
+    // Weight Management (Pattern B: self-allocated)
     //--------------------------------------------------
-    // Weights are set via constructor - no separate allocation/configuration methods
     
-    // Tensor weight accessors (for training/serialization)
+    // Tensor weight accessors (for training/serialization/buildParameterGroups)
     Tensor& W1() { return W1_; }
     Tensor& b1() { return b1_; }
     Tensor& W2() { return W2_; }
@@ -95,9 +100,12 @@ public:
      * 
      * @param input [total_tokens, d_model] - MUST have requires_grad if training
      * @param intermediates Storage for intermediate tensors (REQUIRED for autograd)
+     * @param training_step Current training step (0 = inference, no dropout)
+     * @param layer_idx Encoder layer index (for unique dropout seed per layer)
      * @return output [total_tokens, d_model] with grad_fn attached
      */
-    Tensor forward(const Tensor& input, ForwardIntermediates& intermediates);
+    Tensor forward(const Tensor& input, ForwardIntermediates& intermediates,
+                   uint64_t training_step = 0, int layer_idx = 0);
 
     //--------------------------------------------------
     // NOTE: Backward Pass handled by autograd

@@ -24,4 +24,11 @@ void launchGradientClipping(
 	float max_norm,
 	cudaStream_t stream);
 
+// Scale all gradient elements by a constant factor: gradients[i] *= scale_factor.
+void launchScaleGradients(
+	float* gradients,
+	int n,
+	float scale_factor,
+	cudaStream_t stream);
+
 }

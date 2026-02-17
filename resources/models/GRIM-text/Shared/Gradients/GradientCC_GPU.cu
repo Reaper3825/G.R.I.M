@@ -169,4 +169,24 @@ void launchGradientClipping(
 	cudaFree(d_squared_norm);
 }
 
+void launchScaleGradients(
+	float* gradients,
+	int n,
+	float scale_factor,
+	cudaStream_t stream)
+{
+	if (!validatePointers(gradients, n)) {
+		return;
+	}
+
+	scaleGradientsKernel<<<computeGrid(n), kBlockSize, 0, stream>>>(
+		gradients, scale_factor, n);
+
+	const cudaError_t err = cudaGetLastError();
+	if (err != cudaSuccess) {
+		fprintf(stderr, "GradientCC: launchScaleGradients failed - %s\n",
+				cudaGetErrorString(err));
+	}
+}
+
 }

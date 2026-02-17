@@ -420,21 +420,25 @@ TestResult level5_tokenizer_loss_alignment(GRIM::LanguageModel* model, GRIM::Tok
     PROOF_LOG("Input: \"" + rare_text + "\"");
     PROOF_LOG("Token count: " + std::to_string(tokens.size()));
     
-    // Check if any tokens are in byte range [0-255]
+    // Check if any tokens are in byte range [4-259], atom range [260-279], etc.
     int byte_token_count = 0;
     int atom_token_count = 0;
     int unigram_token_count = 0;
+    int special_token_count = 0;
     
     for (int tid : tokens) {
-        if (tid >= 0 && tid < 256) {
+        if (tid >= 0 && tid < static_cast<int>(GRIM::Tokenizer::NUM_SPECIAL_TOKENS)) {
+            special_token_count++;
+        } else if (tid >= static_cast<int>(GRIM::Tokenizer::BYTE_TOKEN_OFFSET) && tid < static_cast<int>(GRIM::Tokenizer::ATOM_TOKEN_OFFSET)) {
             byte_token_count++;
-        } else if (tid >= 256 && tid < 512) {
+        } else if (tid >= static_cast<int>(GRIM::Tokenizer::ATOM_TOKEN_OFFSET) && tid < static_cast<int>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET)) {
             atom_token_count++;
         } else {
             unigram_token_count++;
         }
     }
     
+    PROOF_LOG("Special tokens: " + std::to_string(special_token_count));
     PROOF_LOG("Byte tokens: " + std::to_string(byte_token_count));
     PROOF_LOG("Atom tokens: " + std::to_string(atom_token_count));
     PROOF_LOG("Unigram tokens: " + std::to_string(unigram_token_count));

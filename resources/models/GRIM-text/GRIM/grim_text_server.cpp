@@ -250,7 +250,32 @@ std::string generateResponse(const std::string& prompt, int max_tokens, float te
 
         std::cout << "[Generate] Decoding..." << std::flush;
         auto start_decode = std::chrono::high_resolution_clock::now();
-        std::string output = g_tokenizer->decode(results[0].token_ids);
+        
+        // Atom resolver: converts atom tokens to symbolic representation
+        // Atoms are structural tokens (numbers, URLs, etc) injected by ScratchBlock during reasoning
+        auto atom_resolver = [](int token_id, GRIM::Tokenizer::AtomType type) -> std::string {
+            // Return atom type name for visibility
+            switch (type) {
+                case GRIM::Tokenizer::AtomType::ATOM_INTEGER: return "[INT]";
+                case GRIM::Tokenizer::AtomType::ATOM_FLOAT: return "[FLOAT]";
+                case GRIM::Tokenizer::AtomType::ATOM_HEX: return "[HEX]";
+                case GRIM::Tokenizer::AtomType::ATOM_BINARY: return "[BIN]";
+                case GRIM::Tokenizer::AtomType::ATOM_IDENTIFIER: return "[ID]";
+                case GRIM::Tokenizer::AtomType::ATOM_STRING_LITERAL: return "[STR]";
+                case GRIM::Tokenizer::AtomType::ATOM_REGEX: return "[REGEX]";
+                case GRIM::Tokenizer::AtomType::ATOM_URL: return "[URL]";
+                case GRIM::Tokenizer::AtomType::ATOM_EMAIL: return "[EMAIL]";
+                case GRIM::Tokenizer::AtomType::ATOM_PATH: return "[PATH]";
+                case GRIM::Tokenizer::AtomType::ATOM_DATE: return "[DATE]";
+                case GRIM::Tokenizer::AtomType::ATOM_TIME: return "[TIME]";
+                case GRIM::Tokenizer::AtomType::ATOM_IP_ADDRESS: return "[IP]";
+                case GRIM::Tokenizer::AtomType::ATOM_EQUATION: return "[EQN]";
+                case GRIM::Tokenizer::AtomType::ATOM_EXPRESSION: return "[EXPR]";
+                default: return "[ATOM]";
+            }
+        };
+        
+        std::string output = g_tokenizer->decodeWithAtoms(results[0].token_ids, atom_resolver);
         auto end_decode = std::chrono::high_resolution_clock::now();
         auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_decode - start_decode).count();
         std::cout << " done (" << decode_ms << "ms)" << std::endl;

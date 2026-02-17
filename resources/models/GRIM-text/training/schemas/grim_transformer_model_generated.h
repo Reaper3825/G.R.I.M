@@ -1156,11 +1156,13 @@ struct ScratchBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tabl
     VT_ATOM_TYPE_EMBEDDINGS = 4,
     VT_ATOM_PROJECTION = 6,
     VT_TEXT_FEATURE_PROJECTION = 8,
-    VT_NUM_ATOM_TYPES = 10,
-    VT_ATOM_EMBEDDING_DIM = 12,
-    VT_D_MODEL = 14,
-    VT_ATOM_SCALE = 16,
-    VT_ENABLED = 18
+    VT_VALUE_EXTRACTION_WEIGHT = 10,
+    VT_VALUE_EXTRACTION_BIAS = 12,
+    VT_NUM_ATOM_TYPES = 14,
+    VT_ATOM_EMBEDDING_DIM = 16,
+    VT_D_MODEL = 18,
+    VT_ATOM_SCALE = 20,
+    VT_ENABLED = 22
   };
   const ::flatbuffers::Vector<float> *atom_type_embeddings() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_ATOM_TYPE_EMBEDDINGS);
@@ -1170,6 +1172,12 @@ struct ScratchBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tabl
   }
   const ::flatbuffers::Vector<float> *text_feature_projection() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_TEXT_FEATURE_PROJECTION);
+  }
+  const ::flatbuffers::Vector<float> *value_extraction_weight() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_VALUE_EXTRACTION_WEIGHT);
+  }
+  const ::flatbuffers::Vector<float> *value_extraction_bias() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_VALUE_EXTRACTION_BIAS);
   }
   uint32_t num_atom_types() const {
     return GetField<uint32_t>(VT_NUM_ATOM_TYPES, 0);
@@ -1194,6 +1202,10 @@ struct ScratchBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tabl
            verifier.VerifyVector(atom_projection()) &&
            VerifyOffset(verifier, VT_TEXT_FEATURE_PROJECTION) &&
            verifier.VerifyVector(text_feature_projection()) &&
+           VerifyOffset(verifier, VT_VALUE_EXTRACTION_WEIGHT) &&
+           verifier.VerifyVector(value_extraction_weight()) &&
+           VerifyOffset(verifier, VT_VALUE_EXTRACTION_BIAS) &&
+           verifier.VerifyVector(value_extraction_bias()) &&
            VerifyField<uint32_t>(verifier, VT_NUM_ATOM_TYPES, 4) &&
            VerifyField<uint32_t>(verifier, VT_ATOM_EMBEDDING_DIM, 4) &&
            VerifyField<uint32_t>(verifier, VT_D_MODEL, 4) &&
@@ -1215,6 +1227,12 @@ struct ScratchBlockWeightsBuilder {
   }
   void add_text_feature_projection(::flatbuffers::Offset<::flatbuffers::Vector<float>> text_feature_projection) {
     fbb_.AddOffset(ScratchBlockWeights::VT_TEXT_FEATURE_PROJECTION, text_feature_projection);
+  }
+  void add_value_extraction_weight(::flatbuffers::Offset<::flatbuffers::Vector<float>> value_extraction_weight) {
+    fbb_.AddOffset(ScratchBlockWeights::VT_VALUE_EXTRACTION_WEIGHT, value_extraction_weight);
+  }
+  void add_value_extraction_bias(::flatbuffers::Offset<::flatbuffers::Vector<float>> value_extraction_bias) {
+    fbb_.AddOffset(ScratchBlockWeights::VT_VALUE_EXTRACTION_BIAS, value_extraction_bias);
   }
   void add_num_atom_types(uint32_t num_atom_types) {
     fbb_.AddElement<uint32_t>(ScratchBlockWeights::VT_NUM_ATOM_TYPES, num_atom_types, 0);
@@ -1247,6 +1265,8 @@ inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeights(
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> atom_type_embeddings = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> atom_projection = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> text_feature_projection = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> value_extraction_weight = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> value_extraction_bias = 0,
     uint32_t num_atom_types = 0,
     uint32_t atom_embedding_dim = 0,
     uint32_t d_model = 0,
@@ -1257,6 +1277,8 @@ inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeights(
   builder_.add_d_model(d_model);
   builder_.add_atom_embedding_dim(atom_embedding_dim);
   builder_.add_num_atom_types(num_atom_types);
+  builder_.add_value_extraction_bias(value_extraction_bias);
+  builder_.add_value_extraction_weight(value_extraction_weight);
   builder_.add_text_feature_projection(text_feature_projection);
   builder_.add_atom_projection(atom_projection);
   builder_.add_atom_type_embeddings(atom_type_embeddings);
@@ -1269,6 +1291,8 @@ inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeightsDirec
     const std::vector<float> *atom_type_embeddings = nullptr,
     const std::vector<float> *atom_projection = nullptr,
     const std::vector<float> *text_feature_projection = nullptr,
+    const std::vector<float> *value_extraction_weight = nullptr,
+    const std::vector<float> *value_extraction_bias = nullptr,
     uint32_t num_atom_types = 0,
     uint32_t atom_embedding_dim = 0,
     uint32_t d_model = 0,
@@ -1277,11 +1301,15 @@ inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeightsDirec
   auto atom_type_embeddings__ = atom_type_embeddings ? _fbb.CreateVector<float>(*atom_type_embeddings) : 0;
   auto atom_projection__ = atom_projection ? _fbb.CreateVector<float>(*atom_projection) : 0;
   auto text_feature_projection__ = text_feature_projection ? _fbb.CreateVector<float>(*text_feature_projection) : 0;
+  auto value_extraction_weight__ = value_extraction_weight ? _fbb.CreateVector<float>(*value_extraction_weight) : 0;
+  auto value_extraction_bias__ = value_extraction_bias ? _fbb.CreateVector<float>(*value_extraction_bias) : 0;
   return GRIMTransformer::CreateScratchBlockWeights(
       _fbb,
       atom_type_embeddings__,
       atom_projection__,
       text_feature_projection__,
+      value_extraction_weight__,
+      value_extraction_bias__,
       num_atom_types,
       atom_embedding_dim,
       d_model,

@@ -23,9 +23,8 @@
 #include "../../Shared/Batching/BatchPayload.hpp"
 // MUST include full definitions for types used in AutogradContext
 #include "../../GRIM/grim_language_model_cuda.hpp"
-// ScratchBlock and NumericHead for autograd forward path
-#include "../../Layers/ScratchBlock/ScratchBlock_GPU.hpp"
-#include "../../Layers/NumericHead/numeric_head_GPU.hpp"
+// ScratchBlock for autograd forward path
+#include "../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -57,12 +56,9 @@ struct ForwardResult {
  * Contains decomposed loss components for logging and gradient weighting.
  */
 struct LossResult {
-    float loss_value = 0.0f;         // Combined weighted loss (text + numeric + regularization)
+    float loss_value = 0.0f;         // Text cross-entropy loss
     float text_loss = 0.0f;          // Raw text cross-entropy loss
-    float numeric_loss = 0.0f;       // Raw numeric regression loss (0 if disabled)
-    int numeric_count = 0;           // Number of numeric tokens in batch
-    float weight_text = 1.0f;        // Learned text weight (1.0 if no learned weighting)
-    float weight_numeric = 1.0f;     // Learned numeric weight (config default if no learned weighting)
+    float weight_text = 1.0f;        // Always 1.0 (single loss path)
     int valid_tokens = 0;            // Number of valid (non-padding) tokens
     bool success = false;
     std::string error_message;
@@ -97,15 +93,15 @@ struct AutogradContext {
     cudaStream_t stream = nullptr;
     
     // ═══════════════════════════════════════════════════════════════════════════
+    // REQUIRED COMPONENTS (Pattern B: persistent, self-allocating layers)
+    // ═══════════════════════════════════════════════════════════════════════════
+    EmbeddingLayer* embedding_layer = nullptr;
+    LMHeadLayer* lm_head = nullptr;
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // OPTIONAL COMPONENTS (nullptr if disabled)
     // ═══════════════════════════════════════════════════════════════════════════
     ScratchBlockLayer* scratch_block = nullptr;
-    
-    // ScratchBlock forward inputs (raw pointers into TrainingState buffers)
-    const float* token_numeric_values = nullptr;
-    const uint8_t* token_numeric_mask = nullptr;
-    const uint16_t* token_text_features = nullptr;
-    const uint8_t* token_text_mask = nullptr;
     
     // ═══════════════════════════════════════════════════════════════════════════
     // BATCH PARAMETERS
@@ -127,6 +123,8 @@ struct AutogradContext {
     // ═══════════════════════════════════════════════════════════════════════════
     autograd::LossConfig loss_config;
     
+
+    
     // ═══════════════════════════════════════════════════════════════════════════
     // VALIDATION (Rule 20: Fail loud)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -134,6 +132,8 @@ struct AutogradContext {
         if (!config) throw std::runtime_error(std::string(caller) + ": config is NULL");
         if (!training_state) throw std::runtime_error(std::string(caller) + ": training_state is NULL");
         if (!gpu_encoder) throw std::runtime_error(std::string(caller) + ": gpu_encoder is NULL");
+        if (!embedding_layer) throw std::runtime_error(std::string(caller) + ": embedding_layer is NULL");
+        if (!lm_head) throw std::runtime_error(std::string(caller) + ": lm_head is NULL");
         if (!cublas_handle) throw std::runtime_error(std::string(caller) + ": cublas_handle is NULL");
         if (batch_size <= 0) throw std::runtime_error(std::string(caller) + ": batch_size <= 0");
         if (seq_len <= 0) throw std::runtime_error(std::string(caller) + ": seq_len <= 0");
@@ -147,6 +147,8 @@ AutogradContext initAutogradContext(
     const LanguageModelConfig* config,
     TrainingState* training_state,
     GPUGrimEncoder* gpu_encoder,
+    EmbeddingLayer* embedding_layer,
+    LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
@@ -163,6 +165,8 @@ AutogradContext initAutogradContext(
     const LanguageModelConfig* config,
     TrainingState* training_state,
     GPUGrimEncoder* gpu_encoder,
+    EmbeddingLayer* embedding_layer,
+    LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
@@ -199,9 +203,7 @@ autograd::LossConfig buildLossConfig(const LossContext::LossOptions& opts);
  * 
  * Handles:
  *   1. Text CE via autograd::unified_loss()
- *   2. Numeric regression loss via launchNumericLoss() (if enabled)
- *   3. Learned loss weighting (homoscedastic uncertainty, if log_var tensors exist)
- *   4. Caches all loss values in training_state for backward pass
+ *   2. Caches loss value in training_state for backward pass
  * 
  * @param ctx     Autograd context (must have logits populated by executeAutogradForward,
  *                 and ctx.payload set to a valid BatchPayload)
@@ -226,10 +228,7 @@ BackwardResult executeAutogradBackward(
  */
 bool verifyGradientsAreConnected(AutogradContext& ctx);
 
-/**
- * Compute gradient norm from all parameter gradients
- */
-float computeGradientNorm(const AutogradContext& ctx);
+// computeGradientNorm() DELETED — redundant with Phase2's computeGradNorm()
 
 /**
  * Full autograd training step: GPU copies → forward → loss → backward

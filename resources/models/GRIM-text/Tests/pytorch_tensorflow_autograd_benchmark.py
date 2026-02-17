@@ -164,8 +164,9 @@ def create_batches(sequences: List[GRMTSequence],
     all_tokens = []
     all_targets = []
     for seq in sequences:
-        # Filter out atom tokens (256-511) for vanilla transformer compatibility
-        mask = (seq.token_ids < 256) | (seq.token_ids >= 512)
+        # Filter out atom tokens [260-279] for vanilla transformer compatibility
+        # Token layout: [0-3]=Special, [4-259]=Byte, [260-279]=Atom, [280+]=Unigram
+        mask = (seq.token_ids < 260) | (seq.token_ids >= 280)
         filtered_tokens = seq.token_ids[mask]
         filtered_targets = seq.targets[mask]
         all_tokens.extend(filtered_tokens)

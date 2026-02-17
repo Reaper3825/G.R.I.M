@@ -282,10 +282,6 @@ struct TrainingHyperparameters {
     float loss_distillation_lambda;
     bool loss_masking_enabled;
     std::string loss_masking_tag;
-    bool loss_numeric_head_enabled;
-    float loss_numeric_head_weight;
-    float loss_numeric_head_huber_delta;
-    bool loss_numeric_head_log_scale;
     
     // Issue #44 FIX: Entropy regularization to prevent mode collapse
     // reg = λ * Σ_v p_v² (penalizes logit concentration)
@@ -619,8 +615,6 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "loss.preference.enabled", "loss.preference.beta",
         "loss.distillation.enabled", "loss.distillation.temperature", "loss.distillation.lambda",
         "loss.masking.enabled", "loss.masking.tag",
-        "loss.numeric_head.enabled", "loss.numeric_head.weight",
-        "loss.numeric_head.huber_delta", "loss.numeric_head.log_scale",
         
         // Stability overrides
         "stability_overrides_enabled",
@@ -1015,7 +1009,6 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
             }
         }
 
-
         
         if (auto pref_it = loss_cfg.find("preference"); pref_it != loss_cfg.end()) {
             const auto& pref = *pref_it;
@@ -1047,19 +1040,6 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
                 if (mask.contains("tag") && mask["tag"].is_string()) {
                     params.loss_masking_tag = mask["tag"].get<std::string>();
                 }
-            }
-        }
-
-        if (auto num_it = loss_cfg.find("numeric_head"); num_it != loss_cfg.end()) {
-            const auto& num = *num_it;
-            if (num.is_boolean()) {
-                params.loss_numeric_head_enabled = num.get<bool>();
-            } else if (num.is_object()) {
-                params.loss_numeric_head_enabled = num.value("enabled", params.loss_numeric_head_enabled);
-                params.loss_numeric_head_weight = num.value("loss_weight",
-                    num.value("weight", params.loss_numeric_head_weight));
-                params.loss_numeric_head_huber_delta = num.value("huber_delta", params.loss_numeric_head_huber_delta);
-                params.loss_numeric_head_log_scale = num.value("log_scale", params.loss_numeric_head_log_scale);
             }
         }
     }

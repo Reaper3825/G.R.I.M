@@ -18,10 +18,8 @@
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../Common/grim_scale_buffer.hpp"
-#include "../Shared/Loss/NumericLoss/NumericLoss_GPU.hpp"
 #include "../Shared/StreamController/StreamController_GPU.hpp"
 #include "../Shared/TensorContract/TensorContract_GPU.hpp"
-#include "../Shared/TrainingState/TrainingTensors.hpp"  // For proper memory ownership
 #include "module_logger.hpp"
 
 namespace {
@@ -61,8 +59,6 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
             stats.position_embedding_params += group.size();
         } else if (group.name.find("lm_head") != std::string::npos) {
             stats.lm_head_params += group.size();
-        } else if (group.name == "numeric_head_weight") {
-            stats.numeric_head_params += group.size();
         } else {
             stats.encoder_params += group.size();
         }
@@ -79,20 +75,28 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
         if (!cfg.tie_embeddings) {
             stats.lm_head_params = static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
         }
-
-        if (cfg.numeric_head_enabled) {
-            stats.numeric_head_params = static_cast<size_t>(cfg.d_model);
+        if (cfg.use_bias) {
+            stats.lm_head_params += cfg.vocab_size;  // lm_head_bias
         }
 
         size_t per_layer = 0;
-        per_layer += static_cast<size_t>(total_qkv_dim) * cfg.d_model;
-        per_layer += static_cast<size_t>(cfg.d_model) * cfg.d_model;
-        per_layer += static_cast<size_t>(cfg.d_model) * cfg.d_ff;
-        per_layer += static_cast<size_t>(cfg.d_ff) * cfg.d_model;
+        per_layer += static_cast<size_t>(total_qkv_dim) * cfg.d_model;  // W_qkv
+        per_layer += static_cast<size_t>(cfg.d_model) * cfg.d_model;    // W_o
+        per_layer += static_cast<size_t>(cfg.d_model) * cfg.d_ff;       // W1
+        per_layer += static_cast<size_t>(cfg.d_ff) * cfg.d_model;       // W2
         per_layer += cfg.d_model; // RMSNorm1 gamma
         per_layer += cfg.d_model; // RMSNorm2 gamma
+        per_layer += cfg.d_model; // RMS post-attn gamma (sandwich norm)
+        per_layer += cfg.d_model; // RMS post-ffn gamma (sandwich norm)
+        if (cfg.use_bias) {
+            per_layer += total_qkv_dim;  // b_qkv
+            per_layer += cfg.d_model;    // b_o
+            per_layer += cfg.d_ff;       // b1
+            per_layer += cfg.d_model;    // b2
+        }
 
         stats.encoder_params = per_layer * cfg.num_layers;
+        stats.encoder_params += cfg.d_model;  // Final RMSNorm gamma
     } else {
         const auto& cfg = config_;
         const int head_dim = cfg.head_dim;
@@ -116,25 +120,52 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
         }
 
         const size_t est_embedding = static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
-        const size_t est_position_embedding = static_cast<size_t>(cfg.max_seq_len) * cfg.d_model;
-        const size_t est_lm_head = cfg.tie_embeddings ? 0 : static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
-        const size_t est_numeric_head = cfg.numeric_head_enabled ? static_cast<size_t>(cfg.d_model) : 0;
 
+        // Position embeddings: only when actually allocated (ALiBi/RoPE = 0)
+        const size_t est_position_embedding = stats.position_embedding_params;
+
+        // LM head: weight (0 when tied — counted under embedding) + bias when use_bias
+        size_t est_lm_head = cfg.tie_embeddings ? 0 : static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
+        if (cfg.use_bias) {
+            est_lm_head += cfg.vocab_size;  // lm_head_bias [vocab_size]
+        }
+
+        // Per-layer encoder: weights + biases + pre-norm + sandwich post-norm
         size_t per_layer = 0;
-        per_layer += static_cast<size_t>(total_qkv_dim) * cfg.d_model;
-        per_layer += static_cast<size_t>(cfg.d_model) * cfg.d_model;
-        per_layer += static_cast<size_t>(cfg.d_model) * cfg.d_ff;
-        per_layer += static_cast<size_t>(cfg.d_ff) * cfg.d_model;
-        per_layer += cfg.d_model;
-        per_layer += cfg.d_model;
+        per_layer += static_cast<size_t>(total_qkv_dim) * cfg.d_model;  // W_qkv
+        per_layer += static_cast<size_t>(cfg.d_model) * cfg.d_model;    // W_o
+        per_layer += static_cast<size_t>(cfg.d_model) * cfg.d_ff;       // W1
+        per_layer += static_cast<size_t>(cfg.d_ff) * cfg.d_model;       // W2
+        per_layer += cfg.d_model;  // RMSNorm1 gamma (pre-attn)
+        per_layer += cfg.d_model;  // RMSNorm2 gamma (pre-ffn)
+        per_layer += cfg.d_model;  // RMS post-attn gamma (sandwich norm)
+        per_layer += cfg.d_model;  // RMS post-ffn gamma (sandwich norm)
+        if (cfg.use_bias) {
+            per_layer += total_qkv_dim;  // b_qkv
+            per_layer += cfg.d_model;    // b_o
+            per_layer += cfg.d_ff;       // b1
+            per_layer += cfg.d_model;    // b2
+        }
 
         size_t est_encoder = per_layer * cfg.num_layers;
         est_encoder += cfg.d_model; // Final RMSNorm gamma (not per-layer)
 
-        const size_t est_total = est_embedding + est_position_embedding + est_encoder + est_lm_head + est_numeric_head;
+        // ScratchBlock params are classified as encoder_params by parameter_groups
+        if (cfg.use_scratch_block) {
+            constexpr int NUM_ATOM_TYPES = HyperParameters::NUM_ATOM_TYPES;
+            const int atom_dim = cfg.scratch_block_atom_embedding_dim;
+            constexpr int kTextFeatureDim = 16;  // Matches ScratchBlockReasoning_GPU.cu
+            est_encoder += static_cast<size_t>(NUM_ATOM_TYPES) * atom_dim;  // atom_type_embeddings
+            est_encoder += static_cast<size_t>(atom_dim) * cfg.d_model;     // atom_projection
+            est_encoder += static_cast<size_t>(kTextFeatureDim) * cfg.d_model; // text_feature_projection
+            est_encoder += cfg.d_model;  // value_extraction_weight
+            est_encoder += 1;            // value_extraction_bias
+        }
+
+        const size_t est_total = est_embedding + est_position_embedding + est_encoder + est_lm_head;
         const size_t actual_total =
             stats.embedding_params + stats.position_embedding_params + stats.encoder_params +
-            stats.lm_head_params + stats.numeric_head_params;
+            stats.lm_head_params;
 
         if (actual_total > 0) {
             const float drift_pct =
@@ -149,22 +180,26 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
                 std::cerr << "  Pos Embed: actual=" << stats.position_embedding_params << " est=" << est_position_embedding << "\n";
                 std::cerr << "  Encoder:   actual=" << stats.encoder_params << " est=" << est_encoder << "\n";
                 std::cerr << "  LM Head:   actual=" << stats.lm_head_params << " est=" << est_lm_head << "\n";
-                std::cerr << "  Num Head:  actual=" << stats.numeric_head_params << " est=" << est_numeric_head << "\n";
                 assert(false && "Parameter count formula drifted from actual allocations");
             }
         }
     }
 
     stats.total_params = stats.embedding_params + stats.position_embedding_params + stats.encoder_params +
-                         stats.lm_head_params + stats.numeric_head_params;
+                         stats.lm_head_params;
 
+    // ScratchBlock stats for reporting (already counted in encoder_params via parameter_groups)
     if (config_.use_scratch_block) {
         constexpr int NUM_ATOM_TYPES = HyperParameters::NUM_ATOM_TYPES;
-        const int atom_embedding_dim = config_.scratch_block_atom_embedding_dim;
+        const int atom_dim = config_.scratch_block_atom_embedding_dim;
+        constexpr int kTextFeatureDim = 16;
         stats.scratchblock_params =
-            static_cast<size_t>(NUM_ATOM_TYPES) * atom_embedding_dim +
-            static_cast<size_t>(atom_embedding_dim) * config_.d_model;
-        stats.total_params += stats.scratchblock_params;
+            static_cast<size_t>(NUM_ATOM_TYPES) * atom_dim +
+            static_cast<size_t>(atom_dim) * config_.d_model +
+            static_cast<size_t>(kTextFeatureDim) * config_.d_model +
+            config_.d_model +  // value_extraction_weight
+            1;                 // value_extraction_bias
+        // NOTE: scratchblock_params NOT added to total_params — already in encoder_params
     }
 
     stats.model_size_mb = (stats.total_params * sizeof(float)) / (1024.0f * 1024.0f);
@@ -255,6 +290,19 @@ void LanguageModel::initGPU() {
         enc_config.center_encoder_residuals = cfg.center_encoder_residuals;
         enc_config.use_bias = cfg.use_bias;
 
+        // Pattern B: Enable layer self-allocation. Encoder layers allocate and Xavier-init
+        // their own weights in the constructor. No god object involved.
+        {
+            enc_config.weight_seed = training_state_.weight_init_seed;
+            // Issue #142: 1/sqrt(2*num_layers) for residual projection init
+            enc_config.residual_scale = 1.0f / std::sqrt(2.0f * static_cast<float>(cfg.num_layers));
+            enc_config.layer_scale_init_value = cfg.layer_scale_init;
+            fprintf(stdout, "[initGPU] Layers will self-allocate weights "
+                    "(seed=%llu, residual_scale=%.6f)\n",
+                    static_cast<unsigned long long>(enc_config.weight_seed),
+                    enc_config.residual_scale);
+        }
+        
         enc_config.stream = primary_stream;
         enc_config.cublas_handle = training_state_.cublas_handle;
 
@@ -273,55 +321,86 @@ void LanguageModel::initGPU() {
         gpu_encoder_.reset(encoder_ptr);
 
         //======================================================//
-        //  5) Wire encoder layers to TrainingTensors (single source of truth)
-        //  Rule 20: NO backwards compatibility - GPUEncoderLayer does NOT allocate.
-        //  TrainingTensors already has Xavier-initialized weights from step 2.75.
+        //  5) Verify self-allocated encoder layers are ready
         //======================================================//
-        if (!training_state_.tensors_) {
-            throw std::runtime_error("[initGPU] FATAL: tensors_ is NULL - Phase1_Startup must call "
-                                     "initializeAutogradTensors() BEFORE initGPU()");
+        if (!training_state_.seed_initialized_) {
+            throw std::runtime_error("[initGPU] FATAL: autograd seed not initialized - Phase1_Startup must call "
+                                     "initializeAutogradSeed() BEFORE initGPU()");
         }
 
-        std::cout << "🔗 Wiring encoder layers to TrainingTensors (single source of truth)...\n";
-
+        // Layers self-allocated their own weights in the constructor. Verify all are ready.
         for (int layer = 0; layer < cfg.num_layers; ++layer) {
             auto* gpu_layer = encoder_ptr->getLayer(layer);
-            if (!gpu_layer) {
-                throw std::runtime_error("[initGPU] FATAL: Could not get layer " + std::to_string(layer));
+            if (!gpu_layer || !gpu_layer->weightsReady()) {
+                throw std::runtime_error("[initGPU] FATAL: Encoder layer " + std::to_string(layer) +
+                                         " not ready after self-allocation!");
             }
+        }
+        std::cout << "✓ " << cfg.num_layers << " encoder layers self-allocated weights\n";
 
-            auto& params = training_state_.tensors_->encoder_layers[layer];
-            
-            // Rule 20: Crash if TrainingTensors wasn't properly initialized
-            if (!params.attn_qkv_weight.data || !params.ffn_w1.data) {
-                throw std::runtime_error("[initGPU] FATAL: TrainingTensors encoder_layers[" + 
-                    std::to_string(layer) + "] not initialized!");
+        //======================================================//
+        //  6a) Build persistent Embedding layer (Pattern B)
+        //  
+        //  Self-allocates token weights [vocab_size, d_model] + optional
+        //  position weights [max_seq_len, d_model] for learned mode.
+        //  Must be created BEFORE LMHeadLayer (LM head aliases embedding for tied config).
+        //======================================================//
+        {
+            EmbeddingLayerConfig emb_config;
+            emb_config.vocab_size = cfg.vocab_size;
+            emb_config.d_model = cfg.d_model;
+            emb_config.max_seq_len = cfg.max_seq_len;
+            emb_config.positional_encoding = cfg.positional_encoding;
+            emb_config.embedding_scale = 1.0f;  // Issue #140: No scaling for ALiBi/RoPE
+
+            // Seed convention: embedding uses weight_init_seed + 0
+            const uint64_t emb_seed = training_state_.weight_init_seed;
+
+            embedding_layer_ = std::make_unique<EmbeddingLayer>(emb_config, emb_seed, primary_stream);
+
+            if (!embedding_layer_->weightsReady()) {
+                throw std::runtime_error("[initGPU] FATAL: EmbeddingLayer not ready after construction!");
             }
-
-            // Wire GPUEncoderLayer to use TrainingTensors' memory
-            // This makes TrainingTensors the SINGLE source of truth for all weights.
-            // Issue #109: Pass LayerScale tensors if allocated (gated by use_layer_scale)
-            Tensor* ls1_ptr = params.layer_scale1.data ? &params.layer_scale1 : nullptr;
-            Tensor* ls2_ptr = params.layer_scale2.data ? &params.layer_scale2 : nullptr;
-            gpu_layer->useExternalWeights(
-                params.rms1_gamma,
-                params.rms2_gamma,
-                params.attn_qkv_weight,
-                params.attn_qkv_bias,
-                params.attn_out_weight,
-                params.attn_out_bias,
-                params.ffn_w1,
-                params.ffn_b1,
-                params.ffn_w2,
-                params.ffn_b2,
-                params.rms_post_attn_gamma,
-                params.rms_post_ffn_gamma,
-                ls1_ptr,
-                ls2_ptr
-            );
+            std::cout << "✓ Embedding layer created (vocab=" << cfg.vocab_size
+                      << ", d_model=" << cfg.d_model
+                      << ", pos_emb=" << (embedding_layer_->hasPositionEmbeddings() ? "learned" : "none")
+                      << ")\n";
         }
 
-        std::cout << "✓ Encoder layers wired to TrainingTensors (" << cfg.num_layers << " layers)\n";
+        //======================================================//
+        //  6b) Build persistent LM Head layer (Pattern B)
+        //  
+        //  Self-allocates weights (or aliases embedding for tied config).
+        //  Owns final_rms_gamma. Created AFTER EmbeddingLayer (needs embedding
+        //  weights for tying) and AFTER encoder (needs stream/cublas).
+        //======================================================//
+        {
+            LMHeadLayerConfig lm_config;
+            lm_config.d_model = cfg.d_model;
+            lm_config.vocab_size = cfg.vocab_size;
+            lm_config.use_bias = cfg.use_bias;
+            lm_config.center_hidden_states = cfg.lm_head_center_hidden_states;
+            lm_config.center_logits = cfg.center_logits;
+            lm_config.has_final_rms_norm = true;
+            lm_config.rms_epsilon = cfg.rms_epsilon;
+            lm_config.stream = primary_stream;
+            lm_config.cublas_handle = training_state_.cublas_handle;
+
+            // Seed convention: lm_head uses weight_init_seed + 1
+            const uint64_t lm_head_seed = training_state_.weight_init_seed + 1;
+
+            // For tied weights, pass pointer to embedding token weights (owned by EmbeddingLayer)
+            Tensor* tied_emb = cfg.tie_embeddings ? &embedding_layer_->tokenWeights() : nullptr;
+
+            lm_head_layer_ = std::make_unique<LMHeadLayer>(lm_config, lm_head_seed, primary_stream, tied_emb);
+
+            if (!lm_head_layer_->weightsReady()) {
+                throw std::runtime_error("[initGPU] FATAL: LMHeadLayer not ready after construction!");
+            }
+            std::cout << "✓ LM Head layer created ("
+                      << (cfg.tie_embeddings ? "tied to embedding" : "separate weights")
+                      << ", final_rms_gamma owned, bias=" << (cfg.use_bias ? "yes" : "no") << ")\n";
+        }
 
         std::cout << "✓ GPU encoder initialized with " << cfg.num_layers << " layers\n";
         std::cout << "  - Attention: GPU-accelerated\n";

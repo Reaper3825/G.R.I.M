@@ -7,8 +7,9 @@
 //  UTF-8 input including unknown characters, emojis, etc.
 //  
 //  Token ID layout:
-//    [0-255]   = Raw byte tokens (0x00 to 0xFF)
-//    [256+]    = Reserved for Unigram vocabulary
+//    [0-3]     = Special tokens (<unk>, <pad>, <s>, </s>)
+//    [4-259]   = Raw byte tokens (0x00 to 0xFF)
+//    [260+]    = Reserved for Atom + Unigram vocabulary
 //  
 //  Author: GRIM Team
 //  Date: December 2025
@@ -27,9 +28,16 @@ namespace Tokenizer {
 //======================================================//
 //  Constants
 //======================================================//
+constexpr int NUM_SPECIAL_TOKENS = 4;          // <unk>=0, <pad>=1, <s>=2, </s>=3
+constexpr int SPECIAL_TOKEN_OFFSET = 0;        // Special tokens start at ID 0
 constexpr int BYTE_VOCAB_SIZE = 256;           // 0x00 - 0xFF
-constexpr int BYTE_TOKEN_OFFSET = 0;           // Byte tokens start at ID 0
-constexpr int UNIGRAM_TOKEN_OFFSET = 256;      // Unigram tokens start after bytes
+constexpr int BYTE_TOKEN_OFFSET = NUM_SPECIAL_TOKENS;  // Byte tokens start at ID 4 (after specials)
+
+// Absolute special token IDs
+constexpr int UNK_TOKEN_ID = 0;
+constexpr int PAD_TOKEN_ID = 1;
+constexpr int BOS_TOKEN_ID = 2;
+constexpr int EOS_TOKEN_ID = 3;
 
 //======================================================//
 //  Byte Token Info

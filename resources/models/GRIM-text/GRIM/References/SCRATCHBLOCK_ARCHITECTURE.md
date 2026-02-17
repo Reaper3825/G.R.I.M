@@ -988,10 +988,10 @@ $$h' = h + \alpha \cdot (\text{Proj}(\text{Embed}(a, v)) + \text{TextProj}(\text
 |-----------|---------------|
 | AtomTable header | `Shared/UnigramByte/AtomTable.hpp` |
 | AtomTable implementation | `Shared/UnigramByte/Atomtable.cu` |
-| ScratchBlock layer | `Layers/ScratchBlock/ScratchBlock_GPU.cu` |
-| ScratchBlock header | `Layers/ScratchBlock/ScratchBlock_GPU.hpp` |
+| ScratchBlock layer | `Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu` |
+| ScratchBlock header | `Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp` |
 | Text feature encoding | `Shared/UnigramByte/UniByte.cu` |
-| Pinned memory pool | `Shared/ScratchBlock/ScratchBlock_GPU.hpp` |
+| Pinned memory pool | `Shared/ScratchBlock/ScratchBlockPool_GPU.hpp` |
 | Token ID constants | `Shared/UnigramByte/AtomTable.hpp` |
 
 ---

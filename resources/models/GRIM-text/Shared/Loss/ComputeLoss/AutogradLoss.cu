@@ -303,18 +303,28 @@ __global__ void kernelNLLLossBackward(
     // NLL gradient w.r.t. log_probs (LogSoftmaxGradFn does the Jacobian correction)
     
     // Precompute sum_log_off if needed for focal derivative with smoothing
-    float sum_log_off = 0.0f;
+    // FIX: Must use shared memory + atomicAdd for cross-warp reduction (256 threads = 8 warps).
+    // Previous code only did intra-warp shuffle, giving each warp 1/8 of the correct value.
+    // The forward kernel (kernelNLLLossForward) already uses the correct pattern.
+    __shared__ float s_sum_log_off;
+    if (threadIdx.x == 0) s_sum_log_off = 0.0f;
+    __syncthreads();
+    
     if (focal_enabled && smoothing_enabled) {
+        float local_sum_log_off = 0.0f;
         for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
             if (v != target) {
-                sum_log_off += row[v];
+                local_sum_log_off += row[v];
             }
         }
-        // Warp reduction for sum_log_off 
+        // Warp reduction
         for (int off = warpSize / 2; off > 0; off /= 2)
-            sum_log_off += __shfl_down_sync(0xffffffff, sum_log_off, off);
-        sum_log_off = __shfl_sync(0xffffffff, sum_log_off, 0);  // Broadcast from lane 0
+            local_sum_log_off += __shfl_down_sync(0xffffffff, local_sum_log_off, off);
+        // Cross-warp reduction via shared memory (matching forward kernel pattern)
+        if (threadIdx.x % warpSize == 0) atomicAdd(&s_sum_log_off, local_sum_log_off);
     }
+    __syncthreads();
+    const float sum_log_off = s_sum_log_off;
     
     for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
         const float q_v = (v == target) ? q_on : q_off;
@@ -789,7 +799,8 @@ __global__ void kernelToken277DiagnosticActual(
     float focal_gamma,
     float smoothing_epsilon,
     float entropy_reg_lambda,
-    int batch_idx
+    int batch_idx,
+    int tracked_token  // Dynamically detected collapse token
 ) {
     const int token_idx = blockIdx.x;
     if (token_idx >= num_tokens) return;
@@ -799,15 +810,15 @@ __global__ void kernelToken277DiagnosticActual(
     const float mask = valid_mask ? valid_mask[token_idx] : 1.0f;
     const int target = targets[token_idx];
     if (mask < 0.5f || target < 0 || target >= vocab_size) return;
+    if (tracked_token < 0 || tracked_token >= vocab_size) return;
     
-    constexpr int TOKEN_277 = 277;  // SPACE
     const float* log_row = log_probs + static_cast<size_t>(token_idx) * vocab_size;
     const float* logit_row = logits + static_cast<size_t>(token_idx) * vocab_size;
     const float* grad_row = grad_log_probs + static_cast<size_t>(token_idx) * vocab_size;
     
-    // Compute softmax probabilities from log_probs
-    const float log_p_277 = log_row[TOKEN_277];
-    const float p_277 = expf(log_p_277);
+    // Compute softmax probabilities from log_probs for the tracked token
+    const float log_p_tracked = log_row[tracked_token];
+    const float p_tracked = expf(log_p_tracked);
     
     // Compute entropy for entropy regularization term
     float neg_entropy = 0.0f;
@@ -818,8 +829,8 @@ __global__ void kernelToken277DiagnosticActual(
         }
     }
     
-    // Compute ACTUAL loss for Token 277 target position
-    float ce_loss = -log_p_277;  // Base CE
+    // Compute ACTUAL loss for tracked token target position
+    float ce_loss = -log_p_tracked;  // Base CE
     
     // Label smoothing if enabled
     if (smoothing_epsilon > 0.0f && vocab_size > 1) {
@@ -827,15 +838,15 @@ __global__ void kernelToken277DiagnosticActual(
         const float q_off = smoothing_epsilon / (vocab_size - 1.0f);
         float sum_log_off = 0.0f;
         for (int v = 0; v < vocab_size; v++) {
-            if (v != TOKEN_277) sum_log_off += log_row[v];
+            if (v != tracked_token) sum_log_off += log_row[v];
         }
-        ce_loss = -(q_on * log_p_277 + q_off * sum_log_off);
+        ce_loss = -(q_on * log_p_tracked + q_off * sum_log_off);
     }
     
     // Focal loss if enabled
     float focal_weight = 1.0f;
     if (focal_gamma > 0.0f) {
-        const float one_minus_pt = fmaxf(1.0f - p_277, 0.0f);
+        const float one_minus_pt = fmaxf(1.0f - p_tracked, 0.0f);
         if (one_minus_pt > 0.0f) {
             focal_weight = powf(one_minus_pt, focal_gamma);
         }
@@ -849,22 +860,22 @@ __global__ void kernelToken277DiagnosticActual(
     }
     
     // Gradient info
-    const float grad_277 = grad_row[TOKEN_277];
-    const bool is_277_target = (target == TOKEN_277);
+    const float grad_tracked = grad_row[tracked_token];
+    const bool is_tracked_target = (target == tracked_token);
     
     // Log in simple format (no stack overflow)
-    printf("[Token277Diagnostic] batch=%d token_idx=%d target=%d "
-           "is_277_target=%d log_p_277=%.6f p_277=%.6f loss=%.6f "
-           "focal_w=%.4f entropy=%.4f grad_277=%.8f\n",
-           batch_idx, token_idx, target,
-           is_277_target, log_p_277, p_277, total_loss,
-           focal_weight, neg_entropy, grad_277);
+    printf("[CollapseTokenDiagnostic] batch=%d token_idx=%d target=%d "
+           "tracked=%d is_tracked_target=%d log_p=%.6f p=%.6f loss=%.6f "
+           "focal_w=%.4f entropy=%.4f grad=%.8f\n",
+           batch_idx, token_idx, target, tracked_token,
+           is_tracked_target, log_p_tracked, p_tracked, total_loss,
+           focal_weight, neg_entropy, grad_tracked);
 }
 
 /**
- * Launch Token 277 diagnostic with ACTUAL loss computation
+ * Launch collapse token diagnostic with ACTUAL loss computation
  * This computes the real loss (focal + smoothing + entropy) per-token
- * to help identify Token 277 mode collapse and gradient issues
+ * to help identify mode collapse and gradient issues for the tracked token
  */
 void launchToken277DiagnosticActual(
     const float* log_probs,
@@ -879,14 +890,16 @@ void launchToken277DiagnosticActual(
     float smoothing_epsilon,
     float entropy_reg_lambda,
     int batch_idx,
+    int tracked_token,
     cudaStream_t stream
 ) {
+    if (tracked_token < 0) return;  // No collapse token detected yet
     const int num_blocks = (num_tokens + 255) / 256;
     kernelToken277DiagnosticActual<<<num_blocks, 256, 0, stream>>>(
         log_probs, logits, targets, valid_mask, grad_log_probs,
         num_tokens, vocab_size,
         focal_alpha, focal_gamma, smoothing_epsilon, entropy_reg_lambda,
-        batch_idx
+        batch_idx, tracked_token
     );
 }
 
@@ -1032,26 +1045,44 @@ struct NLLLossGradFn : public GradFn {
             throw std::runtime_error(std::string("[NLLLossGradFn] CUDA error: ") + cudaGetErrorString(err));
         }
         
-        // ── Step 2: Diagnostic — sample grad_log_probs magnitude (Rule 21) ──
+        // ── Step 2: Diagnostic — sample grad_log_probs at TARGET columns of valid tokens ──
+        // FIX: Previous code sampled a contiguous block starting at token 50.
+        // Problems: (a) token 50 might be masked (kernel writes 0.0f for masked rows),
+        // (b) with plain CE (no smoothing), only grad[target] is non-zero — a contiguous
+        // block mostly reads the 50,375 zero entries. Now we read the TARGET column of
+        // each sampled valid token, which is where the actual gradient lives.
         {
-            const size_t grad_elems = static_cast<size_t>(num_tokens) * vocab_size;
-            // Sample from token 50+ to skip BOS/masked positions
-            const size_t sample_offset = std::min(static_cast<size_t>(50) * vocab_size, grad_elems);
-            const size_t sample_sz = std::min(static_cast<size_t>(50000), grad_elems - sample_offset);
-            std::vector<float> samp(sample_sz);
-            cudaMemcpy(samp.data(), grad_log_probs_buffer + sample_offset,
-                       sample_sz * sizeof(float), cudaMemcpyDeviceToHost);
-            float mx = 0.0f; double sq = 0.0;
-            for (auto& v : samp) {
-                if (!std::isnan(v) && !std::isinf(v)) { mx = std::max(mx, std::abs(v)); sq += v*v; }
+            // Copy targets to host to find valid positions
+            const int sample_max = std::min(200, num_tokens);
+            std::vector<int> h_targets(sample_max);
+            cudaMemcpy(h_targets.data(), targets, sample_max * sizeof(int), cudaMemcpyDeviceToHost);
+            
+            float mx = 0.0f; double sq = 0.0; int valid_sampled = 0;
+            for (int t = 0; t < sample_max; ++t) {
+                if (h_targets[t] < 0 || h_targets[t] >= vocab_size) continue;  // skip masked
+                // Read grad_log_probs[t, target[t]] — the one non-zero entry per valid row
+                const size_t elem_offset = static_cast<size_t>(t) * vocab_size + h_targets[t];
+                float val = 0.0f;
+                cudaMemcpy(&val, grad_log_probs_buffer + elem_offset, sizeof(float), cudaMemcpyDeviceToHost);
+                if (!std::isnan(val) && !std::isinf(val)) {
+                    mx = std::max(mx, std::abs(val));
+                    sq += static_cast<double>(val) * val;
+                    valid_sampled++;
+                }
             }
-            float rms = std::sqrt(static_cast<float>(sq / sample_sz));
+            float rms = (valid_sampled > 0) ? std::sqrt(static_cast<float>(sq / valid_sampled)) : 0.0f;
+            
+            // Expected: with plain CE, grad_log_probs[t, target[t]] = -1/N
+            // With smoothing: grad_log_probs[t, target[t]] = -(1-epsilon)/N
+            const float expected_target_grad = smoothing_enabled
+                ? (1.0f - smoothing_epsilon) / valid_count
+                : 1.0f / valid_count;
             
             std::ostringstream eq;
             eq << "[NLL-BWD-OUT] grad_log_probs = dL/d(log_p) [NLL backward, before LogSoftmaxGradFn]\n"
                << "  INPUTS: num_tokens=" << num_tokens << " vocab=" << vocab_size << " valid=" << valid_count << "\n"
-               << "  EXPECTED max~1/N=" << (1.0f / valid_count) << " rms~1e-5\n"
-               << "  ACTUAL max=" << mx << " rms=" << rms;
+               << "  EXPECTED |grad[t,target[t]]|=1/N=" << expected_target_grad << "\n"
+               << "  ACTUAL max=" << mx << " rms=" << rms << " (sampled " << valid_sampled << " valid target entries)";
             EQ_LOG("NLL-BWD-OUT", eq.str(), 0, -1, 0, GRIM::EquationPhase::LOSS_BACKWARD);
         }
         

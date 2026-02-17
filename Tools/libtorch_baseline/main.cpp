@@ -400,9 +400,12 @@ static std::pair<std::vector<int64_t>, uint32_t> load_grmt(const std::string& pa
 
 class GRIMVocab {
 public:
-    static constexpr uint32_t BYTE_TOKEN_BASE = 0;      // Bytes: 0-255
-    static constexpr uint32_t ATOM_TOKEN_BASE = 256;    // Atoms: 256-511  
-    static constexpr uint32_t UNIGRAM_TOKEN_BASE = 512; // Unigram: 512+
+    static constexpr uint32_t NUM_SPECIAL_TOKENS = 4;   // Special: 0-3 (<unk>, <pad>, <s>, </s>)
+    static constexpr uint32_t BYTE_TOKEN_BASE = 4;       // Bytes: 4-259
+    static constexpr uint32_t BYTE_VOCAB_SIZE = 256;
+    static constexpr uint32_t ATOM_TOKEN_BASE = 260;     // Atoms: 260-279
+    static constexpr uint32_t ATOM_VOCAB_SIZE = 20;
+    static constexpr uint32_t UNIGRAM_TOKEN_BASE = 280;  // Unigram: 280+
     
     struct Piece {
         std::string text;
@@ -528,9 +531,9 @@ public:
                 }
             }
             
-            // Fallback to byte token
+            // Fallback to byte token (offset by BYTE_TOKEN_BASE)
             if (!found) {
-                tokens.push_back(static_cast<int64_t>(static_cast<unsigned char>(text[pos])));
+                tokens.push_back(static_cast<int64_t>(static_cast<unsigned char>(text[pos]) + BYTE_TOKEN_BASE));
                 pos++;
             }
         }
@@ -546,15 +549,21 @@ public:
         for (int64_t t : tokens) {
             uint32_t id = static_cast<uint32_t>(t);
             
-            if (id < 256) {
+            if (id < NUM_SPECIAL_TOKENS) {
+                // Special token
+                if (id == 0) out.append("<unk>");
+                else if (id == 1) out.append("<pad>");
+                else if (id == 2) out.append("<s>");
+                else if (id == 3) out.append("</s>");
+            } else if (id >= BYTE_TOKEN_BASE && id < BYTE_TOKEN_BASE + BYTE_VOCAB_SIZE) {
                 // Byte token
-                out.push_back(static_cast<char>(id));
+                out.push_back(static_cast<char>(id - BYTE_TOKEN_BASE));
             } else {
                 // Look up in id_to_piece_ map (works for both atoms and unigrams with v3 stored IDs)
                 auto it = id_to_piece_.find(id);
                 if (it != id_to_piece_.end()) {
                     out.append(it->second);
-                } else if (id >= ATOM_TOKEN_BASE && id < UNIGRAM_TOKEN_BASE) {
+                } else if (id >= ATOM_TOKEN_BASE && id < ATOM_TOKEN_BASE + ATOM_VOCAB_SIZE) {
                     // Atom placeholder not in vocab - show placeholder
                     out.append("[ATOM:" + std::to_string(id - ATOM_TOKEN_BASE) + "]");
                 } else {

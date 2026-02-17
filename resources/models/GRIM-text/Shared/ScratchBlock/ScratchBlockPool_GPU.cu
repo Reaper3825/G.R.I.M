@@ -1,14 +1,15 @@
 //======================================================//
-//  ScratchBlock_GPU.cu
+//  ScratchBlockPool_GPU.cu
 //  Implementation of Pinned Memory Scratch Blocks
 //======================================================//
 
-#include "ScratchBlock_GPU.hpp"
+#include "ScratchBlockPool_GPU.hpp"
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 
 namespace GRIM {
 namespace ScratchBlock {
@@ -131,16 +132,6 @@ void ScratchBlockPool::release(const ScratchBlockHandle& handle) {
     }
 }
 
-bool ScratchBlockPool::isAvailable(uint32_t block_id) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    
-    if (block_id >= blocks_.size()) {
-        return false;
-    }
-    
-    return !blocks_[block_id].in_use.load();
-}
-
 ScratchBlockPool::Stats ScratchBlockPool::getStats() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return stats_;
@@ -202,7 +193,7 @@ bool ScratchBlockPool::initializeBlocks() {
         );
         
         if (err != cudaSuccess) {
-            // Allocation failed - cleanup and return false
+            // Allocation failed - cleanup already-allocated blocks before throwing
             for (size_t j = 0; j < blocks_.size(); ++j) {
                 if (blocks_[j].data) {
                     cudaFreeHost(blocks_[j].data);
@@ -210,7 +201,10 @@ bool ScratchBlockPool::initializeBlocks() {
                 }
             }
             blocks_.clear();
-            return false;
+            throw std::runtime_error(
+                "ScratchBlockPool: cudaMallocHost failed for block " + std::to_string(i)
+                + " (" + std::to_string(bytes_per_block) + " bytes): "
+                + cudaGetErrorString(err));
         }
         
         block.capacity_tokens = config_.max_tokens_per_block;
@@ -233,15 +227,6 @@ void ScratchBlockPool::cleanupBlocks() {
     
     blocks_.clear();
     initialized_ = false;
-}
-
-int ScratchBlockPool::findAvailableBlock() const {
-    for (size_t i = 0; i < blocks_.size(); ++i) {
-        if (!blocks_[i].in_use.load()) {
-            return static_cast<int>(i);
-        }
-    }
-    return -1;
 }
 
 } // namespace ScratchBlock

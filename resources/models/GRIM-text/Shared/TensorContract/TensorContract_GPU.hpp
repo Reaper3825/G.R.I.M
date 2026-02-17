@@ -189,7 +189,7 @@ enum class Layout : uint8_t {
 /**
  * Check if a layout is 2D (flat) or 4D (multi-dimensional)
  */
-constexpr bool is_flat_layout(Layout l) {
+constexpr bool is_2d_layout(Layout l) {
     return l == Layout::BSM || l == Layout::QKV_FUSED || l == Layout::LOGITS;
 }
 
@@ -275,7 +275,7 @@ struct TensorShape {
     
     // Construct from 2D shape
     TensorShape(Layout l, Shape2D s) : layout(l), flat(s) {
-        if (!is_flat_layout(l)) {
+        if (!TensorContract::is_2d_layout(l)) {
             layout = Layout::UNKNOWN;  // Invalid: 4D layout with 2D shape
         }
     }
@@ -288,12 +288,12 @@ struct TensorShape {
     }
     
     // Query dimensionality
-    bool is_flat() const { return is_flat_layout(layout); }
+    bool is_2d_layout() const { return TensorContract::is_2d_layout(layout); }
     bool is_4d() const { return is_4d_layout(layout); }
     
     // Safe accessors (throw if wrong type)
     const Shape2D& as_2d() const {
-        if (!is_flat()) throw std::logic_error("TensorShape: not a 2D layout");
+        if (!is_2d_layout()) throw std::logic_error("TensorShape: not a 2D layout");
         return flat;
     }
     
@@ -303,7 +303,7 @@ struct TensorShape {
     }
     
     Shape2D& as_2d() {
-        if (!is_flat()) throw std::logic_error("TensorShape: not a 2D layout");
+        if (!is_2d_layout()) throw std::logic_error("TensorShape: not a 2D layout");
         return flat;
     }
     
@@ -314,7 +314,7 @@ struct TensorShape {
     
     // Layout-aware element count
     size_t total_elements() const {
-        if (is_flat()) return flat.total_elements();
+        if (is_2d_layout()) return flat.total_elements();
         if (is_4d()) return multi.total_elements();
         return 0;
     }
@@ -322,7 +322,7 @@ struct TensorShape {
     // Layout-aware validation
     bool is_valid() const {
         if (layout == Layout::UNKNOWN) return false;
-        if (is_flat()) return flat.is_valid();
+        if (is_2d_layout()) return flat.is_valid();
         if (is_4d()) return multi.is_valid();
         return false;
     }
@@ -332,7 +332,7 @@ struct TensorShape {
         if (layout == Layout::UNKNOWN) {
             throw std::runtime_error(std::string(context) + ": TensorShape has UNKNOWN layout");
         }
-        if (is_flat() && !flat.is_valid()) {
+        if (is_2d_layout() && !flat.is_valid()) {
             throw std::runtime_error(std::string(context) + ": TensorShape 2D is invalid (rows=" + 
                                      std::to_string(flat.rows) + ", cols=" + std::to_string(flat.cols) + ")");
         }
@@ -413,7 +413,7 @@ struct TensorView {
     
     // Query layout type
     Layout layout() const { return shape.layout; }
-    bool is_flat() const { return shape.is_flat(); }
+    bool is_2d_layout() const { return shape.is_2d_layout(); }
     bool is_4d() const { return shape.is_4d(); }
     
     // Validation
@@ -732,12 +732,11 @@ namespace GRIM {
 enum class ParamGroupType : uint8_t {
     EMBEDDING = 0,      ///< Token embeddings
     LM_HEAD = 1,        ///< Language model head (output projection)
-    NUMERIC_HEAD = 2,   ///< Numeric prediction head
-    ATTENTION = 3,      ///< Attention weights (W_qkv, W_o)
-    FFN = 4,            ///< Feed-forward network weights (W1, W2)
-    RMSNORM = 5,        ///< RMSNorm gamma parameters
-    SCRATCHBLOCK = 6,   ///< Atom type embeddings + projection
-    COUNT = 7           ///< Number of parameter group types
+    ATTENTION = 2,      ///< Attention weights (W_qkv, W_o)
+    FFN = 3,            ///< Feed-forward network weights (W1, W2)
+    RMSNORM = 4,        ///< RMSNorm gamma parameters
+    SCRATCHBLOCK = 5,   ///< Atom type embeddings + projection
+    COUNT = 6           ///< Number of parameter group types
 };
 
 //======================================================//
@@ -821,13 +820,6 @@ struct GradFn {
     int call_id = 0;                ///< Unique call ID for deterministic replay
     bool applied = false;           ///< ISSUE #49: Prevent infinite loops when grad_fn is shared
     bool released_ = false;         ///< ISSUE #50: Prevent double release_saved calls
-    
-    // Issue #141: Gradient tap — if non-null, apply() copies grad_output here
-    // before processing. Used by ScratchBlock backward to capture encoder input
-    // gradients that would otherwise be consumed by the autograd chain.
-    float* grad_output_tap = nullptr;
-    size_t grad_output_tap_count = 0;
-    bool grad_output_tap_written = false;  // Set true by apply() when tap copy succeeds
     
     //--------------------------------------------------//
     // Virtual Interface

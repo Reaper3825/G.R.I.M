@@ -63,18 +63,21 @@ float* g_debug_embedding_only_grad = nullptr; // Where to copy embedding backwar
 size_t g_debug_grad_buffer_size = 0;          // Size in elements (vocab_size * d_model)
 bool g_debug_capture_enabled = g_autograd_verbose;         // Enable/disable capturing
 
-// ISSUE #60 ROOT CAUSE FIX: Skip embedding backward when weights are tied
-// PyTorch with tied weights does: logits = x @ embedding.weight.T
-// This means autograd only runs matmul backward on embedding weight ONCE.
-// In GRIM, we were running BOTH lm_head backward AND embedding backward,
-// which wrote opposite gradients to the same shared buffer, canceling to ZERO!
-// Set this to true when tie_embeddings=true to match PyTorch behavior.
+// Issue #143: PyTorch-style tied weight gradient accumulation.
+// Both LM head backward (dense matmul) and embedding backward (sparse scatter)
+// write to the SAME shared grad buffer. The natural cancellation (~90% for frequent
+// tokens) acts as frequency-proportional regularization — frequent tokens get braked
+// harder, preventing weight row divergence and logit explosion.
+//
+// PCGrad (Issue #60) was REMOVED because it eliminated this natural brake by
+// projecting out the conflicting embedding component, giving frequent tokens
+// unchecked gradient magnitude.
 bool g_skip_embedding_backward_for_tied_weights = false;
 
-// ISSUE #60 PCGrad FIX: Instead of skipping, use PCGrad to combine gradients
-// This preserves LM head direction while adding orthogonal embedding information
-float* g_pcgrad_temp_buffer = nullptr;    // Temporary buffer for embedding grad before projection
-size_t g_pcgrad_buffer_size = 0;          // Size in elements (vocab_size * d_model)
+// PCGrad buffer — kept as global for ABI compatibility but never allocated.
+// When nullptr, EmbeddingGradFn takes the direct accumulation path.
+float* g_pcgrad_temp_buffer = nullptr;
+size_t g_pcgrad_buffer_size = 0;
 
 // Call this after LM head matmul backward to capture its contribution
 void debugCaptureLMHeadGrad(float* grad_ptr, size_t size, cudaStream_t stream) {
@@ -285,7 +288,7 @@ std::string TensorView::to_string() const {
     std::ostringstream oss;
     oss << (name ? name : "tensor") << " [";
     
-    if (shape.is_flat()) {
+    if (shape.is_2d_layout()) {
         const auto& s = shape.as_2d();
         oss << s.rows << ", " << s.cols;
     } else if (shape.is_4d()) {
@@ -532,7 +535,7 @@ void split_qkv_gqa(const TensorView& qkv_fused,
     }
     
     // Get dimensions from input
-    if (!qkv_fused.is_flat()) {
+    if (!qkv_fused.is_2d_layout()) {
         throw ContractViolation("split_qkv_gqa: input must be 2D (tokens, total_qkv_dim)");
     }
     
@@ -971,14 +974,12 @@ void Tensor::xavier_uniform_(Tensor& t, uint64_t seed, cudaStream_t stream) {
     
     // Xavier uniform calculation
     float fan_in = 1.0f, fan_out = 1.0f;
-    if (t.shape.is_flat()) {
+    if (t.shape.is_2d_layout()) {
         const auto& s = t.shape.as_2d();
         fan_in = static_cast<float>(s.cols);
         fan_out = static_cast<float>(s.rows);
-    } else if (t.shape.is_4d()) {
-        const auto& s = t.shape.as_4d();
-        fan_in = static_cast<float>(s.head_dim);
-        fan_out = static_cast<float>(s.batch * s.heads * s.seq);
+    } else {
+        throw std::invalid_argument("Tensor::xavier_uniform_: only 2D weight matrices are supported. 4D tensors are activations, not weights.");
     }
     
     float scale = std::sqrt(6.0f / (fan_in + fan_out));
@@ -2102,11 +2103,56 @@ struct CenterRowsGradFn : public GradFn {
         if (!grad_output.data) throw std::runtime_error("CenterRowsGradFn::apply: grad_output.data is NULL - backward called with null gradient");
         applied = true;
         
+        // ═══════════════════════════════════════════════════════════════
+        // DIAGNOSTIC: Issue #146 — trace zero grad_C reaching MatMul
+        // Only log for large row_dim (logit centering, vocab=50377)
+        // ═══════════════════════════════════════════════════════════════
+        const bool is_logit_centering = (row_dim > 10000);
+        float diag_in_max = 0.0f;  // Must outlive both if-blocks
+        if (is_logit_centering) {
+            cudaStreamSynchronize(stream);  // Ensure input is ready
+            // Sample input (what LogSoftmax wrote via BiasAdd chain)
+            const size_t n_sample = std::min(static_cast<size_t>(num_rows) * row_dim, static_cast<size_t>(100000));
+            std::vector<float> in_samp(n_sample);
+            cudaMemcpy(in_samp.data(), grad_output.data, n_sample * sizeof(float), cudaMemcpyDeviceToHost);
+            double in_sq = 0.0;
+            for (auto& v : in_samp) { if (!std::isnan(v) && !std::isinf(v)) { diag_in_max = std::max(diag_in_max, std::abs(v)); in_sq += v*v; } }
+            float in_rms = std::sqrt(static_cast<float>(in_sq / n_sample));
+            fprintf(stderr, "[CENTER_ROWS_BWD] LOGIT_CENTERING: input_ptr=%p output_ptr=%p row_dim=%d num_rows=%d\n",
+                    (void*)grad_output.data, (void*)input_grad, row_dim, num_rows);
+            fprintf(stderr, "[CENTER_ROWS_BWD]   INPUT: max=%.10e rms=%.10e (sampled %zu/%zu)\n",
+                    diag_in_max, in_rms, n_sample, static_cast<size_t>(num_rows) * row_dim);
+            fflush(stderr);
+        }
+        
         // BACKWARD: grad_x = grad_y - mean_d(grad_y)  (reuse centering kernel!)
         // We can use kernel_center_rows to center grad_output directly to input_grad
         {
             kernel_center_rows<<<num_rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 grad_output.data, input_grad, row_dim, num_rows);
+        }
+        
+        // DIAGNOSTIC: Verify kernel output for logit centering
+        if (is_logit_centering) {
+            cudaStreamSynchronize(stream);  // Wait for kernel to finish
+            const size_t n_sample = std::min(static_cast<size_t>(num_rows) * row_dim, static_cast<size_t>(100000));
+            std::vector<float> out_samp(n_sample);
+            cudaMemcpy(out_samp.data(), input_grad, n_sample * sizeof(float), cudaMemcpyDeviceToHost);
+            float out_max = 0.0f; double out_sq = 0.0;
+            for (auto& v : out_samp) { if (!std::isnan(v) && !std::isinf(v)) { out_max = std::max(out_max, std::abs(v)); out_sq += v*v; } }
+            float out_rms = std::sqrt(static_cast<float>(out_sq / n_sample));
+            fprintf(stderr, "[CENTER_ROWS_BWD]   OUTPUT: max=%.10e rms=%.10e (sampled %zu)\n", out_max, out_rms, n_sample);
+            if (out_max == 0.0f && diag_in_max > 0.0f) {
+                // Also sample from middle of output buffer to check if it's completely zero
+                const size_t mid_offset = static_cast<size_t>(num_rows / 2) * row_dim;
+                const size_t mid_sample = std::min(static_cast<size_t>(10000), static_cast<size_t>(num_rows) * row_dim - mid_offset);
+                std::vector<float> mid_samp(mid_sample);
+                cudaMemcpy(mid_samp.data(), input_grad + mid_offset, mid_sample * sizeof(float), cudaMemcpyDeviceToHost);
+                float mid_max = 0.0f;
+                for (auto& v : mid_samp) { mid_max = std::max(mid_max, std::abs(v)); }
+                fprintf(stderr, "[CENTER_ROWS_BWD]   [ANOMALY] OUTPUT is ZERO but INPUT was non-zero! mid_sample_max=%.10e\n", mid_max);
+            }
+            fflush(stderr);
         }
         
         // Continue backward chain
@@ -2351,29 +2397,6 @@ struct AddGradFn : public GradFn {
         }
         
         const size_t count = grad_output.numel();
-
-        // Issue #142: Support ScratchBlock gradient tap on non-dropout paths
-        // (e.g. dropout_rate=0 where embedding_tensor.grad_fn is AddGradFn).
-        if (grad_output_tap && grad_output_tap_count > 0) {
-            if (grad_output_tap_count > count) {
-                throw std::runtime_error(
-                    "AddGradFn::apply: grad_output_tap_count (" + std::to_string(grad_output_tap_count) +
-                    ") exceeds grad_output elements (" + std::to_string(count) + ")");
-            }
-            const cudaError_t tap_err = cudaMemcpyAsync(
-                grad_output_tap,
-                grad_output.data,
-                grad_output_tap_count * sizeof(float),
-                cudaMemcpyDeviceToDevice,
-                stream);
-            if (tap_err != cudaSuccess) {
-                throw std::runtime_error(
-                    std::string("AddGradFn::apply: grad_output tap copy failed: ") +
-                    cudaGetErrorString(tap_err));
-            }
-            grad_output_tap_written = true;
-        }
-
         const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
         
         // Accumulate gradients to both inputs using stored grad pointers
@@ -3120,29 +3143,6 @@ struct EmbeddingGradFn : public GradFn {
             throw std::runtime_error("EmbeddingGradFn::apply: grad_output.data is NULL");
         }
 
-        const size_t grad_count = grad_output.numel();
-        // Issue #142: Support ScratchBlock gradient tap when dropout is disabled
-        // and embedding_tensor.grad_fn is EmbeddingGradFn.
-        if (grad_output_tap && grad_output_tap_count > 0) {
-            if (grad_output_tap_count > grad_count) {
-                throw std::runtime_error(
-                    "EmbeddingGradFn::apply: grad_output_tap_count (" + std::to_string(grad_output_tap_count) +
-                    ") exceeds grad_output elements (" + std::to_string(grad_count) + ")");
-            }
-            const cudaError_t tap_err = cudaMemcpyAsync(
-                grad_output_tap,
-                grad_output.data,
-                grad_output_tap_count * sizeof(float),
-                cudaMemcpyDeviceToDevice,
-                stream);
-            if (tap_err != cudaSuccess) {
-                throw std::runtime_error(
-                    std::string("EmbeddingGradFn::apply: grad_output tap copy failed: ") +
-                    cudaGetErrorString(tap_err));
-            }
-            grad_output_tap_written = true;
-        }
-        
         // ═══════════════════════════════════════════════════════════════════════════
         // ISSUE #60 FIX: PCGrad for tied embedding/lm_head weights
         // ═══════════════════════════════════════════════════════════════════════════
@@ -3206,7 +3206,9 @@ struct EmbeddingGradFn : public GradFn {
             // Fallback: skip embedding backward entirely (previous fix)
             AG_TRACE("[EmbeddingGradFn] SKIPPING embedding backward - weights tied, no PCGrad buffer\n");
         } else {
-            // No PCGrad, no skip: run embedding backward normally (will cancel!)
+            // Issue #143: PyTorch-style direct accumulation — embedding grad writes
+            // to same buffer where LM head grad already lives. Natural ~90% cancellation
+            // for frequent tokens acts as frequency-proportional regularization.
             kernel_embedding_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 grad_output.data, token_ids, weight_grad, num_tokens, d_model, vocab_size, embedding_scale);
             trackKernelLaunch("kernel_embedding_backward", stream);
@@ -3514,29 +3516,6 @@ struct DropoutGradFn : public GradFn {
             throw std::runtime_error("DropoutGradFn::apply: grad_output.data is NULL");
         }
         
-        // Issue #141: If a gradient tap is set, copy grad_output BEFORE dropout
-        // mask is applied. This captures the encoder input gradient for ScratchBlock backward.
-        const size_t grad_count = grad_output.numel();
-        if (grad_output_tap && grad_output_tap_count > 0) {
-            if (grad_output_tap_count > grad_count) {
-                throw std::runtime_error(
-                    "DropoutGradFn::apply: grad_output_tap_count (" + std::to_string(grad_output_tap_count) +
-                    ") exceeds grad_output elements (" + std::to_string(grad_count) + ")");
-            }
-            const cudaError_t tap_err = cudaMemcpyAsync(
-                grad_output_tap,
-                grad_output.data,
-                grad_output_tap_count * sizeof(float),
-                cudaMemcpyDeviceToDevice,
-                stream);
-            if (tap_err != cudaSuccess) {
-                throw std::runtime_error(
-                    std::string("DropoutGradFn::apply: grad_output tap copy failed: ") +
-                    cudaGetErrorString(tap_err));
-            }
-            grad_output_tap_written = true;
-        }
-        
         const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
         kernel_dropout_backward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
             grad_output.data, saved_mask, input_grad, scale, count);
@@ -3738,7 +3717,7 @@ Tensor broadcast_add(const Tensor& input, const Tensor& bias, cudaStream_t strea
     
     // Extract dimensions from shapes
     // input: [N, D] or [B*S, D] (2D flat layout), bias: [D]
-    if (!input.shape.is_flat()) {
+    if (!input.shape.is_2d_layout()) {
         throw std::runtime_error("autograd::broadcast_add: input must have 2D flat layout (BSM)");
     }
     const int total_tokens = input.shape.flat.rows;
@@ -3847,7 +3826,7 @@ Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, cudaStream_t st
         throw std::runtime_error("autograd::rms_norm: stream is NULL - caller MUST provide valid stream");
     }
     
-    if (!x.shape.is_flat()) {
+    if (!x.shape.is_2d_layout()) {
         throw std::invalid_argument("autograd::rms_norm: input must be 2D (BSM)");
     }
     
@@ -3886,7 +3865,7 @@ Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, cudaStream_t st
 // Issue #142: cross_entropy_loss() also deleted (was thin wrapper around unified_loss).
 
 Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cudaStream_t stream, float embedding_scale) {
-    if (!weight.shape.is_flat()) {
+    if (!weight.shape.is_2d_layout()) {
         throw std::invalid_argument("autograd::embedding: weight must be 2D [vocab_size, d_model]");
     }
     if (!token_ids) {
@@ -3930,7 +3909,7 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cud
 }
 
 Tensor log_softmax(const Tensor& x, cudaStream_t stream, bool save_output_copy) {
-    if (!x.shape.is_flat()) {
+    if (!x.shape.is_2d_layout()) {
         throw std::invalid_argument("autograd::log_softmax: input must be 2D [tokens, dim]");
     }
     if (!x.data) {
@@ -4159,7 +4138,7 @@ Tensor center_rows(const Tensor& x, cudaStream_t stream) {
     
     // For 2D tensors [total_tokens, d_model]: rows=total_tokens, cols=d_model
     // We center each ROW (subtract mean of that row's d_model elements)
-    if (!x.shape.is_flat()) {
+    if (!x.shape.is_2d_layout()) {
         throw std::runtime_error("center_rows: expected 2D (flat) tensor, got 4D");
     }
     const int num_rows = x.shape.as_2d().rows;  // total_tokens
@@ -4214,7 +4193,7 @@ Tensor center_columns(const Tensor& x, cudaStream_t stream) {
     
     // For 2D tensors [total_tokens, d_model]: rows=total_tokens, cols=d_model
     // We center each COLUMN (subtract mean across all rows for each column)
-    if (!x.shape.is_flat()) {
+    if (!x.shape.is_2d_layout()) {
         throw std::runtime_error("center_columns: expected 2D (flat) tensor, got 4D");
     }
     const int num_rows = x.shape.as_2d().rows;  // total_tokens (positions)
@@ -4954,7 +4933,7 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
     }
     
     // Validate inputs are 2D
-    if (!a.shape.is_flat() || !b.shape.is_flat()) {
+    if (!a.shape.is_2d_layout() || !b.shape.is_2d_layout()) {
         throw std::invalid_argument("autograd::matmul: inputs must be 2D (BSM layout)");
     }
     
@@ -5594,6 +5573,9 @@ Tensor scaled_dot_product_attention(
     cudaMalloc(&v_bf16, kv_elems * sizeof(__nv_bfloat16));
     cudaMalloc(&out_bf16, q_elems * sizeof(__nv_bfloat16));
     cudaMalloc(&softmax_lse, lse_elems * sizeof(float));
+    // Sentinel fill: 0xFF bytes → float NaN. If LSE shows NaN after kernel, kernel didn't write.
+    // Valid LSE is always finite (LSE = max_score * scale + log(sum_exp)), never NaN.
+    cudaMemsetAsync(softmax_lse, 0xFF, lse_elems * sizeof(float), stream);
     
     // Convert FP32 BHSD -> BF16 BSHD
     TensorConversion::convert_BHSD_to_BSHD_bf16(

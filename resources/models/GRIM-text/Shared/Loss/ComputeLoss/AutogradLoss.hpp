@@ -156,7 +156,7 @@ void launchUnifiedLossBackward(
  * @param step_idx     Current training step
  * @param stream       CUDA stream
  */
-void launchToken277Diagnostic(
+void launchToken277DiagnosticActual(
     const float* logits,
     const int* targets,
     const float* valid_mask,
@@ -165,7 +165,8 @@ void launchToken277Diagnostic(
     int vocab_size,
     int batch_idx,
     int step_idx,
-    cudaStream_t stream
+    cudaStream_t stream,
+    int tracked_token
 );
 
 // Issue #142: cross_entropy_loss() DELETED (Rule 26: dead code).

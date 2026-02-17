@@ -75,6 +75,8 @@ struct SerializationEncoderLayerReadView {
 	DeviceReadView rms2_gamma;
 	DeviceReadView rms_post_attn_gamma;
 	DeviceReadView rms_post_ffn_gamma;
+	DeviceReadView layer_scale1;       // [1] LayerScale attention scalar (may be empty if disabled)
+	DeviceReadView layer_scale2;       // [1] LayerScale FFN scalar (may be empty if disabled)
 };
 
 struct SerializationEncoderLayerWriteView {
@@ -90,6 +92,8 @@ struct SerializationEncoderLayerWriteView {
 	DeviceWriteView rms2_gamma;
 	DeviceWriteView rms_post_attn_gamma;
 	DeviceWriteView rms_post_ffn_gamma;
+	DeviceWriteView layer_scale1;      // [1] LayerScale attention scalar (may be empty if disabled)
+	DeviceWriteView layer_scale2;      // [1] LayerScale FFN scalar (may be empty if disabled)
 };
 
 struct SerializationLMHeadReadView {
@@ -105,25 +109,12 @@ struct SerializationLMHeadWriteView {
 	bool expect_bias = false;
 };
 
-struct SerializationNumericHeadReadView {
-	DeviceReadView projection;
-	DeviceReadView bias;
-	bool has_projection = false;
-	bool has_bias = false;
-	bool enabled = false;
-};
-
-struct SerializationNumericHeadWriteView {
-	DeviceWriteView projection;
-	DeviceWriteView bias;
-	bool expect_bias = false;
-	bool enabled = false;
-};
-
 struct SerializationScratchBlockReadView {
 	DeviceReadView atom_type_embeddings;  // [num_atom_types, atom_embedding_dim]
 	DeviceReadView atom_projection;        // [atom_embedding_dim, d_model]
 	DeviceReadView text_feature_projection; // [16, d_model] - text feature value encoding
+	DeviceReadView value_extraction_weight; // [d_model] - extraction head W
+	DeviceReadView value_extraction_bias;   // [1] - extraction head b
 	int num_atom_types = 0;
 	int atom_embedding_dim = 0;
 	int d_model = 0;
@@ -135,6 +126,8 @@ struct SerializationScratchBlockWriteView {
 	DeviceWriteView atom_type_embeddings;
 	DeviceWriteView atom_projection;
 	DeviceWriteView text_feature_projection; // [16, d_model]
+	DeviceWriteView value_extraction_weight; // [d_model]
+	DeviceWriteView value_extraction_bias;   // [1]
 	int num_atom_types = 0;
 	int atom_embedding_dim = 0;
 };
@@ -145,7 +138,6 @@ struct SerializationSaveSources {
 	SerializationCpuEmbeddingReadData cpu_embedding;
 	std::vector<SerializationEncoderLayerReadView> encoder_layers;
 	SerializationLMHeadReadView lm_head;
-	SerializationNumericHeadReadView numeric_head;
 	SerializationScratchBlockReadView scratch_block;  // Optional ScratchBlock weights
 	DeviceReadView final_rms_gamma;  // Issue #33: Final RMSNorm gamma [d_model]
 };
@@ -169,7 +161,6 @@ struct SerializationLoadRequest {
 	SerializationCpuEmbeddingWriteOps cpu_embedding;
 	std::vector<SerializationEncoderLayerWriteView> encoder_layers;
 	SerializationLMHeadWriteView lm_head;
-	SerializationNumericHeadWriteView numeric_head;
 	SerializationScratchBlockWriteView scratch_block;  // Optional ScratchBlock weights
 	DeviceWriteView final_rms_gamma;  // Issue #33: Final RMSNorm gamma [d_model]
 };

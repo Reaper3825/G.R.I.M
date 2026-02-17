@@ -23,12 +23,12 @@
 #include <cuda_bf16.h>
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
+#include "../Embedding/Embedding_GPU.hpp"
 #include "../Encoding/Encoding_GPU.hpp"
-#include "../ScratchBlock/ScratchBlock_GPU.hpp"
+#include "../ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 #include "../FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
-#include "../../Shared/TrainingState/TrainingTensors.hpp"
 
 using GRIM::Tensor;
 
@@ -84,100 +84,44 @@ void LanguageModel::initInferenceState() {
     // TensorContract shape helpers
     using TC = TensorContract::TensorShape;
     
-    // Create TrainingTensors container FIRST — all weight tensors live here
-    // (no gradients for inference, but same container as training for uniform access)
-    training_state_.tensors_ = std::make_unique<TrainingTensors>();
-    
-    // 2. Allocate embedding weights (will be populated by model load)
-    training_state_.tensors_->embedding_weights = Tensor::zeros(
-        TC::make_BSM(cfg.vocab_size, cfg.d_model),
-        false,  // no grad for inference
-        primary_stream,
-        "embedding_weights_inf"
-    );
-    std::cout << "  ✓ Allocated embedding weights (Tensor API)" << std::endl;
-
-    // Learned/additive positional mode requires a position embedding table.
-    if (cfg.positional_encoding == HyperParameters::PositionalEncodingType::NONE) {
-        training_state_.tensors_->position_embedding_weights = Tensor::zeros(
-            TC::make_BSM(cfg.max_seq_len, cfg.d_model),
-            false,  // no grad for inference
-            primary_stream,
-            "position_embedding_weights_inf"
-        );
-        std::cout << "  ✓ Allocated position embeddings (Tensor API, learned mode)" << std::endl;
-    }
-    
-    // 3. Setup LM head weights (tied to embeddings or separate allocation)
-    if (cfg.tie_embeddings) {
-        if (!training_state_.tensors_->embedding_weights.data) {
-            throw std::runtime_error("[InitInferenceState] embedding_weights allocation failed — cannot tie");
-        }
-        // from_ptr: wraps embedding buffer, doesn't own data
-        training_state_.tensors_->lm_head_weights = Tensor::from_ptr(
-            training_state_.tensors_->embedding_weights.data,
-            TC::make_BSM(cfg.vocab_size, cfg.d_model),
-            false,  // doesn't own data
-            false,   // no grad for inference
-            "lm_head_weights_tied_inference"
-        );
-        training_state_.tensors_->lm_head_weights.owns_data = false;
-        std::cout << "  ✓ LM head weights tied to embeddings (Tensor API)" << std::endl;
-    } else {
-        // Allocate separate LM head weights (will be loaded from model file)
-        training_state_.tensors_->lm_head_weights = Tensor::zeros(
-            TC::make_BSM(cfg.vocab_size, cfg.d_model),
-            false,  // no grad for inference
-            primary_stream,
-            "lm_head_weights_inf"
-        );
-        std::cout << "  ✓ Allocated LM head weights (Tensor API)" << std::endl;
-    }
-    
-    // Optional: LM head bias
-    if (cfg.use_bias) {
-        training_state_.tensors_->lm_head_bias = Tensor::zeros(
-            TC::make_BSM(1, cfg.vocab_size),
-            false,  // no grad for inference
-            primary_stream,
-            "lm_head_bias_inf"
-        );
-        std::cout << "  Allocated LM head bias (Tensor API)" << std::endl;
-    }
-
-    if (cfg.numeric_head_enabled) {
-        training_state_.tensors_->numeric_head_weights = Tensor::zeros(
-            TC::make_BSM(1, cfg.d_model),
-            false,  // no grad for inference
-            primary_stream,
-            "numeric_head_weights_inf"
-        );
-        if (cfg.use_bias) {
-            training_state_.tensors_->numeric_head_bias = Tensor::zeros(
-                TC::make_BSM(1, 1),
-                false,  // no grad for inference
-                primary_stream,
-                "numeric_head_bias_inf"
-            );
-        }
-        std::cout << "  Allocated numeric head weights (Tensor API)" << std::endl;
-    }
-    
-    // Final RMSNorm gamma [d_model] - needed for inference forward pass
-    training_state_.tensors_->final_rms_gamma = Tensor::zeros(
-        TC::make_BSM(1, cfg.d_model),
-        false,  // no grad for inference
-        primary_stream,
-        "final_rms_gamma_inf"
-    );
+    // 2. Create EmbeddingLayer (Pattern B: self-allocating, inference mode)
     {
-        std::vector<float> ones(cfg.d_model, 1.0f);
-        cudaMemcpyAsync(training_state_.tensors_->final_rms_gamma.data, ones.data(),
-                        cfg.d_model * sizeof(float), cudaMemcpyHostToDevice, primary_stream);
+        EmbeddingLayerConfig emb_cfg{};
+        emb_cfg.vocab_size = cfg.vocab_size;
+        emb_cfg.d_model = cfg.d_model;
+        emb_cfg.max_seq_len = cfg.max_seq_len;
+        emb_cfg.positional_encoding = cfg.positional_encoding;
+        emb_cfg.embedding_scale = 1.0f;  // Issue #140: no scaling for ALiBi/RoPE
+        emb_cfg.requires_grad = false;   // Inference only — no gradients
+
+        embedding_layer_ = std::make_unique<EmbeddingLayer>(
+            emb_cfg, /*seed=*/0, primary_stream
+        );
+        std::cout << "  ✓ EmbeddingLayer initialized (inference, Pattern B)" << std::endl;
     }
-    std::cout << "  Allocated final RMSNorm gamma (Tensor API)" << std::endl;
+
+    // 3. Setup LM head layer (Pattern B: self-allocating)
+    // LMHeadLayer owns weights, bias, and final_rms_gamma.
+    // Weight tying is handled by passing tied embedding pointer to constructor.
+    {
+        LMHeadLayerConfig lm_cfg{};
+        lm_cfg.d_model = cfg.d_model;
+        lm_cfg.vocab_size = cfg.vocab_size;
+        lm_cfg.use_bias = cfg.use_bias;
+        lm_cfg.has_final_rms_norm = true;
+        lm_cfg.stream = primary_stream;
+        lm_cfg.cublas_handle = training_state_.cublas_handle;
+        
+        Tensor* tied_ptr = cfg.tie_embeddings ? &embedding_layer_->tokenWeights() : nullptr;
+        
+        lm_head_layer_ = std::make_unique<LMHeadLayer>(
+            lm_cfg, /*seed=*/0, primary_stream, tied_ptr
+        );
+        std::cout << "  ✓ LMHeadLayer initialized (inference, tie=" 
+                  << (cfg.tie_embeddings ? "true" : "false") << ")" << std::endl;
+    }
     
-    // 3. Allocate minimal activation caches
+    // 3b. Allocate minimal activation caches
     const size_t max_batch_size = static_cast<size_t>(std::max(1, cfg.max_cached_batch));
     const size_t max_seq_len_cache = static_cast<size_t>(std::max(1, std::min(cfg.max_seq_len, cfg.max_cached_seq_len)));
     size_t max_tokens = max_batch_size * max_seq_len_cache;
@@ -191,7 +135,9 @@ void LanguageModel::initInferenceState() {
               << ", seq_len=" << max_seq_len_cache 
               << ", total_tokens=" << max_tokens << std::endl;
     
-    // Token IDs cache - use Tensor API
+    // NOTE: Tensor::zeros sets all bytes to 0 = UNK_TOKEN_ID when read as int32.
+    // Harmless: forwardInit() writes prompt tokens, forwardStep() appends one at a time.
+    // Only positions [0..kv_cache_len-1] are ever read. If a fill kernel is added, use PAD=1.
     training_state_.cached_token_ids_tensor = Tensor::zeros(
         TC::make_BSM(1, static_cast<int>(max_tokens)),
         false,  // no grad for inference
@@ -241,15 +187,6 @@ void LanguageModel::initInferenceState() {
     );
     std::cout << "  ✓ Allocated logits cache (Tensor API)" << std::endl;
 
-    if (cfg.numeric_head_enabled) {
-        training_state_.cached_numeric_predictions = Tensor::zeros(
-            TC::make_BSM(1, static_cast<int>(max_tokens)),
-            false,  // no grad for inference
-            primary_stream,
-            "cached_numeric_predictions_inf"
-        );
-        std::cout << "  ✓ Allocated numeric predictions cache (Tensor API)" << std::endl;
-    }
     
     // 4. Allocate single-token buffers for incremental generation (KV cache)
     training_state_.single_token_embedding = Tensor::zeros(
@@ -278,56 +215,19 @@ void LanguageModel::initInferenceState() {
     std::cout << "  ✓ Allocated single-token buffers for incremental generation" << std::endl;
     std::cout << "    KV cache capacity: " << training_state_.kv_cache_capacity << " tokens" << std::endl;
     
-    // 5. Allocate encoder workspace (reused across forward passes for cuBLAS)
-    // Conservative estimate: 4x the max intermediate size (d_ff * max_seq)
-    size_t workspace_elems = static_cast<size_t>(cfg.d_ff) * max_seq_len_cache * 4;
-    training_state_.encoder_workspace = Tensor::zeros(
-        TC::make_BSM(1, static_cast<int>(workspace_elems)),
-        false,  // no grad for inference
-        primary_stream,
-        "encoder_workspace_inf"
-    );
-    training_state_.encoder_workspace_size = workspace_elems * sizeof(float);
-    std::cout << "  ✓ Allocated encoder workspace (Tensor API): " << (training_state_.encoder_workspace_size / (1024.0 * 1024.0)) << " MB" << std::endl;
-    
+    // NOTE: encoder_workspace DELETED (Rule 20/26) — autograd forward creates its own Tensors.
+
     // 6. Initialize ScratchBlock reasoning layer (if enabled)
     if (cfg.use_scratch_block) {
         try {
-            // Allocate scratch block cache buffers using Tensor API
-            const size_t max_atoms = cfg.scratch_block_max_atoms;
-            const size_t atom_emb_dim = cfg.scratch_block_atom_embedding_dim;
-            
-            training_state_.cached_scratch_block_embeddings = Tensor::zeros(
-                TC::make_BSM(static_cast<int>(max_tokens), static_cast<int>(atom_emb_dim)),
-                false,  // no grad for inference
-                primary_stream,
-                "cached_scratch_block_embeddings_inf"
-            );
-            
-            training_state_.cached_scratch_block_positions = Tensor::zeros(
-                TC::make_BSM(1, static_cast<int>(max_tokens)),
-                false,  // no grad for inference
-                primary_stream,
-                "cached_scratch_block_positions_inf"
-            );
-            
-            training_state_.cached_scratch_block_num_atoms = Tensor::zeros(
-                TC::make_BSM(1, static_cast<int>(max_batch_size)),
-                false,  // no grad for inference
-                primary_stream,
-                "cached_scratch_block_num_atoms_inf"
-            );
-            
-            // ScratchBlock does not use ScratchBlockPool during inference — atom detection
-            // and substitution run synchronously without pinned-memory staging.
-            training_state_.scratch_enabled = true;
-            
-            std::cout << "  ✓ ScratchBlock cache buffers allocated (Tensor API)" << std::endl;
+            // ScratchBlock layer owns its own buffers now (no external caches needed).
+            // ScratchBlockLayer constructor handles weight allocation + initialization.
+            // scratch_pool remains nullptr for inference (only allocated in InitTrainingState).
             
             if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
                 std::cout << "  ✓ ScratchBlock reasoning layer enabled (d_model="
-                          << cfg.d_model << ", atom_dim=" << atom_emb_dim
-                          << ", max_atoms=" << max_atoms << ")" << std::endl;
+                          << cfg.d_model << ", atom_dim=" << cfg.scratch_block_atom_embedding_dim
+                          << ", max_atoms=" << cfg.scratch_block_max_atoms << ")" << std::endl;
             }
         } catch (const std::exception& e) {
             throw std::runtime_error("[InitInferenceState] ScratchBlock init failed (config says use_scratch_block=true): "
@@ -362,7 +262,7 @@ void LanguageModel::initInferenceState() {
     const size_t logits_bytes = max_tokens * cfg.vocab_size * sizeof(float);
     const size_t single_token_bytes = (2 * cfg.d_model + cfg.vocab_size) * sizeof(float);  // embedding + hidden + logits
     const size_t workspace_bytes = static_cast<size_t>(cfg.d_ff) * max_seq_len_cache * 4 * sizeof(float);
-    const size_t numeric_pred_bytes = cfg.numeric_head_enabled ? (max_tokens * sizeof(float)) : 0;
+    const size_t numeric_pred_bytes = 0;  // NumericHead deleted (Issue #143)
     
     const size_t total_bytes = token_cache_bytes + encoder_out_bytes + logits_bytes +
                                single_token_bytes + workspace_bytes + numeric_pred_bytes;

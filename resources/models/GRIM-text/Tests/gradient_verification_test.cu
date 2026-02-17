@@ -323,6 +323,8 @@ void testFlashAttentionBackward() {
         HEAD_DIM,
         true,
         true,
+        0.0f,
+        0,
         stream);
 
     TensorConversion::convert_BSHD_bf16_to_BHSD(
@@ -356,6 +358,8 @@ void testFlashAttentionBackward() {
         HEAD_DIM,
         true,
         true,
+        0.0f,
+        0,
         stream);
 
     TensorConversion::convert_BSHD_bf16_to_BHSD(

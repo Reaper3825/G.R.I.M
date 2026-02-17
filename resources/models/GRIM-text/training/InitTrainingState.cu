@@ -13,11 +13,10 @@
 #include <cuda_bf16.h>
 
 #include "../GRIM/grim_language_model_cuda.hpp"
-#include "../Layers/Encoding/Encoding_GPU.hpp"
-#include "../Layers/ScratchBlock/ScratchBlock_GPU.hpp"
+// NOTE: Encoding_GPU.hpp include DELETED — was only needed for requiredWorkspaceBytes() (now deleted)
+#include "../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../Shared/StreamController/StreamController_GPU.hpp"
-#include "../Shared/TrainingState/TrainingTensors.hpp"
 #include "../Shared/UnigramByte/Unigram.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"
 
@@ -155,118 +154,88 @@ void LanguageModel::initTrainingState() {
      training_state_.cached_num_layers = cfg.num_layers;
     cudaStream_t primary_stream = training_state_.stream_ctrl.getPrimaryStream();
     
-    std::cout << "[DEBUG-INIT-2] After PBM, before tensors check. tensors_=" << (void*)training_state_.tensors_.get() << std::endl << std::flush;
+    std::cout << "[DEBUG-INIT-2] After PBM, before autograd check." << std::endl << std::flush;
     
     // ═══════════════════════════════════════════════════════════════
     // PARAMETER TENSORS: Preallocate once, reuse throughout training
     // ═══════════════════════════════════════════════════════════════
     // Using GRIM::Tensor with requires_grad=true allocates both data and grad buffers.
     // Weight tying: When tie_embeddings=true, lm_head_weights.data points to embedding buffer
-    // but lm_head_weights.grad is shared with embedding_weights.grad.
+    // and lm_head_weights.grad is shared with embedding tokenWeights().grad via share_grad().
     
     using TC = TensorContract::TensorShape;
     
     // ═══════════════════════════════════════════════════════════════
-    // RULE 20: NO BACKWARDS COMPATIBILITY - TrainingTensors MUST be initialized
+    // RULE 20: autograd MUST be initialized (seed stored)
     // ═══════════════════════════════════════════════════════════════
-    // Phase1_Startup step 2.75 calls initializeAutogradTensors() which creates
-    // TrainingTensors. If not set, it's a bug - fail loud!
+    // Phase1_Startup step 2.75 calls initializeAutogradSeed() which stores
+    // the weight init seed. If not set, it's a bug - fail loud!
     
-    if (!training_state_.tensors_) {
-        std::cout << "[DEBUG-INIT-3] tensors_ is NULL - about to throw" << std::endl << std::flush;
+    if (!training_state_.seed_initialized_) {
         throw std::runtime_error(
-            "[InitTrainingState] FATAL: TrainingTensors not initialized!\n"
-            "Phase1_Startup must call initializeAutogradTensors() in step 2.75 before initTrainingState().\n"
-            "Legacy wrapping code has been DELETED.");
+            "[InitTrainingState] FATAL: Autograd seed not initialized!\n"
+            "Phase1_Startup must call initializeAutogradSeed() in step 2.75 before initTrainingState().");
     }
     
-    // TrainingTensors owns the memory - tensors already set up by initializeAutogradTensors()
-    std::cout << "[DEBUG-INIT-4] tensors_ is SET, checking pointers..." << std::endl << std::flush;
+    // All weights are owned by Pattern B layers (EmbeddingLayer, LMHeadLayer, EncodingLayer, ScratchBlockLayer)
+    std::cout << "[DEBUG-INIT-4] autograd initialized, checking layer pointers..." << std::endl << std::flush;
     
     // CRASH DEBUG: Step-by-step pointer access to find exact crash point
     // ISSUE #59: Use grad_data() accessor
-    std::cout << "[DEBUG-INIT-4a] About to read embedding_weights.data..." << std::endl << std::flush;
-    float* emb_data = training_state_.tensors_->embedding_weights.data;
+    // Session 6: Embedding weights now owned by EmbeddingLayer (Pattern B)
+    if (!embedding_layer_) throw std::runtime_error("[InitTrainingState] FATAL: embedding_layer_ is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    std::cout << "[DEBUG-INIT-4a] About to read embedding tokenWeights().data..." << std::endl << std::flush;
+    float* emb_data = embedding_layer_->tokenWeights().data;
     std::cout << "[DEBUG-INIT-4b] emb_data=" << (void*)emb_data << std::endl << std::flush;
     
-    std::cout << "[DEBUG-INIT-4c] About to read embedding_weights.grad_data()..." << std::endl << std::flush;
-    float* emb_grad = training_state_.tensors_->embedding_weights.grad_data();
+    std::cout << "[DEBUG-INIT-4c] About to read embedding tokenWeights().grad_data()..." << std::endl << std::flush;
+    float* emb_grad = embedding_layer_->tokenWeights().grad_data();
     std::cout << "[DEBUG-INIT-4d] emb_grad=" << (void*)emb_grad << std::endl << std::flush;
     
-    std::cout << "[DEBUG-INIT-4e] About to read position_embedding_weights.data..." << std::endl << std::flush;
-    float* pos_data = training_state_.tensors_->position_embedding_weights.data;
-    std::cout << "[DEBUG-INIT-4f] pos_data=" << (void*)pos_data << std::endl << std::flush;
+    float* pos_data = nullptr;
+    float* pos_grad = nullptr;
+    if (embedding_layer_->hasPositionEmbeddings()) {
+        std::cout << "[DEBUG-INIT-4e] About to read embedding positionWeights().data..." << std::endl << std::flush;
+        pos_data = embedding_layer_->positionWeights().data;
+        std::cout << "[DEBUG-INIT-4f] pos_data=" << (void*)pos_data << std::endl << std::flush;
+        
+        std::cout << "[DEBUG-INIT-4g] About to read embedding positionWeights().grad_data()..." << std::endl << std::flush;
+        pos_grad = embedding_layer_->positionWeights().grad_data();
+        std::cout << "[DEBUG-INIT-4h] pos_grad=" << (void*)pos_grad << std::endl << std::flush;
+    } else {
+        std::cout << "[DEBUG-INIT-4e] No position embeddings (ALiBi/RoPE mode)" << std::endl << std::flush;
+    }
     
-    std::cout << "[DEBUG-INIT-4g] About to read position_embedding_weights.grad_data()..." << std::endl << std::flush;
-    float* pos_grad = training_state_.tensors_->position_embedding_weights.grad_data();
-    std::cout << "[DEBUG-INIT-4h] pos_grad=" << (void*)pos_grad << std::endl << std::flush;
-    
-    std::cout << "[DEBUG-INIT-4i] About to read lm_head_weights.data..." << std::endl << std::flush;
-    float* lm_data = training_state_.tensors_->lm_head_weights.data;
+    std::cout << "[DEBUG-INIT-4i] About to read lm_head_layer_->weights().data..." << std::endl << std::flush;
+    if (!lm_head_layer_) throw std::runtime_error("[InitTrainingState] FATAL: lm_head_layer_ is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    float* lm_data = lm_head_layer_->weights().data;
     std::cout << "[DEBUG-INIT-4j] lm_data=" << (void*)lm_data << std::endl << std::flush;
     
-    std::cout << "[DEBUG-INIT-4k] About to read lm_head_weights.grad_data()..." << std::endl << std::flush;
-    float* lm_grad = training_state_.tensors_->lm_head_weights.grad_data();
+    std::cout << "[DEBUG-INIT-4k] About to read lm_head_layer_->weights().grad_data()..." << std::endl << std::flush;
+    float* lm_grad = lm_head_layer_->weights().grad_data();
     std::cout << "[DEBUG-INIT-4l] lm_grad=" << (void*)lm_grad << std::endl << std::flush;
     
-    std::cout << "✓ Embeddings initialized via TrainingTensors (proper ownership)\n";
-    std::cout << "  embedding_weights.data=" << (void*)emb_data
+    std::cout << "✓ Embeddings initialized via EmbeddingLayer (Pattern B ownership)\n";
+    std::cout << "  tokenWeights.data=" << (void*)emb_data
               << " grad=" << (void*)emb_grad << "\n";
-    std::cout << "  position_embedding_weights.data=" << (void*)pos_data
+    std::cout << "  positionWeights.data=" << (void*)pos_data
               << " grad=" << (void*)pos_grad << "\n";
-    std::cout << "  lm_head_weights.data=" << (void*)lm_data
+    std::cout << "  lm_head weights.data=" << (void*)lm_data
               << " grad=" << (void*)lm_grad << "\n";
     
-    // Verify weight tying aliasing if enabled
-    // ISSUE #59: Use grad_data() accessor
-    if (cfg.tie_embeddings) {
-        if (training_state_.tensors_->embedding_weights.data != training_state_.tensors_->lm_head_weights.data) {
-            throw std::runtime_error(
-                "[InitTrainingState] FATAL: tie_embeddings=true but data pointers NOT aliased!\n"
-                "embedding_weights.data=" + std::to_string(reinterpret_cast<uintptr_t>(training_state_.tensors_->embedding_weights.data)) +
-                " lm_head_weights.data=" + std::to_string(reinterpret_cast<uintptr_t>(training_state_.tensors_->lm_head_weights.data)));
-        }
-        if (training_state_.tensors_->embedding_weights.grad_data() != training_state_.tensors_->lm_head_weights.grad_data()) {
-            throw std::runtime_error(
-                "[InitTrainingState] FATAL: tie_embeddings=true but grad pointers NOT aliased!\n"
-                "embedding_weights.grad=" + std::to_string(reinterpret_cast<uintptr_t>(training_state_.tensors_->embedding_weights.grad_data())) +
-                " lm_head_weights.grad=" + std::to_string(reinterpret_cast<uintptr_t>(training_state_.tensors_->lm_head_weights.grad_data())));
-        }
-        std::cout << "✓ Weight tying verified: embedding and lm_head share data AND grad pointers\n";
-    }
-    
-    // lm_head_bias, numeric_head_weights, numeric_head_bias, final_rms_gamma
-    // are owned by TrainingTensors (allocated in initializeParams()). 
-    // Access via training_state_.tensors_->X.
-    
-    // Learned loss weighting: homoscedastic uncertainty (stays on TrainingState — not a model parameter)
-    // Numeric head WEIGHTS are in TrainingTensors (atom value prediction layer).
-    // These log_var scalars balance text CE vs numeric Huber loss magnitudes.
-    if (cfg.numeric_head_enabled) {
-        // Learned loss weighting (homoscedastic uncertainty)
-        // Formula: weight = 0.5 * exp(-log_var)
-        // To get weight = 1.0 (no scaling), need log_var = -ln(2) ≈ -0.693
-        // BUG FIX: Was initialized to 0 → weight = 0.5 → HALVED the loss!
-        const float init_log_var = -std::log(2.0f);  // -0.693 → weight = 1.0
-        training_state_.log_var_text = Tensor::zeros(TC::make_BSM(1, 1), true, primary_stream, "log_var_text");
-        training_state_.log_var_text.ensure_grad();
-        cudaMemcpyAsync(training_state_.log_var_text.data, &init_log_var, sizeof(float), 
-                        cudaMemcpyHostToDevice, primary_stream);
-        training_state_.log_var_numeric = Tensor::zeros(TC::make_BSM(1, 1), true, primary_stream, "log_var_numeric");
-        training_state_.log_var_numeric.ensure_grad();
-        cudaMemcpyAsync(training_state_.log_var_numeric.data, &init_log_var, sizeof(float),
-                        cudaMemcpyHostToDevice, primary_stream);
-        std::cout << "📦 Learned loss weights allocated (log_var=" << init_log_var << " → weight=1.0)" << std::endl;
-    }
+    // Weight tying verification is handled by LMHeadLayer constructor (Pattern B).
+    // LMHeadLayer validates shape match and pointer aliasing at construction time.
+    // lm_head_bias, final_rms_gamma are owned by LMHeadLayer (Pattern B).
+    // Access via lm_head_layer_->bias() / lm_head_layer_->finalRmsGamma().
     
     // ═══════════════════════════════════════════════════════════════
     // AUTOGRAD MIGRATION COMPLETE - Legacy vectors REMOVED
     // ═══════════════════════════════════════════════════════════════
-    // FFN/Attention/RMSNorm gradients now use encoder's Tensor& accessors:
+    // FFN/Attention/RMSNorm gradients flow through encoder's Tensor& accessors:
     //   - enc->ffnW1().grad_data(), enc->ffnW2().grad_data()
     //   - enc->attnWqkv().grad_data(), enc->attnWo().grad_data()
     //   - enc->rms1Gamma().grad_data(), enc->rms2Gamma().grad_data()
-    // Allocated via ensure_grad() in encoder's allocateWeights().
+    // Allocated via ensure_grad() in EncodingLayer::allocateWeights().
     
     // GQA configuration: source from JSON config (NOT compile-time HyperParameters)
     const int num_kv_heads = cfg.num_kv_heads;
@@ -343,13 +312,6 @@ void LanguageModel::initTrainingState() {
     std::cout << "📊 Allocating activation caches for max_tokens=" << max_tokens
               << " (batch=" << max_batch_size << ", seq_len=" << max_seq_len_cache << ")" << std::endl;
     
-    // DELETED: cached_embeddings_tensor - DEAD CODE (Rule 20)
-    // Was allocated but never read. Intermediates stored in AutogradIntermediates.
-    
-    // DELETED: encoder_layer_caches - DEAD CODE (Rule 20)
-    // Was allocated but never accessed during training or inference.
-    // TrainingTensors.hpp defines the future per-layer cache system but it's not integrated yet.
-    
     // Output layer cache - using Tensor API (actively used by inference and Phase2 diagnostics)
     training_state_.cached_encoder_output = Tensor::empty(
         TensorContract::TensorShape::make_BSM(max_tokens, cfg.d_model), false, primary_stream, "cached_encoder_output");
@@ -362,17 +324,13 @@ void LanguageModel::initTrainingState() {
         TensorContract::TensorShape::make_LOGITS(max_logit_tokens, cfg.vocab_size), false, primary_stream, "cached_logits");
     std::cout << "✓ Allocated cached_logits [" << max_logit_tokens << " x " << cfg.vocab_size << "] LOGITS layout" << std::endl;
 
-    if (cfg.numeric_head_enabled) {
-        training_state_.cached_numeric_predictions = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(max_logit_tokens, 1), false, primary_stream, "cached_numeric_predictions");
-    }
-    
     training_state_.cached_targets_tensor = Tensor::empty(
         TensorContract::TensorShape::make_BSM(max_logit_tokens, 1), false, primary_stream, "cached_targets");
     
-    // BUG FIX: Token IDs cache must be sized by max_tokens (full cache capacity)
-    // not max_logit_tokens. Inference sampling requires full buffer.
-    // Rule 20: Use Tensor API instead of raw cudaMalloc
+    // NOTE: Tensor::zeros sets all bytes to 0, which maps to UNK_TOKEN_ID=0 when
+    // reinterpreted as int32. This is conceptually wrong (should be PAD=1), but
+    // harmless because ComputeLossBatch fully overwrites this buffer via cudaMemcpyAsync
+    // before every forward pass. If a fill kernel is ever added, use PAD_TOKEN_ID=1.
     training_state_.cached_token_ids_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
         false,  // no grad for token IDs
@@ -444,46 +402,17 @@ void LanguageModel::initTrainingState() {
         false, grad_stream, "grad_logits");
     std::cout << "✓ Allocated grad_logits_tensor [" << max_logit_tokens << " x " << cfg.vocab_size << "] LOGITS layout" << std::endl;
 
-    // grad_numeric: [max_logit_tokens] for numeric head
-    if (cfg.numeric_head_enabled) {
-        training_state_.grad_numeric_tensor = Tensor::zeros(
-            TensorContract::TensorShape::make_BSM(static_cast<int>(max_logit_tokens), 1),
-            false, grad_stream, "grad_numeric");
-    }
-    
     // grad_encoder: [max_tokens, d_model]
     training_state_.grad_encoder_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(static_cast<int>(max_tokens), cfg.d_model),
         false, grad_stream, "grad_encoder_out");
     
     const size_t tokens_per_batch = max_batch_size * max_seq_len_cache;
-    EncodingConfig enc_cfg{};
-    enc_cfg.d_model = cfg.d_model;
-    enc_cfg.num_heads = cfg.num_heads;
-    enc_cfg.num_kv_heads = training_state_.num_kv_heads;  // Use calculated GQA value from training_state
-    enc_cfg.d_ff = cfg.d_ff;  // Use actual d_ff from config
-    enc_cfg.rms_epsilon = 1e-5f;
-    enc_cfg.causal_mask = cfg.causal_mask;
-    enc_cfg.use_flash_attention = true;
-    enc_cfg.min_seq_len_for_flash = cfg.min_seq_len_for_flash;
-    enc_cfg.use_bias = cfg.use_bias;
-    enc_cfg.stream = training_state_.stream_ctrl.getPrimaryStream();
-    enc_cfg.cublas_handle = training_state_.cublas_handle;  // Rule 22: centralized handle
-    EncodingLayer enc_layer(enc_cfg);
-    // CRITICAL: requiredWorkspaceBytes computes batch_size = total_tokens / seq_len
-    // We must use max_seq_len_cache (the actual max seq len we'll process), NOT cfg.max_seq_len (8192)
-    // Otherwise batch_size = tokens_per_batch / 8192 = 0, causing undersized workspace allocation!
-    const int seq_len_for_workspace = static_cast<int>(max_seq_len_cache);
-    size_t workspace_bytes = enc_layer.requiredWorkspaceBytes(static_cast<int>(tokens_per_batch), seq_len_for_workspace);
     
-    std::cout << "📊 Encoder workspace: tokens_per_batch=" << tokens_per_batch 
-              << " seq_len=" << seq_len_for_workspace
-              << " batch_size=" << (tokens_per_batch / seq_len_for_workspace)
-              << " workspace=" << (workspace_bytes / (1024*1024)) << "MB" << std::endl;
-
-    training_state_.encoder_workspace = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(static_cast<int>(workspace_bytes / sizeof(float)), 1), false, primary_stream, "encoder_workspace");
-    training_state_.encoder_workspace_size = workspace_bytes;
+    // NOTE: encoder_workspace allocation DELETED (Rule 20/26)
+    // Autograd forward creates its own intermediate Tensors via Tensor::zeros/empty.
+    // The old requiredWorkspaceBytes() / encoder_workspace pipeline was never consumed
+    // by any forward/backward kernel. Reclaims ~dozens of MB of GPU memory.
 
     // ═══════════════════════════════════════════════════════════════
     //  ENCODER BACKWARD TEMPORARIES (Issue #45 FIX: Tensor allocation)
@@ -565,51 +494,39 @@ void LanguageModel::initTrainingState() {
         TensorContract::TensorShape::make_BSM(1, 1),  // Scalar
         false, primary_stream, "d_loss_sum_scratch");
 
-    if (cfg.numeric_head_enabled) {
-        training_state_.d_numeric_loss_sum = Tensor::zeros(
-            TensorContract::TensorShape::make_BSM(1, 1),  // Scalar
-            false, primary_stream, "d_numeric_loss_sum");
-        training_state_.d_numeric_loss_count = Tensor::zeros(
-            TensorContract::TensorShape::make_BSM(1, 1),  // Scalar (int stored as float, cast at usage)
-            false, primary_stream, "d_numeric_loss_count");
+    // Initialize scratch block pool for pinned memory batch transfers
+    // Block size derived from max_cached_tokens — the largest per-batch transfer is
+    // text_features at max_tokens * kTextFeatureDim * sizeof(uint16_t).
+    training_state_.scratch_enabled = true;
+    
+    // kTextFeatureDim already declared above from BatchPayload::kTextFeatureDim
+    const size_t max_transfer_bytes = training_state_.max_cached_tokens
+                                    * static_cast<size_t>(kTextFeatureDim) * sizeof(uint16_t);
+    const size_t tokens_per_block = (max_transfer_bytes + sizeof(int) - 1) / sizeof(int);
+    if (tokens_per_block == 0) {
+        throw std::runtime_error("InitTrainingState: scratch pool tokens_per_block computed as 0");
     }
     
-    // Initialize scratch block pool for pinned memory transfers (if enabled in config)
-    // Load configuration from ai_config.json
-    training_state_.scratch_enabled = true;  // Default enabled
-    size_t scratch_max_tokens = 16384;       // Default
-    size_t scratch_num_blocks = 2;           // Default (double buffer)
-    bool scratch_write_combined = false;     // Default
-    
-    // Note: Config loading happens in train_gpu.cu, so we just use defaults here
-    // The training loop can update training_state_.scratch_enabled at runtime
-    
-    if (training_state_.scratch_enabled) {
+    {
         ScratchBlock::ScratchBlockConfig scratch_config;
         scratch_config.enabled = true;
-        scratch_config.max_tokens_per_block = scratch_max_tokens;
-        scratch_config.num_blocks = scratch_num_blocks;
-        scratch_config.use_write_combined = scratch_write_combined;
+        scratch_config.max_tokens_per_block = tokens_per_block;
+        scratch_config.num_blocks = 2;  // Double buffer
+        scratch_config.use_write_combined = false;
         
         training_state_.scratch_pool = new ScratchBlock::ScratchBlockPool(scratch_config);
         
-        if (training_state_.scratch_pool && training_state_.scratch_pool->isInitialized()) {
-            size_t total_bytes = training_state_.scratch_pool->getTotalPinnedMemoryBytes();
-            double mb = total_bytes / (1024.0 * 1024.0);
-            std::cout << "✓ Scratch block pool initialized ("
-                      << scratch_num_blocks << " blocks × "
-                      << scratch_max_tokens << " tokens = "
-                      << std::fixed << std::setprecision(2) << mb
-                      << " MB pinned memory)" << std::endl;
-        } else {
-            std::cerr << "FATAL: Scratch block pool initialization failed" << std::endl;
-            delete training_state_.scratch_pool;
-            training_state_.scratch_pool = nullptr;
+        if (!training_state_.scratch_pool || !training_state_.scratch_pool->isInitialized()) {
             throw std::runtime_error("InitTrainingState: Scratch block pool initialization failed");
         }
-    } else {
-        std::cout << "ℹ Scratch blocks disabled (using pageable memory)" << std::endl;
-        training_state_.scratch_pool = nullptr;
+        
+        size_t total_bytes = training_state_.scratch_pool->getTotalPinnedMemoryBytes();
+        double mb = total_bytes / (1024.0 * 1024.0);
+        std::cout << "✓ Scratch block pool initialized ("
+                  << scratch_config.num_blocks << " blocks × "
+                  << max_transfer_bytes << " bytes (" << tokens_per_block << " tokens) = "
+                  << std::fixed << std::setprecision(2) << mb
+                  << " MB pinned memory)" << std::endl;
     }
     
     // Initialize ScratchBlock reasoning layer
@@ -621,29 +538,12 @@ void LanguageModel::initTrainingState() {
         sb_config.max_atoms = cfg.scratch_block_max_atoms;
         sb_config.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
         sb_config.enabled = true;
-        sb_config.inject_atom_embeddings = true;
         sb_config.atom_scale = cfg.scratch_block_atom_scale;
         sb_config.atom_token_start = GRIM::Tokenizer::ATOM_TOKEN_OFFSET;
         sb_config.atom_token_end = GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET;
         sb_config.stream = training_state_.stream_ctrl.getPrimaryStream();
         
         scratch_block_layer_ = std::make_unique<ScratchBlockLayer>(sb_config);
-        
-        // Allocate activation caches for ScratchBlock forward/backward pass (Rule 20: Tensor API)
-        training_state_.cached_scratch_block_embeddings = Tensor::zeros(
-            TensorContract::TensorShape::make_BSM(
-                static_cast<int>(cfg.scratch_block_max_atoms),
-                static_cast<int>(cfg.scratch_block_atom_embedding_dim)),
-            false, primary_stream, "cached_scratch_block_embeddings");
-        training_state_.cached_scratch_block_positions = Tensor::zeros(
-            TensorContract::TensorShape::make_BSM(static_cast<int>(cfg.scratch_block_max_atoms), 1),
-            false, primary_stream, "cached_scratch_block_positions");  // int32 stored as float, cast at usage
-        training_state_.cached_scratch_block_types = Tensor::zeros(
-            TensorContract::TensorShape::make_BSM(static_cast<int>(cfg.scratch_block_max_atoms), 1),
-            false, primary_stream, "cached_scratch_block_types");  // int32 stored as float, cast at usage
-        training_state_.cached_scratch_block_num_atoms = Tensor::zeros(
-            TensorContract::TensorShape::make_BSM(1, 1),
-            false, primary_stream, "cached_scratch_block_num_atoms");  // Scalar int32 stored as float
         
         std::cout << "✓ ScratchBlock reasoning layer initialized (d_model="
                   << cfg.d_model << ", atom_dim=" << cfg.scratch_block_atom_embedding_dim
@@ -654,24 +554,10 @@ void LanguageModel::initTrainingState() {
     }
     
     // ═══════════════════════════════════════════════════════════════════════════
-    //  STEP FINAL: Verify Autograd Tensors were initialized
-    //  Phase1_Startup (step 2.75) already called initializeAutogradTensors() to
-    //  set up TrainingTensors with proper memory ownership. Here we just verify
-    //  the flag is set and print confirmation.
-    //  
-    //  WHY THIS MOVED: Previously called initializeAutogradTensors() here, but
-    //  that caused problems because EmbeddingRuntime already allocated memory.
-    //  Now tensors_ OWNS memory BEFORE initGPU(), so no duplicate allocation.
+    //  STEP FINAL: Confirm initialization complete
     // ═══════════════════════════════════════════════════════════════════════════
     
-    if (!training_state_.use_autograd_tensors || !training_state_.tensors_) {
-        throw std::runtime_error(
-            "[InitTrainingState] FATAL: use_autograd_tensors not enabled! "
-            "Phase1_Startup should have called initializeAutogradTensors() in step 2.75. "
-            "This indicates incorrect initialization order."
-        );
-    }
-    std::cout << "✓ Verified: Autograd tensor system already enabled (from Phase1_Startup)" << std::endl;
+    std::cout << "✓ Verified: Autograd seed initialized (from Phase1_Startup)" << std::endl;
     
     training_state_.initialized = true;
     std::cout << "✓ Training state initialized with full gradient buffers" << std::endl;
@@ -684,3 +570,5 @@ void LanguageModel::initTrainingState() {
 #endif // USE_CUDA
 
 } // namespace GRIM
+
+

@@ -31,6 +31,9 @@ struct TrainingSequence;
 
 namespace GRIM {
 
+// Forward declaration — full definition in UnigramByte/UniByte.hpp
+namespace Tokenizer { struct TokenLayout; }
+
 namespace Batching {
 struct BatchAssignment;
 }
@@ -154,6 +157,47 @@ struct BatchPayload {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.fits_in_cache=false — batch exceeds GPU cache limits");
         }
+
+        // Cross-check: numeric and text feature arrays match total_tokens
+        if (static_cast<int>(numeric_values.size()) != total_tokens) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchPayload.numeric_values.size()=" +
+                std::to_string(numeric_values.size()) + " != total_tokens=" +
+                std::to_string(total_tokens));
+        }
+        if (static_cast<int>(numeric_mask.size()) != total_tokens) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchPayload.numeric_mask.size()=" +
+                std::to_string(numeric_mask.size()) + " != total_tokens=" +
+                std::to_string(total_tokens));
+        }
+        const int expected_text_feat = total_tokens * kTextFeatureDim;
+        if (static_cast<int>(text_features.size()) != expected_text_feat) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchPayload.text_features.size()=" +
+                std::to_string(text_features.size()) + " != total_tokens*kTextFeatureDim=" +
+                std::to_string(expected_text_feat));
+        }
+        if (static_cast<int>(text_mask.size()) != total_tokens) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchPayload.text_mask.size()=" +
+                std::to_string(text_mask.size()) + " != total_tokens=" +
+                std::to_string(total_tokens));
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // GPU TRANSFER GEOMETRY (precomputed byte sizes for cudaMemcpy callers)
+    // ═══════════════════════════════════════════════════════════════════════════
+    size_t inputIdBytes()      const { return static_cast<size_t>(total_tokens) * sizeof(int); }
+    size_t targetIdBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(int); }
+    size_t numericValueBytes() const { return static_cast<size_t>(total_tokens) * sizeof(float); }
+    size_t numericMaskBytes()  const { return static_cast<size_t>(total_tokens) * sizeof(uint8_t); }
+    size_t textFeatureBytes()  const { return static_cast<size_t>(total_tokens) * kTextFeatureDim * sizeof(uint16_t); }
+    size_t textMaskBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(uint8_t); }
+    size_t totalTransferBytes() const {
+        return inputIdBytes() + targetIdBytes() + numericValueBytes() +
+               numericMaskBytes() + textFeatureBytes() + textMaskBytes();
     }
 };
 
@@ -184,6 +228,7 @@ BatchPayload buildBatchPayload(
     const BatchAssignment& assignment,
     const std::vector<TrainingSequence*>& views,
     int vocab_size,
+    const GRIM::Tokenizer::TokenLayout& token_layout,
     size_t max_cached_batch,
     size_t max_cached_seq_len);
 
