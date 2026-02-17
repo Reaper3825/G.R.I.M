@@ -143,6 +143,9 @@ struct UniByteConfig {
     float character_coverage = 0.9995f;
     int min_subword_freq = 3;  // Minimum frequency for subwords to be included
     bool prune_during_mining = false;  // Enable memory pruning during subword mining (disable if you have lots of RAM)
+    bool enable_parallel_subword_mining = true;  // Parallelize subword counting during vocab training
+    int subword_mining_workers = 0;  // 0 = auto, >0 fixed worker count
+    size_t subword_mining_max_bytes = 0;  // 0 = use HyperParameters::UNIGRAM_MAX_SUBWORD_BYTES
     
     // Scratch Block Reasoning (AtomTable-based structured reasoning)
     bool enable_scratch_block_reasoning = true;  // Toggle internal reasoning layer

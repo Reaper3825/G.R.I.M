@@ -257,6 +257,61 @@ bool testUnigramUnknown(std::string& message) {
     return true;
 }
 
+bool testUnigramTrainFiltersRepetitionNoise(std::string& message) {
+    UnigramLM unigram;
+
+    std::vector<std::string> corpus = {
+        "i'm gonna call you now i'm gonna call you now i'm gonna call you now",
+        "hahaha hahaha hahaha aaaaaa aaaaaa aaaaaa",
+        "i i i i i i keep repeating words",
+        "callcall callcall callcall should be stripped"
+    };
+
+    const bool trained = unigram.trainFromCorpus(
+        corpus,
+        600,    // target_vocab_size
+        1.0f,   // character_coverage
+        3,      // min_subword_freq
+        false   // prune_during_mining
+    );
+    ASSERT_TRUE(trained, "trainFromCorpus should succeed");
+
+    const bool has_gonna = unigram.hasPiece("gonna") || unigram.hasPiece(" gonna");
+    ASSERT_TRUE(has_gonna, "Expected natural speech token variant for 'gonna' to remain");
+    ASSERT_FALSE(unigram.hasPiece("hahaha"), "Repeated-pattern token 'hahaha' should be filtered");
+    ASSERT_FALSE(unigram.hasPiece("aaaaaa"), "Excessive run-length token 'aaaaaa' should be filtered");
+    ASSERT_FALSE(unigram.hasPiece("i i i"), "Word-level stutter token 'i i i' should be filtered");
+    ASSERT_FALSE(unigram.hasPiece("callcall"), "Doubled-token pattern 'callcall' should be filtered");
+
+    return true;
+}
+
+bool testUnigramTrainDedupsRepeatedVariants(std::string& message) {
+    UnigramLM unigram;
+
+    std::vector<std::string> corpus = {
+        "soo good soo good soo good",
+        "sooo good sooo good sooo good",
+        "soooo good soooo good soooo good"
+    };
+
+    const bool trained = unigram.trainFromCorpus(
+        corpus,
+        400,    // target_vocab_size
+        1.0f,   // character_coverage
+        3,      // min_subword_freq
+        false   // prune_during_mining
+    );
+    ASSERT_TRUE(trained, "trainFromCorpus should succeed");
+
+    const bool has_soo = unigram.hasPiece("soo");
+    const bool has_sooo = unigram.hasPiece("sooo");
+    ASSERT_TRUE(has_soo || has_sooo, "Expected at least one repeated-char variant to survive");
+    ASSERT_FALSE(has_soo && has_sooo, "Repeated-char variants should deduplicate to one form");
+
+    return true;
+}
+
 //======================================================//
 //  Section 3: Aho-Corasick Tests
 //======================================================//
@@ -1742,6 +1797,8 @@ int main(int argc, char** argv) {
     suite.addTest("Unigram.Viterbi", testUnigramViterbi);
     suite.addTest("Unigram.Decode", testUnigramDecode);
     suite.addTest("Unigram.Unknown", testUnigramUnknown);
+    suite.addTest("Unigram.Train.FilterRepetitionNoise", testUnigramTrainFiltersRepetitionNoise);
+    suite.addTest("Unigram.Train.DedupRepeatedVariants", testUnigramTrainDedupsRepeatedVariants);
     
     // Section 3: Aho-Corasick Tests
     suite.addTest("AhoCorasick.BasicMatches", testAhoCorasickBasicMatches);

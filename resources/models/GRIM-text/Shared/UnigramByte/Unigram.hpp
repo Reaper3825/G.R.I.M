@@ -94,6 +94,18 @@ inline uint32_t MAX_ATOM_TOKENS = static_cast<uint32_t>(ATOM_VOCAB_SIZE);
 constexpr int MAX_PIECE_LENGTH = 32;           // Maximum token length in bytes
 constexpr float UNKNOWN_SCORE = -100.0f;       // Score for unknown pieces
 
+//======================================================//
+//  Atom Span for Training Pipeline
+//  Simple byte-offset pair marking detected atom regions.
+//  The tokenizer skips these regions during vocab training
+//  so atom internals (://@.com etc.) don't contaminate
+//  character counts, subword mining, or EM scoring.
+//======================================================//
+struct AtomSpan {
+    size_t start;  // Start byte offset in text (inclusive)
+    size_t end;    // End byte offset in text (exclusive)
+};
+
 inline void configureTokenLayout(int /*atom_vocab_size*/) {
     // Atom tokens are reserved for type-only placeholders; size derived from AtomType.
     ATOM_VOCAB_SIZE = kAtomTypeCount;
@@ -157,7 +169,23 @@ public:
                          int target_vocab_size,
                            float character_coverage = 0.9995f,
                            int min_subword_freq = 3,
-                           bool prune_during_mining = false);
+                           bool prune_during_mining = false,
+                           bool enable_parallel_subword_mining = true,
+                           int subword_mining_workers = 0,
+                           size_t subword_mining_max_bytes = 0);
+
+    // Train with atom-aware spans: atom regions are SKIPPED during
+    // character counting, subword mining, and EM iterations.
+    // atom_spans[i] = list of atom spans for texts[i] (parallel arrays).
+    bool trainFromCorpus(const std::vector<std::string>& texts,
+                         const std::vector<std::vector<AtomSpan>>& atom_spans,
+                         int target_vocab_size,
+                           float character_coverage = 0.9995f,
+                           int min_subword_freq = 3,
+                           bool prune_during_mining = false,
+                           bool enable_parallel_subword_mining = true,
+                           int subword_mining_workers = 0,
+                           size_t subword_mining_max_bytes = 0);
     
     // DELETED: Auto-ID overload removed per Rule 20 (no silent fallbacks)
     // Callers MUST provide explicit token_id = UNIGRAM_VOCAB_OFFSET + pieces_.size()

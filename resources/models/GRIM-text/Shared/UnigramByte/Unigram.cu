@@ -11,14 +11,22 @@
 #include <device_launch_parameters.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <exception>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
+#include <mutex>
 #include <numeric>
 #include <queue>
 #include <random>
 #include <sstream>
+#include <thread>
 #include <unordered_set>
 #include <cctype>
 
@@ -50,6 +58,100 @@ static inline bool isWhitespaceASCII(unsigned char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
+static size_t utf8SequenceLength(unsigned char c) {
+    if ((c & 0x80) == 0x00) return 1;
+    if ((c & 0xE0) == 0xC0) return 2;
+    if ((c & 0xF0) == 0xE0) return 3;
+    if ((c & 0xF8) == 0xF0) return 4;
+    return 1;
+}
+
+//======================================================//
+//  Character-Level Validator
+//  Rejects garbage characters BEFORE they enter the vocab.
+//  Applied to single-character seeds in Step 2 of training.
+//  Without this, control chars, BOM, zero-width spaces, NBSP,
+//  soft hyphens etc. get vocab slots and cascade into subwords.
+//======================================================//
+
+static bool isValidVocabCharacter(const std::string& ch) {
+    if (ch.empty()) return false;
+
+    // Single-byte ASCII path
+    if (ch.size() == 1) {
+        unsigned char c = static_cast<unsigned char>(ch[0]);
+        // Printable ASCII (0x20-0x7E) — space through tilde
+        if (c >= 0x20 && c <= 0x7E) return true;
+        // Common whitespace: tab (0x09), newline (0x0A), carriage return (0x0D)
+        if (c == 0x09 || c == 0x0A || c == 0x0D) return true;
+        // Everything else (0x00-0x08, 0x0B-0x0C, 0x0E-0x1F, 0x7F) is control garbage
+        return false;
+    }
+
+    // Multi-byte UTF-8 path: decode codepoint and check against known garbage ranges
+    unsigned char b0 = static_cast<unsigned char>(ch[0]);
+    uint32_t codepoint = 0;
+
+    if (ch.size() == 2 && (b0 & 0xE0) == 0xC0) {
+        unsigned char b1 = static_cast<unsigned char>(ch[1]);
+        codepoint = ((b0 & 0x1F) << 6) | (b1 & 0x3F);
+    } else if (ch.size() == 3 && (b0 & 0xF0) == 0xE0) {
+        unsigned char b1 = static_cast<unsigned char>(ch[1]);
+        unsigned char b2 = static_cast<unsigned char>(ch[2]);
+        codepoint = ((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F);
+    } else if (ch.size() == 4 && (b0 & 0xF8) == 0xF0) {
+        unsigned char b1 = static_cast<unsigned char>(ch[1]);
+        unsigned char b2 = static_cast<unsigned char>(ch[2]);
+        unsigned char b3 = static_cast<unsigned char>(ch[3]);
+        codepoint = ((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F);
+    } else {
+        // Invalid UTF-8 sequence
+        return false;
+    }
+
+    // Reject known garbage Unicode codepoints:
+    // U+00A0  Non-breaking space (HTML &nbsp;)
+    // U+00AD  Soft hyphen (invisible layout hint)
+    // U+00B7  Middle dot (often OCR/encoding artifact)
+    // U+034F  Combining grapheme joiner
+    // U+200B  Zero-width space
+    // U+200C  Zero-width non-joiner
+    // U+200D  Zero-width joiner
+    // U+200E  Left-to-right mark
+    // U+200F  Right-to-left mark
+    // U+202A-202E  Bidi embedding/override controls
+    // U+2060  Word joiner
+    // U+2066-2069  Bidi isolate controls
+    // U+FEFF  BOM / zero-width no-break space
+    // U+FFF0-FFFF  Specials block (includes replacement char U+FFFD)
+    // U+E0000-E007F  Tags block
+    // U+0080-009F  C1 control characters
+    if (codepoint >= 0x0080 && codepoint <= 0x009F) return false;  // C1 controls
+    if (codepoint == 0x00A0) return false;  // NBSP
+    if (codepoint == 0x00AD) return false;  // Soft hyphen
+    if (codepoint == 0x034F) return false;  // Combining grapheme joiner
+    if (codepoint >= 0x200B && codepoint <= 0x200F) return false;  // Zero-width + bidi marks
+    if (codepoint >= 0x202A && codepoint <= 0x202E) return false;  // Bidi controls
+    if (codepoint == 0x2060) return false;  // Word joiner
+    if (codepoint >= 0x2066 && codepoint <= 0x2069) return false;  // Bidi isolates
+    // Reject typographic punctuation that has ASCII equivalents (wastes vocab slots)
+    if (codepoint >= 0x2010 && codepoint <= 0x2015) return false;  // En dash, em dash, etc. (use ASCII '-')
+    if (codepoint >= 0x2018 && codepoint <= 0x201F) return false;  // Curly quotes (use ASCII ' ")
+    if (codepoint == 0x2032 || codepoint == 0x2033) return false;  // Prime marks (use ASCII ')
+    if (codepoint == 0x2039 || codepoint == 0x203A) return false;  // Angle quotes (use ASCII < >)
+    if (codepoint == 0xFEFF) return false;  // BOM
+    if (codepoint >= 0xFFF0 && codepoint <= 0xFFFF) return false;  // Specials
+    if (codepoint >= 0xE0000 && codepoint <= 0xE007F) return false;  // Tags
+    // Reject private use areas (vendor-specific garbage)
+    if (codepoint >= 0xE000 && codepoint <= 0xF8FF) return false;    // BMP private use
+    if (codepoint >= 0xF0000 && codepoint <= 0x10FFFF) return false; // Supplementary private use
+    // Reject surrogates (invalid in UTF-8)
+    if (codepoint >= 0xD800 && codepoint <= 0xDFFF) return false;
+
+    // Everything else (Latin Extended, common symbols, CJK, emoji, etc.) is OK
+    return true;
+}
+
 // Normalize for near-duplicate detection: lowercase + strip leading/trailing whitespace
 // Used to detect pairs like " the"/"the" and repeated variants like "soooo"/"soo"
 static std::string normalizeForDedup(const std::string& s) {
@@ -74,6 +176,22 @@ static std::string normalizeForDedup(const std::string& s) {
 
     for (size_t i = start; i < end; ++i) {
         unsigned char uc = static_cast<unsigned char>(lower[i]);
+
+        // Canonicalize common UTF-8 punctuation variants to ASCII equivalents:
+        //   ’/‘ -> '
+        //   –/— -> -
+        if (uc == 0xE2 && i + 2 < end) {
+            unsigned char b1 = static_cast<unsigned char>(lower[i + 1]);
+            unsigned char b2 = static_cast<unsigned char>(lower[i + 2]);
+            if (b1 == 0x80 && (b2 == 0x98 || b2 == 0x99)) {
+                uc = static_cast<unsigned char>('\'');
+                i += 2;
+            } else if (b1 == 0x80 && (b2 == 0x93 || b2 == 0x94)) {
+                uc = static_cast<unsigned char>('-');
+                i += 2;
+            }
+        }
+
         char c = static_cast<char>(uc);
 
         if (isWhitespaceASCII(uc)) {
@@ -176,6 +294,24 @@ static bool isRepeatedPatternNoise(const std::string& s) {
     return false;
 }
 
+// Reject long doubled tokens like "wordword" or "testtest"
+static bool isDoubledTokenNoise(const std::string& s) {
+    if (s.size() < 8 || (s.size() % 2) != 0) return false;
+
+    for (unsigned char c : s) {
+        if (isWhitespaceASCII(c)) return false;
+    }
+
+    const size_t half = s.size() / 2;
+    if (half < 4) return false;
+
+    for (size_t i = 0; i < half; ++i) {
+        if (s[i] != s[i + half]) return false;
+    }
+
+    return true;
+}
+
 // Reject stutter-like tokens where the same word repeats 3+ times ("i i i")
 static bool isWordLevelStutter(const std::string& s) {
     size_t i = 0;
@@ -208,14 +344,20 @@ static bool isWordLevelStutter(const std::string& s) {
 }
 
 static bool isRepetitionNoise(const std::string& s) {
-    return hasExcessiveRunLength(s) || isRepeatedPatternNoise(s) || isWordLevelStutter(s);
+    return hasExcessiveRunLength(s) || isRepeatedPatternNoise(s) ||
+           isDoubledTokenNoise(s) || isWordLevelStutter(s);
 }
 
 // Check if subword is linguistically valid
 // Rejects garbage patterns that shouldn't be vocabulary tokens
 static bool isValidSubword(const std::string& s) {
     if (s.empty()) return false;
-    if (s.size() == 1) return true;  // Single chars always OK
+
+    // Single characters: validate instead of blindly accepting.
+    // Without this, control chars and garbage Unicode enter the vocab.
+    if (s.size() == 1 || utf8SequenceLength(static_cast<unsigned char>(s[0])) == s.size()) {
+        return isValidVocabCharacter(s);
+    }
 
     // Repetition stripping: reject obvious run-length / stutter artifacts
     if (isRepetitionNoise(s)) return false;
@@ -366,6 +508,142 @@ static bool isValidSubword(const std::string& s) {
     
     // === ACCEPT ===
     return true;
+}
+
+static unsigned int resolveSubwordMiningWorkerCount(
+    bool enable_parallel_subword_mining,
+    int configured_workers,
+    size_t sentence_count) {
+    if (!enable_parallel_subword_mining) return 1;
+    if (sentence_count < 1024) return 1;
+
+    unsigned int workers = std::thread::hardware_concurrency();
+    if (workers == 0) workers = 4;
+    workers = std::max(1u, workers > 1 ? workers - 1 : 1);
+    constexpr unsigned int kMaxAutoMiningWorkers = 12;
+    workers = std::min(workers, kMaxAutoMiningWorkers);
+
+    if (configured_workers > 0) {
+        workers = static_cast<unsigned int>(configured_workers);
+    }
+
+    if (const char* env_workers = std::getenv("GRIM_SUBWORD_MINING_WORKERS")) {
+        try {
+            const int parsed = std::stoi(env_workers);
+            if (parsed > 0) {
+                workers = static_cast<unsigned int>(parsed);
+            }
+        } catch (...) {
+            // Ignore malformed env override.
+        }
+    }
+
+    workers = std::min<unsigned int>(workers, static_cast<unsigned int>(sentence_count));
+    return std::max(1u, workers);
+}
+
+static size_t resolveSubwordMiningChunkSize(unsigned int workers, size_t sentence_count) {
+    if (workers <= 1 || sentence_count == 0) return sentence_count;
+
+    size_t chunk = (sentence_count + (workers * 8) - 1) / (workers * 8);
+    chunk = std::max<size_t>(64, chunk);
+    chunk = std::min<size_t>(4096, chunk);
+    return chunk;
+}
+
+static void mineSubwordsFromSentence(const std::string& text,
+                                     size_t max_len,
+                                     std::unordered_map<std::string, int>& subword_counts) {
+    if (text.empty()) return;
+
+    // Build UTF-8 character boundaries once per sentence.
+    std::vector<size_t> char_positions;
+    char_positions.reserve(text.size() + 1);
+    for (size_t i = 0; i < text.size(); ) {
+        char_positions.push_back(i);
+        i += utf8SequenceLength(static_cast<unsigned char>(text[i]));
+    }
+    char_positions.push_back(text.size());
+
+    const size_t num_chars = char_positions.size() - 1;
+    for (size_t ci = 0; ci < num_chars; ++ci) {
+        const size_t byte_start = char_positions[ci];
+        for (size_t char_count = 2; char_count <= max_len && ci + char_count <= num_chars; ++char_count) {
+            const size_t byte_end = char_positions[ci + char_count];
+            if (byte_end - byte_start > 64) continue;  // Skip likely garbage spans
+
+            std::string subword = text.substr(byte_start, byte_end - byte_start);
+            if (!isValidSubword(subword)) continue;
+
+            subword_counts[subword]++;
+        }
+    }
+}
+
+// Atom-aware overload: skip subwords that START inside an atom span.
+// Atom spans are sorted by start offset (guaranteed by detectStructures).
+static void mineSubwordsFromSentence(const std::string& text,
+                                     size_t max_len,
+                                     const std::vector<Tokenizer::AtomSpan>& atom_spans,
+                                     std::unordered_map<std::string, int>& subword_counts) {
+    if (text.empty()) return;
+    if (atom_spans.empty()) {
+        // Fast path: no atoms, use original logic
+        mineSubwordsFromSentence(text, max_len, subword_counts);
+        return;
+    }
+
+    // Build UTF-8 character boundaries once per sentence.
+    std::vector<size_t> char_positions;
+    char_positions.reserve(text.size() + 1);
+    for (size_t i = 0; i < text.size(); ) {
+        char_positions.push_back(i);
+        i += utf8SequenceLength(static_cast<unsigned char>(text[i]));
+    }
+    char_positions.push_back(text.size());
+
+    // Build a fast lookup: for each byte position, is it inside an atom span?
+    // Use sorted spans with binary search for O(log N) per position.
+    // But simpler: precompute a skip flag per character index.
+    std::vector<bool> char_in_atom(char_positions.size() - 1, false);
+    size_t span_idx = 0;
+    for (size_t ci = 0; ci < char_positions.size() - 1; ++ci) {
+        const size_t byte_pos = char_positions[ci];
+        // Advance span_idx past spans that end before this position
+        while (span_idx < atom_spans.size() && atom_spans[span_idx].end <= byte_pos) {
+            ++span_idx;
+        }
+        // Check if current position falls inside the current span
+        if (span_idx < atom_spans.size() &&
+            byte_pos >= atom_spans[span_idx].start &&
+            byte_pos < atom_spans[span_idx].end) {
+            char_in_atom[ci] = true;
+        }
+    }
+
+    const size_t num_chars = char_positions.size() - 1;
+    for (size_t ci = 0; ci < num_chars; ++ci) {
+        // Skip characters that start inside an atom span
+        if (char_in_atom[ci]) continue;
+
+        const size_t byte_start = char_positions[ci];
+        for (size_t char_count = 2; char_count <= max_len && ci + char_count <= num_chars; ++char_count) {
+            // If any character in this subword range is inside an atom, skip
+            bool crosses_atom = false;
+            for (size_t k = ci + 1; k < ci + char_count; ++k) {
+                if (char_in_atom[k]) { crosses_atom = true; break; }
+            }
+            if (crosses_atom) break;  // All longer spans will also cross
+
+            const size_t byte_end = char_positions[ci + char_count];
+            if (byte_end - byte_start > 64) continue;
+
+            std::string subword = text.substr(byte_start, byte_end - byte_start);
+            if (!isValidSubword(subword)) continue;
+
+            subword_counts[subword]++;
+        }
+    }
 }
 
 //======================================================//
@@ -942,21 +1220,104 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                                  int target_vocab_size,
                                  float character_coverage,
                                  int min_subword_freq,
-                                 bool prune_during_mining) {
+                                 bool prune_during_mining,
+                                 bool enable_parallel_subword_mining,
+                                 int subword_mining_workers,
+                                 size_t subword_mining_max_bytes) {
+    // Delegate to atom-aware overload with empty spans (no atom skipping).
+    std::vector<std::vector<AtomSpan>> empty_spans(texts.size());
+    return trainFromCorpus(texts, empty_spans, target_vocab_size,
+                           character_coverage, min_subword_freq,
+                           prune_during_mining, enable_parallel_subword_mining,
+                           subword_mining_workers, subword_mining_max_bytes);
+}
+
+bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
+                                 const std::vector<std::vector<AtomSpan>>& atom_spans,
+                                 int target_vocab_size,
+                                 float character_coverage,
+                                 int min_subword_freq,
+                                 bool prune_during_mining,
+                                 bool enable_parallel_subword_mining,
+                                 int subword_mining_workers,
+                                 size_t subword_mining_max_bytes) {
+    if (atom_spans.size() != texts.size()) {
+        throw std::runtime_error("[UnigramLM] atom_spans.size()=" + std::to_string(atom_spans.size())
+                                  + " != texts.size()=" + std::to_string(texts.size()));
+    }
+
     std::cout << "[UnigramLM] Training vocabulary from " << texts.size() 
               << " texts (target_vocab_size=" << target_vocab_size << ")" << std::endl;
     std::cout << "[UnigramLM] min_subword_freq=" << min_subword_freq 
-              << ", prune_during_mining=" << (prune_during_mining ? "true" : "false") << std::endl;
+              << ", prune_during_mining=" << (prune_during_mining ? "true" : "false")
+              << ", parallel_subword_mining=" << (enable_parallel_subword_mining ? "true" : "false")
+              << ", subword_mining_workers=" << subword_mining_workers << std::endl;
+
+    // Count total atoms for logging
+    size_t total_atom_spans = 0;
+    size_t total_atom_bytes = 0;
+    for (const auto& spans : atom_spans) {
+        total_atom_spans += spans.size();
+        for (const auto& s : spans) {
+            total_atom_bytes += (s.end - s.start);
+        }
+    }
+    if (total_atom_spans > 0) {
+        std::cout << "[UnigramLM] Atom-aware training: " << total_atom_spans
+                  << " atom spans (" << (total_atom_bytes / 1024) << " KB) will be skipped" << std::endl;
+    }
     
     // CRITICAL: Segment documents into sentences BEFORE subword mining.
     // This prevents learning garbage tokens that cross sentence boundaries
     // (e.g., ". The", "., B", "). This" which are meaningless).
     std::vector<std::string> sentences;
+    std::vector<std::vector<AtomSpan>> sentence_atom_spans;  // parallel to sentences
     sentences.reserve(texts.size() * 5);  // Estimate ~5 sentences per document
+    sentence_atom_spans.reserve(texts.size() * 5);
+    
+    // Helper: clip document-level atom spans to a sentence byte range and offset-adjust.
+    // doc_spans must be sorted by start. sent_start/sent_end are byte offsets in the document.
+    auto clipAtomSpans = [](const std::vector<AtomSpan>& doc_spans,
+                            size_t sent_start, size_t sent_end) -> std::vector<AtomSpan> {
+        std::vector<AtomSpan> result;
+        for (const auto& span : doc_spans) {
+            if (span.end <= sent_start) continue;   // Entirely before sentence
+            if (span.start >= sent_end) break;       // Past sentence (sorted, done)
+            // Clip to sentence range and offset-adjust
+            size_t clipped_start = std::max(span.start, sent_start) - sent_start;
+            size_t clipped_end = std::min(span.end, sent_end) - sent_start;
+            if (clipped_end > clipped_start) {
+                result.push_back({clipped_start, clipped_end});
+            }
+        }
+        return result;
+    };
+    
+    // Helper: add a sentence extracted from text[start..end) with whitespace trimming,
+    // also producing the corresponding atom spans adjusted for trimming offset.
+    auto addSentence = [&](const std::string& text, size_t raw_start, size_t raw_end,
+                           const std::vector<AtomSpan>& doc_spans) {
+        std::string sentence = text.substr(raw_start, raw_end - raw_start);
+        size_t first = sentence.find_first_not_of(" \t\n\r");
+        if (first != std::string::npos) {
+            size_t last = sentence.find_last_not_of(" \t\n\r");
+            size_t trimmed_len = last - first + 1;
+            if (trimmed_len >= 3) {
+                // The trimmed sentence maps to doc bytes [raw_start + first, raw_start + first + trimmed_len)
+                size_t doc_sent_start = raw_start + first;
+                size_t doc_sent_end = doc_sent_start + trimmed_len;
+                auto spans = clipAtomSpans(doc_spans, doc_sent_start, doc_sent_end);
+                sentences.push_back(sentence.substr(first, trimmed_len));
+                sentence_atom_spans.push_back(std::move(spans));
+            }
+        }
+    };
     
     // Simple sentence segmentation: split on [.!?] followed by whitespace and capital
     // Also split on newlines (paragraph boundaries)
-    for (const auto& text : texts) {
+    for (size_t text_idx = 0; text_idx < texts.size(); ++text_idx) {
+        const auto& text = texts[text_idx];
+        const auto& doc_spans = atom_spans[text_idx];
         if (text.empty()) continue;
         
         size_t start = 0;
@@ -982,30 +1343,13 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             if (is_sentence_end) {
                 // Include the punctuation in this sentence
                 size_t end = (c == '\n') ? i : i + 1;
-                std::string sentence = text.substr(start, end - start);
-                // Trim whitespace
-                size_t first = sentence.find_first_not_of(" \t\n\r");
-                if (first != std::string::npos) {
-                    size_t last = sentence.find_last_not_of(" \t\n\r");
-                    sentence = sentence.substr(first, last - first + 1);
-                    if (sentence.length() >= 3) {  // Skip very short fragments
-                        sentences.push_back(std::move(sentence));
-                    }
-                }
+                addSentence(text, start, end, doc_spans);
                 start = (c == '\n') ? i + 1 : i + 2;  // Skip past whitespace
             }
         }
         // Add remaining text as final sentence
         if (start < text.size()) {
-            std::string sentence = text.substr(start);
-            size_t first = sentence.find_first_not_of(" \t\n\r");
-            if (first != std::string::npos) {
-                size_t last = sentence.find_last_not_of(" \t\n\r");
-                sentence = sentence.substr(first, last - first + 1);
-                if (sentence.length() >= 3) {
-                    sentences.push_back(std::move(sentence));
-                }
-            }
+            addSentence(text, start, text.size(), doc_spans);
         }
     }
     
@@ -1048,10 +1392,17 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         total_sentence_bytes += sent.size();
     }
     
-    // For large corpora, sample SENTENCES to avoid OOM during subword generation
-    constexpr size_t MAX_SUBWORD_MINING_BYTES = HyperParameters::UNIGRAM_MAX_SUBWORD_BYTES;
-    bool use_sampling = total_sentence_bytes > MAX_SUBWORD_MINING_BYTES;
+    // For large corpora, sample SENTENCES to avoid OOM during subword generation.
+    // Allow runtime override from config: 0 means use compile-time default.
+    const size_t max_subword_mining_bytes =
+        (subword_mining_max_bytes > 0)
+            ? subword_mining_max_bytes
+            : static_cast<size_t>(HyperParameters::UNIGRAM_MAX_SUBWORD_BYTES);
+    const bool use_sampling = total_sentence_bytes > max_subword_mining_bytes;
     std::vector<size_t> sample_indices;
+
+    std::cout << "[UnigramLM] Subword mining byte cap: "
+              << (max_subword_mining_bytes / (1024 * 1024)) << " MB" << std::endl;
     
     if (use_sampling) {
         std::mt19937 rng(42);
@@ -1061,7 +1412,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         
         size_t sampled_bytes = 0;
         for (size_t idx : all_indices) {
-            if (sampled_bytes >= MAX_SUBWORD_MINING_BYTES) break;
+            if (sampled_bytes >= max_subword_mining_bytes) break;
             sample_indices.push_back(idx);
             sampled_bytes += training_units[idx].size();
         }
@@ -1070,19 +1421,30 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     }
     
     // Step 1: Count character frequencies (use ALL texts, lowercased)
+    // Skip bytes inside atom spans — atom internals (://@.com digits etc.)
+    // should NOT inflate character counts.
     std::unordered_map<std::string, int> char_counts;
     size_t total_chars = 0;
+    size_t atom_chars_skipped = 0;
     
-    for (const auto& text : lowercase_texts) {
+    for (size_t text_idx = 0; text_idx < lowercase_texts.size(); ++text_idx) {
+        const auto& text = lowercase_texts[text_idx];
+        const auto& spans = atom_spans[text_idx];  // Document-level spans (offsets unchanged by toLowerASCII)
+        size_t span_i = 0;  // Current atom span index
+        
         for (size_t i = 0; i < text.size(); ) {
-            int seq_len = 1;
-            unsigned char c = static_cast<unsigned char>(text[i]);
+            const size_t seq_len = utf8SequenceLength(static_cast<unsigned char>(text[i]));
             
-            // Handle UTF-8
-            if ((c & 0x80) == 0x00) seq_len = 1;
-            else if ((c & 0xE0) == 0xC0) seq_len = 2;
-            else if ((c & 0xF0) == 0xE0) seq_len = 3;
-            else if ((c & 0xF8) == 0xF0) seq_len = 4;
+            // Advance past atom spans that end before current position
+            while (span_i < spans.size() && spans[span_i].end <= i) {
+                ++span_i;
+            }
+            // Skip if current byte is inside an atom span
+            if (span_i < spans.size() && i >= spans[span_i].start && i < spans[span_i].end) {
+                atom_chars_skipped++;
+                i += seq_len;
+                continue;
+            }
             
             if (i + seq_len <= text.size()) {
                 std::string ch = text.substr(i, seq_len);
@@ -1093,109 +1455,324 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         }
     }
     
+    if (atom_chars_skipped > 0) {
+        std::cout << "[UnigramLM] Char counting: skipped " << atom_chars_skipped
+                  << " characters inside atom spans" << std::endl;
+    }
+    
     // Step 2: Build initial vocabulary (all characters meeting coverage)
     std::vector<std::pair<std::string, int>> sorted_chars(char_counts.begin(), char_counts.end());
     std::sort(sorted_chars.begin(), sorted_chars.end(),
-              [](const auto& a, const auto& b) { return a.second > b.second; });
+              [](const auto& a, const auto& b) {
+                  if (a.second != b.second) return a.second > b.second;
+                  return a.first < b.first;
+              });
     
     pieces_.clear();
     piece_to_id_.clear();
     
     // Special tokens are at absolute IDs 0-3, NOT stored in pieces_.
-    // pieces_ contains only regular unigram vocabulary.
+    // pieces_ contains only regular unigram vocabulary (multi-char subwords only).
+    // Single chars are NOT added to pieces_ — they are covered by the byte token layer
+    // [BYTE_TOKEN_OFFSET .. BYTE_TOKEN_OFFSET+255] at runtime. Keeping them out of
+    // pieces_ avoids duplicate token IDs and wastes no vocab slots on chars that are
+    // already handled.
+    //
+    // char_seeds is a temp filter set used in Step 4 to prevent single chars from
+    // being re-added from subword mining candidates.
     
     size_t covered = 0;
     size_t coverage_target = static_cast<size_t>(total_chars * character_coverage);
     
+    // Minimum frequency threshold: reject characters appearing less than this many times.
+    const int MIN_CHAR_FREQUENCY = 10;
+    
+    // Temporary holder: valid single-char EM seeds — never committed to pieces_.
+    std::unordered_set<std::string> char_seeds;
+    
+    int chars_rejected = 0;
+    int chars_too_rare = 0;
     for (const auto& [ch, count] : sorted_chars) {
-        if (covered >= coverage_target && pieces_.size() >= 256) break;
+        if (covered >= coverage_target && char_seeds.size() >= 256) break;
         
-        float score = std::log(static_cast<float>(count) / total_chars);
-        addPiece(ch, score, UNIGRAM_VOCAB_OFFSET + static_cast<int>(pieces_.size()), false);
+        if (count < MIN_CHAR_FREQUENCY) {
+            chars_too_rare++;
+            continue;
+        }
+        
+        if (!isValidVocabCharacter(ch)) {
+            chars_rejected++;
+            continue;
+        }
+        
+        // Record as byte-covered char — do NOT call addPiece().
+        char_seeds.insert(ch);
         covered += count;
     }
     
-    std::cout << "[UnigramLM] Initial vocab: " << pieces_.size() 
-              << " characters, coverage: " << (100.0f * covered / total_chars) << "%" << std::endl;
+    std::cout << "[UnigramLM] Initial char coverage: " << char_seeds.size()
+              << " characters (byte-layer covered), coverage: "
+              << (100.0f * covered / total_chars) << "%";
+    if (chars_rejected > 0 || chars_too_rare > 0) {
+        std::cout << " (rejected " << chars_rejected << " garbage";
+        if (chars_too_rare > 0) {
+            std::cout << ", " << chars_too_rare << " too rare (count < " << MIN_CHAR_FREQUENCY << ")";
+        }
+        std::cout << ")";
+    }
+    std::cout << std::endl;
+    
+    // Diagnostic: show byte-covered chars (they go through BYTE_TOKEN_OFFSET at runtime,
+    // not through pieces_, so they never appear as unigram vocab entries).
+    std::cout << "[UnigramLM] Byte-covered chars (NOT in unigram vocab, handled by byte layer):" << std::endl;
+    for (const auto& [ch, count] : sorted_chars) {
+        if (!char_seeds.count(ch)) continue;
+        std::string display_text;
+        for (unsigned char c : ch) {
+            if (c >= 32 && c <= 126) display_text += c;
+            else if (c == '\t') display_text += "\\t";
+            else if (c == '\n') display_text += "\\n";
+            else if (c == '\r') display_text += "\\r";
+            else {
+                char buf[8];
+                snprintf(buf, sizeof(buf), "\\x%02X", c);
+                display_text += buf;
+            }
+        }
+        std::stringstream hex_bytes;
+        hex_bytes << std::hex;
+        for (size_t i = 0; i < ch.size(); ++i) {
+            if (i > 0) hex_bytes << " ";
+            hex_bytes << std::setw(2) << std::setfill('0') << (int)(unsigned char)ch[i];
+        }
+        // Byte token ID = raw byte value + BYTE_TOKEN_OFFSET
+        int byte_id = (int)(unsigned char)ch[0] + BYTE_TOKEN_OFFSET;
+        std::cout << "  [byte:" << byte_id << "] \"" << display_text
+                  << "\" (0x" << hex_bytes.str() << ") count=" << std::dec << count << std::endl;
+    }
     
     // Step 3: Generate candidate subwords from SENTENCES (never cross sentence boundaries)
     std::unordered_map<std::string, int> subword_counts;
     subword_counts.reserve(1000000);  // Pre-allocate reasonable amount
-    
-    const auto& texts_for_subwords = use_sampling ? sample_indices : std::vector<size_t>{};
-    size_t num_texts_to_process = use_sampling ? sample_indices.size() : training_units.size();
-    size_t progress_interval = std::max(size_t(1), num_texts_to_process / 20);
-    
-    std::cout << "[UnigramLM] Mining subwords from " << num_texts_to_process << " sentences..." << std::endl;
-    
-    for (size_t ti = 0; ti < num_texts_to_process; ++ti) {
-        const std::string& text = use_sampling ? training_units[sample_indices[ti]] : training_units[ti];
-        
-        // Progress reporting
-        if (ti % progress_interval == 0) {
-            std::cout << "[UnigramLM] Subword mining: " << ti << "/" << num_texts_to_process 
-                      << " (" << (100 * ti / num_texts_to_process) << "%), "
-                      << subword_counts.size() << " unique subwords" << std::endl;
-        }
-        
-        // Limit subword length based on corpus size to control memory
-        size_t max_len = use_sampling ? MAX_PIECE_LENGTH : std::min(static_cast<size_t>(MAX_PIECE_LENGTH), size_t(16));
-        
-        // Build list of UTF-8 character boundary positions
-        std::vector<size_t> char_positions;
-        char_positions.reserve(text.size());
-        for (size_t i = 0; i < text.size(); ) {
-            char_positions.push_back(i);
-            unsigned char c = static_cast<unsigned char>(text[i]);
-            size_t char_len = 1;
-            if ((c & 0x80) == 0x00) char_len = 1;
-            else if ((c & 0xE0) == 0xC0) char_len = 2;
-            else if ((c & 0xF0) == 0xE0) char_len = 3;
-            else if ((c & 0xF8) == 0xF0) char_len = 4;
-            i += char_len;
-        }
-        char_positions.push_back(text.size());  // End sentinel
-        
-        // Extract subwords at character boundaries only
-        size_t num_chars = char_positions.size() - 1;
-        for (size_t ci = 0; ci < num_chars; ++ci) {
-            // Extract subwords of 2 to max_len characters (not bytes)
-            for (size_t char_count = 2; char_count <= max_len && ci + char_count <= num_chars; ++char_count) {
-                size_t byte_start = char_positions[ci];
-                size_t byte_end = char_positions[ci + char_count];
-                // Skip very long byte sequences (likely binary garbage)
-                if (byte_end - byte_start > 64) continue;
-                std::string subword = text.substr(byte_start, byte_end - byte_start);
-                
-                // CRITICAL: Filter out linguistically nonsensical patterns
-                // This prevents garbage tokens like "P.," from entering vocabulary
-                if (!isValidSubword(subword)) continue;
-                
-                subword_counts[subword]++;
+
+    const size_t num_texts_to_process = use_sampling ? sample_indices.size() : training_units.size();
+    const size_t progress_interval = std::max<size_t>(1, num_texts_to_process / 20);
+    const size_t max_len = use_sampling
+        ? static_cast<size_t>(MAX_PIECE_LENGTH)
+        : std::min(static_cast<size_t>(MAX_PIECE_LENGTH), size_t(16));
+
+    auto sentenceForIndex = [&](size_t idx) -> const std::string& {
+        return use_sampling ? training_units[sample_indices[idx]] : training_units[idx];
+    };
+
+    auto sentenceAtomsForIndex = [&](size_t idx) -> const std::vector<AtomSpan>& {
+        return use_sampling ? sentence_atom_spans[sample_indices[idx]] : sentence_atom_spans[idx];
+    };
+
+    unsigned int mining_workers = resolveSubwordMiningWorkerCount(
+        enable_parallel_subword_mining, subword_mining_workers, num_texts_to_process);
+    if (prune_during_mining && mining_workers > 1) {
+        // Pruning semantics depend on seeing global counts during mining.
+        // Keep legacy behavior when prune_during_mining is enabled.
+        std::cout << "[UnigramLM] prune_during_mining=true; using single-thread mining to preserve pruning semantics"
+                  << std::endl;
+        mining_workers = 1;
+    }
+
+    std::cout << "[UnigramLM] Mining subwords from " << num_texts_to_process
+              << " sentences (workers=" << mining_workers
+              << ", max_len=" << max_len << ")..." << std::endl;
+    const auto mining_start = std::chrono::steady_clock::now();
+
+    if (mining_workers <= 1) {
+        for (size_t ti = 0; ti < num_texts_to_process; ++ti) {
+            const std::string& text = sentenceForIndex(ti);
+
+            // Progress reporting
+            if (ti % progress_interval == 0) {
+                std::cout << "[UnigramLM] Subword mining: " << ti << "/" << num_texts_to_process
+                          << " (" << (100 * ti / std::max<size_t>(1, num_texts_to_process)) << "%), "
+                          << subword_counts.size() << " unique subwords" << std::endl;
+            }
+
+            mineSubwordsFromSentence(text, max_len, sentenceAtomsForIndex(ti), subword_counts);
+
+            // Safety valve: if enabled and we've accumulated too many unique subwords, prune low-frequency ones
+            if (prune_during_mining && subword_counts.size() > 50000000) {  // 50M entries ~= 2GB memory
+                std::cout << "[UnigramLM] Pruning low-frequency subwords to control memory..." << std::endl;
+                for (auto it = subword_counts.begin(); it != subword_counts.end(); ) {
+                    if (it->second < 3) {
+                        it = subword_counts.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                std::cout << "[UnigramLM] After pruning: " << subword_counts.size() << " subwords" << std::endl;
             }
         }
-        
-        // Safety valve: if enabled and we've accumulated too many unique subwords, prune low-frequency ones
-        if (prune_during_mining && subword_counts.size() > 50000000) {  // 50M entries ~= 2GB memory
-            std::cout << "[UnigramLM] Pruning low-frequency subwords to control memory..." << std::endl;
-            for (auto it = subword_counts.begin(); it != subword_counts.end(); ) {
-                if (it->second < 3) {
-                    it = subword_counts.erase(it);
-                } else {
-                    ++it;
+        const auto mining_elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - mining_start).count();
+        std::cout << "[UnigramLM] Subword mining pass finished in "
+                  << mining_elapsed << "s" << std::endl;
+    } else {
+        const size_t chunk_size = resolveSubwordMiningChunkSize(mining_workers, num_texts_to_process);
+        std::cout << "[UnigramLM] Parallel subword mining: workers=" << mining_workers
+                  << ", chunk_size=" << chunk_size << std::endl;
+
+        std::vector<std::unordered_map<std::string, int>> local_counts(mining_workers);
+        const size_t reserve_per_worker = std::max<size_t>(200000, 4000000 / mining_workers);
+        for (auto& map : local_counts) {
+            map.reserve(reserve_per_worker);
+        }
+
+        std::atomic<size_t> next_index{0};
+        std::atomic<size_t> processed_texts{0};
+        std::atomic<size_t> next_progress_log{progress_interval};
+        std::atomic<bool> abort{false};
+        std::exception_ptr first_error = nullptr;
+        std::mutex error_mutex;
+        std::mutex log_mutex;
+
+        auto worker_fn = [&](unsigned int worker_id) {
+            auto& local = local_counts[worker_id];
+            while (!abort.load(std::memory_order_relaxed)) {
+                const size_t begin = next_index.fetch_add(chunk_size, std::memory_order_relaxed);
+                if (begin >= num_texts_to_process) break;
+                const size_t end = std::min(begin + chunk_size, num_texts_to_process);
+
+                try {
+                    for (size_t ti = begin; ti < end; ++ti) {
+                        if (abort.load(std::memory_order_relaxed)) return;
+                        mineSubwordsFromSentence(sentenceForIndex(ti), max_len, sentenceAtomsForIndex(ti), local);
+                    }
+
+                    const size_t chunk_done = end - begin;
+                    const size_t done = processed_texts.fetch_add(chunk_done, std::memory_order_relaxed) + chunk_done;
+                    size_t target = next_progress_log.load(std::memory_order_relaxed);
+                    while (done >= target && target <= num_texts_to_process) {
+                        if (next_progress_log.compare_exchange_weak(
+                                target,
+                                target + progress_interval,
+                                std::memory_order_relaxed,
+                                std::memory_order_relaxed)) {
+                            const auto now = std::chrono::steady_clock::now();
+                            const double elapsed_sec = std::chrono::duration<double>(now - mining_start).count();
+                            const double rate = elapsed_sec > 0.0
+                                ? static_cast<double>(done) / elapsed_sec
+                                : 0.0;
+                            std::lock_guard<std::mutex> lock(log_mutex);
+                            std::cout << "[UnigramLM] Subword mining: " << done
+                                      << "/" << num_texts_to_process
+                                      << " (" << (100 * done / std::max<size_t>(1, num_texts_to_process))
+                                      << "%), " << static_cast<size_t>(rate) << " sentences/s"
+                                      << std::endl;
+                            break;
+                        }
+                    }
+                } catch (...) {
+                    abort.store(true, std::memory_order_relaxed);
+                    std::lock_guard<std::mutex> lock(error_mutex);
+                    if (!first_error) first_error = std::current_exception();
+                    return;
                 }
             }
-            std::cout << "[UnigramLM] After pruning: " << subword_counts.size() << " subwords" << std::endl;
+        };
+
+        std::vector<std::thread> pool;
+        pool.reserve(mining_workers);
+        for (unsigned int w = 0; w < mining_workers; ++w) {
+            pool.emplace_back(worker_fn, w);
         }
+        for (auto& thread : pool) {
+            thread.join();
+        }
+
+        if (first_error) {
+            std::rethrow_exception(first_error);
+        }
+
+        const auto mining_elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - mining_start).count();
+        std::cout << "[UnigramLM] Parallel mining pass finished in "
+                  << mining_elapsed << "s; merging thread-local counts..." << std::endl;
+
+        size_t merged_unique_estimate = 0;
+        for (const auto& map : local_counts) {
+            merged_unique_estimate += map.size();
+        }
+        subword_counts.reserve(std::max<size_t>(subword_counts.size(), merged_unique_estimate));
+
+        const auto merge_start = std::chrono::steady_clock::now();
+        const size_t merge_progress_interval = std::max<size_t>(1, local_counts.size() / 4);
+        for (size_t wi = 0; wi < local_counts.size(); ++wi) {
+            auto& map = local_counts[wi];
+            for (const auto& [subword, count] : map) {
+                auto [it, inserted] = subword_counts.try_emplace(subword, count);
+                if (!inserted) {
+                    it->second += count;
+                }
+            }
+            // Release each worker map as soon as it is merged to avoid a long
+            // destructor pause when leaving this scope.
+            map.clear();
+            map.rehash(0);
+
+            if ((wi + 1) % merge_progress_interval == 0 || (wi + 1) == local_counts.size()) {
+                const double merge_elapsed_sec = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - merge_start).count();
+                std::cout << "[UnigramLM] Merge progress: " << (wi + 1)
+                          << "/" << local_counts.size()
+                          << " maps, " << subword_counts.size()
+                          << " unique subwords"
+                          << " (" << merge_elapsed_sec << "s)" << std::endl;
+            }
+        }
+        local_counts.clear();
+        local_counts.shrink_to_fit();
+        const double merge_total_sec = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - merge_start).count();
+        std::cout << "[UnigramLM] Merge aggregation complete in "
+                  << merge_total_sec << "s" << std::endl;
     }
     
     std::cout << "[UnigramLM] Subword mining complete: " << subword_counts.size() << " unique subwords" << std::endl;
     
     // Step 4: Add top-K most frequent subwords up to target_vocab_size
     // Sort by frequency descending, add until we hit target OR run out of candidates meeting min_freq
-    std::vector<std::pair<std::string, int>> sorted_subwords(subword_counts.begin(), subword_counts.end());
-    std::sort(sorted_subwords.begin(), sorted_subwords.end(),
-              [](const auto& a, const auto& b) { return a.second > b.second; });
+    std::cout << "[UnigramLM] Preparing sortable candidate list (" << subword_counts.size()
+              << " total entries)..." << std::endl;
+    const auto sort_start = std::chrono::steady_clock::now();
+
+    size_t eligible_candidates = 0;
+    for (const auto& [_, count] : subword_counts) {
+        if (count >= MIN_SUBWORD_FREQ) {
+            ++eligible_candidates;
+        }
+    }
+    std::cout << "[UnigramLM] Frequency filter (min_freq=" << MIN_SUBWORD_FREQ
+              << ") keeps " << eligible_candidates << " candidates" << std::endl;
+
+    using SubwordEntry = std::pair<const std::string, int>;
+    std::vector<const SubwordEntry*> ranked_subwords;
+    ranked_subwords.reserve(eligible_candidates);
+    for (const auto& entry : subword_counts) {
+        if (entry.second >= MIN_SUBWORD_FREQ) {
+            ranked_subwords.push_back(&entry);
+        }
+    }
+    const auto prep_elapsed = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - sort_start).count();
+    std::cout << "[UnigramLM] Candidate index ready in " << prep_elapsed
+              << "s; sorting..." << std::endl;
+    std::sort(ranked_subwords.begin(), ranked_subwords.end(),
+              [](const SubwordEntry* a, const SubwordEntry* b) {
+                  if (a->second != b->second) return a->second > b->second;
+                  return a->first < b->first;
+              });
+    const auto sort_elapsed = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - sort_start).count();
+    std::cout << "[UnigramLM] Candidate sort complete in "
+              << sort_elapsed << "s" << std::endl;
     
     int added = 0;
     int filtered = 0;
@@ -1208,10 +1785,15 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     // Keep the highest-count surviving variant.
     std::unordered_set<std::string> normalized_added;
     
-    for (const auto& [subword, count] : sorted_subwords) {
-        if (count < MIN_SUBWORD_FREQ) break;  // Stop when frequency too low
+    for (const SubwordEntry* entry : ranked_subwords) {
+        const std::string& subword = entry->first;
+        const int count = entry->second;
         if (added >= max_to_add) break;        // Stop when target reached
         if (hasPiece(subword)) continue;
+        // Single chars are byte-covered — skip them even if not in pieces_ yet.
+        // Without this, the top subword mining candidates (space, 'e', 't' etc.) would
+        // be re-added to pieces_ as unigram entries, recreating the duplicate we removed.
+        if (char_seeds.count(subword)) continue;
 
         // Track repetition stripping separately for better visibility.
         if (isRepetitionNoise(subword)) {
@@ -1228,7 +1810,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         // Near-duplicate detection: reject subwords whose normalized form
         // (lowercase + whitespace normalization + repeat compression) matches
         // an already-added piece.
-        // Since sorted_subwords is sorted by count DESC, the highest-count
+        // Since ranked_subwords is sorted by count DESC, the highest-count
         // variant wins. E.g., " the" (50K) added first, then "the" (3K) rejected.
         std::string norm = normalizeForDedup(subword);
         if (norm.empty()) {
@@ -1273,20 +1855,53 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         buildTrie();
         
         // E-step: Count token usage via Viterbi segmentation
+        // Run Viterbi ONLY on non-atom segments to avoid scoring atom internals.
         std::unordered_map<int, double> token_counts;  // token_id -> count
         double total_tokens = 0.0;
         
-        for (const auto& text : lowercase_texts) {
+        for (size_t text_idx = 0; text_idx < lowercase_texts.size(); ++text_idx) {
+            const auto& text = lowercase_texts[text_idx];
+            const auto& spans = atom_spans[text_idx];
             if (text.empty()) continue;
             
-            // Run Viterbi to get optimal segmentation (on lowercased text)
-            auto nodes = viterbi(text);
-            auto tokens = backtrack(nodes, static_cast<int>(text.size()));
-            
-            // Count each token used in this segmentation
-            for (int token_id : tokens) {
-                token_counts[token_id] += 1.0;
-                total_tokens += 1.0;
+            if (spans.empty()) {
+                // Fast path: no atoms, process entire text
+                auto nodes = viterbi(text);
+                auto tokens = backtrack(nodes, static_cast<int>(text.size()));
+                for (int token_id : tokens) {
+                    token_counts[token_id] += 1.0;
+                    total_tokens += 1.0;
+                }
+            } else {
+                // Extract non-atom segments and run Viterbi on each
+                size_t pos = 0;
+                for (const auto& span : spans) {
+                    if (span.start > pos) {
+                        // Non-atom segment: [pos, span.start)
+                        std::string segment = text.substr(pos, span.start - pos);
+                        if (!segment.empty()) {
+                            auto nodes = viterbi(segment);
+                            auto tokens = backtrack(nodes, static_cast<int>(segment.size()));
+                            for (int token_id : tokens) {
+                                token_counts[token_id] += 1.0;
+                                total_tokens += 1.0;
+                            }
+                        }
+                    }
+                    pos = span.end;
+                }
+                // Trailing non-atom segment after last atom
+                if (pos < text.size()) {
+                    std::string segment = text.substr(pos);
+                    if (!segment.empty()) {
+                        auto nodes = viterbi(segment);
+                        auto tokens = backtrack(nodes, static_cast<int>(segment.size()));
+                        for (int token_id : tokens) {
+                            token_counts[token_id] += 1.0;
+                            total_tokens += 1.0;
+                        }
+                    }
+                }
             }
         }
         
@@ -1402,6 +2017,7 @@ std::vector<ViterbiNode> UnigramLM::viterbi(const std::string& text) const {
             }
         } else {
             // Byte fallback disabled: advance with <unk> instead of byte tokens.
+            std::cout << "[UnigramLM] Warning: byte fallback disabled, using <unk> token for unknown bytes" << std::endl;
             float unk_score = nodes[pos].score + UNKNOWN_SCORE;
             if (unk_score > nodes[pos + 1].score) {
                 nodes[pos + 1].score = unk_score;

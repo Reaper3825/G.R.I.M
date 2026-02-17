@@ -4,9 +4,16 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <thread>
+#include <atomic>
+#include <mutex>
+#include <optional>
+#include <cstdlib>
+#include <memory>
 #include <algorithm>
 #include <stdexcept>
 #include <cstdint>
+#include <exception>
 
 #include <nlohmann/json.hpp>
 #include "../../Shared/UnigramByte/UniByte.hpp"
@@ -161,6 +168,46 @@ namespace {
 		// Issue #35: <s>/</s> markers stripped by stripHtmlTags (matches <X>)
 		cleaned = normalizeWhitespace(cleaned);
 		return cleaned;
+	}
+
+	unsigned int resolveTokenizerWorkerCount(
+		const GRIM::Config::TokenizerConfig& config_tok,
+		size_t corpus_size) {
+		if (corpus_size == 0) return 1;
+		if (!config_tok.enable_parallel_tokenization) return 1;
+
+		const size_t threshold = static_cast<size_t>(
+			std::max(1, config_tok.parallel_threshold));
+		if (corpus_size < threshold) return 1;
+
+		unsigned int workers = std::thread::hardware_concurrency();
+		if (workers == 0) workers = 4;
+		workers = std::max(1u, workers > 1 ? workers - 1 : 1);
+
+		if (const char* env_workers = std::getenv("GRIM_TOKENIZER_WORKERS")) {
+			try {
+				const int parsed = std::stoi(env_workers);
+				if (parsed > 0) {
+					workers = static_cast<unsigned int>(parsed);
+				}
+			} catch (...) {
+				// Ignore malformed env override and keep auto worker count.
+			}
+		}
+
+		workers = std::min<unsigned int>(workers, static_cast<unsigned int>(corpus_size));
+		return std::max(1u, workers);
+	}
+
+	size_t resolveTokenizerChunkSize(unsigned int workers, size_t corpus_size) {
+		if (workers <= 1 || corpus_size == 0) return corpus_size;
+
+		// Aim for multiple chunks per worker for load balancing while
+		// keeping chunks large enough to amortize scheduler overhead.
+		size_t chunk = (corpus_size + (workers * 8) - 1) / (workers * 8);
+		chunk = std::max<size_t>(16, chunk);
+		chunk = std::min<size_t>(512, chunk);
+		return chunk;
 	}
 }
 
@@ -351,11 +398,20 @@ bool PrepareTrainingDataFromCache(
 		std::cerr << "[DataLoader] FATAL: tokenizer vocab_size must be > 0" << std::endl;
 		throw std::runtime_error("DataLoader: invalid tokenizer vocab_size");
 	}
-	const int target_vocab_size = config_tok.vocab_size;
+	int target_vocab_size = config_tok.vocab_size;
+	if (config_tok.max_vocab_size > 0 && target_vocab_size > config_tok.max_vocab_size) {
+		std::cout << "[DataLoader] Clamping tokenizer target vocab_size "
+				  << target_vocab_size << " -> " << config_tok.max_vocab_size
+				  << " (max_vocab_size)" << std::endl;
+		target_vocab_size = config_tok.max_vocab_size;
+	}
 	tok_config.target_vocab_size = target_vocab_size;
 	tok_config.character_coverage = GRIM::HyperParameters::TOKENIZER_CHARACTER_COVERAGE;
 	tok_config.min_subword_freq = config_tok.min_subword_freq;
 	tok_config.prune_during_mining = config_tok.prune_during_mining;
+	tok_config.enable_parallel_subword_mining = config_tok.enable_parallel_subword_mining;
+	tok_config.subword_mining_workers = config_tok.subword_mining_workers;
+	tok_config.subword_mining_max_bytes = config_tok.subword_mining_max_bytes;
 	
 	// Load scratch block reasoning settings from training hyperparameters (single source of truth)
 	tok_config.enable_scratch_block_reasoning = train_config.tokenizer_enable_scratch_block_reasoning;
@@ -420,9 +476,11 @@ bool PrepareTrainingDataFromCache(
 		std::vector<TokenizedSequence> tokens;
 		tokens.reserve(corpus.size());
 
-		for (const auto& text : corpus) {
+		auto build_sequence = [&](const std::string& text) -> std::optional<TokenizedSequence> {
 			auto result = tokenizer.encodeWithMetadata(text);
-			if (result.token_ids.empty()) continue; // Skip 0-length tokenizations
+			if (result.token_ids.empty()) {
+				return std::nullopt; // Skip 0-length tokenizations
+			}
 
 			TokenizedSequence seq;
 			seq.token_ids = std::move(result.token_ids);
@@ -446,8 +504,74 @@ bool PrepareTrainingDataFromCache(
 			for (size_t j = 0; j + 1 < seq_len; ++j) {
 				seq.targets[j] = seq.token_ids[j + 1];
 			}
+			return seq;
+		};
 
-			tokens.push_back(std::move(seq));
+		const unsigned int workers = resolveTokenizerWorkerCount(config_tok, corpus.size());
+		if (workers <= 1) {
+			for (const auto& text : corpus) {
+				auto seq = build_sequence(text);
+				if (seq) {
+					tokens.push_back(std::move(*seq));
+				}
+			}
+			return tokens;
+		}
+
+		std::cout << "[DataLoader] Parallel tokenization: workers=" << workers
+				  << " threshold=" << std::max(1, config_tok.parallel_threshold)
+				  << " sequences=" << corpus.size() << std::endl;
+
+		std::vector<std::unique_ptr<TokenizedSequence>> staged(corpus.size());
+
+		const size_t chunk_size = resolveTokenizerChunkSize(workers, corpus.size());
+		std::atomic<size_t> next_index{0};
+		std::atomic<bool> abort{false};
+		std::exception_ptr first_error = nullptr;
+		std::mutex error_mutex;
+
+		auto worker_fn = [&]() {
+			while (!abort.load(std::memory_order_relaxed)) {
+				const size_t begin = next_index.fetch_add(chunk_size, std::memory_order_relaxed);
+				if (begin >= corpus.size()) break;
+				const size_t end = std::min(begin + chunk_size, corpus.size());
+
+				for (size_t i = begin; i < end; ++i) {
+					if (abort.load(std::memory_order_relaxed)) return;
+					try {
+						auto seq = build_sequence(corpus[i]);
+						if (seq) {
+							staged[i] = std::make_unique<TokenizedSequence>(std::move(*seq));
+						}
+					} catch (...) {
+						abort.store(true, std::memory_order_relaxed);
+						std::lock_guard<std::mutex> lock(error_mutex);
+						if (!first_error) {
+							first_error = std::current_exception();
+						}
+						return;
+					}
+				}
+			}
+		};
+
+		std::vector<std::thread> pool;
+		pool.reserve(workers);
+		for (unsigned int w = 0; w < workers; ++w) {
+			pool.emplace_back(worker_fn);
+		}
+		for (auto& thread : pool) {
+			thread.join();
+		}
+
+		if (first_error) {
+			std::rethrow_exception(first_error);
+		}
+
+		// Preserve original sequence order for deterministic GRMT output.
+		for (size_t i = 0; i < corpus.size(); ++i) {
+			if (!staged[i]) continue;
+			tokens.push_back(std::move(*staged[i]));
 		}
 
 		return tokens;

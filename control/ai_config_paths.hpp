@@ -388,6 +388,9 @@ struct TokenizerConfig {
     int max_length = 8192;
     int min_subword_freq = 3;  // Minimum frequency for subwords to be included in vocab
     bool prune_during_mining = false;  // Enable memory pruning during subword mining (disable if RAM is plentiful)
+    bool enable_parallel_subword_mining = true;  // Parallelize subword mining during vocab training
+    int subword_mining_workers = 0;  // 0 = auto, >0 fixed worker count
+    size_t subword_mining_max_bytes = 0;  // 0 = use tokenizer default cap
     std::string model_type = "unibytes";
     std::vector<std::string> special_tokens = {"<pad>", "<unk>", "<s>", "</s>"};
     bool add_bos = true;
@@ -1217,9 +1220,13 @@ inline bool populateTokenizerConfigFromConfig(const nlohmann::json& config, Toke
     }
 
     assignTrainingField(tokenizer_config.vocab_size, tok, "vocab_size");
+    assignTrainingField(tokenizer_config.max_vocab_size, tok, "max_vocab_size");
     assignTrainingField(tokenizer_config.max_length, tok, "max_length");
     assignTrainingField(tokenizer_config.min_subword_freq, tok, "min_subword_freq");
     assignTrainingField(tokenizer_config.prune_during_mining, tok, "prune_during_mining");
+    assignTrainingField(tokenizer_config.enable_parallel_subword_mining, tok, "enable_parallel_subword_mining");
+    assignTrainingField(tokenizer_config.subword_mining_workers, tok, "subword_mining_workers");
+    assignTrainingField(tokenizer_config.subword_mining_max_bytes, tok, "subword_mining_max_bytes");
     assignTrainingField(tokenizer_config.model_type, tok, "model_type");
     assignTrainingField(tokenizer_config.add_bos, tok, "add_bos");
     assignTrainingField(tokenizer_config.add_eos, tok, "add_eos");
@@ -1234,6 +1241,14 @@ inline bool populateTokenizerConfigFromConfig(const nlohmann::json& config, Toke
     assignTrainingField(tokenizer_config.enable_byte_fallback, tok, "enable_byte_fallback");
     assignTrainingField(tokenizer_config.expected_checksum, tok, "expected_checksum");
     assignTrainingField(tokenizer_config.save_text_vocab, tok, "save_text_vocab");
+
+    // Backward compatibility with configs that only set max_vocab_size:
+    // treat it as the target vocab size when vocab_size is omitted.
+    if (!tok.contains("vocab_size") &&
+        tok.contains("max_vocab_size") &&
+        tokenizer_config.max_vocab_size > 0) {
+        tokenizer_config.vocab_size = tokenizer_config.max_vocab_size;
+    }
 
     // Scratch block reasoning configuration - load into hyperparameters (single source of truth)
     if (tok.contains("scratch_block_reasoning") && tok["scratch_block_reasoning"].is_object()) {
@@ -1350,7 +1365,12 @@ inline bool loadTokenizerConfig(TokenizerConfig& config, const std::string& conf
     config = snapshot->tokenizer_config;
     std::cout << "[Config] Loaded tokenizer config from: " << snapshot->config_path << std::endl;
     std::cout << "  vocab_size: " << config.vocab_size << std::endl;
+    std::cout << "  max_vocab_size: " << config.max_vocab_size << std::endl;
     std::cout << "  max_length: " << config.max_length << std::endl;
+    std::cout << "  enable_parallel_subword_mining: "
+              << (config.enable_parallel_subword_mining ? "true" : "false") << std::endl;
+    std::cout << "  subword_mining_workers: " << config.subword_mining_workers << std::endl;
+    std::cout << "  subword_mining_max_bytes: " << config.subword_mining_max_bytes << std::endl;
     std::cout << "  model_type: " << config.model_type << std::endl;
     std::cout << "  add_bos: " << (config.add_bos ? "true" : "false") << std::endl;
     std::cout << "  add_eos: " << (config.add_eos ? "true" : "false") << std::endl;

@@ -244,10 +244,36 @@ bool UniByte::save(const std::string& vocab_path, bool save_text_format) const {
 }
 
 bool UniByte::train(const std::vector<std::string>& texts) {
-    return unigram_.trainFromCorpus(texts, config_.target_vocab_size, 
+    // Detect atom spans in each text BEFORE training.
+    // Atom regions (URLs, emails, numbers, dates, paths, etc.) are SKIPPED
+    // during character counting and subword mining so their internal chars
+    // (://@.com etc.) don't contaminate the vocabulary.
+    std::vector<std::vector<AtomSpan>> all_atom_spans;
+    all_atom_spans.reserve(texts.size());
+    
+    size_t total_atoms = 0;
+    for (const auto& text : texts) {
+        auto structures = detectStructures(text);
+        std::vector<AtomSpan> spans;
+        spans.reserve(structures.size());
+        for (const auto& s : structures) {
+            spans.push_back({s.start, s.end});
+        }
+        total_atoms += spans.size();
+        all_atom_spans.push_back(std::move(spans));
+    }
+    
+    std::cout << "[UniByte] Detected " << total_atoms << " atoms across "
+              << texts.size() << " texts (will skip during vocab training)" << std::endl;
+    
+    return unigram_.trainFromCorpus(texts, all_atom_spans,
+                                     config_.target_vocab_size, 
                                      config_.character_coverage,
                                      config_.min_subword_freq,
-                                     config_.prune_during_mining);
+                                     config_.prune_during_mining,
+                                     config_.enable_parallel_subword_mining,
+                                     config_.subword_mining_workers,
+                                     config_.subword_mining_max_bytes);
 }
 
 bool UniByte::initGPU() {

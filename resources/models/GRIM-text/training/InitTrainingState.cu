@@ -327,11 +327,9 @@ void LanguageModel::initTrainingState() {
     training_state_.cached_targets_tensor = Tensor::empty(
         TensorContract::TensorShape::make_BSM(max_logit_tokens, 1), false, primary_stream, "cached_targets");
     
-    // NOTE: Tensor::zeros sets all bytes to 0, which maps to UNK_TOKEN_ID=0 when
-    // reinterpreted as int32. This is conceptually wrong (should be PAD=1), but
-    // harmless because ComputeLossBatch fully overwrites this buffer via cudaMemcpyAsync
-    // before every forward pass. If a fill kernel is ever added, use PAD_TOKEN_ID=1.
-    training_state_.cached_token_ids_tensor = Tensor::zeros(
+    // NOTE: Using empty() not zeros() - ComputeLossBatch fully overwrites this buffer
+    // via cudaMemcpyAsync before every forward pass. No need to waste bandwidth zero-filling.
+    training_state_.cached_token_ids_tensor = Tensor::empty(
         TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
         false,  // no grad for token IDs
         primary_stream,
@@ -345,7 +343,8 @@ void LanguageModel::initTrainingState() {
     // BUG FIX: Always allocate numeric/text buffers even when ScratchBlock is disabled
     // because buildBatchPayload() always populates these fields from tokenizer
     // Rule 20: Use Tensor API instead of raw cudaMalloc
-    training_state_.cached_token_numeric_values = Tensor::zeros(
+    // NOTE: Using empty() not zeros() - buffers fully overwritten by ComputeLossBatch
+    training_state_.cached_token_numeric_values = Tensor::empty(
         TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
         false,  // no grad
         primary_stream,
@@ -353,7 +352,7 @@ void LanguageModel::initTrainingState() {
     );
     std::cout << "✓ Allocated token numeric values cache (Tensor API)" << std::endl;
     
-    training_state_.cached_token_numeric_mask = Tensor::zeros(
+    training_state_.cached_token_numeric_mask = Tensor::empty(
         TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
         false,  // no grad
         primary_stream,
@@ -363,7 +362,7 @@ void LanguageModel::initTrainingState() {
 
     // GRMT v4: Allocate text feature buffers - Rule 20: Tensor API
     constexpr int kTextFeatureDim = Batching::BatchPayload::kTextFeatureDim;
-    training_state_.cached_token_text_features = Tensor::zeros(
+    training_state_.cached_token_text_features = Tensor::empty(
         TensorContract::TensorShape::make_BSM(static_cast<int>(max_tokens), kTextFeatureDim),
         false,  // no grad
         primary_stream,
@@ -371,7 +370,7 @@ void LanguageModel::initTrainingState() {
     );
     std::cout << "✓ Allocated token text features cache (Tensor API)" << std::endl;
     
-    training_state_.cached_token_text_mask = Tensor::zeros(
+    training_state_.cached_token_text_mask = Tensor::empty(
         TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
         false,  // no grad
         primary_stream,

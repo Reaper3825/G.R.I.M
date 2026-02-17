@@ -60,10 +60,16 @@
         "enable_byte_fallback": true,
         "enable_lowercasing": true,
         "enable_nfkc_normalization": true,
+        "enable_parallel_tokenization": true,
+        "parallel_threshold": 1000,
         "max_length": 1024,
-        "max_vocab_size": 50000,
+        "vocab_size": 10000,
+        "max_vocab_size": 10000,
         "min_subword_freq": 3,
         "prune_during_mining": false,
+        "enable_parallel_subword_mining": true,
+        "subword_mining_workers": 0,
+        "subword_mining_max_bytes": 0,
         "model_type": "unibytes",
         "save_text_vocab": true,
         "scratch_block_reasoning": {
@@ -79,21 +85,21 @@
     "training": {
         "config": {
             "epochs": 3,
-            "seed": 2,
-            "batch_size": 7,
-            "gradient_accumulation_steps": 1,
+            "seed": 1,
+            "batch_size": 8,
+            "gradient_accumulation_steps": 2,
             "batch_strategy": "RANDOM",
             "learning_rate": 3e-4,
-            "weight_decay": 0.01,
+            "weight_decay": 0.1,
             "gradient_clip": 1.0,
             "per_token_grad_scale": true,
             "warmup_steps": 0,
             "max_seq_len": 1024,
             "min_seq_valid_tokens": 10,
             "log_interval": 10,
-            "atom_stats_interval": 10,
+            "atom_stats_interval": 100,
             "atom_stats_max_seqs": 16,
-            "validation_interval": 100,
+            "validation_interval": 1000,
             "checkpoint_interval": 1000,
             "use_gpu": true,
             "use_flash_attention": true,
@@ -143,7 +149,7 @@
                 "guard_loss_multiplier": 1.05,
                 "baseline_capture_steps": 200,
                 "baseline_drift": 0.05,
-                "momentum_interval": 10,
+                "momentum_interval": 100,
                 "momentum_gain": 0.35,
                 "momentum_decay": 0.33333,
                 "safety_interval": 4,
@@ -314,7 +320,7 @@
             "cuda_execution": {
                 "single_stream_mode": true,
                 "disable_async_frees": false,
-                "synchronize_after_kernels": false
+                "synchronize_after_kernels": true
             },
 
             "prediction_comparison": {
@@ -331,7 +337,7 @@
             },
 
             "attention_diagnostics": {
-                "enabled": true,
+                "enabled": false,
                 "layer": -1,
                 "head": 0
             },
@@ -341,7 +347,7 @@
                 "default_level": "Info",
                 "modules": {
                     "ForwardPass": "WARN",
-                    "BackwardPass": "Info",
+                    "BackwardPass": "WARN",
                     "Optimizer": "Info",
                     "Scheduler": "Info",
                     "Activations": "WARN",
@@ -386,7 +392,7 @@
             },
             "lm_head_centering": {
                 "enabled": true,
-                "center_hidden_states": true,
+                "center_hidden_states": false,
                 "center_logits": true,
                 "center_encoder_residuals": false
             },
@@ -436,7 +442,7 @@
                 "num_streams": 2,
                 "enable_histograms": false,
                 "histogram_bins": 32,
-                "telemetry_sample_interval": 1
+                "telemetry_sample_interval": 10
             }
         },
         "server_host": "127.0.0.1",
