@@ -3196,7 +3196,9 @@ BatchResult processBatch(
         // TEXT DUMP: Export gradient values for comparison with PyTorch
         // ========================================================================
         if (batch_idx < 2) {
-            ctx.model->dumpGradientValues(batch_idx + 1, "D:/G.R.I.M/grim_gradients.txt");
+            fs::path grim_root = GRIM::Config::resolveGrimRoot();
+            std::string grad_txt_path = (grim_root / "grim_gradients.txt").string();
+            ctx.model->dumpGradientValues(batch_idx + 1, grad_txt_path);
         }
     }
     
