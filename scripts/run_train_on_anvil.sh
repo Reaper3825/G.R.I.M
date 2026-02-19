@@ -7,6 +7,11 @@
 #   - Repo on Anvil at GRIM_ANVIL_DIR. Default: /anvil/projects/x-cis210085/GRIM/G.R.I.M
 #     Override if you use home or scratch: export GRIM_ANVIL_DIR=\$HOME/G.R.I.M
 #   - On Anvil, build once (see first-time setup in docs or below).
+#   - vcpkg manifest mode (vcpkg.json at repo root). When the build runs, CMake must use the vcpkg toolchain
+#     so the correct prefix/triplet is used. On Anvil we pass CMAKE_TOOLCHAIN_FILE and VCPKG_TARGET_TRIPLET=x64-linux.
+#     vcpkg must be at GRIM_ANVIL_DIR/vcpkg (or set GRIM_VCPKG_ROOT to vcpkg path on Anvil).
+#   - CMake 3.22+ for TrainingLoop. If default module is older, on Anvil run "module avail cmake"
+#     then export ANVIL_CMAKE_MODULE=cmake/X.XX (e.g. cmake/3.26) before this script.
 #
 # Note: To use Cursor Run: in a terminal run "ssh-add ~/.ssh/id_ed25519" (enter passphrase once).
 # Then Run works because the key is in ssh-agent. Or run this script from the terminal.
@@ -79,11 +84,18 @@ REMOTE_EXE="$ANVIL_DIR/$EXE"
 REMOTE_CFG="$REMOTE_TRAINING/$CONFIG"
 
 # Anvil: init module system (non-interactive SSH doesn't load profile), then load GPU stack.
-# RCAC recommends "modtree/gpu" (provides cuda/11.2.2, gcc, openmpi). Add cmake.
-ANVIL_MODULES='source /etc/profile.d/modules.sh 2>/dev/null || source /usr/share/modules/init/bash 2>/dev/null || true; module load modtree/gpu cmake 2>/dev/null || module load cuda gcc cmake 2>/dev/null || true'
+# RCAC recommends "modtree/gpu" (provides cuda/11.2.2, gcc, openmpi). CMake 3.22+ required for TrainingLoop.
+# Try newer cmake first (module name may be cmake/3.26 or cmake/3.22 on Anvil); override with ANVIL_CMAKE_MODULE.
+ANVIL_CMAKE_MODULE="${ANVIL_CMAKE_MODULE:-}"
+ANVIL_MODULES='source /etc/profile.d/modules.sh 2>/dev/null || source /usr/share/modules/init/bash 2>/dev/null || true; module load modtree/gpu 2>/dev/null || module load cuda gcc 2>/dev/null || true; if [ -n "$ANVIL_CMAKE_MODULE" ]; then module load $ANVIL_CMAKE_MODULE 2>/dev/null || true; else module load cmake/3.26 2>/dev/null || module load cmake/3.22 2>/dev/null || module load cmake 2>/dev/null || true; fi'
 # Set CUDAToolkit_ROOT only when nvcc is found (avoid passing "." when module load failed)
 ANVIL_CUDA_ROOT='NVCC=$(which nvcc 2>/dev/null); if [ -z "$NVCC" ]; then echo "ERROR: nvcc not found. On Anvil run: module load modtree/gpu (or module load cuda); then re-run this script." >&2; exit 1; fi; CUDAToolkit_ROOT=$(dirname "$(dirname "$NVCC")")'
+# vcpkg manifest: use toolchain so the build uses the right prefix/triplet (x64-linux on Anvil).
+# VCPKG_MANIFEST_DIR = repo root so toolchain finds vcpkg.json when configuring from TrainingLoop.
+ANVIL_VCPKG="${GRIM_VCPKG_ROOT:-$ANVIL_DIR/vcpkg}"
+VCPKG_TOOLCHAIN="$ANVIL_VCPKG/scripts/buildsystems/vcpkg.cmake"
 ANVIL_CMAKE_OPTS='-DCMAKE_BUILD_TYPE=Release -DCUDAToolkit_ROOT=$CUDAToolkit_ROOT'
+ANVIL_CMAKE_OPTS="$ANVIL_CMAKE_OPTS -DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_MANIFEST_DIR=$ANVIL_DIR"
 
 # --build / --build-training: GRIM-text/training/TrainingLoop CMake → train_gpu
 if [[ "$DO_BUILD" == true ]]; then
