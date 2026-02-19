@@ -55,6 +55,8 @@
 # ==============================
 # CMake and Ninja
 # ==============================
+# compile_commands.json is machine-specific (absolute paths); generate per build
+compile_commands.json
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
