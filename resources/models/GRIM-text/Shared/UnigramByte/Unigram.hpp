@@ -120,7 +120,8 @@ inline void configureTokenLayout(int /*atom_vocab_size*/) {
 struct UnigramPiece {
     std::string text;
     float score;           // Log probability
-    int token_id;
+    // token_id is NOT stored — it's ALWAYS (UNIGRAM_VOCAB_OFFSET + index_in_pieces_).
+    // Storing it caused 1078 collisions during EM prune/backfill (Issue #148).
     bool is_special;
     bool is_user_defined;  // High priority, never pruned
 };
@@ -187,11 +188,12 @@ public:
                            int subword_mining_workers = 0,
                            size_t subword_mining_max_bytes = 0);
     
-    // DELETED: Auto-ID overload removed per Rule 20 (no silent fallbacks)
-    // Callers MUST provide explicit token_id = UNIGRAM_VOCAB_OFFSET + pieces_.size()
+    // Add a piece to vocab. Token ID is ALWAYS (UNIGRAM_VOCAB_OFFSET + pieces_.size()).
+    // No token_id parameter — the position IS the ID. This prevents collision bugs.
+    void addPiece(const std::string& text, float score, bool is_user_defined);
     
-    // Add a piece with explicit token_id (REQUIRED - no auto-ID)
-    void addPiece(const std::string& text, float score, int token_id, bool is_user_defined);
+    // Compute token_id for piece at given index in pieces_
+    static int tokenIdForIndex(int index) { return UNIGRAM_VOCAB_OFFSET + index; }
     
     // Get piece by ID
     const UnigramPiece* getPiece(int token_id) const;

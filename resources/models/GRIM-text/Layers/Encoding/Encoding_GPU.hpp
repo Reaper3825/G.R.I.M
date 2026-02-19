@@ -2,8 +2,10 @@
 //  Encoding_GPU.hpp
 //  PRODUCTION-READY Transformer Encoder Layer
 //  
-//  Architecture: Sandwich Norm with RMSNorm (NOT LayerNorm)
-//    Input -> RMSNorm -> Attention -> Residual -> RMSNorm(sandwich) -> RMSNorm -> FFN -> Residual -> RMSNorm(sandwich) -> Output
+//  Architecture: Standard Pre-Norm with RMSNorm (NOT LayerNorm)
+//    Input -> RMSNorm -> Attention -> Residual -> RMSNorm -> FFN -> Residual -> Output
+//  Issue #148: Sandwich Norm (post-residual RMSNorm) REMOVED to allow hidden
+//  state norms to vary freely, preventing mode collapse from premature cosine alignment.
 //  
 //  Features:
 //    - GQA (Grouped Query Attention) native support
@@ -221,9 +223,8 @@ public:
     Tensor& rms1Gamma() { return rms1_gamma_; }
     Tensor& rms2Gamma() { return rms2_gamma_; }
     
-    // Sandwich norm (post-residual)
-    Tensor& rmsPostAttnGamma() { return rms_post_attn_gamma_; }
-    Tensor& rmsPostFfnGamma() { return rms_post_ffn_gamma_; }
+    // Issue #148: Sandwich norm accessors REMOVED — post-residual RMSNorm deleted.
+    // Old checkpoints with sandwich norm weights are loaded but weights are ignored.
     
     // Attention weights/biases
     Tensor& attnWqkv() { return W_qkv_; }
@@ -281,9 +282,8 @@ private:
     Tensor rms1_gamma_;    // [d_model] - pre-attention norm
     Tensor rms2_gamma_;    // [d_model] - pre-FFN norm
     
-    // Sandwich norm weights (post-residual normalization)
-    Tensor rms_post_attn_gamma_;  // [d_model] - after attention residual
-    Tensor rms_post_ffn_gamma_;   // [d_model] - after FFN residual
+    // Issue #148: Sandwich norm weights REMOVED (rms_post_attn_gamma_, rms_post_ffn_gamma_)
+    // Standard pre-norm architecture does not use post-residual normalization.
     
     // Attention weights (Tensor with requires_grad=true)
     // W_qkv layout: [W_q: d_model x d_model][W_k: kv_dim x d_model][W_v: kv_dim x d_model]

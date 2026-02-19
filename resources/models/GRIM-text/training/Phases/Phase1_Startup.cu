@@ -501,17 +501,12 @@ GRIM::Tokenizer::UniByte initializeTokenizer(
         throw std::runtime_error("Failed to load vocabulary: " + vocab_path);
     }
     
-    const int original_vocab = tokenizer.totalVocabSize();
-    
-    // Cap vocab size if configured (reduces loss computation time)
-    if (tok_config.max_vocab_size > 0 && original_vocab > tok_config.max_vocab_size) {
-        tokenizer.capVocabSize(tok_config.max_vocab_size);
-        logger.log("✓ Loaded " + std::to_string(original_vocab) + " tokens, capped to " + 
-                   std::to_string(tokenizer.totalVocabSize()) + " (max_vocab_size=" + 
-                   std::to_string(tok_config.max_vocab_size) + ")");
-    } else {
-        logger.log("✓ Loaded " + std::to_string(tokenizer.totalVocabSize()) + " tokens");
-    }
+    // The GRMT is the ground truth — it was written with totalVocabSize() at encode time.
+    // Phase1 must match that exactly.  Post-load capping is wrong: it reduces totalVocabSize()
+    // below what the GRMT recorded, guaranteeing a mismatch.  If you want fewer tokens,
+    // lower vocab_size in ai_config.json and let the DataLoader retrain the tokenizer.
+    logger.log("✓ Loaded " + std::to_string(tokenizer.totalVocabSize()) + " tokens (" +
+               std::to_string(tokenizer.vocabSize()) + " pieces)");
     
     return tokenizer;
 }
@@ -687,8 +682,16 @@ SequenceData loadTrainingData(
                 // With stride < max_seq_len, the first (prev_source_end - start)
                 // tokens were already trained on in the previous window. Mask them
                 // to prevent double-training on the same targets.
+                //
+                // Issue #147: Subtract 1 from overlap_len. The position at
+                // (prev_source_end - 1) was the LAST position in the previous
+                // window, which was already  masked there (last-position mask).
+                // Its target was NEVER trained. If we mask it here too, we create
+                // a one-token training gap at every window boundary. By reducing
+                // overlap by 1, this window trains that target instead.
                 if (!is_first_window && prev_source_end > start) {
-                    const size_t overlap_len = prev_source_end - start;
+                    const size_t raw_overlap = prev_source_end - start;
+                    const size_t overlap_len = (raw_overlap > 0) ? (raw_overlap - 1) : 0;
                     const size_t bos_offset = (bos_id >= 0) ? 1 : 0;  // Skip BOS (already masked)
                     for (size_t i = bos_offset; i < bos_offset + overlap_len && i < window.targets.size(); ++i) {
                         window.targets[i] = -1;
@@ -871,10 +874,14 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
 
     // LM Head centering configuration (Issue #37 / #40)
     model_config.lm_head_center_hidden_states = hp.lm_head_center_hidden_states;
+    model_config.project_out_pc1 = hp.project_out_pc1;
+    model_config.pc1_power_iters = hp.pc1_power_iters;
     model_config.center_logits = hp.center_logits;
     model_config.center_encoder_residuals = hp.center_encoder_residuals;
     
     logger.log("LM Head centering: center_hidden_states=" + std::string(model_config.lm_head_center_hidden_states ? "true" : "false") +
+              ", project_out_pc1=" + std::string(model_config.project_out_pc1 ? "true" : "false") +
+              ", pc1_power_iters=" + std::to_string(model_config.pc1_power_iters) +
               ", center_logits=" + std::string(model_config.center_logits ? "true" : "false") +
               ", center_encoder_residuals=" + std::string(model_config.center_encoder_residuals ? "true" : "false"));
     

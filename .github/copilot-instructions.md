@@ -1069,6 +1069,36 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
 - **Train/test mismatch caveat**: During training, ScratchBlock injects the ground truth value into the embedding. During inference, it gets 0.0f. The encoder hidden state will differ. The extraction head accuracy depends on how much the encoder relies on context vs. injected value.
 - **Files Modified**: `grim_language_model_gpu.cu` (`generateSequenceGPU`)
 
+147. **Sliding Window Overlap Masking Off-By-One + PtPvDump Sampling in Masked Zone (FIXED - Issue #147, Feb 2026)**: Two bugs in the sliding window / diagnostic pipeline:
+
+- **BUG A — One-Token Training Gap at Window Boundaries**: At every sliding window boundary, the target at source position `prev_source_end - 1` was masked in BOTH the previous window (last-position mask) AND the current window (overlap mask), creating a systematic gap where ~0.11% of targets were never trained. This affected ~11 positions per average sequence (one per window boundary).
+    - **Root Cause**: `overlap_len = prev_source_end - start` counted the full overlap range. But the previous window already masks its LAST position (`target[seq_len-1] = -1`). The overlap in window k+1 should NOT re-mask that same source token since it's only "trained" in window k+1 (the first window masks it). The overlap was 1 token too large.
+    - **Fix in `Phase1_Startup.cu`**: Changed `overlap_len = raw_overlap - 1` (reduces overlap by 1 when raw_overlap > 0). This closes the gap: window k masks its last position, window k+1 starts overlap masking 1 position AFTER that, so the boundary target gets trained exactly once.
+    - **Impact**: ~0.11% of training targets were systematically skipped. Over many epochs, this creates a blind spot at every window boundary.
+
+- **BUG B — PtPvDump Sampled Entirely in Masked Overlap Zone**: PtPvDump diagnostic linearly sampled 20 positions (0..19) from the first sequence. For non-first sliding windows, positions 0-128 are ALL masked (1 BOS + 128 overlap tokens). All 20 samples showed `target=-1`, producing a completely misleading diagnostic that suggested all targets were broken.
+    - **Root Cause**: Linear sampling assumed valid content starts at position 0. With sliding windows, non-first windows have masked overlap at the start.
+    - **Fix in `Phase2_TrainingLoop.cu`**: Pre-scan for positions with valid targets (`target >= 0`) before sampling. Uniformly samples from valid positions only. Falls back to linear if no valid positions found.
+
+- **NOT A BUG — BOUNDARY_DIAGNOSTIC cached_*=0**: The diagnostic fires BEFORE the first forward pass. `cached_batch_size`, `cached_seq_len`, `cached_valid_tokens` are set DURING forward/loss computation (`AutogradTraining.cu`). For batch 1, they are naturally zero.
+
+- **Files Modified**: `Phase1_Startup.cu` (overlap_len fix), `Phase2_TrainingLoop.cu` (PtPvDump valid-position sampling)
+
+148. **Sandwich Norm Removed — Standard Pre-Norm Architecture (ROOT CAUSE FIX - Issue #148, Feb 2026)**: Post-residual RMSNorm ("Sandwich Norm") forced `||h[t]|| = sqrt(D)` for ALL tokens at EVERY layer, removing magnitude as a degree of freedom. This created four compounding structural differences from standard PyTorch GPT models that collectively caused mode collapse:
+
+- **Problem 1 — Constant hidden norm**: All tokens on a hypersphere where cosine alignment is the ONLY remaining axis of variation. Standard pre-norm transformers allow `||h[t]||` to vary freely, providing magnitude diversity that resists alignment.
+- **Problem 2 — Initial ρ(0) = 0.21**: Standard PyTorch GPT at random init has ρ(0) ≈ 0.05-0.08. The fixed-norm geometry amplifies directional alignment from causal attention prefix averaging (which exists in all causal transformers but is offset by magnitude diversity). GRIM-text started halfway to instability.
+- **Problem 3 — Logit std ≈ 0.37**: Standard GPT-2 small has logit_std ≈ 3-5. The tight logit distribution amplified relative frequency effects, making gradient direction too consistent early in training.
+- **Problem 4 — Residual scaling already implemented**: The `1/sqrt(2L)` scaling (GPT-2 pattern) was already in place for W_o and W_2 init, but Sandwich Norm negated its benefit by re-normalizing the residual stream per-layer, removing the depth compensation's directional damping effect.
+- **Architectural Change**:
+    - **Before**: `output = RMSNorm(input + LayerScale(sublayer_output))` — constrained norm
+    - **After**: `output = input + LayerScale(sublayer_output)` — free norm (standard pre-norm)
+- **Weights Removed**: `rms_post_attn_gamma_` and `rms_post_ffn_gamma_` (2 × d_model per layer = 18,432 params for L=12, D=768) — these were learnable scalars inside the deleted post-residual RMSNorm.
+- **Serialization**: Old checkpoints with sandwich norm weights load successfully (weights silently ignored). New checkpoints don't save them.
+- **Files Modified**: `Encoding_GPU.cu` (forward pass), `Encoding_GPU.hpp` (removed members/accessors), `LanguageModel_Training.cu` (parameter groups), `AutogradTraining.cu` (zero_grad, grad scaling, validation), `TrainingOps.cu` (param counting), `grim_model_serialization.cu` (save/load views), `Serialization_GPU.cu` (checkpoint read/write), `Serialization_GPU.hpp` (view struct comments)
+- **IMPORTANT**: Requires retraining from scratch (architecture fundamentally changed).
+- **Expected Result**: ρ(0) should drop to ~0.05-0.08 (matching standard PyTorch GPT), logit_std should increase, and mode collapse should not occur in early batches.
+
 ## Testing & Debugging
 
 **Run GRIM**

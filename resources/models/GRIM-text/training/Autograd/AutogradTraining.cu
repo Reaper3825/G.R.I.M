@@ -946,8 +946,7 @@ BackwardResult executeAutogradBackward(
                 if (!enc) continue;
                 enc->rms1Gamma().zero_grad(ctx.stream);
                 enc->rms2Gamma().zero_grad(ctx.stream);
-                enc->rmsPostAttnGamma().zero_grad(ctx.stream);
-                enc->rmsPostFfnGamma().zero_grad(ctx.stream);
+                // Issue #148: Sandwich norm gammas REMOVED
                 enc->attnWqkv().zero_grad(ctx.stream);
                 enc->attnBqkv().zero_grad(ctx.stream);
                 enc->attnWo().zero_grad(ctx.stream);
@@ -971,9 +970,10 @@ BackwardResult executeAutogradBackward(
         }
     }
     
-    // Call backward on the text loss (single loss path, weight always 1.0)
-    AG_INFO("Calling loss_tensor.backward()...");
-    intermediates.loss_tensor.backward();
+    // Call backward on the text loss (single loss path)
+    // Starting with ctx.grad_scale (usually 1/accumulation_steps)
+    AG_INFO("Calling loss_tensor.backward(nullptr, " << ctx.grad_scale << ")...");
+    intermediates.loss_tensor.backward(nullptr, ctx.grad_scale);
     AG_INFO("loss_tensor.backward() returned successfully");
 
     // ScratchBlock backward is now automatic via ScratchBlockGradFn in the autograd chain.
@@ -992,7 +992,8 @@ BackwardResult executeAutogradBackward(
             ts->cached_token_numeric_values.data,
             ts->cached_token_numeric_mask.data,
             total_tokens,
-            ctx.stream);
+            ctx.stream,
+            ctx.grad_scale);  // Scale numeric head gradients by accumulation scale too!
         if (atom_count > 0) {
             AG_INFO("Extraction head: loss=" << extraction_loss
                     << " atoms=" << atom_count);
@@ -1008,59 +1009,12 @@ BackwardResult executeAutogradBackward(
     }
     AG_INFO("Gradient connectivity verified");
     
-    // Apply gradient scaling if needed
-    // ISSUE #59: Use grad_data() accessor
-    if (ctx.grad_scale != 1.0f) {
-        const float scale = ctx.grad_scale;
-        
-        scaleGradBuffer(ctx.embedding_layer->tokenWeights().grad_data(), ctx.embedding_layer->tokenWeights().numel(), scale, ctx.stream);
-        if (ctx.embedding_layer->hasPositionEmbeddings()) {
-            scaleGradBuffer(ctx.embedding_layer->positionWeights().grad_data(), ctx.embedding_layer->positionWeights().numel(), scale, ctx.stream);
-        }
-        // LM Head weights may alias embedding weights (tied)
-        if (ctx.lm_head->weights().grad_data() != ctx.embedding_layer->tokenWeights().grad_data()) {
-            scaleGradBuffer(ctx.lm_head->weights().grad_data(), ctx.lm_head->weights().numel(), scale, ctx.stream);
-        }
-        scaleGradBuffer(ctx.lm_head->bias().grad_data(), ctx.lm_head->bias().numel(), scale, ctx.stream);
-        scaleGradBuffer(ctx.lm_head->finalRmsGamma().grad_data(), ctx.lm_head->finalRmsGamma().numel(), scale, ctx.stream);
-        
-        if (ctx.gpu_encoder) {
-            const int num_layers = ctx.gpu_encoder->getNumLayers();
-            for (int layer = 0; layer < num_layers; ++layer) {
-                auto* enc = ctx.gpu_encoder->getLayer(layer);
-                if (!enc) continue;
-                scaleGradBuffer(enc->rms1Gamma().grad_data(), enc->rms1Gamma().numel(), scale, ctx.stream);
-                scaleGradBuffer(enc->rms2Gamma().grad_data(), enc->rms2Gamma().numel(), scale, ctx.stream);
-                scaleGradBuffer(enc->rmsPostAttnGamma().grad_data(), enc->rmsPostAttnGamma().numel(), scale, ctx.stream);
-                scaleGradBuffer(enc->rmsPostFfnGamma().grad_data(), enc->rmsPostFfnGamma().numel(), scale, ctx.stream);
-                scaleGradBuffer(enc->attnWqkv().grad_data(), enc->attnWqkv().numel(), scale, ctx.stream);
-                scaleGradBuffer(enc->attnBqkv().grad_data(), enc->attnBqkv().numel(), scale, ctx.stream);
-                scaleGradBuffer(enc->attnWo().grad_data(), enc->attnWo().numel(), scale, ctx.stream);
-                scaleGradBuffer(enc->attnBo().grad_data(), enc->attnBo().numel(), scale, ctx.stream);
-                scaleGradBuffer(enc->ffnW1().grad_data(), enc->ffnW1().numel(), scale, ctx.stream);
-                scaleGradBuffer(enc->ffnB1().grad_data(), enc->ffnB1().numel(), scale, ctx.stream);
-                scaleGradBuffer(enc->ffnW2().grad_data(), enc->ffnW2().numel(), scale, ctx.stream);
-                scaleGradBuffer(enc->ffnB2().grad_data(), enc->ffnB2().numel(), scale, ctx.stream);
-                scaleGradBuffer(enc->layerScale1().grad_data(), enc->layerScale1().numel(), scale, ctx.stream);
-                scaleGradBuffer(enc->layerScale2().grad_data(), enc->layerScale2().numel(), scale, ctx.stream);
-            }
-        }
-
-        if (ctx.scratch_block && ctx.scratch_block->isEnabled()) {
-            scaleGradBuffer(ctx.scratch_block->atomTypeEmbeddings().grad_data(),
-                            ctx.scratch_block->atomTypeEmbeddings().numel(), scale, ctx.stream);
-            scaleGradBuffer(ctx.scratch_block->atomProjection().grad_data(),
-                            ctx.scratch_block->atomProjection().numel(), scale, ctx.stream);
-            scaleGradBuffer(ctx.scratch_block->textFeatureProjection().grad_data(),
-                            ctx.scratch_block->textFeatureProjection().numel(), scale, ctx.stream);
-            scaleGradBuffer(ctx.scratch_block->valueExtractionWeight().grad_data(),
-                            ctx.scratch_block->valueExtractionWeight().numel(), scale, ctx.stream);
-            scaleGradBuffer(ctx.scratch_block->valueExtractionBias().grad_data(),
-                            ctx.scratch_block->valueExtractionBias().numel(), scale, ctx.stream);
-        }
-    }
+    // ISSUE #149: Manual parameter gradient scaling REMOVED.
+    // We now scale the root gradient (the loss) at the start of backward()
+    // which propagates the scale through the entire computation graph.
+    // This is mathematically equivalent, more efficient (fewer kernels),
+    // and safer against omission bugs when adding new layers.
     
-    // Gradient norm computed by Phase2 via ctx.model->computeGradNorm() — not duplicated here
     AG_INFO("Backward complete");
     
     result.success = true;
@@ -1168,8 +1122,7 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
             };
             check(enc->rms1Gamma(), "rms1Gamma");
             check(enc->rms2Gamma(), "rms2Gamma");
-            check(enc->rmsPostAttnGamma(), "rmsPostAttnGamma");
-            check(enc->rmsPostFfnGamma(), "rmsPostFfnGamma");
+            // Issue #148: Sandwich norm gammas REMOVED
             check(enc->attnWqkv(), "attnWqkv");
             check(enc->attnBqkv(), "attnBqkv");
             check(enc->attnWo(), "attnWo");

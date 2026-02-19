@@ -280,7 +280,8 @@ __global__ void kernelExtractionTrainStep(
     float* __restrict__ d_total_loss,           // [1]
     int total_tokens,
     int d_model,
-    float inv_count                             // 1.0 / atom_count
+    float inv_count,                            // 1.0 / atom_count
+    float grad_scale                            // Scale for accumulation
 ) {
     const int t = blockIdx.x;
     if (t >= total_tokens) return;
@@ -307,8 +308,8 @@ __global__ void kernelExtractionTrainStep(
     const float target    = numeric_values[t];
     const float diff      = predicted - target;
 
-    // --- Backward: grad = diff * inv_count  (mean MSE) ---
-    const float g = diff * inv_count;
+    // --- Backward: grad = diff * inv_count * grad_scale (mean MSE) ---
+    const float g = diff * inv_count * grad_scale;
 
     for (int d = tid; d < d_model; d += blockDim.x) {
         atomicAdd(&grad_W[d], g * hidden[d]);
@@ -966,7 +967,8 @@ std::pair<float, int> ScratchBlockLayer::trainExtractionStep(
     const float* numeric_values,
     const float* numeric_mask,
     int total_tokens,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    float grad_scale)
 {
     if (!weights_allocated_) {
         throw std::runtime_error(
@@ -1049,7 +1051,8 @@ std::pair<float, int> ScratchBlockLayer::trainExtractionStep(
         d_extraction_output_,
         total_tokens,
         config_.d_model,
-        inv_count);
+        inv_count,
+        grad_scale);
 
     // Read back mean loss
     float total_loss = 0.0f;

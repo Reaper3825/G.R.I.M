@@ -1044,9 +1044,10 @@ struct Tensor {
      * Typically called on the loss tensor. Walks the compute graph
      * backward, calling each GradFn::apply().
      * 
-     * @param grad_output Initial gradient (default: scalar 1.0)
+     * @param grad_output Initial gradient (nullptr for scalar 1.0)
+     * @param scale       Scalar scale to apply to the initial gradient (default 1.0)
      */
-    void backward(const Tensor* grad_output = nullptr);
+    void backward(const Tensor* grad_output = nullptr, float scale = 1.0f);
     
     //--------------------------------------------------//
     // View Conversion (for compatibility with existing code)
@@ -1254,6 +1255,12 @@ Tensor center_rows(const Tensor& x, cudaStream_t stream = nullptr);
  * @return Centered tensor (each column has mean ≈ 0 across positions)
  */
 Tensor center_columns(const Tensor& x, cudaStream_t stream = nullptr);
+
+    // Issue #149: project out dominant PC1 direction to prevent mode collapse
+    // g = PC1(H) via n_power_iters steps of power iteration (stop-gradient)
+    // Forward:  h̃[t] = h[t] - (h[t]·g)*g
+    // Backward: grad_h = (I - gg^T) * grad_h̃
+    Tensor project_out_pc1(const Tensor& x, int n_power_iters = 5, cudaStream_t stream = nullptr);
 
 /**
  * Broadcast add with bias: output[i,j] = input[i,j] + bias[j]

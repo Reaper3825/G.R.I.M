@@ -211,12 +211,14 @@ public:
     /// @param numeric_mask    [total_tokens] as float, 1.0 at atom positions (device pointer)
     /// @param total_tokens    number of tokens in the batch
     /// @param stream          CUDA stream
+    /// @param grad_scale      Scale to apply to gradients (for accumulation)
     std::pair<float, int> trainExtractionStep(
         const float* encoder_output,
         const float* numeric_values,
         const float* numeric_mask,
         int total_tokens,
-        cudaStream_t stream);
+        cudaStream_t stream,
+        float grad_scale = 1.0f);
 
 private:    void allocateWeights();
     void freeWeights();

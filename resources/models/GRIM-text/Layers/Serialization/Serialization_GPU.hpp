@@ -73,8 +73,8 @@ struct SerializationEncoderLayerReadView {
 	DeviceReadView ffn_b2;
 	DeviceReadView rms1_gamma;
 	DeviceReadView rms2_gamma;
-	DeviceReadView rms_post_attn_gamma;
-	DeviceReadView rms_post_ffn_gamma;
+	DeviceReadView rms_post_attn_gamma;  // Issue #148: REMOVED from model, kept for old checkpoint compat (always null)
+	DeviceReadView rms_post_ffn_gamma;   // Issue #148: REMOVED from model, kept for old checkpoint compat (always null)
 	DeviceReadView layer_scale1;       // [1] LayerScale attention scalar (may be empty if disabled)
 	DeviceReadView layer_scale2;       // [1] LayerScale FFN scalar (may be empty if disabled)
 };
@@ -90,8 +90,8 @@ struct SerializationEncoderLayerWriteView {
 	DeviceWriteView ffn_b2;
 	DeviceWriteView rms1_gamma;
 	DeviceWriteView rms2_gamma;
-	DeviceWriteView rms_post_attn_gamma;
-	DeviceWriteView rms_post_ffn_gamma;
+	DeviceWriteView rms_post_attn_gamma;  // Issue #148: REMOVED from model, kept for old checkpoint compat (always null)
+	DeviceWriteView rms_post_ffn_gamma;   // Issue #148: REMOVED from model, kept for old checkpoint compat (always null)
 	DeviceWriteView layer_scale1;      // [1] LayerScale attention scalar (may be empty if disabled)
 	DeviceWriteView layer_scale2;      // [1] LayerScale FFN scalar (may be empty if disabled)
 };

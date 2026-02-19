@@ -197,8 +197,8 @@ bool LanguageModel::save(const std::string& path) {
         assignRead(view.ffn_b2, enc->ffnB2().data, d_model);
         assignRead(view.rms1_gamma, enc->rms1Gamma().data, d_model);
         assignRead(view.rms2_gamma, enc->rms2Gamma().data, d_model);
-        assignRead(view.rms_post_attn_gamma, enc->rmsPostAttnGamma().data, d_model);
-        assignRead(view.rms_post_ffn_gamma, enc->rmsPostFfnGamma().data, d_model);
+        // Issue #148: Sandwich norm gammas REMOVED — not saved to checkpoint
+        // Old checkpoints may contain rms_post_attn/rms_post_ffn but they're ignored on load
         // LayerScale (Issue #109) — single scalar per sublayer
         if (enc->layerScale1().data) assignRead(view.layer_scale1, enc->layerScale1().data, 1);
         if (enc->layerScale2().data) assignRead(view.layer_scale2, enc->layerScale2().data, 1);
@@ -339,8 +339,7 @@ bool LanguageModel::load(const std::string& path) {
         assignWrite(view.ffn_b2, enc->ffnB2().data, d_model);
         assignWrite(view.rms1_gamma, enc->rms1Gamma().data, d_model);
         assignWrite(view.rms2_gamma, enc->rms2Gamma().data, d_model);
-        assignWrite(view.rms_post_attn_gamma, enc->rmsPostAttnGamma().data, d_model);
-        assignWrite(view.rms_post_ffn_gamma, enc->rmsPostFfnGamma().data, d_model);
+        // Issue #148: Sandwich norm gammas REMOVED — not loaded from checkpoint
         // LayerScale (Issue #109) — single scalar per sublayer
         if (enc->layerScale1().data) assignWrite(view.layer_scale1, enc->layerScale1().data, 1);
         if (enc->layerScale2().data) assignWrite(view.layer_scale2, enc->layerScale2().data, 1);

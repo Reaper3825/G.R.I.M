@@ -37,6 +37,8 @@ struct LMHeadLayerConfig {
     int vocab_size = 0;        // Output vocabulary size (MUST be populated)
     bool use_bias = false;     // Add learnable bias to logits
     bool center_hidden_states = false;  // Apply column+row centering before projection (Issue #125/#132)
+    bool project_out_pc1 = false;       // Project out dominant PC1 direction before projection (Issue #149)
+    int  pc1_power_iters = 5;           // Number of power iteration steps for PC1 estimation
     bool center_logits = false;         // Row-center logits after projection (numerical stability)
     bool has_final_rms_norm = true;     // Apply RMSNorm before projection (pre-LM-head norm)
     float rms_epsilon = 1e-5f;          // RMSNorm epsilon

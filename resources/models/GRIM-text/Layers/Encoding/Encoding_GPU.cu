@@ -295,15 +295,9 @@ void EncodingLayer::allocateWeights(uint64_t seed, float residual_scale, float l
     rms2_gamma_.ensure_grad();
     fillOnes(rms2_gamma_);
     
-    rms_post_attn_gamma_ = Tensor::zeros({d_model}, stream, "enc_rms_post_attn_gamma_own");
-    rms_post_attn_gamma_.requires_grad_();
-    rms_post_attn_gamma_.ensure_grad();
-    fillOnes(rms_post_attn_gamma_);
-    
-    rms_post_ffn_gamma_ = Tensor::zeros({d_model}, stream, "enc_rms_post_ffn_gamma_own");
-    rms_post_ffn_gamma_.requires_grad_();
-    rms_post_ffn_gamma_.ensure_grad();
-    fillOnes(rms_post_ffn_gamma_);
+    // Issue #148: Sandwich Norm REMOVED — rms_post_attn_gamma_ and rms_post_ffn_gamma_ 
+    // are no longer allocated. Standard pre-norm architecture does not use post-residual
+    // normalization. This allows hidden state norms to vary freely across tokens.
     
     //==================================================//
     //  Attention QKV projection [total_qkv_dim, d_model]
@@ -312,6 +306,11 @@ void EncodingLayer::allocateWeights(uint64_t seed, float residual_scale, float l
     W_qkv_.requires_grad_();
     W_qkv_.ensure_grad();
     Tensor::xavier_uniform_(W_qkv_, seed + 0, stream);
+
+    // Issue #106: Scale QKV weights by 1/sqrt(d_model) to prevent initial LSE explosion.
+    // Without this, coherent summation causes attention scores to start saturated.
+    // Expected output norm ~8, actual without scaling ~125.
+    scaleInplace(W_qkv_, 1.0f / std::sqrt(static_cast<float>(d_model)));
     
     if (config_.use_bias) {
         b_qkv_ = Tensor::zeros({qkv_out_dim}, stream, "enc_b_qkv_own");
@@ -390,8 +389,6 @@ EncodingLayer::EncodingLayer(EncodingLayer&& other) noexcept
     , weights_ready_(other.weights_ready_)
     , rms1_gamma_(std::move(other.rms1_gamma_))
     , rms2_gamma_(std::move(other.rms2_gamma_))
-    , rms_post_attn_gamma_(std::move(other.rms_post_attn_gamma_))
-    , rms_post_ffn_gamma_(std::move(other.rms_post_ffn_gamma_))
     , W_qkv_(std::move(other.W_qkv_))
     , b_qkv_(std::move(other.b_qkv_))
     , W_o_(std::move(other.W_o_))
@@ -415,8 +412,6 @@ EncodingLayer& EncodingLayer::operator=(EncodingLayer&& other) noexcept {
         config_.cublas_handle = other.config_.cublas_handle;
         rms1_gamma_ = std::move(other.rms1_gamma_);
         rms2_gamma_ = std::move(other.rms2_gamma_);
-        rms_post_attn_gamma_ = std::move(other.rms_post_attn_gamma_);
-        rms_post_ffn_gamma_ = std::move(other.rms_post_ffn_gamma_);
         W_qkv_ = std::move(other.W_qkv_);
         b_qkv_ = std::move(other.b_qkv_);
         W_o_ = std::move(other.W_o_);
@@ -440,8 +435,6 @@ void EncodingLayer::freeWeights() {
     // Tensor handles its own memory cleanup via destructor (owns_data=true).
     rms1_gamma_ = Tensor();
     rms2_gamma_ = Tensor();
-    rms_post_attn_gamma_ = Tensor();
-    rms_post_ffn_gamma_ = Tensor();
     W_qkv_ = Tensor();
     b_qkv_ = Tensor();
     W_o_ = Tensor();
@@ -948,7 +941,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     // 7. Residual1: input + proj_out -> residual1
     // Issue #56: Store in intermediates
     // Issue #109: Apply LayerScale to proj_out before residual addition
-    // Note: We apply RMSNorm-based sandwich normalization (not mean-centering).
+    // Note: Standard pre-norm architecture (Issue #148: Sandwich Norm removed).
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1...\n");
     
@@ -959,20 +952,22 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         : intermediates.proj_out;
     
     // ========================================================================
-    // SANDWICH NORM: Residual add + post-residual RMSNorm
-    // 
-    // Architecture: residual1 = RMSNorm(input + LayerScale(attn_out))
-    // 
-    // The post-residual RMSNorm constrains residual stream magnitude,
-    // preventing the unbounded norm growth inherent in standard pre-norm
-    // transformers where output = input + f(RMSNorm(input)).
-    // 
-    // This replaces center_encoder_residuals (Issue #126) which only removed
-    // the mean direction but didn't control magnitude.
+    // STANDARD PRE-NORM RESIDUAL (Issue #148: Sandwich Norm REMOVED)
+    //
+    // Architecture: residual1 = input + LayerScale(attn_out)
+    //
+    // Standard pre-norm transformer residual connection. Hidden state norms
+    // are FREE to vary across tokens, providing an additional degree of freedom
+    // that prevents premature cosine alignment (mode collapse).
+    //
+    // Why Sandwich Norm was removed:
+    //   1. Forced ||h[t]|| = sqrt(D) for ALL tokens → removed magnitude diversity
+    //   2. All tokens on a hypersphere → cosine alignment is the ONLY axis
+    //   3. Initial rho(0)=0.21 (vs PyTorch 0.05-0.08) → started halfway to collapse
+    //   4. Combined with causal attention prefix averaging → mode collapse by batch 3
     // ========================================================================
-    Tensor raw_residual1 = autograd::add(input, proj_for_residual, stream);
-    intermediates.residual1 = autograd::rms_norm(raw_residual1, rms_post_attn_gamma_, config_.rms_epsilon, stream);
-    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 + SandwichNorm DONE\n");
+    intermediates.residual1 = autograd::add(input, proj_for_residual, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 (pre-norm, no sandwich) DONE\n");
     
     
     //--------------------------------------------------
@@ -1019,24 +1014,23 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         : intermediates.ffn_out;
     
     // ========================================================================
-    // SANDWICH NORM: Residual add + post-residual RMSNorm
-    // 
-    // Architecture: output = RMSNorm(residual1 + LayerScale(ffn_out))
-    // 
-    // Same principle as attention residual: constrains stream magnitude.
+    // STANDARD PRE-NORM RESIDUAL (Issue #148: Sandwich Norm REMOVED)
+    //
+    // Architecture: output = residual1 + LayerScale(ffn_out)
+    //
+    // No post-residual normalization. Matches standard PyTorch GPT pre-norm.
     // ========================================================================
-    Tensor raw_output = autograd::add(intermediates.residual1, ffn_for_residual, stream);
-    intermediates.output = autograd::rms_norm(raw_output, rms_post_ffn_gamma_, config_.rms_epsilon, stream);
-    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2 + SandwichNorm DONE - layer COMPLETE\n");
+    intermediates.output = autograd::add(intermediates.residual1, ffn_for_residual, stream);
+    if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2 (pre-norm, no sandwich) DONE - layer COMPLETE\n");
     
     
     // ═══════════════════════════════════════════════════════════════════════════
     // RULE 21 DIAGNOSTIC: Per-Layer Cosine Similarity (correlation tracking)
     //
-    // EQUATION (Sandwich Norm): output = RMSNorm(RMSNorm(input + LS1*attn) + LS2*ffn)
+    // EQUATION (Pre-Norm): output = input + LS2*FFN(RMSNorm(input + LS1*Attn(RMSNorm(input))))
     //
-    // Centering after each residual removes the common direction (mean across tokens),
-    // which prevents correlation accumulation through layers.
+    // Issue #148: Sandwich Norm removed. Standard pre-norm residual connections.
+    // Hidden state norms are now FREE to vary (not clamped to sqrt(D)).
     //
     // Interpretation:
     //   |avg_cos| → 1.0 = mode collapse (all vectors aligned) = BAD

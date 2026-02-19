@@ -86,8 +86,7 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
         per_layer += static_cast<size_t>(cfg.d_ff) * cfg.d_model;       // W2
         per_layer += cfg.d_model; // RMSNorm1 gamma
         per_layer += cfg.d_model; // RMSNorm2 gamma
-        per_layer += cfg.d_model; // RMS post-attn gamma (sandwich norm)
-        per_layer += cfg.d_model; // RMS post-ffn gamma (sandwich norm)
+        // Issue #148: Sandwich norm gammas REMOVED (no post-residual normalization)
         if (cfg.use_bias) {
             per_layer += total_qkv_dim;  // b_qkv
             per_layer += cfg.d_model;    // b_o
@@ -130,7 +129,7 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
             est_lm_head += cfg.vocab_size;  // lm_head_bias [vocab_size]
         }
 
-        // Per-layer encoder: weights + biases + pre-norm + sandwich post-norm
+        // Per-layer encoder: weights + biases + pre-norm
         size_t per_layer = 0;
         per_layer += static_cast<size_t>(total_qkv_dim) * cfg.d_model;  // W_qkv
         per_layer += static_cast<size_t>(cfg.d_model) * cfg.d_model;    // W_o
@@ -138,8 +137,7 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
         per_layer += static_cast<size_t>(cfg.d_ff) * cfg.d_model;       // W2
         per_layer += cfg.d_model;  // RMSNorm1 gamma (pre-attn)
         per_layer += cfg.d_model;  // RMSNorm2 gamma (pre-ffn)
-        per_layer += cfg.d_model;  // RMS post-attn gamma (sandwich norm)
-        per_layer += cfg.d_model;  // RMS post-ffn gamma (sandwich norm)
+        // Issue #148: Sandwich norm gammas REMOVED (no post-residual normalization)
         if (cfg.use_bias) {
             per_layer += total_qkv_dim;  // b_qkv
             per_layer += cfg.d_model;    // b_o
@@ -380,6 +378,8 @@ void LanguageModel::initGPU() {
             lm_config.vocab_size = cfg.vocab_size;
             lm_config.use_bias = cfg.use_bias;
             lm_config.center_hidden_states = cfg.lm_head_center_hidden_states;
+            lm_config.project_out_pc1 = cfg.project_out_pc1;
+            lm_config.pc1_power_iters = cfg.pc1_power_iters;
             lm_config.center_logits = cfg.center_logits;
             lm_config.has_final_rms_norm = true;
             lm_config.rms_epsilon = cfg.rms_epsilon;

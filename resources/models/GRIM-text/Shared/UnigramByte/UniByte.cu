@@ -796,11 +796,11 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
             return;
         }
         std::string segment = text.substr(start, end - start);
-        // Use encodeWithPieces to get piece text for byte length calculation
-        auto segment_pieces = unigram_.encodeWithPieces(segment);
+        // encode() returns token IDs directly — no need for encodeWithPieces
+        // Note: UnigramLM::encode() normalizes to lowercase internally.
+        auto segment_ids = unigram_.encode(segment);
         
-        for (const auto& piece : segment_pieces) {
-            int tid = piece.token_id;
+        for (int tid : segment_ids) {
             result.token_ids.push_back(tid);
             result.token_numeric_values.push_back(0.0f);
             result.token_numeric_mask.push_back(0);
@@ -1021,16 +1021,17 @@ TokenLayout UniByte::tokenLayout() const {
 }
 
 void UniByte::capVocabSize(int max_vocab) {
-    // Cap only affects unigram vocab (specials, bytes, and atoms are always included)
-    const int fixed_size = NUM_SPECIAL_TOKENS + BYTE_VOCAB_SIZE + ATOM_VOCAB_SIZE;  // Specials + Bytes + atom type slots
-    
-    if (max_vocab <= fixed_size) {
-        throw std::runtime_error("max_vocab must be > " + std::to_string(fixed_size) + 
-                                 " to include specials + bytes + atoms");
+    // max_vocab = max number of UNIGRAM PIECES (same semantics as tokenizer.vocab_size
+    // in ai_config.json).  Specials, bytes, and atoms are always included on top.
+    // The old code subtracted the fixed offset here, but that made max_vocab_size=10000
+    // cap to 9723 pieces when vocab_size=10000 trained exactly 10000 — creating a
+    // mismatch between the GRMT file (encoded with 10000 pieces) and the Phase1
+    // tokenizer (capped to 9723).  Now the semantics match: if you train 10000 pieces
+    // and set max_vocab_size=10000, no capping occurs.
+    if (max_vocab <= 0) {
+        throw std::runtime_error("max_vocab must be > 0");
     }
-    
-    const int max_unigram_size = max_vocab - fixed_size;
-    unigram_.capVocabSize(max_unigram_size);
+    unigram_.capVocabSize(max_vocab);
 }
 
 int UniByte::padId() const {

@@ -320,6 +320,8 @@ struct LanguageModelConfig {
     // Centering backward is handled automatically by CenterRowsGradFn/CenterColumnsGradFn
     // inside the autograd graph (Issues #125/#132).
     bool lm_head_center_hidden_states = false;  // Center encoder output before projection
+    bool project_out_pc1 = false;              // Project out PC1 direction before LM head (Issue #149)
+    int  pc1_power_iters = 5;                  // Power iteration steps for PC1 estimation
     bool center_logits = true;                 // Center logits per position (row-wise, mean→0)
     bool center_encoder_residuals = false;        // Center residuals INSIDE encoder layers (attenuates gradient signal)
     

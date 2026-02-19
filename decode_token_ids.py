@@ -113,9 +113,12 @@ def load_vocab_bin(path: Path) -> dict:
                 score = struct.unpack("<f", f.read(4))[0]
 
                 if version >= 3:
-                    token_id = struct.unpack("<I", f.read(4))[0]
-                else:
-                    token_id = UNIGRAM_TOKEN_START + i
+                    _stored_id = struct.unpack("<I", f.read(4))[0]  # Read but IGNORE
+
+                # C++ runtime (getPieceId/getPiece) uses sequential piece index,
+                # NOT the stored token_id (which has gaps from duplicate-text
+                # collisions in addPiece). Use the same sequential mapping.
+                token_id = UNIGRAM_TOKEN_START + i
 
                 id_to_text[token_id] = text
 
@@ -197,9 +200,42 @@ def decode_token(tid: int, vocab: dict) -> str:
 
 
 def decode_sequence(tokens: list, vocab: dict) -> str:
-    """Decode a full sequence of token IDs to readable text."""
-    pieces = [decode_token(tid, vocab) for tid in tokens]
-    text = "".join(pieces)
+    """Decode a full sequence of token IDs to readable text.
+    
+    Merges consecutive byte-fallback tokens into actual UTF-8 characters
+    instead of showing <BYTE 0xNN> tags.
+    """
+    # Two-pass: first collect raw pieces, merging byte runs into UTF-8
+    output_parts = []
+    byte_buffer = bytearray()
+    
+    def flush_bytes():
+        nonlocal byte_buffer
+        if byte_buffer:
+            # Decode accumulated bytes as UTF-8
+            output_parts.append(byte_buffer.decode("utf-8", errors="replace"))
+            byte_buffer = bytearray()
+    
+    for tid in tokens:
+        # Check if this is a byte-fallback token (IDs 4-259)
+        if BYTE_TOKEN_OFFSET <= tid < ATOM_TOKEN_START:
+            byte_val = tid - BYTE_TOKEN_OFFSET
+            if byte_val >= 0x80:  # Non-ASCII byte → accumulate for UTF-8
+                byte_buffer.append(byte_val)
+                continue
+            else:
+                flush_bytes()
+                output_parts.append(chr(byte_val))
+                continue
+        
+        flush_bytes()
+        if tid in vocab:
+            output_parts.append(vocab[tid])
+        else:
+            output_parts.append(f"<UNK:{tid}>")
+    
+    flush_bytes()
+    text = "".join(output_parts)
     text = text.replace("\u2581", " ")  # ▁ (Unigram space marker) → space
     return text
 
@@ -225,6 +261,30 @@ def cmd_decode_ids(args, vocab):
         print(f"  {tid:>6d}  [{region:>7s}]  {text!r}")
 
 
+def wrap_text(text: str, width: int = 100) -> str:
+    """Word-wrap text at the given width, preserving existing newlines."""
+    lines = []
+    for paragraph in text.split("\n"):
+        if not paragraph.strip():
+            lines.append("")
+            continue
+        words = paragraph.split(" ")
+        current_line = ""
+        for word in words:
+            if not word:
+                continue
+            if current_line and len(current_line) + 1 + len(word) > width:
+                lines.append(current_line)
+                current_line = word
+            elif current_line:
+                current_line += " " + word
+            else:
+                current_line = word
+        if current_line:
+            lines.append(current_line)
+    return "\n".join(lines)
+
+
 def cmd_decode_sequences(args, vocab):
     """Decode sequences from training_data.grmt."""
     grmt = Path(args.grmt)
@@ -237,6 +297,9 @@ def cmd_decode_sequences(args, vocab):
     end   = args.seq[1] if args.seq and len(args.seq) > 1 else start + 10
     end   = min(end, total)
 
+    # Default: show first 500 chars per sequence unless --full
+    max_chars = None if args.full else 500
+
     print(f"GRMT: {total} sequences, vocab_size={header['vocab_size']}")
     print(f"Showing sequences [{start}, {end}):\n")
 
@@ -248,14 +311,25 @@ def cmd_decode_sequences(args, vocab):
 
         text = decode_sequence(tokens, vocab)
 
-        print(f"── Sequence {idx} ({len(tokens)} tokens) ──")
+        print(f"{'═' * 80}")
+        print(f"  Sequence {idx}  |  {len(tokens)} tokens  |  {len(text)} chars")
+        print(f"{'═' * 80}")
         if args.raw:
             for i, tid in enumerate(tokens):
                 piece = decode_token(tid, vocab)
                 region = token_type_label(tid)
                 print(f"  [{i:>4d}] {tid:>6d} {region:>7s}  {piece!r}")
             print()
-        print(text)
+
+        display = text
+        truncated = False
+        if max_chars and len(text) > max_chars:
+            display = text[:max_chars]
+            truncated = True
+
+        print(wrap_text(display.strip()))
+        if truncated:
+            print(f"\n  ... [{len(text) - max_chars} more chars, use --full to see all]")
         print()
 
 
@@ -272,8 +346,10 @@ def cmd_search(args, vocab):
     for idx, tokens in iter_grmt_sequences(grmt):
         text = decode_sequence(tokens, vocab)
         if query in text.lower():
-            print(f"── Sequence {idx} ({len(tokens)} tokens) ──")
-            print(text)
+            print(f"{'═' * 80}")
+            print(f"  Sequence {idx}  |  {len(tokens)} tokens  |  {len(text)} chars")
+            print(f"{'═' * 80}")
+            print(wrap_text(text.strip()))
             print()
             found += 1
             if found >= limit:
@@ -373,6 +449,8 @@ def main():
                         help="Print vocabulary and training data statistics")
     parser.add_argument("--limit", type=int, default=20,
                         help="Max results for --search (default: 20)")
+    parser.add_argument("--full", action="store_true",
+                        help="Show full sequence text (default: truncated to 500 chars)")
 
     args = parser.parse_args()
 

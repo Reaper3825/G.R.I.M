@@ -152,20 +152,19 @@ bool testUnigramBuildVocab(std::string& message) {
     
     // Build a simple vocabulary using addPiece
     // Token IDs must start after pre-existing special tokens (unk, pad, bos, eos)
-    int token_id = UNIGRAM_VOCAB_OFFSET + unigram.vocabSize();
-    unigram.addPiece("hello", -1.0f, token_id++, false);
-    unigram.addPiece("world", -1.2f, token_id++, false);
-    unigram.addPiece("he", -2.0f, token_id++, false);
-    unigram.addPiece("llo", -2.5f, token_id++, false);
-    unigram.addPiece("wo", -2.3f, token_id++, false);
-    unigram.addPiece("rld", -2.8f, token_id++, false);
-    unigram.addPiece("h", -3.0f, token_id++, false);
-    unigram.addPiece("e", -3.1f, token_id++, false);
-    unigram.addPiece("l", -3.2f, token_id++, false);
-    unigram.addPiece("o", -3.3f, token_id++, false);
-    unigram.addPiece("w", -3.4f, token_id++, false);
-    unigram.addPiece("r", -3.5f, token_id++, false);
-    unigram.addPiece("d", -3.6f, token_id++, false);
+    unigram.addPiece("hello", -1.0f, false);
+    unigram.addPiece("world", -1.2f, false);
+    unigram.addPiece("he", -2.0f, false);
+    unigram.addPiece("llo", -2.5f, false);
+    unigram.addPiece("wo", -2.3f, false);
+    unigram.addPiece("rld", -2.8f, false);
+    unigram.addPiece("h", -3.0f, false);
+    unigram.addPiece("e", -3.1f, false);
+    unigram.addPiece("l", -3.2f, false);
+    unigram.addPiece("o", -3.3f, false);
+    unigram.addPiece("w", -3.4f, false);
+    unigram.addPiece("r", -3.5f, false);
+    unigram.addPiece("d", -3.6f, false);
     
     // 13 manually added pieces + 4 special tokens (<unk>, <pad>, <s>, </s>) = 17 total
     ASSERT_EQ(unigram.vocabSize(), 17, "Vocab size mismatch");
@@ -178,14 +177,13 @@ bool testUnigramEncode(std::string& message) {
     
     // Build vocabulary with log probabilities
     // Start after pre-existing special tokens
-    int token_id = UNIGRAM_VOCAB_OFFSET + unigram.vocabSize();
-    unigram.addPiece("hello", -1.0f, token_id++, false);  // Most likely for "hello"
-    unigram.addPiece("he", -2.0f, token_id++, false);
-    unigram.addPiece("llo", -2.5f, token_id++, false);
-    unigram.addPiece("h", -3.0f, token_id++, false);
-    unigram.addPiece("e", -3.1f, token_id++, false);
-    unigram.addPiece("l", -3.2f, token_id++, false);
-    unigram.addPiece("o", -3.3f, token_id++, false);
+    unigram.addPiece("hello", -1.0f, false);  // Most likely for "hello"
+    unigram.addPiece("he", -2.0f, false);
+    unigram.addPiece("llo", -2.5f, false);
+    unigram.addPiece("h", -3.0f, false);
+    unigram.addPiece("e", -3.1f, false);
+    unigram.addPiece("l", -3.2f, false);
+    unigram.addPiece("o", -3.3f, false);
     unigram.buildTrie();  // Must build trie before encoding
     
     std::vector<int> tokens = unigram.encode("hello");
@@ -201,13 +199,12 @@ bool testUnigramViterbi(std::string& message) {
     
     // Vocabulary where splitting is better than whole word
     // Start after pre-existing special tokens
-    int token_id = UNIGRAM_VOCAB_OFFSET + unigram.vocabSize();
-    unigram.addPiece("test", -5.0f, token_id++, false);    // Whole word is worse
-    unigram.addPiece("te", -1.0f, token_id++, false);      // Better to split
-    unigram.addPiece("st", -1.0f, token_id++, false);
-    unigram.addPiece("t", -2.0f, token_id++, false);
-    unigram.addPiece("e", -2.1f, token_id++, false);
-    unigram.addPiece("s", -2.2f, token_id++, false);
+    unigram.addPiece("test", -5.0f, false);    // Whole word is worse
+    unigram.addPiece("te", -1.0f, false);      // Better to split
+    unigram.addPiece("st", -1.0f, false);
+    unigram.addPiece("t", -2.0f, false);
+    unigram.addPiece("e", -2.1f, false);
+    unigram.addPiece("s", -2.2f, false);
     unigram.buildTrie();  // Must build trie before encoding
     
     std::vector<int> tokens = unigram.encode("test");
@@ -222,10 +219,9 @@ bool testUnigramDecode(std::string& message) {
     UnigramLM unigram;
     
     // Start after pre-existing special tokens
-    int token_id = UNIGRAM_VOCAB_OFFSET + unigram.vocabSize();
-    unigram.addPiece("hello", -1.0f, token_id++, false);
-    unigram.addPiece("world", -1.2f, token_id++, false);
-    unigram.addPiece(" ", -0.5f, token_id++, false);
+    unigram.addPiece("hello", -1.0f, false);
+    unigram.addPiece("world", -1.2f, false);
+    unigram.addPiece(" ", -0.5f, false);
     unigram.buildTrie();  // Must build trie before encoding
     
     // Encode then decode
@@ -242,9 +238,8 @@ bool testUnigramUnknown(std::string& message) {
     
     // Minimal vocab - will need byte fallback for some chars
     // Start after pre-existing special tokens
-    int token_id = UNIGRAM_VOCAB_OFFSET + unigram.vocabSize();
-    unigram.addPiece("a", -1.0f, token_id++, false);
-    unigram.addPiece("b", -1.0f, token_id++, false);
+    unigram.addPiece("a", -1.0f, false);
+    unigram.addPiece("b", -1.0f, false);
     unigram.buildTrie();  // Must build trie before encoding
     
     // Try to encode something not in vocab
@@ -529,10 +524,9 @@ bool testUniByteBasicEncode(std::string& message) {
     
     // Initialize with a simple vocab via unigramLM
     // Start after pre-existing special tokens
-    int token_id = UNIGRAM_VOCAB_OFFSET + tokenizer.unigramLM().vocabSize();
-    tokenizer.unigramLM().addPiece("hello", -1.0f, token_id++, false);
-    tokenizer.unigramLM().addPiece("world", -1.2f, token_id++, false);
-    tokenizer.unigramLM().addPiece(" ", -0.5f, token_id++, false);
+    tokenizer.unigramLM().addPiece("hello", -1.0f, false);
+    tokenizer.unigramLM().addPiece("world", -1.2f, false);
+    tokenizer.unigramLM().addPiece(" ", -0.5f, false);
     tokenizer.unigramLM().buildTrie();  // Must build trie before encoding
     
     std::vector<int> tokens = tokenizer.encode("hello world");
@@ -705,23 +699,20 @@ bool testUniByteRoundTrip(std::string& message) {
     UniByte tokenizer(config);
     
     // Start after pre-existing special tokens
-    int start_token_id = UNIGRAM_VOCAB_OFFSET + tokenizer.unigramLM().vocabSize();
     std::cout << "[RoundTrip] UNIGRAM_VOCAB_OFFSET = " << UNIGRAM_VOCAB_OFFSET << "\n";
     std::cout << "[RoundTrip] Pre-existing vocab size = " << tokenizer.unigramLM().vocabSize() << "\n";
-    std::cout << "[RoundTrip] Starting token_id = " << start_token_id << "\n";
     
-    int token_id = start_token_id;
     std::cout << "[RoundTrip] Adding pieces:\n";
-    std::cout << "  'the'   -> token_id=" << token_id << "\n";
-    tokenizer.unigramLM().addPiece("the", -1.0f, token_id++, false);
-    std::cout << "  'quick' -> token_id=" << token_id << "\n";
-    tokenizer.unigramLM().addPiece("quick", -1.5f, token_id++, false);
-    std::cout << "  'brown' -> token_id=" << token_id << "\n";
-    tokenizer.unigramLM().addPiece("brown", -1.6f, token_id++, false);
-    std::cout << "  'fox'   -> token_id=" << token_id << "\n";
-    tokenizer.unigramLM().addPiece("fox", -1.7f, token_id++, false);
-    std::cout << "  ' '     -> token_id=" << token_id << "\n";
-    tokenizer.unigramLM().addPiece(" ", -0.5f, token_id++, false);
+    tokenizer.unigramLM().addPiece("the", -1.0f, false);
+    std::cout << "  'the'   -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
+    tokenizer.unigramLM().addPiece("quick", -1.5f, false);
+    std::cout << "  'quick' -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
+    tokenizer.unigramLM().addPiece("brown", -1.6f, false);
+    std::cout << "  'brown' -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
+    tokenizer.unigramLM().addPiece("fox", -1.7f, false);
+    std::cout << "  'fox'   -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
+    tokenizer.unigramLM().addPiece(" ", -0.5f, false);
+    std::cout << "  ' '     -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().vocabSize() - 1) << "\n";
     
     std::cout << "[RoundTrip] Final vocab size = " << tokenizer.unigramLM().vocabSize() << "\n";
     
@@ -732,7 +723,6 @@ bool testUniByteRoundTrip(std::string& message) {
         const auto* piece = tokenizer.unigramLM().getPiece(tid);
         if (piece) {
             std::cout << "  idx=" << i << " token_id=" << tid 
-                      << " stored_id=" << piece->token_id
                       << " text=\"" << piece->text << "\""
                       << " score=" << piece->score
                       << " special=" << piece->is_special
@@ -1093,16 +1083,15 @@ bool testFullPipeline(std::string& message) {
     
     // Add vocabulary via unigramLM
     // Start after pre-existing special tokens
-    int token_id = UNIGRAM_VOCAB_OFFSET + tokenizer.unigramLM().vocabSize();
-    tokenizer.unigramLM().addPiece("the", -1.0f, token_id++, false);
-    tokenizer.unigramLM().addPiece("is", -1.1f, token_id++, false);
-    tokenizer.unigramLM().addPiece("price", -1.5f, token_id++, false);
-    tokenizer.unigramLM().addPiece("visit", -1.6f, token_id++, false);
-    tokenizer.unigramLM().addPiece("for", -1.7f, token_id++, false);
-    tokenizer.unigramLM().addPiece("more", -1.8f, token_id++, false);
-    tokenizer.unigramLM().addPiece("info", -1.9f, token_id++, false);
-    tokenizer.unigramLM().addPiece(" ", -0.5f, token_id++, false);
-    tokenizer.unigramLM().addPiece(".", -0.6f, token_id++, false);
+    tokenizer.unigramLM().addPiece("the", -1.0f, false);
+    tokenizer.unigramLM().addPiece("is", -1.1f, false);
+    tokenizer.unigramLM().addPiece("price", -1.5f, false);
+    tokenizer.unigramLM().addPiece("visit", -1.6f, false);
+    tokenizer.unigramLM().addPiece("for", -1.7f, false);
+    tokenizer.unigramLM().addPiece("more", -1.8f, false);
+    tokenizer.unigramLM().addPiece("info", -1.9f, false);
+    tokenizer.unigramLM().addPiece(" ", -0.5f, false);
+    tokenizer.unigramLM().addPiece(".", -0.6f, false);
     
     // Complex input with multiple structural elements
     std::string input = "The price is 42.99. Visit https://shop.com for more info.";
@@ -1222,8 +1211,7 @@ bool testEdgeCaseOnlyWhitespace(std::string& message) {
     UniByte tokenizer(config);
     
     // Add space to vocab
-    int token_id = UNIGRAM_VOCAB_OFFSET + tokenizer.unigramLM().vocabSize();
-    tokenizer.unigramLM().addPiece(" ", -0.5f, token_id++, false);
+    tokenizer.unigramLM().addPiece(" ", -0.5f, false);
     tokenizer.unigramLM().buildTrie();
     
     std::string input = "   ";
@@ -1265,19 +1253,18 @@ bool testEdgeCaseSpecialTokenLiterals(std::string& message) {
     UniByte tokenizer(config);
     
     // Add vocab pieces for common words to reduce byte fallback
-    int token_id = UNIGRAM_VOCAB_OFFSET + tokenizer.unigramLM().vocabSize();
-    tokenizer.unigramLM().addPiece("This", -1.0f, token_id++, false);
-    tokenizer.unigramLM().addPiece(" ", -0.5f, token_id++, false);
-    tokenizer.unigramLM().addPiece("is", -1.0f, token_id++, false);
-    tokenizer.unigramLM().addPiece("not", -1.0f, token_id++, false);
-    tokenizer.unigramLM().addPiece("a", -1.0f, token_id++, false);
-    tokenizer.unigramLM().addPiece("special", -1.0f, token_id++, false);
-    tokenizer.unigramLM().addPiece("token", -1.0f, token_id++, false);
+    tokenizer.unigramLM().addPiece("This", -1.0f, false);
+    tokenizer.unigramLM().addPiece(" ", -0.5f, false);
+    tokenizer.unigramLM().addPiece("is", -1.0f, false);
+    tokenizer.unigramLM().addPiece("not", -1.0f, false);
+    tokenizer.unigramLM().addPiece("a", -1.0f, false);
+    tokenizer.unigramLM().addPiece("special", -1.0f, false);
+    tokenizer.unigramLM().addPiece("token", -1.0f, false);
     // Add the literal special token strings as regular vocab pieces
-    tokenizer.unigramLM().addPiece("<unk>", -2.0f, token_id++, false);
-    tokenizer.unigramLM().addPiece("<s>", -2.0f, token_id++, false);
-    tokenizer.unigramLM().addPiece("</s>", -2.0f, token_id++, false);
-    tokenizer.unigramLM().addPiece("<pad>", -2.0f, token_id++, false);
+    tokenizer.unigramLM().addPiece("<unk>", -2.0f, false);
+    tokenizer.unigramLM().addPiece("<s>", -2.0f, false);
+    tokenizer.unigramLM().addPiece("</s>", -2.0f, false);
+    tokenizer.unigramLM().addPiece("<pad>", -2.0f, false);
     tokenizer.unigramLM().buildTrie();
     
     // Input contains literal special token strings
@@ -1604,8 +1591,7 @@ bool testMixedVocabAndByteFallback(std::string& message) {
     UniByte tokenizer(config);
     
     // Add partial vocab
-    int token_id = UNIGRAM_VOCAB_OFFSET + tokenizer.unigramLM().vocabSize();
-    tokenizer.unigramLM().addPiece("hello", -1.0f, token_id++, false);
+    tokenizer.unigramLM().addPiece("hello", -1.0f, false);
     tokenizer.unigramLM().buildTrie();
     
     // Input has both vocab word and unknown
@@ -1629,10 +1615,9 @@ bool testVocabSaveLoadText(std::string& message) {
     
     // Create tokenizer with vocab
     UnigramLM original;
-    int token_id = UNIGRAM_VOCAB_OFFSET + original.vocabSize();
-    original.addPiece("test", -1.0f, token_id++, false);
-    original.addPiece("vocab", -1.5f, token_id++, false);
-    original.addPiece("save", -2.0f, token_id++, false);
+    original.addPiece("test", -1.0f, false);
+    original.addPiece("vocab", -1.5f, false);
+    original.addPiece("save", -2.0f, false);
     
     // Save to temp file
     std::string path = "output/test_vocab_save.txt";
@@ -1661,10 +1646,9 @@ bool testVocabSaveLoadBinary(std::string& message) {
     
     // Create tokenizer with vocab
     UnigramLM original;
-    int token_id = UNIGRAM_VOCAB_OFFSET + original.vocabSize();
-    original.addPiece("binary", -1.0f, token_id++, false);
-    original.addPiece("format", -1.5f, token_id++, false);
-    original.addPiece("fast", -2.0f, token_id++, false);
+    original.addPiece("binary", -1.0f, false);
+    original.addPiece("format", -1.5f, false);
+    original.addPiece("fast", -2.0f, false);
     
     // Save to binary
     std::string path = "output/test_vocab_binary.bin";
@@ -1690,11 +1674,10 @@ bool testVocabCapSize(std::string& message) {
     UnigramLM unigram;
     
     // Add many pieces
-    int token_id = UNIGRAM_VOCAB_OFFSET + unigram.vocabSize();
     for (int i = 0; i < 100; ++i) {
         std::string piece = "piece" + std::to_string(i);
         float score = -1.0f - (i * 0.01f);  // Decreasing scores
-        unigram.addPiece(piece, score, token_id++, false);
+        unigram.addPiece(piece, score, false);
     }
     
     int original_size = unigram.vocabSize();
@@ -1717,10 +1700,9 @@ bool testGPUDecode(std::string& message) {
     UnigramLM unigram;
     
     // Add vocab
-    int token_id = UNIGRAM_VOCAB_OFFSET + unigram.vocabSize();
-    unigram.addPiece("gpu", -1.0f, token_id++, false);
-    unigram.addPiece("decode", -1.5f, token_id++, false);
-    unigram.addPiece(" ", -0.5f, token_id++, false);
+    unigram.addPiece("gpu", -1.0f, false);
+    unigram.addPiece("decode", -1.5f, false);
+    unigram.addPiece(" ", -0.5f, false);
     unigram.buildTrie();
     
     // Init GPU

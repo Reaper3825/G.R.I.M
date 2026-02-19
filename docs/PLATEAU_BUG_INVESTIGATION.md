@@ -1,9 +1,140 @@
 # GRIM-text Training Plateau Bug Investigation
 
-**Status:** ISSUE #136 - GRAD_LOGITS[277] negative values at non-target positions FIXED
+**Status:** ISSUE #148 - FIRST-STEP MODE COLLAPSE (Token 36 / SPACE byte)
 **Started:** December 22, 2025
-**Last Updated:** February 14, 2026
-**Latest Finding:** Issue #136 (Feb 9): Mathematically impossible negative gradients at non-target positions were caused by CenterRowsGradFn reusing the externally-owned `grad_logits_tensor.data` buffer, overwriting CE gradients with centered versions. FIX: CenterRowsGradFn now allocates its own dedicated buffer, preserving CE gradients (verified in batch 2 logs: at_other_targets=+0.000023 instead of -0.054415).
+**Last Updated:** February 17, 2026
+**Latest Finding:** Issue #148 (Feb 17): Session 17713862417198392 collapses to token 36 (SPACE byte) after a SINGLE optimizer step (batch 2→3). `avg_cos(h_i,h_j)` jumps 0.46→0.84 in one step. Root causes: `warmup_steps=0` (full lr=5e-4 on first step), `center_hidden_states=false`, PCGrad disabled. Once collapsed, encoder gradients decay (attn: 3.68→0.09) while emb_lm_tied dominates (99% of gradient norm). Loss stalls at 6.7-6.9.
+
+---
+
+## 🔴 ISSUE #148: FIRST-STEP MODE COLLAPSE - Token 36 (SPACE) (Feb 17, 2026)
+
+### Session: 17713862417198392
+
+### Configuration (Key Settings)
+- `warmup_steps = 0` — **NO WARMUP** (lr=5e-4 from step 0!)
+- `center_hidden_states = false` — Issues #125/#132 centering DISABLED
+- `center_logits = true`
+- `entropy_reg = OFF`, `focal = OFF`
+- `weight_decay = 0.1`
+- `embedding_scale = 1.0` (Issue #140)
+- PCGrad DISABLED (Issue #143: "PyTorch-style direct accumulation")
+- `gradient_accumulation_steps = 2`
+- Vocab: 10277 tokens (10000 unigram + 277 byte/atom/special)
+- Token 36 = SPACE (byte 0x20)
+
+### Collapse Timeline
+
+| Batch | unique_argmax | avg_cos(h_i,h_j) | loss | max_logit | logit_std_ratio | Event |
+|-------|--------------|-------------------|------|-----------|-----------------|-------|
+| 1 | 47 | 0.515 | 9.23 | 3.59 | 0.036 | Healthy init |
+| 2 | 43 | 0.462 | 9.29 | 3.04 | 0.036 | **Optimizer step 0 happens here** |
+| 3 | **1 (tok36:50)** | **0.838** | 8.45 | **6.92** | 0.037 | **COLLAPSED** |
+| 5 | 1 (tok277:50) | 0.968 | 8.13 | 4.61 | 0.038 | Oscillates to tok277 briefly |
+| 7 | 1 (tok36:50) | ~0.95 | — | 6.67 | 0.038 | tok36 wins permanently |
+| 10 | 1 (tok36:50) | 0.945 | 7.76 | 7.06 | 0.040 | |
+| 20 | 1 (tok36:50) | 0.949 | 7.23 | 7.61 | 0.060 | |
+| 30 | 1 (tok36:50) | 0.944 | 6.29 | — | — | |
+| 50 | 1 (tok36:50) | 0.947 | 6.85 | 8.18 | 0.116 | max_logit still growing |
+| 59 | 1 (tok36:50) | 0.944 | 6.86 | 8.39 | 0.123 | Training ends |
+
+### Gradient Component Collapse
+
+| Batch | emb_lm_tied | attn | ffn | rms | sb | emb% of total |
+|-------|-------------|------|-----|-----|----|---------------|
+| 1 | 2.27 | 3.68 | 2.09 | 0.14 | 0.186 | 47% |
+| 2 | 3.64 | 6.02 | 3.45 | 0.22 | 0.280 | 46% |
+| 3 | 1.89 | 0.75 | 0.69 | 0.06 | 0.022 | 88% |
+| 7 | 1.92 | 0.28 | 0.33 | 0.05 | 0.001 | 98% |
+| 10 | 3.87 | 0.52 | 0.67 | 0.12 | 0.000 | 98% |
+| 50 | 1.28 | 0.09 | 0.19 | 0.03 | 0.000 | 99% |
+
+**Scratchblock gradients die to ~0 by batch 7** — ScratchBlock parameters stop learning entirely.
+**Encoder gradients (attn+ffn+rms) collapse 30x** from batch 1→50 — the encoder layers barely update.
+
+### QKV Initialization Analysis (from training_run.log)
+
+```
+W_qkv: shape=[1280,768] rms=0.0313
+Q row_norm (full/head): 23.45 / 6.74
+TARGET (full/head):     27.71 / 8.00  (sqrt(d_model)/sqrt(head_dim))
+INFLATION:              0.84x / 0.84x
+```
+
+Q/K row norms at **0.84x of target**. This is mathematically expected (Issue #130 — the "expected" formula was the diagnostic bug, not the init). Attention scores are `0.84² ≈ 0.71x` expected magnitude, making initial attention slightly more uniform. This is NOT the root cause but contributes to weaker initial token differentiation.
+
+### First-Step Catastrophe Analysis
+
+The single optimizer step from batches 1-2 moves the model catastrophically:
+
+1. **Batch 2 post-clip**: `emb_clipped=YES enc_clipped=YES post_clip_total=1.414214` (= √2)
+   Both groups clipped to 1.0 effective norm.
+
+2. **Encoder gradients at batch 1-2**: attn=3.68/6.02, ffn=2.09/3.45 — these are LARGE relative to norm 1.0 clipping budget. The attention gradient dominates at 77% of total.
+
+3. **After step 0**: avg_cos jumps 0.46→0.84. The encoder outputs collapse to a near-single direction. All positions produce nearly identical hidden states → logit[36] becomes dominant for ALL positions.
+
+### Root Causes
+
+1. **No LR warmup** (`warmup_steps=0`): Fixed (Feb 18) by restoring `warmup_steps=1000` and fixing `HyperParameters_GPU.hpp` to stop overriding user LR with 5e-4 defaults.
+
+2. **Gradient Accumulation Formula Bug (Issue #149 - THE SMOKING GUN)**: Discovered Feb 18. Training used `gradient_accumulation_steps=M`, but gradients were only divided by `valid_tokens`. Gradients from `M` micro-batches were SUMMED by `backward()`, making the effective learning rate `Actual_LR * M`. With `accum_steps=7` (from some config tests), effective LR was 35x higher than intended (~1.7e-2), causing the one-step collapse.
+   - **Fix**: Applied `1.0 / accum_steps` scaling to the ROOT of the backward pass (the loss tensor). This propagates through the entire autograd chain, correctly matching PyTorch's `loss = sum(losses) / (M * N)` behavior.
+   - **Cleanup**: Deleted inefficient manual parameter scaling loops in `executeAutogradBackward`.
+
+3. **Hidden state centering disabled** (`center_hidden_states=false`): Fixed (Feb 18) by re-enabling in `ai_config.json`. Issues #125/#132 centering prevents the feedback loop.
+
+---
+
+## 🟢 ISSUE #149: GRADIENT ACCUMULATION SCALE BUG - FIXED (Feb 18, 2026)
+
+### Discovery
+Investigation into Issue #148 ("First-Step Collapse") revealed that the model was receiving massive gradient updates on step 0. 
+
+### Mechanism: The "Sum of Averages" Error
+- Each micro-batch computed `mean_loss = sum(losses) / valid_tokens`.
+- Backward pass produced `avg_gradient` for that micro-batch.
+- Training loop then SUMMED these `avg_gradients` over `M` accumulation steps.
+- **Result**: `effective_grad = grad1 + grad2 + ... + gradM`.
+- **The Bug**: Since each `grad_i` is an average, their sum is `M * global_average`.
+- **Impact**: Step size was `LR * M`. For `M=7`, step size was `3e-4 * 7 = 2.1e-3` (massive for step 0).
+
+### The Fix: Grad-Scale Initialization
+Modified `Tensor::backward` to accept a `scale` parameter.
+```cpp
+// Phase2_TrainingLoop.cu
+const float grad_scale = 1.0f / static_cast<float>(accum_steps);
+// ...
+// AutogradTraining.cu
+intermediates.loss_tensor.backward(nullptr, ctx.grad_scale);
+```
+Initializing the loss gradient to `1/M` instead of `1.0` ensures the accumulated gradient is the true mean over the entire accumulation window.
+
+### Verification
+- `LanguageModel::backward` now passes the correct scale.
+- Redundant `scaleGradBuffer` loops in `AutogradTraining.cu` were deleted (Rule 26).
+- `ScratchBlock::trainExtractionStep` was also updated to respect `grad_scale`.
+
+---
+
+
+### PC1 Causality Test (batch 1, pre-collapse)
+
+```
+PC1 variance_explained = 33.7% (expected: 0.13% for 768-dim)
+BEFORE PC1 removal: logit[36]_mean = 0.50, avg_cos = 0.54
+AFTER  PC1 removal: logit[36]_mean = -0.001, avg_cos = 0.35
+VERDICT: PC1 IS THE MECHANISM — removing it deflates token 36 and decorrelates hidden states.
+```
+
+### What Would Fix This
+
+1. **Add LR warmup**: `warmup_steps = 100-500`. Linear ramp from `lr/warmup_steps` to `lr`.
+2. **Re-enable centering**: `center_hidden_states = true` (column + row centering from Issues #125/#132).
+3. **Consider re-enabling PCGrad** or using separate gradient buffers for embedding/LM head backward.
+4. **Consider PC1 projection**: The PC1 test shows removing the dominant direction fixes logit collapse. An autograd `project_out_pc1` operation could prevent the feedback loop.
+
+---
 
 > **⚠️ NOTE ON TOKEN VOCABULARY LAYOUT (Feb 14, 2026):**  
 > The special token vocabulary layout was refactored on Feb 14, 2026. The layout is:  

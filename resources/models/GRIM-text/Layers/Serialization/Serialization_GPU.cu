@@ -212,21 +212,9 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
             return false;
         }
         
-        // Sandwich norm gammas (optional in checkpoint — initialize to 1.0 if missing)
-        const auto* fb_rms_post_attn = fb_layer->rms_post_attn();
-        const auto* fb_rms_post_ffn = fb_layer->rms_post_ffn();
-        if (fb_rms_post_attn && fb_rms_post_attn->gamma() && layer_view.rms_post_attn_gamma.ptr) {
-            std::vector<float> h_rms_post_attn(fb_rms_post_attn->gamma()->begin(), fb_rms_post_attn->gamma()->end());
-            if (!upload_device_vector(h_rms_post_attn, layer_view.rms_post_attn_gamma, "rms_post_attn.gamma")) {
-                return false;
-            }
-        }
-        if (fb_rms_post_ffn && fb_rms_post_ffn->gamma() && layer_view.rms_post_ffn_gamma.ptr) {
-            std::vector<float> h_rms_post_ffn(fb_rms_post_ffn->gamma()->begin(), fb_rms_post_ffn->gamma()->end());
-            if (!upload_device_vector(h_rms_post_ffn, layer_view.rms_post_ffn_gamma, "rms_post_ffn.gamma")) {
-                return false;
-            }
-        }
+        // Issue #148: Sandwich norm gammas REMOVED from model.
+        // Old checkpoints may contain rms_post_attn/rms_post_ffn — silently skip them.
+        // (layer_view.rms_post_attn_gamma.ptr will be null since model doesn't allocate them)
 
         // LayerScale (Issue #109) — single scalar per sublayer
         // Rule 20: If model expects LayerScale, checkpoint MUST have it. No silent fallback.
@@ -526,25 +514,11 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             builder,
             builder.CreateVector(h_rms2_gamma));
 
-        // Sandwich norm gammas (post-residual)
+        // Issue #148: Sandwich norm gammas REMOVED from model.
+        // Still write empty offsets (0) to maintain FlatBuffer schema compatibility.
         flatbuffers::Offset<GRIMTransformer::RMSNormWeights> fb_rms_post_attn = 0;
         flatbuffers::Offset<GRIMTransformer::RMSNormWeights> fb_rms_post_ffn = 0;
-        if (layer_view.rms_post_attn_gamma.ptr) {
-            std::vector<float> h_rms_post_attn_gamma;
-            if (!download_into(h_rms_post_attn_gamma, layer_view.rms_post_attn_gamma, "rms_post_attn.gamma")) {
-                return false;
-            }
-            fb_rms_post_attn = GRIMTransformer::CreateRMSNormWeights(
-                builder, builder.CreateVector(h_rms_post_attn_gamma));
-        }
-        if (layer_view.rms_post_ffn_gamma.ptr) {
-            std::vector<float> h_rms_post_ffn_gamma;
-            if (!download_into(h_rms_post_ffn_gamma, layer_view.rms_post_ffn_gamma, "rms_post_ffn.gamma")) {
-                return false;
-            }
-            fb_rms_post_ffn = GRIMTransformer::CreateRMSNormWeights(
-                builder, builder.CreateVector(h_rms_post_ffn_gamma));
-        }
+        // (layer_view.rms_post_attn_gamma.ptr and rms_post_ffn_gamma.ptr are null)
 
         // LayerScale serialization (Issue #109) — single scalar per sublayer
         flatbuffers::Offset<flatbuffers::Vector<float>> fb_ls1 = 0;

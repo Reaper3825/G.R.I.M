@@ -519,9 +519,10 @@ static unsigned int resolveSubwordMiningWorkerCount(
 
     unsigned int workers = std::thread::hardware_concurrency();
     if (workers == 0) workers = 4;
-    workers = std::max(1u, workers > 1 ? workers - 1 : 1);
-    constexpr unsigned int kMaxAutoMiningWorkers = 12;
-    workers = std::min(workers, kMaxAutoMiningWorkers);
+    // Leave 2 logical threads for the OS and IO — use the rest for mining.
+    workers = workers > 2 ? workers - 2 : 1;
+    // No artificial cap — hardware_concurrency already reflects the physical limit.
+    // (i7-12700F = 20 logical threads → 18 mining workers)
 
     if (configured_workers > 0) {
         workers = static_cast<unsigned int>(configured_workers);
@@ -906,20 +907,13 @@ UnigramLM& UnigramLM::operator=(UnigramLM&& other) noexcept {
 // Vocabulary Management
 //--------------------------------------------------//
 
-// DELETED: Auto-ID overload removed per Rule 20 (no silent fallbacks)
-// Callers MUST provide explicit token_id = UNIGRAM_VOCAB_OFFSET + pieces_.size()
-
-void UnigramLM::addPiece(const std::string& text, float score, int token_id, bool is_user_defined) {
+void UnigramLM::addPiece(const std::string& text, float score, bool is_user_defined) {
     if (piece_to_id_.count(text)) {
-        // Update existing piece - but preserve token_id for user-defined tokens!
-        // User-defined tokens (special tokens like <unk>, <s>) have manually assigned IDs.
-        // If we overwrite their token_id, we create gaps in the ID sequence and duplicates.
-        int id = piece_to_id_[text];
-        pieces_[id].score = score;
-        // Only update token_id if the existing piece is NOT user-defined
-        if (!pieces_[id].is_user_defined) {
-            pieces_[id].token_id = token_id;
-            pieces_[id].is_user_defined = is_user_defined;
+        // Update existing piece's score. Token ID is immutable (= UNIGRAM_VOCAB_OFFSET + index).
+        int idx = piece_to_id_[text];
+        pieces_[idx].score = score;
+        if (!pieces_[idx].is_user_defined) {
+            pieces_[idx].is_user_defined = is_user_defined;
         }
         return;
     }
@@ -927,8 +921,8 @@ void UnigramLM::addPiece(const std::string& text, float score, int token_id, boo
     UnigramPiece piece;
     piece.text = text;
     piece.score = score;
-    piece.token_id = token_id;
-    piece.is_special = (text.front() == '<' && text.back() == '>');
+    // token_id is NOT stored — it's ALWAYS (UNIGRAM_VOCAB_OFFSET + index).
+    piece.is_special = (!text.empty() && text.front() == '<' && text.back() == '>');
     piece.is_user_defined = is_user_defined;
     
     piece_to_id_[text] = static_cast<int>(pieces_.size());
@@ -1019,7 +1013,7 @@ bool UnigramLM::load(const std::string& vocab_path) {
                 std::cout << "[UnigramLM] Calling addPiece..." << std::endl << std::flush;
             }
             
-            addPiece(piece, score, UNIGRAM_VOCAB_OFFSET + static_cast<int>(pieces_.size()), false);
+            addPiece(piece, score, false);
             
             if (line_count == 1) {
                 std::cout << "[UnigramLM] First addPiece succeeded" << std::endl << std::flush;
@@ -1119,10 +1113,18 @@ bool UnigramLM::loadBinary(const std::string& vocab_path) {
             continue;
         }
         
-        // Assign new token_id based on current layout
-        int new_token_id = UNIGRAM_VOCAB_OFFSET + static_cast<int>(pieces_.size());
+        // Validate stored token_id matches position-derived ID.
+        // If mismatch, the vocab file was produced by the buggy tokenizer.
+        int expected_id = UNIGRAM_VOCAB_OFFSET + static_cast<int>(pieces_.size());
+        if (token_id != expected_id) {
+            throw std::runtime_error(
+                "[UnigramLM] vocab.bin token_id mismatch at piece " + std::to_string(i) +
+                " ('" + text.substr(0, 30) + "'): stored=" + std::to_string(token_id) +
+                " expected=" + std::to_string(expected_id) +
+                ". Retrain tokenizer to fix (old vocab had EM prune/backfill collision bug).");
+        }
         
-        addPiece(text, score, new_token_id, false);
+        addPiece(text, score, false);
     }
     
     if (!bin_file) {
@@ -1186,12 +1188,15 @@ bool UnigramLM::save(const std::string& vocab_path, bool save_text_format) const
     bin_file.write(reinterpret_cast<const char*>(&total_vocab_size), 4);
     
     // Write pieces: length (4 bytes) + text + score (4 bytes float) + token_id (4 bytes)
-    for (const auto& piece : pieces_) {
+    // token_id is position-derived (UNIGRAM_VOCAB_OFFSET + i), written for format compat.
+    for (size_t i = 0; i < pieces_.size(); ++i) {
+        const auto& piece = pieces_[i];
         uint32_t len = static_cast<uint32_t>(piece.text.size());
         bin_file.write(reinterpret_cast<const char*>(&len), 4);
         bin_file.write(piece.text.data(), len);
         bin_file.write(reinterpret_cast<const char*>(&piece.score), 4);
-        bin_file.write(reinterpret_cast<const char*>(&piece.token_id), 4);
+        int tid = tokenIdForIndex(static_cast<int>(i));
+        bin_file.write(reinterpret_cast<const char*>(&tid), 4);
     }
     
     bin_file.close();
@@ -1620,10 +1625,20 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                   << ", chunk_size=" << chunk_size << std::endl;
 
         std::vector<std::unordered_map<std::string, int>> local_counts(mining_workers);
-        const size_t reserve_per_worker = std::max<size_t>(200000, 4000000 / mining_workers);
+        // 6M slots per worker: ~600MB per map at ~100-byte amortised entry cost.
+        // With 128GB RAM and 18 workers that is ~10.8GB total — well within budget.
+        // Pre-reserving prevents the dozens of rehash events that occur when growing
+        // from the old 333K default to the actual 5-11M entries per worker.
+        constexpr size_t kReservePerWorker = 6000000;
         for (auto& map : local_counts) {
-            map.reserve(reserve_per_worker);
+            map.reserve(kReservePerWorker);
         }
+        // Local high-water mark: when a worker's map exceeds this size we prune
+        // entries with count == 1 (true singletons in this worker's slice are almost
+        // certainly global singletons — keeping them wastes memory and dominates
+        // merge cost). 5M chosen so pruning fires before first rehash above reserve.
+        constexpr size_t kLocalPruneHighWater = 5000000;
+        constexpr int    kLocalPruneMinFreq   = 2;
 
         std::atomic<size_t> next_index{0};
         std::atomic<size_t> processed_texts{0};
@@ -1644,6 +1659,16 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                     for (size_t ti = begin; ti < end; ++ti) {
                         if (abort.load(std::memory_order_relaxed)) return;
                         mineSubwordsFromSentence(sentenceForIndex(ti), max_len, sentenceAtomsForIndex(ti), local);
+                    }
+                    // Local pruning: drop singleton entries to keep map small.
+                    // Fires at most a handful of times per worker lifetime.
+                    if (local.size() > kLocalPruneHighWater) {
+                        for (auto it = local.begin(); it != local.end(); ) {
+                            if (it->second < kLocalPruneMinFreq)
+                                it = local.erase(it);
+                            else
+                                ++it;
+                        }
                     }
 
                     const size_t chunk_done = end - begin;
@@ -1696,39 +1721,58 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         std::cout << "[UnigramLM] Parallel mining pass finished in "
                   << mining_elapsed << "s; merging thread-local counts..." << std::endl;
 
-        size_t merged_unique_estimate = 0;
-        for (const auto& map : local_counts) {
-            merged_unique_estimate += map.size();
-        }
-        subword_counts.reserve(std::max<size_t>(subword_counts.size(), merged_unique_estimate));
-
+        // Parallel tree-reduction merge.
+        // Each round halves the number of maps by merging adjacent pairs in parallel.
+        // This keeps individual working sets small and saturates all cores during merge.
         const auto merge_start = std::chrono::steady_clock::now();
-        const size_t merge_progress_interval = std::max<size_t>(1, local_counts.size() / 4);
-        for (size_t wi = 0; wi < local_counts.size(); ++wi) {
-            auto& map = local_counts[wi];
-            for (const auto& [subword, count] : map) {
-                auto [it, inserted] = subword_counts.try_emplace(subword, count);
-                if (!inserted) {
-                    it->second += count;
-                }
-            }
-            // Release each worker map as soon as it is merged to avoid a long
-            // destructor pause when leaving this scope.
-            map.clear();
-            map.rehash(0);
+        std::cout << "[UnigramLM] Merging " << local_counts.size()
+                  << " maps via parallel tree-reduction..." << std::endl;
 
-            if ((wi + 1) % merge_progress_interval == 0 || (wi + 1) == local_counts.size()) {
-                const double merge_elapsed_sec = std::chrono::duration<double>(
-                    std::chrono::steady_clock::now() - merge_start).count();
-                std::cout << "[UnigramLM] Merge progress: " << (wi + 1)
-                          << "/" << local_counts.size()
-                          << " maps, " << subword_counts.size()
-                          << " unique subwords"
-                          << " (" << merge_elapsed_sec << "s)" << std::endl;
+        // Inline helper: merge src into dst, then release src memory.
+        auto mergeInto = [](std::unordered_map<std::string, int>& dst,
+                            std::unordered_map<std::string, int>& src) {
+            dst.reserve(dst.size() + src.size());
+            for (auto& [k, v] : src) {
+                auto [it, inserted] = dst.try_emplace(k, v);
+                if (!inserted) it->second += v;
             }
+            src.clear();
+            src.rehash(0);
+        };
+
+        while (local_counts.size() > 1) {
+            const size_t n = local_counts.size();
+            const size_t pairs = n / 2;
+            std::vector<std::thread> merge_threads;
+            merge_threads.reserve(pairs);
+            for (size_t pi = 0; pi < pairs; ++pi) {
+                // Merge map[pi*2+1] into map[pi*2] in parallel.
+                merge_threads.emplace_back([&, pi]() {
+                    mergeInto(local_counts[pi * 2], local_counts[pi * 2 + 1]);
+                });
+            }
+            for (auto& t : merge_threads) t.join();
+
+            // Compact: keep only the even-indexed (merged) maps.
+            std::vector<std::unordered_map<std::string, int>> next_round;
+            next_round.reserve((n + 1) / 2);
+            for (size_t i = 0; i < n; i += 2) {
+                next_round.push_back(std::move(local_counts[i]));
+            }
+            local_counts = std::move(next_round);
+
+            const double round_sec = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - merge_start).count();
+            std::cout << "[UnigramLM] Merge round done: " << local_counts.size()
+                      << " maps remaining, largest=" << local_counts[0].size()
+                      << " entries (" << round_sec << "s)" << std::endl;
         }
+
+        // local_counts[0] is now the fully merged global map.
+        subword_counts = std::move(local_counts[0]);
         local_counts.clear();
         local_counts.shrink_to_fit();
+
         const double merge_total_sec = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - merge_start).count();
         std::cout << "[UnigramLM] Merge aggregation complete in "
@@ -1785,33 +1829,31 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     // Keep the highest-count surviving variant.
     std::unordered_set<std::string> normalized_added;
     
+    // Pass A: select which entries survive all filters, collect them and their counts.
+    // We need the total accepted count sum BEFORE calling addPiece so that initial
+    // scores are proper log-probabilities: log(count / sum_accepted_counts).
+    // Using total_chars (character corpus size) as denominator was wrong — it mixes
+    // incompatible units (n-gram occurrence count vs character count).
+    struct AcceptedPiece { std::string text; int count; };
+    std::vector<AcceptedPiece> accepted;
+    accepted.reserve(std::min<size_t>(max_to_add, ranked_subwords.size()));
+
     for (const SubwordEntry* entry : ranked_subwords) {
         const std::string& subword = entry->first;
         const int count = entry->second;
-        if (added >= max_to_add) break;        // Stop when target reached
+        if (static_cast<int>(accepted.size()) >= max_to_add) break;
         if (hasPiece(subword)) continue;
-        // Single chars are byte-covered — skip them even if not in pieces_ yet.
-        // Without this, the top subword mining candidates (space, 'e', 't' etc.) would
-        // be re-added to pieces_ as unigram entries, recreating the duplicate we removed.
         if (char_seeds.count(subword)) continue;
 
-        // Track repetition stripping separately for better visibility.
         if (isRepetitionNoise(subword)) {
             repetition_filtered++;
             continue;
         }
-        
-        // Double-check quality filter (should already be filtered during mining, but be safe)
         if (!isValidSubword(subword)) {
             filtered++;
             continue;
         }
-        
-        // Near-duplicate detection: reject subwords whose normalized form
-        // (lowercase + whitespace normalization + repeat compression) matches
-        // an already-added piece.
-        // Since ranked_subwords is sorted by count DESC, the highest-count
-        // variant wins. E.g., " the" (50K) added first, then "the" (3K) rejected.
+
         std::string norm = normalizeForDedup(subword);
         if (norm.empty()) {
             filtered++;
@@ -1822,9 +1864,19 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             continue;
         }
         normalized_added.insert(norm);
-        
-        float score = std::log(static_cast<float>(count) / total_chars);
-        addPiece(subword, score, UNIGRAM_VOCAB_OFFSET + static_cast<int>(pieces_.size()), false);
+
+        accepted.push_back({subword, count});
+    }
+
+    // Sum of all accepted mining counts — correct denominator for initial log-probs.
+    double total_accepted_count = 0.0;
+    for (const auto& ap : accepted) total_accepted_count += ap.count;
+    if (total_accepted_count < 1.0) total_accepted_count = 1.0;  // safety
+
+    // Pass B: commit to pieces_ with correct initial log-probability scores.
+    for (const auto& ap : accepted) {
+        float score = static_cast<float>(std::log(ap.count / total_accepted_count));
+        addPiece(ap.text, score, false);
         added++;
     }
     
@@ -1842,93 +1894,196 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     std::cout << "[UnigramLM] Added " << added << " subwords (min_freq=" << MIN_SUBWORD_FREQ 
               << ", target=" << target_vocab_size << "), total vocab: " << pieces_.size() << std::endl;
     
-    // Step 5: EM iterations to refine scores ONLY (no pruning!)
-    // Tokens that exist in the corpus should NEVER be removed
-    constexpr int EM_ITERATIONS = HyperParameters::UNIGRAM_EM_ITERATIONS;
-    
-    // EM iterations: ONLY refine scores, NO pruning, NO re-adding
-    // The vocabulary is fixed after initial subword mining - we just improve probability estimates
-    for (int em_iter = 0; em_iter < EM_ITERATIONS; ++em_iter) {
-        std::cout << "[UnigramLM] EM iteration " << (em_iter + 1) << "/" << EM_ITERATIONS << std::endl;
-        
-        // Build trie for current vocabulary
-        buildTrie();
-        
-        // E-step: Count token usage via Viterbi segmentation
-        // Run Viterbi ONLY on non-atom segments to avoid scoring atom internals.
-        std::unordered_map<int, double> token_counts;  // token_id -> count
+    // Step 5: EM with convergence detection + dead token pruning + backfill.
+    //
+    // Production EM loop:
+    //   1. Iterate until log-likelihood converges (relative change < threshold).
+    //   2. After convergence, prune tokens that Viterbi never selected (dead weight).
+    //   3. Backfill pruned slots with next-best candidates from ranked_subwords.
+    //   4. Re-run EM to convergence so replacements get proper scores.
+    //
+    // This replaces the old fixed-5-iteration loop that stopped mid-optimization
+    // and kept 1300+ dead tokens wasting vocab slots.
+
+    constexpr int    EM_MAX_ITERATIONS     = 50;      // Safety cap — never spin forever
+    constexpr double EM_CONVERGENCE_THRESH = 0.0001; // 0.01% relative change in log-likelihood
+    constexpr double SMOOTHING             = 0.1;    // Add-k smoothing for M-step
+
+    // Lambda: run one E-step (Viterbi over corpus), return {token_counts, total_tokens, log_likelihood}.
+    auto runEStep = [&]() -> std::tuple<std::unordered_map<int, double>, double, double> {
+        std::unordered_map<int, double> token_counts;
         double total_tokens = 0.0;
-        
+        double log_likelihood = 0.0;
+
         for (size_t text_idx = 0; text_idx < lowercase_texts.size(); ++text_idx) {
             const auto& text = lowercase_texts[text_idx];
             const auto& spans = atom_spans[text_idx];
             if (text.empty()) continue;
-            
-            if (spans.empty()) {
-                // Fast path: no atoms, process entire text
-                auto nodes = viterbi(text);
-                auto tokens = backtrack(nodes, static_cast<int>(text.size()));
+
+            auto processSegment = [&](const std::string& segment) {
+                if (segment.empty()) return;
+                auto nodes = viterbi(segment);
+                // Log-likelihood = score of best Viterbi path for this segment.
+                log_likelihood += nodes.back().score;
+                auto tokens = backtrack(nodes, static_cast<int>(segment.size()));
                 for (int token_id : tokens) {
                     token_counts[token_id] += 1.0;
                     total_tokens += 1.0;
                 }
+            };
+
+            if (spans.empty()) {
+                processSegment(text);
             } else {
-                // Extract non-atom segments and run Viterbi on each
                 size_t pos = 0;
                 for (const auto& span : spans) {
                     if (span.start > pos) {
-                        // Non-atom segment: [pos, span.start)
-                        std::string segment = text.substr(pos, span.start - pos);
-                        if (!segment.empty()) {
-                            auto nodes = viterbi(segment);
-                            auto tokens = backtrack(nodes, static_cast<int>(segment.size()));
-                            for (int token_id : tokens) {
-                                token_counts[token_id] += 1.0;
-                                total_tokens += 1.0;
-                            }
-                        }
+                        processSegment(text.substr(pos, span.start - pos));
                     }
                     pos = span.end;
                 }
-                // Trailing non-atom segment after last atom
                 if (pos < text.size()) {
-                    std::string segment = text.substr(pos);
-                    if (!segment.empty()) {
-                        auto nodes = viterbi(segment);
-                        auto tokens = backtrack(nodes, static_cast<int>(segment.size()));
-                        for (int token_id : tokens) {
-                            token_counts[token_id] += 1.0;
-                            total_tokens += 1.0;
-                        }
-                    }
+                    processSegment(text.substr(pos));
                 }
             }
         }
-        
-        // M-step: Re-estimate probabilities for ALL tokens (no pruning!)
-        // Tokens with zero count get a small smoothed probability
-        constexpr double SMOOTHING = 0.1;  // Add-k smoothing
+        return {std::move(token_counts), total_tokens, log_likelihood};
+    };
+
+    // Lambda: run one M-step (re-estimate scores from counts), return # unused tokens.
+    auto runMStep = [&](const std::unordered_map<int, double>& token_counts, double total_tokens) -> int {
         double smoothed_total = total_tokens + SMOOTHING * static_cast<double>(pieces_.size());
-        
-        int zero_count_tokens = 0;
-        for (auto& piece : pieces_) {
-            if (piece.is_user_defined) continue;  // Don't modify special tokens
-            
-            double count = token_counts[piece.token_id] + SMOOTHING;
-            // score = log(smoothed_count / smoothed_total)
+        int zero_count = 0;
+        for (size_t i = 0; i < pieces_.size(); ++i) {
+            auto& piece = pieces_[i];
+            if (piece.is_user_defined) continue;
+            int tid = tokenIdForIndex(static_cast<int>(i));
+            double count = (token_counts.count(tid) ? token_counts.at(tid) : 0.0) + SMOOTHING;
             piece.score = static_cast<float>(std::log(count / smoothed_total));
-            
-            if (token_counts[piece.token_id] == 0) {
-                zero_count_tokens++;
+            if (!token_counts.count(tid) || token_counts.at(tid) == 0.0) {
+                zero_count++;
             }
         }
-        
-        std::cout << "[UnigramLM] Iteration " << (em_iter + 1) << ": " 
-                  << static_cast<int>(total_tokens) << " tokens used, "
-                  << zero_count_tokens << " tokens unused (kept with smoothed prob)" << std::endl;
+        return zero_count;
+    };
+
+    // Lambda: run EM to convergence, return final {token_counts, iterations_run}.
+    auto runEMToConvergence = [&](const char* phase_label) -> std::pair<std::unordered_map<int, double>, int> {
+        double prev_ll = -1e30;
+        std::unordered_map<int, double> last_counts;
+        int iter = 0;
+        for (; iter < EM_MAX_ITERATIONS; ++iter) {
+            buildTrie();
+            auto [token_counts, total_tokens, log_likelihood] = runEStep();
+            int unused = runMStep(token_counts, total_tokens);
+
+            double relative_change = (prev_ll < -1e20)
+                ? 1.0  // First iteration — no baseline yet
+                : std::abs((log_likelihood - prev_ll) / std::min(std::abs(prev_ll), std::abs(log_likelihood)));
+
+            std::cout << "[UnigramLM] " << phase_label << " iter " << (iter + 1)
+                      << ": LL=" << std::fixed << std::setprecision(2) << log_likelihood
+                      << ", tokens=" << static_cast<int64_t>(total_tokens)
+                      << ", unused=" << unused
+                      << ", delta=" << std::scientific << std::setprecision(4) << relative_change
+                      << std::defaultfloat << std::endl;
+
+            last_counts = std::move(token_counts);
+            bool converged = (iter > 0 && relative_change < EM_CONVERGENCE_THRESH);
+            prev_ll = log_likelihood;
+            if (converged) {
+                std::cout << "[UnigramLM] " << phase_label << " converged after " << (iter + 1)
+                          << " iterations (delta=" << std::scientific << std::setprecision(4)
+                          << relative_change << std::defaultfloat << ")" << std::endl;
+                ++iter;
+                break;
+            }
+        }
+        if (iter == EM_MAX_ITERATIONS) {
+            std::cout << "[UnigramLM] " << phase_label << " hit max iterations ("
+                      << EM_MAX_ITERATIONS << ") without full convergence" << std::endl;
+        }
+        return {std::move(last_counts), iter};
+    };
+
+    // ---- Phase A: initial EM to convergence ----
+    auto [phase_a_counts, phase_a_iters] = runEMToConvergence("Phase-A");
+
+    // ---- Phase B: prune dead tokens, backfill from ranked_subwords ----
+    int pruned = 0;
+    {
+        // Identify dead tokens (zero Viterbi usage after full convergence).
+        // token_counts from Phase A are keyed by token_id = UNIGRAM_VOCAB_OFFSET + index.
+        // After pruning, indices change, so we identify by INDEX first, then compact.
+        std::unordered_set<int> dead_indices;  // indices into pieces_
+        for (size_t i = 0; i < pieces_.size(); ++i) {
+            if (pieces_[i].is_user_defined) continue;
+            int tid = tokenIdForIndex(static_cast<int>(i));
+            if (!phase_a_counts.count(tid) || phase_a_counts.at(tid) == 0.0) {
+                dead_indices.insert(static_cast<int>(i));
+            }
+        }
+
+        if (!dead_indices.empty()) {
+            std::cout << "[UnigramLM] Pruning " << dead_indices.size()
+                      << " dead tokens (zero Viterbi usage after convergence)" << std::endl;
+
+            // Compact pieces_, removing dead entries.
+            std::vector<UnigramPiece> surviving;
+            surviving.reserve(pieces_.size() - dead_indices.size());
+            for (size_t i = 0; i < pieces_.size(); ++i) {
+                if (!dead_indices.count(static_cast<int>(i))) {
+                    surviving.push_back(std::move(pieces_[i]));
+                }
+            }
+            pieces_ = std::move(surviving);
+            pruned = static_cast<int>(dead_indices.size());
+
+            // CRITICAL: Rebuild piece_to_id_ after compacting pieces_.
+            // Old indices are stale — new indices are 0..pieces_.size()-1.
+            piece_to_id_.clear();
+            for (size_t i = 0; i < pieces_.size(); ++i) {
+                piece_to_id_[pieces_[i].text] = static_cast<int>(i);
+            }
+
+            // Backfill: scan ranked_subwords for next-best candidates not already in vocab.
+            int backfilled = 0;
+            const int slots = pruned;
+            // Recompute total accepted count for scoring backfills.
+            double backfill_total = 0.0;
+            for (const auto& p : pieces_) backfill_total += std::exp(static_cast<double>(p.score));
+            if (backfill_total < 1e-30) backfill_total = 1.0;
+
+            for (const SubwordEntry* entry : ranked_subwords) {
+                if (backfilled >= slots) break;
+                const std::string& subword = entry->first;
+                const int count = entry->second;
+                if (hasPiece(subword)) continue;
+                if (char_seeds.count(subword)) continue;
+                if (isRepetitionNoise(subword)) continue;
+                if (!isValidSubword(subword)) continue;
+                std::string norm = normalizeForDedup(subword);
+                if (norm.empty()) continue;
+                if (normalized_added.count(norm)) continue;
+                normalized_added.insert(norm);
+
+                // Seed with mining log-prob (will be refined by Phase C EM).
+                float score = static_cast<float>(std::log(static_cast<double>(count) / total_accepted_count));
+                addPiece(subword, score, false);
+                backfilled++;
+            }
+            std::cout << "[UnigramLM] Backfilled " << backfilled << " replacement tokens" << std::endl;
+        }
     }
-    
-    // Final trie build with refined scores
+
+    // ---- Phase C: re-converge if we changed the vocab ----
+    if (pruned > 0) {
+        auto [phase_c_counts, phase_c_iters] = runEMToConvergence("Phase-C");
+        (void)phase_c_counts;
+        (void)phase_c_iters;
+    }
+
+    // Final trie build with converged scores
     buildTrie();
     
     std::cout << "[UnigramLM] Training complete. Final vocab size: " << pieces_.size() << std::endl;
@@ -1955,7 +2110,8 @@ void UnigramLM::buildTrie() {
             node = trie_[node].children[c];
         }
         
-        trie_[node].token_id = piece.token_id;
+        // Token ID is ALWAYS position-derived. No stored field.
+        trie_[node].token_id = tokenIdForIndex(static_cast<int>(i));
         trie_[node].score = piece.score;
     }
 }
@@ -2047,8 +2203,11 @@ std::vector<int> UnigramLM::backtrack(const std::vector<ViterbiNode>& nodes, int
 std::vector<int> UnigramLM::encode(const std::string& text) const {
     if (text.empty()) return {};
     
-    auto nodes = viterbi(text);
-    return backtrack(nodes, static_cast<int>(text.size()));
+    // Vocab was trained on lowercased text — normalize here so uppercase input
+    // doesn't fall through to byte fallback unnecessarily.
+    const std::string lower = toLowerASCII(text);
+    auto nodes = viterbi(lower);
+    return backtrack(nodes, static_cast<int>(lower.size()));
 }
 
 std::vector<UnigramPiece> UnigramLM::encodeWithPieces(const std::string& text) const {
@@ -2058,9 +2217,9 @@ std::vector<UnigramPiece> UnigramLM::encodeWithPieces(const std::string& text) c
     
     for (int tid : token_ids) {
         if (tid >= SPECIAL_TOKEN_OFFSET && tid < NUM_SPECIAL_TOKENS) {
-            // Special token
+            // Special token — token_id is NOT stored on UnigramPiece (it's position-derived).
+            // Caller should use the token_ids from encode(), not from pieces.
             UnigramPiece piece;
-            piece.token_id = tid;
             if (tid == UNK_TOKEN_ID) piece.text = "<unk>";
             else if (tid == PAD_TOKEN_ID) piece.text = "<pad>";
             else if (tid == BOS_TOKEN_ID) piece.text = "<s>";
@@ -2072,7 +2231,6 @@ std::vector<UnigramPiece> UnigramLM::encodeWithPieces(const std::string& text) c
         } else if (tid >= BYTE_TOKEN_OFFSET && tid < ATOM_TOKEN_OFFSET) {
             // Byte token
             UnigramPiece piece;
-            piece.token_id = tid;
             piece.text = std::string(1, static_cast<char>(tid - BYTE_TOKEN_OFFSET));
             piece.score = UNKNOWN_SCORE;
             piece.is_special = false;
@@ -2151,11 +2309,7 @@ void UnigramLM::capVocabSize(int max_size) {
     
     for (int i = 0; i < max_size && i < static_cast<int>(indices.size()); ++i) {
         UnigramPiece piece = pieces_[indices[i]];
-        
-        // CRITICAL: Reassign token_id to maintain contiguous ID space
-        // Without this, getPiece(token_id) returns wrong pieces after pruning
-        piece.token_id = UNIGRAM_VOCAB_OFFSET + static_cast<int>(new_pieces.size());
-        
+        // Token ID is always UNIGRAM_VOCAB_OFFSET + index — no field to reassign.
         new_piece_to_id[piece.text] = static_cast<int>(new_pieces.size());
         new_pieces.push_back(piece);
     }

@@ -296,6 +296,8 @@ struct TrainingHyperparameters {
     bool lm_head_center_hidden_states;
     bool center_logits;  // Center logits per position (row-wise) before softmax
     bool center_encoder_residuals;  // Center residuals INSIDE encoder layers (24 projections - can attenuate gradients)
+    bool project_out_pc1;            // Issue #149: project out PC1 direction before LM head
+    int  pc1_power_iters;            // Power iteration steps for PC1 (default 5)
     
     // Issue #109: LayerScale (learnable residual scaling from CaiT paper)
     // Reduces correlation buildup between layers by gating sublayer outputs
@@ -1054,12 +1056,16 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     params.lm_head_center_hidden_states = false;
     params.center_logits = false;  // Default to disabled (standard implementation)
     params.center_encoder_residuals = false;  // Default: disabled (24 centering projections attenuate gradient signal)
+    params.project_out_pc1 = false;  // Default: disabled (Issue #149)
+    params.pc1_power_iters = 5;
     if (auto it = trainConfig.find("lm_head_centering"); it != trainConfig.end() && it->is_object()) {
         const auto& lmc = *it;
         params.lm_head_centering_enabled = lmc.value("enabled", false);
         params.lm_head_center_hidden_states = lmc.value("center_hidden_states", false);
         params.center_logits = lmc.value("center_logits", false);
         params.center_encoder_residuals = lmc.value("center_encoder_residuals", false);
+        params.project_out_pc1 = lmc.value("project_out_pc1", false);
+        params.pc1_power_iters = lmc.value("pc1_power_iters", 5);
     }
     
     // Issue #109: LayerScale (learnable residual scaling from CaiT paper)

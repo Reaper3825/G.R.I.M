@@ -1504,6 +1504,22 @@ BatchResult processBatch(
                 diag << "  *** ERROR: Token ID exceeds vocab size! ***\n";
             }
             
+            // Dump ALL token IDs for the first batch only
+            if (batch_idx == 0) {
+                diag << "[BOUNDARY_DIAGNOSTIC] FULL TOKEN DUMP (batch 1):\n";
+                for (int s = 0; s < payload.batch_size; ++s) {
+                    const int flat_start = s * payload.max_seq_len;
+                    const int len = payload.seq_lengths[s];
+                    diag << "  seq[" << s << "] (" << len << " tokens):";
+                    for (int t = 0; t < len; ++t) {
+                        if (t % 32 == 0) diag << "\n    ";
+                        diag << payload.input_ids[flat_start + t];
+                        if (t + 1 < len) diag << ",";
+                    }
+                    diag << "\n";
+                }
+            }
+
             diag << "[BOUNDARY_DIAGNOSTIC] ========================================\n";
             ctx.logging.logger->log(diag.str());
             
@@ -1578,12 +1594,16 @@ BatchResult processBatch(
     ctx.model->getTrainingState().tracked_collapse_token = g_collapse_token_id;
     
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to call autogradTrainingStep...\n");
+    // STABILITY FIX (Issue #27/Math Audit): Apply 1/M scaling at the source (backward pass) to match PyTorch.
+    // This ensures that gradients averaged per micro-batch are further averaged across the accumulation window,
+    // preventing the "Sum of Averages" discrepancy that causes gradient explosion by a factor of M.
+    const float grad_scale = 1.0f / static_cast<float>(accum_steps);
     auto loss_result = GRIM::Autograd::autogradTrainingStep(
         *ctx.model,
         ctx.model->getTrainingState(),
         payload,
         should_accumulate,
-        1.0f,  // grad_scale (Issue #25: no additional scaling, loss already averaged)
+        grad_scale,
         ctx.global_step
     );
     result.loss = loss_result.loss_value;
@@ -2004,7 +2024,27 @@ BatchResult processBatch(
             const int dump_tracked_token = (g_collapse_token_id >= 0) ? g_collapse_token_id : -1;
             
             if ((batch_idx % kPtPvDumpInterval) == 0) {
-                const int dump_n = std::min(sample_positions, kPtPvDumpPositions);
+                const int dump_n = kPtPvDumpPositions;
+                
+                // Issue #147/149: Collect positions with VALID targets first.
+                // The scan must look through the FULL batch, not just sample_positions,
+                // because sliding window overlaps can mask the first ~129 tokens.
+                std::vector<int> valid_positions;
+                valid_positions.reserve(dump_n);
+                for (int pos = 0; pos < total_tokens && static_cast<int>(valid_positions.size()) < dump_n; ++pos) {
+                    const int b = pos / ts.cached_seq_len;
+                    const int t = pos % ts.cached_seq_len;
+                    if (b < payload.batch_size && t < payload.seq_lengths[b]) {
+                        const int tgt = payload.target_ids[b * payload.max_seq_len + t];
+                        if (tgt >= 0) {
+                            valid_positions.push_back(pos);
+                        }
+                    }
+                }
+                // Fallback: if no valid targets found, sample linearly (at least shows the data)
+                if (valid_positions.empty()) {
+                    for (int pos = 0; pos < std::min(total_tokens, dump_n); ++pos) valid_positions.push_back(pos);
+                }
                 
                 // Accumulators for summary stats
                 double sum_p_t = 0.0, sum_p_v = 0.0;
@@ -2014,10 +2054,22 @@ BatchResult processBatch(
                 
                 std::ostringstream pt_pv;
                 pt_pv << std::fixed << std::setprecision(8);
-                pt_pv << "[PtPvDump] batch=" << (batch_idx + 1) << " positions=" << dump_n << "\n";
+                pt_pv << "[PtPvDump] batch=" << (batch_idx + 1) << " positions=" << static_cast<int>(valid_positions.size()) << "\n";
                 
-                for (int pos = 0; pos < dump_n; ++pos) {
-                    const float* logits_pos = logit_sample.data() + static_cast<size_t>(pos) * vocab_size;
+                for (int vi = 0; vi < static_cast<int>(valid_positions.size()); ++vi) {
+                    const int pos = valid_positions[vi];
+                    
+                    // Fetch logits for this specific position (Issue #149: handle positions outside sample_positions)
+                    std::vector<float> row_buffer;
+                    const float* logits_pos = nullptr;
+                    if (pos < sample_positions) {
+                        logits_pos = logit_sample.data() + static_cast<size_t>(pos) * vocab_size;
+                    } else {
+                        row_buffer.resize(vocab_size);
+                        const float* device_ptr = static_cast<const float*>(ts.autograd_intermediates.logits_tensor.data) + static_cast<size_t>(pos) * vocab_size;
+                        cudaMemcpy(row_buffer.data(), device_ptr, vocab_size * sizeof(float), cudaMemcpyDeviceToHost);
+                        logits_pos = row_buffer.data();
+                    }
                     
                     // Stable softmax: subtract max
                     float lmax = -std::numeric_limits<float>::infinity();
@@ -3665,19 +3717,6 @@ BatchResult processBatch(
     if (should_step) {
         const int micro_step_for_log = ctx.optimizer.current_micro_step;
         const int accum_steps_for_log = accum_steps;
-        
-        // GRADIENT ACCUMULATION SCALING (Issue #27 - Jan 11, 2026)
-        // Standard practice: scale accumulated gradients by 1/accum_steps before optimizer step.
-        // This ensures configured LR behaves consistently regardless of accumulation_steps.
-        // Without this: effective_lr = configured_lr * accum_steps (non-standard, misleading)
-        // With this:    effective_lr = configured_lr (matches PyTorch, HuggingFace, DeepSpeed)
-        if (accum_steps_for_log > 1) {
-            const float accum_scale = 1.0f / static_cast<float>(accum_steps_for_log);
-            ctx.model->scaleGradients(accum_scale);
-            ctx.logging.logger->log("[GradAccum] Scaled gradients by " + 
-                                    Internal::formatScalar(accum_scale, 6) + 
-                                    " for accum_steps=" + std::to_string(accum_steps_for_log));
-        }
         
         // ========================================================================
         // Issue #135: POST-ACCUMULATION gradient clipping

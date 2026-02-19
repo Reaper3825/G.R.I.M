@@ -90,10 +90,10 @@
             "gradient_accumulation_steps": 2,
             "batch_strategy": "RANDOM",
             "learning_rate": 3e-4,
-            "weight_decay": 0.1,
+            "weight_decay": 0.01,
             "gradient_clip": 1.0,
             "per_token_grad_scale": true,
-            "warmup_steps": 0,
+            "warmup_steps": 1000,
             "max_seq_len": 1024,
             "min_seq_valid_tokens": 10,
             "log_interval": 10,
@@ -383,7 +383,7 @@
                 "use_rope": true,
                 "use_alibi": true
             },
-            "attention_dropout": 0.125,
+            "attention_dropout": 0.15,
             "dropout_rate": 0.125,
             "force_rebuild_vocab": false,
             "qk_normalization": {
@@ -392,7 +392,9 @@
             },
             "lm_head_centering": {
                 "enabled": true,
-                "center_hidden_states": false,
+                "center_hidden_states": true,
+                "project_out_pc1": true,
+                "pc1_power_iters": 5,
                 "center_logits": true,
                 "center_encoder_residuals": false
             },

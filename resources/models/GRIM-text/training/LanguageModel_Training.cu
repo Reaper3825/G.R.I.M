@@ -246,8 +246,7 @@ void LanguageModel::zeroGrad() {
         // RMSNorm gamma
         enc->rms1Gamma().zero_grad(stream);
         enc->rms2Gamma().zero_grad(stream);
-        enc->rmsPostAttnGamma().zero_grad(stream);
-        enc->rmsPostFfnGamma().zero_grad(stream);
+        // Issue #148: Sandwich norm gammas REMOVED
         
         // Attention weights/biases
         enc->attnWqkv().zero_grad(stream);
@@ -479,11 +478,10 @@ void LanguageModel::buildParameterGroups() {
         registerTensor(prefix + "_ffn_w2", enc->ffnW2(), ParamGroupType::FFN, layer);
         tryRegisterBias(prefix + "_ffn_b2", enc->ffnB2(), ParamGroupType::FFN, layer);
         
-        // RMSNorm gamma (pre-norm + sandwich post-residual) — no weight decay
+        // RMSNorm gamma (pre-norm) — no weight decay
         registerNonDecayTensor(prefix + "_rms1_gamma", enc->rms1Gamma(), ParamGroupType::RMSNORM, layer);
         registerNonDecayTensor(prefix + "_rms2_gamma", enc->rms2Gamma(), ParamGroupType::RMSNORM, layer);
-        registerNonDecayTensor(prefix + "_rms_post_attn_gamma", enc->rmsPostAttnGamma(), ParamGroupType::RMSNORM, layer);
-        registerNonDecayTensor(prefix + "_rms_post_ffn_gamma", enc->rmsPostFfnGamma(), ParamGroupType::RMSNORM, layer);
+        // Issue #148: Sandwich norm gammas REMOVED (no post-residual normalization)
         
         // LayerScale (Issue #109) — learnable scalars, no weight decay
         // BUG FIX: These were zero_grad'd but NEVER registered with optimizer — frozen since creation!

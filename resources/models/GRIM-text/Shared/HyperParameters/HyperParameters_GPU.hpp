@@ -121,7 +121,7 @@ constexpr bool DEFAULT_GRAD_SCALE_PER_TOKEN = false;  // Apply 1/valid_tokens in
 // UnigramLM Training Constants
 // Parameters for vocabulary training/pruning
 //======================================================//
-constexpr int UNIGRAM_EM_ITERATIONS = 5;              // EM algorithm iterations
+// EM_ITERATIONS removed — convergence-based loop in Unigram.cu (max 50, 0.01% threshold)
 constexpr float UNIGRAM_PRUNE_THRESHOLD = 0.0001f;    // Tokens <0.01% usage get pruned
 constexpr int UNIGRAM_MIN_VOCAB_SIZE = 8000;          // Don't prune below this
 constexpr double UNIGRAM_MIN_COUNT = 1.0;             // Tokens used <1 time get pruned
@@ -620,8 +620,10 @@ inline DerivedScheduleInfo harmonizeTrainingHyperparameters(
     log_adjustment("soft_restart_cooldown_steps", original_sr_cooldown, params.soft_restart_cooldown_steps);
 
     const float original_lr = params.learning_rate;
-    params.learning_rate = std::clamp(params.learning_rate, params.dynamic_lr_min, params.dynamic_lr_max);
-    log_adjustment("learning_rate_clamp", original_lr, params.learning_rate);
+    if (params.dynamic_lr_enabled) {
+        params.learning_rate = std::clamp(params.learning_rate, params.dynamic_lr_min, params.dynamic_lr_max);
+        log_adjustment("learning_rate_clamp", original_lr, params.learning_rate);
+    }
 
     const float original_smoothing = params.dynamic_lr_smoothing;
     params.dynamic_lr_smoothing = std::clamp(
