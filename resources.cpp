@@ -2,8 +2,13 @@
 #include "console_history.hpp"
 #include "logger.hpp"
 
-#if defined(__APPLE__)
+#if defined(_WIN32)
+    #include <windows.h>
+#elif defined(__APPLE__)
     #include <mach-o/dyld.h>
+#else
+    #include <unistd.h>
+    #include <limits.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -17,6 +22,62 @@ nlohmann::json aiConfig;
 ConsoleHistory history;
 std::vector<Timer> timers;
 std::filesystem::path g_currentDir;
+
+// ====================================================-
+// Get GRIM root directory
+// ====================================================-
+std::string getGrimRootDir() {
+    namespace fs = std::filesystem;
+    
+#ifdef GRIM_ROOT_DIR
+    fs::path root = fs::path(GRIM_ROOT_DIR);
+    if (fs::exists(root)) {
+        return root.string();
+    }
+#endif
+
+    // Fallback: try to find GRIM root by walking up from executable or current directory
+    fs::path exeDir;
+#if defined(_WIN32)
+    char buffer[MAX_PATH];
+    if (GetModuleFileNameA(nullptr, buffer, MAX_PATH)) {
+        exeDir = fs::path(buffer).parent_path();
+    }
+#elif defined(__APPLE__)
+    char buffer[PATH_MAX];
+    uint32_t size = sizeof(buffer);
+    if (_NSGetExecutablePath(buffer, &size) == 0) {
+        exeDir = fs::path(buffer).parent_path();
+    }
+#else
+    char buffer[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+    if (len > 0) {
+        buffer[len] = '\0';
+        exeDir = fs::path(buffer).parent_path();
+    }
+#endif
+
+    // Walk up from exe directory or current path to find GRIM root
+    std::vector<fs::path> searchPaths = {exeDir, fs::current_path()};
+    
+    for (auto& base : searchPaths) {
+        if (base.empty()) continue;
+        
+        fs::path probe = base;
+        for (int depth = 0; depth < 10 && !probe.empty(); ++depth) {
+            // Check if this is GRIM root (has both "control" and "resources" directories)
+            if (fs::exists(probe / "control") && fs::exists(probe / "resources")) {
+                return probe.string();
+            }
+            if (!probe.has_parent_path()) break;
+            probe = probe.parent_path();
+        }
+    }
+    
+    // Last resort: return current directory
+    return fs::current_path().string();
+}
 
 // ====================================================-
 // Locate resource root (prefer repo/resources over build/resources)

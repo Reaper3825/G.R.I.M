@@ -1387,20 +1387,14 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         // PyTorch verification for side-by-side comparison (compile with -DGRIM_PYTORCH_VERIFY)
 #ifdef GRIM_PYTORCH_VERIFY
         ctx->logging.logger->log("🔬 PyTorch verification: ENABLED (compile flag GRIM_PYTORCH_VERIFY)");
-        // Derive GRIM root from log_dir (e.g., .../GRIM-text/training/logs -> .../G.R.I.M)
-        std::string grim_root = ctx->config.paths.log_dir;
-        auto pos = grim_root.find("resources");
-        if (pos != std::string::npos) {
-            grim_root = grim_root.substr(0, pos);
-        } else {
-            // Fallback: walk up from log_dir
-            fs::path root_path = fs::path(ctx->config.paths.log_dir).parent_path().parent_path().parent_path().parent_path();
-            grim_root = root_path.string();
-        }
+        // Get GRIM root using the centralized resolver
+        fs::path grim_root_path = GRIM::Config::resolveGrimRoot();
+        std::string grim_root = grim_root_path.string();
         bool pytorch_ok = PYTORCH_VERIFY_INIT(grim_root);
         if (pytorch_ok) {
             ctx->logging.logger->log("✓ PyTorch verifier initialized (root=" + grim_root + ")");
-            ctx->logging.logger->log("  Script: " + grim_root + "resources/models/GRIM-text/Shared/EquationLogging/pytorch_verify.py");
+            fs::path script_path = grim_root_path / "resources/models/GRIM-text/Shared/EquationLogging/pytorch_verify.py";
+            ctx->logging.logger->log("  Script: " + script_path.string());
         } else {
             ctx->logging.logger->log("[WARNING] PyTorch verifier failed to initialize - verification disabled");
         }

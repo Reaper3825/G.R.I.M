@@ -316,7 +316,19 @@ int main(int argc, char** argv)
         config_path = "../../../../../../ai_config.json";  // From Release dir
     }
     if (!std::filesystem::exists(config_path)) {
-        config_path = "D:/G.R.I.M/ai_config.json";  // Full path
+        // Try to find GRIM root and look for ai_config.json there
+        std::filesystem::path searchPath = std::filesystem::current_path();
+        for (int i = 0; i < 10 && searchPath.has_parent_path(); ++i) {
+            if (std::filesystem::exists(searchPath / "control") && 
+                std::filesystem::exists(searchPath / "resources")) {
+                std::filesystem::path configCandidate = searchPath / "ai_config.json";
+                if (std::filesystem::exists(configCandidate)) {
+                    config_path = configCandidate.string();
+                    break;
+                }
+            }
+            searchPath = searchPath.parent_path();
+        }
     }
 
     std::cout << "[GRIM-text] Using config: " << config_path << " (exists: " 

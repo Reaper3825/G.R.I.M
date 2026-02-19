@@ -35,17 +35,17 @@
     "ollama_url": "http://127.0.0.1:11434",
     "paths": {
         "grim_text": {
-            "checkpoints": "D:/G.R.I.M/resources/models/GRIM-text/checkpoints",
-            "collected": "D:/G.R.I.M/resources/models/GRIM-text/data/collected",
-            "collector_log": "D:/G.R.I.M/resources/models/GRIM-text/training/logs/collector.log",
-            "logs": "D:/G.R.I.M/resources/models/GRIM-text/training/logs",
-            "merge_checkpoints_exe": "D:/G.R.I.M/resources/models/GRIM-text/DataCollection/Release/merge_checkpoints.exe",
-            "model": "D:/G.R.I.M/resources/models/GRIM-text/grim_text.bin",
-            "source_config": "D:/G.R.I.M/DataCollection/source_data.json",
-            "training_data": "D:/G.R.I.M/resources/models/GRIM-text/training/data/training_data.grmt",
-            "training_status": "D:/G.R.I.M/resources/models/GRIM-text/training\\training_status.fb",
-            "verified": "D:/G.R.I.M/resources/models/GRIM-text/data/verified",
-            "vocab": "D:/G.R.I.M/resources/models/GRIM-text/training/data/vocab.bin"
+            "checkpoints": "resources/models/GRIM-text/checkpoints",
+            "collected": "resources/models/GRIM-text/data/collected",
+            "collector_log": "resources/models/GRIM-text/training/logs/collector.log",
+            "logs": "resources/models/GRIM-text/training/logs",
+            "merge_checkpoints_exe": "resources/models/GRIM-text/DataCollection/Release/merge_checkpoints.exe",
+            "model": "resources/models/GRIM-text/grim_text.bin",
+            "source_config": "DataCollection/source_data.json",
+            "training_data": "resources/models/GRIM-text/training/data/training_data.grmt",
+            "training_status": "resources/models/GRIM-text/training/training_status.fb",
+            "verified": "resources/models/GRIM-text/data/verified",
+            "vocab": "resources/models/GRIM-text/training/data/vocab.bin"
         }
     },
     "personality": {

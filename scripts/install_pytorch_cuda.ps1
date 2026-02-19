@@ -1,13 +1,37 @@
 # Install CUDA-enabled PyTorch for Mixed Precision Training
 # RTX 3080 Ti - CUDA 12.5 compatible
 
+# Function to find GRIM root directory
+function Get-GrimRoot {
+    $scriptDir = Split-Path -Parent $MyInvocation.PSCommandPath
+    $currentDir = Get-Location
+    
+    foreach ($baseDir in @($scriptDir, $currentDir)) {
+        $probe = $baseDir
+        for ($i = 0; $i -lt 10; $i++) {
+            if ((Test-Path (Join-Path $probe "control")) -and (Test-Path (Join-Path $probe "resources"))) {
+                return $probe
+            }
+            $parent = Split-Path -Parent $probe
+            if (-not $parent -or $parent -eq $probe) { break }
+            $probe = $parent
+        }
+    }
+    
+    # Fallback: return script directory parent
+    return (Split-Path -Parent $scriptDir)
+}
+
+# Get GRIM root directory
+$GrimRoot = Get-GrimRoot
+
 Write-Host "🔧 Installing CUDA-enabled PyTorch for RTX 3080 Ti" -ForegroundColor Cyan
 Write-Host "=" * 70 -ForegroundColor Cyan
 Write-Host ""
 
 # Activate virtual environment
 Write-Host "[1/3] Activating virtual environment..." -ForegroundColor Yellow
-& "D:\G.R.I.M\.venv\Scripts\Activate.ps1"
+& (Join-Path $GrimRoot ".venv\Scripts\Activate.ps1")
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "❌ Failed to activate virtual environment" -ForegroundColor Red

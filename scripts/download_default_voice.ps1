@@ -4,8 +4,32 @@
 # This script downloads a default voice reference for XTTS v2
 # ============================================================
 
-$voiceDir = "D:\G.R.I.M\resources\voices"
-$defaultVoice = "$voiceDir\default.wav"
+# Function to find GRIM root directory
+function Get-GrimRoot {
+    $scriptDir = Split-Path -Parent $MyInvocation.PSCommandPath
+    $currentDir = Get-Location
+    
+    foreach ($baseDir in @($scriptDir, $currentDir)) {
+        $probe = $baseDir
+        for ($i = 0; $i -lt 10; $i++) {
+            if ((Test-Path (Join-Path $probe "control")) -and (Test-Path (Join-Path $probe "resources"))) {
+                return $probe
+            }
+            $parent = Split-Path -Parent $probe
+            if (-not $parent -or $parent -eq $probe) { break }
+            $probe = $parent
+        }
+    }
+    
+    # Fallback: return script directory parent
+    return (Split-Path -Parent $scriptDir)
+}
+
+# Get GRIM root directory
+$GrimRoot = Get-GrimRoot
+
+$voiceDir = Join-Path $GrimRoot "resources\voices"
+$defaultVoice = Join-Path $voiceDir "default.wav"
 
 # Create directory
 New-Item -ItemType Directory -Path $voiceDir -Force | Out-Null

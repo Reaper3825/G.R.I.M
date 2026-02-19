@@ -7,13 +7,37 @@
 
 $ErrorActionPreference = "Stop"
 
+# Function to find GRIM root directory
+function Get-GrimRoot {
+    $scriptDir = Split-Path -Parent $MyInvocation.PSCommandPath
+    $currentDir = Get-Location
+    
+    foreach ($baseDir in @($scriptDir, $currentDir)) {
+        $probe = $baseDir
+        for ($i = 0; $i -lt 10; $i++) {
+            if ((Test-Path (Join-Path $probe "control")) -and (Test-Path (Join-Path $probe "resources"))) {
+                return $probe
+            }
+            $parent = Split-Path -Parent $probe
+            if (-not $parent -or $parent -eq $probe) { break }
+            $probe = $parent
+        }
+    }
+    
+    # Fallback: return script directory parent
+    return (Split-Path -Parent $scriptDir)
+}
+
+# Get GRIM root directory
+$GrimRoot = Get-GrimRoot
+
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host "   Cleaning Old Coqui TTS Data" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host ""
 
 $cleanupPaths = @(
-    "D:\G.R.I.M\resources\tts_out\temp",
+    (Join-Path $GrimRoot "resources\tts_out\temp"),
     "$env:USERPROFILE\.local\share\tts"
 )
 
@@ -56,7 +80,7 @@ Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Rebuilding TTS cache index..." -ForegroundColor Yellow
 
-$cacheIndexPath = "D:\G.R.I.M\resources\tts_out\cache_index.json"
+$cacheIndexPath = Join-Path $GrimRoot "resources\tts_out\cache_index.json"
 if (Test-Path $cacheIndexPath) {
     $cacheData = Get-Content $cacheIndexPath | ConvertFrom-Json
     $oldCount = ($cacheData.PSObject.Properties | Measure-Object).Count

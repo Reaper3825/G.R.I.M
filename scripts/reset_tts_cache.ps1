@@ -1,12 +1,38 @@
 # Clear old TTS cache and rebuild
 # This fixes crashes from old cache entries pointing to moved files
 
+# Function to find GRIM root directory
+function Get-GrimRoot {
+    $scriptDir = Split-Path -Parent $MyInvocation.PSCommandPath
+    $currentDir = Get-Location
+    
+    foreach ($baseDir in @($scriptDir, $currentDir)) {
+        $probe = $baseDir
+        for ($i = 0; $i -lt 10; $i++) {
+            if ((Test-Path (Join-Path $probe "control")) -and (Test-Path (Join-Path $probe "resources"))) {
+                return $probe
+            }
+            $parent = Split-Path -Parent $probe
+            if (-not $parent -or $parent -eq $probe) { break }
+            $probe = $parent
+        }
+    }
+    
+    # Fallback: return script directory parent
+    return (Split-Path -Parent $scriptDir)
+}
+
 Write-Host "=== TTS Cache Reset ===" -ForegroundColor Cyan
 Write-Host ""
 
-$cacheIndexPath = "D:\G.R.I.M\resources\tts_out\cache_index.json"
-$tempDir = "D:\G.R.I.M\resources\tts_out\temp"
-$cacheDir = "D:\G.R.I.M\resources\tts_out\cache"
+# Get GRIM root directory
+$GrimRoot = Get-GrimRoot
+Write-Host "GRIM root: $GrimRoot" -ForegroundColor Gray
+Write-Host ""
+
+$cacheIndexPath = Join-Path $GrimRoot "resources\tts_out\cache_index.json"
+$tempDir = Join-Path $GrimRoot "resources\tts_out\temp"
+$cacheDir = Join-Path $GrimRoot "resources\tts_out\cache"
 
 # 1. Backup old cache index
 if (Test-Path $cacheIndexPath) {

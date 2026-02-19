@@ -6,6 +6,23 @@ import os
 import sys
 from pathlib import Path
 
+def get_grim_root():
+    """Find GRIM root directory by walking up from script location or current directory"""
+    script_dir = Path(__file__).parent.absolute()
+    current_dir = Path.cwd()
+    
+    for base_dir in [script_dir, current_dir]:
+        probe = base_dir
+        for _ in range(10):
+            if (probe / "control").exists() and (probe / "resources").exists():
+                return probe
+            if not probe.parent or probe.parent == probe:
+                break
+            probe = probe.parent
+    
+    # Fallback: return script directory parent
+    return script_dir.parent if script_dir.parent != script_dir else current_dir
+
 def check_cuda():
     print("=" * 70)
     print("CUDA Dependency Check for ONNX Runtime GPU")
@@ -65,7 +82,8 @@ def check_cuda():
     print("Checking vcpkg ONNX Runtime GPU...")
     print("-" * 70)
     
-    vcpkg_bin = Path(r"D:\G.R.I.M\vcpkg_installed\x64-windows\bin")
+    grim_root = get_grim_root()
+    vcpkg_bin = grim_root / "vcpkg_installed" / "x64-windows" / "bin"
     onnx_dll = vcpkg_bin / "onnxruntime.dll"
     cuda_provider = vcpkg_bin / "onnxruntime_providers_cuda.dll"
     

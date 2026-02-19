@@ -532,31 +532,51 @@ def check_encoding_consistency():
     return len(issues) == 0
 
 
+def get_grim_root():
+    """Find GRIM root directory by walking up from script location or current directory"""
+    script_dir = Path(__file__).parent.absolute()
+    current_dir = Path.cwd()
+    
+    for base_dir in [script_dir, current_dir]:
+        probe = base_dir
+        for _ in range(10):
+            if (probe / "control").exists() and (probe / "resources").exists():
+                return probe
+            if not probe.parent or probe.parent == probe:
+                break
+            probe = probe.parent
+    
+    # Fallback: return script directory parent
+    return script_dir.parent if script_dir.parent != script_dir else current_dir
+
 def main():
     print("="*60)
     print("🔬 GRIM TOKENIZER VERIFICATION TOOL")
     print("="*60)
     
-    # Find vocab file - use absolute path
-    vocab_path = r"D:\G.R.I.M\resources\models\GRIM-text\training\data\vocab.bin"
+    # Find GRIM root directory
+    grim_root = get_grim_root()
+    print(f"📁 GRIM root: {grim_root}")
     
-    if not Path(vocab_path).exists():
-        print(f"⚠️  Vocab not found at: {vocab_path}")
-        print("   Searching for alternatives...")
-        vocab_paths = [
-            r"D:\G.R.I.M\resources\models\GRIM-text\Shared\UnigramByte\vocab.bin",
-            r"D:\G.R.I.M\resources\models\GRIM-text\vocab.bin",
-            r"D:\G.R.I.M\resources\models\GRIM-text\training\vocab.bin",
-        ]
-        
-        vocab_path = None
+    # Find vocab file - search relative to GRIM root
+    vocab_paths = [
+        grim_root / "resources" / "models" / "GRIM-text" / "training" / "data" / "vocab.bin",
+        grim_root / "resources" / "models" / "GRIM-text" / "Shared" / "UnigramByte" / "vocab.bin",
+        grim_root / "resources" / "models" / "GRIM-text" / "vocab.bin",
+        grim_root / "resources" / "models" / "GRIM-text" / "training" / "vocab.bin",
+    ]
+    
+    vocab_path = None
+    for p in vocab_paths:
+        if Path(p).exists():
+            vocab_path = str(p)
+            print(f"✓ Using vocab: {vocab_path}")
+            break
+    
+    if not vocab_path:
+        print(f"⚠️  Vocab not found in any of the expected locations:")
         for p in vocab_paths:
-            if Path(p).exists():
-                vocab_path = p
-                print(f"   ✓ Found: {p}")
-                break
-    else:
-        print(f"✓ Using vocab: {vocab_path}")
+            print(f"   - {p}")
     
     # Analyze GRIM tokenizer
     analyzer = GRIMTokenizerAnalyzer(vocab_path)

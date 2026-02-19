@@ -1,6 +1,7 @@
 #include "voice_speak.hpp"
 #include "tts_cache.hpp"  // ? Added
 #include "logger.hpp"
+#include "resources.hpp"
 #include "popup_ui/popup_ui.hpp"
 #include "core/audio_core.hpp"
 #include "ai/ai.hpp"  // ✅ NEW: For AI fallback message generation
@@ -33,7 +34,7 @@ namespace Voice {
     static std::string g_speaker    = "default";  // ? Changed from "p225" to "default"
     static double      g_speed      = 1.0;
     static std::string g_language   = "en";  // ? Added language support for XTTS v2
-    static fs::path    g_outputDir  = "D:/G.R.I.M/resources/tts_out";
+    static fs::path    g_outputDir;  // Will be initialized in initTTS()
     static std::unordered_map<std::string, std::string> g_rules;
 
     // =========================================================
@@ -181,8 +182,15 @@ namespace Voice {
         // ? Initialize TTS cache first
         TTSCache::init();
         
+        // Initialize output directory relative to GRIM root
+        if (g_outputDir.empty()) {
+            std::string grimRoot = getGrimRootDir();
+            g_outputDir = fs::path(grimRoot) / "resources/tts_out";
+        }
+        
         try {
-            fs::path cfgPath = fs::path("D:/G.R.I.M/ai_config.json");
+            std::string grimRoot = getGrimRootDir();
+            fs::path cfgPath = fs::path(grimRoot) / "ai_config.json";
             if (fs::exists(cfgPath)) {
                 std::ifstream in(cfgPath);
                 json cfg;
@@ -245,8 +253,9 @@ namespace Voice {
 
             // ? Launch XTTS v2 bridge with GPU support and configured speaker
             // Use the virtual environment Python interpreter to ensure dependencies are available
-            std::string pythonExe = "D:/G.R.I.M/.venv/Scripts/python.exe";
-            std::string scriptPath = "D:/G.R.I.M/resources/python/coqui_bridge.py";
+            std::string grimRoot = getGrimRootDir();
+            std::string pythonExe = (fs::path(grimRoot) / ".venv/Scripts/python.exe").string();
+            std::string scriptPath = (fs::path(grimRoot) / "resources/python/coqui_bridge.py").string();
             std::string cmd = pythonExe + " " + scriptPath + " --persistent --model tts_models/multilingual/multi-dataset/xtts_v2 --gpu --speaker " + g_speaker + " --language " + g_language;
             std::vector<char> mutableCmd(cmd.begin(), cmd.end());
             mutableCmd.push_back('\0');
@@ -259,7 +268,7 @@ namespace Voice {
                 TRUE,
                 0,
                 nullptr,
-                "D:/G.R.I.M/resources/python",
+                (fs::path(grimRoot) / "resources/python").string().c_str(),
                 &si,
                 &piProcInfo
             );
@@ -556,7 +565,8 @@ namespace Voice {
         }
 
         // Generate to temp directory
-        fs::path tempDir = fs::path("D:/G.R.I.M/resources/tts_out/temp");
+        std::string grimRoot = getGrimRootDir();
+        fs::path tempDir = fs::path(grimRoot) / "resources/tts_out/temp";
         fs::create_directories(tempDir);
         std::string outFile = (tempDir / (randomString(32) + ".wav")).string();
 

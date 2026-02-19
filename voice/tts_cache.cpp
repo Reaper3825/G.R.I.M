@@ -1,5 +1,6 @@
 #include "tts_cache.hpp"
 #include "logger.hpp"
+#include "resources.hpp"
 #include <fstream>
 #include <chrono>
 #include <algorithm>
@@ -135,9 +136,10 @@ namespace TTSCache {
     // Public API
     // =========================================================
     void init() {
-    g_cacheDir = fs::path("D:/G.R.I.M/resources/tts_out/cache");
-    g_tempDir  = fs::path("D:/G.R.I.M/resources/tts_out/temp");
-    g_indexFile = fs::path("D:/G.R.I.M/resources/tts_out/cache_index.json");
+    std::string grimRoot = getGrimRootDir();
+    g_cacheDir = fs::path(grimRoot) / "resources/tts_out/cache";
+    g_tempDir  = fs::path(grimRoot) / "resources/tts_out/temp";
+    g_indexFile = fs::path(grimRoot) / "resources/tts_out/cache_index.json";
 
     // Create base directories (speaker subdirs created on-demand)
     fs::create_directories(g_cacheDir);

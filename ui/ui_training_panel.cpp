@@ -1807,6 +1807,41 @@ void UITrainingPanel::loadPathsFromConfig() {
     }
 }
 
+// Helper function to convert absolute path to relative path from GRIM root
+static std::string makeRelativeToGrimRoot(const std::string& pathStr) {
+    namespace fs = std::filesystem;
+    
+    if (pathStr.empty()) return pathStr;
+    
+    fs::path path(pathStr);
+    if (!path.is_absolute()) {
+        // Already relative, return as-is
+        return pathStr;
+    }
+    
+    // Find GRIM root
+    fs::path grimRoot = fs::current_path();
+    for (int i = 0; i < 10 && grimRoot.has_parent_path(); ++i) {
+        if (fs::exists(grimRoot / "control") && fs::exists(grimRoot / "resources")) {
+            break;
+        }
+        grimRoot = grimRoot.parent_path();
+    }
+    
+    // Try to make path relative to GRIM root
+    try {
+        fs::path relativePath = fs::relative(path, grimRoot);
+        if (!relativePath.empty() && !relativePath.string().starts_with("..")) {
+            return relativePath.string();
+        }
+    } catch (...) {
+        // If relative() fails, return original path
+    }
+    
+    // Fallback: return original path
+    return pathStr;
+}
+
 // ====================================================
 // Save GRIM-text paths to ai_config.json
 // ====================================================
@@ -1831,17 +1866,35 @@ void UITrainingPanel::savePathsToConfig() {
             config["paths"]["grim_text"] = nlohmann::json::object();
         }
         
-        config["paths"]["grim_text"]["vocab"] = vocabPathBuffer;
-        config["paths"]["grim_text"]["model"] = modelPathBuffer;
-        config["paths"]["grim_text"]["training_data"] = trainingDataPathBuffer;
-        config["paths"]["grim_text"]["checkpoints"] = checkpointsPathBuffer;
-        config["paths"]["grim_text"]["logs"] = logsPathBuffer;
+        // Convert absolute paths to relative paths before saving
+        config["paths"]["grim_text"]["vocab"] = makeRelativeToGrimRoot(vocabPathBuffer);
+        config["paths"]["grim_text"]["model"] = makeRelativeToGrimRoot(modelPathBuffer);
+        config["paths"]["grim_text"]["training_data"] = makeRelativeToGrimRoot(trainingDataPathBuffer);
+        config["paths"]["grim_text"]["checkpoints"] = makeRelativeToGrimRoot(checkpointsPathBuffer);
+        config["paths"]["grim_text"]["logs"] = makeRelativeToGrimRoot(logsPathBuffer);
         
         // Derive training_status path from training_data path
         std::filesystem::path trainingDataPath(trainingDataPathBuffer);
         std::filesystem::path trainingDir = trainingDataPath.parent_path().parent_path(); // Go up from data/ to training/
         std::filesystem::path statusPath = trainingDir / "training_status.fb";
-        config["paths"]["grim_text"]["training_status"] = statusPath.string();
+        config["paths"]["grim_text"]["training_status"] = makeRelativeToGrimRoot(statusPath.string());
+        
+        // Also save other paths if they exist in the config
+        if (config["paths"]["grim_text"].contains("collected")) {
+            config["paths"]["grim_text"]["collected"] = makeRelativeToGrimRoot(config["paths"]["grim_text"]["collected"].get<std::string>());
+        }
+        if (config["paths"]["grim_text"].contains("verified")) {
+            config["paths"]["grim_text"]["verified"] = makeRelativeToGrimRoot(config["paths"]["grim_text"]["verified"].get<std::string>());
+        }
+        if (config["paths"]["grim_text"].contains("collector_log")) {
+            config["paths"]["grim_text"]["collector_log"] = makeRelativeToGrimRoot(config["paths"]["grim_text"]["collector_log"].get<std::string>());
+        }
+        if (config["paths"]["grim_text"].contains("merge_checkpoints_exe")) {
+            config["paths"]["grim_text"]["merge_checkpoints_exe"] = makeRelativeToGrimRoot(config["paths"]["grim_text"]["merge_checkpoints_exe"].get<std::string>());
+        }
+        if (config["paths"]["grim_text"].contains("source_config")) {
+            config["paths"]["grim_text"]["source_config"] = makeRelativeToGrimRoot(config["paths"]["grim_text"]["source_config"].get<std::string>());
+        }
         
         // Write back to file
         std::ofstream configFileOut("ai_config.json");

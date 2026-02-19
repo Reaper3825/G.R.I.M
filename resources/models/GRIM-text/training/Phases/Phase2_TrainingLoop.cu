@@ -30,6 +30,7 @@
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../Autograd/AutogradTraining.hpp"  // autogradTrainingStep: unified forward+loss+backward
+#include "../../../../../control/ai_config_paths.hpp"  // For resolveGrimRoot()
 
 #include <iostream>
 #include <fstream>
@@ -44,6 +45,7 @@
 #include <thread>
 #include <future>
 #include <atomic>
+#include <filesystem>
 
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
@@ -57,6 +59,7 @@ using GRIM::Logging::EmitModuleWarning;
 using GRIM::Logging::EmitModuleError;
 
 namespace GRIMText::Training {
+namespace fs = std::filesystem;
 
 TrainingLoopState::~TrainingLoopState() = default;
 
@@ -3143,7 +3146,11 @@ BatchResult processBatch(
                             cudaMemcpyDeviceToHost, stream);
             cudaStreamSynchronize(stream);
             
-            std::string path = "D:/G.R.I.M/gradient_dumps/" + std::string(name) + ".bin";
+            // Get GRIM root for gradient dumps directory
+            fs::path grim_root = GRIM::Config::resolveGrimRoot();
+            fs::path dump_dir = grim_root / "gradient_dumps";
+            fs::create_directories(dump_dir);
+            std::string path = (dump_dir / (std::string(name) + ".bin")).string();
             FILE* f = fopen(path.c_str(), "wb");
             if (f) {
                 fwrite(&count, sizeof(size_t), 1, f);

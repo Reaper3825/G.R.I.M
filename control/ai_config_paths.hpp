@@ -36,6 +36,15 @@
 #include <sstream>
 #include <vector>
 
+#ifdef _WIN32
+    #include <windows.h>
+#elif defined(__APPLE__)
+    #include <mach-o/dyld.h>
+#else
+    #include <unistd.h>
+    #include <limits.h>
+#endif
+
 namespace GRIM {
 namespace Config {
 
@@ -451,6 +460,60 @@ inline std::optional<std::filesystem::path> resolveAiConfigPath(const std::strin
     return std::nullopt;
 }
 
+inline std::filesystem::path resolveGrimRoot() {
+    namespace fs = std::filesystem;
+    
+#ifdef GRIM_ROOT_DIR
+    fs::path root = fs::path(GRIM_ROOT_DIR);
+    if (fs::exists(root)) {
+        return root;
+    }
+#endif
+
+    // Try to find GRIM root by walking up from current directory or executable location
+    fs::path searchPath = fs::current_path();
+    
+    // Also try executable directory
+    fs::path exeDir;
+#ifdef _WIN32
+    char buffer[MAX_PATH];
+    if (GetModuleFileNameA(nullptr, buffer, MAX_PATH)) {
+        exeDir = fs::path(buffer).parent_path();
+    }
+#elif defined(__APPLE__)
+    char buffer[PATH_MAX];
+    uint32_t size = sizeof(buffer);
+    if (_NSGetExecutablePath(buffer, &size) == 0) {
+        exeDir = fs::path(buffer).parent_path();
+    }
+#else
+    char buffer[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+    if (len > 0) {
+        buffer[len] = '\0';
+        exeDir = fs::path(buffer).parent_path();
+    }
+#endif
+    
+    std::vector<fs::path> searchPaths = {searchPath, exeDir};
+    
+    for (auto& base : searchPaths) {
+        if (base.empty()) continue;
+        
+        fs::path probe = base;
+        for (int i = 0; i < 10 && probe.has_parent_path(); ++i) {
+            if (fs::exists(probe / "control") && fs::exists(probe / "resources")) {
+                return probe;
+            }
+            if (!probe.has_parent_path()) break;
+            probe = probe.parent_path();
+        }
+    }
+    
+    // Fallback: return current directory
+    return fs::current_path();
+}
+
 inline bool populateGrimTextPathsFromConfig(const nlohmann::json& config, GrimTextPaths& paths) {
     if (!config.contains("paths")) {
         std::cerr << "[Config] WARNING: ai_config.json does not contain 'paths' section" << std::endl;
@@ -469,9 +532,21 @@ inline bool populateGrimTextPathsFromConfig(const nlohmann::json& config, GrimTe
         return false;
     }
 
+    // Get GRIM root for resolving relative paths
+    std::filesystem::path grimRoot = resolveGrimRoot();
+    
     auto assignIfPresent = [&](const char* key, std::string& field) {
         if (grimTextPaths.contains(key) && grimTextPaths[key].is_string()) {
-            field = grimTextPaths[key].get<std::string>();
+            std::string pathStr = grimTextPaths[key].get<std::string>();
+            std::filesystem::path path(pathStr);
+            
+            // If path is relative, resolve it relative to GRIM root
+            if (path.is_relative()) {
+                field = (grimRoot / path).string();
+            } else {
+                // Path is already absolute, use as-is
+                field = pathStr;
+            }
         }
     };
 

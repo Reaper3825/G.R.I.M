@@ -312,21 +312,22 @@ public:
         // Set working directory to GRIM root so train_gpu.exe can find ai_config.json
         fs::path workingDir = fs::absolute(grimRoot);
         
-        // Use paths from config (which are now loaded from ai_config.json as absolute paths)
-        // If they're relative, resolve them; if absolute, use them directly
+        // Use paths from config (which are now loaded from ai_config.json and resolved to absolute paths)
+        // The paths should already be absolute after populateGrimTextPathsFromConfig() resolves them
+        // But if they're still relative (backward compatibility), resolve them from GRIM root
         fs::path dataPath = config.dataPath;
         fs::path vocabPath = config.vocabPath;
         fs::path outputPath = config.outputPath;
         
-        // If paths are relative, resolve them from GRIM root
+        // If paths are relative, resolve them from GRIM root (shouldn't happen with new code, but handle for safety)
         if (dataPath.is_relative()) {
-            dataPath = grimRoot / "resources/models/GRIM-text/training" / dataPath;
+            dataPath = grimRoot / dataPath;
         }
         if (vocabPath.is_relative()) {
-            vocabPath = grimRoot / "resources/models/GRIM-text/training" / vocabPath;
+            vocabPath = grimRoot / vocabPath;
         }
         if (outputPath.is_relative()) {
-            outputPath = grimRoot / "resources/models/GRIM-text/training" / outputPath;
+            outputPath = grimRoot / outputPath;
         }
         
         debugLog << "GRIM root: " << grimRoot << std::endl;

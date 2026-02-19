@@ -2,6 +2,7 @@
 #include "logger.hpp"
 #include "console_history.hpp"
 #include "timer.hpp"
+#include "resources.hpp"
 #include <vector>
 #include <mutex>
 #include <string>
@@ -187,8 +188,9 @@ void start(ConsoleHistory* history,
     LOG_DEBUG("WakeVoice", "Starting wake-word listener...");
 
     const std::string accessKey  = "l24x+8ku2pUsbZKcEyICgbx3Aj/15JHoqGj1TQr+JHcyCXA2RSV2LA==";
-    const std::string modelPath  = "D:/G.R.I.M/external/porcupine/lib/common/porcupine_params.pv";
-    const std::string keywordPath= "D:/G.R.I.M/resources/wakeword/grim.ppn";
+    std::string grimRoot = getGrimRootDir();
+    const std::string modelPath  = (std::filesystem::path(grimRoot) / "external/porcupine/lib/common/porcupine_params.pv").string();
+    const std::string keywordPath= (std::filesystem::path(grimRoot) / "resources/wakeword/grim.ppn").string();
 
     if (!Voice::initWakeWord(accessKey, modelPath, keywordPath)) {
         LOG_ERROR("WakeVoice", "Failed to initialize wake-word engine.");

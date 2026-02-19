@@ -14,6 +14,7 @@ inline constexpr const char* AI_CONFIG_FILE = "ai_config.json";
 // ====================================================
 // Resource loading
 // ====================================================
+std::string getGrimRootDir();  // Get GRIM root directory path
 std::string getResourcePath();
 std::string loadTextResource(const std::string& filename, int argc, char** argv);
 std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* history = nullptr);

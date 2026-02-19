@@ -67,10 +67,34 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "? PyTorch installed" -ForegroundColor Green
 
+# Function to find GRIM root directory
+function Get-GrimRoot {
+    $scriptDir = Split-Path -Parent $MyInvocation.PSCommandPath
+    $currentDir = Get-Location
+    
+    foreach ($baseDir in @($scriptDir, $currentDir)) {
+        $probe = $baseDir
+        for ($i = 0; $i -lt 10; $i++) {
+            if ((Test-Path (Join-Path $probe "control")) -and (Test-Path (Join-Path $probe "resources"))) {
+                return $probe
+            }
+            $parent = Split-Path -Parent $probe
+            if (-not $parent -or $parent -eq $probe) { break }
+            $probe = $parent
+        }
+    }
+    
+    # Fallback: return script directory parent
+    return (Split-Path -Parent $scriptDir)
+}
+
+# Get GRIM root directory
+$GrimRoot = Get-GrimRoot
+
 # Install Coqui TTS with dependencies
 Write-Host ""
 Write-Host "[4/5] Installing Coqui TTS (XTTS v2)..." -ForegroundColor Yellow
-$requirementsPath = "D:\G.R.I.M\resources\python\requirements.txt"
+$requirementsPath = Join-Path $GrimRoot "resources\python\requirements.txt"
 
 if (Test-Path $requirementsPath) {
     python -m pip install -r $requirementsPath
@@ -89,8 +113,8 @@ Write-Host "? Coqui TTS installed" -ForegroundColor Green
 Write-Host ""
 Write-Host "[4.5/5] Setting up default voice reference..." -ForegroundColor Yellow
 
-$voiceDir = "D:\G.R.I.M\resources\voices"
-$defaultVoice = "$voiceDir\default.wav"
+$voiceDir = Join-Path $GrimRoot "resources\voices"
+$defaultVoice = Join-Path $voiceDir "default.wav"
 
 New-Item -ItemType Directory -Path $voiceDir -Force | Out-Null
 

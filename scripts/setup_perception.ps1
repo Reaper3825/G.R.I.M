@@ -11,15 +11,41 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Function to find GRIM root directory
+function Get-GrimRoot {
+    $scriptDir = Split-Path -Parent $MyInvocation.PSCommandPath
+    $currentDir = Get-Location
+    
+    foreach ($baseDir in @($scriptDir, $currentDir)) {
+        $probe = $baseDir
+        for ($i = 0; $i -lt 10; $i++) {
+            if ((Test-Path (Join-Path $probe "control")) -and (Test-Path (Join-Path $probe "resources"))) {
+                return $probe
+            }
+            $parent = Split-Path -Parent $probe
+            if (-not $parent -or $parent -eq $probe) { break }
+            $probe = $parent
+        }
+    }
+    
+    # Fallback: return script directory parent
+    return (Split-Path -Parent $scriptDir)
+}
+
 Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host "   GRIM Perception System Setup" -ForegroundColor Cyan
 Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host ""
 
+# Get GRIM root directory
+$GrimRoot = Get-GrimRoot
+Write-Host "GRIM root: $GrimRoot" -ForegroundColor Gray
+Write-Host ""
+
 # Paths
-$ResourcesPath = "D:\G.R.I.M\resources"
-$TessdataPath = "$ResourcesPath\tessdata"
-$YOLOPath = "$ResourcesPath\models\yolo"
+$ResourcesPath = Join-Path $GrimRoot "resources"
+$TessdataPath = Join-Path $ResourcesPath "tessdata"
+$YOLOPath = Join-Path $ResourcesPath "models\yolo"
 
 # ============================================================
 # 1. Create Directories
