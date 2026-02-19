@@ -1,4 +1,9 @@
 {
+  "code-runner.runInTerminal": true,
+  "code-runner.cwd": "${workspaceFolder}",
+  "code-runner.executorMap": {
+    "shellscript": "cd ${workspaceFolder} && bash"
+  },
   "editor.formatOnSave": true,
   "editor.defaultFormatter": "esbenp.prettier-vscode",
   "prettier.requireConfig": true,
