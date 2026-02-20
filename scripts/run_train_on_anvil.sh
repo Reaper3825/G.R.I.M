@@ -7,9 +7,9 @@
 #   - Repo on Anvil at GRIM_ANVIL_DIR. Default: /anvil/projects/x-cis210085/GRIM/G.R.I.M
 #     Override if you use home or scratch: export GRIM_ANVIL_DIR=\$HOME/G.R.I.M
 #   - On Anvil, build once (see first-time setup in docs or below).
-#   - vcpkg manifest mode (vcpkg.json at repo root). When the build runs, CMake must use the vcpkg toolchain
-#     so the correct prefix/triplet is used. On Anvil we pass CMAKE_TOOLCHAIN_FILE and VCPKG_TARGET_TRIPLET=x64-linux.
-#     vcpkg must be at GRIM_ANVIL_DIR/vcpkg (or set GRIM_VCPKG_ROOT to vcpkg path on Anvil).
+#   - vcpkg manifest mode (vcpkg.json at repo root). On Anvil we use the vcpkg toolchain (x64-linux).
+#     If vcpkg is not found at GRIM_ANVIL_DIR/vcpkg, the script clones and bootstraps it there before building.
+#     Override location with GRIM_VCPKG_ROOT (script will not auto-download in that case).
 #   - CMake 3.22+ for TrainingLoop. If default module is older, on Anvil run "module avail cmake"
 #     then export ANVIL_CMAKE_MODULE=cmake/X.XX (e.g. cmake/3.26) before this script.
 #
@@ -90,29 +90,39 @@ ANVIL_CMAKE_MODULE="${ANVIL_CMAKE_MODULE:-}"
 ANVIL_MODULES='source /etc/profile.d/modules.sh 2>/dev/null || source /usr/share/modules/init/bash 2>/dev/null || true; module load modtree/gpu 2>/dev/null || module load cuda gcc 2>/dev/null || true; if [ -n "$ANVIL_CMAKE_MODULE" ]; then module load $ANVIL_CMAKE_MODULE 2>/dev/null || true; else module load cmake/3.26 2>/dev/null || module load cmake/3.22 2>/dev/null || module load cmake 2>/dev/null || true; fi'
 # Set CUDAToolkit_ROOT only when nvcc is found (avoid passing "." when module load failed)
 ANVIL_CUDA_ROOT='NVCC=$(which nvcc 2>/dev/null); if [ -z "$NVCC" ]; then echo "ERROR: nvcc not found. On Anvil run: module load modtree/gpu (or module load cuda); then re-run this script." >&2; exit 1; fi; CUDAToolkit_ROOT=$(dirname "$(dirname "$NVCC")")'
-# vcpkg manifest: use toolchain so the build uses the right prefix/triplet (x64-linux on Anvil).
-# VCPKG_MANIFEST_DIR = repo root so toolchain finds vcpkg.json when configuring from TrainingLoop.
+# vcpkg: use toolchain with x64-linux. TrainingLoop uses minimal manifest (training/vcpkg.json) so only
+# nlohmann-json and flatbuffers are installed (avoids full repo manifest deps that need Python 3.7+ / meson).
 ANVIL_VCPKG="${GRIM_VCPKG_ROOT:-$ANVIL_DIR/vcpkg}"
 VCPKG_TOOLCHAIN="$ANVIL_VCPKG/scripts/buildsystems/vcpkg.cmake"
 ANVIL_CMAKE_OPTS='-DCMAKE_BUILD_TYPE=Release -DCUDAToolkit_ROOT=$CUDAToolkit_ROOT'
-ANVIL_CMAKE_OPTS="$ANVIL_CMAKE_OPTS -DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_MANIFEST_DIR=$ANVIL_DIR"
+ANVIL_CMAKE_OPTS="$ANVIL_CMAKE_OPTS -DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_MANIFEST_DIR=$ANVIL_DIR/$TRAINING_DIR"
+
+# If using default vcpkg location (not GRIM_VCPKG_ROOT), ensure vcpkg exists on Anvil: clone + bootstrap if missing.
+ANVIL_VCPKG_ENSURE="true"
+if [[ -z "${GRIM_VCPKG_ROOT:-}" ]]; then
+  ANVIL_VCPKG_ENSURE="if [ ! -f \"$ANVIL_DIR/vcpkg/scripts/buildsystems/vcpkg.cmake\" ]; then echo \"vcpkg not found at $ANVIL_DIR/vcpkg, cloning and bootstrapping ...\"; (cd \"$ANVIL_DIR\" && git clone https://github.com/Microsoft/vcpkg.git vcpkg && cd vcpkg && ./bootstrap-vcpkg.sh) || exit 1; fi"
+fi
+
+# Ensure training/vcpkg.json exists on Anvil (minimal manifest for TrainingLoop). Create if missing so build works before git pull.
+TRAINING_VCPKG_JSON='{"name":"grim-training","version-string":"0.1.0","dependencies":["nlohmann-json","flatbuffers"]}'
+ANVIL_TRAINING_MANIFEST_ENSURE="mkdir -p $ANVIL_DIR/$TRAINING_DIR && [ -f $ANVIL_DIR/$TRAINING_DIR/vcpkg.json ] || printf '%s' '$TRAINING_VCPKG_JSON' > $ANVIL_DIR/$TRAINING_DIR/vcpkg.json"
 
 # --build / --build-training: GRIM-text/training/TrainingLoop CMake → train_gpu
 if [[ "$DO_BUILD" == true ]]; then
   echo "Building train_gpu (training loop) on Anvil in $ANVIL_DIR/$BUILD_DIR ..."
-  ssh anvil "cd $ANVIL_DIR/$TRAINING_DIR/TrainingLoop && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) train_gpu"
+  ssh anvil "cd $ANVIL_DIR && $ANVIL_VCPKG_ENSURE && $ANVIL_TRAINING_MANIFEST_ENSURE && cd $ANVIL_DIR/$TRAINING_DIR/TrainingLoop && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) train_gpu"
 fi
 
 # --build-grim: GRIM-text/GRIM CMake → grim_text_server (inference)
 if [[ "$DO_BUILD_GRIM" == true ]]; then
   echo "Building grim_text_server (GRIM-text inference) on Anvil in $ANVIL_DIR/$GRIM_DIR/build ..."
-  ssh anvil "cd $ANVIL_DIR/$GRIM_DIR && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) grim_text_server"
+  ssh anvil "cd $ANVIL_DIR && $ANVIL_VCPKG_ENSURE && cd $ANVIL_DIR/$GRIM_DIR && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) grim_text_server"
 fi
 
 # --build-grim-exe: repo root CMake → GRIM (main host / adaptive controller for future agent)
 if [[ "$DO_BUILD_GRIM_EXE" == true ]]; then
   echo "Building GRIM (main host / grim.exe) on Anvil in $ANVIL_DIR/build ..."
-  ssh anvil "cd $ANVIL_DIR && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) GRIM"
+  ssh anvil "cd $ANVIL_DIR && $ANVIL_VCPKG_ENSURE && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) GRIM"
 fi
 
 if [[ "$USE_SBATCH" == true ]]; then

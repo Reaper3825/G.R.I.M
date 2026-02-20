@@ -374,7 +374,7 @@ add_library(grim_unigrambyte_tokenizer STATIC
     ../../Shared/UnigramByte/Byte.cu
     ../../Shared/UnigramByte/Unigram.cu
     ../../Shared/UnigramByte/UniByte.cu
-    ../../Shared/UnigramByte/AtomTable.cu
+    ../../Shared/UnigramByte/Atomtable.cu
     ../../Shared/UnigramByte/AhoCorasick.cu
 )
 set_target_properties(grim_unigrambyte_tokenizer PROPERTIES
