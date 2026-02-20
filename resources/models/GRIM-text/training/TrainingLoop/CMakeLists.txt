@@ -1,11 +1,18 @@
 # TrainingLoop CMakeLists.txt
 # GPU-accelerated training executable only
-cmake_minimum_required(VERSION 3.22)
+# 3.20: Anvil (Purdue RCAC) default module; 3.18+ needed for CUDA_ARCHITECTURES / CUDAToolkit.
+cmake_minimum_required(VERSION 3.20)
 
-# vcpkg manifest mode - uses CMAKE_PREFIX_PATH for package discovery
-# Set prefix path to vcpkg_installed for package discovery
-if(NOT DEFINED CMAKE_PREFIX_PATH AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vcpkg_installed/x64-windows")
-    set(CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vcpkg_installed/x64-windows" CACHE PATH "vcpkg installed packages")
+# vcpkg manifest mode (vcpkg.json at repo root). vcpkg install produces vcpkg_installed/<triplet>.
+# We set CMAKE_PREFIX_PATH to that dir when present (relative to repo root).
+# Repo root from here: ../../../../../ = resources/models/GRIM-text/training/TrainingLoop -> repo root
+if(NOT DEFINED CMAKE_PREFIX_PATH)
+    set(VCPKG_INSTALLED "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vcpkg_installed")
+    if(EXISTS "${VCPKG_INSTALLED}/x64-windows")
+        set(CMAKE_PREFIX_PATH "${VCPKG_INSTALLED}/x64-windows" CACHE PATH "vcpkg manifest (Windows)")
+    elseif(EXISTS "${VCPKG_INSTALLED}/x64-linux")
+        set(CMAKE_PREFIX_PATH "${VCPKG_INSTALLED}/x64-linux" CACHE PATH "vcpkg manifest (Linux)")
+    endif()
 endif()
 
 # Enable CUDA (required for training loop)
