@@ -12,6 +12,7 @@
 #include <vector>
 #include "SoftRestart.hpp"
 #include "../../GRIM/grim_language_model_cuda.hpp"
+#include "../Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
 
 namespace GRIM {
 namespace SoftRestart {
@@ -64,11 +65,12 @@ void zeroOptimizerMoments(LanguageModel* model, OptimizerState* optimizer) {
         return;
     }
 
-    // Reset all parameter-group moment buffers (m_state, v_state) managed by the model
-    model->resetOptimizerMoments();
+    // Reset all parameter-group moment buffers (m_state, v_state) via free function
+    GRIM::resetAdamWMoments(model->parameterGroups(),
+                            model->getTrainingState().stream_ctrl.getPrimaryStream());
 
     // OptimizerState only tracks step count - no moment buffers to clear
-    // ParameterGroup owns m_state/v_state, which are zeroed by resetOptimizerMoments()
+    // ParameterGroup owns m_state/v_state, which are zeroed by resetAdamWMoments()
     if (optimizer) {
         optimizer->step = 0;  // Reset bias correction step counter
     }
@@ -80,8 +82,9 @@ void scaleOptimizerMoments(LanguageModel* model, float scale) {
         return;
     }
 
-    // Scale all parameter-group moment buffers (m_state, v_state)
-    model->scaleOptimizerMoments(scale);
+    // Scale all parameter-group moment buffers (m_state, v_state) via free function
+    GRIM::scaleAdamWMoments(model->parameterGroups(), scale,
+                            model->getTrainingState().stream_ctrl.getPrimaryStream());
     
     // Don't reset step counter - we're just damping momentum, not restarting
 }

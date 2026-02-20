@@ -48,14 +48,14 @@ TrainingState::~TrainingState() {
 	// Issue #60: Free debug gradient attribution buffers
 	freeDebugGradBuffers();
 	
-	// Issue #60 FIX: Free PCGrad buffer for tied weights
-	freePCGradBuffer();
-	
 	// Free ScratchBlockPool (pinned memory blocks)
 	if (scratch_pool) {
 		delete scratch_pool;
 		scratch_pool = nullptr;
 	}
+	
+	// Free gradient norm scratch buffers
+	GradNorm::freeGradNormScratch(grad_norm_scratch);
 	
 	// StreamController owns and destroys streams - no manual cleanup needed
 	if (cublas_handle) cublasDestroy(cublas_handle);
@@ -282,14 +282,8 @@ void TrainingState::initializeAutogradSeed(uint64_t seed) {
 
 void TrainingState::zeroIntermediateGrads(cudaStream_t stream) {
 	// RULE 20: Fail loud on NULL stream - it causes race conditions
-	StreamController::fatalIfDefaultStream(stream, "TrainingState::zeroIntermediateGrads");
-	
-	// Zero all intermediate gradient tensors at start of accumulation window
-	// NOTE: Only zero tensors that are actually allocated (data != nullptr)
-	
-	// BUG FIX Issue #45: zero_grad() zeros tensor.grad, but intermediate gradient tensors
-	// store their gradient DATA in tensor.data (NOT tensor.grad)!
-	// Must use cudaMemsetAsync on tensor.data instead.
+	StreamController::fatalIfDefaultStream(stream, "FATAL:TrainingState::zeroIntermediateGrads Default stream detected!");
+
 	auto safe_zero = [stream](Tensor& t, const char* name) {
 		if (t.data && t.numel() > 0) {
 			// Zero the DATA field, not the grad field!
@@ -322,39 +316,6 @@ void TrainingState::zeroIntermediateGrads(cudaStream_t stream) {
 //  ISSUE #60 FIX: PCGrad Buffer for Tied Weights (Tensor-based)
 //======================================================//
 
-void TrainingState::allocatePCGradBuffer(int vocab_size, int d_model, cudaStream_t stream) {
-	if (pcgrad_temp_buffer.data) {
-		freePCGradBuffer();
-	}
-	
-	// Rule 22: getPrimaryStream() throws if not initialized (Rule 20)
-	cudaStream_t primary_stream = stream ? stream : stream_ctrl.getPrimaryStream();
-	
-	// Allocate as Tensor [vocab_size, d_model]
-	pcgrad_temp_buffer = Tensor::zeros({vocab_size, d_model}, primary_stream, "pcgrad_temp_buffer");
-	
-	// Set global pointers for EmbeddingGradFn to use
-	extern float* g_pcgrad_temp_buffer;
-	extern size_t g_pcgrad_buffer_size;
-	g_pcgrad_temp_buffer = pcgrad_temp_buffer.data;
-	g_pcgrad_buffer_size = static_cast<size_t>(vocab_size) * d_model;
-	
-	fprintf(stdout, "[PCGRAD] Allocated PCGrad buffer: %zu elements (%zu MB)\n",
-	        g_pcgrad_buffer_size, g_pcgrad_buffer_size * sizeof(float) / (1024 * 1024));
-}
-
-void TrainingState::freePCGradBuffer() {
-	if (pcgrad_temp_buffer.data) {
-		// Clear global pointers BEFORE releasing tensor
-		extern float* g_pcgrad_temp_buffer;
-		extern size_t g_pcgrad_buffer_size;
-		g_pcgrad_temp_buffer = nullptr;
-		g_pcgrad_buffer_size = 0;
-		
-		// Tensor::release() called via default destruction or explicit clear
-		pcgrad_temp_buffer = Tensor();  // Replace with empty tensor
-	}
-}
 
 //======================================================//
 //  DEBUG: Gradient Attribution Buffers (Issue #60) - Tensor-based

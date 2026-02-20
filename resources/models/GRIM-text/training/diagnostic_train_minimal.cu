@@ -42,6 +42,8 @@
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Shared/Batching/BatchPayload.hpp"
+#include "Autograd/AutogradTraining.hpp"
+#include "../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
 
 // Tokenizer  
 #include "../Shared/UnigramByte/UniByte.hpp"
@@ -745,18 +747,27 @@ int main(int argc, char** argv) {
                     payload.text_mask.resize(payload.total_tokens, 0);
                     payload.fits_in_cache = true;  // Assume fits for diagnostic purposes
                     
-                    float loss = model.computeLossBatch(payload);
+                    // Unified forward+loss+backward via autograd
+                    auto loss_result = GRIM::Autograd::autogradTrainingStep(
+                        model, model.getTrainingState(), payload,
+                        /*accumulate=*/false, /*grad_scale=*/1.0f, manual_optimizer_state.step);
+                    if (!loss_result.success) {
+                        std::cout << "  → autogradTrainingStep FAILED: " << loss_result.error_message << std::endl;
+                        break;
+                    }
+                    float loss = loss_result.loss_value;
                     
                     std::cout << "  → Training on target (loss=" << std::fixed << std::setprecision(4) 
                               << loss << ", context_len=" << context_len << ")" << std::endl;
                     
-                    // Zero gradients and backward
-                    model.zeroGrad();
-                    model.backward(loss, false, 1.0f, manual_optimizer_state.step);
                     CUDA_CHECK(cudaStreamSynchronize(stream));
                     
                     // Update weights
-                    model.updateWeights(learning_rate, &manual_optimizer_state);
+                    GRIM::launchAdamWStep(model.parameterGroups(),
+                                          learning_rate,
+                                          GRIM::HyperParameters::ADAMW_WEIGHT_DECAY,
+                                          manual_optimizer_state.step,
+                                          stream);
                     CUDA_CHECK(cudaStreamSynchronize(stream));
                     
                     manual_optimizer_state.step++;

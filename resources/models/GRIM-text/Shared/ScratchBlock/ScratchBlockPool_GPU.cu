@@ -72,7 +72,7 @@ void ScratchBlockPool::setEnabled(bool enabled) {
     }
 }
 
-ScratchBlockHandle ScratchBlockPool::acquire(size_t min_tokens) {
+ScratchBlockHandle ScratchBlockPool::acquire(size_t min_bytes) {
     std::lock_guard<std::mutex> lock(mutex_);
     
     stats_.total_acquisitions++;
@@ -83,10 +83,11 @@ ScratchBlockHandle ScratchBlockPool::acquire(size_t min_tokens) {
         throw std::runtime_error("ScratchBlockPool: acquire called while disabled or uninitialized");
     }
     
-    // Find available block with sufficient capacity
+    // Find available block with sufficient byte capacity
     int block_idx = -1;
     for (size_t i = 0; i < blocks_.size(); ++i) {
-        if (!blocks_[i].in_use.load() && blocks_[i].capacity_tokens >= min_tokens) {
+        const size_t block_bytes = blocks_[i].capacity_tokens * sizeof(int);
+        if (!blocks_[i].in_use.load() && block_bytes >= min_bytes) {
             bool expected = false;
             if (blocks_[i].in_use.compare_exchange_strong(expected, true)) {
                 block_idx = static_cast<int>(i);
@@ -97,7 +98,7 @@ ScratchBlockHandle ScratchBlockPool::acquire(size_t min_tokens) {
     
     // No available block - fail loud
     if (block_idx == -1) {
-        std::fprintf(stderr, "ScratchBlockPool FATAL: No available blocks (min_tokens=%zu)\n", min_tokens);
+        std::fprintf(stderr, "ScratchBlockPool FATAL: No available blocks (min_bytes=%zu)\n", min_bytes);
         throw std::runtime_error("ScratchBlockPool: No available blocks");
     }
     

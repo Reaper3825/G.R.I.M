@@ -230,9 +230,11 @@ int main(int argc, char** argv) {
         std::ostringstream oss;
         oss << "[FATAL] Unhandled exception: " << e.what();
         EmitModuleError(ModuleId::TrainingOrchestrator, oss.str(), 0);
+        GRIM::Logging::FlushModuleLogQueue();
         exit_code = 1;
     } catch (...) {
         EmitModuleError(ModuleId::TrainingOrchestrator, "[FATAL] Unknown exception", 0);
+        GRIM::Logging::FlushModuleLogQueue();
         exit_code = 1;
     }
     
@@ -251,6 +253,10 @@ int main(int argc, char** argv) {
     }
     EmitModuleInfo(ModuleId::TrainingOrchestrator, 
         "════════════════════════════════════════════════════════════", 0);
+    
+    // Flush async log queue so ALL messages (including error details) are written to disk
+    // before process exit. Without this, async-queued error messages are lost.
+    GRIM::Logging::FlushModuleLogQueue();
     
     return exit_code;
 }

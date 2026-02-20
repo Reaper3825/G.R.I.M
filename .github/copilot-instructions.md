@@ -575,12 +575,6 @@ SetConsoleCtrlHandler(consoleHandler, TRUE);
 13. **GQA Gradient Scaling**: Backward kernel MUST apply `gqa_grad_scale = 1.0f / heads_per_kv_group` to dV/dK accumulation. Without this, gradients explode (26M+ spike observed). Scaling ensures proper gradient normalization when multiple Q heads accumulate to same KV head.
 14. **Data Quality vs Gradient Alignment**: High gradient alignment (99.45% cosine similarity) does NOT automatically mean low data diversity. GRIM-text training data has 6,733 unique sequences with only 10% token overlap (Jaccard), 0% duplicates, and 98-99% prefix diversity. The gradient alignment comes from batch composition strategy (`SIMILARITY_GROUPED`) or model architecture, NOT the data. Always run empirical data quality analysis before assuming data issues.
 
-15. **Production Recommendation — Prefer Standard Attention + RMSNorm**: For production training stability, prefer standard scaled dot-product attention together with pre-norm `RMSNorm` (i.e., disable per-head L2 normalization of `Q` and `K`). To switch:
-
-- Set `QK_NORMALIZATION_ENABLED = false` in `resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp`.
-- Keep `RMSNorm` as the pre-normalization layer (no changes required if already in use).
-- Rationale: Standard scaled dot-product attention (score = `Q · K^T / sqrt(d)`) avoids the `1/||Q||` or `1/||K||` singularities introduced by per-head L2 normalization, and is the approach used in large production models (LLaMA, Mistral, Gemma). Use this when you prioritize robustness over the representational geometry benefits of QK-normalization.
-
 20. **NEVER Keep Backwards Compatibility**: When removing functionality, DELETE all compatibility shims, legacy APIs, and fallback code paths. If code fails after removal, that's GOOD - it exposes misconnects and incorrect assumptions. Backwards compatibility hides bugs and creates maintenance debt. Let it fail loud and fix the root cause. Example: Removed `computeOptimalBlockSizes()` from Flash Attention - any caller should be updated to use constants directly from `HyperParameters::FLASH_ATTN_BLOCK_Q/KV`.
 21. **Three-Phase Training Files**: The entry point is `train_gpu.cu` which orchestrates `Phases/Phase{1,2,3}_{Startup,TrainingLoop,Cleanup}.{cu,hpp}`. If modifying training logic, edit the appropriate phase file, not the orchestrator. CMakeLists.txt in `training/TrainingLoop/` defines the build.
 

@@ -198,23 +198,6 @@ constexpr int FLASH_ATTN_HEAD_DIM_64 = DEFAULT_HEAD_DIM;  // Primary supported h
 // Higher values spread attention more evenly (risk over-smoothing).
 constexpr float SOFTMAX_TEMPERATURE = 1.0f;
 
-// QK-Normalization: Normalize Q and K vectors to unit L2 norm before computing scores
-// This prevents attention saturation when embeddings have large magnitudes
-// Used by Gemma, ViT-22B, and other modern architectures
-// 
-// ❌ DISABLED - Extensive testing (Dec 22-27, 2025) showed QK-normalization does NOT fix
-// training plateau. Loss still stalls at ~8.3-8.8 with this enabled. See:
-// docs/PLATEAU_BUG_INVESTIGATION.md "🚫 CRITICAL: QK-NORMALIZATION DOES NOT FIX PLATEAU"
-constexpr bool QK_NORMALIZATION_ENABLED = false;  // Master switch for QK-normalization
-constexpr float QK_NORM_SCALE = 1.0f;  // Default scale factor (like sqrt(head_dim) but tunable)
-
-// Learnable per-head QK-norm scales (nGPT-style)
-// When enabled, each attention head has learnable alpha_q and alpha_k parameters
-// Forward: q̂ = alpha_q * (q / ||q||), k̂ = alpha_k * (k / ||k||)
-// This buffers the 1/||q|| division and allows heads to learn different scales
-constexpr bool QK_NORM_LEARNABLE_SCALE = true;
-constexpr float QK_NORM_ALPHA_INIT = 1.0f;  // Initial value for alpha_q and alpha_k
-
 //======================================================//
 // Positional Bias Method (PBM) Configuration
 // Hybrid ALiBi + RoPE for position encoding

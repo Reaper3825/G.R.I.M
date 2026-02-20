@@ -1,3 +1,5 @@
+#define USE_CUDA
+
 //======================================================//
 //  AdamW_Kernal_GPU.cu
 //  CUDA implementation for AdamW optimizer update
@@ -6,6 +8,7 @@
 #include "AdamW_Kernal_GPU.hpp"
 #include "../../HyperParameters/HyperParameters_GPU.hpp"
 #include "../../TensorContract/TensorContract_GPU.hpp"
+#include "../../../Common/grim_scale_buffer.hpp"
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -14,6 +17,7 @@
 #include <limits>
 #include <string>
 #include <stdexcept>
+#include <vector>
 
 namespace GRIM {
 
@@ -148,6 +152,106 @@ void launchAdamWKernel(ParameterGroup& group,
 			"[launchAdamWKernel] kernel launch failed for group '" + group.name +
 			"': " + std::string(cudaGetErrorString(launch_error)));
 	}
+}
+
+//======================================================//
+//  launchAdamWStep - AdamW Optimizer Step (all groups)
+//======================================================//
+//
+//  Moved from LanguageModel::updateWeights() to break the
+//  coupling between the model class and optimizer orchestration.
+//  The model owns the parameter groups (via buildParameterGroups()),
+//  but stepping the optimizer is training infrastructure, not model logic.
+//
+
+void launchAdamWStep(std::vector<ParameterGroup>& groups,
+                     float learning_rate,
+                     float weight_decay,
+                     int step,
+                     cudaStream_t stream) {
+    if (groups.empty()) {
+        throw std::runtime_error(
+            "[launchAdamWStep] parameter groups are empty - "
+            "caller MUST call buildParameterGroups() first");
+    }
+    if (!stream) {
+        throw std::runtime_error(
+            "[launchAdamWStep] stream is NULL - caller MUST provide valid CUDA stream");
+    }
+
+    for (size_t i = 0; i < groups.size(); ++i) {
+        auto& group = groups[i];
+        if (!group.weights() || !group.grads() || group.size() == 0) continue;
+
+        // Validate optimizer state exists before update
+        if (!group.m_state() || !group.v_state()) {
+            throw std::runtime_error(
+                "[launchAdamWStep] FATAL: Missing optimizer state for group '" + group.name +
+                "' idx=" + std::to_string(i) +
+                " size=" + std::to_string(group.size()) +
+                " weights=" + std::to_string(reinterpret_cast<uintptr_t>(group.weights())) +
+                " grads=" + std::to_string(reinterpret_cast<uintptr_t>(group.grads())) +
+                " m_state=" + std::to_string(reinterpret_cast<uintptr_t>(group.m_state())) +
+                " v_state=" + std::to_string(reinterpret_cast<uintptr_t>(group.v_state())) +
+                " step=" + std::to_string(step));
+        }
+
+        // Apply depth-aware upsilon (Υ) regularization to weight decay
+        // Formula: Υ_l = 0.1 * sqrt(L_ref / L) where L is 1-indexed layer
+        // Deeper layers get LESS regularization (smaller effective weight_decay)
+        // weight_decay_multiplier = 0.0 for biases/norms (standard AdamW practice)
+        const float effective_weight_decay = weight_decay * group.upsilon * group.weight_decay_multiplier;
+
+        launchAdamWKernel(group, learning_rate, effective_weight_decay, step, stream);
+    }
+}
+
+//======================================================//
+//  resetAdamWMoments - Zero all moment buffers
+//======================================================//
+
+void resetAdamWMoments(std::vector<ParameterGroup>& groups, cudaStream_t stream) {
+    if (groups.empty()) {
+        throw std::runtime_error(
+            "[resetAdamWMoments] parameter groups are empty - "
+            "caller MUST call buildParameterGroups() first");
+    }
+
+    for (auto& group : groups) {
+        if (group.m_state() && group.size() > 0) {
+            cudaMemsetAsync(group.m_state(), 0, group.size() * sizeof(float), stream);
+        }
+        if (group.v_state() && group.size() > 0) {
+            cudaMemsetAsync(group.v_state(), 0, group.size() * sizeof(float), stream);
+        }
+    }
+}
+
+//======================================================//
+//  scaleAdamWMoments - Scale all moment buffers
+//======================================================//
+
+void scaleAdamWMoments(std::vector<ParameterGroup>& groups,
+                       float scale,
+                       cudaStream_t stream) {
+    if (groups.empty()) {
+        throw std::runtime_error(
+            "[scaleAdamWMoments] parameter groups are empty - "
+            "caller MUST call buildParameterGroups() first");
+    }
+    if (scale <= 0.0f) {
+        throw std::runtime_error(
+            "[scaleAdamWMoments] scale MUST be > 0.0f, got " + std::to_string(scale));
+    }
+
+    for (auto& group : groups) {
+        if (group.m_state() && group.size() > 0) {
+            scaleDeviceBuffer(group.m_state(), group.size(), scale, stream);
+        }
+        if (group.v_state() && group.size() > 0) {
+            scaleDeviceBuffer(group.v_state(), group.size(), scale, stream);
+        }
+    }
 }
 
 } // namespace GRIM

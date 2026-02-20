@@ -172,10 +172,10 @@ struct EncoderConfig {
     // WARNING: If nullptr, attention sees no positional info - positions become equivalent!
     const PBM::PBMSpec* pos_encoding = nullptr;
     
-    // LayerScale (Issue #109 fix - config propagation)
+    // LayerScale (Issue #109/#129 fix - config propagation)
     // These fields were missing, causing reliance on EncoderLayerConfig defaults
     bool use_layer_scale = false;        // Enable per-sublayer learnable scaling
-    float layer_scale_init = 0.1f;       // Initial scale value (typical: 0.1 for small models)
+    float layer_scale_init = 1.0f;       // Issue #129: init=1.0 (NOT CaiT's 0.1 — caused 10x gradient attenuation)
     
     // Per-layer residual centering (Issue #126 fix - can be disabled to improve gradient signal)
     // When true, applies center_columns after each residual add in every encoder layer (24 total).
@@ -298,7 +298,7 @@ struct LanguageModelConfig {
     // Reduces correlation buildup between layers by gating sublayer outputs
     // with learnable scalars (initialized to layer_scale_init, typically 0.1)
     bool use_layer_scale = false;         // Enable LayerScale (gated residual scaling)
-    float layer_scale_init = 0.1f;        // Initial value for layer scale parameters
+    float layer_scale_init = 1.0f;       // Issue #129: init=1.0 (NOT CaiT's 0.1 — caused 10x gradient attenuation)
     
     bool use_gpu = true;
     bool use_flash_attention = true;  // Use Flash Attention 2 for memory efficiency
@@ -496,20 +496,6 @@ public:
         float model_size_mb = 0.0f;
     };
 
-    struct GradComponentMetrics {
-        float total_norm = 0.0f;
-        float embedding_norm = 0.0f;
-        float lm_head_norm = 0.0f;
-        float attention_norm = 0.0f;
-        float ffn_norm = 0.0f;
-        float rmsnorm_norm = 0.0f;      // RMSNorm gamma gradients
-        float scratchblock_norm = 0.0f; // ScratchBlock atom embeddings + projection gradients
-        float grad_scale = 1.0f;
-        float clip_threshold = 0.0f;
-        bool clipped = false;
-        int valid_token_count = 0;
-    };
-
     struct UpdateProbeResult {
         std::string group_name;
         float parameter_rms = 0.0f;
@@ -577,21 +563,15 @@ public:
     void initPBM();            // Initialize PBM (ALiBi+RoPE hybrid) - MUST be called before initGPU
     void initTrainingState();  // Initialize training state (allocate GPU buffers + gradients)
     void initInferenceState();  // Initialize inference state (allocate GPU buffers WITHOUT gradients)
-    void backward(float loss, bool accumulate = false, float grad_scale = 1.0f, uint64_t step = 0);
-    void updateWeights(float learning_rate,
-                       OptimizerState* optimizer_state,
-                       float weight_decay = HyperParameters::ADAMW_WEIGHT_DECAY);
-    void resetOptimizerMoments();
-    void scaleOptimizerMoments(float scale);
-    void zeroGrad();
-    float computeGradNorm(bool sync_for_host_read = false);  // Default false: async (fast). Set true only when reading result on host.
-    void scaleGradients(float scale);
-    void scaleGradientsByType(float scale, ParamGroupType type);  // Issue #134: Scale only specific param group type
-    void scaleGradientsExcludingType(float scale, ParamGroupType exclude_type);  // Issue #134: Scale all EXCEPT specific type
-    void clampGradients(float min_val, float max_val);  // Clamp individual gradient values
-    void dumpGradients(const std::string& path);  // Dump gradients to binary file for inspection
+    // backward() and zeroGrad() DELETED (Rule 26).
+    // Backward: Use autogradTrainingStep() which does forward+loss+backward.
+    // Zeroing: executeAutogradBackward() zeros all gradients when accumulate=false.
+    // updateWeights(), resetOptimizerMoments(), scaleOptimizerMoments() MOVED to
+    // AdamW_Kernal_GPU.{hpp,cu} as free functions: launchAdamWStep(), resetAdamWMoments(),
+    // scaleAdamWMoments(). AdamW stepping is training infrastructure, not model logic.
+    // computeGradNorm(), scaleGradientsByType(), recordGradientClip() DELETED (Rule 26).
+    // Phase2 calls GradNorm::measureGradientNorms() + launchScaleGradients() directly.
     void dumpGradientValues(int step, const std::string& filepath);  // Dump gradient values to text file for comparison
-    void logEmbeddingDiagnostics(const std::string& tag);
     
 #ifdef USE_CUDA
     void setLossOptions(const LossContext::LossOptions& opts) { loss_options_ = opts; }
@@ -600,14 +580,11 @@ public:
     // Training state access (for debugging/diagnostics)
     const TrainingState& getTrainingState() const { return training_state_; }
     TrainingState& getTrainingState() { return training_state_; }
+    
+    // Parameter groups accessor (for direct gradient norm / clipping in Phase2)
+    const std::vector<ParameterGroup>& parameterGroups() const { return parameter_groups_; }
+    std::vector<ParameterGroup>& parameterGroups() { return parameter_groups_; }
 #endif
-
-    // Diagnostics (host-side consumers should poll and clear to stay off the hot path)
-    const GradComponentMetrics& gradientMetrics() const { return grad_metrics_; }
-    bool hasGradientMetrics() const { return grad_metrics_ready_; }
-    void clearGradientMetricsFlag() { grad_metrics_ready_ = false; }
-    void recordGradientClip(float clip_threshold, bool clipped);
-    float lastGpuNormMs() const { return last_gpu_norm_ms_; }  // Issue #138: GPU-side kernel time only
 
     const UpdateProbeResult& updateProbe() const { return update_probe_result_; }
     bool hasUpdateProbe() const { return update_probe_ready_; }
@@ -692,13 +669,9 @@ private:
     bool staged_prompt_ready_ = false;
     int staged_prompt_len_ = 0;
     
-    GradComponentMetrics grad_metrics_;
     UpdateProbeResult update_probe_result_;
-    bool grad_metrics_ready_ = false;
     bool update_probe_ready_ = false;
     float last_grad_scale_ = 1.0f;
-    float last_grad_clip_limit_ = 0.0f;
-    float last_gpu_norm_ms_ = 0.0f;  // Issue #138: GPU-side norm kernel time (excludes backward drain)
     std::string update_probe_group_name_;
     size_t update_probe_group_index_ = static_cast<size_t>(-1);
     size_t update_probe_sample_elems_ = 0;
@@ -712,8 +685,6 @@ private:
     std::vector<ParameterGroup> parameter_groups_;  // Parameter groups for optimizer
     uint32_t backward_call_count_ = 0;              // Tracks backward() calls for deterministic diagnostics
     LossContext::LossOptions loss_options_{};
-    
-    // NOTE: Gradient norm computation moved to TrainingState::gradnorm_ctrl (GradNormController)
     
     // ScratchBlock reasoning layer (togglable)
     std::unique_ptr<ScratchBlockLayer> scratch_block_layer_;

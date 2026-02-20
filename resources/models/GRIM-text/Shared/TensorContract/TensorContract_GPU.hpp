@@ -42,22 +42,6 @@ extern float* g_debug_embedding_only_grad; // Buffer to capture embedding backwa
 extern size_t g_debug_grad_buffer_size;    // Size in elements (vocab_size * d_model)
 extern bool g_debug_capture_enabled;       // Set to true to enable capturing
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ISSUE #60 FIX: PCGrad (Projecting Conflicting Gradients) for Tied Weights
-// ═══════════════════════════════════════════════════════════════════════════
-// When tie_embeddings=true, embedding backward produces OPPOSITE gradient to LM head!
-// Instead of skipping (loses information) or canceling (current bug), use PCGrad:
-//   g_final = g_W + (g_E - proj_{g_W}(g_E))
-//           = g_W + orthogonal_component(g_E)
-//
-// This preserves the LM head gradient direction while adding any NOVEL information
-// from the embedding gradient that isn't redundant or conflicting.
-//
-// Set g_pcgrad_temp_buffer to a [vocab_size * d_model] buffer for PCGrad computation.
-// When NULL, falls back to skip behavior. When set, uses PCGrad.
-extern float* g_pcgrad_temp_buffer;     // Temporary buffer for embedding grad before projection
-extern size_t g_pcgrad_buffer_size;     // Size in elements
-extern bool g_skip_embedding_backward_for_tied_weights;  // Fallback: skip entirely if true AND no PCGrad buffer
 
 // Call these to capture gradient sources (called internally by GradFn::apply)
 void debugCaptureLMHeadGrad(float* grad_ptr, size_t size, cudaStream_t stream);
@@ -157,6 +141,12 @@ void queueForDeferredCleanup(void* ptr);
  * Call this AFTER cudaStreamSynchronize() when it's safe to free GPU memory.
  */
 void flushDeferredCleanup();
+
+/**
+ * Destroy all module-static autograd GPU resources (cleanup stream + cuBLAS handle).
+ * Call during process shutdown after all GPU work is complete.
+ */
+void shutdownAutogradResources();
 
 /**
  * RULE 20 Error Context: Track current GradFn operation for detailed error messages.
@@ -1287,7 +1277,7 @@ Tensor gelu(const Tensor& x, cudaStream_t stream = nullptr,
             const float* input_cache = nullptr);
 
 /**
- * RMSNorm: y = x / rms(x) * gamma
+ * RMSNorm: y = x / rms(x) * (learnable)gamma
  *
  * TAPE-BASED: Uses external cache pointer for backward pass.
  * If input_cache is nullptr, uses tensor data directly (assumes it persists).
@@ -1296,14 +1286,6 @@ Tensor gelu(const Tensor& x, cudaStream_t stream = nullptr,
  */
 Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps = 1e-5f, 
                 cudaStream_t stream = nullptr, const float* input_cache = nullptr);
-
-// NOTE: cross_entropy() removed - use autograd::unified_loss() from AutogradLoss.hpp
-// Issue #142: cross_entropy_loss() also deleted (was thin wrapper around unified_loss).
-// See: #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
-
-// DELETED: Old focal_loss, unified_loss declarations (Rule 20).
-// Use AutogradLoss.hpp for the authoritative API:
-//   autograd::unified_loss(Tensor&, targets, valid_mask, ...LossConfig...)
 
 /**
  * Embedding lookup: output[i] = weight[token_ids[i]] * embedding_scale
@@ -1324,24 +1306,13 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens,
 Tensor log_softmax(const Tensor& x, cudaStream_t stream = nullptr, bool save_output_copy = true);
 
 /**
- * Dropout with external mask: y = x * mask / (1 - p), where mask is binary
- * @param x Input tensor
- * @param p Dropout probability (fraction to drop, e.g., 0.1)
- * @param training If false, no dropout is applied (identity function)
- * @param mask External binary mask (REQUIRED when training=true and p>0)
- * @throws std::invalid_argument if mask is nullptr when dropout should be applied
- */
-Tensor dropout(const Tensor& x, float p, bool training = true,
-               const uint8_t* mask = nullptr, cudaStream_t stream = nullptr);
-
-/**
  * Dropout with auto-generated mask: y = x * mask / (1 - p)
- * Preferred interface - generates mask internally using Philox PRNG.
+ * Generates mask internally using Philox PRNG.
  * 
  * @param x Input tensor
  * @param p Dropout probability (fraction to drop, e.g., 0.1 = drop 10%)
  * @param seed Random seed for mask generation (use batch_idx * step + layer_offset for reproducibility)
- * @param training If false, no dropout is applied (identity function)
+ * @param training If false, no dropout is applied (identity function) 
  */
 Tensor dropout(const Tensor& x, float p, uint64_t seed, bool training = true,
                cudaStream_t stream = nullptr);
