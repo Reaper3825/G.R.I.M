@@ -22,6 +22,9 @@
 #include <cmath>
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
+#include <cstdint>
+#include <array>
 
 namespace GRIM::Diagnostics {
 
@@ -788,33 +791,193 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
     constexpr int kMaxCosineSamples = 100;
     double sum_pairwise_cos = 0.0;
     int pair_count = 0;
-    
-    for (size_t i = 0; i < position_norms.size() && pair_count < kMaxCosineSamples; ++i) {
-        for (size_t j = i + 1; j < position_norms.size() && pair_count < kMaxCosineSamples; ++j) {
-            int t_i = position_norms[i].first;
-            int t_j = position_norms[j].first;
-            double norm_i = position_norms[i].second;
-            double norm_j = position_norms[j].second;
-            
-            if (norm_i < 1e-8 || norm_j < 1e-8) continue;
-            
-            // Compute h[i] · h[j]
-            const float* h_i = &h_hidden[static_cast<size_t>(t_i) * d_model];
-            const float* h_j = &h_hidden[static_cast<size_t>(t_j) * d_model];
-            double dot_ij = 0.0;
-            for (int d = 0; d < d_model; ++d) {
-                dot_ij += static_cast<double>(h_i[d]) * h_j[d];
+    double max_cos = -1.0e30;
+    double min_cos = 1.0e30;
+    int max_cos_i = -1;
+    int max_cos_j = -1;
+    int min_cos_i = -1;
+    int min_cos_j = -1;
+    std::array<float, FeedbackLoopDiagnostic::kTopCosinePairs> top_cosines = { -1.0e30f, -1.0e30f, -1.0e30f, -1.0e30f, -1.0e30f };
+    std::array<int, FeedbackLoopDiagnostic::kTopCosinePairs> top_i = { -1, -1, -1, -1, -1 };
+    std::array<int, FeedbackLoopDiagnostic::kTopCosinePairs> top_j = { -1, -1, -1, -1, -1 };
+    std::array<float, FeedbackLoopDiagnostic::kTopCosinePairs> bottom_cosines = { 1.0e30f, 1.0e30f, 1.0e30f, 1.0e30f, 1.0e30f };
+    std::array<int, FeedbackLoopDiagnostic::kTopCosinePairs> bottom_i = { -1, -1, -1, -1, -1 };
+    std::array<int, FeedbackLoopDiagnostic::kTopCosinePairs> bottom_j = { -1, -1, -1, -1, -1 };
+
+    const size_t num_positions = position_norms.size();
+    if (num_positions >= 2) {
+        const uint64_t total_pairs = static_cast<uint64_t>(num_positions) * (num_positions - 1) / 2;
+        if (total_pairs <= static_cast<uint64_t>(kMaxCosineSamples)) {
+            for (size_t i = 0; i < num_positions; ++i) {
+                for (size_t j = i + 1; j < num_positions; ++j) {
+                    const int t_i = position_norms[i].first;
+                    const int t_j = position_norms[j].first;
+                    const double norm_i = position_norms[i].second;
+                    const double norm_j = position_norms[j].second;
+
+                    if (norm_i < 1e-8 || norm_j < 1e-8) {
+                        continue;
+                    }
+
+                    const float* h_i = &h_hidden[static_cast<size_t>(t_i) * d_model];
+                    const float* h_j = &h_hidden[static_cast<size_t>(t_j) * d_model];
+                    double dot_ij = 0.0;
+                    for (int d = 0; d < d_model; ++d) {
+                        dot_ij += static_cast<double>(h_i[d]) * h_j[d];
+                    }
+
+                    const double cos_ij = dot_ij / (norm_i * norm_j);
+                    sum_pairwise_cos += std::abs(cos_ij);
+                    if (cos_ij > max_cos) {
+                        max_cos = cos_ij;
+                        max_cos_i = t_i;
+                        max_cos_j = t_j;
+                    }
+                    if (cos_ij < min_cos) {
+                        min_cos = cos_ij;
+                        min_cos_i = t_i;
+                        min_cos_j = t_j;
+                    }
+                    for (int k = 0; k < FeedbackLoopDiagnostic::kTopCosinePairs; ++k) {
+                        if (cos_ij > top_cosines[k]) {
+                            for (int s = FeedbackLoopDiagnostic::kTopCosinePairs - 1; s > k; --s) {
+                                top_cosines[s] = top_cosines[s - 1];
+                                top_i[s] = top_i[s - 1];
+                                top_j[s] = top_j[s - 1];
+                            }
+                            top_cosines[k] = static_cast<float>(cos_ij);
+                            top_i[k] = t_i;
+                            top_j[k] = t_j;
+                            break;
+                        }
+                    }
+                    for (int k = 0; k < FeedbackLoopDiagnostic::kTopCosinePairs; ++k) {
+                        if (cos_ij < bottom_cosines[k]) {
+                            for (int s = FeedbackLoopDiagnostic::kTopCosinePairs - 1; s > k; --s) {
+                                bottom_cosines[s] = bottom_cosines[s - 1];
+                                bottom_i[s] = bottom_i[s - 1];
+                                bottom_j[s] = bottom_j[s - 1];
+                            }
+                            bottom_cosines[k] = static_cast<float>(cos_ij);
+                            bottom_i[k] = t_i;
+                            bottom_j[k] = t_j;
+                            break;
+                        }
+                    }
+                    ++pair_count;
+                }
             }
-            
-            double cos_ij = dot_ij / (norm_i * norm_j);
-            sum_pairwise_cos += std::abs(cos_ij);  // Take abs for avg magnitude
-            pair_count++;
+        } else {
+            uint32_t seed = static_cast<uint32_t>(batch_idx + 1);
+            seed = seed * 1664525u + 1013904223u;
+            auto next_rand = [&seed]() -> uint32_t {
+                seed = seed * 1664525u + 1013904223u;
+                return seed;
+            };
+
+            std::unordered_set<uint64_t> seen_pairs;
+            seen_pairs.reserve(static_cast<size_t>(kMaxCosineSamples) * 2);
+
+            int attempts = 0;
+            const int max_attempts = kMaxCosineSamples * 200;
+            while (pair_count < kMaxCosineSamples && attempts < max_attempts) {
+                ++attempts;
+                size_t i = static_cast<size_t>(next_rand()) % num_positions;
+                size_t j = static_cast<size_t>(next_rand()) % num_positions;
+                if (i == j) {
+                    continue;
+                }
+                if (j < i) {
+                    size_t tmp = i;
+                    i = j;
+                    j = tmp;
+                }
+
+                const uint64_t key = (static_cast<uint64_t>(i) << 32) | static_cast<uint64_t>(j);
+                if (!seen_pairs.insert(key).second) {
+                    continue;
+                }
+
+                const int t_i = position_norms[i].first;
+                const int t_j = position_norms[j].first;
+                const double norm_i = position_norms[i].second;
+                const double norm_j = position_norms[j].second;
+
+                if (norm_i < 1e-8 || norm_j < 1e-8) {
+                    continue;
+                }
+
+                const float* h_i = &h_hidden[static_cast<size_t>(t_i) * d_model];
+                const float* h_j = &h_hidden[static_cast<size_t>(t_j) * d_model];
+                double dot_ij = 0.0;
+                for (int d = 0; d < d_model; ++d) {
+                    dot_ij += static_cast<double>(h_i[d]) * h_j[d];
+                }
+
+                const double cos_ij = dot_ij / (norm_i * norm_j);
+                sum_pairwise_cos += std::abs(cos_ij);
+                if (cos_ij > max_cos) {
+                    max_cos = cos_ij;
+                    max_cos_i = t_i;
+                    max_cos_j = t_j;
+                }
+                if (cos_ij < min_cos) {
+                    min_cos = cos_ij;
+                    min_cos_i = t_i;
+                    min_cos_j = t_j;
+                }
+                for (int k = 0; k < FeedbackLoopDiagnostic::kTopCosinePairs; ++k) {
+                    if (cos_ij > top_cosines[k]) {
+                        for (int s = FeedbackLoopDiagnostic::kTopCosinePairs - 1; s > k; --s) {
+                            top_cosines[s] = top_cosines[s - 1];
+                            top_i[s] = top_i[s - 1];
+                            top_j[s] = top_j[s - 1];
+                        }
+                        top_cosines[k] = static_cast<float>(cos_ij);
+                        top_i[k] = t_i;
+                        top_j[k] = t_j;
+                        break;
+                    }
+                }
+                for (int k = 0; k < FeedbackLoopDiagnostic::kTopCosinePairs; ++k) {
+                    if (cos_ij < bottom_cosines[k]) {
+                        for (int s = FeedbackLoopDiagnostic::kTopCosinePairs - 1; s > k; --s) {
+                            bottom_cosines[s] = bottom_cosines[s - 1];
+                            bottom_i[s] = bottom_i[s - 1];
+                            bottom_j[s] = bottom_j[s - 1];
+                        }
+                        bottom_cosines[k] = static_cast<float>(cos_ij);
+                        bottom_i[k] = t_i;
+                        bottom_j[k] = t_j;
+                        break;
+                    }
+                }
+                ++pair_count;
+            }
+
+            if (pair_count < kMaxCosineSamples) {
+                throw std::runtime_error("HiddenCosine sampling failed: unable to draw enough unique pairs");
+            }
         }
     }
     
     if (pair_count > 0) {
         diag.avg_hidden_cosine = static_cast<float>(sum_pairwise_cos / pair_count);
         diag.hidden_cosine_samples = pair_count;
+        diag.max_hidden_cosine = static_cast<float>(max_cos);
+        diag.min_hidden_cosine = static_cast<float>(min_cos);
+        diag.max_hidden_cosine_i = max_cos_i;
+        diag.max_hidden_cosine_j = max_cos_j;
+        diag.min_hidden_cosine_i = min_cos_i;
+        diag.min_hidden_cosine_j = min_cos_j;
+        for (int k = 0; k < FeedbackLoopDiagnostic::kTopCosinePairs; ++k) {
+            diag.top_cosines[k] = top_cosines[k];
+            diag.top_cosine_i[k] = top_i[k];
+            diag.top_cosine_j[k] = top_j[k];
+            diag.bottom_cosines[k] = bottom_cosines[k];
+            diag.bottom_cosine_i[k] = bottom_i[k];
+            diag.bottom_cosine_j[k] = bottom_j[k];
+        }
     }
     
     // ==========================================
@@ -963,6 +1126,23 @@ std::string formatFeedbackLoopDiagnostic(const FeedbackLoopDiagnostic& d, int ba
     if (d.hidden_cosine_samples > 0) {
         oss << "  HIDDEN_CORRELATION: avg|cos(h_i,h_j)|=" << std::setprecision(4) << d.avg_hidden_cosine
             << " (sampled " << d.hidden_cosine_samples << " pairs, expected~" << kExpectedRandomCosine << ")\n";
+        oss << std::setprecision(6);
+        oss << "  HIDDEN_CORRELATION_EXTREMES: max_cos=" << d.max_hidden_cosine
+            << " at (" << d.max_hidden_cosine_i << "," << d.max_hidden_cosine_j << ")"
+            << " min_cos=" << d.min_hidden_cosine
+            << " at (" << d.min_hidden_cosine_i << "," << d.min_hidden_cosine_j << ")\n";
+        oss << "  HIDDEN_CORRELATION_TOP5: ";
+        for (int k = 0; k < FeedbackLoopDiagnostic::kTopCosinePairs; ++k) {
+            if (k > 0) oss << ", ";
+            oss << "cos=" << d.top_cosines[k] << "@(" << d.top_cosine_i[k] << "," << d.top_cosine_j[k] << ")";
+        }
+        oss << "\n";
+        oss << "  HIDDEN_CORRELATION_BOTTOM5: ";
+        for (int k = 0; k < FeedbackLoopDiagnostic::kTopCosinePairs; ++k) {
+            if (k > 0) oss << ", ";
+            oss << "cos=" << d.bottom_cosines[k] << "@(" << d.bottom_cosine_i[k] << "," << d.bottom_cosine_j[k] << ")";
+        }
+        oss << "\n";
     }
     
     // ==========================================

@@ -208,6 +208,19 @@ struct FeedbackLoopDiagnostic {
     // ==========================================
     float avg_hidden_cosine = 0.0f;  // avg cos(h_i, h_j) pairwise
     int hidden_cosine_samples = 0;   // Number of pairs sampled
+    float max_hidden_cosine = 0.0f;  // Max cos(h_i, h_j) across sampled pairs
+    float min_hidden_cosine = 0.0f;  // Min cos(h_i, h_j) across sampled pairs
+    int max_hidden_cosine_i = -1;    // Position index for max cosine (t_i)
+    int max_hidden_cosine_j = -1;    // Position index for max cosine (t_j)
+    int min_hidden_cosine_i = -1;    // Position index for min cosine (t_i)
+    int min_hidden_cosine_j = -1;    // Position index for min cosine (t_j)
+    static constexpr int kTopCosinePairs = 5;
+    float top_cosines[5] = {};        // Top cosine values (descending)
+    int top_cosine_i[5] = {};         // Position indices for top cosines (t_i)
+    int top_cosine_j[5] = {};         // Position indices for top cosines (t_j)
+    float bottom_cosines[5] = {};     // Bottom cosine values (ascending)
+    int bottom_cosine_i[5] = {};      // Position indices for bottom cosines (t_i)
+    int bottom_cosine_j[5] = {};      // Position indices for bottom cosines (t_j)
     
     // ==========================================
     // Weight Paradox Detection (Issue #114)

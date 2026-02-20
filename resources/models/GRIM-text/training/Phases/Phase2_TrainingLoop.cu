@@ -2595,6 +2595,184 @@ BatchResult processBatch(
             }
             
             // ================================================================
+            // RULE 21: [RHO_BUILDUP_EQUATION] Per-Layer Hidden State Correlation
+            //
+            // EQUATION: ρ(l) = (1/P) Σ_{i<j} |cos(h_i^l, h_j^l)|
+            //   where h^l = output of encoder layer l, P = number of sampled pairs
+            //
+            // PURPOSE: Track WHERE correlation builds up through the encoder stack.
+            //   ρ(emb) → ρ(L0) → ρ(L1) → ... → ρ(L11) → ρ(final)
+            //   Δρ(l) = ρ(l) - ρ(l-1) identifies which layers amplify correlation.
+            //
+            // ARCHITECTURE (pre-norm):
+            //   h^l = h^{l-1} + LS1*Attn(RMSNorm(h^{l-1})) + LS2*FFN(RMSNorm(h^{l-1} + LS1*Attn(RMSNorm(h^{l-1}))))
+            //   Residual connections preserve the common direction while sublayer
+            //   outputs add a (potentially rank-deficient) update.
+            //
+            // ANOMALY: If Δρ(l) > 0.05 for any l, that layer is a correlation amplifier.
+            //   If ρ(0) >> 0 at layer 0, the embedding itself is the source.
+            // ================================================================
+            {
+                const auto& ai = ts.autograd_intermediates;
+                const int num_layers = static_cast<int>(ai.encoder_layer_outputs.size());
+                
+                if (num_layers > 0 && sample_positions >= 2) {
+                    // Helper: compute avg |cos| over sampled pairs from a device buffer
+                    // Uses absolute cosine to detect alignment regardless of sign
+                    const int rho_sample_positions = std::min(sample_positions, 20);  // Cap for speed
+                    const int max_pairs = 50;  // Enough pairs for statistical stability
+                    
+                    auto compute_rho = [&](const float* device_ptr, int num_pos) -> std::pair<float, float> {
+                        // Returns {avg_abs_cos, avg_row_norm}
+                        if (!device_ptr || num_pos < 2) return {0.0f, 0.0f};
+                        
+                        const size_t bytes = static_cast<size_t>(num_pos) * d_model * sizeof(float);
+                        std::vector<float> h(num_pos * d_model);
+                        cudaMemcpy(h.data(), device_ptr, bytes, cudaMemcpyDeviceToHost);
+                        
+                        // Pre-compute row norms
+                        std::vector<float> norms(num_pos);
+                        double norm_sum = 0.0;
+                        for (int t = 0; t < num_pos; ++t) {
+                            double sq = 0.0;
+                            for (int d = 0; d < d_model; ++d) {
+                                float v = h[t * d_model + d];
+                                sq += static_cast<double>(v) * v;
+                            }
+                            norms[t] = static_cast<float>(std::sqrt(sq));
+                            norm_sum += norms[t];
+                        }
+                        float avg_norm = static_cast<float>(norm_sum / num_pos);
+                        
+                        // Sample pairwise |cos|
+                        double cos_acc = 0.0;
+                        int n_pairs = 0;
+                        for (int i = 0; i < num_pos && n_pairs < max_pairs; ++i) {
+                            for (int j = i + 1; j < num_pos && n_pairs < max_pairs; ++j) {
+                                if (norms[i] < 1e-8f || norms[j] < 1e-8f) continue;
+                                double dot = 0.0;
+                                for (int d = 0; d < d_model; ++d) {
+                                    dot += static_cast<double>(h[i * d_model + d]) * h[j * d_model + d];
+                                }
+                                cos_acc += std::abs(dot / (static_cast<double>(norms[i]) * norms[j]));
+                                ++n_pairs;
+                            }
+                        }
+                        float rho = (n_pairs > 0) ? static_cast<float>(cos_acc / n_pairs) : 0.0f;
+                        return {rho, avg_norm};
+                    };
+                    
+                    // Collect ρ for each layer + embedding
+                    struct LayerRho {
+                        float rho;       // avg |cos(h_i, h_j)|
+                        float norm;      // avg ||h[t]||
+                        float delta_rho; // ρ(l) - ρ(l-1)
+                    };
+                    std::vector<LayerRho> layer_rhos;
+                    layer_rhos.reserve(num_layers + 1);  // +1 for embedding
+                    
+                    // Embedding (input to layer 0)
+                    if (ai.embedding_tensor.data) {
+                        auto [rho_emb, norm_emb] = compute_rho(ai.embedding_tensor.data, rho_sample_positions);
+                        layer_rhos.push_back({rho_emb, norm_emb, 0.0f});
+                    }
+                    
+                    // Each encoder layer output
+                    for (int l = 0; l < num_layers; ++l) {
+                        if (ai.encoder_layer_outputs[l].data) {
+                            auto [rho_l, norm_l] = compute_rho(ai.encoder_layer_outputs[l].data, rho_sample_positions);
+                            float delta = (layer_rhos.empty()) ? 0.0f : rho_l - layer_rhos.back().rho;
+                            layer_rhos.push_back({rho_l, norm_l, delta});
+                        }
+                    }
+                    
+                    // Build the equation log
+                    std::ostringstream rho_eq;
+                    rho_eq << std::fixed << std::setprecision(4);
+                    rho_eq << "[RHO_BUILDUP_EQUATION] ρ(l) = avg|cos(h_i^l, h_j^l)|, "
+                           << "Δρ(l) = ρ(l) - ρ(l-1)\n";
+                    rho_eq << "  ARCH: h^l = h^{l-1} + LS*Attn(RMSNorm(h^{l-1})) "
+                           << "+ LS*FFN(RMSNorm(...))\n";
+                    
+                    // Compact per-layer table
+                    rho_eq << "  LAYER  ρ(l)    Δρ(l)   ||h||_avg  interpretation\n";
+                    rho_eq << "  ─────  ──────  ──────  ─────────  ──────────────\n";
+                    
+                    float max_delta = 0.0f;
+                    int max_delta_layer = -1;
+                    float rho_growth = 0.0f;  // total ρ change emb→final
+                    
+                    for (size_t i = 0; i < layer_rhos.size(); ++i) {
+                        const auto& lr = layer_rhos[i];
+                        
+                        // Label: "emb" for index 0, "L0"-"L11" for layers
+                        std::string label = (i == 0) ? "emb  " : "L" + std::to_string(i - 1);
+                        if (i > 0 && i - 1 < 10) label += "   ";
+                        else if (i > 0) label += "  ";
+                        
+                        rho_eq << "  " << label << "  "
+                               << std::setw(6) << lr.rho << "  ";
+                        
+                        // Δρ (skip for embedding)
+                        if (i == 0) {
+                            rho_eq << "  —     ";
+                        } else {
+                            rho_eq << std::showpos << std::setw(6) << lr.delta_rho << std::noshowpos << "  ";
+                        }
+                        
+                        rho_eq << std::setw(9) << lr.norm << "  ";
+                        
+                        // Interpretation
+                        if (lr.rho > 0.8f) {
+                            rho_eq << "[ANOMALY] COLLAPSE RISK";
+                        } else if (lr.rho > 0.5f) {
+                            rho_eq << "[WARNING] HIGH CORRELATION";
+                        } else if (i > 0 && lr.delta_rho > 0.05f) {
+                            rho_eq << "[ANOMALY] LAYER AMPLIFIES ρ";
+                        } else if (i > 0 && lr.delta_rho < -0.05f) {
+                            rho_eq << "decorrelation";
+                        } else {
+                            rho_eq << "healthy";
+                        }
+                        rho_eq << "\n";
+                        
+                        // Track worst amplifier
+                        if (i > 0 && lr.delta_rho > max_delta) {
+                            max_delta = lr.delta_rho;
+                            max_delta_layer = static_cast<int>(i - 1);
+                        }
+                    }
+                    
+                    // Summary line
+                    if (layer_rhos.size() >= 2) {
+                        float rho_emb = layer_rhos.front().rho;
+                        float rho_final = layer_rhos.back().rho;
+                        rho_growth = rho_final - rho_emb;
+                        
+                        rho_eq << "  SUMMARY: ρ(emb)=" << rho_emb
+                               << " → ρ(final)=" << rho_final
+                               << " growth=" << std::showpos << rho_growth << std::noshowpos
+                               << " ||h||_growth=" << (layer_rhos.back().norm / std::max(layer_rhos.front().norm, 1e-8f))
+                               << "x\n";
+                        
+                        if (max_delta_layer >= 0 && max_delta > 0.02f) {
+                            rho_eq << "  WORST AMPLIFIER: Layer " << max_delta_layer
+                                   << " (Δρ=" << std::showpos << max_delta << std::noshowpos << ")\n";
+                        }
+                        
+                        if (rho_final > 0.8f) {
+                            rho_eq << "  [ANOMALY] MODE COLLAPSE IMMINENT: ρ(final)=" << rho_final
+                                   << " → rank-1 hidden states → winner-take-all logits\n";
+                        }
+                    }
+                    
+                    ctx.logging.logger->log(rho_eq.str());
+                    EQ_LOG("RHO_BUILDUP_EQUATION", rho_eq.str(), batch_idx, -1, ctx.global_step,
+                           GRIM::EquationPhase::RESIDUAL_ADD);
+                }
+            }
+            
+            // ================================================================
             // LM HEAD DIAGNOSTICS: Row norms ||W[v]|| for top predicted tokens
             // ================================================================
             const float* lm_head_weights_for_norms = ctx.model->getLmHeadLayer()->weights().data;
