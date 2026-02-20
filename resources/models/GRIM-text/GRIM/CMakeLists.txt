@@ -1,6 +1,6 @@
 # GRIM Text Server CMakeLists.txt
 # GPU-accelerated inference server (Ollama-compatible API)
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.20)
 
 # vcpkg manifest mode - uses CMAKE_PREFIX_PATH for package discovery
 # GRIM folder is at: resources/models/GRIM-text/GRIM
