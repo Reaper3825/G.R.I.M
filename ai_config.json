@@ -386,10 +386,6 @@
             "attention_dropout": 0.15,
             "dropout_rate": 0.125,
             "force_rebuild_vocab": false,
-            "qk_normalization": {
-                "enabled": false,
-                "scale": 16.0
-            },
             "lm_head_centering": {
                 "enabled": true,
                 "center_hidden_states": true,

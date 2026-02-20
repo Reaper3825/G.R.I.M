@@ -254,34 +254,6 @@ void LanguageModel::initTrainingState() {
               << " num_kv_heads=" << num_kv_heads 
               << " (heads_per_kv_group=" << (cfg.num_heads / num_kv_heads) << ")" << std::endl;
     
-    // Learnable QK-norm scales (nGPT-style) — only allocated when QK normalization is enabled
-    if constexpr (HyperParameters::QK_NORMALIZATION_ENABLED) {
-        training_state_.attn_alpha_q.resize(cfg.num_layers);
-        training_state_.attn_alpha_k.resize(cfg.num_layers);
-        
-        for (int layer = 0; layer < cfg.num_layers; ++layer) {
-            // GQA: alpha_q has num_heads entries, alpha_k has num_kv_heads entries
-            training_state_.attn_alpha_q[layer] = Tensor::empty(
-                TensorContract::TensorShape::make_BSM(cfg.num_heads, 1), true, primary_stream, "attn_alpha_q");
-            training_state_.attn_alpha_q[layer].ensure_grad();
-            
-            training_state_.attn_alpha_k[layer] = Tensor::empty(
-                TensorContract::TensorShape::make_BSM(num_kv_heads, 1), true, primary_stream, "attn_alpha_k");
-            training_state_.attn_alpha_k[layer].ensure_grad();
-            
-            // Initialize alpha_q to 1.0 (num_heads entries)
-            std::vector<float> alpha_q_init(cfg.num_heads, HyperParameters::QK_NORM_ALPHA_INIT);
-            cudaMemcpy(training_state_.attn_alpha_q[layer].data, alpha_q_init.data(), 
-                       cfg.num_heads * sizeof(float), cudaMemcpyHostToDevice);
-            
-            // Initialize alpha_k to 1.0 (num_kv_heads entries for GQA)
-            std::vector<float> alpha_k_init(num_kv_heads, HyperParameters::QK_NORM_ALPHA_INIT);
-            cudaMemcpy(training_state_.attn_alpha_k[layer].data, alpha_k_init.data(), 
-                       num_kv_heads * sizeof(float), cudaMemcpyHostToDevice);
-        }
-        std::cout << "QK-norm scales allocated for " << cfg.num_layers << " layers" << std::endl;
-    }
-
     // NOTE: Encoder layer weight initialization is handled in TrainingOps.cu::initGPU()
     // with proper GQA-aware dimensions and GPT-2 residual scaling.
     // DO NOT duplicate Xavier init here per Rule 20 (no backwards compatibility shims).

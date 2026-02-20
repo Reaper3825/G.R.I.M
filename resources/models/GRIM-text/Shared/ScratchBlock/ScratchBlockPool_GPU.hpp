@@ -100,8 +100,8 @@ public:
     
     // Acquire a block for use (thread-safe)
     // Returns handle with pinned memory (throws if disabled/uninitialized/out of blocks)
-    // min_tokens: minimum required capacity
-    ScratchBlockHandle acquire(size_t min_tokens);
+    // min_bytes: minimum required capacity in bytes
+    ScratchBlockHandle acquire(size_t min_bytes);
     
     // Release a block back to the pool (thread-safe)
     void release(const ScratchBlockHandle& handle);

@@ -1388,7 +1388,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
 #ifdef GRIM_PYTORCH_VERIFY
         ctx->logging.logger->log("🔬 PyTorch verification: ENABLED (compile flag GRIM_PYTORCH_VERIFY)");
         // Get GRIM root using the centralized resolver
-        fs::path grim_root_path = GRIM::Config::resolveGrimRoot();
+        fs::path grim_root_path = GRIM::Config::detail::resolveGrimRoot();
         std::string grim_root = grim_root_path.string();
         bool pytorch_ok = PYTORCH_VERIFY_INIT(grim_root);
         if (pytorch_ok) {
@@ -1617,25 +1617,8 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         // Issue #109 re-enabled embedding backward but forgot to restore PCGrad!
         // Result: Training collapses to tracked token mode (same as Issue #88 bug).
         //
-        // Issue #143: PCGrad REMOVED — use PyTorch-style direct gradient accumulation.
-        //
-        // PCGrad preserved the FULL LM head gradient direction while discarding the
-        // conflicting embedding component. This removed the natural frequency-proportional
-        // brake that cancellation provides. Result: frequent tokens (SPACE, 'a', 'o', etc.)
-        // had unchecked gradient magnitude → AdamW momentum amplified the signal →
-        // weight rows diverged → logit_range exploded (1.4 → 21+ over 67 batches).
-        //
-        // PyTorch with tied weights: both LM head and embedding backward write to the
-        // SAME grad buffer. The ~90% cancellation for frequent tokens IS the regularizer.
-        // For rare tokens (few atomicAdds), cancellation is minimal → they still learn.
-        //
-        // With Z-loss added (Issue #143), residual logit growth is also controlled.
-        // ═══════════════════════════════════════════════════════════════════════════
         if (model_cfg.tie_embeddings) {
-            // DO NOT allocate PCGrad buffer — let gradients accumulate directly (PyTorch behavior)
-            // DO NOT skip embedding backward — both gradient sources must write to shared buffer
-            g_skip_embedding_backward_for_tied_weights = false;
-            ctx->logging.logger->log("✓ Issue #143: Tied weight gradients use PyTorch-style direct accumulation (PCGrad disabled)");
+            ctx->logging.logger->log("✓ Tied weight gradients use PyTorch-style direct accumulation");
         }
     }
     

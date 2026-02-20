@@ -20,6 +20,7 @@
 
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/EquationLogging/EquationLogging.hpp"
+#include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -280,8 +281,8 @@ void releaseResources(TrainingContext& ctx) {
     // Final CUDA synchronization
     cudaDeviceSynchronize();
     
-    // Optional: Reset CUDA device for clean state
-    // cudaDeviceReset();  // Uncomment if you want full cleanup
+    // Release module-static autograd resources (cleanup stream + cuBLAS handle)
+    shutdownAutogradResources();
     
     EmitModuleInfo(ModuleId::Training, "✓ CUDA synchronized", ctx.global_step);
 #endif

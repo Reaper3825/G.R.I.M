@@ -2,14 +2,12 @@
 //  TensorContract_GPU.cu
 //  CUDA implementation of type-safe tensor operations
 //======================================================//
-
 #include "TensorContract_GPU.hpp"
 #include "HyperParameters/HyperParameters_GPU.hpp"
 #include "../TensorConversion/TensorConversion.hpp"  // Layout conversions - single source of truth
 #include "../LogRecorder/LogRecorder.hpp"
 #include "../../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../../Layers/Attention/QKV_Projector.hpp"  // ISSUE #62: For launchReshapeFromBHSD
-// Bias kernel declarations (moved from Feed_Forward_GPU.cu - Rule 20: no reverse dependencies)
 #include "../PBM/PositionalBiasMethod.hpp"  // ISSUE #119: For RoPE autograd backward
 #include "../EquationLogging/EquationLogging.hpp"
 #include <cuda_runtime.h>
@@ -63,22 +61,6 @@ float* g_debug_embedding_only_grad = nullptr; // Where to copy embedding backwar
 size_t g_debug_grad_buffer_size = 0;          // Size in elements (vocab_size * d_model)
 bool g_debug_capture_enabled = g_autograd_verbose;         // Enable/disable capturing
 
-// Issue #143: PyTorch-style tied weight gradient accumulation.
-// Both LM head backward (dense matmul) and embedding backward (sparse scatter)
-// write to the SAME shared grad buffer. The natural cancellation (~90% for frequent
-// tokens) acts as frequency-proportional regularization — frequent tokens get braked
-// harder, preventing weight row divergence and logit explosion.
-//
-// PCGrad (Issue #60) was REMOVED because it eliminated this natural brake by
-// projecting out the conflicting embedding component, giving frequent tokens
-// unchecked gradient magnitude.
-bool g_skip_embedding_backward_for_tied_weights = false;
-
-// PCGrad buffer — kept as global for ABI compatibility but never allocated.
-// When nullptr, EmbeddingGradFn takes the direct accumulation path.
-float* g_pcgrad_temp_buffer = nullptr;
-size_t g_pcgrad_buffer_size = 0;
-
 // Call this after LM head matmul backward to capture its contribution
 void debugCaptureLMHeadGrad(float* grad_ptr, size_t size, cudaStream_t stream) {
     if (!g_debug_capture_enabled) return;  // Debug capture not enabled - valid skip
@@ -99,26 +81,25 @@ void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream
                     cudaMemcpyDeviceToDevice, stream);
 }
 
-//======================================================//
-//  ISSUE #53 FIX v2: Use cudaFreeAsync for non-blocking cleanup
-//  
-//  PROBLEM: cudaFree() implicitly synchronizes with pending GPU work.
-//  PREVIOUS ATTEMPT: Deferred queue didn't work because CUDA may reuse
-//  "queued but not freed" memory addresses for new allocations.
-//  
-//  SOLUTION: Use cudaFreeAsync() which is truly stream-ordered.
-//  Memory is freed after all pending work on the stream completes,
-//  but the call returns immediately without blocking the CPU.
-//  
-//  NOTE: cudaFreeAsync requires CUDA 11.2+ (we have 12.5)
-//======================================================//
-
 // Global stream for async cleanup - initialized on first use
 static cudaStream_t g_cleanup_stream = nullptr;
+
+// Static cuBLAS handle for autograd operations (LayerScaleGradFn etc.)
+// Avoids creating/destroying handles per backward call (Issue #ownership-audit)
+static cublasHandle_t g_autograd_cublas_handle = nullptr;
 
 void initCleanupStream() {
     if (g_cleanup_stream == nullptr) {
         cudaStreamCreate(&g_cleanup_stream);
+    }
+}
+
+static void initAutogradCublasHandle() {
+    if (g_autograd_cublas_handle == nullptr) {
+        cublasStatus_t status = cublasCreate(&g_autograd_cublas_handle);
+        if (status != CUBLAS_STATUS_SUCCESS) {
+            throw std::runtime_error("Failed to create autograd cuBLAS handle, status=" + std::to_string(static_cast<int>(status)));
+        }
     }
 }
 
@@ -175,7 +156,7 @@ std::string getCurrentGradFnContext() {
 
 // DEBUG FLAG: Set to true to sync after EVERY kernel to find which one crashes
 // WARNING: This is VERY slow (~10-50x) — only enable for debugging elusive CUDA errors
-static bool g_debug_sync_after_every_kernel = false;
+static bool g_debug_sync_after_every_kernel = true;
 
 void trackKernelLaunch(const char* kernel_name, cudaStream_t stream) {
     ++g_kernel_launch_count;
@@ -257,6 +238,20 @@ void queueForDeferredCleanup(void* ptr) {
 void flushDeferredCleanup() {
     if (g_cleanup_stream) {
         cudaStreamSynchronize(g_cleanup_stream);
+    }
+}
+
+// Destroy all module-static GPU resources (cleanup stream + cuBLAS handle)
+// Call during process shutdown after all GPU work is complete
+void shutdownAutogradResources() {
+    if (g_autograd_cublas_handle) {
+        cublasDestroy(g_autograd_cublas_handle);
+        g_autograd_cublas_handle = nullptr;
+    }
+    if (g_cleanup_stream) {
+        cudaStreamSynchronize(g_cleanup_stream);
+        cudaStreamDestroy(g_cleanup_stream);
+        g_cleanup_stream = nullptr;
     }
 }
 
@@ -728,6 +723,30 @@ __global__ void kernel_accumulate_grad(float* dst, const float* src, size_t coun
     const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (idx < count) {
         dst[idx] += src[idx] * scale;
+    }
+}
+
+// Kernel: Dot product a·b reduced to a single scalar, ACCUMULATED to *dst (not overwritten)
+// Uses shared memory block reduction. Grid must be (1) block.
+__global__ void kernel_dot_accumulate_scalar(float* dst, const float* a, const float* b, size_t count) {
+    __shared__ float sdata[256];
+    const int tid = threadIdx.x;
+    float sum = 0.0f;
+    for (size_t i = tid; i < count; i += blockDim.x) {
+        sum += a[i] * b[i];
+    }
+    sdata[tid] = sum;
+    __syncthreads();
+    // Block reduction
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        __syncthreads();
+    }
+    // Thread 0 accumulates (not overwrites) to dst
+    if (tid == 0) {
+        atomicAdd(dst, sdata[0]);
     }
 }
 
@@ -1433,13 +1452,6 @@ __global__ void kernel_rmsnorm_backward(
     // Step 3: Compute grad_input and accumulate grad_gamma
     // dx = (dy * gamma - x * dgamma_x_sum / (d_model * rms_sq)) * inv_rms
     const float scale = dgamma_x_sum / (d_model * rms_sq);
-    
-    // ISSUE #82 REVERTED: The 1/tokens scaling was WRONG!
-    // The loss backward already applies 1/tokens through mean reduction (Issue #58),
-    // so the incoming dy already reflects this scaling. Adding another 1/tokens
-    // makes RMS gradients 1/tokens² too small (~300,000x too small with 3500 tokens).
-    // The correct gradient is simply: grad_gamma[i] = sum_t(dy[t,i] * x[t,i] * inv_rms[t])
-    
     for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
         dx[i] = (dy[i] * gamma[i] - x[i] * scale) * inv_rms;
         
@@ -1510,89 +1522,7 @@ __global__ void kernel_embedding_backward(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════════
-// ISSUE #60 FIX: PCGrad kernel for tied embedding/lm_head weights
-// ═══════════════════════════════════════════════════════════════════════════════════
-// Combines LM head gradient (g_lm) with embedding gradient (g_emb) using PCGrad:
-//   g_final = g_lm + (g_emb - proj_{g_lm}(g_emb))
-//           = g_lm + g_emb - ((g_lm · g_emb) / ||g_lm||²) * g_lm
-//
-// For each row (one per vocab token):
-// - If cosine(g_lm, g_emb) = -1: g_final = g_lm (embedding conflicts, use LM only)
-// - If cosine(g_lm, g_emb) = 0:  g_final = g_lm + g_emb (orthogonal, keep both)
-// - If cosine(g_lm, g_emb) = +1: g_final = g_lm (avoids double-counting)
-// ═══════════════════════════════════════════════════════════════════════════════════
-__global__ void kernel_pcgrad_combine(
-    float* g_lm,           // [vocab_size, d_model] - LM head gradient (IN-PLACE update)
-    const float* g_emb,    // [vocab_size, d_model] - Embedding gradient (temp buffer)
-    int vocab_size,
-    int d_model
-) {
-    const int vocab_idx = blockIdx.x;
-    if (vocab_idx >= vocab_size) return;
-    
-    float* lm_row = g_lm + static_cast<size_t>(vocab_idx) * d_model;
-    const float* emb_row = g_emb + static_cast<size_t>(vocab_idx) * d_model;
-    
-    extern __shared__ float shared[];
-    float* s_dot_lm_emb = shared;                                // [num_warps]
-    float* s_norm_lm_sq = shared + (blockDim.x / 32) + 1;        // [num_warps]
-    
-    // Step 1: Compute g_lm · g_emb and ||g_lm||² in parallel
-    float local_dot = 0.0f;
-    float local_norm_sq = 0.0f;
-    
-    for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
-        const float lm_val = lm_row[i];
-        const float emb_val = emb_row[i];
-        local_dot += lm_val * emb_val;
-        local_norm_sq += lm_val * lm_val;
-    }
-    
-    // Warp reduction
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        local_dot += __shfl_down_sync(0xffffffff, local_dot, offset);
-        local_norm_sq += __shfl_down_sync(0xffffffff, local_norm_sq, offset);
-    }
-    
-    // Store warp results
-    if (threadIdx.x % 32 == 0) {
-        s_dot_lm_emb[threadIdx.x / 32] = local_dot;
-        s_norm_lm_sq[threadIdx.x / 32] = local_norm_sq;
-    }
-    __syncthreads();
-    
-    // Final reduction in thread 0
-    __shared__ float s_proj_coef;
-    if (threadIdx.x == 0) {
-        float total_dot = 0.0f;
-        float total_norm_sq = 0.0f;
-        const int num_warps = (blockDim.x + 31) / 32;
-        for (int w = 0; w < num_warps; w++) {
-            total_dot += s_dot_lm_emb[w];
-            total_norm_sq += s_norm_lm_sq[w];
-        }
-        
-        // proj_coef = (g_lm · g_emb) / ||g_lm||²
-        // Issue #141 FIX: Replace assert (compiled out in Release) with runtime guard.
-        // Zero g_lm norm means no LM head gradient for this vocab row — nothing
-        // to project onto, so proj_coef = 0 (use g_emb as-is for this row).
-        if (total_norm_sq < 1e-12f) {
-            s_proj_coef = 0.0f;
-        } else {
-            s_proj_coef = total_dot / total_norm_sq;
-        }
-    }
-    __syncthreads();
-    
-    const float proj_coef = s_proj_coef;
-    
-    // Step 2: g_final = g_lm + (g_emb - proj_coef * g_lm)
-    //                 = g_lm * (1 - proj_coef) + g_emb
-    for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
-        lm_row[i] = lm_row[i] * (1.0f - proj_coef) + emb_row[i];
-    }
-}
+
 
 //========================================================================
 // Log-Softmax Forward: log_softmax(x)[i] = x[i] - logsumexp(x)
@@ -1993,23 +1923,11 @@ struct LayerScaleGradFn : public GradFn {
         }
         
         // 2. grad_scale = sum(grad_output * input_data)  (dot product → scalar)
+        //    ACCUMULATE (not overwrite) to scale_grad for gradient accumulation windows
         if (scale_grad && grad_output.data && input_data) {
-            // Compute dot product using cublas
-            cublasHandle_t handle;
-            cublasCreate(&handle);
-            cublasSetStream(handle, stream);
-            
-            float dot_result = 0.0f;
-            cublasSdot(handle, static_cast<int>(n), 
-                       grad_output.data, 1, input_data, 1, &dot_result);
-            
-            // Accumulate to scale_grad (atomicAdd for safety)
-            // Copy to temp buffer then atomicAdd
-            float* h_dot = &dot_result;
-            cudaMemcpyAsync(scale_grad, h_dot, sizeof(float), 
-                           cudaMemcpyHostToDevice, stream);
-            
-            cublasDestroy(handle);
+            // Single-block reduction kernel: atomicAdd(scale_grad, dot(grad_output, input_data))
+            kernel_dot_accumulate_scalar<<<1, 256, 0, stream>>>(
+                scale_grad, grad_output.data, input_data, n);
         }
         
         // Continue backward chain for input
@@ -3257,11 +3175,6 @@ struct EmbeddingGradFn : public GradFn {
     int vocab_size = 0;            // RULE 20: Stored for OOB bounds checking in backward kernel
     float embedding_scale = 1.0f;  // Issue #140: No scaling (1.0f) — AIAYN sqrt(d_model) removed
     
-    // PCGrad buffer — snapshotted at construction, NOT read from globals
-    // Eliminates fragile extern global coupling (Finding A audit)
-    float* pcgrad_buffer = nullptr;     // Temporary buffer for embedding grad before projection
-    size_t pcgrad_buffer_size = 0;      // Size in elements (vocab_size * d_model)
-    
     EmbeddingGradFn() { op_name = "embedding"; }
     
     ~EmbeddingGradFn() override {
@@ -3303,8 +3216,8 @@ struct EmbeddingGradFn : public GradFn {
         // RULE 20: Track current operation for error context
         setCurrentGradFnOp("embedding", this);
         
-        AG_TRACE("[EmbeddingGradFn::apply] ENTER - tokens=%d d=%d pcgrad=%p\n",
-                num_tokens, d_model, (void*)pcgrad_buffer);
+        AG_TRACE("[EmbeddingGradFn::apply] ENTER - tokens=%d d=%d\n",
+                num_tokens, d_model);
         
         // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
         if (applied) {
@@ -3329,81 +3242,21 @@ struct EmbeddingGradFn : public GradFn {
             throw std::runtime_error("EmbeddingGradFn::apply: grad_output.data is NULL");
         }
 
-        // ═══════════════════════════════════════════════════════════════════════════
-        // ISSUE #60 FIX: PCGrad for tied embedding/lm_head weights
-        // ═══════════════════════════════════════════════════════════════════════════
-        // Problem: LM head backward and embedding backward produce OPPOSITE gradients!
-        // Solution: PCGrad - project out the conflicting component:
-        //   g_final = g_lm + (g_emb - proj_{g_lm}(g_emb))
-        //           = g_lm + orthogonal_component(g_emb)
-        // ═══════════════════════════════════════════════════════════════════════════
-        
         if (!vocab_size) {
             throw std::runtime_error("EmbeddingGradFn::apply: vocab_size is 0 — save() was not called or weight_shape is invalid");
         }
         
-        if (pcgrad_buffer && pcgrad_buffer_size >= static_cast<size_t>(vocab_size) * d_model) {
-            // PCGrad mode: compute embedding gradient into temp buffer, then combine
-            AG_TRACE("[EmbeddingGradFn] Using PCGrad mode (vocab=%d d=%d)\n", vocab_size, d_model);
-            
-            // Step 1: Zero the temp buffer
-            cudaMemsetAsync(pcgrad_buffer, 0, 
-                           static_cast<size_t>(vocab_size) * d_model * sizeof(float), stream);
-            
-            // RULE 20: Check for pre-existing CUDA errors (sticky errors from earlier kernels)
-            cudaError_t pre_check = cudaGetLastError();
-            if (pre_check != cudaSuccess) {
-                std::string msg = std::string("[EmbeddingGradFn] Pre-existing CUDA error before kernel launch: ")
-                    + cudaGetErrorString(pre_check);
-                EmitModuleError(ModuleId::Autograd, msg);
-                throw std::runtime_error(msg);
-            }
-            
-            // Step 2: Compute embedding backward into temp buffer (NOT shared grad buffer)
-            kernel_embedding_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-                grad_output.data, token_ids, pcgrad_buffer, num_tokens, d_model, vocab_size, embedding_scale);
-            
-            cudaError_t launch_err = cudaGetLastError();
-            if (launch_err != cudaSuccess) {
-                std::string msg = std::string("[EmbeddingGradFn] kernel_embedding_backward launch failed: ")
-                    + cudaGetErrorString(launch_err);
-                EmitModuleError(ModuleId::Autograd, msg);
-                throw std::runtime_error(msg);
-            }
-            trackKernelLaunch("kernel_embedding_backward_pcgrad", stream);
-            
-            // ISSUE #60 DEBUG: Capture RAW embedding gradient BEFORE PCGrad projection
-            if (g_debug_capture_enabled && g_debug_embedding_only_grad) {
-                cudaStreamSynchronize(stream);
-                const size_t total_size = weight_shape.total_elements();
-                debugCaptureEmbeddingGrad(pcgrad_buffer, total_size, stream);
-            }
-            
-            // Step 3: Apply PCGrad - combine LM head grad (in weight_grad) with orthogonal 
-            //         component of embedding grad (in temp buffer)
-            const int shared_mem = 2 * ((AUTOGRAD_BLOCK_SIZE / 32) + 1) * sizeof(float);
-            kernel_pcgrad_combine<<<vocab_size, AUTOGRAD_BLOCK_SIZE, shared_mem, stream>>>(
-                weight_grad, pcgrad_buffer, vocab_size, d_model);
-            trackKernelLaunch("kernel_pcgrad_combine", stream);
-            
-            AG_TRACE("[EmbeddingGradFn] PCGrad combination complete\n");
-            
-        } else if (g_skip_embedding_backward_for_tied_weights) {
-            // Fallback: skip embedding backward entirely (previous fix)
-            AG_TRACE("[EmbeddingGradFn] SKIPPING embedding backward - weights tied, no PCGrad buffer\n");
-        } else {
-            // Issue #143: PyTorch-style direct accumulation — embedding grad writes
-            // to same buffer where LM head grad already lives. Natural ~90% cancellation
-            // for frequent tokens acts as frequency-proportional regularization.
-            kernel_embedding_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-                grad_output.data, token_ids, weight_grad, num_tokens, d_model, vocab_size, embedding_scale);
-            trackKernelLaunch("kernel_embedding_backward", stream);
-            
-            // DEBUG: Capture embedding gradient (non-PCGrad path)
-            if (g_debug_capture_enabled && g_debug_embedding_only_grad && weight_grad) {
-                const size_t total_size = weight_shape.total_elements();
-                debugCaptureEmbeddingGrad(weight_grad, total_size, stream);
-            }
+        // PyTorch-style direct accumulation — embedding grad writes
+        // to same buffer where LM head grad already lives. Natural ~90% cancellation
+        // for frequent tokens acts as frequency-proportional regularization.
+        kernel_embedding_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            grad_output.data, token_ids, weight_grad, num_tokens, d_model, vocab_size, embedding_scale);
+        trackKernelLaunch("kernel_embedding_backward", stream);
+        
+        // DEBUG: Capture embedding gradient
+        if (g_debug_capture_enabled && g_debug_embedding_only_grad && weight_grad) {
+            const size_t total_size = weight_shape.total_elements();
+            debugCaptureEmbeddingGrad(weight_grad, total_size, stream);
         }
 
         // CONTINUE AUTOGRAD CHAIN using stored grad_fn
@@ -4085,9 +3938,6 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cud
         grad_fn->save(token_ids, num_tokens, d_model, true, stream);
         grad_fn->vocab_size = vocab_size;             // RULE 20: Store for backward OOB checking
         grad_fn->embedding_scale = embedding_scale;   // Store for backward scaling
-        // Snapshot PCGrad buffer at construction — no global coupling during backward
-        grad_fn->pcgrad_buffer = g_pcgrad_temp_buffer;
-        grad_fn->pcgrad_buffer_size = g_pcgrad_buffer_size;
         result.grad_fn = grad_fn;
     }
     
@@ -4129,58 +3979,7 @@ Tensor log_softmax(const Tensor& x, cudaStream_t stream, bool save_output_copy) 
     return result;
 }
 
-Tensor dropout(const Tensor& x, float p, bool training, const uint8_t* mask, cudaStream_t stream) {
-    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "dropout_result");
-    
-    if (!training || p == 0.0f) {
-        // No dropout during inference or when p=0
-        cudaMemcpyAsync(result.data, x.data, x.size_bytes(), cudaMemcpyDeviceToDevice, stream);
-        
-        if (x.requires_grad) {
-            result.is_leaf = false;
-            // Identity backward - ISSUE #48: capture stable data
-            auto grad_fn = std::make_shared<AddGradFn>();
-            grad_fn->capture_single_input(const_cast<Tensor&>(x), stream);  // ISSUE #56 FIX
-            result.grad_fn = grad_fn;
-        }
-        return result;
-    }
-    
-    if (!mask) {
-        throw std::invalid_argument("autograd::dropout: mask required when training=true and p>0. Use dropout(x, p, seed, training, stream) to auto-generate mask.");
-    }
-    
-    const size_t count = x.numel();
-    const float scale = 1.0f / (1.0f - p);  // Inverted dropout scale
-    
-    // Forward: y = x * mask / (1 - p) where mask is 0/1
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    kernel_dropout_forward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        x.data, mask, result.data, scale, count);
-    trackKernelLaunch("kernel_dropout_forward", stream);
-    
-    // Set up backward - ISSUE #48: capture stable data, not Tensor*
-    if (x.requires_grad) {
-        result.is_leaf = false;
-        auto grad_fn = std::make_shared<DropoutGradFn>();
-        grad_fn->capture_input(const_cast<Tensor&>(x));
-        grad_fn->save(mask, p, count, stream);
-        result.grad_fn = grad_fn;
-    }
-    
-    return result;
-}
 
-/**
- * Dropout with auto-generated mask using PRNG seed
- * This is the preferred interface - mask is generated internally and managed properly.
- * 
- * @param x Input tensor
- * @param p Dropout probability (fraction to drop, e.g., 0.1 means drop 10%)
- * @param seed Random seed for mask generation (use batch_idx * step + offset for reproducibility)
- * @param training If false, no dropout applied (identity function)
- * @param stream CUDA stream
- */
 Tensor dropout(const Tensor& x, float p, uint64_t seed, bool training, cudaStream_t stream) {
     Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "dropout_seeded_result");
     
@@ -6501,19 +6300,7 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
 }
 
 
-// =============================================================================
-// ISSUE #119: RoPEGradFn - Autograd wrapper for RoPE rotation
-// =============================================================================
-// RoPE forward rotates Q and K tensors IN-PLACE. The backward pass must apply
-// the INVERSE rotation (R(-θ) = R(θ)^T) to the gradients dQ and dK to correctly
-// propagate gradients through the rotation.
-//
-// Without this, gradients remain in the "rotated space" and are incorrect,
-// causing training to learn wrong attention patterns.
-//
-// Uses SharedState pattern (like SplitAndReshapeQKVGradFn) to coordinate Q and K.
-// When both Q and K backward are complete, continues the autograd chain.
-// =============================================================================
+
 
 struct RoPEGradFn : public GradFn {
     /**
