@@ -5342,9 +5342,11 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
 // For GQA with 4 KV heads, we need to SUM the gradients from grouped Q heads.
 // E.g., Q heads 0,1,2 all use KV head 0, so dK[kv_head=0] = dK[q_head=0] + dK[q_head=1] + dK[q_head=2]
 //
-// ISSUE #73 FIX: External FlashAttention library does NOT apply GQA gradient scaling internally.
-// When summing gradients from 3 Q heads, we get 3x the correct gradient magnitude.
-// Apply gqa_grad_scale = 1.0 / heads_per_kv_group to normalize (same as old custom kernel did).
+// ISSUE #73 / balance fix: External FlashAttention library does NOT apply GQA gradient scaling.
+// We sum gradients from heads_per_kv_group Q heads into one KV head. Two choices:
+//   (1) No scale: true backprop gradient = sum → ||dK|| ~ sqrt(heads_per_kv) * per-Q magnitude (K,V get more).
+//   (2) Scale 1/sqrt(heads_per_kv): so ||dK|| = ||dQ|| per head → Q,K,V comparable (was 1/heads_per_kv → Q 1.7x larger).
+// We use (2) so Q, K, V receive comparable gradient magnitude (no structural 1.7x imbalance).
 //
 // Input layout:  src [B, S, num_heads, D] bf16 - gradients per query head
 // Output layout: dst [B, num_kv_heads, S, D] fp32 - reduced + scaled gradients per KV head
@@ -5367,10 +5369,9 @@ __global__ void kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32(
     // GQA grouping: heads_per_kv_group = num_heads / num_kv_heads
     const int heads_per_kv_group = num_heads / num_kv_heads;
     
-    // ISSUE #73 FIX: Apply GQA gradient scale to normalize the sum
-    // When 3 Q heads each contribute dK/dV for the same KV head, summing gives 3x magnitude.
-    // Normalize by dividing by heads_per_kv_group (same as old custom Flash kernel did).
-    const float gqa_grad_scale = 1.0f / static_cast<float>(heads_per_kv_group);
+    // Balance Q/K/V gradient magnitude: scale so ||dK||, ||dV|| match ||dQ|| per head.
+    // sum has norm ~ sqrt(heads_per_kv_group) * single-head norm → use 1/sqrt to match.
+    const float gqa_grad_scale = 1.0f / sqrtf(static_cast<float>(heads_per_kv_group));
     
     // Sum gradients from all Q heads in this KV group
     float sum = 0.0f;
@@ -5383,7 +5384,6 @@ __global__ void kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32(
         sum += __bfloat162float(src[src_idx]);
     }
     
-    // ISSUE #73: Apply GQA scaling to normalize gradient magnitude
     dst[idx] = sum * gqa_grad_scale;
 }
 
