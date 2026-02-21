@@ -196,7 +196,7 @@ std::string generateResponse(const std::string& prompt, int max_tokens, float te
         auto encoded = g_tokenizer->encodeWithMetadata(prompt);
         auto tokens = std::move(encoded.token_ids);
         auto numeric_values = std::move(encoded.token_numeric_values);
-        auto numeric_mask = std::move(encoded.token_numeric_mask);
+        auto atom_mask = std::move(encoded.token_atom_mask);
         auto end_encode = std::chrono::high_resolution_clock::now();
         auto encode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_encode - start_encode).count();
         std::cout << " " << tokens.size() << " tokens (" << encode_ms << "ms)" << std::endl;
@@ -210,8 +210,8 @@ std::string generateResponse(const std::string& prompt, int max_tokens, float te
             if (!numeric_values.empty()) {
                 numeric_values.pop_back();
             }
-            if (!numeric_mask.empty()) {
-                numeric_mask.pop_back();
+            if (!atom_mask.empty()) {
+                atom_mask.pop_back();
             }
             std::cout << "[Generate] Removed EOS from prompt, now " << tokens.size() << " tokens" << std::endl;
         }
@@ -229,7 +229,7 @@ std::string generateResponse(const std::string& prompt, int max_tokens, float te
 
         std::cout << "[Generate] Starting generation (max_tokens=" << max_tokens << ", temp=" << temperature << ")..." << std::endl << std::flush;
         auto start_gen = std::chrono::high_resolution_clock::now();
-        auto results = g_model->generate(tokens, numeric_values, numeric_mask, &gen_config);
+        auto results = g_model->generate(tokens, numeric_values, atom_mask, &gen_config);
         auto end_gen = std::chrono::high_resolution_clock::now();
         auto gen_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_gen - start_gen).count();
 

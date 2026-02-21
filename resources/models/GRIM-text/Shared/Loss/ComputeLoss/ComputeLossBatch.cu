@@ -146,9 +146,9 @@ float LanguageModel::computeLossBatch(
 	if (!cached_numeric_values_ptr) {
 		throw std::runtime_error("computeLossBatch: cached_token_numeric_values.data is NULL");
 	}
-	float* cached_numeric_mask_ptr = training_state_.cached_token_numeric_mask.data;
-	if (!cached_numeric_mask_ptr) {
-		throw std::runtime_error("computeLossBatch: cached_token_numeric_mask.data is NULL");
+	float* cached_atom_mask_ptr = training_state_.cached_token_atom_mask.data;
+	if (!cached_atom_mask_ptr) {
+		throw std::runtime_error("computeLossBatch: cached_token_atom_mask.data is NULL");
 	}
 
 	// Compute transfer sizes
@@ -156,17 +156,15 @@ float LanguageModel::computeLossBatch(
 	const size_t input_ids_bytes    = payload.inputIdBytes();
 	const size_t target_ids_bytes   = payload.targetIdBytes();
 	const size_t numeric_val_bytes  = payload.numericValueBytes();
-	const size_t numeric_mask_bytes = payload.numericMaskBytes();
+	const size_t atom_mask_bytes    = payload.atomMaskBytes();
 
 	float* cached_text_features_ptr = training_state_.cached_token_text_features.data;
-	float* cached_text_mask_ptr = training_state_.cached_token_text_mask.data;
-	const bool has_text_features = (cached_text_features_ptr && cached_text_mask_ptr);
+	const bool has_text_features = (cached_text_features_ptr != nullptr);
 	const size_t text_feat_bytes = payload.textFeatureBytes();
-	const size_t text_mask_bytes = payload.textMaskBytes();
 
 	// Acquire double-buffer blocks (A and B)
 	auto handleA = scratch_pool->acquire(std::max({input_ids_bytes, numeric_val_bytes, text_feat_bytes}));
-	auto handleB = scratch_pool->acquire(std::max({target_ids_bytes, numeric_mask_bytes, text_mask_bytes}));
+	auto handleB = scratch_pool->acquire(std::max({target_ids_bytes, atom_mask_bytes}));
 
 	// --- Round 1: input_ids (block A) + target_ids (block B) ---
 	std::memcpy(handleA.data, payload.input_ids.data(), input_ids_bytes);
@@ -180,26 +178,22 @@ float LanguageModel::computeLossBatch(
 	// Sync before reusing blocks — GPU must finish reading A and B
 	CUDA_CHECK(cudaStreamSynchronize(stream));
 
-	// --- Round 2: numeric_values (block A) + numeric_mask (block B) ---
+	// --- Round 2: numeric_values (block A) + atom_mask (block B) ---
 	std::memcpy(handleA.data, payload.numeric_values.data(), numeric_val_bytes);
 	CUDA_CHECK(cudaMemcpyAsync(cached_numeric_values_ptr, handleA.data,
 		numeric_val_bytes, cudaMemcpyHostToDevice, stream));
 
-	std::memcpy(handleB.data, payload.numeric_mask.data(), numeric_mask_bytes);
-	CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint8_t*>(cached_numeric_mask_ptr), handleB.data,
-		numeric_mask_bytes, cudaMemcpyHostToDevice, stream));
+	std::memcpy(handleB.data, payload.atom_mask.data(), atom_mask_bytes);
+	CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint8_t*>(cached_atom_mask_ptr), handleB.data,
+		atom_mask_bytes, cudaMemcpyHostToDevice, stream));
 
-	// --- Round 3: text_features (block A) + text_mask (block B) ---
+	// --- Round 3: text_features (block A) ---
 	if (has_text_features) {
 		CUDA_CHECK(cudaStreamSynchronize(stream));
 
 		std::memcpy(handleA.data, payload.text_features.data(), text_feat_bytes);
 		CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint16_t*>(cached_text_features_ptr), handleA.data,
 			text_feat_bytes, cudaMemcpyHostToDevice, stream));
-
-		std::memcpy(handleB.data, payload.text_mask.data(), text_mask_bytes);
-		CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint8_t*>(cached_text_mask_ptr), handleB.data,
-			text_mask_bytes, cudaMemcpyHostToDevice, stream));
 	}
 
 	// Final sync ensures all DMAs complete before releasing pinned blocks

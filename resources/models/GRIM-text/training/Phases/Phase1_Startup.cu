@@ -548,11 +548,11 @@ SequenceData loadTrainingData(
         if (add_bos_token && bos_id >= 0 && seq.token_ids.front() != bos_id) {
             seq.token_ids.insert(seq.token_ids.begin(), bos_id);
             seq.token_numeric_values.insert(seq.token_numeric_values.begin(), 0.0f);
-            seq.token_numeric_mask.insert(seq.token_numeric_mask.begin(), 0);
+            seq.token_atom_mask.insert(seq.token_atom_mask.begin(), 0);
+            seq.atom_entry_ids.insert(seq.atom_entry_ids.begin(), GRIM::Tokenizer::kAtomEntryNone);
             for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
                 seq.token_text_features.insert(seq.token_text_features.begin(), 0);
             }
-            seq.token_text_mask.insert(seq.token_text_mask.begin(), 0);
             seq.targets.insert(seq.targets.begin(), -1);
             added_bos++;
         }
@@ -561,11 +561,11 @@ SequenceData loadTrainingData(
         if (add_eos_token && eos_id >= 0 && seq.token_ids.back() != eos_id) {
             seq.token_ids.push_back(eos_id);
             seq.token_numeric_values.push_back(0.0f);
-            seq.token_numeric_mask.push_back(0);
+            seq.token_atom_mask.push_back(0);
+            seq.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
             for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
                 seq.token_text_features.push_back(0);
             }
-            seq.token_text_mask.push_back(0);
             // Fix shift: the PREVIOUS position's target was -1 (no next token existed
             // when DataLoader ran). Now EOS follows it, so set target = eos_id.
             if (!seq.targets.empty()) {
@@ -610,10 +610,10 @@ SequenceData loadTrainingData(
                 seq.token_ids.resize(max_seq_len, pad_id);
                 seq.targets.resize(max_seq_len, -1);
                 seq.token_numeric_values.resize(max_seq_len, 0.0f);
-                seq.token_numeric_mask.resize(max_seq_len, 0);
+                seq.token_atom_mask.resize(max_seq_len, 0);
+                seq.atom_entry_ids.resize(max_seq_len, GRIM::Tokenizer::kAtomEntryNone);
                 seq.token_text_features.resize(
                     max_seq_len * GRIM::Tokenizer::kTextFeatureDim, 0);
-                seq.token_text_mask.resize(max_seq_len, 0);
                 padded_count++;
             }
         };
@@ -648,11 +648,11 @@ SequenceData loadTrainingData(
                     window.token_ids.push_back(bos_id);
                     window.targets.push_back(-1);  // BOS position masked
                     window.token_numeric_values.push_back(0.0f);
-                    window.token_numeric_mask.push_back(0);
+                    window.token_atom_mask.push_back(0);
+                    window.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
                     for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
                         window.token_text_features.push_back(0);
                     }
-                    window.token_text_mask.push_back(0);
                     bos_prepended++;
                 }
                 
@@ -663,14 +663,17 @@ SequenceData loadTrainingData(
                     seq.targets.begin() + start, seq.targets.begin() + end);
                 window.token_numeric_values.insert(window.token_numeric_values.end(),
                     seq.token_numeric_values.begin() + start, seq.token_numeric_values.begin() + end);
-                window.token_numeric_mask.insert(window.token_numeric_mask.end(),
-                    seq.token_numeric_mask.begin() + start, seq.token_numeric_mask.begin() + end);
+                window.token_atom_mask.insert(window.token_atom_mask.end(),
+                    seq.token_atom_mask.begin() + start, seq.token_atom_mask.begin() + end);
+                // Atom side channel — share parent sequence's AtomTable
+                window.atom_table = seq.atom_table;
+                window.atom_entry_ids.insert(window.atom_entry_ids.end(),
+                    seq.atom_entry_ids.begin() + start, seq.atom_entry_ids.begin() + end);
                 // GRMT v4: slice text features (16 values per token)
                 window.token_text_features.insert(window.token_text_features.end(),
                     seq.token_text_features.begin() + start * GRIM::Tokenizer::kTextFeatureDim,
                     seq.token_text_features.begin() + end * GRIM::Tokenizer::kTextFeatureDim);
-                window.token_text_mask.insert(window.token_text_mask.end(),
-                    seq.token_text_mask.begin() + start, seq.token_text_mask.begin() + end);
+
                 
                 // Mask first position if it's the first window (BOS already there)
                 // For non-first windows, BOS was prepended above with target=-1
@@ -713,13 +716,12 @@ SequenceData loadTrainingData(
                 if (!is_final_window && eos_id >= 0 && !window.token_ids.empty()) {
                     window.token_ids.back() = eos_id;
                     window.token_numeric_values.back() = 0.0f;
-                    window.token_numeric_mask.back() = 0;
+                    window.token_atom_mask.back() = 0;
                     // Clear text features for the replaced position
                     const size_t last_tf_start = (window.token_ids.size() - 1) * GRIM::Tokenizer::kTextFeatureDim;
                     for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
                         window.token_text_features[last_tf_start + i] = 0;
                     }
-                    window.token_text_mask.back() = 0;
                     // Second-to-last position learns to predict EOS
                     if (window.targets.size() >= 2) {
                         window.targets[window.targets.size() - 2] = eos_id;

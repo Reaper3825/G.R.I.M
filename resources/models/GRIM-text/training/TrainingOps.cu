@@ -156,8 +156,6 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
             est_encoder += static_cast<size_t>(NUM_ATOM_TYPES) * atom_dim;  // atom_type_embeddings
             est_encoder += static_cast<size_t>(atom_dim) * cfg.d_model;     // atom_projection
             est_encoder += static_cast<size_t>(kTextFeatureDim) * cfg.d_model; // text_feature_projection
-            est_encoder += cfg.d_model;  // value_extraction_weight
-            est_encoder += 1;            // value_extraction_bias
         }
 
         const size_t est_total = est_embedding + est_position_embedding + est_encoder + est_lm_head;
@@ -194,9 +192,7 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
         stats.scratchblock_params =
             static_cast<size_t>(NUM_ATOM_TYPES) * atom_dim +
             static_cast<size_t>(atom_dim) * config_.d_model +
-            static_cast<size_t>(kTextFeatureDim) * config_.d_model +
-            config_.d_model +  // value_extraction_weight
-            1;                 // value_extraction_bias
+            static_cast<size_t>(kTextFeatureDim) * config_.d_model;
         // NOTE: scratchblock_params NOT added to total_params — already in encoder_params
     }
 

@@ -33,8 +33,8 @@ namespace GRIM::Diagnostics {
 //  (Moved from static struct members to file-level statics)
 //======================================================//
 namespace {
-    float s_prev_hidden_norm = 0.0f;
-    float s_prev_weight_norm = 0.0f;
+    float s_prev_hidden_rms = 0.0f;
+    float s_prev_weight_rms = 0.0f;
     float s_prev_cosine = 0.0f;
     float s_prev_logit = 0.0f;
     int   s_prev_batch_idx = -1;
@@ -111,15 +111,15 @@ EmbGradEquationDiag computeEmbGradEquation(
     int total_tokens,
     int d_model,
     int vocab_size,
-    float prev_emb_norm,
-    float curr_emb_norm,
+    float prev_emb_rms,
+    float curr_emb_rms,
     cudaStream_t stream
 ) {
     EmbGradEquationDiag diag{};
     diag.total_vocab = vocab_size;
-    diag.prev_emb_norm = prev_emb_norm;
-    diag.curr_emb_norm = curr_emb_norm;
-    diag.emb_norm_delta = curr_emb_norm - prev_emb_norm;
+    diag.prev_emb_rms = prev_emb_rms;
+    diag.curr_emb_rms = curr_emb_rms;
+    diag.emb_rms_delta = curr_emb_rms - prev_emb_rms;
     
     // Get the gradient buffer (tied weights → embedding tokenWeights().grad_data)
     if (!embedding_layer) throw std::runtime_error("embedding_layer is NULL in computeEmbGradEquation");
@@ -155,54 +155,55 @@ EmbGradEquationDiag computeEmbGradEquation(
     std::vector<float> h_grad(grad_size);
     cudaMemcpy(h_grad.data(), grad_ptr, grad_size * sizeof(float), cudaMemcpyDeviceToHost);
     
-    // Compute per-row norms
-    std::vector<float> row_norms(vocab_size, 0.0f);
-    double total_norm_sq = 0.0;
+    // Compute per-row RMS (matches training's norm metric)
+    std::vector<float> row_rms_vals(vocab_size, 0.0f);
+    double total_sum_sq = 0.0;
+    size_t total_count = 0;
     for (int v = 0; v < vocab_size; ++v) {
         const float* row = h_grad.data() + static_cast<size_t>(v) * d_model;
         double row_sq = 0.0;
         for (int d = 0; d < d_model; ++d) {
             row_sq += static_cast<double>(row[d]) * row[d];
         }
-        row_norms[v] = static_cast<float>(std::sqrt(row_sq));
-        total_norm_sq += row_sq;
-        if (row_norms[v] > 1e-10f) {
+        row_rms_vals[v] = static_cast<float>(std::sqrt(row_sq / d_model));  // RMS per row
+        total_sum_sq += row_sq;
+        total_count += d_model;
+        if (row_rms_vals[v] > 1e-10f) {
             diag.num_active_rows++;
         }
     }
     
-    diag.total_norm = static_cast<float>(std::sqrt(total_norm_sq));
+    diag.grad_rms = (total_count > 0) ? static_cast<float>(std::sqrt(total_sum_sq / total_count)) : 0.0f;
     diag.active_ratio = static_cast<float>(diag.num_active_rows) / vocab_size;
     
-    // Find top-K row norms
-    // Use partial sort for top-K
-    std::vector<std::pair<float, int>> norm_idx(vocab_size);
+    // Find top-K row RMS values
+    std::vector<std::pair<float, int>> rms_idx(vocab_size);
     for (int v = 0; v < vocab_size; ++v) {
-        norm_idx[v] = {row_norms[v], v};
+        rms_idx[v] = {row_rms_vals[v], v};
     }
-    std::partial_sort(norm_idx.begin(), norm_idx.begin() + EmbGradEquationDiag::kTopK, 
-                      norm_idx.end(), [](auto& a, auto& b) { return a.first > b.first; });
+    std::partial_sort(rms_idx.begin(), rms_idx.begin() + EmbGradEquationDiag::kTopK, 
+                      rms_idx.end(), [](auto& a, auto& b) { return a.first > b.first; });
     
     for (int k = 0; k < EmbGradEquationDiag::kTopK; ++k) {
-        diag.top_tokens[k] = norm_idx[k].second;
-        diag.top_norms[k] = norm_idx[k].first;
+        diag.top_tokens[k] = rms_idx[k].second;
+        diag.top_rms[k] = rms_idx[k].first;
     }
     
-    diag.max_row_norm = norm_idx[0].first;
-    diag.max_row_token = norm_idx[0].second;
+    diag.max_row_rms = rms_idx[0].first;
+    diag.max_row_token = rms_idx[0].second;
     
-    // Compute mean row norm (over active rows only)
+    // Compute mean row RMS (over active rows only)
     if (diag.num_active_rows > 0) {
-        double sum_norms = 0.0;
+        double sum_rms = 0.0;
         for (int v = 0; v < vocab_size; ++v) {
-            if (row_norms[v] > 1e-10f) {
-                sum_norms += row_norms[v];
+            if (row_rms_vals[v] > 1e-10f) {
+                sum_rms += row_rms_vals[v];
             }
         }
-        diag.mean_row_norm = static_cast<float>(sum_norms / diag.num_active_rows);
+        diag.mean_row_rms = static_cast<float>(sum_rms / diag.num_active_rows);
     }
     
-    diag.spike_ratio = (diag.mean_row_norm > 1e-10f) ? (diag.max_row_norm / diag.mean_row_norm) : 0.0f;
+    diag.spike_ratio = (diag.mean_row_rms > 1e-10f) ? (diag.max_row_rms / diag.mean_row_rms) : 0.0f;
     
     diag.valid = true;
     return diag;
@@ -221,25 +222,25 @@ std::string formatEmbGradEquation(const EmbGradEquationDiag& diag, int batch_idx
     oss << "  EQUATION: grad_lm[v] = centered^T @ grad_logits[:,v] (dense matmul)\n";
     oss << "            grad_emb[tok] += grad_encoder[t] * emb_scale (sparse atomicAdd)\n";
     oss << "            grad_final = grad_lm + orthogonal(grad_emb, grad_lm) (PCGrad)\n";
-    oss << "  GRADIENT BUFFER: ||grad_W||_F=" << diag.total_norm
+    oss << "  GRADIENT BUFFER: rms=" << diag.grad_rms
         << " active_rows=" << diag.num_active_rows << "/" << diag.total_vocab
         << " active_ratio=" << std::setprecision(4) << diag.active_ratio << "\n";
     oss << std::setprecision(6);
-    oss << "  ROW NORMS: mean=" << diag.mean_row_norm
-        << " max=" << diag.max_row_norm << " (tok=" << diag.max_row_token << ")"
+    oss << "  ROW RMS: mean=" << diag.mean_row_rms
+        << " max=" << diag.max_row_rms << " (tok=" << diag.max_row_token << ")"
         << " spike_ratio=" << std::setprecision(2) << diag.spike_ratio << "x\n";
     oss << std::setprecision(6);
     oss << "  TOP-5 ROWS: ";
     for (int k = 0; k < EmbGradEquationDiag::kTopK; ++k) {
         if (k > 0) oss << ", ";
-        oss << "tok" << diag.top_tokens[k] << "=" << diag.top_norms[k];
+        oss << "tok" << diag.top_tokens[k] << "=" << diag.top_rms[k];
     }
     oss << "\n";
     oss << "  SCATTER DENSITY: most_frequent=tok" << diag.most_frequent_token
         << " (count=" << diag.most_frequent_count << ")\n";
-    oss << "  BATCH TREND: prev_emb_norm=" << diag.prev_emb_norm
-        << " curr_emb_norm=" << diag.curr_emb_norm
-        << " delta=" << std::showpos << diag.emb_norm_delta << std::noshowpos << "\n";
+    oss << "  BATCH TREND: prev_emb_rms=" << diag.prev_emb_rms
+        << " curr_emb_rms=" << diag.curr_emb_rms
+        << " delta=" << std::showpos << diag.emb_rms_delta << std::noshowpos << "\n";
     
     // Anomaly detection
     if (diag.spike_ratio > 10.0f) {
@@ -248,9 +249,9 @@ std::string formatEmbGradEquation(const EmbGradEquationDiag& diag, int batch_idx
             << "Likely cause: frequent token (tok" << diag.max_row_token 
             << ") with high atomicAdd contention OR concentrated LM head gradient.\n";
     }
-    if (diag.emb_norm_delta > diag.prev_emb_norm * 0.5f && diag.prev_emb_norm > 0.01f) {
-        oss << "  [ANOMALY] EMB_NORM_SPIKE: delta=" << diag.emb_norm_delta 
-            << " > 50% of prev=" << diag.prev_emb_norm
+    if (diag.emb_rms_delta > diag.prev_emb_rms * 0.5f && diag.prev_emb_rms > 0.01f) {
+        oss << "  [ANOMALY] EMB_RMS_SPIKE: delta=" << diag.emb_rms_delta 
+            << " > 50% of prev=" << diag.prev_emb_rms
             << " — non-deterministic gradient magnitude jump.\n";
     }
     if (diag.active_ratio < 0.1f) {
@@ -323,7 +324,7 @@ Token277Diagnostic computeToken277Diagnostic(
     }
     diag.grad_row_sum = static_cast<float>(grad_sum);
     diag.grad_row_mean = static_cast<float>(grad_sum / d_model);
-    diag.grad_row_norm = static_cast<float>(std::sqrt(grad_sum_sq));
+    diag.grad_row_rms = static_cast<float>(std::sqrt(grad_sum_sq / d_model));
     
     // Compute weight statistics
     double weight_sum = 0.0, weight_sum_sq = 0.0;
@@ -331,7 +332,7 @@ Token277Diagnostic computeToken277Diagnostic(
         weight_sum += weight_row[i];
         weight_sum_sq += static_cast<double>(weight_row[i]) * weight_row[i];
     }
-    diag.weight_row_norm = static_cast<float>(std::sqrt(weight_sum_sq));
+    diag.weight_row_rms = static_cast<float>(std::sqrt(weight_sum_sq / d_model));
     diag.weight_row_mean = static_cast<float>(weight_sum / d_model);
     
     diag.valid = true;
@@ -349,10 +350,10 @@ std::string formatToken277Diagnostic(const Token277Diagnostic& diag, int batch_i
     
     // Rule 21 Equation-Based Diagnostic Format
     oss << "[WEIGHT_GRADIENT_EQUATION] W_UPDATE[" << tok << "]: W_new[" << tok << "] = W[" << tok << "] - lr × grad_W[" << tok << "] / sqrt(v + eps)\n";
-    oss << "  GRAD_W[" << tok << "]: ||grad||=" << diag.grad_row_norm
+    oss << "  GRAD_W[" << tok << "]: rms=" << diag.grad_row_rms
         << " sum=" << diag.grad_row_sum
         << " mean=" << diag.grad_row_mean << "\n";
-    oss << "  WEIGHT[" << tok << "]: ||W[" << tok << "]||=" << diag.weight_row_norm
+    oss << "  WEIGHT[" << tok << "]: rms=" << diag.weight_row_rms
         << " mean=" << diag.weight_row_mean << "\n";
     oss << "  TARGET_DISTRIBUTION: collapse_token_count=" << diag.target_count
         << "/" << diag.total_valid_targets
@@ -435,9 +436,9 @@ HiddenState277Analysis computeHiddenState277Analysis(
     
     // Analyze per-position
     double sum_hidden = 0.0, sum_hidden_sq = 0.0;
-    double sum_norm = 0.0;
-    double sum_hidden_tracked = 0.0, sum_norm_tracked = 0.0;
-    double sum_hidden_other = 0.0, sum_norm_other = 0.0;
+    double sum_rms = 0.0;
+    double sum_hidden_tracked = 0.0, sum_rms_tracked = 0.0;
+    double sum_hidden_other = 0.0, sum_rms_other = 0.0;
     double sum_grad_tracked_at_tracked = 0.0, sum_grad_tracked_at_other = 0.0;
     
     const int PAD_ID = GRIM::Tokenizer::PAD_TOKEN_ID;
@@ -456,15 +457,15 @@ HiddenState277Analysis computeHiddenState277Analysis(
             sum_hidden_sq += hidden_t[i] * hidden_t[i];
             norm_sq += hidden_t[i] * hidden_t[i];
         }
-        double norm = std::sqrt(norm_sq);
-        sum_norm += norm;
+        double rms = std::sqrt(norm_sq / d_model);
+        sum_rms += rms;
         
         // Grad_logits[t, T] (T = tracked collapse token)
         const float grad_tracked_t = h_grad_logits[static_cast<size_t>(t) * vocab_size + tracked_token];
         
         if (target == tracked_token) {
             analysis.count_tracked_targets++;
-            sum_norm_tracked += norm;
+            sum_rms_tracked += rms;
             sum_grad_tracked_at_tracked += grad_tracked_t;
             // Accumulate per-dimension: grad_W[T,i] += h[t,i] * g[t,T]
             for (int i = 0; i < d_model; ++i) {
@@ -472,7 +473,7 @@ HiddenState277Analysis computeHiddenState277Analysis(
             }
         } else {
             analysis.count_other_targets++;
-            sum_norm_other += norm;
+            sum_rms_other += rms;
             sum_grad_tracked_at_other += grad_tracked_t;
             for (int i = 0; i < d_model; ++i) {
                 grad_w_from_other[i] += hidden_t[i] * grad_tracked_t;
@@ -485,15 +486,15 @@ HiddenState277Analysis computeHiddenState277Analysis(
     
     analysis.valid = true;
     analysis.hidden_mean = static_cast<float>(sum_hidden / (total_valid * d_model));
-    analysis.hidden_norm_mean = static_cast<float>(sum_norm / total_valid);
+    analysis.hidden_rms_mean = static_cast<float>(sum_rms / total_valid);
     analysis.hidden_std = static_cast<float>(std::sqrt(
         sum_hidden_sq / (total_valid * d_model) - analysis.hidden_mean * analysis.hidden_mean));
     
     if (analysis.count_tracked_targets > 0) {
-        analysis.hidden_tracked_norm = static_cast<float>(sum_norm_tracked / analysis.count_tracked_targets);
+        analysis.hidden_tracked_rms = static_cast<float>(sum_rms_tracked / analysis.count_tracked_targets);
     }
     if (analysis.count_other_targets > 0) {
-        analysis.hidden_other_norm = static_cast<float>(sum_norm_other / analysis.count_other_targets);
+        analysis.hidden_other_rms = static_cast<float>(sum_rms_other / analysis.count_other_targets);
     }
     
     analysis.grad_tracked_at_tracked_targets = static_cast<float>(sum_grad_tracked_at_tracked);
@@ -509,8 +510,8 @@ HiddenState277Analysis computeHiddenState277Analysis(
         sum_tracked += grad_w_from_tracked[i];
         sum_other += grad_w_from_other[i];
     }
-    analysis.grad_w_norm_from_tracked = static_cast<float>(std::sqrt(norm_sq_tracked));
-    analysis.grad_w_norm_from_other = static_cast<float>(std::sqrt(norm_sq_other));
+    analysis.grad_w_rms_from_tracked = static_cast<float>(std::sqrt(norm_sq_tracked / d_model));
+    analysis.grad_w_rms_from_other = static_cast<float>(std::sqrt(norm_sq_other / d_model));
     analysis.grad_w_sum_from_tracked = static_cast<float>(sum_tracked);
     analysis.grad_w_sum_from_other = static_cast<float>(sum_other);
     const double denom = std::sqrt(norm_sq_tracked) * std::sqrt(norm_sq_other);
@@ -531,12 +532,12 @@ std::string formatHiddenState277Analysis(const HiddenState277Analysis& a, int ba
     // Rule 21 Equation-Based Diagnostic Format
     oss << "[HIDDEN_STATE_EQUATION] GRAD_W[" << tok << "]: grad_W[" << tok << ",i] = Σ_t (hidden[t,i] × grad_logits[t," << tok << "])\n";
     oss << "  HIDDEN STATES (encoder output): mean=" << a.hidden_mean
-        << " ||h||_mean=" << a.hidden_norm_mean
+        << " h_rms_mean=" << a.hidden_rms_mean
         << " std=" << a.hidden_std << "\n";
     
     // Breakdown by target type (Issue #37 root cause: hidden_sum × grad contribution)
-    oss << "  AT_TRACKED_TARGETS (n=" << a.count_tracked_targets << "): ||h||=" << a.hidden_tracked_norm << "\n";
-    oss << "  AT_OTHER_TARGETS (n=" << a.count_other_targets << "): ||h||=" << a.hidden_other_norm << "\n";
+    oss << "  AT_TRACKED_TARGETS (n=" << a.count_tracked_targets << "): h_rms=" << a.hidden_tracked_rms << "\n";
+    oss << "  AT_OTHER_TARGETS (n=" << a.count_other_targets << "): h_rms=" << a.hidden_other_rms << "\n";
     
     // Gradient at tracked column
     oss << "  GRAD_LOGITS[" << tok << "]: at_tracked_targets=" << a.grad_tracked_at_tracked_targets 
@@ -545,11 +546,11 @@ std::string formatHiddenState277Analysis(const HiddenState277Analysis& a, int ba
     
     // Issue #137: Per-dimension gradient decomposition
     oss << "  GRAD_W[" << tok << "] PER-DIMENSION DECOMPOSITION:\n";
-    oss << "    from_tracked_targets: ||g||=" << a.grad_w_norm_from_tracked << "\n";
-    oss << "    from_other_targets: ||g||=" << a.grad_w_norm_from_other << "\n";
-    float ratio = (a.grad_w_norm_from_other > 1e-12f) 
-        ? a.grad_w_norm_from_tracked / a.grad_w_norm_from_other : 0.0f;
-    oss << "    ||g_tracked||/||g_other||=" << std::setprecision(1) << ratio << "x"
+    oss << "    from_tracked_targets: g_rms=" << a.grad_w_rms_from_tracked << "\n";
+    oss << "    from_other_targets: g_rms=" << a.grad_w_rms_from_other << "\n";
+    float ratio = (a.grad_w_rms_from_other > 1e-12f) 
+        ? a.grad_w_rms_from_tracked / a.grad_w_rms_from_other : 0.0f;
+    oss << "    g_rms_tracked/g_rms_other=" << std::setprecision(1) << ratio << "x"
         << std::setprecision(6) << " cos(g_tracked, g_other)=" << a.grad_w_cosine 
         << " (negative=opposing, positive=reinforcing)\n";
     
@@ -629,14 +630,14 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
     cudaStreamSynchronize(stream);
     
     // ==========================================
-    // Compute ||W[T]||
-    // Equation: ||W[T]|| = sqrt(Σ_d W[T,d]²)
+    // Compute W_rms[T]
+    // Equation: W_rms[T] = sqrt(Σ_d W[T,d]² / d_model)
     // ==========================================
     double w277_sq = 0.0;
     for (int d = 0; d < d_model; ++d) {
         w277_sq += static_cast<double>(w277[d]) * w277[d];
     }
-    diag.weight_tracked_norm = static_cast<float>(std::sqrt(w277_sq));
+    diag.weight_tracked_rms = static_cast<float>(std::sqrt(w277_sq / d_model));
     
     // ==========================================
     // Compute grad_W[T] · W[T] for weight paradox detection
@@ -653,7 +654,7 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
     // Per-position analysis
     // ==========================================
     const int PAD_ID = GRIM::Tokenizer::PAD_TOKEN_ID;
-    double sum_h_norm = 0.0;
+    double sum_h_rms = 0.0;
     double sum_cosine = 0.0;
     double sum_actual_logit = 0.0;
     double sum_predicted_logit = 0.0;
@@ -664,7 +665,7 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
     int valid_count = 0;
     
     // For hidden cosine sampling (pairwise)
-    std::vector<std::pair<int, double>> position_norms;  // (position_idx, norm)
+    std::vector<std::pair<int, double>> position_rms;  // (position_idx, rms)
     
     for (int t = 0; t < total_tokens; ++t) {
         if (targets[t] < 0 || targets[t] == PAD_ID) continue;
@@ -672,16 +673,16 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
         const float* h_t = &h_hidden[static_cast<size_t>(t) * d_model];
         
         // ==========================================
-        // Compute ||h[t]||
-        // Equation: ||h[t]|| = sqrt(Σ_d h[t,d]²)
+        // Compute h_rms[t]
+        // Equation: h_rms[t] = sqrt(Σ_d h[t,d]² / d_model)
         // ==========================================
         double h_sq = 0.0;
         for (int d = 0; d < d_model; ++d) {
             h_sq += static_cast<double>(h_t[d]) * h_t[d];
         }
-        double h_norm = std::sqrt(h_sq);
-        sum_h_norm += h_norm;
-        position_norms.emplace_back(t, h_norm);
+        double h_rms = std::sqrt(h_sq / d_model);
+        sum_h_rms += h_rms;
+        position_rms.emplace_back(t, h_rms);
         
         // ==========================================
         // Find argmax at this position (what token the model predicts here)
@@ -703,31 +704,31 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
                        d_model * sizeof(float), cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
         
-        // Compute W[argmax_t] norm
-        double w_argmax_norm_sq = 0.0;
+        // Compute W[argmax_t] RMS
+        double w_argmax_rms_sq = 0.0;
         for (int d = 0; d < d_model; ++d) {
-            w_argmax_norm_sq += static_cast<double>(w_argmax[d]) * w_argmax[d];
+            w_argmax_rms_sq += static_cast<double>(w_argmax[d]) * w_argmax[d];
         }
-        double w_argmax_norm = std::sqrt(w_argmax_norm_sq);
+        double w_argmax_rms = std::sqrt(w_argmax_rms_sq / d_model);
         
         // ==========================================
         // Compute cos(h[t], W[argmax[t]])
-        // Equation: cos(h,W) = (h · W) / (||h|| × ||W||)
+        // Equation: cos(h,W) = dot / (h_rms × W_rms × d_model)
         // ==========================================
         double dot_hw = 0.0;
         for (int d = 0; d < d_model; ++d) {
             dot_hw += static_cast<double>(h_t[d]) * w_argmax[d];
         }
-        double cosine = (h_norm > 1e-8 && w_argmax_norm > 1e-8) 
-                        ? dot_hw / (h_norm * w_argmax_norm) : 0.0;
+        double cosine = (h_rms > 1e-8 && w_argmax_rms > 1e-8) 
+                        ? dot_hw / (h_rms * w_argmax_rms * d_model) : 0.0;
         sum_cosine += cosine;
         
         // ==========================================
         // Compute predicted vs actual logit[argmax[t]]
-        // Equation: logit[argmax] = ||h|| × ||W[argmax]|| × cos(h,W[argmax])
+        // Equation: logit[argmax] = h_rms × W_rms × cos(h,W) × d_model
         // Alternatively: logit[argmax] = h · W[argmax]^T (direct dot product)
         // ==========================================
-        double predicted_logit = h_norm * w_argmax_norm * cosine;
+        double predicted_logit = h_rms * w_argmax_rms * cosine * d_model;
         sum_predicted_logit += predicted_logit;
         
         // Actual logit from forward pass (should equal max_logit we found above)
@@ -757,7 +758,7 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
     // ==========================================
     // Compute means for the feedback loop equation
     // ==========================================
-    diag.hidden_norm_mean = static_cast<float>(sum_h_norm / valid_count);
+    diag.hidden_rms_mean = static_cast<float>(sum_h_rms / valid_count);
     diag.cosine_h_w_tracked_mean = static_cast<float>(sum_cosine / valid_count);
     diag.predicted_logit_tracked = static_cast<float>(sum_predicted_logit / valid_count);
     diag.actual_logit_tracked_mean = static_cast<float>(sum_actual_logit / valid_count);
@@ -777,7 +778,7 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
     
     // ==========================================
     // Decomposition error check
-    // If ||h|| × ||W|| × cos ≠ actual logit, something is wrong
+    // If h_rms × W_rms × cos × d_model ≠ actual logit, something is wrong
     // ==========================================
     if (std::abs(diag.actual_logit_tracked_mean) > 1e-8) {
         diag.decomposition_error_pct = std::abs(diag.predicted_logit_tracked - diag.actual_logit_tracked_mean) 
@@ -804,18 +805,18 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
     std::array<int, FeedbackLoopDiagnostic::kTopCosinePairs> bottom_i = { -1, -1, -1, -1, -1 };
     std::array<int, FeedbackLoopDiagnostic::kTopCosinePairs> bottom_j = { -1, -1, -1, -1, -1 };
 
-    const size_t num_positions = position_norms.size();
+    const size_t num_positions = position_rms.size();
     if (num_positions >= 2) {
         const uint64_t total_pairs = static_cast<uint64_t>(num_positions) * (num_positions - 1) / 2;
         if (total_pairs <= static_cast<uint64_t>(kMaxCosineSamples)) {
             for (size_t i = 0; i < num_positions; ++i) {
                 for (size_t j = i + 1; j < num_positions; ++j) {
-                    const int t_i = position_norms[i].first;
-                    const int t_j = position_norms[j].first;
-                    const double norm_i = position_norms[i].second;
-                    const double norm_j = position_norms[j].second;
+                    const int t_i = position_rms[i].first;
+                    const int t_j = position_rms[j].first;
+                    const double rms_i = position_rms[i].second;
+                    const double rms_j = position_rms[j].second;
 
-                    if (norm_i < 1e-8 || norm_j < 1e-8) {
+                    if (rms_i < 1e-8 || rms_j < 1e-8) {
                         continue;
                     }
 
@@ -826,7 +827,7 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
                         dot_ij += static_cast<double>(h_i[d]) * h_j[d];
                     }
 
-                    const double cos_ij = dot_ij / (norm_i * norm_j);
+                    const double cos_ij = dot_ij / (rms_i * rms_j * d_model);
                     sum_pairwise_cos += std::abs(cos_ij);
                     if (cos_ij > max_cos) {
                         max_cos = cos_ij;
@@ -898,12 +899,12 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
                     continue;
                 }
 
-                const int t_i = position_norms[i].first;
-                const int t_j = position_norms[j].first;
-                const double norm_i = position_norms[i].second;
-                const double norm_j = position_norms[j].second;
+                const int t_i = position_rms[i].first;
+                const int t_j = position_rms[j].first;
+                const double rms_i = position_rms[i].second;
+                const double rms_j = position_rms[j].second;
 
-                if (norm_i < 1e-8 || norm_j < 1e-8) {
+                if (rms_i < 1e-8 || rms_j < 1e-8) {
                     continue;
                 }
 
@@ -914,7 +915,7 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
                     dot_ij += static_cast<double>(h_i[d]) * h_j[d];
                 }
 
-                const double cos_ij = dot_ij / (norm_i * norm_j);
+                const double cos_ij = dot_ij / (rms_i * rms_j * d_model);
                 sum_pairwise_cos += std::abs(cos_ij);
                 if (cos_ij > max_cos) {
                     max_cos = cos_ij;
@@ -987,24 +988,24 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
     if (s_prev_batch_idx >= 0 && 
         batch_idx > s_prev_batch_idx) {
         
-        if (s_prev_hidden_norm > 1e-8) {
-            diag.hidden_norm_growth_pct = 
-                (diag.hidden_norm_mean - s_prev_hidden_norm) 
-                / s_prev_hidden_norm * 100.0f;
-            diag.contribution_from_h_norm = 
-                diag.hidden_norm_mean / s_prev_hidden_norm;
+        if (s_prev_hidden_rms > 1e-8) {
+            diag.hidden_rms_growth_pct = 
+                (diag.hidden_rms_mean - s_prev_hidden_rms) 
+                / s_prev_hidden_rms * 100.0f;
+            diag.contribution_from_h_rms = 
+                diag.hidden_rms_mean / s_prev_hidden_rms;
         }
         
-        if (s_prev_weight_norm > 1e-8) {
-            diag.weight_norm_growth_pct = 
-                (diag.weight_tracked_norm - s_prev_weight_norm)
-                / s_prev_weight_norm * 100.0f;
-            diag.contribution_from_w_norm = 
-                diag.weight_tracked_norm / s_prev_weight_norm;
+        if (s_prev_weight_rms > 1e-8) {
+            diag.weight_rms_growth_pct = 
+                (diag.weight_tracked_rms - s_prev_weight_rms)
+                / s_prev_weight_rms * 100.0f;
+            diag.contribution_from_w_rms = 
+                diag.weight_tracked_rms / s_prev_weight_rms;
             
-            // Weight paradox detection: grad·W > 0 means optimizer will decrease ||W||
-            // If ||W|| actually GREW despite this, that's a paradox
-            if (diag.grad_dot_w_tracked > 0 && diag.weight_norm_growth_pct > 0.1f) {
+            // Weight paradox detection: grad·W > 0 means optimizer will decrease W_rms
+            // If W_rms actually GREW despite this, that's a paradox
+            if (diag.grad_dot_w_tracked > 0 && diag.weight_rms_growth_pct > 0.1f) {
                 diag.weight_paradox = true;
             }
         }
@@ -1025,8 +1026,8 @@ FeedbackLoopDiagnostic computeFeedbackLoopDiagnostic(
     }
     
     // Update static storage for next batch
-    s_prev_hidden_norm = diag.hidden_norm_mean;
-    s_prev_weight_norm = diag.weight_tracked_norm;
+    s_prev_hidden_rms = diag.hidden_rms_mean;
+    s_prev_weight_rms = diag.weight_tracked_rms;
     s_prev_cosine = diag.cosine_h_w_tracked_mean;
     s_prev_logit = diag.actual_logit_tracked_mean;
     s_prev_batch_idx = batch_idx;
@@ -1048,17 +1049,17 @@ std::string formatFeedbackLoopDiagnostic(const FeedbackLoopDiagnostic& d, int ba
     // Rule 21: Equation-Based Diagnostic Format
     // NOTE: Cosine is now computed per-position with argmax[t], not a global tracked token
     // ==========================================
-    oss << "[FEEDBACK_LOOP_EQUATION] ARGMAX_ALIGNMENT: logit[argmax[t]] = ||h[t]|| × ||W[argmax[t]]|| × cos(h[t], W[argmax[t]])\n";
+    oss << "[FEEDBACK_LOOP_EQUATION] ARGMAX_ALIGNMENT: logit[argmax[t]] = h_rms[t] × W_rms[argmax[t]] × cos(h[t], W[argmax[t]]) × d_model\n";
     
     oss << std::setprecision(6);
     oss << "  INPUT h (encoder output): n_positions=" << d.valid_position_count 
-        << " ||h||_mean=" << d.hidden_norm_mean << "\n";
+        << " h_rms_mean=" << d.hidden_rms_mean << "\n";
     oss << "  ALIGNMENT: cos(h[t], W[argmax[t]])_mean=" << d.cosine_h_w_tracked_mean 
         << " (" << (d.cosine_h_w_tracked_mean > 0.5f ? "HIGH alignment" : "normal") << ")\n";
     
     oss << std::setprecision(4);
     oss << "  TRACKED TOKEN " << tok << " (most common argmax):\n";
-    oss << "    ||W[" << tok << "]||=" << d.weight_tracked_norm << "\n";
+    oss << "    W_rms[" << tok << "]=" << d.weight_tracked_rms << "\n";
     oss << "    When target=" << tok << ": logit[" << tok << "]_mean=" << d.logit_tracked_when_target_is_tracked 
         << " (n=" << d.count_tracked_targets << ")\n";
     oss << "    When target≠" << tok << ": logit[" << tok << "]_mean=" << d.logit_tracked_when_target_not_tracked 
@@ -1069,8 +1070,8 @@ std::string formatFeedbackLoopDiagnostic(const FeedbackLoopDiagnostic& d, int ba
     // ==========================================
     // Growth Rates - Issue #114 Anomaly Detection
     // ==========================================
-    oss << "  GROWTH_RATES: ||h||=" << std::showpos << d.hidden_norm_growth_pct << "% "
-        << "||W||=" << d.weight_norm_growth_pct << "% "
+    oss << "  GROWTH_RATES: h_rms=" << std::showpos << d.hidden_rms_growth_pct << "% "
+        << "W_rms=" << d.weight_rms_growth_pct << "% "
         << "cos=" << d.cosine_growth_pct << "% "
         << "logit=" << d.logit_growth_pct << "%" << std::noshowpos << "\n";
     
@@ -1080,8 +1081,8 @@ std::string formatFeedbackLoopDiagnostic(const FeedbackLoopDiagnostic& d, int ba
     std::vector<std::string> anomalies;
     
     // Hidden norm explosion (Issue #114: +111% observed)
-    if (d.hidden_norm_growth_pct > 5.0f) {
-        anomalies.push_back("HIDDEN_NORM_EXPLOSION(+" + std::to_string(static_cast<int>(d.hidden_norm_growth_pct)) + "%)");
+    if (d.hidden_rms_growth_pct > 5.0f) {
+        anomalies.push_back("HIDDEN_RMS_EXPLOSION(+" + std::to_string(static_cast<int>(d.hidden_rms_growth_pct)) + "%)");
     }
     
     // Cosine collapse (Issue #114: avg_cos → 0.84)
@@ -1096,7 +1097,7 @@ std::string formatFeedbackLoopDiagnostic(const FeedbackLoopDiagnostic& d, int ba
     // Weight paradox (Issue #114: grad·W > 0 means optimizer wants ||W|| to decrease, but it grew)
     if (d.weight_paradox) {
         anomalies.push_back("WEIGHT_PARADOX(grad·W=" + std::to_string(d.grad_dot_w_tracked) + 
-                           ">0 should_shrink but ||W|| grew by " + std::to_string(d.weight_norm_growth_pct) + "%)");
+                           ">0 should_shrink but W_rms grew by " + std::to_string(d.weight_rms_growth_pct) + "%)");
     }
     
     // Alignment explosion (Issue #114: cos 0.05 → 0.44)
@@ -1148,11 +1149,11 @@ std::string formatFeedbackLoopDiagnostic(const FeedbackLoopDiagnostic& d, int ba
     // ==========================================
     // Per-Component Contribution (if growth data available)
     // ==========================================
-    if (d.contribution_from_h_norm > 0 || d.contribution_from_w_norm > 0 || d.contribution_from_cosine != 0) {
-        oss << "  CONTRIBUTION_FACTORS: h_norm=" << std::setprecision(3) << d.contribution_from_h_norm << "x"
-            << " w_norm=" << d.contribution_from_w_norm << "x"
+    if (d.contribution_from_h_rms > 0 || d.contribution_from_w_rms > 0 || d.contribution_from_cosine != 0) {
+        oss << "  CONTRIBUTION_FACTORS: h_rms=" << std::setprecision(3) << d.contribution_from_h_rms << "x"
+            << " w_rms=" << d.contribution_from_w_rms << "x"
             << " cosine=" << d.contribution_from_cosine << "x"
-            << " PRODUCT=" << (d.contribution_from_h_norm * d.contribution_from_w_norm * d.contribution_from_cosine) << "x\n";
+            << " PRODUCT=" << (d.contribution_from_h_rms * d.contribution_from_w_rms * d.contribution_from_cosine) << "x\n";
     }
     
     return oss.str();
@@ -1254,12 +1255,12 @@ PC1CausalityTest computePC1CausalityTest(
             seed = seed * 1103515245u + 12345u;
             v[d] = static_cast<float>(static_cast<int>(seed >> 16) & 0x7FFF) / 32768.0f - 0.5f;
         }
-        // Normalize
-        float norm = 0.0f;
-        for (int d = 0; d < D; ++d) norm += v[d] * v[d];
-        norm = std::sqrt(norm);
-        if (norm < 1e-12f) { v[0] = 1.0f; norm = 1.0f; }
-        for (int d = 0; d < D; ++d) v[d] /= norm;
+        // Normalize to RMS=1 (matching power iteration convention)
+        float rms = 0.0f;
+        for (int d = 0; d < D; ++d) rms += v[d] * v[d];
+        rms = std::sqrt(rms / D);
+        if (rms < 1e-12f) { v[0] = 1.0f; rms = 1.0f; }
+        for (int d = 0; d < D; ++d) v[d] /= rms;
     }
 
     constexpr int kPowerIters = 5;
@@ -1286,28 +1287,28 @@ PC1CausalityTest computePC1CausalityTest(
             }
         }
 
-        // Eigenvalue estimate = ||w|| (since v is unit, w = λv approximately)
-        float w_norm = 0.0f;
-        for (int d = 0; d < D; ++d) w_norm += w[d] * w[d];
-        w_norm = std::sqrt(w_norm);
-        eigenvalue = w_norm;
+        // Eigenvalue estimate = rms(w) (since v has RMS=1, w = λv approximately, rms(w) = |λ|)
+        float w_rms = 0.0f;
+        for (int d = 0; d < D; ++d) w_rms += w[d] * w[d];
+        w_rms = std::sqrt(w_rms / D);
+        eigenvalue = w_rms;
 
-        // Normalize: v = w / ||w||
-        if (w_norm < 1e-12f) break;
-        for (int d = 0; d < D; ++d) v[d] = w[d] / w_norm;
+        // Normalize: v = w / rms(w) (makes rms(v) = 1.0)
+        if (w_rms < 1e-12f) break;
+        for (int d = 0; d < D; ++d) v[d] = w[d] / w_rms;
     }
 
     result.power_iterations = kPowerIters;
 
-    // Normalize PC1 direction (should already be unit but enforce)
+    // Normalize PC1 direction (should already have RMS≈1 but enforce)
     {
-        float norm = 0.0f;
-        for (int d = 0; d < D; ++d) norm += v[d] * v[d];
-        norm = std::sqrt(norm);
-        if (norm > 1e-12f) {
-            for (int d = 0; d < D; ++d) v[d] /= norm;
+        float rms = 0.0f;
+        for (int d = 0; d < D; ++d) rms += v[d] * v[d];
+        rms = std::sqrt(rms / D);
+        if (rms > 1e-12f) {
+            for (int d = 0; d < D; ++d) v[d] /= rms;
         }
-        result.pc1_norm = norm;
+        result.pc1_rms = rms;
     }
 
     // ==========================================
@@ -1328,13 +1329,14 @@ PC1CausalityTest computePC1CausalityTest(
     // ==========================================
     {
         const float* w277 = &h_weights[static_cast<size_t>(tracked_token) * D];
-        float dot = 0.0f, w_norm = 0.0f;
+        float dot = 0.0f, w_rms_sq = 0.0f;
         for (int d = 0; d < D; ++d) {
             dot += v[d] * w277[d];
-            w_norm += w277[d] * w277[d];
+            w_rms_sq += w277[d] * w277[d];
         }
-        w_norm = std::sqrt(w_norm);
-        result.cos_pc1_w_tracked = (w_norm > 1e-12f) ? (dot / w_norm) : 0.0f;
+        float w_rms = std::sqrt(w_rms_sq / D);
+        // cos = dot / (rms_v * rms_w * D), and rms_v = 1.0 after normalization
+        result.cos_pc1_w_tracked = (w_rms > 1e-12f) ? (dot / (w_rms * D)) : 0.0f;
     }
 
     // ==========================================
@@ -1574,7 +1576,7 @@ std::string formatPC1CausalityTest(const PC1CausalityTest& r, int batch_idx) {
     oss << "    variance_explained = λ_1/trace(H^T H) = " << r.pc1_variance_explained
         << " (" << std::setprecision(1) << (r.pc1_variance_explained * 100.0f) << "% of total)\n";
     oss << std::setprecision(6);
-    oss << "    ||g|| = " << r.pc1_norm << " (should be 1.0)\n";
+    oss << "    rms(g) = " << r.pc1_rms << " (should be 1.0)\n";
     oss << "    cos(PC1, W[" << tok << "]) = " << r.cos_pc1_w_tracked << "\n";
 
     oss << "  BEFORE PROJECTION (original hidden states, n=" << r.n_positions << "):\n";

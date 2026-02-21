@@ -226,18 +226,6 @@ void LanguageModel::buildParameterGroups() {
                     (void*)tfp.data, (int)tfp.has_grad(), tfp.numel()); fflush(stderr);
             registerTensor("scratch_block_text_feature_projection", tfp, ParamGroupType::SCRATCHBLOCK);
             fprintf(stderr, "[buildParameterGroups] DIAG-D3: registered OK\n"); fflush(stderr);
-
-            auto& vew = scratch_block_layer_->valueExtractionWeight();
-            fprintf(stderr, "[buildParameterGroups] DIAG-D4: value_extraction_weight data=%p grad=%d numel=%zu\n",
-                    (void*)vew.data, (int)vew.has_grad(), vew.numel()); fflush(stderr);
-            registerTensor("scratch_block_value_extraction_weight", vew, ParamGroupType::SCRATCHBLOCK);
-            fprintf(stderr, "[buildParameterGroups] DIAG-D4: registered OK\n"); fflush(stderr);
-
-            auto& veb = scratch_block_layer_->valueExtractionBias();
-            fprintf(stderr, "[buildParameterGroups] DIAG-D5: value_extraction_bias data=%p grad=%d numel=%zu\n",
-                    (void*)veb.data, (int)veb.has_grad(), veb.numel()); fflush(stderr);
-            registerTensor("scratch_block_value_extraction_bias", veb, ParamGroupType::SCRATCHBLOCK);
-            fprintf(stderr, "[buildParameterGroups] DIAG-D5: registered OK\n"); fflush(stderr);
         } catch (const std::exception& ex) {
             fprintf(stderr, "[buildParameterGroups] DIAG-D-EXCEPTION in scratchblock: %s\n", ex.what()); fflush(stderr);
             throw;
@@ -363,7 +351,7 @@ void LanguageModel::disableUpdateProbe() {
 // scaleAdamWMoments(). AdamW stepping is training infrastructure, not model logic.
 
 //======================================================
-//  dumpGradientValues - Debug: Dump first N gradient values for each parameter
+//  dumpGradientValues - Debug: Dump gradient RMS stats for each parameter group
 //======================================================//
 
 void LanguageModel::dumpGradientValues(int step, const std::string& filepath) {
@@ -377,41 +365,23 @@ void LanguageModel::dumpGradientValues(int step, const std::string& filepath) {
     std::ofstream file(filepath, std::ios::app);
     file << "\n========== STEP " << step << " GRADIENT VALUES (GRIM-text) ==========\n";
     
-    constexpr int NUM_TO_PRINT = 10;
-    std::vector<float> host_buffer(NUM_TO_PRINT);
-    
     for (const auto& group : parameter_groups_) {
         if (!group.grads() || group.size() == 0) continue;
         
-        // Copy first N values to host
-        size_t copy_count = std::min(group.size(), (size_t)NUM_TO_PRINT);
-        cudaMemcpy(host_buffer.data(), group.grads(), copy_count * sizeof(float), cudaMemcpyDeviceToHost);
-        
-        // Compute stats on GPU (norm, min, max, mean)
-        float norm = 0.0f;
-        {
-            // Simple norm computation for stats
-            std::vector<float> full_buffer(group.size());
-            cudaMemcpy(full_buffer.data(), group.grads(), group.size() * sizeof(float), cudaMemcpyDeviceToHost);
-            double sum_sq = 0.0;
-            float min_val = full_buffer[0], max_val = full_buffer[0];
-            double sum = 0.0;
-            for (size_t i = 0; i < group.size(); ++i) {
-                sum_sq += (double)full_buffer[i] * full_buffer[i];
-                sum += full_buffer[i];
-                if (full_buffer[i] < min_val) min_val = full_buffer[i];
-                if (full_buffer[i] > max_val) max_val = full_buffer[i];
-            }
-            norm = std::sqrt((float)sum_sq);
-            
-            file << "\n[" << group.name << "] size=" << group.size() 
-                 << " norm=" << std::scientific << std::setprecision(6) << norm << "\n";
-            file << "  first " << copy_count << " values: ";
-            for (size_t i = 0; i < copy_count; ++i) {
-                file << host_buffer[i] << " ";
-            }
-            file << "\n  min=" << min_val << " max=" << max_val << " mean=" << (sum / group.size()) << "\n";
+        std::vector<float> full_buffer(group.size());
+        cudaMemcpy(full_buffer.data(), group.grads(), group.size() * sizeof(float), cudaMemcpyDeviceToHost);
+        double sum_sq = 0.0;
+        float min_val = full_buffer[0], max_val = full_buffer[0];
+        for (size_t i = 0; i < group.size(); ++i) {
+            sum_sq += (double)full_buffer[i] * full_buffer[i];
+            if (full_buffer[i] < min_val) min_val = full_buffer[i];
+            if (full_buffer[i] > max_val) max_val = full_buffer[i];
         }
+        const float rms = std::sqrt(static_cast<float>(sum_sq / group.size()));
+        
+        file << "\n[" << group.name << "] size=" << group.size() 
+             << " rms=" << std::scientific << std::setprecision(6) << rms
+             << " min=" << min_val << " max=" << max_val << "\n";
     }
     
     file.close();

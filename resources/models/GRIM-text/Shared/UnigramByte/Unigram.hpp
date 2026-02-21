@@ -90,7 +90,8 @@ inline int ATOM_VOCAB_SIZE = kAtomTypeCount;  // Atom slots derived from AtomTyp
 inline int UNIGRAM_VOCAB_OFFSET = ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE;
 inline uint32_t ATOM_TOKEN_BASE = static_cast<uint32_t>(ATOM_TOKEN_OFFSET);
 inline uint32_t ATOM_TOKEN_MAX = static_cast<uint32_t>(UNIGRAM_VOCAB_OFFSET);
-inline uint32_t MAX_ATOM_TOKENS = static_cast<uint32_t>(ATOM_VOCAB_SIZE);
+// Sentinel: position has no registered AtomTable entry (0 is a valid AtomTable ID)
+constexpr uint32_t kAtomEntryNone = UINT32_MAX;
 constexpr int MAX_PIECE_LENGTH = 32;           // Maximum token length in bytes
 constexpr float UNKNOWN_SCORE = -100.0f;       // Score for unknown pieces
 
@@ -111,7 +112,6 @@ inline void configureTokenLayout(int /*atom_vocab_size*/) {
     ATOM_VOCAB_SIZE = kAtomTypeCount;
     UNIGRAM_VOCAB_OFFSET = ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE;
     ATOM_TOKEN_MAX = static_cast<uint32_t>(UNIGRAM_VOCAB_OFFSET);
-    MAX_ATOM_TOKENS = static_cast<uint32_t>(ATOM_VOCAB_SIZE);
 }
 
 //======================================================//

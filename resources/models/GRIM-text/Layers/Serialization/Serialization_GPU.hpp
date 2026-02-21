@@ -113,8 +113,6 @@ struct SerializationScratchBlockReadView {
 	DeviceReadView atom_type_embeddings;  // [num_atom_types, atom_embedding_dim]
 	DeviceReadView atom_projection;        // [atom_embedding_dim, d_model]
 	DeviceReadView text_feature_projection; // [16, d_model] - text feature value encoding
-	DeviceReadView value_extraction_weight; // [d_model] - extraction head W
-	DeviceReadView value_extraction_bias;   // [1] - extraction head b
 	int num_atom_types = 0;
 	int atom_embedding_dim = 0;
 	int d_model = 0;
@@ -126,8 +124,6 @@ struct SerializationScratchBlockWriteView {
 	DeviceWriteView atom_type_embeddings;
 	DeviceWriteView atom_projection;
 	DeviceWriteView text_feature_projection; // [16, d_model]
-	DeviceWriteView value_extraction_weight; // [d_model]
-	DeviceWriteView value_extraction_bias;   // [1]
 	int num_atom_types = 0;
 	int atom_embedding_dim = 0;
 };

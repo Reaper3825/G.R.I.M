@@ -49,16 +49,16 @@ struct EmbGradEquationDiag {
     bool valid = false;
     
     // Overall gradient buffer statistics
-    float total_norm = 0.0f;           // ||grad_W||_F (Frobenius)
-    float mean_row_norm = 0.0f;        // mean(||grad_W[v]||) across vocab
-    float max_row_norm = 0.0f;         // max(||grad_W[v]||)
-    int max_row_token = -1;            // Token ID with max row norm
-    float spike_ratio = 0.0f;          // max_row_norm / mean_row_norm (>10 = spike)
+    float grad_rms = 0.0f;             // RMS = sqrt(sum_sq / count) — matches training's norm metric
+    float mean_row_rms = 0.0f;         // mean(rms(grad_W[v])) across active vocab rows
+    float max_row_rms = 0.0f;          // max(rms(grad_W[v]))
+    int max_row_token = -1;            // Token ID with max row RMS
+    float spike_ratio = 0.0f;          // max_row_rms / mean_row_rms (>10 = spike)
     
-    // Top-5 gradient row norms (identifies which tokens drive spikes)
+    // Top-5 gradient row RMS (identifies which tokens drive spikes)
     static constexpr int kTopK = 5;
     int top_tokens[5] = {};
-    float top_norms[5] = {};
+    float top_rms[5] = {};
     
     // Scatter density (atomicAdd concentration)
     int num_active_rows = 0;           // Rows with non-zero gradient
@@ -70,9 +70,9 @@ struct EmbGradEquationDiag {
     int most_frequent_count = 0;
     
     // Per-batch delta tracking
-    float prev_emb_norm = 0.0f;        // Previous batch emb_lm_tied norm (from gradient metrics)
-    float curr_emb_norm = 0.0f;        // Current batch emb_lm_tied norm
-    float emb_norm_delta = 0.0f;       // curr - prev (positive = growing spike)
+    float prev_emb_rms = 0.0f;        // Previous batch emb_lm_tied rms (from gradient metrics)
+    float curr_emb_rms = 0.0f;        // Current batch emb_lm_tied rms
+    float emb_rms_delta = 0.0f;       // curr - prev (positive = growing spike)
 };
 
 EmbGradEquationDiag computeEmbGradEquation(
@@ -81,8 +81,8 @@ EmbGradEquationDiag computeEmbGradEquation(
     int total_tokens,
     int d_model,
     int vocab_size,
-    float prev_emb_norm,
-    float curr_emb_norm,
+    float prev_emb_rms,
+    float curr_emb_rms,
     cudaStream_t stream
 );
 std::string formatEmbGradEquation(const EmbGradEquationDiag& diag, int batch_idx);
@@ -96,12 +96,12 @@ struct Token277Diagnostic {
     int tracked_token = -1;          // Which token we're tracking (argmax of predictions)
     
     // Gradient info for the tracked embedding row
-    float grad_row_norm = 0.0f;      // L2 norm of gradient for tracked row
+    float grad_row_rms = 0.0f;       // RMS of gradient for tracked row
     float grad_row_sum = 0.0f;       // Sum of gradient for tracked row (sign indicates direction)
     float grad_row_mean = 0.0f;      // Mean of gradient elements
     
     // Weight info for the tracked embedding row
-    float weight_row_norm = 0.0f;    // L2 norm of embedding row
+    float weight_row_rms = 0.0f;     // RMS of embedding row
     float weight_row_mean = 0.0f;    // Mean of embedding row
     
     // LM head output projection analysis (for weight-tied case)
@@ -134,20 +134,20 @@ struct HiddenState277Analysis {
     
     // Hidden state statistics
     float hidden_mean = 0.0f;         // Mean of all hidden states
-    float hidden_norm_mean = 0.0f;    // Mean L2 norm per position
+    float hidden_rms_mean = 0.0f;     // Mean RMS per position
     float hidden_std = 0.0f;          // Std dev of hidden values
     
     // Split by target type
-    float hidden_tracked_norm = 0.0f;  // Mean norm at positions targeting tracked token
-    float hidden_other_norm = 0.0f;   // Mean norm at positions targeting other
+    float hidden_tracked_rms = 0.0f;  // Mean RMS at positions targeting tracked token
+    float hidden_other_rms = 0.0f;    // Mean RMS at positions targeting other
     
     // Gradient logits for tracked token
     float grad_tracked_at_tracked_targets = 0.0f;  // Sum of grad_logits[t,tok] where target=tok
     float grad_tracked_at_other_targets = 0.0f;    // Sum of grad_logits[t,tok] where target≠tok
     
     // Issue #137: Per-dimension grad_W[tok] decomposition by target type
-    float grad_w_norm_from_tracked = 0.0f;
-    float grad_w_norm_from_other = 0.0f;
+    float grad_w_rms_from_tracked = 0.0f;
+    float grad_w_rms_from_other = 0.0f;
     float grad_w_sum_from_tracked = 0.0f;
     float grad_w_sum_from_other = 0.0f;
     float grad_w_cosine = 0.0f;
@@ -180,10 +180,10 @@ struct FeedbackLoopDiagnostic {
     
     // ==========================================
     // Core Equation Components (Issue #114)
-    // logit[T] = ||h|| × ||W[T]|| × cos(h, W[T])
+    // logit[T] = h_rms × W_rms × cos(h, W[T]) × d_model
     // ==========================================
-    float hidden_norm_mean = 0.0f;    // ||h|| averaged over positions
-    float weight_tracked_norm = 0.0f;     // ||W[T]||
+    float hidden_rms_mean = 0.0f;     // h_rms averaged over positions
+    float weight_tracked_rms = 0.0f;  // W_rms[T]
     float cosine_h_w_tracked_mean = 0.0f;  // cos(h, W[T]) averaged over positions
     
     // Predicted logit from decomposition (should match actual)
@@ -195,8 +195,8 @@ struct FeedbackLoopDiagnostic {
     // Growth Rates (Issue #114 Anomaly Tracking)
     // These track d(metric)/d(batch) to detect explosion
     // ==========================================
-    float hidden_norm_growth_pct = 0.0f;   // (current - previous) / previous * 100
-    float weight_norm_growth_pct = 0.0f;
+    float hidden_rms_growth_pct = 0.0f;    // (current - previous) / previous * 100
+    float weight_rms_growth_pct = 0.0f;
     float cosine_growth_pct = 0.0f;
     float logit_growth_pct = 0.0f;
     
@@ -235,8 +235,8 @@ struct FeedbackLoopDiagnostic {
     // ==========================================
     // Per-component logit contribution breakdown
     // ==========================================
-    float contribution_from_h_norm = 0.0f;    // Factor: ||h|| / ||h||_prev
-    float contribution_from_w_norm = 0.0f;    // Factor: ||W|| / ||W||_prev
+    float contribution_from_h_rms = 0.0f;     // Factor: h_rms / h_rms_prev
+    float contribution_from_w_rms = 0.0f;     // Factor: W_rms / W_rms_prev
     float contribution_from_cosine = 0.0f;    // Factor: cos / cos_prev
     
     // ==========================================
@@ -251,7 +251,7 @@ struct FeedbackLoopDiagnostic {
     // Statistics
     int valid_position_count = 0;
     
-    // NOTE: Cross-batch tracking state (prev_hidden_norm, prev_weight_norm, etc.)
+    // NOTE: Cross-batch tracking state (prev_hidden_rms, prev_weight_rms, etc.)
     // is stored as file-level statics in TrainingDiagnostics.cu, NOT as struct members.
 };
 
@@ -279,7 +279,7 @@ struct PC1CausalityTest {
 
     // PC1 estimation
     float pc1_variance_explained = 0.0f;     // λ_1 / trace(H^T H) — fraction of total variance
-    float pc1_norm = 0.0f;                   // Should be ~1.0 (unit vector)
+    float pc1_rms = 0.0f;                    // Should be ~1.0 (RMS-normalized vector)
     int   power_iterations = 0;              // Number of iterations used
 
     // Before projection (original hidden states)

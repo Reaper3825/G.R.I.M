@@ -244,16 +244,16 @@ TestResult level2_causal_mask_correctness(GRIM::LanguageModel* model, GRIM::Toke
     GRIM::Vector logits_modified = model->forwardGPU(modified_token, modified_numeric.values, modified_numeric.mask);
     
     // Logits should be different
-    float diff_norm = 0.0f;
+    float diff_rms = 0.0f;
     for (size_t i = 0; i < logits_pos0.data.size(); ++i) {
         float d = logits_pos0.data[i] - logits_modified.data[i];
-        diff_norm += d * d;
+        diff_rms += d * d;
     }
-    diff_norm = std::sqrt(diff_norm);
+    diff_rms = std::sqrt(diff_rms / logits_pos0.data.size());
     
-    PROOF_LOG("Logits difference when changing input: " + std::to_string(diff_norm));
+    PROOF_LOG("Logits difference RMS when changing input: " + std::to_string(diff_rms));
     
-    PROOF_ASSERT(diff_norm > 1e-6f, 
+    PROOF_ASSERT(diff_rms > 1e-8f, 
                  "FATAL: Logits unchanged when input changes - causal mask broken!");
     
     // Test: Verify model can't see position t when predicting position t
@@ -306,10 +306,10 @@ TestResult level3_gradient_reaches_embeddings(GRIM::LanguageModel* model, GRIM::
     // TODO(REWRITE): Use GradNorm::measureGradientNorms() instead of deleted gradientMetrics()
     const auto& gm = model->gradientMetrics(); // BROKEN: method deleted
     
-    PROOF_LOG("Embedding gradient L2: " + std::to_string(GRIM::GradNorm::GradMetrics::l2(gm.embedding_sum_sq)));
-    PROOF_LOG("LM head gradient L2: " + std::to_string(GRIM::GradNorm::GradMetrics::l2(gm.lm_head_sum_sq)));
-    PROOF_LOG("Attention gradient L2: " + std::to_string(GRIM::GradNorm::GradMetrics::l2(gm.attention_sum_sq)));
-    PROOF_LOG("FFN gradient L2: " + std::to_string(GRIM::GradNorm::GradMetrics::l2(gm.ffn_sum_sq)));
+    PROOF_LOG("Embedding gradient RMS: " + std::to_string(GRIM::GradNorm::GradMetrics::rms(gm.embedding_sum_sq, gm.embedding_count)));
+    PROOF_LOG("LM head gradient RMS: " + std::to_string(GRIM::GradNorm::GradMetrics::rms(gm.lm_head_sum_sq, gm.lm_head_count)));
+    PROOF_LOG("Attention gradient RMS: " + std::to_string(GRIM::GradNorm::GradMetrics::rms(gm.attention_sum_sq, gm.attention_count)));
+    PROOF_LOG("FFN gradient RMS: " + std::to_string(GRIM::GradNorm::GradMetrics::rms(gm.ffn_sum_sq, gm.ffn_count)));
     
     PROOF_ASSERT(gm.embedding_sum_sq > 1e-20f, 
                  "FATAL: Embedding gradient is zero - gradients not reaching embeddings!");
@@ -467,8 +467,8 @@ TestResult level5_tokenizer_loss_alignment(GRIM::LanguageModel* model, GRIM::Tok
         // TODO(REWRITE): Use GradNorm::measureGradientNorms() instead of deleted gradientMetrics()
         const auto& gm = model->gradientMetrics(); // BROKEN: method deleted
         
-        PROOF_LOG("Embedding gradient L2 after byte/unicode input: " + 
-                  std::to_string(GRIM::GradNorm::GradMetrics::l2(gm.embedding_sum_sq)));
+        PROOF_LOG("Embedding gradient RMS after byte/unicode input: " + 
+                  std::to_string(GRIM::GradNorm::GradMetrics::rms(gm.embedding_sum_sq, gm.embedding_count)));
         
         PROOF_ASSERT(gm.embedding_sum_sq > 1e-20f, 
                      "FATAL: No gradient for byte/unicode tokens!");
@@ -491,8 +491,8 @@ TestResult level5_tokenizer_loss_alignment(GRIM::LanguageModel* model, GRIM::Tok
         // TODO(REWRITE): Use GradNorm::measureGradientNorms() instead of deleted gradientMetrics()
         const auto& gm = model->gradientMetrics(); // BROKEN: method deleted
         
-        PROOF_LOG("Embedding gradient L2 after number input: " + 
-                  std::to_string(GRIM::GradNorm::GradMetrics::l2(gm.embedding_sum_sq)));
+        PROOF_LOG("Embedding gradient RMS after number input: " + 
+                  std::to_string(GRIM::GradNorm::GradMetrics::rms(gm.embedding_sum_sq, gm.embedding_count)));
         
         PROOF_ASSERT(gm.embedding_sum_sq > 1e-20f, 
                      "FATAL: No gradient for atom tokens!");

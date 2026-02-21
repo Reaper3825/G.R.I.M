@@ -576,6 +576,21 @@ static void mineSubwordsFromSentence(const std::string& text,
             std::string subword = text.substr(byte_start, byte_end - byte_start);
             if (!isValidSubword(subword)) continue;
 
+            // Cross-boundary fragment rejection: if the subword contains an
+            // internal space (spans across a word boundary), it must start
+            // and end at word boundaries in the source text.  Otherwise we
+            // get fragments like "semi-major ax" mined from "semi-major axis"
+            // where "axis" is truncated to "ax".
+            if (subword.find(' ') != std::string::npos) {
+                bool starts_mid_word = (byte_start > 0 &&
+                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_start])) &&
+                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_start - 1])));
+                bool ends_mid_word = (byte_end < text.size() &&
+                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_end - 1])) &&
+                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_end])));
+                if (starts_mid_word || ends_mid_word) continue;
+            }
+
             subword_counts[subword]++;
         }
     }
@@ -641,6 +656,17 @@ static void mineSubwordsFromSentence(const std::string& text,
 
             std::string subword = text.substr(byte_start, byte_end - byte_start);
             if (!isValidSubword(subword)) continue;
+
+            // Cross-boundary fragment rejection (same logic as non-atom overload).
+            if (subword.find(' ') != std::string::npos) {
+                bool starts_mid_word = (byte_start > 0 &&
+                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_start])) &&
+                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_start - 1])));
+                bool ends_mid_word = (byte_end < text.size() &&
+                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_end - 1])) &&
+                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_end])));
+                if (starts_mid_word || ends_mid_word) continue;
+            }
 
             subword_counts[subword]++;
         }
@@ -1866,6 +1892,86 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         normalized_added.insert(norm);
 
         accepted.push_back({subword, count});
+    }
+
+    // Pass A.5: Substring deduplication.
+    // Remove entries that are strict prefixes or suffixes of a longer accepted entry.
+    // This eliminates cascades like "probl"/"proble"/"problem"/"roblem" — only
+    // "problem" (highest frequency, longest form) survives.
+    //
+    // Algorithm: build a set of all accepted normalized forms, then for each entry
+    // (shortest first) check if it's a prefix or suffix of any longer entry.
+    // We process shortest-first so that when we remove "probl", it doesn't prevent
+    // "proble" from also being removed (both are substrings of "problem").
+    {
+        // Sort indices by length ascending so we evaluate shortest pieces first.
+        std::vector<size_t> len_order(accepted.size());
+        std::iota(len_order.begin(), len_order.end(), 0);
+        std::sort(len_order.begin(), len_order.end(),
+                  [&](size_t a, size_t b) {
+                      return accepted[a].text.size() < accepted[b].text.size();
+                  });
+
+        // Build a set of all normalized accepted texts for fast lookup.
+        // We'll also need the raw texts for prefix/suffix matching.
+        std::unordered_set<std::string> accepted_norms;
+        accepted_norms.reserve(accepted.size());
+        for (const auto& ap : accepted) {
+            accepted_norms.insert(normalizeForDedup(ap.text));
+        }
+
+        std::vector<bool> is_substring(accepted.size(), false);
+        int substring_dupes = 0;
+
+        for (size_t idx : len_order) {
+            const std::string& piece = accepted[idx].text;
+            std::string norm = normalizeForDedup(piece);
+            if (norm.size() < 3) continue;  // Don't remove very short pieces (common morphemes)
+
+            // Check if this piece is a strict prefix or suffix of any longer accepted piece.
+            // To avoid O(n²), we check a small set of plausible extensions:
+            //   - For prefix: try norm + each char a-z, space, hyphen (27 extensions)
+            //   - For suffix: try each char + norm (27 extensions)
+            // This catches the exact cascade pattern (probl→proble→problem).
+            // One-character extensions that exist imply the short piece is redundant.
+            bool found_superstring = false;
+            static const char ext_chars[] = "abcdefghijklmnopqrstuvwxyz -";
+            for (const char ec : ext_chars) {
+                if (ec == '\0') break;
+                // Prefix check: does norm + ec exist as a longer accepted piece?
+                std::string prefix_ext = norm + ec;
+                if (accepted_norms.count(prefix_ext)) {
+                    found_superstring = true;
+                    break;
+                }
+                // Suffix check: does ec + norm exist as a longer accepted piece?
+                std::string suffix_ext = std::string(1, ec) + norm;
+                if (accepted_norms.count(suffix_ext)) {
+                    found_superstring = true;
+                    break;
+                }
+            }
+
+            if (found_superstring) {
+                is_substring[idx] = true;
+                accepted_norms.erase(norm);  // Remove so even shorter pieces can't hide behind this one
+                substring_dupes++;
+            }
+        }
+
+        if (substring_dupes > 0) {
+            // Compact accepted vector, removing substring entries.
+            std::vector<AcceptedPiece> compacted;
+            compacted.reserve(accepted.size() - substring_dupes);
+            for (size_t i = 0; i < accepted.size(); ++i) {
+                if (!is_substring[i]) {
+                    compacted.push_back(std::move(accepted[i]));
+                }
+            }
+            accepted = std::move(compacted);
+            std::cout << "[UnigramLM] Substring dedup removed " << substring_dupes
+                      << " prefix/suffix fragments" << std::endl;
+        }
     }
 
     // Sum of all accepted mining counts — correct denominator for initial log-probs.

@@ -781,25 +781,25 @@ extern "C" void flash_attn_fwd_ex(
         q_rms = sqrtf(q_rms / static_cast<float>(q_sample_size));
         k_rms = sqrtf(k_rms / static_cast<float>(k_sample_size));
         
-        // Compute Q row norms and K row norms
-        std::vector<float> q_row_norms(sample_tokens), k_row_norms(sample_tokens);
+        // Compute Q row RMS and K row RMS
+        std::vector<float> q_row_rms(sample_tokens), k_row_rms(sample_tokens);
         for (int t = 0; t < sample_tokens; ++t) {
             float q_norm_sq = 0.0f, k_norm_sq = 0.0f;
             for (int d = 0; d < head_dim; ++d) {
                 q_norm_sq += h_q_sample[t * head_dim + d] * h_q_sample[t * head_dim + d];
                 k_norm_sq += h_k_sample[t * head_dim + d] * h_k_sample[t * head_dim + d];
             }
-            q_row_norms[t] = sqrtf(q_norm_sq);
-            k_row_norms[t] = sqrtf(k_norm_sq);
+            q_row_rms[t] = sqrtf(q_norm_sq / head_dim);
+            k_row_rms[t] = sqrtf(k_norm_sq / head_dim);
         }
         
-        float q_norm_mean = 0.0f, k_norm_mean = 0.0f;
+        float q_rms_mean = 0.0f, k_rms_mean = 0.0f;
         for (int t = 0; t < sample_tokens; ++t) {
-            q_norm_mean += q_row_norms[t];
-            k_norm_mean += k_row_norms[t];
+            q_rms_mean += q_row_rms[t];
+            k_rms_mean += k_row_rms[t];
         }
-        q_norm_mean /= sample_tokens;
-        k_norm_mean /= sample_tokens;
+        q_rms_mean /= sample_tokens;
+        k_rms_mean /= sample_tokens;
         
         // Compute attention scores for sample positions
         const float scale = 1.0f / sqrtf(static_cast<float>(head_dim));
@@ -859,7 +859,9 @@ extern "C" void flash_attn_fwd_ex(
         // LOG THE EQUATION-BASED DIAGNOSTIC
         // ========================================================================
         // Check for anomalies
-        const float expected_score_magnitude = q_norm_mean * k_norm_mean * scale;
+        // expected_score = ||Q||*||K||*scale = Q_rms*sqrt(head_dim) * K_rms*sqrt(head_dim) * (1/sqrt(head_dim))
+        //                = Q_rms * K_rms * head_dim * scale = Q_rms * K_rms * sqrt(head_dim)
+        const float expected_score_magnitude = q_rms_mean * k_rms_mean * head_dim * scale;
         
         if (isEquationLoggingEnabled()) {
             fprintf(stderr, "\n[ATTN_SCORE_EQUATION] FLASH_ATTENTION_FWD: score = (Q @ K^T) / sqrt(head_dim) + alibi_bias\n");
@@ -867,12 +869,12 @@ extern "C" void flash_attn_fwd_ex(
                     sample_tokens, sample_tokens, head_dim, q_min, q_max, q_rms);
             fprintf(stderr, "  K (sample %d tokens, head 0): shape=[%d,%d] min=%.4f max=%.4f rms=%.4f\n",
                     sample_tokens, sample_tokens, head_dim, k_min, k_max, k_rms);
-            fprintf(stderr, "  Q_row_norms: mean=%.4f | K_row_norms: mean=%.4f\n", q_norm_mean, k_norm_mean);
+            fprintf(stderr, "  Q_row_rms: mean=%.4f | K_row_rms: mean=%.4f\n", q_rms_mean, k_rms_mean);
             fprintf(stderr, "  scale = 1/sqrt(%d) = %.6f\n", head_dim, scale);
             fprintf(stderr, "  alibi_slope[head0] = %.6f (max_distance=%d -> max_bias=%.4f)\n",
                     h_slopes[0], seqlen - 1, h_slopes[0] * static_cast<float>(seqlen - 1));
-            fprintf(stderr, "  EXPECTED score = Q_row_norm * K_row_norm * scale = %.4f * %.4f * %.6f ≈ %.4f\n",
-                    q_norm_mean, k_norm_mean, scale, q_norm_mean * k_norm_mean * scale);
+            fprintf(stderr, "  EXPECTED score = Q_row_rms * K_row_rms * head_dim * scale = %.4f * %.4f * %d * %.6f ≈ %.4f\n",
+                    q_rms_mean, k_rms_mean, head_dim, scale, expected_score_magnitude);
             fprintf(stderr, "  ACTUAL score (FULL SEQUENCE %d positions, %d samples): min=%.4f max=%.4f rms=%.4f\n",
                     sample_tokens, valid_scores, score_min, score_max, score_rms);
             fprintf(stderr, "  EXPECTED LSE (from sampled scores): min=%.4f max=%.4f mean=%.4f\n",
@@ -882,8 +884,8 @@ extern "C" void flash_attn_fwd_ex(
             if (expected_score_magnitude > 20.0f) {
                 fprintf(stderr, "  *** ANOMALY: Expected score magnitude %.2f >> 20! Q/K vectors too large! ***\n",
                         expected_score_magnitude);
-                fprintf(stderr, "      For head_dim=%d, Q_norm and K_norm should each be ~%.1f for score~1.0\n",
-                        head_dim, sqrtf(static_cast<float>(head_dim)));
+                fprintf(stderr, "      For head_dim=%d, Q_rms and K_rms should each be ~%.3f for score~1.0\n",
+                        head_dim, 1.0f / powf(static_cast<float>(head_dim), 0.25f));
             }
             if (score_max > 100.0f) {
                 fprintf(stderr, "  *** ANOMALY: score_max=%.2f >> 100! This will cause LSE explosion! ***\n", score_max);

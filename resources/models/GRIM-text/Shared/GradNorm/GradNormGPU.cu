@@ -18,8 +18,6 @@
  * After D2H of per-group sum-of-squares, CPU loop computes:
  *   - Per-type sum_sq and element count aggregation
  *   - NaN/Inf detection with first-offender tracking
- *   - total_norm (L2 across all params)
- *   - max_group_norm
  * No GPU kernel needed — data is ~100 floats, trivial on CPU.
  */
 
@@ -223,8 +221,6 @@ GradNormStatus measureGradientNorms(
     // Per-type accumulators (indexed by ParamGroupType enum: 0..5)
     float type_sum_sq[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     int type_count[6] = {0, 0, 0, 0, 0, 0};
-    float total_sum_sq = 0.0f;
-    float max_group_norm = 0.0f;
 
     for (size_t g = 0; g < num_groups; ++g) {
         float sq = scratch->h_partial_sums[g];
@@ -257,11 +253,6 @@ GradNormStatus measureGradientNorms(
             type_sum_sq[type_idx] += sq;
             type_count[type_idx] += static_cast<int>(sz);
         }
-
-        // Track total and max
-        total_sum_sq += sq;
-        float group_norm = std::sqrt(sq);
-        max_group_norm = std::max(max_group_norm, group_norm);
     }
 
     // Write per-type metrics
@@ -273,8 +264,6 @@ GradNormStatus measureGradientNorms(
     m.scratchblock_sum_sq = type_sum_sq[5];   m.scratchblock_count = type_count[5];
 
     // Aggregate metrics
-    m.total_norm = std::sqrt(total_sum_sq);
-    m.max_group_norm = max_group_norm;
     m.groups_processed = static_cast<uint32_t>(num_groups);
 
     return GradNormStatus::SUCCESS;

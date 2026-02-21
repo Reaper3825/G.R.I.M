@@ -36,36 +36,6 @@ __global__ void clampGradientsKernel(
 	}
 }
 
-__global__ void gradientSquaredNormKernel(
-	const float* __restrict__ gradients,
-	float* __restrict__ partial_sums,
-	int n)
-{
-	__shared__ float shared[kBlockSize];
-
-	const int tid = threadIdx.x;
-	const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-	float val = 0.0f;
-	if (idx < n) {
-		const float g = gradients[idx];
-		val = g * g;
-	}
-	shared[tid] = val;
-	__syncthreads();
-
-	for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-		if (tid < stride) {
-			shared[tid] += shared[tid + stride];
-		}
-		__syncthreads();
-	}
-
-	if (tid == 0) {
-		atomicAdd(partial_sums, shared[0]);
-	}
-}
-
 __global__ void scaleGradientsKernel(
 	float* __restrict__ gradients,
 	float scale_factor,
@@ -119,54 +89,6 @@ void launchClampGradients(
 		fprintf(stderr, "GradientCC: launchClampGradients failed - %s\n",
 				cudaGetErrorString(err));
 	}
-}
-
-void launchGradientClipping(
-	float* gradients,
-	int n,
-	float max_norm,
-	cudaStream_t stream)
-{
-	if (!validatePointers(gradients, n)) {
-		return;
-	}
-
-	if (max_norm <= 0.0f || !std::isfinite(max_norm)) {
-		fprintf(stderr, "GradientCC: invalid max_norm=%.6f\n", max_norm);
-		return;
-	}
-
-	float* d_squared_norm = nullptr;
-	if (cudaMalloc(&d_squared_norm, sizeof(float)) != cudaSuccess) {
-		fprintf(stderr, "GradientCC: cudaMalloc failed in launchGradientClipping\n");
-		return;
-	}
-
-	cudaMemsetAsync(d_squared_norm, 0, sizeof(float), stream);
-
-	gradientSquaredNormKernel<<<computeGrid(n), kBlockSize, 0, stream>>>(
-		gradients, d_squared_norm, n);
-
-	float h_squared_norm = 0.0f;
-	cudaMemcpyAsync(&h_squared_norm, d_squared_norm, sizeof(float),
-					cudaMemcpyDeviceToHost, stream);
-	cudaStreamSynchronize(stream);
-
-	const float norm = sqrtf(h_squared_norm);
-
-	if (norm > max_norm && norm > 0.0f) {
-		const float scale_factor = max_norm / norm;
-		scaleGradientsKernel<<<computeGrid(n), kBlockSize, 0, stream>>>(
-			gradients, scale_factor, n);
-
-		const cudaError_t err = cudaGetLastError();
-		if (err != cudaSuccess) {
-			fprintf(stderr, "GradientCC: scaleGradientsKernel failed - %s\n",
-					cudaGetErrorString(err));
-		}
-	}
-
-	cudaFree(d_squared_norm);
 }
 
 void launchScaleGradients(
