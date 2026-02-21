@@ -83,7 +83,7 @@ Vector LanguageModel::executeInferenceForward_(int seq_len) {
 //======================================================//
 Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
                                   const std::vector<float>& prompt_numeric_values,
-                                  const std::vector<uint8_t>& prompt_numeric_mask) {
+                                  const std::vector<uint8_t>& prompt_atom_mask) {
     const int seq_len = static_cast<int>(prompt_tokens.size());
     
     if (!training_state_.initialized) {
@@ -116,9 +116,9 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
                         seq_len * sizeof(float),
                         cudaMemcpyHostToDevice, stream);
     }
-    if (!prompt_numeric_mask.empty()) {
-        cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_numeric_mask.data),
-                        prompt_numeric_mask.data(),
+    if (!prompt_atom_mask.empty()) {
+        cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data),
+                        prompt_atom_mask.data(),
                         seq_len * sizeof(uint8_t),
                         cudaMemcpyHostToDevice, stream);
     }
@@ -132,7 +132,7 @@ Vector LanguageModel::forwardInit(const std::vector<int>& prompt_tokens,
 //======================================================//
 //  forwardStep - Decode phase: append token, recompute full sequence
 //======================================================//
-Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t numeric_mask) {
+Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t atom_mask) {
     if (!training_state_.initialized) {
         throw std::runtime_error("forwardStep: training state not initialized");
     }
@@ -159,8 +159,8 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t nu
     cudaMemcpyAsync(training_state_.cached_token_numeric_values.data + new_pos,
                     &numeric_value, sizeof(float),
                     cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_numeric_mask.data) + new_pos,
-                    &numeric_mask, sizeof(uint8_t),
+    cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data) + new_pos,
+                    &atom_mask, sizeof(uint8_t),
                     cudaMemcpyHostToDevice, stream);
 
     training_state_.kv_cache_len = new_seq_len;

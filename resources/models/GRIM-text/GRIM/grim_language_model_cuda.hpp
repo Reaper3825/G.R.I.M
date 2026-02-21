@@ -429,7 +429,9 @@ struct GeneratedSequence {
     std::vector<int> token_ids;
     std::vector<float> token_scores;
     std::vector<float> token_numeric_values;
-    std::vector<uint8_t> token_numeric_mask;
+    std::vector<uint8_t> token_atom_mask;
+    std::shared_ptr<const GRIM::Tokenizer::AtomTable> context_atom_table;  // Atom registry from context (null for generated tokens)
+    std::vector<uint32_t> atom_entry_ids;  // Per-token atom entry IDs (kAtomEntryNone = no atom)
     float score = 0.0f;
     bool finished = false;
 
@@ -474,7 +476,7 @@ struct TokenBufferView;
 struct TokenBufferView {
     int* device_token_ids = nullptr;
     float* device_token_numeric_values = nullptr;
-    uint8_t* device_token_numeric_mask = nullptr;
+    uint8_t* device_token_atom_mask = nullptr;
     int max_tokens = 0;
     cudaStream_t stream = nullptr;
 };
@@ -515,17 +517,17 @@ public:
     // Main API
     Vector forward(const std::vector<int>& token_ids,
                    const std::vector<float>& token_numeric_values,
-                   const std::vector<uint8_t>& token_numeric_mask);
+                   const std::vector<uint8_t>& token_atom_mask);
     Vector getNextTokenLogits(const std::vector<int>& context_tokens,
                               const std::vector<float>& context_numeric_values,
-                              const std::vector<uint8_t>& context_numeric_mask);
+                              const std::vector<uint8_t>& context_atom_mask);
     std::vector<GeneratedSequence> generate(const std::vector<int>& prompt_tokens,
                                             const std::vector<float>& prompt_numeric_values,
-                                            const std::vector<uint8_t>& prompt_numeric_mask,
+                                            const std::vector<uint8_t>& prompt_atom_mask,
                                             const GenerationConfig* gen_config = nullptr);
     GeneratedSequence generateStream(const std::vector<int>& prompt_tokens,
                                      const std::vector<float>& prompt_numeric_values,
-                                     const std::vector<uint8_t>& prompt_numeric_mask,
+                                     const std::vector<uint8_t>& prompt_atom_mask,
                                      GenerationStreamCallback callback,
                                      const GenerationConfig* gen_config = nullptr);
     
@@ -546,12 +548,12 @@ public:
     // Returns logits for the last prompt token (ready for first sampling)
     Vector forwardInit(const std::vector<int>& prompt_tokens,
                        const std::vector<float>& prompt_numeric_values,
-                       const std::vector<uint8_t>& prompt_numeric_mask);
+                       const std::vector<uint8_t>& prompt_atom_mask);
     
     // Process a single new token using cached K,V (decode phase)  
     // Returns logits for this token position (ready for next sampling)
     // Appends new token to cached sequence and recomputes full forward pass
-    Vector forwardStep(int new_token, float numeric_value, uint8_t numeric_mask);
+    Vector forwardStep(int new_token, float numeric_value, uint8_t atom_mask);
     
     // Clear KV cache (call before starting new generation)
     void resetKVCache();
@@ -607,10 +609,10 @@ public:
     void initGPU();
     Vector forwardGPU(const std::vector<int>& token_ids,
                       const std::vector<float>& token_numeric_values,
-                      const std::vector<uint8_t>& token_numeric_mask);
+                      const std::vector<uint8_t>& token_atom_mask);
     Vector getNextTokenLogitsGPU(const std::vector<int>& context_tokens,
                                  const std::vector<float>& context_numeric_values,
-                                 const std::vector<uint8_t>& context_numeric_mask);
+                                 const std::vector<uint8_t>& context_atom_mask);
     TokenBufferView getTokenBufferView();
     void markDevicePromptReady(int token_count);
     
@@ -644,7 +646,7 @@ public:
     
     GeneratedSequence generateSequenceGPU(const std::vector<int>& prompt_tokens,
                                           const std::vector<float>& prompt_numeric_values,
-                                          const std::vector<uint8_t>& prompt_numeric_mask,
+                                          const std::vector<uint8_t>& prompt_atom_mask,
                                           const GenerationConfig& cfg,
                                           GenerationStreamCallback* stream_callback,
                                           std::mt19937& rng);

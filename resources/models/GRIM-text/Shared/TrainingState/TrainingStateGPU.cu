@@ -402,7 +402,7 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream, c
 		lm_sum += lm_grad_tracked[i];
 		lm_sq_sum += lm_grad_tracked[i] * lm_grad_tracked[i];
 	}
-	const float lm_norm = sqrtf(lm_sq_sum);
+	const float lm_rms = sqrtf(lm_sq_sum / d_model);
 	
 	// Compute statistics for raw embedding gradient (pre-projection)
 	float raw_emb_sum = 0, raw_emb_sq_sum = 0;
@@ -410,7 +410,7 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream, c
 		raw_emb_sum += raw_emb_grad_tracked[i];
 		raw_emb_sq_sum += raw_emb_grad_tracked[i] * raw_emb_grad_tracked[i];
 	}
-	const float raw_emb_norm = sqrtf(raw_emb_sq_sum);
+	const float raw_emb_rms = sqrtf(raw_emb_sq_sum / d_model);
 	
 	// Compute statistics for FINAL gradient (post-PCGrad)
 	float final_sum = 0, final_sq_sum = 0;
@@ -418,7 +418,7 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream, c
 		final_sum += final_grad_tracked[i];
 		final_sq_sum += final_grad_tracked[i] * final_grad_tracked[i];
 	}
-	const float final_norm = sqrtf(final_sq_sum);
+	const float final_rms = sqrtf(final_sq_sum / d_model);
 	
 	// Compute cosine similarity between LM and raw embedding gradients
 	float lm_emb_dot = 0;
@@ -428,31 +428,32 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream, c
 	
 	const char* interaction;
 	float cosine_sim;
-	if (lm_norm < 1e-8f || raw_emb_norm < 1e-8f) {
-		// Near-zero norm means no meaningful gradient — log it explicitly
+	if (lm_rms < 1e-8f || raw_emb_rms < 1e-8f) {
+		// Near-zero rms means no meaningful gradient — log it explicitly
 		cosine_sim = 0.0f;
-		interaction = "DEGENERATE_NORM";
-		fprintf(stderr, "[GRAD_ATTRIB_COLLAPSE] [ANOMALY] Near-zero gradient norm! "
-			"lm_norm=%.10e raw_emb_norm=%.10e — gradient is effectively zero\n",
-			lm_norm, raw_emb_norm);
+		interaction = "DEGENERATE_RMS";
+		fprintf(stderr, "[GRAD_ATTRIB_COLLAPSE] [ANOMALY] Near-zero gradient rms! "
+			"lm_rms=%.10e raw_emb_rms=%.10e — gradient is effectively zero\n",
+			lm_rms, raw_emb_rms);
 	} else {
-		cosine_sim = lm_emb_dot / (lm_norm * raw_emb_norm);
+		// cos = dot / (rms_a * rms_b * d_model) — equivalent to dot / (||a|| * ||b||)
+		cosine_sim = lm_emb_dot / (lm_rms * raw_emb_rms * d_model);
 		interaction = (cosine_sim > 0.5f) ? "REINFORCING" 
 		            : (cosine_sim < -0.5f) ? "CANCELING" 
 		            : "ORTHOGONAL";
 	}
 	
 	// Check if PCGrad preserved the gradient (final should ≈ lm when emb opposes)
-	const char* pcgrad_status = (final_norm > lm_norm * 0.5f) ? "PRESERVED" : "LOST";
+	const char* pcgrad_status = (final_rms > lm_rms * 0.5f) ? "PRESERVED" : "LOST";
 	
 	fprintf(stdout, "\n[GRAD_ATTRIB_COLLAPSE] batch=%d token=%d gradient conflict analysis:\n", batch_idx, tracked_token);
-	fprintf(stdout, "  ├─ LM_HEAD_GRAD:        sum=%+.10f  norm=%.10f  mean=%+.10e\n", 
-	        lm_sum, lm_norm, lm_sum / d_model);
-	fprintf(stdout, "  ├─ EMBEDDING_RAW_GRAD:  sum=%+.10f  norm=%.10f  mean=%+.10e\n", 
-	        raw_emb_sum, raw_emb_norm, raw_emb_sum / d_model);
+	fprintf(stdout, "  ├─ LM_HEAD_GRAD:        sum=%+.10f  rms=%.10f  mean=%+.10e\n", 
+	        lm_sum, lm_rms, lm_sum / d_model);
+	fprintf(stdout, "  ├─ EMBEDDING_RAW_GRAD:  sum=%+.10f  rms=%.10f  mean=%+.10e\n", 
+	        raw_emb_sum, raw_emb_rms, raw_emb_sum / d_model);
 	fprintf(stdout, "  ├─ COSINE_SIMILARITY:   %.10f [%s]\n", cosine_sim, interaction);
-	fprintf(stdout, "  ├─ FINAL_GRAD_POSTPCGR: sum=%+.10f  norm=%.10f  mean=%+.10e [%s]\n", 
-	        final_sum, final_norm, final_sum / d_model, pcgrad_status);
+	fprintf(stdout, "  ├─ FINAL_GRAD_POSTPCGR: sum=%+.10f  rms=%.10f  mean=%+.10e [%s]\n", 
+	        final_sum, final_rms, final_sum / d_model, pcgrad_status);
 	fprintf(stdout, "  └─ UPDATE_DIRECTION:    LM→%s  EMB→%s  (W_new = W - lr*grad)\n",
 	        lm_sum > 0 ? "DECREASE" : "INCREASE",
 	        raw_emb_sum > 0 ? "DECREASE" : "INCREASE");

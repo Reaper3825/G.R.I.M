@@ -243,17 +243,6 @@ bool LanguageModel::save(const std::string& path) {
             request.sources.scratch_block.text_feature_projection.count = 
                 static_cast<std::size_t>(kTextFeatureDim * config_.d_model);
         }
-
-        // Value extraction head [d_model] weight + [1] bias
-        if (scratch_block_layer_->valueExtractionWeight().data) {
-            request.sources.scratch_block.value_extraction_weight.ptr = scratch_block_layer_->valueExtractionWeight().data;
-            request.sources.scratch_block.value_extraction_weight.count =
-                static_cast<std::size_t>(config_.d_model);
-        }
-        if (scratch_block_layer_->valueExtractionBias().data) {
-            request.sources.scratch_block.value_extraction_bias.ptr = scratch_block_layer_->valueExtractionBias().data;
-            request.sources.scratch_block.value_extraction_bias.count = 1;
-        }
         
         EmitModuleInfo(ModuleId::Checkpoint, "Processing ScratchBlock (atom_emb=" + 
                        std::to_string(request.sources.scratch_block.atom_type_embeddings.count) +
@@ -388,18 +377,6 @@ bool LanguageModel::load(const std::string& path) {
             assignWrite(request.scratch_block.text_feature_projection,
                         scratch_block_layer_->textFeatureProjection().data,
                         static_cast<std::size_t>(kTextFeatureDim * config_.d_model));
-        }
-
-        // Value extraction head [d_model] weight + [1] bias
-        if (scratch_block_layer_->valueExtractionWeight().data) {
-            assignWrite(request.scratch_block.value_extraction_weight,
-                        scratch_block_layer_->valueExtractionWeight().data,
-                        static_cast<std::size_t>(config_.d_model));
-        }
-        if (scratch_block_layer_->valueExtractionBias().data) {
-            assignWrite(request.scratch_block.value_extraction_bias,
-                        scratch_block_layer_->valueExtractionBias().data,
-                        1);
         }
         
         request.scratch_block.num_atom_types = kNumAtomTypes;

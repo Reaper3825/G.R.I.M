@@ -155,13 +155,13 @@ void LanguageModel::initInferenceState() {
     );
     std::cout << "  ✓ Allocated numeric values cache (Tensor API)" << std::endl;
     
-    training_state_.cached_token_numeric_mask = Tensor::zeros(
+    training_state_.cached_token_atom_mask = Tensor::zeros(
         TC::make_BSM(1, static_cast<int>(max_tokens)),
         false,  // no grad for inference
         primary_stream,
-        "cached_token_numeric_mask_inf"
+        "cached_token_atom_mask_inf"
     );
-    std::cout << "  ✓ Allocated numeric mask cache (Tensor API)" << std::endl;
+    std::cout << "  ✓ Allocated atom mask cache (Tensor API)" << std::endl;
     
     // DELETED: cached_embeddings_tensor - not used in inference (encoder output computed on-the-fly)
     // DELETED: encoder_layer_caches - intermediate tensor caching moved to AutogradIntermediates

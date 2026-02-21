@@ -22,8 +22,7 @@
  * METRICS:
  * ========
  * GradMetrics stores per-type sum_sq and element count. Callers compute:
- *   L2 norm  = sqrt(sum_sq)        — for gradient clipping
- *   RMS      = sqrt(sum_sq/count)  — for comparable cross-type logging
+ *   RMS = sqrt(sum_sq / count) — for gradient clipping and logging
  *
  * FAIL LOUD:
  * ==========
@@ -78,9 +77,6 @@ struct alignas(64) GradMetrics {
     int rmsnorm_count = 0;
     int scratchblock_count = 0;
     
-    float total_norm = 0.0f;          // L2 norm across ALL parameters: sqrt(sum of all sum_sq)
-    float max_group_norm = 0.0f;      // Maximum per-group L2 norm
-    
     uint32_t has_nan = 0;
     uint32_t has_inf = 0;
     uint32_t groups_processed = 0;
@@ -93,10 +89,7 @@ struct alignas(64) GradMetrics {
     
     // --- Accessor helpers ---
     
-    /// L2 norm for a type (for gradient clipping): sqrt(sum_sq)
-    static float l2(float sum_sq) { return std::sqrt(sum_sq); }
-    
-    /// RMS for a type (for comparable logging): sqrt(sum_sq / count)
+    /// RMS for a type: sqrt(sum_sq / count)
     static float rms(float sum_sq, int count) {
         return count > 0 ? std::sqrt(sum_sq / static_cast<float>(count)) : 0.0f;
     }

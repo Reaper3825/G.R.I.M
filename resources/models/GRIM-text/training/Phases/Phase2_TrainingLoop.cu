@@ -122,14 +122,16 @@ std::string trimSampleText(const std::string& text, std::size_t max_chars) {
     return text.substr(0, max_chars) + "...";
 }
 
-std::string decodeWithNumericSideChannel(const GRIM::Tokenizer::UniByte& tokenizer,
-                                         const std::vector<int>& token_ids,
-                                         const std::vector<float>& numeric_values,
-                                         const std::vector<uint8_t>& numeric_mask) {
+std::string decodeWithAtomSideChannel(const GRIM::Tokenizer::UniByte& tokenizer,
+                                      const std::vector<int>& token_ids,
+                                      const std::vector<float>& numeric_values,
+                                      const std::vector<uint8_t>& atom_mask,
+                                      const std::vector<uint32_t>& atom_entry_ids,
+                                      const GRIM::Tokenizer::AtomTable* atom_table) {
     std::string result;
-    const size_t numeric_count = std::min(numeric_values.size(), numeric_mask.size());
+    const size_t n = token_ids.size();
 
-    for (size_t i = 0; i < token_ids.size(); ++i) {
+    for (size_t i = 0; i < n; ++i) {
         const int tid = token_ids[i];
 
         if (tokenizer.isByteToken(tid)) {
@@ -140,27 +142,64 @@ std::string decodeWithNumericSideChannel(const GRIM::Tokenizer::UniByte& tokeniz
 
         if (tokenizer.isAtomToken(tid)) {
             const GRIM::Tokenizer::AtomType type = GRIM::Tokenizer::tokenIdToAtomType(tid);
-            if (GRIM::Tokenizer::isNumericAtom(type) && i < numeric_count && numeric_mask[i]) {
-                const float value = numeric_values[i];
-                if (std::isfinite(value)) {
+
+            if (GRIM::Tokenizer::isNumericAtom(type)) {
+                // Numeric atoms: format the float value based on atom type
+                if (i < numeric_values.size() && i < atom_mask.size() &&
+                    atom_mask[i] && std::isfinite(numeric_values[i])) {
+                    const float value = numeric_values[i];
                     std::ostringstream oss;
-                    if (std::fabs(value - std::round(value)) < 1e-6f) {
-                        oss << static_cast<long long>(std::llround(value));
-                    } else {
-                        oss << std::setprecision(6) << value;
+                    switch (type) {
+                        case GRIM::Tokenizer::AtomType::ATOM_INTEGER:
+                            oss << static_cast<long long>(std::llround(value));
+                            break;
+                        case GRIM::Tokenizer::AtomType::ATOM_FLOAT:
+                            oss << std::setprecision(6) << value;
+                            break;
+                        case GRIM::Tokenizer::AtomType::ATOM_HEX: {
+                            const long long int_val = std::llround(value);
+                            oss << "0x" << std::hex << std::uppercase << int_val;
+                            break;
+                        }
+                        case GRIM::Tokenizer::AtomType::ATOM_BINARY: {
+                            const long long int_val = std::llround(value);
+                            if (int_val == 0) {
+                                oss << "0b0";
+                            } else {
+                                std::string bits;
+                                long long abs_val = std::abs(int_val);
+                                while (abs_val > 0) {
+                                    bits.push_back('0' + static_cast<char>(abs_val & 1));
+                                    abs_val >>= 1;
+                                }
+                                std::reverse(bits.begin(), bits.end());
+                                if (int_val < 0) oss << "-";
+                                oss << "0b" << bits;
+                            }
+                            break;
+                        }
+                        default:
+                            oss << value;
+                            break;
                     }
                     result += oss.str();
                     continue;
                 }
+            } else {
+                // String-type atoms: look up raw text via AtomTable
+                if (atom_table && i < atom_entry_ids.size() &&
+                    atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone) {
+                    const auto* entry = atom_table->getAtom(atom_entry_ids[i]);
+                    if (entry) {
+                        result += atom_table->atomToString(*entry);
+                        continue;
+                    }
+                }
             }
-            // BUG FIX: Atom tokens without valid numeric values indicate corrupted training data.
-            // Fail loud instead of silently showing placeholder text like <PATH>, <TIME>, etc.
-            throw std::runtime_error(
-                "Atom token " + std::to_string(tid) + " (" + tokenizer.tokenToString(tid) + 
-                ") at position " + std::to_string(i) + " has no valid numeric/text value. " +
-                "This indicates the model was trained on corrupted data containing literal atom placeholders. " +
-                "Training data must be cleaned before retraining."
-            );
+
+            // Fallback: atom token with no side-channel data (e.g. model-generated)
+            result += tokenizer.tokenToString(tid);
+            continue;
         }
 
         result += tokenizer.tokenToString(tid);
@@ -269,7 +308,7 @@ void logInferenceSample(TrainingContext& ctx, TrainingLoopState& state) {
     auto prompt_result = ctx.tokenizer.encodeWithMetadata(prompt);
     std::vector<int> prompt_tokens = std::move(prompt_result.token_ids);
     std::vector<float> prompt_numeric_values = std::move(prompt_result.token_numeric_values);
-    std::vector<uint8_t> prompt_numeric_mask = std::move(prompt_result.token_numeric_mask);
+    std::vector<uint8_t> prompt_atom_mask = std::move(prompt_result.token_atom_mask);
     if (prompt_tokens.empty()) {
         ctx.logging.logger->log("[Sample] prompt tokenization returned empty tokens");
         return;
@@ -283,8 +322,8 @@ void logInferenceSample(TrainingContext& ctx, TrainingLoopState& state) {
         if (prompt_numeric_values.size() >= drop) {
             prompt_numeric_values.erase(prompt_numeric_values.begin(), prompt_numeric_values.begin() + drop);
         }
-        if (prompt_numeric_mask.size() >= drop) {
-            prompt_numeric_mask.erase(prompt_numeric_mask.begin(), prompt_numeric_mask.begin() + drop);
+        if (prompt_atom_mask.size() >= drop) {
+            prompt_atom_mask.erase(prompt_atom_mask.begin(), prompt_atom_mask.begin() + drop);
         }
     }
 
@@ -307,7 +346,7 @@ void logInferenceSample(TrainingContext& ctx, TrainingLoopState& state) {
         std::vector<GRIM::GeneratedSequence> outputs = ctx.model->generate(
             prompt_tokens,
             prompt_numeric_values,
-            prompt_numeric_mask,
+            prompt_atom_mask,
             &cfg);
         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start).count();
@@ -340,10 +379,12 @@ void logInferenceSample(TrainingContext& ctx, TrainingLoopState& state) {
             ctx.logging.logger->log(tid_decode.str());
         }
 
-        std::string decoded = decodeWithNumericSideChannel(ctx.tokenizer,
-                                                           outputs.front().token_ids,
-                                                           outputs.front().token_numeric_values,
-                                                           outputs.front().token_numeric_mask);
+        std::string decoded = decodeWithAtomSideChannel(ctx.tokenizer,
+                                                          outputs.front().token_ids,
+                                                          outputs.front().token_numeric_values,
+                                                          outputs.front().token_atom_mask,
+                                                          outputs.front().atom_entry_ids,
+                                                          outputs.front().context_atom_table.get());
         decoded = trimSampleText(decoded, static_cast<std::size_t>(max_chars));
         ctx.logging.logger->log("[Sample] step=" + std::to_string(optimizer_step) +
                                 " ms=" + std::to_string(elapsed_ms) +
@@ -634,27 +675,30 @@ std::string formatMetric(std::string_view name, float value, int precision) {
 std::string formatGradientComponents(const GRIM::GradNorm::GradMetrics& gm, bool tied) {
     using GM = GRIM::GradNorm::GradMetrics;
     std::ostringstream comp_msg;
-    comp_msg << "[GradTrace] COMPONENTS(rms): "
-             << "total_l2=" << formatScalar(gm.total_norm);
+    comp_msg << "[GradTrace] COMPONENTS(rms):";
     
     // When tie_embeddings=true: tied buffer registered as LM_HEAD type (embedding_sum_sq=0)
     // When tie_embeddings=false: separate EMBEDDING and LM_HEAD groups
+    // Use precision=6 so small per-parameter RMS values (e.g. attn ~0.00004) don't
+    // display as 0.0000 with the default precision=4 (Issue #150)
+    constexpr int kComponentPrecision = 6;
+
     if (tied) {
-        comp_msg << " emb_lm_tied=" << formatScalar(GM::rms(gm.lm_head_sum_sq, gm.lm_head_count));
+        comp_msg << " emb_lm_tied=" << formatScalar(GM::rms(gm.lm_head_sum_sq, gm.lm_head_count), kComponentPrecision);
     } else {
-        comp_msg << " emb=" << formatScalar(GM::rms(gm.embedding_sum_sq, gm.embedding_count))
-                 << " lm=" << formatScalar(GM::rms(gm.lm_head_sum_sq, gm.lm_head_count));
+        comp_msg << " emb=" << formatScalar(GM::rms(gm.embedding_sum_sq, gm.embedding_count), kComponentPrecision)
+                 << " lm=" << formatScalar(GM::rms(gm.lm_head_sum_sq, gm.lm_head_count), kComponentPrecision);
     }
     
-    comp_msg << " attn=" << formatScalar(GM::rms(gm.attention_sum_sq, gm.attention_count))
-             << " ffn=" << formatScalar(GM::rms(gm.ffn_sum_sq, gm.ffn_count))
-             << " rmsnorm=" << formatScalar(GM::rms(gm.rmsnorm_sum_sq, gm.rmsnorm_count));
+    comp_msg << " attn=" << formatScalar(GM::rms(gm.attention_sum_sq, gm.attention_count), kComponentPrecision)
+             << " ffn=" << formatScalar(GM::rms(gm.ffn_sum_sq, gm.ffn_count), kComponentPrecision)
+             << " rmsnorm=" << formatScalar(GM::rms(gm.rmsnorm_sum_sq, gm.rmsnorm_count), kComponentPrecision);
 
     comp_msg << " tied=" << (tied ? "yes" : "no");
     
     // Include ScratchBlock if enabled
     if (gm.scratchblock_sum_sq > 0.0f) {
-        comp_msg << " sb=" << formatScalar(GM::rms(gm.scratchblock_sum_sq, gm.scratchblock_count));
+        comp_msg << " sb=" << formatScalar(GM::rms(gm.scratchblock_sum_sq, gm.scratchblock_count), kComponentPrecision);
     }
     
     return comp_msg.str();
@@ -2366,9 +2410,8 @@ BatchResult processBatch(
                     ? ts.centering_scratch_tensor.data
                     : ts.cached_encoder_output.data;
                 
-                float h_norm_mean = 0.0f;
-                float h_norm_max = -std::numeric_limits<float>::infinity();
-                float h_norm_min = std::numeric_limits<float>::infinity();
+                float h_rms_max = -std::numeric_limits<float>::infinity();
+                float h_rms_min = std::numeric_limits<float>::infinity();
                 float h_rms_mean = 0.0f;
                 if (h_src) {
                     const size_t h_bytes = static_cast<size_t>(sample_positions) * d_model * sizeof(float);
@@ -2381,24 +2424,20 @@ BatchResult processBatch(
                             const float val = h_sample[pos * d_model + d];
                             sum_sq += val * val;
                         }
-                        const float norm = std::sqrt(sum_sq);
                         const float rms = std::sqrt(sum_sq / d_model);
-                        h_norm_mean += norm;
-                        h_norm_max = std::max(h_norm_max, norm);
-                        h_norm_min = std::min(h_norm_min, norm);
                         h_rms_mean += rms;
+                        h_rms_max = std::max(h_rms_max, rms);
+                        h_rms_min = std::min(h_rms_min, rms);
                     }
-                    h_norm_mean /= sample_positions;
                     h_rms_mean /= sample_positions;
                     
                     // Rule 20: Verify hidden state norms are finite (issue #142)
-                    if (!std::isfinite(h_norm_mean) || !std::isfinite(h_norm_max) || !std::isfinite(h_rms_mean)) {
+                    if (!std::isfinite(h_rms_mean) || !std::isfinite(h_rms_max)) {
                         throw std::runtime_error(
-                            "[HIDDEN_STATE_NORMS] FATAL: Hidden state norms contain inf/nan at batch " + 
+                            "[HIDDEN_STATE_NORMS] FATAL: Hidden state RMS contain inf/nan at batch " + 
                             std::to_string(batch_idx + 1) + 
-                            " (h_norm_mean=" + std::to_string(h_norm_mean) + 
-                            ", h_norm_max=" + std::to_string(h_norm_max) + 
-                            ", h_rms_mean=" + std::to_string(h_rms_mean) + 
+                            " (h_rms_mean=" + std::to_string(h_rms_mean) + 
+                            ", h_rms_max=" + std::to_string(h_rms_max) + 
                             "). Encoder output exploded. " +
                             "Check: (1) attention gradient explosion, (2) FFN activation overflow, (3) RMSNorm inverse explosion."
                         );
@@ -2418,40 +2457,40 @@ BatchResult processBatch(
                     throw std::runtime_error("Tied embeddings: lm_head_weights and embedding_weights must alias the same buffer.");
                 }
 
-                float w_norm_mean = 0.0f, w_norm_sq_mean = 0.0f, w_norm_max = 0.0f;
-                int w_norm_max_tok = -1;
+                float w_rms_mean = 0.0f, w_rms_sq_mean = 0.0f, w_rms_max = 0.0f;
+                int w_rms_max_tok = -1;
                 const int w_sample_count = std::min(500, vocab_size);  // Sample 500 rows for better coverage
                 if (lm_head_weights) {
                     std::vector<float> w_row(d_model);
                     
-                    // Helper: compute L2 norm of a weight row on host
-                    auto compute_row_norm = [&](int tok) -> float {
+                    // Helper: compute RMS of a weight row on host
+                    auto compute_row_rms = [&](int tok) -> float {
                         const size_t row_offset = static_cast<size_t>(tok) * d_model;
                         cudaMemcpy(w_row.data(),
                                    lm_head_weights + row_offset,
                                    d_model * sizeof(float), cudaMemcpyDeviceToHost);
-                        float norm_sq = 0.0f;
+                        float sum_sq = 0.0f;
                         for (int d = 0; d < d_model; ++d) {
-                            norm_sq += w_row[d] * w_row[d];
+                            sum_sq += w_row[d] * w_row[d];
                         }
-                        return std::sqrt(norm_sq);
+                        return std::sqrt(sum_sq / d_model);
                     };
                     
                     // Sample evenly-spaced vocab tokens for mean/rms statistics
                     const int stride = std::max(1, vocab_size / w_sample_count);
                     int sampled = 0;
                     for (int tok = 0; tok < vocab_size && sampled < w_sample_count; tok += stride, ++sampled) {
-                        const float norm = compute_row_norm(tok);
-                        w_norm_mean += norm;
-                        const float norm_sq = norm * norm;
-                        w_norm_sq_mean += norm_sq;
-                        if (norm > w_norm_max) {
-                            w_norm_max = norm;
-                            w_norm_max_tok = tok;
+                        const float rms = compute_row_rms(tok);
+                        w_rms_mean += rms;
+                        const float rms_sq = rms * rms;
+                        w_rms_sq_mean += rms_sq;
+                        if (rms > w_rms_max) {
+                            w_rms_max = rms;
+                            w_rms_max_tok = tok;
                         }
                     }
-                    w_norm_mean /= sampled;
-                    w_norm_sq_mean /= sampled;
+                    w_rms_mean /= sampled;
+                    w_rms_sq_mean /= sampled;
                     
                     // FIX: Also check top-predicted tokens for ||W||_max.
                     // The strided sample (stride=100) systematically misses tokens like
@@ -2462,10 +2501,10 @@ BatchResult processBatch(
                         const int tok = sorted_argmax[i].first;
                         // Skip if already in strided sample
                         if (tok % stride == 0 && tok / stride < w_sample_count) continue;
-                        const float norm = compute_row_norm(tok);
-                        if (norm > w_norm_max) {
-                            w_norm_max = norm;
-                            w_norm_max_tok = tok;
+                        const float rms = compute_row_rms(tok);
+                        if (rms > w_rms_max) {
+                            w_rms_max = rms;
+                            w_rms_max_tok = tok;
                         }
                     }
                 }
@@ -2475,8 +2514,8 @@ BatchResult processBatch(
                 // Var(h·W) = d × Var(h_i) × Var(W_j) = h_rms² × E[||W||²]
                 // Old code used h_rms × E[||W||] which underestimates due to Jensen's inequality.
                 // Correct: logit_std ≈ h_rms × sqrt(E[||W||²]) = h_rms × ||W||_rms
-                const float w_norm_rms = std::sqrt(w_norm_sq_mean);  // sqrt(E[||W||²])
-                const float expected_logit_std = std::sqrt(static_cast<float>(d_model)) * h_rms_mean * w_norm_rms;
+                const float w_rms_rms = std::sqrt(w_rms_sq_mean);  // sqrt(E[rms²])
+                const float expected_logit_std = std::sqrt(static_cast<float>(d_model)) * h_rms_mean * w_rms_rms;
                 const float logit_std_ratio = (expected_logit_std > 1e-10f) ? logit_std / expected_logit_std : 0.0f;
 
                 struct LogitTrendState {
@@ -2507,16 +2546,15 @@ BatchResult processBatch(
                 scale_eq << "  LOGIT STATS: std=" << logit_std << " range=" << logit_range
                          << " avg_per_pos_range=" << avg_per_pos_range
                          << " max_per_pos_range=" << per_pos_range_max << "\n";
-                scale_eq << "  HIDDEN (LM input): ||h||_mean=" << h_norm_mean
-                         << " ||h||_max=" << h_norm_max << " ||h||_min=" << h_norm_min
-                         << " h_rms_mean=" << h_rms_mean << "\n";
-                scale_eq << "  WEIGHTS (LM head): ||W||_mean=" << w_norm_mean
-                         << " ||W||_rms=" << w_norm_rms
-                         << " ||W||_max=" << w_norm_max << " (tok=" << w_norm_max_tok << ")"
+                scale_eq << "  HIDDEN (LM input): h_rms_mean=" << h_rms_mean
+                         << " h_rms_max=" << h_rms_max << " h_rms_min=" << h_rms_min << "\n";
+                scale_eq << "  WEIGHTS (LM head): W_rms_mean=" << w_rms_mean
+                         << " W_rms_rms=" << w_rms_rms
+                         << " W_rms_max=" << w_rms_max << " (tok=" << w_rms_max_tok << ")"
                          << " d_model=" << d_model << "\n";
-                scale_eq << "  EXPECTED logit_std = sqrt(d_model) × h_rms × ||W||_rms\n";
+                scale_eq << "  EXPECTED logit_std = sqrt(d_model) × h_rms × W_rms_rms\n";
                 scale_eq << "                      = sqrt(" << d_model << ") × " << h_rms_mean
-                         << " × " << w_norm_rms << "\n";
+                         << " × " << w_rms_rms << "\n";
                 scale_eq << "                      = " << expected_logit_std << "\n";
                 scale_eq << "  ACTUAL logit_std = " << logit_std
                          << " ratio(actual/expected)=" << logit_std_ratio << "\n";
@@ -2525,9 +2563,9 @@ BatchResult processBatch(
                          << " max_logit_delta=" << (logit_max - trend_state.ema_logit_max)
                          << " top2_margin_delta=" << (avg_margin - trend_state.ema_top2_margin)
                          << " top1_frac_delta=" << (top1_frac - trend_state.ema_top1_frac) << "\n";
-                if (w_norm_max > 2.0f) {
-                    scale_eq << "  [ANOMALY] WEIGHT_NORM_EXPLOSION: ||W||_max=" << w_norm_max
-                             << " (tok=" << w_norm_max_tok << ") >> 2.0. Weight decay too weak or gradient bias.\n";
+                if (w_rms_max > 2.0f) {
+                    scale_eq << "  [ANOMALY] WEIGHT_RMS_EXPLOSION: W_rms_max=" << w_rms_max
+                             << " (tok=" << w_rms_max_tok << ") >> 2.0. Weight decay too weak or gradient bias.\n";
                 }
                 if (logit_std_ratio > 3.0f) {
                     scale_eq << "  [ANOMALY] LOGIT_STD_MISMATCH: actual/expected=" << logit_std_ratio
@@ -2554,15 +2592,18 @@ BatchResult processBatch(
                 
                 // Compute cosine similarity between position pairs (sample 5 pairs)
                 auto compute_cosine = [&](int i, int j) -> float {
-                    float dot = 0.0f, norm_i = 0.0f, norm_j = 0.0f;
+                    float dot = 0.0f, sq_i = 0.0f, sq_j = 0.0f;
                     for (int d = 0; d < d_model; ++d) {
                         float hi = hidden_sample[i * d_model + d];
                         float hj = hidden_sample[j * d_model + d];
                         dot += hi * hj;
-                        norm_i += hi * hi;
-                        norm_j += hj * hj;
+                        sq_i += hi * hi;
+                        sq_j += hj * hj;
                     }
-                    return dot / (std::sqrt(norm_i * norm_j) + 1e-8f);
+                    // cos = dot / (rms_i * rms_j * d_model)
+                    const float rms_i = std::sqrt(sq_i / d_model);
+                    const float rms_j = std::sqrt(sq_j / d_model);
+                    return dot / (rms_i * rms_j * d_model + 1e-8f);
                 };
                 
                 // Compute pairwise cosines: (0,1), (0,10), (0,25), (10,25), (25,49)
@@ -2625,49 +2666,49 @@ BatchResult processBatch(
                     const int max_pairs = 50;  // Enough pairs for statistical stability
                     
                     auto compute_rho = [&](const float* device_ptr, int num_pos) -> std::pair<float, float> {
-                        // Returns {avg_abs_cos, avg_row_norm}
+                        // Returns {avg_abs_cos, avg_row_rms}
                         if (!device_ptr || num_pos < 2) return {0.0f, 0.0f};
                         
                         const size_t bytes = static_cast<size_t>(num_pos) * d_model * sizeof(float);
                         std::vector<float> h(num_pos * d_model);
                         cudaMemcpy(h.data(), device_ptr, bytes, cudaMemcpyDeviceToHost);
                         
-                        // Pre-compute row norms
-                        std::vector<float> norms(num_pos);
-                        double norm_sum = 0.0;
+                        // Pre-compute row RMS
+                        std::vector<float> rms_vals(num_pos);
+                        double rms_sum = 0.0;
                         for (int t = 0; t < num_pos; ++t) {
                             double sq = 0.0;
                             for (int d = 0; d < d_model; ++d) {
                                 float v = h[t * d_model + d];
                                 sq += static_cast<double>(v) * v;
                             }
-                            norms[t] = static_cast<float>(std::sqrt(sq));
-                            norm_sum += norms[t];
+                            rms_vals[t] = static_cast<float>(std::sqrt(sq / d_model));
+                            rms_sum += rms_vals[t];
                         }
-                        float avg_norm = static_cast<float>(norm_sum / num_pos);
+                        float avg_rms = static_cast<float>(rms_sum / num_pos);
                         
-                        // Sample pairwise |cos|
+                        // Sample pairwise |cos| (cos = dot / (rms_i * rms_j * d_model))
                         double cos_acc = 0.0;
                         int n_pairs = 0;
                         for (int i = 0; i < num_pos && n_pairs < max_pairs; ++i) {
                             for (int j = i + 1; j < num_pos && n_pairs < max_pairs; ++j) {
-                                if (norms[i] < 1e-8f || norms[j] < 1e-8f) continue;
+                                if (rms_vals[i] < 1e-8f || rms_vals[j] < 1e-8f) continue;
                                 double dot = 0.0;
                                 for (int d = 0; d < d_model; ++d) {
                                     dot += static_cast<double>(h[i * d_model + d]) * h[j * d_model + d];
                                 }
-                                cos_acc += std::abs(dot / (static_cast<double>(norms[i]) * norms[j]));
+                                cos_acc += std::abs(dot / (static_cast<double>(rms_vals[i]) * rms_vals[j] * d_model));
                                 ++n_pairs;
                             }
                         }
                         float rho = (n_pairs > 0) ? static_cast<float>(cos_acc / n_pairs) : 0.0f;
-                        return {rho, avg_norm};
+                        return {rho, avg_rms};
                     };
                     
                     // Collect ρ for each layer + embedding
                     struct LayerRho {
                         float rho;       // avg |cos(h_i, h_j)|
-                        float norm;      // avg ||h[t]||
+                        float rms;       // avg rms(h[t])
                         float delta_rho; // ρ(l) - ρ(l-1)
                     };
                     std::vector<LayerRho> layer_rhos;
@@ -2675,16 +2716,16 @@ BatchResult processBatch(
                     
                     // Embedding (input to layer 0)
                     if (ai.embedding_tensor.data) {
-                        auto [rho_emb, norm_emb] = compute_rho(ai.embedding_tensor.data, rho_sample_positions);
-                        layer_rhos.push_back({rho_emb, norm_emb, 0.0f});
+                        auto [rho_emb, rms_emb] = compute_rho(ai.embedding_tensor.data, rho_sample_positions);
+                        layer_rhos.push_back({rho_emb, rms_emb, 0.0f});
                     }
                     
                     // Each encoder layer output
                     for (int l = 0; l < num_layers; ++l) {
                         if (ai.encoder_layer_outputs[l].data) {
-                            auto [rho_l, norm_l] = compute_rho(ai.encoder_layer_outputs[l].data, rho_sample_positions);
+                            auto [rho_l, rms_l] = compute_rho(ai.encoder_layer_outputs[l].data, rho_sample_positions);
                             float delta = (layer_rhos.empty()) ? 0.0f : rho_l - layer_rhos.back().rho;
-                            layer_rhos.push_back({rho_l, norm_l, delta});
+                            layer_rhos.push_back({rho_l, rms_l, delta});
                         }
                     }
                     
@@ -2697,7 +2738,7 @@ BatchResult processBatch(
                            << "+ LS*FFN(RMSNorm(...))\n";
                     
                     // Compact per-layer table
-                    rho_eq << "  LAYER  ρ(l)    Δρ(l)   ||h||_avg  interpretation\n";
+                    rho_eq << "  LAYER  ρ(l)    Δρ(l)   h_rms_avg  interpretation\n";
                     rho_eq << "  ─────  ──────  ──────  ─────────  ──────────────\n";
                     
                     float max_delta = 0.0f;
@@ -2722,7 +2763,7 @@ BatchResult processBatch(
                             rho_eq << std::showpos << std::setw(6) << lr.delta_rho << std::noshowpos << "  ";
                         }
                         
-                        rho_eq << std::setw(9) << lr.norm << "  ";
+                        rho_eq << std::setw(9) << lr.rms << "  ";
                         
                         // Interpretation
                         if (lr.rho > 0.8f) {
@@ -2754,7 +2795,7 @@ BatchResult processBatch(
                         rho_eq << "  SUMMARY: ρ(emb)=" << rho_emb
                                << " → ρ(final)=" << rho_final
                                << " growth=" << std::showpos << rho_growth << std::noshowpos
-                               << " ||h||_growth=" << (layer_rhos.back().norm / std::max(layer_rhos.front().norm, 1e-8f))
+                               << " h_rms_growth=" << (layer_rhos.back().rms / std::max(layer_rhos.front().rms, 1e-8f))
                                << "x\n";
                         
                         if (max_delta_layer >= 0 && max_delta > 0.02f) {
@@ -2781,7 +2822,7 @@ BatchResult processBatch(
             if (lm_head_weights_for_norms) {
                 // Copy LM head rows for top-5 predicted tokens
                 std::ostringstream lm_stats;
-                lm_stats << "[LMHeadNorm] batch=" << (batch_idx + 1) << " ||W[v]||=[";
+                lm_stats << "[LMHeadNorm] batch=" << (batch_idx + 1) << " rms(W[v])=[";
                 
                 std::vector<float> row_buffer(d_model);
                 for (size_t i = 0; i < std::min(sorted_argmax.size(), size_t(5)); ++i) {
@@ -2792,13 +2833,13 @@ BatchResult processBatch(
                                lm_head_weights_for_norms + row_offset,
                                d_model * sizeof(float), cudaMemcpyDeviceToHost);
                     
-                    // Compute L2 norm of row
-                    float norm_sq = 0.0f;
+                    // Compute RMS of row
+                    float sum_sq = 0.0f;
                     for (int d = 0; d < d_model; ++d) {
-                        norm_sq += row_buffer[d] * row_buffer[d];
+                        sum_sq += row_buffer[d] * row_buffer[d];
                     }
-                    float row_norm = std::sqrt(norm_sq);
-                    lm_stats << "tok" << tok_id << ":" << Internal::formatScalar(row_norm, 10);
+                    float row_rms = std::sqrt(sum_sq / d_model);
+                    lm_stats << "tok" << tok_id << ":" << Internal::formatScalar(row_rms, 10);
                     if (i + 1 < std::min(sorted_argmax.size(), size_t(5))) lm_stats << ",";
                 }
                 lm_stats << "]";
@@ -3214,7 +3255,7 @@ BatchResult processBatch(
                                cfg.d_model * sizeof(float), cudaMemcpyDeviceToHost);
                     double sq = 0.0;
                     for (int d = 0; d < cfg.d_model; ++d) sq += static_cast<double>(row_buf[d]) * row_buf[d];
-                    content_norm_sum += std::sqrt(sq);
+                    content_norm_sum += std::sqrt(sq / cfg.d_model);
                     content_norm_count++;
                 }
                 const double content_norm_mean = (content_norm_count > 0)
@@ -3232,11 +3273,11 @@ BatchResult processBatch(
                         w_sq += static_cast<double>(row_buf[d]) * row_buf[d];
                         w_sum += row_buf[d];
                     }
-                    const float w_norm = static_cast<float>(std::sqrt(w_sq));
+                    const float w_rms = static_cast<float>(std::sqrt(w_sq / cfg.d_model));
                     const float w_mean = static_cast<float>(w_sum / cfg.d_model);
 
                     // Gradient row (may be null if not yet computed)
-                    float g_norm = 0.0f, g_sum = 0.0f;
+                    float g_rms = 0.0f, g_sum = 0.0f;
                     bool has_grad = false;
                     if (grads_ptr) {
                         cudaMemcpy(row_buf.data(), grads_ptr + row_offset,
@@ -3248,7 +3289,7 @@ BatchResult processBatch(
                             gs += row_buf[d];
                             if (row_buf[d] != 0.0f) any_nonzero = true;
                         }
-                        g_norm = static_cast<float>(std::sqrt(g_sq));
+                        g_rms = static_cast<float>(std::sqrt(g_sq / cfg.d_model));
                         g_sum = static_cast<float>(gs);
                         has_grad = any_nonzero;
                     }
@@ -3258,34 +3299,34 @@ BatchResult processBatch(
                     // We don't have input_ids readily available here, so skip input count.
 
                     diag << "  " << SPECIAL_NAMES[s] << "(id=" << tok_id << "): "
-                         << "||W||=" << w_norm
+                         << "rms(W)=" << w_rms
                          << " w_mean=" << w_mean;
                     if (grads_ptr) {
-                        diag << " ||grad||=" << g_norm
+                        diag << " rms(grad)=" << g_rms
                              << " grad_sum=" << g_sum
                              << (has_grad ? "" : " [ZERO_GRAD]");
                     } else {
                         diag << " [NO_GRAD_BUFFER]";
                     }
 
-                    // Anomaly: special token weight norm diverging from content tokens
-                    if (content_norm_mean > 0.0 && w_norm > 3.0f * content_norm_mean) {
-                        diag << " [ANOMALY] ||W||=" << w_norm
+                    // Anomaly: special token weight RMS diverging from content tokens
+                    if (content_norm_mean > 0.0 && w_rms > 3.0f * content_norm_mean) {
+                        diag << " [ANOMALY] rms(W)=" << w_rms
                              << " >> content_mean=" << Internal::formatScalar(static_cast<float>(content_norm_mean), 6);
                     }
-                    if (w_norm < 1e-6f) {
+                    if (w_rms < 1e-6f) {
                         diag << " [ANOMALY] NEAR_ZERO_WEIGHT";
                     }
-                    if (!std::isfinite(w_norm) || !std::isfinite(g_norm)) {
+                    if (!std::isfinite(w_rms) || !std::isfinite(g_rms)) {
                         throw std::runtime_error(
                             "[SPECIAL_TOKEN_EQUATION] Non-finite special token weight/grad: "
-                            + std::string(SPECIAL_NAMES[s]) + " ||W||=" + std::to_string(w_norm)
-                            + " ||grad||=" + std::to_string(g_norm)
+                            + std::string(SPECIAL_NAMES[s]) + " rms(W)=" + std::to_string(w_rms)
+                            + " rms(grad)=" + std::to_string(g_rms)
                             + " at batch " + std::to_string(batch_idx + 1));
                     }
                     diag << "\n";
                 }
-                diag << "  content_baseline: ||W||_mean=" << Internal::formatScalar(static_cast<float>(content_norm_mean), 6)
+                diag << "  content_baseline: rms(W)_mean=" << Internal::formatScalar(static_cast<float>(content_norm_mean), 6)
                      << " (sampled " << content_norm_count << " tokens)";
 
                 ctx.logging.logger->log(diag.str());
@@ -3328,10 +3369,10 @@ BatchResult processBatch(
                 fwrite(h_data.data(), sizeof(float), count, f);
                 fclose(f);
                 
-                // Compute norm for logging
+                // Compute RMS for logging
                 float sq_sum = 0.0f;
                 for (size_t i = 0; i < count; ++i) sq_sum += h_data[i] * h_data[i];
-                printf("[GradExport] %s: %zu elements, norm=%.6f\n", name, count, sqrtf(sq_sum));
+                printf("[GradExport] %s: %zu elements, rms=%.6f\n", name, count, sqrtf(sq_sum / count));
             }
         };
         
@@ -3471,7 +3512,20 @@ BatchResult processBatch(
     cudaStreamSynchronize(stream);  // Wait for async D2H copy to complete
     
     const auto& gm = *training_state.grad_norm_scratch->h_metrics;
-    result.grad_norm = gm.total_norm;
+    // Compute per-component RMS matching the clipping strategy (Issue #139)
+    const bool tied_for_norm = ctx.model->getConfig().tie_embeddings;
+    const float emb_sum_sq_pre = tied_for_norm ? gm.lm_head_sum_sq : (gm.lm_head_sum_sq + gm.embedding_sum_sq);
+    const int64_t emb_count_pre = tied_for_norm ? gm.lm_head_count : (gm.lm_head_count + gm.embedding_count);
+    const float enc_sum_sq_pre = gm.attention_sum_sq + gm.ffn_sum_sq + gm.rmsnorm_sum_sq + gm.scratchblock_sum_sq;
+    const int64_t enc_count_pre = gm.attention_count + gm.ffn_count + gm.rmsnorm_count + gm.scratchblock_count;
+    const float emb_rms_pre = (emb_count_pre > 0) ? std::sqrt(emb_sum_sq_pre / static_cast<float>(emb_count_pre)) : 0.0f;
+    const float enc_rms_pre = (enc_count_pre > 0) ? std::sqrt(enc_sum_sq_pre / static_cast<float>(enc_count_pre)) : 0.0f;
+    // Separate sb_rms for POST-GRADNORM visibility (Issue #150)
+    const float sb_rms_pre = (gm.scratchblock_count > 0) ? std::sqrt(gm.scratchblock_sum_sq / static_cast<float>(gm.scratchblock_count)) : 0.0f;
+    // Combined RMS across all parameter groups
+    const float total_sum_sq_pre = emb_sum_sq_pre + enc_sum_sq_pre;
+    const int64_t total_count_pre = emb_count_pre + enc_count_pre;
+    result.grad_norm = (total_count_pre > 0) ? std::sqrt(total_sum_sq_pre / static_cast<float>(total_count_pre)) : 0.0f;
     result.normalized_grad_norm = result.grad_norm;
     const float preclip_grad_norm = result.grad_norm;
     auto norm_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - norm_start).count();
@@ -3509,45 +3563,11 @@ BatchResult processBatch(
     const bool tied = ctx.model->getConfig().tie_embeddings;
     std::string comp_log = Internal::formatGradientComponents(gm, tied);
     ctx.logging.logger->log(comp_log);
-    
-    // Sanity check: sum of per-type sum_sq should match total_norm² (5% relative tolerance)
-    {
-        // When tied: only lm_head_sum_sq is populated (embedding_sum_sq=0)
-        float computed_total_sq = (tied ? 0.0f : gm.embedding_sum_sq) +
-                                       gm.lm_head_sum_sq +
-                                       gm.attention_sum_sq +
-                                       gm.ffn_sum_sq +
-                                   gm.rmsnorm_sum_sq +
-                                   gm.scratchblock_sum_sq;
-        float computed_total = std::sqrt(computed_total_sq);
-        float rel_diff = std::abs(computed_total - gm.total_norm);
-        float threshold = 0.05f * gm.total_norm;  // 5% relative tolerance
-        if (rel_diff > threshold && rel_diff > 0.1f) {  // Also allow tiny absolute diff
-            ctx.logging.logger->log("[GradTrace] WARNING: component sum=" + Internal::formatScalar(computed_total) +
-                                    " != total=" + Internal::formatScalar(gm.total_norm) +
-                                    " diff=" + Internal::formatScalar(rel_diff) +
-                                    " threshold=" + Internal::formatScalar(threshold));
-        }
-    }
 
-    if (logit_trace_enabled) {
-        using GM = GRIM::GradNorm::GradMetrics;
-        std::ostringstream trace_msg;
-        trace_msg << "[LogitTrace][PostBackward] source=grad_metrics"
-                  << " tied=" << (tied ? "yes" : "no")
-                  << " batch=" << (batch_idx + 1)
-                  << " preclip_grad_norm=" << Internal::formatScalar(preclip_grad_norm, 6)
-                  << " total_l2=" << Internal::formatScalar(gm.total_norm, 6)
-                  << " lm_head_rms=" << Internal::formatScalar(GM::rms(gm.lm_head_sum_sq, gm.lm_head_count), 6)
-                  << " embedding_rms=" << Internal::formatScalar(GM::rms(gm.embedding_sum_sq, gm.embedding_count), 6)
-                  << " attention_rms=" << Internal::formatScalar(GM::rms(gm.attention_sum_sq, gm.attention_count), 6)
-                  << " ffn_rms=" << Internal::formatScalar(GM::rms(gm.ffn_sum_sq, gm.ffn_count), 6)
-                  << " rmsnorm_rms=" << Internal::formatScalar(GM::rms(gm.rmsnorm_sum_sq, gm.rmsnorm_count), 6)
-                  << " scratchblock_rms=" << Internal::formatScalar(GM::rms(gm.scratchblock_sum_sq, gm.scratchblock_count), 6);
-        ctx.logging.logger->log(trace_msg.str());
-    }
-    
-    ctx.logging.logger->log("[GradTrace] POST-GRADNORM preclip=" + Internal::formatScalar(preclip_grad_norm));
+    ctx.logging.logger->log("[GradTrace] POST-GRADNORM preclip=" + Internal::formatScalar(preclip_grad_norm) +
+                            " emb_rms=" + Internal::formatScalar(emb_rms_pre, 6) +
+                            " enc_rms=" + Internal::formatScalar(enc_rms_pre, 6) +
+                            " sb_rms=" + Internal::formatScalar(sb_rms_pre, 6));
     
     // ========================================================================
     // DIAGNOSTIC: [EMB_GRAD_EQUATION] Embedding gradient spike analysis (Issue #141)
@@ -3557,7 +3577,7 @@ BatchResult processBatch(
     // atomicAdd scatter density correlates with spike magnitude.
     // ========================================================================
     {
-        static float prev_emb_norm_for_spike_diag = 0.0f;
+        static float prev_emb_rms_for_spike_diag = 0.0f;
         
         // Gate to same interval as other expensive diagnostics
         static int emb_grad_diag_interval = 10;
@@ -3565,7 +3585,8 @@ BatchResult processBatch(
             (batch_idx == 0 || (batch_idx + 1) % std::max(emb_grad_diag_interval, 1) == 0);
         
         // gm is already in scope from measureGradientNorms above
-        const float curr_emb_norm = GRIM::GradNorm::GradMetrics::l2(gm.lm_head_sum_sq);  // tied weights: lm_head L2 IS emb grad L2
+        const float curr_emb_rms = (gm.lm_head_count > 0) 
+            ? std::sqrt(gm.lm_head_sum_sq / static_cast<float>(gm.lm_head_count)) : 0.0f;
         
         if (kEmbGradDiagEnabled) {
             const auto& ts = ctx.model->getTrainingState();
@@ -3579,7 +3600,7 @@ BatchResult processBatch(
                 GRIM::Diagnostics::EmbGradEquationDiag emb_diag = GRIM::Diagnostics::computeEmbGradEquation(
                     ctx.model->getEmbeddingLayer(), d_tok_ids, total_tokens_diag,
                     cfg.d_model, cfg.vocab_size,
-                    prev_emb_norm_for_spike_diag, curr_emb_norm,
+                    prev_emb_rms_for_spike_diag, curr_emb_rms,
                     stream);
                 
                 std::string emb_eq_str = GRIM::Diagnostics::formatEmbGradEquation(emb_diag, batch_idx);
@@ -3590,7 +3611,7 @@ BatchResult processBatch(
             }
         }
         
-        prev_emb_norm_for_spike_diag = curr_emb_norm;
+        prev_emb_rms_for_spike_diag = curr_emb_rms;
     }
     
     // === TIMING GUARD: Track operations between POST-BACKWARD and PRE-OPTIMIZER ===
@@ -3957,30 +3978,46 @@ BatchResult processBatch(
             cudaStreamSynchronize(clip_stream);
             
             const auto& clip_gm = *clip_ts.grad_norm_scratch->h_metrics;
-            result.grad_norm = clip_gm.total_norm;
+            // Compute per-component RMS matching clipping strategy
+            float clip_emb_sq = clip_gm.lm_head_sum_sq;
+            int64_t clip_emb_count = clip_gm.lm_head_count;
+            if (!ctx.model->getConfig().tie_embeddings) {
+                clip_emb_sq += clip_gm.embedding_sum_sq;
+                clip_emb_count += clip_gm.embedding_count;
+            }
+            const float clip_enc_sq = clip_gm.attention_sum_sq + clip_gm.ffn_sum_sq
+                                    + clip_gm.rmsnorm_sum_sq + clip_gm.scratchblock_sum_sq;
+            const int64_t clip_enc_count = clip_gm.attention_count + clip_gm.ffn_count
+                                         + clip_gm.rmsnorm_count + clip_gm.scratchblock_count;
+            const float clip_emb_rms = (clip_emb_count > 0) ? std::sqrt(clip_emb_sq / static_cast<float>(clip_emb_count)) : 0.0f;
+            const float clip_enc_rms = (clip_enc_count > 0) ? std::sqrt(clip_enc_sq / static_cast<float>(clip_enc_count)) : 0.0f;
+            result.grad_norm = std::sqrt(clip_emb_rms * clip_emb_rms + clip_enc_rms * clip_enc_rms);
             result.normalized_grad_norm = result.grad_norm;
             const float post_accum_norm = result.grad_norm;
             
-            {
-                // emb_norm: LM_HEAD L2 (includes tied embedding when tie_embeddings=true)
+            {   // emb_norm computed as RMS
                 float emb_sum_sq = clip_gm.lm_head_sum_sq;
+                int64_t emb_count = clip_gm.lm_head_count;
                 if (!ctx.model->getConfig().tie_embeddings) {
                     emb_sum_sq += clip_gm.embedding_sum_sq;
+                    emb_count += clip_gm.embedding_count;
                 }
-                const float emb_norm = std::sqrt(emb_sum_sq);
+                const float emb_rms = (emb_count > 0) ? std::sqrt(emb_sum_sq / static_cast<float>(emb_count)) : 0.0f;
                 
-                // encoder_norm: everything that's NOT emb/lm_head
+                // encoder_rms: everything that's NOT emb/lm_head
                 const float enc_sum_sq = clip_gm.attention_sum_sq
                                        + clip_gm.ffn_sum_sq
                                        + clip_gm.rmsnorm_sum_sq
                                        + clip_gm.scratchblock_sum_sq;
-                const float enc_norm = std::sqrt(enc_sum_sq);
+                const int64_t enc_count = clip_gm.attention_count + clip_gm.ffn_count
+                                        + clip_gm.rmsnorm_count + clip_gm.scratchblock_count;
+                const float enc_rms = (enc_count > 0) ? std::sqrt(enc_sum_sq / static_cast<float>(enc_count)) : 0.0f;
                 
                 bool any_clipped = false;
                 
                 // Clip embedding/LM head independently — iterate groups directly
-                if (emb_norm > effective_per_token_limit) {
-                    const float emb_clip_coef = effective_per_token_limit / (emb_norm + 1e-8f);
+                if (emb_rms > effective_per_token_limit) {
+                    const float emb_clip_coef = effective_per_token_limit / (emb_rms + 1e-8f);
                     for (auto& g : clip_groups) {
                         if (!g.grads() || g.size() == 0) continue;
                         if (g.type == GRIM::ParamGroupType::LM_HEAD ||
@@ -3992,8 +4029,8 @@ BatchResult processBatch(
                 }
                 
                 // Clip encoder components independently
-                if (enc_norm > effective_per_token_limit) {
-                    const float enc_clip_coef = effective_per_token_limit / (enc_norm + 1e-8f);
+                if (enc_rms > effective_per_token_limit) {
+                    const float enc_clip_coef = effective_per_token_limit / (enc_rms + 1e-8f);
                     for (auto& g : clip_groups) {
                         if (!g.grads() || g.size() == 0) continue;
                         if (g.type == GRIM::ParamGroupType::ATTENTION ||
@@ -4006,20 +4043,20 @@ BatchResult processBatch(
                     any_clipped = true;
                 }
                 
-                // Recompute post-clip total norm
-                const float clipped_emb = std::min(emb_norm, effective_per_token_limit);
-                const float clipped_enc = std::min(enc_norm, effective_per_token_limit);
+                // Recompute post-clip total RMS
+                const float clipped_emb = std::min(emb_rms, effective_per_token_limit);
+                const float clipped_enc = std::min(enc_rms, effective_per_token_limit);
                 result.grad_norm = std::sqrt(clipped_emb * clipped_emb 
                                            + clipped_enc * clipped_enc);
                 result.normalized_grad_norm = result.grad_norm;
                 result.gradient_clipped = any_clipped;
                 
                 ctx.logging.logger->log("[PostAccumClip] batch=" + std::to_string(batch_idx + 1) +
-                                        " post_accum_norm=" + Internal::formatScalar(post_accum_norm, 6) +
-                                        " emb_norm=" + Internal::formatScalar(emb_norm, 6) +
-                                        " enc_norm=" + Internal::formatScalar(enc_norm, 6) +
-                                        " emb_clipped=" + (emb_norm > effective_per_token_limit ? "YES" : "NO") +
-                                        " enc_clipped=" + (enc_norm > effective_per_token_limit ? "YES" : "NO") +
+                                        " post_accum_rms=" + Internal::formatScalar(post_accum_norm, 6) +
+                                        " emb_rms=" + Internal::formatScalar(emb_rms, 6) +
+                                        " enc_rms=" + Internal::formatScalar(enc_rms, 6) +
+                                        " emb_clipped=" + (emb_rms > effective_per_token_limit ? "YES" : "NO") +
+                                        " enc_clipped=" + (enc_rms > effective_per_token_limit ? "YES" : "NO") +
                                         " post_clip_total=" + Internal::formatScalar(result.grad_norm, 6));
             }
             
@@ -4030,7 +4067,7 @@ BatchResult processBatch(
         // PRE-OPTIMIZER Token 277 Weight Snapshot (Issue #36.5)
         // Log weight row 277 BEFORE optimizer step to track delta
         // ========================================================================
-        float pre_w277_norm = 0.0f;
+        float pre_w277_rms = 0.0f;
         float pre_w277_mean = 0.0f;
         {
             const auto& ts = ctx.model->getTrainingState();
@@ -4050,7 +4087,7 @@ BatchResult processBatch(
                     sum += w277_row[i];
                     sq_sum += w277_row[i] * w277_row[i];
                 }
-                pre_w277_norm = std::sqrt(sq_sum);
+                pre_w277_rms = std::sqrt(sq_sum / static_cast<float>(cfg.d_model));
                 pre_w277_mean = sum / static_cast<float>(cfg.d_model);
             }
         }
@@ -4119,23 +4156,23 @@ BatchResult processBatch(
                     sum += w277_row[i];
                     sq_sum += w277_row[i] * w277_row[i];
                 }
-                float post_w277_norm = std::sqrt(sq_sum);
+                float post_w277_rms = std::sqrt(sq_sum / static_cast<float>(cfg.d_model));
                 float post_w277_mean = sum / static_cast<float>(cfg.d_model);
                 
-                float delta_norm = post_w277_norm - pre_w277_norm;
+                float delta_rms = post_w277_rms - pre_w277_rms;
                 float delta_mean = post_w277_mean - pre_w277_mean;
                 
                 std::ostringstream msg;
                 msg << std::fixed << std::setprecision(8);
                 msg << "[Token277] POST-OPT batch=" << (batch_idx + 1);
-                msg << " pre_norm=" << pre_w277_norm;
-                msg << " post_norm=" << post_w277_norm;
-                msg << " delta_norm=" << delta_norm;
+                msg << " pre_rms=" << pre_w277_rms;
+                msg << " post_rms=" << post_w277_rms;
+                msg << " delta_rms=" << delta_rms;
                 msg << " delta_mean=" << delta_mean;
                 
                 // WARNING FLAGS
-                if (delta_norm > 0.0001f) {
-                    msg << " ⚠️ NORM_INCREASED";  // Weight row getting larger!
+                if (delta_rms > 0.0001f) {
+                    msg << " ⚠️ RMS_INCREASED";  // Weight row getting larger!
                 }
                 if (delta_mean > 0.0001f) {
                     msg << " ⚠️ MEAN_INCREASED";  // Weight values drifting positive!

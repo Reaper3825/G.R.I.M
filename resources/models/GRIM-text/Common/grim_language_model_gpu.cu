@@ -69,12 +69,6 @@ constexpr float kSoftmaxClipThreshold = HyperParameters::SOFTMAX_CLIP_THRESHOLD;
 constexpr float kTemperatureEpsilon = HyperParameters::EPSILON_TEMPERATURE;
 constexpr uint32_t kMaxReasonableVocabSize = HyperParameters::MAX_REASONABLE_VOCAB_SIZE;
 
-bool isNumericAtomToken(int token_id) {
-    using GRIM::Tokenizer::AtomType;
-    const AtomType type = GRIM::Tokenizer::tokenIdToAtomType(token_id);
-    return GRIM::Tokenizer::isNumericAtom(type);
-}
-
 int detectVocabSizeFromBinary(const std::string& path) {
     std::ifstream file(path, std::ios::binary);
     if (!file) {
@@ -725,11 +719,11 @@ LanguageModel::~LanguageModel() = default;
 
 Vector LanguageModel::forward(const std::vector<int>& token_ids,
                               const std::vector<float>& token_numeric_values,
-                              const std::vector<uint8_t>& token_numeric_mask) {
+                              const std::vector<uint8_t>& token_atom_mask) {
 #ifdef USE_CUDA
     // Use GPU if available
     if (config_.use_gpu && gpu_encoder_) {
-        return forwardGPU(token_ids, token_numeric_values, token_numeric_mask);
+        return forwardGPU(token_ids, token_numeric_values, token_atom_mask);
     }
 #endif
     throw std::runtime_error("LanguageModel::forward requires GPU initialization");
@@ -737,13 +731,13 @@ Vector LanguageModel::forward(const std::vector<int>& token_ids,
 
 Vector LanguageModel::getNextTokenLogits(const std::vector<int>& context_tokens,
                                          const std::vector<float>& context_numeric_values,
-                                         const std::vector<uint8_t>& context_numeric_mask) {
+                                         const std::vector<uint8_t>& context_atom_mask) {
 #ifdef USE_CUDA
     // Use GPU if available
     if (config_.use_gpu && gpu_encoder_) {
         return getNextTokenLogitsGPU(context_tokens,
                                      context_numeric_values,
-                                     context_numeric_mask);
+                                     context_atom_mask);
     }
 #endif
     throw std::runtime_error("LanguageModel::getNextTokenLogits requires GPU initialization");
@@ -752,7 +746,7 @@ Vector LanguageModel::getNextTokenLogits(const std::vector<int>& context_tokens,
 
 Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_tokens,
                                             const std::vector<float>& context_numeric_values,
-                                            const std::vector<uint8_t>& context_numeric_mask) {
+                                            const std::vector<uint8_t>& context_atom_mask) {
     if (!config_.use_gpu || !gpu_encoder_) {
         throw std::runtime_error("getNextTokenLogitsGPU requires initialized GPU encoder");
     }
@@ -760,8 +754,8 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
         throw std::runtime_error("getNextTokenLogitsGPU requires non-empty context_tokens");
     }
     if (context_numeric_values.size() != context_tokens.size() ||
-        context_numeric_mask.size() != context_tokens.size()) {
-        throw std::runtime_error("getNextTokenLogitsGPU: numeric side-channel length mismatch");
+        context_atom_mask.size() != context_tokens.size()) {
+        throw std::runtime_error("getNextTokenLogitsGPU: side-channel length mismatch");
     }
     const int seq_len = static_cast<int>(context_tokens.size());
     if (seq_len > config_.max_seq_len) {
@@ -799,8 +793,8 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
                     context_numeric_values.data(),
                     seq_len * sizeof(float),
                     cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_numeric_mask.data),
-                    context_numeric_mask.data(),
+    cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data),
+                    context_atom_mask.data(),
                     seq_len * sizeof(uint8_t),
                     cudaMemcpyHostToDevice, stream);
     
@@ -810,8 +804,8 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
 
 Vector LanguageModel::forwardGPU(const std::vector<int>& token_ids,
                                  const std::vector<float>& token_numeric_values,
-                                 const std::vector<uint8_t>& token_numeric_mask) {
-    return getNextTokenLogitsGPU(token_ids, token_numeric_values, token_numeric_mask);
+                                 const std::vector<uint8_t>& token_atom_mask) {
+    return getNextTokenLogitsGPU(token_ids, token_numeric_values, token_atom_mask);
 }
 
 TokenBufferView LanguageModel::getTokenBufferView() {
@@ -831,12 +825,12 @@ TokenBufferView LanguageModel::getTokenBufferView() {
     }
     if (!training_state_.cached_token_ids_tensor.data ||
         !training_state_.cached_token_numeric_values.data ||
-        !training_state_.cached_token_numeric_mask.data) {
+        !training_state_.cached_token_atom_mask.data) {
         throw std::runtime_error("getTokenBufferView: token buffers are not allocated");
     }
     view.device_token_ids = reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data);
     view.device_token_numeric_values = training_state_.cached_token_numeric_values.data;
-    view.device_token_numeric_mask = reinterpret_cast<uint8_t*>(training_state_.cached_token_numeric_mask.data);
+    view.device_token_atom_mask = reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data);
     view.max_tokens = config_.max_seq_len;
     view.stream = training_state_.stream_ctrl.getPrimaryStream();
     return view;
@@ -866,7 +860,7 @@ void LanguageModel::markDevicePromptReady(int token_count) {
 std::vector<GeneratedSequence> LanguageModel::generate(
     const std::vector<int>& prompt_tokens,
     const std::vector<float>& prompt_numeric_values,
-    const std::vector<uint8_t>& prompt_numeric_mask,
+    const std::vector<uint8_t>& prompt_atom_mask,
     const GenerationConfig* gen_config)
 {
 #ifdef USE_CUDA
@@ -882,7 +876,7 @@ std::vector<GeneratedSequence> LanguageModel::generate(
             std::mt19937 rng = makeGenerator(cfg.seed, i);
             outputs.push_back(generateSequenceGPU(prompt_tokens,
                                                   prompt_numeric_values,
-                                                  prompt_numeric_mask,
+                                                  prompt_atom_mask,
                                                   cfg,
                                                   nullptr,
                                                   rng));
@@ -896,7 +890,7 @@ std::vector<GeneratedSequence> LanguageModel::generate(
 GeneratedSequence LanguageModel::generateStream(
     const std::vector<int>& prompt_tokens,
     const std::vector<float>& prompt_numeric_values,
-    const std::vector<uint8_t>& prompt_numeric_mask,
+    const std::vector<uint8_t>& prompt_atom_mask,
     GenerationStreamCallback callback,
     const GenerationConfig* gen_config)
 {
@@ -906,7 +900,7 @@ GeneratedSequence LanguageModel::generateStream(
         std::mt19937 rng = makeGenerator(cfg.seed);
         return generateSequenceGPU(prompt_tokens,
                                    prompt_numeric_values,
-                                   prompt_numeric_mask,
+                                   prompt_atom_mask,
                                    cfg,
                                    &callback,
                                    rng);
@@ -918,14 +912,15 @@ GeneratedSequence LanguageModel::generateStream(
 
 GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& prompt_tokens,
                                                      const std::vector<float>& prompt_numeric_values,
-                                                     const std::vector<uint8_t>& prompt_numeric_mask,
+                                                     const std::vector<uint8_t>& prompt_atom_mask,
                                                      const GenerationConfig& cfg,
                                                      GenerationStreamCallback* stream_callback,
                                                      std::mt19937& rng) {
     GeneratedSequence sequence;
     sequence.token_ids = prompt_tokens;
     sequence.token_numeric_values = prompt_numeric_values;
-    sequence.token_numeric_mask = prompt_numeric_mask;
+    sequence.token_atom_mask = prompt_atom_mask;
+    sequence.atom_entry_ids.assign(prompt_tokens.size(), GRIM::Tokenizer::kAtomEntryNone);
     
     if (!config_.use_gpu || !gpu_encoder_) {
         throw std::runtime_error("generateSequenceGPU requires initialized GPU encoder");
@@ -937,8 +932,8 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
                                  std::to_string(config_.max_seq_len));
     }
     if (prompt_numeric_values.size() != prompt_tokens.size() ||
-        prompt_numeric_mask.size() != prompt_tokens.size()) {
-        throw std::runtime_error("generateSequenceGPU: numeric side-channel length mismatch");
+        prompt_atom_mask.size() != prompt_tokens.size()) {
+        throw std::runtime_error("generateSequenceGPU: side-channel length mismatch");
     }
     
     if (cfg.max_new_tokens < 0) {
@@ -980,7 +975,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
     // Process prompt and get logits for first new token
     Vector logits_vec = forwardInit(prompt_tokens,
                                     prompt_numeric_values,
-                                    prompt_numeric_mask);
+                                    prompt_atom_mask);
     if (logits_vec.data.empty()) {
         throw std::runtime_error("generateSequenceGPU: forwardInit returned empty logits");
     }
@@ -1040,7 +1035,8 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             sequence.token_ids.push_back(sample.token_id);
             sequence.token_scores.push_back(sample.log_probability);
             sequence.token_numeric_values.push_back(0.0f);
-            sequence.token_numeric_mask.push_back(0);
+            sequence.token_atom_mask.push_back(0);
+            sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
             sequence.score += sample.log_probability;
             sequence.finished = true;
             if (stream_callback) {
@@ -1049,43 +1045,19 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             break;
         }
         
-        // Run forward pass for this token FIRST (no numeric injection).
-        // Issue #145: The extraction head was trained on hidden states where the
-        // atom token IS the input at position t:
-        //   Training:  hidden[t] = encoder(atom_token_at_t) → extract(h[t]) ≈ value
-        //   Inference:  must read hidden[t] for the atom, NOT hidden[t-1]
-        // We must call forwardStep BEFORE extraction so the atom token's own
-        // hidden state exists in cached_encoder_output.
-        // Numeric injection is 0 because we don't know the value yet — the
-        // extraction head must learn to predict from context, not echo injection.
+        // Run forward pass for this token.
         logits_vec = forwardStep(sample.token_id, 0.0f, 0);
         if (logits_vec.data.empty()) {
             throw std::runtime_error("generateSequenceGPU: forwardStep returned empty logits");
         }
         logits_pos = training_state_.kv_cache_len - 1;
         
-        // Now extract numeric value from the atom token's OWN hidden state
-        float output_numeric_value = 0.0f;
-        uint8_t output_numeric_mask = 0;
-        if (isNumericAtomToken(sample.token_id)) {
-            if (!scratch_block_layer_) {
-                throw std::runtime_error(
-                    "generateSequenceGPU: atom token " + std::to_string(sample.token_id) +
-                    " sampled but ScratchBlock layer is NULL — cannot extract numeric value");
-            }
-            cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
-            output_numeric_value = scratch_block_layer_->extractNumericValue(
-                training_state_.cached_encoder_output.data,
-                logits_pos,
-                stream);
-            output_numeric_mask = 1;
-        }
-        
         // Add token to sequence
         sequence.token_ids.push_back(sample.token_id);
         sequence.token_scores.push_back(sample.log_probability);
-        sequence.token_numeric_values.push_back(output_numeric_value);
-        sequence.token_numeric_mask.push_back(output_numeric_mask);
+        sequence.token_numeric_values.push_back(0.0f);
+        sequence.token_atom_mask.push_back(0);
+        sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
         sequence.score += sample.log_probability;
         
         if (stream_callback) {

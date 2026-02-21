@@ -324,15 +324,15 @@ void LanguageModel::initTrainingState() {
     );
     std::cout << "✓ Allocated token numeric values cache (Tensor API)" << std::endl;
     
-    training_state_.cached_token_numeric_mask = Tensor::empty(
+    training_state_.cached_token_atom_mask = Tensor::empty(
         TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
         false,  // no grad
         primary_stream,
-        "cached_token_numeric_mask"
+        "cached_token_atom_mask"
     );
-    std::cout << "✓ Allocated token numeric mask cache (Tensor API)" << std::endl;
+    std::cout << "✓ Allocated token atom mask cache (Tensor API)" << std::endl;
 
-    // GRMT v4: Allocate text feature buffers - Rule 20: Tensor API
+    // Allocate text feature buffers - Rule 20: Tensor API
     constexpr int kTextFeatureDim = Batching::BatchPayload::kTextFeatureDim;
     training_state_.cached_token_text_features = Tensor::empty(
         TensorContract::TensorShape::make_BSM(static_cast<int>(max_tokens), kTextFeatureDim),
@@ -342,16 +342,8 @@ void LanguageModel::initTrainingState() {
     );
     std::cout << "✓ Allocated token text features cache (Tensor API)" << std::endl;
     
-    training_state_.cached_token_text_mask = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(1, static_cast<int>(max_tokens)),
-        false,  // no grad
-        primary_stream,
-        "cached_token_text_mask"
-    );
-    std::cout << "✓ Allocated token text mask cache (Tensor API)" << std::endl;
-    
-    std::cout << "✓ Allocated numeric/text feature buffers (" 
-              << (max_tokens * (sizeof(float) + sizeof(uint8_t) + kTextFeatureDim * sizeof(uint16_t) + sizeof(uint8_t)) / 1024 / 1024) 
+    std::cout << "✓ Allocated atom mask + text feature buffers (" 
+              << (max_tokens * (sizeof(float) + sizeof(uint8_t) + kTextFeatureDim * sizeof(uint16_t)) / 1024 / 1024) 
               << " MB)" << std::endl;
 
     training_state_.sequence_weights_tensor = Tensor::zeros(

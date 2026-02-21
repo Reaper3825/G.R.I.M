@@ -59,7 +59,7 @@ struct ScratchBlockGradFn : public GradFn {
 
     // Text feature side-channel (OWNED copies)
     uint16_t* cached_text_features = nullptr; // [total_tokens * 16] FP16
-    uint8_t*  cached_text_mask     = nullptr; // [total_tokens]
+    uint8_t*  cached_atom_mask     = nullptr; // [total_tokens]
 
     //--- Geometry ---
     int total_tokens     = 0;
@@ -95,7 +95,7 @@ struct ScratchBlockGradFn : public GradFn {
     void capture_forward(
         const int* atom_positions, const int* atom_types,
         const float* atom_embeddings, int num_atoms,
-        const uint16_t* text_features, const uint8_t* text_mask,
+        const uint16_t* text_features, const uint8_t* atom_mask,
         int total_tokens, cudaStream_t stream);
 
     /// Capture references to layer weight gradient buffers
@@ -142,23 +142,6 @@ public:
     Tensor& atomTypeEmbeddings()      { return atom_type_embeddings_; }
     Tensor& atomProjection()          { return atom_projection_; }
     Tensor& textFeatureProjection()   { return text_feature_projection_; }
-    Tensor& valueExtractionWeight()   { return value_extraction_weight_; }
-    Tensor& valueExtractionBias()     { return value_extraction_bias_; }
-
-    //--------------------------------------------------//
-    // Value Extraction: hidden_state[atom_pos] → numeric value
-    // Used during inference to decode what numeric value the
-    // model intended when it generated an atom token.
-    // W_extract: [1, d_model], b_extract: [1]
-    // value = W_extract @ hidden_state[pos] + b_extract
-    //--------------------------------------------------//
-
-    /// Extract numeric value from encoder output at a specific position.
-    /// @param encoder_output  Device ptr [seq_len, d_model]
-    /// @param position        Token position to extract from
-    /// @param stream          CUDA stream
-    /// @return Predicted numeric value (host-side float)
-    float extractNumericValue(const float* encoder_output, int position, cudaStream_t stream);
 
     //--------------------------------------------------//
     // Statistics
@@ -199,26 +182,9 @@ public:
     void runForwardKernels(
         float* output, int total_tokens,
         const int* token_ids,
-        const float* numeric_values, const uint8_t* numeric_mask,
-        const uint16_t* text_features, const uint8_t* text_mask,
-        cudaStream_t stream);
-
-    /// Train the extraction head: MSE between predicted and ground-truth numeric values
-    /// at atom positions. Accumulates gradients to value_extraction_weight_ and _bias_.
-    /// Returns (mean_extraction_loss, atom_count).
-    /// @param encoder_output  [total_tokens, d_model] from autograd forward
-    /// @param numeric_values  [total_tokens] ground-truth values (device pointer)
-    /// @param numeric_mask    [total_tokens] as float, 1.0 at atom positions (device pointer)
-    /// @param total_tokens    number of tokens in the batch
-    /// @param stream          CUDA stream
-    /// @param grad_scale      Scale to apply to gradients (for accumulation)
-    std::pair<float, int> trainExtractionStep(
-        const float* encoder_output,
         const float* numeric_values,
-        const float* numeric_mask,
-        int total_tokens,
-        cudaStream_t stream,
-        float grad_scale = 1.0f);
+        const uint16_t* text_features, const uint8_t* atom_mask,
+        cudaStream_t stream);
 
 private:    void allocateWeights();
     void freeWeights();
@@ -231,14 +197,11 @@ private:    void allocateWeights();
     Tensor atom_type_embeddings_;       // [num_atom_types, atom_embedding_dim]
     Tensor atom_projection_;            // [atom_embedding_dim, d_model]
     Tensor text_feature_projection_;    // [16, d_model]
-    Tensor value_extraction_weight_;    // [1, d_model] — extracts numeric value from hidden state
-    Tensor value_extraction_bias_;      // [1] — extraction bias
 
     // Temporary buffers for forward pass (reused across calls)
     int*   d_atom_positions_  = nullptr;  // [max_atoms]
     int*   d_num_atoms_       = nullptr;  // Scalar on device
     float* d_atom_embeddings_ = nullptr;  // [max_atoms, atom_embedding_dim]
-    float* d_extraction_output_ = nullptr; // Scalar on device (reused for extraction)
 
     bool weights_allocated_ = false;
     bool logging_enabled_   = false;
@@ -264,9 +227,8 @@ namespace autograd {
 /// @param layer          ScratchBlockLayer (owns weights, provides config)
 /// @param token_ids      Device ptr [total_tokens] — for atom detection
 /// @param numeric_values Device ptr [total_tokens] — per-token numeric values
-/// @param numeric_mask   Device ptr [total_tokens] — 1 if token has numeric value
 /// @param text_features  Device ptr [total_tokens * 16] FP16 — text feature vectors
-/// @param text_mask      Device ptr [total_tokens] — 1 if token has text features
+/// @param atom_mask      Device ptr [total_tokens] — 1 if token is an atom
 /// @param total_tokens   Number of tokens in batch
 /// @param stream         CUDA stream
 Tensor scratch_block_inject(
@@ -274,9 +236,8 @@ Tensor scratch_block_inject(
     ScratchBlockLayer& layer,
     const int* token_ids,
     const float* numeric_values,
-    const uint8_t* numeric_mask,
     const uint16_t* text_features,
-    const uint8_t* text_mask,
+    const uint8_t* atom_mask,
     int total_tokens,
     cudaStream_t stream);
 

@@ -2190,7 +2190,7 @@ static __global__ void kernel_pc1_col_mean(
     }
 }
 
-// Normalize g in-place: g = g / ||g||_2
+// Normalize g in-place: g = g / rms(g)   where rms = sqrt(sum(g²)/D)
 // Launch: <<<1, 256, 0, stream>>>
 static __global__ void kernel_pc1_normalize(float* __restrict__ g, int D)
 {
@@ -2204,7 +2204,8 @@ static __global__ void kernel_pc1_normalize(float* __restrict__ g, int D)
         if (threadIdx.x < s) sdata[threadIdx.x] += sdata[threadIdx.x + s];
         __syncthreads();
     }
-    float inv = 1.f / sqrtf(sdata[0] + 1e-12f);
+    // RMS normalization: inv = 1/rms(g) = 1/sqrt(sum_sq/D)
+    float inv = 1.f / sqrtf(sdata[0] / (float)D + 1e-12f);
     __syncthreads();
     for (int d = threadIdx.x; d < D; d += blockDim.x)
         g[d] *= inv;
@@ -2236,8 +2237,9 @@ static __global__ void kernel_pc1_gemv_HtV(
     g_out[d] = dot;
 }
 
-// H_out[t,d] = H[t,d] - (H[t,:]·g) * g[d]  — project each row
-// Used in both forward pass and backward (same linear projection since I-gg^T is symmetric)
+// H_out[t,d] = H[t,d] - (H[t,:]·g / D) * g[d]  — project each row
+// With RMS-normalized g (rms(g)=1 → g·g=D), proper projection is (h·g)/(g·g) * g = (h·g)/D * g
+// Used in both forward pass and backward (same linear projection since (I-gg^T/D) is symmetric)
 // Launch: <<<T, 256, 0, stream>>>  (one block per row for shared-mem dot product)
 static __global__ void kernel_pc1_project(
     const float* __restrict__ H, const float* __restrict__ g,
@@ -2255,7 +2257,8 @@ static __global__ void kernel_pc1_project(
         if (threadIdx.x < s) sdata[threadIdx.x] += sdata[threadIdx.x + s];
         __syncthreads();
     }
-    float coeff = sdata[0];
+    // Divide by D because g is RMS-normalized (g·g = D, not 1)
+    float coeff = sdata[0] / (float)D;
     __syncthreads();
     for (int d = threadIdx.x; d < D; d += blockDim.x)
         H_out[(size_t)t * D + d] = H[(size_t)t * D + d] - coeff * g[d];
@@ -2264,8 +2267,8 @@ static __global__ void kernel_pc1_project(
 /**
  * ProjectOutPC1GradFn — Issue #149
  * Backward for project_out_pc1
- * Forward:  h̃[t] = h[t] - (h[t]·g)*g   where g = PC1(H) via power iteration, stop-grad
- * Backward: grad_h = (I - gg^T) * grad_h̃   (same linear projection, g constant)
+ * Forward:  h̃[t] = h[t] - (h[t]·g/D)*g   where g = PC1(H) via power iteration (rms-normalized), stop-grad
+ * Backward: grad_h = (I - gg^T/D) * grad_h̃   (same linear projection, g constant)
  */
 struct ProjectOutPC1GradFn : public GradFn {
     bool input_requires_grad = false;
@@ -2337,7 +2340,7 @@ struct ProjectOutPC1GradFn : public GradFn {
             AG_TRACE("[ProjectOutPC1GradFn] Allocated deferred input_grad buffer: %zu floats at %p\n", element_count, (void*)input_grad);
         }
 
-        // BACKWARD: grad_h = (I - gg^T) * grad_h̃  — same projection as forward
+        // BACKWARD: grad_h = (I - gg^T/D) * grad_h̃  — same projection as forward (g is RMS-normalized)
         kernel_pc1_project<<<num_rows, 256, 0, stream>>>(
             grad_output.data, g_saved, input_grad, num_rows, num_cols);
 
@@ -2600,7 +2603,7 @@ static void launchBiasAdd(float* tensor, const float* bias,
     if (total_tokens <= 0 || features <= 0) throw std::runtime_error("launchBiasAdd: invalid dimensions (" + std::to_string(total_tokens) + ", " + std::to_string(features) + ")");
 
     const int total_elements = total_tokens * features;
-    constexpr int kBlockSize = 256;
+    constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
     const int grid = (total_elements + kBlockSize - 1) / kBlockSize;
     biasAddKernel<<<grid, kBlockSize, 0, stream>>>(tensor, bias, total_elements, features);
 }
@@ -2612,7 +2615,7 @@ static void launchBiasBackward(const float* grad_output, float* grad_bias,
     if (!grad_bias) throw std::runtime_error("launchBiasBackward: grad_bias is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
     if (total_tokens <= 0 || features <= 0) throw std::runtime_error("launchBiasBackward: invalid dimensions (" + std::to_string(total_tokens) + ", " + std::to_string(features) + ")");
 
-    constexpr int kBlockSize = 256;
+    constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
     const int shared_bytes = kBlockSize * sizeof(float);
     biasBackwardKernel<<<features, kBlockSize, shared_bytes, stream>>>(
         grad_output, grad_bias, total_tokens, features);
@@ -4209,8 +4212,8 @@ Tensor center_columns(const Tensor& x, cudaStream_t stream) {
 // Reduces avg_cos(h_i,h_j) to prevent causal-attention prefix-averaging
 // from creating a shared direction that causes mode collapse.
 //
-// Forward:  h̃[t] = h[t] - (h[t]·g)*g   where g = PC1(H) via power iteration
-// Backward: grad_h = (I - gg^T) * grad_h̃   (g treated as stop-gradient)
+// Forward:  h̃[t] = h[t] - (h[t]·g/D)*g   where g = PC1(H) via power iteration (rms-normalized)
+// Backward: grad_h = (I - gg^T/D) * grad_h̃   (g treated as stop-gradient)
 //
 // g is initialised from the column mean, then refined with n_power_iters
 // steps of the power method (H^T H g normalised each step).
@@ -4271,7 +4274,7 @@ Tensor autograd::project_out_pc1(const Tensor& x, int n_power_iters, cudaStream_
         x_mut.is_leaf    = false;
     }
 
-    // Project IN-PLACE: H[t,d] -= (H[t,:]·g) * g[d]
+    // Project IN-PLACE: H[t,d] -= (H[t,:]·g / D) * g[d]  (g is RMS-normalized, g·g=D)
     // Safe because kernel reads entire row into shared mem before writing.
     // Eliminates 24MB allocation that caused OOM.
     kernel_pc1_project<<<T, 256, 0, stream>>>(x_mut.data, g_buf, x_mut.data, T, D);

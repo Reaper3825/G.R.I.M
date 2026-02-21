@@ -77,11 +77,10 @@ struct TrainingState {
     Tensor cached_targets_tensor;       // [max_tokens] int32
     Tensor cached_token_ids_tensor;     // [max_tokens] int32
     Tensor cached_token_numeric_values; // [max_tokens] float
-    Tensor cached_token_numeric_mask;   // [max_tokens] uint8
     
-    // GRMT v4: text features for ScratchBlock
+    // Unified atom side-channel
     Tensor cached_token_text_features;  // [max_tokens * kTextFeatureDim] FP16
-    Tensor cached_token_text_mask;      // [max_tokens] uint8
+    Tensor cached_token_atom_mask;      // [max_tokens] uint8 (1 = atom token)
     
     int cached_batch_size = 0;
     int cached_seq_len = 0;
@@ -139,9 +138,7 @@ struct TrainingState {
     
     /// Zero all intermediate gradient tensors
     void zeroIntermediateGrads(cudaStream_t stream);
-    
-    // DELETED: FA bf16/dq_accum/dsoftmax_sum buffers — FlashAttentionLayer::ensureScratch() self-manages.
-    // Autograd ScaledDotProductAttentionGradFn also self-allocates backward buffers.
+
     
     //======================================================//
     //  Issue #43 FIX: Centering Scratch Buffer
