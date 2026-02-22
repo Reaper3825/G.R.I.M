@@ -25,6 +25,7 @@ struct TrainingSequence {
     std::vector<float> token_numeric_values;
     std::vector<uint8_t> token_atom_mask;           // 1 if this position is any atom type
     std::vector<uint16_t> token_text_features;  // [tokens * kTextFeatureDim] FP16
+    std::vector<uint32_t> token_atom_flags;          // GRMT v8: per-token AtomTable flags (type-specific metadata)
     std::shared_ptr<GRIM::Tokenizer::AtomTable> atom_table;  // Atom registry (shared across sliding windows)
     std::vector<uint32_t> atom_entry_ids;                    // Per-token index into atom_table (kAtomEntryNone = no atom)
 };
@@ -39,6 +40,7 @@ struct TrainingSampleView {
     const std::vector<float>* token_numeric_values;
     const std::vector<uint8_t>* token_atom_mask;
     const std::vector<uint16_t>* token_text_features;
+    const std::vector<uint32_t>* token_atom_flags;
     std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table;
     const std::vector<uint32_t>* atom_entry_ids;
 };
@@ -142,6 +144,7 @@ bool load(const std::string& path) {
                                   &sequences_[seq_id].token_numeric_values,
                                   &sequences_[seq_id].token_atom_mask,
                                   &sequences_[seq_id].token_text_features,
+                                  &sequences_[seq_id].token_atom_flags,
                                   sequences_[seq_id].atom_table,
                                   &sequences_[seq_id].atom_entry_ids};
     }
@@ -170,10 +173,10 @@ private:
         
         vocab_size_ = vocab_size; // Store vocab size from file
         
-        // GRMT v7 required — unified atom mask
-        if (version != 7) {
+        // GRMT v8 required — atom_flags side channel
+        if (version != 8) {
             std::cerr << "[DataLoader] FATAL: Unsupported GRMT version " << version
-                      << " (required: 7). Delete .grmt files and regenerate training data." << std::endl;
+                      << " (required: 8). Delete .grmt files and regenerate training data." << std::endl;
             return false;
         }
 
@@ -196,6 +199,7 @@ private:
             seq.token_numeric_values.resize(seq_len);
             seq.token_atom_mask.resize(seq_len);
             seq.token_text_features.resize(seq_len * GRIM::Tokenizer::kTextFeatureDim);
+            seq.token_atom_flags.resize(seq_len);
             // atom_table and atom_entry_ids are built after reading strings below
   
             // Bulk read token_ids (written as int array by DataLoader.cu)
@@ -214,6 +218,9 @@ private:
                 // GRMT v7: text features (no separate text_mask — atom_mask covers it)
                 file.read(reinterpret_cast<char*>(seq.token_text_features.data()),
                           seq_len * GRIM::Tokenizer::kTextFeatureDim * sizeof(uint16_t));
+                // GRMT v8: atom_flags (type-specific metadata from AtomTable)
+                file.read(reinterpret_cast<char*>(seq.token_atom_flags.data()),
+                          seq_len * sizeof(uint32_t));
                 // GRMT v6: read atom text strings, then reconstruct AtomTable
                 std::vector<std::string> temp_atom_text(seq_len);
                 for (uint32_t j = 0; j < seq_len; ++j) {

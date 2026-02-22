@@ -768,13 +768,14 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
     
     // Initialize atom registry for this encoding pass
     result.atom_table = std::make_shared<AtomTable>();
-    
+
     // Pre-allocate based on heuristic: ~1 token per 3-4 bytes + atoms
     // This avoids repeated vector reallocation during push_back
     const size_t estimated_tokens = (text.size() / 3) + structures.size() + 8;
     result.token_ids.reserve(estimated_tokens);
     result.is_byte_fallback.reserve(estimated_tokens);
     result.token_numeric_values.reserve(estimated_tokens);
+    result.token_atom_flags.reserve(estimated_tokens);
     result.atom_entry_ids.reserve(estimated_tokens);
     result.token_text_features.reserve(estimated_tokens * kTextFeatureDim);
     result.token_atom_mask.reserve(estimated_tokens);
@@ -802,10 +803,11 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
         // encode() returns token IDs directly — no need for encodeWithPieces
         // Note: UnigramLM::encode() normalizes to lowercase internally.
         auto segment_ids = unigram_.encode(segment);
-        
+                        
         for (int tid : segment_ids) {
             result.token_ids.push_back(tid);
             result.token_numeric_values.push_back(0.0f);
+            result.token_atom_flags.push_back(0);
             result.atom_entry_ids.push_back(kAtomEntryNone);  // no atom at this position
             appendZeroSideChannels();  // Non-atom tokens get zero features + mask=0
             
@@ -848,7 +850,9 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
             }
 
             const bool numeric_atom = Tokenizer::isNumericAtom(span.atom_type);
-            const bool numeric_parse_failed = numeric_atom && (!has_parsed || numeric_value == 0.0f);
+            // Only bail out if the parser actually FAILED — NOT if the value happens to be 0.
+            // The literal integer "0" is a valid atom (numeric_value=0.0f, has_parsed=true).
+            const bool numeric_parse_failed = numeric_atom && !has_parsed;
             if (numeric_parse_failed) {
                 appendSegmentTokens(span.start, span.end);
                 pos = span.end;
@@ -867,11 +871,30 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
                 appendSegmentTokens(whitespace_start, whitespace_end);
             }
 
-            // Emit a single atom token
+            // Emit a single atom token with full AtomTable-backed side channels
+            uint32_t entry_id = result.atom_table->registerSpan(span);
+            
+            // Read back AtomTable's packed values — covers ALL atom types
+            // (dates, times, IPs, etc. get meaningful numeric_value and flags
+            // via packNumericValue(), not just INT/FLOAT/HEX/BIN)
+            const auto* entry = result.atom_table->getAtom(entry_id);
+            float packed_numeric = numeric_value;  // fallback to parser result
+            uint32_t packed_flags = 0;
+            if (entry) {
+                packed_numeric = entry->numeric_value;
+                packed_flags = entry->flags;
+                // For numeric atoms, prefer the direct parser result if AtomTable
+                // re-packed it differently (float precision preservation)
+                if (Tokenizer::isNumericAtom(span.atom_type) && numeric_value != 0.0f) {
+                    packed_numeric = numeric_value;
+                }
+            }
+            
             result.token_ids.push_back(atom_token_id);
             result.is_byte_fallback.push_back(false);
-            result.token_numeric_values.push_back(numeric_value);
-            result.atom_entry_ids.push_back(result.atom_table->registerSpan(span));
+            result.token_numeric_values.push_back(packed_numeric);
+            result.token_atom_flags.push_back(packed_flags);
+            result.atom_entry_ids.push_back(entry_id);
             
             // Encode text features for atom token
             uint16_t text_features[kTextFeatureDim];

@@ -58,6 +58,7 @@ BatchPayload buildBatchPayload(
         const std::vector<float>* numeric_values;
         const std::vector<uint16_t>* text_features;
         const std::vector<uint8_t>* atom_mask;
+        const std::vector<uint32_t>* atom_flags;
         std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table;
         const std::vector<uint32_t>* atom_entry_ids;
         int length;
@@ -128,6 +129,12 @@ BatchPayload buildBatchPayload(
                 " atom_entry_ids.size()=" + std::to_string(seq->atom_entry_ids.size()) +
                 " != token_ids.size()=" + std::to_string(seq_len));
         }
+        if (static_cast<int>(seq->token_atom_flags.size()) != seq_len) {
+            throw std::runtime_error(
+                "buildBatchPayload: sequence " + std::to_string(sid) +
+                " token_atom_flags.size()=" + std::to_string(seq->token_atom_flags.size()) +
+                " != token_ids.size()=" + std::to_string(seq_len));
+        }
 
         // Validate targets for invalid token IDs (root cause of loss=165)
         for (int t = 0; t < seq_len; ++t) {
@@ -147,6 +154,7 @@ BatchPayload buildBatchPayload(
             &seq->token_numeric_values,
             &seq->token_text_features,
             &seq->token_atom_mask,
+            &seq->token_atom_flags,
             seq->atom_table,
             &seq->atom_entry_ids,
             seq_len
@@ -206,6 +214,7 @@ BatchPayload buildBatchPayload(
     payload.numeric_values.assign(flat_size, 0.0f);
     payload.text_features.assign(text_feat_flat_size, 0);
     payload.atom_mask.assign(flat_size, 0);
+    payload.atom_flags.assign(flat_size, 0);
     payload.atom_entry_ids.assign(flat_size, GRIM::Tokenizer::kAtomEntryNone);
     payload.seq_atom_tables.resize(payload.batch_size);
     payload.valid_target_counts.resize(payload.batch_size, 0);
@@ -268,6 +277,11 @@ BatchPayload buildBatchPayload(
         std::memcpy(&payload.atom_mask[row_offset],
                     r.atom_mask->data(),
                     seq_len * sizeof(uint8_t));
+
+        // Bulk copy atom flags (type-specific metadata from AtomTable)
+        std::memcpy(&payload.atom_flags[row_offset],
+                    r.atom_flags->data(),
+                    seq_len * sizeof(uint32_t));
 
         // Copy atom entry IDs (bulk memcpy — fixed-size uint32_t)
         std::memcpy(&payload.atom_entry_ids[row_offset],
