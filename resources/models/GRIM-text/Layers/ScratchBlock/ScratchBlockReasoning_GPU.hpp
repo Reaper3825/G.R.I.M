@@ -184,6 +184,7 @@ public:
         const int* token_ids,
         const float* numeric_values,
         const uint16_t* text_features, const uint8_t* atom_mask,
+        const uint32_t* atom_flags,
         cudaStream_t stream);
 
 private:    void allocateWeights();
@@ -229,6 +230,7 @@ namespace autograd {
 /// @param numeric_values Device ptr [total_tokens] — per-token numeric values
 /// @param text_features  Device ptr [total_tokens * 16] FP16 — text feature vectors
 /// @param atom_mask      Device ptr [total_tokens] — 1 if token is an atom
+/// @param atom_flags     Device ptr [total_tokens] — AtomTable type-specific metadata
 /// @param total_tokens   Number of tokens in batch
 /// @param stream         CUDA stream
 Tensor scratch_block_inject(
@@ -238,6 +240,7 @@ Tensor scratch_block_inject(
     const float* numeric_values,
     const uint16_t* text_features,
     const uint8_t* atom_mask,
+    const uint32_t* atom_flags,
     int total_tokens,
     cudaStream_t stream);
 

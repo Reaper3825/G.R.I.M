@@ -81,6 +81,7 @@ struct TrainingState {
     // Unified atom side-channel
     Tensor cached_token_text_features;  // [max_tokens * kTextFeatureDim] FP16
     Tensor cached_token_atom_mask;      // [max_tokens] uint8 (1 = atom token)
+    Tensor cached_token_atom_flags;     // [max_tokens] uint32 (type-specific metadata from AtomTable)
     
     int cached_batch_size = 0;
     int cached_seq_len = 0;

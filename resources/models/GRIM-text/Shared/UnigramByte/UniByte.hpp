@@ -75,7 +75,8 @@ struct UniByteResult {
     std::vector<int> token_ids;
     std::vector<StructuralSpan> atoms;          // Detected structures
     std::vector<bool> is_byte_fallback;         // Per-token: was byte fallback used?
-    std::vector<float> token_numeric_values;    // Per-token numeric value (0 if none)
+    std::vector<float> token_numeric_values;    // Per-token packed value from AtomTable (all atom types, 0 if none)
+    std::vector<uint32_t> token_atom_flags;     // Per-token type-specific flags from AtomTable (0 if not atom)
     std::vector<uint16_t> token_text_features;  // Per-token text features [tokens * kTextFeatureDim] (FP16)
     std::vector<uint8_t> token_atom_mask;       // Per-token atom mask (1 if token is any atom type)
     std::shared_ptr<AtomTable> atom_table;       // Per-sequence atom registry (shared across windows)
@@ -100,6 +101,12 @@ struct UniByteResult {
             throw std::runtime_error(
                 std::string(caller) + ": UniByteResult.token_numeric_values.size()=" +
                 std::to_string(token_numeric_values.size()) + " != token_ids.size()=" +
+                std::to_string(n));
+        }
+        if (token_atom_flags.size() != n) {
+            throw std::runtime_error(
+                std::string(caller) + ": UniByteResult.token_atom_flags.size()=" +
+                std::to_string(token_atom_flags.size()) + " != token_ids.size()=" +
                 std::to_string(n));
         }
         const size_t expected_feat = n * kTextFeatureDim;

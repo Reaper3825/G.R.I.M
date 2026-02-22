@@ -351,6 +351,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             ts->cached_token_numeric_values.data,
             reinterpret_cast<const uint16_t*>(ts->cached_token_text_features.data),
             reinterpret_cast<const uint8_t*>(ts->cached_token_atom_mask.data),
+            reinterpret_cast<const uint32_t*>(ts->cached_token_atom_flags.data),
             total_tokens,
             ctx.stream);
         
@@ -1216,6 +1217,14 @@ LossResult autogradTrainingStep(
             reinterpret_cast<uint16_t*>(training_state.cached_token_text_features.data),
             payload.text_features.data(),
             payload.textFeatureBytes(),
+            cudaMemcpyHostToDevice, stream));
+    }
+    // Atom flags (type-specific metadata from AtomTable)
+    if (training_state.cached_token_atom_flags.data) {
+        CUDA_CHECK(cudaMemcpyAsync(
+            reinterpret_cast<uint32_t*>(training_state.cached_token_atom_flags.data),
+            payload.atom_flags.data(),
+            payload.atomFlagBytes(),
             cudaMemcpyHostToDevice, stream));
     }
     

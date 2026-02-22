@@ -73,6 +73,8 @@ __global__ void kernelDetectAtomTokens(
 }
 
 // Value-aware atom embedding lookup (sinusoidal+log basis in dims 16-47, type embedding in 0-15 and 48+)
+// UNIFIED: Uses numeric_values + atom_flags for ALL atom types (not just numeric).
+// numeric_values carries AtomTable packed values; atom_flags carries type-specific metadata.
 __global__ void kernelLookupAtomEmbeddingsWithValue(
     const int* __restrict__ token_ids,
     const int* __restrict__ atom_positions,
@@ -80,6 +82,7 @@ __global__ void kernelLookupAtomEmbeddingsWithValue(
     int max_atoms,
     const float* __restrict__ atom_type_embeddings,
     const float* __restrict__ token_numeric_values,
+    const uint32_t* __restrict__ token_atom_flags,
     float* __restrict__ atom_embeddings,
     int atom_embedding_dim
 ) {
@@ -97,36 +100,40 @@ __global__ void kernelLookupAtomEmbeddingsWithValue(
     int token_id = token_ids[token_pos];
     int atom_type = (token_id - ATOM_TOKEN_START) % NUM_ATOM_TYPES;
 
-    // Derive numeric status from atom type (no separate mask needed)
-    bool has_numeric = isNumericAtomType(atom_type);
-    float numeric_val = (token_numeric_values && has_numeric)
-        ? token_numeric_values[token_pos] : 0.0f;
-    if (has_numeric && !isfinite(numeric_val)) {
-        has_numeric = false;
-        numeric_val = 0.0f;
-    }
+    // UNIFIED: Read packed numeric value and flags for ALL atom types.
+    // AtomTable packs dates as YYYYMMDD, times as HHMMSScc, IPs as packed octets, etc.
+    // Non-atom tokens have 0.0f / 0 which produces zero contribution in value dims.
+    float numeric_val = token_numeric_values ? token_numeric_values[token_pos] : 0.0f;
+    uint32_t flags = token_atom_flags ? token_atom_flags[token_pos] : 0u;
+    bool has_value = (numeric_val != 0.0f) && isfinite(numeric_val);
+    bool has_flags = (flags != 0u);
 
     // Base embedding from type
     float value = atom_type_embeddings[atom_type * atom_embedding_dim + dim_idx];
 
-    // Value-specific encoding in dimensions 16-47
-    if (dim_idx >= 16 && dim_idx < 32 && has_numeric) {
+    // Dims 16-31: Sinusoidal value encoding — for ANY atom with meaningful packed value
+    if (dim_idx >= 16 && dim_idx < 32 && has_value) {
         int bit = dim_idx - 16;
         float log_mag = log2f(fabsf(numeric_val) + 1.0f);
         float freq = (float)(bit + 1) * 0.5f;
         value += 0.5f * sinf(log_mag * freq);
     }
-    else if (dim_idx >= 32 && dim_idx < 48 && has_numeric) {
+    // Dims 32-39: Numeric structure OR flag bits
+    else if (dim_idx >= 32 && dim_idx < 40) {
         int feat = dim_idx - 32;
-        if (feat == 0) {
+        if (feat == 0 && has_value) {
+            // Sign feature (works for all numeric types)
             value += (numeric_val < 0) ? 0.5f : -0.5f;
-        } else if (feat < 8) {
+        } else if (feat < 8 && has_value) {
+            // Integer bit features of packed value
             int int_val = (int)fabsf(numeric_val);
             value += ((int_val >> (feat - 1)) & 1) ? 0.3f : -0.3f;
-        } else {
-            float frac = numeric_val - floorf(numeric_val);
-            value += 0.3f * sinf(frac * 3.14159f * (feat - 7));
         }
+    }
+    // Dims 40-47: Flag-based features — encode AtomTable metadata bits
+    else if (dim_idx >= 40 && dim_idx < 48 && has_flags) {
+        int bit = dim_idx - 40;
+        value += ((flags >> bit) & 1u) ? 0.3f : -0.3f;
     }
     // Dims 0-15 and 48+: pure type embedding
 
@@ -512,6 +519,7 @@ Tensor scratch_block_inject(
     const float* numeric_values,
     const uint16_t* text_features,
     const uint8_t* atom_mask,
+    const uint32_t* atom_flags,
     int total_tokens,
     cudaStream_t stream)
 {
@@ -540,7 +548,7 @@ Tensor scratch_block_inject(
     layer.runForwardKernels(
         output.data, total_tokens,
         token_ids, numeric_values,
-        text_features, atom_mask, stream);
+        text_features, atom_mask, atom_flags, stream);
 
     // Build GradFn for backward pass
     if (input.requires_grad) {
@@ -760,6 +768,7 @@ void ScratchBlockLayer::runForwardKernels(
     const int* token_ids,
     const float* numeric_values,
     const uint16_t* text_features, const uint8_t* atom_mask,
+    const uint32_t* atom_flags,
     cudaStream_t stream)
 {
     // Step 1: Detect atom tokens
@@ -776,11 +785,12 @@ void ScratchBlockLayer::runForwardKernels(
     const int atom_blocks = std::min(config_.max_atoms, total_tokens);
     if (atom_blocks <= 0) return;
 
-    // Step 2: Lookup atom embeddings (value-aware, derives numeric status from atom type)
+    // Step 2: Lookup atom embeddings (value-aware, uses numeric_values + atom_flags for ALL atom types)
     kernelLookupAtomEmbeddingsWithValue<<<atom_blocks, config_.atom_embedding_dim, 0, stream>>>(
         token_ids, d_atom_positions_, d_num_atoms_, config_.max_atoms,
         atom_type_embeddings_.data,
         numeric_values,
+        atom_flags,
         d_atom_embeddings_, config_.atom_embedding_dim);
 
     // Step 3: Project and inject atom embeddings

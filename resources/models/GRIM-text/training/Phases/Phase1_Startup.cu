@@ -550,6 +550,7 @@ SequenceData loadTrainingData(
             seq.token_numeric_values.insert(seq.token_numeric_values.begin(), 0.0f);
             seq.token_atom_mask.insert(seq.token_atom_mask.begin(), 0);
             seq.atom_entry_ids.insert(seq.atom_entry_ids.begin(), GRIM::Tokenizer::kAtomEntryNone);
+            seq.token_atom_flags.insert(seq.token_atom_flags.begin(), 0);
             for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
                 seq.token_text_features.insert(seq.token_text_features.begin(), 0);
             }
@@ -563,6 +564,7 @@ SequenceData loadTrainingData(
             seq.token_numeric_values.push_back(0.0f);
             seq.token_atom_mask.push_back(0);
             seq.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
+            seq.token_atom_flags.push_back(0);
             for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
                 seq.token_text_features.push_back(0);
             }
@@ -612,6 +614,7 @@ SequenceData loadTrainingData(
                 seq.token_numeric_values.resize(max_seq_len, 0.0f);
                 seq.token_atom_mask.resize(max_seq_len, 0);
                 seq.atom_entry_ids.resize(max_seq_len, GRIM::Tokenizer::kAtomEntryNone);
+                seq.token_atom_flags.resize(max_seq_len, 0);
                 seq.token_text_features.resize(
                     max_seq_len * GRIM::Tokenizer::kTextFeatureDim, 0);
                 padded_count++;
@@ -650,6 +653,7 @@ SequenceData loadTrainingData(
                     window.token_numeric_values.push_back(0.0f);
                     window.token_atom_mask.push_back(0);
                     window.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
+                    window.token_atom_flags.push_back(0);
                     for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
                         window.token_text_features.push_back(0);
                     }
@@ -669,6 +673,8 @@ SequenceData loadTrainingData(
                 window.atom_table = seq.atom_table;
                 window.atom_entry_ids.insert(window.atom_entry_ids.end(),
                     seq.atom_entry_ids.begin() + start, seq.atom_entry_ids.begin() + end);
+                window.token_atom_flags.insert(window.token_atom_flags.end(),
+                    seq.token_atom_flags.begin() + start, seq.token_atom_flags.begin() + end);
                 // GRMT v4: slice text features (16 values per token)
                 window.token_text_features.insert(window.token_text_features.end(),
                     seq.token_text_features.begin() + start * GRIM::Tokenizer::kTextFeatureDim,
