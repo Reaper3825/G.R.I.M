@@ -965,7 +965,6 @@ BackwardResult executeAutogradBackward(
         if (ctx.scratch_block && ctx.scratch_block->isEnabled()) {
             ctx.scratch_block->atomTypeEmbeddings().zero_grad(ctx.stream);
             ctx.scratch_block->atomProjection().zero_grad(ctx.stream);
-            ctx.scratch_block->textFeatureProjection().zero_grad(ctx.stream);
         }
     }
     
@@ -1123,7 +1122,6 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
         };
         checkScratch(ctx.scratch_block->atomTypeEmbeddings(), "atomTypeEmbeddings");
         checkScratch(ctx.scratch_block->atomProjection(), "atomProjection");
-        checkScratch(ctx.scratch_block->textFeatureProjection(), "textFeatureProjection");
     }
     
     return ok;

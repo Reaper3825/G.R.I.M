@@ -6,7 +6,9 @@
 //  ScratchBlockGradFn attached. GradFn owns all caches
 //  internally. No external cache buffers, no gradient tap.
 //
-//  Forward:  output = input + project(atom_emb) + project(text_feat)
+//  Forward:  output = input + scale * project(atom_emb)
+//            atom_emb dims: 0-15 type, 16-31 value, 32-39 int bits,
+//                           40-47 flags, 48-63 text features (excl. length)
 //  Backward: grad_input = grad_output (additive identity)
 //            + parameter gradients for projection/embeddings
 //
@@ -57,10 +59,6 @@ struct ScratchBlockGradFn : public GradFn {
     int*   cached_atom_types      = nullptr;  // [num_atoms_captured]
     int    num_atoms_captured     = 0;
 
-    // Text feature side-channel (OWNED copies)
-    uint16_t* cached_text_features = nullptr; // [total_tokens * 16] FP16
-    uint8_t*  cached_atom_mask     = nullptr; // [total_tokens]
-
     //--- Geometry ---
     int total_tokens     = 0;
     int atom_embedding_dim = 0;
@@ -72,7 +70,6 @@ struct ScratchBlockGradFn : public GradFn {
     float* atom_projection_data         = nullptr;  // [atom_embedding_dim, d_model]
     float* atom_projection_grad         = nullptr;
     float* atom_type_embeddings_grad    = nullptr;  // [NUM_ATOM_TYPES, atom_embedding_dim]
-    float* text_feature_projection_grad = nullptr;  // [16, d_model]
 
     //--- Temporary backward scratch (OWNED) ---
     float* d_grad_atom_embeddings = nullptr;  // [max_atoms, atom_embedding_dim]
@@ -90,16 +87,15 @@ struct ScratchBlockGradFn : public GradFn {
     /// Capture input tensor state for backward chain (Issue #48: stable data, not Tensor*)
     void capture_input(Tensor& input);
 
-    /// Capture forward activations: atom positions, types, embeddings, text features
-    /// Called by scratch_block_inject() after forward kernels complete.
+    /// Capture forward activations: atom positions, types, embeddings
+    /// Text features are now merged into atom embeddings (dims 48-63).
     void capture_forward(
         const int* atom_positions, const int* atom_types,
         const float* atom_embeddings, int num_atoms,
-        const uint16_t* text_features, const uint8_t* atom_mask,
         int total_tokens, cudaStream_t stream);
 
     /// Capture references to layer weight gradient buffers
-    void capture_weights(Tensor& atom_proj, Tensor& atom_type_emb, Tensor& text_feat_proj);
+    void capture_weights(Tensor& atom_proj, Tensor& atom_type_emb);
 
     void apply(const Tensor& grad_output, cudaStream_t stream) override;
 
@@ -141,7 +137,6 @@ public:
 
     Tensor& atomTypeEmbeddings()      { return atom_type_embeddings_; }
     Tensor& atomProjection()          { return atom_projection_; }
-    Tensor& textFeatureProjection()   { return text_feature_projection_; }
 
     //--------------------------------------------------//
     // Statistics
@@ -197,7 +192,6 @@ private:    void allocateWeights();
     // GPU weights (Tensor-managed — RAII, gradient via ensure_grad)
     Tensor atom_type_embeddings_;       // [num_atom_types, atom_embedding_dim]
     Tensor atom_projection_;            // [atom_embedding_dim, d_model]
-    Tensor text_feature_projection_;    // [16, d_model]
 
     // Temporary buffers for forward pass (reused across calls)
     int*   d_atom_positions_  = nullptr;  // [max_atoms]
@@ -221,7 +215,8 @@ namespace autograd {
 /// Inject ScratchBlock atom/text embeddings into token representations.
 /// Returns NEW Tensor with ScratchBlockGradFn attached to autograd graph.
 ///
-/// Forward:  output[t] = input[t] + scale * project(atom_emb[t]) + scale * project(text_feat[t])
+/// Forward:  output[t] = input[t] + scale * project(atom_emb[t])
+///   atom_emb includes merged text features in dims 48-63 (length excluded)
 /// Backward: grad_input = grad_output (additive identity), plus parameter gradients
 ///
 /// @param input          Embedding tensor [total_tokens, d_model] with grad_fn chain
