@@ -332,7 +332,7 @@ bool testEnabledAllocatesWeights(std::string& message) {
     // Check that weight Tensors have allocated data
     SB_ASSERT_TRUE(layer.atomTypeEmbeddings().data != nullptr, "Atom type embeddings should be allocated");
     SB_ASSERT_TRUE(layer.atomProjection().data != nullptr, "Atom projection should be allocated");
-    SB_ASSERT_TRUE(layer.textFeatureProjection().data != nullptr, "Text feature projection should be allocated");
+    // text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
     
     return true;
 }

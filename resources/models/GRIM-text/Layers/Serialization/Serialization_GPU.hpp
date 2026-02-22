@@ -111,7 +111,7 @@ struct SerializationLMHeadWriteView {
 struct SerializationScratchBlockReadView {
 	DeviceReadView atom_type_embeddings;  // [num_atom_types, atom_embedding_dim]
 	DeviceReadView atom_projection;        // [atom_embedding_dim, d_model]
-	DeviceReadView text_feature_projection; // [16, d_model] - text feature value encoding
+	// text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
 	int num_atom_types = 0;
 	int atom_embedding_dim = 0;
 	int d_model = 0;
@@ -122,7 +122,7 @@ struct SerializationScratchBlockReadView {
 struct SerializationScratchBlockWriteView {
 	DeviceWriteView atom_type_embeddings;
 	DeviceWriteView atom_projection;
-	DeviceWriteView text_feature_projection; // [16, d_model]
+	// text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
 	int num_atom_types = 0;
 	int atom_embedding_dim = 0;
 };

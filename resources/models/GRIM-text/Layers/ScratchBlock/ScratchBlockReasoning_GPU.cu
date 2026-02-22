@@ -73,8 +73,11 @@ __global__ void kernelDetectAtomTokens(
 }
 
 // Value-aware atom embedding lookup (sinusoidal+log basis in dims 16-47, type embedding in 0-15 and 48+)
-// UNIFIED: Uses numeric_values + atom_flags for ALL atom types (not just numeric).
-// numeric_values carries AtomTable packed values; atom_flags carries type-specific metadata.
+// UNIFIED: Uses numeric_values + atom_flags + text_features for ALL atom types.
+// numeric_values carries AtomTable packed values; atom_flags carries type-specific metadata;
+// text_features carries 16-dim FP16 raw-text surface analysis (length, char ratios, separators).
+// All three signals are combined into a single atom embedding vector, eliminating the
+// separate text feature injection path (Path B).
 __global__ void kernelLookupAtomEmbeddingsWithValue(
     const int* __restrict__ token_ids,
     const int* __restrict__ atom_positions,
@@ -83,6 +86,8 @@ __global__ void kernelLookupAtomEmbeddingsWithValue(
     const float* __restrict__ atom_type_embeddings,
     const float* __restrict__ token_numeric_values,
     const uint32_t* __restrict__ token_atom_flags,
+    const uint16_t* __restrict__ text_features,
+    const uint8_t* __restrict__ atom_mask,
     float* __restrict__ atom_embeddings,
     int atom_embedding_dim
 ) {
@@ -135,7 +140,20 @@ __global__ void kernelLookupAtomEmbeddingsWithValue(
         int bit = dim_idx - 40;
         value += ((flags >> bit) & 1u) ? 0.3f : -0.3f;
     }
-    // Dims 0-15 and 48+: pure type embedding
+    // Dims 48-63: Text features — raw-text surface analysis (absorbed from former Path B)
+    // These carry instance-specific signals: char composition, separator presence.
+    // EXCLUDED: dims 8-9 (text length) — representation artifact, not semantic signal.
+    else if (dim_idx >= 48 && dim_idx < 64 && text_features && atom_mask) {
+        if (atom_mask[token_pos] != 0) {
+            int feat_idx = dim_idx - 48;
+            if (feat_idx != 8 && feat_idx != 9) {  // Skip length dims
+                float feat = __half2float(*reinterpret_cast<const __half*>(
+                    &text_features[token_pos * kTextFeatureDim + feat_idx]));
+                value += feat;  // Additive — learned type embedding in these dims acts as bias
+            }
+        }
+    }
+    // Dims 0-15: pure learned type embedding
 
     atom_embeddings[atom_idx * atom_embedding_dim + dim_idx] = value;
 }
@@ -169,30 +187,6 @@ __global__ void kernelInjectAtomEmbeddings(
                projection[k * d_model + d_idx];
     }
     hidden_states[token_pos * d_model + d_idx] += scale * sum;
-}
-
-// Inject text features into hidden states
-__global__ void kernelInjectTextFeatures(
-    float* __restrict__ hidden_states,
-    const uint16_t* __restrict__ text_features,
-    const uint8_t* __restrict__ atom_mask,
-    const float* __restrict__ text_projection,
-    int total_tokens,
-    int d_model,
-    float scale
-) {
-    const int token_idx = blockIdx.x;
-    const int d_idx = threadIdx.x;
-    if (token_idx >= total_tokens || d_idx >= d_model) return;
-    if (!atom_mask || atom_mask[token_idx] == 0) return;
-
-    const uint16_t* token_features = text_features + token_idx * kTextFeatureDim;
-    float sum = 0.0f;
-    for (int k = 0; k < kTextFeatureDim; ++k) {
-        float feat = __half2float(*reinterpret_cast<const __half*>(&token_features[k]));
-        sum += feat * text_projection[k * d_model + d_idx];
-    }
-    hidden_states[token_idx * d_model + d_idx] += scale * sum;
 }
 
 //======================================================//
@@ -270,31 +264,6 @@ __global__ void kernelAccumulateAtomTypeGradients(
     atomicAdd(&grad_atom_type_embeddings[atom_type * atom_embedding_dim + k_idx], grad);
 }
 
-// Backward through text feature injection
-__global__ void kernelBackwardTextFeatures(
-    const float* __restrict__ grad_output,
-    const uint16_t* __restrict__ text_features,
-    const uint8_t* __restrict__ atom_mask,
-    float* __restrict__ grad_text_projection,
-    int total_tokens,
-    int d_model,
-    float scale
-) {
-    const int token_idx = blockIdx.x;
-    const int k_idx = threadIdx.x;
-    if (token_idx >= total_tokens || k_idx >= kTextFeatureDim) return;
-    if (!atom_mask || atom_mask[token_idx] == 0) return;
-
-    const uint16_t* token_features = text_features + token_idx * kTextFeatureDim;
-    float feat = __half2float(*reinterpret_cast<const __half*>(&token_features[k_idx]));
-
-    const float* grad_h = grad_output + token_idx * d_model;
-    for (int d = 0; d < d_model; ++d) {
-        float grad_proj = scale * feat * grad_h[d];
-        atomicAdd(&grad_text_projection[k_idx * d_model + d], grad_proj);
-    }
-}
-
 //======================================================//
 //  Xavier Init — splitmix64 PRNG (replaces broken LCG)
 //======================================================//
@@ -334,8 +303,6 @@ ScratchBlockGradFn::~ScratchBlockGradFn() {
     if (cached_atom_embeddings)   cudaFree(cached_atom_embeddings);
     if (cached_atom_positions)    cudaFree(cached_atom_positions);
     if (cached_atom_types)        cudaFree(cached_atom_types);
-    if (cached_text_features)     cudaFree(cached_text_features);
-    if (cached_atom_mask)         cudaFree(cached_atom_mask);
     if (d_grad_atom_embeddings)   cudaFree(d_grad_atom_embeddings);
     if (owns_input_grad && input_grad) cudaFree(input_grad);
 }
@@ -357,7 +324,6 @@ void ScratchBlockGradFn::capture_input(Tensor& x) {
 void ScratchBlockGradFn::capture_forward(
     const int* atom_positions_src, const int* atom_types_src,
     const float* atom_embeddings_src, int num_atoms,
-    const uint16_t* text_features_src, const uint8_t* atom_mask_src,
     int tokens, cudaStream_t stream)
 {
     total_tokens = tokens;
@@ -384,38 +350,24 @@ void ScratchBlockGradFn::capture_forward(
         // Backward scratch for per-atom gradients
         cudaMalloc(&d_grad_atom_embeddings, static_cast<size_t>(max_atoms) * atom_embedding_dim * sizeof(float));
     }
-
-    // Capture text feature data (OWNED copies)
-    if (text_features_src && atom_mask_src) {
-        const size_t feat_bytes = static_cast<size_t>(tokens) * kTextFeatureDim * sizeof(uint16_t);
-        const size_t mask_bytes = static_cast<size_t>(tokens) * sizeof(uint8_t);
-
-        cudaMalloc(&cached_text_features, feat_bytes);
-        cudaMemcpyAsync(cached_text_features, text_features_src, feat_bytes,
-                        cudaMemcpyDeviceToDevice, stream);
-
-        cudaMalloc(&cached_atom_mask, mask_bytes);
-        cudaMemcpyAsync(cached_atom_mask, atom_mask_src, mask_bytes,
-                        cudaMemcpyDeviceToDevice, stream);
-    }
+    // NOTE: Text features are now merged INTO atom embeddings (dims 48-63)
+    // during forward. cached_atom_embeddings already contains the merged signal.
+    // No separate text feature capture needed.
 }
 
 void ScratchBlockGradFn::capture_weights(
-    Tensor& atom_proj, Tensor& atom_type_emb, Tensor& text_feat_proj)
+    Tensor& atom_proj, Tensor& atom_type_emb)
 {
     atom_proj.ensure_grad();
     atom_type_emb.ensure_grad();
-    text_feat_proj.ensure_grad();
 
     atom_projection_data         = atom_proj.data;
     atom_projection_grad         = atom_proj.grad_data();
     atom_type_embeddings_grad    = atom_type_emb.grad_data();
-    text_feature_projection_grad = text_feat_proj.grad_data();
 
     if (!atom_projection_data)         throw std::runtime_error("ScratchBlockGradFn::capture_weights: atom_projection.data is NULL");
     if (!atom_projection_grad)         throw std::runtime_error("ScratchBlockGradFn::capture_weights: atom_projection.grad is NULL");
     if (!atom_type_embeddings_grad)    throw std::runtime_error("ScratchBlockGradFn::capture_weights: atom_type_embeddings.grad is NULL");
-    if (!text_feature_projection_grad) throw std::runtime_error("ScratchBlockGradFn::capture_weights: text_feature_projection.grad is NULL");
 }
 
 void ScratchBlockGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
@@ -464,23 +416,11 @@ void ScratchBlockGradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //  Backward Step 2: Text feature projection gradients
+    //  Backward Step 2: Chain to input (additive injection → identity gradient)
     // ═══════════════════════════════════════════════════════════════════════════
-    if (cached_text_features && cached_atom_mask && text_feature_projection_grad) {
-        const int text_block_size = std::min(kTextFeatureDim, 32);
-        kernelBackwardTextFeatures<<<total_tokens, text_block_size, 0, stream>>>(
-            grad_output.data,
-            cached_text_features,
-            cached_atom_mask,
-            text_feature_projection_grad,
-            total_tokens,
-            d_model,
-            atom_scale);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    //  Backward Step 3: Chain to input (additive injection → identity gradient)
-    // ═══════════════════════════════════════════════════════════════════════════
+    // NOTE: Text feature backward (former Step 2) ELIMINATED — text features are
+    // now absorbed into atom embeddings (dims 48-63). Their gradients flow through
+    // kernelBackwardAtomEmbeddings → atom_projection + atom_type_embeddings.
     if (input_grad_fn) {
         // For additive injection, grad_input = grad_output (no modification needed).
         // Pass grad_output directly to the chain — no copy required.
@@ -498,8 +438,6 @@ void ScratchBlockGradFn::release_saved() {
     if (cached_atom_embeddings) { cudaFree(cached_atom_embeddings); cached_atom_embeddings = nullptr; }
     if (cached_atom_positions)  { cudaFree(cached_atom_positions);  cached_atom_positions = nullptr; }
     if (cached_atom_types)      { cudaFree(cached_atom_types);      cached_atom_types = nullptr; }
-    if (cached_text_features)   { cudaFree(cached_text_features);   cached_text_features = nullptr; }
-    if (cached_atom_mask)       { cudaFree(cached_atom_mask);       cached_atom_mask = nullptr; }
     if (d_grad_atom_embeddings) { cudaFree(d_grad_atom_embeddings); d_grad_atom_embeddings = nullptr; }
     if (owns_input_grad && input_grad) { cudaFree(input_grad); owns_input_grad = false; }
     input_grad = nullptr;
@@ -564,8 +502,7 @@ Tensor scratch_block_inject(
         // Capture weight gradient pointers (layer outlives GradFn)
         grad_fn->capture_weights(
             layer.atomProjection(),
-            layer.atomTypeEmbeddings(),
-            layer.textFeatureProjection());
+            layer.atomTypeEmbeddings());
 
         // Get atom count from device (need sync for host read)
         int num_atoms_host = 0;
@@ -593,7 +530,6 @@ Tensor scratch_block_inject(
             d_atom_types_temp,
             layer.atomEmbeddingsBuffer(),
             num_atoms_host,
-            text_features, atom_mask,
             total_tokens, stream);
 
         // Free temporary atom types buffer (GradFn made its own copy)
@@ -638,7 +574,6 @@ ScratchBlockLayer::ScratchBlockLayer(ScratchBlockLayer&& other) noexcept
     , stats_(other.stats_)
     , atom_type_embeddings_(std::move(other.atom_type_embeddings_))
     , atom_projection_(std::move(other.atom_projection_))
-    , text_feature_projection_(std::move(other.text_feature_projection_))
     , d_atom_positions_(other.d_atom_positions_)
     , d_num_atoms_(other.d_num_atoms_)
     , d_atom_embeddings_(other.d_atom_embeddings_)
@@ -658,7 +593,6 @@ ScratchBlockLayer& ScratchBlockLayer::operator=(ScratchBlockLayer&& other) noexc
         stats_ = other.stats_;
         atom_type_embeddings_ = std::move(other.atom_type_embeddings_);
         atom_projection_ = std::move(other.atom_projection_);
-        text_feature_projection_ = std::move(other.text_feature_projection_);
         d_atom_positions_ = other.d_atom_positions_;
         d_num_atoms_ = other.d_num_atoms_;
         d_atom_embeddings_ = other.d_atom_embeddings_;
@@ -696,18 +630,14 @@ void ScratchBlockLayer::allocateWeights() {
 
     TensorContract::Shape2D atom_emb_2d{NUM_ATOM_TYPES, config_.atom_embedding_dim};
     TensorContract::Shape2D proj_2d{config_.atom_embedding_dim, config_.d_model};
-    TensorContract::Shape2D text_proj_2d{kTextFeatureDim, config_.d_model};
 
     TensorContract::TensorShape atom_emb_shape(TensorContract::Layout::BSM, atom_emb_2d);
     TensorContract::TensorShape proj_shape(TensorContract::Layout::BSM, proj_2d);
-    TensorContract::TensorShape text_proj_shape(TensorContract::Layout::BSM, text_proj_2d);
 
     atom_type_embeddings_ = Tensor::zeros(atom_emb_shape, true, config_.stream, "atom_type_embeddings");
     atom_type_embeddings_.ensure_grad();
     atom_projection_ = Tensor::zeros(proj_shape, true, config_.stream, "atom_projection");
     atom_projection_.ensure_grad();
-    text_feature_projection_ = Tensor::zeros(text_proj_shape, true, config_.stream, "text_feature_projection");
-    text_feature_projection_.ensure_grad();
 
     // Temporary buffers for forward (reused across calls, NOT cached for backward — GradFn owns that)
     cudaMalloc(&d_atom_positions_, config_.max_atoms * sizeof(int));
@@ -720,7 +650,6 @@ void ScratchBlockLayer::allocateWeights() {
 void ScratchBlockLayer::freeWeights() {
     atom_type_embeddings_ = Tensor();
     atom_projection_ = Tensor();
-    text_feature_projection_ = Tensor();
 
     if (d_atom_positions_)  cudaFree(d_atom_positions_);
     if (d_num_atoms_)       cudaFree(d_num_atoms_);
@@ -753,13 +682,6 @@ void ScratchBlockLayer::initializeWeights() {
     kernelXavierInit<<<grid_size, block_size, 0, stream>>>(
         atom_projection_.data, proj_size, proj_stddev, 123);
 
-    // Xavier init for text feature projection
-    const int text_proj_size = kTextFeatureDim * config_.d_model;
-    float text_proj_stddev = std::sqrt(2.0f / (kTextFeatureDim + config_.d_model));
-    grid_size = (text_proj_size + block_size - 1) / block_size;
-    kernelXavierInit<<<grid_size, block_size, 0, stream>>>(
-        text_feature_projection_.data, text_proj_size, text_proj_stddev, 456);
-
     logWeightInit();
 }
 
@@ -785,27 +707,22 @@ void ScratchBlockLayer::runForwardKernels(
     const int atom_blocks = std::min(config_.max_atoms, total_tokens);
     if (atom_blocks <= 0) return;
 
-    // Step 2: Lookup atom embeddings (value-aware, uses numeric_values + atom_flags for ALL atom types)
+    // Step 2: Lookup atom embeddings (unified: numeric_values + atom_flags + text_features)
     kernelLookupAtomEmbeddingsWithValue<<<atom_blocks, config_.atom_embedding_dim, 0, stream>>>(
         token_ids, d_atom_positions_, d_num_atoms_, config_.max_atoms,
         atom_type_embeddings_.data,
         numeric_values,
         atom_flags,
+        text_features, atom_mask,
         d_atom_embeddings_, config_.atom_embedding_dim);
 
-    // Step 3: Project and inject atom embeddings
+    // Step 3: Project and inject atom embeddings (single unified projection)
     kernelInjectAtomEmbeddings<<<atom_blocks, config_.d_model, 0, stream>>>(
         output, d_atom_positions_, d_num_atoms_, config_.max_atoms,
         d_atom_embeddings_, atom_projection_.data,
         config_.atom_embedding_dim, config_.d_model, config_.atom_scale);
-
-    // Step 4: Inject text features
-    if (text_features && atom_mask) {
-        kernelInjectTextFeatures<<<total_tokens, config_.d_model, 0, stream>>>(
-            output, text_features, atom_mask,
-            text_feature_projection_.data,
-            total_tokens, config_.d_model, config_.atom_scale);
-    }
+    // NOTE: Text features are now absorbed into dims 48-63 of atom embeddings above.
+    // The separate text feature injection path (Path B) has been eliminated.
 }
 
 //======================================================//
@@ -830,14 +747,13 @@ void ScratchBlockLayer::logWeightInit() {
 
     const int atom_emb_size = NUM_ATOM_TYPES * config_.atom_embedding_dim;
     const int proj_size = config_.atom_embedding_dim * config_.d_model;
-    const int text_proj_size = kTextFeatureDim * config_.d_model;
-    const size_t total_bytes = (atom_emb_size + proj_size + text_proj_size) * sizeof(float) * 2;
+    const size_t total_bytes = (atom_emb_size + proj_size) * sizeof(float) * 2;
 
     std::ostringstream oss;
     oss << "weights_init: atom_types=" << NUM_ATOM_TYPES
         << " atom_emb_dim=" << config_.atom_embedding_dim
         << " d_model=" << config_.d_model
-        << " total_params=" << (atom_emb_size + proj_size + text_proj_size)
+        << " total_params=" << (atom_emb_size + proj_size)
         << " memory_mb=" << std::fixed << std::setprecision(2) << (total_bytes / (1024.0 * 1024.0));
     Logging::EmitModuleInfo(kScratchBlockModule, oss.str(), global_step_);
 }

@@ -221,11 +221,7 @@ void LanguageModel::buildParameterGroups() {
             registerTensor("scratch_block_atom_projection", ap, ParamGroupType::SCRATCHBLOCK);
             fprintf(stderr, "[buildParameterGroups] DIAG-D2: registered OK\n"); fflush(stderr);
 
-            auto& tfp = scratch_block_layer_->textFeatureProjection();
-            fprintf(stderr, "[buildParameterGroups] DIAG-D3: text_feature_projection data=%p grad=%d numel=%zu\n",
-                    (void*)tfp.data, (int)tfp.has_grad(), tfp.numel()); fflush(stderr);
-            registerTensor("scratch_block_text_feature_projection", tfp, ParamGroupType::SCRATCHBLOCK);
-            fprintf(stderr, "[buildParameterGroups] DIAG-D3: registered OK\n"); fflush(stderr);
+            // text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
         } catch (const std::exception& ex) {
             fprintf(stderr, "[buildParameterGroups] DIAG-D-EXCEPTION in scratchblock: %s\n", ex.what()); fflush(stderr);
             throw;
