@@ -79,13 +79,12 @@ def load_vocab_bin(path: Path) -> dict:
     for tid, name in SPECIAL_NAMES.items():
         id_to_text[tid] = name
 
-    # 2) Byte fallback tokens
+    # 2) Byte fallback tokens — emit the raw byte (matching C++ decode behavior).
+    #    The C++ tokenizer does: result.push_back(static_cast<char>(tid - BYTE_TOKEN_OFFSET))
+    #    so every byte token maps to its literal byte value.
     for b in range(BYTE_VOCAB_SIZE):
         tid = BYTE_TOKEN_OFFSET + b
-        if 32 <= b <= 126:
-            id_to_text[tid] = chr(b)
-        else:
-            id_to_text[tid] = f"<BYTE 0x{b:02X}>"
+        id_to_text[tid] = bytes([b]).decode("latin-1")  # 1:1 byte→char mapping
 
     # 3) Atom placeholder tokens
     for i in range(NUM_ATOM_TYPES):

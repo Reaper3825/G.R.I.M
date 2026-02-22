@@ -768,7 +768,7 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
     
     // Initialize atom registry for this encoding pass
     result.atom_table = std::make_shared<AtomTable>();
-
+    
     // Pre-allocate based on heuristic: ~1 token per 3-4 bytes + atoms
     // This avoids repeated vector reallocation during push_back
     const size_t estimated_tokens = (text.size() / 3) + structures.size() + 8;

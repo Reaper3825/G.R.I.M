@@ -341,7 +341,6 @@
                 "layer": -1,
                 "head": 0
             },
-
             "log_recorder": {
                 "enabled": true,
                 "default_level": "Info",
@@ -372,7 +371,6 @@
                     "serialization": true
                 }
             },
-
             "d_model": 768,
             "num_layers": 12,
             "num_heads": 12,
