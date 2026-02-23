@@ -1151,15 +1151,28 @@ bool detectInteger(const std::string& text, size_t pos, size_t& end) {
         ++i;
     }
     
-    // Check it's not followed by . or e (that would be float)
-    if (i < text.size() && (text[i] == '.' || text[i] == 'e' || text[i] == 'E')) {
+    // Reject if followed by '.' (could be float like 5.3)
+    if (i < text.size() && text[i] == '.') {
         return false;
     }
     
-    // Must not be followed by letter (part of identifier)
-    if (i < text.size() && std::isalpha(text[i])) {
-        return false;
+    // Reject if followed by e/E + (digit or sign) — scientific notation like 5e3, 5E+2
+    // Do NOT reject "5english", "5em", etc. — detectFloat already failed for those,
+    // so deferring would create a gap where BOTH detectors reject the digit.
+    if (i < text.size() && (text[i] == 'e' || text[i] == 'E')) {
+        if (i + 1 < text.size()) {
+            char next = text[i + 1];
+            if (std::isdigit(next) || next == '+' || next == '-') {
+                return false;  // Genuine scientific notation — defer to detectFloat
+            }
+        }
+        // "5english", "5em", "5E_something" — not scientific notation, accept as integer
     }
+    
+    // NOTE: We intentionally do NOT reject digits followed by alpha (e.g. "5th", "100ms", "3D").
+    // The digit run is the integer atom; the alpha suffix gets tokenized separately via Viterbi.
+    // The old guard `if (isalpha(text[i])) return false` caused digits in ordinals, units, and
+    // version strings to bypass atom detection entirely, leaking raw byte tokens into training.
     
     end = i;
     return i > pos;

@@ -1565,6 +1565,64 @@ bool testNegativeNumbers(std::string& message) {
     return true;
 }
 
+bool testDigitsFollowedByAlpha(std::string& message) {
+    // Regression test: digits followed by alphabetic chars (ordinals, units, versions)
+    // must still be detected as integer atoms, not leak as raw byte tokens.
+    UniByteConfig config;
+    config.enable_byte_fallback = true;
+    config.detect_numbers = true;
+    UniByte tokenizer(config);
+    
+    struct TestCase {
+        std::string input;
+        int expected_integers;
+        std::string description;
+    };
+    
+    std::vector<TestCase> cases = {
+        {"the 5th element", 1, "ordinal '5th'"},
+        {"took 100ms to run", 1, "unit suffix '100ms'"},
+        {"a 3D model", 1, "dimension '3D'"},
+        {"on the 1st day", 1, "ordinal '1st'"},
+        {"the 2nd place", 1, "ordinal '2nd'"},
+        {"came in 3rd", 1, "ordinal '3rd'"},
+        {"version 5 is out", 1, "standalone integer"},
+    };
+    
+    for (const auto& tc : cases) {
+        auto result = tokenizer.encodeWithMetadata(tc.input);
+        
+        int int_count = 0;
+        for (const auto& span : result.atoms) {
+            if (span.atom_type == AtomType::ATOM_INTEGER) {
+                int_count++;
+            }
+        }
+        
+        std::string fail_msg = "Should detect integer in: " + tc.description 
+                             + " (input='" + tc.input + "', found=" + std::to_string(int_count) 
+                             + ", expected=" + std::to_string(tc.expected_integers) + ")";
+        ASSERT_TRUE(int_count == tc.expected_integers, fail_msg.c_str());
+        
+        // Verify no digit byte tokens leaked through
+        for (size_t i = 0; i < result.token_ids.size(); ++i) {
+            int tid = result.token_ids[i];
+            if (tid >= static_cast<int>(BYTE_TOKEN_OFFSET) && 
+                tid < static_cast<int>(BYTE_TOKEN_OFFSET) + 256) {
+                int byte_val = tid - static_cast<int>(BYTE_TOKEN_OFFSET);
+                if (byte_val >= '0' && byte_val <= '9') {
+                    std::string leak_msg = "Digit byte token leaked in: " + tc.description
+                                         + " (token_id=" + std::to_string(tid) 
+                                         + ", byte='" + std::string(1, static_cast<char>(byte_val)) + "')";
+                    ASSERT_TRUE(false, leak_msg.c_str());
+                }
+            }
+        }
+    }
+    
+    return true;
+}
+
 //======================================================//
 //  Section 12: Byte Fallback Control Tests
 //======================================================//
@@ -1849,6 +1907,7 @@ int main(int argc, char** argv) {
     suite.addTest("Numeric.ScientificNotation", testScientificNotation);
     suite.addTest("Numeric.IPvsDecimal", testIPAddressVsDecimal);
     suite.addTest("Numeric.Negative", testNegativeNumbers);
+    suite.addTest("Numeric.DigitsFollowedByAlpha", testDigitsFollowedByAlpha);
     
     // Section 12: Byte Fallback Control Tests
     suite.addTest("ByteFallback.Disabled", testByteFallbackDisabled);

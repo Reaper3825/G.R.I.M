@@ -340,12 +340,6 @@ void LanguageModel::disableUpdateProbe() {
     update_probe_ready_ = false;
 }
 
-// recordGradientClip() DELETED (Rule 26). Phase2 no longer uses GradComponentMetrics.
-
-// updateWeights(), resetOptimizerMoments(), scaleOptimizerMoments() MOVED to
-// AdamW_Kernal_GPU.{hpp,cu} as free functions: launchAdamWStep(), resetAdamWMoments(),
-// scaleAdamWMoments(). AdamW stepping is training infrastructure, not model logic.
-
 //======================================================
 //  dumpGradientValues - Debug: Dump gradient RMS stats for each parameter group
 //======================================================//

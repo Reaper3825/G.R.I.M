@@ -1189,7 +1189,47 @@ ValidationResult runValidation(TrainingContext& ctx) {
     ValidationResult result;
     
     ctx.logging.logger->log("Running validation...");
-    
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PRE-VALIDATION SAFETY: Sync GPU and check for deferred CUDA errors.
+    // After 24+ hours of training, deferred errors can accumulate. If we don't
+    // drain them here, they manifest as SEH exceptions inside the validation
+    // loop — bypassing C++ catch blocks and silently killing the process.
+    // ═══════════════════════════════════════════════════════════════════════════
+    {
+        cudaError_t sync_err = cudaDeviceSynchronize();
+        if (sync_err != cudaSuccess) {
+            ctx.logging.logger->log("[Val] WARNING: cudaDeviceSynchronize before validation returned: " +
+                std::string(cudaGetErrorString(sync_err)));
+        }
+        cudaError_t deferred_err = cudaGetLastError();
+        if (deferred_err != cudaSuccess) {
+            ctx.logging.logger->log("[Val] WARNING: Cleared deferred CUDA error before validation: " +
+                std::string(cudaGetErrorString(deferred_err)));
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PRE-VALIDATION CHECKPOINT: Save model state BEFORE validation.
+    // Validation runs hundreds of forward passes that can crash via SEH.
+    // Without this, a validation crash loses the entire epoch of training.
+    // ═══════════════════════════════════════════════════════════════════════════
+    {
+        std::string safety_path = ctx.config.paths.checkpoint_dir + "/checkpoint_pre_validation.bin";
+        ctx.logging.logger->log("[Val] Saving pre-validation safety checkpoint...");
+        try {
+            bool saved = ctx.model->save(safety_path);
+            if (saved) {
+                ctx.logging.logger->log("[Val] Safety checkpoint saved: " + safety_path);
+            } else {
+                ctx.logging.logger->log("[Val] WARNING: Safety checkpoint save returned false");
+            }
+        } catch (const std::exception& e) {
+            ctx.logging.logger->log("[Val] WARNING: Safety checkpoint failed: " + std::string(e.what()));
+            // Non-fatal — continue with validation anyway
+        }
+    }
+
     // Issue #85 FIX: Use model's actual buffer capacity, NOT kDefaultMaxTokensPerBatch (8192)!
     // Training allocates buffers based on batch_size * max_seq_len (e.g., 7 * 1024 = 7168).
     // Using 8192 for validation exceeds this → buffer overflow → crash!
@@ -1205,31 +1245,96 @@ ValidationResult runValidation(TrainingContext& ctx) {
     val_opts.bucket_step = 256;
     
     auto val_schedule = GRIM::Batching::buildBatches(ctx.data.val_catalog, val_opts);
-    ctx.logging.logger->log("Created " + std::to_string(val_schedule.batches.size()) + " validation batches");
+    const int total_val_batches = static_cast<int>(val_schedule.batches.size());
+    ctx.logging.logger->log("Created " + std::to_string(total_val_batches) + " validation batches");
     
     float val_loss = 0.0f;
     int val_sequences_processed = 0;
+    int val_batches_failed = 0;
     
     const auto& val_model_cfg = ctx.model->getConfig();
     const size_t val_max_cached_batch = static_cast<size_t>(std::max(1, val_model_cfg.max_cached_batch));
     const size_t val_max_cached_seq = static_cast<size_t>(std::max(1, std::min(val_model_cfg.max_seq_len, val_model_cfg.max_cached_seq_len)));
     
-    for (const auto& val_batch : val_schedule.batches) {
-        const auto val_token_layout = ctx.tokenizer.tokenLayout();
-        auto val_payload = GRIM::Batching::buildBatchPayload(
-            val_batch, ctx.data.val_views, ctx.config.actual_vocab_size,
-            val_token_layout,
-            val_max_cached_batch, val_max_cached_seq);
-        if (val_payload.batch_size == 0) continue;
+    const auto val_start_time = std::chrono::steady_clock::now();
+    
+    for (int val_idx = 0; val_idx < total_val_batches; ++val_idx) {
+        const auto& val_batch = val_schedule.batches[val_idx];
         
-        float batch_val_loss = ctx.model->computeLossBatch(val_payload);
-        ctx.model->getTrainingState().autograd_intermediates.clear();
+        // Progress logging every 50 batches
+        if (val_idx % 50 == 0) {
+            ctx.logging.logger->log("[Val] Processing batch " + std::to_string(val_idx + 1) + 
+                "/" + std::to_string(total_val_batches) +
+                " (processed=" + std::to_string(val_sequences_processed) +
+                " failed=" + std::to_string(val_batches_failed) + ")");
+        }
         
-        val_loss += batch_val_loss * val_payload.batch_size;
-        val_sequences_processed += val_payload.batch_size;
+        try {
+            const auto val_token_layout = ctx.tokenizer.tokenLayout();
+            auto val_payload = GRIM::Batching::buildBatchPayload(
+                val_batch, ctx.data.val_views, ctx.config.actual_vocab_size,
+                val_token_layout,
+                val_max_cached_batch, val_max_cached_seq);
+            if (val_payload.batch_size == 0) continue;
+            
+            float batch_val_loss = ctx.model->computeLossBatch(val_payload);
+            ctx.model->getTrainingState().autograd_intermediates.clear();
+            
+            // Check for deferred CUDA errors after each batch
+            cudaError_t batch_err = cudaGetLastError();
+            if (batch_err != cudaSuccess) {
+                ctx.logging.logger->log("[Val] CUDA error after batch " + std::to_string(val_idx + 1) + 
+                    ": " + std::string(cudaGetErrorString(batch_err)));
+                val_batches_failed++;
+                // Sync and clear to attempt recovery for remaining batches
+                cudaDeviceSynchronize();
+                cudaGetLastError();
+                continue;
+            }
+            
+            // Validate the loss value before accumulating
+            if (!std::isfinite(batch_val_loss)) {
+                ctx.logging.logger->log("[Val] WARNING: Non-finite loss at batch " + 
+                    std::to_string(val_idx + 1) + " (loss=" + std::to_string(batch_val_loss) + "), skipping");
+                val_batches_failed++;
+                continue;
+            }
+            
+            val_loss += batch_val_loss * val_payload.batch_size;
+            val_sequences_processed += val_payload.batch_size;
+            
+        } catch (const std::exception& e) {
+            ctx.logging.logger->log("[Val] Exception at batch " + std::to_string(val_idx + 1) + 
+                "/" + std::to_string(total_val_batches) + ": " + std::string(e.what()));
+            val_batches_failed++;
+            
+            // Clear autograd intermediates to prevent memory buildup after failed batch
+            ctx.model->getTrainingState().autograd_intermediates.clear();
+            
+            // Sync and clear CUDA state for recovery
+            cudaDeviceSynchronize();
+            cudaGetLastError();
+            
+            // If too many batches fail (>10%), abort validation with partial results
+            if (val_batches_failed > total_val_batches / 10 && val_batches_failed >= 5) {
+                ctx.logging.logger->log("[Val] ABORTING: Too many failed batches (" + 
+                    std::to_string(val_batches_failed) + "/" + std::to_string(val_idx + 1) + 
+                    "). Using partial results.");
+                break;
+            }
+            continue;
+        }
     }
     
-    result.loss = val_loss / val_sequences_processed;
+    auto val_duration = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - val_start_time);
+    
+    if (val_sequences_processed > 0) {
+        result.loss = val_loss / val_sequences_processed;
+    } else {
+        ctx.logging.logger->log("[Val] ERROR: No validation sequences processed successfully!");
+        result.loss = std::numeric_limits<float>::infinity();
+    }
     result.sequences_processed = val_sequences_processed;
     result.perplexity = (std::isfinite(result.loss) && result.loss < 50.0f)
         ? std::exp(result.loss)
@@ -1237,7 +1342,10 @@ ValidationResult runValidation(TrainingContext& ctx) {
     result.is_best = (result.loss < ctx.best_val_loss);
     
     ctx.logging.logger->log("[Val] " + Internal::formatMetric("loss", result.loss) + " " +
-                            Internal::formatMetric("ppl", result.perplexity, 3));
+                            Internal::formatMetric("ppl", result.perplexity, 3) +
+                            " seqs=" + std::to_string(val_sequences_processed) +
+                            " failed=" + std::to_string(val_batches_failed) +
+                            " time=" + std::to_string(val_duration.count()) + "s");
     
     return result;
 }
