@@ -379,11 +379,6 @@ void LanguageModel::initTrainingState() {
         false, grad_stream, "grad_encoder_out");
     
     const size_t tokens_per_batch = max_batch_size * max_seq_len_cache;
-    
-    // NOTE: encoder_workspace allocation DELETED (Rule 20/26)
-    // Autograd forward creates its own intermediate Tensors via Tensor::zeros/empty.
-    // The old requiredWorkspaceBytes() / encoder_workspace pipeline was never consumed
-    // by any forward/backward kernel. Reclaims ~dozens of MB of GPU memory.
 
     // ═══════════════════════════════════════════════════════════════
     //  ENCODER BACKWARD TEMPORARIES (Issue #45 FIX: Tensor allocation)

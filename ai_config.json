@@ -383,6 +383,7 @@
             },
             "attention_dropout": 0.15,
             "dropout_rate": 0.125,
+            "residual_dropout_rate": 0.1,
             "force_rebuild_vocab": false,
             "lm_head_centering": {
                 "enabled": true,

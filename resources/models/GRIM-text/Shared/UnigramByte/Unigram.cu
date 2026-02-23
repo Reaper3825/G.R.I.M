@@ -54,6 +54,19 @@ static inline bool isPunct(char c) {
            (c >= '{' && c <= '~');    // {|}~
 }
 
+// Punctuation isolation guard for Viterbi.
+// Returns true if the character at the given position is a punctuation character
+// that should be tokenized in isolation (never merged with adjacent letters/digits).
+// Used in both CPU Viterbi and GPU kernel to enforce punctuation boundary splitting.
+// Note: space (0x20) is NOT punctuation — it's a normal character that can appear
+// in multi-word vocab tokens like "of the".
+__host__ __device__ static inline bool isPunctBoundary(unsigned char c) {
+    return (c >= '!' && c <= '/') ||  // !"#$%&'()*+,-./
+           (c >= ':' && c <= '@') ||  // :;<=>?@
+           (c >= '[' && c <= '`') ||  // [\]^_`
+           (c >= '{' && c <= '~');    // {|}~
+}
+
 static inline bool isWhitespaceASCII(unsigned char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
@@ -709,6 +722,21 @@ __global__ void kernelViterbiForward(
     
     // Process each position sequentially (required for correctness)
     for (size_t pos = 1; pos <= length; ++pos) {
+        unsigned char cur_byte = static_cast<unsigned char>(text[pos - 1]);
+        bool cur_is_punct = isPunctBoundary(cur_byte);
+        
+        // PUNCTUATION ISOLATION GUARD:
+        // If this position's character is punctuation, force it to be a single
+        // byte token. Skip trie matching entirely — punctuation is never merged
+        // with adjacent letters/digits.
+        if (cur_is_punct) {
+            // Emit as byte token: BYTE_TOKEN_OFFSET + byte_value
+            viterbi_scores[pos] = viterbi_scores[pos - 1] + unk_score;
+            viterbi_prev[pos] = static_cast<int>(pos - 1);
+            viterbi_tokens[pos] = static_cast<int>(cur_byte) + 4;  // BYTE_TOKEN_OFFSET = 4
+            continue;
+        }
+        
         float best_score = -1e30f;
         int best_prev = -1;
         int best_token = unk_id;
@@ -721,6 +749,11 @@ __global__ void kernelViterbiForward(
         for (size_t start = pos; start > 0 && (pos - start) < MAX_PIECE_LENGTH; --start) {
             size_t idx = start - 1;
             unsigned char c = static_cast<unsigned char>(text[idx]);
+            
+            // PUNCTUATION ISOLATION GUARD:
+            // Stop backward walk if we hit a punctuation character —
+            // pieces must not span across a punctuation boundary.
+            if (isPunctBoundary(c)) break;
             
             // Navigate trie
             int child = trie_children[node * 256 + c];
@@ -2247,10 +2280,34 @@ std::vector<ViterbiNode> UnigramLM::viterbi(const std::string& text) const {
     for (size_t pos = 0; pos < n; ++pos) {
         if (nodes[pos].score < -1e20f) continue;  // Unreachable
         
+        unsigned char cur_byte = static_cast<unsigned char>(text[pos]);
+        bool cur_is_punct = isPunctBoundary(cur_byte);
+        
+        // PUNCTUATION ISOLATION GUARD:
+        // If current position is a punctuation character, force it to be emitted
+        // as a single byte token and skip trie matching entirely.
+        // This prevents tokens like "however," or "al." from ever being selected.
+        if (cur_is_punct) {
+            float byte_score = nodes[pos].score + UNKNOWN_SCORE;
+            if (byte_score > nodes[pos + 1].score) {
+                nodes[pos + 1].score = byte_score;
+                nodes[pos + 1].prev_pos = static_cast<int>(pos);
+                nodes[pos + 1].token_id = static_cast<int>(cur_byte) + BYTE_TOKEN_OFFSET;
+                nodes[pos + 1].piece_length = 1;
+            }
+            continue;  // Skip trie search — punctuation is always isolated
+        }
+        
         // Try all pieces starting at pos
         int node = 0;
         for (size_t len = 1; len <= MAX_PIECE_LENGTH && pos + len <= n; ++len) {
             unsigned char c = static_cast<unsigned char>(text[pos + len - 1]);
+            
+            // PUNCTUATION ISOLATION GUARD:
+            // Stop extending the piece if we hit a punctuation character.
+            // This prevents the trie from matching tokens that contain
+            // punctuation mixed with letters (e.g., "al.", "et al.,").
+            if (isPunctBoundary(c)) break;
             
             if (trie_[node].children[c] < 0) break;
             node = trie_[node].children[c];

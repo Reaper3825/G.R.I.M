@@ -537,8 +537,17 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         // Pass ctx.step for per-step attention/sublayer dropout seed generation
         // Sublayer dropout (post-attn-projection, post-FFN, FFN-activation) is now
         // handled INSIDE the encoder layer, matching standard transformer architecture.
-        // Post-whole-layer dropout REMOVED — it double-regularizes on top of sublayer dropout.
         Tensor layer_output = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, layer_storage, ctx.step, layer_idx);
+        
+        // Residual-stream dropout: applied to each layer's output BEFORE it becomes
+        // input to the next layer. This disrupts correlated direction buildup (ρ) across
+        // the residual stream that sublayer dropout alone cannot prevent.
+        // Seed varies by step AND layer to produce independent masks per layer per step.
+        if (cfg->residual_dropout_rate > 0.0f && ctx.is_training) {
+            const uint64_t residual_drop_seed = ctx.step * 2654435761ULL + 7000 + static_cast<uint64_t>(layer_idx) * 131;
+            layer_output = autograd::dropout(layer_output, cfg->residual_dropout_rate,
+                                             residual_drop_seed, ctx.is_training, ctx.stream);
+        }
         
         intermediates.encoder_layer_outputs.push_back(std::move(layer_output));
     }
