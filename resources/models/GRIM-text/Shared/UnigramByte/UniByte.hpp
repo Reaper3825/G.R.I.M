@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include "AtomTable.hpp"
 #include "Byte.hpp"
 #include "Unigram.hpp"
 
@@ -74,10 +75,12 @@ struct UniByteResult {
     std::vector<int> token_ids;
     std::vector<StructuralSpan> atoms;          // Detected structures
     std::vector<bool> is_byte_fallback;         // Per-token: was byte fallback used?
-    std::vector<float> token_numeric_values;    // Per-token numeric value (0 if none)
-    std::vector<uint8_t> token_numeric_mask;    // Per-token numeric mask (1 if valid)
+    std::vector<float> token_numeric_values;    // Per-token packed value from AtomTable (all atom types, 0 if none)
+    std::vector<uint32_t> token_atom_flags;     // Per-token type-specific flags from AtomTable (0 if not atom)
     std::vector<uint16_t> token_text_features;  // Per-token text features [tokens * kTextFeatureDim] (FP16)
-    std::vector<uint8_t> token_text_mask;       // Per-token text feature mask (1 if valid)
+    std::vector<uint8_t> token_atom_mask;       // Per-token atom mask (1 if token is any atom type)
+    std::shared_ptr<AtomTable> atom_table;       // Per-sequence atom registry (shared across windows)
+    std::vector<uint32_t> atom_entry_ids;        // Per-token index into atom_table (kAtomEntryNone = no atom)
     size_t unigram_tokens = 0;
     size_t byte_tokens = 0;
     size_t atom_tokens = 0;
@@ -100,10 +103,10 @@ struct UniByteResult {
                 std::to_string(token_numeric_values.size()) + " != token_ids.size()=" +
                 std::to_string(n));
         }
-        if (token_numeric_mask.size() != n) {
+        if (token_atom_flags.size() != n) {
             throw std::runtime_error(
-                std::string(caller) + ": UniByteResult.token_numeric_mask.size()=" +
-                std::to_string(token_numeric_mask.size()) + " != token_ids.size()=" +
+                std::string(caller) + ": UniByteResult.token_atom_flags.size()=" +
+                std::to_string(token_atom_flags.size()) + " != token_ids.size()=" +
                 std::to_string(n));
         }
         const size_t expected_feat = n * kTextFeatureDim;
@@ -113,10 +116,16 @@ struct UniByteResult {
                 std::to_string(token_text_features.size()) + " != token_ids.size()*kTextFeatureDim=" +
                 std::to_string(expected_feat));
         }
-        if (token_text_mask.size() != n) {
+        if (token_atom_mask.size() != n) {
             throw std::runtime_error(
-                std::string(caller) + ": UniByteResult.token_text_mask.size()=" +
-                std::to_string(token_text_mask.size()) + " != token_ids.size()=" +
+                std::string(caller) + ": UniByteResult.token_atom_mask.size()=" +
+                std::to_string(token_atom_mask.size()) + " != token_ids.size()=" +
+                std::to_string(n));
+        }
+        if (atom_entry_ids.size() != n) {
+            throw std::runtime_error(
+                std::string(caller) + ": UniByteResult.atom_entry_ids.size()=" +
+                std::to_string(atom_entry_ids.size()) + " != token_ids.size()=" +
                 std::to_string(n));
         }
         if (unigram_tokens + byte_tokens + atom_tokens != n) {

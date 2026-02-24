@@ -96,18 +96,18 @@ void printTensorCPU(const char* label, const float* data, int rows, int cols) {
     if (rows > 8) printf("  ...\n");
 }
 
-float computeNormGPU(const float* d_data, int size) {
+float computeRmsGPU(const float* d_data, int size) {
     std::vector<float> h(size);
     CUDA_CHECK(cudaMemcpy(h.data(), d_data, size * sizeof(float), cudaMemcpyDeviceToHost));
     float sum = 0.0f;
     for (int i = 0; i < size; i++) sum += h[i] * h[i];
-    return sqrtf(sum);
+    return sqrtf(sum / size);
 }
 
-float computeNormCPU(const float* data, int size) {
+float computeRmsCPU(const float* data, int size) {
     float sum = 0.0f;
     for (int i = 0; i < size; i++) sum += data[i] * data[i];
-    return sqrtf(sum);
+    return sqrtf(sum / size);
 }
 
 void compareSideBySide(const char* label, const float* gpu_data, const float* cpu_expected, 
@@ -135,8 +135,8 @@ void compareSideBySide(const char* label, const float* gpu_data, const float* cp
     }
     if (rows * cols > 32) printf("  ... (%d more elements)\n", rows * cols - 32);
     
-    float gpu_norm = computeNormCPU(gpu.data(), rows * cols);
-    float cpu_norm = computeNormCPU(cpu_expected, rows * cols);
+    float gpu_norm = computeRmsCPU(gpu.data(), rows * cols);
+    float cpu_norm = computeRmsCPU(cpu_expected, rows * cols);
     
     printf("\n  Summary:\n");
     printf("    GPU norm:      %12.6f\n", gpu_norm);
@@ -377,13 +377,13 @@ void testFlashAttentionBackward() {
     
     // ===== CRITICAL: Gradient Magnitude Analysis =====
     printf("\n===== GRADIENT MAGNITUDE ANALYSIS (ATTENTION) =====\n");
-    float q_norm = computeNormCPU(h_Q.data(), qkv_size);
-    float k_norm = computeNormCPU(h_K.data(), qkv_size);
-    float v_norm = computeNormCPU(h_V.data(), qkv_size);
-    float grad_out_norm = computeNormCPU(h_grad_output.data(), qkv_size);
-    float grad_q_norm = computeNormGPU(d_grad_Q, qkv_size);
-    float grad_k_norm = computeNormGPU(d_grad_K, qkv_size);
-    float grad_v_norm = computeNormGPU(d_grad_V, qkv_size);
+    float q_norm = computeRmsCPU(h_Q.data(), qkv_size);
+    float k_norm = computeRmsCPU(h_K.data(), qkv_size);
+    float v_norm = computeRmsCPU(h_V.data(), qkv_size);
+    float grad_out_norm = computeRmsCPU(h_grad_output.data(), qkv_size);
+    float grad_q_norm = computeRmsGPU(d_grad_Q, qkv_size);
+    float grad_k_norm = computeRmsGPU(d_grad_K, qkv_size);
+    float grad_v_norm = computeRmsGPU(d_grad_V, qkv_size);
     
     printf("  Input norms:\n");
     printf("    |Q|: %12.6f\n", q_norm);
@@ -546,10 +546,10 @@ void testRMSNorm() {
     
     // ===== Gradient Magnitude Analysis =====
     printf("\n===== GRADIENT MAGNITUDE ANALYSIS =====\n");
-    float input_norm = computeNormCPU(h_input.data(), TOTAL_TOKENS * D_MODEL);
-    float grad_out_norm = computeNormCPU(h_grad_output.data(), TOTAL_TOKENS * D_MODEL);
-    float grad_in_norm_gpu = computeNormGPU(d_grad_input, TOTAL_TOKENS * D_MODEL);
-    float grad_in_norm_cpu = computeNormCPU(cpu_grad_input.data(), TOTAL_TOKENS * D_MODEL);
+    float input_norm = computeRmsCPU(h_input.data(), TOTAL_TOKENS * D_MODEL);
+    float grad_out_norm = computeRmsCPU(h_grad_output.data(), TOTAL_TOKENS * D_MODEL);
+    float grad_in_norm_gpu = computeRmsGPU(d_grad_input, TOTAL_TOKENS * D_MODEL);
+    float grad_in_norm_cpu = computeRmsCPU(cpu_grad_input.data(), TOTAL_TOKENS * D_MODEL);
     
     printf("  |input|:              %12.6f\n", input_norm);
     printf("  |grad_output|:        %12.6f\n", grad_out_norm);

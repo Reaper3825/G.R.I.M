@@ -332,7 +332,7 @@ bool testEnabledAllocatesWeights(std::string& message) {
     // Check that weight Tensors have allocated data
     SB_ASSERT_TRUE(layer.atomTypeEmbeddings().data != nullptr, "Atom type embeddings should be allocated");
     SB_ASSERT_TRUE(layer.atomProjection().data != nullptr, "Atom projection should be allocated");
-    SB_ASSERT_TRUE(layer.textFeatureProjection().data != nullptr, "Text feature projection should be allocated");
+    // text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
     
     return true;
 }
@@ -403,7 +403,7 @@ bool testForwardWithNoAtoms(std::string& message) {
         return false;
     }
     args.token_numeric_values = numeric_buffers.values;
-    args.token_numeric_mask = numeric_buffers.mask;
+    args.token_atom_mask = numeric_buffers.mask;
     
     layer.forward(args);
     cudaDeviceSynchronize();
@@ -472,7 +472,7 @@ bool testForwardWithAtoms(std::string& message) {
         return false;
     }
     args.token_numeric_values = numeric_buffers.values;
-    args.token_numeric_mask = numeric_buffers.mask;
+    args.token_atom_mask = numeric_buffers.mask;
     
     layer.forward(args);
     cudaDeviceSynchronize();
@@ -826,7 +826,7 @@ bool testIntegerEmbeddingVariance(std::string& message) {
                    total_tokens * sizeof(uint8_t), cudaMemcpyHostToDevice),
         "Failed to copy numeric mask");
     args.token_numeric_values = numeric_buffers.values;
-    args.token_numeric_mask = numeric_buffers.mask;
+    args.token_atom_mask = numeric_buffers.mask;
     
     layer.forward(args);
     cudaDeviceSynchronize();
@@ -979,7 +979,7 @@ bool testStringConsistentEmbeddings(std::string& message) {
         return false;
     }
     args.token_numeric_values = numeric_buffers.values;
-    args.token_numeric_mask = numeric_buffers.mask;
+    args.token_atom_mask = numeric_buffers.mask;
     
     layer.forward(args);
     cudaDeviceSynchronize();
@@ -1080,7 +1080,7 @@ bool testAtomSemanticReasoning(std::string& message) {
                    total_tokens * sizeof(uint8_t), cudaMemcpyHostToDevice),
         "Failed to copy numeric mask");
     args.token_numeric_values = numeric_buffers.values;
-    args.token_numeric_mask = numeric_buffers.mask;
+    args.token_atom_mask = numeric_buffers.mask;
     
     layer.forward(args);
     cudaDeviceSynchronize();
@@ -1261,7 +1261,7 @@ bool testLoggingForwardDiagnostics(std::string& message) {
         return false;
     }
     args.token_numeric_values = numeric_buffers.values;
-    args.token_numeric_mask = numeric_buffers.mask;
+    args.token_atom_mask = numeric_buffers.mask;
     
     // This forward pass should log diagnostic information
     layer.forward(args);

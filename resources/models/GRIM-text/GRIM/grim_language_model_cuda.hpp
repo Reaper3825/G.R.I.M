@@ -144,6 +144,7 @@ struct EncoderConfig {
     int num_layers = 0;        // Use HyperParameters::DEFAULT_NUM_LAYERS
     int max_seq_len = 0;       // Use HyperParameters::DEFAULT_MAX_SEQ_LEN
     float dropout_rate = 0.0f; // Use HyperParameters::DEFAULT_DROPOUT_RATE
+    float residual_dropout_rate = 0.0f; // Use HyperParameters::DEFAULT_RESIDUAL_DROPOUT_RATE
     float attention_dropout = 0.0f; // Use HyperParameters::DEFAULT_ATTENTION_DROPOUT
     
     // Cache limits
@@ -172,15 +173,15 @@ struct EncoderConfig {
     // WARNING: If nullptr, attention sees no positional info - positions become equivalent!
     const PBM::PBMSpec* pos_encoding = nullptr;
     
-    // LayerScale (Issue #109 fix - config propagation)
+    // LayerScale (Issue #109/#129 fix - config propagation)
     // These fields were missing, causing reliance on EncoderLayerConfig defaults
     bool use_layer_scale = false;        // Enable per-sublayer learnable scaling
-    float layer_scale_init = 0.1f;       // Initial scale value (typical: 0.1 for small models)
+    float layer_scale_init = 1.0f;       // Issue #129: init=1.0 (NOT CaiT's 0.1 — caused 10x gradient attenuation)
     
     // Per-layer residual centering (Issue #126 fix - can be disabled to improve gradient signal)
     // When true, applies center_columns after each residual add in every encoder layer (24 total).
     // This prevents mode collapse but attenuates gradient signal through 24 centering projections.
-    // When false, only the LM head centering (center_hidden_states) prevents mode collapse.
+    // When false, only the LM head centering (center_hidden_states) helps prevent mode collapse.
     bool center_encoder_residuals = false;
     
     // Bias control - when false, encoder layers skip bias addition (b_qkv, b_o not used)
@@ -203,14 +204,17 @@ struct LMHeadConfig {
     const Matrix* embedding_weights = nullptr;
     bool use_bias = true;
     bool use_simd = true;
-    float epsilon = 1e-10f;
+    float epsilon = 1e-5f;
 };
 
 enum class SamplingStrategy {
     GREEDY,
     TOP_K,
     TOP_P,
-    BEAM_SEARCH
+    MIN_P,           // Min-P (relative threshold)
+    TYPICAL,         // Locally typical sampling
+    TOP_K_TOP_P,     // Combined: Top-K first, then Top-P within survivors
+    BEAM_SEARCH      // NOT SUPPORTED - exists only to give clear error
 };
 
 struct GenerationConfig {
@@ -220,24 +224,36 @@ struct GenerationConfig {
     float temperature = 1.0f;
     int top_k = 50;
     float top_p = 0.9f;
+    float min_p = 0.0f;                    // Min-P threshold (0 = disabled)
+    float typical_p = 1.0f;                // Typical sampling mass (1.0 = disabled)
     float repetition_penalty = 1.0f;
     int repetition_penalty_window = 64;
+    float frequency_penalty = 0.0f;        // Additive penalty per occurrence (0 = disabled)
+    float presence_penalty = 0.0f;         // Additive penalty if token appeared (0 = disabled)
     float length_penalty = 1.0f;
     int num_beams = 1;
     int num_return_sequences = 1;
     bool early_stopping = false;
     int eos_token_id = 0;
-    int pad_token_id = 0; 
+    int pad_token_id = 0;
+    int bos_token_id = 2;
+    int unk_token_id = 0;
     int no_repeat_ngram_size = 0;
     bool do_sample = true;
     float diversity_penalty = 0.0f;
     std::vector<int> bad_words_ids;
     unsigned int seed = 0;
+
+    // ScratchBlock reasoning during inference
+    // When true, generated atom tokens (numbers, URLs, etc.) are classified
+    // and their metadata (numeric_value, atom_mask) is fed back into forwardStep()
+    // so the ScratchBlock layer can inject structured reasoning embeddings.
+    bool enable_scratchblock_reasoning = true;
 };
 
 using GenerationStreamCallback = std::function<void(int token_id, float score)>;
 
-struct ActivationQuantizationConfig {
+ struct ActivationQuantizationConfig {
     bool enabled = false;
     bool apply_to_embeddings = false;
     bool apply_to_encoder_outputs = false;
@@ -262,6 +278,7 @@ struct LanguageModelConfig {
     int num_layers = 0;        // Use HyperParameters::DEFAULT_NUM_LAYERS
     int max_seq_len = 0;       // Use HyperParameters::DEFAULT_MAX_SEQ_LEN
     float dropout_rate = 0.0f; // Use HyperParameters::DEFAULT_DROPOUT_RATE
+    float residual_dropout_rate = 0.0f; // Use HyperParameters::DEFAULT_RESIDUAL_DROPOUT_RATE
     float attention_dropout = 0.0f; // Use HyperParameters::DEFAULT_ATTENTION_DROPOUT
     
     // Derived values - computed from above, DO NOT set directly
@@ -298,7 +315,7 @@ struct LanguageModelConfig {
     // Reduces correlation buildup between layers by gating sublayer outputs
     // with learnable scalars (initialized to layer_scale_init, typically 0.1)
     bool use_layer_scale = false;         // Enable LayerScale (gated residual scaling)
-    float layer_scale_init = 0.1f;        // Initial value for layer scale parameters
+    float layer_scale_init = 1.0f;       // Issue #129: init=1.0 (NOT CaiT's 0.1 — caused 10x gradient attenuation)
     
     bool use_gpu = true;
     bool use_flash_attention = true;  // Use Flash Attention 2 for memory efficiency
@@ -429,7 +446,9 @@ struct GeneratedSequence {
     std::vector<int> token_ids;
     std::vector<float> token_scores;
     std::vector<float> token_numeric_values;
-    std::vector<uint8_t> token_numeric_mask;
+    std::vector<uint8_t> token_atom_mask;
+    std::shared_ptr<const GRIM::Tokenizer::AtomTable> context_atom_table;  // Atom registry from context (null for generated tokens)
+    std::vector<uint32_t> atom_entry_ids;  // Per-token atom entry IDs (kAtomEntryNone = no atom)
     float score = 0.0f;
     bool finished = false;
 
@@ -474,7 +493,7 @@ struct TokenBufferView;
 struct TokenBufferView {
     int* device_token_ids = nullptr;
     float* device_token_numeric_values = nullptr;
-    uint8_t* device_token_numeric_mask = nullptr;
+    uint8_t* device_token_atom_mask = nullptr;
     int max_tokens = 0;
     cudaStream_t stream = nullptr;
 };
@@ -496,20 +515,6 @@ public:
         float model_size_mb = 0.0f;
     };
 
-    struct GradComponentMetrics {
-        float total_norm = 0.0f;
-        float embedding_norm = 0.0f;
-        float lm_head_norm = 0.0f;
-        float attention_norm = 0.0f;
-        float ffn_norm = 0.0f;
-        float rmsnorm_norm = 0.0f;      // RMSNorm gamma gradients
-        float scratchblock_norm = 0.0f; // ScratchBlock atom embeddings + projection gradients
-        float grad_scale = 1.0f;
-        float clip_threshold = 0.0f;
-        bool clipped = false;
-        int valid_token_count = 0;
-    };
-
     struct UpdateProbeResult {
         std::string group_name;
         float parameter_rms = 0.0f;
@@ -529,17 +534,17 @@ public:
     // Main API
     Vector forward(const std::vector<int>& token_ids,
                    const std::vector<float>& token_numeric_values,
-                   const std::vector<uint8_t>& token_numeric_mask);
+                   const std::vector<uint8_t>& token_atom_mask);
     Vector getNextTokenLogits(const std::vector<int>& context_tokens,
                               const std::vector<float>& context_numeric_values,
-                              const std::vector<uint8_t>& context_numeric_mask);
+                              const std::vector<uint8_t>& context_atom_mask);
     std::vector<GeneratedSequence> generate(const std::vector<int>& prompt_tokens,
                                             const std::vector<float>& prompt_numeric_values,
-                                            const std::vector<uint8_t>& prompt_numeric_mask,
+                                            const std::vector<uint8_t>& prompt_atom_mask,
                                             const GenerationConfig* gen_config = nullptr);
     GeneratedSequence generateStream(const std::vector<int>& prompt_tokens,
                                      const std::vector<float>& prompt_numeric_values,
-                                     const std::vector<uint8_t>& prompt_numeric_mask,
+                                     const std::vector<uint8_t>& prompt_atom_mask,
                                      GenerationStreamCallback callback,
                                      const GenerationConfig* gen_config = nullptr);
     
@@ -560,12 +565,12 @@ public:
     // Returns logits for the last prompt token (ready for first sampling)
     Vector forwardInit(const std::vector<int>& prompt_tokens,
                        const std::vector<float>& prompt_numeric_values,
-                       const std::vector<uint8_t>& prompt_numeric_mask);
+                       const std::vector<uint8_t>& prompt_atom_mask);
     
     // Process a single new token using cached K,V (decode phase)  
     // Returns logits for this token position (ready for next sampling)
     // Appends new token to cached sequence and recomputes full forward pass
-    Vector forwardStep(int new_token, float numeric_value, uint8_t numeric_mask);
+    Vector forwardStep(int new_token, float numeric_value, uint8_t atom_mask);
     
     // Clear KV cache (call before starting new generation)
     void resetKVCache();
@@ -577,21 +582,15 @@ public:
     void initPBM();            // Initialize PBM (ALiBi+RoPE hybrid) - MUST be called before initGPU
     void initTrainingState();  // Initialize training state (allocate GPU buffers + gradients)
     void initInferenceState();  // Initialize inference state (allocate GPU buffers WITHOUT gradients)
-    void backward(float loss, bool accumulate = false, float grad_scale = 1.0f, uint64_t step = 0);
-    void updateWeights(float learning_rate,
-                       OptimizerState* optimizer_state,
-                       float weight_decay = HyperParameters::ADAMW_WEIGHT_DECAY);
-    void resetOptimizerMoments();
-    void scaleOptimizerMoments(float scale);
-    void zeroGrad();
-    float computeGradNorm(bool sync_for_host_read = false);  // Default false: async (fast). Set true only when reading result on host.
-    void scaleGradients(float scale);
-    void scaleGradientsByType(float scale, ParamGroupType type);  // Issue #134: Scale only specific param group type
-    void scaleGradientsExcludingType(float scale, ParamGroupType exclude_type);  // Issue #134: Scale all EXCEPT specific type
-    void clampGradients(float min_val, float max_val);  // Clamp individual gradient values
-    void dumpGradients(const std::string& path);  // Dump gradients to binary file for inspection
+    // backward() and zeroGrad() DELETED (Rule 26).
+    // Backward: Use autogradTrainingStep() which does forward+loss+backward.
+    // Zeroing: executeAutogradBackward() zeros all gradients when accumulate=false.
+    // updateWeights(), resetOptimizerMoments(), scaleOptimizerMoments() MOVED to
+    // AdamW_Kernal_GPU.{hpp,cu} as free functions: launchAdamWStep(), resetAdamWMoments(),
+    // scaleAdamWMoments(). AdamW stepping is training infrastructure, not model logic.
+    // computeGradNorm(), scaleGradientsByType(), recordGradientClip() DELETED (Rule 26).
+    // Phase2 calls GradNorm::measureGradientNorms() + launchScaleGradients() directly.
     void dumpGradientValues(int step, const std::string& filepath);  // Dump gradient values to text file for comparison
-    void logEmbeddingDiagnostics(const std::string& tag);
     
 #ifdef USE_CUDA
     void setLossOptions(const LossContext::LossOptions& opts) { loss_options_ = opts; }
@@ -600,14 +599,11 @@ public:
     // Training state access (for debugging/diagnostics)
     const TrainingState& getTrainingState() const { return training_state_; }
     TrainingState& getTrainingState() { return training_state_; }
+    
+    // Parameter groups accessor (for direct gradient norm / clipping in Phase2)
+    const std::vector<ParameterGroup>& parameterGroups() const { return parameter_groups_; }
+    std::vector<ParameterGroup>& parameterGroups() { return parameter_groups_; }
 #endif
-
-    // Diagnostics (host-side consumers should poll and clear to stay off the hot path)
-    const GradComponentMetrics& gradientMetrics() const { return grad_metrics_; }
-    bool hasGradientMetrics() const { return grad_metrics_ready_; }
-    void clearGradientMetricsFlag() { grad_metrics_ready_ = false; }
-    void recordGradientClip(float clip_threshold, bool clipped);
-    float lastGpuNormMs() const { return last_gpu_norm_ms_; }  // Issue #138: GPU-side kernel time only
 
     const UpdateProbeResult& updateProbe() const { return update_probe_result_; }
     bool hasUpdateProbe() const { return update_probe_ready_; }
@@ -630,10 +626,10 @@ public:
     void initGPU();
     Vector forwardGPU(const std::vector<int>& token_ids,
                       const std::vector<float>& token_numeric_values,
-                      const std::vector<uint8_t>& token_numeric_mask);
+                      const std::vector<uint8_t>& token_atom_mask);
     Vector getNextTokenLogitsGPU(const std::vector<int>& context_tokens,
                                  const std::vector<float>& context_numeric_values,
-                                 const std::vector<uint8_t>& context_numeric_mask);
+                                 const std::vector<uint8_t>& context_atom_mask);
     TokenBufferView getTokenBufferView();
     void markDevicePromptReady(int token_count);
     
@@ -667,10 +663,9 @@ public:
     
     GeneratedSequence generateSequenceGPU(const std::vector<int>& prompt_tokens,
                                           const std::vector<float>& prompt_numeric_values,
-                                          const std::vector<uint8_t>& prompt_numeric_mask,
+                                          const std::vector<uint8_t>& prompt_atom_mask,
                                           const GenerationConfig& cfg,
-                                          GenerationStreamCallback* stream_callback,
-                                          std::mt19937& rng);
+                                          GenerationStreamCallback* stream_callback = nullptr);
     
 private:
     // Core inference forward: assumes data already in cached_* tensors.
@@ -692,13 +687,9 @@ private:
     bool staged_prompt_ready_ = false;
     int staged_prompt_len_ = 0;
     
-    GradComponentMetrics grad_metrics_;
     UpdateProbeResult update_probe_result_;
-    bool grad_metrics_ready_ = false;
     bool update_probe_ready_ = false;
     float last_grad_scale_ = 1.0f;
-    float last_grad_clip_limit_ = 0.0f;
-    float last_gpu_norm_ms_ = 0.0f;  // Issue #138: GPU-side norm kernel time (excludes backward drain)
     std::string update_probe_group_name_;
     size_t update_probe_group_index_ = static_cast<size_t>(-1);
     size_t update_probe_sample_elems_ = 0;
@@ -712,8 +703,6 @@ private:
     std::vector<ParameterGroup> parameter_groups_;  // Parameter groups for optimizer
     uint32_t backward_call_count_ = 0;              // Tracks backward() calls for deterministic diagnostics
     LossContext::LossOptions loss_options_{};
-    
-    // NOTE: Gradient norm computation moved to TrainingState::gradnorm_ctrl (GradNormController)
     
     // ScratchBlock reasoning layer (togglable)
     std::unique_ptr<ScratchBlockLayer> scratch_block_layer_;

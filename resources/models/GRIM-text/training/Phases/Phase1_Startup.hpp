@@ -134,6 +134,9 @@ struct StartupConfig {
     StabilityOverrides stability;
     ScratchBlockConfig scratch;
     
+    // Generation config for inference samples during training
+    GRIM::GenerationConfig generation;
+    
     // Derived values (Rule 20: No defaults - must be explicitly set during loadConfiguration)
     int max_seq_len = 0;  // MUST be set from hyperparameters or stability override, throw if 0
     int sliding_window_stride = 0;  // Derived from max_seq_len

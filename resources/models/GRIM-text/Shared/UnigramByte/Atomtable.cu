@@ -318,7 +318,8 @@ bool AtomTable::loadFromFile(const std::string& path) {
     if (!file.good() || version != 1) {
         return false;
     }
-    if (entry_count > MAX_ATOM_TOKENS) {
+    // Sanity check: reject obviously corrupt files (> 10M entries)
+    if (entry_count > 10000000) {
         return false;
     }
 
@@ -555,13 +556,8 @@ uint32_t AtomTable::registerAtom(AtomType type,
     }
     
     // New atom - allocate entry
-    // Token IDs start at ATOM_TOKEN_BASE to separate from byte tokens
+    // Entry IDs start at ATOM_TOKEN_BASE (side-channel index, not model token vocab)
     AtomEntry entry;
-    if (next_id_ >= MAX_ATOM_TOKENS) {
-        throw std::runtime_error(
-            "AtomTable capacity exceeded (max " +
-            std::to_string(MAX_ATOM_TOKENS) + " atom tokens)");
-    }
     entry.id = ATOM_TOKEN_BASE + next_id_;
     next_id_++;
     
@@ -632,10 +628,7 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
         return true;
     }
     
-    // New atom - allocate entry if there's room
-    if (next_id_ >= MAX_ATOM_TOKENS) {
-        return false;
-    }
+    // New atom - allocate entry
     
     // Parse the atom (still needs std::string temporarily)
     std::string raw_text_str(raw_text);
@@ -698,8 +691,8 @@ uint32_t AtomTable::registerSpan(const StructuralSpan& span) {
     uint32_t out_id = UINT32_MAX;
     if (!tryRegisterSpan(span, out_id)) {
         throw std::runtime_error(
-            "AtomTable capacity exceeded (max " +
-            std::to_string(MAX_ATOM_TOKENS) + " atom tokens)");
+            "AtomTable::registerSpan failed for atom type " +
+            std::to_string(static_cast<int>(span.atom_type)));
     }
     return out_id;
 }

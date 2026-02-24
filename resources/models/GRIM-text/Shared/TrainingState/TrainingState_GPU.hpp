@@ -61,12 +61,6 @@ struct TrainingState {
     // weight_init_seed stored directly on TrainingState for Pattern B layer construction.
     uint64_t weight_init_seed = 0;
     
-    //======================================================//
-    //  QK-NORM LEARNED SCALES (nGPT-style)
-    //======================================================//
-    std::vector<Tensor> attn_alpha_q;       // [num_heads] per layer
-    std::vector<Tensor> attn_alpha_k;       // [num_kv_heads] per layer
-
     // GQA configuration (stored for cache sizing)
     int num_heads = 0;           // Q heads
     int num_kv_heads = 0;        // K,V heads (GQA: num_kv_heads < num_heads)
@@ -83,11 +77,11 @@ struct TrainingState {
     Tensor cached_targets_tensor;       // [max_tokens] int32
     Tensor cached_token_ids_tensor;     // [max_tokens] int32
     Tensor cached_token_numeric_values; // [max_tokens] float
-    Tensor cached_token_numeric_mask;   // [max_tokens] uint8
     
-    // GRMT v4: text features for ScratchBlock
+    // Unified atom side-channel
     Tensor cached_token_text_features;  // [max_tokens * kTextFeatureDim] FP16
-    Tensor cached_token_text_mask;      // [max_tokens] uint8
+    Tensor cached_token_atom_mask;      // [max_tokens] uint8 (1 = atom token)
+    Tensor cached_token_atom_flags;     // [max_tokens] uint32 (type-specific metadata from AtomTable)
     
     int cached_batch_size = 0;
     int cached_seq_len = 0;
@@ -145,9 +139,7 @@ struct TrainingState {
     
     /// Zero all intermediate gradient tensors
     void zeroIntermediateGrads(cudaStream_t stream);
-    
-    // DELETED: FA bf16/dq_accum/dsoftmax_sum buffers — FlashAttentionLayer::ensureScratch() self-manages.
-    // Autograd ScaledDotProductAttentionGradFn also self-allocates backward buffers.
+
     
     //======================================================//
     //  Issue #43 FIX: Centering Scratch Buffer
@@ -169,7 +161,7 @@ struct TrainingState {
     //  STREAM & GRADIENT MANAGEMENT
     //======================================================//
     StreamController stream_ctrl;
-    GradNorm::GradNormController gradnorm_ctrl;
+    GradNorm::GradNormScratch* grad_norm_scratch = nullptr;  // Allocated in Phase1, freed in ~TrainingState
     cublasHandle_t cublas_handle = nullptr;
 
     //======================================================//
@@ -221,14 +213,6 @@ struct TrainingState {
     // -1 means no collapse token detected yet.
     int tracked_collapse_token = -1;
 
-    //======================================================//
-    //  ISSUE #60 FIX: PCGRAD BUFFER FOR TIED WEIGHTS
-    //======================================================//
-    Tensor pcgrad_temp_buffer;
-    
-    void allocatePCGradBuffer(int vocab_size, int d_model, cudaStream_t stream);
-    void freePCGradBuffer();
-    
     //======================================================//
     //  GUESS CACHE BUFFERS (GRIM-TS - typed buffers, NOT Tensors)
     //======================================================//

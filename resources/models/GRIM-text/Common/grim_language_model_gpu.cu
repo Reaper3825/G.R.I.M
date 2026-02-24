@@ -37,6 +37,7 @@
 #include "../Shared/UnigramByte/Unigram.hpp"
 #include "../Shared/UnigramByte/AtomTable.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"                 // Unified PBM (ALiBi + RoPE)
+#include "../Shared/Sampling/Sampling.hpp"                        // SamplingPipeline
 
 namespace GRIM {
 
@@ -68,12 +69,6 @@ constexpr float kProbabilityFloor = HyperParameters::PROBABILITY_FLOOR;
 constexpr float kSoftmaxClipThreshold = HyperParameters::SOFTMAX_CLIP_THRESHOLD;
 constexpr float kTemperatureEpsilon = HyperParameters::EPSILON_TEMPERATURE;
 constexpr uint32_t kMaxReasonableVocabSize = HyperParameters::MAX_REASONABLE_VOCAB_SIZE;
-
-bool isNumericAtomToken(int token_id) {
-    using GRIM::Tokenizer::AtomType;
-    const AtomType type = GRIM::Tokenizer::tokenIdToAtomType(token_id);
-    return GRIM::Tokenizer::isNumericAtom(type);
-}
 
 int detectVocabSizeFromBinary(const std::string& path) {
     std::ifstream file(path, std::ios::binary);
@@ -148,250 +143,6 @@ int detectVocabSizeFromBinary(const std::string& path) {
     }
 
     return static_cast<int>(vocab_size);
-}
-
-struct SampleResult {
-    int token_id = -1;
-    float probability = 0.0f;
-    float log_probability = -std::numeric_limits<float>::infinity();
-};
-
-std::mt19937 makeGenerator(unsigned int seed, int sequence_offset = 0) {
-    if (seed == 0) {
-        std::random_device rd;
-        return std::mt19937(rd());
-    }
-    return std::mt19937(seed + sequence_offset);
-}
-
-void applyBadWordMask(std::vector<float>& logits, const std::vector<int>& bad_words) {
-    if (bad_words.empty()) return;
-    const int vocab = static_cast<int>(logits.size());
-    for (int token_id : bad_words) {
-        if (token_id >= 0 && token_id < vocab) {
-            logits[token_id] = kNegInf;
-        }
-    }
-}
-
-void applyRepetitionPenalty(std::vector<float>& logits,
-                            const std::vector<int>& history,
-                            float penalty,
-                            int window)
-{
-    if (penalty <= 1.0f || history.empty()) return;
-
-    const int vocab = static_cast<int>(logits.size());
-    const int start = std::max(0, static_cast<int>(history.size()) - window);
-
-    // Collect unique tokens in history window
-    std::unordered_set<int> seen;
-    seen.reserve(window);
-
-    for (int i = start; i < static_cast<int>(history.size()); ++i) {
-        int token_id = history[i];
-        if (token_id < 0 || token_id >= vocab) continue;
-        if (!seen.insert(token_id).second) continue;
-
-        float& logit = logits[token_id];
-
-        // Standard repetition penalty (sign-aware, uniform)
-        // Positive logits are divided, negative logits are multiplied
-        // This pushes repeated tokens away from being selected
-        if (logit > 0.0f) {
-            logit /= penalty;
-        } else {
-            logit *= penalty;
-        }
-    }
-}
-
-
-std::vector<float> softmaxWithTemperature(const std::vector<float>& logits,
-                                          float temperature)
-{
-    const size_t n = logits.size();
-    std::vector<float> probs(n);
-
-    if (n == 0) return probs;
-
-    // Temperature scaling (safe)
-    float inv_temp = 1.0f;
-    if (temperature > 0.0f && std::fabs(temperature - 1.0f) > kTemperatureEpsilon) {
-        inv_temp = 1.0f / temperature;
-    }
-
-    // Find max logit for numerical stability
-    float max_logit = -std::numeric_limits<float>::infinity();
-    for (float v : logits) {
-        max_logit = std::max(max_logit, v * inv_temp);
-    }
-
-    float sum = 0.0f;
-
-    for (size_t i = 0; i < n; ++i) {
-        float shifted = logits[i] * inv_temp - max_logit;
-
-        // TRUE clipping: prevent exp underflow, not probability mass deletion
-        shifted = std::max(shifted, kSoftmaxClipThreshold);
-
-        float v = std::exp(shifted);
-        probs[i] = v;
-        sum += v;
-    }
-
-    // Normalize (or fail loudly)
-    if (sum <= 0.0f || !std::isfinite(sum)) {
-        throw std::runtime_error("softmaxWithTemperature: invalid probability sum");
-    }
-
-    float inv_sum = 1.0f / sum;
-    for (float& p : probs) {
-        p *= inv_sum;
-    }
-
-    return probs;
-}
-
-
-void normalizeProbabilities(std::vector<float>& probs) {
-    float sum = std::accumulate(probs.begin(), probs.end(), 0.0f);
-    if (sum <= 0.0f || !std::isfinite(sum)) {
-        throw std::runtime_error("normalizeProbabilities: invalid probability sum");
-    }
-    for (float& p : probs) {
-        p /= sum;
-    }
-}
-
-void applyTopKFilter(std::vector<float>& probs, int top_k) { 
-    if (top_k <= 0 || top_k >= static_cast<int>(probs.size())) return;
-    std::vector<int> indices(probs.size());
-    std::iota(indices.begin(), indices.end(), 0);
-    std::sort(indices.begin(), indices.end(),
-              [&](int a, int b) { return probs[a] > probs[b]; });
-    for (size_t i = top_k; i < indices.size(); ++i) {
-        probs[indices[i]] = 0.0f;
-    }
-}
-
-void applyTopPFilter(std::vector<float>& probs, float top_p) {
-    if (top_p <= 0.0f || top_p >= 1.0f) return;
-
-    std::vector<int> indices(probs.size());
-    std::iota(indices.begin(), indices.end(), 0);
-
-    std::sort(indices.begin(), indices.end(),
-              [&](int a, int b) { return probs[a] > probs[b]; });
-
-    float cumulative = 0.0f;
-    bool kept_any = false;
-
-    for (size_t i = 0; i < indices.size(); ++i) {
-        int idx = indices[i];
-        float p = probs[idx];
-
-        // Always keep at least 1 token (the max-prob token)
-        if (!kept_any) {
-            cumulative += p;
-            kept_any = true;
-            continue;
-        }
-
-        // Once we have enough mass, cut the rest
-        if (cumulative >= top_p) {
-            probs[idx] = 0.0f;
-        } else {
-            cumulative += p;
-        }
-    }
-}
-
-
-SampleResult sampleFromLogits(const std::vector<float>& logits,
-                              const GenerationConfig& cfg,
-                              bool allow_sampling,
-                              std::mt19937& rng,
-                              int vocab_size) {
-    SampleResult result;
-    if (logits.empty()) {
-        throw std::runtime_error("sampleFromLogits: empty logits vector");
-    }
-    
-    if (vocab_size <= 0) {
-        throw std::runtime_error("sampleFromLogits: vocab_size must be > 0");
-    }
-    // STRICT: vocab_size must match logits size exactly
-    if (static_cast<int>(logits.size()) != vocab_size) {
-        throw std::runtime_error("sampleFromLogits: vocab_size=" + std::to_string(vocab_size) + 
-                                 " but logits.size()=" + std::to_string(logits.size()));
-    }
-    const int valid_vocab_size = vocab_size;
-    if (cfg.strategy == SamplingStrategy::BEAM_SEARCH) {
-        throw std::runtime_error("sampleFromLogits: BEAM_SEARCH is not supported");
-    }
-    if (!allow_sampling && cfg.strategy != SamplingStrategy::GREEDY) {
-        throw std::runtime_error("sampleFromLogits: non-greedy strategy requires sampling");
-    }
-    auto probabilities = softmaxWithTemperature(logits, cfg.temperature);
-    const bool use_sampling = allow_sampling && cfg.strategy != SamplingStrategy::GREEDY;
-
-    if (use_sampling) {
-        if (cfg.strategy == SamplingStrategy::TOP_K) {
-            if (cfg.top_k <= 0 || cfg.top_k > valid_vocab_size) {
-                throw std::runtime_error("sampleFromLogits: top_k out of range");
-            }
-            applyTopKFilter(probabilities, cfg.top_k);
-            normalizeProbabilities(probabilities);   // keep distribution valid
-        } else if (cfg.strategy == SamplingStrategy::TOP_P) {
-            if (cfg.top_p <= 0.0f || cfg.top_p >= 1.0f) {
-                throw std::runtime_error("sampleFromLogits: top_p out of range");
-            }
-            // probabilities are already normalized coming out of softmaxWithTemperature
-            applyTopPFilter(probabilities, cfg.top_p);
-            normalizeProbabilities(probabilities);   // renormalize nucleus
-        } else {
-            throw std::runtime_error("sampleFromLogits: unsupported sampling strategy");
-        }
-    }
-
-    float sum = std::accumulate(probabilities.begin(), probabilities.end(), 0.0f);
-    if (sum <= 0.0f) {
-        throw std::runtime_error("sampleFromLogits: probability sum is zero (temperature=" + 
-                                 std::to_string(cfg.temperature) + "). Model outputs are degenerate.");
-    }
-    
-    if (!use_sampling) {
-        // Greedy decoding
-        int idx = static_cast<int>(std::distance(
-            probabilities.begin(),
-            std::max_element(probabilities.begin(), probabilities.end())));
-        if (idx < 0 || idx >= valid_vocab_size) {
-            throw std::runtime_error("sampleFromLogits: greedy index out of range: idx=" +
-                                     std::to_string(idx) + " vocab_size=" + std::to_string(valid_vocab_size));
-        }
-        float prob = std::max(probabilities[idx], kProbabilityFloor);
-        result.token_id = idx;
-        result.probability = prob;
-        result.log_probability = std::log(prob);
-        return result;
-    }
-    
-    // Sampling with temperature
-    std::discrete_distribution<int> dist(probabilities.begin(), probabilities.end());
-    int sampled = dist(rng);
-    
-    // STRICT: Sampled token must be valid
-    if (sampled < 0 || sampled >= valid_vocab_size) {
-        throw std::runtime_error("sampleFromLogits: sampled token out of range: sampled=" + 
-                                 std::to_string(sampled) + " vocab_size=" + std::to_string(valid_vocab_size));
-    }
-    
-    float prob = std::max(probabilities[sampled], kProbabilityFloor);
-    result.token_id = sampled;
-    result.probability = prob;
-    result.log_probability = std::log(prob);
-    return result;
 }
 
 }  // namespace
@@ -725,11 +476,11 @@ LanguageModel::~LanguageModel() = default;
 
 Vector LanguageModel::forward(const std::vector<int>& token_ids,
                               const std::vector<float>& token_numeric_values,
-                              const std::vector<uint8_t>& token_numeric_mask) {
+                              const std::vector<uint8_t>& token_atom_mask) {
 #ifdef USE_CUDA
     // Use GPU if available
     if (config_.use_gpu && gpu_encoder_) {
-        return forwardGPU(token_ids, token_numeric_values, token_numeric_mask);
+        return forwardGPU(token_ids, token_numeric_values, token_atom_mask);
     }
 #endif
     throw std::runtime_error("LanguageModel::forward requires GPU initialization");
@@ -737,13 +488,13 @@ Vector LanguageModel::forward(const std::vector<int>& token_ids,
 
 Vector LanguageModel::getNextTokenLogits(const std::vector<int>& context_tokens,
                                          const std::vector<float>& context_numeric_values,
-                                         const std::vector<uint8_t>& context_numeric_mask) {
+                                         const std::vector<uint8_t>& context_atom_mask) {
 #ifdef USE_CUDA
     // Use GPU if available
     if (config_.use_gpu && gpu_encoder_) {
         return getNextTokenLogitsGPU(context_tokens,
                                      context_numeric_values,
-                                     context_numeric_mask);
+                                     context_atom_mask);
     }
 #endif
     throw std::runtime_error("LanguageModel::getNextTokenLogits requires GPU initialization");
@@ -752,7 +503,7 @@ Vector LanguageModel::getNextTokenLogits(const std::vector<int>& context_tokens,
 
 Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_tokens,
                                             const std::vector<float>& context_numeric_values,
-                                            const std::vector<uint8_t>& context_numeric_mask) {
+                                            const std::vector<uint8_t>& context_atom_mask) {
     if (!config_.use_gpu || !gpu_encoder_) {
         throw std::runtime_error("getNextTokenLogitsGPU requires initialized GPU encoder");
     }
@@ -760,8 +511,8 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
         throw std::runtime_error("getNextTokenLogitsGPU requires non-empty context_tokens");
     }
     if (context_numeric_values.size() != context_tokens.size() ||
-        context_numeric_mask.size() != context_tokens.size()) {
-        throw std::runtime_error("getNextTokenLogitsGPU: numeric side-channel length mismatch");
+        context_atom_mask.size() != context_tokens.size()) {
+        throw std::runtime_error("getNextTokenLogitsGPU: side-channel length mismatch");
     }
     const int seq_len = static_cast<int>(context_tokens.size());
     if (seq_len > config_.max_seq_len) {
@@ -799,8 +550,8 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
                     context_numeric_values.data(),
                     seq_len * sizeof(float),
                     cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_numeric_mask.data),
-                    context_numeric_mask.data(),
+    cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data),
+                    context_atom_mask.data(),
                     seq_len * sizeof(uint8_t),
                     cudaMemcpyHostToDevice, stream);
     
@@ -810,8 +561,8 @@ Vector LanguageModel::getNextTokenLogitsGPU(const std::vector<int>& context_toke
 
 Vector LanguageModel::forwardGPU(const std::vector<int>& token_ids,
                                  const std::vector<float>& token_numeric_values,
-                                 const std::vector<uint8_t>& token_numeric_mask) {
-    return getNextTokenLogitsGPU(token_ids, token_numeric_values, token_numeric_mask);
+                                 const std::vector<uint8_t>& token_atom_mask) {
+    return getNextTokenLogitsGPU(token_ids, token_numeric_values, token_atom_mask);
 }
 
 TokenBufferView LanguageModel::getTokenBufferView() {
@@ -831,12 +582,12 @@ TokenBufferView LanguageModel::getTokenBufferView() {
     }
     if (!training_state_.cached_token_ids_tensor.data ||
         !training_state_.cached_token_numeric_values.data ||
-        !training_state_.cached_token_numeric_mask.data) {
+        !training_state_.cached_token_atom_mask.data) {
         throw std::runtime_error("getTokenBufferView: token buffers are not allocated");
     }
     view.device_token_ids = reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data);
     view.device_token_numeric_values = training_state_.cached_token_numeric_values.data;
-    view.device_token_numeric_mask = reinterpret_cast<uint8_t*>(training_state_.cached_token_numeric_mask.data);
+    view.device_token_atom_mask = reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data);
     view.max_tokens = config_.max_seq_len;
     view.stream = training_state_.stream_ctrl.getPrimaryStream();
     return view;
@@ -866,7 +617,7 @@ void LanguageModel::markDevicePromptReady(int token_count) {
 std::vector<GeneratedSequence> LanguageModel::generate(
     const std::vector<int>& prompt_tokens,
     const std::vector<float>& prompt_numeric_values,
-    const std::vector<uint8_t>& prompt_numeric_mask,
+    const std::vector<uint8_t>& prompt_atom_mask,
     const GenerationConfig* gen_config)
 {
 #ifdef USE_CUDA
@@ -879,13 +630,14 @@ std::vector<GeneratedSequence> LanguageModel::generate(
         std::vector<GeneratedSequence> outputs;
         outputs.reserve(sequences);
         for (int i = 0; i < sequences; ++i) {
-            std::mt19937 rng = makeGenerator(cfg.seed, i);
+            // Each sequence gets a unique seed offset for reproducibility
+            GenerationConfig seq_cfg = cfg;
+            if (seq_cfg.seed != 0) seq_cfg.seed += i;
             outputs.push_back(generateSequenceGPU(prompt_tokens,
                                                   prompt_numeric_values,
-                                                  prompt_numeric_mask,
-                                                  cfg,
-                                                  nullptr,
-                                                  rng));
+                                                  prompt_atom_mask,
+                                                  seq_cfg,
+                                                  nullptr));
         }
         return outputs;
     }
@@ -896,20 +648,18 @@ std::vector<GeneratedSequence> LanguageModel::generate(
 GeneratedSequence LanguageModel::generateStream(
     const std::vector<int>& prompt_tokens,
     const std::vector<float>& prompt_numeric_values,
-    const std::vector<uint8_t>& prompt_numeric_mask,
+    const std::vector<uint8_t>& prompt_atom_mask,
     GenerationStreamCallback callback,
     const GenerationConfig* gen_config)
 {
 #ifdef USE_CUDA
     if (config_.use_gpu && gpu_encoder_) {
         GenerationConfig cfg = gen_config ? *gen_config : config_.generation;
-        std::mt19937 rng = makeGenerator(cfg.seed);
         return generateSequenceGPU(prompt_tokens,
                                    prompt_numeric_values,
-                                   prompt_numeric_mask,
+                                   prompt_atom_mask,
                                    cfg,
-                                   &callback,
-                                   rng);
+                                   &callback);
     }
 #endif
     throw std::runtime_error("LanguageModel::generateStream requires GPU initialization");
@@ -918,14 +668,14 @@ GeneratedSequence LanguageModel::generateStream(
 
 GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& prompt_tokens,
                                                      const std::vector<float>& prompt_numeric_values,
-                                                     const std::vector<uint8_t>& prompt_numeric_mask,
+                                                     const std::vector<uint8_t>& prompt_atom_mask,
                                                      const GenerationConfig& cfg,
-                                                     GenerationStreamCallback* stream_callback,
-                                                     std::mt19937& rng) {
+                                                     GenerationStreamCallback* stream_callback) {
     GeneratedSequence sequence;
     sequence.token_ids = prompt_tokens;
     sequence.token_numeric_values = prompt_numeric_values;
-    sequence.token_numeric_mask = prompt_numeric_mask;
+    sequence.token_atom_mask = prompt_atom_mask;
+    sequence.atom_entry_ids.assign(prompt_tokens.size(), GRIM::Tokenizer::kAtomEntryNone);
     
     if (!config_.use_gpu || !gpu_encoder_) {
         throw std::runtime_error("generateSequenceGPU requires initialized GPU encoder");
@@ -937,8 +687,8 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
                                  std::to_string(config_.max_seq_len));
     }
     if (prompt_numeric_values.size() != prompt_tokens.size() ||
-        prompt_numeric_mask.size() != prompt_tokens.size()) {
-        throw std::runtime_error("generateSequenceGPU: numeric side-channel length mismatch");
+        prompt_atom_mask.size() != prompt_tokens.size()) {
+        throw std::runtime_error("generateSequenceGPU: side-channel length mismatch");
     }
     
     if (cfg.max_new_tokens < 0) {
@@ -952,20 +702,36 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
     if (cfg.strategy == SamplingStrategy::BEAM_SEARCH) {
         throw std::runtime_error("generateSequenceGPU: BEAM_SEARCH is not supported");
     }
-    if (!cfg.do_sample && cfg.strategy != SamplingStrategy::GREEDY) {
-        throw std::runtime_error("generateSequenceGPU: non-greedy strategy requires sampling");
-    }
-    if (cfg.strategy == SamplingStrategy::TOP_K &&
-        (cfg.top_k <= 0 || cfg.top_k > vocab_size)) {
-        throw std::runtime_error("generateSequenceGPU: top_k out of range");
-    }
-    if (cfg.strategy == SamplingStrategy::TOP_P &&
-        (cfg.top_p <= 0.0f || cfg.top_p >= 1.0f)) {
-        throw std::runtime_error("generateSequenceGPU: top_p out of range");
-    }
-    if (cfg.strategy != SamplingStrategy::GREEDY && cfg.temperature <= 0.0f) {
-        throw std::runtime_error("generateSequenceGPU: temperature must be > 0 for sampling");
-    }
+    
+    // =========================================================================
+    // Build SamplingPipeline from GenerationConfig (single sampling path)
+    // =========================================================================
+    Sampling::SamplingConfig sampling_cfg = Sampling::buildFromGenerationConfig(
+        static_cast<int>(cfg.strategy),
+        cfg.do_sample,
+        cfg.temperature,
+        cfg.top_k,
+        cfg.top_p,
+        cfg.min_p,
+        cfg.typical_p,
+        cfg.repetition_penalty,
+        cfg.repetition_penalty_window,
+        cfg.frequency_penalty,
+        cfg.presence_penalty,
+        cfg.no_repeat_ngram_size,
+        cfg.eos_token_id,
+        cfg.bos_token_id,
+        cfg.pad_token_id,
+        cfg.unk_token_id,
+        cfg.bad_words_ids,
+        cfg.seed);
+    
+    Sampling::SamplingPipeline pipeline(sampling_cfg);
+    
+    // ScratchBlock reasoning: determine if we should classify generated atom tokens
+    const bool scratchblock_active = cfg.enable_scratchblock_reasoning &&
+                                     config_.use_scratch_block &&
+                                     isScratchBlockEnabled();
     
     // =========================================================================
     // INCREMENTAL GENERATION WITH KV CACHE
@@ -980,13 +746,11 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
     // Process prompt and get logits for first new token
     Vector logits_vec = forwardInit(prompt_tokens,
                                     prompt_numeric_values,
-                                    prompt_numeric_mask);
+                                    prompt_atom_mask);
     if (logits_vec.data.empty()) {
         throw std::runtime_error("generateSequenceGPU: forwardInit returned empty logits");
     }
 
-    int logits_pos = static_cast<int>(prompt_tokens.size()) - 1;
-    
     for (int step = 0; step < max_steps; ++step) {
         // Check max sequence length
         const int current_len = getKVCacheLength();
@@ -995,42 +759,43 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             break;
         }
         
-        std::vector<float> logits = logits_vec.data;
+        // =====================================================================
+        // Sample next token using SamplingPipeline
+        // Pipeline handles: penalties → n-gram blocking → token masking →
+        //                   temperature+softmax → filter → renorm → sample
+        // =====================================================================
+        Sampling::SampleResult sample = pipeline.sample(
+            logits_vec.data, sequence.token_ids, vocab_size);
         
-        if (cfg.repetition_penalty > 1.0f) {
-            applyRepetitionPenalty(logits, sequence.token_ids, cfg.repetition_penalty, cfg.repetition_penalty_window);
-        }
-        if (!cfg.bad_words_ids.empty()) {
-            applyBadWordMask(logits, cfg.bad_words_ids);
-        }
-
-        // Mask non-content tokens: UNK(0), PAD(1), BOS(2) → -inf
-        // These tokens should NEVER be generated. EOS(3) stays valid.
-        if (vocab_size > 3) {
-            logits[0] = -std::numeric_limits<float>::infinity();  // UNK
-            logits[1] = -std::numeric_limits<float>::infinity();  // PAD
-            logits[2] = -std::numeric_limits<float>::infinity();  // BOS
-        }
-
-        if (static_cast<int>(logits.size()) != vocab_size) {
-            throw std::runtime_error(
-                "generateSequenceGPU: logits size mismatch (logits.size=" +
-                std::to_string(logits.size()) + ", vocab_size=" + std::to_string(vocab_size) + ")");
-        }
-        
-        const bool allow_sampling = cfg.do_sample &&
-                                    cfg.strategy != SamplingStrategy::GREEDY &&
-                                    cfg.strategy != SamplingStrategy::BEAM_SEARCH &&
-                                    cfg.temperature > 0.0f;
-        
-        // sampleFromLogits enforces the same strict vocab contract.
-        SampleResult sample = sampleFromLogits(logits, cfg, allow_sampling, rng, vocab_size);
-        
-        // Validate sampled token (no fallback)
+        // Validate sampled token (Rule 20: crash, no fallback)
         if (sample.token_id < 0 || sample.token_id >= vocab_size) {
-            fprintf(stderr, "[LanguageModel] FATAL: sampled token out of range (token_id=%d, vocab=%d)\n",
-                    sample.token_id, vocab_size);
-            throw std::runtime_error("LanguageModel: sampled token out of range");
+            throw std::runtime_error("generateSequenceGPU: sampled token out of range (token_id=" +
+                                     std::to_string(sample.token_id) + ", vocab=" +
+                                     std::to_string(vocab_size) + ")");
+        }
+        
+        // =====================================================================
+        // ScratchBlock Reasoning: Classify generated token for atom metadata
+        //
+        // During training, the tokenizer produces atom_mask and numeric_values
+        // alongside token_ids. During autoregressive generation, we must
+        // reconstruct this metadata for each generated token so that
+        // ScratchBlock's atom detection kernel receives correct input.
+        //
+        // Atom tokens live in range [ATOM_TOKEN_OFFSET, UNIGRAM_VOCAB_OFFSET).
+        // The atom type is encoded as: type = token_id - ATOM_TOKEN_OFFSET.
+        // For atom tokens, we set atom_mask=1 so ScratchBlock activates.
+        // =====================================================================
+        float token_numeric_value = 0.0f;
+        uint8_t token_atom_mask_val = 0;
+        
+        if (scratchblock_active && GRIM::Tokenizer::isAtomToken(sample.token_id)) {
+            // This generated token IS an atom placeholder — tell ScratchBlock
+            token_atom_mask_val = 1;
+            // Numeric value is extracted at tokenization time and stored in
+            // the sequence; for generated atoms we don't have the original
+            // text, so we leave numeric_value=0. The ScratchBlock layer uses
+            // atom type embeddings (from the token ID) as the primary signal.
         }
         
         // Check for EOS BEFORE processing next step
@@ -1040,7 +805,8 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             sequence.token_ids.push_back(sample.token_id);
             sequence.token_scores.push_back(sample.log_probability);
             sequence.token_numeric_values.push_back(0.0f);
-            sequence.token_numeric_mask.push_back(0);
+            sequence.token_atom_mask.push_back(0);
+            sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
             sequence.score += sample.log_probability;
             sequence.finished = true;
             if (stream_callback) {
@@ -1049,43 +815,18 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
             break;
         }
         
-        // Run forward pass for this token FIRST (no numeric injection).
-        // Issue #145: The extraction head was trained on hidden states where the
-        // atom token IS the input at position t:
-        //   Training:  hidden[t] = encoder(atom_token_at_t) → extract(h[t]) ≈ value
-        //   Inference:  must read hidden[t] for the atom, NOT hidden[t-1]
-        // We must call forwardStep BEFORE extraction so the atom token's own
-        // hidden state exists in cached_encoder_output.
-        // Numeric injection is 0 because we don't know the value yet — the
-        // extraction head must learn to predict from context, not echo injection.
-        logits_vec = forwardStep(sample.token_id, 0.0f, 0);
+        // Run forward pass for this token WITH ScratchBlock metadata
+        logits_vec = forwardStep(sample.token_id, token_numeric_value, token_atom_mask_val);
         if (logits_vec.data.empty()) {
             throw std::runtime_error("generateSequenceGPU: forwardStep returned empty logits");
-        }
-        logits_pos = training_state_.kv_cache_len - 1;
-        
-        // Now extract numeric value from the atom token's OWN hidden state
-        float output_numeric_value = 0.0f;
-        uint8_t output_numeric_mask = 0;
-        if (isNumericAtomToken(sample.token_id)) {
-            if (!scratch_block_layer_) {
-                throw std::runtime_error(
-                    "generateSequenceGPU: atom token " + std::to_string(sample.token_id) +
-                    " sampled but ScratchBlock layer is NULL — cannot extract numeric value");
-            }
-            cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
-            output_numeric_value = scratch_block_layer_->extractNumericValue(
-                training_state_.cached_encoder_output.data,
-                logits_pos,
-                stream);
-            output_numeric_mask = 1;
         }
         
         // Add token to sequence
         sequence.token_ids.push_back(sample.token_id);
         sequence.token_scores.push_back(sample.log_probability);
-        sequence.token_numeric_values.push_back(output_numeric_value);
-        sequence.token_numeric_mask.push_back(output_numeric_mask);
+        sequence.token_numeric_values.push_back(token_numeric_value);
+        sequence.token_atom_mask.push_back(token_atom_mask_val);
+        sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
         sequence.score += sample.log_probability;
         
         if (stream_callback) {

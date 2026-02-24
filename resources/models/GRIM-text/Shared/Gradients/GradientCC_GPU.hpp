@@ -17,13 +17,6 @@ void launchClampGradients(
 	float max_val,
 	cudaStream_t stream);
 
-// Clip gradients by their global L2 norm.
-void launchGradientClipping(
-	float* gradients,
-	int n,
-	float max_norm,
-	cudaStream_t stream);
-
 // Scale all gradient elements by a constant factor: gradients[i] *= scale_factor.
 void launchScaleGradients(
 	float* gradients,

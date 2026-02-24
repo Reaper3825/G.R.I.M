@@ -227,12 +227,21 @@ int main(int argc, char** argv) {
         }
         
     } catch (const std::exception& e) {
+        // Rule 20: Print to stderr BEFORE any module logging.
+        // The TrainingContext (and its logger) is already destroyed by stack unwinding,
+        // so EmitModuleError alone loses the message.
+        fprintf(stderr, "\n[FATAL] Unhandled exception: %s\n", e.what());
+        fflush(stderr);
         std::ostringstream oss;
         oss << "[FATAL] Unhandled exception: " << e.what();
         EmitModuleError(ModuleId::TrainingOrchestrator, oss.str(), 0);
+        GRIM::Logging::FlushModuleLogQueue();
         exit_code = 1;
     } catch (...) {
+        fprintf(stderr, "\n[FATAL] Unknown exception (not std::exception)\n");
+        fflush(stderr);
         EmitModuleError(ModuleId::TrainingOrchestrator, "[FATAL] Unknown exception", 0);
+        GRIM::Logging::FlushModuleLogQueue();
         exit_code = 1;
     }
     
@@ -251,6 +260,10 @@ int main(int argc, char** argv) {
     }
     EmitModuleInfo(ModuleId::TrainingOrchestrator, 
         "════════════════════════════════════════════════════════════", 0);
+    
+    // Flush async log queue so ALL messages (including error details) are written to disk
+    // before process exit. Without this, async-queued error messages are lost.
+    GRIM::Logging::FlushModuleLogQueue();
     
     return exit_code;
 }

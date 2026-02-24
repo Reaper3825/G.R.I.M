@@ -322,6 +322,8 @@ StartupConfig loadConfiguration(int argc, char** argv) {
             config.architecture.d_ff = config.architecture.d_model * GRIM::HyperParameters::DEFAULT_D_FF_MULTIPLIER;
         if (cfg.contains("dropout_rate") && cfg["dropout_rate"].is_number())
             config.architecture.dropout_rate = cfg["dropout_rate"].get<float>();
+        if (cfg.contains("residual_dropout_rate") && cfg["residual_dropout_rate"].is_number())
+            config.architecture.residual_dropout_rate = cfg["residual_dropout_rate"].get<float>();
         if (cfg.contains("attention_dropout") && cfg["attention_dropout"].is_number())
             config.architecture.attention_dropout = cfg["attention_dropout"].get<float>();
         
@@ -358,6 +360,49 @@ StartupConfig loadConfiguration(int argc, char** argv) {
         }
             
         config.force_rebuild_vocab = cfg.value("force_rebuild_vocab", false);
+        
+        // Load generation config for inference samples during training
+        if (cfg.contains("generation") && cfg["generation"].is_object()) {
+            const auto& gen = cfg["generation"];
+            if (gen.contains("strategy") && gen["strategy"].is_string()) {
+                const std::string strat = gen["strategy"].get<std::string>();
+                if (strat == "greedy") { config.generation.strategy = GRIM::SamplingStrategy::GREEDY; config.generation.do_sample = false; }
+                else if (strat == "top_k") config.generation.strategy = GRIM::SamplingStrategy::TOP_K;
+                else if (strat == "top_p") config.generation.strategy = GRIM::SamplingStrategy::TOP_P;
+                else if (strat == "min_p") config.generation.strategy = GRIM::SamplingStrategy::MIN_P;
+                else if (strat == "typical") config.generation.strategy = GRIM::SamplingStrategy::TYPICAL;
+                else if (strat == "top_k_top_p") config.generation.strategy = GRIM::SamplingStrategy::TOP_K_TOP_P;
+                else throw std::runtime_error("Phase1_Startup: unknown generation.strategy: " + strat);
+            }
+            if (gen.contains("max_new_tokens") && gen["max_new_tokens"].is_number())
+                config.generation.max_new_tokens = gen["max_new_tokens"].get<int>();
+            if (gen.contains("min_new_tokens") && gen["min_new_tokens"].is_number())
+                config.generation.min_new_tokens = gen["min_new_tokens"].get<int>();
+            if (gen.contains("temperature") && gen["temperature"].is_number())
+                config.generation.temperature = gen["temperature"].get<float>();
+            if (gen.contains("top_k") && gen["top_k"].is_number())
+                config.generation.top_k = gen["top_k"].get<int>();
+            if (gen.contains("top_p") && gen["top_p"].is_number())
+                config.generation.top_p = gen["top_p"].get<float>();
+            if (gen.contains("min_p") && gen["min_p"].is_number())
+                config.generation.min_p = gen["min_p"].get<float>();
+            if (gen.contains("typical_p") && gen["typical_p"].is_number())
+                config.generation.typical_p = gen["typical_p"].get<float>();
+            if (gen.contains("repetition_penalty") && gen["repetition_penalty"].is_number())
+                config.generation.repetition_penalty = gen["repetition_penalty"].get<float>();
+            if (gen.contains("repetition_penalty_window") && gen["repetition_penalty_window"].is_number())
+                config.generation.repetition_penalty_window = gen["repetition_penalty_window"].get<int>();
+            if (gen.contains("frequency_penalty") && gen["frequency_penalty"].is_number())
+                config.generation.frequency_penalty = gen["frequency_penalty"].get<float>();
+            if (gen.contains("presence_penalty") && gen["presence_penalty"].is_number())
+                config.generation.presence_penalty = gen["presence_penalty"].get<float>();
+            if (gen.contains("no_repeat_ngram_size") && gen["no_repeat_ngram_size"].is_number())
+                config.generation.no_repeat_ngram_size = gen["no_repeat_ngram_size"].get<int>();
+            if (gen.contains("do_sample") && gen["do_sample"].is_boolean())
+                config.generation.do_sample = gen["do_sample"].get<bool>();
+            if (gen.contains("enable_scratchblock_reasoning") && gen["enable_scratchblock_reasoning"].is_boolean())
+                config.generation.enable_scratchblock_reasoning = gen["enable_scratchblock_reasoning"].get<bool>();
+        }
     }
     config.architecture.max_seq_len = config.hyperparameters.max_seq_len;
     config.architecture.validate();
@@ -548,11 +593,12 @@ SequenceData loadTrainingData(
         if (add_bos_token && bos_id >= 0 && seq.token_ids.front() != bos_id) {
             seq.token_ids.insert(seq.token_ids.begin(), bos_id);
             seq.token_numeric_values.insert(seq.token_numeric_values.begin(), 0.0f);
-            seq.token_numeric_mask.insert(seq.token_numeric_mask.begin(), 0);
+            seq.token_atom_mask.insert(seq.token_atom_mask.begin(), 0);
+            seq.atom_entry_ids.insert(seq.atom_entry_ids.begin(), GRIM::Tokenizer::kAtomEntryNone);
+            seq.token_atom_flags.insert(seq.token_atom_flags.begin(), 0);
             for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
                 seq.token_text_features.insert(seq.token_text_features.begin(), 0);
             }
-            seq.token_text_mask.insert(seq.token_text_mask.begin(), 0);
             seq.targets.insert(seq.targets.begin(), -1);
             added_bos++;
         }
@@ -561,11 +607,12 @@ SequenceData loadTrainingData(
         if (add_eos_token && eos_id >= 0 && seq.token_ids.back() != eos_id) {
             seq.token_ids.push_back(eos_id);
             seq.token_numeric_values.push_back(0.0f);
-            seq.token_numeric_mask.push_back(0);
+            seq.token_atom_mask.push_back(0);
+            seq.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
+            seq.token_atom_flags.push_back(0);
             for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
                 seq.token_text_features.push_back(0);
             }
-            seq.token_text_mask.push_back(0);
             // Fix shift: the PREVIOUS position's target was -1 (no next token existed
             // when DataLoader ran). Now EOS follows it, so set target = eos_id.
             if (!seq.targets.empty()) {
@@ -610,10 +657,11 @@ SequenceData loadTrainingData(
                 seq.token_ids.resize(max_seq_len, pad_id);
                 seq.targets.resize(max_seq_len, -1);
                 seq.token_numeric_values.resize(max_seq_len, 0.0f);
-                seq.token_numeric_mask.resize(max_seq_len, 0);
+                seq.token_atom_mask.resize(max_seq_len, 0);
+                seq.atom_entry_ids.resize(max_seq_len, GRIM::Tokenizer::kAtomEntryNone);
+                seq.token_atom_flags.resize(max_seq_len, 0);
                 seq.token_text_features.resize(
                     max_seq_len * GRIM::Tokenizer::kTextFeatureDim, 0);
-                seq.token_text_mask.resize(max_seq_len, 0);
                 padded_count++;
             }
         };
@@ -648,11 +696,12 @@ SequenceData loadTrainingData(
                     window.token_ids.push_back(bos_id);
                     window.targets.push_back(-1);  // BOS position masked
                     window.token_numeric_values.push_back(0.0f);
-                    window.token_numeric_mask.push_back(0);
+                    window.token_atom_mask.push_back(0);
+                    window.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
+                    window.token_atom_flags.push_back(0);
                     for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
                         window.token_text_features.push_back(0);
                     }
-                    window.token_text_mask.push_back(0);
                     bos_prepended++;
                 }
                 
@@ -663,14 +712,19 @@ SequenceData loadTrainingData(
                     seq.targets.begin() + start, seq.targets.begin() + end);
                 window.token_numeric_values.insert(window.token_numeric_values.end(),
                     seq.token_numeric_values.begin() + start, seq.token_numeric_values.begin() + end);
-                window.token_numeric_mask.insert(window.token_numeric_mask.end(),
-                    seq.token_numeric_mask.begin() + start, seq.token_numeric_mask.begin() + end);
+                window.token_atom_mask.insert(window.token_atom_mask.end(),
+                    seq.token_atom_mask.begin() + start, seq.token_atom_mask.begin() + end);
+                // Atom side channel — share parent sequence's AtomTable
+                window.atom_table = seq.atom_table;
+                window.atom_entry_ids.insert(window.atom_entry_ids.end(),
+                    seq.atom_entry_ids.begin() + start, seq.atom_entry_ids.begin() + end);
+                window.token_atom_flags.insert(window.token_atom_flags.end(),
+                    seq.token_atom_flags.begin() + start, seq.token_atom_flags.begin() + end);
                 // GRMT v4: slice text features (16 values per token)
                 window.token_text_features.insert(window.token_text_features.end(),
                     seq.token_text_features.begin() + start * GRIM::Tokenizer::kTextFeatureDim,
                     seq.token_text_features.begin() + end * GRIM::Tokenizer::kTextFeatureDim);
-                window.token_text_mask.insert(window.token_text_mask.end(),
-                    seq.token_text_mask.begin() + start, seq.token_text_mask.begin() + end);
+
                 
                 // Mask first position if it's the first window (BOS already there)
                 // For non-first windows, BOS was prepended above with target=-1
@@ -713,13 +767,12 @@ SequenceData loadTrainingData(
                 if (!is_final_window && eos_id >= 0 && !window.token_ids.empty()) {
                     window.token_ids.back() = eos_id;
                     window.token_numeric_values.back() = 0.0f;
-                    window.token_numeric_mask.back() = 0;
+                    window.token_atom_mask.back() = 0;
                     // Clear text features for the replaced position
                     const size_t last_tf_start = (window.token_ids.size() - 1) * GRIM::Tokenizer::kTextFeatureDim;
                     for (int i = 0; i < GRIM::Tokenizer::kTextFeatureDim; ++i) {
                         window.token_text_features[last_tf_start + i] = 0;
                     }
-                    window.token_text_mask.back() = 0;
                     // Second-to-last position learns to predict EOS
                     if (window.targets.size() >= 2) {
                         window.targets[window.targets.size() - 2] = eos_id;
@@ -843,6 +896,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model_config.d_ff = arch.d_ff;
     model_config.max_seq_len = config.max_seq_len;
     model_config.dropout_rate = arch.dropout_rate;
+    model_config.residual_dropout_rate = arch.residual_dropout_rate;
     model_config.attention_dropout = arch.attention_dropout;
     model_config.vocab_path = config.paths.vocab_path;
     model_config.infer_vocab_from_file = true;
@@ -1388,7 +1442,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
 #ifdef GRIM_PYTORCH_VERIFY
         ctx->logging.logger->log("🔬 PyTorch verification: ENABLED (compile flag GRIM_PYTORCH_VERIFY)");
         // Get GRIM root using the centralized resolver
-        fs::path grim_root_path = GRIM::Config::resolveGrimRoot();
+        fs::path grim_root_path = GRIM::Config::detail::resolveGrimRoot();
         std::string grim_root = grim_root_path.string();
         bool pytorch_ok = PYTORCH_VERIFY_INIT(grim_root);
         if (pytorch_ok) {
@@ -1617,25 +1671,8 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         // Issue #109 re-enabled embedding backward but forgot to restore PCGrad!
         // Result: Training collapses to tracked token mode (same as Issue #88 bug).
         //
-        // Issue #143: PCGrad REMOVED — use PyTorch-style direct gradient accumulation.
-        //
-        // PCGrad preserved the FULL LM head gradient direction while discarding the
-        // conflicting embedding component. This removed the natural frequency-proportional
-        // brake that cancellation provides. Result: frequent tokens (SPACE, 'a', 'o', etc.)
-        // had unchecked gradient magnitude → AdamW momentum amplified the signal →
-        // weight rows diverged → logit_range exploded (1.4 → 21+ over 67 batches).
-        //
-        // PyTorch with tied weights: both LM head and embedding backward write to the
-        // SAME grad buffer. The ~90% cancellation for frequent tokens IS the regularizer.
-        // For rare tokens (few atomicAdds), cancellation is minimal → they still learn.
-        //
-        // With Z-loss added (Issue #143), residual logit growth is also controlled.
-        // ═══════════════════════════════════════════════════════════════════════════
         if (model_cfg.tie_embeddings) {
-            // DO NOT allocate PCGrad buffer — let gradients accumulate directly (PyTorch behavior)
-            // DO NOT skip embedding backward — both gradient sources must write to shared buffer
-            g_skip_embedding_backward_for_tied_weights = false;
-            ctx->logging.logger->log("✓ Issue #143: Tied weight gradients use PyTorch-style direct accumulation (PCGrad disabled)");
+            ctx->logging.logger->log("✓ Tied weight gradients use PyTorch-style direct accumulation");
         }
     }
     

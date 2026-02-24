@@ -182,7 +182,7 @@ inline void printWeightStatistics(const char* name, const float* weights,
     std::cout << "  Range:       [" << min_val << ", " << max_val << "]\n";
     std::cout << "  Zeros:       " << zero_count << " (" 
               << std::setprecision(2) << (100.0 * zero_count / total) << "%)\n";
-    std::cout << "  Frobenius:   " << std::sqrt(sq_sum) << "\n";
+    std::cout << "  RMS:         " << std::sqrt(sq_sum / static_cast<double>(total)) << "\n";
     if (nan_count > 0) std::cout << "  ⚠ NaN:       " << nan_count << "\n";
     if (inf_count > 0) std::cout << "  ⚠ Inf:       " << inf_count << "\n";
 }
@@ -190,20 +190,22 @@ inline void printWeightStatistics(const char* name, const float* weights,
 inline void printGradientComponents(const char* name,
                                      const std::vector<std::pair<std::string, double>>& components) {
     std::cout << "\n[" << name << "] Gradient Components:\n";
-    double total = 0.0;
-    for (const auto& [component_name, norm] : components) {
-        total += norm * norm;
+    double total_sq = 0.0;
+    int total_count = 0;
+    for (const auto& [component_name, rms] : components) {
+        total_sq += rms * rms;
+        total_count++;
     }
-    total = std::sqrt(total);
+    double total_rms = (total_count > 0) ? std::sqrt(total_sq / total_count) : 0.0;
     
-    for (const auto& [component_name, norm] : components) {
-        double pct = (total > 0) ? (100.0 * norm / total) : 0.0;
+    for (const auto& [component_name, rms] : components) {
+        double pct = (total_rms > 0) ? (100.0 * rms / total_rms) : 0.0;
         std::cout << "  " << std::setw(20) << std::left << component_name 
-                  << " ||g|| = " << std::scientific << std::setprecision(4) << norm
+                  << " g_rms = " << std::scientific << std::setprecision(4) << rms
                   << " (" << std::fixed << std::setprecision(1) << pct << "%)\n";
     }
     std::cout << "  " << std::setw(20) << std::left << "TOTAL"
-              << " ||g|| = " << std::scientific << std::setprecision(4) << total << "\n";
+              << " g_rms = " << std::scientific << std::setprecision(4) << total_rms << "\n";
 }
 
 //======================================================//

@@ -56,9 +56,11 @@ BatchPayload buildBatchPayload(
         const std::vector<int>* token_ids;
         const std::vector<int>* targets;
         const std::vector<float>* numeric_values;
-        const std::vector<uint8_t>* numeric_mask;
         const std::vector<uint16_t>* text_features;
-        const std::vector<uint8_t>* text_mask;
+        const std::vector<uint8_t>* atom_mask;
+        const std::vector<uint32_t>* atom_flags;
+        std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table;
+        const std::vector<uint32_t>* atom_entry_ids;
         int length;
     };
 
@@ -108,16 +110,10 @@ BatchPayload buildBatchPayload(
                 " numeric_values.size()=" + std::to_string(seq->token_numeric_values.size()) +
                 " != token_ids.size()=" + std::to_string(seq_len));
         }
-        if (static_cast<int>(seq->token_numeric_mask.size()) != seq_len) {
+        if (static_cast<int>(seq->token_atom_mask.size()) != seq_len) {
             throw std::runtime_error(
                 "buildBatchPayload: sequence " + std::to_string(sid) +
-                " numeric_mask.size()=" + std::to_string(seq->token_numeric_mask.size()) +
-                " != token_ids.size()=" + std::to_string(seq_len));
-        }
-        if (static_cast<int>(seq->token_text_mask.size()) != seq_len) {
-            throw std::runtime_error(
-                "buildBatchPayload: sequence " + std::to_string(sid) +
-                " text_mask.size()=" + std::to_string(seq->token_text_mask.size()) +
+                " atom_mask.size()=" + std::to_string(seq->token_atom_mask.size()) +
                 " != token_ids.size()=" + std::to_string(seq_len));
         }
         const int expected_text_feat_len = seq_len * BatchPayload::kTextFeatureDim;
@@ -126,6 +122,18 @@ BatchPayload buildBatchPayload(
                 "buildBatchPayload: sequence " + std::to_string(sid) +
                 " text_features.size()=" + std::to_string(seq->token_text_features.size()) +
                 " != token_ids.size()*kTextFeatureDim=" + std::to_string(expected_text_feat_len));
+        }
+        if (static_cast<int>(seq->atom_entry_ids.size()) != seq_len) {
+            throw std::runtime_error(
+                "buildBatchPayload: sequence " + std::to_string(sid) +
+                " atom_entry_ids.size()=" + std::to_string(seq->atom_entry_ids.size()) +
+                " != token_ids.size()=" + std::to_string(seq_len));
+        }
+        if (static_cast<int>(seq->token_atom_flags.size()) != seq_len) {
+            throw std::runtime_error(
+                "buildBatchPayload: sequence " + std::to_string(sid) +
+                " token_atom_flags.size()=" + std::to_string(seq->token_atom_flags.size()) +
+                " != token_ids.size()=" + std::to_string(seq_len));
         }
 
         // Validate targets for invalid token IDs (root cause of loss=165)
@@ -144,9 +152,11 @@ BatchPayload buildBatchPayload(
             &seq->token_ids,
             &seq->targets,
             &seq->token_numeric_values,
-            &seq->token_numeric_mask,
             &seq->token_text_features,
-            &seq->token_text_mask,
+            &seq->token_atom_mask,
+            &seq->token_atom_flags,
+            seq->atom_table,
+            &seq->atom_entry_ids,
             seq_len
         });
 
@@ -202,9 +212,11 @@ BatchPayload buildBatchPayload(
     payload.input_ids.assign(flat_size, Tokenizer::PAD_TOKEN_ID);  // PAD=1, NOT UNK=0
     payload.target_ids.assign(flat_size, -1);  // padding targets = masked
     payload.numeric_values.assign(flat_size, 0.0f);
-    payload.numeric_mask.assign(flat_size, 0);
     payload.text_features.assign(text_feat_flat_size, 0);
-    payload.text_mask.assign(flat_size, 0);
+    payload.atom_mask.assign(flat_size, 0);
+    payload.atom_flags.assign(flat_size, 0);
+    payload.atom_entry_ids.assign(flat_size, GRIM::Tokenizer::kAtomEntryNone);
+    payload.seq_atom_tables.resize(payload.batch_size);
     payload.valid_target_counts.resize(payload.batch_size, 0);
 
     payload.valid_tokens = 0;
@@ -249,13 +261,10 @@ BatchPayload buildBatchPayload(
         payload.valid_target_counts[b] = valid_count;
         payload.valid_tokens += valid_count;
 
-        // Bulk copy numeric side-channels
+        // Bulk copy numeric values
         std::memcpy(&payload.numeric_values[row_offset],
                     r.numeric_values->data(),
                     seq_len * sizeof(float));
-        std::memcpy(&payload.numeric_mask[row_offset],
-                    r.numeric_mask->data(),
-                    seq_len * sizeof(uint8_t));
 
         // Bulk copy text features (kTextFeatureDim uint16_t values per token)
         const size_t feat_dst_offset = row_offset * BatchPayload::kTextFeatureDim;
@@ -264,10 +273,22 @@ BatchPayload buildBatchPayload(
                     r.text_features->data(),
                     feat_src_bytes);
 
-        // Bulk copy text mask
-        std::memcpy(&payload.text_mask[row_offset],
-                    r.text_mask->data(),
+        // Bulk copy atom mask
+        std::memcpy(&payload.atom_mask[row_offset],
+                    r.atom_mask->data(),
                     seq_len * sizeof(uint8_t));
+
+        // Bulk copy atom flags (type-specific metadata from AtomTable)
+        std::memcpy(&payload.atom_flags[row_offset],
+                    r.atom_flags->data(),
+                    seq_len * sizeof(uint32_t));
+
+        // Copy atom entry IDs (bulk memcpy — fixed-size uint32_t)
+        std::memcpy(&payload.atom_entry_ids[row_offset],
+                    r.atom_entry_ids->data(),
+                    seq_len * sizeof(uint32_t));
+        // Store AtomTable reference for this batch row
+        payload.seq_atom_tables[b] = r.atom_table;
     }
 
     // ═════════════════════════════════════════════════════════════════════════

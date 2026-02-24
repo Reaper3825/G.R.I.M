@@ -766,25 +766,29 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
         return result;
     }
     
+    // Initialize atom registry for this encoding pass
+    result.atom_table = std::make_shared<AtomTable>();
+
     // Pre-allocate based on heuristic: ~1 token per 3-4 bytes + atoms
     // This avoids repeated vector reallocation during push_back
     const size_t estimated_tokens = (text.size() / 3) + structures.size() + 8;
     result.token_ids.reserve(estimated_tokens);
     result.is_byte_fallback.reserve(estimated_tokens);
     result.token_numeric_values.reserve(estimated_tokens);
-    result.token_numeric_mask.reserve(estimated_tokens);
+    result.token_atom_flags.reserve(estimated_tokens);
+    result.atom_entry_ids.reserve(estimated_tokens);
     result.token_text_features.reserve(estimated_tokens * kTextFeatureDim);
-    result.token_text_mask.reserve(estimated_tokens);
+    result.token_atom_mask.reserve(estimated_tokens);
     result.atoms.reserve(structures.size());
     
     // Pre-computed zero text features (FP16) — avoid recomputing floatToFp16(0.0f) per token
     static const uint16_t kZeroFp16 = floatToFp16(0.0f);
     
     // Helper: append zeros for non-atom tokens (no text features)
-    auto appendZeroTextFeatures = [&]() {
+    auto appendZeroSideChannels = [&]() {
         result.token_text_features.insert(
             result.token_text_features.end(), kTextFeatureDim, kZeroFp16);
-        result.token_text_mask.push_back(0);
+        result.token_atom_mask.push_back(0);
     };
     
     // Process text in segments between structures
@@ -799,12 +803,13 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
         // encode() returns token IDs directly — no need for encodeWithPieces
         // Note: UnigramLM::encode() normalizes to lowercase internally.
         auto segment_ids = unigram_.encode(segment);
-        
+                        
         for (int tid : segment_ids) {
             result.token_ids.push_back(tid);
             result.token_numeric_values.push_back(0.0f);
-            result.token_numeric_mask.push_back(0);
-            appendZeroTextFeatures();  // Non-atom tokens get zero text features
+            result.token_atom_flags.push_back(0);
+            result.atom_entry_ids.push_back(kAtomEntryNone);  // no atom at this position
+            appendZeroSideChannels();  // Non-atom tokens get zero features + mask=0
             
             if (tid >= BYTE_TOKEN_OFFSET && tid < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE) {
                 result.is_byte_fallback.push_back(true);
@@ -823,7 +828,6 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
 
             int atom_token_id = span.placeholder_id;
             float numeric_value = 0.0f;
-            uint8_t numeric_mask = 0;
             AtomValue parsed_value;
             bool has_parsed = false;
             
@@ -836,19 +840,19 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
                 if (Tokenizer::isNumericAtom(span.atom_type)) {
                     if (auto* int_val = std::get_if<AtomInteger>(&parsed.value)) {
                         numeric_value = static_cast<float>(int_val->value);
-                        numeric_mask = 1;
                     } else if (auto* float_val = std::get_if<AtomFloat>(&parsed.value)) {
                         float numeric = static_cast<float>(float_val->value);
                         if (std::isfinite(numeric)) {
                             numeric_value = numeric;
-                            numeric_mask = 1;
                         }
                     }
                 }
             }
 
             const bool numeric_atom = Tokenizer::isNumericAtom(span.atom_type);
-            const bool numeric_parse_failed = numeric_atom && (!has_parsed || numeric_mask == 0);
+            // Only bail out if the parser actually FAILED — NOT if the value happens to be 0.
+            // The literal integer "0" is a valid atom (numeric_value=0.0f, has_parsed=true).
+            const bool numeric_parse_failed = numeric_atom && !has_parsed;
             if (numeric_parse_failed) {
                 appendSegmentTokens(span.start, span.end);
                 pos = span.end;
@@ -867,11 +871,30 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
                 appendSegmentTokens(whitespace_start, whitespace_end);
             }
 
-            // Emit a single atom token
+            // Emit a single atom token with full AtomTable-backed side channels
+            uint32_t entry_id = result.atom_table->registerSpan(span);
+            
+            // Read back AtomTable's packed values — covers ALL atom types
+            // (dates, times, IPs, etc. get meaningful numeric_value and flags
+            // via packNumericValue(), not just INT/FLOAT/HEX/BIN)
+            const auto* entry = result.atom_table->getAtom(entry_id);
+            float packed_numeric = numeric_value;  // fallback to parser result
+            uint32_t packed_flags = 0;
+            if (entry) {
+                packed_numeric = entry->numeric_value;
+                packed_flags = entry->flags;
+                // For numeric atoms, prefer the direct parser result if AtomTable
+                // re-packed it differently (float precision preservation)
+                if (Tokenizer::isNumericAtom(span.atom_type) && numeric_value != 0.0f) {
+                    packed_numeric = numeric_value;
+                }
+            }
+            
             result.token_ids.push_back(atom_token_id);
             result.is_byte_fallback.push_back(false);
-            result.token_numeric_values.push_back(numeric_value);
-            result.token_numeric_mask.push_back(numeric_mask);
+            result.token_numeric_values.push_back(packed_numeric);
+            result.token_atom_flags.push_back(packed_flags);
+            result.atom_entry_ids.push_back(entry_id);
             
             // Encode text features for atom token
             uint16_t text_features[kTextFeatureDim];
@@ -884,7 +907,7 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
             for (int i = 0; i < kTextFeatureDim; ++i) {
                 result.token_text_features.push_back(text_features[i]);
             }
-            result.token_text_mask.push_back(1);  // Atom tokens have valid text features
+            result.token_atom_mask.push_back(1);  // Atom tokens: unified mask
             
             result.atoms.push_back(span);
             result.atom_tokens++;
@@ -1128,15 +1151,28 @@ bool detectInteger(const std::string& text, size_t pos, size_t& end) {
         ++i;
     }
     
-    // Check it's not followed by . or e (that would be float)
-    if (i < text.size() && (text[i] == '.' || text[i] == 'e' || text[i] == 'E')) {
+    // Reject if followed by '.' (could be float like 5.3)
+    if (i < text.size() && text[i] == '.') {
         return false;
     }
     
-    // Must not be followed by letter (part of identifier)
-    if (i < text.size() && std::isalpha(text[i])) {
-        return false;
+    // Reject if followed by e/E + (digit or sign) — scientific notation like 5e3, 5E+2
+    // Do NOT reject "5english", "5em", etc. — detectFloat already failed for those,
+    // so deferring would create a gap where BOTH detectors reject the digit.
+    if (i < text.size() && (text[i] == 'e' || text[i] == 'E')) {
+        if (i + 1 < text.size()) {
+            char next = text[i + 1];
+            if (std::isdigit(next) || next == '+' || next == '-') {
+                return false;  // Genuine scientific notation — defer to detectFloat
+            }
+        }
+        // "5english", "5em", "5E_something" — not scientific notation, accept as integer
     }
+    
+    // NOTE: We intentionally do NOT reject digits followed by alpha (e.g. "5th", "100ms", "3D").
+    // The digit run is the integer atom; the alpha suffix gets tokenized separately via Viterbi.
+    // The old guard `if (isalpha(text[i])) return false` caused digits in ordinals, units, and
+    // version strings to bypass atom detection entirely, leaking raw byte tokens into training.
     
     end = i;
     return i > pos;

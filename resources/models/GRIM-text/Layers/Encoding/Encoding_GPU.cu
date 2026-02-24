@@ -177,8 +177,6 @@ namespace {
 namespace GRIM {
 
 
-static_assert(!GRIM::HyperParameters::QK_NORMALIZATION_ENABLED,
-              "FlashAttention v2 forward does not support QK normalization.");
 static_assert(GRIM::HyperParameters::SOFTMAX_TEMPERATURE == 1.0f,
               "FlashAttention v2 forward requires softmax_temperature=1.0f.");
 
@@ -596,7 +594,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         // Compute ln1_out statistics
         float ln1_min = FLT_MAX, ln1_max = -FLT_MAX;
         double ln1_sum_sq = 0.0;
-        double ln1_row_norm_sum = 0.0;
+        double ln1_row_rms_sum = 0.0;
         for (int t = 0; t < n_sample; ++t) {
             double row_sum_sq = 0.0;
             for (int d = 0; d < d_model_local; ++d) {
@@ -606,16 +604,16 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
                 ln1_sum_sq += v * v;
                 row_sum_sq += v * v;
             }
-            ln1_row_norm_sum += sqrtf(static_cast<float>(row_sum_sq));
+            ln1_row_rms_sum += sqrtf(static_cast<float>(row_sum_sq / d_model_local));
         }
         float ln1_rms = sqrtf(static_cast<float>(ln1_sum_sq / (n_sample * d_model_local)));
-        float ln1_row_norm_mean = static_cast<float>(ln1_row_norm_sum / n_sample);
+        float ln1_row_rms_mean = static_cast<float>(ln1_row_rms_sum / n_sample);
         
         // Compute W_qkv statistics (first 64 columns)
         float wqkv_min = FLT_MAX, wqkv_max = -FLT_MAX;
         double wqkv_sum_sq = 0.0;
-        double wqkv_row_norm_sum = 0.0;
-        double wq_row_norm_sum = 0.0;
+        double wqkv_row_rms_sum = 0.0;
+        double wq_row_rms_sum = 0.0;
         for (int row = 0; row < qkv_dim_local; ++row) {
             double row_sum_sq = 0.0;
             for (int col = 0; col < w_sample_cols; ++col) {
@@ -625,23 +623,24 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
                 wqkv_sum_sq += v * v;
                 row_sum_sq += v * v;
             }
-            // Scale row norm to full d_model (assuming similar variance)
-            const float row_norm_scaled = sqrtf(static_cast<float>(row_sum_sq * d_model_local / w_sample_cols));
-            wqkv_row_norm_sum += row_norm_scaled;
+            // Scale row RMS to full d_model (assuming similar variance)
+            // RMS of full row = sqrt(sum_sq_full / d_model) = sqrt(row_sum_sq * d_model / w_sample_cols / d_model) = sqrt(row_sum_sq / w_sample_cols)
+            const float row_rms_scaled = sqrtf(static_cast<float>(row_sum_sq / w_sample_cols));
+            wqkv_row_rms_sum += row_rms_scaled;
             if (row < d_model_local) {
                 // Q rows occupy [0, d_model) in unified W_qkv layout.
-                wq_row_norm_sum += row_norm_scaled;
+                wq_row_rms_sum += row_rms_scaled;
             }
         }
         float wqkv_rms = sqrtf(static_cast<float>(wqkv_sum_sq / (qkv_dim_local * w_sample_cols)));
-        float wqkv_row_norm_mean = static_cast<float>(wqkv_row_norm_sum / qkv_dim_local);
-        float wq_row_norm_mean = static_cast<float>(wq_row_norm_sum / d_model_local);
+        float wqkv_row_rms_mean = static_cast<float>(wqkv_row_rms_sum / qkv_dim_local);
+        float wq_row_rms_mean = static_cast<float>(wq_row_rms_sum / d_model_local);
         
         // Compute qkv_out statistics (Q portion only - first d_model columns)
         float qkv_min = FLT_MAX, qkv_max = -FLT_MAX;
         double qkv_sum_sq = 0.0;
-        double qkv_row_norm_sum = 0.0;
-        double qkv_head_row_norm_sum = 0.0;
+        double qkv_row_rms_sum = 0.0;
+        double qkv_head_row_rms_sum = 0.0;
         for (int t = 0; t < n_sample; ++t) {
             double row_sum_sq = 0.0;
             for (int d = 0; d < d_model_local; ++d) {  // Q portion only
@@ -651,8 +650,8 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
                 qkv_sum_sq += v * v;
                 row_sum_sq += v * v;
             }
-            qkv_row_norm_sum += sqrtf(static_cast<float>(row_sum_sq));
-            // Measure true per-head Q norms directly (no balanced-head assumption).
+            qkv_row_rms_sum += sqrtf(static_cast<float>(row_sum_sq / d_model_local));
+            // Measure true per-head Q RMS directly (no balanced-head assumption).
             for (int h = 0; h < num_heads_local; ++h) {
                 double head_sum_sq = 0.0;
                 const int head_base = t * qkv_dim_local + h * head_dim_local;
@@ -660,12 +659,12 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
                     const float v = h_qkv_sample[head_base + d];
                     head_sum_sq += v * v;
                 }
-                qkv_head_row_norm_sum += sqrtf(static_cast<float>(head_sum_sq));
+                qkv_head_row_rms_sum += sqrtf(static_cast<float>(head_sum_sq / head_dim_local));
             }
         }
         float qkv_rms = sqrtf(static_cast<float>(qkv_sum_sq / (n_sample * d_model_local)));
-        float qkv_row_norm_mean = static_cast<float>(qkv_row_norm_sum / n_sample);
-        float qkv_head_row_norm_mean = static_cast<float>(qkv_head_row_norm_sum / (n_sample * num_heads_local));
+        float qkv_row_rms_mean = static_cast<float>(qkv_row_rms_sum / n_sample);
+        float qkv_head_row_rms_mean = static_cast<float>(qkv_head_row_rms_sum / (n_sample * num_heads_local));
         
         // Compute bias statistics
         float bias_min = 0.0f, bias_max = 0.0f, bias_rms = 0.0f;
@@ -682,21 +681,21 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         
         // Compute EXPECTED Q magnitude in CONSISTENT units.
         // GEMM: Y = X @ W^T where X is [N, d_model], W is [qkv_dim, d_model]
-        // For random rows, each output element has:
-        //   E[elem_rms] ≈ ||x_row|| * ||w_row|| / sqrt(d_model)
+        // For iid elements: elem_rms(Y) = sqrt(d_model) * rms(X_row) * rms(W_row)
         const float expected_q_elem_rms =
-            ln1_row_norm_mean * wq_row_norm_mean / sqrtf(static_cast<float>(d_model_local));
-        const float expected_q_full_row_norm = expected_q_elem_rms * sqrtf(static_cast<float>(d_model_local));
-        const float expected_q_head_row_norm = expected_q_elem_rms * sqrtf(static_cast<float>(head_dim_local));
+            ln1_row_rms_mean * wq_row_rms_mean * sqrtf(static_cast<float>(d_model_local));
+        // RMS doesn't scale with dimension (unlike L2 norm), so row_rms = elem_rms for iid elements
+        const float expected_q_full_row_rms = expected_q_elem_rms;
+        const float expected_q_head_row_rms = expected_q_elem_rms;
 
         // Actual Q magnitudes in matching units.
         const float actual_q_elem_rms = qkv_rms;
-        const float actual_q_full_row_norm = qkv_row_norm_mean;
-        const float actual_q_head_row_norm = qkv_head_row_norm_mean;
+        const float actual_q_full_row_rms = qkv_row_rms_mean;
+        const float actual_q_head_row_rms = qkv_head_row_rms_mean;
 
-        // Healthy-attention targets (same units as comparisons).
-        const float target_q_head_row_norm = sqrtf(static_cast<float>(head_dim_local));
-        const float target_q_full_row_norm = sqrtf(static_cast<float>(d_model_local));
+        // Healthy-attention targets: for attention scores ~1, Q/K elements should have RMS ~1.0
+        const float target_q_head_row_rms = 1.0f;
+        const float target_q_full_row_rms = 1.0f;
         
         const int layer_idx_local = layer_idx;
         
@@ -705,31 +704,31 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
             fprintf(stderr, "\n[QKV_EQUATION] ENCODER_LAYER_%d: qkv_out = ln1_out @ W_qkv^T + b_qkv\n", layer_idx_local);
             fprintf(stderr, "  ln1_out (sample %d tokens): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
                     n_sample, n_sample, d_model_local, ln1_min, ln1_max, ln1_rms);
-            fprintf(stderr, "  ln1_out row_norms: mean=%.10f\n", ln1_row_norm_mean);
+            fprintf(stderr, "  ln1_out row_rms: mean=%.10f\n", ln1_row_rms_mean);
             fprintf(stderr, "  W_qkv (sample %d cols): shape=[%d,%d] min=%.10f max=%.10f rms=%.10f\n",
                     w_sample_cols, qkv_dim_local, d_model_local, wqkv_min, wqkv_max, wqkv_rms);
-            fprintf(stderr, "  W_q row_norms (scaled to d_model): mean=%.10f\n", wq_row_norm_mean);
-            fprintf(stderr, "  W_qkv row_norms (all rows, scaled): mean=%.10f\n", wqkv_row_norm_mean);
+            fprintf(stderr, "  W_q row_rms (scaled to d_model): mean=%.10f\n", wq_row_rms_mean);
+            fprintf(stderr, "  W_qkv row_rms (all rows, scaled): mean=%.10f\n", wqkv_row_rms_mean);
             if (b_qkv_.data) {
                 fprintf(stderr, "  b_qkv: shape=[%d] min=%.10f max=%.10f rms=%.10f\n",
                         qkv_dim_local, bias_min, bias_max, bias_rms);
             } else {
                 fprintf(stderr, "  b_qkv: [nullptr]\n");
             }
-            fprintf(stderr, "  EXPECTED qkv_elem_rms = ln1_row_norm * wq_row_norm / sqrt(d_model)\n");
-            fprintf(stderr, "                        = %.4f * %.4f / sqrt(%d) = %.4f\n",
-                    ln1_row_norm_mean, wq_row_norm_mean, d_model_local, expected_q_elem_rms);
+            fprintf(stderr, "  EXPECTED qkv_elem_rms = ln1_row_rms * wq_row_rms * sqrt(d_model)\n");
+            fprintf(stderr, "                        = %.4f * %.4f * sqrt(%d) = %.4f\n",
+                    ln1_row_rms_mean, wq_row_rms_mean, d_model_local, expected_q_elem_rms);
             fprintf(stderr, "  ACTUAL qkv_out (Q portion): min=%.10f max=%.10f rms=%.10f\n",
                     qkv_min, qkv_max, qkv_rms);
-            fprintf(stderr, "  EXPECTED Q row_norm (full/head): %.4f / %.4f\n",
-                    expected_q_full_row_norm, expected_q_head_row_norm);
-            fprintf(stderr, "  ACTUAL   Q row_norm (full/head): %.4f / %.4f\n",
-                    actual_q_full_row_norm, actual_q_head_row_norm);
-            fprintf(stderr, "  TARGET   Q row_norm (full/head): %.4f / %.4f (sqrt(d_model=%d) / sqrt(head_dim=%d))\n",
-                    target_q_full_row_norm, target_q_head_row_norm, d_model_local, head_dim_local);
+            fprintf(stderr, "  EXPECTED Q row_rms (full/head): %.4f / %.4f\n",
+                    expected_q_full_row_rms, expected_q_head_row_rms);
+            fprintf(stderr, "  ACTUAL   Q row_rms (full/head): %.4f / %.4f\n",
+                    actual_q_full_row_rms, actual_q_head_row_rms);
+            fprintf(stderr, "  TARGET   Q row_rms (full/head): %.4f / %.4f (healthy attention: elem_rms≈1.0)\n",
+                    target_q_full_row_rms, target_q_head_row_rms);
             fprintf(stderr, "  INFLATION(full/head): %.4fx / %.4fx\n",
-                    actual_q_full_row_norm / target_q_full_row_norm,
-                    actual_q_head_row_norm / target_q_head_row_norm);
+                    actual_q_full_row_rms / target_q_full_row_rms,
+                    actual_q_head_row_rms / target_q_head_row_rms);
 
             // Best-available IDs in this layer scope.
             // NOTE: Global optimizer step is not available here.
@@ -739,26 +738,26 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
             {
                 std::ostringstream eq;
                 eq << "[QKV_PROJECTION_EQUATION] qkv_out = ln1_out @ W_qkv^T + b_qkv\n";
-                eq << "  INPUT (ln1_out): rms=" << ln1_rms << " row_norm=" << ln1_row_norm_mean << "\n";
-                eq << "  WEIGHT (W_qkv): rms=" << wqkv_rms << " q_row_norm=" << wq_row_norm_mean << "\n";
-                eq << "  EXPECTED qkv_elem_rms = ln1_row_norm * wq_row_norm / sqrt(d_model)\n";
-                eq << "                         = " << ln1_row_norm_mean << " * " << wq_row_norm_mean 
-                   << " / sqrt(" << d_model_local << ")\n";
+                eq << "  INPUT (ln1_out): rms=" << ln1_rms << " row_rms=" << ln1_row_rms_mean << "\n";
+                eq << "  WEIGHT (W_qkv): rms=" << wqkv_rms << " q_row_rms=" << wq_row_rms_mean << "\n";
+                eq << "  EXPECTED qkv_elem_rms = ln1_row_rms * wq_row_rms * sqrt(d_model)\n";
+                eq << "                         = " << ln1_row_rms_mean << " * " << wq_row_rms_mean 
+                   << " * sqrt(" << d_model_local << ")\n";
                 eq << "                         = " << expected_q_elem_rms << "\n";
-                eq << "  ACTUAL Q row_norm (full/head): " << actual_q_full_row_norm << " / " << actual_q_head_row_norm << "\n";
-                eq << "  TARGET Q row_norm (full/head): " << target_q_full_row_norm << " / " << target_q_head_row_norm << "\n";
-                const float inflation_ratio_eq = actual_q_head_row_norm / target_q_head_row_norm;
-                eq << "  INFLATION (full/head): " << (actual_q_full_row_norm / target_q_full_row_norm) 
+                eq << "  ACTUAL Q row_rms (full/head): " << actual_q_full_row_rms << " / " << actual_q_head_row_rms << "\n";
+                eq << "  TARGET Q row_rms (full/head): " << target_q_full_row_rms << " / " << target_q_head_row_rms << "\n";
+                const float inflation_ratio_eq = actual_q_head_row_rms / target_q_head_row_rms;
+                eq << "  INFLATION (full/head): " << (actual_q_full_row_rms / target_q_full_row_rms) 
                    << "x / " << inflation_ratio_eq << "x\n";
                 if (inflation_ratio_eq > 5.0f) {
-                    eq << "  [ANOMALY] per-head q_row_norm=" << actual_q_head_row_norm 
-                       << " is " << inflation_ratio_eq << "x larger than target=" << target_q_head_row_norm << "\n";
+                    eq << "  [ANOMALY] per-head q_row_rms=" << actual_q_head_row_rms 
+                       << " is " << inflation_ratio_eq << "x larger than target=" << target_q_head_row_rms << "\n";
                 }
-                if (ln1_row_norm_mean > 50.0f) {
-                    eq << "  [ANOMALY] ln1_out row_norm=" << ln1_row_norm_mean << " >> expected ~27.7\n";
+                if (ln1_row_rms_mean > 50.0f) {
+                    eq << "  [ANOMALY] ln1_out row_rms=" << ln1_row_rms_mean << " >> expected ~1.0\n";
                 }
-                if (wq_row_norm_mean > 5.0f) {
-                    eq << "  [ANOMALY] W_q row_norm=" << wq_row_norm_mean << " >> expected ~1.0\n";
+                if (wq_row_rms_mean > 5.0f) {
+                    eq << "  [ANOMALY] W_q row_rms=" << wq_row_rms_mean << " >> expected ~0.036\n";
                 }
                 EQ_LOG("QKV_PROJECTION_EQUATION", eq.str(), batch_idx_local, layer_idx_local, step_idx_local, 
                        GRIM::EquationPhase::QKV_PROJECTION);
@@ -1044,15 +1043,15 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         std::vector<float> h_output(output_size);
         cudaMemcpy(h_output.data(), intermediates.output.data, output_size * sizeof(float), cudaMemcpyDeviceToHost);
         
-        // Compute row norms
-        std::vector<float> row_norms(total_tokens);
+        // Compute row RMS
+        std::vector<float> row_rms(total_tokens);
         for (int t = 0; t < total_tokens; t++) {
             double norm_sq = 0.0;
             for (int d = 0; d < d_model; d++) {
                 float v = h_output[t * d_model + d];
                 norm_sq += v * v;
             }
-            row_norms[t] = sqrtf(norm_sq);
+            row_rms[t] = sqrtf(norm_sq / d_model);
         }
         
         // Sample pairwise cosine similarity
@@ -1063,19 +1062,19 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         
         for (int i = 0; i < total_tokens && num_pairs < sample_pairs; i += stride) {
             int j = (i + total_tokens / 2) % total_tokens;
-            if (i == j || row_norms[i] < 1e-8f || row_norms[j] < 1e-8f) continue;
+            if (i == j || row_rms[i] < 1e-8f || row_rms[j] < 1e-8f) continue;
             
             double dot = 0.0;
             for (int d = 0; d < d_model; d++) {
                 dot += h_output[i * d_model + d] * h_output[j * d_model + d];
             }
-            cos_sum += dot / (row_norms[i] * row_norms[j]);
+            cos_sum += dot / (static_cast<double>(row_rms[i]) * row_rms[j] * d_model);
             num_pairs++;
         }
         
         const double avg_cos = (num_pairs > 0) ? cos_sum / num_pairs : 0.0;
-        const float norm_min = *std::min_element(row_norms.begin(), row_norms.end());
-        const float norm_max = *std::max_element(row_norms.begin(), row_norms.end());
+        const float rms_min = *std::min_element(row_rms.begin(), row_rms.end());
+        const float rms_max = *std::max_element(row_rms.begin(), row_rms.end());
         
         // Log LayerScale values if available
         float ls1_val = 0.0f, ls2_val = 0.0f;
@@ -1090,7 +1089,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         eq << "[LAYER_COSINE_EQUATION] layer=" << layer_idx 
            << ": output = RMSNorm(RMSNorm(input + LS1*attn) + LS2*ffn)\n";
         eq << "  OUTPUT h_L" << layer_idx << ": shape=[" << total_tokens << ", " << d_model 
-           << "] row_norm_range=[" << norm_min << ", " << norm_max << "]\n";
+           << "] row_rms_range=[" << rms_min << ", " << rms_max << "]\n";
         eq << "  LAYERSCALE: LS1=" << ls1_val << " LS2=" << ls2_val << "\n";
         eq << "  ACTUAL avg_cos=" << avg_cos << " (pairs=" << num_pairs 
            << ") [|avg_cos|->1 = collapse, near 0 = diverse]\n";

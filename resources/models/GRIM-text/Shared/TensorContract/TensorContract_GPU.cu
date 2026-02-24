@@ -2,14 +2,12 @@
 //  TensorContract_GPU.cu
 //  CUDA implementation of type-safe tensor operations
 //======================================================//
-
 #include "TensorContract_GPU.hpp"
 #include "HyperParameters/HyperParameters_GPU.hpp"
 #include "../TensorConversion/TensorConversion.hpp"  // Layout conversions - single source of truth
 #include "../LogRecorder/LogRecorder.hpp"
 #include "../../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../../Layers/Attention/QKV_Projector.hpp"  // ISSUE #62: For launchReshapeFromBHSD
-// Bias kernel declarations (moved from Feed_Forward_GPU.cu - Rule 20: no reverse dependencies)
 #include "../PBM/PositionalBiasMethod.hpp"  // ISSUE #119: For RoPE autograd backward
 #include "../EquationLogging/EquationLogging.hpp"
 #include <cuda_runtime.h>
@@ -63,22 +61,6 @@ float* g_debug_embedding_only_grad = nullptr; // Where to copy embedding backwar
 size_t g_debug_grad_buffer_size = 0;          // Size in elements (vocab_size * d_model)
 bool g_debug_capture_enabled = g_autograd_verbose;         // Enable/disable capturing
 
-// Issue #143: PyTorch-style tied weight gradient accumulation.
-// Both LM head backward (dense matmul) and embedding backward (sparse scatter)
-// write to the SAME shared grad buffer. The natural cancellation (~90% for frequent
-// tokens) acts as frequency-proportional regularization — frequent tokens get braked
-// harder, preventing weight row divergence and logit explosion.
-//
-// PCGrad (Issue #60) was REMOVED because it eliminated this natural brake by
-// projecting out the conflicting embedding component, giving frequent tokens
-// unchecked gradient magnitude.
-bool g_skip_embedding_backward_for_tied_weights = false;
-
-// PCGrad buffer — kept as global for ABI compatibility but never allocated.
-// When nullptr, EmbeddingGradFn takes the direct accumulation path.
-float* g_pcgrad_temp_buffer = nullptr;
-size_t g_pcgrad_buffer_size = 0;
-
 // Call this after LM head matmul backward to capture its contribution
 void debugCaptureLMHeadGrad(float* grad_ptr, size_t size, cudaStream_t stream) {
     if (!g_debug_capture_enabled) return;  // Debug capture not enabled - valid skip
@@ -99,26 +81,25 @@ void debugCaptureEmbeddingGrad(float* grad_ptr, size_t size, cudaStream_t stream
                     cudaMemcpyDeviceToDevice, stream);
 }
 
-//======================================================//
-//  ISSUE #53 FIX v2: Use cudaFreeAsync for non-blocking cleanup
-//  
-//  PROBLEM: cudaFree() implicitly synchronizes with pending GPU work.
-//  PREVIOUS ATTEMPT: Deferred queue didn't work because CUDA may reuse
-//  "queued but not freed" memory addresses for new allocations.
-//  
-//  SOLUTION: Use cudaFreeAsync() which is truly stream-ordered.
-//  Memory is freed after all pending work on the stream completes,
-//  but the call returns immediately without blocking the CPU.
-//  
-//  NOTE: cudaFreeAsync requires CUDA 11.2+ (we have 12.5)
-//======================================================//
-
 // Global stream for async cleanup - initialized on first use
 static cudaStream_t g_cleanup_stream = nullptr;
+
+// Static cuBLAS handle for autograd operations (LayerScaleGradFn etc.)
+// Avoids creating/destroying handles per backward call (Issue #ownership-audit)
+static cublasHandle_t g_autograd_cublas_handle = nullptr;
 
 void initCleanupStream() {
     if (g_cleanup_stream == nullptr) {
         cudaStreamCreate(&g_cleanup_stream);
+    }
+}
+
+static void initAutogradCublasHandle() {
+    if (g_autograd_cublas_handle == nullptr) {
+        cublasStatus_t status = cublasCreate(&g_autograd_cublas_handle);
+        if (status != CUBLAS_STATUS_SUCCESS) {
+            throw std::runtime_error("Failed to create autograd cuBLAS handle, status=" + std::to_string(static_cast<int>(status)));
+        }
     }
 }
 
@@ -257,6 +238,20 @@ void queueForDeferredCleanup(void* ptr) {
 void flushDeferredCleanup() {
     if (g_cleanup_stream) {
         cudaStreamSynchronize(g_cleanup_stream);
+    }
+}
+
+// Destroy all module-static GPU resources (cleanup stream + cuBLAS handle)
+// Call during process shutdown after all GPU work is complete
+void shutdownAutogradResources() {
+    if (g_autograd_cublas_handle) {
+        cublasDestroy(g_autograd_cublas_handle);
+        g_autograd_cublas_handle = nullptr;
+    }
+    if (g_cleanup_stream) {
+        cudaStreamSynchronize(g_cleanup_stream);
+        cudaStreamDestroy(g_cleanup_stream);
+        g_cleanup_stream = nullptr;
     }
 }
 
@@ -728,6 +723,30 @@ __global__ void kernel_accumulate_grad(float* dst, const float* src, size_t coun
     const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (idx < count) {
         dst[idx] += src[idx] * scale;
+    }
+}
+
+// Kernel: Dot product a·b reduced to a single scalar, ACCUMULATED to *dst (not overwritten)
+// Uses shared memory block reduction. Grid must be (1) block.
+__global__ void kernel_dot_accumulate_scalar(float* dst, const float* a, const float* b, size_t count) {
+    __shared__ float sdata[256];
+    const int tid = threadIdx.x;
+    float sum = 0.0f;
+    for (size_t i = tid; i < count; i += blockDim.x) {
+        sum += a[i] * b[i];
+    }
+    sdata[tid] = sum;
+    __syncthreads();
+    // Block reduction
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        __syncthreads();
+    }
+    // Thread 0 accumulates (not overwrites) to dst
+    if (tid == 0) {
+        atomicAdd(dst, sdata[0]);
     }
 }
 
@@ -1433,13 +1452,6 @@ __global__ void kernel_rmsnorm_backward(
     // Step 3: Compute grad_input and accumulate grad_gamma
     // dx = (dy * gamma - x * dgamma_x_sum / (d_model * rms_sq)) * inv_rms
     const float scale = dgamma_x_sum / (d_model * rms_sq);
-    
-    // ISSUE #82 REVERTED: The 1/tokens scaling was WRONG!
-    // The loss backward already applies 1/tokens through mean reduction (Issue #58),
-    // so the incoming dy already reflects this scaling. Adding another 1/tokens
-    // makes RMS gradients 1/tokens² too small (~300,000x too small with 3500 tokens).
-    // The correct gradient is simply: grad_gamma[i] = sum_t(dy[t,i] * x[t,i] * inv_rms[t])
-    
     for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
         dx[i] = (dy[i] * gamma[i] - x[i] * scale) * inv_rms;
         
@@ -1510,89 +1522,7 @@ __global__ void kernel_embedding_backward(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════════
-// ISSUE #60 FIX: PCGrad kernel for tied embedding/lm_head weights
-// ═══════════════════════════════════════════════════════════════════════════════════
-// Combines LM head gradient (g_lm) with embedding gradient (g_emb) using PCGrad:
-//   g_final = g_lm + (g_emb - proj_{g_lm}(g_emb))
-//           = g_lm + g_emb - ((g_lm · g_emb) / ||g_lm||²) * g_lm
-//
-// For each row (one per vocab token):
-// - If cosine(g_lm, g_emb) = -1: g_final = g_lm (embedding conflicts, use LM only)
-// - If cosine(g_lm, g_emb) = 0:  g_final = g_lm + g_emb (orthogonal, keep both)
-// - If cosine(g_lm, g_emb) = +1: g_final = g_lm (avoids double-counting)
-// ═══════════════════════════════════════════════════════════════════════════════════
-__global__ void kernel_pcgrad_combine(
-    float* g_lm,           // [vocab_size, d_model] - LM head gradient (IN-PLACE update)
-    const float* g_emb,    // [vocab_size, d_model] - Embedding gradient (temp buffer)
-    int vocab_size,
-    int d_model
-) {
-    const int vocab_idx = blockIdx.x;
-    if (vocab_idx >= vocab_size) return;
-    
-    float* lm_row = g_lm + static_cast<size_t>(vocab_idx) * d_model;
-    const float* emb_row = g_emb + static_cast<size_t>(vocab_idx) * d_model;
-    
-    extern __shared__ float shared[];
-    float* s_dot_lm_emb = shared;                                // [num_warps]
-    float* s_norm_lm_sq = shared + (blockDim.x / 32) + 1;        // [num_warps]
-    
-    // Step 1: Compute g_lm · g_emb and ||g_lm||² in parallel
-    float local_dot = 0.0f;
-    float local_norm_sq = 0.0f;
-    
-    for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
-        const float lm_val = lm_row[i];
-        const float emb_val = emb_row[i];
-        local_dot += lm_val * emb_val;
-        local_norm_sq += lm_val * lm_val;
-    }
-    
-    // Warp reduction
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        local_dot += __shfl_down_sync(0xffffffff, local_dot, offset);
-        local_norm_sq += __shfl_down_sync(0xffffffff, local_norm_sq, offset);
-    }
-    
-    // Store warp results
-    if (threadIdx.x % 32 == 0) {
-        s_dot_lm_emb[threadIdx.x / 32] = local_dot;
-        s_norm_lm_sq[threadIdx.x / 32] = local_norm_sq;
-    }
-    __syncthreads();
-    
-    // Final reduction in thread 0
-    __shared__ float s_proj_coef;
-    if (threadIdx.x == 0) {
-        float total_dot = 0.0f;
-        float total_norm_sq = 0.0f;
-        const int num_warps = (blockDim.x + 31) / 32;
-        for (int w = 0; w < num_warps; w++) {
-            total_dot += s_dot_lm_emb[w];
-            total_norm_sq += s_norm_lm_sq[w];
-        }
-        
-        // proj_coef = (g_lm · g_emb) / ||g_lm||²
-        // Issue #141 FIX: Replace assert (compiled out in Release) with runtime guard.
-        // Zero g_lm norm means no LM head gradient for this vocab row — nothing
-        // to project onto, so proj_coef = 0 (use g_emb as-is for this row).
-        if (total_norm_sq < 1e-12f) {
-            s_proj_coef = 0.0f;
-        } else {
-            s_proj_coef = total_dot / total_norm_sq;
-        }
-    }
-    __syncthreads();
-    
-    const float proj_coef = s_proj_coef;
-    
-    // Step 2: g_final = g_lm + (g_emb - proj_coef * g_lm)
-    //                 = g_lm * (1 - proj_coef) + g_emb
-    for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
-        lm_row[i] = lm_row[i] * (1.0f - proj_coef) + emb_row[i];
-    }
-}
+
 
 //========================================================================
 // Log-Softmax Forward: log_softmax(x)[i] = x[i] - logsumexp(x)
@@ -1926,14 +1856,12 @@ struct LayerScaleGradFn : public GradFn {
     
     LayerScaleGradFn() { op_name = "layer_scale"; }
     
-    void capture_inputs(Tensor& input, Tensor& scale_param, cudaStream_t stream) {
+    void capture_inputs(Tensor& input, Tensor& scale_param, float cached_scale_value, cudaStream_t stream) {
         input_shape = input.shape;
         element_count = input.numel();
         
-        // Cache scale value
-        cudaMemcpyAsync(&scale_value, scale_param.data, sizeof(float), 
-                        cudaMemcpyDeviceToHost, stream);
-        cudaStreamSynchronize(stream);  // Need sync to read value
+        // Use cached scale value (already read from GPU in layer_scale forward)
+        scale_value = cached_scale_value;
         
         // Copy shared_ptr to input's grad_fn
         input_grad_fn = input.grad_fn;
@@ -1993,23 +1921,11 @@ struct LayerScaleGradFn : public GradFn {
         }
         
         // 2. grad_scale = sum(grad_output * input_data)  (dot product → scalar)
+        //    ACCUMULATE (not overwrite) to scale_grad for gradient accumulation windows
         if (scale_grad && grad_output.data && input_data) {
-            // Compute dot product using cublas
-            cublasHandle_t handle;
-            cublasCreate(&handle);
-            cublasSetStream(handle, stream);
-            
-            float dot_result = 0.0f;
-            cublasSdot(handle, static_cast<int>(n), 
-                       grad_output.data, 1, input_data, 1, &dot_result);
-            
-            // Accumulate to scale_grad (atomicAdd for safety)
-            // Copy to temp buffer then atomicAdd
-            float* h_dot = &dot_result;
-            cudaMemcpyAsync(scale_grad, h_dot, sizeof(float), 
-                           cudaMemcpyHostToDevice, stream);
-            
-            cublasDestroy(handle);
+            // Single-block reduction kernel: atomicAdd(scale_grad, dot(grad_output, input_data))
+            kernel_dot_accumulate_scalar<<<1, 256, 0, stream>>>(
+                scale_grad, grad_output.data, input_data, n);
         }
         
         // Continue backward chain for input
@@ -2101,56 +2017,11 @@ struct CenterRowsGradFn : public GradFn {
         if (!grad_output.data) throw std::runtime_error("CenterRowsGradFn::apply: grad_output.data is NULL - backward called with null gradient");
         applied = true;
         
-        // ═══════════════════════════════════════════════════════════════
-        // DIAGNOSTIC: Issue #146 — trace zero grad_C reaching MatMul
-        // Only log for large row_dim (logit centering, vocab=50377)
-        // ═══════════════════════════════════════════════════════════════
-        const bool is_logit_centering = (row_dim > 10000);
-        float diag_in_max = 0.0f;  // Must outlive both if-blocks
-        if (is_logit_centering) {
-            cudaStreamSynchronize(stream);  // Ensure input is ready
-            // Sample input (what LogSoftmax wrote via BiasAdd chain)
-            const size_t n_sample = std::min(static_cast<size_t>(num_rows) * row_dim, static_cast<size_t>(100000));
-            std::vector<float> in_samp(n_sample);
-            cudaMemcpy(in_samp.data(), grad_output.data, n_sample * sizeof(float), cudaMemcpyDeviceToHost);
-            double in_sq = 0.0;
-            for (auto& v : in_samp) { if (!std::isnan(v) && !std::isinf(v)) { diag_in_max = std::max(diag_in_max, std::abs(v)); in_sq += v*v; } }
-            float in_rms = std::sqrt(static_cast<float>(in_sq / n_sample));
-            fprintf(stderr, "[CENTER_ROWS_BWD] LOGIT_CENTERING: input_ptr=%p output_ptr=%p row_dim=%d num_rows=%d\n",
-                    (void*)grad_output.data, (void*)input_grad, row_dim, num_rows);
-            fprintf(stderr, "[CENTER_ROWS_BWD]   INPUT: max=%.10e rms=%.10e (sampled %zu/%zu)\n",
-                    diag_in_max, in_rms, n_sample, static_cast<size_t>(num_rows) * row_dim);
-            fflush(stderr);
-        }
-        
         // BACKWARD: grad_x = grad_y - mean_d(grad_y)  (reuse centering kernel!)
         // We can use kernel_center_rows to center grad_output directly to input_grad
         {
             kernel_center_rows<<<num_rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 grad_output.data, input_grad, row_dim, num_rows);
-        }
-        
-        // DIAGNOSTIC: Verify kernel output for logit centering
-        if (is_logit_centering) {
-            cudaStreamSynchronize(stream);  // Wait for kernel to finish
-            const size_t n_sample = std::min(static_cast<size_t>(num_rows) * row_dim, static_cast<size_t>(100000));
-            std::vector<float> out_samp(n_sample);
-            cudaMemcpy(out_samp.data(), input_grad, n_sample * sizeof(float), cudaMemcpyDeviceToHost);
-            float out_max = 0.0f; double out_sq = 0.0;
-            for (auto& v : out_samp) { if (!std::isnan(v) && !std::isinf(v)) { out_max = std::max(out_max, std::abs(v)); out_sq += v*v; } }
-            float out_rms = std::sqrt(static_cast<float>(out_sq / n_sample));
-            fprintf(stderr, "[CENTER_ROWS_BWD]   OUTPUT: max=%.10e rms=%.10e (sampled %zu)\n", out_max, out_rms, n_sample);
-            if (out_max == 0.0f && diag_in_max > 0.0f) {
-                // Also sample from middle of output buffer to check if it's completely zero
-                const size_t mid_offset = static_cast<size_t>(num_rows / 2) * row_dim;
-                const size_t mid_sample = std::min(static_cast<size_t>(10000), static_cast<size_t>(num_rows) * row_dim - mid_offset);
-                std::vector<float> mid_samp(mid_sample);
-                cudaMemcpy(mid_samp.data(), input_grad + mid_offset, mid_sample * sizeof(float), cudaMemcpyDeviceToHost);
-                float mid_max = 0.0f;
-                for (auto& v : mid_samp) { mid_max = std::max(mid_max, std::abs(v)); }
-                fprintf(stderr, "[CENTER_ROWS_BWD]   [ANOMALY] OUTPUT is ZERO but INPUT was non-zero! mid_sample_max=%.10e\n", mid_max);
-            }
-            fflush(stderr);
         }
         
         // Continue backward chain
@@ -2272,7 +2143,7 @@ static __global__ void kernel_pc1_col_mean(
     }
 }
 
-// Normalize g in-place: g = g / ||g||_2
+// Normalize g in-place: g = g / rms(g)   where rms = sqrt(sum(g²)/D)
 // Launch: <<<1, 256, 0, stream>>>
 static __global__ void kernel_pc1_normalize(float* __restrict__ g, int D)
 {
@@ -2286,7 +2157,8 @@ static __global__ void kernel_pc1_normalize(float* __restrict__ g, int D)
         if (threadIdx.x < s) sdata[threadIdx.x] += sdata[threadIdx.x + s];
         __syncthreads();
     }
-    float inv = 1.f / sqrtf(sdata[0] + 1e-12f);
+    // RMS normalization: inv = 1/rms(g) = 1/sqrt(sum_sq/D)
+    float inv = 1.f / sqrtf(sdata[0] / (float)D + 1e-12f);
     __syncthreads();
     for (int d = threadIdx.x; d < D; d += blockDim.x)
         g[d] *= inv;
@@ -2318,8 +2190,9 @@ static __global__ void kernel_pc1_gemv_HtV(
     g_out[d] = dot;
 }
 
-// H_out[t,d] = H[t,d] - (H[t,:]·g) * g[d]  — project each row
-// Used in both forward pass and backward (same linear projection since I-gg^T is symmetric)
+// H_out[t,d] = H[t,d] - (H[t,:]·g / D) * g[d]  — project each row
+// With RMS-normalized g (rms(g)=1 → g·g=D), proper projection is (h·g)/(g·g) * g = (h·g)/D * g
+// Used in both forward pass and backward (same linear projection since (I-gg^T/D) is symmetric)
 // Launch: <<<T, 256, 0, stream>>>  (one block per row for shared-mem dot product)
 static __global__ void kernel_pc1_project(
     const float* __restrict__ H, const float* __restrict__ g,
@@ -2337,7 +2210,8 @@ static __global__ void kernel_pc1_project(
         if (threadIdx.x < s) sdata[threadIdx.x] += sdata[threadIdx.x + s];
         __syncthreads();
     }
-    float coeff = sdata[0];
+    // Divide by D because g is RMS-normalized (g·g = D, not 1)
+    float coeff = sdata[0] / (float)D;
     __syncthreads();
     for (int d = threadIdx.x; d < D; d += blockDim.x)
         H_out[(size_t)t * D + d] = H[(size_t)t * D + d] - coeff * g[d];
@@ -2346,8 +2220,8 @@ static __global__ void kernel_pc1_project(
 /**
  * ProjectOutPC1GradFn — Issue #149
  * Backward for project_out_pc1
- * Forward:  h̃[t] = h[t] - (h[t]·g)*g   where g = PC1(H) via power iteration, stop-grad
- * Backward: grad_h = (I - gg^T) * grad_h̃   (same linear projection, g constant)
+ * Forward:  h̃[t] = h[t] - (h[t]·g/D)*g   where g = PC1(H) via power iteration (rms-normalized), stop-grad
+ * Backward: grad_h = (I - gg^T/D) * grad_h̃   (same linear projection, g constant)
  */
 struct ProjectOutPC1GradFn : public GradFn {
     bool input_requires_grad = false;
@@ -2419,7 +2293,7 @@ struct ProjectOutPC1GradFn : public GradFn {
             AG_TRACE("[ProjectOutPC1GradFn] Allocated deferred input_grad buffer: %zu floats at %p\n", element_count, (void*)input_grad);
         }
 
-        // BACKWARD: grad_h = (I - gg^T) * grad_h̃  — same projection as forward
+        // BACKWARD: grad_h = (I - gg^T/D) * grad_h̃  — same projection as forward (g is RMS-normalized)
         kernel_pc1_project<<<num_rows, 256, 0, stream>>>(
             grad_output.data, g_saved, input_grad, num_rows, num_cols);
 
@@ -2682,7 +2556,7 @@ static void launchBiasAdd(float* tensor, const float* bias,
     if (total_tokens <= 0 || features <= 0) throw std::runtime_error("launchBiasAdd: invalid dimensions (" + std::to_string(total_tokens) + ", " + std::to_string(features) + ")");
 
     const int total_elements = total_tokens * features;
-    constexpr int kBlockSize = 256;
+    constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
     const int grid = (total_elements + kBlockSize - 1) / kBlockSize;
     biasAddKernel<<<grid, kBlockSize, 0, stream>>>(tensor, bias, total_elements, features);
 }
@@ -2694,7 +2568,7 @@ static void launchBiasBackward(const float* grad_output, float* grad_bias,
     if (!grad_bias) throw std::runtime_error("launchBiasBackward: grad_bias is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
     if (total_tokens <= 0 || features <= 0) throw std::runtime_error("launchBiasBackward: invalid dimensions (" + std::to_string(total_tokens) + ", " + std::to_string(features) + ")");
 
-    constexpr int kBlockSize = 256;
+    constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
     const int shared_bytes = kBlockSize * sizeof(float);
     biasBackwardKernel<<<features, kBlockSize, shared_bytes, stream>>>(
         grad_output, grad_bias, total_tokens, features);
@@ -3257,11 +3131,6 @@ struct EmbeddingGradFn : public GradFn {
     int vocab_size = 0;            // RULE 20: Stored for OOB bounds checking in backward kernel
     float embedding_scale = 1.0f;  // Issue #140: No scaling (1.0f) — AIAYN sqrt(d_model) removed
     
-    // PCGrad buffer — snapshotted at construction, NOT read from globals
-    // Eliminates fragile extern global coupling (Finding A audit)
-    float* pcgrad_buffer = nullptr;     // Temporary buffer for embedding grad before projection
-    size_t pcgrad_buffer_size = 0;      // Size in elements (vocab_size * d_model)
-    
     EmbeddingGradFn() { op_name = "embedding"; }
     
     ~EmbeddingGradFn() override {
@@ -3303,8 +3172,8 @@ struct EmbeddingGradFn : public GradFn {
         // RULE 20: Track current operation for error context
         setCurrentGradFnOp("embedding", this);
         
-        AG_TRACE("[EmbeddingGradFn::apply] ENTER - tokens=%d d=%d pcgrad=%p\n",
-                num_tokens, d_model, (void*)pcgrad_buffer);
+        AG_TRACE("[EmbeddingGradFn::apply] ENTER - tokens=%d d=%d\n",
+                num_tokens, d_model);
         
         // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
         if (applied) {
@@ -3329,81 +3198,21 @@ struct EmbeddingGradFn : public GradFn {
             throw std::runtime_error("EmbeddingGradFn::apply: grad_output.data is NULL");
         }
 
-        // ═══════════════════════════════════════════════════════════════════════════
-        // ISSUE #60 FIX: PCGrad for tied embedding/lm_head weights
-        // ═══════════════════════════════════════════════════════════════════════════
-        // Problem: LM head backward and embedding backward produce OPPOSITE gradients!
-        // Solution: PCGrad - project out the conflicting component:
-        //   g_final = g_lm + (g_emb - proj_{g_lm}(g_emb))
-        //           = g_lm + orthogonal_component(g_emb)
-        // ═══════════════════════════════════════════════════════════════════════════
-        
         if (!vocab_size) {
             throw std::runtime_error("EmbeddingGradFn::apply: vocab_size is 0 — save() was not called or weight_shape is invalid");
         }
         
-        if (pcgrad_buffer && pcgrad_buffer_size >= static_cast<size_t>(vocab_size) * d_model) {
-            // PCGrad mode: compute embedding gradient into temp buffer, then combine
-            AG_TRACE("[EmbeddingGradFn] Using PCGrad mode (vocab=%d d=%d)\n", vocab_size, d_model);
-            
-            // Step 1: Zero the temp buffer
-            cudaMemsetAsync(pcgrad_buffer, 0, 
-                           static_cast<size_t>(vocab_size) * d_model * sizeof(float), stream);
-            
-            // RULE 20: Check for pre-existing CUDA errors (sticky errors from earlier kernels)
-            cudaError_t pre_check = cudaGetLastError();
-            if (pre_check != cudaSuccess) {
-                std::string msg = std::string("[EmbeddingGradFn] Pre-existing CUDA error before kernel launch: ")
-                    + cudaGetErrorString(pre_check);
-                EmitModuleError(ModuleId::Autograd, msg);
-                throw std::runtime_error(msg);
-            }
-            
-            // Step 2: Compute embedding backward into temp buffer (NOT shared grad buffer)
-            kernel_embedding_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-                grad_output.data, token_ids, pcgrad_buffer, num_tokens, d_model, vocab_size, embedding_scale);
-            
-            cudaError_t launch_err = cudaGetLastError();
-            if (launch_err != cudaSuccess) {
-                std::string msg = std::string("[EmbeddingGradFn] kernel_embedding_backward launch failed: ")
-                    + cudaGetErrorString(launch_err);
-                EmitModuleError(ModuleId::Autograd, msg);
-                throw std::runtime_error(msg);
-            }
-            trackKernelLaunch("kernel_embedding_backward_pcgrad", stream);
-            
-            // ISSUE #60 DEBUG: Capture RAW embedding gradient BEFORE PCGrad projection
-            if (g_debug_capture_enabled && g_debug_embedding_only_grad) {
-                cudaStreamSynchronize(stream);
-                const size_t total_size = weight_shape.total_elements();
-                debugCaptureEmbeddingGrad(pcgrad_buffer, total_size, stream);
-            }
-            
-            // Step 3: Apply PCGrad - combine LM head grad (in weight_grad) with orthogonal 
-            //         component of embedding grad (in temp buffer)
-            const int shared_mem = 2 * ((AUTOGRAD_BLOCK_SIZE / 32) + 1) * sizeof(float);
-            kernel_pcgrad_combine<<<vocab_size, AUTOGRAD_BLOCK_SIZE, shared_mem, stream>>>(
-                weight_grad, pcgrad_buffer, vocab_size, d_model);
-            trackKernelLaunch("kernel_pcgrad_combine", stream);
-            
-            AG_TRACE("[EmbeddingGradFn] PCGrad combination complete\n");
-            
-        } else if (g_skip_embedding_backward_for_tied_weights) {
-            // Fallback: skip embedding backward entirely (previous fix)
-            AG_TRACE("[EmbeddingGradFn] SKIPPING embedding backward - weights tied, no PCGrad buffer\n");
-        } else {
-            // Issue #143: PyTorch-style direct accumulation — embedding grad writes
-            // to same buffer where LM head grad already lives. Natural ~90% cancellation
-            // for frequent tokens acts as frequency-proportional regularization.
-            kernel_embedding_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-                grad_output.data, token_ids, weight_grad, num_tokens, d_model, vocab_size, embedding_scale);
-            trackKernelLaunch("kernel_embedding_backward", stream);
-            
-            // DEBUG: Capture embedding gradient (non-PCGrad path)
-            if (g_debug_capture_enabled && g_debug_embedding_only_grad && weight_grad) {
-                const size_t total_size = weight_shape.total_elements();
-                debugCaptureEmbeddingGrad(weight_grad, total_size, stream);
-            }
+        // PyTorch-style direct accumulation — embedding grad writes
+        // to same buffer where LM head grad already lives. Natural ~90% cancellation
+        // for frequent tokens acts as frequency-proportional regularization.
+        kernel_embedding_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            grad_output.data, token_ids, weight_grad, num_tokens, d_model, vocab_size, embedding_scale);
+        trackKernelLaunch("kernel_embedding_backward", stream);
+        
+        // DEBUG: Capture embedding gradient
+        if (g_debug_capture_enabled && g_debug_embedding_only_grad && weight_grad) {
+            const size_t total_size = weight_shape.total_elements();
+            debugCaptureEmbeddingGrad(weight_grad, total_size, stream);
         }
 
         // CONTINUE AUTOGRAD CHAIN using stored grad_fn
@@ -3488,9 +3297,7 @@ struct LogSoftmaxGradFn : public GradFn {
     ///              OOM FIX: unified_loss() passes false because NLLLossGradFn
     ///              owns the same data and keeps it alive through backward.
     void save(const float* log_softmax_output, int tokens, int d, cudaStream_t stream, bool copy = true) {
-        fprintf(stderr, "[LogSoftmaxGradFn::save] this=%p copy=%d input_ptr=%p\n", (void*)this, (int)copy, (const void*)log_softmax_output);
-        fflush(stderr);
-        num_tokens = tokens;
+            num_tokens = tokens;
         dim = d;
         if (copy) {
             const size_t bytes = static_cast<size_t>(tokens) * d * sizeof(float);
@@ -3526,89 +3333,6 @@ struct LogSoftmaxGradFn : public GradFn {
         kernel_log_softmax_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
             grad_output.data, saved_log_softmax, input_grad, num_tokens, dim);
         trackKernelLaunch("kernel_log_softmax_backward", stream);
-
-        // ═══════════════════════════════════════════════════════════════
-        // [LOGSOFTMAX_BWD_EQUATION] Issue #135: Verify kernel output
-        //
-        // For pure CE (no entropy/smoothing/focal):
-        //   grad_logits[t,v] = (p(v|t) - 1_{v=target[t]}) / N
-        // Column 277 (SPACE): MUST be >= 0 at non-target-277 positions
-        //   because grad[t,277] = p(277|t)/N > 0 when target[t] != 277
-        // If we see negative values here, the kernel/inputs are wrong.
-        // If values are correct here but diagnostic shows negative later,
-        //   then something modifies ts.grad_logits_tensor.data after this point.
-        // ═══════════════════════════════════════════════════════════════
-        {
-            constexpr int VERIFY_COL = 277;
-            if (num_tokens > 0 && dim > VERIFY_COL) {
-                cudaStreamSynchronize(stream);
-
-                // Extract column 277 from grad_logits (output) and NLL backward (input)
-                // using strided 2D copy: one float per row, row stride = dim floats
-                std::vector<float> grad_col(num_tokens), nll_col(num_tokens);
-                cudaMemcpy2D(grad_col.data(), sizeof(float),
-                             input_grad + VERIFY_COL, dim * sizeof(float),
-                             sizeof(float), num_tokens, cudaMemcpyDeviceToHost);
-                cudaMemcpy2D(nll_col.data(), sizeof(float),
-                             grad_output.data + VERIFY_COL, dim * sizeof(float),
-                             sizeof(float), num_tokens, cudaMemcpyDeviceToHost);
-
-                // NLL backward: nll_col[t] ≈ -1/N when target[t]==277, else 0
-                // LogSoftmax backward result:
-                //   at target-277: grad_col[t] = (p(277|t) - 1)/N < 0
-                //   at non-target: grad_col[t] = p(277|t)/N > 0  (MUST be non-negative!)
-                double sum_at_target = 0.0, sum_at_other = 0.0;
-                int count_target = 0, count_other = 0, count_other_neg = 0;
-                for (int t = 0; t < num_tokens; ++t) {
-                    if (std::abs(nll_col[t]) > 1e-10f) {
-                        sum_at_target += grad_col[t];
-                        count_target++;
-                    } else {
-                        sum_at_other += grad_col[t];
-                        count_other++;
-                        if (grad_col[t] < -1e-10f) count_other_neg++;
-                    }
-                }
-
-                fprintf(stderr,
-                    "[LOGSOFTMAX_BWD_EQUATION] POST-KERNEL col=277 tokens=%d:\n"
-                    "  at_277_targets: count=%d sum=%.6f (expect negative)\n"
-                    "  at_other_targets: count=%d sum=%.6f (MUST be >= 0) neg_positions=%d\n",
-                    num_tokens, count_target, sum_at_target,
-                    count_other, sum_at_other, count_other_neg);
-                fflush(stderr);
-
-                if (count_other_neg > 0) {
-                    fprintf(stderr,
-                        "  [ANOMALY] %d non-target-277 positions have NEGATIVE "
-                        "grad_logits[t,277]! IMPOSSIBLE for pure CE.\n", count_other_neg);
-                    // Print first offending positions
-                    int printed = 0;
-                    for (int t = 0; t < num_tokens && printed < 5; ++t) {
-                        if (std::abs(nll_col[t]) <= 1e-10f && grad_col[t] < -1e-10f) {
-                            // Also read saved log_softmax at this position for diagnosis
-                            float log_p_277;
-                            cudaMemcpy(&log_p_277,
-                                       saved_log_softmax + static_cast<size_t>(t) * dim + VERIFY_COL,
-                                       sizeof(float), cudaMemcpyDeviceToHost);
-                            fprintf(stderr,
-                                "    t=%d grad_logits=%.10f nll_input=%.10f "
-                                "log_p(277)=%.6f p(277)=%.6e\n",
-                                t, grad_col[t], nll_col[t], log_p_277, std::exp(log_p_277));
-                            printed++;
-                        }
-                    }
-                    fflush(stderr);
-                }
-
-                if (sum_at_other >= -1e-10) {
-                    fprintf(stderr,
-                        "  [OK] Kernel output correct. If Phase2 diagnostic shows negative "
-                        "at_other, buffer is modified AFTER this point.\n");
-                    fflush(stderr);
-                }
-            }
-        }
 
         // Continue autograd chain
         if (input_grad_fn) {
@@ -3937,14 +3661,6 @@ Tensor broadcast_add(const Tensor& input, const Tensor& bias, cudaStream_t strea
     AG_TRACE("[autograd::broadcast_add] input[%d,%d] + bias[%d] -> output[%d,%d] requires_grad=%d\n",
              total_tokens, features, bias_size, total_tokens, features, result.requires_grad);
     
-    // ISSUE #97 DIAGNOSTIC: Always print for debugging
-    static std::atomic<int> broadcast_add_call_idx{0};
-    const int fwd_call_idx = broadcast_add_call_idx.fetch_add(1);
-    fprintf(stderr, "[BIAS-ADD-FWD] call=%d | input[%d,%d] + bias[%d] req_grad: input=%d bias=%d out=%d bias.grad_data=%p\n",
-            fwd_call_idx, total_tokens, features, bias_size, 
-            input.requires_grad, bias.requires_grad, result.requires_grad,
-            (void*)const_cast<Tensor&>(bias).grad_data());
-    
     return result;
 }
 
@@ -4085,9 +3801,6 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cud
         grad_fn->save(token_ids, num_tokens, d_model, true, stream);
         grad_fn->vocab_size = vocab_size;             // RULE 20: Store for backward OOB checking
         grad_fn->embedding_scale = embedding_scale;   // Store for backward scaling
-        // Snapshot PCGrad buffer at construction — no global coupling during backward
-        grad_fn->pcgrad_buffer = g_pcgrad_temp_buffer;
-        grad_fn->pcgrad_buffer_size = g_pcgrad_buffer_size;
         result.grad_fn = grad_fn;
     }
     
@@ -4129,58 +3842,7 @@ Tensor log_softmax(const Tensor& x, cudaStream_t stream, bool save_output_copy) 
     return result;
 }
 
-Tensor dropout(const Tensor& x, float p, bool training, const uint8_t* mask, cudaStream_t stream) {
-    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "dropout_result");
-    
-    if (!training || p == 0.0f) {
-        // No dropout during inference or when p=0
-        cudaMemcpyAsync(result.data, x.data, x.size_bytes(), cudaMemcpyDeviceToDevice, stream);
-        
-        if (x.requires_grad) {
-            result.is_leaf = false;
-            // Identity backward - ISSUE #48: capture stable data
-            auto grad_fn = std::make_shared<AddGradFn>();
-            grad_fn->capture_single_input(const_cast<Tensor&>(x), stream);  // ISSUE #56 FIX
-            result.grad_fn = grad_fn;
-        }
-        return result;
-    }
-    
-    if (!mask) {
-        throw std::invalid_argument("autograd::dropout: mask required when training=true and p>0. Use dropout(x, p, seed, training, stream) to auto-generate mask.");
-    }
-    
-    const size_t count = x.numel();
-    const float scale = 1.0f / (1.0f - p);  // Inverted dropout scale
-    
-    // Forward: y = x * mask / (1 - p) where mask is 0/1
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    kernel_dropout_forward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        x.data, mask, result.data, scale, count);
-    trackKernelLaunch("kernel_dropout_forward", stream);
-    
-    // Set up backward - ISSUE #48: capture stable data, not Tensor*
-    if (x.requires_grad) {
-        result.is_leaf = false;
-        auto grad_fn = std::make_shared<DropoutGradFn>();
-        grad_fn->capture_input(const_cast<Tensor&>(x));
-        grad_fn->save(mask, p, count, stream);
-        result.grad_fn = grad_fn;
-    }
-    
-    return result;
-}
 
-/**
- * Dropout with auto-generated mask using PRNG seed
- * This is the preferred interface - mask is generated internally and managed properly.
- * 
- * @param x Input tensor
- * @param p Dropout probability (fraction to drop, e.g., 0.1 means drop 10%)
- * @param seed Random seed for mask generation (use batch_idx * step + offset for reproducibility)
- * @param training If false, no dropout applied (identity function)
- * @param stream CUDA stream
- */
 Tensor dropout(const Tensor& x, float p, uint64_t seed, bool training, cudaStream_t stream) {
     Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "dropout_seeded_result");
     
@@ -4296,7 +3958,7 @@ Tensor layer_scale(const Tensor& x, Tensor& scale_param, cudaStream_t stream) {
     if (track_grad) {
         result.is_leaf = false;
         auto grad_fn = std::make_shared<LayerScaleGradFn>();
-        grad_fn->capture_inputs(const_cast<Tensor&>(x), scale_param, stream);
+        grad_fn->capture_inputs(const_cast<Tensor&>(x), scale_param, scale_value, stream);
         result.grad_fn = grad_fn;
     }
     
@@ -4410,8 +4072,8 @@ Tensor center_columns(const Tensor& x, cudaStream_t stream) {
 // Reduces avg_cos(h_i,h_j) to prevent causal-attention prefix-averaging
 // from creating a shared direction that causes mode collapse.
 //
-// Forward:  h̃[t] = h[t] - (h[t]·g)*g   where g = PC1(H) via power iteration
-// Backward: grad_h = (I - gg^T) * grad_h̃   (g treated as stop-gradient)
+// Forward:  h̃[t] = h[t] - (h[t]·g/D)*g   where g = PC1(H) via power iteration (rms-normalized)
+// Backward: grad_h = (I - gg^T/D) * grad_h̃   (g treated as stop-gradient)
 //
 // g is initialised from the column mean, then refined with n_power_iters
 // steps of the power method (H^T H g normalised each step).
@@ -4425,9 +4087,6 @@ Tensor autograd::project_out_pc1(const Tensor& x, int n_power_iters, cudaStream_
     if (D <= 0 || T <= 0)
         throw std::runtime_error("project_out_pc1: invalid dimensions T=" + std::to_string(T) + " D=" + std::to_string(D));
 
-    fprintf(stderr, "[PC1] project_out_pc1 ENTRY: T=%d D=%d numel=%zu requires_grad=%d stream=%p data=%p\n",
-            T, D, x.numel(), (int)x.requires_grad, (void*)stream, (void*)x.data);
-
     bool track_grad = x.requires_grad;
 
     // Working buffers on device
@@ -4437,18 +4096,10 @@ Tensor autograd::project_out_pc1(const Tensor& x, int n_power_iters, cudaStream_
     cudaMalloc(&g_buf, D * sizeof(float));
     cudaMalloc(&g_tmp, D * sizeof(float));
     cudaMalloc(&v_buf, T * sizeof(float));
-    fprintf(stderr, "[PC1] Buffers allocated: g_buf=%p g_tmp=%p v_buf=%p\n", (void*)g_buf, (void*)g_tmp, (void*)v_buf);
 
     // Initialize PC1 guess from column mean, then normalize
     kernel_pc1_col_mean<<<1, 256, 0, stream>>>(x.data, g_buf, T, D);
-    cudaError_t e1 = cudaStreamSynchronize(stream);
-    fprintf(stderr, "[PC1] col_mean done: %s\n", cudaGetErrorString(e1));
-    if (e1 != cudaSuccess) throw std::runtime_error("project_out_pc1: kernel_pc1_col_mean failed: " + std::string(cudaGetErrorString(e1)));
-
     kernel_pc1_normalize<<<1, 256, 0, stream>>>(g_buf, D);
-    cudaError_t e2 = cudaStreamSynchronize(stream);
-    fprintf(stderr, "[PC1] normalize done: %s\n", cudaGetErrorString(e2));
-    if (e2 != cudaSuccess) throw std::runtime_error("project_out_pc1: kernel_pc1_normalize failed: " + std::string(cudaGetErrorString(e2)));
 
     // Power iteration: g ← normalize(H^T (H g))
     const int blk = 256;
@@ -4458,9 +4109,9 @@ Tensor autograd::project_out_pc1(const Tensor& x, int n_power_iters, cudaStream_
         kernel_pc1_normalize<<<1, 256, 0, stream>>>(g_tmp, D);
         cudaMemcpyAsync(g_buf, g_tmp, D * sizeof(float), cudaMemcpyDeviceToDevice, stream);
     }
-    cudaError_t e3 = cudaStreamSynchronize(stream);
-    fprintf(stderr, "[PC1] power_iteration done (%d iters): %s\n", n_power_iters, cudaGetErrorString(e3));
-    if (e3 != cudaSuccess) throw std::runtime_error("project_out_pc1: power iteration failed: " + std::string(cudaGetErrorString(e3)));
+    // Single sync after all PC1 kernels — needed before host-side autograd capture
+    cudaError_t pc1_err = cudaStreamSynchronize(stream);
+    if (pc1_err != cudaSuccess) throw std::runtime_error("project_out_pc1: PC1 kernels failed: " + std::string(cudaGetErrorString(pc1_err)));
 
     // Wire autograd graph — capture g BEFORE projecting (backward only needs g)
     // GradFn makes its own device copy of g_buf
@@ -4472,18 +4123,15 @@ Tensor autograd::project_out_pc1(const Tensor& x, int n_power_iters, cudaStream_
         x_mut.is_leaf    = false;
     }
 
-    // Project IN-PLACE: H[t,d] -= (H[t,:]·g) * g[d]
+    // Project IN-PLACE: H[t,d] -= (H[t,:]·g / D) * g[d]  (g is RMS-normalized, g·g=D)
     // Safe because kernel reads entire row into shared mem before writing.
     // Eliminates 24MB allocation that caused OOM.
     kernel_pc1_project<<<T, 256, 0, stream>>>(x_mut.data, g_buf, x_mut.data, T, D);
-    cudaError_t e4 = cudaStreamSynchronize(stream);
-    fprintf(stderr, "[PC1] project done (in-place): %s\n", cudaGetErrorString(e4));
-    if (e4 != cudaSuccess) throw std::runtime_error("project_out_pc1: kernel_pc1_project failed: " + std::string(cudaGetErrorString(e4)));
 
-    // Free temporary buffers
-    cudaFree(v_buf);
-    cudaFree(g_tmp);
-    cudaFree(g_buf);  // GradFn already captured its own copy
+    // Free temporary buffers (async safe — project kernel submitted to stream before free)
+    cudaFreeAsync(v_buf, stream);
+    cudaFreeAsync(g_tmp, stream);
+    cudaFreeAsync(g_buf, stream);  // GradFn already captured its own copy
 
     // Return non-owning view of the (now projected) input data
     Tensor result;
@@ -4495,7 +4143,6 @@ Tensor autograd::project_out_pc1(const Tensor& x, int n_power_iters, cudaStream_
     result.grad_fn   = x_mut.grad_fn;  // Share the autograd chain
     result.stream    = stream;
 
-    fprintf(stderr, "[PC1] project_out_pc1 EXIT (in-place): result.data=%p\n", (void*)result.data);
     return result;
 }
 
@@ -4745,13 +4392,7 @@ struct MatMulGradFn : public GradFn {
                 grad_b = b.grad_data();  // ISSUE #59: Use accessor
                 AG_TRACE("[MatMulGradFn] Using persistent grad_b buffer (leaf): %p\n", (void*)grad_b);
                 
-                // ISSUE #87 DEBUG: Always print for weight tensors to verify buffer matching
-                // This is critical for diagnosing the plateau bug
-                if (b_shape.as_2d().rows > 10000) {  // Likely vocab_size x d_model = LM head weights
-                    fprintf(stderr, "[Issue87-DEBUG] LM head weight capture: is_leaf=%d grad_b=%p shape=[%d,%d]\n",
-                            (int)b.is_leaf, (void*)grad_b, b_shape.as_2d().rows, b_shape.as_2d().cols);
-                    fflush(stderr);
-                }
+
             } else {
                 // Non-leaf tensor (activation): temporary, allocate owned buffer
                 const size_t b_numel = b.numel();
@@ -4835,37 +4476,6 @@ struct MatMulGradFn : public GradFn {
         }
         applied = true;
         
-        // DIAGNOSTIC: Log incoming gradient to matmul backward
-        static int s_matmul_bwd_call = 0;
-        const int mm_call_idx = ++s_matmul_bwd_call;
-        {
-            cudaStreamSynchronize(stream);
-            const size_t grad_elems = grad_output.numel();
-            // FIX: For LM_HEAD (vocab_size=50377), first 10K elements are <1 token
-            // Sample from middle of buffer (skip first 50 tokens for BOS/masked)
-            const size_t start_offset = (N > 10000) ? static_cast<size_t>(50) * N : 0;
-            const size_t sample_sz = std::min(grad_elems - start_offset, static_cast<size_t>(10000));
-            std::vector<float> samp(sample_sz);
-            cudaMemcpy(samp.data(), grad_output.data + start_offset, sample_sz * sizeof(float), cudaMemcpyDeviceToHost);
-            float mx = 0.0f; double sq = 0.0;
-            for (auto& v : samp) { if (!std::isnan(v) && !std::isinf(v)) { mx = std::max(mx, std::abs(v)); sq += v*v; } }
-            float rms = std::sqrt(static_cast<float>(sq / sample_sz));
-            // Identify matmul by dimensions:
-            // LM_HEAD: N=vocab_size (~50377)
-            // QKV:     N=1280 (768 + 2*256 for GQA)
-            // W_o:     K=768, N=768
-            // FFN W1:  K=768, N=3072 (d_model -> d_ff)
-            // FFN W2:  K=3072, N=768 (d_ff -> d_model)
-            const char* label = "encoder";
-            if (N > 10000) label = "LM_HEAD";
-            else if (N == 1280 && K == 768) label = "QKV_proj";
-            else if (K == 768 && N == 768) label = "W_o_proj";
-            else if (K == 768 && N == 3072) label = "FFN_W1";
-            else if (K == 3072 && N == 768) label = "FFN_W2";
-            fprintf(stderr, "[MATMUL-BWD-IN] call=%d %s M=%d K=%d N=%d | grad_C: numel=%zu max=%.10f rms=%.10f PTR=%p\n",
-                    mm_call_idx, label, M, K, N, grad_elems, mx, rms, (void*)grad_output.data);
-        }
-        
         if (!cublas_handle) {
             throw std::runtime_error("MatMulGradFn::apply: cublas_handle is NULL");
         }
@@ -4892,50 +4502,6 @@ struct MatMulGradFn : public GradFn {
             }
             if (!grad_a) {
                 throw std::runtime_error("MatMulGradFn::apply: grad_a is NULL - capture_inputs() must be called");
-            }
-            
-            // DIAGNOSTIC: Log equation values for LM_HEAD grad_A computation
-            if (N > 10000 && transpose_b) {  // LM_HEAD case
-                cudaStreamSynchronize(stream);
-                // Sample cached_b (weights) statistics
-                const size_t b_elems = static_cast<size_t>(N) * K;
-                const size_t b_sample_sz = std::min(b_elems, static_cast<size_t>(100000));
-                std::vector<float> b_samp(b_sample_sz);
-                cudaMemcpy(b_samp.data(), cached_b, b_sample_sz * sizeof(float), cudaMemcpyDeviceToHost);
-                float b_max = 0.0f, b_min = 1e30f;
-                double b_sq = 0.0, b_sum = 0.0;
-                for (auto& v : b_samp) {
-                    if (!std::isnan(v) && !std::isinf(v)) {
-                        b_max = std::max(b_max, std::abs(v));
-                        b_min = std::min(b_min, std::abs(v));
-                        b_sq += v*v;
-                        b_sum += v;
-                    }
-                }
-                float b_std = std::sqrt(static_cast<float>(b_sq / b_sample_sz - (b_sum/b_sample_sz)*(b_sum/b_sample_sz)));
-                float b_rms = std::sqrt(static_cast<float>(b_sq / b_sample_sz));
-                
-                // Sample grad_C statistics (already have from earlier diagnostic, but log again for clarity)
-                const size_t c_sample_sz = std::min(static_cast<size_t>(M) * N, static_cast<size_t>(100000));
-                std::vector<float> c_samp(c_sample_sz);
-                cudaMemcpy(c_samp.data(), grad_output.data, c_sample_sz * sizeof(float), cudaMemcpyDeviceToHost);
-                float c_max = 0.0f;
-                double c_sq = 0.0;
-                for (auto& v : c_samp) {
-                    if (!std::isnan(v) && !std::isinf(v)) {
-                        c_max = std::max(c_max, std::abs(v));
-                        c_sq += v*v;
-                    }
-                }
-                float c_rms = std::sqrt(static_cast<float>(c_sq / c_sample_sz));
-                
-                // Expected grad_A magnitude: sqrt(N) * grad_C_rms * B_rms
-                float expected_grad_a = std::sqrt(static_cast<float>(N)) * c_rms * b_rms; 
-                
-                fprintf(stderr, "[GRAD_A_EQUATION] LM_HEAD: grad_A = grad_C @ B\n");
-                fprintf(stderr, "  grad_C: shape=[%d,%d] max=%.10e rms=%.10e\n", M, N, c_max, c_rms);
-                fprintf(stderr, "  B(weights): shape=[%d,%d] max=%.10e std=%.10e rms=%.10e\n", N, K, b_max, b_std, b_rms);
-                fprintf(stderr, "  EXPECTED grad_A ≈ sqrt(%d) * %.10e * %.10e = %.10e\n", N, c_rms, b_rms, expected_grad_a);
             }
             
             if (transpose_b) {
@@ -4966,25 +4532,6 @@ struct MatMulGradFn : public GradFn {
                     grad_a, K             // ldc=K=768 (leading dim of [K,M])
                 );
                 trackCublasCall("cublasSgemm_grad_A_transB", cublas_handle, stream, sgemm_status_1);
-                
-                // DIAGNOSTIC: Log ACTUAL grad_A after GEMM for LM_HEAD
-                if (N > 10000) {
-                    cudaStreamSynchronize(stream);
-                    const size_t a_elems = static_cast<size_t>(M) * K;
-                    const size_t a_sample_sz = std::min(a_elems, static_cast<size_t>(100000));
-                    std::vector<float> a_samp(a_sample_sz);
-                    cudaMemcpy(a_samp.data(), grad_a, a_sample_sz * sizeof(float), cudaMemcpyDeviceToHost);
-                    float a_max = 0.0f;
-                    double a_sq = 0.0;
-                    for (auto& v : a_samp) {
-                        if (!std::isnan(v) && !std::isinf(v)) {
-                            a_max = std::max(a_max, std::abs(v));
-                            a_sq += v*v;
-                        }
-                    }
-                    float a_rms = std::sqrt(static_cast<float>(a_sq / a_sample_sz));
-                    fprintf(stderr, "  ACTUAL grad_A: shape=[%d,%d] max=%.2e rms=%.2e\n", M, K, a_max, a_rms);
-                }
             } else {
                 // grad_A = grad_C @ B^T  where B is [K, N]
                 // Goal: grad_A[M,K] = grad_C[M,N] @ B^T[N,K]  (row-major)
@@ -5523,29 +5070,6 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         // RULE 20: Track current operation for error context
         setCurrentGradFnOp("scaled_dot_product_attention", this);
         
-        // ISSUE #76: Static call counter for tracking which layer/call sees explosion
-        static int s_sdpa_bwd_call = 0;
-        const int call_idx = ++s_sdpa_bwd_call;
-        
-        // DIAGNOSTIC: Log grad_output at ENTRY to SDPA backward (before any processing)
-        {
-            cudaStreamSynchronize(stream);
-            const size_t grad_elems = grad_output.numel();
-            std::vector<float> grad_sample(std::min(grad_elems, static_cast<size_t>(10000)));
-            cudaMemcpy(grad_sample.data(), grad_output.data, grad_sample.size() * sizeof(float), cudaMemcpyDeviceToHost);
-            float grad_max = 0.0f;
-            double grad_sq_sum = 0.0;
-            for (auto& v : grad_sample) {
-                if (!std::isnan(v) && !std::isinf(v)) {
-                    grad_max = std::max(grad_max, std::abs(v));
-                    grad_sq_sum += static_cast<double>(v) * v;
-                }
-            }
-            float grad_rms = std::sqrt(static_cast<float>(grad_sq_sum / grad_sample.size()));
-            fprintf(stderr, "[SDPA-BWD-ENTRY] call=%d | grad_output: numel=%zu max=%.6f rms=%.6f\n",
-                    call_idx, grad_elems, grad_max, grad_rms);
-        }
-        
         // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
         if (applied) {
             return;
@@ -5557,61 +5081,15 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         if (!saved_v_bf16) throw std::runtime_error("ScaledDotProductAttentionGradFn::apply: saved_v_bf16 is NULL - save() must store V for backward");
         if (!saved_out_bf16) throw std::runtime_error("ScaledDotProductAttentionGradFn::apply: saved_out_bf16 is NULL - save() must store output for backward");
         
-        // ISSUE #76: Detect max_seq_len boundary - assume typical max_seq_len values
-        const bool is_boundary_1024 = (seq_len >= 920);   // 90% of 1024
-        const bool is_boundary_2048 = (seq_len >= 1840);  // 90% of 2048
-        const bool is_boundary = is_boundary_1024 || is_boundary_2048;
-        
         const size_t q_elems = static_cast<size_t>(batch_size) * seq_len * num_heads * head_dim;
         const size_t kv_elems = static_cast<size_t>(batch_size) * seq_len * num_kv_heads * head_dim;
         const int block_size = 256;
         const int q_blocks = static_cast<int>((q_elems + block_size - 1) / block_size);
         const int kv_blocks = static_cast<int>((kv_elems + block_size - 1) / block_size);
         
-        // DIAGNOSTIC: Log grad_output (FP32 BHSD) BEFORE conversion to BF16
-        {
-            cudaStreamSynchronize(stream);
-            std::vector<float> grad_sample(std::min(q_elems, static_cast<size_t>(10000)));
-            cudaMemcpy(grad_sample.data(), grad_output.data, grad_sample.size() * sizeof(float), cudaMemcpyDeviceToHost);
-            float grad_max = 0.0f;
-            double grad_sum = 0.0, grad_sq_sum = 0.0;
-            int grad_nan = 0, grad_inf = 0;
-            for (auto& v : grad_sample) {
-                if (std::isnan(v)) { grad_nan++; continue; }
-                if (std::isinf(v)) { grad_inf++; continue; }
-                grad_max = std::max(grad_max, std::abs(v));
-                grad_sum += v;
-                grad_sq_sum += static_cast<double>(v) * v;
-            }
-            float grad_mean = static_cast<float>(grad_sum / grad_sample.size());
-            float grad_rms = std::sqrt(static_cast<float>(grad_sq_sum / grad_sample.size()));
-            fprintf(stderr, "[FA-BWD-GRAD-IN-FP32] call=%d seqlen=%d | nan=%d inf=%d max=%.6f mean=%.6f rms=%.6f\n",
-                    call_idx, seq_len, grad_nan, grad_inf, grad_max, grad_mean, grad_rms);
-        }
-        
         // Convert grad_output (FP32 BHSD) to BF16 BSHD
         TensorConversion::convert_BHSD_to_BSHD_bf16(
             grad_output.data, dout_bf16, batch_size, num_heads, seq_len, head_dim, stream);
-        
-        // ISSUE #79 DIAGNOSTIC: Log saved attention output O before FA backward
-        // The FA backward computes dP_sum = sum(dO * O), so O magnitude matters
-        {
-            cudaStreamSynchronize(stream);
-            std::vector<__nv_bfloat16> out_sample(std::min(q_elems, static_cast<size_t>(10000)));
-            cudaMemcpy(out_sample.data(), saved_out_bf16, out_sample.size() * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost);
-            float out_max = 0.0f;
-            double out_sum = 0.0, out_sq_sum = 0.0;
-            for (auto& v : out_sample) {
-                float fv = __bfloat162float(v);
-                out_max = std::max(out_max, std::abs(fv));
-                out_sum += fv;
-                out_sq_sum += fv * fv;
-            }
-            float out_mean = static_cast<float>(out_sum / out_sample.size());
-            float out_rms = std::sqrt(static_cast<float>(out_sq_sum / out_sample.size()));
-            fprintf(stderr, "[FA-BWD-SAVED-OUT] call=%d seqlen=%d | out_max=%.6f out_mean=%.6f out_rms=%.6f\n",
-                    call_idx, seq_len, out_max, out_mean, out_rms);
-        }
         
         // Call FlashAttention backward
         flash_attn_bwd_ex(
@@ -5638,54 +5116,6 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             dropout_seed,         // Same seed as forward (reproduces identical mask)
             stream
         );
-        
-        // ISSUE #76 DIAGNOSTIC: Check for gradient explosion after FlashAttention backward
-        // This identifies which layer (via call_idx) sees the explosion at max_seq_len boundary
-        {
-            cudaStreamSynchronize(stream);  // Sync to read results
-            
-            // Read dQ max magnitude
-            std::vector<__nv_bfloat16> dq_host(std::min(q_elems, static_cast<size_t>(1000)));
-            cudaMemcpy(dq_host.data(), dq_bf16, dq_host.size() * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost);
-            float dq_max = 0.0f;
-            for (auto& v : dq_host) { dq_max = std::max(dq_max, std::abs(__bfloat162float(v))); }
-            
-            // Read dK/dV max magnitude (using num_heads buffer, not num_kv_heads)
-            const size_t dk_dv_elems = static_cast<size_t>(batch_size) * seq_len * num_heads * head_dim;
-            std::vector<__nv_bfloat16> dk_host(std::min(dk_dv_elems, static_cast<size_t>(1000)));
-            std::vector<__nv_bfloat16> dv_host(std::min(dk_dv_elems, static_cast<size_t>(1000)));
-            cudaMemcpy(dk_host.data(), dk_bf16, dk_host.size() * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost);
-            cudaMemcpy(dv_host.data(), dv_bf16, dv_host.size() * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost);
-            float dk_max = 0.0f, dv_max = 0.0f;
-            for (auto& v : dk_host) { dk_max = std::max(dk_max, std::abs(__bfloat162float(v))); }
-            for (auto& v : dv_host) { dv_max = std::max(dv_max, std::abs(__bfloat162float(v))); }
-            
-            // Check softmax_lse for anomalies
-            const size_t lse_elems = static_cast<size_t>(batch_size) * num_heads * seq_len;
-            std::vector<float> lse_host(std::min(lse_elems, static_cast<size_t>(1000)));
-            cudaMemcpy(lse_host.data(), saved_softmax_lse, lse_host.size() * sizeof(float), cudaMemcpyDeviceToHost);
-            float lse_min = FLT_MAX, lse_max = -FLT_MAX;
-            int lse_nan = 0, lse_inf = 0;
-            for (auto& v : lse_host) {
-                if (std::isnan(v)) lse_nan++;
-                else if (std::isinf(v)) lse_inf++;
-                else { lse_min = std::min(lse_min, v); lse_max = std::max(lse_max, v); }
-            }
-            
-            // Detect explosion: any gradient > 100 or LSE > 50
-            const bool grad_explosion = (dq_max > 100.0f || dk_max > 100.0f || dv_max > 100.0f);
-            const bool lse_explosion = (lse_max > 50.0f || lse_nan > 0 || lse_inf > 0);
-            
-            if (is_boundary || grad_explosion || lse_explosion) {
-                fprintf(stderr, "[SDPA-BWD-ISSUE76] call=%d seqlen=%d%s batch=%d heads=%d/%d\n",
-                        call_idx, seq_len, is_boundary ? " *** BOUNDARY ***" : "",
-                        batch_size, num_heads, num_kv_heads);
-                fprintf(stderr, "    dQ_max=%.10f dK_max=%.10f dV_max=%.10f%s\n",
-                        dq_max, dk_max, dv_max, grad_explosion ? " *** GRAD EXPLOSION ***" : "");
-                fprintf(stderr, "    softmax_lse: nan=%d inf=%d range=[%.10f, %.10f]%s\n",
-                        lse_nan, lse_inf, lse_min, lse_max, lse_explosion ? " *** LSE EXPLOSION ***" : "");
-            }
-        }
         
         // =========================================================================
         // ISSUE #83 REMOVAL: Issue #84 (missing preprocessing kernel)
@@ -6038,32 +5468,7 @@ struct ReshapeFromBHSDGradFn : public GradFn {
         if (applied) return;
         applied = true;
         
-        // DIAGNOSTIC: Log incoming gradient to Reshape backward
-        {
-            static int s_reshape_call = 0;
-            const int call_idx = ++s_reshape_call;
-            cudaStreamSynchronize(stream);
-            const size_t grad_elems = grad_output.numel();
-            std::vector<float> grad_sample(std::min(grad_elems, static_cast<size_t>(10000)));
-            cudaMemcpy(grad_sample.data(), grad_output.data, grad_sample.size() * sizeof(float), cudaMemcpyDeviceToHost);
-            float grad_max = 0.0f;
-            double grad_sq_sum = 0.0;
-            for (auto& v : grad_sample) {
-                if (!std::isnan(v) && !std::isinf(v)) {
-                    grad_max = std::max(grad_max, std::abs(v));
-                    grad_sq_sum += static_cast<double>(v) * v;
-                }
-            }
-            float grad_rms = std::sqrt(static_cast<float>(grad_sq_sum / grad_sample.size()));
-            fprintf(stderr, "[RESHAPE-BWD-IN] call=%d | grad_output: numel=%zu max=%.10f rms=%.10f\n",
-                    call_idx, grad_elems, grad_max, grad_rms);
-        }
-        
-        fprintf(stderr, "[ReshapeBHSDtoFlat] apply() called, input_grad_fn=%p, input_requires_grad=%d\n",
-                (void*)input_grad_fn.get(), input_requires_grad);
-        
         if (!input_requires_grad) {
-            fprintf(stderr, "[ReshapeBHSDtoFlat] input doesn't require grad, skipping\n");
             return;
         }
         
@@ -6079,15 +5484,6 @@ struct ReshapeFromBHSDGradFn : public GradFn {
         kernel_reshape_flat_to_BHSD<<<num_blocks, block_size, 0, stream>>>(
             grad_output.data, bhsd_grad, batch_size, seq_len, num_heads, head_dim);
         
-        // DEBUG: Check for NaN in reshaped gradient
-        cudaStreamSynchronize(stream);
-        float first_val = 0.0f;
-        cudaMemcpy(&first_val, bhsd_grad, sizeof(float), cudaMemcpyDeviceToHost);
-        fprintf(stderr, "[ReshapeBHSDtoFlat] dims: B=%d S=%d H=%d D=%d total=%d first_val=%.6f\n",
-                batch_size, seq_len, num_heads, head_dim, total_elems, first_val);
-        
-        fprintf(stderr, "[ReshapeBHSDtoFlat] reshaped grad, calling input_grad_fn->apply()...\n");
-        
         // Continue chain to attention backward
         if (input_grad_fn) {
             Tensor bhsd_grad_tensor;
@@ -6098,9 +5494,8 @@ struct ReshapeFromBHSDGradFn : public GradFn {
             
             input_grad_fn->apply(bhsd_grad_tensor, stream);
             input_grad_fn->release_saved();
-            fprintf(stderr, "[ReshapeBHSDtoFlat] input_grad_fn->apply() done\n");
         } else {
-            fprintf(stderr, "[ReshapeBHSDtoFlat] WARNING: no input_grad_fn to continue chain!\n");
+            throw std::runtime_error("[ReshapeBHSDtoFlat] input_grad_fn is NULL - autograd chain is broken at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
         }
         
         // ISSUE #62: Use cudaFreeAsync to ensure kernels in apply() complete before freeing
@@ -6323,13 +5718,11 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
             throw std::runtime_error(std::string("[SplitQKV-") + type_str + "] shared is null");
         }
         if (applied) {
-            fprintf(stderr, "[SplitQKV-%s] SKIP: already applied\n", type_str);
             return;
         }
         applied = true;
         
         auto& state = *shared;
-        fprintf(stderr, "[SplitQKV-%s] apply() called, current count=%d\n", type_str, state.apply_count.load());
         
         // Store this output's BHSD gradient pointer directly — no intermediate reshape
         if (output_type == OutputType::Q) {
@@ -6342,19 +5735,13 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
         
         // Check if all three outputs have been processed
         const int count = state.apply_count.fetch_add(1) + 1;
-        fprintf(stderr, "[SplitQKV-%s] after increment, count=%d (need 3)\n", type_str, count);
         
         if (count == 3) {
-            fprintf(stderr, "[SplitQKV-%s] ALL THREE RECEIVED! Launching fused kernel...\n", type_str);
-            
             // All three BHSD gradient pointers collected.
             // Launch ONE fused kernel that reads BHSD directly and writes flat QKV grad.
             // No intermediate BSM buffers, no race condition, no CPU sync needed.
             state.qkv_out_ref.ensure_grad();
             float* qkv_grad = state.qkv_out_ref.grad_data();
-            
-            fprintf(stderr, "[SplitQKV-%s] qkv_grad=%p qkv_grad_fn=%p requires_grad=%d\n", 
-                    type_str, (void*)qkv_grad, (void*)state.qkv_grad_fn.get(), state.qkv_out_ref.requires_grad);
             
             const int threads = std::max(state.d_model, state.kv_dim);
             kernel_fused_bhsd_to_qkv_grad<<<state.tokens, threads, 0, stream>>>(
@@ -6364,7 +5751,6 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
             
             // Continue the chain to qkv_out -> W_qkv
             if (state.qkv_out_ref.requires_grad && state.qkv_grad_fn) {
-                fprintf(stderr, "[SplitQKV-%s] Calling qkv_grad_fn->apply()...\n", type_str);
                 Tensor qkv_grad_tensor;
                 qkv_grad_tensor.data = qkv_grad;
                 qkv_grad_tensor.shape = state.qkv_out_ref.shape;
@@ -6373,10 +5759,6 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
                 
                 state.qkv_grad_fn->apply(qkv_grad_tensor, stream);
                 state.qkv_grad_fn->release_saved();
-                fprintf(stderr, "[SplitQKV-%s] qkv_grad_fn->apply() complete\n", type_str);
-            } else {
-                fprintf(stderr, "[SplitQKV-%s] SKIP qkv_grad_fn: requires_grad=%d qkv_grad_fn=%p\n", 
-                        type_str, state.qkv_out_ref.requires_grad, (void*)state.qkv_grad_fn.get());
             }
         }
     }
@@ -6501,19 +5883,7 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
 }
 
 
-// =============================================================================
-// ISSUE #119: RoPEGradFn - Autograd wrapper for RoPE rotation
-// =============================================================================
-// RoPE forward rotates Q and K tensors IN-PLACE. The backward pass must apply
-// the INVERSE rotation (R(-θ) = R(θ)^T) to the gradients dQ and dK to correctly
-// propagate gradients through the rotation.
-//
-// Without this, gradients remain in the "rotated space" and are incorrect,
-// causing training to learn wrong attention patterns.
-//
-// Uses SharedState pattern (like SplitAndReshapeQKVGradFn) to coordinate Q and K.
-// When both Q and K backward are complete, continues the autograd chain.
-// =============================================================================
+
 
 struct RoPEGradFn : public GradFn {
     /**

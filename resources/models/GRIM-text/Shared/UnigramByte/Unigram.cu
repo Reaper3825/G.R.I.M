@@ -54,6 +54,19 @@ static inline bool isPunct(char c) {
            (c >= '{' && c <= '~');    // {|}~
 }
 
+// Punctuation isolation guard for Viterbi.
+// Returns true if the character at the given position is a punctuation character
+// that should be tokenized in isolation (never merged with adjacent letters/digits).
+// Used in both CPU Viterbi and GPU kernel to enforce punctuation boundary splitting.
+// Note: space (0x20) is NOT punctuation — it's a normal character that can appear
+// in multi-word vocab tokens like "of the".
+__host__ __device__ static inline bool isPunctBoundary(unsigned char c) {
+    return (c >= '!' && c <= '/') ||  // !"#$%&'()*+,-./
+           (c >= ':' && c <= '@') ||  // :;<=>?@
+           (c >= '[' && c <= '`') ||  // [\]^_`
+           (c >= '{' && c <= '~');    // {|}~
+}
+
 static inline bool isWhitespaceASCII(unsigned char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
@@ -576,6 +589,21 @@ static void mineSubwordsFromSentence(const std::string& text,
             std::string subword = text.substr(byte_start, byte_end - byte_start);
             if (!isValidSubword(subword)) continue;
 
+            // Cross-boundary fragment rejection: if the subword contains an
+            // internal space (spans across a word boundary), it must start
+            // and end at word boundaries in the source text.  Otherwise we
+            // get fragments like "semi-major ax" mined from "semi-major axis"
+            // where "axis" is truncated to "ax".
+            if (subword.find(' ') != std::string::npos) {
+                bool starts_mid_word = (byte_start > 0 &&
+                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_start])) &&
+                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_start - 1])));
+                bool ends_mid_word = (byte_end < text.size() &&
+                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_end - 1])) &&
+                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_end])));
+                if (starts_mid_word || ends_mid_word) continue;
+            }
+
             subword_counts[subword]++;
         }
     }
@@ -642,6 +670,17 @@ static void mineSubwordsFromSentence(const std::string& text,
             std::string subword = text.substr(byte_start, byte_end - byte_start);
             if (!isValidSubword(subword)) continue;
 
+            // Cross-boundary fragment rejection (same logic as non-atom overload).
+            if (subword.find(' ') != std::string::npos) {
+                bool starts_mid_word = (byte_start > 0 &&
+                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_start])) &&
+                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_start - 1])));
+                bool ends_mid_word = (byte_end < text.size() &&
+                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_end - 1])) &&
+                    !isWhitespaceASCII(static_cast<unsigned char>(text[byte_end])));
+                if (starts_mid_word || ends_mid_word) continue;
+            }
+
             subword_counts[subword]++;
         }
     }
@@ -683,6 +722,21 @@ __global__ void kernelViterbiForward(
     
     // Process each position sequentially (required for correctness)
     for (size_t pos = 1; pos <= length; ++pos) {
+        unsigned char cur_byte = static_cast<unsigned char>(text[pos - 1]);
+        bool cur_is_punct = isPunctBoundary(cur_byte);
+        
+        // PUNCTUATION ISOLATION GUARD:
+        // If this position's character is punctuation, force it to be a single
+        // byte token. Skip trie matching entirely — punctuation is never merged
+        // with adjacent letters/digits.
+        if (cur_is_punct) {
+            // Emit as byte token: BYTE_TOKEN_OFFSET + byte_value
+            viterbi_scores[pos] = viterbi_scores[pos - 1] + unk_score;
+            viterbi_prev[pos] = static_cast<int>(pos - 1);
+            viterbi_tokens[pos] = static_cast<int>(cur_byte) + 4;  // BYTE_TOKEN_OFFSET = 4
+            continue;
+        }
+        
         float best_score = -1e30f;
         int best_prev = -1;
         int best_token = unk_id;
@@ -695,6 +749,11 @@ __global__ void kernelViterbiForward(
         for (size_t start = pos; start > 0 && (pos - start) < MAX_PIECE_LENGTH; --start) {
             size_t idx = start - 1;
             unsigned char c = static_cast<unsigned char>(text[idx]);
+            
+            // PUNCTUATION ISOLATION GUARD:
+            // Stop backward walk if we hit a punctuation character —
+            // pieces must not span across a punctuation boundary.
+            if (isPunctBoundary(c)) break;
             
             // Navigate trie
             int child = trie_children[node * 256 + c];
@@ -1868,6 +1927,86 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         accepted.push_back({subword, count});
     }
 
+    // Pass A.5: Substring deduplication.
+    // Remove entries that are strict prefixes or suffixes of a longer accepted entry.
+    // This eliminates cascades like "probl"/"proble"/"problem"/"roblem" — only
+    // "problem" (highest frequency, longest form) survives.
+    //
+    // Algorithm: build a set of all accepted normalized forms, then for each entry
+    // (shortest first) check if it's a prefix or suffix of any longer entry.
+    // We process shortest-first so that when we remove "probl", it doesn't prevent
+    // "proble" from also being removed (both are substrings of "problem").
+    {
+        // Sort indices by length ascending so we evaluate shortest pieces first.
+        std::vector<size_t> len_order(accepted.size());
+        std::iota(len_order.begin(), len_order.end(), 0);
+        std::sort(len_order.begin(), len_order.end(),
+                  [&](size_t a, size_t b) {
+                      return accepted[a].text.size() < accepted[b].text.size();
+                  });
+
+        // Build a set of all normalized accepted texts for fast lookup.
+        // We'll also need the raw texts for prefix/suffix matching.
+        std::unordered_set<std::string> accepted_norms;
+        accepted_norms.reserve(accepted.size());
+        for (const auto& ap : accepted) {
+            accepted_norms.insert(normalizeForDedup(ap.text));
+        }
+
+        std::vector<bool> is_substring(accepted.size(), false);
+        int substring_dupes = 0;
+
+        for (size_t idx : len_order) {
+            const std::string& piece = accepted[idx].text;
+            std::string norm = normalizeForDedup(piece);
+            if (norm.size() < 3) continue;  // Don't remove very short pieces (common morphemes)
+
+            // Check if this piece is a strict prefix or suffix of any longer accepted piece.
+            // To avoid O(n²), we check a small set of plausible extensions:
+            //   - For prefix: try norm + each char a-z, space, hyphen (27 extensions)
+            //   - For suffix: try each char + norm (27 extensions)
+            // This catches the exact cascade pattern (probl→proble→problem).
+            // One-character extensions that exist imply the short piece is redundant.
+            bool found_superstring = false;
+            static const char ext_chars[] = "abcdefghijklmnopqrstuvwxyz -";
+            for (const char ec : ext_chars) {
+                if (ec == '\0') break;
+                // Prefix check: does norm + ec exist as a longer accepted piece?
+                std::string prefix_ext = norm + ec;
+                if (accepted_norms.count(prefix_ext)) {
+                    found_superstring = true;
+                    break;
+                }
+                // Suffix check: does ec + norm exist as a longer accepted piece?
+                std::string suffix_ext = std::string(1, ec) + norm;
+                if (accepted_norms.count(suffix_ext)) {
+                    found_superstring = true;
+                    break;
+                }
+            }
+
+            if (found_superstring) {
+                is_substring[idx] = true;
+                accepted_norms.erase(norm);  // Remove so even shorter pieces can't hide behind this one
+                substring_dupes++;
+            }
+        }
+
+        if (substring_dupes > 0) {
+            // Compact accepted vector, removing substring entries.
+            std::vector<AcceptedPiece> compacted;
+            compacted.reserve(accepted.size() - substring_dupes);
+            for (size_t i = 0; i < accepted.size(); ++i) {
+                if (!is_substring[i]) {
+                    compacted.push_back(std::move(accepted[i]));
+                }
+            }
+            accepted = std::move(compacted);
+            std::cout << "[UnigramLM] Substring dedup removed " << substring_dupes
+                      << " prefix/suffix fragments" << std::endl;
+        }
+    }
+
     // Sum of all accepted mining counts — correct denominator for initial log-probs.
     double total_accepted_count = 0.0;
     for (const auto& ap : accepted) total_accepted_count += ap.count;
@@ -2141,10 +2280,34 @@ std::vector<ViterbiNode> UnigramLM::viterbi(const std::string& text) const {
     for (size_t pos = 0; pos < n; ++pos) {
         if (nodes[pos].score < -1e20f) continue;  // Unreachable
         
+        unsigned char cur_byte = static_cast<unsigned char>(text[pos]);
+        bool cur_is_punct = isPunctBoundary(cur_byte);
+        
+        // PUNCTUATION ISOLATION GUARD:
+        // If current position is a punctuation character, force it to be emitted
+        // as a single byte token and skip trie matching entirely.
+        // This prevents tokens like "however," or "al." from ever being selected.
+        if (cur_is_punct) {
+            float byte_score = nodes[pos].score + UNKNOWN_SCORE;
+            if (byte_score > nodes[pos + 1].score) {
+                nodes[pos + 1].score = byte_score;
+                nodes[pos + 1].prev_pos = static_cast<int>(pos);
+                nodes[pos + 1].token_id = static_cast<int>(cur_byte) + BYTE_TOKEN_OFFSET;
+                nodes[pos + 1].piece_length = 1;
+            }
+            continue;  // Skip trie search — punctuation is always isolated
+        }
+        
         // Try all pieces starting at pos
         int node = 0;
         for (size_t len = 1; len <= MAX_PIECE_LENGTH && pos + len <= n; ++len) {
             unsigned char c = static_cast<unsigned char>(text[pos + len - 1]);
+            
+            // PUNCTUATION ISOLATION GUARD:
+            // Stop extending the piece if we hit a punctuation character.
+            // This prevents the trie from matching tokens that contain
+            // punctuation mixed with letters (e.g., "al.", "et al.,").
+            if (isPunctBoundary(c)) break;
             
             if (trie_[node].children[c] < 0) break;
             node = trie_[node].children[c];
