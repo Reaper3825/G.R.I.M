@@ -38,18 +38,18 @@ inline bool isEquationLoggingEnabled() {
 // (was silently ignored before despite config having attention_dropout parameter)
 
 #define FLASH_NAMESPACE grim_flash
-#include "../../../../../external/flash-attention/csrc/flash_attn/src/namespace_config.h"
-#include "../../../../../external/flash-attention/csrc/flash_attn/src/static_switch.h"
-#include "../../../../../external/flash-attention/csrc/flash_attn/src/hardware_info.h"
-#include "../../../../../external/flash-attention/csrc/flash_attn/src/kernel_traits.h"
-#include "../../../../../external/flash-attention/csrc/flash_attn/src/block_info.h"
-#include "../../../../../external/flash-attention/csrc/flash_attn/src/utils.h"
-#include "../../../../../external/flash-attention/csrc/flash_attn/src/softmax.h"
-#include "../../../../../external/flash-attention/csrc/flash_attn/src/mask.h"
-#include "../../../../../external/flash-attention/csrc/flash_attn/src/dropout.h"
-#include "../../../../../external/flash-attention/csrc/flash_attn/src/flash_fwd_kernel.h"
-#include "../../../../../external/flash-attention/csrc/flash_attn/src/flash_bwd_preprocess_kernel.h"
-#include "../../../../../external/flash-attention/csrc/flash_attn/src/flash_bwd_kernel.h"
+#include "namespace_config.h"
+#include "static_switch.h"
+#include "hardware_info.h"
+#include "kernel_traits.h"
+#include "block_info.h"
+#include "utils.h"
+#include "softmax.h"
+#include "mask.h"
+#include "dropout.h"
+#include "flash_fwd_kernel.h"
+#include "flash_bwd_preprocess_kernel.h"
+#include "flash_bwd_kernel.h"
 
 namespace grim_flash {
 
