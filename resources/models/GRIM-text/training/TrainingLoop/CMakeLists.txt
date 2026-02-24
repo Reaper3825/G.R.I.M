@@ -120,8 +120,12 @@ target_link_libraries(grim_log_recorder PUBLIC
 # Flash Attention kernels library - requires external/flash-attention submodule (git submodule update --init)
 set(FLASH_ATTN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../external/flash-attention")
 set(FLASH_ATTN_SRC "${FLASH_ATTN_ROOT}/csrc/flash_attn/src")
+get_filename_component(ATEN_STUB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../Layers/FlashAttention/aten_stub" ABSOLUTE)
 if(NOT EXISTS "${FLASH_ATTN_SRC}/namespace_config.h")
   message(FATAL_ERROR "flash-attention submodule not found. Run: git submodule update --init --recursive")
+endif()
+if(NOT EXISTS "${ATEN_STUB_DIR}/ATen/cuda/detail/UnpackRaw.cuh")
+  message(FATAL_ERROR "ATen stub not found at ${ATEN_STUB_DIR}. Run: git pull")
 endif()
 add_library(grim_flash_attention STATIC 
     ../../Layers/FlashAttention/Flash_Attention_Kernal.cu
@@ -142,7 +146,7 @@ target_compile_definitions(grim_flash_attention PRIVATE
     FLASHATTENTION_DISABLE_UNEVEN_K
 )
 target_include_directories(grim_flash_attention PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Layers/FlashAttention/aten_stub  # ATen stub (PhiloxCudaState, unpack) - no PyTorch
+    ${ATEN_STUB_DIR}  # ATen stub (PhiloxCudaState, unpack) - no PyTorch; must be first for <ATen/...>
     ${CMAKE_CURRENT_SOURCE_DIR}/../../..      # GRIM-text root
     ${CMAKE_CURRENT_SOURCE_DIR}/../..         # training/
     ${CMAKE_CURRENT_SOURCE_DIR}/..            # training/
@@ -321,9 +325,10 @@ target_precompile_headers(train_gpu PRIVATE
 )
 
 
-target_link_options(train_gpu PRIVATE 
-    /NODEFAULTLIB:cudart_static.lib
-)
+# MSVC only: avoid cudart_static conflict when using shared runtime
+if(MSVC)
+    target_link_options(train_gpu PRIVATE /NODEFAULTLIB:cudart_static.lib)
+endif()
 
 target_link_libraries(train_gpu PRIVATE
     flatbuffers::flatbuffers
@@ -340,9 +345,11 @@ target_link_libraries(train_gpu PRIVATE
     grim_unigrambyte_tokenizer
     grim_log_recorder
     grim_equation_logging
-
-    $<$<CXX_COMPILER_ID:GNU>:pthread gomp>
 )
+# Link pthread and gomp for GCC/Linux (avoid genex - nvcc device link rejects $<CXX_COMPILER_ID:GNU>)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    target_link_libraries(train_gpu PRIVATE pthread gomp)
+endif()
 
 target_include_directories(train_gpu PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../..
