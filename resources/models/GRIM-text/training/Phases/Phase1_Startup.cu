@@ -1424,7 +1424,11 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
             auto now = std::chrono::system_clock::now();
             auto time_t_now = std::chrono::system_clock::to_time_t(now);
             std::tm tm_now;
+#if defined(__linux__) || defined(__APPLE__) || defined(__unix__)
+            localtime_r(&time_t_now, &tm_now);
+#else
             localtime_s(&tm_now, &time_t_now);
+#endif
             char timestamp[32];
             std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &tm_now);
             eq_log_path = ctx->config.paths.log_dir + "/equation_log_" + timestamp + ".csv";
