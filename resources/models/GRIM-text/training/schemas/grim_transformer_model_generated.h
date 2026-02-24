@@ -6,9 +6,10 @@
 
 #include "flatbuffers/flatbuffers.h"
 
-// Ensure the included flatbuffers.h is compatible (25.2.x).
-// Generated with flatc 25.2.10; vcpkg may install 25.2.10 or nearby 25.2.x.
-static_assert(FLATBUFFERS_VERSION_MAJOR == 25 && FLATBUFFERS_VERSION_MINOR >= 2,
+// Ensure the included flatbuffers.h is compatible.
+// Generated with flatc 25.2.10; accept 24.12+ and 25.x (vcpkg default varies by clone).
+static_assert((FLATBUFFERS_VERSION_MAJOR == 24 && FLATBUFFERS_VERSION_MINOR >= 12) ||
+              (FLATBUFFERS_VERSION_MAJOR == 25),
              "Non-compatible flatbuffers version included");
 
 namespace GRIMTransformer {

@@ -104,7 +104,7 @@ if [[ -z "${GRIM_VCPKG_ROOT:-}" ]]; then
 fi
 
 # Ensure training/vcpkg.json exists on Anvil (minimal manifest for TrainingLoop). Create if missing so build works before git pull.
-TRAINING_VCPKG_JSON='{"name":"grim-training","version-string":"0.1.0","dependencies":["nlohmann-json",{"name":"flatbuffers","version>=":"25.2.10"}],"builtin-baseline":"c6e61b795fd6b27598228b16b6e6b5adeab663d6"}'
+TRAINING_VCPKG_JSON='{"name":"grim-training","version-string":"0.1.0","dependencies":["nlohmann-json","flatbuffers"]}'
 ANVIL_TRAINING_MANIFEST_ENSURE="mkdir -p $ANVIL_DIR/$TRAINING_DIR && [ -f $ANVIL_DIR/$TRAINING_DIR/vcpkg.json ] || printf '%s' '$TRAINING_VCPKG_JSON' > $ANVIL_DIR/$TRAINING_DIR/vcpkg.json"
 
 # --build / --build-training: GRIM-text/training/TrainingLoop CMake → train_gpu
