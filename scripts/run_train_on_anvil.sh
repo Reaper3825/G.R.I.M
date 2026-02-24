@@ -4,6 +4,7 @@
 #
 # Prerequisites:
 #   - SSH: ssh anvil  (anvil.rcac.purdue.edu; key in ~/.ssh/id_ed25519)
+#   - Submodules: flash-attention (script runs git submodule update --init before build)
 #   - Repo on Anvil at GRIM_ANVIL_DIR. Default: /anvil/projects/x-cis210085/GRIM/G.R.I.M
 #     Override if you use home or scratch: export GRIM_ANVIL_DIR=\$HOME/G.R.I.M
 #   - On Anvil, build once (see first-time setup in docs or below).
@@ -110,19 +111,19 @@ ANVIL_TRAINING_MANIFEST_ENSURE="mkdir -p $ANVIL_DIR/$TRAINING_DIR && [ -f $ANVIL
 # --build / --build-training: GRIM-text/training/TrainingLoop CMake → train_gpu
 if [[ "$DO_BUILD" == true ]]; then
   echo "Building train_gpu (training loop) on Anvil in $ANVIL_DIR/$BUILD_DIR ..."
-  ssh anvil "cd $ANVIL_DIR && $ANVIL_VCPKG_ENSURE && $ANVIL_TRAINING_MANIFEST_ENSURE && cd $ANVIL_DIR/$TRAINING_DIR/TrainingLoop && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) train_gpu"
+  ssh anvil "cd $ANVIL_DIR && git submodule update --init --recursive && $ANVIL_VCPKG_ENSURE && $ANVIL_TRAINING_MANIFEST_ENSURE && cd $ANVIL_DIR/$TRAINING_DIR/TrainingLoop && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) train_gpu"
 fi
 
 # --build-grim: GRIM-text/GRIM CMake → grim_text_server (inference)
 if [[ "$DO_BUILD_GRIM" == true ]]; then
   echo "Building grim_text_server (GRIM-text inference) on Anvil in $ANVIL_DIR/$GRIM_DIR/build ..."
-  ssh anvil "cd $ANVIL_DIR && $ANVIL_VCPKG_ENSURE && cd $ANVIL_DIR/$GRIM_DIR && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) grim_text_server"
+  ssh anvil "cd $ANVIL_DIR && git submodule update --init --recursive && $ANVIL_VCPKG_ENSURE && cd $ANVIL_DIR/$GRIM_DIR && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) grim_text_server"
 fi
 
 # --build-grim-exe: repo root CMake → GRIM (main host / adaptive controller for future agent)
 if [[ "$DO_BUILD_GRIM_EXE" == true ]]; then
   echo "Building GRIM (main host / grim.exe) on Anvil in $ANVIL_DIR/build ..."
-  ssh anvil "cd $ANVIL_DIR && $ANVIL_VCPKG_ENSURE && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) GRIM"
+  ssh anvil "cd $ANVIL_DIR && git submodule update --init --recursive && $ANVIL_VCPKG_ENSURE && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) GRIM"
 fi
 
 if [[ "$USE_SBATCH" == true ]]; then
