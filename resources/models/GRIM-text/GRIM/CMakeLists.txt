@@ -209,7 +209,7 @@ add_executable(scratch_block_test
     ${CMAKE_CURRENT_SOURCE_DIR}/../Tests/ScratchBlockTest.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../Shared/LogRecorder/LogRecorder.cu
-    ${CMAKE_CURRENT_SOURCE_DIR}/../Shared/UnigramByte/Atomtable.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Shared/UnigramByte/AtomTable.cu
 )
 
 target_compile_definitions(scratch_block_test PRIVATE 
