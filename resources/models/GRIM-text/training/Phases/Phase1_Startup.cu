@@ -360,6 +360,49 @@ StartupConfig loadConfiguration(int argc, char** argv) {
         }
             
         config.force_rebuild_vocab = cfg.value("force_rebuild_vocab", false);
+        
+        // Load generation config for inference samples during training
+        if (cfg.contains("generation") && cfg["generation"].is_object()) {
+            const auto& gen = cfg["generation"];
+            if (gen.contains("strategy") && gen["strategy"].is_string()) {
+                const std::string strat = gen["strategy"].get<std::string>();
+                if (strat == "greedy") { config.generation.strategy = GRIM::SamplingStrategy::GREEDY; config.generation.do_sample = false; }
+                else if (strat == "top_k") config.generation.strategy = GRIM::SamplingStrategy::TOP_K;
+                else if (strat == "top_p") config.generation.strategy = GRIM::SamplingStrategy::TOP_P;
+                else if (strat == "min_p") config.generation.strategy = GRIM::SamplingStrategy::MIN_P;
+                else if (strat == "typical") config.generation.strategy = GRIM::SamplingStrategy::TYPICAL;
+                else if (strat == "top_k_top_p") config.generation.strategy = GRIM::SamplingStrategy::TOP_K_TOP_P;
+                else throw std::runtime_error("Phase1_Startup: unknown generation.strategy: " + strat);
+            }
+            if (gen.contains("max_new_tokens") && gen["max_new_tokens"].is_number())
+                config.generation.max_new_tokens = gen["max_new_tokens"].get<int>();
+            if (gen.contains("min_new_tokens") && gen["min_new_tokens"].is_number())
+                config.generation.min_new_tokens = gen["min_new_tokens"].get<int>();
+            if (gen.contains("temperature") && gen["temperature"].is_number())
+                config.generation.temperature = gen["temperature"].get<float>();
+            if (gen.contains("top_k") && gen["top_k"].is_number())
+                config.generation.top_k = gen["top_k"].get<int>();
+            if (gen.contains("top_p") && gen["top_p"].is_number())
+                config.generation.top_p = gen["top_p"].get<float>();
+            if (gen.contains("min_p") && gen["min_p"].is_number())
+                config.generation.min_p = gen["min_p"].get<float>();
+            if (gen.contains("typical_p") && gen["typical_p"].is_number())
+                config.generation.typical_p = gen["typical_p"].get<float>();
+            if (gen.contains("repetition_penalty") && gen["repetition_penalty"].is_number())
+                config.generation.repetition_penalty = gen["repetition_penalty"].get<float>();
+            if (gen.contains("repetition_penalty_window") && gen["repetition_penalty_window"].is_number())
+                config.generation.repetition_penalty_window = gen["repetition_penalty_window"].get<int>();
+            if (gen.contains("frequency_penalty") && gen["frequency_penalty"].is_number())
+                config.generation.frequency_penalty = gen["frequency_penalty"].get<float>();
+            if (gen.contains("presence_penalty") && gen["presence_penalty"].is_number())
+                config.generation.presence_penalty = gen["presence_penalty"].get<float>();
+            if (gen.contains("no_repeat_ngram_size") && gen["no_repeat_ngram_size"].is_number())
+                config.generation.no_repeat_ngram_size = gen["no_repeat_ngram_size"].get<int>();
+            if (gen.contains("do_sample") && gen["do_sample"].is_boolean())
+                config.generation.do_sample = gen["do_sample"].get<bool>();
+            if (gen.contains("enable_scratchblock_reasoning") && gen["enable_scratchblock_reasoning"].is_boolean())
+                config.generation.enable_scratchblock_reasoning = gen["enable_scratchblock_reasoning"].get<bool>();
+        }
     }
     config.architecture.max_seq_len = config.hyperparameters.max_seq_len;
     config.architecture.validate();

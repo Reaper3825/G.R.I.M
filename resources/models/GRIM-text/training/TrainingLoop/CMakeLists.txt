@@ -208,6 +208,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/Encoding/Encoding_GPU.cu
     ../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu
     ../../Shared/ScratchBlock/ScratchBlockPool_GPU.cu
+    ../../Shared/Sampling/Sampling.cu
     ../../Layers/InitInferenceState/InitinferenceState.cu
     ../../Shared/TensorConversion/TensorConversion.cu
     ../../Shared/TensorContract/TensorContract_GPU.cu

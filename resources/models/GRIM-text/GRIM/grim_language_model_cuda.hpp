@@ -181,7 +181,7 @@ struct EncoderConfig {
     // Per-layer residual centering (Issue #126 fix - can be disabled to improve gradient signal)
     // When true, applies center_columns after each residual add in every encoder layer (24 total).
     // This prevents mode collapse but attenuates gradient signal through 24 centering projections.
-    // When false, only the LM head centering (center_hidden_states) prevents mode collapse.
+    // When false, only the LM head centering (center_hidden_states) helps prevent mode collapse.
     bool center_encoder_residuals = false;
     
     // Bias control - when false, encoder layers skip bias addition (b_qkv, b_o not used)
@@ -204,14 +204,17 @@ struct LMHeadConfig {
     const Matrix* embedding_weights = nullptr;
     bool use_bias = true;
     bool use_simd = true;
-    float epsilon = 1e-10f;
+    float epsilon = 1e-5f;
 };
 
 enum class SamplingStrategy {
     GREEDY,
     TOP_K,
     TOP_P,
-    BEAM_SEARCH
+    MIN_P,           // Min-P (relative threshold)
+    TYPICAL,         // Locally typical sampling
+    TOP_K_TOP_P,     // Combined: Top-K first, then Top-P within survivors
+    BEAM_SEARCH      // NOT SUPPORTED - exists only to give clear error
 };
 
 struct GenerationConfig {
@@ -221,24 +224,36 @@ struct GenerationConfig {
     float temperature = 1.0f;
     int top_k = 50;
     float top_p = 0.9f;
+    float min_p = 0.0f;                    // Min-P threshold (0 = disabled)
+    float typical_p = 1.0f;                // Typical sampling mass (1.0 = disabled)
     float repetition_penalty = 1.0f;
     int repetition_penalty_window = 64;
+    float frequency_penalty = 0.0f;        // Additive penalty per occurrence (0 = disabled)
+    float presence_penalty = 0.0f;         // Additive penalty if token appeared (0 = disabled)
     float length_penalty = 1.0f;
     int num_beams = 1;
     int num_return_sequences = 1;
     bool early_stopping = false;
     int eos_token_id = 0;
-    int pad_token_id = 0; 
+    int pad_token_id = 0;
+    int bos_token_id = 2;
+    int unk_token_id = 0;
     int no_repeat_ngram_size = 0;
     bool do_sample = true;
     float diversity_penalty = 0.0f;
     std::vector<int> bad_words_ids;
     unsigned int seed = 0;
+
+    // ScratchBlock reasoning during inference
+    // When true, generated atom tokens (numbers, URLs, etc.) are classified
+    // and their metadata (numeric_value, atom_mask) is fed back into forwardStep()
+    // so the ScratchBlock layer can inject structured reasoning embeddings.
+    bool enable_scratchblock_reasoning = true;
 };
 
 using GenerationStreamCallback = std::function<void(int token_id, float score)>;
 
-struct ActivationQuantizationConfig {
+ struct ActivationQuantizationConfig {
     bool enabled = false;
     bool apply_to_embeddings = false;
     bool apply_to_encoder_outputs = false;
@@ -650,8 +665,7 @@ public:
                                           const std::vector<float>& prompt_numeric_values,
                                           const std::vector<uint8_t>& prompt_atom_mask,
                                           const GenerationConfig& cfg,
-                                          GenerationStreamCallback* stream_callback,
-                                          std::mt19937& rng);
+                                          GenerationStreamCallback* stream_callback = nullptr);
     
 private:
     // Core inference forward: assumes data already in cached_* tensors.

@@ -992,25 +992,14 @@ struct NLLLossGradFn : public GradFn {
     }
     
     __host__ ~NLLLossGradFn() {
-        fprintf(stderr, "[NLLLossGradFn] DTOR ENTER: this=%p log_probs_data=%p grad_buf=%p upstream=%p\n",
-                (void*)this, (void*)log_probs_data, (void*)grad_log_probs_buffer, (void*)log_probs_grad_fn.get());
-        fflush(stderr);
         log_probs_grad_fn.reset();  // Release shared_ptr to upstream LogSoftmaxGradFn
         
         if (cleanup_event) {
-            fprintf(stderr, "[NLLLossGradFn] DTOR: syncing cleanup_event...\n");
-            fflush(stderr);
             cudaEventSynchronize(cleanup_event);
             cudaEventDestroy(cleanup_event);
         }
-        fprintf(stderr, "[NLLLossGradFn] DTOR: freeing log_probs_data=%p...\n", (void*)log_probs_data);
-        fflush(stderr);
         if (log_probs_data) { cudaFree(log_probs_data); log_probs_data = nullptr; }
-        fprintf(stderr, "[NLLLossGradFn] DTOR: freeing grad_log_probs_buffer=%p...\n", (void*)grad_log_probs_buffer);
-        fflush(stderr);
         if (grad_log_probs_buffer) { cudaFree(grad_log_probs_buffer); grad_log_probs_buffer = nullptr; }
-        fprintf(stderr, "[NLLLossGradFn] DTOR EXIT\n");
-        fflush(stderr);
     }
     
     __host__ void apply(const Tensor& grad_output, cudaStream_t stream) override {
@@ -1242,12 +1231,6 @@ __host__ Tensor unified_loss(
     
     // ── Step 5: Attach NLLLossGradFn ──
     if (logits.requires_grad) {
-        // DEBUG: Log log_probs.data for correlation with LogSoftmaxGradFn::save() output
-        fprintf(stderr, "[unified_loss] log_probs.data=%p grad_fn=%p — if save_output_copy=false works, "
-                "LogSoftmaxGradFn::save() should show same ptr with copy=0\n",
-                (void*)log_probs.data, (void*)log_probs.grad_fn.get());
-        fflush(stderr);
-        
         auto grad_fn = std::make_shared<NLLLossGradFn>(
             log_probs.data,       // Takes ownership of log_probs GPU buffer
             targets, valid_mask,

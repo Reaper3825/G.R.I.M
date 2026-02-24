@@ -114,11 +114,7 @@ __global__ void computeGradStatsKernel(
 		local_min = fminf(local_min, val);
 		local_max = fmaxf(local_max, val);
 		
-		// DEBUG: Log first few values to see what max_abs is based on
-		if (i < 10 && blockIdx.x == 0) {
-			printf("[GradStats][DEBUG] thread=%d i=%llu val=%.6e abs_val=%.6e local_max_abs=%.6e\n",
-			       tid, i, val, abs_val, local_max_abs);
-		}
+
 	}
 
 	shared_sum_sq[tid] = local_sum_sq;
@@ -143,12 +139,6 @@ __global__ void computeGradStatsKernel(
 
 	if (tid == 0) {
 		atomicAdd(&output->sum_sq, shared_sum_sq[0]);
-		
-		// DEBUG: Log what values are being sent to atomic operations
-		if (blockIdx.x < 2) {
-			printf("[GradStats][ATOMIC] block=%d max_abs_before_atomic=%.6e min_val=%.6e max_val=%.6e has_nan=%d has_inf=%d\n",
-			       blockIdx.x, shared_max_abs[0], shared_min[0], shared_max[0], shared_nan[0], shared_inf[0]);
-		}
 		
 		// Use proper atomic float operations (CAS-based) instead of broken atomicMax
 		atomicMaxFloat(&output->max_abs, shared_max_abs[0]);
@@ -281,8 +271,6 @@ void enqueue(const char* name,
 	float explosion_threshold,
 	cudaStream_t stream) {
 	if (!name || !data || size == 0) {
-		fprintf(stderr, "[GradStats] enqueue SKIPPED: name=%p data=%p size=%zu\n", 
-		        (void*)name, (void*)data, size);
 		return;
 	}
 	if (!stream) {
@@ -293,8 +281,6 @@ void enqueue(const char* name,
 	}
 
 	const std::size_t index = g_entries.size();
-	fprintf(stderr, "[GradStats] enqueue '%s' index=%zu size=%zu data=%p\n", 
-	        name, index, size, (void*)data);
 	
 	if (!ensureCapacity(index + 1, stream)) {
 		return;
@@ -380,13 +366,6 @@ FlushResult flushAndLog(cudaStream_t stream,
 		const auto& entry = g_entries[i];
 		const auto& stats = g_host_results[i];
 		
-		// DEBUG: Log raw struct values from GPU to see if data corruption
-		if (i < 5) {
-			fprintf(stderr, "[GradStats][RAW] entry='%s' layer=%d sum_sq=%.6e max_abs_raw=%.6e min_val_raw=%.6e max_val_raw=%.6e has_nan=%d has_inf=%d size=%llu\n",
-			        entry.name.c_str(), entry.layer, stats.sum_sq, stats.max_abs, 
-			        stats.min_val, stats.max_val, stats.has_nan, stats.has_inf, 
-			        (unsigned long long)stats.size);
-		}
 		
 		const std::size_t denom = stats.size > 0 ? stats.size : entry.size;
 		const float rms = (denom > 0)

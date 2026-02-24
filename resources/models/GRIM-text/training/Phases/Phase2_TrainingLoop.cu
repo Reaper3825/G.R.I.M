@@ -327,18 +327,16 @@ void logInferenceSample(TrainingContext& ctx, TrainingLoopState& state) {
         }
     }
 
-    GRIM::GenerationConfig cfg;
-    // Use greedy for deterministic/reproducible samples (like PyTorch baseline)
-    // With untrained model: greedy produces repetition, sampling produces gibberish
-    cfg.strategy = GRIM::SamplingStrategy::GREEDY;
-    cfg.do_sample = false;
+    // Use generation config from ai_config.json (configurable strategy, penalties, etc.)
+    GRIM::GenerationConfig cfg = ctx.config.generation;
     cfg.max_new_tokens = max_new_tokens;
-    cfg.min_new_tokens = std::max(1, max_new_tokens / 4);  // Generate at least some tokens before EOS
-    cfg.temperature = 1.0f;  // Ignored for greedy
-    cfg.top_p = 0.9f;        // Ignored for greedy
+    if (cfg.min_new_tokens <= 0) {
+        cfg.min_new_tokens = std::max(1, max_new_tokens / 4);
+    }
     cfg.num_return_sequences = 1;
     cfg.eos_token_id = ctx.tokenizer.eosId();
     cfg.pad_token_id = ctx.tokenizer.padId();
+    // Seed from optimizer step for reproducible but varied samples per step
     cfg.seed = static_cast<unsigned int>(optimizer_step);
 
     try {
