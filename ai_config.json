@@ -84,6 +84,23 @@
     },
     "training": {
         "config": {
+            "generation": {
+                "strategy": "greedy",
+                "max_new_tokens": 80,
+                "min_new_tokens": 1,
+                "temperature": 0.8,
+                "top_k": 50,
+                "top_p": 0.9,
+                "min_p": 0.0,
+                "typical_p": 1.0,
+                "repetition_penalty": 1.1,
+                "repetition_penalty_window": 64,
+                "frequency_penalty": 0.0,
+                "presence_penalty": 0.0,
+                "no_repeat_ngram_size": 3,
+                "do_sample": false,
+                "enable_scratchblock_reasoning": true
+            },
             "epochs": 3,
             "seed": 1,
             "batch_size": 8,

@@ -899,9 +899,6 @@ LossResult computeAutogradLoss(
             + std::to_string(text_loss) + ")");
     }
     
-    fprintf(stderr, "[LossComponents] text_ce=%.4f total=%.4f valid_tokens=%d\n",
-            text_loss, text_loss, valid_tokens);
-    
     AG_INFO("Loss computed: text_ce=" << text_loss << " valid_tokens=" << valid_tokens);
     
     result.success = true;
