@@ -11,6 +11,8 @@
 #   - vcpkg manifest mode (vcpkg.json at repo root). On Anvil we use the vcpkg toolchain (x64-linux).
 #     If vcpkg is not found at GRIM_ANVIL_DIR/vcpkg, the script clones and bootstraps it there before building.
 #     Override location with GRIM_VCPKG_ROOT (script will not auto-download in that case).
+#   - CUDA 12+ for training build (CUTLASS/flash-attention). Anvil has only CUDA 11.2 via modtree/gpu.
+#     Install CUDA 12 to project space, then: GRIM_CUDA_ROOT=/anvil/projects/x-cis210085/GRIM/cuda-12.0 ./scripts/run_train_on_anvil.sh --build
 #   - CMake 3.22+ for TrainingLoop. If default module is older, on Anvil run "module avail cmake"
 #     then export ANVIL_CMAKE_MODULE=cmake/X.XX (e.g. cmake/3.26) before this script.
 #
@@ -84,13 +86,20 @@ REMOTE_TRAINING="$ANVIL_DIR/$TRAINING_DIR"
 REMOTE_EXE="$ANVIL_DIR/$EXE"
 REMOTE_CFG="$REMOTE_TRAINING/$CONFIG"
 
-# Anvil: init module system (non-interactive SSH doesn't load profile), then load GPU stack.
-# RCAC recommends "modtree/gpu" (provides cuda/11.2.2, gcc, openmpi). CMake 3.22+ required for TrainingLoop.
-# Try newer cmake first (module name may be cmake/3.26 or cmake/3.22 on Anvil); override with ANVIL_CMAKE_MODULE.
+# Anvil: init module system, load GPU stack. CUTLASS (flash-attention) requires CUDA 12+.
+# Anvil has only CUDA 11.2 (modtree/gpu). To use a user-installed CUDA 12:
+#   1. Download runfile: open https://developer.nvidia.com/cuda-12-0-1-download-archive
+#      Select Linux > x86_64 > CentOS > runfile (local), get the wget/curl command.
+#      Or: ssh anvil "cd /anvil/projects/x-cis210085/GRIM && wget -q --show-progress https://developer.download.nvidia.com/compute/cuda/12.0.1/local_installers/cuda_12.0.1_535.104.05_linux.run"
+#   2. Verify file size ~2.5GB before installing. If tiny, the URL failed.
+#   3. ssh anvil "cd /anvil/projects/x-cis210085/GRIM && chmod +x cuda_12*.run && ./cuda_12*.run --silent --toolkit --override --no-man-page --toolkitpath=/anvil/projects/x-cis210085/GRIM/cuda-12.0"
+#   4. GRIM_CUDA_ROOT=/anvil/projects/x-cis210085/GRIM/cuda-12.0 ./scripts/run_train_on_anvil.sh --build
 ANVIL_CMAKE_MODULE="${ANVIL_CMAKE_MODULE:-}"
-ANVIL_MODULES='source /etc/profile.d/modules.sh 2>/dev/null || source /usr/share/modules/init/bash 2>/dev/null || true; module load modtree/gpu 2>/dev/null || module load cuda gcc 2>/dev/null || true; if [ -n "$ANVIL_CMAKE_MODULE" ]; then module load $ANVIL_CMAKE_MODULE 2>/dev/null || true; else module load cmake/3.26 2>/dev/null || module load cmake/3.22 2>/dev/null || module load cmake 2>/dev/null || true; fi'
-# Set CUDAToolkit_ROOT only when nvcc is found (avoid passing "." when module load failed)
-ANVIL_CUDA_ROOT='NVCC=$(which nvcc 2>/dev/null); if [ -z "$NVCC" ]; then echo "ERROR: nvcc not found. On Anvil run: module load modtree/gpu (or module load cuda); then re-run this script." >&2; exit 1; fi; CUDAToolkit_ROOT=$(dirname "$(dirname "$NVCC")")'
+ANVIL_CUDA_MODULE="${ANVIL_CUDA_MODULE:-}"
+# If GRIM_CUDA_ROOT set: skip CUDA modules, use that path. Else: try module (cuda/12.0.1, modtree/gpu, etc.)
+ANVIL_MODULES="source /etc/profile.d/modules.sh 2>/dev/null || source /usr/share/modules/init/bash 2>/dev/null || true; if [ -z \"\$GRIM_CUDA_ROOT\" ]; then if [ -n \"${ANVIL_CUDA_MODULE}\" ]; then module load ${ANVIL_CUDA_MODULE} 2>/dev/null || true; fi; if ! which nvcc >/dev/null 2>&1; then module load cuda/12.0.1 2>/dev/null || module load cuda/11.4.2 2>/dev/null || module load modtree/gpu 2>/dev/null || module load cuda 2>/dev/null || true; fi; fi; module load gcc 2>/dev/null || true; if [ -n \"${ANVIL_CMAKE_MODULE}\" ]; then module load ${ANVIL_CMAKE_MODULE} 2>/dev/null || true; else module load cmake/3.26 2>/dev/null || module load cmake/3.22 2>/dev/null || module load cmake 2>/dev/null || true; fi"
+# Set CUDAToolkit_ROOT and require CUDA 12+. If GRIM_CUDA_ROOT set, use user-installed toolkit.
+ANVIL_CUDA_ROOT='if [ -n "$GRIM_CUDA_ROOT" ]; then if [ ! -x "$GRIM_CUDA_ROOT/bin/nvcc" ]; then echo "ERROR: GRIM_CUDA_ROOT=$GRIM_CUDA_ROOT but bin/nvcc not found or not executable" >&2; exit 1; fi; export PATH="$GRIM_CUDA_ROOT/bin:$PATH"; CUDAToolkit_ROOT="$GRIM_CUDA_ROOT"; echo "[Anvil] Using GRIM_CUDA_ROOT=$GRIM_CUDA_ROOT"; else NVCC=$(which nvcc 2>/dev/null); if [ -z "$NVCC" ]; then echo "ERROR: nvcc not found. Set GRIM_CUDA_ROOT=/path/to/cuda-12 or use a CUDA 12 module." >&2; exit 1; fi; CUDAToolkit_ROOT=$(dirname "$(dirname "$NVCC")"); fi; NVCC_RELEASE=$("$CUDAToolkit_ROOT/bin/nvcc" --version 2>/dev/null | grep -E "release [0-9]" | head -1); echo "[Anvil] $NVCC_RELEASE"; CUDA_MAJOR=$(echo "$NVCC_RELEASE" | sed -n "s/.*release \([0-9]*\)\..*/\1/p"); if [ -n "$CUDA_MAJOR" ] && [ "$CUDA_MAJOR" -lt 12 ]; then echo "ERROR: CUDA $CUDA_MAJOR.x detected. CUTLASS (flash-attention) requires CUDA 12+." >&2; echo "  Install CUDA 12 to project space, then:" >&2; echo "  GRIM_CUDA_ROOT=/anvil/projects/x-cis210085/GRIM/cuda-12.0 ./scripts/run_train_on_anvil.sh --build" >&2; exit 1; fi'
 # vcpkg: use toolchain with x64-linux. TrainingLoop uses minimal manifest (training/vcpkg.json) so only
 # nlohmann-json and flatbuffers are installed (avoids full repo manifest deps that need Python 3.7+ / meson).
 ANVIL_VCPKG="${GRIM_VCPKG_ROOT:-$ANVIL_DIR/vcpkg}"
@@ -110,24 +119,41 @@ ANVIL_TRAINING_MANIFEST_ENSURE="mkdir -p $ANVIL_DIR/$TRAINING_DIR && [ -f $ANVIL
 
 # Init flash-attention submodule only (avoids "No url for external/vcpkg" if vcpkg was ever a submodule).
 # Also init flash-attention's submodules (cutlass) - required for cute/tensor.hpp
-ANVIL_SUBMODULE_INIT="(git submodule deinit -f external/vcpkg 2>/dev/null || true) && git submodule update --init external/flash-attention && (cd external/flash-attention && git submodule update --init csrc/cutlass)"
+# Pin cutlass to CUTLASS 3.4.1 (bbe579a) for flash-attention. CUDA 12+ nvcc required regardless—
+# CUDA 11.x triggers stride.hpp "unexpected function type" template error.
+# Set GRIM_USE_LATEST_CUTLASS=1 to skip pin (still requires CUDA 12+).
+CUTLASS_PIN="bbe579a9e3beb6ea6626d9227ec32d0dae119a49"
+if [[ "${GRIM_USE_LATEST_CUTLASS:-}" == "1" ]]; then
+  ANVIL_SUBMODULE_INIT="(git submodule deinit -f external/vcpkg 2>/dev/null || true) && git submodule update --init external/flash-attention && (cd external/flash-attention && git submodule update --init csrc/cutlass)"
+  ANVIL_CLEAN_BEFORE_BUILD=""
+else
+  ANVIL_SUBMODULE_INIT="(git submodule deinit -f external/vcpkg 2>/dev/null || true) && git submodule update --init external/flash-attention && (cd external/flash-attention && git submodule update --init csrc/cutlass) && (echo 'Pinning cutlass to 3.4.1 (bbe579a)...' && cd external/flash-attention/csrc/cutlass && git fetch origin && git checkout $CUTLASS_PIN) && (echo 'Applying flash-attention bwd template fix...' && cd external/flash-attention && git apply -p1 < ../../scripts/patches/flash-attention-bwd-template-fix.patch) || { echo 'Cutlass pin failed. Try: GRIM_USE_LATEST_CUTLASS=1 with CUDA 12'; exit 1; }"
+  # Force clean rebuild when cutlass is pinned (headers changed; Make would otherwise use cached objects)
+  ANVIL_CLEAN_BEFORE_BUILD="rm -rf $ANVIL_DIR/$BUILD_DIR && "
+fi
+
+# Pass GRIM_CUDA_ROOT to remote if set (user-installed CUDA 12 for Anvil)
+ANVIL_EXPORT_CUDA="${GRIM_CUDA_ROOT:+export GRIM_CUDA_ROOT='$GRIM_CUDA_ROOT'; }"
 
 # --build / --build-training: GRIM-text/training/TrainingLoop CMake → train_gpu
 if [[ "$DO_BUILD" == true ]]; then
   echo "Building train_gpu (training loop) on Anvil in $ANVIL_DIR/$BUILD_DIR ..."
-  ssh anvil "cd $ANVIL_DIR && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && $ANVIL_TRAINING_MANIFEST_ENSURE && cd $ANVIL_DIR/$TRAINING_DIR/TrainingLoop && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) train_gpu"
+  [[ -n "$GRIM_CUDA_ROOT" ]] && echo "  Using GRIM_CUDA_ROOT=$GRIM_CUDA_ROOT (user-installed CUDA 12)"
+  ssh anvil "$ANVIL_EXPORT_CUDA cd $ANVIL_DIR && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && $ANVIL_TRAINING_MANIFEST_ENSURE && cd $ANVIL_DIR/$TRAINING_DIR/TrainingLoop && ${ANVIL_CLEAN_BEFORE_BUILD}mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) train_gpu"
 fi
 
 # --build-grim: GRIM-text/GRIM CMake → grim_text_server (inference)
 if [[ "$DO_BUILD_GRIM" == true ]]; then
   echo "Building grim_text_server (GRIM-text inference) on Anvil in $ANVIL_DIR/$GRIM_DIR/build ..."
-  ssh anvil "cd $ANVIL_DIR && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && cd $ANVIL_DIR/$GRIM_DIR && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) grim_text_server"
+  [[ -n "$GRIM_CUDA_ROOT" ]] && echo "  Using GRIM_CUDA_ROOT=$GRIM_CUDA_ROOT"
+  ssh anvil "$ANVIL_EXPORT_CUDA cd $ANVIL_DIR && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && cd $ANVIL_DIR/$GRIM_DIR && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) grim_text_server"
 fi
 
 # --build-grim-exe: repo root CMake → GRIM (main host / adaptive controller for future agent)
 if [[ "$DO_BUILD_GRIM_EXE" == true ]]; then
   echo "Building GRIM (main host / grim.exe) on Anvil in $ANVIL_DIR/build ..."
-  ssh anvil "cd $ANVIL_DIR && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) GRIM"
+  [[ -n "$GRIM_CUDA_ROOT" ]] && echo "  Using GRIM_CUDA_ROOT=$GRIM_CUDA_ROOT"
+  ssh anvil "$ANVIL_EXPORT_CUDA cd $ANVIL_DIR && $ANVIL_SUBMODULE_INIT && $ANVIL_VCPKG_ENSURE && mkdir -p build && cd build && $ANVIL_MODULES && $ANVIL_CUDA_ROOT && cmake .. $ANVIL_CMAKE_OPTS && make -j \$(nproc) GRIM"
 fi
 
 if [[ "$USE_SBATCH" == true ]]; then
