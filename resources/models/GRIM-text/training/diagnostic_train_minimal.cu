@@ -42,6 +42,8 @@
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Shared/Batching/BatchPayload.hpp"
+#include "Autograd/AutogradTraining.hpp"
+#include "../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
 
 // Tokenizer  
 #include "../Shared/UnigramByte/UniByte.hpp"
@@ -64,12 +66,12 @@
 #endif
 
 //======================================================//
-//  Compute L2 norm of a gradient buffer (sync to CPU)
+//  Compute RMS of a gradient buffer (sync to CPU)
 //======================================================//
 float computeGradNormSync(float* d_buffer, size_t size, cudaStream_t stream) {
     if (!d_buffer || size == 0) return 0.0f;
     
-    // Copy to host and compute norm
+    // Copy to host and compute RMS
     std::vector<float> h_buffer(size);
     CUDA_CHECK(cudaMemcpyAsync(h_buffer.data(), d_buffer, size * sizeof(float), 
                                cudaMemcpyDeviceToHost, stream));
@@ -79,7 +81,7 @@ float computeGradNormSync(float* d_buffer, size_t size, cudaStream_t stream) {
     for (size_t i = 0; i < size; ++i) {
         sum_sq += static_cast<double>(h_buffer[i]) * h_buffer[i];
     }
-    return static_cast<float>(std::sqrt(sum_sq));
+    return static_cast<float>(std::sqrt(sum_sq / size));
 }
 
 //======================================================//
@@ -126,8 +128,8 @@ void traceGradientComponents(GRIM::LanguageModel& model, int batch, cudaStream_t
     if (!lm_head) throw std::runtime_error("[traceGradientComponents] LMHeadLayer is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
     if (lm_head->weights().grad_data()) {
         size_t lm_size = static_cast<size_t>(config.vocab_size) * config.d_model;
-        float lm_head_norm = computeGradNormSync(lm_head->weights().grad_data(), lm_size, stream);
-        std::cout << "  LM_HEAD: " << std::scientific << std::setprecision(4) << lm_head_norm 
+        float lm_head_rms = computeGradNormSync(lm_head->weights().grad_data(), lm_size, stream);
+        std::cout << "  LM_HEAD: " << std::scientific << std::setprecision(4) << lm_head_rms 
                   << " (should be largest - closest to loss)" << std::endl;
     }
     
@@ -142,29 +144,29 @@ void traceGradientComponents(GRIM::LanguageModel& model, int batch, cudaStream_t
             continue;
         }
         
-        // Helper: compute and print grad norm for a named Tensor
-        auto printGradNorm = [&](const char* label, GRIM::Tensor& tensor) {
+        // Helper: compute and print grad RMS for a named Tensor
+        auto printGradRms = [&](const char* label, GRIM::Tensor& tensor) {
             if (tensor.has_grad()) {
-                float norm = computeGradNormSync(tensor.grad_data(), tensor.numel(), stream);
-                std::cout << "  " << label << ": " << std::scientific << std::setprecision(4) << norm;
+                float rms = computeGradNormSync(tensor.grad_data(), tensor.numel(), stream);
+                std::cout << "  " << label << ": " << std::scientific << std::setprecision(4) << rms;
             } else {
                 std::cout << "  " << label << ": NULL";
             }
         };
         
         // Attention gradients
-        printGradNorm("QKV", enc->attnWqkv());
-        printGradNorm("W_o", enc->attnWo());
+        printGradRms("QKV", enc->attnWqkv());
+        printGradRms("W_o", enc->attnWo());
         
         // FFN gradients
-        printGradNorm("FFN_W1", enc->ffnW1());
-        printGradNorm("FFN_W2", enc->ffnW2());
+        printGradRms("FFN_W1", enc->ffnW1());
+        printGradRms("FFN_W2", enc->ffnW2());
         std::cout << std::endl;
         
         // RMSNorm gradients (should be smallest)
         std::cout << "    ";
-        printGradNorm("RMS1_gamma", enc->rms1Gamma());
-        printGradNorm("RMS2_gamma", enc->rms2Gamma());
+        printGradRms("RMS1_gamma", enc->rms1Gamma());
+        printGradRms("RMS2_gamma", enc->rms2Gamma());
         std::cout << std::endl;
     }
     
@@ -173,8 +175,8 @@ void traceGradientComponents(GRIM::LanguageModel& model, int batch, cudaStream_t
     if (!emb_layer) throw std::runtime_error("[traceGradientComponents] EmbeddingLayer is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
     if (emb_layer->tokenWeights().grad_data()) {
         const size_t embedding_grad_size = config.vocab_size * config.d_model;
-        float emb_norm = computeGradNormSync(emb_layer->tokenWeights().grad_data(), embedding_grad_size, stream);
-        std::cout << "  EMBEDDING: " << emb_norm 
+        float emb_rms = computeGradNormSync(emb_layer->tokenWeights().grad_data(), embedding_grad_size, stream);
+        std::cout << "  EMBEDDING: " << emb_rms 
                   << " (most attenuated - farthest from loss)" << std::endl;
     }
     
@@ -660,14 +662,14 @@ int main(int argc, char** argv) {
             // Get numeric side-channels for context
             std::vector<float> numeric_values(seq.token_numeric_values.begin(),
                                               seq.token_numeric_values.begin() + context_len);
-            std::vector<uint8_t> numeric_mask(seq.token_numeric_mask.begin(),
-                                              seq.token_numeric_mask.begin() + context_len);
+            std::vector<uint8_t> atom_mask(seq.token_atom_mask.begin(),
+                                           seq.token_atom_mask.begin() + context_len);
             
             //--------------------------------------------------
             // 6a. FORWARD PASS (get logits for prediction)
             //--------------------------------------------------
             // Use getNextTokenLogits to get logits for the next token position
-            GRIM::Vector logits_vec = model.getNextTokenLogits(context_ids, numeric_values, numeric_mask);
+            GRIM::Vector logits_vec = model.getNextTokenLogits(context_ids, numeric_values, atom_mask);
             CUDA_CHECK(cudaStreamSynchronize(stream));
             
             // Copy logits to a GPU buffer for getTopKPredictions
@@ -716,7 +718,7 @@ int main(int argc, char** argv) {
                     
                     // Numeric values for input (same length as input)
                     std::vector<float> train_numeric_values = numeric_values;
-                    std::vector<uint8_t> train_numeric_mask = numeric_mask;
+                    std::vector<uint8_t> train_atom_mask = atom_mask;
                     
                     // Construct BatchPayload for single-sequence batch
                     GRIM::Batching::BatchPayload payload;
@@ -740,23 +742,31 @@ int main(int argc, char** argv) {
                     payload.input_ids = train_input_ids;
                     payload.target_ids = train_target_ids;
                     payload.numeric_values = train_numeric_values;
-                    payload.numeric_mask = train_numeric_mask;
+                    payload.atom_mask = train_atom_mask;
                     payload.text_features.resize(payload.total_tokens * GRIM::Batching::BatchPayload::kTextFeatureDim, 0);
-                    payload.text_mask.resize(payload.total_tokens, 0);
                     payload.fits_in_cache = true;  // Assume fits for diagnostic purposes
                     
-                    float loss = model.computeLossBatch(payload);
+                    // Unified forward+loss+backward via autograd
+                    auto loss_result = GRIM::Autograd::autogradTrainingStep(
+                        model, model.getTrainingState(), payload,
+                        /*accumulate=*/false, /*grad_scale=*/1.0f, manual_optimizer_state.step);
+                    if (!loss_result.success) {
+                        std::cout << "  → autogradTrainingStep FAILED: " << loss_result.error_message << std::endl;
+                        break;
+                    }
+                    float loss = loss_result.loss_value;
                     
                     std::cout << "  → Training on target (loss=" << std::fixed << std::setprecision(4) 
                               << loss << ", context_len=" << context_len << ")" << std::endl;
                     
-                    // Zero gradients and backward
-                    model.zeroGrad();
-                    model.backward(loss, false, 1.0f, manual_optimizer_state.step);
                     CUDA_CHECK(cudaStreamSynchronize(stream));
                     
                     // Update weights
-                    model.updateWeights(learning_rate, &manual_optimizer_state);
+                    GRIM::launchAdamWStep(model.parameterGroups(),
+                                          learning_rate,
+                                          GRIM::HyperParameters::ADAMW_WEIGHT_DECAY,
+                                          manual_optimizer_state.step,
+                                          stream);
                     CUDA_CHECK(cudaStreamSynchronize(stream));
                     
                     manual_optimizer_state.step++;

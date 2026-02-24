@@ -287,29 +287,11 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
             }
         }
         
-        if (request.scratch_block.text_feature_projection.ptr && fb_scratch_block->text_feature_projection()) {
-            std::vector<float> sb_text_proj(fb_scratch_block->text_feature_projection()->begin(),
-                                            fb_scratch_block->text_feature_projection()->end());
-            if (!upload_device_vector(sb_text_proj, request.scratch_block.text_feature_projection, "ScratchBlock text_feature_projection")) {
-                return false;
-            }
-        }
+        // text_feature_projection ELIMINATED — old checkpoints may contain it, silently ignored
+        // (same pattern as value_extraction_weight/bias below)
 
-        // Value extraction head (optional - may not exist in older checkpoints)
-        if (request.scratch_block.value_extraction_weight.ptr && fb_scratch_block->value_extraction_weight()) {
-            std::vector<float> sb_extract_w(fb_scratch_block->value_extraction_weight()->begin(),
-                                            fb_scratch_block->value_extraction_weight()->end());
-            if (!upload_device_vector(sb_extract_w, request.scratch_block.value_extraction_weight, "ScratchBlock value_extraction_weight")) {
-                return false;
-            }
-        }
-        if (request.scratch_block.value_extraction_bias.ptr && fb_scratch_block->value_extraction_bias()) {
-            std::vector<float> sb_extract_b(fb_scratch_block->value_extraction_bias()->begin(),
-                                            fb_scratch_block->value_extraction_bias()->end());
-            if (!upload_device_vector(sb_extract_b, request.scratch_block.value_extraction_bias, "ScratchBlock value_extraction_bias")) {
-                return false;
-            }
-        }
+        // Old checkpoints may contain value_extraction_weight/bias — silently ignore them.
+        // The extraction head has been removed from the architecture.
         
         GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[load] ScratchBlock: atom_types=", 
                                             fb_scratch_block->num_atom_types(),
@@ -585,32 +567,21 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
     if (sb_view.enabled && sb_view.atom_type_embeddings.ptr) {
         auto sb_atom_emb = download_device_vector(sb_view.atom_type_embeddings, "ScratchBlock atom_type_embeddings");
         auto sb_atom_proj = download_device_vector(sb_view.atom_projection, "ScratchBlock atom_projection");
-        auto sb_text_proj = download_device_vector(sb_view.text_feature_projection, "ScratchBlock text_feature_projection");
-        auto sb_extract_w = (sb_view.value_extraction_weight.ptr && sb_view.value_extraction_weight.count > 0)
-            ? download_device_vector(sb_view.value_extraction_weight, "ScratchBlock value_extraction_weight")
-            : std::vector<float>{};
-        auto sb_extract_b = (sb_view.value_extraction_bias.ptr && sb_view.value_extraction_bias.count > 0)
-            ? download_device_vector(sb_view.value_extraction_bias, "ScratchBlock value_extraction_bias")
-            : std::vector<float>{};
+        // text_feature_projection ELIMINATED — write empty vector for schema compatibility
         
         if (!sb_atom_emb.empty() || sb_view.atom_type_embeddings.count == 0) {
             fb_scratch_block = GRIMTransformer::CreateScratchBlockWeights(
                 builder,
                 builder.CreateVector(sb_atom_emb),
                 builder.CreateVector(sb_atom_proj),
-                builder.CreateVector(sb_text_proj),
-                sb_extract_w.empty() ? 0 : builder.CreateVector(sb_extract_w),
-                sb_extract_b.empty() ? 0 : builder.CreateVector(sb_extract_b),
+                0,  // text_feature_projection — eliminated, empty for schema compat
                 static_cast<uint32_t>(sb_view.num_atom_types),
                 static_cast<uint32_t>(sb_view.atom_embedding_dim),
                 static_cast<uint32_t>(sb_view.d_model),
                 sb_view.atom_scale,
                 sb_view.enabled);
             GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[save] ScratchBlock: atom_emb=",
-                                                sb_atom_emb.size(), " atom_proj=", sb_atom_proj.size(),
-                                                " text_proj=", sb_text_proj.size(),
-                                                " extract_w=", sb_extract_w.size(),
-                                                " extract_b=", sb_extract_b.size()));
+                                                sb_atom_emb.size(), " atom_proj=", sb_atom_proj.size()));
         }
     }
 

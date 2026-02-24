@@ -62,7 +62,7 @@ struct EncodingConfig {
     // When enabled, residuals become: residual = input + layer_scale * sublayer_output
     // This reduces the correlation buildup through layers by dampening sublayer contributions
     bool use_layer_scale = true;
-    float layer_scale_init = 0.1f;  // Initial scale (CaiT uses 0.1, can go lower for more layers)
+    float layer_scale_init = 1.0f;  // Issue #129: init=1.0 (NOT CaiT's 0.1 — caused 10x gradient attenuation)
     
     // Per-layer residual centering
     // When true: output = center_columns(input + branch) — prevents mode collapse but 24 gradient projections
@@ -75,8 +75,6 @@ struct EncodingConfig {
     // Attention
     bool causal_mask = true;
     float softmax_temperature = 1.0f;
-    bool qk_norm_enabled = false;
-    float qk_norm_scale = 8.0f;
     float dropout_rate = 0.0f;        // Sublayer dropout DROP rate (0.0 = disabled). Applied after attention projection and FFN output.
     float attention_dropout = 0.0f;   // Attention dropout DROP rate (0.0 = disabled, 0.15 = 15% dropped)
     
@@ -158,7 +156,7 @@ public:
     /// @param cfg       Fully-populated EncodingConfig (d_model, d_ff, num_heads, etc.)
     /// @param seed      Base PRNG seed.  Offsets: +0 W_qkv, +1 W_o, +2 FFN W1, +3 FFN W2
     /// @param residual_scale  Issue #142: GPT-2 init scaling for W_o (1/sqrt(2*num_layers))
-    /// @param layer_scale_init Issue #109: CaiT LayerScale initial value (only when config.use_layer_scale)
+    /// @param layer_scale_init Issue #109/#129: LayerScale initial value. Use 1.0 (NOT CaiT's 0.1 — caused 10x gradient attenuation)
     EncodingLayer(const EncodingConfig& cfg, uint64_t seed,
                   float residual_scale = 1.0f,
                   float layer_scale_init = 1.0f);

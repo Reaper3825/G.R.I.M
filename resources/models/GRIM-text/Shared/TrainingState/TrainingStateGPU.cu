@@ -48,14 +48,14 @@ TrainingState::~TrainingState() {
 	// Issue #60: Free debug gradient attribution buffers
 	freeDebugGradBuffers();
 	
-	// Issue #60 FIX: Free PCGrad buffer for tied weights
-	freePCGradBuffer();
-	
 	// Free ScratchBlockPool (pinned memory blocks)
 	if (scratch_pool) {
 		delete scratch_pool;
 		scratch_pool = nullptr;
 	}
+	
+	// Free gradient norm scratch buffers
+	GradNorm::freeGradNormScratch(grad_norm_scratch);
 	
 	// StreamController owns and destroys streams - no manual cleanup needed
 	if (cublas_handle) cublasDestroy(cublas_handle);
@@ -282,14 +282,8 @@ void TrainingState::initializeAutogradSeed(uint64_t seed) {
 
 void TrainingState::zeroIntermediateGrads(cudaStream_t stream) {
 	// RULE 20: Fail loud on NULL stream - it causes race conditions
-	StreamController::fatalIfDefaultStream(stream, "TrainingState::zeroIntermediateGrads");
-	
-	// Zero all intermediate gradient tensors at start of accumulation window
-	// NOTE: Only zero tensors that are actually allocated (data != nullptr)
-	
-	// BUG FIX Issue #45: zero_grad() zeros tensor.grad, but intermediate gradient tensors
-	// store their gradient DATA in tensor.data (NOT tensor.grad)!
-	// Must use cudaMemsetAsync on tensor.data instead.
+	StreamController::fatalIfDefaultStream(stream, "FATAL:TrainingState::zeroIntermediateGrads Default stream detected!");
+
 	auto safe_zero = [stream](Tensor& t, const char* name) {
 		if (t.data && t.numel() > 0) {
 			// Zero the DATA field, not the grad field!
@@ -322,39 +316,6 @@ void TrainingState::zeroIntermediateGrads(cudaStream_t stream) {
 //  ISSUE #60 FIX: PCGrad Buffer for Tied Weights (Tensor-based)
 //======================================================//
 
-void TrainingState::allocatePCGradBuffer(int vocab_size, int d_model, cudaStream_t stream) {
-	if (pcgrad_temp_buffer.data) {
-		freePCGradBuffer();
-	}
-	
-	// Rule 22: getPrimaryStream() throws if not initialized (Rule 20)
-	cudaStream_t primary_stream = stream ? stream : stream_ctrl.getPrimaryStream();
-	
-	// Allocate as Tensor [vocab_size, d_model]
-	pcgrad_temp_buffer = Tensor::zeros({vocab_size, d_model}, primary_stream, "pcgrad_temp_buffer");
-	
-	// Set global pointers for EmbeddingGradFn to use
-	extern float* g_pcgrad_temp_buffer;
-	extern size_t g_pcgrad_buffer_size;
-	g_pcgrad_temp_buffer = pcgrad_temp_buffer.data;
-	g_pcgrad_buffer_size = static_cast<size_t>(vocab_size) * d_model;
-	
-	fprintf(stdout, "[PCGRAD] Allocated PCGrad buffer: %zu elements (%zu MB)\n",
-	        g_pcgrad_buffer_size, g_pcgrad_buffer_size * sizeof(float) / (1024 * 1024));
-}
-
-void TrainingState::freePCGradBuffer() {
-	if (pcgrad_temp_buffer.data) {
-		// Clear global pointers BEFORE releasing tensor
-		extern float* g_pcgrad_temp_buffer;
-		extern size_t g_pcgrad_buffer_size;
-		g_pcgrad_temp_buffer = nullptr;
-		g_pcgrad_buffer_size = 0;
-		
-		// Tensor::release() called via default destruction or explicit clear
-		pcgrad_temp_buffer = Tensor();  // Replace with empty tensor
-	}
-}
 
 //======================================================//
 //  DEBUG: Gradient Attribution Buffers (Issue #60) - Tensor-based
@@ -441,7 +402,7 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream, c
 		lm_sum += lm_grad_tracked[i];
 		lm_sq_sum += lm_grad_tracked[i] * lm_grad_tracked[i];
 	}
-	const float lm_norm = sqrtf(lm_sq_sum);
+	const float lm_rms = sqrtf(lm_sq_sum / d_model);
 	
 	// Compute statistics for raw embedding gradient (pre-projection)
 	float raw_emb_sum = 0, raw_emb_sq_sum = 0;
@@ -449,7 +410,7 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream, c
 		raw_emb_sum += raw_emb_grad_tracked[i];
 		raw_emb_sq_sum += raw_emb_grad_tracked[i] * raw_emb_grad_tracked[i];
 	}
-	const float raw_emb_norm = sqrtf(raw_emb_sq_sum);
+	const float raw_emb_rms = sqrtf(raw_emb_sq_sum / d_model);
 	
 	// Compute statistics for FINAL gradient (post-PCGrad)
 	float final_sum = 0, final_sq_sum = 0;
@@ -457,7 +418,7 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream, c
 		final_sum += final_grad_tracked[i];
 		final_sq_sum += final_grad_tracked[i] * final_grad_tracked[i];
 	}
-	const float final_norm = sqrtf(final_sq_sum);
+	const float final_rms = sqrtf(final_sq_sum / d_model);
 	
 	// Compute cosine similarity between LM and raw embedding gradients
 	float lm_emb_dot = 0;
@@ -467,31 +428,32 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream, c
 	
 	const char* interaction;
 	float cosine_sim;
-	if (lm_norm < 1e-8f || raw_emb_norm < 1e-8f) {
-		// Near-zero norm means no meaningful gradient — log it explicitly
+	if (lm_rms < 1e-8f || raw_emb_rms < 1e-8f) {
+		// Near-zero rms means no meaningful gradient — log it explicitly
 		cosine_sim = 0.0f;
-		interaction = "DEGENERATE_NORM";
-		fprintf(stderr, "[GRAD_ATTRIB_COLLAPSE] [ANOMALY] Near-zero gradient norm! "
-			"lm_norm=%.10e raw_emb_norm=%.10e — gradient is effectively zero\n",
-			lm_norm, raw_emb_norm);
+		interaction = "DEGENERATE_RMS";
+		fprintf(stderr, "[GRAD_ATTRIB_COLLAPSE] [ANOMALY] Near-zero gradient rms! "
+			"lm_rms=%.10e raw_emb_rms=%.10e — gradient is effectively zero\n",
+			lm_rms, raw_emb_rms);
 	} else {
-		cosine_sim = lm_emb_dot / (lm_norm * raw_emb_norm);
+		// cos = dot / (rms_a * rms_b * d_model) — equivalent to dot / (||a|| * ||b||)
+		cosine_sim = lm_emb_dot / (lm_rms * raw_emb_rms * d_model);
 		interaction = (cosine_sim > 0.5f) ? "REINFORCING" 
 		            : (cosine_sim < -0.5f) ? "CANCELING" 
 		            : "ORTHOGONAL";
 	}
 	
 	// Check if PCGrad preserved the gradient (final should ≈ lm when emb opposes)
-	const char* pcgrad_status = (final_norm > lm_norm * 0.5f) ? "PRESERVED" : "LOST";
+	const char* pcgrad_status = (final_rms > lm_rms * 0.5f) ? "PRESERVED" : "LOST";
 	
 	fprintf(stdout, "\n[GRAD_ATTRIB_COLLAPSE] batch=%d token=%d gradient conflict analysis:\n", batch_idx, tracked_token);
-	fprintf(stdout, "  ├─ LM_HEAD_GRAD:        sum=%+.10f  norm=%.10f  mean=%+.10e\n", 
-	        lm_sum, lm_norm, lm_sum / d_model);
-	fprintf(stdout, "  ├─ EMBEDDING_RAW_GRAD:  sum=%+.10f  norm=%.10f  mean=%+.10e\n", 
-	        raw_emb_sum, raw_emb_norm, raw_emb_sum / d_model);
+	fprintf(stdout, "  ├─ LM_HEAD_GRAD:        sum=%+.10f  rms=%.10f  mean=%+.10e\n", 
+	        lm_sum, lm_rms, lm_sum / d_model);
+	fprintf(stdout, "  ├─ EMBEDDING_RAW_GRAD:  sum=%+.10f  rms=%.10f  mean=%+.10e\n", 
+	        raw_emb_sum, raw_emb_rms, raw_emb_sum / d_model);
 	fprintf(stdout, "  ├─ COSINE_SIMILARITY:   %.10f [%s]\n", cosine_sim, interaction);
-	fprintf(stdout, "  ├─ FINAL_GRAD_POSTPCGR: sum=%+.10f  norm=%.10f  mean=%+.10e [%s]\n", 
-	        final_sum, final_norm, final_sum / d_model, pcgrad_status);
+	fprintf(stdout, "  ├─ FINAL_GRAD_POSTPCGR: sum=%+.10f  rms=%.10f  mean=%+.10e [%s]\n", 
+	        final_sum, final_rms, final_sum / d_model, pcgrad_status);
 	fprintf(stdout, "  └─ UPDATE_DIRECTION:    LM→%s  EMB→%s  (W_new = W - lr*grad)\n",
 	        lm_sum > 0 ? "DECREASE" : "INCREASE",
 	        raw_emb_sum > 0 ? "DECREASE" : "INCREASE");

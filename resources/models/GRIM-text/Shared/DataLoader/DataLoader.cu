@@ -251,7 +251,7 @@ bool PrepareTrainingDataFromCache(
 		// Read vocab size from GRMT file
 		std::ifstream grmt_file(out_training_data_path, std::ios::binary);
 		if (grmt_file.is_open()) {
-			constexpr uint32_t kExpectedGrmtVersion = 5;  // GRMT v5: pre-computed targets
+	constexpr uint32_t kExpectedGrmtVersion = 7;  // GRMT v7: unified atom mask
 			uint32_t magic = 0, version = 0, num_sequences = 0, grmt_vocab_size = 0;
 			grmt_file.read(reinterpret_cast<char*>(&magic), 4);
 			grmt_file.read(reinterpret_cast<char*>(&version), 4);
@@ -462,11 +462,13 @@ bool PrepareTrainingDataFromCache(
 
 	struct TokenizedSequence {
 		std::vector<int> token_ids;
-		std::vector<int> targets;  // GRMT v5: pre-computed targets (shifted token_ids with masking)
+		std::vector<int> targets;  // GRMT v7: pre-computed targets (shifted token_ids with masking)
 		std::vector<float> numeric_values;
-		std::vector<uint8_t> numeric_mask;
+		std::vector<uint32_t> atom_flags;     // Per-token type-specific flags from AtomTable
 		std::vector<uint16_t> text_features;  // [tokens * kTextFeatureDim] FP16
-		std::vector<uint8_t> text_feature_mask;  // Per-token mask
+		std::vector<uint8_t> atom_mask;       // Unified per-token atom mask
+		std::shared_ptr<GRIM::Tokenizer::AtomTable> atom_table;  // Per-sequence atom registry
+		std::vector<uint32_t> atom_entry_ids;  // Per-token index into atom_table
 	};
 
 	// BOS/EOS are NOT added here — Phase1_Startup owns boundary token
@@ -485,17 +487,20 @@ bool PrepareTrainingDataFromCache(
 			TokenizedSequence seq;
 			seq.token_ids = std::move(result.token_ids);
 			seq.numeric_values = std::move(result.token_numeric_values);
-			seq.numeric_mask = std::move(result.token_numeric_mask);
+			seq.atom_flags = std::move(result.token_atom_flags);
 			seq.text_features = std::move(result.token_text_features);
-			seq.text_feature_mask = std::move(result.token_text_mask);
+			seq.atom_mask = std::move(result.token_atom_mask);
+			seq.atom_table = std::move(result.atom_table);
+			seq.atom_entry_ids = std::move(result.atom_entry_ids);
 			if (seq.numeric_values.size() != seq.token_ids.size() ||
-				seq.numeric_mask.size() != seq.token_ids.size() ||
+				seq.atom_flags.size() != seq.token_ids.size() ||
 				seq.text_features.size() != seq.token_ids.size() * GRIM::Tokenizer::kTextFeatureDim ||
-				seq.text_feature_mask.size() != seq.token_ids.size()) {
-				throw std::runtime_error("[DataLoader] Token/numeric side-channel length mismatch");
+				seq.atom_mask.size() != seq.token_ids.size() ||
+				seq.atom_entry_ids.size() != seq.token_ids.size()) {
+				throw std::runtime_error("[DataLoader] Token/side-channel length mismatch");
 			}
 
-			// GRMT v5: Pure next-token prediction targets.
+			// GRMT v6: Pure next-token prediction targets.
 			// target[j] = token_ids[j+1], last position = -1 (no next token).
 			// Phase1_Startup handles BOS/EOS insertion and target fixup around
 			// those boundary tokens.
@@ -622,7 +627,7 @@ bool PrepareTrainingDataFromCache(
 		}
 
 		uint32_t magic = 0x474D5254; // "GRMT"
-		uint32_t version = 5;  // GRMT v5: pre-computed targets
+		uint32_t version = 8;  // GRMT v8: atom_flags side channel
 		uint32_t num_sequences = static_cast<uint32_t>(valid_seq_count);
 		// CRITICAL: Use totalVocabSize() to include byte (256) + atom (256) + unigram tokens
 		uint32_t vocab_size = static_cast<uint32_t>(tokenizer.totalVocabSize());
@@ -648,12 +653,27 @@ bool PrepareTrainingDataFromCache(
 					len * sizeof(int));
 			file.write(reinterpret_cast<const char*>(seq.numeric_values.data()),
 					len * sizeof(float));
-			file.write(reinterpret_cast<const char*>(seq.numeric_mask.data()),
+			file.write(reinterpret_cast<const char*>(seq.atom_mask.data()),
 					len * sizeof(uint8_t));
 			file.write(reinterpret_cast<const char*>(seq.text_features.data()),
 					len * GRIM::Tokenizer::kTextFeatureDim * sizeof(uint16_t));
-			file.write(reinterpret_cast<const char*>(seq.text_feature_mask.data()),
-					len * sizeof(uint8_t));
+			// GRMT v8: atom_flags (type-specific metadata from AtomTable)
+			file.write(reinterpret_cast<const char*>(seq.atom_flags.data()),
+					len * sizeof(uint32_t));
+			// GRMT v6: atom text (length-prefixed strings per token, reconstructed from AtomTable)
+			for (uint32_t j = 0; j < len; ++j) {
+				std::string s;
+				if (seq.atom_table &&
+					seq.atom_entry_ids[j] != GRIM::Tokenizer::kAtomEntryNone) {
+					const auto* entry = seq.atom_table->getAtom(seq.atom_entry_ids[j]);
+					if (entry) { s = seq.atom_table->atomToString(*entry); }
+				}
+				uint16_t slen = static_cast<uint16_t>(std::min<size_t>(s.size(), 65535));
+				file.write(reinterpret_cast<const char*>(&slen), sizeof(uint16_t));
+				if (slen > 0) {
+					file.write(s.data(), slen);
+				}
+			}
 		}
 		return file.good();
 	};

@@ -54,6 +54,7 @@ constexpr int DEFAULT_NUM_HEADS = 12;
 constexpr int DEFAULT_D_FF_MULTIPLIER = 4;  // d_ff = d_model * multiplier
 constexpr int DEFAULT_MAX_SEQ_LEN = 2048;
 constexpr float DEFAULT_DROPOUT_RATE = 0.1f;
+constexpr float DEFAULT_RESIDUAL_DROPOUT_RATE = 0.1f;
 constexpr float DEFAULT_ATTENTION_DROPOUT = 0.1f;
 
 // Derived model constants
@@ -197,23 +198,6 @@ constexpr int FLASH_ATTN_HEAD_DIM_64 = DEFAULT_HEAD_DIM;  // Primary supported h
 // Standard value is 1.0 (no scaling). Lower values sharpen attention (risk saturation).
 // Higher values spread attention more evenly (risk over-smoothing).
 constexpr float SOFTMAX_TEMPERATURE = 1.0f;
-
-// QK-Normalization: Normalize Q and K vectors to unit L2 norm before computing scores
-// This prevents attention saturation when embeddings have large magnitudes
-// Used by Gemma, ViT-22B, and other modern architectures
-// 
-// ❌ DISABLED - Extensive testing (Dec 22-27, 2025) showed QK-normalization does NOT fix
-// training plateau. Loss still stalls at ~8.3-8.8 with this enabled. See:
-// docs/PLATEAU_BUG_INVESTIGATION.md "🚫 CRITICAL: QK-NORMALIZATION DOES NOT FIX PLATEAU"
-constexpr bool QK_NORMALIZATION_ENABLED = false;  // Master switch for QK-normalization
-constexpr float QK_NORM_SCALE = 1.0f;  // Default scale factor (like sqrt(head_dim) but tunable)
-
-// Learnable per-head QK-norm scales (nGPT-style)
-// When enabled, each attention head has learnable alpha_q and alpha_k parameters
-// Forward: q̂ = alpha_q * (q / ||q||), k̂ = alpha_k * (k / ||k||)
-// This buffers the 1/||q|| division and allows heads to learn different scales
-constexpr bool QK_NORM_LEARNABLE_SCALE = true;
-constexpr float QK_NORM_ALPHA_INIT = 1.0f;  // Initial value for alpha_q and alpha_k
 
 //======================================================//
 // Positional Bias Method (PBM) Configuration
@@ -370,6 +354,7 @@ struct ModelArchitecture {
     int d_ff = DEFAULT_D_FF;
     int max_seq_len = DEFAULT_MAX_SEQ_LEN;
     float dropout_rate = DEFAULT_DROPOUT_RATE;
+    float residual_dropout_rate = DEFAULT_RESIDUAL_DROPOUT_RATE;
     float attention_dropout = DEFAULT_ATTENTION_DROPOUT;
     bool tie_embeddings = true;  // Weight tying: share embedding/LM head weights
     PositionalEncodingType positional_encoding = DEFAULT_POSITIONAL_ENCODING;
@@ -689,6 +674,7 @@ inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& co
     arch.d_ff = DEFAULT_D_FF;
     arch.max_seq_len = DEFAULT_MAX_SEQ_LEN;
     arch.dropout_rate = DEFAULT_DROPOUT_RATE;
+    arch.residual_dropout_rate = DEFAULT_RESIDUAL_DROPOUT_RATE;
     arch.attention_dropout = DEFAULT_ATTENTION_DROPOUT;
     
     // Try to load from config
@@ -729,6 +715,9 @@ inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& co
         }
         if (cfg.contains("dropout_rate") && cfg["dropout_rate"].is_number()) {
             arch.dropout_rate = cfg["dropout_rate"].get<float>();
+        }
+        if (cfg.contains("residual_dropout_rate") && cfg["residual_dropout_rate"].is_number()) {
+            arch.residual_dropout_rate = cfg["residual_dropout_rate"].get<float>();
         }
         if (cfg.contains("attention_dropout") && cfg["attention_dropout"].is_number()) {
             arch.attention_dropout = cfg["attention_dropout"].get<float>();
@@ -796,6 +785,7 @@ inline void printModelArchitecture(const ModelArchitecture& arch) {
     std::cout << "  d_ff: " << arch.d_ff << std::endl;
     std::cout << "  max_seq_len: " << arch.max_seq_len << std::endl;
     std::cout << "  dropout_rate: " << arch.dropout_rate << std::endl;
+    std::cout << "  residual_dropout_rate: " << arch.residual_dropout_rate << std::endl;
     std::cout << "  attention_dropout: " << arch.attention_dropout << std::endl;
 }
 

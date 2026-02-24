@@ -1,6 +1,13 @@
 //======================================================//
 //  causality_proof_tests.cu
 //  
+//  ⚠️ NOT BUILT — Not in CMakeLists.txt.
+//  ⚠️ BROKEN — Uses deleted LanguageModel::backward()/zeroGrad(),
+//     forwardGPU() inference path (no autograd graph), and
+//     deleted LanguageModel::gradientMetrics().
+//  ⚠️ NEEDS FULL REWRITE to use autogradTrainingStep() + BatchPayload
+//     + GradNorm::measureGradientNorms() for gradient metrics.
+//  
 //  Definitive proof tests for GRIM-text training correctness.
 //  6 levels of verification - if any fail, generation is impossible.
 //  
@@ -14,6 +21,7 @@
 
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
+#include "../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -236,16 +244,16 @@ TestResult level2_causal_mask_correctness(GRIM::LanguageModel* model, GRIM::Toke
     GRIM::Vector logits_modified = model->forwardGPU(modified_token, modified_numeric.values, modified_numeric.mask);
     
     // Logits should be different
-    float diff_norm = 0.0f;
+    float diff_rms = 0.0f;
     for (size_t i = 0; i < logits_pos0.data.size(); ++i) {
         float d = logits_pos0.data[i] - logits_modified.data[i];
-        diff_norm += d * d;
+        diff_rms += d * d;
     }
-    diff_norm = std::sqrt(diff_norm);
+    diff_rms = std::sqrt(diff_rms / logits_pos0.data.size());
     
-    PROOF_LOG("Logits difference when changing input: " + std::to_string(diff_norm));
+    PROOF_LOG("Logits difference RMS when changing input: " + std::to_string(diff_rms));
     
-    PROOF_ASSERT(diff_norm > 1e-6f, 
+    PROOF_ASSERT(diff_rms > 1e-8f, 
                  "FATAL: Logits unchanged when input changes - causal mask broken!");
     
     // Test: Verify model can't see position t when predicting position t
@@ -295,17 +303,18 @@ TestResult level3_gradient_reaches_embeddings(GRIM::LanguageModel* model, GRIM::
     model->backward(loss, false, 1.0f);
     
     // Get gradient metrics
-    const auto& grad_metrics = model->gradientMetrics();
+    // TODO(REWRITE): Use GradNorm::measureGradientNorms() instead of deleted gradientMetrics()
+    const auto& gm = model->gradientMetrics(); // BROKEN: method deleted
     
-    PROOF_LOG("Embedding gradient norm: " + std::to_string(grad_metrics.embedding_norm));
-    PROOF_LOG("LM head gradient norm: " + std::to_string(grad_metrics.lm_head_norm));
-    PROOF_LOG("Attention gradient norm: " + std::to_string(grad_metrics.attention_norm));
-    PROOF_LOG("FFN gradient norm: " + std::to_string(grad_metrics.ffn_norm));
+    PROOF_LOG("Embedding gradient RMS: " + std::to_string(GRIM::GradNorm::GradMetrics::rms(gm.embedding_sum_sq, gm.embedding_count)));
+    PROOF_LOG("LM head gradient RMS: " + std::to_string(GRIM::GradNorm::GradMetrics::rms(gm.lm_head_sum_sq, gm.lm_head_count)));
+    PROOF_LOG("Attention gradient RMS: " + std::to_string(GRIM::GradNorm::GradMetrics::rms(gm.attention_sum_sq, gm.attention_count)));
+    PROOF_LOG("FFN gradient RMS: " + std::to_string(GRIM::GradNorm::GradMetrics::rms(gm.ffn_sum_sq, gm.ffn_count)));
     
-    PROOF_ASSERT(grad_metrics.embedding_norm > 1e-10f, 
+    PROOF_ASSERT(gm.embedding_sum_sq > 1e-20f, 
                  "FATAL: Embedding gradient is zero - gradients not reaching embeddings!");
     
-    PROOF_ASSERT(grad_metrics.lm_head_norm > 1e-10f, 
+    PROOF_ASSERT(gm.lm_head_sum_sq > 1e-20f, 
                  "FATAL: LM head gradient is zero - loss not connected!");
     
     // The embedding gradient for the target token should be non-zero
@@ -378,7 +387,10 @@ TestResult level4_learning_changes_logits(GRIM::LanguageModel* model, GRIM::Toke
     GRIM::OptimizerState opt_state;
     opt_state.initialized = false;  // Will be initialized by updateWeights
     
-    model->updateWeights(test_lr, &opt_state);
+    GRIM::launchAdamWStep(model->parameterGroups(), test_lr,
+                          GRIM::HyperParameters::ADAMW_WEIGHT_DECAY,
+                          opt_state.step,
+                          model->getTrainingState().stream_ctrl.getPrimaryStream());
     
     // 5. Get logits AFTER training
     auto after_numeric = makeNumericSideChannel(input_tokens.size());
@@ -452,12 +464,13 @@ TestResult level5_tokenizer_loss_alignment(GRIM::LanguageModel* model, GRIM::Tok
         model->forwardGPU(tokens, numeric.values, numeric.mask);
         model->backward(1.0f, false, 1.0f);
         
-        const auto& grad_metrics = model->gradientMetrics();
+        // TODO(REWRITE): Use GradNorm::measureGradientNorms() instead of deleted gradientMetrics()
+        const auto& gm = model->gradientMetrics(); // BROKEN: method deleted
         
-        PROOF_LOG("Embedding gradient norm after byte/unicode input: " + 
-                  std::to_string(grad_metrics.embedding_norm));
+        PROOF_LOG("Embedding gradient RMS after byte/unicode input: " + 
+                  std::to_string(GRIM::GradNorm::GradMetrics::rms(gm.embedding_sum_sq, gm.embedding_count)));
         
-        PROOF_ASSERT(grad_metrics.embedding_norm > 1e-10f, 
+        PROOF_ASSERT(gm.embedding_sum_sq > 1e-20f, 
                      "FATAL: No gradient for byte/unicode tokens!");
     }
     
@@ -475,12 +488,13 @@ TestResult level5_tokenizer_loss_alignment(GRIM::LanguageModel* model, GRIM::Tok
         model->forwardGPU(number_tokens, numeric.values, numeric.mask);
         model->backward(1.0f, false, 1.0f);
         
-        const auto& grad_metrics = model->gradientMetrics();
+        // TODO(REWRITE): Use GradNorm::measureGradientNorms() instead of deleted gradientMetrics()
+        const auto& gm = model->gradientMetrics(); // BROKEN: method deleted
         
-        PROOF_LOG("Embedding gradient norm after number input: " + 
-                  std::to_string(grad_metrics.embedding_norm));
+        PROOF_LOG("Embedding gradient RMS after number input: " + 
+                  std::to_string(GRIM::GradNorm::GradMetrics::rms(gm.embedding_sum_sq, gm.embedding_count)));
         
-        PROOF_ASSERT(grad_metrics.embedding_norm > 1e-10f, 
+        PROOF_ASSERT(gm.embedding_sum_sq > 1e-20f, 
                      "FATAL: No gradient for atom tokens!");
     }
     
@@ -544,7 +558,10 @@ TestResult level6_autoregressive_emergence(GRIM::LanguageModel* model, GRIM::Tok
         model->backward(loss, false, 1.0f / tokens.size());
         
         // Update
-        model->updateWeights(lr, &opt_state);
+        GRIM::launchAdamWStep(model->parameterGroups(), lr,
+                              GRIM::HyperParameters::ADAMW_WEIGHT_DECAY,
+                              opt_state.step,
+                              model->getTrainingState().stream_ctrl.getPrimaryStream());
         
         if ((step + 1) % 20 == 0) {
             PROOF_LOG("Step " + std::to_string(step + 1) + "/" + std::to_string(num_steps));

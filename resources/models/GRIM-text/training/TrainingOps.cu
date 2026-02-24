@@ -152,12 +152,9 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
         if (cfg.use_scratch_block) {
             constexpr int NUM_ATOM_TYPES = HyperParameters::NUM_ATOM_TYPES;
             const int atom_dim = cfg.scratch_block_atom_embedding_dim;
-            constexpr int kTextFeatureDim = 16;  // Matches ScratchBlockReasoning_GPU.cu
             est_encoder += static_cast<size_t>(NUM_ATOM_TYPES) * atom_dim;  // atom_type_embeddings
             est_encoder += static_cast<size_t>(atom_dim) * cfg.d_model;     // atom_projection
-            est_encoder += static_cast<size_t>(kTextFeatureDim) * cfg.d_model; // text_feature_projection
-            est_encoder += cfg.d_model;  // value_extraction_weight
-            est_encoder += 1;            // value_extraction_bias
+            // text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
         }
 
         const size_t est_total = est_embedding + est_position_embedding + est_encoder + est_lm_head;
@@ -190,13 +187,10 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
     if (config_.use_scratch_block) {
         constexpr int NUM_ATOM_TYPES = HyperParameters::NUM_ATOM_TYPES;
         const int atom_dim = config_.scratch_block_atom_embedding_dim;
-        constexpr int kTextFeatureDim = 16;
         stats.scratchblock_params =
             static_cast<size_t>(NUM_ATOM_TYPES) * atom_dim +
-            static_cast<size_t>(atom_dim) * config_.d_model +
-            static_cast<size_t>(kTextFeatureDim) * config_.d_model +
-            config_.d_model +  // value_extraction_weight
-            1;                 // value_extraction_bias
+            static_cast<size_t>(atom_dim) * config_.d_model;
+            // text_feature_projection ELIMINATED — merged into atom embeddings
         // NOTE: scratchblock_params NOT added to total_params — already in encoder_params
     }
 

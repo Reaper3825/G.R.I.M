@@ -220,10 +220,7 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden) {
         // h̃[t] = h[t] - (h[t]·g)*g  where g = PC1(H), g treated as stop-gradient
         // Backward: grad_h = (I - gg^T) * grad_h̃
         // Returns non-owning view — input tensor's buffer is modified in-place
-        fprintf(stderr, "[LM_HEAD] About to call project_out_pc1 (in-place)...\n"); fflush(stderr);
         out_centered_hidden = autograd::project_out_pc1(*current_input, config_.pc1_power_iters, stream);
-        fprintf(stderr, "[LM_HEAD] project_out_pc1 returned. data=%p owns_data=%d\n",
-                (void*)out_centered_hidden.data, (int)out_centered_hidden.owns_data); fflush(stderr);
         matmul_input = &out_centered_hidden;
     } else {
         out_centered_hidden = Tensor();  // No centering, clear output
@@ -237,37 +234,9 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden) {
     //     grad_input  = grad_output @ weights      (for backward to encoder)
     //     grad_weights = lm_input^T @ grad_output  (for weight update)
     // ════════════════════════════════════════════════════════════════════
-    fprintf(stderr, "[LM_HEAD] STEP 2: About to set weights shape and call matmul. matmul_input->data=%p\n",
-            (void*)matmul_input->data); fflush(stderr);
     weights_.requires_grad = true;
     weights_.shape = TensorContract::TensorShape::make_BSM(config_.vocab_size, config_.d_model);
-    fprintf(stderr, "[LM_HEAD] weights set: data=%p shape=%dx%d\n",
-            (void*)weights_.data, config_.vocab_size, config_.d_model); fflush(stderr);
 
-    // Validate inputs before matmul
-    fprintf(stderr, "[LM_HEAD] matmul_input: data=%p rows=%d cols=%d requires_grad=%d is_leaf=%d grad_fn=%p\n",
-            (void*)matmul_input->data,
-            (int)matmul_input->shape.as_2d().rows, (int)matmul_input->shape.as_2d().cols,
-            (int)matmul_input->requires_grad, (int)matmul_input->is_leaf,
-            (void*)matmul_input->grad_fn.get()); fflush(stderr);
-    fprintf(stderr, "[LM_HEAD] weights: data=%p rows=%d cols=%d requires_grad=%d is_leaf=%d\n",
-            (void*)weights_.data,
-            (int)weights_.shape.as_2d().rows, (int)weights_.shape.as_2d().cols,
-            (int)weights_.requires_grad, (int)weights_.is_leaf); fflush(stderr);
-
-    // Check CUDA state before matmul
-    cudaError_t pre_err = cudaGetLastError();
-    if (pre_err != cudaSuccess) {
-        fprintf(stderr, "[LM_HEAD] CUDA ERROR before matmul: %s\n", cudaGetErrorString(pre_err)); fflush(stderr);
-    }
-
-    // Check available GPU memory
-    size_t free_mem = 0, total_mem = 0;
-    cudaMemGetInfo(&free_mem, &total_mem);
-    fprintf(stderr, "[LM_HEAD] GPU memory before matmul: free=%zuMB total=%zuMB\n",
-            free_mem / (1024*1024), total_mem / (1024*1024)); fflush(stderr);
-
-    fprintf(stderr, "[LM_HEAD] Calling autograd::matmul...\n"); fflush(stderr);
     Tensor logits = autograd::matmul(
         *matmul_input,
         weights_,
@@ -276,9 +245,6 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden) {
         nullptr,
         true  // transpose_b=true: logits = input @ W^T
     );
-    fprintf(stderr, "[LM_HEAD] matmul returned: logits.data=%p numel=%zu\n",
-            (void*)logits.data, logits.numel()); fflush(stderr);
-
     // Validate output shape
     const auto expected_shape = TensorContract::TensorShape::make_LOGITS(total_tokens, config_.vocab_size);
     const size_t logits_elements = logits.shape.total_elements();

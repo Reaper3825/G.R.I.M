@@ -236,29 +236,11 @@ bool LanguageModel::save(const std::string& path) {
                 static_cast<std::size_t>(atom_emb_dim * config_.d_model);
         }
         
-        // Text feature projection [16 x d_model] - VALUE encoding path
-        constexpr int kTextFeatureDim = 16;
-        if (scratch_block_layer_->textFeatureProjection().data) {
-            request.sources.scratch_block.text_feature_projection.ptr = scratch_block_layer_->textFeatureProjection().data;
-            request.sources.scratch_block.text_feature_projection.count = 
-                static_cast<std::size_t>(kTextFeatureDim * config_.d_model);
-        }
-
-        // Value extraction head [d_model] weight + [1] bias
-        if (scratch_block_layer_->valueExtractionWeight().data) {
-            request.sources.scratch_block.value_extraction_weight.ptr = scratch_block_layer_->valueExtractionWeight().data;
-            request.sources.scratch_block.value_extraction_weight.count =
-                static_cast<std::size_t>(config_.d_model);
-        }
-        if (scratch_block_layer_->valueExtractionBias().data) {
-            request.sources.scratch_block.value_extraction_bias.ptr = scratch_block_layer_->valueExtractionBias().data;
-            request.sources.scratch_block.value_extraction_bias.count = 1;
-        }
+        // text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
         
         EmitModuleInfo(ModuleId::Checkpoint, "Processing ScratchBlock (atom_emb=" + 
                        std::to_string(request.sources.scratch_block.atom_type_embeddings.count) +
-                       ", atom_proj=" + std::to_string(request.sources.scratch_block.atom_projection.count) +
-                       ", text_proj=" + std::to_string(request.sources.scratch_block.text_feature_projection.count) + ")");
+                       ", atom_proj=" + std::to_string(request.sources.scratch_block.atom_projection.count) + ")");
     }
 
     // Issue #33: Final RMSNorm gamma (normalizes encoder output before LM head) — owned by LMHeadLayer
@@ -382,25 +364,8 @@ bool LanguageModel::load(const std::string& path) {
                         static_cast<std::size_t>(atom_emb_dim * config_.d_model));
         }
         
-        // Text feature projection [16 x d_model] - VALUE encoding path
-        constexpr int kTextFeatureDim = 16;
-        if (scratch_block_layer_->textFeatureProjection().data) {
-            assignWrite(request.scratch_block.text_feature_projection,
-                        scratch_block_layer_->textFeatureProjection().data,
-                        static_cast<std::size_t>(kTextFeatureDim * config_.d_model));
-        }
-
-        // Value extraction head [d_model] weight + [1] bias
-        if (scratch_block_layer_->valueExtractionWeight().data) {
-            assignWrite(request.scratch_block.value_extraction_weight,
-                        scratch_block_layer_->valueExtractionWeight().data,
-                        static_cast<std::size_t>(config_.d_model));
-        }
-        if (scratch_block_layer_->valueExtractionBias().data) {
-            assignWrite(request.scratch_block.value_extraction_bias,
-                        scratch_block_layer_->valueExtractionBias().data,
-                        1);
-        }
+        // text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
+        // Old checkpoints may contain text_feature_projection — silently ignored on load.
         
         request.scratch_block.num_atom_types = kNumAtomTypes;
         request.scratch_block.atom_embedding_dim = atom_emb_dim;

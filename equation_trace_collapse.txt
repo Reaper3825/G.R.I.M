@@ -743,15 +743,3 @@ WHY TOKEN 36 STILL EMERGES (SLOWER):
 
   Removing PC1 is like removing one head of a hydra — more grow back.
 
-CONCLUSION:
-
-  project_out_pc1 is INSUFFICIENT because:
-  1. It doesn't prevent the encoder from building correlated representations
-  2. It crushes logit magnitude (||h̃|| → 0 as PC1 absorbs variance)
-  3. The collapse mechanism operates in ALL rank-k subspaces, not just PC1
-  4. Loss improvement is negligible (0.7% vs 22% without PC1)
-
-  The ROOT CAUSE is the encoder's tendency to produce aligned hidden states
-  through 12 layers of causal attention + shared weights. The fix must be
-  INSIDE the encoder (e.g., per-layer decorrelation, spectral normalization,
-  or architectural changes to break the alignment feedback loop).

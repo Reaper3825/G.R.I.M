@@ -349,9 +349,9 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             *ctx.scratch_block,
             reinterpret_cast<const int*>(ts->cached_token_ids_tensor.data),
             ts->cached_token_numeric_values.data,
-            reinterpret_cast<const uint8_t*>(ts->cached_token_numeric_mask.data),
             reinterpret_cast<const uint16_t*>(ts->cached_token_text_features.data),
-            reinterpret_cast<const uint8_t*>(ts->cached_token_text_mask.data),
+            reinterpret_cast<const uint8_t*>(ts->cached_token_atom_mask.data),
+            reinterpret_cast<const uint32_t*>(ts->cached_token_atom_flags.data),
             total_tokens,
             ctx.stream);
         
@@ -396,7 +396,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         // (Issue #103), same tokens at different positions have IDENTICAL
         // embeddings, causing avg_cos to approach 1.0 as token repetition increases.
         //
-        // EQUATION: cosine(h_i, h_j) = (h_i · h_j) / (||h_i|| * ||h_j||)
+        // EQUATION: cosine(h_i, h_j) = (h_i · h_j) / (h_rms_i * h_rms_j * d_model)
         // EXPECTED: avg_cos ≈ 1/sqrt(d_model) ≈ 0.036 for random orthogonal vectors
         // ANOMALY: avg_cos > 0.5 indicates high correlation (representational collapse)
         // ═══════════════════════════════════════════════════════════════════════
@@ -405,15 +405,15 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             const int sample_pairs = std::min(50, total_tokens / 2);  // Sample pairs for efficiency
             
             if (sample_pairs >= 2) {
-                // Compute norms for each position
-                std::vector<float> row_norms(total_tokens);
+                // Compute RMS for each position
+                std::vector<float> row_rms(total_tokens);
                 for (int t = 0; t < total_tokens; t++) {
                     double norm_sq = 0.0;
                     for (int d = 0; d < d_model; d++) {
                         float v = h_emb[t * d_model + d];
                         norm_sq += v * v;
                     }
-                    row_norms[t] = sqrtf(norm_sq);
+                    row_rms[t] = sqrtf(norm_sq / d_model);
                 }
                 
                 // Compute pairwise cosine similarity for sampled pairs
@@ -427,7 +427,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 const int stride = std::max(1, total_tokens / sample_pairs);
                 for (int i = 0; i < total_tokens && num_pairs < sample_pairs; i += stride) {
                     int j = (i + total_tokens / 2) % total_tokens;  // Pair with distant position
-                    if (i == j || row_norms[i] < 1e-8f || row_norms[j] < 1e-8f) continue;
+                    if (i == j || row_rms[i] < 1e-8f || row_rms[j] < 1e-8f) continue;
                     
                     // Compute dot product h_i · h_j
                     double dot = 0.0;
@@ -435,7 +435,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                         dot += h_emb[i * d_model + d] * h_emb[j * d_model + d];
                     }
                     
-                    double cosine = dot / (row_norms[i] * row_norms[j]);
+                    double cosine = dot / (static_cast<double>(row_rms[i]) * row_rms[j] * d_model);
                     cos_sum += cosine;
                     cos_min = std::min(cos_min, cosine);
                     cos_max = std::max(cos_max, cosine);
@@ -456,11 +456,11 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                 const double avg_cos = (num_pairs > 0) ? cos_sum / num_pairs : 0.0;
                 const double expected_cos = 1.0 / sqrt(static_cast<double>(d_model));  // ~0.036 for d=768
                 
-                fprintf(stderr, "[EMBED_COSINE_EQUATION] BEFORE_ENCODER: cosine(h_i, h_j) = (h_i · h_j) / (||h_i|| * ||h_j||)\n");
-                fprintf(stderr, "  INPUT h (embeddings): shape=[%d, %d] row_norm_range=[%.6f, %.6f]\n",
+                fprintf(stderr, "[EMBED_COSINE_EQUATION] BEFORE_ENCODER: cosine(h_i, h_j) = (h_i · h_j) / (h_rms_i * h_rms_j * d_model)\n");
+                fprintf(stderr, "  INPUT h (embeddings): shape=[%d, %d] row_rms_range=[%.6f, %.6f]\n",
                         total_tokens, d_model, 
-                        *std::min_element(row_norms.begin(), row_norms.end()),
-                        *std::max_element(row_norms.begin(), row_norms.end()));
+                        *std::min_element(row_rms.begin(), row_rms.end()),
+                        *std::max_element(row_rms.begin(), row_rms.end()));
                 fprintf(stderr, "  PARAMETERS: sample_pairs=%d, stride=%d\n", num_pairs, stride);
                 fprintf(stderr, "  EXPECTED avg_cos = 1/sqrt(d_model)\n");
                 fprintf(stderr, "                    = 1/sqrt(%d)\n", d_model);
@@ -537,8 +537,17 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
         // Pass ctx.step for per-step attention/sublayer dropout seed generation
         // Sublayer dropout (post-attn-projection, post-FFN, FFN-activation) is now
         // handled INSIDE the encoder layer, matching standard transformer architecture.
-        // Post-whole-layer dropout REMOVED — it double-regularizes on top of sublayer dropout.
         Tensor layer_output = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, layer_storage, ctx.step, layer_idx);
+        
+        // Residual-stream dropout: applied to each layer's output BEFORE it becomes
+        // input to the next layer. This disrupts correlated direction buildup (ρ) across
+        // the residual stream that sublayer dropout alone cannot prevent.
+        // Seed varies by step AND layer to produce independent masks per layer per step.
+        if (cfg->residual_dropout_rate > 0.0f && ctx.is_training) {
+            const uint64_t residual_drop_seed = ctx.step * 2654435761ULL + 7000 + static_cast<uint64_t>(layer_idx) * 131;
+            layer_output = autograd::dropout(layer_output, cfg->residual_dropout_rate,
+                                             residual_drop_seed, ctx.is_training, ctx.stream);
+        }
         
         intermediates.encoder_layer_outputs.push_back(std::move(layer_output));
     }
@@ -699,10 +708,11 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             }
             
             // Compute cosine similarity between h and W[argmax]
-            float h_norm = std::sqrt(h_sum_sq);
-            float w_norm = std::sqrt(w_sum_sq);
-            float cosine_sim = (h_norm > 1e-8f && w_norm > 1e-8f) 
-                               ? (dot_product_argmax / (h_norm * w_norm)) : 0.0f;
+            // cos = dot / (rms_h * rms_w * d_model)  [equivalent to dot / (||h|| * ||w||)]
+            float h_rms_val = std::sqrt(h_sum_sq / d_model);
+            float w_rms_val = std::sqrt(w_sum_sq / d_model);
+            float cosine_sim = (h_rms_val > 1e-8f && w_rms_val > 1e-8f) 
+                               ? (dot_product_argmax / (h_rms_val * w_rms_val * d_model)) : 0.0f;
             
             fprintf(stderr, "═══════════════════════════════════════════════════════════════════════════\n");
             fprintf(stderr, "[LOGIT_ANALYSIS] Position %d: Why does logit[v] = Σ_d h[d] × W[v,d] choose token %d?\n", pos, argmax_token);
@@ -889,9 +899,6 @@ LossResult computeAutogradLoss(
             + std::to_string(text_loss) + ")");
     }
     
-    fprintf(stderr, "[LossComponents] text_ce=%.4f total=%.4f valid_tokens=%d\n",
-            text_loss, text_loss, valid_tokens);
-    
     AG_INFO("Loss computed: text_ce=" << text_loss << " valid_tokens=" << valid_tokens);
     
     result.success = true;
@@ -964,9 +971,6 @@ BackwardResult executeAutogradBackward(
         if (ctx.scratch_block && ctx.scratch_block->isEnabled()) {
             ctx.scratch_block->atomTypeEmbeddings().zero_grad(ctx.stream);
             ctx.scratch_block->atomProjection().zero_grad(ctx.stream);
-            ctx.scratch_block->textFeatureProjection().zero_grad(ctx.stream);
-            ctx.scratch_block->valueExtractionWeight().zero_grad(ctx.stream);
-            ctx.scratch_block->valueExtractionBias().zero_grad(ctx.stream);
         }
     }
     
@@ -978,27 +982,6 @@ BackwardResult executeAutogradBackward(
 
     // ScratchBlock backward is now automatic via ScratchBlockGradFn in the autograd chain.
     // loss_tensor.backward() → ... → ScratchBlockGradFn::apply() handles parameter gradients.
-    
-    // Extraction head training: predict numeric values from encoder output at atom positions.
-    // This is SEPARATE from the main text loss — gradients flow only to W_extract and b_extract,
-    // NOT back into the encoder (we use cached_encoder_output which is detached).
-    if (ctx.scratch_block && ctx.scratch_block->isEnabled() &&
-        ts->cached_encoder_output.data &&
-        ts->cached_token_numeric_values.data &&
-        ts->cached_token_numeric_mask.data) {
-        const int total_tokens = ctx.batch_size * ctx.seq_len;
-        auto [extraction_loss, atom_count] = ctx.scratch_block->trainExtractionStep(
-            ts->cached_encoder_output.data,
-            ts->cached_token_numeric_values.data,
-            ts->cached_token_numeric_mask.data,
-            total_tokens,
-            ctx.stream,
-            ctx.grad_scale);  // Scale numeric head gradients by accumulation scale too!
-        if (atom_count > 0) {
-            AG_INFO("Extraction head: loss=" << extraction_loss
-                    << " atoms=" << atom_count);
-        }
-    }
     
     // Verify gradients are properly connected before optimizer runs
     AG_INFO("Verifying gradients are connected to optimizer...");
@@ -1145,7 +1128,6 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
         };
         checkScratch(ctx.scratch_block->atomTypeEmbeddings(), "atomTypeEmbeddings");
         checkScratch(ctx.scratch_block->atomProjection(), "atomProjection");
-        checkScratch(ctx.scratch_block->textFeatureProjection(), "textFeatureProjection");
     }
     
     return ok;
@@ -1225,28 +1207,28 @@ LossResult autogradTrainingStep(
         payload.numericValueBytes(),
         cudaMemcpyHostToDevice, stream));
     
-    // Numeric mask
-    if (!training_state.cached_token_numeric_mask.data) {
-        throw std::runtime_error("autogradTrainingStep: cached_token_numeric_mask.data is NULL");
-    }
-    CUDA_CHECK(cudaMemcpyAsync(
-        reinterpret_cast<uint8_t*>(training_state.cached_token_numeric_mask.data),
-        payload.numeric_mask.data(),
-        payload.numericMaskBytes(),
-        cudaMemcpyHostToDevice, stream));
-    
-    // Text features + mask (if buffers exist)
+    // Atom mask + text features
     constexpr int kTextFeatureDim = Batching::BatchPayload::kTextFeatureDim;
-    if (training_state.cached_token_text_features.data && training_state.cached_token_text_mask.data) {
+    if (training_state.cached_token_atom_mask.data) {
+        CUDA_CHECK(cudaMemcpyAsync(
+            reinterpret_cast<uint8_t*>(training_state.cached_token_atom_mask.data),
+            payload.atom_mask.data(),
+            payload.atomMaskBytes(),
+            cudaMemcpyHostToDevice, stream));
+    }
+    if (training_state.cached_token_text_features.data) {
         CUDA_CHECK(cudaMemcpyAsync(
             reinterpret_cast<uint16_t*>(training_state.cached_token_text_features.data),
             payload.text_features.data(),
             payload.textFeatureBytes(),
             cudaMemcpyHostToDevice, stream));
+    }
+    // Atom flags (type-specific metadata from AtomTable)
+    if (training_state.cached_token_atom_flags.data) {
         CUDA_CHECK(cudaMemcpyAsync(
-            reinterpret_cast<uint8_t*>(training_state.cached_token_text_mask.data),
-            payload.text_mask.data(),
-            payload.textMaskBytes(),
+            reinterpret_cast<uint32_t*>(training_state.cached_token_atom_flags.data),
+            payload.atom_flags.data(),
+            payload.atomFlagBytes(),
             cudaMemcpyHostToDevice, stream));
     }
     

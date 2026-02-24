@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <vector>
 #include <string>
+#include <memory>
 #include <stdexcept>
 #include <numeric>
 
@@ -28,6 +29,9 @@
 
 // Forward declarations
 struct TrainingSequence;
+
+// Forward declaration — full definition in UnigramByte/AtomTable.hpp
+namespace GRIM { namespace Tokenizer { class AtomTable; } }
 
 namespace GRIM {
 
@@ -70,9 +74,17 @@ struct BatchPayload {
     std::vector<int> input_ids;              // [total_tokens] padded with 0
     std::vector<int> target_ids;             // [total_tokens] padded with -1
     std::vector<float> numeric_values;       // [total_tokens] padded with 0.0f
-    std::vector<uint8_t> numeric_mask;       // [total_tokens] padded with 0
     std::vector<uint16_t> text_features;     // [total_tokens * kTextFeatureDim] padded with 0
-    std::vector<uint8_t> text_mask;          // [total_tokens] padded with 0
+    std::vector<uint8_t> atom_mask;          // [total_tokens] padded with 0 (1 = any atom type)
+     std::vector<uint32_t> atom_flags;         // [total_tokens] padded with 0 (type-specific metadata from AtomTable)
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ATOM TABLE SIDE CHANNEL (host-only, NOT transferred to GPU)
+    // atom_entry_ids[i] indexes into seq_atom_tables[batch_row] for token i.
+    // kAtomEntryNone = no atom at this position.
+    // ═══════════════════════════════════════════════════════════════════════════
+    std::vector<uint32_t> atom_entry_ids;    // [total_tokens] padded with kAtomEntryNone
+    std::vector<std::shared_ptr<const GRIM::Tokenizer::AtomTable>> seq_atom_tables;  // [batch_size]
 
     // ═══════════════════════════════════════════════════════════════════════════
     // TOKEN STATS (for gradient clipping — computed ONCE)
@@ -165,10 +177,16 @@ struct BatchPayload {
                 std::to_string(numeric_values.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
         }
-        if (static_cast<int>(numeric_mask.size()) != total_tokens) {
+        if (static_cast<int>(atom_mask.size()) != total_tokens) {
             throw std::runtime_error(
-                std::string(caller) + ": BatchPayload.numeric_mask.size()=" +
-                std::to_string(numeric_mask.size()) + " != total_tokens=" +
+                std::string(caller) + ": BatchPayload.atom_mask.size()=" +
+                std::to_string(atom_mask.size()) + " != total_tokens=" +
+                std::to_string(total_tokens));
+        }
+        if (static_cast<int>(atom_flags.size()) != total_tokens) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchPayload.atom_flags.size()=" +
+                std::to_string(atom_flags.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
         }
         const int expected_text_feat = total_tokens * kTextFeatureDim;
@@ -178,12 +196,6 @@ struct BatchPayload {
                 std::to_string(text_features.size()) + " != total_tokens*kTextFeatureDim=" +
                 std::to_string(expected_text_feat));
         }
-        if (static_cast<int>(text_mask.size()) != total_tokens) {
-            throw std::runtime_error(
-                std::string(caller) + ": BatchPayload.text_mask.size()=" +
-                std::to_string(text_mask.size()) + " != total_tokens=" +
-                std::to_string(total_tokens));
-        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -192,12 +204,12 @@ struct BatchPayload {
     size_t inputIdBytes()      const { return static_cast<size_t>(total_tokens) * sizeof(int); }
     size_t targetIdBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(int); }
     size_t numericValueBytes() const { return static_cast<size_t>(total_tokens) * sizeof(float); }
-    size_t numericMaskBytes()  const { return static_cast<size_t>(total_tokens) * sizeof(uint8_t); }
+    size_t atomMaskBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(uint8_t); }
+    size_t atomFlagBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(uint32_t); }
     size_t textFeatureBytes()  const { return static_cast<size_t>(total_tokens) * kTextFeatureDim * sizeof(uint16_t); }
-    size_t textMaskBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(uint8_t); }
     size_t totalTransferBytes() const {
         return inputIdBytes() + targetIdBytes() + numericValueBytes() +
-               numericMaskBytes() + textFeatureBytes() + textMaskBytes();
+               atomMaskBytes() + atomFlagBytes() + textFeatureBytes();
     }
 };
 

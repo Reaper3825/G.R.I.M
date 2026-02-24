@@ -77,6 +77,14 @@ bool loadGenerationDefaultsFromAIConfig(const std::string& config_path = "ai_con
         g_generation_defaults.temperature = ollama["temperature"].get<float>();
         g_generation_defaults.top_p = ollama["top_p"].get<float>();
         g_generation_defaults.top_k = ollama["top_k"].get<int>();
+        
+        // Optional advanced sampling parameters from ollama_options
+        if (ollama.contains("min_p")) g_generation_defaults.min_p = ollama["min_p"].get<float>();
+        if (ollama.contains("typical_p")) g_generation_defaults.typical_p = ollama["typical_p"].get<float>();
+        if (ollama.contains("repetition_penalty")) g_generation_defaults.repetition_penalty = ollama["repetition_penalty"].get<float>();
+        if (ollama.contains("frequency_penalty")) g_generation_defaults.frequency_penalty = ollama["frequency_penalty"].get<float>();
+        if (ollama.contains("presence_penalty")) g_generation_defaults.presence_penalty = ollama["presence_penalty"].get<float>();
+        if (ollama.contains("no_repeat_ngram_size")) g_generation_defaults.no_repeat_ngram_size = ollama["no_repeat_ngram_size"].get<int>();
 
         if (config.contains("training") && config["training"].contains("config")) {
             const auto& train_cfg = config["training"]["config"];
@@ -185,7 +193,7 @@ bool initializeModel(const std::string& model_path, const std::string& vocab_pat
 //======================================================//
 //  Generate Response
 //======================================================//
-std::string generateResponse(const std::string& prompt, int max_tokens, float temperature)
+std::string generateResponse(const std::string& prompt, const GenerationConfig& gen_config_in)
 {
     if (!g_model || !g_tokenizer)
         return "Error: Model not initialized";
@@ -196,7 +204,7 @@ std::string generateResponse(const std::string& prompt, int max_tokens, float te
         auto encoded = g_tokenizer->encodeWithMetadata(prompt);
         auto tokens = std::move(encoded.token_ids);
         auto numeric_values = std::move(encoded.token_numeric_values);
-        auto numeric_mask = std::move(encoded.token_numeric_mask);
+        auto atom_mask = std::move(encoded.token_atom_mask);
         auto end_encode = std::chrono::high_resolution_clock::now();
         auto encode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_encode - start_encode).count();
         std::cout << " " << tokens.size() << " tokens (" << encode_ms << "ms)" << std::endl;
@@ -210,15 +218,13 @@ std::string generateResponse(const std::string& prompt, int max_tokens, float te
             if (!numeric_values.empty()) {
                 numeric_values.pop_back();
             }
-            if (!numeric_mask.empty()) {
-                numeric_mask.pop_back();
+            if (!atom_mask.empty()) {
+                atom_mask.pop_back();
             }
             std::cout << "[Generate] Removed EOS from prompt, now " << tokens.size() << " tokens" << std::endl;
         }
 
-        GenerationConfig gen_config = g_generation_defaults;
-        gen_config.max_new_tokens = max_tokens;
-        gen_config.temperature = temperature;
+        GenerationConfig gen_config = gen_config_in;
         
         // CRITICAL: Set EOS/PAD token IDs from tokenizer (not default 0!)
         gen_config.eos_token_id = g_tokenizer->eosId();
@@ -227,9 +233,9 @@ std::string generateResponse(const std::string& prompt, int max_tokens, float te
         std::cout << "[Generate] EOS token ID: " << gen_config.eos_token_id 
                   << ", PAD token ID: " << gen_config.pad_token_id << std::endl;
 
-        std::cout << "[Generate] Starting generation (max_tokens=" << max_tokens << ", temp=" << temperature << ")..." << std::endl << std::flush;
+        std::cout << "[Generate] Starting generation (max_tokens=" << gen_config.max_new_tokens << ", temp=" << gen_config.temperature << ")..." << std::endl << std::flush;
         auto start_gen = std::chrono::high_resolution_clock::now();
-        auto results = g_model->generate(tokens, numeric_values, numeric_mask, &gen_config);
+        auto results = g_model->generate(tokens, numeric_values, atom_mask, &gen_config);
         auto end_gen = std::chrono::high_resolution_clock::now();
         auto gen_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_gen - start_gen).count();
 
@@ -398,7 +404,37 @@ int main(int argc, char** argv)
                 return;
             }
 
-            std::string text = generateResponse(prompt, max_tokens, temperature);
+            // Build GenerationConfig from defaults + request overrides
+            GenerationConfig gen_config = g_generation_defaults;
+            gen_config.max_new_tokens = max_tokens;
+            gen_config.temperature = temperature;
+            
+            // Parse optional sampling parameters
+            if (request.contains("top_p")) gen_config.top_p = request["top_p"].get<float>();
+            if (request.contains("top_k")) gen_config.top_k = request["top_k"].get<int>();
+            if (request.contains("min_p")) gen_config.min_p = request["min_p"].get<float>();
+            if (request.contains("typical_p")) gen_config.typical_p = request["typical_p"].get<float>();
+            if (request.contains("repetition_penalty")) gen_config.repetition_penalty = request["repetition_penalty"].get<float>();
+            if (request.contains("frequency_penalty")) gen_config.frequency_penalty = request["frequency_penalty"].get<float>();
+            if (request.contains("presence_penalty")) gen_config.presence_penalty = request["presence_penalty"].get<float>();
+            if (request.contains("no_repeat_ngram_size")) gen_config.no_repeat_ngram_size = request["no_repeat_ngram_size"].get<int>();
+            if (request.contains("seed")) gen_config.seed = request["seed"].get<unsigned int>();
+            if (request.contains("enable_scratchblock_reasoning")) {
+                gen_config.enable_scratchblock_reasoning = request["enable_scratchblock_reasoning"].get<bool>();
+            }
+            
+            // Strategy override: "greedy", "top_k", "top_p", "min_p", "typical", "top_k_top_p"
+            if (request.contains("strategy")) {
+                std::string strat = request["strategy"].get<std::string>();
+                if (strat == "greedy") { gen_config.strategy = SamplingStrategy::GREEDY; gen_config.do_sample = false; }
+                else if (strat == "top_k") gen_config.strategy = SamplingStrategy::TOP_K;
+                else if (strat == "top_p") gen_config.strategy = SamplingStrategy::TOP_P;
+                else if (strat == "min_p") gen_config.strategy = SamplingStrategy::MIN_P;
+                else if (strat == "typical") gen_config.strategy = SamplingStrategy::TYPICAL;
+                else if (strat == "top_k_top_p") gen_config.strategy = SamplingStrategy::TOP_K_TOP_P;
+            }
+
+            std::string text = generateResponse(prompt, gen_config);
 
             json response = {
                 {"model", "grim-text"},
@@ -409,9 +445,10 @@ int main(int argc, char** argv)
 
             res.set_content(response.dump(), "application/json");
 
-        } catch (...) {
+        } catch (const std::exception& e) {
             res.status = 500;
-            res.set_content(json({{"error", "Invalid request"}}).dump(), "application/json");
+            std::cerr << "[/api/generate] ERROR: " << e.what() << std::endl;
+            res.set_content(json({{"error", std::string(e.what())}}).dump(), "application/json");
         }
     });
 
@@ -433,7 +470,35 @@ int main(int argc, char** argv)
             int max_tokens = request.value("max_tokens", g_generation_defaults.max_new_tokens);
             float temperature = request.value("temperature", g_generation_defaults.temperature);
 
-            std::string text = generateResponse(prompt, max_tokens, temperature);
+            // Build GenerationConfig from defaults + request overrides
+            GenerationConfig gen_config = g_generation_defaults;
+            gen_config.max_new_tokens = max_tokens;
+            gen_config.temperature = temperature;
+            
+            // Parse optional sampling parameters
+            if (request.contains("top_p")) gen_config.top_p = request["top_p"].get<float>();
+            if (request.contains("top_k")) gen_config.top_k = request["top_k"].get<int>();
+            if (request.contains("min_p")) gen_config.min_p = request["min_p"].get<float>();
+            if (request.contains("typical_p")) gen_config.typical_p = request["typical_p"].get<float>();
+            if (request.contains("repetition_penalty")) gen_config.repetition_penalty = request["repetition_penalty"].get<float>();
+            if (request.contains("frequency_penalty")) gen_config.frequency_penalty = request["frequency_penalty"].get<float>();
+            if (request.contains("presence_penalty")) gen_config.presence_penalty = request["presence_penalty"].get<float>();
+            if (request.contains("no_repeat_ngram_size")) gen_config.no_repeat_ngram_size = request["no_repeat_ngram_size"].get<int>();
+            if (request.contains("seed")) gen_config.seed = request["seed"].get<unsigned int>();
+            if (request.contains("enable_scratchblock_reasoning")) {
+                gen_config.enable_scratchblock_reasoning = request["enable_scratchblock_reasoning"].get<bool>();
+            }
+            if (request.contains("strategy")) {
+                std::string strat = request["strategy"].get<std::string>();
+                if (strat == "greedy") { gen_config.strategy = SamplingStrategy::GREEDY; gen_config.do_sample = false; }
+                else if (strat == "top_k") gen_config.strategy = SamplingStrategy::TOP_K;
+                else if (strat == "top_p") gen_config.strategy = SamplingStrategy::TOP_P;
+                else if (strat == "min_p") gen_config.strategy = SamplingStrategy::MIN_P;
+                else if (strat == "typical") gen_config.strategy = SamplingStrategy::TYPICAL;
+                else if (strat == "top_k_top_p") gen_config.strategy = SamplingStrategy::TOP_K_TOP_P;
+            }
+
+            std::string text = generateResponse(prompt, gen_config);
 
             json response = {
                 {"model", "grim-text"},
@@ -444,9 +509,10 @@ int main(int argc, char** argv)
 
             res.set_content(response.dump(), "application/json");
 
-        } catch (...) {
+        } catch (const std::exception& e) {
             res.status = 500;
-            res.set_content(json({{"error", "Invalid request"}}).dump(), "application/json");
+            std::cerr << "[/api/chat] ERROR: " << e.what() << std::endl;
+            res.set_content(json({{"error", std::string(e.what())}}).dump(), "application/json");
         }
     });
 

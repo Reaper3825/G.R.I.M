@@ -338,18 +338,18 @@ void logHardcodedStateDiagnostics(
     cudaStreamSynchronize(stream);
     
     // Compute statistics
-    double h_mean = 0.0, h_var = 0.0, h_norm = 0.0;
-    double w_norm = 0.0, dot_hw = 0.0;
+    double h_mean = 0.0, h_var = 0.0, h_rms_sq = 0.0;
+    double w_rms_sq = 0.0, dot_hw = 0.0;
     
     for (int i = 0; i < d_model; ++i) {
         h_mean += h_sample[i];
-        h_norm += h_sample[i] * h_sample[i];
-        w_norm += h_w277[i] * h_w277[i];
+        h_rms_sq += h_sample[i] * h_sample[i];
+        w_rms_sq += h_w277[i] * h_w277[i];
         dot_hw += h_sample[i] * h_w277[i];
     }
     h_mean /= d_model;
-    h_norm = std::sqrt(h_norm);
-    w_norm = std::sqrt(w_norm);
+    double h_rms = std::sqrt(h_rms_sq / d_model);
+    double w_rms = std::sqrt(w_rms_sq / d_model);
     
     for (int i = 0; i < d_model; ++i) {
         double diff = h_sample[i] - h_mean;
@@ -357,7 +357,7 @@ void logHardcodedStateDiagnostics(
     }
     h_var /= d_model;
     
-    const double cosine_hw = dot_hw / (h_norm * w_norm + 1e-8);
+    const double cosine_hw = dot_hw / (h_rms * w_rms * d_model + 1e-8);
     
     // Find top-5 logits
     std::vector<std::pair<float, int>> logit_pairs;
@@ -386,11 +386,11 @@ void logHardcodedStateDiagnostics(
     fprintf(stderr, "║   Mean:     %+.6f (should be ~0 for centered patterns)                ║\n", h_mean);
     fprintf(stderr, "║   Variance: %.6f  (should be ~1/%d = %.6f)                      ║\n", 
             h_var, d_model, 1.0 / d_model);
-    fprintf(stderr, "║   Norm:     %.6f                                                        ║\n", h_norm);
+    fprintf(stderr, "║   RMS:      %.6f                                                        ║\n", h_rms);
     fprintf(stderr, "╠═══════════════════════════════════════════════════════════════════════════╣\n");
     fprintf(stderr, "║ Alignment with W[277]:                                                    ║\n");
     fprintf(stderr, "║   h·W[277]:     %+.6f                                                    ║\n", dot_hw);
-    fprintf(stderr, "║   ||W[277]||:   %.6f                                                      ║\n", w_norm);
+    fprintf(stderr, "║   rms(W[277]):  %.6f                                                      ║\n", w_rms);
     fprintf(stderr, "║   cosine(h,W):  %+.6f (orthogonal≈0, aligned≈1)                       ║\n", cosine_hw);
     fprintf(stderr, "╠═══════════════════════════════════════════════════════════════════════════╣\n");
     fprintf(stderr, "║ Resulting Logits:                                                         ║\n");
