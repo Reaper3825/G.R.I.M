@@ -117,7 +117,12 @@ target_link_libraries(grim_log_recorder PUBLIC
     CUDA::cudart
 )
 
-# Flash Attention kernels library
+# Flash Attention kernels library - requires external/flash-attention submodule (git submodule update --init)
+set(FLASH_ATTN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../external/flash-attention")
+set(FLASH_ATTN_SRC "${FLASH_ATTN_ROOT}/csrc/flash_attn/src")
+if(NOT EXISTS "${FLASH_ATTN_SRC}/namespace_config.h")
+  message(FATAL_ERROR "flash-attention submodule not found. Run: git submodule update --init --recursive")
+endif()
 add_library(grim_flash_attention STATIC 
     ../../Layers/FlashAttention/Flash_Attention_Kernal.cu
 )
@@ -143,7 +148,8 @@ target_include_directories(grim_flash_attention PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM    # shared GRIM
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared  # Shared/ folder for TrainingState, etc.
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../control  # control/ for ai_config_paths.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../external/flash-attention/csrc/cutlass/include
+    ${FLASH_ATTN_SRC}                         # flash_attn headers (namespace_config.h, etc.)
+    ${FLASH_ATTN_ROOT}/csrc/cutlass/include
 )
 target_link_libraries(grim_flash_attention PUBLIC
     CUDA::cudart
