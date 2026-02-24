@@ -108,8 +108,9 @@ fi
 TRAINING_VCPKG_JSON='{"name":"grim-training","version-string":"0.1.0","dependencies":["nlohmann-json","flatbuffers"]}'
 ANVIL_TRAINING_MANIFEST_ENSURE="mkdir -p $ANVIL_DIR/$TRAINING_DIR && [ -f $ANVIL_DIR/$TRAINING_DIR/vcpkg.json ] || printf '%s' '$TRAINING_VCPKG_JSON' > $ANVIL_DIR/$TRAINING_DIR/vcpkg.json"
 
-# Init flash-attention submodule only (avoids "No url for external/vcpkg" if vcpkg was ever a submodule)
-ANVIL_SUBMODULE_INIT="(git submodule deinit -f external/vcpkg 2>/dev/null || true) && git submodule update --init external/flash-attention"
+# Init flash-attention submodule only (avoids "No url for external/vcpkg" if vcpkg was ever a submodule).
+# Also init flash-attention's submodules (cutlass) - required for cute/tensor.hpp
+ANVIL_SUBMODULE_INIT="(git submodule deinit -f external/vcpkg 2>/dev/null || true) && git submodule update --init external/flash-attention && (cd external/flash-attention && git submodule update --init csrc/cutlass)"
 
 # --build / --build-training: GRIM-text/training/TrainingLoop CMake → train_gpu
 if [[ "$DO_BUILD" == true ]]; then
