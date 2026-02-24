@@ -4078,7 +4078,7 @@ Tensor center_columns(const Tensor& x, cudaStream_t stream) {
 // g is initialised from the column mean, then refined with n_power_iters
 // steps of the power method (H^T H g normalised each step).
 // ─────────────────────────────────────────────────────────────────────────────
-Tensor autograd::project_out_pc1(const Tensor& x, int n_power_iters, cudaStream_t stream) {
+Tensor project_out_pc1(const Tensor& x, int n_power_iters, cudaStream_t stream) {
     if (x.numel() == 0)
         throw std::runtime_error("project_out_pc1: input tensor is empty");
 
