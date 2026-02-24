@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -33,7 +34,7 @@ inline bool isEquationLoggingEnabled() {
 
 #define FLASHATTENTION_DISABLE_LOCAL
 #define FLASHATTENTION_DISABLE_SOFTCAP
-#define FLASHATTENTION_DISABLE_UNEVEN_K
+// FLASHATTENTION_DISABLE_UNEVEN_K defined via CMake target_compile_definitions
 // NOTE: FLASHATTENTION_DISABLE_DROPOUT removed per Rule 20 - feature dropout is now enabled
 // (was silently ignored before despite config having attention_dropout parameter)
 
@@ -766,8 +767,8 @@ extern "C" void flash_attn_fwd_ex(
         
         // Compute Q and K statistics
         float q_rms = 0.0f, k_rms = 0.0f;
-        float q_max = -FLT_MAX, k_max = -FLT_MAX;
-        float q_min = FLT_MAX, k_min = FLT_MAX;
+        float q_max = std::numeric_limits<float>::lowest(), k_max = std::numeric_limits<float>::lowest();
+        float q_min = std::numeric_limits<float>::max(), k_min = std::numeric_limits<float>::max();
         for (size_t i = 0; i < q_sample_size; ++i) {
             q_rms += h_q_sample[i] * h_q_sample[i];
             q_max = std::max(q_max, h_q_sample[i]);
@@ -804,7 +805,7 @@ extern "C" void flash_attn_fwd_ex(
         // Compute attention scores for sample positions
         const float scale = 1.0f / sqrtf(static_cast<float>(head_dim));
         std::vector<float> scores_sample(static_cast<size_t>(sample_tokens) * sample_tokens);
-        float score_max = -FLT_MAX, score_min = FLT_MAX;
+        float score_max = std::numeric_limits<float>::lowest(), score_min = std::numeric_limits<float>::max();
         double score_sum_sq = 0.0;
         
         for (int qi = 0; qi < sample_tokens; ++qi) {
@@ -835,7 +836,7 @@ extern "C" void flash_attn_fwd_ex(
         // For causal attention: LSE[qi] = log(sum_{ki<=qi} exp(score[qi,ki] - max_score[qi])) + max_score[qi]
         std::vector<float> expected_lse(sample_tokens);
         for (int qi = 0; qi < sample_tokens; ++qi) {
-            float max_score_row = -FLT_MAX;
+            float max_score_row = std::numeric_limits<float>::lowest();
             for (int ki = 0; ki <= qi; ++ki) {
                 max_score_row = std::max(max_score_row, scores_sample[qi * sample_tokens + ki]);
             }
