@@ -142,6 +142,7 @@ target_compile_definitions(grim_flash_attention PRIVATE
     FLASHATTENTION_DISABLE_UNEVEN_K
 )
 target_include_directories(grim_flash_attention PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Layers/FlashAttention/aten_stub  # ATen stub (PhiloxCudaState, unpack) - no PyTorch
     ${CMAKE_CURRENT_SOURCE_DIR}/../../..      # GRIM-text root
     ${CMAKE_CURRENT_SOURCE_DIR}/../..         # training/
     ${CMAKE_CURRENT_SOURCE_DIR}/..            # training/
