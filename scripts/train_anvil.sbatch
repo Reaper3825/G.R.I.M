@@ -33,8 +33,7 @@ CONFIG="${GRIM_TRAIN_CONFIG:-model_config.json}"
 # module load cuda gcc cmake
 
 mkdir -p "$TRAINING_DIR/logs"
-cd "$TRAINING_DIR"
-
+# Run from repo root so ai_config paths (e.g. resources/models/.../data/training_data.grmt) resolve correctly
 echo "Running train_gpu on $(hostname) at $(date)"
-"$GRIM_ROOT/$BUILD_DIR/train_gpu" --config "$CONFIG"
+"$GRIM_ROOT/$BUILD_DIR/train_gpu" --config "$TRAINING_DIR/$CONFIG"
 echo "Done at $(date)"

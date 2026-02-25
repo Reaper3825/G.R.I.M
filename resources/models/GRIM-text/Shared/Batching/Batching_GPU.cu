@@ -76,7 +76,7 @@ std::string BatchSchedule::summary() const {
     ss << "  Batch size range: " << min_batch_size_observed << "-" << max_batch_size_observed;
     ss << " (avg: " << avg_batch_size << ")\n";
     ss << "  Tokens: " << actual_tokens << " actual / " << total_tokens << " compute";
-    ss << " (padding: " << padding_tokens << ", " << (100.0f * padding_tokens / std::max(1ULL, total_tokens)) << "%)\n";
+    ss << " (padding: " << padding_tokens << ", " << (100.0f * padding_tokens / (total_tokens > 0 ? total_tokens : uint64_t(1))) << "%)\n";
     ss << "  Packing efficiency: " << (100.0f * avg_packing_efficiency) << "%\n";
     ss << "  Overflow batches: " << overflow_batches << "\n";
     ss << "  Max seq len: " << max_seq_len_observed << "\n";

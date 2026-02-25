@@ -50,9 +50,14 @@ if(MSVC)
     set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} -O3")
 endif()
 
-# Compiler flags
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /DNDEBUG")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /O2 /DNDEBUG")
+# Compiler flags (platform-specific)
+if(MSVC)
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /DNDEBUG")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /O2 /DNDEBUG")
+else()
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -DNDEBUG")
+endif()
 
 # Include directories
 # CMAKE_CURRENT_SOURCE_DIR = training/TrainingLoop
@@ -117,7 +122,16 @@ target_link_libraries(grim_log_recorder PUBLIC
     CUDA::cudart
 )
 
-# Flash Attention kernels library
+# Flash Attention kernels library - requires external/flash-attention submodule (git submodule update --init)
+set(FLASH_ATTN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../external/flash-attention")
+set(FLASH_ATTN_SRC "${FLASH_ATTN_ROOT}/csrc/flash_attn/src")
+get_filename_component(ATEN_STUB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../Layers/FlashAttention/aten_stub" ABSOLUTE)
+if(NOT EXISTS "${FLASH_ATTN_SRC}/namespace_config.h")
+  message(FATAL_ERROR "flash-attention submodule not found. Run: git submodule update --init --recursive")
+endif()
+if(NOT EXISTS "${ATEN_STUB_DIR}/ATen/cuda/detail/UnpackRaw.cuh")
+  message(FATAL_ERROR "ATen stub not found at ${ATEN_STUB_DIR}. Run: git pull")
+endif()
 add_library(grim_flash_attention STATIC 
     ../../Layers/FlashAttention/Flash_Attention_Kernal.cu
 )
@@ -128,7 +142,7 @@ set_target_properties(grim_flash_attention PROPERTIES
 )
 target_compile_options(grim_flash_attention PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
-    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/FS>
+    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>>:-Xcompiler=/FS>
 )
 target_compile_definitions(grim_flash_attention PRIVATE
     GRIM_FLASHATTN_BF16_ONLY
@@ -137,13 +151,15 @@ target_compile_definitions(grim_flash_attention PRIVATE
     FLASHATTENTION_DISABLE_UNEVEN_K
 )
 target_include_directories(grim_flash_attention PRIVATE
+    ${ATEN_STUB_DIR}  # ATen stub (PhiloxCudaState, unpack) - no PyTorch; must be first for <ATen/...>
     ${CMAKE_CURRENT_SOURCE_DIR}/../../..      # GRIM-text root
     ${CMAKE_CURRENT_SOURCE_DIR}/../..         # training/
     ${CMAKE_CURRENT_SOURCE_DIR}/..            # training/
     ${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM    # shared GRIM
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared  # Shared/ folder for TrainingState, etc.
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../control  # control/ for ai_config_paths.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../external/flash-attention/csrc/cutlass/include
+    ${FLASH_ATTN_SRC}                         # flash_attn headers (namespace_config.h, etc.)
+    ${FLASH_ATTN_ROOT}/csrc/cutlass/include
 )
 target_link_libraries(grim_flash_attention PUBLIC
     CUDA::cudart
@@ -314,9 +330,10 @@ target_precompile_headers(train_gpu PRIVATE
 )
 
 
-target_link_options(train_gpu PRIVATE 
-    /NODEFAULTLIB:cudart_static.lib
-)
+# MSVC only: avoid cudart_static conflict when using shared runtime
+if(MSVC)
+    target_link_options(train_gpu PRIVATE /NODEFAULTLIB:cudart_static.lib)
+endif()
 
 target_link_libraries(train_gpu PRIVATE
     flatbuffers::flatbuffers
@@ -333,9 +350,11 @@ target_link_libraries(train_gpu PRIVATE
     grim_unigrambyte_tokenizer
     grim_log_recorder
     grim_equation_logging
-
-    $<$<CXX_COMPILER_ID:GNU>:pthread gomp>
 )
+# Link pthread and gomp for GCC/Linux (avoid genex - nvcc device link rejects $<CXX_COMPILER_ID:GNU>)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    target_link_libraries(train_gpu PRIVATE pthread gomp)
+endif()
 
 target_include_directories(train_gpu PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../..
