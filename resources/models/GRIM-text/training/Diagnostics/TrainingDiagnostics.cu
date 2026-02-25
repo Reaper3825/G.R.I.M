@@ -218,10 +218,10 @@ std::string formatEmbGradEquation(const EmbGradEquationDiag& diag, int batch_idx
     oss << std::fixed << std::setprecision(6);
     
     // Rule 21 format: equation, inputs, expected, actual, anomaly
-    oss << "[EMB_GRAD_EQUATION] TIED_WEIGHT_GRAD: grad_W = grad_lm + pcgrad(grad_emb)\n";
+    oss << "[EMB_GRAD_EQUATION] WEIGHT_GRAD: grad_W = grad_lm + grad_emb (direct accumulation)\n";
     oss << "  EQUATION: grad_lm[v] = centered^T @ grad_logits[:,v] (dense matmul)\n";
     oss << "            grad_emb[tok] += grad_encoder[t] * emb_scale (sparse atomicAdd)\n";
-    oss << "            grad_final = grad_lm + orthogonal(grad_emb, grad_lm) (PCGrad)\n";
+    oss << "            grad_final = grad_lm + grad_emb (same buffer when tied, separate when untied)\n";
     oss << "  GRADIENT BUFFER: rms=" << diag.grad_rms
         << " active_rows=" << diag.num_active_rows << "/" << diag.total_vocab
         << " active_ratio=" << std::setprecision(4) << diag.active_ratio << "\n";

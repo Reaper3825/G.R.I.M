@@ -1660,16 +1660,9 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         //   - LM head: grad = h^T @ grad_logits (DENSE MATMUL, based on OUTPUT predictions)
         //   - Embedding: grad_W[token_id] += grad_encoder (SPARSE SCATTER, based on INPUT)
         //
-        // These gradients have OPPOSITE SIGNS and CANCEL when accumulated to same buffer!
-        // The "different information" claim was WRONG - they fight each other:
-        //   LM_HEAD:    wants to DECREASE tracked token probability → negative grad
-        //   EMBEDDING:  wants to INCREASE tracked token representation → positive grad
-        //   COMBINED:   near-zero (cancellation)!
-        //
-        // Issue #87 INCORRECTLY removed PCGrad allocation, claiming "gradients accumulate naturally".
-        // Issue #88 then skipped embedding backward to stop the cancellation.
-        // Issue #109 re-enabled embedding backward but forgot to restore PCGrad!
-        // Result: Training collapses to tracked token mode (same as Issue #88 bug).
+        // With tied weights, both write to the same buffer via direct accumulation
+        // (PyTorch-style, same as GPT-2/LLaMA). The LM head and embedding gradients
+        // can partially cancel, but this is standard behavior for tied embeddings.
         //
         if (model_cfg.tie_embeddings) {
             ctx->logging.logger->log("✓ Tied weight gradients use PyTorch-style direct accumulation");
