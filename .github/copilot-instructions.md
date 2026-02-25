@@ -202,13 +202,12 @@ All GPU resource management MUST go through `TrainingState`. VIOLATIONS ARE BUGS
 - MHA and GQA checkpoints are incompatible — serialization validates and throws on mismatch
 - Old GQA checkpoints (num_kv_heads=0) cannot load into current model; must retrain
 
-### PCGrad for Tied Embedding / LM Head Weights
+### Tied Embedding / LM Head Weight Gradients
 
-When `tie_embeddings=true`, LM head backward and embedding backward produce OPPOSITE gradients that cancel to zero. PCGrad is mandatory:
-- `g_final = g_lm + (g_emb - proj_{g_lm}(g_emb))`
-- `kernel_pcgrad_combine` in `TensorContract_GPU.cu`
-- `pcgrad_temp_buffer` allocated in `Phase1_Startup.cu` when `tie_embeddings=true`
-- NaN guard: `if (total_norm_sq < 1e-12f) { s_proj_coef = 0.0f; }` (NOT assert — compiled out in Release)
+When `tie_embeddings=true`, LM head backward and embedding backward both write to the SAME gradient buffer via PyTorch-style direct accumulation (same approach as GPT-2/LLaMA):
+- `g_final = g_lm + g_emb` (accumulated into shared buffer)
+- LM head: dense GEMM (`grad_W = centered^T @ grad_logits`)
+- Embedding: sparse scatter-add (`grad_W[tok] += grad_encoder[t]`)
 - Weight tying aliasing: `embedding_grads` and `lm_head_weight_grads` are the SAME pointer. NEVER zero both separately, add both to param groups, or free both.
 
 ### Per-Component Gradient Clipping

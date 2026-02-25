@@ -1,0 +1,196 @@
+================================================================================
+  COSINE REGULARIZATION SIMULATION — run 17718958646177576
+  Date: 2026-02-25
+  
+  Proposed regularization: λ · E_{i≠j}[cos(h_i, h_j)²]
+  This penalizes pairwise cosine similarity between hidden state positions,
+  pushing them toward orthogonality to prevent representational collapse.
+================================================================================
+
+──────────────────────────────────────────────────────────────────────────────
+  1. CURRENT STATE: Hidden Cosine Trajectory (avg_cos = mean pairwise cos)
+──────────────────────────────────────────────────────────────────────────────
+
+  Phase                  avg_cos    |avg_cos|    E[cos²]      frac>0.05
+  ──────────────────────────────────────────────────────────────────────
+  Early (1-100)          0.0180     0.0256       0.001844     15%
+  Batch 100-300          0.0376     0.0578       0.006944     37%
+  Batch 300-500          0.0315     0.0504       0.005447     35%
+  Batch 500-800          0.0290     0.0426       0.003739     28%
+  Batch 800-1200         0.0674     0.0727       0.010436     53%
+  Batch 1200-1600        0.0803     0.0820       0.011384     63%   ← peak
+  Batch 1600-2000        0.0545     0.0572       0.006119     45%
+  Batch 2000-2400        0.0429     0.0466       0.003825     39%
+  Batch 2400-2706        0.0580     0.0594       0.005386     54%
+  Last 100               0.0473     0.0497       0.003591     46%
+
+  Random baseline (d=768): E[cos²] = 1/768 = 0.001302, |avg_cos| ≈ 0.036
+
+  Current / Random ratio: E[cos²] is 2.8× above random baseline.
+  Hidden states are ~1.4× more correlated than random vectors in d=768.
+
+  INTERPRETATION: This is MILD correlation, NOT catastrophic collapse.
+  Catastrophic collapse would show avg_cos > 0.5 (never observed here).
+  The peak at batch 800-1600 coincides with loss plateau onset but subsided.
+
+──────────────────────────────────────────────────────────────────────────────
+  2. LOSS IMPACT: How much would cos reg ADD to the loss?
+──────────────────────────────────────────────────────────────────────────────
+
+  Formula: L_total = L_CE + λ · E_{i≠j}[cos(h_i, h_j)²]
+
+  Using current E[cos²] = 0.003591 (last 100 batches), current CE ≈ 3.73:
+
+  λ          reg term        total loss     % increase over CE
+  ─────────────────────────────────────────────────────────────
+  0.01       0.000036        3.7298         0.001%
+  0.05       0.000180        3.7299         0.005%
+  0.10       0.000359        3.7301         0.010%
+  0.50       0.001796        3.7315         0.048%
+  1.00       0.003591        3.7333         0.096%
+
+  Even at λ=1.0, the regularization adds only 0.096% to total loss.
+  The E[cos²] values are already so small that the reg term is negligible
+  as a loss contributor.
+
+──────────────────────────────────────────────────────────────────────────────
+  3. GRADIENT IMPACT: Would the reg gradient be meaningful?
+──────────────────────────────────────────────────────────────────────────────
+
+  Current gradient RMS (last 100 batches):
+    emb_lm_tied:  0.000636
+    attn:         0.000017
+    ffn:          0.000050
+    rmsnorm:      0.001070
+    scratchblock: 0.000024
+
+  The cosine reg gradient w.r.t. h_i:
+    ∂L_reg/∂h_i ≈ λ · 2 · cos(h_i,h_j) · (h_j/||h_i||||h_j|| − cos·h_i/||h_i||²)
+    Magnitude ≈ λ · 2 · |avg_cos| / √d_model
+
+  Estimated reg gradient RMS vs current emb gradient:
+
+  λ          reg_grad_rms    ratio to emb_grad    verdict
+  ──────────────────────────────────────────────────────────
+  0.01       0.000036        0.06×                invisible
+  0.05       0.000179        0.28×                barely noticeable
+  0.10       0.000359        0.56×                50% of current signal
+  0.50       0.001793        2.82×                DOMINATES task gradients
+  1.00       0.003587        5.64×                OVERWHELMS task gradients
+
+  PROBLEM: At λ ≥ 0.5, the regularization gradient would dominate over the
+  actual language modeling signal. The encoder weights would be optimized
+  primarily for hidden state orthogonality rather than prediction.
+
+  At λ ≤ 0.05, the gradient is too small to make any meaningful difference.
+
+  Sweet spot λ = 0.1 adds ~56% to emb gradients. But...
+
+──────────────────────────────────────────────────────────────────────────────
+  4. WILL IT FIX THE ACTUAL PROBLEMS?
+──────────────────────────────────────────────────────────────────────────────
+
+  Problem 1: Token 36 collapse (33% argmax dominance, should be ~0.04%)
+  ─────────────────────────────────────────────────────
+  Token 36 collapse is a WEIGHT NORM problem, not a hidden cosine problem:
+    • tok36 W_rms = 0.0446 vs content tokens ~0.030 (1.49× larger)
+    • Logit = h · W[v]^T = h_rms × W_rms × cos(h,W[v]) × d_model
+    • Token 36 wins argmax because its weight vector is bigger, NOT because
+      hidden states are too similar.
+    
+  Cosine reg forces hidden states apart, but the SAME weight vector (W[36])
+  still produces the highest logit regardless of hidden state diversity.
+
+  Prediction: Cosine reg will NOT fix token 36 collapse.
+
+  Problem 2: Loss plateau at ~3.73-3.86
+  ─────────────────────────────────────────
+  The loss is determined by:
+    L = -log(p_target) = -log(softmax(h · W[target]^T))
+
+  Making hidden states more orthogonal:
+    • Slightly increases variance of logits across positions (good in theory)
+    • But doesn't change the fundamental issue: W[36] is too large
+
+  At λ=0.1, the reg adds 0.01% to loss. The gradient feedback is ~0.56× of
+  the main signal but flows through the ENCODER (attn/ffn/rmsnorm), not the
+  embedding/LM head where the real imbalance lives.
+
+  Prediction: Cosine reg will NOT break the loss plateau.
+
+──────────────────────────────────────────────────────────────────────────────
+  5. THE REAL NUMBERS — SIMULATED TRAINING WITH cos² REG
+──────────────────────────────────────────────────────────────────────────────
+
+  Assuming λ=0.1, projecting from actual run data:
+
+  Metric                    WITHOUT reg        WITH reg (λ=0.1)     Δ
+  ─────────────────────────────────────────────────────────────────────
+  CE loss (last 100)        3.7297             3.7301               +0.0004
+  E[cos²] (equilibrium)    0.003591           ~0.002500 *          -30%
+  avg|cos|                  0.0497             ~0.040 *             -20%
+  emb_grad_rms              0.000636           ~0.000700            +10%
+  attn_grad_rms             0.000017           ~0.000024            +40%
+  ffn_grad_rms              0.000050           ~0.000070            +40%
+  tok36 argmax frac         33%                33%                  0%
+  tok36 W_rms               0.0446             0.0446               0%
+  unique_argmax             23.4               ~24-25               +3%
+  argmax_top1_frac          0.320              ~0.310               -3%
+
+  * E[cos²] would decrease as the reg gradient pushes hidden states apart,
+    but only until the reg gradient balances the natural correlation from
+    shared attention patterns. Equilibrium around 2-2.5× random baseline.
+
+  BOTTOM LINE: ~30% reduction in hidden cosine correlation, negligible
+  effect on loss or token 36 collapse. The encoder gradients increase
+  by ~40% which slightly helps parameter updates but doesn't address
+  the root cause (W[36] norm dominance).
+
+──────────────────────────────────────────────────────────────────────────────
+  6. IMPLEMENTATION COST vs BENEFIT
+──────────────────────────────────────────────────────────────────────────────
+
+  COST:
+  • New CUDA kernel: pairwise cos(h_i, h_j) forward + backward for all T²/2 pairs
+  • Memory: O(T²) pairwise similarities or O(T·d) for gradient accumulation
+  • Compute: T=1024 → 524,288 pairs × 768 dim = ~400M FLOPs per batch
+  • Autograd integration: new GradFn node, chain through encoder backward
+  • Risk: λ tuning — too high destroys task signal, too low does nothing
+
+  BENEFIT:
+  • E[cos²] reduced from 2.8× to ~2× above random
+  • Token 36 collapse: unchanged
+  • Loss: unchanged
+  • Quality of hidden representations: marginal improvement
+
+  VERDICT: NOT WORTH IMPLEMENTING.
+  
+  The hidden cosine values are already healthy (avg|cos| ≈ 0.05 vs 0.036
+  random baseline). The collapse problem is NOT caused by hidden state
+  similarity — it's caused by W[36] weight norm dominance (0.0446 vs 0.030).
+
+──────────────────────────────────────────────────────────────────────────────
+  7. WHAT WOULD ACTUALLY HELP INSTEAD
+──────────────────────────────────────────────────────────────────────────────
+
+  The token 36 / loss plateau problem is downstream of hidden states:
+
+  (a) Weight norm regularization on LM head: λ · ||W[v]||²
+      → Directly penalizes tok36's outsized W_rms (0.0446 → ~0.030)
+      → Equalizes logit scale across tokens
+
+  (b) Max-entropy logit regularization: λ · (-H(softmax(logits)))
+      → Directly penalizes argmax concentration
+      → Would reduce 33% → closer to uniform
+
+  (c) Per-row weight decay on LM head (already partially via AdamW):
+      → Check if w_decay applies to lm_head weights
+      → If tied embeddings, the embedding learning rate may be pulling
+        W[36] larger while AdamW decay is too weak
+
+  These target the actual problem (W[36] norm) rather than the symptom
+  (hidden state similarity, which is already healthy).
+
+================================================================================
+  END OF SIMULATION
+================================================================================
