@@ -3,6 +3,11 @@
 # ==============================
 *.d
 
+# Anvil SSH/sbatch scripts (local only - never commit)
+scripts/run_train_on_anvil.sh
+scripts/train_anvil.sbatch
+scripts/README_ANVIL_RUN.md
+
 # ==============================
 # Compiled Object files
 # ==============================
