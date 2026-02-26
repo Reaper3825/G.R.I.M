@@ -966,6 +966,26 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     //   4. Combined with causal attention prefix averaging → mode collapse by batch 3
     // ========================================================================
     intermediates.residual1 = autograd::add(input, proj_for_residual, stream);
+    
+    // ========================================================================
+    // RESIDUAL CENTERING (Issue #118 / Mode Collapse Fix)
+    //
+    // WHY: Causal attention creates a shared output component from prefix tokens.
+    //   Residual accumulation + RMSNorm direction preservation amplifies this
+    //   shared direction through layers: ρ grows +0.01-0.04 per layer.
+    //   Over 12 layers: ρ(emb)=0.05 → ρ(final)=0.44 → mode collapse.
+    //
+    // WHAT: center_columns subtracts the cross-position mean for each feature:
+    //   h[t,d] -= mean_t(h[t,d])   for each feature d
+    //   This removes the rank-1 shared direction at each layer.
+    //
+    // GRADIENT COST: The centering projection P = I - 11^T/n has backward
+    //   grad_input = P * grad_output. Per-layer attenuation = (1 - 1/n_tokens).
+    //   For n_tokens ≈ 6000: (1 - 1/6000)^24 ≈ 0.996. Negligible.
+    // ========================================================================
+    if (config_.center_encoder_residuals) {
+        intermediates.residual1 = autograd::center_columns(intermediates.residual1, stream);
+    }
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 (pre-norm, no sandwich) DONE\n");
     
     
@@ -1020,6 +1040,11 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     // No post-residual normalization. Matches standard PyTorch GPT pre-norm.
     // ========================================================================
     intermediates.output = autograd::add(intermediates.residual1, ffn_for_residual, stream);
+    
+    // Residual centering after FFN sublayer (same rationale as post-attention above)
+    if (config_.center_encoder_residuals) {
+        intermediates.output = autograd::center_columns(intermediates.output, stream);
+    }
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2 (pre-norm, no sandwich) DONE - layer COMPLETE\n");
     
     

@@ -1,0 +1,614 @@
+================================================================================
+  CLASS-BALANCED LOSS WEIGHTING SIMULATION
+  Fix for frequency-biased CE gradient → mode collapse
+  Data source: training_17720671463154007.log (140 steps, run 2026-02-25)
+================================================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. THE PROBLEM — MEASURED FROM REAL TRAINING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Current loss: kernelNLLLossBackward computes per-token gradient:
+
+    grad_log_probs[t, v] = -q_v * (1/N)        (plain CE, no smoothing)
+
+  where N = valid_count ≈ 7000 per batch, q_v = δ_{v=target}.
+
+  Then LogSoftmaxGradFn converts to:
+
+    grad_logits[t, v] = (p_v - q_v) / N
+
+  This gradient is UNIFORM: every valid token position gets weight 1/N,
+  regardless of how frequent its target class is.
+
+  CONSEQUENCE: The LM head weight gradient for vocab row v is:
+
+    ∂L/∂W[v] = Σ_{t: target(t)=v}  h_t^T · (p_{t,v} - 1) / N
+             + Σ_{t: target(t)≠v}  h_t^T · p_{t,v} / N
+
+  The first sum has count(v) terms — one per occurrence of token v as target.
+  These are the DOMINANT terms (magnitude ≈ 1/N each since p_t ≈ 0 early).
+  The second sum contributes O(p_{t,v}) ≈ 1/V ≈ 0.0004 per term — negligible.
+
+  So the effective gradient magnitude for W[v] scales as:
+
+    ||∂L/∂W[v]|| ≈ count(v) / N · ||h̄_v||
+
+  where h̄_v is the mean hidden state of positions where target = v.
+
+  MEASURED token frequencies (per batch, from SCATTER DENSITY logs):
+
+    Token    | count/batch | % of 8192  | count/mean | Role
+    ---------+-------------+------------+------------+------------------
+    tok1     |    1072     |   13.1%    |   92.3×    | BOS/padding
+    tok36    |     838     |   10.2%    |   72.1×    | SPACE
+    tok262   |     400     |    4.9%    |   34.4×    | common subword
+    tok263   |     350     |    4.3%    |   30.1×    | common subword
+    tok48    |     300     |    3.7%    |   25.8×    | digit '0'
+    tok50    |     280     |    3.4%    |   24.1×    | digit '2'
+    tok278   |     200     |    2.4%    |   17.2×    | common subword
+    tok44    |     180     |    2.2%    |   15.5×    | comma
+    content  |      20     |    0.2%    |    1.7×    | typical token
+    rare     |       2     |    0.02%   |    0.17×   | rare token
+
+    Active vocab per batch: ~700
+    Mean count per active token: c̄ = 8192/700 ≈ 11.6
+
+  MEASURED gradient spike (from ROW RMS logs):
+
+    Step  | spike_ratio | dom_token | collapse_count | collapse_ratio
+    ------+-------------+-----------+----------------+---------------
+      1   |    21.4×    |   tok36   |      0/7164    |    0.00%
+     10   |    35.0×    |   tok36   |      1/6773    |    0.01%
+     20   |    31.5×    |   tok36   |      0/7453    |    0.00%
+     30   |    27.2×    |   tok36   |    135/6472    |    2.09%    ← collapse onset
+     40   |    32.1×    |   tok36   |    109/7292    |    1.49%
+     50   |    25.4×    |    tok1   |    166/7417    |    2.24%
+     60   |    21.4×    |    tok1   |    869/5964    |   14.57%   ← full collapse
+     70   |    19.9×    |    tok1   |    575/5740    |   10.02%
+     80   |     9.7×    |   tok36   |    939/6654    |   14.11%
+     90   |    11.4×    |   tok36   |    632/6034    |   10.47%
+    100   |    10.6×    |   tok36   |    761/6476    |   11.75%
+    110   |    10.5×    |   tok36   |    777/7294    |   10.65%
+    120   |     8.8×    |   tok36   |    639/5985    |   10.68%
+    130   |    11.7×    |   tok36   |    819/7307    |   11.21%
+    140   |    10.0×    |   tok36   |    856/7163    |   11.95%
+
+  LOSS PROGRESSION:
+    Step 10: 8.058  (random baseline: ln(2533) = 7.837, should be below this)
+    Step 30: 7.830
+    Step 60: 6.875  ← collapse onset, loss drops via degenerate shortcut
+    Step 80: 6.414
+    Step 100: 6.304  ← plateau begins
+    Step 120: 6.018
+    Step 140: 6.014  ← stuck
+
+  DIAGNOSIS: By step 30, tok36 (SPACE) has received 30 × 838 = 25,140 gradient
+  updates to its LM head row, while a rare token with count=2 has received
+  30 × 2 = 60. That's 419× more gradient signal. The LM head row for SPACE
+  becomes the only row well-aligned with the hidden state distribution.
+  The model discovers that predicting SPACE everywhere lowers loss (because
+  SPACE IS frequent — it's right 10% of the time vs 0.04% random chance).
+
+  By step 60, 14.6% of predictions collapse to a single token. Loss keeps
+  dropping (SPACE predictions are partially correct!) but plateaus because
+  the model can't learn anything beyond the frequency shortcut.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. THE FIX — CLASS-BALANCED LOSS WEIGHTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Replace uniform 1/N weighting with per-class weight:
+
+    OLD:  grad_log_probs[t, :] = -q[:] / N
+    NEW:  grad_log_probs[t, :] = -q[:] · w_{y_t} / W_sum
+
+  where:
+    y_t           = target token at position t
+    w_v           = 1 / freq(v)^β        (class weight for vocab ID v)
+    freq(v)       = count of token v across ALL training data (global, not per-batch)
+    β             = 0.5  (sqrt inverse — moderate rebalancing)
+    W_sum         = Σ_{t: valid} w_{y_t}  (sum of weights for valid tokens in batch)
+
+  CRITICAL: w_{y_t} multiplies the ENTIRE row grad_log_probs[t, :], not just
+  the target column. This is because the weight is a per-POSITION scalar that
+  says "how much should this position contribute to the total gradient."
+
+  After LogSoftmaxGradFn applies the Jacobian:
+
+    grad_logits[t, v] = w_{y_t}/W_sum · (p_v - q_v)
+
+  The ENTIRE row vector is scaled uniformly. This preserves:
+    (a) sum-to-zero:  Σ_v (p_v - q_v) = 0  ⟹  w · Σ_v (p_v - q_v) = 0  ✓
+    (b) direction:    gradient still points toward the correct target
+    (c) relative magnitudes within a row: all vocab dimensions scale equally
+
+  What changes is the RELATIVE IMPORTANCE between positions:
+    - A position where y_t = SPACE (freq=high) gets downweighted
+    - A position where y_t = rare_token (freq=low) gets upweighted
+
+  WHY β=0.5 (SQRT) AND NOT β=1.0 (FULL INVERSE):
+
+    With β=1.0: w_rare = 1/2, w_space = 1/838 → ratio = 419×
+    Rare tokens would get 419× the gradient of SPACE per occurrence.
+    This is too aggressive — rare tokens only appear in ~2 contexts,
+    so their gradients are extremely noisy. Amplifying noise 419× 
+    causes gradient explosion on rare token rows.
+
+    With β=0.5: w_rare = 1/√2 ≈ 0.707, w_space = 1/√838 ≈ 0.0345
+    Ratio = 20.5× — rare tokens get 20× per-occurrence, but SPACE's
+    838 occurrences × 0.0345 ≈ 28.9 effective weight, vs rare's 
+    2 × 0.707 ≈ 1.41 effective weight. Total ratio: 28.9/1.41 = 20.5×
+    Compare to current: 838/2 = 419×. This is a 20× reduction in bias.
+
+    With β=0.0: w = 1 for all → current behavior (no fix)
+
+  β=0.5 is a well-studied middle ground:
+    - Used in "Class-Balanced Loss Based on Effective Number of Samples" (CVPR 2019)
+    - sqrt(inverse_freq) appears in NLP class-balanced losses
+    - Conservative enough to not explode on singleton tokens
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. NUMERICAL SIMULATION — STEP-BY-STEP WITH REAL NUMBERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  SETUP (batch from training log):
+    batch_size = 8, seq_len = 1024 → 8192 total positions
+    valid_count N = 7164 (batch 1 data)
+    vocab_size V = 2533
+
+  Concrete token distribution used (simplified to 5 representative classes):
+    tok36  (SPACE):    count = 838,   freq_global ≈ 10.2%
+    tok262 (subword):  count = 400,   freq_global ≈ 4.9%
+    tok48  (digit):    count = 300,   freq_global ≈ 3.7%
+    content tokens:    count = 20 each, ~200 unique, total ≈ 4000
+    rare tokens:       count = 2 each, ~300 unique, total ≈ 600
+
+    Check: 838 + 400 + 300 + 4000 + 600 ≈ 6138 valid targets
+    (remaining ~1026 are masked/BOS with target=-1)
+
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ 3a. CURRENT SYSTEM (UNIFORM 1/N)                                       │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  For token at position t with target y_t:
+
+    grad_logits[t, v] = (p_v - q_v) / N
+
+  where N = 7164. At early training, p_v ≈ 1/V = 0.000395 for all v.
+
+  Per-position gradient magnitude (for target position):
+    |grad_logits[t, y_t]| ≈ (0.000395 - 1.0) / 7164 ≈ 0.0001396
+
+  This is IDENTICAL for every valid position regardless of target class.
+
+  Total gradient accumulated into LM head row W[v] (dominant term):
+    ||∂L/∂W[v]|| ≈ count(v) × 0.0001396 × ||h̄||
+
+  For ||h̄|| ≈ 0.03 (measured from embedding RMS ≈ 0.025):
+
+    Row          | count | ∂L/∂W     | relative
+    -------------+-------+-----------+---------
+    tok36 SPACE  |  838  | 3.51e-3   |  419.0×
+    tok262       |  400  | 1.68e-3   |  200.0×
+    tok48 digit  |  300  | 1.26e-3   |  150.0×
+    content      |   20  | 8.38e-5   |   10.0×
+    rare         |    2  | 8.38e-6   |    1.0×   ← baseline
+
+  Spike ratio prediction: max/mean = 3.51e-3 / (mean across 700 active rows)
+  Mean row ≈ 7164 / 700 × 8.38e-6 ≈ 8.6e-5
+  Spike = 3.51e-3 / 8.6e-5 ≈ 40.8×
+
+  MEASURED: spike_ratio = 21.4× – 35.0× in first 10 steps. ✓ Order of magnitude matches.
+  (Lower measured value because LM head dense gradient partially offsets the concentraton.)
+
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ 3b. WITH CLASS-BALANCED WEIGHTS (β = 0.5)                              │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  Step 1: Compute global frequencies from training data.
+  (These are computed ONCE in Phase1 from all sliding windows, not per-batch.)
+
+    For this simulation, assume global frequencies ≈ per-batch frequencies
+    (reasonable for a shuffled dataset with 37K windows).
+
+  Step 2: Compute class weights.
+
+    w_v = 1 / freq(v)^0.5 = 1 / count(v)^0.5
+
+    Row          | count | w_v = 1/√count | w_v · count (effective weight)
+    -------------+-------+----------------+-------------------------------
+    tok36 SPACE  |  838  |  0.03453       |   28.93
+    tok262       |  400  |  0.05000       |   20.00
+    tok48 digit  |  300  |  0.05774       |   17.32
+    content      |   20  |  0.22361       |    4.47
+    rare         |    2  |  0.70711       |    1.41
+
+  Step 3: Compute W_sum (sum of class weights for all valid tokens in batch).
+
+    W_sum = 838 × 0.03453 + 400 × 0.05000 + 300 × 0.05774
+          + 4000 × 0.22361 + 600 × 0.70711
+    W_sum = 28.93 + 20.00 + 17.32 + 894.43 + 424.26
+    W_sum = 1384.9
+
+  Step 4: Per-position gradient (for a position where target = tok36):
+
+    grad_logits[t, v] = w_{tok36}/W_sum · (p_v - q_v)
+                      = 0.03453/1384.9 · (p_v - q_v)
+                      = 2.49e-5 · (p_v - q_v)
+
+  Compare to current: 1/N = 1/7164 = 1.396e-4. Reduction factor: 5.6×
+
+  Step 5: Per-position gradient (for a position where target = rare token):
+
+    grad_logits[t, v] = w_{rare}/W_sum · (p_v - q_v)
+                      = 0.70711/1384.9 · (p_v - q_v)
+                      = 5.11e-4 · (p_v - q_v)
+
+  Compare to current: 1/N = 1.396e-4. Amplification factor: 3.66×
+
+  Step 6: Total gradient accumulated into LM head rows.
+
+    ||∂L/∂W[v]|| ≈ count(v) × (w_v / W_sum) × ||h̄||
+
+    Row          | count | w_v/W_sum   | count × w_v/W_sum | relative
+    -------------+-------+-------------+-------------------+---------
+    tok36 SPACE  |  838  |  2.49e-5    |     0.02089       |  14.8×
+    tok262       |  400  |  3.61e-5    |     0.01444       |  10.2×
+    tok48 digit  |  300  |  4.17e-5    |     0.01251       |   8.9×
+    content      |   20  |  1.61e-4    |     0.00323       |   2.3×
+    rare         |    2  |  5.11e-4    |     0.00102       |   0.72× 
+    very rare    |    1  |  7.22e-4    |     0.00072       |   0.51× 
+
+    Effective mean ≈ W_sum / 700 active = 1384.9/700 ≈ 1.978 per class
+    Ideally we want all classes equal. The ratio SPACE/rare = 14.8× (vs 419× before).
+
+    SPIKE RATIO PREDICTION:
+    max effective weight = 28.93 (tok36)
+    mean effective weight = 1384.9 / 700 = 1.978
+    spike = 28.93 / 1.978 = 14.6×
+
+    vs current: 40.8× predicted, 21-35× measured.
+
+    The fix reduces spike ratio by roughly 2-3×. That's significant but not
+    a silver bullet. For stronger equalization, β → 1.0. But see Section 4
+    for why β=0.5 is safer.
+
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ 3c. GRADIENT FLOW THROUGH THE FULL BACKWARD CHAIN                      │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  The class weight w_{y_t} enters at kernelNLLLossBackward:
+
+    grad_log_probs[t, v] = -q_v · w_{y_t} / W_sum        (all v in [0, V))
+
+  Then LogSoftmaxGradFn::apply() transforms:
+
+    grad_logits[t, j] = grad_log_probs[t, j] - p_j · Σ_i grad_log_probs[t, i]
+                      = (w_{y_t}/W_sum) · [-q_j - p_j · Σ_i (-q_i)]
+                      = (w_{y_t}/W_sum) · [-q_j + p_j · 1]    (since Σ q_i = 1)
+                      = (w_{y_t}/W_sum) · (p_j - q_j)
+
+  ✓ The class weight factors out of the Jacobian because it's a per-ROW scalar.
+  ✓ The gradient direction (p - q) is UNCHANGED for each position.
+  ✓ Only the magnitude per position changes.
+  ✓ Sum-to-zero preserved: w · Σ(p_j - q_j) = w · 0 = 0.
+
+  Then MatMulGradFn (LM head backward) computes:
+
+    ∂L/∂W[v]  = Σ_t h_t · grad_logits[t, v]^T
+    ∂L/∂h_t   = W^T · grad_logits[t, :]
+
+  For ∂L/∂h_t (hidden state gradient flowing back to encoder):
+
+    ∂L/∂h_t = (w_{y_t}/W_sum) · W^T · (p_t - q_t)
+
+  This is the standard hidden state gradient, just scaled by w_{y_t}/W_sum.
+  Positions with rare targets get LARGER hidden state gradients.
+  Positions with common targets (SPACE) get smaller hidden state gradients.
+
+  This means the encoder layers receive a MORE BALANCED signal:
+  - Common-target positions no longer dominate the hidden state gradient
+  - Rare-target positions contribute meaningful training signal
+  - The encoder sees gradient from diverse contexts, not just SPACE contexts
+
+  For ∂L/∂W[v] (LM head weight gradient):
+
+    ∂L/∂W[v] = Σ_t (w_{y_t}/W_sum) · h_t · (p_{t,v} - q_{t,v})
+
+  For v = target at position t:  q_{t,v} = 1, p_{t,v} ≈ 0
+    → contribution ≈ -w_{y_t}/W_sum · h_t    (magnitude ≈ w/W_sum · ||h||)
+
+  For v ≠ target at position t:  q_{t,v} = 0, p_{t,v} ≈ 1/V
+    → contribution ≈ (w_{y_t}/W_sum) · (1/V) · h_t   (tiny, ≈ 0.0004 × prev)
+
+  The dominant term for row v is the sum over positions where TARGET = v:
+
+    ||∂L/∂W[v]|| ≈ (w_v/W_sum) · count(v) · ||h̄_v||
+                  = count(v)^(1-β) / W_sum · ||h̄_v||
+                  = count(v)^0.5 / W_sum · ||h̄_v||     (with β=0.5)
+
+  With uniform weights: ||∂L/∂W[v]|| ∝ count(v)         → linear in freq
+  With β=0.5:           ||∂L/∂W[v]|| ∝ count(v)^0.5     → square root
+  With β=1.0:           ||∂L/∂W[v]|| ∝ count(v)^0       → constant (all equal)
+
+  β=0.5 changes the scaling from LINEAR to SQRT. This means:
+    tok36 (838 occurrences): gradient ∝ √838 ≈ 28.9
+    rare (2 occurrences):    gradient ∝ √2   ≈ 1.41
+    Ratio: 20.5× (vs 419× current)
+
+  This is a 20× reduction in frequency bias on the LM head rows.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. RISK ANALYSIS — WHAT COULD GO WRONG
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  RISK 1: Gradient explosion on rare tokens (β too high)
+  ─────────────────────────────────────────────────────
+    With β=1.0 and a token appearing once: w = 1/1 = 1.0
+    With β=1.0 and SPACE: w = 1/838 = 0.0012
+    Per-occurrence gradient ratio: 1.0/0.0012 = 833×
+
+    A single occurrence of a rare token would get 833× gradient vs SPACE.
+    But that single occurrence might be noise (unusual context, OCR artifact).
+    Result: rare token row flies off to infinity → NaN.
+
+    With β=0.5: ratio = √838 ≈ 29×. Much safer. And the rare token still
+    only has 2 occurrences total, so its effective weight is 2×0.707 = 1.41
+    vs SPACE's 838×0.0345 = 28.9. SPACE still dominates, just less so.
+
+    MITIGATION: Clamp w_v to [w_min, w_max] where w_min = 0.01, w_max = 10.0.
+    This bounds the per-occurrence amplification to max 1000× min.
+
+  RISK 2: Effective learning rate change
+  ─────────────────────────────────────────
+    The denominator changes from N to W_sum. If W_sum ≠ N, the effective
+    learning rate changes.
+
+    Current:  |grad| ≈ 1/N per position
+    New:      |grad| ≈ w_v/W_sum per position
+
+    Mean |grad| = (1/W_sum) · Σ_t w_{y_t} / N = W_sum/(W_sum·N) = 1/N  ✓
+
+    Wait — that's only true if we average over positions. The actual mean
+    gradient per position is Σ_t w_{y_t} / (N · W_sum) = 1/N. So the
+    AVERAGE magnitude is preserved. Individual positions vary.
+
+    This means the effective LR is unchanged on average. ✓
+
+  RISK 3: Forward loss value changes
+  ──────────────────────────────────────
+    If we weight the forward loss too, the loss value reported changes:
+      L_balanced = Σ_t w_{y_t} · L_t / W_sum
+
+    vs current:
+      L_uniform  = Σ_t L_t / N
+
+    These will have different magnitudes. Early-stopping, LR scheduling, and
+    diagnostic thresholds all use loss values.
+
+    DECISION: Weight forward AND backward identically to maintain consistency
+    between loss value and gradient direction. Adjust diagnostic thresholds
+    after first test run. The loss magnitude should be similar (mean w ≈ 1
+    by normalization), just with different emphasis.
+
+  RISK 4: Class weights computed from wrong distribution
+  ─────────────────────────────────────────────────────────
+    The weights must be computed from TARGET frequencies, not INPUT frequencies.
+    With next-token prediction, targets are token_ids[1:], inputs are token_ids[:-1].
+    BOS (target=-1) is always masked.
+
+    In GRIM-text, targets are pre-computed in the GRMT file and stored in
+    TrainingSequence.pre_computed_targets[]. The frequency should be computed
+    from these target arrays, excluding -1 entries.
+
+    SIMPLIFICATION: Use token_ids frequency as a proxy. The only difference
+    is the very first and very last token of each window. With 37K × 1024
+    tokens, the error is ~37K/37M = 0.1%. Negligible.
+
+  RISK 5: Interaction with per-component gradient clipping
+  ──────────────────────────────────────────────────────────
+    GRIM-text clips embedding/LM-head gradients independently from encoder
+    gradients (Issue #139). The class-balanced weights change the gradient
+    distribution, which changes whether clipping activates and by how much.
+
+    Expected effect: With more balanced gradients, spike_ratio drops from
+    ~30× to ~15×. The L2 norm of the full gradient is similar (weights are
+    mean-1 normalized). Clipping thresholds should not need adjustment.
+
+    MONITOR: Watch emb_rms and enc_rms in first test run. If emb_rms
+    drops significantly, the clipping threshold may need tightening.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. PREDICTED OUTCOMES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  METRIC                    | CURRENT    | PREDICTED (β=0.5)  | CHANGE
+  --------------------------+------------+--------------------+------------------
+  spike_ratio (step 10)     | 35×        | ~12-15×            | -60%
+  collapse_ratio (step 60)  | 14.6%      | <5%                | significant ↓
+  loss (step 140)           | 6.01       | lower              | should break plateau
+  tok36 W_rms growth rate   | 2× baseline| ~1.2× baseline     | much slower growth
+  rare token W_rms          | stagnant   | measurable growth  | learning starts
+  effective gradient ratio  | 419×       | 20.5×              | 20× reduction
+
+  WHY THIS SHOULD BREAK THE PLATEAU:
+
+    The plateau at loss ≈ 6.0 occurs because the model has learned the
+    frequency shortcut (predict common tokens everywhere) but cannot learn
+    context-dependent predictions. Context-dependent learning requires the
+    LM head rows for ALL tokens to be well-trained, not just the top-5.
+
+    With class-balanced loss:
+    1. Rare token LM head rows receive meaningful gradient signal
+    2. The model is penalized more for getting rare tokens wrong
+    3. The frequency shortcut is less profitable (SPACE predictions 
+       contribute less to loss reduction)
+    4. Context-dependent predictions become the dominant loss reduction path
+
+  WHAT TO VERIFY IN THE FIRST RUN:
+    1. spike_ratio should drop below 15× by step 10
+    2. collapse_token_count should stay <5% past step 60
+    3. Loss should continue decreasing past the 6.0 plateau
+    4. No NaN/Inf (gradient explosion on rare tokens)
+    5. Rare token W_rms should show measurable growth by step 50
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. COMPARISON WITH PREVIOUS SIMULATION PROPOSALS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  freq_scaling_simulation.txt:
+    PROPOSED: Scale embedding backward only (sparse scatter path).
+    ERROR: Only fixes the embedding gradient, not the LM head gradient.
+    The LM head dense gradient has the SAME frequency bias (see Section 3c).
+    With untied weights, the LM head is a separate matrix — fixing only
+    embedding backward leaves the LM head frequency bias untouched.
+
+    CLASS-BALANCED FIX: Operates at the LOSS level, which scales
+    grad_logits[t, :] BEFORE it splits into LM head backward and
+    embedding backward. Both paths receive the correction. ✓
+
+  Rv_simulation.txt:
+    IDENTIFIES: R_v = count(v) · ||g_v|| as the gradient pressure metric.
+    CLAIM: "LM head backward is uniform across all V rows."
+    ERROR: This is wrong. The LM head gradient for row v is:
+      ∂L/∂W[v] = Σ_t h_t · grad_logits[t, v]
+    When target(t) = v, grad_logits[t, v] ≈ (0 - 1)/N = -1/N (large).
+    When target(t) ≠ v, grad_logits[t, v] ≈ (1/V - 0)/N = 1/(NV) (tiny).
+    So ∂L/∂W[v] is dominated by the count(v) target positions.
+    The LM head gradient IS frequency-biased via target counts.
+
+    CLASS-BALANCED FIX: Directly addresses R_v by changing the per-occurrence
+    gradient magnitude g_v. With w_v applied: g_v ∝ w_v/W_sum = 1/(count^β · W_sum).
+    So R_v ∝ count^(1-β), converting from linear to sqrt scaling. ✓
+
+  cosine_reg_simulation.txt:
+    PROPOSED: Regularize LM head row cosine similarities.
+    ISSUE: Treats a symptom (row correlation) not the cause (unequal learning).
+    Forcing rows apart doesn't help if rare rows are still at Xavier noise;
+    pushing noise apart from signal doesn't create meaningful representations.
+
+  center_encoder_residuals_actual_results.txt:
+    PROVED: Centering delays collapse but doesn't prevent it.
+    WHY: Centering removes the mean bias (d_collapse direction shifts)
+    but doesn't address VARIANCE alignment bias. Frequent tokens still have
+    well-trained W[v] rows that capture the hidden state variance structure.
+    Class-balanced loss addresses the root cause: unequal learning rates.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. EXACT KERNEL CHANGE (PSEUDOCODE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  kernelNLLLossForward (changed line only):
+  ──────────────────────────────────────────
+
+    // OLD:
+    per_token_loss[token_idx] = total_loss;
+    atomicAdd(loss_sum, total_loss);
+
+    // NEW:
+    float cw = class_weights ? class_weights[target] : 1.0f;
+    per_token_loss[token_idx] = total_loss * cw;
+    atomicAdd(loss_sum, total_loss * cw);
+    atomicAdd(weight_sum, cw);          // ← new accumulator
+
+  kernelNLLLossBackward (changed line only):
+  ───────────────────────────────────────────
+
+    // OLD:
+    grad_row[v] = grad_v * inv_valid_count;
+
+    // NEW:
+    float cw = class_weights ? class_weights[target] : 1.0f;
+    grad_row[v] = grad_v * cw * inv_weight_sum;    // inv_weight_sum = 1/W_sum
+
+  Note: cw is looked up ONCE per token (outside the v loop).
+  The scalar cw · inv_weight_sum multiplies the entire row [0..V-1] uniformly.
+
+  Phase1_Startup.cu (new initialization):
+  ────────────────────────────────────────
+
+    // After loading all training data:
+    std::vector<uint64_t> token_counts(vocab_size, 0);
+    for (auto& seq : loader.getSequences()) {
+        for (int tok : seq.token_ids) {
+            if (tok >= 0 && tok < vocab_size) token_counts[tok]++;
+        }
+    }
+
+    std::vector<float> class_weights(vocab_size);
+    for (int v = 0; v < vocab_size; v++) {
+        float freq = std::max(token_counts[v], (uint64_t)1);  // avoid div by 0
+        class_weights[v] = 1.0f / std::pow(freq, beta);
+    }
+
+    // Normalize so mean = 1.0 (preserves effective LR)
+    float mean_w = 0;
+    for (float w : class_weights) mean_w += w;
+    mean_w /= vocab_size;
+    for (float& w : class_weights) w /= mean_w;
+
+    // Clamp extremes
+    for (float& w : class_weights) w = std::clamp(w, 0.01f, 100.0f);
+
+    // Upload to GPU
+    cudaMalloc(&training_state.d_class_weights, vocab_size * sizeof(float));
+    cudaMemcpy(training_state.d_class_weights, class_weights.data(),
+               vocab_size * sizeof(float), cudaMemcpyHostToDevice);
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. IMPLEMENTATION CHECKLIST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  [ ] 1. ai_config.json: Add loss.class_balanced.enabled + beta
+  [ ] 2. HyperParameters_GPU.hpp: Add config fields
+  [ ] 3. Phase1_Startup.cu: Parse config, compute frequencies, build weights
+  [ ] 4. AutogradLoss.hpp: Add d_class_weights to LossConfig
+  [ ] 5. AutogradLoss.cu: Modify forward + backward kernels
+  [ ] 6. AutogradTraining.cu: Wire weights through buildLossConfig
+  [ ] 7. Build and test — verify no NaN, check spike_ratio drop
+  [ ] 8. Compare loss trajectory against baseline 17720671463154007
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. KNOWN LIMITATIONS (WHAT THIS FIX DOES NOT ADDRESS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. The class-balanced loss equalizes gradient MAGNITUDE per class, but does
+     not fix gradient DIRECTION issues. If the hidden state distribution is
+     already collapsed to a low-rank subspace, all classes will learn the same
+     directions — just at more equal rates. The centering system should
+     prevent that scenario.
+
+  2. The class weights are STATIC (computed once from training data).
+     If the model learns to predict some tokens better and the effective
+     frequency changes (curriculum effect), the weights are stale.
+     A future upgrade could use running EMA of per-class loss.
+
+  3. This does not address the embedding backward gradient frequency bias
+     separately. With untied weights, the embedding backward still accumulates
+     via scatter-add with count(v) proportionality. However, the class-balanced
+     loss reduces grad_encoder[t] for frequent-target positions, which
+     indirectly reduces the scatter-add spike. For full equalization on the
+     embedding side, a separate freq-scaled scatter would be needed — but
+     that's a much more invasive change.
+
+  4. With β=0.5, SPACE still gets 20× the total gradient of a rare token.
+     This is a FEATURE, not a bug: SPACE appears in diverse contexts and
+     does need a well-trained row. The fix ensures rare tokens can ALSO learn,
+     not that all tokens learn equally fast.
+
+
+================================================================================
+END OF SIMULATION
+================================================================================

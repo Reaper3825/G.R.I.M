@@ -1,0 +1,313 @@
+═══════════════════════════════════════════════════════════════════════════════
+  TIED vs UNTIED TRAINING TRAJECTORY COMPARISON
+  GRIM-text Transformer (d_model=768, 12 layers, 12 heads, vocab=2533)
+═══════════════════════════════════════════════════════════════════════════════
+
+Sessions:
+  TIED:   training_17718958646177576.log  (2706 batches, full epoch)
+  UNTIED: training_17720477731880730.log  (70 batches, interrupted)
+
+Config differences:
+  TIED:   tie_embeddings=true  → param group: emb_lm_tied (shared W matrix)
+  UNTIED: tie_embeddings=false → param groups: emb (separate) + lm (separate)
+  All other config identical: lr=0.0003, warmup=1000, wd=0.01, LayerScale=1.0
+
+───────────────────────────────────────────────────────────────────────────────
+ SECTION 1: TOKEN COLLAPSE TRAJECTORY (COLLAPSE_DETECT)
+───────────────────────────────────────────────────────────────────────────────
+
+  Batch │ TIED                                    │ UNTIED
+  ──────┼─────────────────────────────────────────┼──────────────────────────────────────────
+     1  │ tok=1985   2/112  ( 1%)                 │ tok=1985   2/112  ( 1%)
+    10  │ tok=961    2/105  ( 1%)                 │ tok=321    2/105  ( 1%)
+    20  │ tok=262    2/113  ( 1%)                 │ tok=987    2/113  ( 1%)
+    30  │ tok=262   13/99  (13%)                  │ tok=262    2/99   ( 2%)
+    40  │ tok=262    7/113  ( 6%)                 │ tok=262    3/113  ( 2%)
+    50  │ tok=262    8/114  ( 7%)                 │ tok=262    7/114  ( 6%)
+    60  │ tok=36    47/93  (50%)  ← COLLAPSE      │ tok=36    34/93  (36%)  ← COLLAPSE
+    70  │ tok=36    63/89  (70%)                  │ tok=36    60/89  (67%)
+        │                                         │ (session ends here)
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │ CRITICAL FINDING: Untying does NOT prevent tok36 collapse.             │
+  │ Both sessions collapse to tok36 at batch 60, within 14% of each other.│
+  │ By batch 70: tied=70%, untied=67%. Virtually identical.               │
+  │                                                                       │
+  │ The root cause of tok36 dominance is NOT weight tying.                │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  Note: tok 262 = unigram subword (appears as intermediate dominant before tok36)
+        tok 36  = space byte (0x20), 10.7% of all tokens = 873/8192 per batch
+
+───────────────────────────────────────────────────────────────────────────────
+ SECTION 2: LOSS TRAJECTORY (LossStats loss_mean)
+───────────────────────────────────────────────────────────────────────────────
+
+  Batch │ TIED     │ UNTIED   │ Δ (tied - untied)
+  ──────┼──────────┼──────────┼──────────────────
+     1  │ 8.0521   │ 8.0558   │  -0.004  (identical)
+    10  │ 8.0373   │ 8.0534   │  -0.016
+    20  │ 7.9355   │ 7.9845   │  -0.049
+    30  │ 7.7607   │ 7.8643   │  -0.104
+    40  │ 7.5846   │ 7.7643   │  -0.180
+    50  │ 7.3720   │ 7.5649   │  -0.193  (tied learns faster)
+    60  │ 6.5431   │ 6.9506   │  -0.408  (tied drops more at collapse)
+    70  │ 6.6602   │ 6.9011   │  -0.241
+
+  Both sessions: ln(vocab) = ln(2533) = 7.837 (random baseline)
+  
+  Observation: Tied learns ~3% faster in early batches, consistent with
+  weight sharing providing a regularization effect. Both show a sharp loss
+  drop at batch 60 — the exact batch where tok36 collapse begins.
+
+  THE LOSS DROP AT BATCH 60 IS FAKE: the model "learns" to predict the
+  most common token (space=10.7%) for all positions. This reduces CE
+  but is degenerate. Loss goes from ~7.4 to ~6.5 by outputting p(36)≈1.
+
+───────────────────────────────────────────────────────────────────────────────
+ SECTION 3: GRADIENT COMPONENTS (GradTrace COMPONENTS(rms))
+───────────────────────────────────────────────────────────────────────────────
+
+  3A. TIED SESSION (emb_lm_tied = combined embedding + LM head gradient)
+
+  Batch │ emb_lm_tied │ attn     │ ffn      │ rmsnorm  │ sb
+  ──────┼─────────────┼──────────┼──────────┼──────────┼──────────
+     1  │ 0.000376    │ 0.000017 │ 0.000359 │ 0.000190 │ 0.000107
+    10  │ 0.000607    │ 0.000024 │ 0.000552 │ 0.000314 │ 0.000208
+    30  │ 0.000633    │ 0.000023 │ 0.000520 │ 0.000298 │ 0.000133
+    50  │ 0.000890    │ 0.000027 │ 0.000513 │ 0.000463 │ 0.000210
+    60  │ 0.001344    │ 0.000032 │ 0.000499 │ 0.000860 │ 0.000162
+    70  │ 0.002463    │ 0.000037 │ 0.000693 │ 0.000818 │ 0.000136
+
+  3B. UNTIED SESSION (emb and lm are separate gradient buffers)
+
+  Batch │ emb      │ lm       │ attn     │ ffn      │ rmsnorm  │ sb
+  ──────┼──────────┼──────────┼──────────┼──────────┼──────────┼──────────
+     1  │ 0.000037 │ 0.000320 │ 0.000018 │ 0.000296 │ 0.000169 │ 0.000094
+    10  │ 0.000062 │ 0.000518 │ 0.000026 │ 0.000465 │ 0.000306 │ 0.000172
+    30  │ 0.000058 │ 0.000540 │ 0.000025 │ 0.000450 │ 0.000255 │ 0.000119
+    50  │ 0.000055 │ 0.000835 │ 0.000031 │ 0.000482 │ 0.000470 │ 0.000182
+    60  │ 0.000048 │ 0.001265 │ 0.000033 │ 0.000484 │ 0.001036 │ 0.000234
+    70  │ 0.000041 │ 0.001147 │ 0.000029 │ 0.000412 │ 0.000912 │ 0.000093
+
+  3C. SIDE-BY-SIDE COMPONENT COMPARISON AT BATCH 50 (pre-collapse)
+
+  Component     │ TIED        │ UNTIED          │ Ratio    │ Notes
+  ──────────────┼─────────────┼─────────────────┼──────────┼─────────────────────
+  emb_lm / emb  │ 0.000890    │ emb=0.000055    │ 16.2×    │ Tied = emb+lm combined
+                │             │ lm=0.000835     │          │ emb+lm=0.000890 (same total)
+  attn          │ 0.000027    │ 0.000031        │ 0.87×    │ Nearly identical
+  ffn           │ 0.000513    │ 0.000482        │ 1.06×    │ Nearly identical
+  rmsnorm       │ 0.000463    │ 0.000470        │ 0.99×    │ Nearly identical
+  sb            │ 0.000210    │ 0.000182        │ 1.15×    │ Nearly identical
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │ KEY INSIGHT: When untied, emb gradient is only 6% of lm gradient.     │
+  │ The embedding layer learns 16× slower than the LM head.               │
+  │ When tied, both gradients merge into same buffer (0.000890 = sum).     │
+  │                                                                       │
+  │ Encoder components (attn, ffn, rmsnorm) are IDENTICAL between runs.   │
+  │ This proves tying only affects the embedding/LM head gradient ratio,  │
+  │ not the encoder backbone. The encoder has the same gradient structure  │
+  │ in both sessions → same collapse behavior.                            │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  3D. GRADIENT EVOLUTION: WHAT HAPPENS AT COLLAPSE (batch 50→60→70)
+
+  Component     │ B50    → B60    → B70    │ Growth 50→70 │ Notes
+  ──────────────┼─────────────────────────┼──────────────┼──────────────────
+  TIED:                                    
+  emb_lm_tied   │ 0.0009 → 0.0013 → 0.0025│ 2.8×         │ Accelerating
+  attn          │ 27e-6  → 32e-6  → 37e-6 │ 1.4×         │ Barely moves
+  ffn           │ 0.0005 → 0.0005 → 0.0007│ 1.4×         │ Slow growth
+  rmsnorm       │ 0.0005 → 0.0009 → 0.0008│ 1.8×         │ Spikes then dips
+
+  UNTIED:
+  lm            │ 0.0008 → 0.0013 → 0.0011│ 1.4×         │ Plateaus
+  emb           │ 55e-6  → 48e-6  → 41e-6 │ 0.75× (↓!)   │ SHRINKING
+  attn          │ 31e-6  → 33e-6  → 29e-6 │ 0.94×        │ Frozen
+  ffn           │ 0.0005 → 0.0005 → 0.0004│ 0.85×        │ Slightly shrinks
+  rmsnorm       │ 0.0005 → 0.0010 → 0.0009│ 1.9×         │ Same rmsnorm spike
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │ ATTENTION GRADIENTS ARE FROZEN IN BOTH SESSIONS:                      │
+  │   tied:   27e-6 → 37e-6  (barely moves, 30× smaller than emb_lm)     │
+  │   untied: 31e-6 → 29e-6  (literally zero growth)                     │
+  │                                                                       │
+  │ The encoder cannot differentiate positions. It has no learning signal. │
+  │ With attn 30× weaker than other components, attention weights are     │
+  │ effectively frozen. This is the SAME in both tied and untied.         │
+  │                                                                       │
+  │ rmsnorm gradient spikes at collapse in BOTH sessions — this is the    │
+  │ normalization layer reacting to encoder collapse, not causing it.     │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+───────────────────────────────────────────────────────────────────────────────
+ SECTION 4: REPRESENTATION COLLAPSE (ρ = avg|cos(h_i, h_j)|)
+───────────────────────────────────────────────────────────────────────────────
+
+  ρ(final) = average absolute cosine similarity at layer 11 output
+  h_rms_growth = h_rms(L11) / h_rms(emb) = residual stream amplification
+
+  Batch │ TIED                               │ UNTIED
+  ──────┼────────────────────────────────────┼────────────────────────────────────
+     1  │ ρ(emb)=0.044 → ρ(L11)=0.096       │ ρ(emb)=0.044 → ρ(L11)=0.053
+        │ h_rms_growth = 16.1×               │ h_rms_growth = 20.5×
+        │                                    │
+    50  │ ρ(emb)=0.045 → ρ(L11)=0.107       │ ρ(emb)=0.045 → ρ(L11)=0.058
+        │ h_rms_growth = 23.1×               │ h_rms_growth = 28.0×
+        │                                    │
+    60  │ ρ(emb)=0.028 → ρ(L11)=0.227       │ ρ(emb)=0.028 → ρ(L11)=0.121
+        │ h_rms_growth = 25.4×               │ h_rms_growth = 30.1×
+        │                                    │
+    70  │ ρ(emb)=0.062 → ρ(L11)=0.338       │ ρ(emb)=0.062 → ρ(L11)=0.208
+        │ h_rms_growth = 29.7×               │ h_rms_growth = 35.3×
+
+  Observations:
+
+  1. ρ(emb) is IDENTICAL in both sessions at every batch — same tokenizer,
+     same data order, same embedding initialization. (This is expected since
+     they share the same random seed.)
+
+  2. ρ(final) is LOWER in untied at every batch, but the GAP NARROWS:
+       B1:  tied 0.096 vs untied 0.053  (tied 1.8× higher)
+       B50: tied 0.107 vs untied 0.058  (tied 1.8× higher)
+       B60: tied 0.227 vs untied 0.121  (tied 1.9× higher)
+       B70: tied 0.338 vs untied 0.208  (tied 1.6× higher)
+
+     Untied delays the rho buildup but does NOT prevent it.
+     The trend in untied is the same direction — just 10-20 batches behind.
+
+  3. h_rms_growth is actually HIGHER in untied (20.5× vs 16.1× at batch 1,
+     35.3× vs 29.7× at batch 70). Untying causes MORE residual growth,
+     not less. This is because the separate embedding matrix receives 
+     weaker gradients and updates slower, allowing the residual to grow
+     more relative to embedding scale.
+
+───────────────────────────────────────────────────────────────────────────────
+ SECTION 5: TIMELINE OF COLLAPSE (both sessions superimposed)
+───────────────────────────────────────────────────────────────────────────────
+
+  Batch   Event                       TIED              UNTIED
+  ──────  ────────────────────────────────────────────────────────────────
+    1     Random init                 Loss=8.05         Loss=8.06
+   10     Learning begins             Loss=8.04         Loss=8.05
+   20     Slow descent                Loss=7.94         Loss=7.98
+   30     tok262 appears              tok262 13% dom    tok262 2% dom
+   40     tok262 consolidates         tok262 6%         tok262 2%
+   50     Pre-collapse                tok262 7%         tok262 6%
+          attn grad starvation        attn=27e-6        attn=31e-6
+   55     ─── TRANSITION POINT ───    ─────────────     ─────────────
+   60     TOK36 TAKES OVER            tok36 50%         tok36 36%
+          Loss "drops" (fake)         Loss=6.54         Loss=6.95
+          ρ(L11) doubles              ρ=0.227           ρ=0.121
+   70     Collapse deepens            tok36 70%         tok36 67%
+          ρ(L11) keeps rising         ρ=0.338           ρ=0.208
+   80+    (tied continues)            tok36 64%         (session ends)
+  100     Locked                      tok36 62%
+  500+    Plateau                     Loss ≈ 3.85
+  2706    End                         Loss = 3.83
+
+───────────────────────────────────────────────────────────────────────────────
+ SECTION 6: DIAGNOSIS — WHY UNTYING DOESN'T FIX THE COLLAPSE
+───────────────────────────────────────────────────────────────────────────────
+
+  Previous hypothesis: Tok36 collapse is caused by tied-weight gradient
+  contamination — embedding scatter-add (frequency-proportional) corrupts
+  the LM head gradient → space byte row grows → predict space everywhere.
+
+  THIS HYPOTHESIS IS DISPROVEN BY THE DATA.
+
+  Evidence:
+  1. Untied session collapses to tok36 at the SAME batch (60)
+  2. The collapse severity is nearly identical (67% vs 70% at batch 70)
+  3. Encoder gradients (attn, ffn, rmsnorm) are identical in both sessions
+  4. Only difference: untied ρ is ~2× lower (delays but doesn't prevent)
+
+  Revised understanding — the collapse has THREE contributors:
+
+  A. ATTENTION GRADIENT STARVATION (primary cause, shared by both)
+     ──────────────────────────────────────────────────────────────
+     attn gradient rms ≈ 27e-6 at batch 50, vs ffn ≈ 500e-6 (18.5×)
+     This means Q/K/V weight updates are 18× slower than FFN weights.
+     The attention layer cannot learn to differentiate positions.
+     If all positions look the same to attention → all hidden states
+     converge → model predicts the most frequent token.
+
+     This is a STRUCTURAL imbalance in the gradient flow, present in
+     both tied and untied sessions, and is the primary collapse driver.
+
+  B. FREQUENCY-PROPORTIONAL GRADIENT SIGNAL (secondary, shared by both)
+     ──────────────────────────────────────────────────────────────────
+     Even in the untied session, the LM HEAD backward pass (dense GEMM)
+     uses the centered hidden states as input. When the model starts
+     predicting tok36 for many positions (batch 60+), the cross-entropy
+     gradient for tok36 row accumulates from many positions, reinforcing
+     the tok36 bias. This is a positive feedback loop in BOTH sessions.
+
+     The LM head gradient for row v = Σ_t (p[t,v] - 1{y_t=v}) · h[t]
+     When p[t,36] is large for ALL t, gradient points toward "predict
+     more tok36" for ALL positions, regardless of tying.
+
+  C. WEIGHT TYING AMPLIFICATION (minor exacerbation, tied only)
+     ────────────────────────────────────────────────────────────
+     When tied, the embedding scatter-add (873 additions for tok36)
+     adds extra directional bias to the shared matrix. This explains
+     why tied ρ is 1.6-1.9× higher and tied collapse is slightly faster
+     (50% vs 36% at batch 60). But it's the accelerator, not the engine.
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │ CONCLUSION: The real problem is ATTENTION GRADIENT STARVATION.         │
+  │                                                                       │
+  │ When attn gradients are 18× weaker than FFN, the model's only         │
+  │ differentiating mechanism (position-dependent attention patterns)      │
+  │ cannot learn. The FFN + LM head learn to predict the mode of the      │
+  │ distribution (tok36 = space = 10.7% of tokens), while attention       │
+  │ remains essentially random.                                           │
+  │                                                                       │
+  │ Neither tying nor untying addresses this fundamental gradient          │
+  │ imbalance in the encoder backbone.                                    │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+───────────────────────────────────────────────────────────────────────────────
+ SECTION 7: IMPLICATIONS FOR NEXT STEPS
+───────────────────────────────────────────────────────────────────────────────
+
+  Since the root cause is attention gradient starvation (not weight tying):
+
+  1. FREQUENCY SCALING on embedding scatter-add is still valid as a
+     secondary fix (reduces tied gradient asymmetry), but won't solve
+     the collapse by itself — untied proves this.
+
+  2. The primary intervention must increase attention gradient magnitude
+     relative to FFN. Possible approaches:
+
+     a) Per-component learning rate: lr_attn = k × lr_base (k > 1)
+        Current data shows attn needs about 18× more gradient to match FFN.
+        A component-specific lr multiplier of 5-10× for W_q, W_k, W_v
+        would bring attention learning rate into the same regime as FFN.
+
+     b) Attention gradient scaling in backward pass:
+        Scale dW_q, dW_k, dW_v by a factor before optimizer step.
+        Equivalent to (a) but implemented as gradient scaling.
+
+     c) Different optimizer hyperparameters for attention:
+        Lower β2 or higher ε for attention parameters could help
+        Adam(W) adapt to the smaller gradient scale.
+
+     d) Investigate WHY attn gradients are 18× smaller:
+        - Flash Attention backward kernel gradient magnitudes
+        - Softmax gradient saturation (if attention is near-uniform,
+          ∂softmax/∂z ≈ 0 for all entries → zero gradient flow)
+        - ALiBi slope magnitudes (might be too large, causing
+          attention to be dominated by positional bias rather than
+          learned Q·K similarity)
+
+  3. h_rms growth (16→35× in 70 batches) may be a secondary issue.
+     If encoder weights update slowly (because attn is frozen), the
+     residual stream grows unchecked. Fixing attention learning should
+     indirectly stabilize h_rms.
+
+═══════════════════════════════════════════════════════════════════════════════
+  END OF COMPARISON  |  Generated from log analysis, no synthetic data
+═══════════════════════════════════════════════════════════════════════════════

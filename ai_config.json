@@ -283,6 +283,10 @@
                     "enabled": false,
                     "lambda": 0.0
                 },
+                "class_balanced": {
+                    "enabled": true,
+                    "beta": 0.5
+                },
                 "preference": {
                     "enabled": false,
                     "beta": 0.1
@@ -408,7 +412,7 @@
                 "project_out_pc1": true,
                 "pc1_power_iters": 5,
                 "center_logits": true,
-                "center_encoder_residuals": false
+                "center_encoder_residuals": true
             },
             "layer_scale": {
                 "enabled": true,

@@ -67,6 +67,7 @@ __global__ void kernelNLLLossForward(
     float* __restrict__ per_token_loss,
     float* __restrict__ loss_sum,
     int* __restrict__ valid_count,
+    float* __restrict__ weight_sum,             // Accumulated class weights (nullable if no class_balanced)
     int num_tokens,
     int vocab_size,
     float focal_alpha,
@@ -75,7 +76,8 @@ __global__ void kernelNLLLossForward(
     float smoothing_epsilon,
     bool smoothing_enabled,
     float entropy_reg_lambda,
-    bool entropy_reg_enabled
+    bool entropy_reg_enabled,
+    const float* __restrict__ class_weights     // [vocab_size] per-class weights (nullable = all 1.0)
 ) {
     const int token_idx = blockIdx.x;
     if (token_idx >= num_tokens) return;
@@ -157,9 +159,17 @@ __global__ void kernelNLLLossForward(
         const float entropy_loss = entropy_reg_enabled ? (entropy_reg_lambda * s_neg_entropy) : 0.0f;
         const float total_loss   = ce_loss + entropy_loss;
 
-        per_token_loss[token_idx] = total_loss;
-        atomicAdd(loss_sum, total_loss);
+        // Class-balanced weighting: w_{y_t} scales the ENTIRE loss for this position
+        // This weights the whole gradient row grad_logits[t, :] = w * (p - q) / W
+        const float cw = (class_weights != nullptr) ? class_weights[target] : 1.0f;
+        const float weighted_loss = cw * total_loss;
+
+        per_token_loss[token_idx] = weighted_loss;
+        atomicAdd(loss_sum, weighted_loss);
         atomicAdd(valid_count, 1);
+        if (weight_sum != nullptr) {
+            atomicAdd(weight_sum, cw);
+        }
     }
 }
 
@@ -227,14 +237,15 @@ __global__ void kernelNLLLossBackward(
     float* __restrict__ grad_log_probs,     // [num_tokens, vocab_size] — OUTPUT
     int num_tokens,
     int vocab_size,
-    float inv_valid_count,  // 1/N
+    float inv_valid_count,  // 1/N or 1/W (weight_sum) when class_balanced
     float focal_alpha,
     float focal_gamma,
     bool focal_enabled,
     float smoothing_epsilon,
     bool smoothing_enabled,
     float entropy_reg_lambda,
-    bool entropy_reg_enabled
+    bool entropy_reg_enabled,
+    const float* __restrict__ class_weights     // [vocab_size] per-class weights (nullable = all 1.0)
 ) {
     const int token_idx = blockIdx.x;
     if (token_idx >= num_tokens) return;
@@ -356,8 +367,12 @@ __global__ void kernelNLLLossBackward(
             }
         }
 
-        // Apply mean reduction
-        grad_row[v] = grad_v * inv_valid_count;
+        // Apply mean reduction with class-balanced weighting
+        // When class_balanced: grad_row[v] = w_{y_t} * grad_v / W  (W = weight_sum)
+        // When unweighted:     grad_row[v] = grad_v / N            (N = valid_count)
+        // inv_valid_count is set to 1/W or 1/N by caller accordingly.
+        const float cw = (class_weights != nullptr) ? class_weights[target] : 1.0f;
+        grad_row[v] = grad_v * cw * inv_valid_count;
     }
 }
 
@@ -386,6 +401,7 @@ void launchUnifiedLossForward(
     float* per_token_loss,
     float* loss_sum,
     int* valid_count,
+    float* weight_sum,          // Accumulated class weights (nullable if no class_balanced)
     int num_tokens,
     int vocab_size,
     float focal_alpha,
@@ -395,19 +411,22 @@ void launchUnifiedLossForward(
     bool smoothing_enabled,
     float entropy_reg_lambda,
     bool entropy_reg_enabled,
+    const float* class_weights, // [vocab_size] per-class weights (nullable = all 1.0)
     cudaStream_t stream
 ) {
     cudaMemsetAsync(loss_sum, 0, sizeof(float), stream);
     cudaMemsetAsync(valid_count, 0, sizeof(int), stream);
+    if (weight_sum) cudaMemsetAsync(weight_sum, 0, sizeof(float), stream);
     
     const int block_size = 256;
     kernelNLLLossForward<<<num_tokens, block_size, 0, stream>>>(
         log_probs, targets, valid_mask,
-        per_token_loss, loss_sum, valid_count,
+        per_token_loss, loss_sum, valid_count, weight_sum,
         num_tokens, vocab_size,
         focal_alpha, focal_gamma, focal_enabled,
         smoothing_epsilon, smoothing_enabled,
-        entropy_reg_lambda, entropy_reg_enabled
+        entropy_reg_lambda, entropy_reg_enabled,
+        class_weights
     );
 }
 
@@ -419,6 +438,7 @@ void launchUnifiedLossBackward(
     int num_tokens,
     int vocab_size,
     int valid_count,
+    float weight_sum,           // Sum of class weights (0 = use valid_count instead)
     float focal_alpha,
     float focal_gamma,
     bool focal_enabled,
@@ -426,14 +446,18 @@ void launchUnifiedLossBackward(
     bool smoothing_enabled,
     float entropy_reg_lambda,
     bool entropy_reg_enabled,
+    const float* class_weights, // [vocab_size] per-class weights (nullable = all 1.0)
     cudaStream_t stream
 ) {
-    // Mean reduction: divide gradient by valid_count (matching PyTorch's F.nll_loss(reduction='mean'))
+    // Mean reduction denominator: weight_sum if class_balanced, valid_count otherwise
     if (valid_count <= 0) {
         throw std::runtime_error("[launchUnifiedLossBackward] valid_count=" + std::to_string(valid_count) 
             + " — no valid tokens, caller MUST ensure valid_count > 0");
     }
-    const float inv_valid_count = 1.0f / static_cast<float>(valid_count);
+    const float normalization = (class_weights != nullptr && weight_sum > 0.0f)
+        ? weight_sum
+        : static_cast<float>(valid_count);
+    const float inv_valid_count = 1.0f / normalization;
     
     const int block_size = 256;
     kernelNLLLossBackward<<<num_tokens, block_size, 0, stream>>>(
@@ -441,7 +465,8 @@ void launchUnifiedLossBackward(
         num_tokens, vocab_size, inv_valid_count,
         focal_alpha, focal_gamma, focal_enabled,
         smoothing_epsilon, smoothing_enabled,
-        entropy_reg_lambda, entropy_reg_enabled
+        entropy_reg_lambda, entropy_reg_enabled,
+        class_weights
     );
 }
 
@@ -953,6 +978,10 @@ struct NLLLossGradFn : public GradFn {
     float entropy_reg_lambda;
     bool entropy_reg_enabled;
     
+    // Class-balanced loss: per-token weight = 1/freq(target)^β
+    const float* class_weights;     // NOT OWNED — points to TrainingState::d_class_weights
+    float weight_sum;               // Sum of per-token class weights for this batch
+    
     // Upstream gradient chain
     std::shared_ptr<GradFn> log_probs_grad_fn;
     TensorContract::TensorShape grad_shape;
@@ -967,6 +996,7 @@ struct NLLLossGradFn : public GradFn {
         float focal_alpha_, float focal_gamma_, bool focal_enabled_,
         float smoothing_epsilon_, bool smoothing_enabled_,
         float entropy_reg_lambda_, bool entropy_reg_enabled_,
+        const float* class_weights_, float weight_sum_,
         std::shared_ptr<GradFn> upstream_grad_fn,
         const TensorContract::TensorShape& shape,
         cudaStream_t stream_
@@ -979,6 +1009,7 @@ struct NLLLossGradFn : public GradFn {
         , focal_alpha(focal_alpha_), focal_gamma(focal_gamma_), focal_enabled(focal_enabled_)
         , smoothing_epsilon(smoothing_epsilon_), smoothing_enabled(smoothing_enabled_)
         , entropy_reg_lambda(entropy_reg_lambda_), entropy_reg_enabled(entropy_reg_enabled_)
+        , class_weights(class_weights_), weight_sum(weight_sum_)
         , log_probs_grad_fn(std::move(upstream_grad_fn))
         , grad_shape(shape)
         , async_stream(stream_), cleanup_event(nullptr)
@@ -1021,9 +1052,11 @@ struct NLLLossGradFn : public GradFn {
         launchUnifiedLossBackward(
             log_probs_data, targets, valid_mask, grad_log_probs_buffer,
             num_tokens, vocab_size, valid_count,
+            weight_sum,
             focal_alpha, focal_gamma, focal_enabled,
             smoothing_epsilon, smoothing_enabled,
             entropy_reg_lambda, entropy_reg_enabled,
+            class_weights,
             stream
         );
         
@@ -1173,10 +1206,14 @@ __host__ Tensor unified_loss(
     float* per_token_loss = nullptr;
     float* d_loss_sum = nullptr;
     int* d_valid_count = nullptr;
+    float* d_weight_sum = nullptr;  // Class-balanced: accumulates per-token weights
     
     cudaMalloc(&per_token_loss, num_tokens * sizeof(float));
     cudaMalloc(&d_loss_sum, sizeof(float));
     cudaMalloc(&d_valid_count, sizeof(int));
+    if (config.d_class_weights) {
+        cudaMalloc(&d_weight_sum, sizeof(float));
+    }
     
     launchUnifiedLossForward(
         log_probs.data,
@@ -1185,6 +1222,7 @@ __host__ Tensor unified_loss(
         per_token_loss,
         d_loss_sum,
         d_valid_count,
+        d_weight_sum,
         num_tokens,
         vocab_size,
         config.focal_alpha,
@@ -1194,24 +1232,38 @@ __host__ Tensor unified_loss(
         config.smoothing_enabled,
         config.entropy_reg_lambda,
         config.entropy_reg_enabled,
+        config.d_class_weights,
         stream
     );
     
     // ── Step 3: Copy results to host ──
     float h_loss_sum = 0.0f;
     int h_valid_count = 0;
+    float h_weight_sum = 0.0f;
     cudaMemcpyAsync(&h_loss_sum, d_loss_sum, sizeof(float), cudaMemcpyDeviceToHost, stream);
     cudaMemcpyAsync(&h_valid_count, d_valid_count, sizeof(int), cudaMemcpyDeviceToHost, stream);
+    if (d_weight_sum) {
+        cudaMemcpyAsync(&h_weight_sum, d_weight_sum, sizeof(float), cudaMemcpyDeviceToHost, stream);
+    }
     cudaStreamSynchronize(stream);
     
     if (h_valid_count <= 0) {
         throw std::runtime_error("[unified_loss] valid_count=0 — no valid tokens in batch. "
             "Check valid_mask and targets for corruption.");
     }
-    const float mean_loss = h_loss_sum / static_cast<float>(h_valid_count);
+    
+    // Mean loss: weighted_loss_sum / weight_sum (class-balanced) or loss_sum / valid_count (standard)
+    const float normalization = (config.d_class_weights && h_weight_sum > 0.0f)
+        ? h_weight_sum
+        : static_cast<float>(h_valid_count);
+    const float mean_loss = h_loss_sum / normalization;
     
     AG_TRACE("[unified_loss] loss_sum=%.6f valid_count=%d mean_loss=%.6f\n",
              h_loss_sum, h_valid_count, mean_loss);
+    if (config.d_class_weights) {
+        AG_TRACE("[unified_loss] class_balanced: weight_sum=%.2f effective_N=%.2f (vs raw N=%d)\n",
+                 h_weight_sum, h_weight_sum, h_valid_count);
+    }
     AG_TRACE("[unified_loss] config: focal_alpha=%.2f focal_gamma=%.2f smoothing=%.3f entropy_lambda=%.4f\n",
              config.focal_alpha, config.focal_gamma, config.smoothing_epsilon, config.entropy_reg_lambda);
     
@@ -1238,6 +1290,7 @@ __host__ Tensor unified_loss(
             config.focal_alpha, config.focal_gamma, config.focal_enabled,
             config.smoothing_epsilon, config.smoothing_enabled,
             config.entropy_reg_lambda, config.entropy_reg_enabled,
+            config.d_class_weights, h_weight_sum,
             log_probs.grad_fn,    // Takes ownership of LogSoftmaxGradFn
             log_probs.shape,
             stream
@@ -1252,6 +1305,7 @@ __host__ Tensor unified_loss(
     cudaFree(per_token_loss);
     cudaFree(d_loss_sum);
     cudaFree(d_valid_count);
+    if (d_weight_sum) cudaFree(d_weight_sum);
     
     return loss;
     // log_probs goes out of scope: data NOT freed (transferred), grad_fn NOT deleted (transferred)

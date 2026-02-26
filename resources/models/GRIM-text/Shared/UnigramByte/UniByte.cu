@@ -576,15 +576,7 @@ std::vector<int> UniByte::encode(const std::string& text) const {
     // If scratch block reasoning is disabled, use fast path (normal UnigramByte)
     if (!config_.enable_scratch_block_reasoning) {
         // FAST PATH: No structural detection, no AtomTable, just pure tokenization
-        auto pieces = unigram_.encode(text);
-        std::vector<int> token_ids;
-        token_ids.reserve(pieces.size());
-        
-        for (int tid : pieces) {
-            token_ids.push_back(tid);
-        }
-        
-        return token_ids;
+        return unigram_.encode(text);
     }
     
     // SCRATCH BLOCK REASONING PATH: Use AtomTable for structural reasoning

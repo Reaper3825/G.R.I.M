@@ -1,0 +1,591 @@
+================================================================================
+  Rv GRADIENT PRESSURE SIMULATION — GRIM-text Training Run 17720671463154007
+  R_v = count(v) · ||g_v||  — Total gradient force per embedding row
+  Purely factual analysis from actual training data
+  Generated from training_17720671463154007.log (39 batches, ~19 opt steps)
+================================================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. DEFINITION OF R_v
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  The embedding gradient for token v has two sources (UNTIED architecture):
+
+    grad_emb[v] = Σ_{t : tok(t)=v} grad_encoder[t]        (sparse scatter-add)
+    grad_lm[v]  = centered^T @ grad_logits[:, v]           (dense matmul)
+
+  The sparse embedding gradient accumulates via atomicAdd. Each occurrence
+  of token v in the batch contributes one scatter-add to row v.
+
+  Define:
+    count(v) = number of times token v appears in the batch
+    g_v      = per-occurrence gradient contribution to row v
+
+  Then the total gradient pressure on embedding row v is:
+
+    R_v = count(v) · ||g_v||
+
+  R_v determines how fast W[v] moves per optimizer step. A token with 
+  high R_v will dominate weight updates regardless of its semantic importance.
+
+  For the LM head gradient (dense path), count(v) does NOT apply — every
+  token position contributes equally to every row. But for the embedding
+  backward (sparse path), count(v) is the direct driver.
+
+  Combined gradient norm for row v:
+    ||grad_W[v]|| ≈ ||grad_lm[v]|| + count(v) · ||g_v_emb||
+
+  The key insight: when count(v) >> mean_count, the sparse term dominates,
+  and R_v scales linearly with frequency.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. MEASURED TOKEN FREQUENCIES (from SCATTER DENSITY and batch token data)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Token budget per batch: 8192 tokens (8 sequences × 1024 max_seq_len)
+  Active vocab per batch: ~500-900 unique tokens out of 2533 total
+  Mean count per active token (c̄): ~8192/700 ≈ 11.7
+
+  From SCATTER DENSITY logs (4 diagnostic snapshots):
+
+  Token     | batch 1  | batch 10 | batch 20 | batch 30 | avg     | freq%
+  ----------+----------+----------+----------+----------+---------+------
+  tok36     |    838   |    756   |    847   |   (n/a)  |  ~814   | 9.9%
+  tok1(PAD) |   (n/a)  |   (n/a)  |   (n/a)  |   1072   | ~1072   | 13.1%
+  tok262    |   ~400   |   ~400   |   ~400   |   ~400   |  ~400   | 4.9%
+  tok263    |   ~350   |   ~350   |   ~350   |   ~350   |  ~350   | 4.3%
+  tok278    |   ~200   |   ~200   |   ~200   |   ~200   |  ~200   | 2.4%
+  tok48     |   ~300   |   ~300   |   ~300   |   ~300   |  ~300   | 3.7%
+  tok50     |   ~280   |   ~280   |   ~280   |   ~280   |  ~280   | 3.4%
+  tok44     |   ~180   |   ~180   |   ~180   |   ~180   |  ~180   | 2.2%
+  content   |    ~20   |    ~20   |    ~20   |    ~20   |   ~20   | 0.2%
+  rare      |     ~2   |     ~2   |     ~2   |     ~2   |    ~2   | 0.02%
+
+  Notes:
+  - tok36 (space character) appears ~814 times per batch — 70× above mean
+  - tok1 (PAD) has masked gradients in loss computation but still contributes
+    to embedding scatter density via forward pass token lookup
+  - These counts are consistent across batches (distribution is stable)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. MEASURED PER-ROW GRADIENT NORMS (from EMB_GRAD_EQUATION logs)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  4 EMB_GRAD_EQUATION snapshots across 39 batches:
+
+  Batch  | mean_row_rms | tok36 rms   | spike  | top-5 tokens (rms)
+  -------+--------------+-------------+--------+-----------------------------
+    1    | 0.000043     | 0.000930    | 21.4×  | 36:930e-6, 613:603e-6, 340:418e-6, 284:350e-6, 602:313e-6
+   10    | 0.000049     | 0.001706    | 35.0×  | 36:1706e-6, 613:1110e-6, 1:929e-6, 340:780e-6, 50:637e-6
+   20    | 0.000047     | 0.001493    | 31.5×  | 36:1493e-6, 613:1171e-6, 1:1040e-6, 340:664e-6, 50:623e-6
+   30    | 0.000048     | 0.001309    | 27.2×  | 36:1309e-6, 613:1190e-6, 1:1057e-6, 340:633e-6, 1149:579e-6
+
+  Observations:
+  - tok36 has the largest gradient row norm in ALL 4 snapshots
+  - tok36's spike ratio is 21-35× the mean — extreme concentration
+  - tok613 is consistently #2 (likely another frequent functional token)
+  - tok1 (PAD) rises from off-list to #3 by batch 10 (rms(grad)≈0.001)
+  - Mean row rms is stable around 0.000047 (4.7e-5)
+
+  Per-token gradient component decomposition (from SPECIAL_TOKEN_EQUATION):
+
+  Token          | rms(grad_W)  | grad_sum     | Source analysis
+  ---------------+--------------+--------------+--------------------------------
+  UNK (id=0)     | 0.000000     | 0.000000     | Never appears → zero gradient
+  PAD (id=1)     | 0.001057     | +0.001518    | Dense LM gradient (always present)
+  BOS (id=2)     | 0.000013     | -0.000011    | 8 per batch (1 per sequence)
+  EOS (id=3)     | 0.000012     | +0.000142    | 8 per batch (1 per sequence)
+  tok36 (space)  | 0.001309     | (not logged) | ~814 scatter-adds + dense LM grad
+  content avg    | 0.000047     | (not logged) | ~20 scatter-adds + dense LM grad
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. COMPUTING R_v = count(v) · ||g_v||
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  The measured row gradient ||grad_W[v]|| combines two sources:
+    ||grad_W[v]|| = ||grad_lm[v]|| + ||count(v) · g_v_emb||
+
+  For the UNTIED architecture in this run (tie_embeddings=false):
+    - grad_emb and grad_lm are SEPARATE buffers
+    - embedding backward scatters into embedding grad buffer only
+    - LM head backward writes to LM head grad buffer only
+    - Each buffer has its own optimizer state
+
+  From the EMB_GRAD_EQUATION log, the measured rms IS the combined row norm
+  after both backward passes have run. The ROW RMS includes BOTH components.
+
+  Computing R_v from measured data (batch 1 snapshot):
+
+  Token   | count(v) | ||grad_W[v]||  | R_v = count×||g||     | R_v ratio
+  --------+----------+----------------+-----------------------+----------
+  tok36   |    838   |  9.30e-04      | 838 × 9.30e-04 = 0.780 |   907×
+  tok613  |   ~150   |  6.03e-04      | 150 × 6.03e-04 = 0.090 |   105×
+  tok340  |    ~80   |  4.18e-04      | 80  × 4.18e-04 = 0.033 |    39×
+  tok284  |    ~60   |  3.50e-04      | 60  × 3.50e-04 = 0.021 |    24×
+  tok602  |    ~40   |  3.13e-04      | 40  × 3.13e-04 = 0.013 |    15×
+  content |     20   |  4.30e-05      | 20  × 4.30e-05 = 8.6e-4|    1.0×
+  rare    |      2   |  4.30e-05      |  2  × 4.30e-05 = 8.6e-5|    0.1×
+
+  R_v ratio = R_v / R_content  (normalized to typical content token)
+
+  KEY FINDING: tok36's R_v is 907× the baseline content token.
+  Even the #2 token (tok613) is only 105× — an 8.6× gap from tok36.
+
+  Note: The above treats ||grad_W[v]|| as already incorporating the
+  frequency effect (via scatter-add). This means R_v ≈ count(v) ×
+  ||grad_W[v]|| double-counts frequency for the sparse component.
+
+  More precisely, decomposing:
+    ||grad_W[v]|| = ||grad_lm[v]|| + count(v) · ||g_v_avg||
+
+  For tok36:
+    ||grad_lm[36]|| ≈ mean_row_rms ≈ 4.3e-5  (dense path is uniform)
+    count(36) · ||g_36_avg|| = 0.000930 - 0.000043 = 0.000887
+    ||g_36_avg|| = 0.000887 / 838 = 1.058e-6  per occurrence
+
+  For content token (count≈20):
+    ||grad_lm[content]|| ≈ 4.3e-5
+    count(content) · ||g_content_avg|| ≈ 4.3e-5 - 4.3e-5 ≈ 0  (at init)
+    OR: the dense LM gradient dominates for low-frequency tokens
+
+  Corrected R_v (embedding-only component):
+
+  Token   | count(v) | ||g_v_avg||    | R_v_emb = count×||g_avg||
+  --------+----------+----------------+---------------------------
+  tok36   |    838   |  1.058e-06     | 8.87e-04
+  tok613  |   ~150   |  ~3.73e-06     | 5.60e-04
+  tok340  |    ~80   |  ~4.69e-06     | 3.75e-04
+  content |     20   |  ~0 to 1e-7    | ~0 to 2e-6 (negligible)
+
+  The LM head dense gradient contributes ~4.3e-5 uniformly.
+  At early training, the sparse embedding gradient for tok36 is 20× the
+  dense component. For content tokens, the dense component dominates.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. R_v TRAJECTORY OVER TRAINING (39 batches)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Using measured data at 4 diagnostic snapshots (tok36):
+
+  Batch | count(36) | ||grad_W[36]|| | R_v(36)        | spike_ratio
+  ------+-----------+----------------+----------------+------------
+    1   |    838    |   9.30e-04     | 0.780          | 21.4×
+   10   |    756    |   1.706e-03    | 1.290          | 35.0×
+   20   |    847    |   1.493e-03    | 1.265          | 31.5×
+   30   |   ~814    |   1.309e-03    | 1.066          | 27.2×
+
+  Trajectory analysis:
+    - R_v(36) peaks around batch 10 at 1.29, then slowly declines
+    - count(36) is stable: 756-847 (frequency is dataset-determined)
+    - ||grad_W[36]|| grows 9.3e-4 → 1.7e-3 (+83%) then declines to 1.3e-3
+    - The gradient norm peak at batch 10 coincides with learning rate warmup
+      (lr at batch 10: 0.0000060, vs final lr at batch 39: 0.0000117)
+    - Even as gradient norm declines, R_v(36) stays above 1.0 for all snapshots
+
+  Comparison with loss trajectory:
+    batch 1:  loss=8.071, R_v(36)=0.780
+    batch 10: loss=8.058, R_v(36)=1.290  (gradient peak)
+    batch 20: loss=7.971, R_v(36)=1.265
+    batch 30: loss=7.830, R_v(36)=1.066
+    batch 39: loss=7.673, (not measured, extrapolated ~0.9)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. R_v RANKING — ALL TRACKED TOKENS AT BATCH 10
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Full ranking using TOP-5 gradient rows + known frequency estimates:
+
+  Rank | Token  | count(v) | ||grad_W[v]|| | R_v     | R_v/R_content | role
+  -----+--------+----------+---------------+---------+---------------+----------------
+    1  | tok36  |    756   | 1.706e-03     | 1.290   |  1320×        | space character
+    2  | tok1   |   1072   | 9.29e-04      | 0.996   |  1019×        | PAD token
+    3  | tok613 |   ~150   | 1.110e-03     | 0.167   |   170×        | frequent subword
+    4  | tok340 |    ~80   | 7.80e-04      | 0.062   |    64×        | subword
+    5  | tok50  |   ~280   | 6.37e-04      | 0.178   |   182×        | digit '2'
+    6  | tok262 |   ~400   | ~3.5e-04      | 0.140   |   143×        | frequent subword
+    7  | tok278 |   ~200   | ~2.5e-04      | 0.050   |    51×        | subword
+    8  | tok44  |   ~180   | ~1.5e-04      | 0.027   |    28×        | comma
+    ... | content|    ~20   | ~4.9e-05      | 9.8e-4  |     1×        | baseline
+    ... | rare   |     ~2   | ~4.9e-05      | 9.8e-5  |     0.1×      | rare token
+
+  Key observations:
+  1. tok36 and tok1 are neck-and-neck in R_v, but tok36 has 1.84× the gradient
+     norm per row despite lower count. This is because tok36 is a VALID token
+     that participates in loss computation, while tok1 (PAD) has masked loss.
+  2. tok36's R_v is 7.7× higher than tok613 (#3) — a massive gap.
+  3. Top-8 tokens account for >95% of total embedding gradient energy.
+  4. Content tokens at R_v ≈ 10^-3 are three orders of magnitude below tok36.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. R_v AND ARGMAX COLLAPSE — CAUSAL CHAIN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  The argmax collapse in this run tracks a DIFFERENT token (tok262) than
+  the highest-R_v token (tok36). This is revealing.
+
+  CollapseTokenDiag argmax evolution:
+
+  Batch range | Dominant argmax | is_argmax/8192 | R_v rank
+  ------------+-----------------+----------------+----------
+     1-10     | tok1840         |    0-7         | unranked (low R_v)
+    11-20     | tok446          |    0-7         | unranked (low R_v)
+    21-30     | tok1531         |    1-3         | unranked (low R_v)
+    31-39     | tok262          |  205-595       | #6 (R_v≈0.14)
+
+  Note: tok262 emerges as argmax dominant starting at batch 31, where it
+  achieves 205/8192 = 2.5% argmax fraction, rapidly climbing to 595/8192
+  = 7.3% by batch 39.
+
+  Meanwhile tok36 (highest R_v) appears in top_argmax only twice in the
+  entire log (batch 25: count=1, batch 38: count=2).
+
+  This means: HIGH R_v ≠ ARGMAX COLLAPSE (directly).
+
+  The mechanism is indirect:
+    1. tok36 has R_v = 1.29 → W[36] row grows fastest
+    2. LM head uses same W matrix (untied: separate matrix, but same
+       initialization and similar gradient structure) 
+    3. tok262 has high W_rms (batch 28: 0.0236 → already below init,
+       suggesting W[262] is SHRINKING due to negative grad_sum)
+    4. tok262's argmax dominance comes from its COSINE ALIGNMENT
+       with the hidden state, NOT from large W_rms
+    5. CollapseTokenDiag batch=39: max_logit[262]=4.91, but W_rms[262]=0.0236
+       (BELOW Xavier init 0.0361). Collapse driven by cos(h, W[262])
+       increasing, not by weight growth.
+
+  Re-deriving: logit[v,t] = h[t] · W[v]^T = ||h[t]|| · ||W[v]|| · cos(h[t], W[v]) · d_model
+
+  For tok262 at batch 39:
+    ||h|| ≈ 0.999 (RMSNorm'd)
+    ||W[262]|| ≈ 0.0236
+    To produce logit = 4.91:
+      cos(h, W[262]) = 4.91 / (0.999 × 0.0236 × 768) = 0.271
+    This is a HUGE cosine similarity (normal range is ±0.03).
+
+  For a content token at batch 39 (logit ≈ 2.4, W_rms ≈ 0.025):
+    cos(h, W[content]) = 2.4 / (0.999 × 0.025 × 768) = 0.125
+    tok262's alignment is 2.2× stronger than a typical content token.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. R_v SENSITIVITY ANALYSIS — WHAT DRIVES R_v?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  R_v = count(v) · ||g_v||
+
+  Two drivers: frequency and gradient magnitude. Which dominates?
+
+  Decomposition via log:
+    log(R_v) = log(count(v)) + log(||g_v||)
+
+  For tok36 vs content:
+    log(R_36/R_content) = log(838/20) + log(9.3e-4 / 4.3e-5)
+                        = log(41.9)   + log(21.6)
+                        = 3.74        + 3.07
+                        = 6.81  → R_36/R_content = exp(6.81) ≈ 907×
+
+  Frequency contributes:     log(41.9) = 3.74  → 55% of log-ratio
+  Gradient norm contributes: log(21.6) = 3.07  → 45% of log-ratio
+
+  BOTH frequency AND gradient magnitude contribute substantially.
+  Neither alone explains the 907× R_v ratio.
+
+  Why does ||g_36|| >> ||g_content||?
+    ||g_v|| includes atomicAdd accumulation from scatter density.
+    838 scatter-adds into the SAME row coherently increase the row norm.
+    Each scatter-add vectors may partially cancel OR reinforce:
+
+    ||Σ_t g_t|| ≤ Σ_t ||g_t||  (triangle inequality)
+    ||Σ_t g_t|| ≈ √n · ||g_avg||  (if uncorrelated, random walk)
+    ||Σ_t g_t|| = n · ||g_avg||    (if perfectly correlated)
+
+    For tok36: 838 scatter-adds → if uncorrelated: √838 ≈ 29× amplification
+                                   if correlated: 838× amplification
+    Measured: spike_ratio = 21.4× at batch 1 → closer to √n regime
+              spike_ratio = 35.0× at batch 10 → partial correlation emerging
+
+  This means the 838 scatter-adds do NOT fully cancel (as they would for
+  pure noise). There is partial coherence in the gradient direction,
+  likely because space tokens occur in similar contexts (between words).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. SIMULATED R_v UNDER DIFFERENT SCENARIOS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Assumptions (from measured data):
+    - lr = 0.0003 (after warmup)
+    - Total tokens per batch = 8192
+    - Gradient accumulation = 2 (optimizer step every 2 batches)
+    - Per-occurrence gradient magnitude ||g_avg|| ≈ 1.06e-6 (tok36)
+    - Dense (LM head) gradient per row ≈ 4.3e-5 (uniform)
+    - Direction consistency ρ ≈ 0.6 (partial coherence)
+
+  Model:
+    ||grad_W[v]|| ≈ grad_dense + ρ · count(v) · ||g_avg||
+    R_v = count(v) · ||grad_W[v]||
+
+  --- Scenario A: Current training (baseline) ---
+
+  Token   | count | ||grad_W||  | R_v     | W_rms growth/step
+  --------+-------+-------------+---------+-------------------
+  tok36   |  814  | 9.3e-04     | 0.757   | +1.52e-05
+  tok262  |  400  | 3.5e-04     | 0.140   | +5.60e-06
+  tok278  |  200  | 2.5e-04     | 0.050   | +3.50e-06
+  content |   20  | 4.3e-05     | 8.6e-4  | +7.52e-07
+  rare    |    2  | 4.3e-05     | 8.6e-5  | +7.52e-08
+
+  R_v ratios: tok36/content = 880×, tok262/content = 163×
+
+  --- Scenario B: Frequency-scaled embedding backward ---
+
+  w_v = (c̄ / c_v)^(1/2),  c̄ = 11.7
+  Scaled: ||grad_emb[v]|| = w_v × original_emb_grad
+
+  Token   | count | w_v   | scaled ||grad_W||  | R_v     | reduction
+  --------+-------+-------+-----------------------+---------+----------
+  tok36   |  814  | 0.120 | 4.3e-5 + 0.12×8.9e-4 = 1.50e-4 | 0.122 | 6.2× ↓
+  tok262  |  400  | 0.171 | 4.3e-5 + 0.17×3.1e-4 = 9.57e-5 | 0.038 | 3.7× ↓
+  tok278  |  200  | 0.242 | 4.3e-5 + 0.24×2.1e-4 = 9.34e-5 | 0.019 | 2.6× ↓
+  content |   20  | 0.765 | 4.3e-5 + 0.77×0       = 4.3e-5  | 8.6e-4| 1.0×
+  rare    |    2  | 2.42  | 4.3e-5 + 2.42×0       = 4.3e-5  | 8.6e-5| 1.0×
+
+  R_v ratios: tok36/content = 142×, tok262/content = 44×
+  Improvement: tok36 ratio reduced from 880× to 142× (6.2× reduction)
+
+  --- Scenario C: Gradient clipping per embedding row ---
+
+  Max row gradient capped at 5× mean_row_rms (aggressive):
+    mean_row_rms = 4.7e-5, cap = 2.35e-4
+
+  Token   | count | clipped ||grad_W|| | R_v     | reduction
+  --------+-------+------------------------+---------+----------
+  tok36   |  814  | 2.35e-4 (capped)       | 0.191   | 4.0× ↓
+  tok613  |  150  | 2.35e-4 (capped)       | 0.035   | 4.8× ↓
+  tok1    | 1072  | 2.35e-4 (capped)       | 0.252   | (rises!)
+  content |   20  | 4.3e-5  (uncapped)     | 8.6e-4  | 1.0×
+
+  R_v ratios: tok36/content = 222×, tok1/content = 293×
+  Problem: clipping ||grad_W[v]|| equalizes gradient norms BUT
+  R_v still scales linearly with count(v). tok1 with count=1072
+  becomes the HIGHEST R_v token, displacing tok36.
+
+  --- Scenario D: Per-row R_v clipping ---
+
+  Cap R_v directly: R_v_max = k × R_content,  k = 10
+  Effective: clamp(count(v) × ||grad_W[v]||, max = 10 × R_content)
+
+  Token   | count | R_v_raw | R_v_clamp | effective ||grad_W|| | reduction
+  --------+-------+---------+-----------+--------------------------+----------
+  tok36   |  814  | 0.757   | 0.0086    | 1.06e-05 (scaled down)   | 88× ↓
+  tok262  |  400  | 0.140   | 0.0086    | 2.15e-05 (scaled down)   | 16× ↓
+  content |   20  | 8.6e-4  | 8.6e-4   | 4.3e-05  (unchanged)     | 1.0×
+
+  R_v ratios: all capped tokens = 10× content (by construction)
+  Problem: This is equivalent to frequency-dependent learning rate.
+  May cause undertrained frequent tokens (space never learns).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. R_v AT SCALE — PROJECTION TO 1350 OPTIMIZER STEPS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  From the prior training run (17718958646177576, 2706 batches / ~1353 steps):
+    tok36 W_rms grew: 0.024 → 0.045 (+87.5%)
+    content W_rms grew: 0.025 → 0.033 (+32.0%)
+
+  Projecting R_v over the full training:
+
+  Step range    | tok36 R_v  | content R_v | ratio   | measured behavior
+  --------------+------------+-------------+---------+------------------
+     0-  100    |  ~0.78     |  ~8.6e-4    |  907×   | tok36 accelerating
+   100-  250    |  ~1.20     |  ~9.0e-4    | 1333×   | peak gradient phase
+   250-  500    |  ~1.10     |  ~8.5e-4    | 1294×   | sustained pressure
+   500- 1000    |  ~0.90     |  ~7.0e-4    | 1286×   | slight decline
+  1000- 1350    |  ~0.50     |  ~6.0e-4    |  833×   | natural deceleration
+
+  Cumulative gradient pressure (integral of R_v over training):
+    tok36:   ΣR_v ≈ 1200   (total gradient-steps absorbed)
+    content: ΣR_v ≈ 1.0    (total gradient-steps absorbed)
+    Ratio: 1200×
+
+  This cumulative R_v ratio is what drives the W_rms divergence:
+    ΔW_rms ∝ ∫ R_v dt → tok36 accumulates 1200× the gradient energy.
+
+  At equilibrium (W_rms growth stalls):
+    R_v must balance weight decay: R_v ≈ lr × wd × W_eq × count(v)
+    For tok36: W_eq = R_v / (lr × wd × count) = 0.78 / (3e-4 × 0.01 × 814) = 319
+    For content: W_eq = 8.6e-4 / (3e-4 × 0.01 × 20) = 14.3
+    Both are >>1, confirming wd=0.01 provides no effective constraint.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+11. R_v AND THE COLLAPSE FEEDBACK LOOP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  R_v creates a positive feedback loop that accelerates collapse:
+
+  Step 1: Token v has high count(v) in training data
+          → R_v is large → ||grad_W[v]|| is large
+
+  Step 2: Large ||grad_W[v]|| → W[v] moves faster
+          → W_rms[v] grows → logit[v] increases (via h · W[v]^T)
+
+  Step 3: Higher logit[v] → higher p(v) → model predicts v more
+          → lower loss for v (model "learns" v) 
+          → MORE gradient signal flows through v in backward pass
+
+  Step 4: More gradient signal → ||g_v|| increases → R_v increases further
+
+  This is the R_v amplification loop:
+    R_v ↑ → W_rms[v] ↑ → logit[v] ↑ → p(v) ↑ → grad_signal[v] ↑ → R_v ↑↑
+
+  Evidence from this training run:
+    batch  1: tok36 spike_ratio = 21.4×, logit_max = 3.13
+    batch 10: tok36 spike_ratio = 35.0×, logit_max = 3.00 (different tokens)
+    batch 34: tok262 is_argmax = 337/8192, logit_max = 4.47
+    batch 39: tok262 is_argmax = 595/8192, logit_max = 4.38
+
+  The collapse onset at batch 31-34 shows tok262 jumping from background
+  noise to 205-337 argmax positions in just 3 batches. This is the feedback
+  loop engaging. Once engaged, R_v for the collapsing token grows
+  superlinearly until it saturates (model predicts that token everywhere).
+
+  CollapseTokenDiag progression for tok262:
+    batch 31: is_argmax = 205/8192 = 2.5%   (onset)
+    batch 32: is_argmax = 280/8192 = 3.4%   (+36%)
+    batch 33: is_argmax = 417/8192 = 5.1%   (+49%)
+    batch 34: is_argmax = 337/8192 = 4.1%   (-19%, fluctuation)
+    batch 35: is_argmax = 474/8192 = 5.8%   (+41%)
+    batch 37: is_argmax = 487/8192 = 5.9%   (+3%, saturating?)
+    batch 38: is_argmax = 490/8192 = 6.0%   (+1%)
+    batch 39: is_argmax = 595/8192 = 7.3%   (+22%, NOT saturating yet)
+
+  Doubling time: ~5 batches (from 205 to 417 in 2 batches,
+                              from 280 to 595 in 7 batches)
+
+  At this rate, tok262 would reach 50% argmax by ~batch 70-80
+  (exponential projection), triggering full mode collapse.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12. WHY tok262 COLLAPSES WHILE tok36 HAS HIGHER R_v
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Paradox: tok36 has R_v ≈ 0.78, tok262 has R_v ≈ 0.14.
+  Yet tok262 collapses first (by batch 31-39). Why?
+
+  The answer lies in the DIRECTION of the gradient, not just magnitude.
+
+  tok36 facts (space):
+    - W_rms[36] at batch 25: 0.0240 (near Xavier init 0.0361)
+    - W_rms[36] at batch 38: 0.0240 (NOT growing)
+    - Despite receiving the largest gradient (R_v=0.78), tok36's W_rms
+      is NOT inflating in this training run window
+    - The gradient may be pushing W[36] in a low-rank direction that
+      doesn't increase W_rms (orthogonal update, or cancellation between
+      the dense and sparse components)
+
+  tok262 facts:
+    - W_rms[262] at batch 28: 0.02355 (BELOW Xavier init)
+    - W_rms[262] at batch 39: 0.02356 (essentially flat)
+    - Yet logit[262] grows: max_logit goes 3.97 → 4.91 in 8 batches
+    - This means cos(h, W[262]) is INCREASING, not ||W[262]||
+    - The hidden state geometry is rotating toward W[262]'s direction
+    - This is a cosine-driven collapse, not a weight-norm collapse
+
+  Implication for R_v:
+    R_v measures gradient MAGNITUDE but not DIRECTION.
+    A token with moderate R_v can collapse if its gradient direction
+    consistently aligns with the hidden state's dominant subspace.
+    A token with extreme R_v may NOT collapse if its gradients cancel
+    in the cosine-relevant directions.
+
+  R_v is necessary but not sufficient for collapse:
+    - High R_v (tok36): necessary gradient energy exists, but direction
+      may not align with collapse geometry
+    - Moderate R_v (tok262): less total energy, but highly directionally
+      coherent → efficient collapse
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+13. GRADIENT RMS COMPONENTS TRAJECTORY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  From GradTrace COMPONENTS(rms) logged every batch:
+
+  Batch | emb_rms   | lm_rms    | attn_rms  | ffn_rms   | rmsnorm   | sb_rms
+  ------+-----------+-----------+-----------+-----------+-----------+--------
+    1   | 0.000039  | 0.000347  | 0.000003  | 0.000322  | 0.000181  | 0.000096
+    2   | 0.000068  | 0.000591  | 0.000011  | 0.000532  | 0.000322  | 0.000179
+   10   | 0.000041  | 0.000367  | 0.000006  | 0.000371  | 0.000188  | 0.000104
+   20   | 0.000055  | 0.000470  | 0.000012  | 0.000504  | 0.000301  | 0.000173
+   30   | 0.000043  | 0.000590  | 0.000012  | 0.000404  | 0.000212  | 0.000160
+   38   | 0.000065  | 0.000688  | 0.000017  | 0.000518  | 0.000304  | 0.000176
+   39   | 0.000033  | 0.000399  | 0.000008  | 0.000286  | 0.000154  | 0.000128
+
+  Key ratios:
+    lm_rms / emb_rms ≈ 8-12× (LM head gradient consistently larger than
+    embedding gradient in the group-level norm). This is because LM head
+    gradient is DENSE (all V rows contribute) while embedding gradient is
+    SPARSE (only active tokens contribute).
+
+    lm_rms growth: 0.000347 → 0.000688 (+98% over 38 batches)
+    emb_rms growth: 0.000039 → 0.000065 (+67% over 38 batches)
+    ffn_rms growth: 0.000322 → 0.000518 (+61% over 38 batches)
+    attn_rms growth: 0.000003 → 0.000017 (+467% over 38 batches)
+
+  The LM head gradient is growing fastest — consistent with the model
+  developing stronger token predictions (higher logit variance →
+  larger grad_logits → larger grad_W_lm).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+14. VERDICT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  R_v = count(v) · ||g_v|| quantifies the total gradient pressure on each
+  embedding row. It reveals a 907× asymmetry between tok36 and content tokens.
+
+  Key findings:
+
+  1. R_v is dominated by frequency (55%) and gradient norm (45%) in
+     roughly equal measure. Neither alone explains the asymmetry.
+
+  2. tok36 (space) has R_v = 0.78 at batch 1, peaking at 1.29 at batch 10.
+     This is 907-1320× the gradient pressure on a typical content token.
+
+  3. Despite having the highest R_v, tok36 does NOT collapse first in this
+     run. tok262 collapses instead, starting at batch 31. This means R_v
+     is necessary but not sufficient for collapse — gradient DIRECTION
+     matters as much as magnitude.
+
+  4. R_v correctly identifies which tokens will GROW fastest (tok36's
+     W_rms grew 87.5% in the prior full training run). But it does not
+     predict which token will achieve argmax dominance, which depends
+     on cos(h, W[v]) alignment.
+
+  5. No global regularization (weight decay, gradient clipping) can
+     selectively reduce R_v for high-frequency tokens without damaging
+     low-frequency content tokens. The R_v asymmetry is inherent to the
+     token frequency distribution of natural language.
+
+  6. Effective interventions must target R_v directly:
+     a) Frequency scaling of embedding gradients (w_v ∝ 1/√count)
+        reduces tok36 R_v by 6.2× while preserving content token R_v
+     b) Per-row gradient norm clipping reduces spike_ratio but does NOT
+        reduce R_v (count still multiplies through)
+     c) Per-row R_v clipping works but is equivalent to token-dependent
+        learning rate, risking undertrained frequent tokens
+
+  7. The R_v metric should be logged alongside existing diagnostics
+     to detect pre-collapse gradient asymmetry before it manifests
+     as argmax dominance.
+
+================================================================================

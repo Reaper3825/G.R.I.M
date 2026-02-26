@@ -1,0 +1,629 @@
+================================================================================
+  LOGIT FEEDBACK LOOP — CORRECTED ROOT CAUSE ANALYSIS
+  GRIM-text Transformer (d_model=768, 12 layers, 12 heads, 4 kv_heads)
+  Date: 2026-02-25
+
+  ERRATA: Corrects THREE errors in attention_gradient_starvation_simulation.txt
+  This file supersedes Sections 1, 3, 8 of that document.
+================================================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. CORRECTIONS TO PREVIOUS ANALYSIS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ERROR 1: "Softmax Jacobian attenuates gradients by 1/T (= 1/1024 = 0.001×)"
+  ────────────────────────────────────────────────────────────────────────────
+
+  WRONG. The per-row Jacobian eigenvalues are indeed ≈ 1/T for uniform softmax.
+  But the weight gradient sums over T query positions:
+
+    dW_q = Σ_t dQ_t^T @ x_t
+
+  Each dQ_t contributes a term scaled by ~1/T from the Jacobian, but there 
+  are T such terms. If their directions are independent, the sum grows as √T:
+
+    ||dW_q|| ∝ √T × (1/T) × ||signal|| = (1/√T) × ||signal||
+
+  For T=1024: attenuation ≈ 1/√1024 ≈ 1/32 ≈ 0.03
+
+  If partially correlated (common in practice with shared data distribution):
+    effective attenuation ≈ 1/T^α where α ∈ [0.3, 0.5]
+    For T=1024: attenuation ≈ 3-10×, NOT 1000×
+
+  The observed 18× attn/ffn gap already includes:
+    - softmax Jacobian (~3-10×)
+    - 1/√d_head scaling (1/8 = 0.125×, but this applies to both Q and K grad)
+    - GQA reduction (1/3 on K,V portions)
+    - O projection backward
+    - All other factors
+
+  The 18× is the TOTAL measured gap, not a theoretical underestimate.
+  The previous simulation claimed 6667× theoretical attenuation and then
+  hand-waved the 360× discrepancy. The real math shows ~30-80× theoretical
+  (softmax × 1/√d × GQA), which is consistent with 18× observed after
+  accounting for ALiBi peakiness providing partial gradient recovery.
+
+
+  ERROR 2: "18× smaller grad_rms means attention can't learn (starvation)"
+  ──────────────────────────────────────────────────────────────────────────
+
+  WRONG. Adam normalizes per-element update magnitude.
+
+  Adam update: Δθ = lr × m̂ / (√v̂ + ε)
+
+  After moment convergence:
+    m̂ ≈ grad_mean    (biased toward recent direction)
+    v̂ ≈ grad_rms²    (recent magnitude)
+
+    Δθ ≈ lr × grad_mean / (grad_rms + ε)
+       ≈ lr × sign(grad) × (signal/noise ratio)
+
+  When gradient is consistently small but directionally coherent:
+    v̂ is proportionally small → denominator is small → update is NOT small
+
+  Per-element Adam update ≈ lr regardless of gradient magnitude (at convergence).
+  Comparing raw grad_rms across components does NOT measure learning rate.
+
+  What ACTUALLY matters for learning speed under Adam:
+    1. Signal-to-Noise Ratio (SNR): direction consistency across steps
+    2. update_rms / param_rms: actual relative parameter change per step
+    3. Direction coherence: cos(grad_step_t, grad_step_t+1)
+
+  We DO NOT HAVE per-component update_rms data. The training logs show:
+    - [GradTrace] COMPONENTS(rms): grad_rms per component ← THIS IS NOT LEARNING RATE
+    - [UpdateMag] batch=N update_rms=X param_rms=Y ← GLOBAL, not per-component
+    - [UpdateProbe] group=X upd_rms=Y ← Only ONE group probed
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │ VERDICT: "Attention gradient starvation" is NOT PROVEN.               │
+  │                                                                       │
+  │ The 18× raw grad_rms gap is real, but under Adam it does NOT          │
+  │ imply 18× slower learning. We cannot claim starvation without         │
+  │ measuring per-component update_rms/param_rms.                         │
+  │                                                                       │
+  │ The previous proposals (lr multiplier, init scaling) were built on    │
+  │ this unproven claim and may be unnecessary or even harmful.           │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+
+  ERROR 3: "If attention learned faster, collapse wouldn't happen"
+  ───────────────────────────────────────────────────────────────
+
+  WRONG. The tied_vs_untied comparison proved this:
+    - Untied session has IDENTICAL attention gradients
+    - Untied session collapses at the SAME batch (60)
+    - Same severity (67% vs 70% at batch 70)
+
+  If collapse were caused by attention failing to differentiate positions,
+  then a run with PERFECT, fast-learning attention would avoid collapse.
+  But there's no evidence for this — the untied run shows the LM head 
+  feedback loop is self-reinforcing independent of attention quality.
+
+  The collapse is fundamentally a LOGIT DYNAMICS problem:
+    1. CE loss gradient: grad[t,v] = p(v|t) - 1{y_t = v}
+    2. When hidden states are similar: grad_W[v] ∝ (E[p(v)] - freq(v)) × h̄
+    3. Tok36 freq = 10.7%. Initially p(36) ≈ 1/V ≈ 0.01% → grad pushes p(36) UP
+    4. As p(36) rises toward 10.7%, other sparse tokens' p() drops
+    5. Once p(36) > freq(36), the gradient should reverse... BUT
+    6. The hidden states are correlated, so the gradient reinforces across ALL t
+    7. POSITIVE FEEDBACK: W[36] grows → logit[36] rises → p(36) rises → repeat
+
+  This loop activates even if attention is learning normally. It's a property
+  of CE + softmax + tied/shared hidden representations, not attention.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. THE ACTUAL ROOT CAUSE: DENSE CE FEEDBACK LOOP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Let me trace the exact mechanism with numbers from the actual training log.
+
+  THE POSITIVE FEEDBACK LOOP (mathematical derivation):
+
+  LM head weight gradient for row v:
+    grad_W[v] = (1/N) Σ_t (p(v|t) - 1{y_t = v}) × h[t]
+
+  For the space token (tok36), frequency f₃₆ = 873/8192 = 0.1065:
+    grad_W[36] = (1/N) Σ_t (p(36|t) - 1{y_t=36}) × h[t]
+
+  Split into target positions (y_t = 36) and non-target positions (y_t ≠ 36):
+    = (1/N) [ Σ_{t:y_t=36} (p(36|t) - 1) × h[t]  +  Σ_{t:y_t≠36} p(36|t) × h[t] ]
+
+  At initialization: p(36|t) ≈ 1/V ≈ 0.0001 for all t
+    Target contribution:     873 × (0.0001 - 1) × h[t] ≈ -873 × h[t]    (DECREASE W[36])
+    Non-target contribution: 7319 × 0.0001 × h[t] ≈ +0.73 × h[t]        (INCREASE W[36])
+    Net: overwhelmingly DECREASE → correct! CE pushes W[36] toward targets.
+
+  After a few steps: p(36|t) grows due to CE Learning
+    When p(36|t) ≈ 0.1 at many positions (the model has partly learned):
+    Target contribution:     873 × (0.1 - 1) × h[t] = -785.7 × h̄
+    Non-target contribution: 7319 × 0.1 × h[t] = +731.9 × h̄
+    Net: -53.8 × h̄ (barely decreasing — near equilibrium)
+
+  But CRITICALLY: this analysis assumes h[t] varies per position.
+  When hidden states are correlated (h[t] ≈ h̄):
+    grad_W[36] ≈ (Σ_t (p(36|t) - 1{y_t=36})) × h̄
+              = (N × E[p(36)] - count₃₆) × h̄
+
+  The gradient direction is ENTIRELY determined by h̄.
+  Whether W[36] grows or shrinks depends on N×E[p(36)] vs count₃₆.
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │ THE INSTABILITY:                                                      │
+  │                                                                       │
+  │ When h[t] ≈ h̄ for all t:                                             │
+  │   logit(36|t) = h̄ · W[36]^T for all t                               │
+  │   p(36|t) = exp(h̄·W[36]) / Σ_v exp(h̄·W[v]) for all t              │
+  │                                                                       │
+  │ ALL positions produce the SAME p(36). The model cannot produce         │
+  │ different predictions for different positions.                          │
+  │                                                                       │
+  │ CE loss then optimizes for the MARGINAL frequency:                     │
+  │   optimal p(36) = freq(36) = 10.7%                                   │
+  │                                                                       │
+  │ But 10.7% is MUCH higher than 1/V = 0.04%.                           │
+  │ So CE pushes p(36) UP from 0.04% toward 10.7%.                       │
+  │ This requires W[36] to grow relative to other rows.                   │
+  │                                                                       │
+  │ As W[36] grows → p(36) increases → CE keeps pushing until p(36)=10.7% │
+  │ But the argmax is dominated by tok36 long before p(36) reaches 10.7%  │
+  │ because logit(36) is the LARGEST logit for all positions.             │
+  │                                                                       │
+  │ This is NOT a bug. This is CE doing exactly what it's supposed to do  │
+  │ when the model can't differentiate positions.                          │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  WHY DOES THE MODEL RECOVER (PARTIALLY)?
+
+  Training log shows collapse peaks at batch 70 (70% tok36 argmax) then
+  gradually improves to 21-35% by batch 500-2000. Loss drops from 8.0 to 3.8.
+
+  This partial recovery means the ENCODER IS LEARNING to differentiate
+  positions, just slowly. As hidden states become more diverse:
+    - Different positions produce different logits
+    - p(36|t) varies by position → gradient has position-specific signal
+    - Other tokens' predictions improve → loss decreases
+
+  But it plateaus at 3.73-3.86 with tok36 still at 21-41% argmax share.
+  The model learned PARTIAL differentiation but not enough.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. WHAT EXACTLY DOES THE COLLAPSE LOOK LIKE? (ACTUAL LOG DATA)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Training session 17718958646177576 (2706 batches, tied, wd=0.01, lr=3e-4):
+
+  Phase 1: RANDOM (batch 1-30)
+  ─────────────────────────────
+  batch  1: loss=8.05  tok1535 2/112 (1%)   unique_argmax=50
+  batch 10: loss=8.04  tok961  2/105 (1%)   unique_argmax=50*
+  batch 20: loss=7.94  tok262  2/113 (1%)   unique_argmax=49
+  batch 30: loss=7.76  tok262 13/99 (13%)   unique_argmax=?
+  
+  Model learns random-ish. tok262 starts to emerge as a common prediction.
+
+  Phase 2: SUDDEN COLLAPSE (batch 50-70)
+  ───────────────────────────────────────
+  batch 50: loss=7.37  tok262 8/114 (7%)    unique_argmax=43
+  batch 60: loss=6.54  tok36 47/93 (50%)    unique_argmax=21  ← COLLAPSE
+  batch 70: loss=6.66  tok36 63/89 (70%)    unique_argmax=10  ← PEAK
+
+  At batch 60, tok36 seizes 50% of argmax positions in 10 batches.
+  Loss DROPS because predicting space (10.7% of tokens) with high 
+  confidence is better than random. But this is degenerate learning.
+
+  Phase 3: PARTIAL RECOVERY (batch 80-500)
+  ─────────────────────────────────────────
+  batch  80: loss=6.04  tok36 66/102 (64%)  unique_argmax=12
+  batch 100: loss=6.04  tok36 62/100 (62%)  unique_argmax=11
+  batch 200: loss=5.45  tok36 34/116 (29%)  unique_argmax=18
+  batch 300: loss=4.67* tok36 16/100 (32%)* unique_argmax=20
+  batch 500: loss=4.07  tok36 34/97  (35%)  unique_argmax=27
+
+  Model gradually learns other tokens. tok36 dominance drops from 70% to
+  29-35%. Loss steadily decreases. Encoder IS learning, just slowly.
+
+  Phase 4: PLATEAU (batch 500-2706)
+  ──────────────────────────────────
+  batch 1000: loss=3.73  tok36 38/100 (38%)  unique_argmax=?
+  batch 1500: loss=3.76  tok36 30/100 (30%)  unique_argmax=?
+  batch 2000: loss=3.74  tok36 24/112 (21%)  unique_argmax=?
+  batch 2500: loss=3.83  tok36 41/99  (41%)  unique_argmax=?
+  batch 2700: loss=3.86  tok36 ??           unique_argmax=?
+
+  Loss stuck at 3.73-3.86 for 2200+ batches. tok36 oscillates 21-41%.
+  The model has learned the easy patterns but cannot improve further.
+
+  KEY OBSERVATION: The collapse is NOT permanent. The model partially
+  recovers. But it gets trapped in a basin where tok36 still dominates
+  the softmax output for ~30% of positions. The loss plateau corresponds
+  to this residual tok36 dominance.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. WHY DOES THE LOSS PLATEAU AT 3.73-3.86?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Lower bound of achievable loss with tok36 at 30% argmax dominance:
+
+  For positions where prediction is correct (not dominated by tok36):
+    These contribute good loss terms. Say ~70% of positions learn properly.
+    If those positions achieve perplexity ~30: per-position loss ≈ 3.4
+
+  For positions where tok36 dominates incorrectly:
+    ~30% of positions predict tok36 instead of the correct token.
+    If the correct token has frequency ~0.1%: loss ≈ -ln(0.001) ≈ 6.9
+
+  Blended: 0.70 × 3.4 + 0.30 × 6.9 = 2.38 + 2.07 = 4.45
+
+  This is rough, but consistent with 3.73-3.86 given that the "good"
+  positions haven't fully converged either.
+
+  The deeper problem: tok36 dominance PREVENTS the model from learning
+  the correct distribution for those ~30% of positions. The gradient
+  for those positions is mostly "reduce p(36)" rather than "increase 
+  p(correct_token)". This is an information bottleneck — the model wastes
+  gradient budget fighting tok36 instead of learning patterns.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. OPTION A: LABEL SMOOTHING (BREAK THE FEEDBACK LOOP DIRECTLY)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Label smoothing replaces the hard target 1{y_t=v} with:
+    target_smooth(v) = (1-ε) × 1{y_t=v} + ε/V
+
+  CE gradient becomes:
+    grad[t,v] = p(v|t) - target_smooth(v)
+              = p(v|t) - (1-ε)×1{y_t=v} - ε/V
+
+  For tok36 at a non-target position (y_t ≠ 36):
+    OLD:  grad = p(36|t) - 0         = p(36|t)     (pushes UP if p(36)>0)
+    NEW:  grad = p(36|t) - ε/V       (pushes UP only if p(36) > ε/V)
+
+  For ε=0.1, V=10277:  ε/V = 9.73e-6
+  This is tiny — label smoothing barely changes the non-target gradient.
+
+  For tok36 at a target position (y_t = 36):
+    OLD:  grad = p(36|t) - 1.0       (pushes DOWN, toward p=1.0)
+    NEW:  grad = p(36|t) - (1-ε)     (pushes DOWN, toward p=0.9)
+
+  EFFECT ON FEEDBACK LOOP:
+  The key is the equilibrium. Without smoothing, CE wants p(36|t) = 1.0 
+  at target positions. With smoothing, it wants p(36|t) = 0.9.
+
+  But the feedback loop is driven by the EXCESS of p(36) across ALL 
+  positions, not just targets. Label smoothing reduces the target pull
+  by 10%, which is negligible compared to the non-target push.
+
+  Net effect: Label smoothing at ε=0.1 reduces target gradient by 10%.
+  The feedback loop magnitude is barely affected because the loop is 
+  driven by p(36) at non-target positions, not by the target gradient.
+
+  At ε=0.1 with V=10277:
+    Change to non-target gradient: -9.73e-6 per logit → negligible
+    Change to target gradient: -0.1 (from 1.0 to 0.9) → moderate
+
+  HOWEVER: Label smoothing has a SECONDARY benefit. It prevents the model
+  from pushing logits to extreme values. With hard targets, the optimal
+  logit for the target token is +∞ and for all others is -∞. Label 
+  smoothing caps the optimal logit magnitude, which regularizes the
+  weight norms.
+
+  Expected logit magnitude at convergence with label smoothing ε=0.1:
+    p_target = 0.9 → logit_target - logsumexp ≈ ln(0.9) ≈ -0.105
+    p_other = ε/(V-1) ≈ 1e-5 → logit_other - logsumexp ≈ -11.5
+    Logit range ≈ 11.4 (vs unbounded without smoothing)
+
+  Observed current logit range at batch 2500: max=10.6, min=-18.3 = range 28.9
+  Label smoothing would constrain this to ~11.4, reducing W norms.
+
+  Simulation:
+
+  ε      | non-target Δ | target Δ | logit range cap | breaks loop?
+  ───────┼──────────────┼──────────┼─────────────────┼─────────────
+  0.0    | 0            | 0        | ∞               | NO (current)
+  0.05   | -4.87e-6     | -0.05    | 14.9            | WEAK
+  0.1    | -9.73e-6     | -0.10    | 11.4            | MODERATE
+  0.2    | -1.95e-5     | -0.20    | 8.0             | GOOD
+  0.3    | -2.92e-5     | -0.30    | 5.9             | STRONG
+
+  VERDICT: Label smoothing at ε=0.1-0.2 addresses the SYMPTOM (unbounded
+  logit growth / W norm growth) but not the ROOT CAUSE (uniform hidden 
+  states → all positions make the same prediction). It's a useful
+  regularizer that constrains the damage from the feedback loop without 
+  eliminating it. Already implemented in AutogradLoss.cu, just needs
+  config change: "label_smoothing": { "enabled": true, "epsilon": 0.1 }.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. OPTION B: OUTPUT ENTROPY REGULARIZATION (DIRECTLY PENALIZE LOW DIVERSITY)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  L = L_CE - λ × H(p)    where H(p) = -Σ_v p(v) × ln(p(v))
+
+  The entropy term REWARDS high-entropy (diverse) output distributions.
+  It directly opposes the collapse-to-mode behavior.
+
+  Gradient of entropy term w.r.t. logit z_v:
+    ∂H/∂z_v = -p(v) × (1 + ln(p(v))) + p(v) × Σ_w p(w) × (1 + ln(p(w)))
+            = p(v) × (H(p) + ln(V) - ln(p(v)) - 1)  [simplified]
+            ≈ p(v) × (H(p) - ln(p(v)))  [dominant terms]
+
+  For tok36 when dominating (p(36) = 0.3, H ≈ 5.0):
+    ∂H/∂z_36 ≈ 0.3 × (5.0 - ln(0.3)) ≈ 0.3 × (5.0 + 1.2) = 1.86
+
+  This is POSITIVE → entropy reg pushes logit[36] DOWN (toward uniform).
+  It directly opposes the CE-driven tok36 growth.
+
+  ISSUE: Was tried before (Issue #136). At λ=0.1, entropy reg subtracted
+  1.08 from loss, masking the real CE. The problem was that entropy reg
+  FIGHTS CE throughout training, not just during collapse.
+
+  HOWEVER: The previous implementation was with a much larger vocab 
+  (V=50377). Now V=10277. And λ=0.1 was too large for that vocab.
+
+  With current V=10277:
+    H_max = ln(10277) = 9.24
+    At uniform: entropy_reg = -λ × 9.24
+
+  For λ and its effect on loss:
+
+  λ      | entropy offset at uniform | gradient vs CE at p(36)=0.3
+  ───────┼──────────────────────────┼──────────────────────────────
+  0.005  | -0.046                   | 0.009 (0.3% of CE grad)
+  0.01   | -0.092                   | 0.019 (0.6% of CE grad)
+  0.02   | -0.185                   | 0.037 (1.2% of CE grad)
+  0.05   | -0.462                   | 0.093 (3.0% of CE grad)
+  0.10   | -0.924                   | 0.186 (6.0% of CE grad)
+
+  At λ=0.01-0.02, entropy reg adds <0.2 to the loss (negligible masking)
+  but provides 0.6-1.2% gradient opposing tok36 growth at peak collapse.
+
+  Is 1% enough? At batch 60, tok36 jumps to 50% argmax in ~10 batches.
+  The CE gradient driving this is ≈ (p(36) - freq(36)) × h̄ ≈ (0.5 - 0.107) = 0.39.
+  1% of that is 0.004. Per step, this is tiny compared to the CE push.
+
+  At λ=0.1, the entropy gradient is 6% of CE — more meaningful but the
+  loss masking becomes 0.924, which is ~25% of CE loss (3.73). This makes
+  the loss metric unreliable for monitoring.
+
+  VERDICT: Entropy reg at small λ (0.01-0.02) is too weak to prevent
+  collapse. At large λ (0.05-0.1) it masks the loss. The fundamental 
+  issue is that entropy reg applies AFTER the prediction (at logit level)
+  but the collapse is caused by hidden state uniformity BEFORE the LM 
+  head. It's a band-aid on the output rather than a fix to the encoder.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. OPTION C: LM HEAD ROW NORM REGULARIZATION (WEIGHT NORM CONSTRAINT)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  L = L_CE + λ × Σ_v ||W[v]||²
+
+  This directly penalizes large weight norms. Since tok36's W_rms (0.0446)
+  is 1.34× the content average (0.033), this creates a DIFFERENTIAL penalty:
+
+    Penalty for tok36:    λ × 0.0446² × d_model = λ × 1.529
+    Penalty for content:  λ × 0.033² × d_model = λ × 0.836
+    Differential:         tok36 penalty is 1.83× content penalty
+
+  Gradient: ∂L_reg/∂W[v] = 2λ × W[v]
+
+  This is identical to weight decay! The AdamW update already includes:
+    params[i] = param - lr × (adam_update + weight_decay × param)
+
+  The wd_simulation.txt already proved that global weight decay cannot
+  selectively penalize tok36 without harming content tokens. This option
+  IS weight decay, just applied only to the LM head.
+
+  New idea: Apply weight decay ONLY to the LM head (or higher wd for LM head):
+
+  The ParameterGroup already has weight_decay_multiplier. We could set:
+    lm_head.weight_decay_multiplier = 5.0  (effective wd = 0.05)
+    other groups: weight_decay_multiplier = 1.0 (effective wd = 0.01)
+
+  With wd_eff = 0.05 for LM head:
+    tok36 decay/step:    0.0003 × 0.05 × 0.0446 = 6.69e-07
+    tok36 grad/step:     1.52e-05
+    ratio: 22.7× → still grad-dominated, but 5× more effective than current
+
+  Even at wd_multiplier = 50 (wd_eff = 0.5):
+    tok36 decay/step:    6.69e-06
+    tok36 grad/step:     1.52e-05
+    ratio: 2.3× → partial equilibrium
+
+  But this STILL has the uniform problem: it penalizes ALL LM head rows 
+  equally. If we want SELECTIVE suppression of tok36, we need PER-ROW 
+  weight decay proportional to frequency. That's the freq_scaling idea
+  from freq_scaling_simulation.txt, applied to decay instead of gradients.
+
+  VERDICT: Moderate effectiveness. Easy to implement (just change
+  weight_decay_multiplier for LM_HEAD groups). But cannot fix the root 
+  cause — hidden state uniformity makes frequent token dominance inevitable.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. OPTION D: LOGIT MAX-VALUE PENALTY (CONSTRAIN LOGIT DYNAMICS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  L = L_CE + λ × max_v(logit_v)²
+
+  or softer version using logsumexp:
+  L = L_CE + λ × (logsumexp(logits/τ) × τ)²
+
+  This directly penalizes the maximum logit, which is the proximate cause
+  of argmax collapse. If logit[36] can't grow above a threshold, it can't
+  dominate the argmax.
+
+  At batch 60: max_logit = 9.52, avg_max_logit per position = 3.74
+  At batch 500: max_logit = 10.6, avg_max_logit = 7.78
+
+  The gradient: ∂L/∂z_max = 2λ × z_max (for the hard max version)
+  This pushes the highest logit DOWN. Since the highest logit tends to 
+  be tok36, this directly counteracts tok36 growth.
+
+  HOWEVER: This also penalizes legitimate high-confidence correct predictions.
+  If the model correctly predicts a common word with high confidence, 
+  max-logit penalty fights against this. It's adversarial to learning.
+
+  VERDICT: Too blunt. Penalizes correct high-confidence predictions along 
+  with wrong ones. Would need to condition on correctness, which makes 
+  it equivalent to label smoothing with extra complexity.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. OPTION E: FREQUENCY-SCALED EMBEDDING BACKWARD (from prev simulation)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Re-evaluation in light of the corrected root cause:
+
+  The freq_scaling reduces tok36 embedding scatter gradient from 68× to 12.9×.
+  But the tied_vs_untied comparison showed that collapse happens even WITHOUT
+  the embedding scatter (untied = separate embedding, no scatter contamination).
+
+  The dense LM head backward is the primary gradient source for W[36]:
+    grad_W_lm[36] = (1/N) Σ_t (p(36|t) - 1{y_t=36}) × h[t]
+
+  This gradient exists regardless of tying. Freq scaling only affects the
+  embedding backward scatter-add, which in the untied case is a SEPARATE
+  matrix that doesn't contribute to LM head weights at all.
+
+  So freq scaling addresses a SECONDARY gradient source (embedding scatter).
+  The PRIMARY source (dense LM head GEMM) is unaffected.
+
+  However, with TIED weights, both gradient sources write to the SAME buffer.
+  Freq scaling would reduce the combined gradient by ~30-50% (since embedding
+  scatter contributes about 50% of the total gradient for tok36 when tied).
+
+  VERDICT: Still valid for tied configuration but does NOT address the primary 
+  feedback loop. If we switch to untied, this becomes irrelevant.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. OPTION F: FIRST MEASURE, THEN FIX (PER-COMPONENT UPDATE DIAGNOSTICS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Before implementing any fix, we need data we DON'T CURRENTLY HAVE:
+
+  MISSING DATA 1: Per-component Adam update_rms
+  ──────────────────────────────────────────────
+  Current logging:
+    [GradTrace] COMPONENTS(rms): emb=X attn=Y ffn=Z ...  ← GRADIENT rms only
+    [UpdateMag] update_rms=X param_rms=Y                  ← GLOBAL only
+    [UpdateProbe] group=X upd_rms=Y                       ← SINGLE group only
+
+  We need per ParamGroupType:
+    [UpdateTrace] COMPONENTS(upd_rms): emb=X attn=Y ffn=Z rmsnorm=W sb=V
+    [UpdateTrace] COMPONENTS(upd/param): emb=X attn=Y ffn=Z rmsnorm=W sb=V
+
+  This tells us whether Adam is ACTUALLY normalizing the 18× gradient gap.
+  If update_rms/param_rms is similar across components → Adam IS normalizing
+  and the attn starvation theory is wrong. If not → there's a real difference.
+
+  MISSING DATA 2: tok36 logit decomposition
+  ──────────────────────────────────────────
+  logit(36|t) = h[t] · W[36]^T
+
+  We need to know: is tok36 dominance caused by:
+    (a) W[36] being too large (weight norm issue)
+    (b) cos(h[t], W[36]) being too high (direction alignment issue)
+    (c) Both
+
+  Log: cos(h_mean, W[tok36]) and ||W[tok36]|| vs ||W[median_token]||
+
+  MISSING DATA 3: Attention entropy over training
+  ────────────────────────────────────────────────
+  Are attention distributions actually near-uniform (high entropy)?
+  Or does ALiBi make them sufficiently peaked from the start?
+  
+  Log: mean_attention_entropy per head over training.
+  If attn entropy is already low (peaked), the softmax Jacobian compression
+  is NOT the bottleneck, and the 18× gap has a different explanation.
+
+  MISSING DATA 4: Gradient direction consistency per component
+  ────────────────────────────────────────────────────────────
+  cos(grad_step_t, grad_step_t+1) per component.
+  If attn gradients have LOW direction consistency (= noisy), Adam's m_hat
+  underestimates the true gradient → effective lr is suppressed.
+  If HIGH consistency → Adam normalizes properly and 18× raw gap is irrelevant.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+11. RECOMMENDED NEXT STEPS (CORRECTED)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  THE ROOT CAUSE IS: Dense CE softmax feedback loop.
+  When hidden states are correlated, CE gradient pushes W[mode_token] to 
+  grow, which makes the mode dominate more, which makes hidden states more
+  correlated (all positions optimize similarly). Positive feedback.
+
+  Recovery happens slowly as the encoder learns to differentiate positions,
+  but the plateau at 3.73 suggests the model is stuck in a local basin
+  where ~30% of positions still predict tok36 instead of the correct token.
+
+  PRIORITY 1 — ADD DIAGNOSTICS (understand before fixing)
+  ─────────────────────────────────────────────────────────
+  Add per-component update_rms/param_rms logging. This resolves whether 
+  the 18× gradient gap translates to actual learning rate differences 
+  under Adam. 10 lines of code in Phase2.
+
+  Also add: cos(h_mean, W[tok36]), attention entropy, gradient direction 
+  consistency. These tell us what's actually happening vs what we're guessing.
+
+  PRIORITY 2 — LABEL SMOOTHING ε=0.1 (low risk, already implemented)
+  ─────────────────────────────────────────────────────────────────────
+  Config change only: "label_smoothing": { "enabled": true, "epsilon": 0.1 }
+  Constrains logit magnitude growth. Prevents the "all logit weight on one
+  token" extreme. Side benefit: better calibrated predictions, known to 
+  help transformer training generally.
+
+  PRIORITY 3 — FREQUENCY-SCALED EMBEDDING BACKWARD (if staying tied)
+  ──────────────────────────────────────────────────────────────────
+  If tie_embeddings=true (current config=false, but was true in the long
+  run), apply inverse sqrt frequency scaling to embedding scatter-add.
+  Reduces the tied gradient contamination that amplifies tok36.
+
+  PRIORITY 4 — BASED ON DIAGNOSTIC RESULTS
+  ─────────────────────────────────────────
+  If diagnostics show attn update_rms/param_rms is genuinely lower than 
+  ffn → THEN consider attn lr multiplier or W_qkv init scaling.
+  
+  If diagnostics show Adam IS normalizing the gap → the problem is purely
+  in the logit dynamics and the fixes should target the LM head / loss
+  function (label smoothing, weight norm constraint, entropy reg).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12. SUMMARY OF SERIES SO FAR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ✗ wd_simulation.txt
+      → Global weight decay can't fix per-row gradient asymmetry
+
+  ✗ cosine_reg_simulation.txt
+      → Hidden cosines already healthy, reg too weak or destroys signal
+
+  ✗ tied_vs_untied_comparison.txt  
+      → Proved collapse is NOT caused by weight tying
+      → Proved collapse is a dense CE feedback loop
+
+  ✗ freq_scaling_simulation.txt
+      → Valid for tied config, but untied proves it's not the root cause
+
+  ✗ attention_gradient_starvation_simulation.txt (PARTIALLY WRONG)
+      → Correct: attn grad_rms is 18× below ffn
+      → WRONG: This does NOT prove starvation under Adam
+      → WRONG: Softmax Jacobian attenuation is O(1/√T), not O(1/T)
+      → WRONG: "Fix attention to fix collapse" unsupported by untied data
+
+  ✓ logit_feedback_loop_simulation.txt (THIS DOCUMENT)
+      → Root cause: Dense CE feedback loop when hidden states are correlated
+      → Model partially recovers but plateaus (3.73-3.86)
+      → Need per-component update_rms diagnostics before implementing fixes
+      → Label smoothing is the safest first intervention
+
+================================================================================
+  END OF SIMULATION
+================================================================================
