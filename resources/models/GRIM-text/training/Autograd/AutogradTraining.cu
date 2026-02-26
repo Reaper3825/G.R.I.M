@@ -791,7 +791,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
 // Loss Config Builder (single conversion point)
 //======================================================================
 
-autograd::LossConfig buildLossConfig(const LossContext::LossOptions& opts) {
+autograd::LossConfig buildLossConfig(const LossContext::LossOptions& opts, const float* d_class_weights) {
     autograd::LossConfig lc{};
     lc.focal_enabled       = opts.focal_enabled;
     lc.focal_alpha         = opts.focal_enabled ? opts.focal_alpha : 1.0f;
@@ -800,6 +800,8 @@ autograd::LossConfig buildLossConfig(const LossContext::LossOptions& opts) {
     lc.smoothing_epsilon   = opts.label_smoothing_enabled ? opts.label_smoothing_epsilon : 0.0f;
     lc.entropy_reg_enabled = opts.entropy_reg_enabled;
     lc.entropy_reg_lambda  = opts.entropy_reg_enabled ? opts.entropy_reg_lambda : 0.0f;
+    lc.class_balanced_enabled = opts.class_balanced_enabled;
+    lc.d_class_weights     = opts.class_balanced_enabled ? d_class_weights : nullptr;
     return lc;
 }
 
@@ -1255,7 +1257,7 @@ LossResult autogradTrainingStep(
         step,
         true
     );
-    ctx.loss_config = buildLossConfig(model.getLossOptions());
+    ctx.loss_config = buildLossConfig(model.getLossOptions(), training_state.d_class_weights);
     
     // ═══════════════════════════════════════════════════════════════════════════
     // FORWARD → LOSS → BACKWARD

@@ -21,6 +21,7 @@
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../training/module_logger.hpp"
 #include "../../Shared/EquationLogging/EquationLogging.hpp"
+#include "../../Shared/VerboseLogging.hpp"
 
 // Module logger for Flash Attention diagnostics
 namespace {
@@ -53,6 +54,7 @@ inline bool isEquationLoggingEnabled() {
 #include "flash_bwd_kernel.h"
 
 namespace grim_flash {
+
 
 // Copy of flash.h parameter structs (ATen removed via philox_unpack.cuh stub).
 struct Qkv_params {
@@ -687,6 +689,13 @@ extern "C" void flash_attn_fwd_ex(
 
     static int s_fwd_call_count = 0;
     ++s_fwd_call_count;
+
+    // Issue #151: All FA forward diagnostics gated behind compile-time flag.
+    // When enabled, these produce 5 sync D2H copies per layer × 12 layers = 60 pipeline
+    // drains per batch PLUS O(seqlen²) host-side attention score computation.
+    // Set ENABLE_FA_EQUATION_DIAGNOSTICS = true in VerboseLogging.hpp to re-enable.
+    if constexpr (GRIM::VerboseLogging::ENABLE_FA_EQUATION_DIAGNOSTICS) {
+
     if (isEquationLoggingEnabled()) {
         std::vector<float> h_slopes(static_cast<size_t>(n_heads));
         cudaMemcpyAsync(h_slopes.data(), alibi_slopes, n_heads * sizeof(float), cudaMemcpyDeviceToHost, stream);
@@ -898,6 +907,8 @@ extern "C" void flash_attn_fwd_ex(
         }
     }
 
+    } // end if constexpr ENABLE_FA_EQUATION_DIAGNOSTICS (pre-kernel)
+
 #if defined(GRIM_FLASHATTN_HDIM64_ONLY)
 #if defined(GRIM_FLASHATTN_CAUSAL_ONLY)
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
@@ -1019,6 +1030,8 @@ extern "C" void flash_attn_fwd_ex(
         }
     }
 
+    if constexpr (GRIM::VerboseLogging::ENABLE_FA_EQUATION_DIAGNOSTICS) {
+
     if (isEquationLoggingEnabled()) {
         // NOTE: 'out' points to bf16 data (BSHD layout). Reading as float produces garbage.
         // To get meaningful stats, would need bf16→fp32 conversion. Skip for now.
@@ -1101,6 +1114,8 @@ extern "C" void flash_attn_fwd_ex(
             }
         }
     }
+
+    } // end if constexpr ENABLE_FA_EQUATION_DIAGNOSTICS (post-kernel)
 }
 
 extern "C" void flash_attn_bwd_ex(
@@ -1141,6 +1156,7 @@ extern "C" void flash_attn_bwd_ex(
                  causal ? "true" : "false", is_bf16 ? "true" : "false");
         FlashAttentionLog::info(input_msg);
     }
+    if constexpr (GRIM::VerboseLogging::ENABLE_FA_EQUATION_DIAGNOSTICS) {
     if (isEquationLoggingEnabled()) {
         float alibi0 = 0.0f;
         cudaError_t copy_err = cudaMemcpyAsync(&alibi0, alibi_slopes, sizeof(float),
@@ -1165,6 +1181,7 @@ extern "C" void flash_attn_bwd_ex(
             }
         }
     }
+    } // end if constexpr ENABLE_FA_EQUATION_DIAGNOSTICS (backward)
     if (!dq_accum || !dsoftmax_sum) {
         FlashAttentionLog::error("[FlashAttention] FATAL: flash_attn_bwd dq_accum and dsoftmax_sum workspace required");
         throw std::runtime_error("flash_attn_bwd: dq_accum and dsoftmax_sum workspace required");
@@ -1290,6 +1307,7 @@ extern "C" void flash_attn_bwd_ex(
 
     static int s_bwd_call_count = 0;
     ++s_bwd_call_count;
+    if constexpr (GRIM::VerboseLogging::ENABLE_FA_EQUATION_DIAGNOSTICS) {
     if (isEquationLoggingEnabled()) {
         const size_t lse_elems = static_cast<size_t>(batch) * n_heads * seqlen;
         std::vector<float> h_lse(lse_elems);
@@ -1347,7 +1365,9 @@ extern "C" void flash_attn_bwd_ex(
             }
         }
     }
+    } // if constexpr ENABLE_FA_EQUATION_DIAGNOSTICS (FA-BWD-SAVED-LSE)
 
+    if constexpr (GRIM::VerboseLogging::ENABLE_FA_EQUATION_DIAGNOSTICS) {
     if (isEquationLoggingEnabled()) {
         const size_t grad_elems = static_cast<size_t>(batch) * n_heads * seqlen * head_dim;
         const size_t sample_size = std::min(grad_elems, static_cast<size_t>(10000));
@@ -1371,6 +1391,7 @@ extern "C" void flash_attn_bwd_ex(
         fprintf(stderr, "[FA-BWD-IN] grad_output (BF16): nan=%d inf=%d max=%.10f rms=%.10f first=%.10f\n",
                 nan_dout, inf_dout, dout_max, dout_rms, first_val);
     }
+    } // if constexpr ENABLE_FA_EQUATION_DIAGNOSTICS (FA-BWD-IN)
 
     FlashAttentionLog::info("[FlashAttention] flash_attn_bwd_ex launching kernels");
 #if defined(GRIM_FLASHATTN_HDIM64_ONLY)
@@ -1485,6 +1506,7 @@ extern "C" void flash_attn_bwd_ex(
     if (rng_state_buf_bwd) { cudaFree(rng_state_buf_bwd); rng_state_buf_bwd = nullptr; }
     FlashAttentionLog::info("[FlashAttention] flash_attn_bwd_ex stream synchronized");
 
+    if constexpr (GRIM::VerboseLogging::ENABLE_FA_EQUATION_DIAGNOSTICS) {
     if (isEquationLoggingEnabled()) {
         // dQ is sized for n_heads (12), layout BSHD
         const size_t dq_elems = static_cast<size_t>(batch) * seqlen * n_heads * head_dim;
@@ -1547,4 +1569,5 @@ extern "C" void flash_attn_bwd_ex(
         fprintf(stderr, "[FA-BWD-OUT] dV (BF16): nan=%d inf=%d max=%.10f rms=%.10f first=%.10f (n_heads=%d buffer)\n",
                 nan_dv, inf_dv, max_dv, rms_dv, first_dv, n_heads);
     }
+    } // if constexpr ENABLE_FA_EQUATION_DIAGNOSTICS (FA-BWD-OUT)
 }

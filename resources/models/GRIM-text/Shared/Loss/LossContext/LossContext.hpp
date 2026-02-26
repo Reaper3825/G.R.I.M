@@ -43,6 +43,10 @@ struct LossOptions {
     // Entropy regularization: reg = -λ * H(p) = λ * Σ p*log(p)
     bool entropy_reg_enabled = HyperParameters::DEFAULT_LOSS_ENTROPY_REG_ENABLED;
     float entropy_reg_lambda = HyperParameters::DEFAULT_LOSS_ENTROPY_REG_LAMBDA;
+
+    // Class-balanced loss: w_v = 1/freq(v)^β reweights per-token loss
+    bool class_balanced_enabled = HyperParameters::DEFAULT_LOSS_CLASS_BALANCED_ENABLED;
+    float class_balanced_beta = HyperParameters::DEFAULT_LOSS_CLASS_BALANCED_BETA;
 };
 
 }  // namespace GRIM::LossContext

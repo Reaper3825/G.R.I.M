@@ -48,6 +48,9 @@ TrainingState::~TrainingState() {
 	// Issue #60: Free debug gradient attribution buffers
 	freeDebugGradBuffers();
 	
+	// Free class-balanced loss weights (raw cudaMalloc)
+	if (d_class_weights) { cudaFree(d_class_weights); d_class_weights = nullptr; }
+	
 	// Free ScratchBlockPool (pinned memory blocks)
 	if (scratch_pool) {
 		delete scratch_pool;

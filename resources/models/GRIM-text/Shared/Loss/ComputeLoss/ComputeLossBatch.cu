@@ -275,7 +275,7 @@ float LanguageModel::computeLossBatch(
 		batch_size, seq_len, total_tokens, valid_tokens);
 
 	// Build loss config via centralized helper (Issue #142: single conversion point)
-	autograd_ctx.loss_config = GRIM::Autograd::buildLossConfig(loss_options_);
+	autograd_ctx.loss_config = GRIM::Autograd::buildLossConfig(loss_options_, nullptr);
 
 	static int loss_call_count = 0;
 	++loss_call_count;

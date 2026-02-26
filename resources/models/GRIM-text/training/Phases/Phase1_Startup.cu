@@ -38,6 +38,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <stdexcept>
 
 #ifdef USE_CUDA
@@ -279,6 +280,10 @@ StartupConfig loadConfiguration(int argc, char** argv) {
     // Issue #44 FIX: Entropy regularization to prevent mode collapse
     config.loss_options.entropy_reg_enabled = config.hyperparameters.loss_entropy_reg_enabled;
     config.loss_options.entropy_reg_lambda = config.hyperparameters.loss_entropy_reg_lambda;
+
+    // Class-balanced loss: reweights per-token loss by 1/freq^β
+    config.loss_options.class_balanced_enabled = config.hyperparameters.loss_class_balanced_enabled;
+    config.loss_options.class_balanced_beta = config.hyperparameters.loss_class_balanced_beta;
 
     // Map stability overrides
     config.stability.enabled = config.hyperparameters.stability_overrides_enabled;
@@ -1083,6 +1088,52 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     model->initTrainingState();
     logger.log("✓ TrainingState fully initialized");
 
+    // ═══════════════════════════════════════════════════════════════
+    // tie_embeddings pointer verification (Step C: non-negotiable truth)
+    // Log raw pointers, ownership, and optimizer group count
+    // ═══════════════════════════════════════════════════════════════
+    {
+        const float* emb_w_ptr = model->getEmbeddingLayer()->tokenWeights().data;
+        const float* lm_w_ptr  = model->getLmHeadLayer()->weights().data;
+        const float* emb_g_ptr = model->getEmbeddingLayer()->tokenWeights().grad_data();
+        const float* lm_g_ptr  = model->getLmHeadLayer()->weights().grad_data();
+        const bool cfg_tied = model->getConfig().tie_embeddings;
+        const bool lm_owns = model->getLmHeadLayer()->ownsWeights();
+        const bool ptrs_same = (emb_w_ptr == lm_w_ptr);
+        const bool grads_same = (emb_g_ptr == lm_g_ptr);
+
+        // Count optimizer groups referencing each buffer
+        int emb_groups = 0, lm_groups = 0;
+        for (const auto& g : model->parameterGroups()) {
+            if (g.tensor && g.tensor->data == emb_w_ptr) ++emb_groups;
+            if (g.tensor && g.tensor->data == lm_w_ptr)  ++lm_groups;
+        }
+
+        std::ostringstream tie_msg;
+        tie_msg << "[TieEmbeddingsVerify] config.tie_embeddings=" << (cfg_tied ? "true" : "false")
+                << " lm_owns_weights=" << (lm_owns ? "true" : "false")
+                << "\n  emb_weight_ptr=" << (const void*)emb_w_ptr
+                << " lm_weight_ptr=" << (const void*)lm_w_ptr
+                << " SAME=" << (ptrs_same ? "YES" : "NO")
+                << "\n  emb_grad_ptr=" << (const void*)emb_g_ptr
+                << " lm_grad_ptr=" << (const void*)lm_g_ptr
+                << " SAME=" << (grads_same ? "YES" : "NO")
+                << "\n  optimizer_groups: emb_buffer=" << emb_groups
+                << " lm_buffer=" << lm_groups
+                << " total=" << model->parameterGroups().size();
+        if (cfg_tied && !ptrs_same) {
+            tie_msg << "\n  [BUG] tie_embeddings=true but pointers differ!";
+        }
+        if (!cfg_tied && ptrs_same) {
+            tie_msg << "\n  [BUG] tie_embeddings=false but pointers are SAME!";
+        }
+        if (cfg_tied && (emb_groups + lm_groups) > lm_groups) {
+            // When tied, only lm_groups should reference the buffer (not emb separately)
+            tie_msg << "\n  [WARNING] tied buffer has " << emb_groups << " emb refs + " << lm_groups << " lm refs (expect lm only)";
+        }
+        logger.log(tie_msg.str());
+    }
+
     if (config.hyperparameters.logit_update_trace_enabled) {
         const bool tied = model->getConfig().tie_embeddings;
         const std::string group = tied ? "embedding_lm_head_tied" : "lm_head_weight";
@@ -1117,7 +1168,9 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
                  << " distill=" << (config.loss_options.distillation_enabled ? "ON" : "off")
                  << " pref=" << (config.loss_options.preference_enabled ? "ON" : "off")
                  << " entropy_reg=" << (config.loss_options.entropy_reg_enabled ? "ON" : "off")
-                 << " ent_lambda=" << config.loss_options.entropy_reg_lambda;
+                 << " ent_lambda=" << config.loss_options.entropy_reg_lambda
+                 << " class_balanced=" << (config.loss_options.class_balanced_enabled ? "ON" : "off")
+                 << " cb_beta=" << config.loss_options.class_balanced_beta;
 
         logger.log(loss_msg.str());
     }
@@ -1614,6 +1667,120 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     
     // 10. Initialize optimizer
     ctx->optimizer = Internal::initializeOptimizer(*ctx->model, ctx->config, *ctx->logging.logger);
+    
+    // 10b. Compute class-balanced loss weights if enabled
+    // w_v = 1/freq(v)^β where freq(v) = count(v) / total_targets
+    // Weights indexed by vocab token ID, uploaded to GPU once at startup.
+    if (ctx->config.loss_options.class_balanced_enabled) {
+        auto& ts = ctx->model->getTrainingState();
+        const uint32_t vocab_size = ctx->config.actual_vocab_size;
+        const float beta = ctx->config.loss_options.class_balanced_beta;
+        cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
+        
+        // Count target frequencies across ALL training sequences
+        std::vector<int64_t> target_counts(vocab_size, 0);
+        int64_t total_targets = 0;
+        for (const auto& seq : ctx->data.train_seqs) {
+            for (int tgt : seq.targets) {
+                if (tgt >= 0 && tgt < static_cast<int>(vocab_size)) {
+                    target_counts[tgt]++;
+                    total_targets++;
+                }
+            }
+        }
+        
+        if (total_targets <= 0) {
+            throw std::runtime_error("[class_balanced] total_targets=0 — no valid targets in training data");
+        }
+        
+        // Compute weights: w_v = 1/freq(v)^β, clamped for unseen tokens
+        // Unseen tokens get weight = max_weight (same as freq=1 token)
+        std::vector<float> h_class_weights(vocab_size);
+        float max_weight = 0.0f;
+        int seen_count = 0;
+        int unseen_count = 0;
+        
+        for (uint32_t v = 0; v < vocab_size; v++) {
+            if (target_counts[v] > 0) {
+                const float freq = static_cast<float>(target_counts[v]) / static_cast<float>(total_targets);
+                h_class_weights[v] = 1.0f / std::pow(freq, beta);
+                max_weight = std::max(max_weight, h_class_weights[v]);
+                seen_count++;
+            } else {
+                h_class_weights[v] = 0.0f;  // placeholder, filled after loop
+                unseen_count++;
+            }
+        }
+        
+        // Unseen tokens: clamp to max_weight (the rarest seen token's weight)
+        // This prevents infinite weights while still giving rare tokens maximum upweight
+        if (max_weight <= 0.0f) max_weight = 1.0f;  // Safety: shouldn't happen
+        for (uint32_t v = 0; v < vocab_size; v++) {
+            if (target_counts[v] == 0) {
+                h_class_weights[v] = max_weight;
+            }
+        }
+        
+        // Upload to GPU
+        const size_t weights_bytes = vocab_size * sizeof(float);
+        cudaError_t err = cudaMalloc(&ts.d_class_weights, weights_bytes);
+        if (err != cudaSuccess) {
+            throw std::runtime_error("[class_balanced] cudaMalloc failed for d_class_weights ("
+                + std::to_string(weights_bytes) + " bytes): " + cudaGetErrorString(err));
+        }
+        cudaMemcpyAsync(ts.d_class_weights, h_class_weights.data(), weights_bytes,
+                         cudaMemcpyHostToDevice, stream);
+        ts.class_weights_vocab_size = static_cast<int>(vocab_size);
+        cudaStreamSynchronize(stream);
+        
+        // Log top-10 highest and lowest weight tokens for verification
+        {
+            std::vector<std::pair<float, uint32_t>> weight_pairs;
+            for (uint32_t v = 0; v < vocab_size; v++) {
+                if (target_counts[v] > 0) {
+                    weight_pairs.push_back({h_class_weights[v], v});
+                }
+            }
+            std::sort(weight_pairs.begin(), weight_pairs.end());
+            
+            std::ostringstream cb_msg;
+            cb_msg << "[CLASS_BALANCED] β=" << beta
+                   << " total_targets=" << total_targets
+                   << " seen_tokens=" << seen_count
+                   << " unseen_tokens=" << unseen_count
+                   << " max_weight=" << max_weight;
+            ctx->logging.logger->log(cb_msg.str());
+            
+            // Lowest weights = most frequent tokens
+            cb_msg.str("");
+            cb_msg << "[CLASS_BALANCED] Lowest weights (most frequent): ";
+            for (int i = 0; i < std::min(10, (int)weight_pairs.size()); i++) {
+                cb_msg << "tok" << weight_pairs[i].second 
+                       << "(w=" << std::fixed << std::setprecision(2) << weight_pairs[i].first
+                       << ",cnt=" << target_counts[weight_pairs[i].second] << ") ";
+            }
+            ctx->logging.logger->log(cb_msg.str());
+            
+            // Highest weights = rarest seen tokens
+            cb_msg.str("");
+            cb_msg << "[CLASS_BALANCED] Highest weights (rarest seen): ";
+            for (int i = std::max(0, (int)weight_pairs.size() - 10); i < (int)weight_pairs.size(); i++) {
+                cb_msg << "tok" << weight_pairs[i].second
+                       << "(w=" << std::fixed << std::setprecision(2) << weight_pairs[i].first
+                       << ",cnt=" << target_counts[weight_pairs[i].second] << ") ";
+            }
+            ctx->logging.logger->log(cb_msg.str());
+            
+            // Log ratio: max_weight / min_weight shows the dynamic range
+            if (!weight_pairs.empty()) {
+                float ratio = weight_pairs.back().first / weight_pairs.front().first;
+                cb_msg.str("");
+                cb_msg << "[CLASS_BALANCED] Dynamic range: max/min weight ratio = " 
+                       << std::fixed << std::setprecision(1) << ratio << "x";
+                ctx->logging.logger->log(cb_msg.str());
+            }
+        }
+    }
     
     // 10d. Issue #60 DEBUG: Allocate gradient attribution buffers if enabled
     // This lets us separately track LM head vs embedding backward contributions

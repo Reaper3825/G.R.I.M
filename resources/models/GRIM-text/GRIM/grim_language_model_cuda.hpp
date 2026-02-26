@@ -340,7 +340,8 @@ struct LanguageModelConfig {
     bool project_out_pc1 = false;              // Project out PC1 direction before LM head (Issue #149)
     int  pc1_power_iters = 5;                  // Power iteration steps for PC1 estimation
     bool center_logits = true;                 // Center logits per position (row-wise, mean→0)
-    bool center_encoder_residuals = false;        // Center residuals INSIDE encoder layers (attenuates gradient signal)
+    bool center_encoder_residuals = false;        // Center residuals INSIDE encoder layers. Prevents ρ buildup from causal attention prefix averaging.
+                                                     // Gradient cost: negligible ((1-1/n_tokens)^24 ≈ 0.996 for n≈6000).
     
     // Hardcoded Hidden States Diagnostic (Issue #42)
     // When enabled, replaces encoder output with synthetic patterns to isolate

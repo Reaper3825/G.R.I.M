@@ -192,7 +192,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx);
  * Build autograd::LossConfig from model LossOptions (single conversion point).
  * Eliminates duplicate LossOptions → LossConfig conversions across callsites.
  */
-autograd::LossConfig buildLossConfig(const LossContext::LossOptions& opts);
+autograd::LossConfig buildLossConfig(const LossContext::LossOptions& opts, const float* d_class_weights = nullptr);
 
 /**
  * Compute loss with autograd

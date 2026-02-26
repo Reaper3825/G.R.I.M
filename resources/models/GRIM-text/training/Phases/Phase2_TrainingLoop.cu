@@ -3426,6 +3426,21 @@ BatchResult processBatch(
             // Structured equation logging to CSV
             EQ_LOG("PC1_CAUSALITY_TEST", GRIM::Diagnostics::formatPC1CausalityTest(pc1_test, batch_idx),
                    static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::GRADIENT_CLIP);
+
+            // ========================================================================
+            // DIAGNOSTIC: HiddenSpectrum — Top-k singular value spectrum (Rule 21)
+            // Computes top-20 eigenvalues of H^T H via deflated power iteration.
+            // Answers: what is the rank structure of the hidden state correlation?
+            // [HIDDEN_SPECTRUM_EQUATION] r_k = Σ_{i=1}^{k} σ_i² / Σ σ_i²
+            // ========================================================================
+            GRIM::Diagnostics::HiddenSpectrum spectrum = GRIM::Diagnostics::computeHiddenSpectrum(
+                ts, flat_targets, cfg.d_model,
+                cfg.lm_head_center_hidden_states,
+                stream);
+            ctx.logging.logger->log(GRIM::Diagnostics::formatHiddenSpectrum(spectrum, batch_idx));
+
+            EQ_LOG("HIDDEN_SPECTRUM_EQUATION", GRIM::Diagnostics::formatHiddenSpectrum(spectrum, batch_idx),
+                   static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::GRADIENT_CLIP);
         }
 
         // ========================================================================
@@ -3453,7 +3468,16 @@ BatchResult processBatch(
         // ========================================================================
         {
             const float* weights_ptr = ctx.model->getLmHeadLayer()->weights().data;
-            const float* grads_ptr = ctx.model->getEmbeddingLayer()->tokenWeights().grad_data();
+            // Issue #150: When tied=no, LM head and embedding are DIFFERENT tensors.
+            // Read gradients from the SAME layer as weights (LM head) so rms(W) and
+            // rms(grad) refer to the same parameter. Previously read embedding grads,
+            // which showed PAD scatter-add accumulation (~1754 positions) as 76x spike
+            // vs BOS/EOS — misleading because that gradient doesn't affect LM head.
+            const bool weights_tied = ctx.model->getEmbeddingLayer()->tokenWeights().data
+                                   == ctx.model->getLmHeadLayer()->weights().data;
+            const float* grads_ptr = weights_tied
+                ? ctx.model->getEmbeddingLayer()->tokenWeights().grad_data()   // tied: same tensor, either pointer works
+                : ctx.model->getLmHeadLayer()->weights().grad_data();          // untied: use LM head's own gradients
 
             if (weights_ptr) {
                 constexpr int SPECIAL_IDS[] = {
@@ -4174,6 +4198,54 @@ BatchResult processBatch(
         const int accum_steps_for_log = accum_steps;
         
         // ========================================================================
+        // Issue #149: Zero PAD/UNK gradients before optimizer step
+        //
+        // PAD (id=1) and UNK (id=0) are never valid targets, yet they accumulate
+        // non-zero gradients through two paths:
+        //   1. LM head backward: label smoothing redistributes tiny gradient to ALL
+        //      vocab rows, including PAD/UNK (via softmax Jacobian)
+        //   2. Embedding backward: attention backward leaks gradient from valid
+        //      positions to PAD input positions through K/V cross-attention,
+        //      then scatter-adds to PAD's embedding row
+        // Path 2 is dominant (~76x larger than BOS/EOS) because attention has
+        // cross-position interactions even for masked-target positions.
+        //
+        // Zeroing these BEFORE norm computation ensures PAD/UNK don't inflate
+        // gradient norms or waste optimizer capacity.
+        // ========================================================================
+        {
+            auto& zero_ts = ctx.model->getTrainingState();
+            cudaStream_t zero_stream = zero_ts.stream_ctrl.getPrimaryStream();
+            const auto& zero_cfg = ctx.model->getConfig();
+            const size_t row_bytes = static_cast<size_t>(zero_cfg.d_model) * sizeof(float);
+            
+            constexpr int NON_TRAINABLE_TOKENS[] = {
+                GRIM::Tokenizer::UNK_TOKEN_ID,  // 0
+                GRIM::Tokenizer::PAD_TOKEN_ID   // 1
+            };
+            
+            // Zero embedding gradients for non-trainable tokens
+            float* emb_grads = ctx.model->getEmbeddingLayer()->tokenWeights().grad_data();
+            if (emb_grads) {
+                for (int tok : NON_TRAINABLE_TOKENS) {
+                    cudaMemsetAsync(
+                        emb_grads + static_cast<size_t>(tok) * zero_cfg.d_model,
+                        0, row_bytes, zero_stream);
+                }
+            }
+            
+            // Zero LM head gradients for non-trainable tokens
+            float* lm_grads = ctx.model->getLmHeadLayer()->weights().grad_data();
+            if (lm_grads) {
+                for (int tok : NON_TRAINABLE_TOKENS) {
+                    cudaMemsetAsync(
+                        lm_grads + static_cast<size_t>(tok) * zero_cfg.d_model,
+                        0, row_bytes, zero_stream);
+                }
+            }
+        }
+        
+        // ========================================================================
         // Issue #135: POST-ACCUMULATION gradient clipping
         //
         // Clipping runs ONCE on the fully accumulated + scaled gradients.
@@ -4319,6 +4391,64 @@ BatchResult processBatch(
             }
         }
         
+        // ════════════════════════════════════════════════════════════════════
+        // RUNTIME tie_embeddings pointer verification (every batch)
+        // Startup logging only proves state at init. This proves state at
+        // the moment the optimizer actually consumes the buffers.
+        // ════════════════════════════════════════════════════════════════════
+        {
+            const float* emb_w = ctx.model->getEmbeddingLayer()->tokenWeights().data;
+            const float* emb_g = ctx.model->getEmbeddingLayer()->tokenWeights().grad_data();
+            const float* lm_w  = ctx.model->getLmHeadLayer()->weights().data;
+            const float* lm_g  = ctx.model->getLmHeadLayer()->weights().grad_data();
+            const bool cfg_tied = ctx.model->getConfig().tie_embeddings;
+            const bool w_same = (emb_w == lm_w);
+            const bool g_same = (emb_g == lm_g);
+
+            // Count parameter groups referencing each buffer
+            int emb_w_groups = 0, lm_w_groups = 0;
+            for (const auto& pg : ctx.model->parameterGroups()) {
+                if (pg.tensor && pg.tensor->data == emb_w) ++emb_w_groups;
+                if (pg.tensor && pg.tensor->data == lm_w)  ++lm_w_groups;
+            }
+
+            // Log every 10 batches to avoid spam, but ALWAYS log if inconsistent
+            const bool inconsistent = (cfg_tied != w_same) || (cfg_tied != g_same);
+            if (inconsistent || (batch_idx % 10 == 0)) {
+                std::ostringstream oss;
+                oss << "[TIE_VERIFY] B=" << (batch_idx + 1)
+                    << " step=" << ctx.optimizer.optimizer_state.step
+                    << " cfg_tied=" << (cfg_tied ? "yes" : "no")
+                    << " w_ptrs=" << (w_same ? "SAME" : "DIFF")
+                    << " g_ptrs=" << (g_same ? "SAME" : "DIFF")
+                    << " emb_w=" << (const void*)emb_w
+                    << " lm_w=" << (const void*)lm_w
+                    << " emb_g=" << (const void*)emb_g
+                    << " lm_g=" << (const void*)lm_g
+                    << " emb_w_groups=" << emb_w_groups
+                    << " lm_w_groups=" << lm_w_groups;
+                if (inconsistent) {
+                    oss << " [ANOMALY] POINTER ALIASING MISMATCH — cfg says "
+                        << (cfg_tied ? "tied" : "untied")
+                        << " but weights " << (w_same ? "match" : "DIFFER")
+                        << " and grads " << (g_same ? "match" : "DIFFER");
+                }
+                ctx.logging.logger->log(oss.str());
+            }
+
+            // Rule 20: crash on mismatch — this is an architectural bug
+            if (cfg_tied && !w_same) {
+                throw std::runtime_error("[TIE_VERIFY] FATAL: tie_embeddings=true but weight pointers differ at batch "
+                    + std::to_string(batch_idx + 1) + " emb=" + std::to_string(reinterpret_cast<uintptr_t>(emb_w))
+                    + " lm=" + std::to_string(reinterpret_cast<uintptr_t>(lm_w)));
+            }
+            if (cfg_tied && !g_same) {
+                throw std::runtime_error("[TIE_VERIFY] FATAL: tie_embeddings=true but grad pointers differ at batch "
+                    + std::to_string(batch_idx + 1) + " emb_g=" + std::to_string(reinterpret_cast<uintptr_t>(emb_g))
+                    + " lm_g=" + std::to_string(reinterpret_cast<uintptr_t>(lm_g)));
+            }
+        }
+
         GRIM::launchAdamWStep(ctx.model->parameterGroups(),
                               result.learning_rate,
                               ctx.config.hyperparameters.weight_decay,
@@ -4416,6 +4546,23 @@ BatchResult processBatch(
                                            " param_rms=" + Internal::formatScalar(pre_sample.rms, 8);
             ctx.logging.logger->log(update_msg);
             EmitModuleInfo(ModuleId::Optimizer, update_msg, ctx.global_step);
+        }
+        
+        // Per-component Adam update_rms diagnostic (Issue #150)
+        // Answers: "Does Adam normalize the gradient gap across component types?"
+        // Only on diagnostic-sync batches to avoid blocking the pipeline.
+        if (sync_diag) {
+            const auto update_trace = GRIM::Diagnostics::computePerComponentUpdateTrace(
+                ctx.model->parameterGroups(),
+                result.learning_rate,
+                ctx.optimizer.optimizer_state.step + 1,  // 1-based iteration count (matches AdamW bias correction)
+                ctx.model->getTrainingState().stream_ctrl.getPrimaryStream()
+            );
+            if (update_trace.valid) {
+                const std::string trace_str = GRIM::Diagnostics::formatUpdateTrace(
+                    update_trace, batch_idx + 1, ctx.model->getConfig().tie_embeddings);
+                ctx.logging.logger->log(trace_str);
+            }
         }
         
         ctx.optimizer.optimizer_state.step++;
