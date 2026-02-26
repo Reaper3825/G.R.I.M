@@ -99,6 +99,9 @@ data/*
 
 # Then exclude large files and generated content
 resources/models/GRIM-text/training/data/
+# Sensitive training cache - never commit (script SCPs from ~/Downloads on Anvil runs)
+merged_verified_cache.jsonl
+**/merged_verified_cache.jsonl
 resources/models/GRIM-text/training/logs/
 resources/models/GRIM-text/training/models/
 resources/models/GRIM-text/quality/

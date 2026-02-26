@@ -21,6 +21,15 @@ project(GRIM_TrainingLoop LANGUAGES CXX CUDA)
 set(CUDA_ENABLED ON)
 message(STATUS "CUDA enabled for training loop")
 
+# CUDA architectures: A100 (sm_80) on Anvil + RTX 30xx (sm_86) locally.
+# Override: GRIM_CUDA_ARCH=80 (Anvil-only) or 80;86 (default, portable).
+if(DEFINED ENV{GRIM_CUDA_ARCH})
+    set(GRIM_CUDA_ARCHITECTURES "$ENV{GRIM_CUDA_ARCH}" CACHE STRING "CUDA arch list")
+else()
+    set(GRIM_CUDA_ARCHITECTURES "80;86" CACHE STRING "CUDA arch: A100 sm_80, RTX sm_86")
+endif()
+message(STATUS "CUDA architectures: ${GRIM_CUDA_ARCHITECTURES}")
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -85,7 +94,7 @@ add_library(grim_training_kernels STATIC
 set_target_properties(grim_training_kernels PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES "86"
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
 )
 target_include_directories(grim_training_kernels PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../..      # GRIM-text root
@@ -111,7 +120,7 @@ add_library(grim_log_recorder STATIC
 set_target_properties(grim_log_recorder PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES "86"
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
 )
 target_include_directories(grim_log_recorder PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../../..      # GRIM-text root
@@ -138,7 +147,7 @@ add_library(grim_flash_attention STATIC
 set_target_properties(grim_flash_attention PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES "86"
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
 )
 target_compile_options(grim_flash_attention PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
@@ -177,7 +186,7 @@ add_library(grim_cuda_kernels OBJECT
 )
 set_target_properties(grim_cuda_kernels PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF  # OFF: QKV_Projector only CALLS TensorConversion (doesn't export device symbols)
-    CUDA_ARCHITECTURES "86"
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
     POSITION_INDEPENDENT_CODE ON
 )
 target_include_directories(grim_cuda_kernels PRIVATE
@@ -235,7 +244,7 @@ add_library(grim_language_model_gpu_impl OBJECT
 )
 set_target_properties(grim_language_model_gpu_impl PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
-    CUDA_ARCHITECTURES "86"
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
     POSITION_INDEPENDENT_CODE ON
 )
 target_include_directories(grim_language_model_gpu_impl PRIVATE
@@ -269,7 +278,7 @@ add_library(grim_model_serialization STATIC
 )
 set_target_properties(grim_model_serialization PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
-    CUDA_ARCHITECTURES "86"
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
 )
 target_include_directories(grim_model_serialization PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../..
@@ -314,7 +323,7 @@ add_executable(train_gpu
 set_target_properties(train_gpu PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES "86"
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
     CUDA_RUNTIME_LIBRARY Shared
 )
 
@@ -374,7 +383,7 @@ add_library(grim_equation_logging STATIC
 set_target_properties(grim_equation_logging PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES "86"
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
 )
 target_include_directories(grim_equation_logging PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../..
@@ -400,7 +409,7 @@ add_library(grim_unigrambyte_tokenizer STATIC
 set_target_properties(grim_unigrambyte_tokenizer PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES "86"
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
 )
 target_include_directories(grim_unigrambyte_tokenizer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../..
@@ -422,7 +431,7 @@ add_executable(tokenizer_self_test
 )
 
 set_target_properties(tokenizer_self_test PROPERTIES
-    CUDA_ARCHITECTURES "86"
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
     CUDA_RUNTIME_LIBRARY Shared
 )
 
@@ -450,7 +459,7 @@ add_executable(unigrambyte_self_test
 )
 
 set_target_properties(unigrambyte_self_test PROPERTIES
-    CUDA_ARCHITECTURES "86"
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
     CUDA_RUNTIME_LIBRARY Shared
 )
 
@@ -481,7 +490,7 @@ add_executable(flash_attention_test
 set_target_properties(flash_attention_test PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES "86"
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
     CUDA_RUNTIME_LIBRARY Shared
 )
 
@@ -521,7 +530,7 @@ add_executable(gradient_verification_test
 set_target_properties(gradient_verification_test PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES "86"
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
     CUDA_RUNTIME_LIBRARY Shared
 )
 
@@ -562,7 +571,7 @@ add_executable(diagnostic_train_minimal
 set_target_properties(diagnostic_train_minimal PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES "86"
+    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
     CUDA_RUNTIME_LIBRARY Shared
 )
 

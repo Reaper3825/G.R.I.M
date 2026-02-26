@@ -198,8 +198,17 @@ namespace Internal {
 StartupConfig loadConfiguration(int argc, char** argv) {
     StartupConfig config;
     
-    // Load ai_config.json snapshot
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+    // Resolve config path: --config overrides default ai_config.json discovery
+    std::string config_path = "ai_config.json";
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--config" && i + 1 < argc) {
+            config_path = argv[++i];
+            break;
+        }
+    }
+    
+    // Load ai_config.json snapshot (or path from --config, e.g. model_config.json)
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot(config_path);
     if (!snapshot) {
         throw std::runtime_error("FATAL: ai_config.json not found or unreadable");
     }
@@ -446,9 +455,11 @@ StartupConfig loadConfiguration(int argc, char** argv) {
         else if (arg == "--batch-size" && i + 1 < argc) config.hyperparameters.batch_size = std::atoi(argv[++i]);
         else if (arg == "--lr" && i + 1 < argc) config.hyperparameters.learning_rate = std::atof(argv[++i]);
         else if (arg == "--save-test") config.save_test_mode = true;
+        else if (arg == "--config" && i + 1 < argc) { ++i; }  // consumed above for loadAiConfigSnapshot
         else if (arg == "--help") {
             std::cout << "Usage: " << argv[0] << " [options]\n";
             std::cout << "Options:\n";
+            std::cout << "  --config <path>    Config file (ai_config.json or model_config.json)\n";
             std::cout << "  --data <path>      Training data path\n";
             std::cout << "  --vocab <path>     Vocabulary path\n";
             std::cout << "  --output <path>    Output model path\n";
