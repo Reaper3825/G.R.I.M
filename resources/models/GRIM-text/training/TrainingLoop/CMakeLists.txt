@@ -28,6 +28,8 @@ if(DEFINED ENV{GRIM_CUDA_ARCH})
 else()
     set(GRIM_CUDA_ARCHITECTURES "80;86" CACHE STRING "CUDA arch: A100 sm_80, RTX sm_86")
 endif()
+# Set globally so ALL CUDA targets inherit (including object libraries)
+set(CMAKE_CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}")
 message(STATUS "CUDA architectures: ${GRIM_CUDA_ARCHITECTURES}")
 
 set(CMAKE_CXX_STANDARD 17)
