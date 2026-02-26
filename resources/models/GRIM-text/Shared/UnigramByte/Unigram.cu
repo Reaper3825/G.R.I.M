@@ -1887,7 +1887,19 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     // whitespace/case/repetition artifacts (e.g., " the" vs "the", "soooo" vs "soo").
     // Keep the highest-count surviving variant.
     std::unordered_set<std::string> normalized_added;
-    
+
+    // Pre-seed normalized_added with byte-layer char_seeds so that space-prefixed
+    // near-duplicates like " a" collide with the byte-covered "a".
+    // Without this, "a" is skipped by char_seeds before reaching dedup, so " a"
+    // (which normalizes to "a") sails through unchallenged — producing redundant
+    // vocab entries for all 26 " X" (space+letter) tokens.
+    for (const auto& ch : char_seeds) {
+        std::string norm = normalizeForDedup(ch);
+        if (!norm.empty()) normalized_added.insert(norm);
+    }
+    std::cout << "[UnigramLM] Pre-seeded " << normalized_added.size()
+              << " normalized forms from byte-layer chars for dedup" << std::endl;
+
     // Pass A: select which entries survive all filters, collect them and their counts.
     // We need the total accepted count sum BEFORE calling addPiece so that initial
     // scores are proper log-probabilities: log(count / sum_accepted_counts).

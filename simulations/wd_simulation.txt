@@ -1,0 +1,333 @@
+================================================================================
+  WEIGHT DECAY SIMULATION — GRIM-text Training Run 17718958646177576
+  Purely factual analysis from actual training data
+  Generated from training_17718958646177576.log (2706 batches, ~1353 opt steps)
+================================================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. CURRENT WEIGHT DECAY CONFIGURATION (VERIFIED IN CODE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Source chain:
+    ai_config.json line 110:        "weight_decay": 0.01
+    ai_config_paths.hpp line 143:   TrainingHyperparameters.weight_decay = 0.01
+    Phase2_TrainingLoop.cu line 4322: launchAdamWStep(ctx.config.hyperparameters.weight_decay, ...)
+    AdamW_Kernal_GPU.cu line 203:   effective_wd = weight_decay * group.upsilon * group.weight_decay_multiplier
+                                                 = 0.01 * 1.0 * 1.0 = 0.01
+
+  For the tied embedding/LM head matrix:
+    group.upsilon                  = 1.0     (layer_index=-1, no depth scaling)
+    group.weight_decay_multiplier  = 1.0     (default, not overridden)
+    effective_weight_decay         = 0.01
+
+  Other config:
+    lr                   = 0.0003
+    β1, β2               = 0.9, 0.999
+    ε                    = 1e-8
+    gradient_accumulation = 2 batches per optimizer step
+
+  AdamW update rule (line 28 of AdamW_Kernal_GPU.cu):
+    params[i] = param - lr * (adam_update + weight_decay * param)
+
+  Decay per step for a weight element w:
+    Δw_decay = -lr × wd × w = -0.0003 × 0.01 × w = -3e-6 × w
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. TOKEN 36 ACTUAL WEIGHT TRAJECTORY (from LMHeadNorm log entries)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  2668 LMHeadNorm entries contain tok36 (out of 2701 total batches).
+
+  Trajectory milestones:
+    batch      2:  W_rms = 0.024014  (Xavier init)
+    batch    170:  W_rms = 0.024744
+    batch    303:  W_rms = 0.025544
+    batch    569:  W_rms = 0.027618
+    batch    835:  W_rms = 0.030167
+    batch   1101:  W_rms = 0.033683
+    batch   1367:  W_rms = 0.036061
+    batch   1633:  W_rms = 0.039367
+    batch   1899:  W_rms = 0.042026
+    batch   2165:  W_rms = 0.044264
+    batch   2431:  W_rms = 0.044598
+    batch   2706:  W_rms = 0.044598  (final)
+
+  Total growth: 0.024014 → 0.044598 = +0.020584 (+85.7%)
+
+  Per-phase growth rates (per optimizer step):
+    batch     1-  200:  +9.23e-06/step  (warming up)
+    batch   200-  500:  +1.39e-05/step  (accelerating)
+    batch   500- 1000:  +2.08e-05/step  (peak growth phase)
+    batch  1000- 1500:  +2.51e-05/step  (peak growth phase)
+    batch  1500- 2000:  +1.85e-05/step  (decelerating)
+    batch  2000- 2500:  +5.39e-06/step  (plateau)
+    batch  2500- 2706:  +1.25e-06/step  (near-stall)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. ALL TRACKED TOKENS — WEIGHT GROWTH COMPARISON
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  From LMHeadNorm top-5 argmax tracking (first batch seen → last batch seen):
+
+  tok   |  init    |  final   |  growth  |  pct    | growth/step
+  ------+----------+----------+----------+---------+------------
+   36   | 0.02415  | 0.04466  | +0.02051 | +84.9%  | 1.52e-05
+  283   | 0.02511  | 0.04290  | +0.01779 | +70.8%  | 1.32e-05
+   48   | 0.02465  | 0.04262  | +0.01797 | +72.9%  | 1.33e-05
+   50   | 0.02484  | 0.03898  | +0.01414 | +56.9%  | 1.05e-05
+   45   | 0.02506  | 0.03864  | +0.01358 | +54.2%  | 1.01e-05
+  278   | 0.02481  | 0.03410  | +0.00929 | +37.5%  | 6.88e-06
+  281   | 0.02532  | 0.03313  | +0.00781 | +30.8%  | 5.78e-06
+  262   | 0.02504  | 0.03260  | +0.00756 | +30.2%  | 5.60e-06
+  106   | 0.02467  | 0.03160  | +0.00693 | +28.1%  | 5.13e-06
+  263   | 0.02406  | 0.03010  | +0.00605 | +25.1%  | 4.48e-06
+   44   | 0.02480  | 0.02983  | +0.00503 | +20.3%  | 3.73e-06
+  295   | 0.02394  | 0.02949  | +0.00555 | +23.2%  | 4.11e-06
+
+  Summary:
+    Xavier init W_rms (d_model=768):     0.036084
+    Mean content token final W_rms:      0.033284  (n=11 tokens, excluding tok36)
+    Tok36 final W_rms:                   0.044660
+    Tok36 / content ratio:               1.34×
+    Tok36 growth/step vs content avg:    1.52e-05 / 7.52e-06 = 2.0× faster
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. WEIGHT DECAY EFFECTIVENESS — CURRENT wd=0.01
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Cumulative decay removed from tok36 over entire training:
+    Total decay = 0.000145
+    Without decay, tok36 would be: 0.044742  (vs actual 0.044598)
+    Decay as % of total growth:    0.70%
+
+  Instantaneous comparison at final W_rms = 0.04466:
+    Decay per step:     lr × wd × W = 0.0003 × 0.01 × 0.04466 = 1.34e-07
+    Growth per step:    (averaged over training)                 = 1.52e-05
+    Gradient / Decay ratio:                                     = 113×
+
+  Conclusion: Current wd=0.01 removes 0.70% of growth. Functionally zero.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. EQUILIBRIUM ANALYSIS — WHAT wd IS NEEDED?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  At equilibrium, decay = gradient push:
+    lr × wd × W_eq = growth_per_step
+    W_eq = growth_per_step / (lr × wd)
+
+  Using tok36 average growth rate = 1.52e-05/step:
+
+  wd     | tok36 W_eq | content W_eq | tok36 status     | content status
+  -------+------------+--------------+------------------+-----------------
+  0.01   |   5.0642   |    2.5069    | UNCONSTRAINED    | UNCONSTRAINED
+  0.05   |   1.0128   |    0.5014    | UNCONSTRAINED    | UNCONSTRAINED
+  0.1    |   0.5064   |    0.2507    | UNCONSTRAINED    | UNCONSTRAINED
+  0.3    |   0.1688   |    0.0836    | UNCONSTRAINED    | ABOVE INIT
+  0.5    |   0.1013   |    0.0501    | UNCONSTRAINED    | ABOVE INIT
+  1.0    |   0.0506   |    0.0251    | ABOVE INIT       | BELOW INIT
+
+  (Content growth/step = 7.52e-06, Xavier init = 0.036)
+
+  To CAP tok36 at specific W_rms targets:
+    W_target = 0.025 (near init):      wd needed = 2.03
+    W_target = 0.030 (content level):  wd needed = 1.69
+    W_target = 0.035 (mild excess):    wd needed = 1.45
+
+  Problem: wd > 0.75 SHRINKS content tokens (decay > gradient push at W=0.033).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. SIMULATED TRAJECTORIES AT DIFFERENT wd VALUES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Assumptions:
+  - Gradient push to tok36 = 1.52e-05/step (constant, averaged from actual data)
+  - Gradient push to content tokens = 7.52e-06/step (constant)
+  - lr = 0.0003, init W_rms = 0.024 (tok36), 0.033 (content)
+  - Simulation: w_new = w + growth - lr × wd × w
+
+  --- wd = 0.1 ---
+
+  Token 36 (init 0.024):
+    step     0: W=0.024000  decay=7.20e-07  net=+1.45e-05
+    step   200: W=0.026846  decay=8.05e-07  net=+1.44e-05
+    step   500: W=0.030822  decay=9.25e-07  net=+1.43e-05
+    step  1000: W=0.036930  decay=1.11e-06  net=+1.41e-05
+    step  1350: W=0.041186  (actual was 0.04460; ~7.6% lower)
+
+  Content tokens (init 0.033):
+    step     0: W=0.033000  decay=9.90e-07  net=+6.53e-06
+    step   500: W=0.036133  decay=1.08e-06  net=+6.44e-06
+    step  1000: W=0.039117  decay=1.17e-06  net=+6.35e-06
+    step  1350: W=0.041174  (actual was 0.03328; 23.7% HIGHER)
+
+  → wd=0.1 barely slows tok36, does not shrink content.
+  → tok36 still reaches 0.041 (vs actual 0.045). Disparity reduced from 1.34× to 1.00×.
+  → BUT: content tokens ALSO inflate to 0.041 — the ratio improvement is an artifact
+     of all tokens inflating toward equilibrium. No selective pressure on tok36.
+
+  --- wd = 0.5 ---
+
+  Token 36 (init 0.024):
+    step     0: W=0.024000  decay=3.60e-06  net=+1.16e-05
+    step   200: W=0.026195  decay=3.93e-06  net=+1.13e-05
+    step   500: W=0.028987  decay=4.35e-06  net=+1.09e-05
+    step  1000: W=0.032891  decay=4.93e-06  net=+1.03e-05
+    step  1350: W=0.035315  (actual was 0.04460; 20.8% lower)
+
+  Content tokens (init 0.033):
+    step     0: W=0.033000  decay=4.95e-06  net=+2.57e-06
+    step   500: W=0.034208  decay=5.13e-06  net=+2.39e-06
+    step  1000: W=0.035161  decay=5.27e-06  net=+2.25e-06
+    step  1350: W=0.035736  (actual was 0.03328; 7.4% HIGHER)
+
+  → wd=0.5 brings tok36 from 0.045→0.035, content from 0.033→0.036.
+  → Ratio tok36/content = 0.035/0.036 = 0.99×. Disparity nominally eliminated.
+  → Content tokens still growing, not shrinking.
+
+  --- wd = 1.0 ---
+
+  Token 36 (init 0.024):
+    step     0: W=0.024000  decay=7.20e-06  net=+8.00e-06
+    step   200: W=0.025566  decay=7.67e-06  net=+7.53e-06
+    step   500: W=0.027530  decay=8.26e-06  net=+6.94e-06
+    step  1000: W=0.030412  decay=9.12e-06  net=+6.08e-06
+    step  1350: W=0.032312  (actual was 0.04460; 27.5% lower)
+
+  Content tokens (init 0.033):
+    step     0: W=0.033000  decay=9.90e-06  net=-2.38e-06
+    step   500: W=0.031895  decay=9.57e-06  net=-2.05e-06
+    step  1000: W=0.030944  decay=9.28e-06  net=-1.76e-06
+    step  1350: W=0.030280  (actual was 0.03328; 9.0% LOWER)
+
+  → wd=1.0 constrains tok36 to 0.032 BUT shrinks content tokens to 0.030.
+  → Ratio tok36/content = 0.032/0.030 = 1.07×. Disparity persists in ratio.
+  → Content tokens are now LOSING information (shrinking below init).
+  → DESTRUCTIVE: model capacity diminished for all tokens to constrain one.
+
+  --- wd = 1.69 (the wd needed to cap tok36 at 0.030) ---
+
+  Token 36 (init 0.024):
+    step  1350: W ≈ 0.029 (at equilibrium target)
+
+  Content tokens (init 0.033):
+    step     0: decay = 0.0003 × 1.69 × 0.033 = 1.67e-05 >> growth 7.52e-06
+    step  1350: W ≈ 0.025 (SEVERE shrinkage, 24% below init)
+
+  → Catastrophically destructive to content tokens.
+  → Content decay/growth ratio = 0.45× (content shrinks 2.2× faster than it grows).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. GRADIENT-TO-DECAY RATIO AT EACH wd LEVEL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  At current tok36 W_rms = 0.04466:
+
+  wd     | decay/step  | tok36 grad   | ratio (grad/decay) | effective?
+  -------+-------------+--------------+--------------------+-----------
+  0.01   | 1.34e-07    | 1.52e-05     | 113×               | NO
+  0.05   | 6.70e-07    | 1.52e-05     |  23×               | NO
+  0.1    | 1.34e-06    | 1.52e-05     |  11×               | WEAK
+  0.3    | 4.02e-06    | 1.52e-05     |  3.8×              | PARTIAL
+  0.5    | 6.70e-06    | 1.52e-05     |  2.3×              | PARTIAL
+  1.0    | 1.34e-05    | 1.52e-05     |  1.1×              | YES
+  1.69   | 2.26e-05    | 1.52e-05     |  0.67×             | OVERCORRECTS
+
+  At content token W_rms = 0.03328:
+
+  wd     | decay/step  | content grad | ratio (grad/decay) | effect on content
+  -------+-------------+--------------+--------------------+------------------
+  0.01   | 9.99e-08    | 7.52e-06     | 75×                | negligible
+  0.05   | 4.99e-07    | 7.52e-06     | 15×                | negligible
+  0.1    | 9.99e-07    | 7.52e-06     |  7.5×              | mild
+  0.3    | 3.00e-06    | 7.52e-06     |  2.5×              | moderate
+  0.5    | 4.99e-06    | 7.52e-06     |  1.5×              | significant
+  1.0    | 9.99e-06    | 7.52e-06     |  0.75×             | DESTRUCTIVE
+  1.69   | 1.69e-05    | 7.52e-06     |  0.45×             | CATASTROPHIC
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. THE CORE PROBLEM: WEIGHT DECAY IS GLOBAL, THE BUG IS LOCAL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Weight decay applies uniformly to every row of the embedding matrix.
+  The tok36 problem is a PER-ROW gradient magnitude problem.
+
+  Tok36 receives 2.0× the gradient push of a typical content token.
+  To suppress tok36 to content-token level, decay must exceed tok36's
+  gradient push. But that same decay also exceeds content tokens'
+  gradient push, actively destroying them.
+
+  There is NO wd value that simultaneously:
+    (a) constrains tok36 W_rms to ≤ 0.030
+    (b) does not shrink content tokens below their current W_rms
+
+  The crossover point is wd ≈ 0.75:
+    - Below 0.75: content tokens still grow, tok36 barely constrained
+    - Above 0.75: content tokens shrink, tok36 constrained but at cost of model capacity
+
+  At the "sweet spot" wd = 0.5:
+    - tok36 ends at 0.035 (vs 0.045 actual — 22% reduction)
+    - content ends at 0.036 (vs 0.033 actual — 9% increase)
+    - But this does NOT fix argmax dominance. Tok36's dominance comes from its
+      GRADIENT SIGNAL being 2× stronger, not merely its weight norm being 1.34×.
+      Weight norm is a symptom. Reducing it via global decay treats the symptom.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. SUPPORTING DATA — GRADIENT RMS AND COLLAPSE DETECTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Gradient RMS (emb_lm_tied group):
+    First 100 batches: 0.000636
+    Last 100 batches:  0.000636
+    Stable throughout training — gradient magnitude is NOT diminishing.
+
+  Collapse detection:
+    271 total events, 263 for tok36
+    Mean argmax dominance:  34.2%   (expected: 0.04% = 1/2534)
+    Max argmax dominance:   70.0%
+    Dominance is a 855× excess over uniform expectation.
+
+  Update magnitude (last 50 optimizer steps):
+    update_rms:  5.47e-06
+    param_rms:   0.028972
+    update/param ratio: 1.89e-04
+
+  Tok36 growth deceleration:
+    Peak growth was +2.51e-05/step at batch 1000-1500.
+    Latest growth is +1.25e-06/step at batch 2500-2706.
+    Tok36 is approaching a natural gradient-driven plateau at ~0.045.
+    This plateauing is NOT caused by weight decay (decay removed only 0.7%
+    of total growth). It's caused by reduced gradient signal as the model
+    adapts to tok36's dominance.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. VERDICT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  INCREASING GLOBAL WEIGHT DECAY WILL NOT FIX THE TOK36 COLLAPSE.
+
+  Quantitative basis:
+  1. Current wd=0.01 removed 0.70% of tok36's growth. Ineffective.
+  2. wd=0.5 would reduce tok36 from 0.045 to 0.035 (22% lower) but
+     simultaneously inflate content tokens from 0.033 to 0.036 (9% higher).
+     Net disparity reduced from 1.34× to 0.99× — but this is cosmetic.
+  3. wd=1.0 constrains tok36 to 0.032 but SHRINKS content tokens to 0.030.
+     The disparity PERSISTS at 1.07× while the model loses capacity.
+  4. wd=1.69 (needed to cap tok36 at 0.030) causes 24% shrinkage of content
+     tokens. Catastrophically destructive.
+  5. No global wd value satisfies both constraints simultaneously.
+
+  The root cause is tok36 receiving 2× the per-step gradient push
+  of content tokens. Global weight decay cannot selectively penalize
+  one embedding row. Weight norm is a downstream symptom of gradient
+  flow asymmetry, not the cause of argmax dominance.
+
+================================================================================

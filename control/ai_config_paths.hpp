@@ -297,6 +297,10 @@ struct TrainingHyperparameters {
     bool loss_entropy_reg_enabled;
     float loss_entropy_reg_lambda;
 
+    // Class-balanced loss: reweights per-token loss by 1/freq^β
+    bool loss_class_balanced_enabled = false;
+    float loss_class_balanced_beta = 0.5f;
+
 
     // LM Head centering (Issue #37 / #40) - NO DEFAULTS
     // When enabled, centers hidden states before LM head projection.
@@ -1089,6 +1093,17 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
             }
         }
 
+        // Class-balanced loss: reweights per-token loss by 1/freq^β
+        if (auto cb_it = loss_cfg.find("class_balanced"); cb_it != loss_cfg.end()) {
+            const auto& cb = *cb_it;
+            if (cb.is_boolean()) {
+                params.loss_class_balanced_enabled = cb.get<bool>();
+            } else if (cb.is_object()) {
+                params.loss_class_balanced_enabled = cb.value("enabled", params.loss_class_balanced_enabled);
+                params.loss_class_balanced_beta = cb.value("beta", params.loss_class_balanced_beta);
+            }
+        }
+
         
         if (auto pref_it = loss_cfg.find("preference"); pref_it != loss_cfg.end()) {
             const auto& pref = *pref_it;
@@ -1130,7 +1145,8 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     params.lm_head_centering_enabled = false;  // Default to disabled (standard implementation)
     params.lm_head_center_hidden_states = false;
     params.center_logits = false;  // Default to disabled (standard implementation)
-    params.center_encoder_residuals = false;  // Default: disabled (24 centering projections attenuate gradient signal)
+    params.center_encoder_residuals = false;  // Default: disabled. Enable to prevent ρ buildup across layers (mode collapse fix).
+                                               // Gradient cost: (1-1/n_tokens)^24 ≈ 0.996 for n≈6000 — negligible.
     params.project_out_pc1 = false;  // Default: disabled (Issue #149)
     params.pc1_power_iters = 5;
     if (auto it = trainConfig.find("lm_head_centering"); it != trainConfig.end() && it->is_object()) {

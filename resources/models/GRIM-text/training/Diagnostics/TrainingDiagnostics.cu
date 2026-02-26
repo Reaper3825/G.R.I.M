@@ -218,10 +218,10 @@ std::string formatEmbGradEquation(const EmbGradEquationDiag& diag, int batch_idx
     oss << std::fixed << std::setprecision(6);
     
     // Rule 21 format: equation, inputs, expected, actual, anomaly
-    oss << "[EMB_GRAD_EQUATION] TIED_WEIGHT_GRAD: grad_W = grad_lm + pcgrad(grad_emb)\n";
+    oss << "[EMB_GRAD_EQUATION] WEIGHT_GRAD: grad_W = grad_lm + grad_emb (direct accumulation)\n";
     oss << "  EQUATION: grad_lm[v] = centered^T @ grad_logits[:,v] (dense matmul)\n";
     oss << "            grad_emb[tok] += grad_encoder[t] * emb_scale (sparse atomicAdd)\n";
-    oss << "            grad_final = grad_lm + orthogonal(grad_emb, grad_lm) (PCGrad)\n";
+    oss << "            grad_final = grad_lm + grad_emb (same buffer when tied, separate when untied)\n";
     oss << "  GRADIENT BUFFER: rms=" << diag.grad_rms
         << " active_rows=" << diag.num_active_rows << "/" << diag.total_vocab
         << " active_ratio=" << std::setprecision(4) << diag.active_ratio << "\n";
@@ -1341,9 +1341,14 @@ PC1CausalityTest computePC1CausalityTest(
 
     // ==========================================
     // Step 4: Compute PC1 coefficients per position
-    // coeff_t = h_t · g  (projection of h_t onto PC1)
-    // No need to actually project — we use the analytical delta instead.
+    // coeff_t = h_t · g  (raw dot product, g has RMS=1 so ||g||²=D)
+    //
+    // CRITICAL: g is RMS-normalized (||g||²=D, NOT ||g||=1).
+    // The unit vector is ĝ = g/||g|| = g/sqrt(D).
+    // Projection: h'_t = h_t - (h_t·ĝ)ĝ = h_t - (coeff_t/D) × g
+    // So all formulas using coeff_t must divide by D.
     // ==========================================
+    const float inv_D = 1.0f / static_cast<float>(D);
     std::vector<float> pc1_coeffs(N);
     for (int i = 0; i < N; ++i) {
         const int t = valid_positions[i];
@@ -1354,10 +1359,56 @@ PC1CausalityTest computePC1CausalityTest(
     }
 
     // ==========================================
+    // Step 4b: Invariant checks on projected hidden states
+    //
+    // Invariant 1: h'_t · g = 0 (residual orthogonal to PC1)
+    //   h'_t = h_t - (c_t/D)g → h'_t·g = c_t - (c_t/D)||g||² = c_t - c_t = 0
+    //
+    // Invariant 2: ||h'_t||² + (h_t·ĝ)² = ||h_t||² (Pythagorean)
+    //   ||h'_t||² = ||h_t||² - c_t²/D, and (h_t·ĝ)² = c_t²/D
+    //   So ||h'_t||² + c_t²/D = ||h_t||²
+    // ==========================================
+    {
+        constexpr int kInvariantSamples = 5;
+        float max_ortho_err = 0.0f;
+        float max_pythag_err = 0.0f;
+        for (int si = 0; si < std::min(kInvariantSamples, N); ++si) {
+            const int idx = si * std::max(1, N / kInvariantSamples);
+            if (idx >= N) break;
+            const int t = valid_positions[idx];
+            const float* h_t = &h_hidden[static_cast<size_t>(t) * D];
+            const float c_t = pc1_coeffs[idx];
+
+            // Compute h'_t = h_t - (c_t/D) * g
+            // Then dot(h'_t, g) should be ≈ 0
+            float dot_proj_g = 0.0f;
+            float norm_proj_sq = 0.0f;
+            float norm_orig_sq = 0.0f;
+            for (int d = 0; d < D; ++d) {
+                float h_proj = h_t[d] - (c_t * inv_D) * v[d];
+                dot_proj_g += h_proj * v[d];
+                norm_proj_sq += h_proj * h_proj;
+                norm_orig_sq += h_t[d] * h_t[d];
+            }
+            // Invariant 1: |h'·g| / ||g|| should be ≈ 0
+            float ortho_err = std::abs(dot_proj_g) / std::sqrt(static_cast<float>(D));
+            max_ortho_err = std::max(max_ortho_err, ortho_err);
+
+            // Invariant 2: ||h'||² + c_t²/D should equal ||h||²
+            float pythag_lhs = norm_proj_sq + c_t * c_t * inv_D;
+            float pythag_err = std::abs(pythag_lhs - norm_orig_sq) / std::max(1e-12f, norm_orig_sq);
+            max_pythag_err = std::max(max_pythag_err, pythag_err);
+        }
+        result.pc1_ortho_err = max_ortho_err;
+        result.pc1_pythag_err = max_pythag_err;
+    }
+
+    // ==========================================
     // Step 5: Compute gW[v] = g · W[v] for all vocab tokens
-    // This is the per-token logit shift from removing PC1:
-    //   Δlogit[t,v] = -coeff_t × gW[v]
-    //   logit_after[t,v] = logit_before[t,v] + Δlogit[t,v]
+    // Per-token logit shift from removing PC1:
+    //   h'_t = h_t - (c_t/D) × g
+    //   Δlogit[t,v] = h'_t·W[v] - h_t·W[v] = -(c_t/D) × (g·W[v]) = -(c_t/D) × gW[v]
+    //   logit_after[t,v] = logit_before[t,v] - (c_t/D) × gW[v]
     //
     // No CPU matmul needed — just one dot product per vocab row.
     // ==========================================
@@ -1371,8 +1422,9 @@ PC1CausalityTest computePC1CausalityTest(
 
     // ==========================================
     // Step 6: BEFORE/AFTER logit[277] from cached logits + analytical delta
-    // BEFORE: cached_logits[t, 277]  (from actual forward pass)
-    // AFTER:  cached_logits[t, 277] - coeff_t × gW[277]
+    // BEFORE: cached_logits[t, tracked]
+    // AFTER:  cached_logits[t, tracked] - (coeff_t / D) × gW[tracked]
+    //         (divide by D because g has ||g||²=D, not ||g||=1)
     // ==========================================
     const float gW_277 = gW[tracked_token];
 
@@ -1382,7 +1434,7 @@ PC1CausalityTest computePC1CausalityTest(
         const int t = valid_positions[i];
         const float before = h_cached_logits[static_cast<size_t>(t) * vocab_size + tracked_token];
         sum_logit277_before += before;
-        sum_logit277_after += before - pc1_coeffs[i] * gW_277;
+        sum_logit277_after += before - pc1_coeffs[i] * gW_277 * inv_D;
     }
     result.before_logit_tracked_mean = sum_logit277_before / N;
     result.after_logit_tracked_mean = sum_logit277_after / N;
@@ -1450,10 +1502,10 @@ PC1CausalityTest computePC1CausalityTest(
         const float* logits_before_row = &h_cached_logits[static_cast<size_t>(t) * vocab_size];
 
         // AFTER: cached logits + analytical delta from PC1 removal
-        // logit_after[v] = logit_before[v] - coeff_t × gW[v]
+        // logit_after[v] = logit_before[v] - (coeff_t / D) × gW[v]
         const float coeff = pc1_coeffs[idx];
         for (int j = 0; j < vocab_size; ++j) {
-            logits_after_row[j] = logits_before_row[j] - coeff * gW[j];
+            logits_after_row[j] = logits_before_row[j] - coeff * gW[j] * inv_D;
         }
 
         float l277_b, ent_b, t1_b, t5_b;
@@ -1510,12 +1562,12 @@ PC1CausalityTest computePC1CausalityTest(
         result.before_avg_cos = (count_before > 0) ? (sum_cos_before / count_before) : 0.0f;
 
         // AFTER: pairwise cosine on projected hidden states (analytical)
-        // h'_t = h_t - c_t × g, so:
-        //   h'_i · h'_j = (h_i - c_i g) · (h_j - c_j g)
-        //               = h_i·h_j - c_i(g·h_j) - c_j(g·h_i) + c_i c_j
-        //               = h_i·h_j - c_i c_j - c_j c_i + c_i c_j
-        //               = h_i·h_j - c_i c_j
-        //   ||h'_t||^2  = ||h_t||^2 - c_t^2
+        // h'_t = h_t - (c_t/D) × g  (g has RMS=1 so ||g||²=D)
+        //   h'_i · h'_j = (h_i - c_i/D g) · (h_j - c_j/D g)
+        //               = h_i·h_j - (c_i/D)(g·h_j) - (c_j/D)(g·h_i) + (c_i c_j/D²)||g||²
+        //               = h_i·h_j - c_i c_j/D - c_j c_i/D + c_i c_j D/D²
+        //               = h_i·h_j - c_i c_j/D
+        //   ||h'_t||^2  = ||h_t||^2 - c_t^2/D
         float sum_cos_after = 0.0f;
         int count_after = 0;
         for (int i = 0; i < N && count_after < kCosineSamples; i += step) {
@@ -1533,9 +1585,9 @@ PC1CausalityTest computePC1CausalityTest(
             }
             const float c_i = pc1_coeffs[i];
             const float c_j = pc1_coeffs[j];
-            const float proj_dot = dot_ab - c_i * c_j;
-            const float proj_na = na - c_i * c_i;
-            const float proj_nb = nb - c_j * c_j;
+            const float proj_dot = dot_ab - c_i * c_j * inv_D;
+            const float proj_na = na - c_i * c_i * inv_D;
+            const float proj_nb = nb - c_j * c_j * inv_D;
             float denom = std::sqrt(std::max(0.0f, proj_na)) * std::sqrt(std::max(0.0f, proj_nb));
             if (denom > 1e-12f) {
                 sum_cos_after += std::abs(proj_dot / denom);
@@ -1569,7 +1621,7 @@ std::string formatPC1CausalityTest(const PC1CausalityTest& r, int batch_idx) {
     // ==========================================
     // Rule 21: Equation-Based Diagnostic Format
     // ==========================================
-    oss << "[PC1_CAUSALITY_TEST] HIDDEN_STATE_GEOMETRY: h'_t = h_t - (h_t · g) g  (g = PC1 unit vector)\n";
+    oss << "[PC1_CAUSALITY_TEST] HIDDEN_STATE_GEOMETRY: h'_t = h_t - (h_t · g) g / ||g||²  (g = PC1, RMS-norm'd, ||g||²=D)\n";
 
     oss << std::setprecision(6);
     oss << "  PC1 ESTIMATION (" << r.power_iterations << " power iterations):\n";
@@ -1578,6 +1630,11 @@ std::string formatPC1CausalityTest(const PC1CausalityTest& r, int batch_idx) {
     oss << std::setprecision(6);
     oss << "    rms(g) = " << r.pc1_rms << " (should be 1.0)\n";
     oss << "    cos(PC1, W[" << tok << "]) = " << r.cos_pc1_w_tracked << "\n";
+    oss << "  INVARIANTS (should both be ≈0):\n";
+    oss << std::scientific << std::setprecision(2);
+    oss << "    max|h'·g|/||g|| = " << r.pc1_ortho_err << " (orthogonality)\n";
+    oss << "    max|(||h'||²+c²/D-||h||²)/||h||²| = " << r.pc1_pythag_err << " (Pythagorean)\n";
+    oss << std::fixed;
 
     oss << "  BEFORE PROJECTION (original hidden states, n=" << r.n_positions << "):\n";
     oss << std::setprecision(4);
@@ -1624,6 +1681,425 @@ std::string formatPC1CausalityTest(const PC1CausalityTest& r, int batch_idx) {
     } else {
         oss << "  [VERDICT] PC1 IS NOT THE PRIMARY MECHANISM: Token " << tok << " did NOT deflate.\n";
         oss << "           Investigate: rank-2+ components, weight norm, or loss landscape.\n";
+    }
+
+    return oss.str();
+}
+
+//======================================================//
+//  HiddenSpectrum — Top-k singular value spectrum via deflated power iteration
+//  [HIDDEN_SPECTRUM_EQUATION] Σ_{i=1}^{k} σ_i² / Σ σ_i²
+//======================================================//
+
+HiddenSpectrum computeHiddenSpectrum(
+    const GRIM::TrainingState& ts,
+    const std::vector<int>& targets,
+    int d_model,
+    bool use_centering,
+    cudaStream_t stream
+) {
+    HiddenSpectrum result{};
+    result.d_model = d_model;
+
+    const int total_tokens = static_cast<int>(targets.size());
+    const bool have_hidden = use_centering
+        ? (ts.centering_scratch_tensor.data != nullptr)
+        : (ts.cached_encoder_output.data != nullptr);
+
+    if (total_tokens == 0 || !have_hidden) return result;
+
+    // D2H copy of hidden states
+    const size_t hidden_size = static_cast<size_t>(total_tokens) * d_model;
+    std::vector<float> h_hidden(hidden_size);
+
+    const float* hidden_source = use_centering && ts.centering_scratch_tensor.data
+        ? ts.centering_scratch_tensor.data
+        : ts.cached_encoder_output.data;
+
+    cudaMemcpyAsync(h_hidden.data(), hidden_source,
+                    hidden_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+
+    // Identify valid (non-PAD) positions
+    constexpr int PAD_ID = GRIM::Tokenizer::PAD_TOKEN_ID;
+    std::vector<int> valid_positions;
+    valid_positions.reserve(total_tokens);
+    for (int t = 0; t < total_tokens; ++t) {
+        if (targets[t] != PAD_ID) {
+            valid_positions.push_back(t);
+        }
+    }
+    const int N = static_cast<int>(valid_positions.size());
+    if (N < 2) return result;
+    result.n_positions = N;
+    const int D = d_model;
+
+    // Compute trace = Σ_t ||h_t||² (total variance)
+    float trace = 0.0f;
+    for (int i = 0; i < N; ++i) {
+        const int t = valid_positions[i];
+        const float* h_t = &h_hidden[static_cast<size_t>(t) * D];
+        for (int d = 0; d < D; ++d) trace += h_t[d] * h_t[d];
+    }
+    result.trace = trace;
+    if (trace < 1e-12f) return result;
+
+    // ==========================================================
+    // Deflated power iteration for top-k eigenvalues of H^T H
+    //
+    // For each component k:
+    //   1. Run power iteration on (H - Σ_{j<k} σ_j u_j v_j^T)^T (H - ...)
+    //      Equivalently, deflate by subtracting projections onto found eigenvectors.
+    //   2. Store eigenvalue λ_k and eigenvector v_k
+    //
+    // Instead of modifying H, we deflate during the H^T(Hv) step:
+    //   Hv_raw = H @ v
+    //   Hv_deflated[i] = Hv_raw[i] - Σ_{j<k} (v · v_j) × σ_j × u_j[i]
+    //   But simpler: just deflate v before multiplication:
+    //   v_deflated = v - Σ_{j<k} (v · v_j) v_j
+    //   Then proceed with H^T(H @ v_deflated)
+    // ==========================================================
+
+    constexpr int kPowerIters = 5;  // Same as PC1 test
+    const int K = kSpectrumTopK;    // 20
+
+    // Storage for found eigenvectors [K x D]
+    std::vector<float> eigenvecs(static_cast<size_t>(K) * D, 0.0f);
+
+    for (int k = 0; k < K; ++k) {
+        // Initialize v with deterministic pseudo-random (seeded by k)
+        std::vector<float> v(D);
+        {
+            uint32_t seed = static_cast<uint32_t>(N * 7919 + D * 104729 + k * 31337);
+            for (int d = 0; d < D; ++d) {
+                seed = seed * 1103515245u + 12345u;
+                v[d] = static_cast<float>(static_cast<int>(seed >> 16) & 0x7FFF) / 32768.0f - 0.5f;
+            }
+            float norm = 0.0f;
+            for (int d = 0; d < D; ++d) norm += v[d] * v[d];
+            norm = std::sqrt(norm);
+            if (norm < 1e-12f) { v[0] = 1.0f; norm = 1.0f; }
+            for (int d = 0; d < D; ++d) v[d] /= norm;
+        }
+
+        float eigenvalue = 0.0f;
+
+        for (int iter = 0; iter < kPowerIters; ++iter) {
+            // Deflate: v = v - Σ_{j<k} (v · v_j) v_j
+            for (int j = 0; j < k; ++j) {
+                const float* vj = &eigenvecs[static_cast<size_t>(j) * D];
+                float dot = 0.0f;
+                for (int d = 0; d < D; ++d) dot += v[d] * vj[d];
+                for (int d = 0; d < D; ++d) v[d] -= dot * vj[d];
+            }
+            // Re-normalize after deflation
+            {
+                float norm = 0.0f;
+                for (int d = 0; d < D; ++d) norm += v[d] * v[d];
+                norm = std::sqrt(norm);
+                if (norm < 1e-12f) break;
+                for (int d = 0; d < D; ++d) v[d] /= norm;
+            }
+
+            // Compute Hv = H @ v  [N-vector]
+            std::vector<float> Hv(N, 0.0f);
+            for (int i = 0; i < N; ++i) {
+                const int t = valid_positions[i];
+                const float* h_t = &h_hidden[static_cast<size_t>(t) * D];
+                float dot = 0.0f;
+                for (int d = 0; d < D; ++d) dot += h_t[d] * v[d];
+                Hv[i] = dot;
+            }
+
+            // Compute w = H^T @ Hv  [D-vector]
+            std::vector<float> w(D, 0.0f);
+            for (int i = 0; i < N; ++i) {
+                const int t = valid_positions[i];
+                const float* h_t = &h_hidden[static_cast<size_t>(t) * D];
+                for (int d = 0; d < D; ++d) {
+                    w[d] += h_t[d] * Hv[i];
+                }
+            }
+
+            // Deflate w as well (remove components along previous eigenvectors)
+            for (int j = 0; j < k; ++j) {
+                const float* vj = &eigenvecs[static_cast<size_t>(j) * D];
+                float dot = 0.0f;
+                for (int d = 0; d < D; ++d) dot += w[d] * vj[d];
+                for (int d = 0; d < D; ++d) w[d] -= dot * vj[d];
+            }
+
+            // Eigenvalue = ||w|| / ||v|| but ||v||=1 after normalization
+            float w_norm = 0.0f;
+            for (int d = 0; d < D; ++d) w_norm += w[d] * w[d];
+            w_norm = std::sqrt(w_norm);
+            eigenvalue = w_norm;
+
+            // v = w / ||w||
+            if (w_norm < 1e-12f) break;
+            for (int d = 0; d < D; ++d) v[d] = w[d] / w_norm;
+        }
+
+        result.lambda[k] = eigenvalue;
+
+        // Store eigenvector for deflation of subsequent components
+        float* vk = &eigenvecs[static_cast<size_t>(k) * D];
+        for (int d = 0; d < D; ++d) vk[d] = v[d];
+    }
+
+    // ==========================================================
+    // Compute derived metrics from the spectrum
+    // ==========================================================
+
+    // Cumulative variance ratios
+    float cumsum = 0.0f;
+    for (int k = 0; k < K; ++k) {
+        cumsum += result.lambda[k];
+        if (k == 0)  result.r1  = cumsum / trace;
+        if (k == 1)  result.r2  = cumsum / trace;
+        if (k == 4)  result.r5  = cumsum / trace;
+        if (k == 9)  result.r10 = cumsum / trace;
+        if (k == 19) result.r20 = cumsum / trace;
+    }
+
+    // Spectral gaps (ratio of eigenvalues)
+    if (result.lambda[1] > 1e-12f) result.gap12   = result.lambda[0] / result.lambda[1];
+    if (result.lambda[9] > 1e-12f) result.gap5_10 = result.lambda[4] / result.lambda[9];
+
+    // Effective rank (entropy-based) using ALL D eigenvalues
+    // We have top-K explicitly; remaining D-K eigenvalues are approximated as equal:
+    //   λ_remaining = (trace - sum_topk) / (D - K) each
+    // p_i = λ_i / trace for all i
+    // erank = exp(-Σ p_i ln p_i) computed over ALL D eigenvalues
+    {
+        float sum_topk = 0.0f;
+        for (int k = 0; k < K; ++k) sum_topk += result.lambda[k];
+        const float residual = std::max(0.0f, trace - sum_topk);
+        const int remaining = D - K;  // D = d_model = 768, K = 20
+
+        if (trace > 1e-12f) {
+            float entropy = 0.0f;
+            // Top-K explicit eigenvalues
+            for (int k = 0; k < K; ++k) {
+                float p = result.lambda[k] / trace;
+                if (p > 1e-12f) entropy -= p * std::log(p);
+            }
+            // Remaining D-K eigenvalues (assumed equal)
+            if (remaining > 0 && residual > 1e-12f) {
+                float p_each = residual / (trace * remaining);
+                if (p_each > 1e-12f) {
+                    entropy -= remaining * p_each * std::log(p_each);
+                }
+            }
+            result.erank = std::exp(entropy);
+        }
+    }
+
+    // Participation ratio: trace² / Σ λ_i²  (ALL D eigenvalues)
+    // Top-K: sum their squares explicitly
+    // Remaining D-K: each ≈ (trace - sum_topk) / (D-K)
+    //   Σ_rest λ² = (D-K) × ((trace-sum_topk)/(D-K))² = (trace-sum_topk)² / (D-K)
+    {
+        float sum_topk = 0.0f;
+        float sum_sq_topk = 0.0f;
+        for (int k = 0; k < K; ++k) {
+            sum_topk += result.lambda[k];
+            sum_sq_topk += result.lambda[k] * result.lambda[k];
+        }
+        const float residual = std::max(0.0f, trace - sum_topk);
+        const int remaining = D - K;
+        float sum_sq_rest = (remaining > 0) ? (residual * residual / remaining) : 0.0f;
+        float total_sum_sq = sum_sq_topk + sum_sq_rest;
+        if (total_sum_sq > 1e-24f) result.prank = (trace * trace) / total_sum_sq;
+    }
+
+    result.valid = true;
+    return result;
+}
+
+std::string formatHiddenSpectrum(const HiddenSpectrum& s, int batch_idx) {
+    if (!s.valid) {
+        return "[HiddenSpectrum] batch=" + std::to_string(batch_idx + 1) + " INVALID (missing data)";
+    }
+
+    std::ostringstream oss;
+    oss << std::fixed;
+
+    // Line 1: cumulative variance ratios
+    oss << "[HiddenSpectrum] tap=enc_out B=" << (batch_idx + 1)
+        << "\n  r1=" << std::setprecision(2) << s.r1
+        << " r2=" << s.r2
+        << " r5=" << s.r5
+        << " r10=" << s.r10
+        << " r20=" << s.r20;
+
+    // Line 2: effective rank measures and spectral gaps
+    oss << "\n  erank=" << std::setprecision(1) << s.erank
+        << " prank=" << s.prank
+        << " gap12=" << s.gap12
+        << " gap5_10=" << s.gap5_10;
+
+    // Line 3: top-10 eigenvalues (raw)
+    oss << "\n  top10_lambda=[" << std::scientific << std::setprecision(3);
+    for (int k = 0; k < 10; ++k) {
+        if (k > 0) oss << ", ";
+        oss << s.lambda[k];
+    }
+    oss << "]";
+
+    // Line 4: trace and position count
+    oss << "\n  trace=" << std::scientific << std::setprecision(4) << s.trace
+        << " n_pos=" << s.n_positions;
+
+    return oss.str();
+}
+
+//======================================================//
+//  UpdateTrace — Per-component Adam update magnitude (Issue #150)
+//======================================================//
+
+const char* UpdateTraceMetrics::typeName(int type_idx) {
+    switch (type_idx) {
+        case 0: return "emb";
+        case 1: return "lm";
+        case 2: return "attn";
+        case 3: return "ffn";
+        case 4: return "rmsnorm";
+        case 5: return "sb";
+        default: return "?";
+    }
+}
+
+UpdateTraceMetrics computePerComponentUpdateTrace(
+    const std::vector<GRIM::ParameterGroup>& groups,
+    float learning_rate,
+    int optimizer_step,
+    cudaStream_t stream
+) {
+    UpdateTraceMetrics result{};
+    if (groups.empty() || optimizer_step <= 0) return result;
+    if (!stream) throw std::runtime_error("[computePerComponentUpdateTrace] stream is NULL");
+
+    // Bias corrections for Adam moment estimates
+    const float bc1 = 1.0f - std::pow(0.9f, static_cast<float>(optimizer_step));
+    const float bc2 = 1.0f - std::pow(0.999f, static_cast<float>(optimizer_step));
+    if (bc1 <= 0.0f || bc2 <= 0.0f) return result;
+    const float inv_bc1 = 1.0f / bc1;
+    const float inv_bc2 = 1.0f / bc2;
+
+    // For each component type, find the FIRST group with valid data and sample it.
+    // We sample m_state, v_state, and params from that group.
+    bool any_sampled = false;
+
+    // Track which types we've already sampled (one group per type is sufficient)
+    bool type_sampled[kNumComponentTypes] = {};
+
+    for (const auto& group : groups) {
+        const int ti = static_cast<int>(group.type);
+        if (ti < 0 || ti >= kNumComponentTypes) continue;
+        if (type_sampled[ti]) continue;
+        if (!group.weights() || !group.m_state() || !group.v_state() || group.size() == 0) continue;
+
+        const int total = static_cast<int>(group.size());
+        const int n = std::min(total, kUpdateTraceSampleSize);
+
+        // STRIDED sampling: spread across the full buffer to avoid dead rows.
+        // E.g., embedding [2533×768] — consecutive sampling hits only token 0
+        // (UNK, never trained). Stride = total/n ensures we touch diverse rows.
+        const int stride = (total > n) ? (total / n) : 1;
+
+        // Small host buffers (stack-allocated, no heap)
+        float h_params[kUpdateTraceSampleSize];
+        float h_m[kUpdateTraceSampleSize];
+        float h_v[kUpdateTraceSampleSize];
+
+        // Copy strided elements from GPU to host (one element at a time for stride>1)
+        if (stride <= 1) {
+            // Consecutive — single copy is fine
+            cudaMemcpyAsync(h_params, group.weights(), n * sizeof(float), cudaMemcpyDeviceToHost, stream);
+            cudaMemcpyAsync(h_m, group.m_state(), n * sizeof(float), cudaMemcpyDeviceToHost, stream);
+            cudaMemcpyAsync(h_v, group.v_state(), n * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        } else {
+            // Strided — copy individual elements
+            for (int s = 0; s < n; ++s) {
+                const int idx = s * stride;
+                cudaMemcpyAsync(&h_params[s], group.weights() + idx, sizeof(float), cudaMemcpyDeviceToHost, stream);
+                cudaMemcpyAsync(&h_m[s],      group.m_state() + idx, sizeof(float), cudaMemcpyDeviceToHost, stream);
+                cudaMemcpyAsync(&h_v[s],      group.v_state() + idx, sizeof(float), cudaMemcpyDeviceToHost, stream);
+            }
+        }
+        cudaStreamSynchronize(stream);
+
+        // Compute Adam update RMS and param RMS from samples
+        float update_sq_sum = 0.0f;
+        float param_sq_sum = 0.0f;
+
+        for (int i = 0; i < n; ++i) {
+            const float m_hat = h_m[i] * inv_bc1;
+            const float v_hat = h_v[i] * inv_bc2;
+            // Adam update magnitude (without weight decay contribution)
+            const float adam_update = learning_rate * m_hat / (std::sqrt(std::abs(v_hat)) + 1e-8f);
+            update_sq_sum += adam_update * adam_update;
+            param_sq_sum += h_params[i] * h_params[i];
+        }
+
+        result.update_rms[ti] = std::sqrt(update_sq_sum / static_cast<float>(n));
+        result.param_rms[ti] = std::sqrt(param_sq_sum / static_cast<float>(n));
+        result.update_over_param[ti] = (result.param_rms[ti] > 1e-12f)
+            ? (result.update_rms[ti] / result.param_rms[ti]) : 0.0f;
+        result.element_count[ti] = n;
+        result.has_data[ti] = true;
+        type_sampled[ti] = true;
+        any_sampled = true;
+    }
+
+    result.valid = any_sampled;
+    return result;
+}
+
+std::string formatUpdateTrace(const UpdateTraceMetrics& m, int batch_idx, bool tied) {
+    if (!m.valid) return "";
+
+    std::ostringstream oss;
+    oss << std::scientific << std::setprecision(4);
+
+    // Line 1: Per-component update_rms
+    oss << "[UpdateTrace] COMPONENTS(upd_rms) batch=" << batch_idx;
+    if (tied) {
+        // When tied, EMBEDDING bucket is empty; LM_HEAD contains both
+        if (m.has_data[1]) oss << " emb_lm_tied=" << m.update_rms[1];
+    } else {
+        if (m.has_data[0]) oss << " emb=" << m.update_rms[0];
+        if (m.has_data[1]) oss << " lm=" << m.update_rms[1];
+    }
+    if (m.has_data[2]) oss << " attn=" << m.update_rms[2];
+    if (m.has_data[3]) oss << " ffn=" << m.update_rms[3];
+    if (m.has_data[4]) oss << " rmsnorm=" << m.update_rms[4];
+    if (m.has_data[5]) oss << " sb=" << m.update_rms[5];
+
+    // Line 2: Per-component update_rms / param_rms (effective relative LR)
+    oss << "\n[UpdateTrace] COMPONENTS(upd/param) batch=" << batch_idx;
+    if (tied) {
+        if (m.has_data[1]) oss << " emb_lm_tied=" << m.update_over_param[1];
+    } else {
+        if (m.has_data[0]) oss << " emb=" << m.update_over_param[0];
+        if (m.has_data[1]) oss << " lm=" << m.update_over_param[1];
+    }
+    if (m.has_data[2]) oss << " attn=" << m.update_over_param[2];
+    if (m.has_data[3]) oss << " ffn=" << m.update_over_param[3];
+    if (m.has_data[4]) oss << " rmsnorm=" << m.update_over_param[4];
+    if (m.has_data[5]) oss << " sb=" << m.update_over_param[5];
+
+    // Line 3: Ratios relative to FFN (the "reference" component)
+    if (m.has_data[3] && m.update_rms[3] > 1e-15f) {
+        oss << "\n[UpdateTrace] RATIOS(vs_ffn) batch=" << batch_idx;
+        for (int t = 0; t < kNumComponentTypes; ++t) {
+            if (!m.has_data[t] || t == 3) continue;
+            if (tied && t == 0) continue;  // Skip empty embedding bucket when tied
+            const float ratio = m.update_rms[t] / m.update_rms[3];
+            oss << " " << UpdateTraceMetrics::typeName(t) << "=" << std::fixed << std::setprecision(2) << ratio << "x";
+        }
+        oss << std::scientific << std::setprecision(4);
     }
 
     return oss.str();

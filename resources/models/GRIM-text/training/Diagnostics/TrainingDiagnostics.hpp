@@ -20,6 +20,8 @@ namespace GRIM {
     class EmbeddingLayer;
     class LMHeadLayer;
     struct TrainingState;
+    struct ParameterGroup;
+    enum class ParamGroupType : uint8_t;
 }
 
 namespace GRIM::Diagnostics {
@@ -305,6 +307,10 @@ struct PC1CausalityTest {
     // PC1 alignment with W[T]
     float cos_pc1_w_tracked = 0.0f;          // cos(g, W[T]) — how aligned is PC1 with the tracked weight row
 
+    // Projection invariant checks (should both be ≈0 if projection is correct)
+    float pc1_ortho_err = 0.0f;              // max |h'_t · g| / ||g|| — should be ~0 (orthogonality)
+    float pc1_pythag_err = 0.0f;             // max |( ||h'||² + c²/D - ||h||² ) / ||h||²| — Pythagorean check
+
     int n_positions = 0;                     // Valid (non-pad) positions analyzed
 };
 
@@ -319,5 +325,104 @@ PC1CausalityTest computePC1CausalityTest(
     cudaStream_t stream
 );
 std::string formatPC1CausalityTest(const PC1CausalityTest& r, int batch_idx);
+
+//======================================================//
+//  HiddenSpectrum — Top-k singular value spectrum of hidden states
+//  Answers: "What is the rank structure of the correlation?"
+//
+//  Uses deflated power iteration to compute top-k eigenvalues of H^T H
+//  (equivalently, top-k squared singular values of H).
+//
+//  Key metrics:
+//    r_k = Σ_{i=1}^{k} σ_i² / Σ_i σ_i²   (cumulative variance ratio)
+//    erank = exp(-Σ p_i ln p_i)             (effective rank from entropy)
+//    prank = (Σ σ_i²)² / Σ σ_i⁴            (participation ratio)
+//    gap_ij = σ_i / σ_j                     (spectral gap)
+//======================================================//
+
+/// Maximum number of singular values to compute via deflation
+constexpr int kSpectrumTopK = 20;
+
+struct HiddenSpectrum {
+    bool valid = false;
+    int n_positions = 0;       // Valid (non-pad) positions
+    int d_model = 0;
+
+    // Top-k squared singular values (eigenvalues of H^T H), descending
+    float lambda[kSpectrumTopK] = {};
+    float trace = 0.0f;        // Σ_i σ_i² = trace(H^T H) = Σ_t ||h_t||²
+
+    // Cumulative variance ratios: r_k = Σ_{i=1}^{k} λ_i / trace
+    float r1 = 0.0f;           // PC1 alone
+    float r2 = 0.0f;           // Top 2
+    float r5 = 0.0f;           // Top 5
+    float r10 = 0.0f;          // Top 10
+    float r20 = 0.0f;          // Top 20
+
+    // Effective rank measures
+    float erank = 0.0f;        // exp(-Σ p_i ln p_i) using top-k normalized spectrum
+    float prank = 0.0f;        // (Σ λ_i)² / Σ λ_i²  (participation ratio)
+
+    // Spectral gaps
+    float gap12 = 0.0f;        // λ_1 / λ_2  (how dominant is top component)
+    float gap5_10 = 0.0f;      // λ_5 / λ_10 (steepness of spectrum tail)
+};
+
+HiddenSpectrum computeHiddenSpectrum(
+    const GRIM::TrainingState& ts,
+    const std::vector<int>& targets,
+    int d_model,
+    bool use_centering,
+    cudaStream_t stream
+);
+std::string formatHiddenSpectrum(const HiddenSpectrum& s, int batch_idx);
+
+//======================================================//
+//  UpdateTrace — Per-component Adam update magnitude (Issue #150)
+//  Rule 21: [UPDATE_TRACE_EQUATION] format
+//
+//  Measures actual Adam update RMS per component type by sampling
+//  moment buffers and computing: update ≈ lr × m_hat / (√v_hat + ε)
+//  Then computes update_rms / param_rms to measure effective learning
+//  rate relative to parameter scale.
+//
+//  This answers: "Does Adam normalize the 18× gradient gap between
+//  attention and FFN into similar update magnitudes?"
+//======================================================//
+
+/// Number of elements to sample per component type for update estimation.
+/// 64 gives <1% RMS error vs full-buffer computation (CLT: 1/√64 = 12.5%).
+constexpr int kUpdateTraceSampleSize = 64;
+
+/// Number of component types (matches ParamGroupType::COUNT)
+constexpr int kNumComponentTypes = 6;
+
+struct UpdateTraceMetrics {
+    bool valid = false;
+
+    // Per component type (indexed by ParamGroupType enum value 0..5):
+    //   EMBEDDING=0, LM_HEAD=1, ATTENTION=2, FFN=3, RMSNORM=4, SCRATCHBLOCK=5
+    float update_rms[kNumComponentTypes]     = {};  // RMS of Adam update per element
+    float param_rms[kNumComponentTypes]      = {};  // RMS of parameter values
+    float update_over_param[kNumComponentTypes] = {};  // update_rms / param_rms
+    int   element_count[kNumComponentTypes]  = {};  // Elements sampled per type
+    bool  has_data[kNumComponentTypes]       = {};  // Whether this type had groups
+
+    // Names for logging
+    static const char* typeName(int type_idx);
+};
+
+/// Compute per-component update_rms by sampling Adam moment buffers.
+/// Call AFTER launchAdamWStep() on diagnostic-sync batches.
+/// Requires cudaStreamSynchronize() internally for small D2H copies.
+UpdateTraceMetrics computePerComponentUpdateTrace(
+    const std::vector<GRIM::ParameterGroup>& groups,
+    float learning_rate,
+    int optimizer_step,       // step AFTER increment (1-based iteration count)
+    cudaStream_t stream
+);
+
+/// Format as [UpdateTrace] log line
+std::string formatUpdateTrace(const UpdateTraceMetrics& m, int batch_idx, bool tied);
 
 } // namespace GRIM::Diagnostics

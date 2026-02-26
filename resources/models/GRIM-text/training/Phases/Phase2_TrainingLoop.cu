@@ -648,6 +648,155 @@ void MicroValidationScope::complete(const GRIMTS::MicroValidationPulse& pulse) {
 // Only 48-byte ControlDecision struct synced to CPU
 
 //======================================================//
+//  GPU Collapse Token Diagnostic Kernel
+//======================================================//
+
+// Result struct for collapse token stats reduction (copied D2H — 24 bytes)
+struct CollapseTokenStats {
+    float logit_sum;       // Σ logit[pos][collapse_token]
+    float logit_min;       // min over positions
+    float logit_max;       // max over positions
+    int   is_argmax_count; // # positions where collapse_token is argmax
+    float global_max_logit;// max logit across ALL positions × ALL tokens
+    int   global_argmax_token; // which token achieved global_max_logit
+};
+
+// Block-level reduction kernel: each block reduces a chunk of positions,
+// then block 0 does a final serial merge of per-block results.
+// total_positions × vocab_size logits → single CollapseTokenStats.
+__global__ void collapseTokenDiagKernel(
+    const float* __restrict__ logits,   // [total_positions, vocab_size]
+    int total_positions,
+    int vocab_size,
+    int collapse_token_id,
+    CollapseTokenStats* __restrict__ block_results,  // [gridDim.x] partial results
+    CollapseTokenStats* __restrict__ final_result     // [1] final output (written by block 0 after sync)
+) {
+    // Phase 1: each thread processes one position, block reduces via shared mem
+    __shared__ float  s_logit_sum[256];
+    __shared__ float  s_logit_min[256];
+    __shared__ float  s_logit_max[256];
+    __shared__ int    s_argmax_count[256];
+    __shared__ float  s_global_max[256];
+    __shared__ int    s_global_argmax[256];
+
+    const int tid = threadIdx.x;
+    const int pos = blockIdx.x * blockDim.x + tid;
+
+    // Init per-thread accumulators
+    float my_sum = 0.0f;
+    float my_min = 1e30f;
+    float my_max = -1e30f;
+    int   my_argmax_count = 0;
+    float my_global_max = -1e30f;
+    int   my_global_argmax = 0;
+
+    if (pos < total_positions) {
+        const float* row = logits + static_cast<size_t>(pos) * vocab_size;
+        const float collapse_logit = row[collapse_token_id];
+        my_sum = collapse_logit;
+        my_min = collapse_logit;
+        my_max = collapse_logit;
+
+        // Find argmax for this position
+        float pos_max = row[0];
+        int   pos_argmax = 0;
+        for (int v = 1; v < vocab_size; ++v) {
+            const float l = row[v];
+            if (l > pos_max) { pos_max = l; pos_argmax = v; }
+        }
+        my_argmax_count = (pos_argmax == collapse_token_id) ? 1 : 0;
+        my_global_max = pos_max;
+        my_global_argmax = pos_argmax;
+    }
+
+    s_logit_sum[tid]    = my_sum;
+    s_logit_min[tid]    = my_min;
+    s_logit_max[tid]    = my_max;
+    s_argmax_count[tid] = my_argmax_count;
+    s_global_max[tid]   = my_global_max;
+    s_global_argmax[tid]= my_global_argmax;
+    __syncthreads();
+
+    // Block reduction
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            s_logit_sum[tid] += s_logit_sum[tid + stride];
+            s_argmax_count[tid] += s_argmax_count[tid + stride];
+            if (s_logit_min[tid + stride] < s_logit_min[tid])
+                s_logit_min[tid] = s_logit_min[tid + stride];
+            if (s_logit_max[tid + stride] > s_logit_max[tid])
+                s_logit_max[tid] = s_logit_max[tid + stride];
+            if (s_global_max[tid + stride] > s_global_max[tid]) {
+                s_global_max[tid] = s_global_max[tid + stride];
+                s_global_argmax[tid] = s_global_argmax[tid + stride];
+            }
+        }
+        __syncthreads();
+    }
+
+    // Thread 0 writes block result
+    if (tid == 0) {
+        const int bid = blockIdx.x;
+        block_results[bid].logit_sum       = s_logit_sum[0];
+        block_results[bid].logit_min       = s_logit_min[0];
+        block_results[bid].logit_max       = s_logit_max[0];
+        block_results[bid].is_argmax_count = s_argmax_count[0];
+        block_results[bid].global_max_logit    = s_global_max[0];
+        block_results[bid].global_argmax_token = s_global_argmax[0];
+    }
+}
+
+// Host helper: launch kernel, merge block results, return stats
+static CollapseTokenStats launchCollapseTokenDiag(
+    const float* d_logits, int total_positions, int vocab_size,
+    int collapse_token_id, cudaStream_t stream
+) {
+    constexpr int kBlockSize = 256;
+    const int num_blocks = (total_positions + kBlockSize - 1) / kBlockSize;
+
+    // Allocate temporary block results on device
+    CollapseTokenStats* d_block_results = nullptr;
+    cudaMalloc(&d_block_results, num_blocks * sizeof(CollapseTokenStats));
+
+    collapseTokenDiagKernel<<<num_blocks, kBlockSize, 0, stream>>>(
+        d_logits, total_positions, vocab_size, collapse_token_id,
+        d_block_results, nullptr
+    );
+
+    // Copy block results to host and merge
+    std::vector<CollapseTokenStats> h_blocks(num_blocks);
+    cudaMemcpyAsync(h_blocks.data(), d_block_results,
+                    num_blocks * sizeof(CollapseTokenStats),
+                    cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    cudaFree(d_block_results);
+
+    // Final merge on host (num_blocks is small, typically ~32)
+    CollapseTokenStats result{};
+    result.logit_sum = 0.0f;
+    result.logit_min = 1e30f;
+    result.logit_max = -1e30f;
+    result.is_argmax_count = 0;
+    result.global_max_logit = -1e30f;
+    result.global_argmax_token = 0;
+
+    for (int i = 0; i < num_blocks; ++i) {
+        result.logit_sum += h_blocks[i].logit_sum;
+        result.is_argmax_count += h_blocks[i].is_argmax_count;
+        if (h_blocks[i].logit_min < result.logit_min)
+            result.logit_min = h_blocks[i].logit_min;
+        if (h_blocks[i].logit_max > result.logit_max)
+            result.logit_max = h_blocks[i].logit_max;
+        if (h_blocks[i].global_max_logit > result.global_max_logit) {
+            result.global_max_logit = h_blocks[i].global_max_logit;
+            result.global_argmax_token = h_blocks[i].global_argmax_token;
+        }
+    }
+    return result;
+}
+
+//======================================================//
 //  Internal Helper Implementations
 //======================================================//
 
@@ -2114,55 +2263,27 @@ BatchResult processBatch(
             
             // === COLLAPSE TOKEN MODE COLLAPSE DIAGNOSTIC ===
             // Track logit values for the dynamically-detected collapse token
+            // Uses GPU reduction kernel over ALL positions (not a 10-pos sample)
             const int COLLAPSE_TOKEN_ID = g_collapse_token_id;
             if (COLLAPSE_TOKEN_ID >= 0 && vocab_size > COLLAPSE_TOKEN_ID) {
-                // Sample first 10 positions to get logit stats for collapse token
-                const int diag_positions = std::min(sample_positions, 10);
-                float collapse_logit_sum = 0.0f;
-                float collapse_logit_max = -std::numeric_limits<float>::infinity();
-                float collapse_logit_min = std::numeric_limits<float>::infinity();
-                int collapse_is_argmax_count = 0;
-                
-                // Also track the overall max logit for comparison
-                float global_max_logit = -std::numeric_limits<float>::infinity();
-                int global_argmax_token = -1;
-                
-                for (int pos = 0; pos < diag_positions; ++pos) {
-                    float collapse_logit = logit_sample[pos * vocab_size + COLLAPSE_TOKEN_ID];
-                    collapse_logit_sum += collapse_logit;
-                    collapse_logit_max = std::max(collapse_logit_max, collapse_logit);
-                    collapse_logit_min = std::min(collapse_logit_min, collapse_logit);
-                    
-                    // Find argmax for this position
-                    float pos_max = -std::numeric_limits<float>::infinity();
-                    int pos_argmax = 0;
-                    for (int v = 0; v < vocab_size; ++v) {
-                        float logit = logit_sample[pos * vocab_size + v];
-                        if (logit > pos_max) {
-                            pos_max = logit;
-                            pos_argmax = v;
-                        }
-                    }
-                    if (pos_argmax == COLLAPSE_TOKEN_ID) collapse_is_argmax_count++;
-                    if (pos_max > global_max_logit) {
-                        global_max_logit = pos_max;
-                        global_argmax_token = pos_argmax;
-                    }
-                }
-                
-                float collapse_logit_mean = collapse_logit_sum / diag_positions;
-                
-                // Log collapse token diagnostic
+                const CollapseTokenStats cstats = launchCollapseTokenDiag(
+                    ts.autograd_intermediates.logits_tensor.data,
+                    total_tokens, vocab_size, COLLAPSE_TOKEN_ID,
+                    ts.stream_ctrl.getPrimaryStream()
+                );
+                const float collapse_logit_mean = cstats.logit_sum / total_tokens;
+
+                // Log collapse token diagnostic (full population)
                 std::ostringstream collapse_diag;
                 collapse_diag << std::fixed << std::setprecision(4);
                 collapse_diag << "[CollapseTokenDiag] batch=" << (batch_idx + 1)
                            << " token=" << COLLAPSE_TOKEN_ID
                            << " logit: mean=" << collapse_logit_mean
-                           << " min=" << collapse_logit_min
-                           << " max=" << collapse_logit_max
-                           << " is_argmax=" << collapse_is_argmax_count << "/" << diag_positions
-                           << " global_max_logit=" << global_max_logit
-                           << " global_argmax_token=" << global_argmax_token;
+                           << " min=" << cstats.logit_min
+                           << " max=" << cstats.logit_max
+                           << " is_argmax=" << cstats.is_argmax_count << "/" << total_tokens
+                           << " global_max_logit=" << cstats.global_max_logit
+                           << " global_argmax_token=" << cstats.global_argmax_token;
                 ctx.logging.logger->log(collapse_diag.str());
             }
             
@@ -3305,6 +3426,21 @@ BatchResult processBatch(
             // Structured equation logging to CSV
             EQ_LOG("PC1_CAUSALITY_TEST", GRIM::Diagnostics::formatPC1CausalityTest(pc1_test, batch_idx),
                    static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::GRADIENT_CLIP);
+
+            // ========================================================================
+            // DIAGNOSTIC: HiddenSpectrum — Top-k singular value spectrum (Rule 21)
+            // Computes top-20 eigenvalues of H^T H via deflated power iteration.
+            // Answers: what is the rank structure of the hidden state correlation?
+            // [HIDDEN_SPECTRUM_EQUATION] r_k = Σ_{i=1}^{k} σ_i² / Σ σ_i²
+            // ========================================================================
+            GRIM::Diagnostics::HiddenSpectrum spectrum = GRIM::Diagnostics::computeHiddenSpectrum(
+                ts, flat_targets, cfg.d_model,
+                cfg.lm_head_center_hidden_states,
+                stream);
+            ctx.logging.logger->log(GRIM::Diagnostics::formatHiddenSpectrum(spectrum, batch_idx));
+
+            EQ_LOG("HIDDEN_SPECTRUM_EQUATION", GRIM::Diagnostics::formatHiddenSpectrum(spectrum, batch_idx),
+                   static_cast<int>(batch_idx), 0, 0, GRIM::EquationPhase::GRADIENT_CLIP);
         }
 
         // ========================================================================
@@ -3332,7 +3468,16 @@ BatchResult processBatch(
         // ========================================================================
         {
             const float* weights_ptr = ctx.model->getLmHeadLayer()->weights().data;
-            const float* grads_ptr = ctx.model->getEmbeddingLayer()->tokenWeights().grad_data();
+            // Issue #150: When tied=no, LM head and embedding are DIFFERENT tensors.
+            // Read gradients from the SAME layer as weights (LM head) so rms(W) and
+            // rms(grad) refer to the same parameter. Previously read embedding grads,
+            // which showed PAD scatter-add accumulation (~1754 positions) as 76x spike
+            // vs BOS/EOS — misleading because that gradient doesn't affect LM head.
+            const bool weights_tied = ctx.model->getEmbeddingLayer()->tokenWeights().data
+                                   == ctx.model->getLmHeadLayer()->weights().data;
+            const float* grads_ptr = weights_tied
+                ? ctx.model->getEmbeddingLayer()->tokenWeights().grad_data()   // tied: same tensor, either pointer works
+                : ctx.model->getLmHeadLayer()->weights().grad_data();          // untied: use LM head's own gradients
 
             if (weights_ptr) {
                 constexpr int SPECIAL_IDS[] = {
@@ -4053,6 +4198,54 @@ BatchResult processBatch(
         const int accum_steps_for_log = accum_steps;
         
         // ========================================================================
+        // Issue #149: Zero PAD/UNK gradients before optimizer step
+        //
+        // PAD (id=1) and UNK (id=0) are never valid targets, yet they accumulate
+        // non-zero gradients through two paths:
+        //   1. LM head backward: label smoothing redistributes tiny gradient to ALL
+        //      vocab rows, including PAD/UNK (via softmax Jacobian)
+        //   2. Embedding backward: attention backward leaks gradient from valid
+        //      positions to PAD input positions through K/V cross-attention,
+        //      then scatter-adds to PAD's embedding row
+        // Path 2 is dominant (~76x larger than BOS/EOS) because attention has
+        // cross-position interactions even for masked-target positions.
+        //
+        // Zeroing these BEFORE norm computation ensures PAD/UNK don't inflate
+        // gradient norms or waste optimizer capacity.
+        // ========================================================================
+        {
+            auto& zero_ts = ctx.model->getTrainingState();
+            cudaStream_t zero_stream = zero_ts.stream_ctrl.getPrimaryStream();
+            const auto& zero_cfg = ctx.model->getConfig();
+            const size_t row_bytes = static_cast<size_t>(zero_cfg.d_model) * sizeof(float);
+            
+            constexpr int NON_TRAINABLE_TOKENS[] = {
+                GRIM::Tokenizer::UNK_TOKEN_ID,  // 0
+                GRIM::Tokenizer::PAD_TOKEN_ID   // 1
+            };
+            
+            // Zero embedding gradients for non-trainable tokens
+            float* emb_grads = ctx.model->getEmbeddingLayer()->tokenWeights().grad_data();
+            if (emb_grads) {
+                for (int tok : NON_TRAINABLE_TOKENS) {
+                    cudaMemsetAsync(
+                        emb_grads + static_cast<size_t>(tok) * zero_cfg.d_model,
+                        0, row_bytes, zero_stream);
+                }
+            }
+            
+            // Zero LM head gradients for non-trainable tokens
+            float* lm_grads = ctx.model->getLmHeadLayer()->weights().grad_data();
+            if (lm_grads) {
+                for (int tok : NON_TRAINABLE_TOKENS) {
+                    cudaMemsetAsync(
+                        lm_grads + static_cast<size_t>(tok) * zero_cfg.d_model,
+                        0, row_bytes, zero_stream);
+                }
+            }
+        }
+        
+        // ========================================================================
         // Issue #135: POST-ACCUMULATION gradient clipping
         //
         // Clipping runs ONCE on the fully accumulated + scaled gradients.
@@ -4198,6 +4391,64 @@ BatchResult processBatch(
             }
         }
         
+        // ════════════════════════════════════════════════════════════════════
+        // RUNTIME tie_embeddings pointer verification (every batch)
+        // Startup logging only proves state at init. This proves state at
+        // the moment the optimizer actually consumes the buffers.
+        // ════════════════════════════════════════════════════════════════════
+        {
+            const float* emb_w = ctx.model->getEmbeddingLayer()->tokenWeights().data;
+            const float* emb_g = ctx.model->getEmbeddingLayer()->tokenWeights().grad_data();
+            const float* lm_w  = ctx.model->getLmHeadLayer()->weights().data;
+            const float* lm_g  = ctx.model->getLmHeadLayer()->weights().grad_data();
+            const bool cfg_tied = ctx.model->getConfig().tie_embeddings;
+            const bool w_same = (emb_w == lm_w);
+            const bool g_same = (emb_g == lm_g);
+
+            // Count parameter groups referencing each buffer
+            int emb_w_groups = 0, lm_w_groups = 0;
+            for (const auto& pg : ctx.model->parameterGroups()) {
+                if (pg.tensor && pg.tensor->data == emb_w) ++emb_w_groups;
+                if (pg.tensor && pg.tensor->data == lm_w)  ++lm_w_groups;
+            }
+
+            // Log every 10 batches to avoid spam, but ALWAYS log if inconsistent
+            const bool inconsistent = (cfg_tied != w_same) || (cfg_tied != g_same);
+            if (inconsistent || (batch_idx % 10 == 0)) {
+                std::ostringstream oss;
+                oss << "[TIE_VERIFY] B=" << (batch_idx + 1)
+                    << " step=" << ctx.optimizer.optimizer_state.step
+                    << " cfg_tied=" << (cfg_tied ? "yes" : "no")
+                    << " w_ptrs=" << (w_same ? "SAME" : "DIFF")
+                    << " g_ptrs=" << (g_same ? "SAME" : "DIFF")
+                    << " emb_w=" << (const void*)emb_w
+                    << " lm_w=" << (const void*)lm_w
+                    << " emb_g=" << (const void*)emb_g
+                    << " lm_g=" << (const void*)lm_g
+                    << " emb_w_groups=" << emb_w_groups
+                    << " lm_w_groups=" << lm_w_groups;
+                if (inconsistent) {
+                    oss << " [ANOMALY] POINTER ALIASING MISMATCH — cfg says "
+                        << (cfg_tied ? "tied" : "untied")
+                        << " but weights " << (w_same ? "match" : "DIFFER")
+                        << " and grads " << (g_same ? "match" : "DIFFER");
+                }
+                ctx.logging.logger->log(oss.str());
+            }
+
+            // Rule 20: crash on mismatch — this is an architectural bug
+            if (cfg_tied && !w_same) {
+                throw std::runtime_error("[TIE_VERIFY] FATAL: tie_embeddings=true but weight pointers differ at batch "
+                    + std::to_string(batch_idx + 1) + " emb=" + std::to_string(reinterpret_cast<uintptr_t>(emb_w))
+                    + " lm=" + std::to_string(reinterpret_cast<uintptr_t>(lm_w)));
+            }
+            if (cfg_tied && !g_same) {
+                throw std::runtime_error("[TIE_VERIFY] FATAL: tie_embeddings=true but grad pointers differ at batch "
+                    + std::to_string(batch_idx + 1) + " emb_g=" + std::to_string(reinterpret_cast<uintptr_t>(emb_g))
+                    + " lm_g=" + std::to_string(reinterpret_cast<uintptr_t>(lm_g)));
+            }
+        }
+
         GRIM::launchAdamWStep(ctx.model->parameterGroups(),
                               result.learning_rate,
                               ctx.config.hyperparameters.weight_decay,
@@ -4295,6 +4546,23 @@ BatchResult processBatch(
                                            " param_rms=" + Internal::formatScalar(pre_sample.rms, 8);
             ctx.logging.logger->log(update_msg);
             EmitModuleInfo(ModuleId::Optimizer, update_msg, ctx.global_step);
+        }
+        
+        // Per-component Adam update_rms diagnostic (Issue #150)
+        // Answers: "Does Adam normalize the gradient gap across component types?"
+        // Only on diagnostic-sync batches to avoid blocking the pipeline.
+        if (sync_diag) {
+            const auto update_trace = GRIM::Diagnostics::computePerComponentUpdateTrace(
+                ctx.model->parameterGroups(),
+                result.learning_rate,
+                ctx.optimizer.optimizer_state.step + 1,  // 1-based iteration count (matches AdamW bias correction)
+                ctx.model->getTrainingState().stream_ctrl.getPrimaryStream()
+            );
+            if (update_trace.valid) {
+                const std::string trace_str = GRIM::Diagnostics::formatUpdateTrace(
+                    update_trace, batch_idx + 1, ctx.model->getConfig().tie_embeddings);
+                ctx.logging.logger->log(trace_str);
+            }
         }
         
         ctx.optimizer.optimizer_state.step++;

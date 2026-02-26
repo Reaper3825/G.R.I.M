@@ -197,6 +197,12 @@ struct TrainingState {
     void freeOptimizerStates();
 
     bool initialized = false;
+
+    //======================================================//
+    //  CLASS-BALANCED LOSS WEIGHTS (owned GPU buffer)
+    //======================================================//
+    float* d_class_weights = nullptr;     // [vocab_size] on GPU, w_v = 1/freq(v)^β
+    int class_weights_vocab_size = 0;     // For validation
     
     //======================================================//
     //  DEBUG GRADIENT ATTRIBUTION (Issue #60)

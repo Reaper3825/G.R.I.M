@@ -31,5 +31,10 @@ constexpr bool ENABLE_LOSS_ORDER_LOGS = false;         ///< "[ORDER] computeLoss
 // Expensive diagnostics (D2H copies for analysis - disable for production training)
 constexpr bool ENABLE_EXPENSIVE_DIAGNOSTICS = false;   ///< Rule 21 argmax analysis, embedding cosine, etc.
 
+// FlashAttention equation diagnostics — 5 sync D2H copies per layer × 12 layers = 60 pipeline
+// drains per batch PLUS O(seqlen²) host-side attention score computation. These were critical
+// during Issue #76/#84 debugging but are catastrophic for training throughput.
+constexpr bool ENABLE_FA_EQUATION_DIAGNOSTICS = false;  ///< [FA-FWD-*], [ATTN_SCORE_EQUATION]
+
 } // namespace VerboseLogging
 } // namespace GRIM

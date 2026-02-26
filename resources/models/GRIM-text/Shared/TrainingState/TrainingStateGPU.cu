@@ -48,6 +48,9 @@ TrainingState::~TrainingState() {
 	// Issue #60: Free debug gradient attribution buffers
 	freeDebugGradBuffers();
 	
+	// Free class-balanced loss weights (raw cudaMalloc)
+	if (d_class_weights) { cudaFree(d_class_weights); d_class_weights = nullptr; }
+	
 	// Free ScratchBlockPool (pinned memory blocks)
 	if (scratch_pool) {
 		delete scratch_pool;
@@ -381,15 +384,15 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream, c
 	
 	// Copy tracked token's row from each debug buffer to host
 	// NOTE: debug_lm_head_only_grad = LM head contribution only (captured AFTER LM head backward)
-	//       debug_embedding_only_grad = Raw embedding contribution (captured BEFORE PCGrad projection)
-	// With PCGrad: final_grad = g_lm + orthogonal(g_emb)
+	//       debug_embedding_only_grad = Raw embedding contribution (captured separately)
+	// Direct accumulation: final_grad = g_lm + g_emb (PyTorch-style)
 	std::vector<float> lm_grad_tracked(d_model);
 	std::vector<float> raw_emb_grad_tracked(d_model);  // Pre-projection embedding gradient
 	
 	cudaMemcpy(lm_grad_tracked.data(), debug_lm_head_only_grad.data + row_offset, row_bytes, cudaMemcpyDeviceToHost);
 	cudaMemcpy(raw_emb_grad_tracked.data(), debug_embedding_only_grad.data + row_offset, row_bytes, cudaMemcpyDeviceToHost);
 	
-	// Get the ACTUAL final gradient from the shared buffer (this is post-PCGrad!)
+	// Get the ACTUAL final gradient from the shared buffer (accumulated lm + emb)
 	std::vector<float> final_grad_tracked(d_model);
 	const float* shared_grad_ptr = embedding_layer->tokenWeights().grad_data();
 	if (shared_grad_ptr) {
@@ -412,7 +415,7 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream, c
 	}
 	const float raw_emb_rms = sqrtf(raw_emb_sq_sum / d_model);
 	
-	// Compute statistics for FINAL gradient (post-PCGrad)
+	// Compute statistics for FINAL accumulated gradient
 	float final_sum = 0, final_sq_sum = 0;
 	for (int i = 0; i < d_model; ++i) {
 		final_sum += final_grad_tracked[i];
@@ -443,8 +446,8 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream, c
 		            : "ORTHOGONAL";
 	}
 	
-	// Check if PCGrad preserved the gradient (final should ≈ lm when emb opposes)
-	const char* pcgrad_status = (final_rms > lm_rms * 0.5f) ? "PRESERVED" : "LOST";
+	// Check if gradient survived accumulation (final should ≈ lm when emb opposes)
+	const char* accum_status = (final_rms > lm_rms * 0.5f) ? "PRESERVED" : "CANCELED";
 	
 	fprintf(stdout, "\n[GRAD_ATTRIB_COLLAPSE] batch=%d token=%d gradient conflict analysis:\n", batch_idx, tracked_token);
 	fprintf(stdout, "  ├─ LM_HEAD_GRAD:        sum=%+.10f  rms=%.10f  mean=%+.10e\n", 
@@ -452,8 +455,8 @@ void TrainingState::logGradientAttribution(int batch_idx, cudaStream_t stream, c
 	fprintf(stdout, "  ├─ EMBEDDING_RAW_GRAD:  sum=%+.10f  rms=%.10f  mean=%+.10e\n", 
 	        raw_emb_sum, raw_emb_rms, raw_emb_sum / d_model);
 	fprintf(stdout, "  ├─ COSINE_SIMILARITY:   %.10f [%s]\n", cosine_sim, interaction);
-	fprintf(stdout, "  ├─ FINAL_GRAD_POSTPCGR: sum=%+.10f  rms=%.10f  mean=%+.10e [%s]\n", 
-	        final_sum, final_rms, final_sum / d_model, pcgrad_status);
+	fprintf(stdout, "  ├─ FINAL_GRAD_ACCUM:    sum=%+.10f  rms=%.10f  mean=%+.10e [%s]\n", 
+	        final_sum, final_rms, final_sum / d_model, accum_status);
 	fprintf(stdout, "  └─ UPDATE_DIRECTION:    LM→%s  EMB→%s  (W_new = W - lr*grad)\n",
 	        lm_sum > 0 ? "DECREASE" : "INCREASE",
 	        raw_emb_sum > 0 ? "DECREASE" : "INCREASE");

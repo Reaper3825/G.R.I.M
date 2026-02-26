@@ -283,6 +283,10 @@
                     "enabled": false,
                     "lambda": 0.0
                 },
+                "class_balanced": {
+                    "enabled": true,
+                    "beta": 0.5
+                },
                 "preference": {
                     "enabled": false,
                     "beta": 0.1
@@ -392,15 +396,15 @@
             "num_layers": 12,
             "num_heads": 12,
             "num_kv_heads": 4,
-            "tie_embeddings": true,
+            "tie_embeddings": false,
             "positional_encoding": {
                 "use_learned": false,
                 "use_rope": true,
                 "use_alibi": true
             },
-            "attention_dropout": 0.15,
+            "attention_dropout": 0.2,
             "dropout_rate": 0.125,
-            "residual_dropout_rate": 0.1,
+            "residual_dropout_rate": 0.15,
             "force_rebuild_vocab": false,
             "lm_head_centering": {
                 "enabled": true,
@@ -408,7 +412,7 @@
                 "project_out_pc1": true,
                 "pc1_power_iters": 5,
                 "center_logits": true,
-                "center_encoder_residuals": false
+                "center_encoder_residuals": true
             },
             "layer_scale": {
                 "enabled": true,

@@ -1,0 +1,310 @@
+================================================================================
+FREQUENCY-BASED EMBEDDING GRADIENT SCALING: SIMULATION
+================================================================================
+Date: 2025-07-21
+Context: tok36 (space) collapse → 33% argmax dominance → loss plateau 3.73-3.86
+
+Root cause: Tied weight matrix receives TWO gradient sources:
+  1. LM head backward (DENSE):  grad_W = centered^T @ grad_logits  → uniform across all V rows
+  2. Embedding backward (SPARSE): atomicAdd(&grad_W[tok_id], ...) → frequency-proportional
+
+tok36 appears 873/8192 times per batch (10.7%, 270× above uniform).
+Embedding backward accumulates 873 scatter-adds into tok36's row per batch.
+Result: 68× gradient spike → 2× growth rate → W_rms 0.024→0.045 → argmax collapse.
+
+Proposed fix: Scale embedding backward gradients by inverse-frequency weight w_v.
+Apply ONLY to embedding backward kernel, not LM head backward.
+
+================================================================================
+SECTION 1: CURRENT STATE (BASELINE)
+================================================================================
+
+Gradient decomposition (from training logs):
+
+                    grad_emb      %emb     grad_lm      %lm      total
+  tok36 (space)     0.021272    99.5%      0.000108    0.5%     0.021380
+  typical content   0.000108    50.0%      0.000108   50.0%     0.000216
+
+  tok36/content gradient ratio: 99.0×
+  tok36 W_rms growth rate: 2.0× baseline
+  tok36 W_rms after 500 steps: 0.024 → 0.159 (projected, no weight decay)
+  tok36 argmax share: 33% (observed at step ~850)
+  Loss plateau: 3.73-3.86 (model predicts space for 1/3 of all tokens)
+
+Token frequency distribution (from SCATTER DENSITY logs):
+
+  Token             count/batch   frequency
+  tok1  (BOS?)          1211       14.8%
+  tok36 (space)          873       10.7%
+  tok262 (subword)       400        4.9%
+  tok263 (subword)       350        4.3%
+  tok48 (digit 0)        300        3.7%
+  tok50 (digit 2)        280        3.4%
+  tok278 (subword)       200        2.4%
+  tok44 (comma)          180        2.2%
+  typical content         20        0.2%
+  rare token               2        0.02%
+  very rare              0.5        0.006%
+
+  Active tokens per batch: ~500 unique out of 2534 vocab
+  Mean count per active token (c̄): ~10
+
+================================================================================
+SECTION 2: OPTION A — INVERSE SQRT FREQUENCY
+================================================================================
+
+Formula:  w_v = (c̄ / (c_v + ε))^(1/2)
+          c̄ = mean count per active token ≈ 10
+          ε = 0.001
+
+Computed weights:
+
+  Token                c_v      w_v
+  ──────────────────────────────────
+  tok36 (space)       873.0    0.1070
+  tok262 (subword)    400.0    0.1581
+  tok263 (subword)    350.0    0.1690
+  tok48 (digit 0)     300.0    0.1826
+  tok50 (digit 2)     280.0    0.1890
+  tok278 (subword)    200.0    0.2236
+  tok44 (comma)       180.0    0.2357
+  typical content      20.0    0.7071
+  rare token            2.0    2.2355
+  very rare             0.5    4.4677
+
+Key ratios:
+  tok36/content = 0.151  (currently 99.0×, reduced to 12.9×)
+  rare/content = 3.162
+
+Gradient after scaling (embedding backward only):
+  tok36:    0.021380 → 0.002384  (11.2% of original)
+  content:  0.000216 → 0.000184  (85.4% of original, modest reduction)
+
+  tok36/content gradient ratio: 99.0× → 12.9×
+  tok36 growth rate: 2.0× → 0.22×  (STRONG suppression)
+
+W_rms trajectory (500 steps, direction_consistency=0.9, lr=0.0003, wd=0.01):
+  tok36: 0.024 → 0.038  (equilibrium ~9.6)
+  vs current: 0.024 → 0.159
+
+Rare token amplification risk:
+  w_v at c_v=0.5: 4.47  (NEEDS CLAMPING)
+  w_v at c_v=2:   2.24
+  Rare token equilibrium W_rms: 22.4 → needs max clamp
+
+Recommended: clamp w_v ∈ [0.05, 3.0]
+  After clamp: very rare (c_v=0.5) w = 3.0 instead of 4.47
+
+VERDICT: Strong tok36 suppression (89% gradient reduction). Good separation
+from content tokens. Requires clamp for rare tokens. Simple formula.
+Risk: may over-suppress tok36 initially → space underprediction.
+
+================================================================================
+SECTION 3: OPTION B — INVERSE LOG FREQUENCY
+================================================================================
+
+Formula:  w_v = 1 / (log(1 + c_v) + ε)
+          ε = 0.001
+          Normalized: divide all w_v by w_content to set content baseline = 1.0
+
+Raw weights:
+
+  Token                c_v      w_v(raw)   w_v(norm)
+  ───────────────────────────────────────────────────
+  tok36 (space)       873.0     0.1476      0.450
+  tok262 (subword)    400.0     0.1668      0.508
+  tok263 (subword)    350.0     0.1706      0.520
+  tok48 (digit 0)     300.0     0.1752      0.533
+  tok50 (digit 2)     280.0     0.1773      0.540
+  tok278 (subword)    200.0     0.1885      0.574
+  tok44 (comma)       180.0     0.1923      0.586
+  typical content      20.0     0.3284      1.000
+  rare token            2.0     0.9094      2.770
+  very rare             0.5     2.4602      7.493
+
+Key ratios (normalized):
+  tok36/content = 0.450  (currently 99.0×, reduced to only 44.8×)
+  rare/content = 2.770
+
+Gradient after scaling:
+  tok36:    0.021380 → 0.009672  (45.2% of original)
+  content:  0.000216 → 0.000216  (100% unchanged, normalized)
+
+  tok36/content gradient ratio: 99.0× → 44.8×
+  tok36 growth rate: 2.0× → 0.90×  (MODERATE suppression)
+
+W_rms trajectory (500 steps):
+  tok36: 0.024 → 0.085  (equilibrium ~40.5)
+  vs current: 0.024 → 0.159
+
+Rare token amplification risk:
+  w_v(norm) at c_v=0.5: 7.49  (EXCESSIVE — needs aggressive clamp)
+  w_v(norm) at c_v=2:   2.77
+
+VERDICT: Insufficient suppression. tok36 gradient still 44.8× content.
+Growth rate 0.90× means tok36 STILL grows faster than content, just slower.
+Log compression is too weak for this frequency ratio (873:20 = 43.7).
+Also: normalization adds complexity, and rare token amplification is worse
+than Option A. NOT RECOMMENDED for this frequency distribution.
+
+================================================================================
+SECTION 4: OPTION C — EMA FREQUENCY + INVERSE SQRT
+================================================================================
+
+Formula:  f_v ← (1-α)·f_v + α·c_v     (EMA count update per batch)
+          w_v = (c̄ / (f_v + ε))^(1/2)  (same as Option A, using EMA count)
+          α = 0.01
+
+This is Option A with adaptive frequency estimation instead of static counts.
+
+EMA convergence (α=0.01):
+  Steps to 90% of true frequency: 229
+  Steps to 95%: 299
+  Steps to 99%: 459
+
+Convergence trajectory for tok36 (true c_v=873):
+  step=  0: EMA=   8.7  w=1.070  (NO suppression — treats tok36 as rare)
+  step= 25: EMA= 200.8  w=0.223  (moderate suppression)
+  step= 50: EMA= 350.1  w=0.169  (approaching target)
+  step=100: EMA= 556.6  w=0.134  (near convergence)
+  step=200: EMA= 757.2  w=0.115  (converged)
+  step=300: EMA= 867.3  w=0.107  (matches Option A steady-state)
+
+After convergence: IDENTICAL to Option A (same formula, same weights)
+
+Advantages over Option A:
+  1. Adapts to distribution shift (new training data)
+  2. No need to precompute frequency table
+  3. Self-correcting if batch composition changes
+
+Disadvantages vs Option A:
+  1. ~230 steps of WEAK suppression during warmup
+     - During steps 0-50, tok36 w ∈ [1.07, 0.17] — starts with NO suppression
+     - tok36 accumulates damage during warmup phase
+  2. Additional state: must persist f_v buffer across batches
+  3. Cold start from checkpoint: EMA resets unless saved/loaded
+  4. Algorithm complexity: EMA update kernel needed each batch
+
+EMA with batch noise (tok36 varies 695-1166):
+  After convergence: EMA oscillates 860-880, w oscillates 0.106-0.108
+  Stable. Noise has negligible effect due to α=0.01 smoothing.
+
+VERDICT: Converges to Option A. The 230-step warmup is a LIABILITY:
+tok36 gets ~50 steps of near-zero suppression, accumulating the exact
+gradient bias we're trying to prevent. For a static vocabulary with known
+frequencies, Option A is strictly better (immediate full suppression).
+Option C is only superior if training data distribution changes mid-run.
+
+================================================================================
+SECTION 5: COMPARISON TABLE
+================================================================================
+
+Metric                       Current   Option A    Option B    Option C
+                            (no fix)   (√ freq)   (log freq)  (EMA+√)
+─────────────────────────────────────────────────────────────────────────
+tok36 w_v                     1.0       0.107       0.450*      0.107†
+content w_v                   1.0       0.707       1.000*      0.707†
+rare (c=2) w_v                1.0       2.236       2.770*      2.236†
+tok36 gradient (% of orig)   100%       11.2%       45.2%       11.2%†
+content gradient (% of orig) 100%       85.4%      100.0%       85.4%†
+tok36/content ratio          99.0×      12.9×       44.8×       12.9×†
+tok36 growth rate             2.0×      0.22×       0.90×       0.22×†
+W_rms tok36 @ step 500       0.159     0.038       0.085       0.038†
+Rare token max w_v            1.0       4.47        7.49*       4.47†
+Needs clamp?                  No        Yes(3.0)    Yes(3.0)    Yes(3.0)
+Warmup delay                  N/A       None        None      ~230 steps
+Extra buffers                 N/A       V floats    V floats   2V floats
+Implementation complexity     N/A       Simple      Moderate    Complex
+
+* Option B normalized so content=1.0
+† Option C after convergence (~230 steps)
+
+Winner: OPTION A (inverse sqrt frequency)
+  - Strongest tok36 suppression (89% gradient reduction)
+  - No warmup delay
+  - Simplest implementation
+  - Well-understood mathematical properties
+
+================================================================================
+SECTION 6: IMPLEMENTATION DETAILS (OPTION A)
+================================================================================
+
+Apply point: kernel_embedding_backward in TensorContract_GPU.cu
+
+Current kernel (line ~1508):
+  atomicAdd(&weight_grad[token_id * d + i], token_grad[i] * embedding_scale)
+
+Modified kernel:
+  float scale = freq_scale[token_id] * embedding_scale;
+  atomicAdd(&weight_grad[token_id * d + i], token_grad[i] * scale);
+
+New arguments:
+  const float* freq_scale    // [V] per-token scaling weights, precomputed
+
+Precomputation (Phase1 or Phase2 init):
+  // Count token frequencies from training data
+  // c_bar = total_tokens / num_unique_tokens
+  // freq_scale[v] = clamp(sqrt(c_bar / (count[v] + eps)), 0.05, 3.0)
+  // Upload to GPU: cudaMemcpy(d_freq_scale, h_freq_scale, V*sizeof(float))
+
+Memory: 2534 × 4 bytes = 9.9 KB (negligible)
+
+Kernel performance impact: One extra global memory read per token per dim.
+  Current: read token_grad[i] + read embedding_scale (register) + atomicAdd
+  New:     read token_grad[i] + read freq_scale[token_id] (cached) + atomicAdd
+  Impact: ~0% (freq_scale fits in L1 cache, same token_id read by all d threads)
+
+Grad norm adjustment: Per-component gradient clipping (Issue #139) handles
+  the reduced gradient magnitude automatically. No norm rescaling needed.
+
+AdamW interaction: AdamW's v_t (second moment) adapts to new gradient scale
+  within ~1/(1-β₂) = 1000 steps. During adaptation period, Adam's effective
+  LR for tok36 INCREASES slightly (v_t overshoots from historical high gradients).
+  Monitor tok36 W_rms for first 1000 steps to verify no transient overshoot.
+
+Frequency computation options:
+  (a) Static: count from full training corpus, compute once at init
+  (b) Per-epoch: recount each epoch (handles curriculum/data changes)
+  (c) Running: accumulate during training (like Option C but no EMA decay)
+
+Recommended: (a) Static, recompute only if dataset changes. The token
+frequency distribution of natural language text is extremely stable.
+
+================================================================================
+SECTION 7: MATHEMATICAL VERIFICATION
+================================================================================
+
+Claim: Option A's equilibrium W_rms is bounded and tractable.
+
+For token v with frequency c_v and scaling w_v = sqrt(c̄/c_v):
+
+  Per-step growth = lr × direction_consistency × w_v
+  Per-step decay  = lr × wd × W_rms
+
+  At equilibrium: growth = decay
+  W_rms_eq = direction_consistency × w_v / wd
+
+For tok36 (dc=0.9, w_v=0.107, wd=0.01):
+  W_rms_eq = 0.9 × 0.107 / 0.01 = 9.63
+
+This is the THEORETICAL equilibrium if no other forces act. In practice,
+AdamW's adaptive learning rate and other gradient sources prevent W_rms
+from reaching this value. The 500-step projection (0.024 → 0.038) is
+the relevant number.
+
+Verification check:
+  Current (no scaling): W_rms grows 0.024 → 0.045 in ~850 steps = +87.5%
+  Option A projection:  W_rms grows 0.024 → 0.038 in 500 steps = +58.3%
+  But growth RATE is 0.22× baseline → 500 steps of Option A ≈ 110 steps current
+  Consistent: 110/850 × 87.5% ≈ 11.3% growth, 0.024 × 1.113 = 0.027
+  Discrepancy: trajectory model overshoots because it doesn't account for
+  AdamW v_t adaptation. Real growth will be LESS than 0.038.
+
+Conclusion: Option A reduces tok36 growth to ≤0.22× baseline. With weight
+decay continuing to operate, tok36 W_rms stabilizes near content token levels.
+The 68× gradient spike becomes 12.9× — still elevated, but within the range
+where AdamW's normalization + weight decay maintain healthy norms.
+
+================================================================================
+END OF SIMULATION
+================================================================================

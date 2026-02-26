@@ -34,6 +34,11 @@ struct LossConfig {
     float entropy_reg_lambda = 0.0f;
     bool  entropy_reg_enabled = false;
     
+    // Class-balanced loss: per-token weight = 1/freq(target)^β
+    // GPU array [vocab_size], nullptr = disabled (all weights 1.0)
+    const float* d_class_weights = nullptr;
+    bool  class_balanced_enabled = false;
+    
     // Static factory for plain CE (testing/default)
     static LossConfig plain_ce() { return LossConfig{}; }
 };

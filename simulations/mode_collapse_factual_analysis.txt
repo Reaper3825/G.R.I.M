@@ -1,0 +1,467 @@
+══════════════════════════════════════════════════════════════════════════════════
+FACTUAL ANALYSIS: GRIM-text Mode Collapse
+Based exclusively on equation_log_20260225_162158.csv and training_run.log
+Session: 2026-02-25 16:21:58, 102 batches
+══════════════════════════════════════════════════════════════════════════════════
+
+Every statement below is either:
+  (A) A value directly measured and logged during training, or
+  (B) An algebraic identity that holds by definition
+
+Nothing else.
+
+════════════════════════════════════════════════════════════════════════════
+PART 1: MEASURED VALUES
+════════════════════════════════════════════════════════════════════════════
+
+Table 1: Configuration (from training_run.log)
+─────────────────────────────────────────────────────────
+  d_model           = 768
+  num_layers        = 12
+  num_heads         = 12 (GQA: num_kv_heads=4)
+  vocab_size        = 2533
+  max_seq_len       = 1024
+  tie_embeddings    = false
+  lr                = 3e-4 (AdamW, β1=0.9, β2=0.999)
+  label_smoothing   = DISABLED (ε=0.1, γ=0.0, λ=0.0)
+  center_hidden     = true
+  project_out_pc1   = true
+  center_logits     = true
+  residual_scale    = 0.204124
+
+
+Table 2: Per-Batch Measurements
+─────────────────────────────────────────────────────────
+Columns:
+  B      = batch number
+  Loss   = cross-entropy loss (BATCH_LOSS)
+  Token  = TRACKED TOKEN (most common argmax prediction)
+  Tgt%   = % of batch positions where target IS the tracked token
+  h_rms  = RMS of hidden states at encoder output
+  W_rms  = RMS of tracked token's LM head weight row
+  cos_al = mean cos(h[t], W[argmax[t]]) over all positions
+  avg|c| = mean |cos(h_i, h_j)| sampled 100 pairs (ρ)
+  PC1%   = fraction of hidden variance in 1st principal component
+  cos_PW = cos(PC1, W[tracked_token])
+
+  B   | Loss  | Token | Tgt%   | h_rms  | W_rms  | cos_al | avg|c| | PC1%  | cos_PW
+ ─────┼───────┼───────┼────────┼────────┼────────┼────────┼────────┼───────┼────────
+   1  | 8.056 | 1985  |  0.00% | 0.9726 | 0.0250 | 0.1252 | 0.0294 |  1.1% |  0.001
+  10  | 8.054 |  321  |  0.37% | 0.9803 |   —    | 0.1251 | 0.0291 |  0.5% |  0.029
+  20  | 7.985 |  987  |  0.00% | 0.9778 |   —    | 0.1254 | 0.0345 |  0.7% |  0.012
+  30  | 7.865 |  262  |  2.09% | 0.9749 |   —    | 0.1257 | 0.0305 |  0.8% | -0.202
+  40  | 7.765 |  262  |  3.09% | 0.9728 |   —    | 0.1295 | 0.0362 |  1.5% | -0.402
+  50  | 7.567 |  262  |  2.24% | 0.9744 |   —    | 0.1416 | 0.0344 |  2.7% | -0.445
+  60  | 6.956 |   36  | 14.57% | 0.9768 | 0.0241 | 0.1863 | 0.0564 |  7.4% |  0.682
+  70  | 6.907 |   36  | 10.02% | 0.9563 | 0.0241 | 0.2518 | 0.0946 | 16.7% |  0.772
+  80  | 6.414 |   36  | 14.11% | 0.9519 | 0.0242 | 0.2939 | 0.1699 | 25.8% |  0.768
+  90  | 6.507 |   36  | 10.47% | 0.9612 | 0.0243 | 0.3458 | 0.2368 | 33.6% |  0.754
+ 100  | 6.295 |   36  | 11.75% | 0.9487 | 0.0244 | 0.3141 | 0.2920 | 35.2% |  0.641
+
+
+Table 3: Gradient Decomposition at Tracked Token
+─────────────────────────────────────────────────────────
+Columns:
+  ∂L/∂logit[tok] averaged over positions where target IS tok  (always ≤ 0)
+  ∂L/∂logit[tok] averaged over positions where target IS NOT tok  (always ≥ 0)
+  g_tracked/g_other = ratio of gradient RMS from target vs non-target positions
+  cos(g_t, g_o) = cosine between the two gradient vectors on W[tok]
+  n_trk / n_oth = number of target / non-target positions for tracked token
+
+  B   | Token | ∂L/∂z_trk | ∂L/∂z_oth | ratio   | cos(g,g) | n_trk | n_oth
+ ─────┼───────┼───────────┼───────────┼─────────┼──────────┼───────┼───────
+   1  | 1985  |  0.000000 |  0.000398 |   0.0x  |  0.000   |     0 |  7164
+  10  |  321  | -0.003690 |  0.000399 |  74.7x  |  0.049   |    25 |  6748
+  20  |  987  |  0.000000 |  0.000396 |   0.0x  |  0.000   |     0 |  7453
+  30  |  262  | -0.020833 |  0.000454 | 110.3x  | -0.807   |   135 |  6337
+  40  |  262  | -0.030772 |  0.000590 |  70.6x  | -0.933   |   225 |  7067
+  50  |  262  | -0.022184 |  0.001440 |  11.9x  | -0.957   |   166 |  7251
+  60  |   36  | -0.143181 |  0.004405 |  25.3x  | -0.975   |   869 |  5095
+  70  |   36  | -0.093079 |  0.030554 |   2.5x  | -0.983   |   575 |  5165
+  80  |   36  | -0.119458 |  0.054469 |   1.9x  | -0.994   |   939 |  5715
+  90  |   36  | -0.066007 |  0.174510 |   0.3x  | -0.994   |   632 |  5402
+ 100  |   36  | -0.102963 |  0.056514 |   1.5x  | -0.995   |   761 |  5715
+
+
+Table 4: ρ(final) Trajectory (from RHO_BUILDUP_EQUATION SUMMARY)
+─────────────────────────────────────────────────────────
+Sequential ρ(final) values from all 103 RHO measurements.
+(ρ(final) = avg|cos(h_i,h_j)| at encoder output, from per-layer buildup)
+
+  Batches ~1-25 (first 25 measurements):
+    0.053 0.042 0.045 0.042 0.045 0.043 0.049 0.043 0.040 0.064
+    0.044 0.047 0.040 0.049 0.047 0.048 0.050 0.045 0.050 0.045
+    0.047 0.057 0.061 0.056 0.045
+
+  Batches ~25-50 (next 25):
+    0.048 0.048 0.047 0.050 0.047 0.055 0.051 0.049 0.045 0.050
+    0.057 0.047 0.051 0.049 0.059 0.060 0.063 0.058 0.060 0.059
+    0.070 0.067 0.055 0.058 0.047
+
+  Batches ~50-75 (next 25):
+    0.061 0.064 0.072 0.057 0.113 0.100 0.139 0.119 0.157 0.153
+    0.165 0.104 0.191 0.161 0.225 0.165 0.135 0.205 0.210 0.198
+    0.211 0.281 0.190 0.225 0.220
+
+  Batches ~75-102 (final 28):
+    0.288 0.337 0.307 0.287 0.327 0.351 0.264 0.319 0.328 0.287
+    0.358 0.351 0.254 0.234 0.229 0.390 0.290 0.257 0.443 0.436
+    0.337 0.423 0.369 0.443 0.332
+
+  Summary: ρ(final) rises from 0.04-0.06 (batches 1-40) to 0.30-0.44 (batches 85-102).
+  This is a 7-10× increase. Expected random: 0.036.
+
+
+════════════════════════════════════════════════════════════════════════════
+PART 2: ALGEBRAIC IDENTITIES
+════════════════════════════════════════════════════════════════════════════
+
+These are mathematical definitions. They hold unconditionally.
+
+Identity 1 (Logit Decomposition):
+───────────────────────────────────
+  logit_k(t) = h(t) · W_k + b_k
+             = ‖h(t)‖ · ‖W_k‖ · cos(h(t), W_k) + b_k
+             = h_rms(t) · W_rms_k · d_model · cos(h(t), W_k) + b_k
+
+  where ‖x‖ = rms(x) · √d_model
+
+  The equation log uses this formula explicitly:
+    "[FEEDBACK_LOOP_EQUATION] logit[argmax[t]] = h_rms[t] × W_rms[argmax[t]] × cos(h[t], W[argmax[t]]) × d_model"
+
+
+Identity 2 (Cross-Entropy Gradient):
+───────────────────────────────────
+  ∂L/∂logit_k(t) = p_k(t) - 1[k = y(t)]
+
+  where p_k(t) = softmax(logit(t))_k, y(t) = target at position t.
+
+  At target positions:    ∂L/∂logit_k = p_k - 1    (always ≤ 0, pushes logit UP)
+  At non-target positions: ∂L/∂logit_k = p_k       (always ≥ 0, pushes logit DOWN)
+
+
+Identity 3 (Weight Gradient as Sum):
+───────────────────────────────────
+  ∂L/∂W_k = Σ_t ∂L/∂logit_k(t) · h(t)^T
+
+  Split by target membership:
+
+  ∂L/∂W_k = Σ_{t: y(t)=k} (p_k(t) - 1) · h(t)^T   +   Σ_{t: y(t)≠k} p_k(t) · h(t)^T
+             ←── g_tracked (corrective) ──→               ←── g_other (reinforcing) ──→
+
+  g_tracked pulls W_k AWAY from h (reduces logit at target positions)
+  g_other pulls W_k TOWARD h (BUT this is the wrong direction at non-target positions)
+
+  The equation log calls these "from_tracked_targets" and "from_other_targets".
+
+
+Identity 4 (Hidden Correlation → Gradient Coherence):
+───────────────────────────────────
+  When avg|cos(h_i, h_j)| = ρ is high, hidden states share a common component.
+
+  If ρ is high, then for any fixed scalar c_t:
+    ‖Σ_t c_t · h(t)‖ ≈ ‖c‖₁ · ‖h_mean‖   (instead of ‖c‖₂ · ‖h‖ for uncorrelated)
+
+  In words: when hidden states point in similar directions, their weighted sum
+  grows proportionally to the SUM of coefficients |c_t|, not the √(sum of squares).
+  This makes g_other (which has MANY small positive c_t = p_k(t)) much larger
+  relative to g_tracked (which has FEW large negative c_t = p_k(t) - 1).
+
+
+Identity 5 (PC1 and Logit Baseline):
+───────────────────────────────────
+  If PC1 explains fraction λ₁ of hidden variance with unit direction g, then:
+    h(t) = α(t)·g + h_⊥(t)
+
+  The logit contribution from PC1:
+    logit_k(t)|_{PC1} = α(t) · (g · W_k)
+
+  This component has the SAME SIGN for all t (since α(t) ≈ same sign when PC1 dominates).
+  It acts as a position-independent baseline that raises logit_k everywhere.
+
+
+════════════════════════════════════════════════════════════════════════════
+PART 3: CONNECTING MEASUREMENTS TO IDENTITIES
+════════════════════════════════════════════════════════════════════════════
+
+§3.1 Logit Decomposition Verification (Identity 1 vs Table 2)
+───────────────────────────────────
+  For token 36, the implied cos(h, W[36]) from the logit decomposition:
+
+    cos_implied = logit[36]_nontarget / (h_rms × W_rms[36] × 768)
+
+  B60: 3.390 / (0.977 × 0.0241 × 768) = 3.390 / 18.08 = 0.188   (measured cos_al: 0.186)
+  B70: 4.455 / (0.956 × 0.0241 × 768) = 4.455 / 17.70 = 0.252   (measured cos_al: 0.252)
+  B80: 5.064 / (0.952 × 0.0242 × 768) = 5.064 / 17.69 = 0.286   (measured cos_al: 0.294)
+  B90: 6.038 / (0.961 × 0.0243 × 768) = 6.038 / 17.94 = 0.337   (measured cos_al: 0.346)
+  B100: 5.499 / (0.949 × 0.0244 × 768) = 5.499 / 17.78 = 0.309  (measured cos_al: 0.314)
+
+  The implied values match measured cos_alignment within 3%.
+  This confirms: the logit decomposition accounts for 97%+ of the logit value.
+
+
+§3.2 What drives logit[36] growth? (Table 2 deltas)
+───────────────────────────────────
+  From B60 to B90:
+    h_rms:   0.977 → 0.961   (Δ = -1.6%)
+    W_rms:   0.0241 → 0.0243 (Δ = +0.8%)
+    cos_al:  0.186 → 0.346   (Δ = +86%)
+    logit:   3.390 → 6.038   (Δ = +78%)
+
+  The logit increase is 78%. Of the three multiplicative factors:
+    h_rms contributed -1.6%, W_rms contributed +0.8%, cos_al contributed +86%.
+
+  Measured: cos(h, W[36]) increase accounts for >95% of the logit increase.
+  Measured: W_rms[36] is effectively constant (0.0241 → 0.0244, purely Xavier init scale).
+
+
+§3.3 What drives cos(h, W[36]) growth? (Table 2, PC1 data)
+───────────────────────────────────
+  PC1_var goes from 1.1% (B1) to 33.6% (B90).
+  cos(PC1, W[36]) goes from 0.001 (B1) to 0.754 (B90).
+
+  Both quantities are independently measured. Their product:
+    √(PC1_var) × cos(PC1, W[36])
+
+    B1:  √0.011 × 0.001 = 0.000
+    B60: √0.074 × 0.682 = 0.186
+    B70: √0.167 × 0.772 = 0.315
+    B80: √0.258 × 0.768 = 0.390
+    B90: √0.336 × 0.754 = 0.437
+    B100: √0.352 × 0.641 = 0.380
+
+  Measured cos_al values: 0.125, 0.186, 0.252, 0.294, 0.346, 0.314
+
+  The PC1 contribution OVERESTIMATES cos_al at B70+ (0.315 vs 0.252 at B70).
+  The difference (0.315 - 0.252 = 0.063) is the contribution from h_⊥ (non-PC1 components).
+  This means non-PC1 components partially OPPOSE the PC1 direction at those batches.
+
+  Regardless: PC1 alignment with W[36] is the largest contributor to cos_al growth.
+
+
+§3.4 Gradient Budget Arithmetic (Identity 3 vs Table 3)
+───────────────────────────────────
+  The total gradient signal on W[36] from logit gradients:
+
+    S_tracked = n_trk × |∂L/∂z_trk|    (corrective signal, pulls logit[36] down at targets)
+    S_other   = n_oth × |∂L/∂z_oth|     (reinforcing signal, pushes logit[36] up everywhere)
+
+    B60:  S_tracked = 869 × 0.143 = 124.3    S_other = 5095 × 0.004 =  22.4    ratio = 5.5×
+    B70:  S_tracked = 575 × 0.093 =  53.5    S_other = 5165 × 0.031 = 157.8    ratio = 0.3×
+    B80:  S_tracked = 939 × 0.119 = 112.1    S_other = 5715 × 0.054 = 311.3    ratio = 0.4×
+    B90:  S_tracked = 632 × 0.066 =  41.7    S_other = 5402 × 0.175 = 945.4    ratio = 0.04×
+    B100: S_tracked = 761 × 0.103 =  78.4    S_other = 5715 × 0.057 = 322.9    ratio = 0.2×
+
+  At B60: corrective signal is 5.5× larger than reinforcing signal.
+  At B70: reinforcing signal overtakes corrective by 3×.
+  At B90: reinforcing signal is 23× larger than corrective.
+
+  However, cos(g_tracked, g_other) ≈ -0.98 at B60-B90 (Table 3).
+  These two gradient components are nearly ANTI-PARALLEL.
+  The net gradient magnitude is |S_tracked - S_other| (approximately).
+
+  At B60: net ≈ 124.3 - 22.4  = 101.9 (corrective direction)
+  At B70: net ≈ 157.8 - 53.5  = 104.3 (REINFORCING direction) ← crossover
+  At B90: net ≈ 945.4 - 41.7  = 903.7 (reinforcing direction)
+
+
+§3.5 Why does ∂L/∂z_other grow? (Identity 2 + Table 3)
+───────────────────────────────────
+  By Identity 2:  ∂L/∂logit_36(t) = p_36(t)  at non-target positions.
+
+  Measured ∂L/∂z_oth values at non-target positions (= p_36(t) averaged):
+    B30: 0.000454
+    B40: 0.000590
+    B50: 0.001440
+    B60: 0.004405
+    B70: 0.030554
+    B80: 0.054469
+    B90: 0.174510
+
+  This IS the softmax probability p(36|t) averaged over non-target positions.
+
+  Growth: 0.000454 → 0.174510 = 384× increase from B30 to B90.
+
+  For comparison, uniform probability for vocab 2533 = 1/2533 = 0.000395.
+  B30: p(36) = 0.000454 ≈ 1.15× uniform (essentially random)
+  B90: p(36) = 0.174510 ≈ 442× uniform (dominant prediction)
+
+
+§3.6 Hidden Correlation and Gradient Coherence (Identity 4 + Tables 2,3)
+───────────────────────────────────
+  avg|cos(h_i, h_j)| (ρ) trajectory:
+    B1-B50:  0.029 → 0.034  (stable near random 0.036)
+    B60:     0.056  (+65% above random)
+    B70:     0.095  (2.6× random)
+    B80:     0.170  (4.7× random)
+    B90:     0.237  (6.6× random)
+    B100:    0.292  (8.1× random)
+
+  By Identity 4, when ρ is high:
+    The g_other sum (many small p_k terms) accumulates coherently.
+    For n_oth terms each contributing p_k · h(t):
+      If uncorrelated: ‖g_other‖ ∝ √n_oth · p_k · h_rms
+      If correlated (ρ high): ‖g_other‖ ∝ n_oth · p_k · h_rms
+
+  At B90: n_oth = 5402, √n_oth = 73.5.
+  The coherent sum is n_oth/√n_oth = 73.5× larger than the incoherent sum.
+  Measured ρ = 0.237, so the effective amplification is between 1× and 73.5×.
+
+
+§3.7 Loss Plateau and Reversal (Table 2)
+───────────────────────────────────
+  Loss trajectory:
+    B1=8.056, B10=8.054, B20=7.985, B30=7.865, B40=7.765
+    B50=7.567, B60=6.956, B70=6.907, B80=6.414, B90=6.507, B100=6.295
+
+  B80→B90: loss INCREASES from 6.414 to 6.507 (Δ = +0.093).
+  This is the batch where gradient ratio hits 0.3x (Table 3) — reinforcing overwhelms corrective.
+  The model is "learning" to predict tok36 harder, which INCREASES loss at non-tok36 positions.
+
+
+§3.8 ρ Per-Layer Amplification (from RHO_BUILDUP per-layer data at B90, line ~69471)
+───────────────────────────────────
+  ρ at each encoder layer (measured):
+    emb:  0.064
+    L0:   0.077  (Δ = +0.013)
+    L1:   0.091  (Δ = +0.014)
+    L2:   0.092  (Δ = +0.001)
+    L3:   0.116  (Δ = +0.024)
+    L4:   0.136  (Δ = +0.020)
+    L5:   0.142  (Δ = +0.006)
+    L6:   0.155  (Δ = +0.013)
+    L7:   0.161  (Δ = +0.005)
+    L8:   0.200  (Δ = +0.040)  ← largest amplifier
+    L9:   0.199  (Δ = -0.001)
+    L10:  0.212  (Δ = +0.013)
+    L11:  0.237  (Δ = +0.025)
+
+  ρ grows from 0.064 at embedding to 0.237 at output.
+  The encoder amplifies ρ by +0.173 absolute.
+  Layer 8 contributes the largest single jump (+0.040).
+
+
+════════════════════════════════════════════════════════════════════════════
+PART 4: MEASURED QUANTITIES THAT CHANGED vs DID NOT CHANGE
+════════════════════════════════════════════════════════════════════════════
+
+DID NOT CHANGE (B60 → B90):
+  h_rms:            0.977 → 0.961  (Δ = -1.6%)
+  W_rms[36]:        0.0241 → 0.0243 (Δ = +0.8%)
+  ρ(emb):           0.03 → 0.06   (stayed near random at embedding level)
+
+DID CHANGE (B60 → B90):
+  cos(h, W[36]):    0.186 → 0.346  (Δ = +86%)     ← drives logit growth
+  avg|cos| (ρ):     0.056 → 0.237  (Δ = +323%)    ← drives gradient coherence
+  PC1_var:          7.4% → 33.6%   (Δ = +354%)    ← hidden state rank collapse
+  cos(PC1, W[36]):  0.682 → 0.754  (Δ = +11%)     ← PC1 aligned with SPACE token
+  p(36|non-target): 0.004 → 0.175  (Δ = +4275%)   ← drives S_other explosion
+  grad ratio:       25.3x → 0.3x   (inverted)      ← corrective → reinforcing
+  logit[36]:        3.39 → 6.04    (Δ = +78%)      ← consequence of cos growth
+  ρ amplification:  +0.013 → +0.173 (13× more)    ← encoder amplifies correlation
+
+MEASURED CHAIN:
+  1. ρ(emb) stays ~0.03-0.06 throughout training (embedding layer is stable)
+  2. Encoder amplifies ρ from emb to output:  +0.01 (B1) → +0.17 (B90)
+  3. Higher ρ(final) → hidden states share a dominant direction (PC1)
+  4. PC1 aligns with W[36] (cos = 0.68 at B60 → 0.75 at B90)
+  5. Hidden states aligned with W[36] → cos(h, W[36]) rises → logit[36] rises
+  6. Higher logit[36] → higher p(36) at non-target positions → larger ∂L/∂z_other
+  7. Larger ∂L/∂z_other × coherent h(t) → g_other overwhelms g_tracked in W[36] gradient
+  8. Net gradient on W[36] is now REINFORCING (pushes logit[36] higher, not lower)
+
+  Step 2→7 are all measured values. Step 8 is arithmetic on measured values.
+
+
+════════════════════════════════════════════════════════════════════════════
+PART 5: QUANTITATIVE STATE AT EACH PHASE
+════════════════════════════════════════════════════════════════════════════
+
+Phase A: Healthy (B1-B50)
+─────────────────────────
+  ρ(final) ≈ 0.04-0.06 (near random)
+  cos_al ≈ 0.125 (near 1/√64 = 0.125, consistent with isotropic embeddings)
+  PC1_var < 3%
+  p(36|non-target) < 0.002
+  S_tracked/S_other > 5×
+  Loss decreasing: 8.056 → 7.567
+
+Phase B: Transition (B50-B70)
+─────────────────────────────
+  ρ(final) rises from 0.06 to 0.10
+  cos_al rises from 0.14 to 0.25
+  PC1_var rises from 2.7% to 16.7%
+  p(36|non-target) rises from 0.001 to 0.031 (31× uniform)
+  S_tracked/S_other crosses 1.0 at B70 (gradient inversion)
+  Loss still decreasing: 7.567 → 6.907
+
+Phase C: Collapsed (B70-102)
+────────────────────────────
+  ρ(final) rises from 0.10 to 0.44
+  cos_al rises from 0.25 to 0.35
+  PC1_var rises from 16.7% to 35.2%
+  p(36|non-target) rises from 0.031 to 0.175 (442× uniform)
+  S_tracked/S_other < 0.5× (reinforcing dominates)
+  Loss plateaus: 6.907 → 6.237 (and reverses at B90: 6.414 → 6.507)
+
+
+════════════════════════════════════════════════════════════════════════════
+PART 6: WHAT THE MEASUREMENTS CONSTRAIN
+════════════════════════════════════════════════════════════════════════════
+
+The measured data constrains what any fix must do. For loss to decrease below 6.2:
+
+NECESSARY CONDITION 1: avg|cos(h_i,h_j)| must stay below ~0.06
+  Reason: When ρ > 0.10, S_other grows faster than S_tracked (Table 3, §3.4).
+  At ρ = 0.06 (B60), ratio was still 5.5×.
+  At ρ = 0.10 (B70), ratio had already inverted to 0.3×.
+  The crossover occurs between ρ = 0.06 and ρ = 0.10.
+
+NECESSARY CONDITION 2: The encoder must not amplify ρ by more than ~+0.03
+  Reason: ρ(emb) stays near 0.03-0.06 (healthy). The encoder adds +0.17 by B90.
+  If encoder amplification stays below +0.03 (like B1-B40), ρ(final) stays ≤ 0.09.
+
+NECESSARY CONDITION 3: PC1 variance must stay below ~5%
+  Reason: At PC1_var = 7.4% with cos(PC1,W[36]) = 0.68 (B60), collapse had begun.
+  At PC1_var = 2.7% (B50), the model was still learning.
+  Any mechanism that keeps PC1_var < 5% prevents the cascade.
+
+These are not recommendations. They are arithmetic constraints derived from the
+gradient crossover point observed in the measurements.
+
+
+════════════════════════════════════════════════════════════════════════════
+PART 7: RAW DATA FOR EXTERNAL VERIFICATION
+════════════════════════════════════════════════════════════════════════════
+
+All values below are copy-pasted from equation_log_20260225_162158.csv line numbers.
+
+Line 282:   "INPUT h (encoder output): n_positions=7164 h_rms_mean=0.972554"
+Line 283:   "ALIGNMENT: cos(h[t], W[argmax[t]])_mean=0.125170 (normal)"
+Line 290:   "HIDDEN_CORRELATION: avg|cos(h_i,h_j)|=0.0294"
+Line 304:   "variance_explained = λ_1/trace(H^T H) = 0.010504 (1.1% of total)"
+Line 306:   "cos(PC1, W[1985]) = 0.001346"
+
+Line 41652: "GRAD_LOGITS[36]: at_tracked_targets=-0.143181, at_other_targets=0.004405"
+Line 41656: "g_rms_tracked/g_rms_other=25.3x cos(g_tracked, g_other)=-0.974780"
+Line 41680: "variance_explained = λ_1/trace(H^T H) = 0.074104 (7.4% of total)"
+Line 41703: "ALIGNMENT: cos(h[t], W[argmax[t]])_mean=0.186291"
+Line 41705: "W_rms[36]=0.0241"
+Line 41707: "When target≠36: logit[36]_mean=3.3901 (n=5095)"
+Line 41711: "HIDDEN_CORRELATION: avg|cos(h_i,h_j)|=0.0564"
+
+Line 69455: "GRAD_LOGITS[36]: at_tracked_targets=-0.066007, at_other_targets=0.174510"
+Line 69459: "g_rms_tracked/g_rms_other=0.3x cos(g_tracked, g_other)=-0.993731"
+Line 69463: "ALIGNMENT: cos(h[t], W[argmax[t]])_mean=0.345832"
+Line 69465: "W_rms[36]=0.0243"
+Line 69467: "When target≠36: logit[36]_mean=6.0384 (n=5402)"
+Line 69471: "HIDDEN_CORRELATION: avg|cos(h_i,h_j)|=0.2368"
+Line 69479: "variance_explained = λ_1/trace(H^T H) = 0.335764 (33.6% of total)"
+Line 69481: "cos(PC1, W[36]) = 0.754444"
+
+Source: D:\G.R.I.M\resources\models\GRIM-text\training\logs\equation_log_20260225_162158.csv
+       (70095 lines, session 2026-02-25 16:21:58)
+
+════════════════════════════════════════════════════════════════════════════
+END OF ANALYSIS
+════════════════════════════════════════════════════════════════════════════
