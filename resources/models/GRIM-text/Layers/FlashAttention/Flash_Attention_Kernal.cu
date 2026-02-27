@@ -39,6 +39,9 @@ inline bool isEquationLoggingEnabled() {
 // NOTE: FLASHATTENTION_DISABLE_DROPOUT removed per Rule 20 - feature dropout is now enabled
 // (was silently ignored before despite config having attention_dropout parameter)
 
+// ATen stub required before flash-attention headers (flash_fwd_kernel.h uses at::cuda::philox::unpack).
+#include <ATen/cuda/detail/UnpackRaw.cuh>
+
 #define FLASH_NAMESPACE grim_flash
 #include "namespace_config.h"
 #include "static_switch.h"
