@@ -137,7 +137,7 @@ target_link_libraries(grim_log_recorder PUBLIC
 set(FLASH_ATTN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../external/flash-attention")
 set(FLASH_ATTN_SRC "${FLASH_ATTN_ROOT}/csrc/flash_attn/src")
 get_filename_component(ATEN_STUB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../Layers/FlashAttention/aten_stub" ABSOLUTE)
-if(NOT EXISTS "${FLASH_ATTN_SRC}/namespace_config.h")
+if(NOT EXISTS "${FLASH_ATTN_SRC}/flash_bwd_kernel.h")
   message(FATAL_ERROR "flash-attention submodule not found. Run: git submodule update --init --recursive")
 endif()
 if(NOT EXISTS "${ATEN_STUB_DIR}/ATen/cuda/detail/UnpackRaw.cuh")
