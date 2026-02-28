@@ -539,7 +539,12 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
         fflush(stderr);
     }
     // Use transpose_b=true since W_qkv is [qkv_dim, d_model] and we need [tokens, d_model] @ [d_model, qkv_dim]
-    intermediates.qkv_out = autograd::matmul(intermediates.ln1_out, W_qkv_, stream, nullptr, nullptr, true);
+    // Contract: pass explicit A cache for grad_B (W_qkv) path.
+    if (!intermediates.ln1_out.data) {
+        throw std::runtime_error("EncodingLayer::forward: ln1_out.data is NULL before QKV matmul (cannot supply required a_cache for W_qkv grad)");
+    }
+    intermediates.qkv_out = autograd::matmul(intermediates.ln1_out, W_qkv_, stream,
+                                            intermediates.ln1_out.data, nullptr, true);
     if (qkv_debug > 0) {
         const bool always_log = (qkv_debug >= 2);
         logTensorNonFinite("AutogradQKV:qkv_out_prebias", intermediates.qkv_out, stream, always_log);
@@ -914,7 +919,12 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 6: Output projection...\n");
     // W_o is [d_model, d_model], so W_o^T is also [d_model, d_model]
     // Use transpose_b=true to compute attn_out @ W_o^T
-    intermediates.proj_out = autograd::matmul(intermediates.attn_out, W_o_, stream, nullptr, nullptr, true);
+    // Contract: pass explicit A cache for grad_B (W_o) path.
+    if (!intermediates.attn_out.data) {
+        throw std::runtime_error("EncodingLayer::forward: attn_out.data is NULL before output projection matmul (cannot supply required a_cache for W_o grad)");
+    }
+    intermediates.proj_out = autograd::matmul(intermediates.attn_out, W_o_, stream,
+                                              intermediates.attn_out.data, nullptr, true);
     // ISSUE #97 FIX: Use autograd::broadcast_add for proper gradient tracking on b_o
     if (config_.use_bias && b_o_.data) {
         intermediates.proj_out = autograd::broadcast_add(intermediates.proj_out, b_o_, stream);

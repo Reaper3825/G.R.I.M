@@ -21,6 +21,7 @@
 #include <sstream>
 #include <cmath>
 #include <cfloat>
+#include <cstdint>
 #include <algorithm>
 #include <mutex>
 #include <vector>
@@ -4457,11 +4458,26 @@ struct MatMulGradFn : public GradFn {
         if (b_requires_grad && a_cache) {
             // A is [M, K] row-major
             const size_t a_size = static_cast<size_t>(m) * k;
+            const size_t a_bytes = a_size * sizeof(float);
             float* buffer_a = nullptr;
-            cudaMalloc(&buffer_a, a_size * sizeof(float));
+            const cudaError_t a_alloc_err = cudaMalloc(&buffer_a, a_bytes);
+            if (a_alloc_err != cudaSuccess || !buffer_a) {
+                size_t free_bytes = 0, total_bytes = 0;
+                cudaMemGetInfo(&free_bytes, &total_bytes);  // best-effort telemetry
+                throw std::runtime_error(
+                    "MatMulGradFn::set_cache_copy: cudaMalloc failed for a_cache copy (" +
+                    std::to_string(a_bytes) + " bytes): " + cudaGetErrorString(a_alloc_err) +
+                    " [free=" + std::to_string(free_bytes) + ", total=" + std::to_string(total_bytes) + "]");
+            }
             // Issue #57: Use SYNCHRONOUS copy to ensure source data isn't freed before copy completes
             // The source tensor destructor runs on CPU and can free memory while async copy is in flight
-            cudaMemcpy(buffer_a, a_cache, a_size * sizeof(float), cudaMemcpyDeviceToDevice);
+            const cudaError_t a_copy_err = cudaMemcpy(buffer_a, a_cache, a_bytes, cudaMemcpyDeviceToDevice);
+            if (a_copy_err != cudaSuccess) {
+                cudaFree(buffer_a);
+                throw std::runtime_error(
+                    "MatMulGradFn::set_cache_copy: cudaMemcpy failed for a_cache copy (" +
+                    std::to_string(a_bytes) + " bytes): " + cudaGetErrorString(a_copy_err));
+            }
             
             // Wrap in shared_ptr with DEFERRED cleanup deleter (Issue #53)
             // Instead of calling cudaFree directly (which blocks), queue for later cleanup
@@ -4475,10 +4491,25 @@ struct MatMulGradFn : public GradFn {
         if (a_requires_grad && b_cache) {
             // B is [K, N] or [N, K] depending on transpose_b
             const size_t b_size = transB ? static_cast<size_t>(n) * k : static_cast<size_t>(k) * n;
+            const size_t b_bytes = b_size * sizeof(float);
             float* buffer_b = nullptr;
-            cudaMalloc(&buffer_b, b_size * sizeof(float));
+            const cudaError_t b_alloc_err = cudaMalloc(&buffer_b, b_bytes);
+            if (b_alloc_err != cudaSuccess || !buffer_b) {
+                size_t free_bytes = 0, total_bytes = 0;
+                cudaMemGetInfo(&free_bytes, &total_bytes);  // best-effort telemetry
+                throw std::runtime_error(
+                    "MatMulGradFn::set_cache_copy: cudaMalloc failed for b_cache copy (" +
+                    std::to_string(b_bytes) + " bytes): " + cudaGetErrorString(b_alloc_err) +
+                    " [free=" + std::to_string(free_bytes) + ", total=" + std::to_string(total_bytes) + "]");
+            }
             // Issue #57: Use SYNCHRONOUS copy to ensure source data isn't freed before copy completes
-            cudaMemcpy(buffer_b, b_cache, b_size * sizeof(float), cudaMemcpyDeviceToDevice);
+            const cudaError_t b_copy_err = cudaMemcpy(buffer_b, b_cache, b_bytes, cudaMemcpyDeviceToDevice);
+            if (b_copy_err != cudaSuccess) {
+                cudaFree(buffer_b);
+                throw std::runtime_error(
+                    "MatMulGradFn::set_cache_copy: cudaMemcpy failed for b_cache copy (" +
+                    std::to_string(b_bytes) + " bytes): " + cudaGetErrorString(b_copy_err));
+            }
             
             // Wrap in shared_ptr with DEFERRED cleanup deleter (Issue #53)
             // Instead of calling cudaFree directly (which blocks), queue for later cleanup
@@ -4490,10 +4521,14 @@ struct MatMulGradFn : public GradFn {
         
         // Validate that required caches are set
         if (a_requires_grad && !cached_b) {
-            throw std::runtime_error("MatMulGradFn::set_cache_copy: b_cache is NULL but input_a requires grad");
+            throw std::runtime_error(
+                "MatMulGradFn::set_cache_copy: b_cache is NULL but input_a requires grad "
+                "(A.grad=true requires B cache for grad_A)");
         }
         if (b_requires_grad && !cached_a) {
-            throw std::runtime_error("MatMulGradFn::set_cache_copy: a_cache is NULL but input_b requires grad");
+            throw std::runtime_error(
+                "MatMulGradFn::set_cache_copy: a_cache is NULL but input_b requires grad "
+                "(B.grad=true requires A cache for grad_B)");
         }
     }
     
@@ -4895,19 +4930,26 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
         // ISSUE #55 FIX: Pass stream for async allocation of owned grad buffers
         grad_fn->capture_inputs(const_cast<Tensor&>(a), const_cast<Tensor&>(b), stream);
         
-        // TAPE-BASED: Use external caches or the tensor data directly
-        // If cache not provided, assume the tensor data persists (e.g., weights)
-        // ISSUE #51 FIX: Copy caches to owned buffers instead of storing dangling pointers
-        // If cache not provided, use the tensor data directly (assumes weights persist)
-        const float* effective_a_cache = a_cache ? a_cache : a.data;
+        // TAPE-BASED cache contract:
+        // - grad_B requires A cache. Enforce explicit a_cache so missing plumbing fails loud.
+        // - grad_A may still use persistent B.data when b_cache is omitted (weights typically persist).
+        const float* effective_a_cache = a_cache;
         const float* effective_b_cache = b_cache ? b_cache : b.data;
         
         // Null check: grad_B = A^T @ grad_C requires cached A; grad_A = grad_C @ B^T requires cached B
         if (grad_fn->b_requires_grad && !effective_a_cache) {
             throw std::runtime_error(
-                "autograd::matmul: Cannot compute grad for input_b (weights) - activation data is NULL. "
-                "Both a_cache and a.data are null. Possible causes: moved-from tensor, zero-size allocation, "
-                "or buffer freed prematurely.");
+                "autograd::matmul: Missing required a_cache for grad_B path. "
+                "input_b requires grad, so caller MUST pass explicit a_cache (forward A activation) to matmul. "
+                "This is a cache-plumbing contract failure, not a fallback path. "
+                "Context: A.name=" + std::string(a.name ? a.name : "<unnamed>") +
+                " A.data=" + std::to_string(reinterpret_cast<uintptr_t>(a.data)) +
+                " a_cache=" + std::to_string(reinterpret_cast<uintptr_t>(a_cache)) +
+                " B.name=" + std::string(b.name ? b.name : "<unnamed>") +
+                " B.data=" + std::to_string(reinterpret_cast<uintptr_t>(b.data)) +
+                " shape(A)=[" + std::to_string(M) + "," + std::to_string(K) + "]"
+                " shape(B)=[" + std::to_string(b_shape.rows) + "," + std::to_string(b_shape.cols) + "]"
+                " transpose_b=" + std::to_string(transpose_b ? 1 : 0));
         }
         if (grad_fn->a_requires_grad && !effective_b_cache) {
             throw std::runtime_error(

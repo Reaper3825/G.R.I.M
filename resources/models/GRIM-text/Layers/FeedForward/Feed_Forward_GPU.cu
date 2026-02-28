@@ -184,6 +184,9 @@ Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& inte
     //--------------------------------------------------
 
     // matmul: input [tokens, d_model] @ W1 [d_model, d_ff] = pre_gelu [tokens, d_ff]
+    if (!input.data) {
+        throw std::runtime_error("FeedForwardLayer::forward: input.data is NULL before W1 matmul (cannot supply required a_cache for W1 grad)");
+    }
     intermediates.ffn_linear1_out = autograd::matmul(input, W1_, stream,
                                                      input.data,  // cache input for W1 grad
                                                      nullptr);    // W1 persists, no cache needed
@@ -211,6 +214,9 @@ Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& inte
     //--------------------------------------------------
 
     // matmul: post_gelu [tokens, d_ff] @ W2 [d_ff, d_model] = output [tokens, d_model]
+    if (!intermediates.ffn_gelu_out.data) {
+        throw std::runtime_error("FeedForwardLayer::forward: ffn_gelu_out.data is NULL before W2 matmul (cannot supply required a_cache for W2 grad)");
+    }
     Tensor output = autograd::matmul(intermediates.ffn_gelu_out, W2_, stream,
                                      intermediates.ffn_gelu_out.data,  // cache post_gelu for W2 grad
                                      nullptr);                          // W2 persists
