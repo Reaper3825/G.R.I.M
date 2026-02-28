@@ -267,6 +267,14 @@ inline EquationLogger& getEquationLogger() {
     return instance;
 }
 
+// Skip flag for gradient accumulation: when true, layers omit expensive D2H + fprintf
+// equation diagnostics for this forward pass. Set by executeAutogradForward when
+// accumulate=true (micro-batches 1..N-1), so we log only once per optimizer step.
+inline bool& getEquationLoggingSkipThisPassRef() {
+    static bool s_skip = false;
+    return s_skip;
+}
+
 // ============================================================================
 // EQ_LOG macro — the ONLY logging macro. Rule 20: no legacy macros kept.
 //

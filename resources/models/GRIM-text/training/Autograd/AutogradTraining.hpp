@@ -115,6 +115,8 @@ struct AutogradContext {
     float grad_scale = 1.0f;
     uint64_t step = 0;
     bool is_training = true;
+    /** When true, encoder layers skip QKV_EQUATION D2H + fprintf (gradient accumulation micro-batches) */
+    bool skip_equation_logging = false;
     
     // ═══════════════════════════════════════════════════════════════════════════
     // LOSS CONFIGURATION

@@ -209,6 +209,10 @@ std::string decodeWithAtomSideChannel(const GRIM::Tokenizer::UniByte& tokenizer,
 }
 
 bool shouldSyncDiagnostics(const TrainingContext& ctx, std::size_t batch_idx) {
+    // Skip expensive D2H syncs when equation logging disabled (avoids GPU pipeline drain)
+    if (!GRIM::getEquationLogger().isEnabled()) {
+        return false;
+    }
     const int default_interval = ctx.config.hyperparameters.log_interval;
     const int interval = readEnvInt("GRIM_SYNC_INTERVAL", default_interval);
     if (interval <= 0) {
@@ -2126,7 +2130,8 @@ BatchResult processBatch(
     }
     
     // Log model predictions (what it predicts vs targets) - uses ForwardPass module for filtering
-    {
+    // GUARDED: Blocking cudaMemcpy drains GPU pipeline - only run on diagnostic sync interval
+    if (shouldSyncDiagnostics(ctx, batch_idx)) {
         const auto& ts = ctx.model->getTrainingState();
         if (ts.autograd_intermediates.hasLogits() && ts.cached_batch_size > 0 && ts.cached_seq_len > 0) {
             const int total_tokens = ts.cached_batch_size * ts.cached_seq_len;
@@ -4365,6 +4370,7 @@ BatchResult processBatch(
         // ========================================================================
         // PRE-OPTIMIZER Token 277 Weight Snapshot (Issue #36.5)
         // Log weight row 277 BEFORE optimizer step to track delta
+        // GUARDED: Only when tracking a collapse token (set by kCollapseDiagEnabled block)
         // ========================================================================
         float pre_w277_rms = 0.0f;
         float pre_w277_mean = 0.0f;
@@ -4373,7 +4379,7 @@ BatchResult processBatch(
             const auto& cfg = ctx.model->getConfig();
             cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
             
-            if (ctx.model->getLmHeadLayer()->weights().data && g_collapse_token_id < cfg.vocab_size) {
+            if (ctx.model->getLmHeadLayer()->weights().data && g_collapse_token_id >= 0 && g_collapse_token_id < cfg.vocab_size) {
                 std::vector<float> w277_row(static_cast<size_t>(cfg.d_model));
                 const float* w277_ptr = ctx.model->getLmHeadLayer()->weights().data + static_cast<size_t>(g_collapse_token_id) * cfg.d_model;
                 cudaMemcpyAsync(w277_row.data(), w277_ptr, 
@@ -4494,13 +4500,14 @@ BatchResult processBatch(
         // ========================================================================
         // POST-OPTIMIZER Token 277 Weight Delta (Issue #36.5)
         // Track how much weight row 277 changed after optimizer step
+        // GUARDED: Only when tracking a collapse token (avoids GPU sync when diag disabled)
         // ========================================================================
         {
             const auto& ts = ctx.model->getTrainingState();
             const auto& cfg = ctx.model->getConfig();
             cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
             
-            if (ctx.model->getLmHeadLayer()->weights().data && g_collapse_token_id < cfg.vocab_size) {
+            if (ctx.model->getLmHeadLayer()->weights().data && g_collapse_token_id >= 0 && g_collapse_token_id < cfg.vocab_size) {
                 std::vector<float> w277_row(static_cast<size_t>(cfg.d_model));
                 const float* w277_ptr = ctx.model->getLmHeadLayer()->weights().data + static_cast<size_t>(g_collapse_token_id) * cfg.d_model;
                 cudaMemcpyAsync(w277_row.data(), w277_ptr, 

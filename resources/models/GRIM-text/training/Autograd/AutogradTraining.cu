@@ -15,6 +15,7 @@
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "../../Shared/Gradients/GradientCC_GPU.hpp"          // launchScaleGradients
+#include "../../Shared/EquationLogging/EquationLogging.hpp"  // getEquationLoggingSkipThisPassRef
 
 #include <iostream>
 #include <cmath>
@@ -180,7 +181,16 @@ AutogradContext initAutogradContext(
 ForwardResult executeAutogradForward(AutogradContext& ctx) {
     ForwardResult result{};
     result.success = false;
-    
+
+    // Skip QKV_EQUATION D2H + fprintf on gradient-accumulation micro-batches (same weights, duplicate output)
+    struct EquationLoggingScope {
+        bool& ref;
+        bool prev;
+        explicit EquationLoggingScope(bool skip) : ref(GRIM::getEquationLoggingSkipThisPassRef()), prev(ref) { ref = skip; }
+        ~EquationLoggingScope() { ref = prev; }
+    };
+    EquationLoggingScope eq_scope(ctx.skip_equation_logging);
+
     // Rule 20: Fail loud
     ctx.validate("executeAutogradForward");
     
@@ -1258,7 +1268,8 @@ LossResult autogradTrainingStep(
         true
     );
     ctx.loss_config = buildLossConfig(model.getLossOptions(), training_state.d_class_weights);
-    
+    ctx.skip_equation_logging = accumulate;  // Skip D2H + fprintf on accumulation micro-batches
+
     // ═══════════════════════════════════════════════════════════════════════════
     // FORWARD → LOSS → BACKWARD
     // ═══════════════════════════════════════════════════════════════════════════

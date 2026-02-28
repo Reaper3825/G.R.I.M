@@ -1441,7 +1441,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         }
     }
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing logging...", 0);
-    ctx->logging = Internal::initializeLogging(ctx->config.paths);
+        ctx->logging = Internal::initializeLogging(ctx->config.paths);
     
     // Create standard module log formatter (Rule 21: centralized logging setup)
     auto log_fn = [logger = ctx->logging.logger.get()](const std::string& msg) {
@@ -1499,9 +1499,9 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
             ctx->logging.logger->log("Previous equation_log.csv exists, creating: " + eq_log_path);
         }
         
-        bool eq_init_ok = GRIM::getEquationLogger().initialize(eq_log_path);
+        bool eq_init_ok = GRIM::getEquationLogger().initialize(eq_log_path, false);  // Disabled: avoids GPU sync + D2H on hot path
         if (eq_init_ok) {
-            ctx->logging.logger->log("✓ EquationLogger initialized: " + eq_log_path);
+            ctx->logging.logger->log("EquationLogger disabled (enable=false) - no equation diagnostics, no D2H sync overhead");
         } else {
             ctx->logging.logger->log("[WARNING] EquationLogger initialization failed - equation diagnostics disabled");
         }

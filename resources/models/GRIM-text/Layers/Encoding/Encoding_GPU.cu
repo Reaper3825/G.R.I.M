@@ -305,11 +305,6 @@ void EncodingLayer::allocateWeights(uint64_t seed, float residual_scale, float l
     W_qkv_.ensure_grad();
     Tensor::xavier_uniform_(W_qkv_, seed + 0, stream);
 
-    // Issue #106: Scale QKV weights by 1/sqrt(d_model) to prevent initial LSE explosion.
-    // Without this, coherent summation causes attention scores to start saturated.
-    // Expected output norm ~8, actual without scaling ~125.
-    scaleInplace(W_qkv_, 1.0f / std::sqrt(static_cast<float>(d_model)));
-    
     if (config_.use_bias) {
         b_qkv_ = Tensor::zeros({qkv_out_dim}, stream, "enc_b_qkv_own");
         b_qkv_.requires_grad_();
@@ -553,8 +548,9 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     // ========================================================================
     // [QKV_EQUATION] DIAGNOSTIC (Rule 21) - Equation-based logging
     // Formula: qkv_out = ln1_out @ W_qkv^T + b_qkv
+    // Skipped on gradient-accumulation micro-batches (same weights → duplicate output)
     // ========================================================================
-    if (isEquationLoggingEnabled()) {
+    if (isEquationLoggingEnabled() && !GRIM::getEquationLoggingSkipThisPassRef()) {
         const int qkv_dim_local = config_.d_model + 2 * config_.kvDim();
         const int d_model_local = config_.d_model;
         const int num_heads_local = config_.num_heads;
@@ -1059,8 +1055,9 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     // Interpretation:
     //   |avg_cos| → 1.0 = mode collapse (all vectors aligned) = BAD
     //   |avg_cos| near 0 = diverse representations = generally healthy
+    // Skipped on gradient-accumulation micro-batches (same weights → duplicate output)
     // ═══════════════════════════════════════════════════════════════════════════
-    if (isEquationLoggingEnabled() && (layer_idx == 0 || layer_idx == 11)) {
+    if (isEquationLoggingEnabled() && !GRIM::getEquationLoggingSkipThisPassRef() && (layer_idx == 0 || layer_idx == 11)) {
         cudaStreamSynchronize(stream);  // Ensure data is ready
         
         // Copy layer output to host for analysis

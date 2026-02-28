@@ -100,7 +100,7 @@ constexpr int TELEMETRY_MAX_STREAMS = 16;         // TelemetryLattice metric str
 // Equation Logging Configuration
 // Controls diagnostic equation-based logging for training
 //======================================================//
-constexpr bool DEFAULT_EQ_LOG_ENABLED = true;     // Enable equation logging by default
+constexpr bool DEFAULT_EQ_LOG_ENABLED = false;    // Disabled: equation logging causes GPU sync + D2H every forward
 constexpr int DEFAULT_EQ_LOG_INTERVAL = 1;       // Log every N batches (0 = every batch)
 
 //======================================================//
