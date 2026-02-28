@@ -233,16 +233,26 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden) {
     //   MatMulGradFn::apply() computes:
     //     grad_input  = grad_output @ weights      (for backward to encoder)
     //     grad_weights = lm_input^T @ grad_output  (for weight update)
+    //
+    // Pass explicit a_cache (like FFN) so grad_B computation has valid source.
+    // Avoids MatMulGradFn::set_cache_copy "a_cache is NULL" when tensor.data
+    // is null (moved-from, zero-size, or lifecycle edge case).
     // ════════════════════════════════════════════════════════════════════
     weights_.requires_grad = true;
     weights_.shape = TensorContract::TensorShape::make_BSM(config_.vocab_size, config_.d_model);
+
+    if (!matmul_input->data) {
+        throw std::runtime_error("LMHeadLayer::forward: matmul input has null data - cannot compute weight gradient. "
+            "Check encoder output and centering/PC1 buffers.");
+    }
+    const float* a_cache = matmul_input->data;  // Explicit cache for grad_B = lm_input^T @ grad_output
 
     Tensor logits = autograd::matmul(
         *matmul_input,
         weights_,
         stream,
-        nullptr,
-        nullptr,
+        a_cache,
+        nullptr,  // weights_.data persists
         true  // transpose_b=true: logits = input @ W^T
     );
     // Validate output shape

@@ -3993,8 +3993,7 @@ BatchResult processBatch(
             
             // Reset telemetry anchors to prevent repeated drift triggers (Rule 22: explicit API call)
             if (ctx.telemetry.enabled && ctx.telemetry.lattice) {
-                GRIM::Telemetry::TelemetryError err = GRIM::Telemetry::resetTelemetryAnchors(
-                    ctx.telemetry.lattice,
+                GRIM::Telemetry::TelemetryError err = ctx.telemetry.lattice->resetAnchors(
                     ctx.model->getTrainingState().stream_ctrl.getPrimaryStream()
                 );
                 if (err != GRIM::Telemetry::TelemetryError::OK) {
@@ -4046,10 +4045,7 @@ BatchResult processBatch(
                 
                 // Reset telemetry anchors
                 if (ctx.telemetry.enabled && ctx.telemetry.lattice) {
-                    GRIM::Telemetry::resetTelemetryAnchors(
-                        ctx.telemetry.lattice,
-                        stream
-                    );
+                    ctx.telemetry.lattice->resetAnchors(stream);
                 }
             }
             break;
@@ -4565,16 +4561,9 @@ BatchResult processBatch(
                                 " step=" + std::to_string(ctx.global_step) + 
                                 " grad_norm=" + Internal::formatScalar(preclip_grad_norm, 6));
         
-        float observations[5] = {
-            result.loss,            // Stream 0: LOSS
-            preclip_grad_norm,      // Stream 1: GRAD_NORM_MEAN (PRE-CLIP total norm - Issue #14 fix)
-            preclip_grad_norm,      // Stream 2: GRAD_NORM_MAX (use same as mean for now)
-            result.learning_rate,   // Stream 3: LEARNING_RATE
-            static_cast<float>(result.tokens_processed)  // Stream 4: TOKENS_PER_BATCH
-        };
-        
-        GRIM::Telemetry::TelemetryError tel_err = GRIM::Telemetry::updateTelemetryLattice(
-            ctx.telemetry.lattice, observations, ctx.global_step);
+        GRIM::Telemetry::TelemetryError tel_err = ctx.telemetry.lattice->updateFromBatch(
+            payload, result.loss, preclip_grad_norm, result.learning_rate,
+            ctx.global_step);
         
         ctx.logging.logger->log("[TelemetryLattice] POST-UPDATE batch=" + std::to_string(batch_idx + 1) + 
                                 " step=" + std::to_string(ctx.global_step) + 
@@ -4839,10 +4828,8 @@ EpochResult runEpoch(
         
         // Log level 0 (fast, every step)
         GRIM::Telemetry::TelemetryVector vec0_loss, vec0_grad;
-        GRIM::Telemetry::readTelemetryVector(ctx.telemetry.lattice, 0, 
-                                             (int)GRIM::Telemetry::MetricStream::LOSS, &vec0_loss);
-        GRIM::Telemetry::readTelemetryVector(ctx.telemetry.lattice, 0, 
-                                             (int)GRIM::Telemetry::MetricStream::GRAD_NORM_MEAN, &vec0_grad);
+        ctx.telemetry.lattice->readVector(0, (int)GRIM::Telemetry::MetricStream::LOSS, &vec0_loss);
+        ctx.telemetry.lattice->readVector(0, (int)GRIM::Telemetry::MetricStream::GRAD_NORM_MEAN, &vec0_grad);
         
         std::ostringstream oss;
         oss << "[Tel-L0] LOSS: μ=" << vec0_loss.mu << " σ̃=" << vec0_loss.sigma_tilde 
@@ -4858,8 +4845,7 @@ EpochResult runEpoch(
         
         // Log level 2 (medium scale, stride=4)
         GRIM::Telemetry::TelemetryVector vec2_loss;
-        GRIM::Telemetry::readTelemetryVector(ctx.telemetry.lattice, 2, 
-                                             (int)GRIM::Telemetry::MetricStream::LOSS, &vec2_loss);
+        ctx.telemetry.lattice->readVector(2, (int)GRIM::Telemetry::MetricStream::LOSS, &vec2_loss);
         
         oss.str("");
         oss << "[Tel-L2] LOSS (s=4): μ=" << vec2_loss.mu << " σ̃=" << vec2_loss.sigma_tilde 

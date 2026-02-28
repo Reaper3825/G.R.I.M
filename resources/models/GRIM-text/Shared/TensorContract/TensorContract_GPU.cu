@@ -4902,6 +4902,19 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
         const float* effective_a_cache = a_cache ? a_cache : a.data;
         const float* effective_b_cache = b_cache ? b_cache : b.data;
         
+        // Null check: grad_B = A^T @ grad_C requires cached A; grad_A = grad_C @ B^T requires cached B
+        if (grad_fn->b_requires_grad && !effective_a_cache) {
+            throw std::runtime_error(
+                "autograd::matmul: Cannot compute grad for input_b (weights) - activation data is NULL. "
+                "Both a_cache and a.data are null. Possible causes: moved-from tensor, zero-size allocation, "
+                "or buffer freed prematurely.");
+        }
+        if (grad_fn->a_requires_grad && !effective_b_cache) {
+            throw std::runtime_error(
+                "autograd::matmul: Cannot compute grad for input_a - weight/b cache is NULL. "
+                "Second input tensor has null data.");
+        }
+        
         grad_fn->set_cache_copy(effective_a_cache, effective_b_cache, M, K, N, handle, stream, transpose_b);
         result.grad_fn = grad_fn;
     }

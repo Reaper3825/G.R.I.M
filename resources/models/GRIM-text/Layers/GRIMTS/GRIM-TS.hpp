@@ -125,6 +125,7 @@ struct GuessCacheDeviceState {
     unsigned int* evict_cursor = nullptr;
     std::uint32_t* diversity_bloom = nullptr;  // Bloom filter for diversity
     float* calibration_offset = nullptr;       // Dynamic confidence calibration
+    int* slot_locks = nullptr;                 // Per-slot spin locks for Welford consistency
     std::size_t capacity = 0;
     std::size_t bloom_size = 0;
 };
@@ -251,6 +252,9 @@ struct GuessCacheBuffers {
     // Calibration
     float* calibration_offset = nullptr;
     
+    // Per-slot spin locks
+    int* slot_locks = nullptr;
+    
     // Single-item transfer buffers
     void* single_meta_buffer = nullptr;    // Single GuessMetadata
     float* single_reward_buffer = nullptr; // Single float reward
@@ -280,6 +284,9 @@ void ResetGuessCache(cudaStream_t stream = nullptr);
 // Configuration (can be modified at runtime)
 CacheConfig GetCurrentConfig();
 void UpdateConfig(const CacheConfig& config);
+
+// Step counter — call once per training step to advance the deterministic clock
+void AdvanceStep(float step);
 
 // Capacity management
 bool ResizeCache(std::size_t new_capacity, cudaStream_t stream = nullptr);

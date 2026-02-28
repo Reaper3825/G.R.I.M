@@ -1816,10 +1816,7 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
     ctx->telemetry.config.hyperparams.strict_mode = true; // Fail loud (Rule 20: no compatibility shims)
     ctx->telemetry.config.stream = ctx->model->getTrainingState().stream_ctrl.getPrimaryStream(); // Use same stream as training
     
-    ctx->telemetry.lattice = GRIM::Telemetry::initTelemetryLattice(ctx->telemetry.config);
-    if (!ctx->telemetry.lattice) {
-        throw std::runtime_error("FATAL: Failed to initialize telemetry lattice");
-    }
+    ctx->telemetry.lattice = std::make_unique<GRIM::Telemetry::TelemetryLattice>(ctx->telemetry.config);
     ctx->logging.logger->log("✓ Telemetry lattice: 8 levels, 5 streams, GPU-resident");
     
     // 11b. Initialize telemetry control (GPU-native kernel-based control)

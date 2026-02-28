@@ -185,7 +185,7 @@ void TrainingState::allocateGuessCacheBuffers(
 		throw std::runtime_error("[TrainingState::allocateGuessCacheBuffers] cudaMalloc calibration_offset failed! error=" +
 			std::string(cudaGetErrorString(err)));
 	}
-	
+
 	// Allocate single-item transfer buffers
 	err = cudaMalloc(&guess_cache_buffers.single_meta_buffer, GUESS_METADATA_SIZE);
 	if (err != cudaSuccess) {
