@@ -868,17 +868,15 @@ Tensor Tensor::zeros(TensorContract::TensorShape shape, bool requires_grad, cuda
         "[Tensor::alloc] #A%d cudaMalloc data=%p bytes=%zu name=%s\n",
         (void*)t.data, bytes, name ? name : "unnamed");
     
-    // Zero-initialize. Grid dimensions respect device max (via getMaxGridBlocks1D).
-    const dim3 grid = gridForCount(count);
-    kernel_zero_autograd<<<grid, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count);
-    
-    cudaError_t kernelErr = cudaGetLastError();
-    
-    if (kernelErr != cudaSuccess) {
-        const int blocks = static_cast<int>((count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE);
-        throw std::runtime_error(std::string("Tensor::zeros: kernel launch failed for ") +
-                                 (name ? name : "unnamed") + ": " + cudaGetErrorString(kernelErr) +
-                                 " (blocks=" + std::to_string(blocks) + " count=" + std::to_string(count) + ")");
+    // Zero-initialize using cudaMemsetAsync (avoids kernel launch grid limits for large tensors).
+    // 0.0f has all-zero bytes, so byte-wise memset is correct.
+    err = cudaMemsetAsync(t.data, 0, bytes, stream);
+    if (err != cudaSuccess) {
+        cudaFree(t.data);
+        t.data = nullptr;
+        throw std::runtime_error(std::string("Tensor::zeros cudaMemsetAsync failed for ") +
+                                 (name ? name : "unnamed") + ": " + cudaGetErrorString(err) +
+                                 " (count=" + std::to_string(count) + ")");
     }
     
     // NOTE: Don't sync here - let caller control sync point
