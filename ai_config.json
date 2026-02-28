@@ -103,7 +103,7 @@
             },
             "epochs": 3,
             "seed": 1,
-            "batch_size": 32,
+            "batch_size": 16,
             "gradient_accumulation_steps": 2,
             "batch_strategy": "RANDOM",
             "learning_rate": 6e-4,
@@ -190,7 +190,7 @@
             },
 
             "micro_validation": {
-                "enabled": true,
+                "enabled": false,
                 "interval": 500,
                 "batch_limit": 8,
                 "min_step": 500,
@@ -412,7 +412,7 @@
                 "center_hidden_states": true,
                 "project_out_pc1": true,
                 "pc1_power_iters": 5,
-                "center_logits": true,
+                "center_logits": false,
                 "center_encoder_residuals": true
             },
             "layer_scale": {

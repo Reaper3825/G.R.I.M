@@ -833,12 +833,19 @@ Tensor Tensor::zeros(TensorContract::TensorShape shape, bool requires_grad, cuda
     
     // Zero-initialize
     const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
+    if (blocks < 0 || blocks > 2147483647) {
+        throw std::runtime_error(std::string("Tensor::zeros: invalid grid size for ") +
+                                 (name ? name : "unnamed") + " blocks=" + std::to_string(blocks) +
+                                 " count=" + std::to_string(count));
+    }
     kernel_zero_autograd<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count);
     
     cudaError_t kernelErr = cudaGetLastError();
     
     if (kernelErr != cudaSuccess) {
-        throw std::runtime_error(std::string("Tensor::zeros: kernel launch failed: ") + cudaGetErrorString(kernelErr));
+        throw std::runtime_error(std::string("Tensor::zeros: kernel launch failed for ") +
+                                 (name ? name : "unnamed") + ": " + cudaGetErrorString(kernelErr) +
+                                 " (blocks=" + std::to_string(blocks) + " count=" + std::to_string(count) + ")");
     }
     
     // NOTE: Don't sync here - let caller control sync point
