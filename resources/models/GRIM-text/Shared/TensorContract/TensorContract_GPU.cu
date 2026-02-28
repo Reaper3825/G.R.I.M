@@ -687,8 +687,10 @@ namespace GRIM {
 //======================================================//
 
 // Kernel: Zero-initialize tensor (outside anonymous namespace so visible everywhere in GRIM)
+// Supports 2D grid when block count exceeds device maxGridDim[0] (e.g. 65535 on older GPUs)
 __global__ void kernel_zero_autograd(float* data, size_t count) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
         data[idx] = 0.0f;
     }
@@ -706,7 +708,8 @@ namespace {
 // projection inflation (actual_row_norm=24.1 vs expected=0.86). Philox is a
 // counter-based PRNG with excellent statistical properties used by PyTorch/TensorFlow.
 __global__ void kernel_xavier_uniform(float* data, size_t count, float scale, uint64_t seed) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx >= count) return;
     
     // Initialize Philox4_32_10 state - each thread gets unique sequence via idx
@@ -720,7 +723,8 @@ __global__ void kernel_xavier_uniform(float* data, size_t count, float scale, ui
 
 // Kernel: Accumulate gradient (dst += src * scale)
 __global__ void kernel_accumulate_grad(float* dst, const float* src, size_t count, float scale) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
         dst[idx] += src[idx] * scale;
     }
@@ -751,6 +755,15 @@ __global__ void kernel_dot_accumulate_scalar(float* dst, const float* a, const f
 }
 
 constexpr int AUTOGRAD_BLOCK_SIZE = 256;
+constexpr int kMaxGridBlocks1D = 65535;  // Device limit on many GPUs
+
+// Returns grid dimensions for count elements; uses 2D grid when blocks > 65535.
+inline dim3 gridForCount(size_t count) {
+    const int blocks = static_cast<int>((count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE);
+    if (blocks <= kMaxGridBlocks1D)
+        return dim3(blocks, 1, 1);
+    return dim3(kMaxGridBlocks1D, (blocks + kMaxGridBlocks1D - 1) / kMaxGridBlocks1D, 1);
+}
 
 }  // anonymous namespace
 
@@ -831,18 +844,14 @@ Tensor Tensor::zeros(TensorContract::TensorShape shape, bool requires_grad, cuda
         "[Tensor::alloc] #A%d cudaMalloc data=%p bytes=%zu name=%s\n",
         (void*)t.data, bytes, name ? name : "unnamed");
     
-    // Zero-initialize
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    if (blocks < 0 || blocks > 2147483647) {
-        throw std::runtime_error(std::string("Tensor::zeros: invalid grid size for ") +
-                                 (name ? name : "unnamed") + " blocks=" + std::to_string(blocks) +
-                                 " count=" + std::to_string(count));
-    }
-    kernel_zero_autograd<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count);
+    // Zero-initialize. Use 2D grid when blocks exceeds device maxGridDim (65535 on many GPUs).
+    const dim3 grid = gridForCount(count);
+    kernel_zero_autograd<<<grid, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count);
     
     cudaError_t kernelErr = cudaGetLastError();
     
     if (kernelErr != cudaSuccess) {
+        const int blocks = static_cast<int>((count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE);
         throw std::runtime_error(std::string("Tensor::zeros: kernel launch failed for ") +
                                  (name ? name : "unnamed") + ": " + cudaGetErrorString(kernelErr) +
                                  " (blocks=" + std::to_string(blocks) + " count=" + std::to_string(count) + ")");
@@ -1010,8 +1019,7 @@ void Tensor::xavier_uniform_(Tensor& t, uint64_t seed, cudaStream_t stream) {
     
     float scale = std::sqrt(6.0f / (fan_in + fan_out));
     
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    kernel_xavier_uniform<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count, scale, seed);
+    kernel_xavier_uniform<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count, scale, seed);
     
     t.version++;
 }
@@ -1074,8 +1082,7 @@ void Tensor::zero_grad(cudaStream_t exec_stream) {
     
     cudaStream_t s = exec_stream ? exec_stream : stream;
     const size_t count = shape.total_elements();
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    kernel_zero_autograd<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, s>>>(grad_->data, count);
+    kernel_zero_autograd<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, s>>>(grad_->data, count);
 }
 
 void Tensor::accumulate_grad(const float* incoming_grad, size_t count, float scale, cudaStream_t exec_stream) {
@@ -1092,9 +1099,7 @@ void Tensor::accumulate_grad(const float* incoming_grad, size_t count, float sca
     }
     
     cudaStream_t s = exec_stream ? exec_stream : stream;
-    
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-    kernel_accumulate_grad<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, s>>>(grad_->data, incoming_grad, count, scale);
+    kernel_accumulate_grad<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, s>>>(grad_->data, incoming_grad, count, scale);
 }
 
 Tensor Tensor::detach() const {
@@ -1246,7 +1251,8 @@ __global__ void kernel_gelu_forward(
     float* __restrict__ output,
     size_t count
 ) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
         const float x = input[idx];
         const float c = 0.7978845608f;  // sqrt(2/pi)
@@ -1328,7 +1334,8 @@ __global__ void kernel_gelu_backward(
     float* grad_input,
     size_t count
 ) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
         const float x = input[idx];
         const float c = 0.7978845608f;  // sqrt(2/pi)
@@ -1676,7 +1683,8 @@ __global__ void kernel_dropout_forward(
     float scale,                // 1.0 / (1.0 - dropout_prob)
     size_t count
 ) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
         // Inverted dropout: scale up kept values so expected value unchanged
         output[idx] = input[idx] * (mask[idx] ? scale : 0.0f);
@@ -1691,7 +1699,8 @@ __global__ void kernel_generate_dropout_mask(
     float dropout_prob,         // Probability of dropping (e.g., 0.1)
     uint64_t seed
 ) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
         // Initialize Philox RNG per-element with unique sequence
         curandStatePhilox4_32_10_t state;
@@ -1714,7 +1723,8 @@ __global__ void kernel_dropout_backward(
     float scale,                // 1.0 / (1.0 - dropout_prob)
     size_t count
 ) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < count) {
         grad_input[idx] = grad_output[idx] * (mask[idx] ? scale : 0.0f);
     }
@@ -1919,11 +1929,10 @@ struct LayerScaleGradFn : public GradFn {
         applied = true;
         
         const size_t n = element_count;
-        const int blocks = (n + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
         
         // 1. grad_input = grad_output * scale_value  (broadcast)
         if (input_grad && grad_output.data) {
-            kernel_accumulate_grad<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(n), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 input_grad, grad_output.data, n, scale_value);
         }
         
@@ -2464,15 +2473,14 @@ struct AddGradFn : public GradFn {
         }
         
         const size_t count = grad_output.numel();
-        const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
         
         // Accumulate gradients to both inputs using stored grad pointers
         if (a_requires_grad && grad_a) {
-            kernel_accumulate_grad<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 grad_a, grad_output.data, count, 1.0f);
         }
         if (b_requires_grad && grad_b) {
-            kernel_accumulate_grad<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 grad_b, grad_output.data, count, 1.0f);
         }
 
@@ -2692,11 +2700,10 @@ struct BiasAddGradFn : public GradFn {
         }
         
         const size_t count = grad_output.numel();
-        const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
         
         // Backward for input: grad_input = grad_output (pass-through, no shape change)
         if (input_requires_grad && grad_input) {
-            kernel_accumulate_grad<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 grad_input, grad_output.data, count, 1.0f);
         }
         
@@ -2863,10 +2870,9 @@ struct GeluGradFn : public GradFn {
             throw std::runtime_error("GeluGradFn::apply: size mismatch - grad_output.numel()=" + 
                                      std::to_string(count) + " cached_size=" + std::to_string(cached_size));
         }
-        const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
         
         // TAPE-BASED: Write directly to stored grad buffer
-        kernel_gelu_backward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        kernel_gelu_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
             grad_output.data, cached_input, input_grad, count);
         trackKernelLaunch("kernel_gelu_backward", stream);
 
@@ -3433,8 +3439,7 @@ struct DropoutGradFn : public GradFn {
             throw std::runtime_error("DropoutGradFn::apply: grad_output.data is NULL");
         }
         
-        const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-        kernel_dropout_backward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        kernel_dropout_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
             grad_output.data, saved_mask, input_grad, scale, count);
         trackKernelLaunch("kernel_dropout_backward", stream);
 
@@ -3540,15 +3545,14 @@ struct ResidualAddGradFn : public GradFn {
         
         // Both inputs receive the same gradient (d(x+r)/dx = 1, d(x+r)/dr = 1)
         const size_t count = grad_output.numel();
-        const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
         
         if (input_requires_grad && input_grad) {
-            kernel_accumulate_grad<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 input_grad, grad_output.data, count, 1.0f);
         }
         
         if (residual_requires_grad && residual_grad) {
-            kernel_accumulate_grad<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 residual_grad, grad_output.data, count, 1.0f);
         }
 
@@ -3694,10 +3698,9 @@ Tensor gelu(const Tensor& x, cudaStream_t stream, const float* input_cache) {
     // Forward: y = gelu(x)
     // gelu(x) = x * 0.5 * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
     const size_t count = x.numel();
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
     
     // Launch GELU forward kernel
-    kernel_gelu_forward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(x.data, result.data, count);
+    kernel_gelu_forward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(x.data, result.data, count);
     
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
     if (x.requires_grad) {
@@ -3868,19 +3871,18 @@ Tensor dropout(const Tensor& x, float p, uint64_t seed, bool training, cudaStrea
     
     const size_t count = x.numel();
     const float scale = 1.0f / (1.0f - p);
-    const int blocks = (count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
     
     // Allocate mask on device
     uint8_t* mask = nullptr;
     cudaMalloc(&mask, count * sizeof(uint8_t));
     
     // Generate random mask: 1 = keep (with prob 1-p), 0 = drop (with prob p)
-    kernel_generate_dropout_mask<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+    kernel_generate_dropout_mask<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
         mask, count, p, seed);
     trackKernelLaunch("kernel_generate_dropout_mask", stream);
     
     // Forward: y = x * mask * scale
-    kernel_dropout_forward<<<blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+    kernel_dropout_forward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
         x.data, mask, result.data, scale, count);
     trackKernelLaunch("kernel_dropout_forward", stream);
     
@@ -5150,8 +5152,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
                 dq_bf16, grad_q_fp32, batch_size, seq_len, num_heads, head_dim, stream);
             
             // Scale = 1.0 (no normalization - Issue #84 fixed root cause)
-            const int acc_blocks = (q_elems + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-            kernel_accumulate_grad<<<acc_blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(q_elems), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 q_grad, grad_q_fp32, q_elems, 1.0f);
             cudaFreeAsync(grad_q_fp32, stream);
         }
@@ -5165,8 +5166,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32<<<kv_blocks, block_size, 0, stream>>>(
                 dk_bf16, grad_k_fp32, batch_size, num_heads, num_kv_heads, seq_len, head_dim);
             // Scale = 1.0 (no normalization - Issue #84 fixed root cause)
-            const int acc_blocks = (kv_elems + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-            kernel_accumulate_grad<<<acc_blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(kv_elems), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 k_grad, grad_k_fp32, kv_elems, 1.0f);
             cudaFreeAsync(grad_k_fp32, stream);
         }
@@ -5180,8 +5180,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32<<<kv_blocks, block_size, 0, stream>>>(
                 dv_bf16, grad_v_fp32, batch_size, num_heads, num_kv_heads, seq_len, head_dim);
             // Scale = 1.0 (no normalization needed)
-            const int acc_blocks = (kv_elems + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE;
-            kernel_accumulate_grad<<<acc_blocks, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            kernel_accumulate_grad<<<gridForCount(kv_elems), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
                 v_grad, grad_v_fp32, kv_elems, 1.0f);
             cudaFreeAsync(grad_v_fp32, stream);
         }
