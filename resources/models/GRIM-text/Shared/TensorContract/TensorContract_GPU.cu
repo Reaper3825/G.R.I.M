@@ -765,13 +765,15 @@ inline int getMaxGridBlocks1D() {
         int device = 0;
         if (cudaGetDevice(&device) != cudaSuccess) {
             cached = kMaxGridBlocks1DFallback;
+            fprintf(stderr, "[gridForCount] cudaGetDevice failed, using maxGridBlocks1D=%d\n", cached);
         } else {
             int max_x = 0;
             if (cudaDeviceGetAttribute(&max_x, cudaDevAttrMaxGridDimX, device) != cudaSuccess) {
                 cached = kMaxGridBlocks1DFallback;
+                fprintf(stderr, "[gridForCount] cudaDeviceGetAttribute failed, using maxGridBlocks1D=%d\n", cached);
             } else {
-                // Some drivers reject exactly 65535; use one less only when device reports that exact value
-                cached = (max_x == 65535) ? 65534 : max_x;
+                cached = (max_x > 65534) ? 65534 : max_x;
+                fprintf(stderr, "[gridForCount] device %d maxGridDimX=%d, using maxGridBlocks1D=%d\n", device, max_x, cached);
             }
         }
     }
