@@ -593,11 +593,14 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     // ═══════════════════════════════════════════════════════════════════════════
     
     // Create encoder output tensor from last layer output (preserves grad_fn chain)
+    // Inference: requires_grad=false — no backward runs, avoids MatMulGradFn needing b_cache
+    // (LM head matmul would fail set_cache_copy when input_a requires grad but weights/data lifecycle differs)
+    const bool lmhead_track_grad = ctx.is_training;
     Tensor encoder_output_tensor = Tensor::from_ptr(
         encoder_output,
         TensorContract::TensorShape::make_BSM(total_tokens, cfg->d_model),
         false,
-        true,
+        lmhead_track_grad,
         "encoder_output_for_lmhead"
     );
     encoder_output_tensor.is_leaf = false;

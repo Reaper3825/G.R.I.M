@@ -62,7 +62,7 @@
         "enable_nfkc_normalization": true,
         "enable_parallel_tokenization": true,
         "parallel_threshold": 1000,
-        "max_length": 1024,
+        "max_length": 2048,
         "vocab_size": 10000,
         "max_vocab_size": 10000,
         "min_subword_freq": 3,
@@ -86,7 +86,7 @@
         "config": {
             "generation": {
                 "strategy": "greedy",
-                "max_new_tokens": 80,
+                "max_new_tokens": 128,
                 "min_new_tokens": 1,
                 "temperature": 0.8,
                 "top_k": 50,
@@ -103,24 +103,24 @@
             },
             "epochs": 3,
             "seed": 1,
-            "batch_size": 8,
+            "batch_size": 32,
             "gradient_accumulation_steps": 2,
             "batch_strategy": "RANDOM",
-            "learning_rate": 3e-4,
+            "learning_rate": 6e-4,
             "weight_decay": 0.01,
             "gradient_clip": 1.0,
             "per_token_grad_scale": true,
-            "warmup_steps": 1000,
-            "max_seq_len": 1024,
+            "warmup_steps": 2000,
+            "max_seq_len": 2048,
             "min_seq_valid_tokens": 10,
-            "log_interval": 10,
-            "atom_stats_interval": 100,
-            "atom_stats_max_seqs": 16,
-            "validation_interval": 1000,
-            "checkpoint_interval": 1000,
+            "log_interval": 25,
+            "atom_stats_interval": 200,
+            "atom_stats_max_seqs": 32,
+            "validation_interval": 2000,
+            "checkpoint_interval": 2000,
             "use_gpu": true,
             "use_flash_attention": true,
-            "min_seq_len_for_flash": 512,
+            "min_seq_len_for_flash": 256,
             "use_mixed_precision": true,
             "single_batch": {
                 "enabled": false,
@@ -130,8 +130,8 @@
             "dynamic_lr": {
                 "enabled": false,
                 "auto_generate": false,
-                "min": 5e-4,
-                "max": 5e-4,
+                "min": 6e-4,
+                "max": 6e-4,
                 "increase_factor": 1.1,
                 "decrease_factor": 0.1,
                 "upper_grad_norm": 12.0,
@@ -160,11 +160,11 @@
                 "loss_min_samples": 8,
                 "loss_floor": 0.25,
                 "guard_logging": true,
-                "guard_floor_steps": 200,
+                "guard_floor_steps": 500,
                 "guard_grad_multiplier": 1.6,
                 "guard_loss_patience": 12,
                 "guard_loss_multiplier": 1.05,
-                "baseline_capture_steps": 200,
+                "baseline_capture_steps": 500,
                 "baseline_drift": 0.05,
                 "momentum_interval": 100,
                 "momentum_gain": 0.35,
@@ -183,17 +183,17 @@
 
             "auto_stop": {
                 "enabled": true,
-                "plateau_patience": 12,
-                "plateau_min_delta": 0.005,
-                "high_loss_threshold": 5.5,
-                "high_loss_patience": 8
+                "plateau_patience": 18,
+                "plateau_min_delta": 0.004,
+                "high_loss_threshold": 6.0,
+                "high_loss_patience": 12
             },
 
             "micro_validation": {
-                "enabled": false,
-                "interval": 200,
-                "batch_limit": 5,
-                "min_step": 150,
+                "enabled": true,
+                "interval": 500,
+                "batch_limit": 8,
+                "min_step": 500,
                 "prefer_short": false
             },
 
@@ -204,8 +204,8 @@
             },
 
             "shuffle": {
-                "enabled": false,
-                "epochs": 0
+                "enabled": true,
+                "epochs": 1
             },
 
             "telemetry_control": {
@@ -229,8 +229,8 @@
                     "suppression_steps": 2
                 },
                 "volatility_damping": {
-                    "threshold": 100.0,
-                    "max_damping": 1.0
+                    "threshold": 150.0,
+                    "max_damping": 0.9
                 },
                 "gradient_decay": {
                     "threshold": 0.0,
@@ -251,8 +251,8 @@
                     "cooldown_steps": 10
                 },
                 "baseline": {
-                    "warmup_steps": 100,
-                    "stabilization_steps": 50
+                    "warmup_steps": 200,
+                    "stabilization_steps": 100
                 },
                 "logging": {
                     "verbose": false,
@@ -260,8 +260,8 @@
                 },
                 "plateau_noise": {
                     "enabled": true,
-                    "patience": 25,
-                    "variance_threshold": 0.01,
+                    "patience": 30,
+                    "variance_threshold": 0.008,
                     "noise_std": 0.1,
                     "proportional": true,
                     "cooldown": 10,
@@ -304,23 +304,23 @@
 
             "stability_overrides_enabled": false,
             "stability_overrides": {
-                "batch_size": 3,
-                "max_seq_len": 1024,
-                "clip_per_token": 0.025,
-                "lr_min": 1e-3
+                "batch_size": 16,
+                "max_seq_len": 2048,
+                "clip_per_token": 0.02,
+                "lr_min": 5e-4
             },
 
             "scratch_blocks": {
                 "enabled": true,
-                "max_tokens_per_block": 16384,
-                "num_blocks": 4,
+                "max_tokens_per_block": 20480,
+                "num_blocks": 5,
                 "use_write_combined": true
             },
 
             "scratch_block_reasoning": {
                 "enabled": true,
-                "atom_embedding_dim": 64,
-                "max_atoms": 4096,
+                "atom_embedding_dim": 96,
+                "max_atoms": 8192,
                 "atom_scale": 1.0
             },
 
@@ -339,7 +339,7 @@
             },
 
             "cuda_execution": {
-                "single_stream_mode": true,
+                "single_stream_mode": false,
                 "disable_async_frees": false,
                 "synchronize_after_kernels": true
             },
@@ -354,7 +354,7 @@
 
             "logit_update_trace": {
                 "enabled": true,
-                "interval": 1
+                "interval": 50
             },
 
             "attention_diagnostics": {
@@ -392,10 +392,11 @@
                     "serialization": true
                 }
             },
-            "d_model": 768,
-            "num_layers": 12,
-            "num_heads": 12,
-            "num_kv_heads": 4,
+            "d_model": 1024,
+            "num_layers": 24,
+            "num_heads": 16,
+            "num_kv_heads": 8,
+            "d_ff": 4096,
             "tie_embeddings": false,
             "positional_encoding": {
                 "use_learned": false,
@@ -432,9 +433,9 @@
             },
             "guess_cache": {
                 "enabled": true,
-                "initial_capacity": 16384,
-                "min_capacity": 4096,
-                "max_capacity": 262144,
+                "initial_capacity": 32768,
+                "min_capacity": 8192,
+                "max_capacity": 524288,
                 "grow_threshold": 0.85,
                 "shrink_threshold": 0.25,
                 "grow_factor": 2.0,
@@ -446,7 +447,7 @@
                 "diversity_weight": 0.25,
                 "recency_weight": 0.25,
                 "enable_diversity_tracking": true,
-                "diversity_bloom_bits": 65536,
+                "diversity_bloom_bits": 131072,
                 "diversity_hash_functions": 4,
                 "diversity_penalty": 0.15,
                 "confidence_floor": 0.01,
@@ -456,11 +457,11 @@
                 "momentum_ceiling": 0.995,
                 "staleness_grace_period": 0.25,
                 "enable_async_transfers": true,
-                "pinned_buffer_size": 8192,
-                "num_streams": 2,
+                "pinned_buffer_size": 16384,
+                "num_streams": 4,
                 "enable_histograms": false,
                 "histogram_bins": 32,
-                "telemetry_sample_interval": 10
+                "telemetry_sample_interval": 25
             }
         },
         "server_host": "127.0.0.1",
