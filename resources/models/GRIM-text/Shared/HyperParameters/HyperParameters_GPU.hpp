@@ -448,81 +448,6 @@ using LogCallback = std::function<void(const std::string&)>;
 namespace GRIM {
 namespace HyperParameters {
 
-inline void autoPopulateDynamicLR(
-    GRIM::Config::TrainingHyperparameters& params,
-    const DerivedScheduleInfo& info) {
-    if (!params.dynamic_lr_enabled || !params.dynamic_lr_autogenerate) {
-        return;
-    }
-
-    const float base_lr = std::max(params.learning_rate, 5.0e-7f);
-    const float batch_scale = std::clamp(static_cast<float>(params.batch_size) / 32.0f, 0.25f, 4.0f);
-    const float grad_ref = std::max(params.grad_clip_norm, 1.0f);
-    const float warmup_scale = static_cast<float>(params.warmup_steps) / 512.0f;
-
-    // Learning rate envelope
-    params.dynamic_lr_min = std::max(5.0e-7f, base_lr * 0.35f);
-    params.dynamic_lr_max = std::min(5.0e-3f, std::max(params.dynamic_lr_min * 1.3f, base_lr * 1.9f));
-
-    // Adjustment factors scale with batch size (smaller batches → gentler steps)
-    params.dynamic_lr_increase_factor = std::clamp(1.0f + (0.05f / batch_scale), 1.02f, 1.18f);
-    const float decrease_delta = std::clamp(0.04f * batch_scale, 0.08f, 0.35f);
-    params.dynamic_lr_decrease_factor = std::clamp(1.0f - decrease_delta, 0.45f, 0.85f);
-
-    params.dynamic_lr_max_step_up_ratio = 1.0f + (params.dynamic_lr_increase_factor - 1.0f) * 2.0f;
-    params.dynamic_lr_max_step_down_ratio = 1.0f - (1.0f - params.dynamic_lr_decrease_factor) * 1.4f;
-
-    // Gradient bounds derive from clip norm
-    params.dynamic_lr_upper_grad_norm = grad_ref * 1.25f;
-    params.dynamic_lr_lower_grad_norm = std::max(1.0f, grad_ref * 0.35f);
-
-    // Loss spike sensitivity depends on plateau delta / high-loss tolerance
-    const float plateau_delta = std::max(0.001f, params.auto_stop_plateau_min_delta);
-    params.dynamic_lr_max_loss_jump = std::clamp(1.1f + plateau_delta * 40.0f, 1.2f, 3.0f);
-
-    // Smoothing and cooldown align with warmup window
-    params.dynamic_lr_smoothing = std::clamp(0.16f + warmup_scale * 0.3f, 0.12f, 0.55f);
-    params.dynamic_lr_cooldown_steps = std::clamp(params.warmup_steps / 6, 1, 12);
-    params.dynamic_lr_warmup_steps = params.warmup_steps;
-
-    params.dynamic_lr_smoothing_min = std::max(0.08f, params.dynamic_lr_smoothing * 0.6f);
-    params.dynamic_lr_smoothing_max = std::min(0.75f, params.dynamic_lr_smoothing * 1.4f);
-
-    params.dynamic_lr_auto_band = true;
-    params.dynamic_lr_band_sigma = std::clamp(1.0f + 0.2f * batch_scale, 1.1f, 2.5f);
-    params.dynamic_lr_band_floor = std::max(2.0f, grad_ref * 0.3f);
-    params.dynamic_lr_band_ceiling = std::max(params.dynamic_lr_band_floor + 6.0f, grad_ref * 1.8f);
-    params.dynamic_lr_band_min_samples = std::clamp(params.batch_size / 2, 8, 64);
-    params.dynamic_lr_band_min_span = std::max(0.5f, params.dynamic_lr_band_floor * 0.15f);
-
-    params.dynamic_lr_adaptive_smoothing = true;
-    params.dynamic_lr_variance_reference = grad_ref * grad_ref;
-
-    params.dynamic_lr_adaptive_cooldown = true;
-    params.dynamic_lr_cooldown_min = std::max(1, params.dynamic_lr_cooldown_steps / 2);
-    params.dynamic_lr_cooldown_max = std::max(params.dynamic_lr_cooldown_steps, params.dynamic_lr_cooldown_steps * 2);
-
-    params.dynamic_lr_adaptive_loss = true;
-    params.dynamic_lr_loss_sigma = std::clamp(2.0f + params.auto_stop_high_loss_threshold / 12.0f, 2.0f, 4.5f);
-    params.dynamic_lr_loss_min_samples = std::clamp(info.batches_per_epoch / 6, 6, 48);
-    params.dynamic_lr_loss_floor = std::max(0.05f, plateau_delta * 8.0f);
-
-    params.dynamic_lr_guard_logging = true;
-    params.dynamic_lr_guard_floor_steps = std::max(info.batches_per_epoch * 2, params.warmup_steps);
-    params.dynamic_lr_guard_grad_multiplier = std::clamp(1.15f + grad_ref / 25.0f, 1.2f, 2.5f);
-    params.dynamic_lr_guard_loss_patience = std::max(8, info.batches_per_epoch / 3);
-    params.dynamic_lr_guard_loss_multiplier = std::clamp(1.02f + plateau_delta * 4.0f, 1.02f, 1.25f);
-
-    params.dynamic_lr_baseline_capture_steps = std::max(16, params.warmup_steps / 2);
-    params.dynamic_lr_baseline_drift = 0.05f;
-    params.dynamic_lr_momentum_interval = std::clamp(params.warmup_steps / 4, 6, 32);
-    params.dynamic_lr_momentum_gain = std::clamp(0.25f + batch_scale * 0.05f, 0.25f, 0.45f);
-    params.dynamic_lr_momentum_decay = 0.65f;
-    params.dynamic_lr_safety_interval = std::max(1, params.dynamic_lr_momentum_interval / 3);
-    params.dynamic_lr_safety_gain = 0.08f;
-    params.dynamic_lr_safety_scale = std::clamp(1.8f + batch_scale * 0.4f, 2.0f, 3.8f);
-}
-
 inline DerivedScheduleInfo harmonizeTrainingHyperparameters(
     GRIM::Config::TrainingHyperparameters& params,
     const DerivationContext& context,
@@ -535,8 +460,6 @@ inline DerivedScheduleInfo harmonizeTrainingHyperparameters(
     info.batches_per_epoch = std::max(1, (sequence_count + safe_batch_size - 1) / safe_batch_size);
     info.total_training_steps = std::max(1, info.batches_per_epoch * std::max(1, params.epochs));
     info.safe_last_step = std::max(info.total_training_steps - 1, 1);
-
-    autoPopulateDynamicLR(params, info);
 
     auto log_adjustment = [&](std::string_view label, auto before, auto after) {
         if (!log_callback || before == after) {
@@ -560,29 +483,17 @@ inline DerivedScheduleInfo harmonizeTrainingHyperparameters(
         std::swap(low, high);
     };
 
-    ensure_ordered(params.dynamic_lr_min, params.dynamic_lr_max, "dynamic_lr_min", "dynamic_lr_max");
-    ensure_ordered(params.dynamic_lr_smoothing_min, params.dynamic_lr_smoothing_max,
-                   "dynamic_lr_smoothing_min", "dynamic_lr_smoothing_max");
-    ensure_ordered(params.dynamic_lr_cooldown_min, params.dynamic_lr_cooldown_max,
-                   "dynamic_lr_cooldown_min", "dynamic_lr_cooldown_max");
-    ensure_ordered(params.dynamic_lr_band_floor, params.dynamic_lr_band_ceiling,
-                   "dynamic_lr_band_floor", "dynamic_lr_band_ceiling");
-
     const int cadence_reference = std::max(info.batches_per_epoch, std::max(0, context.validation_interval));
 
     const int original_warmup = params.warmup_steps;
     params.warmup_steps = std::min(params.warmup_steps, info.safe_last_step);
     log_adjustment("warmup_steps", original_warmup, params.warmup_steps);
 
-    const int original_lr_warmup = params.dynamic_lr_warmup_steps;
-    params.dynamic_lr_warmup_steps = std::max(params.dynamic_lr_warmup_steps, params.warmup_steps);
-    log_adjustment("dynamic_lr_warmup_steps", original_lr_warmup, params.dynamic_lr_warmup_steps);
-
     const int original_validation_interval = params.validation_interval;
     params.validation_interval = std::max(1, params.validation_interval);
     log_adjustment("validation_interval", original_validation_interval, params.validation_interval);
 
-    const int required_micro_min = params.warmup_steps + params.dynamic_lr_cooldown_max;
+    const int required_micro_min = params.warmup_steps;
     const int original_micro_min = params.micro_validation_min_step;
     params.micro_validation_min_step = std::clamp(
         std::max(params.micro_validation_min_step, required_micro_min),
@@ -608,26 +519,6 @@ inline DerivedScheduleInfo harmonizeTrainingHyperparameters(
     const int original_sr_cooldown = params.soft_restart_cooldown_steps;
     params.soft_restart_cooldown_steps = std::max(params.soft_restart_cooldown_steps, cadence_reference);
     log_adjustment("soft_restart_cooldown_steps", original_sr_cooldown, params.soft_restart_cooldown_steps);
-
-    const float original_lr = params.learning_rate;
-    if (params.dynamic_lr_enabled) {
-        params.learning_rate = std::clamp(params.learning_rate, params.dynamic_lr_min, params.dynamic_lr_max);
-        log_adjustment("learning_rate_clamp", original_lr, params.learning_rate);
-    }
-
-    const float original_smoothing = params.dynamic_lr_smoothing;
-    params.dynamic_lr_smoothing = std::clamp(
-        params.dynamic_lr_smoothing,
-        params.dynamic_lr_smoothing_min,
-        params.dynamic_lr_smoothing_max);
-    log_adjustment("dynamic_lr_smoothing", original_smoothing, params.dynamic_lr_smoothing);
-
-    const int original_cooldown_steps = params.dynamic_lr_cooldown_steps;
-    params.dynamic_lr_cooldown_steps = std::clamp(
-        params.dynamic_lr_cooldown_steps,
-        params.dynamic_lr_cooldown_min,
-        params.dynamic_lr_cooldown_max);
-    log_adjustment("dynamic_lr_cooldown_steps", original_cooldown_steps, params.dynamic_lr_cooldown_steps);
 
     const int original_auto_plateau = params.auto_stop_plateau_patience;
     params.auto_stop_plateau_patience = std::clamp(params.auto_stop_plateau_patience, 0, params.epochs);

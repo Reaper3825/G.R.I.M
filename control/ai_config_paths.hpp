@@ -169,52 +169,6 @@ struct TrainingHyperparameters {
     bool use_flash_attention;
     int min_seq_len_for_flash;
     
-    // Dynamic LR - NO DEFAULTS
-    bool dynamic_lr_enabled;
-    bool dynamic_lr_autogenerate;
-    float dynamic_lr_min;
-    float dynamic_lr_max;
-    float dynamic_lr_increase_factor;
-    float dynamic_lr_decrease_factor;
-    float dynamic_lr_upper_grad_norm;
-    float dynamic_lr_lower_grad_norm;
-    float dynamic_lr_max_loss_jump;
-    float dynamic_lr_smoothing;
-    int dynamic_lr_cooldown_steps;
-    int dynamic_lr_warmup_steps;
-    float dynamic_lr_max_step_up_ratio;
-    float dynamic_lr_max_step_down_ratio;
-    bool dynamic_lr_auto_band;
-    float dynamic_lr_band_sigma;
-    float dynamic_lr_band_floor;
-    float dynamic_lr_band_ceiling;
-    int dynamic_lr_band_min_samples;
-    float dynamic_lr_band_min_span;
-    bool dynamic_lr_adaptive_smoothing;
-    float dynamic_lr_smoothing_min;
-    float dynamic_lr_smoothing_max;
-    float dynamic_lr_variance_reference;
-    bool dynamic_lr_adaptive_cooldown;
-    int dynamic_lr_cooldown_min;
-    int dynamic_lr_cooldown_max;
-    bool dynamic_lr_adaptive_loss;
-    float dynamic_lr_loss_sigma;
-    int dynamic_lr_loss_min_samples;
-    float dynamic_lr_loss_floor;
-    bool dynamic_lr_guard_logging;
-    int dynamic_lr_guard_floor_steps;
-    float dynamic_lr_guard_grad_multiplier;
-    int dynamic_lr_guard_loss_patience;
-    float dynamic_lr_guard_loss_multiplier;
-    int dynamic_lr_baseline_capture_steps;
-    float dynamic_lr_baseline_drift;
-    int dynamic_lr_momentum_interval;
-    float dynamic_lr_momentum_gain;
-    float dynamic_lr_momentum_decay;
-    int dynamic_lr_safety_interval;
-    float dynamic_lr_safety_gain;
-    float dynamic_lr_safety_scale;
-    
     // Soft restart - NO DEFAULTS
     bool soft_restart_enabled;
     float soft_restart_loss_increase_threshold;
@@ -618,29 +572,6 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         // Single batch overfit
         "single_batch.enabled", "single_batch.max_steps",
         
-        // Dynamic LR
-        "dynamic_lr.enabled", "dynamic_lr.auto_generate",
-        "dynamic_lr.min", "dynamic_lr.max",
-        "dynamic_lr.increase_factor", "dynamic_lr.decrease_factor",
-        "dynamic_lr.upper_grad_norm", "dynamic_lr.lower_grad_norm",
-        "dynamic_lr.max_loss_jump", "dynamic_lr.smoothing",
-        "dynamic_lr.cooldown_steps", "dynamic_lr.warmup_steps",
-        "dynamic_lr.max_step_up_ratio", "dynamic_lr.max_step_down_ratio",
-        "dynamic_lr.auto_band", "dynamic_lr.band_sigma",
-        "dynamic_lr.band_floor", "dynamic_lr.band_ceiling",
-        "dynamic_lr.band_min_samples", "dynamic_lr.band_min_span",
-        "dynamic_lr.adaptive_smoothing", "dynamic_lr.smoothing_min", "dynamic_lr.smoothing_max",
-        "dynamic_lr.variance_reference", "dynamic_lr.adaptive_cooldown",
-        "dynamic_lr.cooldown_min", "dynamic_lr.cooldown_max",
-        "dynamic_lr.adaptive_loss", "dynamic_lr.loss_sigma",
-        "dynamic_lr.loss_min_samples", "dynamic_lr.loss_floor",
-        "dynamic_lr.guard_logging", "dynamic_lr.guard_floor_steps",
-        "dynamic_lr.guard_grad_multiplier", "dynamic_lr.guard_loss_patience",
-        "dynamic_lr.guard_loss_multiplier", "dynamic_lr.baseline_capture_steps",
-        "dynamic_lr.baseline_drift", "dynamic_lr.momentum_interval",
-        "dynamic_lr.momentum_gain", "dynamic_lr.momentum_decay",
-        "dynamic_lr.safety_interval", "dynamic_lr.safety_gain", "dynamic_lr.safety_scale",
-        
         // Soft restart
         "soft_restart.enabled", "soft_restart.loss_increase_threshold",
         "soft_restart.max_step_window", "soft_restart.cooldown_steps",
@@ -795,61 +726,6 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.use_gpu, trainConfig, "use_gpu");
     assignTrainingField(params.use_flash_attention, trainConfig, "use_flash_attention");
     assignTrainingField(params.min_seq_len_for_flash, trainConfig, "min_seq_len_for_flash");
-
-    if (auto it = trainConfig.find("dynamic_lr"); it != trainConfig.end()) {
-        const auto& dlr = *it;
-        if (dlr.is_boolean()) {
-            params.dynamic_lr_enabled = dlr.get<bool>();
-
-        } else if (dlr.is_object()) {
-            params.dynamic_lr_enabled = dlr.value("enabled", params.dynamic_lr_enabled);
-            params.dynamic_lr_autogenerate = dlr.value("auto_generate", params.dynamic_lr_autogenerate);
-            if (!params.dynamic_lr_autogenerate) {
-                params.dynamic_lr_min = dlr.value("min", params.dynamic_lr_min);
-                params.dynamic_lr_max = dlr.value("max", params.dynamic_lr_max);
-                params.dynamic_lr_increase_factor = dlr.value("increase_factor", params.dynamic_lr_increase_factor);
-                params.dynamic_lr_decrease_factor = dlr.value("decrease_factor", params.dynamic_lr_decrease_factor);
-                params.dynamic_lr_upper_grad_norm = dlr.value("upper_grad_norm", params.dynamic_lr_upper_grad_norm);
-                params.dynamic_lr_lower_grad_norm = dlr.value("lower_grad_norm", params.dynamic_lr_lower_grad_norm);
-                params.dynamic_lr_max_loss_jump = dlr.value("max_loss_jump", params.dynamic_lr_max_loss_jump);
-                params.dynamic_lr_smoothing = dlr.value("smoothing", params.dynamic_lr_smoothing);
-                params.dynamic_lr_cooldown_steps = dlr.value("cooldown_steps", params.dynamic_lr_cooldown_steps);
-                params.dynamic_lr_warmup_steps = dlr.value("warmup_steps", params.dynamic_lr_warmup_steps);
-                params.dynamic_lr_max_step_up_ratio = dlr.value("max_step_up_ratio", params.dynamic_lr_max_step_up_ratio);
-                params.dynamic_lr_max_step_down_ratio = dlr.value("max_step_down_ratio", params.dynamic_lr_max_step_down_ratio);
-                params.dynamic_lr_auto_band = dlr.value("auto_band", params.dynamic_lr_auto_band);
-                params.dynamic_lr_band_sigma = dlr.value("band_sigma", params.dynamic_lr_band_sigma);
-                params.dynamic_lr_band_floor = dlr.value("band_floor", params.dynamic_lr_band_floor);
-                params.dynamic_lr_band_ceiling = dlr.value("band_ceiling", params.dynamic_lr_band_ceiling);
-                params.dynamic_lr_band_min_samples = dlr.value("band_min_samples", params.dynamic_lr_band_min_samples);
-                params.dynamic_lr_band_min_span = dlr.value("band_min_span", params.dynamic_lr_band_min_span);
-                params.dynamic_lr_adaptive_smoothing = dlr.value("adaptive_smoothing", params.dynamic_lr_adaptive_smoothing);
-                params.dynamic_lr_smoothing_min = dlr.value("smoothing_min", params.dynamic_lr_smoothing_min);
-                params.dynamic_lr_smoothing_max = dlr.value("smoothing_max", params.dynamic_lr_smoothing_max);
-                params.dynamic_lr_variance_reference = dlr.value("variance_reference", params.dynamic_lr_variance_reference);
-                params.dynamic_lr_adaptive_cooldown = dlr.value("adaptive_cooldown", params.dynamic_lr_adaptive_cooldown);
-                params.dynamic_lr_cooldown_min = dlr.value("cooldown_min", params.dynamic_lr_cooldown_min);
-                params.dynamic_lr_cooldown_max = dlr.value("cooldown_max", params.dynamic_lr_cooldown_max);
-                params.dynamic_lr_adaptive_loss = dlr.value("adaptive_loss", params.dynamic_lr_adaptive_loss);
-                params.dynamic_lr_loss_sigma = dlr.value("loss_sigma", params.dynamic_lr_loss_sigma);
-                params.dynamic_lr_loss_min_samples = dlr.value("loss_min_samples", params.dynamic_lr_loss_min_samples);
-                params.dynamic_lr_loss_floor = dlr.value("loss_floor", params.dynamic_lr_loss_floor);
-                params.dynamic_lr_guard_logging = dlr.value("guard_logging", params.dynamic_lr_guard_logging);
-                params.dynamic_lr_guard_floor_steps = dlr.value("guard_floor_steps", params.dynamic_lr_guard_floor_steps);
-                params.dynamic_lr_guard_grad_multiplier = dlr.value("guard_grad_multiplier", params.dynamic_lr_guard_grad_multiplier);
-                params.dynamic_lr_guard_loss_patience = dlr.value("guard_loss_patience", params.dynamic_lr_guard_loss_patience);
-                params.dynamic_lr_guard_loss_multiplier = dlr.value("guard_loss_multiplier", params.dynamic_lr_guard_loss_multiplier);
-                params.dynamic_lr_baseline_capture_steps = dlr.value("baseline_capture_steps", params.dynamic_lr_baseline_capture_steps);
-                params.dynamic_lr_baseline_drift = dlr.value("baseline_drift", params.dynamic_lr_baseline_drift);
-                params.dynamic_lr_momentum_interval = dlr.value("momentum_interval", params.dynamic_lr_momentum_interval);
-                params.dynamic_lr_momentum_gain = dlr.value("momentum_gain", params.dynamic_lr_momentum_gain);
-                params.dynamic_lr_momentum_decay = dlr.value("momentum_decay", params.dynamic_lr_momentum_decay);
-                params.dynamic_lr_safety_interval = dlr.value("safety_interval", params.dynamic_lr_safety_interval);
-                params.dynamic_lr_safety_gain = dlr.value("safety_gain", params.dynamic_lr_safety_gain);
-                params.dynamic_lr_safety_scale = dlr.value("safety_scale", params.dynamic_lr_safety_scale);
-            }
-        }
-    }
 
     if (auto it = trainConfig.find("soft_restart"); it != trainConfig.end()) {
         const auto& soft = *it;

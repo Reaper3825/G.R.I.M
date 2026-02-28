@@ -3900,10 +3900,7 @@ BatchResult processBatch(
     }();
     static int telemetry_counter = 0;
     const bool telemetry_control_enabled = ctx.config.hyperparameters.telemetry_control_enabled;
-    const bool telemetry_control_active = telemetry_control_enabled &&
-        ctx.telemetry.enabled &&
-        ctx.telemetry.controller &&
-        ctx.telemetry.controller->isInitialized();
+    const bool telemetry_control_active = false;  // TelemetryControl call sites removed
     const bool should_eval_telemetry = telemetry_control_active && (telemetry_counter == 0);
     telemetry_counter = (telemetry_counter + 1) % 10;
     
@@ -3916,39 +3913,6 @@ BatchResult processBatch(
         cached_telemetry_decision = telemetry_decision;
     }
     
-    if (telemetry_control_active && should_eval_telemetry) {
-        // Compute average sequence length for this batch
-        float avg_seq_len = token_stats.batch_size > 0 
-            ? static_cast<float>(token_stats.total_tokens) / static_cast<float>(token_stats.batch_size)
-            : 0.0f;
-        
-        // GPU-native decision: single kernel reads telemetry + computes action
-        // Only 48-byte D2H transfer at end (requires sync - that's why we only do this every 10 batches)
-        telemetry_decision = ctx.telemetry.controller->evaluate(
-            ctx.telemetry.lattice,
-            result.grad_norm,             // raw gradient norm (computed after backward)
-            result.loss,                  // current batch loss
-            static_cast<int>(token_stats.total_tokens),  // valid tokens in batch
-            avg_seq_len,                  // average sequence length
-            ctx.global_step,              // training step
-            ctx.model->getTrainingState().stream_ctrl.getPrimaryStream()  // Rule 22: no cached streams
-        );
-        
-        cached_telemetry_decision = telemetry_decision;  // Cache for next 9 batches
-        
-        // Log decision (every 10 steps or on important actions)
-        if (ctx.global_step % 10 == 0 || 
-            telemetry_decision.action != GRIM::Telemetry::ControlAction::Continue ||
-            telemetry_decision.spike_severity != GRIM::Telemetry::SpikeSeverity::None) {
-            std::string desc = ctx.telemetry.controller->describeDecision(telemetry_decision);
-            ctx.logging.logger->log("[TelemetryControl] batch=" + std::to_string(batch_idx + 1) + " " + desc);
-        }
-        
-        // Check for fatal conditions
-        if (telemetry_decision.action == GRIM::Telemetry::ControlAction::FatalError) {
-            throw std::runtime_error("FATAL: Telemetry control detected unrecoverable state (accumulation bug or state corruption)");
-        }
-    }
     
     auto telemetry_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - telemetry_start).count();
     const bool allow_telemetry_actions = telemetry_control_active && should_eval_telemetry;
@@ -3993,22 +3957,10 @@ BatchResult processBatch(
     
     result.learning_rate = scheduled_lr;
     
-    // Dynamic LR adjustment - pass scheduled LR as ceiling to respect cosine decay
-    if (hp.dynamic_lr_enabled && !ctx.config.stability.enabled) {
-        ctx.optimizer.dynamic_lr_controller.setBaseLearningRate(scheduled_lr);
-        if (ctx.global_step >= hp.dynamic_lr_warmup_steps) {
-            result.learning_rate = ctx.optimizer.dynamic_lr_controller.update(
-                result.normalized_grad_norm, result.loss, scheduled_lr);
-        } else {
-            ctx.optimizer.dynamic_lr_controller.update(
-                result.normalized_grad_norm, result.loss, scheduled_lr);
-        }
-    }
-    
     // Spike cooldown handling
     if (state.grad_spike_cooldown > 0 && !ctx.config.stability.enabled) {
         state.grad_spike_cooldown--;
-        const float floor_lr = std::max(hp.dynamic_lr_min, ctx.config.stability.lr_min);
+        const float floor_lr = std::max(1e-8f, ctx.config.stability.lr_min);
         const float spike_cap_lr = std::max(floor_lr, scheduled_lr * kGradSpikeLrFraction);
         result.learning_rate = std::min(result.learning_rate, spike_cap_lr);
     }
@@ -4070,14 +4022,6 @@ BatchResult processBatch(
                 // Inject into LM head weights (always accessible via LMHeadLayer)
                 if (ctx.model->getLmHeadLayer()->weights().data) {
                     size_t lm_size = static_cast<size_t>(cfg.vocab_size) * cfg.d_model;
-                    GRIM::Telemetry::launchPlateauNoiseInjection(
-                        ctx.model->getLmHeadLayer()->weights().data,
-                        lm_size,
-                        tc_cfg.plateau_noise_std,
-                        tc_cfg.plateau_noise_proportional,
-                        noise_seed,
-                        stream
-                    );
                     total_params_perturbed += lm_size;
                     ctx.logging.logger->log("[TelemetryControl] Injected noise into lm_head_weights (" + 
                                            std::to_string(lm_size) + " params)");
@@ -4085,14 +4029,6 @@ BatchResult processBatch(
                 
                 // Inject into LM head bias if present
                 if (ctx.model->getLmHeadLayer()->bias().data) {
-                    GRIM::Telemetry::launchPlateauNoiseInjection(
-                        ctx.model->getLmHeadLayer()->bias().data,
-                        static_cast<size_t>(cfg.vocab_size),
-                        tc_cfg.plateau_noise_std,
-                        tc_cfg.plateau_noise_proportional,
-                        noise_seed + 1,
-                        stream
-                    );
                     total_params_perturbed += cfg.vocab_size;
                 }
                 
@@ -5046,8 +4982,6 @@ bool executePhase2(TrainingContext& ctx) {
     EmitModuleInfo(ModuleId::Training, "Starting training...", ctx.global_step);
     EmitModuleInfo(ModuleId::Training, std::string("  Warmup steps: ") + std::to_string(hp.warmup_steps), ctx.global_step);
     EmitModuleInfo(ModuleId::Training, std::string("  Target learning rate: ") + std::to_string(hp.learning_rate), ctx.global_step);
-    EmitModuleInfo(ModuleId::Training, 
-        std::string("  Dynamic LR: ") + (hp.dynamic_lr_enabled ? "enabled" : "disabled"), ctx.global_step);
     EmitModuleInfo(ModuleId::Training, 
         std::string("  Soft restart: ") + (hp.soft_restart_enabled ? "enabled" : "disabled"), ctx.global_step);
     EmitModuleInfo(ModuleId::Training, 

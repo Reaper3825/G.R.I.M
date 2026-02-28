@@ -444,7 +444,6 @@ StartupConfig loadConfiguration(int argc, char** argv) {
                                      std::to_string(config.stability.batch_size) + " (must be > 0)");
         }
         config.hyperparameters.batch_size = config.stability.batch_size;
-        config.hyperparameters.dynamic_lr_min = config.stability.lr_min;
         if (config.stability.clip_per_token > 0.0f) {
             config.hyperparameters.grad_clip_norm = config.stability.clip_per_token;
         }
@@ -1262,56 +1261,6 @@ OptimizerContext initializeOptimizer(
     sr_cfg.cooldown_steps = hp.soft_restart_cooldown_steps;
     ctx.soft_restart_controller = GRIM::SoftRestart::SoftRestartController(sr_cfg);
     
-    // Dynamic LR controller
-    GRIM::DynamicLR::DynamicLRConfig lr_cfg;
-    lr_cfg.base_learning_rate = hp.learning_rate;
-    lr_cfg.min_learning_rate = hp.dynamic_lr_min;
-    lr_cfg.max_learning_rate = hp.dynamic_lr_max;
-    lr_cfg.increase_factor = hp.dynamic_lr_increase_factor;
-    lr_cfg.decrease_factor = hp.dynamic_lr_decrease_factor;
-    lr_cfg.upper_grad_norm = hp.dynamic_lr_upper_grad_norm;
-    lr_cfg.lower_grad_norm = hp.dynamic_lr_lower_grad_norm;
-    lr_cfg.max_loss_jump = hp.dynamic_lr_max_loss_jump;
-    lr_cfg.smoothing = hp.dynamic_lr_smoothing;
-    lr_cfg.cooldown_steps = hp.dynamic_lr_cooldown_steps;
-    lr_cfg.warmup_steps = hp.dynamic_lr_warmup_steps;
-    lr_cfg.max_step_up_ratio = hp.dynamic_lr_max_step_up_ratio;
-    lr_cfg.max_step_down_ratio = hp.dynamic_lr_max_step_down_ratio;
-    lr_cfg.auto_band = hp.dynamic_lr_auto_band;
-    lr_cfg.band_sigma = hp.dynamic_lr_band_sigma;
-    lr_cfg.band_floor = hp.dynamic_lr_band_floor;
-    lr_cfg.band_ceiling = hp.dynamic_lr_band_ceiling;
-    lr_cfg.band_min_samples = hp.dynamic_lr_band_min_samples;
-    lr_cfg.band_min_span = hp.dynamic_lr_band_min_span;
-    lr_cfg.adaptive_smoothing = hp.dynamic_lr_adaptive_smoothing;
-    lr_cfg.smoothing_min = hp.dynamic_lr_smoothing_min;
-    lr_cfg.smoothing_max = hp.dynamic_lr_smoothing_max;
-    lr_cfg.variance_reference = hp.dynamic_lr_variance_reference;
-    lr_cfg.adaptive_cooldown = hp.dynamic_lr_adaptive_cooldown;
-    lr_cfg.cooldown_min = hp.dynamic_lr_cooldown_min;
-    lr_cfg.cooldown_max = hp.dynamic_lr_cooldown_max;
-    lr_cfg.adaptive_loss = hp.dynamic_lr_adaptive_loss;
-    lr_cfg.loss_sigma = hp.dynamic_lr_loss_sigma;
-    lr_cfg.loss_min_samples = hp.dynamic_lr_loss_min_samples;
-    lr_cfg.loss_floor = hp.dynamic_lr_loss_floor;
-    lr_cfg.guard_logging = hp.dynamic_lr_guard_logging;
-    lr_cfg.guard_floor_steps = hp.dynamic_lr_guard_floor_steps;
-    lr_cfg.guard_grad_multiplier = hp.dynamic_lr_guard_grad_multiplier;
-    lr_cfg.guard_loss_patience = hp.dynamic_lr_guard_loss_patience;
-    lr_cfg.guard_loss_multiplier = hp.dynamic_lr_guard_loss_multiplier;
-    lr_cfg.baseline_capture_steps = hp.dynamic_lr_baseline_capture_steps;
-    lr_cfg.baseline_drift = hp.dynamic_lr_baseline_drift;
-    lr_cfg.momentum_interval = hp.dynamic_lr_momentum_interval;
-    lr_cfg.momentum_gain = hp.dynamic_lr_momentum_gain;
-    lr_cfg.momentum_decay = hp.dynamic_lr_momentum_decay;
-    lr_cfg.safety_interval = hp.dynamic_lr_safety_interval;
-    lr_cfg.safety_gain = hp.dynamic_lr_safety_gain;
-    lr_cfg.safety_scale = hp.dynamic_lr_safety_scale;
-    
-    ctx.dynamic_lr_controller = GRIM::DynamicLR::DynamicLRController(lr_cfg);
-    ctx.dynamic_lr_controller.setRuntimeLimits(hp.dynamic_lr_min, hp.dynamic_lr_max);
-    ctx.dynamic_lr_controller.setEnabled(hp.dynamic_lr_enabled);
-    
     // Gradient accumulation now tracked directly via hyperparameters
     // ctx.optimizer.current_micro_step is reset at start of each accumulation window
     const int accum_steps = std::max(1, hp.gradient_accumulation_steps);
@@ -1941,10 +1890,6 @@ std::unique_ptr<TrainingContext> executePhase1(int argc, char** argv) {
         ctx->telemetry.control_config.plateau_noise_enabled = false;      // No plateau noise
         ctx->telemetry.control_config.moderate_grad_scale = 1.0f;         // No gradient scaling
     }
-    
-    ctx->telemetry.controller = std::make_unique<GRIM::Telemetry::TelemetryControl>(ctx->telemetry.control_config);
-    ctx->telemetry.controller->initGPU();  // No stream caching (Rule 22)
-    ctx->logging.logger->log("✓ Telemetry control: GPU-native (plateau noise injection built-in)");
     
     // 12. Check GPU memory
     size_t free_mem, total_mem;
