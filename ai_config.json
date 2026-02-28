@@ -403,9 +403,9 @@
                 "use_rope": true,
                 "use_alibi": true
             },
-            "attention_dropout": 0.2,
-            "dropout_rate": 0.125,
-            "residual_dropout_rate": 0.15,
+            "attention_dropout": 0.1,
+            "dropout_rate": 0.1,
+            "residual_dropout_rate": 0.1,
             "force_rebuild_vocab": false,
             "lm_head_centering": {
                 "enabled": true,
