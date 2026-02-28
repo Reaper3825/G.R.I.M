@@ -4358,13 +4358,11 @@ struct MatMulGradFn : public GradFn {
     std::shared_ptr<GradFn> a_grad_fn;   // Chain continuation for A
     std::shared_ptr<GradFn> b_grad_fn;   // Chain continuation for B
     
-    // ISSUE #51 FIX: Own copies of cached data to prevent dangling pointers
-    // Previously: stored non-owning pointers that became stale when input tensors freed
-    // Now: copy to owned buffers that persist for backward pass
-    std::shared_ptr<float> owned_cache_a;  // Owned GPU memory copy of A (for grad_B)
-    std::shared_ptr<float> owned_cache_b;  // Owned GPU memory copy of B (for grad_A)
-    const float* cached_a = nullptr;  // Points to owned_cache_a.get() after set_cache_copy()
-    const float* cached_b = nullptr;  // Points to owned_cache_b.get() after set_cache_copy()
+    // TAPE-BASED cache contract:
+    // - cached_a/cached_b are external pointers managed by caller lifecycle.
+    // - MatMulGradFn validates non-null requirements but does not allocate/copy caches.
+    const float* cached_a = nullptr;  // External A cache (for grad_B)
+    const float* cached_b = nullptr;  // External B cache (for grad_A)
     int M = 0, K = 0, N = 0;   // Dimensions
     cublasHandle_t cublas_handle = nullptr;
     bool transpose_b = false;  // Was B transposed in forward?
@@ -4444,9 +4442,8 @@ struct MatMulGradFn : public GradFn {
         }
     }
     
-    // ISSUE #51 FIX: Copy cache data to owned buffers (not just store pointers)
-    // This prevents the SGEMM "illegal value" errors caused by dangling pointers
-    // when input tensors are freed before backward() runs.
+    // Bind external cache pointers for backward.
+    // Contract: caller owns cache lifetime through backward execution.
     void set_cache_copy(const float* a_cache, const float* b_cache, int m, int k, int n, 
                         cublasHandle_t handle, cudaStream_t stream, bool transB = false) {
         transpose_b = transB;
@@ -4454,70 +4451,9 @@ struct MatMulGradFn : public GradFn {
         cublas_handle = handle;
         cache_stream = stream;
         
-        // Copy cache A if needed for grad_B computation
-        if (b_requires_grad && a_cache) {
-            // A is [M, K] row-major
-            const size_t a_size = static_cast<size_t>(m) * k;
-            const size_t a_bytes = a_size * sizeof(float);
-            float* buffer_a = nullptr;
-            const cudaError_t a_alloc_err = cudaMalloc(&buffer_a, a_bytes);
-            if (a_alloc_err != cudaSuccess || !buffer_a) {
-                size_t free_bytes = 0, total_bytes = 0;
-                cudaMemGetInfo(&free_bytes, &total_bytes);  // best-effort telemetry
-                throw std::runtime_error(
-                    "MatMulGradFn::set_cache_copy: cudaMalloc failed for a_cache copy (" +
-                    std::to_string(a_bytes) + " bytes): " + cudaGetErrorString(a_alloc_err) +
-                    " [free=" + std::to_string(free_bytes) + ", total=" + std::to_string(total_bytes) + "]");
-            }
-            // Issue #57: Use SYNCHRONOUS copy to ensure source data isn't freed before copy completes
-            // The source tensor destructor runs on CPU and can free memory while async copy is in flight
-            const cudaError_t a_copy_err = cudaMemcpy(buffer_a, a_cache, a_bytes, cudaMemcpyDeviceToDevice);
-            if (a_copy_err != cudaSuccess) {
-                cudaFree(buffer_a);
-                throw std::runtime_error(
-                    "MatMulGradFn::set_cache_copy: cudaMemcpy failed for a_cache copy (" +
-                    std::to_string(a_bytes) + " bytes): " + cudaGetErrorString(a_copy_err));
-            }
-            
-            // Wrap in shared_ptr with DEFERRED cleanup deleter (Issue #53)
-            // Instead of calling cudaFree directly (which blocks), queue for later cleanup
-            owned_cache_a = std::shared_ptr<float>(buffer_a, [](float* p) {
-                queueForDeferredCleanup(p);
-            });
-            cached_a = owned_cache_a.get();
-        }
+        if (b_requires_grad) cached_a = a_cache;
         
-        // Copy cache B if needed for grad_A computation
-        if (a_requires_grad && b_cache) {
-            // B is [K, N] or [N, K] depending on transpose_b
-            const size_t b_size = transB ? static_cast<size_t>(n) * k : static_cast<size_t>(k) * n;
-            const size_t b_bytes = b_size * sizeof(float);
-            float* buffer_b = nullptr;
-            const cudaError_t b_alloc_err = cudaMalloc(&buffer_b, b_bytes);
-            if (b_alloc_err != cudaSuccess || !buffer_b) {
-                size_t free_bytes = 0, total_bytes = 0;
-                cudaMemGetInfo(&free_bytes, &total_bytes);  // best-effort telemetry
-                throw std::runtime_error(
-                    "MatMulGradFn::set_cache_copy: cudaMalloc failed for b_cache copy (" +
-                    std::to_string(b_bytes) + " bytes): " + cudaGetErrorString(b_alloc_err) +
-                    " [free=" + std::to_string(free_bytes) + ", total=" + std::to_string(total_bytes) + "]");
-            }
-            // Issue #57: Use SYNCHRONOUS copy to ensure source data isn't freed before copy completes
-            const cudaError_t b_copy_err = cudaMemcpy(buffer_b, b_cache, b_bytes, cudaMemcpyDeviceToDevice);
-            if (b_copy_err != cudaSuccess) {
-                cudaFree(buffer_b);
-                throw std::runtime_error(
-                    "MatMulGradFn::set_cache_copy: cudaMemcpy failed for b_cache copy (" +
-                    std::to_string(b_bytes) + " bytes): " + cudaGetErrorString(b_copy_err));
-            }
-            
-            // Wrap in shared_ptr with DEFERRED cleanup deleter (Issue #53)
-            // Instead of calling cudaFree directly (which blocks), queue for later cleanup
-            owned_cache_b = std::shared_ptr<float>(buffer_b, [](float* p) {
-                queueForDeferredCleanup(p);
-            });
-            cached_b = owned_cache_b.get();
-        }
+        if (a_requires_grad) cached_b = b_cache;
         
         // Validate that required caches are set
         if (a_requires_grad && !cached_b) {
