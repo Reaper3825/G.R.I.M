@@ -755,14 +755,36 @@ __global__ void kernel_dot_accumulate_scalar(float* dst, const float* a, const f
 }
 
 constexpr int AUTOGRAD_BLOCK_SIZE = 256;
-constexpr int kMaxGridBlocks1D = 65535;  // Device limit on many GPUs
+constexpr int kMaxGridBlocks1DFallback = 65534;  // Fallback when device query fails or reports 65535 (some drivers reject exactly 65535)
 
-// Returns grid dimensions for count elements; uses 2D grid when blocks > 65535.
+// Returns the device's max blocks per grid dimension (x). Queried at runtime via cudaDeviceGetAttribute.
+// Cached per process; uses fallback if query fails (e.g. before CUDA init).
+inline int getMaxGridBlocks1D() {
+    static int cached = -1;
+    if (cached < 0) {
+        int device = 0;
+        if (cudaGetDevice(&device) != cudaSuccess) {
+            cached = kMaxGridBlocks1DFallback;
+        } else {
+            int max_x = 0;
+            if (cudaDeviceGetAttribute(&max_x, cudaDevAttrMaxGridDimX, device) != cudaSuccess) {
+                cached = kMaxGridBlocks1DFallback;
+            } else {
+                // Some drivers reject exactly 65535; use one less only when device reports that exact value
+                cached = (max_x == 65535) ? 65534 : max_x;
+            }
+        }
+    }
+    return cached;
+}
+
+// Returns grid dimensions for count elements; uses 2D grid when blocks exceeds device max per dimension.
 inline dim3 gridForCount(size_t count) {
     const int blocks = static_cast<int>((count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE);
-    if (blocks <= kMaxGridBlocks1D)
+    const int max1d = getMaxGridBlocks1D();
+    if (blocks <= max1d)
         return dim3(blocks, 1, 1);
-    return dim3(kMaxGridBlocks1D, (blocks + kMaxGridBlocks1D - 1) / kMaxGridBlocks1D, 1);
+    return dim3(max1d, (blocks + max1d - 1) / max1d, 1);
 }
 
 }  // anonymous namespace
@@ -844,7 +866,7 @@ Tensor Tensor::zeros(TensorContract::TensorShape shape, bool requires_grad, cuda
         "[Tensor::alloc] #A%d cudaMalloc data=%p bytes=%zu name=%s\n",
         (void*)t.data, bytes, name ? name : "unnamed");
     
-    // Zero-initialize. Use 2D grid when blocks exceeds device maxGridDim (65535 on many GPUs).
+    // Zero-initialize. Grid dimensions respect device max (via getMaxGridBlocks1D).
     const dim3 grid = gridForCount(count);
     kernel_zero_autograd<<<grid, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count);
     
