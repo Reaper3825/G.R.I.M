@@ -272,7 +272,13 @@ constexpr int WARP_SIZE = GRIM::HyperParameters::CUDA_WARP_SIZE;
 #define TC_CUDA_CHECK(call) do { \
     cudaError_t err = (call); \
     if (err != cudaSuccess) { \
-        throw ContractViolation(std::string("CUDA error in TensorContract: ") + cudaGetErrorString(err)); \
+        std::ostringstream oss; \
+        oss << "CUDA error in TensorContract: " << cudaGetErrorString(err) \
+            << " (code=" << static_cast<int>(err) << ")" \
+            << " | call=" << #call \
+            << " | file=" << __FILE__ << ":" << __LINE__ \
+            << " | " << getCurrentGradFnContext(); \
+        throw ContractViolation(oss.str()); \
     } \
 } while(0)
 
