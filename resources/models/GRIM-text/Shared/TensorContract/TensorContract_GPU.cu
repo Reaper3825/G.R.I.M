@@ -787,7 +787,11 @@ inline int getMaxGridBlocks1D() {
     return cached;
 }
 
+// CUDA limits: gridDim.y and gridDim.z are 65535 (2^16-1) on all architectures.
+constexpr int kMaxGridDimY = 65535;
+
 // Returns grid dimensions for count elements; uses 2D grid when blocks exceeds device max per dimension.
+// Ensures grid.y <= kMaxGridDimY to avoid cudaErrorInvalidValue (invalid argument).
 inline dim3 gridForCount(size_t count) {
     // CUDA kernel launches with grid.x == 0 are invalid.
     // Treat empty tensors as a legal no-op launch configuration.
@@ -798,7 +802,12 @@ inline dim3 gridForCount(size_t count) {
     const int max1d = getMaxGridBlocks1D();
     if (blocks <= max1d)
         return dim3(blocks, 1, 1);
-    return dim3(max1d, (blocks + max1d - 1) / max1d, 1);
+    int gy = (blocks + max1d - 1) / max1d;
+    if (gy <= kMaxGridDimY)
+        return dim3(max1d, gy, 1);
+    // grid.y would exceed 65535: switch to grid.x = ceil(blocks/65535), grid.y = 65535
+    int gx = (blocks + kMaxGridDimY - 1) / kMaxGridDimY;
+    return dim3(gx, kMaxGridDimY, 1);
 }
 
 }  // anonymous namespace
