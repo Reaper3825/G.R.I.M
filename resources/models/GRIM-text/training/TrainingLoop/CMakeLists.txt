@@ -21,12 +21,12 @@ project(GRIM_TrainingLoop LANGUAGES CXX CUDA)
 set(CUDA_ENABLED ON)
 message(STATUS "CUDA enabled for training loop")
 
-# CUDA architectures: A100 (sm_80) on Anvil + RTX 30xx (sm_86) locally.
-# Override: GRIM_CUDA_ARCH=80 (Anvil-only) or 80;86 (default, portable).
+# CUDA architectures: A100 (sm_80), RTX 30xx (sm_86), H100 (sm_90) for Anvil ai partition.
+# Override: GRIM_CUDA_ARCH=80 (A100-only) or 90 (H100-only) or 80;86;90 (default, portable).
 if(DEFINED ENV{GRIM_CUDA_ARCH})
     set(GRIM_CUDA_ARCHITECTURES "$ENV{GRIM_CUDA_ARCH}" CACHE STRING "CUDA arch list")
 else()
-    set(GRIM_CUDA_ARCHITECTURES "80;86" CACHE STRING "CUDA arch: A100 sm_80, RTX sm_86")
+    set(GRIM_CUDA_ARCHITECTURES "80;86;90" CACHE STRING "CUDA arch: A100 sm_80, RTX sm_86, H100 sm_90")
 endif()
 # Set globally so ALL CUDA targets inherit (including object libraries)
 set(CMAKE_CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}")

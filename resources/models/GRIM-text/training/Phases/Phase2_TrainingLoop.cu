@@ -1588,7 +1588,8 @@ BatchResult processBatch(
     
     // Token stats already computed in payload — single source of truth
     const auto& token_stats = payload.token_stats;
-    const int long_seq_threshold = ctx.config.max_seq_len;
+    // Per-batch seq_len from BatchPayload (single source of truth), not config
+    const int long_seq_threshold = payload.max_seq_len;
     const auto clip_selection = GRIM::TNC::computeClipSelection(
         hp.grad_clip_norm, token_stats, 1.0f, long_seq_threshold);
     
