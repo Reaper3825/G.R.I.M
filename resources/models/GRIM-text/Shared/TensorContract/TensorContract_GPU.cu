@@ -278,7 +278,7 @@ constexpr int WARP_SIZE = GRIM::HyperParameters::CUDA_WARP_SIZE;
             << " | call=" << #call \
             << " | file=" << __FILE__ << ":" << __LINE__ \
             << " | " << getCurrentGradFnContext(); \
-        throw ContractViolation(oss.str()); \
+        throw TensorContract::ContractViolation(oss.str()); \
     } \
 } while(0)
 
