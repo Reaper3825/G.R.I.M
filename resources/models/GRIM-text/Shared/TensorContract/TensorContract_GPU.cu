@@ -4982,25 +4982,21 @@ __global__ void kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32(
     const int kv_h = (idx / (head_dim * seq_len)) % num_kv_heads;
     const int b = idx / (head_dim * seq_len * num_kv_heads);
     
-    // GQA grouping: heads_per_kv_group = num_heads / num_kv_heads
+    // ISSUE #85 FIX: The correct GQA gradient is the plain SUM of per-query-head contributions
+    // (chain rule: dL/dK = sum over grouped Q heads). The previous 1/sqrt scaling halved the
+    // effective K/V learning rate. Upstream FA2 uses at::sum_out without any scaling.
     const int heads_per_kv_group = num_heads / num_kv_heads;
-    
-    // Balance Q/K/V gradient magnitude: scale so ||dK||, ||dV|| match ||dQ|| per head.
-    // sum has norm ~ sqrt(heads_per_kv_group) * single-head norm → use 1/sqrt to match.
-    const float gqa_grad_scale = 1.0f / sqrtf(static_cast<float>(heads_per_kv_group));
-    
-    // Sum gradients from all Q heads in this KV group
+
     float sum = 0.0f;
     for (int g = 0; g < heads_per_kv_group; ++g) {
         const int q_head = kv_h * heads_per_kv_group + g;
-        // Source layout: [B, S, num_heads, D] = b*S*H*D + s*H*D + h*D + d
         const size_t src_idx = (static_cast<size_t>(b) * seq_len * num_heads * head_dim) +
                                (static_cast<size_t>(s) * num_heads * head_dim) +
                                (static_cast<size_t>(q_head) * head_dim) + d;
         sum += __bfloat162float(src[src_idx]);
     }
-    
-    dst[idx] = sum * gqa_grad_scale;
+
+    dst[idx] = sum;
 }
 
 /**
