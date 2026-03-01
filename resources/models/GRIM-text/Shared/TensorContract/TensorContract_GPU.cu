@@ -789,6 +789,11 @@ inline int getMaxGridBlocks1D() {
 
 // Returns grid dimensions for count elements; uses 2D grid when blocks exceeds device max per dimension.
 inline dim3 gridForCount(size_t count) {
+    // CUDA kernel launches with grid.x == 0 are invalid.
+    // Treat empty tensors as a legal no-op launch configuration.
+    if (count == 0) {
+        return dim3(1, 1, 1);
+    }
     const int blocks = static_cast<int>((count + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE);
     const int max1d = getMaxGridBlocks1D();
     if (blocks <= max1d)
@@ -3897,23 +3902,44 @@ Tensor dropout(const Tensor& x, float p, uint64_t seed, bool training, cudaStrea
         }
         return result;
     }
+
+    if (p < 0.0f || p >= 1.0f) {
+        throw std::invalid_argument(
+            "autograd::dropout: dropout probability p must be in [0, 1), got " +
+            std::to_string(p));
+    }
     
     const size_t count = x.numel();
+    if (count == 0) {
+        // Empty tensor: dropout is a no-op, keep gradient identity edge.
+        if (x.requires_grad) {
+            result.is_leaf = false;
+            auto grad_fn = std::make_shared<AddGradFn>();
+            grad_fn->capture_single_input(const_cast<Tensor&>(x), stream);
+            result.grad_fn = grad_fn;
+        }
+        return result;
+    }
     const float scale = 1.0f / (1.0f - p);
     
     // Allocate mask on device
     uint8_t* mask = nullptr;
-    cudaMalloc(&mask, count * sizeof(uint8_t));
+    TC_CUDA_CHECK(cudaMalloc(&mask, count * sizeof(uint8_t)));
+    if (!x.data || !result.data || !mask) {
+        throw std::runtime_error("autograd::dropout: null buffer(s) before kernel launch");
+    }
     
     // Generate random mask: 1 = keep (with prob 1-p), 0 = drop (with prob p)
     kernel_generate_dropout_mask<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
         mask, count, p, seed);
     trackKernelLaunch("kernel_generate_dropout_mask", stream);
+    TC_CUDA_CHECK(cudaGetLastError());
     
     // Forward: y = x * mask * scale
     kernel_dropout_forward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
         x.data, mask, result.data, scale, count);
     trackKernelLaunch("kernel_dropout_forward", stream);
+    TC_CUDA_CHECK(cudaGetLastError());
     
     // Set up backward - ISSUE #48: capture stable data
     if (x.requires_grad) {
