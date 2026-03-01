@@ -282,6 +282,15 @@ constexpr int WARP_SIZE = GRIM::HyperParameters::CUDA_WARP_SIZE;
     } \
 } while(0)
 
+// Grid dimensions for 1D kernels: cap grid.x at 65535 to avoid cudaErrorInvalidValue.
+inline dim3 gridFor1D(size_t n, int block_size) {
+    if (n == 0) return dim3(1, 1, 1);
+    const int blocks = static_cast<int>((n + block_size - 1) / block_size);
+    constexpr int kMax = 65535;
+    if (blocks <= kMax) return dim3(blocks, 1, 1);
+    return dim3(kMax, (blocks + kMax - 1) / kMax, 1);
+}
+
 //======================================================//
 //  TensorView Implementation
 //======================================================//
@@ -428,11 +437,12 @@ size_t compute_buffer_size(const TensorShape& shape) {
 //  CUDA Kernels - Basic Operations
 //======================================================//
 
-__global__ void kernel_add(const float* __restrict__ a, 
+__global__ void kernel_add(const float* __restrict__ a,
                            const float* __restrict__ b,
                            float* __restrict__ dst,
                            size_t n) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < n) {
         dst[idx] = a[idx] + b[idx];
     }
@@ -442,7 +452,8 @@ __global__ void kernel_scale(const float* __restrict__ src,
                              float alpha,
                              float* __restrict__ dst,
                              size_t n) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < n) {
         dst[idx] = alpha * src[idx];
     }
@@ -458,7 +469,8 @@ __global__ void kernel_scale(const float* __restrict__ src,
 //======================================================//
 
 __global__ void kernel_zero(float* dst, size_t n) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
     if (idx < n) {
         dst[idx] = 0.0f;
     }
@@ -474,9 +486,7 @@ void zero(TensorView& tensor, cudaStream_t stream) {
     }
     
     size_t n = tensor.size_elements();
-    int blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    
-    kernel_zero<<<blocks, BLOCK_SIZE, 0, stream>>>(tensor.ptr, n);
+    kernel_zero<<<gridFor1D(n, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(tensor.ptr, n);
     TC_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -499,9 +509,7 @@ void add(const TensorView& a, const TensorView& b, TensorView& dst, cudaStream_t
     }
     
     size_t n = a.size_elements();
-    int blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    
-    kernel_add<<<blocks, BLOCK_SIZE, 0, stream>>>(a.ptr, b.ptr, dst.ptr, n);
+    kernel_add<<<gridFor1D(n, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(a.ptr, b.ptr, dst.ptr, n);
     TC_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -509,9 +517,7 @@ void scale(const TensorView& src, float alpha, TensorView& dst, cudaStream_t str
     validate_conversion(src, dst, "scale");
     
     size_t n = src.size_elements();
-    int blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    
-    kernel_scale<<<blocks, BLOCK_SIZE, 0, stream>>>(src.ptr, alpha, dst.ptr, n);
+    kernel_scale<<<gridFor1D(n, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(src.ptr, alpha, dst.ptr, n);
     TC_CUDA_CHECK(cudaGetLastError());
 }
 
