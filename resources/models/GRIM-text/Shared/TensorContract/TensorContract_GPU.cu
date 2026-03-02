@@ -3009,7 +3009,10 @@ struct GeluGradFn : public GradFn {
  * SiluGradFn - Backward for SiLU activation
  * Forward: y = silu(x) = x * sigmoid(x)
  * Backward: grad_x = grad_y * sigmoid(x) * (1 + x * (1 - sigmoid(x)))
- * Follows GeluGradFn tape-based pattern with owned cache copy.
+ *
+ * MEMORY OPTIMIZATION: Uses non-owning cache reference instead of copying.
+ * Safe because ForwardIntermediates (Issue #56) guarantees the source tensor
+ * persists until after backward completes.
  */
 struct SiluGradFn : public GradFn {
     bool input_requires_grad = false;
@@ -3017,7 +3020,6 @@ struct SiluGradFn : public GradFn {
     std::shared_ptr<float> owned_input_grad;
     TensorContract::TensorShape input_shape;
     std::shared_ptr<GradFn> input_grad_fn;
-    std::shared_ptr<float> owned_cache;
     const float* cached_input = nullptr;
     size_t cached_size = 0;
 
@@ -3043,19 +3045,12 @@ struct SiluGradFn : public GradFn {
         }
     }
 
-    void set_cache_copy(const float* external_cache, size_t size, cudaStream_t stream) {
-        if (!external_cache) {
-            throw std::runtime_error("SiluGradFn::set_cache_copy: external_cache is NULL");
+    void set_cache_ref(const float* data, size_t size) {
+        if (!data) {
+            throw std::runtime_error("SiluGradFn::set_cache_ref: data is NULL");
         }
+        cached_input = data;
         cached_size = size;
-        float* buffer = nullptr;
-        cudaMalloc(&buffer, size * sizeof(float));
-        cudaMemcpyAsync(buffer, external_cache, size * sizeof(float),
-                       cudaMemcpyDeviceToDevice, stream);
-        owned_cache = std::shared_ptr<float>(buffer, [](float* p) {
-            queueForDeferredCleanup(p);
-        });
-        cached_input = owned_cache.get();
     }
 
     void apply(const Tensor& grad_output, cudaStream_t stream) override {
@@ -3101,7 +3096,10 @@ struct SiluGradFn : public GradFn {
  * ElementwiseMulGradFn - Backward for element-wise multiply (Hadamard product)
  * Forward: y = a ⊙ b
  * Backward: grad_a = grad_y ⊙ b, grad_b = grad_y ⊙ a
- * Follows tape-based pattern: caches both inputs in owned buffers.
+ *
+ * MEMORY OPTIMIZATION: Uses non-owning cache references instead of copying.
+ * Safe because ForwardIntermediates (Issue #56) guarantees both input tensors
+ * persist until after backward completes.
  */
 struct ElementwiseMulGradFn : public GradFn {
     bool a_requires_grad = false;
@@ -3115,8 +3113,6 @@ struct ElementwiseMulGradFn : public GradFn {
     std::shared_ptr<GradFn> a_grad_fn;
     std::shared_ptr<GradFn> b_grad_fn;
 
-    std::shared_ptr<float> owned_cache_a;
-    std::shared_ptr<float> owned_cache_b;
     const float* cached_a = nullptr;
     const float* cached_b = nullptr;
     size_t cached_size = 0;
@@ -3159,23 +3155,10 @@ struct ElementwiseMulGradFn : public GradFn {
         }
     }
 
-    void set_cache_copies(const float* a_data, const float* b_data, size_t size, cudaStream_t stream) {
+    void set_cache_refs(const float* a_data, const float* b_data, size_t size) {
         cached_size = size;
-
-        if (a_requires_grad && b_data) {
-            float* buf = nullptr;
-            cudaMalloc(&buf, size * sizeof(float));
-            cudaMemcpyAsync(buf, b_data, size * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-            owned_cache_b = std::shared_ptr<float>(buf, [](float* p) { queueForDeferredCleanup(p); });
-            cached_b = owned_cache_b.get();
-        }
-        if (b_requires_grad && a_data) {
-            float* buf = nullptr;
-            cudaMalloc(&buf, size * sizeof(float));
-            cudaMemcpyAsync(buf, a_data, size * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-            owned_cache_a = std::shared_ptr<float>(buf, [](float* p) { queueForDeferredCleanup(p); });
-            cached_a = owned_cache_a.get();
-        }
+        if (a_requires_grad && b_data) cached_b = b_data;
+        if (b_requires_grad && a_data) cached_a = a_data;
     }
 
     void apply(const Tensor& grad_output, cudaStream_t stream) override {
@@ -4082,7 +4065,7 @@ Tensor silu(const Tensor& x, cudaStream_t stream, const float* input_cache) {
         grad_fn->capture_input(const_cast<Tensor&>(x), stream);
 
         const float* effective_cache = input_cache ? input_cache : x.data;
-        grad_fn->set_cache_copy(effective_cache, count, stream);
+        grad_fn->set_cache_ref(effective_cache, count);
         result.grad_fn = grad_fn;
     }
 
@@ -4120,7 +4103,7 @@ Tensor elementwise_mul(const Tensor& a, const Tensor& b, cudaStream_t stream) {
         result.is_leaf = false;
         auto grad_fn = std::make_shared<ElementwiseMulGradFn>();
         grad_fn->capture_inputs(const_cast<Tensor&>(a), const_cast<Tensor&>(b), stream);
-        grad_fn->set_cache_copies(a.data, b.data, count, stream);
+        grad_fn->set_cache_refs(a.data, b.data, count);
         result.grad_fn = grad_fn;
     }
 
