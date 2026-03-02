@@ -83,10 +83,12 @@ struct ForwardIntermediates {
     Tensor output;           // residual1 + ffn_out
     
     //--------------------------------------------------
-    // FFN internal intermediates (if FFN uses autograd internally)
+    // FFN internal intermediates (SwiGLU autograd)
     //--------------------------------------------------
-    Tensor ffn_linear1_out;  // W1 @ input
-    Tensor ffn_gelu_out;     // GELU(ffn_linear1_out)
+    Tensor ffn_gate_out;     // input @ W_gate (pre-SiLU)
+    Tensor ffn_silu_out;     // SiLU(ffn_gate_out)
+    Tensor ffn_linear1_out;  // input @ W1 (up projection)
+    Tensor ffn_swiglu_out;   // ffn_silu_out ⊙ ffn_linear1_out
     
     //--------------------------------------------------
     // Lifecycle Management
@@ -123,8 +125,10 @@ struct ForwardIntermediates {
         residual1 = Tensor();
         ffn_out = Tensor();
         output = Tensor();
+        ffn_gate_out = Tensor();
+        ffn_silu_out = Tensor();
         ffn_linear1_out = Tensor();
-        ffn_gelu_out = Tensor();
+        ffn_swiglu_out = Tensor();
     }
     
     /**
@@ -148,8 +152,10 @@ struct ForwardIntermediates {
         if (residual1.grad_fn) count++;
         if (ffn_out.grad_fn) count++;
         if (output.grad_fn) count++;
+        if (ffn_gate_out.grad_fn) count++;
+        if (ffn_silu_out.grad_fn) count++;
         if (ffn_linear1_out.grad_fn) count++;
-        if (ffn_gelu_out.grad_fn) count++;
+        if (ffn_swiglu_out.grad_fn) count++;
         return count;
     }
 };

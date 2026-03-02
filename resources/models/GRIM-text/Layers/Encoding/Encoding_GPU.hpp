@@ -230,10 +230,10 @@ public:
     Tensor& attnWo() { return W_o_; }
     Tensor& attnBo() { return b_o_; }
     
-    // FFN weights/biases (delegates to FeedForwardLayer)
+    // FFN weights (delegates to FeedForwardLayer, SwiGLU)
     // Rule 20: ffn_ MUST be initialized - crash if null
+    Tensor& ffnWGate() { return ffn_->W_gate(); }
     Tensor& ffnW1() { return ffn_->W1(); }
-    Tensor& ffnB1() { return ffn_->b1(); }
     Tensor& ffnW2() { return ffn_->W2(); }
     Tensor& ffnB2() { return ffn_->b2(); }
     

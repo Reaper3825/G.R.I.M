@@ -66,8 +66,8 @@ struct SerializationEncoderLayerReadView {
 	DeviceReadView attn_b_qkv;
 	DeviceReadView attn_w_o;
 	DeviceReadView attn_b_o;
+	DeviceReadView ffn_w_gate;
 	DeviceReadView ffn_w1;
-	DeviceReadView ffn_b1;
 	DeviceReadView ffn_w2;
 	DeviceReadView ffn_b2;
 	DeviceReadView rms1_gamma;
@@ -83,8 +83,8 @@ struct SerializationEncoderLayerWriteView {
 	DeviceWriteView attn_b_qkv;
 	DeviceWriteView attn_w_o;
 	DeviceWriteView attn_b_o;
+	DeviceWriteView ffn_w_gate;
 	DeviceWriteView ffn_w1;
-	DeviceWriteView ffn_b1;
 	DeviceWriteView ffn_w2;
 	DeviceWriteView ffn_b2;
 	DeviceWriteView rms1_gamma;

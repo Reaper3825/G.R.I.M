@@ -192,12 +192,15 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
         }
 
         const auto* fb_ffn = fb_layer->ffn();
+        std::vector<float> h_W_gate;
+        if (fb_ffn->w_gate_data()) {
+            h_W_gate.assign(fb_ffn->w_gate_data()->begin(), fb_ffn->w_gate_data()->end());
+        }
         std::vector<float> h_W1(fb_ffn->w1_data()->begin(), fb_ffn->w1_data()->end());
-        std::vector<float> h_b1(fb_ffn->b1_data()->begin(), fb_ffn->b1_data()->end());
         std::vector<float> h_W2(fb_ffn->w2_data()->begin(), fb_ffn->w2_data()->end());
         std::vector<float> h_b2(fb_ffn->b2_data()->begin(), fb_ffn->b2_data()->end());
-        if (!upload_device_vector(h_W1, layer_view.ffn_w1, "ffn.W1") ||
-            !upload_device_vector(h_b1, layer_view.ffn_b1, "ffn.b1") ||
+        if ((!h_W_gate.empty() && !upload_device_vector(h_W_gate, layer_view.ffn_w_gate, "ffn.W_gate")) ||
+            !upload_device_vector(h_W1, layer_view.ffn_w1, "ffn.W1") ||
             !upload_device_vector(h_W2, layer_view.ffn_w2, "ffn.W2") ||
             !upload_device_vector(h_b2, layer_view.ffn_b2, "ffn.b2")) {
             return false;
@@ -462,12 +465,12 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             static_cast<uint32_t>(cfg.num_kv_heads),  // GQA: num_kv_heads
             true);
 
+        std::vector<float> h_W_gate;
         std::vector<float> h_W1;
-        std::vector<float> h_b1;
         std::vector<float> h_W2;
         std::vector<float> h_b2;
-        if (!download_into(h_W1, layer_view.ffn_w1, "ffn.W1") ||
-            !download_into(h_b1, layer_view.ffn_b1, "ffn.b1") ||
+        if (!download_into(h_W_gate, layer_view.ffn_w_gate, "ffn.W_gate") ||
+            !download_into(h_W1, layer_view.ffn_w1, "ffn.W1") ||
             !download_into(h_W2, layer_view.ffn_w2, "ffn.W2") ||
             !download_into(h_b2, layer_view.ffn_b2, "ffn.b2")) {
             return false;
@@ -476,11 +479,12 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         auto fb_ffn = GRIMTransformer::CreateFFNWeights(
             builder,
             builder.CreateVector(h_W1),
-            builder.CreateVector(h_b1),
+            0,
             builder.CreateVector(h_W2),
             builder.CreateVector(h_b2),
             static_cast<uint32_t>(cfg.d_model),
-            static_cast<uint32_t>(cfg.d_ff));
+            static_cast<uint32_t>(cfg.d_ff),
+            builder.CreateVector(h_W_gate));
 
         std::vector<float> h_rms1_gamma;
         std::vector<float> h_rms2_gamma;

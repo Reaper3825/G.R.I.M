@@ -623,6 +623,7 @@ struct FFNWeightsT : public ::flatbuffers::NativeTable {
   std::vector<float> b2_data{};
   uint32_t d_model = 0;
   uint32_t d_ff = 0;
+  std::vector<float> w_gate_data{};
 };
 
 struct FFNWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -634,7 +635,8 @@ struct FFNWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_W2_DATA = 8,
     VT_B2_DATA = 10,
     VT_D_MODEL = 12,
-    VT_D_FF = 14
+    VT_D_FF = 14,
+    VT_W_GATE_DATA = 16
   };
   const ::flatbuffers::Vector<float> *w1_data() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W1_DATA);
@@ -654,11 +656,14 @@ struct FFNWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint32_t d_ff() const {
     return GetField<uint32_t>(VT_D_FF, 0);
   }
+  const ::flatbuffers::Vector<float> *w_gate_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_GATE_DATA);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffsetRequired(verifier, VT_W1_DATA) &&
            verifier.VerifyVector(w1_data()) &&
-           VerifyOffsetRequired(verifier, VT_B1_DATA) &&
+           VerifyOffset(verifier, VT_B1_DATA) &&
            verifier.VerifyVector(b1_data()) &&
            VerifyOffsetRequired(verifier, VT_W2_DATA) &&
            verifier.VerifyVector(w2_data()) &&
@@ -666,6 +671,8 @@ struct FFNWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyVector(b2_data()) &&
            VerifyField<uint32_t>(verifier, VT_D_MODEL, 4) &&
            VerifyField<uint32_t>(verifier, VT_D_FF, 4) &&
+           VerifyOffset(verifier, VT_W_GATE_DATA) &&
+           verifier.VerifyVector(w_gate_data()) &&
            verifier.EndTable();
   }
   FFNWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
@@ -695,6 +702,9 @@ struct FFNWeightsBuilder {
   void add_d_ff(uint32_t d_ff) {
     fbb_.AddElement<uint32_t>(FFNWeights::VT_D_FF, d_ff, 0);
   }
+  void add_w_gate_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_gate_data) {
+    fbb_.AddOffset(FFNWeights::VT_W_GATE_DATA, w_gate_data);
+  }
   explicit FFNWeightsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -703,7 +713,6 @@ struct FFNWeightsBuilder {
     const auto end = fbb_.EndTable(start_);
     auto o = ::flatbuffers::Offset<FFNWeights>(end);
     fbb_.Required(o, FFNWeights::VT_W1_DATA);
-    fbb_.Required(o, FFNWeights::VT_B1_DATA);
     fbb_.Required(o, FFNWeights::VT_W2_DATA);
     fbb_.Required(o, FFNWeights::VT_B2_DATA);
     return o;
@@ -717,8 +726,10 @@ inline ::flatbuffers::Offset<FFNWeights> CreateFFNWeights(
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> w2_data = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> b2_data = 0,
     uint32_t d_model = 0,
-    uint32_t d_ff = 0) {
+    uint32_t d_ff = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_gate_data = 0) {
   FFNWeightsBuilder builder_(_fbb);
+  builder_.add_w_gate_data(w_gate_data);
   builder_.add_d_ff(d_ff);
   builder_.add_d_model(d_model);
   builder_.add_b2_data(b2_data);
@@ -735,11 +746,13 @@ inline ::flatbuffers::Offset<FFNWeights> CreateFFNWeightsDirect(
     const std::vector<float> *w2_data = nullptr,
     const std::vector<float> *b2_data = nullptr,
     uint32_t d_model = 0,
-    uint32_t d_ff = 0) {
+    uint32_t d_ff = 0,
+    const std::vector<float> *w_gate_data = nullptr) {
   auto w1_data__ = w1_data ? _fbb.CreateVector<float>(*w1_data) : 0;
   auto b1_data__ = b1_data ? _fbb.CreateVector<float>(*b1_data) : 0;
   auto w2_data__ = w2_data ? _fbb.CreateVector<float>(*w2_data) : 0;
   auto b2_data__ = b2_data ? _fbb.CreateVector<float>(*b2_data) : 0;
+  auto w_gate_data__ = w_gate_data ? _fbb.CreateVector<float>(*w_gate_data) : 0;
   return GRIMTransformer::CreateFFNWeights(
       _fbb,
       w1_data__,
@@ -747,7 +760,8 @@ inline ::flatbuffers::Offset<FFNWeights> CreateFFNWeightsDirect(
       w2_data__,
       b2_data__,
       d_model,
-      d_ff);
+      d_ff,
+      w_gate_data__);
 }
 
 ::flatbuffers::Offset<FFNWeights> CreateFFNWeights(::flatbuffers::FlatBufferBuilder &_fbb, const FFNWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
@@ -2377,6 +2391,7 @@ inline void FFNWeights::UnPackTo(FFNWeightsT *_o, const ::flatbuffers::resolver_
   { auto _e = b2_data(); if (_e) { _o->b2_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b2_data[_i] = _e->Get(_i); } } else { _o->b2_data.resize(0); } }
   { auto _e = d_model(); _o->d_model = _e; }
   { auto _e = d_ff(); _o->d_ff = _e; }
+  { auto _e = w_gate_data(); if (_e) { _o->w_gate_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_gate_data[_i] = _e->Get(_i); } } else { _o->w_gate_data.resize(0); } }
 }
 
 inline ::flatbuffers::Offset<FFNWeights> FFNWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const FFNWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
@@ -2388,11 +2403,12 @@ inline ::flatbuffers::Offset<FFNWeights> CreateFFNWeights(::flatbuffers::FlatBuf
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const FFNWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
   auto _w1_data = _fbb.CreateVector(_o->w1_data);
-  auto _b1_data = _fbb.CreateVector(_o->b1_data);
+  auto _b1_data = _o->b1_data.size() ? _fbb.CreateVector(_o->b1_data) : 0;
   auto _w2_data = _fbb.CreateVector(_o->w2_data);
   auto _b2_data = _fbb.CreateVector(_o->b2_data);
   auto _d_model = _o->d_model;
   auto _d_ff = _o->d_ff;
+  auto _w_gate_data = _o->w_gate_data.size() ? _fbb.CreateVector(_o->w_gate_data) : 0;
   return GRIMTransformer::CreateFFNWeights(
       _fbb,
       _w1_data,
@@ -2400,7 +2416,8 @@ inline ::flatbuffers::Offset<FFNWeights> CreateFFNWeights(::flatbuffers::FlatBuf
       _w2_data,
       _b2_data,
       _d_model,
-      _d_ff);
+      _d_ff,
+      _w_gate_data);
 }
 
 inline EncoderLayerWeightsT::EncoderLayerWeightsT(const EncoderLayerWeightsT &o)

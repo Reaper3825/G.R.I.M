@@ -1006,7 +1006,7 @@ Tensor EncodingLayer::forward(const Tensor& input, int seq_len, cudaStream_t str
     //--------------------------------------------------
     // 9. FFN: ln2_out -> ffn_out (already using autograd)
     // Issue #56: FFN also stores its intermediates in this same ForwardIntermediates
-    // (ffn_linear1_out, ffn_gelu_out are written by FFN forward)
+    // (ffn_gate_out, ffn_silu_out, ffn_linear1_out, ffn_swiglu_out are written by SwiGLU forward)
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN...\n");
     intermediates.ffn_out = ffn_->forward(intermediates.ln2_out, intermediates, training_step, layer_idx);

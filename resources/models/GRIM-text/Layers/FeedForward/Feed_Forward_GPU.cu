@@ -2,13 +2,15 @@
 //  Feed_Forward_GPU.cu
 //  GPU-accelerated FeedForward layer using autograd
 //
-//  Two-layer MLP with GELU activation:
-//    hidden = GELU(input @ W1 + b1)
+//  SwiGLU gated MLP:
+//    gate   = SiLU(input @ W_gate)
+//    up     = input @ W1
+//    hidden = gate ⊙ up
 //    output = hidden @ W2 + b2
 //
 //  ISSUE #97 FIX: Bias add now uses autograd::broadcast_add for proper
 //  gradient tracking. Previously used raw kernels which bypassed autograd,
-//  causing b1/b2 to receive ZERO gradients (frozen biases).
+//  causing b2 to receive ZERO gradients (frozen bias).
 //======================================================//
 
 #include "Feed_Forward_GPU.hpp"
@@ -54,18 +56,24 @@ FeedForwardLayer::FeedForwardLayer(const FeedForwardConfig& config, uint64_t see
     const int d_ff = config_.d_ff;
     const cudaStream_t stream = config_.stream;
     
-    // W1: [d_model, d_ff] for matmul: input [T, d_model] @ W1 [d_model, d_ff] = [T, d_ff]
+    // W_gate: [d_model, d_ff] gate projection (SiLU applied to this path)
+    W_gate_ = Tensor::zeros({d_model, d_ff}, stream, "ffn_w_gate");
+    W_gate_.requires_grad_();
+    W_gate_.ensure_grad();
+    Tensor::xavier_uniform_(W_gate_, seed, stream);
+    
+    // W1: [d_model, d_ff] up projection (linear, no activation)
     W1_ = Tensor::zeros({d_model, d_ff}, stream, "ffn_w1");
     W1_.requires_grad_();
     W1_.ensure_grad();
-    Tensor::xavier_uniform_(W1_, seed, stream);
+    Tensor::xavier_uniform_(W1_, seed + 1, stream);
     
-    // W2: [d_ff, d_model] for matmul: hidden [T, d_ff] @ W2 [d_ff, d_model] = [T, d_model]
+    // W2: [d_ff, d_model] down projection
     // Issue #142: Scaled by residual_scale after Xavier init (GPT-2 pattern)
     W2_ = Tensor::zeros({d_ff, d_model}, stream, "ffn_w2");
     W2_.requires_grad_();
     W2_.ensure_grad();
-    Tensor::xavier_uniform_(W2_, seed + 1, stream);
+    Tensor::xavier_uniform_(W2_, seed + 2, stream);
     
     // Apply Issue #142 residual scaling to W2 (down-projection)
     if (residual_scale != 1.0f) {
@@ -81,11 +89,6 @@ FeedForwardLayer::FeedForwardLayer(const FeedForwardConfig& config, uint64_t see
     }
     
     if (config_.use_bias) {
-        b1_ = Tensor::zeros({1, d_ff}, stream, "ffn_b1");
-        b1_.requires_grad_();
-        b1_.ensure_grad();
-        // Biases initialized to zero (standard practice)
-        
         b2_ = Tensor::zeros({1, d_model}, stream, "ffn_b2");
         b2_.requires_grad_();
         b2_.ensure_grad();
@@ -93,8 +96,8 @@ FeedForwardLayer::FeedForwardLayer(const FeedForwardConfig& config, uint64_t see
     
     autograd::set_autograd_cublas_handle(config_.cublas_handle);
     
-    std::fprintf(stderr, "[FeedForwardLayer] Self-allocated weights: W1=[%d,%d], W2=[%d,%d], residual_scale=%.6f\n",
-                 d_model, d_ff, d_ff, d_model, residual_scale);
+    std::fprintf(stderr, "[FeedForwardLayer] SwiGLU self-allocated weights: W_gate=[%d,%d], W1=[%d,%d], W2=[%d,%d], residual_scale=%.6f\n",
+                 d_model, d_ff, d_model, d_ff, d_ff, d_model, residual_scale);
 }
 
 FeedForwardLayer::~FeedForwardLayer() {
@@ -103,8 +106,8 @@ FeedForwardLayer::~FeedForwardLayer() {
 
 FeedForwardLayer::FeedForwardLayer(FeedForwardLayer&& other) noexcept
     : config_(other.config_)
+    , W_gate_(std::move(other.W_gate_))
     , W1_(std::move(other.W1_))
-    , b1_(std::move(other.b1_))
     , W2_(std::move(other.W2_))
     , b2_(std::move(other.b2_)) {
     other.config_.cublas_handle = nullptr;
@@ -113,8 +116,8 @@ FeedForwardLayer::FeedForwardLayer(FeedForwardLayer&& other) noexcept
 FeedForwardLayer& FeedForwardLayer::operator=(FeedForwardLayer&& other) noexcept {
     if (this != &other) {
         config_ = other.config_;
+        W_gate_ = std::move(other.W_gate_);
         W1_ = std::move(other.W1_);
-        b1_ = std::move(other.b1_);
         W2_ = std::move(other.W2_);
         b2_ = std::move(other.b2_);
         other.config_.cublas_handle = nullptr;
@@ -132,14 +135,14 @@ void FeedForwardLayer::setConfig(const FeedForwardConfig& cfg) {
 
 
 //======================================================//
-//  Forward Pass - Autograd with ForwardIntermediates (Issue #56 Fix)
+//  Forward Pass - SwiGLU with ForwardIntermediates (Issue #56 Fix)
 //======================================================//
 
 Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& intermediates,
                                  uint64_t training_step, int layer_idx) {
     // Rule 20: Crash on invalid weights
-    if (!W1_.data || !W2_.data) {
-        throw std::runtime_error("FeedForwardLayer::forward: weights not set - constructor requires external weights");
+    if (!W_gate_.data || !W1_.data || !W2_.data) {
+        throw std::runtime_error("FeedForwardLayer::forward: weights not set (W_gate/W1/W2)");
     }
     if (!config_.stream) {
         throw std::runtime_error("FeedForwardLayer::forward: stream is NULL");
@@ -157,7 +160,15 @@ Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& inte
                                  std::to_string(d_model) + " vs " + std::to_string(config_.d_model) + ")");
     }
 
-    // Sanity-check weight shapes (avoid silent wrong matmuls)
+    // Sanity-check weight shapes
+    {
+        const auto& sg = W_gate_.shape.as_2d();
+        if (sg.rows != config_.d_model || sg.cols != config_.d_ff) {
+            throw std::runtime_error("FeedForwardLayer::forward: W_gate shape mismatch. Expected [" +
+                                     std::to_string(config_.d_model) + "," + std::to_string(config_.d_ff) +
+                                     "], got [" + std::to_string(sg.rows) + "," + std::to_string(sg.cols) + "]");
+        }
+    }
     {
         const auto& s1 = W1_.shape.as_2d();
         if (s1.rows != config_.d_model || s1.cols != config_.d_ff) {
@@ -178,58 +189,50 @@ Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& inte
     // Set cuBLAS handle for autograd ops
     autograd::set_autograd_cublas_handle(config_.cublas_handle);
 
-    //--------------------------------------------------
-    // Layer 1: hidden = GELU(input @ W1 + b1)
-    // Issue #56: Store in intermediates to keep autograd graph alive
-    //--------------------------------------------------
-
-    // matmul: input [tokens, d_model] @ W1 [d_model, d_ff] = pre_gelu [tokens, d_ff]
     if (!input.data) {
-        throw std::runtime_error("FeedForwardLayer::forward: input.data is NULL before W1 matmul (cannot supply required a_cache for W1 grad)");
+        throw std::runtime_error("FeedForwardLayer::forward: input.data is NULL");
     }
+
+    //--------------------------------------------------
+    // SwiGLU Gate Path: gate = SiLU(input @ W_gate)
+    //--------------------------------------------------
+    intermediates.ffn_gate_out = autograd::matmul(input, W_gate_, stream,
+                                                   input.data, nullptr);
+    intermediates.ffn_silu_out = autograd::silu(intermediates.ffn_gate_out, stream,
+                                                intermediates.ffn_gate_out.data);
+
+    //--------------------------------------------------
+    // SwiGLU Up Path: up = input @ W1
+    //--------------------------------------------------
     intermediates.ffn_linear1_out = autograd::matmul(input, W1_, stream,
-                                                     input.data,  // cache input for W1 grad
-                                                     nullptr);    // W1 persists, no cache needed
+                                                     input.data, nullptr);
 
-    // ISSUE #97 FIX: Add bias b1 with autograd tracking (was bypassing gradient computation)
-    if (config_.use_bias && b1_.data) {
-        intermediates.ffn_linear1_out = autograd::broadcast_add(intermediates.ffn_linear1_out, b1_, stream);
-    }
+    //--------------------------------------------------
+    // SwiGLU Combine: hidden = gate ⊙ up
+    //--------------------------------------------------
+    intermediates.ffn_swiglu_out = autograd::elementwise_mul(
+        intermediates.ffn_silu_out, intermediates.ffn_linear1_out, stream);
 
-    // GELU activation - stores result in intermediates
-    intermediates.ffn_gelu_out = autograd::gelu(intermediates.ffn_linear1_out, stream, 
-                                                intermediates.ffn_linear1_out.data);
-
-    // FFN activation dropout: applied after GELU, before W2 projection.
-    // Standard practice (GPT-2, LLaMA, BERT): dropout(GELU(x @ W1 + b1)) @ W2 + b2
+    // Activation dropout: applied after SwiGLU gating, before W2 projection
     if (config_.dropout_rate > 0.0f && training_step > 0) {
         const uint64_t ffn_act_dropout_seed = training_step * 2654435761ULL + 300 + layer_idx;
-        intermediates.ffn_gelu_out = autograd::dropout(intermediates.ffn_gelu_out, config_.dropout_rate,
-                                                       ffn_act_dropout_seed, true, stream);
+        intermediates.ffn_swiglu_out = autograd::dropout(intermediates.ffn_swiglu_out, config_.dropout_rate,
+                                                          ffn_act_dropout_seed, true, stream);
     }
 
     //--------------------------------------------------
-    // Layer 2: output = post_gelu @ W2 + b2
-    // The output is also stored in intermediates.ffn_out by EncodingLayer
+    // Down Projection: output = hidden @ W2 + b2
     //--------------------------------------------------
-
-    // matmul: post_gelu [tokens, d_ff] @ W2 [d_ff, d_model] = output [tokens, d_model]
-    if (!intermediates.ffn_gelu_out.data) {
-        throw std::runtime_error("FeedForwardLayer::forward: ffn_gelu_out.data is NULL before W2 matmul (cannot supply required a_cache for W2 grad)");
+    if (!intermediates.ffn_swiglu_out.data) {
+        throw std::runtime_error("FeedForwardLayer::forward: ffn_swiglu_out.data is NULL before W2 matmul");
     }
-    Tensor output = autograd::matmul(intermediates.ffn_gelu_out, W2_, stream,
-                                     intermediates.ffn_gelu_out.data,  // cache post_gelu for W2 grad
-                                     nullptr);                          // W2 persists
+    Tensor output = autograd::matmul(intermediates.ffn_swiglu_out, W2_, stream,
+                                     intermediates.ffn_swiglu_out.data, nullptr);
     
-    // ISSUE #97 FIX: Add bias b2 with autograd tracking (was bypassing gradient computation)
     if (config_.use_bias && b2_.data) {
         output = autograd::broadcast_add(output, b2_, stream);
     }
     
-    // CRITICAL (Issue #56 root cause fix): Return the output tensor!
-    // Without this return statement, `output` is destroyed at function end,
-    // which triggers destruction of its grad_fn chain, destroying the entire
-    // autograd graph DURING the forward pass!
     return output;
 }
 

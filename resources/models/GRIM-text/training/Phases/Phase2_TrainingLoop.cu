@@ -3681,6 +3681,7 @@ BatchResult processBatch(
             if (enc) {
                 exportBuffer((prefix + "qkv_grads").c_str(), enc->attnWqkv().grad_data(), enc->attnWqkv().numel());
                 exportBuffer((prefix + "wo_grads").c_str(), enc->attnWo().grad_data(), enc->attnWo().numel());
+                exportBuffer((prefix + "ffn_w_gate_grads").c_str(), enc->ffnWGate().grad_data(), enc->ffnWGate().numel());
                 exportBuffer((prefix + "ffn_w1_grads").c_str(), enc->ffnW1().grad_data(), enc->ffnW1().numel());
                 exportBuffer((prefix + "ffn_w2_grads").c_str(), enc->ffnW2().grad_data(), enc->ffnW2().numel());
             } else {

@@ -2,8 +2,14 @@
 //  Feed_Forward_GPU.hpp
 //  GPU-accelerated FeedForward layer using autograd
 //  
-//  Two-layer MLP: Linear -> GELU -> Linear
-//  Uses autograd::matmul and autograd::gelu for automatic differentiation
+//  SwiGLU gated MLP:
+//    gate  = SiLU(input @ W_gate)
+//    up    = input @ W1
+//    hidden = gate ⊙ up
+//    output = hidden @ W2 + b2
+//  
+//  Uses autograd::matmul, autograd::silu, autograd::elementwise_mul
+//  for automatic differentiation.
 //  
 //  ISSUE #56 FIX: Forward now accepts ForwardIntermediates& to keep
 //  intermediate tensors alive until backward completes.
@@ -31,7 +37,7 @@ struct FeedForwardConfig {
     int d_model = 0;           // Input/output dimension debug was 768
     int d_ff = 0;             // Hidden (intermediate) dimension debug was 3072
     float dropout_rate = 0.1f;   // Dropout probability
-    bool use_bias = true;        // When false, skip bias addition (b1, b2)
+    bool use_bias = true;        // When false, skip bias addition (b2)
     cudaStream_t stream = nullptr;
     cublasHandle_t cublas_handle = nullptr;  // Rule 22: MUST be training_state.cublas_handle
 };
@@ -46,7 +52,7 @@ public:
     FeedForwardLayer() = delete;
     
     /// Self-allocating constructor (Pattern B: layer self-management)
-    /// Allocates and Xavier-initializes W1, b1, W2, b2 on GPU.
+    /// Allocates and Xavier-initializes W_gate, W1, W2, b2 on GPU.
     /// Layer OWNS the memory (owns_data=true). Registers with autograd via ensure_grad().
     /// @param config Layer configuration (d_model, d_ff, cublas_handle, stream REQUIRED)
     /// @param seed   Xavier initialization seed
@@ -75,11 +81,11 @@ public:
     
     // Tensor weight accessors (for training/serialization/buildParameterGroups)
     Tensor& W1() { return W1_; }
-    Tensor& b1() { return b1_; }
+    Tensor& W_gate() { return W_gate_; }
     Tensor& W2() { return W2_; }
     Tensor& b2() { return b2_; }
     const Tensor& W1() const { return W1_; }
-    const Tensor& b1() const { return b1_; }
+    const Tensor& W_gate() const { return W_gate_; }
     const Tensor& W2() const { return W2_; }
     const Tensor& b2() const { return b2_; }
 
@@ -87,16 +93,18 @@ public:
     // Forward Pass - Autograd with ForwardIntermediates (Issue #56 Fix)
     //--------------------------------------------------
     /**
-     * FFN forward with autograd tracking:
-     *   hidden = GELU(input @ W1^T + b1)
-     *   output = hidden @ W2^T + b2
+     * SwiGLU FFN forward with autograd tracking:
+     *   gate   = SiLU(input @ W_gate)
+     *   up     = input @ W1
+     *   hidden = gate ⊙ up
+     *   output = hidden @ W2 + b2
      * 
      * Builds compute graph for automatic backward().
      * 
-     * CRITICAL: Intermediate tensors (pre_gelu, post_gelu) are stored in
-     * ForwardIntermediates to keep the autograd graph alive. Without this,
-     * grad_fn objects are destroyed when forward() returns, causing 
-     * use-after-free in backward pass.
+     * CRITICAL: Intermediate tensors are stored in ForwardIntermediates
+     * to keep the autograd graph alive. Without this, grad_fn objects
+     * are destroyed when forward() returns, causing use-after-free
+     * in backward pass.
      * 
      * @param input [total_tokens, d_model] - MUST have requires_grad if training
      * @param intermediates Storage for intermediate tensors (REQUIRED for autograd)
@@ -116,10 +124,11 @@ private:
     FeedForwardConfig config_{};
 
     // Weight Tensors with autograd (requires_grad=true)
-    Tensor W1_;    // [d_ff, d_model]
-    Tensor b1_;    // [d_ff]
-    Tensor W2_;    // [d_model, d_ff]
-    Tensor b2_;    // [d_model]
+    // SwiGLU uses three projections: gate, up, down
+    Tensor W_gate_; // [d_model, d_ff] - gate projection (SiLU applied)
+    Tensor W1_;     // [d_model, d_ff] - up projection (linear)
+    Tensor W2_;     // [d_ff, d_model] - down projection
+    Tensor b2_;     // [d_model]       - down projection bias
 };
 
 } // namespace GRIM

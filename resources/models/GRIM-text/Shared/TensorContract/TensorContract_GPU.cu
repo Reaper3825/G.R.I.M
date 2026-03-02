@@ -1403,6 +1403,67 @@ __global__ void kernel_gelu_backward(
     }
 }
 
+// SiLU forward: y = x * sigmoid(x)
+__global__ void kernel_silu_forward(
+    const float* __restrict__ input,
+    float* __restrict__ output,
+    size_t count
+) {
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        const float x = input[idx];
+        const float sig = 1.0f / (1.0f + expf(-x));
+        output[idx] = x * sig;
+    }
+}
+
+// SiLU backward: grad_x = grad_y * silu'(x)
+// silu'(x) = sigmoid(x) * (1 + x * (1 - sigmoid(x)))
+__global__ void kernel_silu_backward(
+    const float* grad_output,
+    const float* input,
+    float* grad_input,
+    size_t count
+) {
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        const float x = input[idx];
+        const float sig = 1.0f / (1.0f + expf(-x));
+        const float dsilu = sig * (1.0f + x * (1.0f - sig));
+        grad_input[idx] = grad_output[idx] * dsilu;
+    }
+}
+
+// Element-wise multiply forward: output = a ⊙ b
+__global__ void kernel_elementwise_mul_forward(
+    const float* __restrict__ a,
+    const float* __restrict__ b,
+    float* __restrict__ output,
+    size_t count
+) {
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        output[idx] = a[idx] * b[idx];
+    }
+}
+
+// Element-wise multiply backward for input A: grad_a = grad_output ⊙ b
+__global__ void kernel_elementwise_mul_backward(
+    const float* grad_output,
+    const float* other,
+    float* grad_self,
+    size_t count
+) {
+    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+    const size_t idx = block_idx * blockDim.x + threadIdx.x;
+    if (idx < count) {
+        grad_self[idx] = grad_output[idx] * other[idx];
+    }
+}
+
 // Element-wise add backward: grad_a = grad_out, grad_b = grad_out
 // (Gradient just passes through to both inputs)
 __global__ void kernel_add_backward(
@@ -2945,6 +3006,231 @@ struct GeluGradFn : public GradFn {
 };
 
 /**
+ * SiluGradFn - Backward for SiLU activation
+ * Forward: y = silu(x) = x * sigmoid(x)
+ * Backward: grad_x = grad_y * sigmoid(x) * (1 + x * (1 - sigmoid(x)))
+ * Follows GeluGradFn tape-based pattern with owned cache copy.
+ */
+struct SiluGradFn : public GradFn {
+    bool input_requires_grad = false;
+    float* input_grad = nullptr;
+    std::shared_ptr<float> owned_input_grad;
+    TensorContract::TensorShape input_shape;
+    std::shared_ptr<GradFn> input_grad_fn;
+    std::shared_ptr<float> owned_cache;
+    const float* cached_input = nullptr;
+    size_t cached_size = 0;
+
+    SiluGradFn() { op_name = "silu"; }
+
+    void capture_input(Tensor& x, cudaStream_t stream) {
+        input_requires_grad = x.requires_grad;
+        input_shape = x.shape;
+        input_grad_fn = x.grad_fn;
+
+        if (input_requires_grad) {
+            if (x.is_leaf) {
+                x.ensure_grad();
+                input_grad = x.grad_data();
+            } else {
+                const size_t x_numel = x.numel();
+                float* buffer = nullptr;
+                cudaMalloc(&buffer, x_numel * sizeof(float));
+                cudaMemsetAsync(buffer, 0, x_numel * sizeof(float), stream);
+                owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
+                input_grad = owned_input_grad.get();
+            }
+        }
+    }
+
+    void set_cache_copy(const float* external_cache, size_t size, cudaStream_t stream) {
+        if (!external_cache) {
+            throw std::runtime_error("SiluGradFn::set_cache_copy: external_cache is NULL");
+        }
+        cached_size = size;
+        float* buffer = nullptr;
+        cudaMalloc(&buffer, size * sizeof(float));
+        cudaMemcpyAsync(buffer, external_cache, size * sizeof(float),
+                       cudaMemcpyDeviceToDevice, stream);
+        owned_cache = std::shared_ptr<float>(buffer, [](float* p) {
+            queueForDeferredCleanup(p);
+        });
+        cached_input = owned_cache.get();
+    }
+
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        setCurrentGradFnOp("silu", this);
+        if (applied) return;
+        applied = true;
+
+        if (!input_requires_grad) return;
+        if (!input_grad) {
+            throw std::runtime_error("SiluGradFn::apply: input_grad is NULL");
+        }
+        if (!cached_input) {
+            throw std::runtime_error("SiluGradFn::apply: cached_input is NULL");
+        }
+
+        const size_t count = grad_output.numel();
+        if (count != cached_size) {
+            throw std::runtime_error("SiluGradFn::apply: size mismatch");
+        }
+
+        kernel_silu_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            grad_output.data, cached_input, input_grad, count);
+        trackKernelLaunch("kernel_silu_backward", stream);
+
+        if (input_grad_fn) {
+            Tensor view;
+            view.data = input_grad; view.shape = input_shape;
+            view.owns_data = false; view.stream = stream;
+            input_grad_fn->apply(view, stream);
+        }
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        cached_input = nullptr;
+        cached_size = 0;
+        input_grad = nullptr;
+        input_grad_fn.reset();
+    }
+};
+
+/**
+ * ElementwiseMulGradFn - Backward for element-wise multiply (Hadamard product)
+ * Forward: y = a ⊙ b
+ * Backward: grad_a = grad_y ⊙ b, grad_b = grad_y ⊙ a
+ * Follows tape-based pattern: caches both inputs in owned buffers.
+ */
+struct ElementwiseMulGradFn : public GradFn {
+    bool a_requires_grad = false;
+    bool b_requires_grad = false;
+    float* a_grad = nullptr;
+    float* b_grad = nullptr;
+    std::shared_ptr<float> owned_a_grad;
+    std::shared_ptr<float> owned_b_grad;
+    TensorContract::TensorShape a_shape;
+    TensorContract::TensorShape b_shape;
+    std::shared_ptr<GradFn> a_grad_fn;
+    std::shared_ptr<GradFn> b_grad_fn;
+
+    std::shared_ptr<float> owned_cache_a;
+    std::shared_ptr<float> owned_cache_b;
+    const float* cached_a = nullptr;
+    const float* cached_b = nullptr;
+    size_t cached_size = 0;
+
+    ElementwiseMulGradFn() { op_name = "elementwise_mul"; }
+
+    void capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
+        a_requires_grad = a.requires_grad;
+        b_requires_grad = b.requires_grad;
+        a_shape = a.shape;
+        b_shape = b.shape;
+        a_grad_fn = a.grad_fn;
+        b_grad_fn = b.grad_fn;
+
+        if (a_requires_grad) {
+            if (a.is_leaf) {
+                a.ensure_grad();
+                a_grad = a.grad_data();
+            } else {
+                const size_t n = a.numel();
+                float* buffer = nullptr;
+                cudaMalloc(&buffer, n * sizeof(float));
+                cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
+                owned_a_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
+                a_grad = owned_a_grad.get();
+            }
+        }
+        if (b_requires_grad) {
+            if (b.is_leaf) {
+                b.ensure_grad();
+                b_grad = b.grad_data();
+            } else {
+                const size_t n = b.numel();
+                float* buffer = nullptr;
+                cudaMalloc(&buffer, n * sizeof(float));
+                cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
+                owned_b_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
+                b_grad = owned_b_grad.get();
+            }
+        }
+    }
+
+    void set_cache_copies(const float* a_data, const float* b_data, size_t size, cudaStream_t stream) {
+        cached_size = size;
+
+        if (a_requires_grad && b_data) {
+            float* buf = nullptr;
+            cudaMalloc(&buf, size * sizeof(float));
+            cudaMemcpyAsync(buf, b_data, size * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+            owned_cache_b = std::shared_ptr<float>(buf, [](float* p) { queueForDeferredCleanup(p); });
+            cached_b = owned_cache_b.get();
+        }
+        if (b_requires_grad && a_data) {
+            float* buf = nullptr;
+            cudaMalloc(&buf, size * sizeof(float));
+            cudaMemcpyAsync(buf, a_data, size * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+            owned_cache_a = std::shared_ptr<float>(buf, [](float* p) { queueForDeferredCleanup(p); });
+            cached_a = owned_cache_a.get();
+        }
+    }
+
+    void apply(const Tensor& grad_output, cudaStream_t stream) override {
+        setCurrentGradFnOp("elementwise_mul", this);
+        if (applied) return;
+        applied = true;
+
+        const size_t count = grad_output.numel();
+
+        if (a_requires_grad) {
+            if (!a_grad || !cached_b) {
+                throw std::runtime_error("ElementwiseMulGradFn::apply: a_grad or cached_b is NULL");
+            }
+            kernel_elementwise_mul_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+                grad_output.data, cached_b, a_grad, count);
+            trackKernelLaunch("kernel_elementwise_mul_backward_a", stream);
+
+            if (a_grad_fn) {
+                Tensor view;
+                view.data = a_grad; view.shape = a_shape;
+                view.owns_data = false; view.stream = stream;
+                a_grad_fn->apply(view, stream);
+            }
+        }
+
+        if (b_requires_grad) {
+            if (!b_grad || !cached_a) {
+                throw std::runtime_error("ElementwiseMulGradFn::apply: b_grad or cached_a is NULL");
+            }
+            kernel_elementwise_mul_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+                grad_output.data, cached_a, b_grad, count);
+            trackKernelLaunch("kernel_elementwise_mul_backward_b", stream);
+
+            if (b_grad_fn) {
+                Tensor view;
+                view.data = b_grad; view.shape = b_shape;
+                view.owns_data = false; view.stream = stream;
+                b_grad_fn->apply(view, stream);
+            }
+        }
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        cached_a = nullptr;
+        cached_b = nullptr;
+        cached_size = 0;
+        a_grad = nullptr;
+        b_grad = nullptr;
+        a_grad_fn.reset();
+        b_grad_fn.reset();
+    }
+};
+
+/**
  * RMSNormGradFn - Backward for RMSNorm
  * Forward: y = x / rms(x) * gamma
  * Backward: Complex chain rule through normalization
@@ -3763,6 +4049,81 @@ Tensor gelu(const Tensor& x, cudaStream_t stream, const float* input_cache) {
         result.grad_fn = grad_fn;
     }
     
+    return result;
+}
+
+/**
+ * autograd::silu - SiLU (Swish) activation with automatic differentiation
+ *
+ * SiLU(x) = x * sigmoid(x)
+ *
+ * TAPE-BASED: Requires caller to provide cache pointer.
+ * Does NOT allocate internal copy of input.
+ *
+ * @param x Input tensor
+ * @param stream CUDA stream
+ * @param input_cache External cache pointer for input (needed for backward).
+ *                    Must point to valid memory until backward() is called.
+ * @return Output tensor with SiLU applied
+ */
+Tensor silu(const Tensor& x, cudaStream_t stream, const float* input_cache) {
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("autograd::silu: stream is NULL - caller MUST provide valid stream");
+    }
+
+    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "silu_result");
+
+    const size_t count = x.numel();
+    kernel_silu_forward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(x.data, result.data, count);
+
+    if (x.requires_grad) {
+        result.is_leaf = false;
+        auto grad_fn = std::make_shared<SiluGradFn>();
+        grad_fn->capture_input(const_cast<Tensor&>(x), stream);
+
+        const float* effective_cache = input_cache ? input_cache : x.data;
+        grad_fn->set_cache_copy(effective_cache, count, stream);
+        result.grad_fn = grad_fn;
+    }
+
+    return result;
+}
+
+/**
+ * autograd::elementwise_mul - Element-wise (Hadamard) product with automatic differentiation
+ *
+ * Forward: y = a ⊙ b
+ * Backward: grad_a = grad_y ⊙ b, grad_b = grad_y ⊙ a
+ *
+ * @param a First input tensor
+ * @param b Second input tensor (same shape as a)
+ * @param stream CUDA stream
+ * @return Output tensor with element-wise product
+ */
+Tensor elementwise_mul(const Tensor& a, const Tensor& b, cudaStream_t stream) {
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("autograd::elementwise_mul: stream is NULL");
+    }
+    if (a.numel() != b.numel()) {
+        throw std::runtime_error("autograd::elementwise_mul: size mismatch a.numel()=" +
+                                 std::to_string(a.numel()) + " b.numel()=" + std::to_string(b.numel()));
+    }
+
+    const bool needs_grad = a.requires_grad || b.requires_grad;
+    Tensor result = Tensor::empty(a.shape, needs_grad, stream, "emul_result");
+
+    const size_t count = a.numel();
+    kernel_elementwise_mul_forward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        a.data, b.data, result.data, count);
+
+    if (needs_grad) {
+        result.is_leaf = false;
+        auto grad_fn = std::make_shared<ElementwiseMulGradFn>();
+        grad_fn->capture_inputs(const_cast<Tensor&>(a), const_cast<Tensor&>(b), stream);
+        grad_fn->set_cache_copies(a.data, b.data, count, stream);
+        result.grad_fn = grad_fn;
+    }
+
     return result;
 }
 

@@ -103,7 +103,7 @@
             },
             "epochs": 1,
             "seed": 1,
-            "batch_size": 10,
+            "batch_size": 8,
             "gradient_accumulation_steps": 2,
             "batch_strategy": "RANDOM",
             "learning_rate": 6e-4,
@@ -265,8 +265,8 @@
 
             "scratch_blocks": {
                 "enabled": true,
-                "max_tokens_per_block": 10240,
-                "num_blocks": 5,
+                "max_tokens_per_block": 1024,
+                "num_blocks": 4,
                 "use_write_combined": true
             },
 

@@ -1277,6 +1277,25 @@ Tensor gelu(const Tensor& x, cudaStream_t stream = nullptr,
             const float* input_cache = nullptr);
 
 /**
+ * SiLU (Swish) activation: y = x * sigmoid(x)
+ *
+ * Used as the gate activation in SwiGLU feed-forward networks.
+ * TAPE-BASED: Uses external cache pointer for backward pass.
+ *
+ * @param input_cache External cache for input (needed for backward)
+ */
+Tensor silu(const Tensor& x, cudaStream_t stream = nullptr,
+            const float* input_cache = nullptr);
+
+/**
+ * Element-wise (Hadamard) product: y = a ⊙ b
+ *
+ * Used for the gating operation in SwiGLU: SiLU(gate) ⊙ up
+ * Both inputs must have the same shape.
+ */
+Tensor elementwise_mul(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
+
+/**
  * RMSNorm: y = x / rms(x) * (learnable)gamma
  *
  * TAPE-BASED: Uses external cache pointer for backward pass.

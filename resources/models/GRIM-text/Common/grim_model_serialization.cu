@@ -191,8 +191,8 @@ bool LanguageModel::save(const std::string& path) {
         assignRead(view.attn_b_qkv, enc->attnBqkv().data, total_qkv_dim);  // GQA-aware bias size
         assignRead(view.attn_w_o, enc->attnWo().data, d_model * d_model);
         assignRead(view.attn_b_o, enc->attnBo().data, d_model);
+        assignRead(view.ffn_w_gate, enc->ffnWGate().data, d_model * d_ff);
         assignRead(view.ffn_w1, enc->ffnW1().data, d_model * d_ff);
-        assignRead(view.ffn_b1, enc->ffnB1().data, d_ff);
         assignRead(view.ffn_w2, enc->ffnW2().data, d_ff * d_model);
         assignRead(view.ffn_b2, enc->ffnB2().data, d_model);
         assignRead(view.rms1_gamma, enc->rms1Gamma().data, d_model);
@@ -315,8 +315,8 @@ bool LanguageModel::load(const std::string& path) {
         assignWrite(view.attn_b_qkv, enc->attnBqkv().data, total_qkv_dim);  // GQA-aware bias size
         assignWrite(view.attn_w_o, enc->attnWo().data, d_model * d_model);
         assignWrite(view.attn_b_o, enc->attnBo().data, d_model);
+        assignWrite(view.ffn_w_gate, enc->ffnWGate().data, d_model * d_ff);
         assignWrite(view.ffn_w1, enc->ffnW1().data, d_model * d_ff);
-        assignWrite(view.ffn_b1, enc->ffnB1().data, d_ff);
         assignWrite(view.ffn_w2, enc->ffnW2().data, d_ff * d_model);
         assignWrite(view.ffn_b2, enc->ffnB2().data, d_model);
         assignWrite(view.rms1_gamma, enc->rms1Gamma().data, d_model);

@@ -158,7 +158,8 @@ void traceGradientComponents(GRIM::LanguageModel& model, int batch, cudaStream_t
         printGradRms("QKV", enc->attnWqkv());
         printGradRms("W_o", enc->attnWo());
         
-        // FFN gradients
+        // FFN gradients (SwiGLU)
+        printGradRms("FFN_W_gate", enc->ffnWGate());
         printGradRms("FFN_W1", enc->ffnW1());
         printGradRms("FFN_W2", enc->ffnW2());
         std::cout << std::endl;

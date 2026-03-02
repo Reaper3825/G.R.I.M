@@ -183,9 +183,9 @@ void LanguageModel::buildParameterGroups() {
         registerTensor(prefix + "_wo_weight",   enc->attnWo(),   ParamGroupType::ATTENTION, layer);
         tryRegisterBias(prefix + "_wo_bias",    enc->attnBo(),   ParamGroupType::ATTENTION, layer);
         
-        // FFN weights/biases
+        // FFN weights (SwiGLU: W_gate, W1, W2, b2)
+        registerTensor(prefix + "_ffn_w_gate", enc->ffnWGate(), ParamGroupType::FFN, layer);
         registerTensor(prefix + "_ffn_w1", enc->ffnW1(), ParamGroupType::FFN, layer);
-        tryRegisterBias(prefix + "_ffn_b1", enc->ffnB1(), ParamGroupType::FFN, layer);
         registerTensor(prefix + "_ffn_w2", enc->ffnW2(), ParamGroupType::FFN, layer);
         tryRegisterBias(prefix + "_ffn_b2", enc->ffnB2(), ParamGroupType::FFN, layer);
         

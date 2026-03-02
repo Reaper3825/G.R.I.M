@@ -973,8 +973,8 @@ BackwardResult executeAutogradBackward(
                 enc->attnBqkv().zero_grad(ctx.stream);
                 enc->attnWo().zero_grad(ctx.stream);
                 enc->attnBo().zero_grad(ctx.stream);
+                enc->ffnWGate().zero_grad(ctx.stream);
                 enc->ffnW1().zero_grad(ctx.stream);
-                enc->ffnB1().zero_grad(ctx.stream);
                 enc->ffnW2().zero_grad(ctx.stream);
                 enc->ffnB2().zero_grad(ctx.stream);
                 enc->layerScale1().zero_grad(ctx.stream);
@@ -1125,8 +1125,8 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
             check(enc->attnBqkv(), "attnBqkv");
             check(enc->attnWo(), "attnWo");
             check(enc->attnBo(), "attnBo");
+            check(enc->ffnWGate(), "ffnWGate");
             check(enc->ffnW1(), "ffnW1");
-            check(enc->ffnB1(), "ffnB1");
             check(enc->ffnW2(), "ffnW2");
             check(enc->ffnB2(), "ffnB2");
             check(enc->layerScale1(), "layerScale1");
