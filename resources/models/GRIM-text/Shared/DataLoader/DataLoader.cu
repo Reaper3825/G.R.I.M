@@ -251,7 +251,7 @@ bool PrepareTrainingDataFromCache(
 		// Read vocab size from GRMT file
 		std::ifstream grmt_file(out_training_data_path, std::ios::binary);
 		if (grmt_file.is_open()) {
-	constexpr uint32_t kExpectedGrmtVersion = 7;  // GRMT v7: unified atom mask
+	constexpr uint32_t kExpectedGrmtVersion = 8;  // GRMT v8: atom_flags side channel
 			uint32_t magic = 0, version = 0, num_sequences = 0, grmt_vocab_size = 0;
 			grmt_file.read(reinterpret_cast<char*>(&magic), 4);
 			grmt_file.read(reinterpret_cast<char*>(&version), 4);
@@ -589,13 +589,38 @@ bool PrepareTrainingDataFromCache(
 	fs::create_directories(cache_dir);
 	fs::path train_grmt = training_path;
 
-	// Log sequence statistics
+	// Log sequence statistics + atom diagnostics
 	size_t total_tokens = 0;
+	size_t encode_atom_tokens = 0;
+	size_t encode_atom_sequences = 0;
+	size_t encode_atom_entries = 0;
 	for (const auto& seq : all_tokens) {
 		total_tokens += seq.token_ids.size();
+		bool seq_has_atoms = false;
+		for (size_t j = 0; j < seq.token_ids.size(); ++j) {
+			if (j < seq.atom_mask.size() && seq.atom_mask[j]) {
+				encode_atom_tokens++;
+				seq_has_atoms = true;
+			}
+			if (j < seq.atom_entry_ids.size() &&
+				seq.atom_entry_ids[j] != GRIM::Tokenizer::kAtomEntryNone) {
+				encode_atom_entries++;
+			}
+		}
+		if (seq_has_atoms) encode_atom_sequences++;
 	}
 	std::cout << "[DataLoader] " << all_tokens.size() << " sequences, "
 			  << total_tokens << " total tokens" << std::endl;
+	std::cout << "[DataLoader] Atom encoding stats: "
+			  << encode_atom_tokens << " atom tokens ("
+			  << (total_tokens > 0 ? (100.0 * encode_atom_tokens / total_tokens) : 0.0)
+			  << "%), " << encode_atom_sequences << "/" << all_tokens.size()
+			  << " sequences with atoms, " << encode_atom_entries
+			  << " AtomTable entries" << std::endl;
+	if (encode_atom_tokens == 0) {
+		std::cerr << "[DataLoader] WARNING: Zero atoms detected during encoding! "
+				  << "Check scratch_block_reasoning.enabled in ai_config.json" << std::endl;
+	}
 
 	// Write all sequences to single GRMT file (no chunking — Phase1_Startup
 	// handles sliding windows with stride and BOS prepending for long sequences)

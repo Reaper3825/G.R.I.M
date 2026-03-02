@@ -10,6 +10,7 @@
 #include <random>
 #include <filesystem>
 #include <optional>
+#include <unordered_map>
 #include "../Shared/DynaSeqs/DynaSeq_GPU.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"  // For kTextFeatureDim
 
@@ -264,6 +265,52 @@ private:
             std::cerr << "[DataLoader] Sanitized " << nonfinite_total
                       << " non-finite numeric values across " << nonfinite_sequences
                       << " sequences (mask cleared)" << std::endl;
+        }
+
+        // Atom side-channel diagnostics: report what's actually in the GRMT
+        size_t total_tokens_loaded = 0;
+        size_t atom_tokens_total = 0;
+        size_t atom_sequences = 0;
+        std::unordered_map<int, size_t> atom_type_counts;
+        size_t atom_entries_total = 0;
+        for (const auto& seq : sequences_) {
+            total_tokens_loaded += seq.token_ids.size();
+            bool seq_has_atoms = false;
+            for (size_t j = 0; j < seq.token_ids.size(); ++j) {
+                if (j < seq.token_atom_mask.size() && seq.token_atom_mask[j]) {
+                    atom_tokens_total++;
+                    seq_has_atoms = true;
+                    atom_type_counts[seq.token_ids[j]]++;
+                }
+                if (j < seq.atom_entry_ids.size() &&
+                    seq.atom_entry_ids[j] != GRIM::Tokenizer::kAtomEntryNone) {
+                    atom_entries_total++;
+                }
+            }
+            if (seq_has_atoms) atom_sequences++;
+        }
+        std::cout << "[DataLoader] Atom side-channel stats:\n"
+                  << "  Total tokens: " << total_tokens_loaded << "\n"
+                  << "  Atom tokens: " << atom_tokens_total
+                  << " (" << (total_tokens_loaded > 0
+                      ? (100.0 * atom_tokens_total / total_tokens_loaded) : 0.0)
+                  << "% of tokens)\n"
+                  << "  Sequences with atoms: " << atom_sequences
+                  << "/" << sequences_.size() << "\n"
+                  << "  AtomTable entries reconstructed: " << atom_entries_total << "\n";
+        if (!atom_type_counts.empty()) {
+            std::cout << "  Atom type breakdown:\n";
+            for (const auto& [tid, count] : atom_type_counts) {
+                auto type = GRIM::Tokenizer::tokenIdToAtomType(tid);
+                std::cout << "    " << GRIM::Tokenizer::atomTypeName(type)
+                          << " (token " << tid << "): " << count << "\n";
+            }
+        }
+        if (atom_tokens_total == 0) {
+            std::cerr << "[DataLoader] WARNING: Zero atom tokens in GRMT! "
+                      << "Atom detection may not have been enabled during encoding. "
+                      << "Delete .grmt files and regenerate with scratch_block_reasoning.enabled=true"
+                      << std::endl;
         }
       
         catalog_dirty_ = true;

@@ -521,11 +521,11 @@ inline DerivedScheduleInfo harmonizeTrainingHyperparameters(
     log_adjustment("soft_restart_cooldown_steps", original_sr_cooldown, params.soft_restart_cooldown_steps);
 
     const int original_auto_plateau = params.auto_stop_plateau_patience;
-    params.auto_stop_plateau_patience = std::clamp(params.auto_stop_plateau_patience, 0, params.epochs);
+    params.auto_stop_plateau_patience = std::max(0, params.auto_stop_plateau_patience);
     log_adjustment("auto_stop_plateau_patience", original_auto_plateau, params.auto_stop_plateau_patience);
 
     const int original_auto_high_loss = params.auto_stop_high_loss_patience;
-    params.auto_stop_high_loss_patience = std::clamp(params.auto_stop_high_loss_patience, 0, params.epochs);
+    params.auto_stop_high_loss_patience = std::max(0, params.auto_stop_high_loss_patience);
     log_adjustment("auto_stop_high_loss_patience", original_auto_high_loss, params.auto_stop_high_loss_patience);
 
     return info;
