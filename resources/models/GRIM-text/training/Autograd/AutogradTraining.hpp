@@ -69,7 +69,7 @@ struct LossResult {
  */
 struct BackwardResult {
     bool success = false;
-    float grad_norm = 0.0f;         // Total gradient norm
+    float grad_rms = 0.0f;         // Total gradient RMS
     std::string error_message;
 };
 

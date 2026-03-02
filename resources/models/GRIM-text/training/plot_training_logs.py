@@ -168,7 +168,7 @@ def plot_series(
         axes[0].set_ylim(loss_min, loss_max)
 
     axes[1].set_title("Grad Norm (preclip)")
-    axes[1].set_ylabel("grad_norm")
+    axes[1].set_ylabel("grad_rms")
     axes[1].grid(True, alpha=0.2)
     if log_grad:
         axes[1].set_yscale("symlog", linthresh=1.0)

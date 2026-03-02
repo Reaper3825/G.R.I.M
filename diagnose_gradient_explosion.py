@@ -44,7 +44,7 @@ class GradientExplosionDiagnostics:
                 # Parse step info
                 step_match = re.search(r'Step (\d+)', line)
                 loss_match = re.search(r'Loss: ([\d.e+-]+)', line)
-                grad_match = re.search(r'GradNorm.*Norm: ([\d.e+-]+)', line)
+                grad_match = re.search(r'(?:GradNorm.*(?:Norm|RMS):|grad_(?:rms|norm)=)([\d.e+-]+)', line)
                 lr_match = re.search(r'LR: ([\d.e+-]+)', line)
                 
                 if step_match and loss_match:

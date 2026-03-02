@@ -1062,7 +1062,7 @@ bool handleGradientSpike(
     TrainingContext& ctx,
     TrainingLoopState& state,
     const GRIM::Batching::BatchAssignment& batch,
-    float preclip_grad_norm,
+    float preclip_grad_rms,
     float preclip_norm_grad,
     float batch_loss,
     const GRIM::TNC::ClipSelection& clip_selection,
@@ -1071,7 +1071,7 @@ bool handleGradientSpike(
     const float token_skip_threshold = clip_selection.per_token_limit * 50.0f;
     const float raw_skip_threshold = 500000.0f;
     
-    if (preclip_norm_grad <= token_skip_threshold || preclip_grad_norm <= raw_skip_threshold) {
+    if (preclip_norm_grad <= token_skip_threshold || preclip_grad_rms <= raw_skip_threshold) {
         return false;  // Not a spike
     }
     
@@ -1082,7 +1082,7 @@ bool handleGradientSpike(
     
     std::ostringstream skip_msg;
     skip_msg << "[GradGuard] skip optimizer step preclip_norm="
-             << formatScalar(preclip_grad_norm)
+             << formatScalar(preclip_grad_rms)
              << " per_token=" << formatScalar(preclip_norm_grad, 4)
              << " batch=" << (batch_idx + 1)
              << " loss=" << formatScalar(batch_loss)
@@ -1119,7 +1119,7 @@ bool handleGradientSpike(
     if (bad_seq_log.is_open()) {
         bad_seq_log << "\n========================================\n";
         bad_seq_log << "[Batch " << (batch_idx + 1) << "] Gradient spike: " 
-                   << preclip_grad_norm << " (raw) / " << preclip_norm_grad << " (per-token)\n";
+                   << preclip_grad_rms << " (raw) / " << preclip_norm_grad << " (per-token)\n";
         bad_seq_log << "Loss: " << batch_loss << " | Tokens: " << clip_selection.stats.total_tokens << "\n";
         bad_seq_log << "Sequence IDs: ";
         for (size_t si = 0; si < batch.seq_ids.size(); ++si) {
@@ -3761,7 +3761,7 @@ BatchResult processBatch(
     //       its own norm on scaled gradients. This norm is for diagnostics/spike detection only.
 
     ctx.logging.logger->log("[GradTrace] PRE-GRADNORM batch=" + std::to_string(batch_idx + 1) +
-                            " cached_preclip=" + Internal::formatScalar(state.last_grad_norm));
+                            " cached_preclip=" + Internal::formatScalar(state.last_grad_rms));
     
     // === TIMING GUARD: Track expensive operations between POST-BACKWARD logs ===
     auto grad_ops_start = std::chrono::steady_clock::now();
@@ -3814,9 +3814,9 @@ BatchResult processBatch(
     // Combined RMS across all parameter groups
     const float total_sum_sq_pre = emb_sum_sq_pre + enc_sum_sq_pre;
     const int64_t total_count_pre = emb_count_pre + enc_count_pre;
-    result.grad_norm = (total_count_pre > 0) ? std::sqrt(total_sum_sq_pre / static_cast<float>(total_count_pre)) : 0.0f;
-    result.normalized_grad_norm = result.grad_norm;
-    const float preclip_grad_norm = result.grad_norm;
+    result.grad_rms = (total_count_pre > 0) ? std::sqrt(total_sum_sq_pre / static_cast<float>(total_count_pre)) : 0.0f;
+    result.normalized_grad_rms = result.grad_rms;
+    const float preclip_grad_rms = result.grad_rms;
     auto norm_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - norm_start).count();
     
     // Issue #138: Decompose wall time into kernel time + backward drain time
@@ -3853,7 +3853,7 @@ BatchResult processBatch(
     std::string comp_log = Internal::formatGradientComponents(gm, tied);
     ctx.logging.logger->log(comp_log);
 
-    ctx.logging.logger->log("[GradTrace] POST-GRADNORM preclip=" + Internal::formatScalar(preclip_grad_norm) +
+    ctx.logging.logger->log("[GradTrace] POST-GRADNORM preclip=" + Internal::formatScalar(preclip_grad_rms) +
                             " emb_rms=" + Internal::formatScalar(emb_rms_pre, 6) +
                             " enc_rms=" + Internal::formatScalar(enc_rms_pre, 6) +
                             " sb_rms=" + Internal::formatScalar(sb_rms_pre, 6));
@@ -3908,7 +3908,7 @@ BatchResult processBatch(
     
     // Handle gradient spikes
     auto spike_start = std::chrono::steady_clock::now();
-    if (Internal::handleGradientSpike(ctx, state, batch, preclip_grad_norm, preclip_grad_norm, 
+    if (Internal::handleGradientSpike(ctx, state, batch, preclip_grad_rms, preclip_grad_rms, 
                                       result.loss, clip_selection, batch_idx)) {
         // zeroGrad removed: next autogradTrainingStep with accumulate=false zeros gradients
         ctx.optimizer.current_micro_step = 0;  // Reset accumulation window
@@ -4117,9 +4117,9 @@ BatchResult processBatch(
                                 "ms, sample=" + Internal::formatScalar(sample_elapsed_ms, 2) + "ms)");
     }
     
-    ctx.logging.logger->log("[GradTrace] PRE-OPTIMIZER batch=" + std::to_string(batch_idx + 1) + 
+    ctx.logging.logger->log("[GradTrace] PRE-OPTIMIZER batch=" + std::to_string(batch_idx + 1) +
                             " lr=" + Internal::formatScalar(result.learning_rate, 8) +
-                            " grad_norm=" + Internal::formatScalar(result.grad_norm) +
+                            " grad_rms=" + Internal::formatScalar(result.grad_rms) +
                             " step=" + std::to_string(ctx.optimizer.optimizer_state.step) +
                             " " + pre_weights);
     
@@ -4260,9 +4260,9 @@ BatchResult processBatch(
                                          + clip_gm.rmsnorm_count + clip_gm.scratchblock_count;
             const float clip_emb_rms = (clip_emb_count > 0) ? std::sqrt(clip_emb_sq / static_cast<float>(clip_emb_count)) : 0.0f;
             const float clip_enc_rms = (clip_enc_count > 0) ? std::sqrt(clip_enc_sq / static_cast<float>(clip_enc_count)) : 0.0f;
-            result.grad_norm = std::sqrt(clip_emb_rms * clip_emb_rms + clip_enc_rms * clip_enc_rms);
-            result.normalized_grad_norm = result.grad_norm;
-            const float post_accum_norm = result.grad_norm;
+            result.grad_rms = std::sqrt(clip_emb_rms * clip_emb_rms + clip_enc_rms * clip_enc_rms);
+            result.normalized_grad_rms = result.grad_rms;
+            const float post_accum_norm = result.grad_rms;
             
             {   // emb_norm computed as RMS
                 float emb_sum_sq = clip_gm.lm_head_sum_sq;
@@ -4315,9 +4315,9 @@ BatchResult processBatch(
                 // Recompute post-clip total RMS
                 const float clipped_emb = std::min(emb_rms, effective_per_token_limit);
                 const float clipped_enc = std::min(enc_rms, effective_per_token_limit);
-                result.grad_norm = std::sqrt(clipped_emb * clipped_emb 
+                result.grad_rms = std::sqrt(clipped_emb * clipped_emb 
                                            + clipped_enc * clipped_enc);
-                result.normalized_grad_norm = result.grad_norm;
+                result.normalized_grad_rms = result.grad_rms;
                 result.gradient_clipped = any_clipped;
                 
                 ctx.logging.logger->log("[PostAccumClip] batch=" + std::to_string(batch_idx + 1) +
@@ -4326,7 +4326,7 @@ BatchResult processBatch(
                                         " enc_rms=" + Internal::formatScalar(enc_rms, 6) +
                                         " emb_clipped=" + (emb_rms > effective_per_token_limit ? "YES" : "NO") +
                                         " enc_clipped=" + (enc_rms > effective_per_token_limit ? "YES" : "NO") +
-                                        " post_clip_total=" + Internal::formatScalar(result.grad_norm, 6));
+                                        " post_clip_total=" + Internal::formatScalar(result.grad_rms, 6));
             }
             
             clipping_elapsed_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - clipping_start).count();
@@ -4420,11 +4420,26 @@ BatchResult processBatch(
             }
         }
 
+        const int emb_freeze_step = ctx.config.hyperparameters.embedding_freeze_enabled
+            ? ctx.config.hyperparameters.embedding_freeze_after_step : -1;
+
+        if (emb_freeze_step > 0 && ctx.optimizer.optimizer_state.step == emb_freeze_step) {
+            if (ctx.config.architecture.tie_embeddings) {
+                ctx.logging.logger->log("[EmbeddingFreeze] WARNING: tie_embeddings=true — "
+                    "embedding and LM head share weights. Set tie_embeddings=false to freeze "
+                    "embedding independently. Freeze has no effect on tied weights.");
+            } else {
+                ctx.logging.logger->log("[EmbeddingFreeze] Embedding weights FROZEN at step "
+                    + std::to_string(emb_freeze_step) + " — no further embedding updates");
+            }
+        }
+
         GRIM::launchAdamWStep(ctx.model->parameterGroups(),
                               result.learning_rate,
                               ctx.config.hyperparameters.weight_decay,
                               ctx.optimizer.optimizer_state.step,
-                              ctx.model->getTrainingState().stream_ctrl.getPrimaryStream());
+                              ctx.model->getTrainingState().stream_ctrl.getPrimaryStream(),
+                              emb_freeze_step);
         // Reset micro_step counter after optimizer step completes
         ctx.optimizer.current_micro_step = 0;
 
@@ -4566,9 +4581,9 @@ BatchResult processBatch(
         GRIM::LayerType::kEncoding,         // aggregate marker
         -1,                                 // no specific layer (-1 = global)
         static_cast<std::uint64_t>(ctx.global_step),
-        result.grad_norm,                   // primary: gradient norm
-        result.normalized_grad_norm,        // secondary: per-token norm
-        "grad_norm",
+        result.grad_rms,                   // primary: gradient RMS
+        result.normalized_grad_rms,        // secondary: per-token RMS
+        "grad_rms",
         "post_backward");
     
     // Update telemetry lattice (GPU-resident, fail loud)
@@ -4576,15 +4591,15 @@ BatchResult processBatch(
     // Single stream with 10 internal dimensions (μ, σ_tilde, v_σ, etc.)
     if (ctx.telemetry.lattice && ctx.telemetry.enabled) {
         // ISSUE #14 FIX: Use PRE-CLIP gradient norm for telemetry baseline.
-        // Before: used result.grad_norm (post-clip, always ~1.0 due to clipping)
+        // Before: used result.grad_rms (post-clip, always ~1.0 due to clipping)
         // This caused spike detection to think normal gradients (3-12) were 10x+ spikes
         // relative to the clamped 1.0 baseline, skipping 62% of batches!
-        // After: use preclip_grad_norm so baseline reflects actual gradient magnitude
+        // After: use preclip_grad_rms so baseline reflects actual gradient magnitude
         
         // Guard against NaN/Inf BEFORE passing to telemetry (fail loud with diagnostic)
-        if (!std::isfinite(preclip_grad_norm)) {
+        if (!std::isfinite(preclip_grad_rms)) {
             throw std::runtime_error(
-                "FATAL: Gradient norm is " + std::string(std::isnan(preclip_grad_norm) ? "NaN" : "Inf") +
+                "FATAL: Gradient RMS is " + std::string(std::isnan(preclip_grad_rms) ? "NaN" : "Inf") +
                 " at batch " + std::to_string(batch_idx + 1) + " step " + std::to_string(ctx.global_step) +
                 " loss=" + std::to_string(result.loss) +
                 " - indicates gradient explosion or numerical instability in backward pass");
@@ -4592,10 +4607,10 @@ BatchResult processBatch(
         
         ctx.logging.logger->log("[TelemetryLattice] PRE-UPDATE batch=" + std::to_string(batch_idx + 1) + 
                                 " step=" + std::to_string(ctx.global_step) + 
-                                " grad_norm=" + Internal::formatScalar(preclip_grad_norm, 6));
+                                " grad_rms=" + Internal::formatScalar(preclip_grad_rms, 6));
         
         GRIM::Telemetry::TelemetryError tel_err = ctx.telemetry.lattice->updateFromBatch(
-            payload, result.loss, preclip_grad_norm, result.learning_rate,
+            payload, result.loss, preclip_grad_rms, result.learning_rate,
             ctx.global_step);
         
         ctx.logging.logger->log("[TelemetryLattice] POST-UPDATE batch=" + std::to_string(batch_idx + 1) + 
@@ -4611,7 +4626,7 @@ BatchResult processBatch(
     }
     
     ctx.global_step++;
-    state.last_grad_norm = result.grad_norm;
+    state.last_grad_rms = result.grad_rms;
     
     // Log update probe for QKV weights (if configured)
     if (ctx.model->hasUpdateProbe()) {
@@ -5005,6 +5020,12 @@ bool executePhase2(TrainingContext& ctx) {
         std::string("  Soft restart: ") + (hp.soft_restart_enabled ? "enabled" : "disabled"), ctx.global_step);
     EmitModuleInfo(ModuleId::Training, 
         std::string("  Auto-stop: ") + (hp.auto_stop_enabled ? "enabled" : "disabled"), ctx.global_step);
+    if (hp.embedding_freeze_enabled) {
+        EmitModuleInfo(ModuleId::Training,
+            std::string("  Embedding freeze: after step ") + std::to_string(hp.embedding_freeze_after_step)
+            + (ctx.config.architecture.tie_embeddings ? " (WARNING: tie_embeddings=true, set to false for freeze to take effect)" : ""),
+            ctx.global_step);
+    }
     
     try {
         for (int epoch = 0; epoch < hp.epochs; ++epoch) {

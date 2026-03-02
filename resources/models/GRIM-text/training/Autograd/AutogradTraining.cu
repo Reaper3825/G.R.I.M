@@ -930,7 +930,7 @@ BackwardResult executeAutogradBackward(
 ) {
     BackwardResult result{};
     result.success = false;
-    result.grad_norm = 0.0f;
+    result.grad_rms = 0.0f;
     
     ctx.validate("executeAutogradBackward");
     

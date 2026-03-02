@@ -88,7 +88,7 @@
                 "strategy": "greedy",
                 "max_new_tokens": 128,
                 "min_new_tokens": 1,
-                "temperature": 1.0,
+                "temperature": 0.8,
                 "top_k": 50,
                 "top_p": 0.9,
                 "min_p": 0.0,
@@ -253,6 +253,11 @@
                     "enabled": true,
                     "tag": ""
                 }
+            },
+
+            "embedding_freeze": {
+                "enabled": false,
+                "freeze_after_step": 0
             },
 
             "stability_overrides_enabled": false,

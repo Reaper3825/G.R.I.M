@@ -43,8 +43,8 @@ def parse_training_log(log_path):
                     data['loss'].append(float(match.group(1)))
             
             # Gradient norm
-            if '[GradTrace] PRE-OPTIMIZER' in line and 'grad_norm=' in line:
-                match = re.search(r'grad_norm=([\d.]+)', line)
+            if '[GradTrace] PRE-OPTIMIZER' in line and ('grad_rms=' in line or 'grad_norm=' in line):
+                match = re.search(r'grad_(?:rms|norm)=([\d.]+)', line)
                 if match:
                     data['grad_norm'].append(float(match.group(1)))
             

@@ -279,6 +279,10 @@ struct TrainingHyperparameters {
     int hardcoded_hidden_pattern;  // 0=DISABLED, 1=RANDOM_CENTERED, 2=ORTHOGONAL_W277, etc.
     int hardcoded_log_every_n_batches;
     
+    // Embedding freeze guard - freezes embedding weights after N optimizer steps
+    bool embedding_freeze_enabled = false;
+    int embedding_freeze_after_step = 0;
+
     // Stability overrides - NO DEFAULTS
     bool stability_overrides_enabled;
     int stability_override_batch_size;
@@ -1067,6 +1071,13 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         }
     }
     
+    // Load embedding freeze guard
+    if (auto it = trainConfig.find("embedding_freeze"); it != trainConfig.end() && it->is_object()) {
+        const auto& ef = *it;
+        params.embedding_freeze_enabled = ef.value("enabled", params.embedding_freeze_enabled);
+        params.embedding_freeze_after_step = ef.value("freeze_after_step", params.embedding_freeze_after_step);
+    }
+
     // Load stability overrides - ALWAYS parse values even if disabled
     // (Phase1_Startup copies them unconditionally, so they must be initialized)
     params.stability_overrides_enabled = trainConfig.value("stability_overrides_enabled", params.stability_overrides_enabled);

@@ -85,14 +85,15 @@ def parse_log_file(log_path: str) -> List[BatchRecord]:
             continue
         
         # Pre-optimizer
-        m = re.search(r'PRE-OPTIMIZER batch=\d+ lr=([0-9.]+) grad_norm=([0-9.]+) step=(\d+) lm_w\[0:5\]=\[([^\]]+)\] rms=([0-9.e+-]+)', line)
+        m = re.search(r'PRE-OPTIMIZER batch=\d+ lr=([0-9.]+) grad_(?:rms|norm)=([0-9.]+) step=(\d+)(?: lm_w\[0:5\]=\[([^\]]*)\] rms=([0-9.e+-]+))?', line)
         if m:
             current_batch.lr = float(m.group(1))
             current_batch.grad_norm = float(m.group(2))
             current_batch.step = int(m.group(3))
-            weights_str = m.group(4)
-            current_batch.lm_weights = [float(x) for x in weights_str.split(',')]
-            current_batch.lm_rms = float(m.group(5))
+            if m.group(4) is not None:
+                current_batch.lm_weights = [float(x) for x in m.group(4).split(',')]
+            if m.group(5) is not None:
+                current_batch.lm_rms = float(m.group(5))
             continue
     
     if current_batch:

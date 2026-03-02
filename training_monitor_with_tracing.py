@@ -45,7 +45,7 @@ class TrainingMonitor:
             data['loss'] = float(loss_match.group(1))
         
         # Parse gradient norm
-        grad_match = re.search(r'GradNorm.*Norm: ([\d.e+-]+)', line)
+        grad_match = re.search(r'GradNorm.*(?:Norm|RMS): ([\d.e+-]+)', line)
         if grad_match:
             data['grad_norm'] = float(grad_match.group(1))
         

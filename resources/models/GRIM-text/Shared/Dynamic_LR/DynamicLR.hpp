@@ -108,7 +108,7 @@ public:
     void reset();
     void setBaseLearningRate(float lr);
 
-    float update(float grad_norm, float loss, float scheduled_lr_ceiling = -1.0f);
+    float update(float grad_rms, float loss, float scheduled_lr_ceiling = -1.0f);
     float currentLearningRate() const { return current_lr_; }
     void setRuntimeLimits(float min_lr, float max_lr);
 
@@ -165,7 +165,7 @@ private:
     RunningStats grad_stats_{};
     RunningStats loss_stats_{};
 
-    void applySmoothing(float grad_norm, float loss);
+    void applySmoothing(float grad_rms, float loss);
     void applyWarmupPhase();
     void applyDynamicAdjustment();
     void clampAndCommit(float proposed_lr, DynamicLRDiagnostics::AdjustmentReason reason);
@@ -201,7 +201,7 @@ inline void LogError(std::string_view message) { EmitLog(LogLevel::Error, messag
 // Structured logging helpers
 void LogAdjustment(float base_lr, float proposed_lr, float applied_lr,
                    DynamicLRDiagnostics::AdjustmentReason reason,
-                   float grad_norm, float loss);
+                   float grad_rms, float loss);
 void LogFloorRecovery(float lr, int at_floor_steps);
 void LogBandUpdate(float lower, float upper, float safety_lower, float safety_upper);
 
