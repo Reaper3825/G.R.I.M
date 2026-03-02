@@ -550,7 +550,8 @@ public:
                                      const GenerationConfig* gen_config = nullptr);
     
     // Training
-    float computeLossBatch(const GRIM::Batching::BatchPayload& payload);
+    float computeLossBatch(const GRIM::Batching::BatchPayload& payload,
+                           bool is_training = true);
     
     // =========================================================================
     // INCREMENTAL GENERATION API (KV-Cache Autoregressive)

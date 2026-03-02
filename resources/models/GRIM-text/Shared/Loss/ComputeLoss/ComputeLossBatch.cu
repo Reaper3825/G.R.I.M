@@ -49,7 +49,8 @@ void orderLog(const char* stage,
 }  // namespace
 
 float LanguageModel::computeLossBatch(
-	const GRIM::Batching::BatchPayload& payload)
+	const GRIM::Batching::BatchPayload& payload,
+	bool is_training)
 {
 	// Keep intermediates for the legacy computeLossBatch() -> backward() flow on success,
 	// but clear them if this function exits via exception.
@@ -239,7 +240,7 @@ float LanguageModel::computeLossBatch(
 		payload,
 		1.0f,
 		autograd_forward_step,
-		true
+		is_training
 	);
 	
 	// ScratchBlock side-channel data is now accessed directly from BatchPayload
