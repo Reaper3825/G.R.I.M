@@ -3042,6 +3042,37 @@ BatchResult processBatch(
                         }
                     }
                     
+                    // Top 10 most frequent input tokens in this batch
+                    {
+                        std::unordered_map<int, int> tok_freq;
+                        for (int s = 0; s < payload.batch_size; ++s) {
+                            const int flat_start = s * payload.max_seq_len;
+                            const int len = payload.seq_lengths[s];
+                            for (int t = 0; t < len; ++t) {
+                                ++tok_freq[payload.input_ids[flat_start + t]];
+                            }
+                        }
+                        std::vector<std::pair<int, int>> freq_sorted(tok_freq.begin(), tok_freq.end());
+                        std::sort(freq_sorted.begin(), freq_sorted.end(),
+                                  [](const auto& a, const auto& b) { return a.second > b.second; });
+                        const size_t top_n = std::min(freq_sorted.size(), size_t(10));
+                        rho_eq << "  TOP-10 INPUT TOKENS:";
+                        for (size_t i = 0; i < top_n; ++i) {
+                            const int tid = freq_sorted[i].first;
+                            const int cnt = freq_sorted[i].second;
+                            std::string decoded = ctx.tokenizer.decode({tid});
+                            // Escape newlines/tabs for single-line display
+                            for (auto& c : decoded) {
+                                if (c == '\n') c = ' ';
+                                else if (c == '\t') c = ' ';
+                                else if (c == '\r') c = ' ';
+                            }
+                            if (decoded.size() > 20) decoded = decoded.substr(0, 20) + "…";
+                            rho_eq << " [" << tid << " \"" << decoded << "\" ×" << cnt << "]";
+                        }
+                        rho_eq << "\n";
+                    }
+
                     ctx.logging.logger->log(rho_eq.str());
                     EQ_LOG("RHO_BUILDUP_EQUATION", rho_eq.str(), batch_idx, -1, ctx.global_step,
                            GRIM::EquationPhase::RESIDUAL_ADD);
