@@ -124,8 +124,8 @@ std::string trimSampleText(const std::string& text, std::size_t max_chars) {
 
 std::string decodeWithAtomSideChannel(const GRIM::Tokenizer::UniByte& tokenizer,
                                       const std::vector<int>& token_ids,
-                                      const std::vector<float>& numeric_values,
-                                      const std::vector<uint8_t>& atom_mask,
+                                      const std::vector<float>& /*numeric_values*/,
+                                      const std::vector<uint8_t>& /*atom_mask*/,
                                       const std::vector<uint32_t>& atom_entry_ids,
                                       const GRIM::Tokenizer::AtomTable* atom_table) {
     std::string result;
@@ -141,63 +141,19 @@ std::string decodeWithAtomSideChannel(const GRIM::Tokenizer::UniByte& tokenizer,
         }
 
         if (tokenizer.isAtomToken(tid)) {
-            const GRIM::Tokenizer::AtomType type = GRIM::Tokenizer::tokenIdToAtomType(tid);
-
-            if (GRIM::Tokenizer::isNumericAtom(type)) {
-                // Numeric atoms: format the float value based on atom type
-                if (i < numeric_values.size() && i < atom_mask.size() &&
-                    atom_mask[i] && std::isfinite(numeric_values[i])) {
-                    const float value = numeric_values[i];
-                    std::ostringstream oss;
-                    switch (type) {
-                        case GRIM::Tokenizer::AtomType::ATOM_INTEGER:
-                            oss << static_cast<long long>(std::llround(value));
-                            break;
-                        case GRIM::Tokenizer::AtomType::ATOM_FLOAT:
-                            oss << std::setprecision(6) << value;
-                            break;
-                        case GRIM::Tokenizer::AtomType::ATOM_HEX: {
-                            const long long int_val = std::llround(value);
-                            oss << "0x" << std::hex << std::uppercase << int_val;
-                            break;
-                        }
-                        case GRIM::Tokenizer::AtomType::ATOM_BINARY: {
-                            const long long int_val = std::llround(value);
-                            if (int_val == 0) {
-                                oss << "0b0";
-                            } else {
-                                std::string bits;
-                                long long abs_val = std::abs(int_val);
-                                while (abs_val > 0) {
-                                    bits.push_back('0' + static_cast<char>(abs_val & 1));
-                                    abs_val >>= 1;
-                                }
-                                std::reverse(bits.begin(), bits.end());
-                                if (int_val < 0) oss << "-";
-                                oss << "0b" << bits;
-                            }
-                            break;
-                        }
-                        default:
-                            oss << value;
-                            break;
-                    }
-                    result += oss.str();
+            // All atom types (numeric and string) are retrieved the same way:
+            // atom_table stores the original raw text for every registered atom.
+            // numeric_values exists for ScratchBlock input, not for decoding.
+            if (atom_table && i < atom_entry_ids.size() &&
+                atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone) {
+                const auto* entry = atom_table->getAtom(atom_entry_ids[i]);
+                if (entry) {
+                    result += atom_table->atomToString(*entry);
                     continue;
-                }
-            } else {
-                // String-type atoms: look up raw text via AtomTable
-                if (atom_table && i < atom_entry_ids.size() &&
-                    atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone) {
-                    const auto* entry = atom_table->getAtom(atom_entry_ids[i]);
-                    if (entry) {
-                        result += atom_table->atomToString(*entry);
-                        continue;
-                    }
                 }
             }
 
-            // Fallback: atom token with no side-channel data (e.g. model-generated)
+            // Fallback: model-generated atom with no registered entry
             result += tokenizer.tokenToString(tid);
             continue;
         }

@@ -29,8 +29,6 @@
 #include <memory>
 #include <chrono>
 #include <sstream>
-#include <iomanip>
-#include <cmath>
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include "../../control/ai_config_paths.hpp"
@@ -269,56 +267,18 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
             }
 
             if (g_tokenizer->isAtomToken(tid)) {
-                const auto type = GRIM::Tokenizer::tokenIdToAtomType(tid);
-
-                if (GRIM::Tokenizer::isNumericAtom(type)) {
-                    if (i < seq.token_numeric_values.size() &&
-                        i < seq.token_atom_mask.size() &&
-                        seq.token_atom_mask[i] &&
-                        std::isfinite(seq.token_numeric_values[i])) {
-                        const float value = seq.token_numeric_values[i];
-                        std::ostringstream oss;
-                        switch (type) {
-                            case GRIM::Tokenizer::AtomType::ATOM_INTEGER:
-                                oss << static_cast<long long>(std::llround(value));
-                                break;
-                            case GRIM::Tokenizer::AtomType::ATOM_FLOAT:
-                                oss << std::setprecision(6) << value;
-                                break;
-                            case GRIM::Tokenizer::AtomType::ATOM_HEX: {
-                                const long long iv = std::llround(value);
-                                oss << "0x" << std::hex << std::uppercase << iv;
-                                break;
-                            }
-                            case GRIM::Tokenizer::AtomType::ATOM_BINARY: {
-                                const long long iv = std::llround(value);
-                                if (iv == 0) { oss << "0b0"; }
-                                else {
-                                    std::string bits;
-                                    long long av = std::abs(iv);
-                                    while (av > 0) { bits.push_back('0' + static_cast<char>(av & 1)); av >>= 1; }
-                                    std::reverse(bits.begin(), bits.end());
-                                    if (iv < 0) oss << "-";
-                                    oss << "0b" << bits;
-                                }
-                                break;
-                            }
-                            default: oss << value; break;
-                        }
-                        output += oss.str();
+                // All atom types use the same retrieval path: atom_table raw text.
+                // numeric_values exists for ScratchBlock input, not for decoding.
+                if (atom_tbl && i < seq.atom_entry_ids.size() &&
+                    seq.atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone) {
+                    const auto* entry = atom_tbl->getAtom(seq.atom_entry_ids[i]);
+                    if (entry) {
+                        output += atom_tbl->atomToString(*entry);
                         continue;
-                    }
-                } else {
-                    if (atom_tbl && i < seq.atom_entry_ids.size() &&
-                        seq.atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone) {
-                        const auto* entry = atom_tbl->getAtom(seq.atom_entry_ids[i]);
-                        if (entry) {
-                            output += atom_tbl->atomToString(*entry);
-                            continue;
-                        }
                     }
                 }
 
+                // Fallback: model-generated atom with no registered entry
                 output += g_tokenizer->tokenToString(tid);
                 continue;
             }

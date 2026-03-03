@@ -289,21 +289,21 @@ private:
             }
             if (seq_has_atoms) atom_sequences++;
         }
-        std::cout << "[DataLoader] Atom side-channel stats:\n"
-                  << "  Total tokens: " << total_tokens_loaded << "\n"
+        std::cerr << "[DataLoader] Atom side-channel stats:" << std::endl
+                  << "  Total tokens: " << total_tokens_loaded << std::endl
                   << "  Atom tokens: " << atom_tokens_total
                   << " (" << (total_tokens_loaded > 0
                       ? (100.0 * atom_tokens_total / total_tokens_loaded) : 0.0)
-                  << "% of tokens)\n"
+                  << "% of tokens)" << std::endl
                   << "  Sequences with atoms: " << atom_sequences
-                  << "/" << sequences_.size() << "\n"
-                  << "  AtomTable entries reconstructed: " << atom_entries_total << "\n";
+                  << "/" << sequences_.size() << std::endl
+                  << "  AtomTable entries reconstructed: " << atom_entries_total << std::endl;
         if (!atom_type_counts.empty()) {
-            std::cout << "  Atom type breakdown:\n";
+            std::cerr << "  Atom type breakdown:" << std::endl;
             for (const auto& [tid, count] : atom_type_counts) {
                 auto type = GRIM::Tokenizer::tokenIdToAtomType(tid);
-                std::cout << "    " << GRIM::Tokenizer::atomTypeName(type)
-                          << " (token " << tid << "): " << count << "\n";
+                std::cerr << "    " << GRIM::Tokenizer::atomTypeName(type)
+                          << " (token " << tid << "): " << count << std::endl;
             }
         }
         if (atom_tokens_total == 0) {
