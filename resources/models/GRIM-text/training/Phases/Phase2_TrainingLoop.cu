@@ -1434,7 +1434,9 @@ ValidationResult runValidation(TrainingContext& ctx) {
             
             float batch_val_loss = ctx.model->computeLossBatch(val_payload, /*is_training=*/false);
             ctx.model->getTrainingState().autograd_intermediates.clear();
-            
+            // Sync so frees from clear() are processed before next batch (prevents validation OOM)
+            cudaDeviceSynchronize();
+
             // Check for deferred CUDA errors after each batch
             cudaError_t batch_err = cudaGetLastError();
             if (batch_err != cudaSuccess) {

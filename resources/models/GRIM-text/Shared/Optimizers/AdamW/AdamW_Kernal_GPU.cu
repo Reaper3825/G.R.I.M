@@ -180,13 +180,17 @@ void launchAdamWStep(std::vector<ParameterGroup>& groups,
             "[launchAdamWStep] stream is NULL - caller MUST provide valid CUDA stream");
     }
 
-    const bool embedding_frozen = (embedding_freeze_after_step > 0) && (step >= embedding_freeze_after_step);
+    const bool embedding_frozen = (embedding_freeze_after_step >= 0) && (step >= embedding_freeze_after_step);
 
     for (size_t i = 0; i < groups.size(); ++i) {
         auto& group = groups[i];
         if (!group.weights() || !group.grads() || group.size() == 0) continue;
 
+        // When tie_embeddings=true, no EMBEDDING group exists; the tied buffer is LM_HEAD named "embedding_lm_head_tied"
         if (embedding_frozen && group.type == ParamGroupType::EMBEDDING) {
+            continue;
+        }
+        if (embedding_frozen && group.type == ParamGroupType::LM_HEAD && group.name == "embedding_lm_head_tied") {
             continue;
         }
 

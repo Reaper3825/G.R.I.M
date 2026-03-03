@@ -2,7 +2,7 @@
     "api_keys": {
         "azure": "",
         "elevenlabs": "",
-        "huggingface": "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",
+        "huggingface": "TODO",
         "openai": ""
     },
     "backend": "grim_native",
@@ -256,7 +256,7 @@
             },
 
             "embedding_freeze": {
-                "enabled": false,
+                "enabled": true,
                 "freeze_after_step": 0
             },
 
@@ -355,7 +355,7 @@
             "num_heads": 12,
             "num_kv_heads": 4,
             "d_ff": 3072,
-            "tie_embeddings": true,
+            "tie_embeddings": false,
             "positional_encoding": {
                 "use_learned": false,
                 "use_rope": true,
