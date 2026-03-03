@@ -1381,22 +1381,19 @@ ValidationResult runValidation(TrainingContext& ctx) {
         }
     }
 
-    // Issue #85 FIX: Use model's actual buffer capacity, NOT kDefaultMaxTokensPerBatch (8192)!
-    // Training allocates buffers based on batch_size * max_seq_len (e.g., 7 * 1024 = 7168).
-    // Using 8192 for validation exceeds this → buffer overflow → crash!
-    // Halve the token budget: validation runs with is_training=false (no backward caches)
-    // but encoder-layer autograd intermediates still consume VRAM alongside model weights.
+    // Use the same batch limits as training so validation uses the same memory path.
+    // Training runs 4000+ batches with these limits; validation must not use different (e.g. halved) limits.
     const auto& model_cfg = ctx.model->getConfig();
-    const int full_token_budget = static_cast<int>(model_cfg.max_cached_batch * model_cfg.max_cached_seq_len);
-    const int safe_token_budget = full_token_budget / 2;
-    const int val_batch_size = std::max(1, ctx.config.hyperparameters.batch_size / 2);
+    const int batch_size = std::max(1, ctx.config.hyperparameters.batch_size);
+    const uint32_t config_token_budget = static_cast<uint32_t>(batch_size) *
+        static_cast<uint32_t>(std::max(1, model_cfg.max_seq_len));
 
-    ctx.logging.logger->log("[Val] Token budget: " + std::to_string(safe_token_budget) +
-        " (half of training limit: " + std::to_string(full_token_budget) + ")");
-    
+    ctx.logging.logger->log("[Val] Token budget: " + std::to_string(config_token_budget) +
+        " (same as training: batch_size=" + std::to_string(batch_size) + " x max_seq_len=" + std::to_string(model_cfg.max_seq_len) + ")");
+
     GRIM::Batching::BatchOptions val_opts;
-    val_opts.max_tokens_per_batch = static_cast<uint32_t>(safe_token_budget);
-    val_opts.max_batch_size = static_cast<uint32_t>(val_batch_size);
+    val_opts.max_tokens_per_batch = config_token_budget;
+    val_opts.max_batch_size = static_cast<uint32_t>(batch_size);
     val_opts.bucket_step = 256;
     
     auto val_schedule = GRIM::Batching::buildBatches(ctx.data.val_catalog, val_opts);
@@ -1434,8 +1431,6 @@ ValidationResult runValidation(TrainingContext& ctx) {
             
             float batch_val_loss = ctx.model->computeLossBatch(val_payload, /*is_training=*/false);
             ctx.model->getTrainingState().autograd_intermediates.clear();
-            // Sync so frees from clear() are processed before next batch (prevents validation OOM)
-            cudaDeviceSynchronize();
 
             // Check for deferred CUDA errors after each batch
             cudaError_t batch_err = cudaGetLastError();
