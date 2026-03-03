@@ -302,7 +302,7 @@ void logInferenceSample(TrainingContext& ctx, TrainingLoopState& state) {
         return;
     }
 
-    const std::string prompt = readEnvString("GRIM_SAMPLE_PROMPT", "What is a Planet?");
+    const std::string prompt = readEnvString("GRIM_SAMPLE_PROMPT", "What is a Planet and why is the value 80 less than 100?");
     const int max_new_tokens = readEnvInt("GRIM_SAMPLE_TOKENS", 80);
     const int max_chars = readEnvInt("GRIM_SAMPLE_MAX_CHARS", 300);
     if (max_new_tokens <= 0 || max_chars <= 0) {
@@ -313,6 +313,8 @@ void logInferenceSample(TrainingContext& ctx, TrainingLoopState& state) {
     std::vector<int> prompt_tokens = std::move(prompt_result.token_ids);
     std::vector<float> prompt_numeric_values = std::move(prompt_result.token_numeric_values);
     std::vector<uint8_t> prompt_atom_mask = std::move(prompt_result.token_atom_mask);
+    auto prompt_atom_table = prompt_result.atom_table;
+    std::vector<uint32_t> prompt_atom_entry_ids = std::move(prompt_result.atom_entry_ids);
     if (prompt_tokens.empty()) {
         ctx.logging.logger->log("[Sample] prompt tokenization returned empty tokens");
         return;
@@ -328,6 +330,9 @@ void logInferenceSample(TrainingContext& ctx, TrainingLoopState& state) {
         }
         if (prompt_atom_mask.size() >= drop) {
             prompt_atom_mask.erase(prompt_atom_mask.begin(), prompt_atom_mask.begin() + drop);
+        }
+        if (prompt_atom_entry_ids.size() >= drop) {
+            prompt_atom_entry_ids.erase(prompt_atom_entry_ids.begin(), prompt_atom_entry_ids.begin() + drop);
         }
     }
 
@@ -349,7 +354,9 @@ void logInferenceSample(TrainingContext& ctx, TrainingLoopState& state) {
             prompt_tokens,
             prompt_numeric_values,
             prompt_atom_mask,
-            &cfg);
+            &cfg,
+            prompt_atom_table,
+            prompt_atom_entry_ids);
         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start).count();
 

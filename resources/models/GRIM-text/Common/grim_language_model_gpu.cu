@@ -618,7 +618,9 @@ std::vector<GeneratedSequence> LanguageModel::generate(
     const std::vector<int>& prompt_tokens,
     const std::vector<float>& prompt_numeric_values,
     const std::vector<uint8_t>& prompt_atom_mask,
-    const GenerationConfig* gen_config)
+    const GenerationConfig* gen_config,
+    std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table,
+    const std::vector<uint32_t>& prompt_atom_entry_ids)
 {
 #ifdef USE_CUDA
     if (config_.use_gpu && gpu_encoder_) {
@@ -630,14 +632,15 @@ std::vector<GeneratedSequence> LanguageModel::generate(
         std::vector<GeneratedSequence> outputs;
         outputs.reserve(sequences);
         for (int i = 0; i < sequences; ++i) {
-            // Each sequence gets a unique seed offset for reproducibility
             GenerationConfig seq_cfg = cfg;
             if (seq_cfg.seed != 0) seq_cfg.seed += i;
             outputs.push_back(generateSequenceGPU(prompt_tokens,
                                                   prompt_numeric_values,
                                                   prompt_atom_mask,
                                                   seq_cfg,
-                                                  nullptr));
+                                                  nullptr,
+                                                  prompt_atom_table,
+                                                  prompt_atom_entry_ids));
         }
         return outputs;
     }
@@ -650,7 +653,9 @@ GeneratedSequence LanguageModel::generateStream(
     const std::vector<float>& prompt_numeric_values,
     const std::vector<uint8_t>& prompt_atom_mask,
     GenerationStreamCallback callback,
-    const GenerationConfig* gen_config)
+    const GenerationConfig* gen_config,
+    std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table,
+    const std::vector<uint32_t>& prompt_atom_entry_ids)
 {
 #ifdef USE_CUDA
     if (config_.use_gpu && gpu_encoder_) {
@@ -659,7 +664,9 @@ GeneratedSequence LanguageModel::generateStream(
                                    prompt_numeric_values,
                                    prompt_atom_mask,
                                    cfg,
-                                   &callback);
+                                   &callback,
+                                   prompt_atom_table,
+                                   prompt_atom_entry_ids);
     }
 #endif
     throw std::runtime_error("LanguageModel::generateStream requires GPU initialization");
@@ -670,12 +677,19 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
                                                      const std::vector<float>& prompt_numeric_values,
                                                      const std::vector<uint8_t>& prompt_atom_mask,
                                                      const GenerationConfig& cfg,
-                                                     GenerationStreamCallback* stream_callback) {
+                                                     GenerationStreamCallback* stream_callback,
+                                                     std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table,
+                                                     const std::vector<uint32_t>& prompt_atom_entry_ids) {
     GeneratedSequence sequence;
     sequence.token_ids = prompt_tokens;
     sequence.token_numeric_values = prompt_numeric_values;
     sequence.token_atom_mask = prompt_atom_mask;
-    sequence.atom_entry_ids.assign(prompt_tokens.size(), GRIM::Tokenizer::kAtomEntryNone);
+    sequence.context_atom_table = prompt_atom_table;
+    if (!prompt_atom_entry_ids.empty() && prompt_atom_entry_ids.size() == prompt_tokens.size()) {
+        sequence.atom_entry_ids = prompt_atom_entry_ids;
+    } else {
+        sequence.atom_entry_ids.assign(prompt_tokens.size(), GRIM::Tokenizer::kAtomEntryNone);
+    }
     
     if (!config_.use_gpu || !gpu_encoder_) {
         throw std::runtime_error("generateSequenceGPU requires initialized GPU encoder");

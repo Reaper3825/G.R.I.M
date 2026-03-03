@@ -21,12 +21,16 @@
 
 #include "grim_language_model_cuda.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
+#include "../Shared/UnigramByte/AtomTable.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include <iostream>
 #include <fstream>
 #include <filesystem>
 #include <memory>
 #include <chrono>
+#include <sstream>
+#include <iomanip>
+#include <cmath>
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include "../../control/ai_config_paths.hpp"
@@ -205,13 +209,12 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
         auto tokens = std::move(encoded.token_ids);
         auto numeric_values = std::move(encoded.token_numeric_values);
         auto atom_mask = std::move(encoded.token_atom_mask);
+        auto prompt_atom_table = encoded.atom_table;
+        auto atom_entry_ids = std::move(encoded.atom_entry_ids);
         auto end_encode = std::chrono::high_resolution_clock::now();
         auto encode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_encode - start_encode).count();
         std::cout << " " << tokens.size() << " tokens (" << encode_ms << "ms)" << std::endl;
 
-        // CRITICAL: Remove EOS token from prompt if present
-        // The tokenizer adds EOS by default, but for generation we want the MODEL to generate EOS
-        // Having EOS in the prompt confuses the model's attention
         int eos_id = g_tokenizer->eosId();
         if (!tokens.empty() && tokens.back() == eos_id) {
             tokens.pop_back();
@@ -220,6 +223,9 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
             }
             if (!atom_mask.empty()) {
                 atom_mask.pop_back();
+            }
+            if (!atom_entry_ids.empty()) {
+                atom_entry_ids.pop_back();
             }
             std::cout << "[Generate] Removed EOS from prompt, now " << tokens.size() << " tokens" << std::endl;
         }
@@ -235,7 +241,8 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
 
         std::cout << "[Generate] Starting generation (max_tokens=" << gen_config.max_new_tokens << ", temp=" << gen_config.temperature << ")..." << std::endl << std::flush;
         auto start_gen = std::chrono::high_resolution_clock::now();
-        auto results = g_model->generate(tokens, numeric_values, atom_mask, &gen_config);
+        auto results = g_model->generate(tokens, numeric_values, atom_mask, &gen_config,
+                                         prompt_atom_table, atom_entry_ids);
         auto end_gen = std::chrono::high_resolution_clock::now();
         auto gen_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_gen - start_gen).count();
 
@@ -246,52 +253,82 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
 
         std::cout << "[Generate] Generated " << results[0].token_ids.size() << " tokens in " << gen_ms << "ms" << std::endl;
         std::cout << "[Generate] Tokens/sec: " << (results[0].token_ids.size() * 1000.0 / gen_ms) << std::endl;
-        
-        // DEBUG: Show all generated token IDs BEFORE decode
-        std::cout << "[Generate] Token IDs (before decode): ";
-        for (size_t i = 0; i < results[0].token_ids.size(); i++) {
-            std::cout << results[0].token_ids[i] << " ";
-        }
-        std::cout << std::endl;
 
         std::cout << "[Generate] Decoding..." << std::flush;
         auto start_decode = std::chrono::high_resolution_clock::now();
-        
-        // Atom resolver: converts atom tokens to symbolic representation
-        // Atoms are structural tokens (numbers, URLs, etc) injected by ScratchBlock during reasoning
-        auto atom_resolver = [](int token_id, GRIM::Tokenizer::AtomType type) -> std::string {
-            // Return atom type name for visibility
-            switch (type) {
-                case GRIM::Tokenizer::AtomType::ATOM_INTEGER: return "[INT]";
-                case GRIM::Tokenizer::AtomType::ATOM_FLOAT: return "[FLOAT]";
-                case GRIM::Tokenizer::AtomType::ATOM_HEX: return "[HEX]";
-                case GRIM::Tokenizer::AtomType::ATOM_BINARY: return "[BIN]";
-                case GRIM::Tokenizer::AtomType::ATOM_IDENTIFIER: return "[ID]";
-                case GRIM::Tokenizer::AtomType::ATOM_STRING_LITERAL: return "[STR]";
-                case GRIM::Tokenizer::AtomType::ATOM_REGEX: return "[REGEX]";
-                case GRIM::Tokenizer::AtomType::ATOM_URL: return "[URL]";
-                case GRIM::Tokenizer::AtomType::ATOM_EMAIL: return "[EMAIL]";
-                case GRIM::Tokenizer::AtomType::ATOM_PATH: return "[PATH]";
-                case GRIM::Tokenizer::AtomType::ATOM_DATE: return "[DATE]";
-                case GRIM::Tokenizer::AtomType::ATOM_TIME: return "[TIME]";
-                case GRIM::Tokenizer::AtomType::ATOM_IP_ADDRESS: return "[IP]";
-                case GRIM::Tokenizer::AtomType::ATOM_EQUATION: return "[EQN]";
-                case GRIM::Tokenizer::AtomType::ATOM_EXPRESSION: return "[EXPR]";
-                default: return "[ATOM]";
+
+        const auto& seq = results[0];
+        const GRIM::Tokenizer::AtomTable* atom_tbl = seq.context_atom_table.get();
+        std::string output;
+        for (size_t i = 0; i < seq.token_ids.size(); ++i) {
+            const int tid = seq.token_ids[i];
+
+            if (g_tokenizer->isByteToken(tid)) {
+                output.push_back(static_cast<char>(g_tokenizer->byteEncoder().tokenToByte(tid)));
+                continue;
             }
-        };
-        
-        std::string output = g_tokenizer->decodeWithAtoms(results[0].token_ids, atom_resolver);
+
+            if (g_tokenizer->isAtomToken(tid)) {
+                const auto type = GRIM::Tokenizer::tokenIdToAtomType(tid);
+
+                if (GRIM::Tokenizer::isNumericAtom(type)) {
+                    if (i < seq.token_numeric_values.size() &&
+                        i < seq.token_atom_mask.size() &&
+                        seq.token_atom_mask[i] &&
+                        std::isfinite(seq.token_numeric_values[i])) {
+                        const float value = seq.token_numeric_values[i];
+                        std::ostringstream oss;
+                        switch (type) {
+                            case GRIM::Tokenizer::AtomType::ATOM_INTEGER:
+                                oss << static_cast<long long>(std::llround(value));
+                                break;
+                            case GRIM::Tokenizer::AtomType::ATOM_FLOAT:
+                                oss << std::setprecision(6) << value;
+                                break;
+                            case GRIM::Tokenizer::AtomType::ATOM_HEX: {
+                                const long long iv = std::llround(value);
+                                oss << "0x" << std::hex << std::uppercase << iv;
+                                break;
+                            }
+                            case GRIM::Tokenizer::AtomType::ATOM_BINARY: {
+                                const long long iv = std::llround(value);
+                                if (iv == 0) { oss << "0b0"; }
+                                else {
+                                    std::string bits;
+                                    long long av = std::abs(iv);
+                                    while (av > 0) { bits.push_back('0' + static_cast<char>(av & 1)); av >>= 1; }
+                                    std::reverse(bits.begin(), bits.end());
+                                    if (iv < 0) oss << "-";
+                                    oss << "0b" << bits;
+                                }
+                                break;
+                            }
+                            default: oss << value; break;
+                        }
+                        output += oss.str();
+                        continue;
+                    }
+                } else {
+                    if (atom_tbl && i < seq.atom_entry_ids.size() &&
+                        seq.atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone) {
+                        const auto* entry = atom_tbl->getAtom(seq.atom_entry_ids[i]);
+                        if (entry) {
+                            output += atom_tbl->atomToString(*entry);
+                            continue;
+                        }
+                    }
+                }
+
+                output += g_tokenizer->tokenToString(tid);
+                continue;
+            }
+
+            output += g_tokenizer->tokenToString(tid);
+        }
+
         auto end_decode = std::chrono::high_resolution_clock::now();
         auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_decode - start_decode).count();
         std::cout << " done (" << decode_ms << "ms)" << std::endl;
-        
-        // DEBUG: Show token IDs AFTER decode (should be same)
-        std::cout << "[Generate] Token IDs (after decode): ";
-        for (size_t i = 0; i < results[0].token_ids.size(); i++) {
-            std::cout << results[0].token_ids[i] << " ";
-        }
-        std::cout << std::endl;
 
         return output;
 

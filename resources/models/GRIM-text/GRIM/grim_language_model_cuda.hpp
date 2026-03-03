@@ -542,12 +542,16 @@ public:
     std::vector<GeneratedSequence> generate(const std::vector<int>& prompt_tokens,
                                             const std::vector<float>& prompt_numeric_values,
                                             const std::vector<uint8_t>& prompt_atom_mask,
-                                            const GenerationConfig* gen_config = nullptr);
+                                            const GenerationConfig* gen_config = nullptr,
+                                            std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table = nullptr,
+                                            const std::vector<uint32_t>& prompt_atom_entry_ids = {});
     GeneratedSequence generateStream(const std::vector<int>& prompt_tokens,
                                      const std::vector<float>& prompt_numeric_values,
                                      const std::vector<uint8_t>& prompt_atom_mask,
                                      GenerationStreamCallback callback,
-                                     const GenerationConfig* gen_config = nullptr);
+                                     const GenerationConfig* gen_config = nullptr,
+                                     std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table = nullptr,
+                                     const std::vector<uint32_t>& prompt_atom_entry_ids = {});
     
     // Training
     float computeLossBatch(const GRIM::Batching::BatchPayload& payload,
@@ -667,7 +671,9 @@ public:
                                           const std::vector<float>& prompt_numeric_values,
                                           const std::vector<uint8_t>& prompt_atom_mask,
                                           const GenerationConfig& cfg,
-                                          GenerationStreamCallback* stream_callback = nullptr);
+                                          GenerationStreamCallback* stream_callback = nullptr,
+                                          std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table = nullptr,
+                                          const std::vector<uint32_t>& prompt_atom_entry_ids = {});
     
 private:
     // Core inference forward: assumes data already in cached_* tensors.
