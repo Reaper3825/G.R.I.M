@@ -2145,7 +2145,7 @@ BatchResult processBatch(
             EmitModuleInfo(ModuleId::ForwardPass, pred_info.str(), ctx.global_step);
 
             if (logit_trace_enabled && sample_positions > 0) {
-                const int kDebugTokenId = Tokenizer::UNIGRAM_VOCAB_OFFSET;
+                const int kDebugTokenId = GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET;
                 int debug_pos = -1;
                 int debug_b = -1;
                 int debug_t = -1;
