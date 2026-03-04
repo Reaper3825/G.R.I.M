@@ -35,6 +35,7 @@
 #include "../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 #include "../Layers/Embedding/Embedding_GPU.hpp"
 #include "../Layers/LMHead/lm_head_GPU.hpp"
+#include "../Layers/NumericHead/numeric_head_GPU.hpp"
 #include "../Shared/GPUBuffer/GPUBuffer.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../Shared/TrainingState/TrainingState_GPU.hpp"
@@ -578,6 +579,11 @@ public:
     // Appends new token to cached sequence and recomputes full forward pass
     Vector forwardStep(int new_token, float numeric_value, uint8_t atom_mask);
     
+    // Reconstruct the predicted numeric value from the cached numeric head
+    // output produced by the most recent forward pass. Call AFTER sampling
+    // a <NUM> token and BEFORE forwardStep appends the next token.
+    float predictNumericValue() const;
+
     // Clear KV cache (call before starting new generation)
     void resetKVCache();
     
@@ -661,6 +667,10 @@ public:
     // LM Head layer access (Pattern B: persistent, self-allocating)
     LMHeadLayer* getLmHeadLayer() { return lm_head_layer_.get(); }
     const LMHeadLayer* getLmHeadLayer() const { return lm_head_layer_.get(); }
+
+    // Numeric Head layer access (nullptr when disabled)
+    NumericHeadLayer* getNumericHeadLayer() { return numeric_head_layer_.get(); }
+    const NumericHeadLayer* getNumericHeadLayer() const { return numeric_head_layer_.get(); }
     
     // Scratch pool configuration (pinned memory transfers)
     void configureScratchPool(bool enabled);
@@ -720,6 +730,9 @@ private:
 
     // LM Head layer (Pattern B: persistent, self-allocating, owns final_rms_gamma)
     std::unique_ptr<LMHeadLayer> lm_head_layer_;
+
+    // Numeric Head layer (predicts log-magnitude + sign for <NUM> tokens)
+    std::unique_ptr<NumericHeadLayer> numeric_head_layer_;
 #endif
 };
 

@@ -124,8 +124,8 @@ std::string trimSampleText(const std::string& text, std::size_t max_chars) {
 
 std::string decodeWithAtomSideChannel(const GRIM::Tokenizer::UniByte& tokenizer,
                                       const std::vector<int>& token_ids,
-                                      const std::vector<float>& /*numeric_values*/,
-                                      const std::vector<uint8_t>& /*atom_mask*/,
+                                      const std::vector<float>& numeric_values,
+                                      const std::vector<uint8_t>& atom_mask,
                                       const std::vector<uint32_t>& atom_entry_ids,
                                       const GRIM::Tokenizer::AtomTable* atom_table) {
     std::string result;
@@ -141,9 +141,6 @@ std::string decodeWithAtomSideChannel(const GRIM::Tokenizer::UniByte& tokenizer,
         }
 
         if (tokenizer.isAtomToken(tid)) {
-            // All atom types (numeric and string) are retrieved the same way:
-            // atom_table stores the original raw text for every registered atom.
-            // numeric_values exists for ScratchBlock input, not for decoding.
             if (atom_table && i < atom_entry_ids.size() &&
                 atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone) {
                 const auto* entry = atom_table->getAtom(atom_entry_ids[i]);
@@ -153,7 +150,13 @@ std::string decodeWithAtomSideChannel(const GRIM::Tokenizer::UniByte& tokenizer,
                 }
             }
 
-            // Fallback: model-generated atom with no registered entry
+            // Use numeric value from side-channel (training data or model-predicted)
+            if (i < atom_mask.size() && atom_mask[i] != 0 &&
+                i < numeric_values.size()) {
+                result += GRIM::Tokenizer::formatNumericValue(numeric_values[i]);
+                continue;
+            }
+
             result += tokenizer.tokenToString(tid);
             continue;
         }
@@ -2142,7 +2145,7 @@ BatchResult processBatch(
             EmitModuleInfo(ModuleId::ForwardPass, pred_info.str(), ctx.global_step);
 
             if (logit_trace_enabled && sample_positions > 0) {
-                constexpr int kDebugTokenId = 277;
+                const int kDebugTokenId = Tokenizer::UNIGRAM_VOCAB_OFFSET;
                 int debug_pos = -1;
                 int debug_b = -1;
                 int debug_t = -1;
@@ -4219,9 +4222,11 @@ BatchResult processBatch(
                 clip_emb_count += clip_gm.embedding_count;
             }
             const float clip_enc_sq = clip_gm.attention_sum_sq + clip_gm.ffn_sum_sq
-                                    + clip_gm.rmsnorm_sum_sq + clip_gm.scratchblock_sum_sq;
+                                    + clip_gm.rmsnorm_sum_sq + clip_gm.scratchblock_sum_sq
+                                    + clip_gm.numeric_head_sum_sq;
             const int64_t clip_enc_count = clip_gm.attention_count + clip_gm.ffn_count
-                                         + clip_gm.rmsnorm_count + clip_gm.scratchblock_count;
+                                         + clip_gm.rmsnorm_count + clip_gm.scratchblock_count
+                                         + clip_gm.numeric_head_count;
             const float clip_emb_rms = (clip_emb_count > 0) ? std::sqrt(clip_emb_sq / static_cast<float>(clip_emb_count)) : 0.0f;
             const float clip_enc_rms = (clip_enc_count > 0) ? std::sqrt(clip_enc_sq / static_cast<float>(clip_enc_count)) : 0.0f;
             result.grad_rms = std::sqrt(clip_emb_rms * clip_emb_rms + clip_enc_rms * clip_enc_rms);
@@ -4241,9 +4246,11 @@ BatchResult processBatch(
                 const float enc_sum_sq = clip_gm.attention_sum_sq
                                        + clip_gm.ffn_sum_sq
                                        + clip_gm.rmsnorm_sum_sq
-                                       + clip_gm.scratchblock_sum_sq;
+                                       + clip_gm.scratchblock_sum_sq
+                                       + clip_gm.numeric_head_sum_sq;
                 const int64_t enc_count = clip_gm.attention_count + clip_gm.ffn_count
-                                        + clip_gm.rmsnorm_count + clip_gm.scratchblock_count;
+                                        + clip_gm.rmsnorm_count + clip_gm.scratchblock_count
+                                        + clip_gm.numeric_head_count;
                 const float enc_rms = (enc_count > 0) ? std::sqrt(enc_sum_sq / static_cast<float>(enc_count)) : 0.0f;
                 
                 bool any_clipped = false;
@@ -4269,7 +4276,8 @@ BatchResult processBatch(
                         if (g.type == GRIM::ParamGroupType::ATTENTION ||
                             g.type == GRIM::ParamGroupType::FFN ||
                             g.type == GRIM::ParamGroupType::RMSNORM ||
-                            g.type == GRIM::ParamGroupType::SCRATCHBLOCK) {
+                            g.type == GRIM::ParamGroupType::SCRATCHBLOCK ||
+                            g.type == GRIM::ParamGroupType::NUMERIC_HEAD) {
                             launchScaleGradients(g.grads(), static_cast<int>(g.size()), enc_clip_coef, clip_stream);
                         }
                     }

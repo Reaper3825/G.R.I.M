@@ -296,9 +296,28 @@ bool SerializationLayer::load(const SerializationLoadRequest& request) {
         // Old checkpoints may contain value_extraction_weight/bias — silently ignore them.
         // The extraction head has been removed from the architecture.
         
-        GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[load] ScratchBlock: atom_types=", 
+        GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[load] ScratchBlock: atom_types=",
                                             fb_scratch_block->num_atom_types(),
                                             " atom_dim=", fb_scratch_block->atom_embedding_dim()));
+    }
+
+    // Load NumericHead weights (optional — missing in old checkpoints)
+    const auto* fb_numeric_head = model_fb->numeric_head();
+    if (fb_numeric_head && fb_numeric_head->projection_data() && request.numeric_head.weights.ptr) {
+        std::vector<float> nh_weights(fb_numeric_head->projection_data()->begin(),
+                                      fb_numeric_head->projection_data()->end());
+        if (!upload_device_vector(nh_weights, request.numeric_head.weights, "NumericHead weights")) {
+            return false;
+        }
+        if (fb_numeric_head->bias_data() && request.numeric_head.bias.ptr) {
+            std::vector<float> nh_bias(fb_numeric_head->bias_data()->begin(),
+                                       fb_numeric_head->bias_data()->end());
+            if (!upload_device_vector(nh_bias, request.numeric_head.bias, "NumericHead bias")) {
+                return false;
+            }
+        }
+        GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[load] NumericHead: d_model=",
+                                            fb_numeric_head->d_model()));
     }
 
     // Issue #33: Load final RMSNorm gamma (normalizes encoder output before LM head)
@@ -589,6 +608,22 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         }
     }
 
+    // Save NumericHead weights
+    flatbuffers::Offset<GRIMTransformer::NumericHeadWeights> fb_numeric_head = 0;
+    const auto& nh_view = request.sources.numeric_head;
+    if (nh_view.enabled && nh_view.weights.ptr) {
+        auto nh_weights = download_device_vector(nh_view.weights, "NumericHead weights");
+        auto nh_bias = download_device_vector(nh_view.bias, "NumericHead bias");
+        fb_numeric_head = GRIMTransformer::CreateNumericHeadWeights(
+            builder,
+            builder.CreateVector(nh_weights),
+            builder.CreateVector(nh_bias),
+            static_cast<uint32_t>(nh_view.d_model),
+            true);
+        GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[save] NumericHead: weights=",
+                                            nh_weights.size(), " bias=", nh_bias.size()));
+    }
+
     // Issue #33: Save final RMSNorm gamma (normalizes encoder output before LM head)
     flatbuffers::Offset<flatbuffers::Vector<float>> fb_final_rms_gamma = 0;
     const auto& final_rms_view = request.sources.final_rms_gamma;
@@ -628,7 +663,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         fb_embeddings,
         fb_encoder_layers,
         fb_lm_head,
-        0,                   // numeric_head removed - not used
+        fb_numeric_head,
         fb_scratch_block,
         fb_final_rms_gamma,  // Issue #33: Final RMSNorm gamma
         0,                   // loss_weighting (not used)

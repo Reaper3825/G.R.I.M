@@ -231,6 +231,13 @@ void LanguageModel::buildParameterGroups() {
         fprintf(stderr, "[buildParameterGroups] DIAG-D-SKIP: scratchblock not enabled\n"); fflush(stderr);
     }
 
+    // NumericHead parameters
+    if (numeric_head_layer_) {
+        registerTensor("numeric_head_weights", numeric_head_layer_->weights(), ParamGroupType::NUMERIC_HEAD);
+        registerNonDecayTensor("numeric_head_bias", numeric_head_layer_->bias(), ParamGroupType::NUMERIC_HEAD);
+        fprintf(stderr, "[buildParameterGroups] DIAG-D4b: numeric head registered\n"); fflush(stderr);
+    }
+
     // Final RMSNorm (between encoder output and LM head) — no weight decay
     fprintf(stderr, "[buildParameterGroups] DIAG-D5: about to register final_rms_gamma data=%p grad=%d numel=%zu\n",
             (void*)lm_head_layer_->finalRmsGamma().data, (int)lm_head_layer_->finalRmsGamma().has_grad(),

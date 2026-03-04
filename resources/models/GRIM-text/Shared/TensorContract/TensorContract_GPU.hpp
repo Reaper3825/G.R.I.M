@@ -726,7 +726,8 @@ enum class ParamGroupType : uint8_t {
     FFN = 3,            ///< Feed-forward network weights (W1, W2)
     RMSNORM = 4,        ///< RMSNorm gamma parameters
     SCRATCHBLOCK = 5,   ///< Atom type embeddings + projection
-    COUNT = 6           ///< Number of parameter group types
+    NUMERIC_HEAD = 6,   ///< Numeric prediction head weights + bias
+    COUNT = 7           ///< Number of parameter group types
 };
 
 //======================================================//

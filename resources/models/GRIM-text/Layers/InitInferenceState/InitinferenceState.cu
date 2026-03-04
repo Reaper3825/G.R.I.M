@@ -120,6 +120,17 @@ void LanguageModel::initInferenceState() {
         std::cout << "  ✓ LMHeadLayer initialized (inference, tie=" 
                   << (cfg.tie_embeddings ? "true" : "false") << ")" << std::endl;
     }
+
+    // NumericHead layer (inference mode, no gradients)
+    {
+        NumericHeadConfig nh_cfg;
+        nh_cfg.d_model = cfg.d_model;
+        nh_cfg.stream = primary_stream;
+        nh_cfg.cublas_handle = training_state_.cublas_handle;
+
+        numeric_head_layer_ = std::make_unique<NumericHeadLayer>(nh_cfg, /*seed=*/0, primary_stream);
+        std::cout << "  ✓ NumericHeadLayer initialized (inference, d_model=" << cfg.d_model << ")" << std::endl;
+    }
     
     // 3b. Allocate minimal activation caches
     const size_t max_batch_size = static_cast<size_t>(std::max(1, cfg.max_cached_batch));

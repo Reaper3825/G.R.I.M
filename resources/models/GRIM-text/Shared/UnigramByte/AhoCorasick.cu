@@ -494,72 +494,44 @@ void AhoCorasick::computeOutputClosure() {
 
 AhoCorasick StructuralPatterns::createURLPrefixes() {
     AhoCorasick ac;
-    ac.addPattern("http://", AtomType::ATOM_URL);
-    ac.addPattern("https://", AtomType::ATOM_URL);
-    ac.addPattern("ftp://", AtomType::ATOM_URL);
-    ac.addPattern("ftps://", AtomType::ATOM_URL);
-    ac.addPattern("ws://", AtomType::ATOM_URL);
-    ac.addPattern("wss://", AtomType::ATOM_URL);
     ac.build();
     return ac;
 }
 
 AhoCorasick StructuralPatterns::createDateSeparators() {
     AhoCorasick ac;
-    // These are used as hints, actual validation happens elsewhere
-    ac.addPattern("-", AtomType::ATOM_DATE);
-    ac.addPattern("/", AtomType::ATOM_DATE);
-    ac.addPattern(".", AtomType::ATOM_DATE);
     ac.build();
     return ac;
 }
 
 AhoCorasick StructuralPatterns::createTimeSeparators() {
     AhoCorasick ac;
-    ac.addPattern(":", AtomType::ATOM_TIME);
-    ac.addPattern(".", AtomType::ATOM_TIME);
     ac.build();
     return ac;
 }
 
 AhoCorasick StructuralPatterns::createNumberPrefixes() {
     AhoCorasick ac;
-    ac.addPattern("0x", AtomType::ATOM_HEX);
-    ac.addPattern("0X", AtomType::ATOM_HEX);
-    ac.addPattern("0b", AtomType::ATOM_BINARY);
-    ac.addPattern("0B", AtomType::ATOM_BINARY);
+    ac.addPattern("0x", AtomType::ATOM_NUM);
+    ac.addPattern("0X", AtomType::ATOM_NUM);
+    ac.addPattern("0b", AtomType::ATOM_NUM);
+    ac.addPattern("0B", AtomType::ATOM_NUM);
     ac.build();
     return ac;
 }
 
 AhoCorasick StructuralPatterns::createPathSeparators() {
     AhoCorasick ac;
-    ac.addPattern("/", AtomType::ATOM_PATH);
-    ac.addPattern("\\", AtomType::ATOM_PATH);
     ac.build();
     return ac;
 }
 
 AhoCorasick StructuralPatterns::createAllStructuralPatterns() {
     AhoCorasick ac;
-    
-    // URLs
-    ac.addPattern("http://", AtomType::ATOM_URL);
-    ac.addPattern("https://", AtomType::ATOM_URL);
-    ac.addPattern("ftp://", AtomType::ATOM_URL);
-    ac.addPattern("ftps://", AtomType::ATOM_URL);
-    ac.addPattern("ws://", AtomType::ATOM_URL);
-    ac.addPattern("wss://", AtomType::ATOM_URL);
-    
-    // Email indicators
-    ac.addPattern("@", AtomType::ATOM_EMAIL);
-    
-    // Number prefixes
-    ac.addPattern("0x", AtomType::ATOM_HEX);
-    ac.addPattern("0X", AtomType::ATOM_HEX);
-    ac.addPattern("0b", AtomType::ATOM_BINARY);
-    ac.addPattern("0B", AtomType::ATOM_BINARY);
-    
+    ac.addPattern("0x", AtomType::ATOM_NUM);
+    ac.addPattern("0X", AtomType::ATOM_NUM);
+    ac.addPattern("0b", AtomType::ATOM_NUM);
+    ac.addPattern("0B", AtomType::ATOM_NUM);
     ac.build();
     return ac;
 }

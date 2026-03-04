@@ -1,4 +1,5 @@
 #include "HardcodedStates_GPU.hpp"
+#include "../../Shared/UnigramByte/Unigram.hpp"
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -250,11 +251,11 @@ void generateHardcodedStates(
     dim3 grid_2d(total_tokens, (d_model + 255) / 256);
     dim3 block_2d(256);
     
-    // Compute W[277] pointer (token 277 = SPACE)
-    constexpr int kToken277 = 277;
+    // Compute W[SPACE] pointer (SPACE = first unigram token = UNIGRAM_VOCAB_OFFSET)
+    const int kSpaceToken = Tokenizer::UNIGRAM_VOCAB_OFFSET;
     const float* w277 = nullptr;
-    if (lm_head_weights && kToken277 < vocab_size) {
-        w277 = lm_head_weights + static_cast<size_t>(kToken277) * d_model;
+    if (lm_head_weights && kSpaceToken < vocab_size) {
+        w277 = lm_head_weights + static_cast<size_t>(kSpaceToken) * d_model;
     }
     
     switch (pattern) {

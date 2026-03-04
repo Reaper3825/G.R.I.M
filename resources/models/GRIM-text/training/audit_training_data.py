@@ -22,32 +22,17 @@ NUM_SPECIAL_TOKENS = 4           # <unk>=0, <pad>=1, <s>=2, </s>=3
 BYTE_TOKEN_OFFSET = NUM_SPECIAL_TOKENS  # 4
 BYTE_VOCAB_SIZE = 256
 ATOM_TOKEN_START = BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE  # 260
-ATOM_VOCAB_SIZE = 20  # ~kAtomTypeCount (adjusted dynamically)
+ATOM_VOCAB_SIZE = 2  # ATOM_NONE + ATOM_NUM
 ATOM_TOKEN_END = ATOM_TOKEN_START + ATOM_VOCAB_SIZE
 UNIGRAM_TOKEN_START = ATOM_TOKEN_END
 
 # AtomType ordering matches Shared/UnigramByte/Unigram.hpp
 ATOM_TYPE_LABELS = {
     0: "<ATOM_NONE>",
-    1: "<ATOM_END>",
-    2: "<INT>",
-    3: "<FLOAT>",
-    4: "<HEX>",
-    5: "<BIN>",
-    6: "<ID>",
-    7: "<STR>",
-    8: "<REGEX>",
-    9: "<URL>",
-    10: "<EMAIL>",
-    11: "<PATH>",
-    12: "<DATE>",
-    13: "<TIME>",
-    14: "<IP>",
-    15: "<EQUATION>",
-    16: "<EXPR>",
+    1: "<NUM>",
 }
 
-NUMERIC_ATOM_TYPES = {2, 3, 4, 5}
+NUMERIC_ATOM_TYPES = {1}
 
 
 def load_vocab(vocab_path: str, total_vocab_size: int | None = None) -> tuple[dict, int]:

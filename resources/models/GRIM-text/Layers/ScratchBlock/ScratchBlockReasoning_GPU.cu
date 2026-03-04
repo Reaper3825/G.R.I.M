@@ -41,10 +41,9 @@ __device__ __forceinline__ int ClampNumAtoms(const int* num_atoms, int max_atoms
     return (n > max_atoms) ? max_atoms : n;
 }
 
-// Numeric atom types: INTEGER=2, FLOAT=3, HEX=4, BINARY=5
-// Must match AtomType enum in Unigram.hpp
+// ATOM_NUM=1 is the only atom type
 __device__ __forceinline__ bool isNumericAtomType(int atom_type) {
-    return atom_type >= 2 && atom_type <= 5;
+    return atom_type == 1;
 }
 
 //======================================================//
@@ -105,12 +104,9 @@ __global__ void kernelLookupAtomEmbeddingsWithValue(
     int token_id = token_ids[token_pos];
     int atom_type = (token_id - ATOM_TOKEN_START) % NUM_ATOM_TYPES;
 
-    // UNIFIED: Read packed numeric value and flags for ALL atom types.
-    // AtomTable packs dates as YYYYMMDD, times as HHMMSScc, IPs as packed octets, etc.
-    // Non-atom tokens have 0.0f / 0 which produces zero contribution in value dims.
     float numeric_val = token_numeric_values ? token_numeric_values[token_pos] : 0.0f;
     uint32_t flags = token_atom_flags ? token_atom_flags[token_pos] : 0u;
-    bool has_value = (numeric_val != 0.0f) && isfinite(numeric_val);
+    bool has_value = (atom_mask[token_pos] != 0) && isfinite(numeric_val);
     bool has_flags = (flags != 0u);
 
     // Base embedding from type

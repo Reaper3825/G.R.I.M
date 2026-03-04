@@ -218,9 +218,10 @@ GradNormStatus measureGradientNorms(
     GradMetrics& m = *scratch->h_metrics;
     m = GradMetrics{};  // Zero everything
 
-    // Per-type accumulators (indexed by ParamGroupType enum: 0..5)
-    float type_sum_sq[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    int type_count[6] = {0, 0, 0, 0, 0, 0};
+    // Per-type accumulators (indexed by ParamGroupType enum: 0..6)
+    constexpr int kNumGroups = static_cast<int>(GRIM::ParamGroupType::COUNT);
+    float type_sum_sq[kNumGroups] = {};
+    int type_count[kNumGroups] = {};
 
     for (size_t g = 0; g < num_groups; ++g) {
         float sq = scratch->h_partial_sums[g];
@@ -249,7 +250,7 @@ GradNormStatus measureGradientNorms(
         if (sz == 0) continue;
 
         // Accumulate per-type
-        if (type_idx >= 0 && type_idx < 6) {
+        if (type_idx >= 0 && type_idx < kNumGroups) {
             type_sum_sq[type_idx] += sq;
             type_count[type_idx] += static_cast<int>(sz);
         }
@@ -262,6 +263,7 @@ GradNormStatus measureGradientNorms(
     m.ffn_sum_sq = type_sum_sq[3];            m.ffn_count = type_count[3];
     m.rmsnorm_sum_sq = type_sum_sq[4];        m.rmsnorm_count = type_count[4];
     m.scratchblock_sum_sq = type_sum_sq[5];   m.scratchblock_count = type_count[5];
+    m.numeric_head_sum_sq = type_sum_sq[6];   m.numeric_head_count = type_count[6];
 
     // Aggregate metrics
     m.groups_processed = static_cast<uint32_t>(num_groups);

@@ -122,9 +122,21 @@ struct SerializationScratchBlockReadView {
 struct SerializationScratchBlockWriteView {
 	DeviceWriteView atom_type_embeddings;
 	DeviceWriteView atom_projection;
-	// text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
 	int num_atom_types = 0;
 	int atom_embedding_dim = 0;
+};
+
+struct SerializationNumericHeadReadView {
+	DeviceReadView weights;     // [2, d_model]
+	DeviceReadView bias;        // [2]
+	int d_model = 0;
+	bool enabled = false;
+};
+
+struct SerializationNumericHeadWriteView {
+	DeviceWriteView weights;
+	DeviceWriteView bias;
+	int d_model = 0;
 };
 
 struct SerializationSaveSources {
@@ -133,8 +145,9 @@ struct SerializationSaveSources {
 	SerializationCpuEmbeddingReadData cpu_embedding;
 	std::vector<SerializationEncoderLayerReadView> encoder_layers;
 	SerializationLMHeadReadView lm_head;
-	SerializationScratchBlockReadView scratch_block;  // Optional ScratchBlock weights
-	DeviceReadView final_rms_gamma;  // Issue #33: Final RMSNorm gamma [d_model]
+	SerializationScratchBlockReadView scratch_block;
+	SerializationNumericHeadReadView numeric_head;
+	DeviceReadView final_rms_gamma;
 };
 
 struct SerializationConfig {
@@ -156,8 +169,9 @@ struct SerializationLoadRequest {
 	SerializationCpuEmbeddingWriteOps cpu_embedding;
 	std::vector<SerializationEncoderLayerWriteView> encoder_layers;
 	SerializationLMHeadWriteView lm_head;
-	SerializationScratchBlockWriteView scratch_block;  // Optional ScratchBlock weights
-	DeviceWriteView final_rms_gamma;  // Issue #33: Final RMSNorm gamma [d_model]
+	SerializationScratchBlockWriteView scratch_block;
+	SerializationNumericHeadWriteView numeric_head;
+	DeviceWriteView final_rms_gamma;
 };
 
 class SerializationLayer final : public Layer<SerializationLayer, float> {

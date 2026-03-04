@@ -13,8 +13,8 @@
 //  
 //  Usage:
 //    AhoCorasick ac;
-//    ac.addPattern("http://", AtomType::ATOM_URL);
-//    ac.addPattern("https://", AtomType::ATOM_URL);
+//    ac.addPattern("0x", AtomType::ATOM_NUM);
+//    ac.addPattern("0b", AtomType::ATOM_NUM);
 //    ac.build();
 //    
 //    auto matches = ac.search(text);
@@ -50,7 +50,7 @@ struct AhoCorasickMatch {
     AtomType atom_type;   // Atom type for this pattern
     
     AhoCorasickMatch()
-        : start(0), end(0), length(0), pattern_id(0), atom_type(AtomType::ATOM_IDENTIFIER) {}
+        : start(0), end(0), length(0), pattern_id(0), atom_type(AtomType::ATOM_NONE) {}
     
     AhoCorasickMatch(size_t s, size_t e, uint32_t pid, AtomType type)
         : start(s), end(e), length(e - s), pattern_id(pid), atom_type(type) {}

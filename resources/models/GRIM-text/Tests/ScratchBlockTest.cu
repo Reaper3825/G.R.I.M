@@ -709,20 +709,20 @@ bool testAtomTableTypeMapping(std::string& message) {
     AtomURL url2{"http", "test.org", 8080, "/data", "", ""};
     
     // Register atoms and verify unique token IDs
-    auto tok1 = atom_table.registerAtom(AtomType::ATOM_INTEGER, AtomValue(int1), "42");
-    auto tok2 = atom_table.registerAtom(AtomType::ATOM_INTEGER, AtomValue(int2), "731");
-    auto tok3 = atom_table.registerAtom(AtomType::ATOM_INTEGER, AtomValue(int3), "0xFF");
+    auto tok1 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(int1), "42");
+    auto tok2 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(int2), "731");
+    auto tok3 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(int3), "0xFF");
     
-    auto tok_str1 = atom_table.registerAtom(AtomType::ATOM_STRING_LITERAL, AtomValue(str1), "\"hello\"");
-    auto tok_str2 = atom_table.registerAtom(AtomType::ATOM_STRING_LITERAL, AtomValue(str2), "\"world\"");
-    auto tok_str3 = atom_table.registerAtom(AtomType::ATOM_STRING_LITERAL, AtomValue(str3), "\"hello\"");
+    auto tok_str1 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(str1), "\"hello\"");
+    auto tok_str2 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(str2), "\"world\"");
+    auto tok_str3 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(str3), "\"hello\"");
     
-    auto tok_id1 = atom_table.registerAtom(AtomType::ATOM_IDENTIFIER, AtomValue(id1), "userName");
-    auto tok_id2 = atom_table.registerAtom(AtomType::ATOM_IDENTIFIER, AtomValue(id2), "user_name");
-    auto tok_id3 = atom_table.registerAtom(AtomType::ATOM_IDENTIFIER, AtomValue(id3), "userName");
+    auto tok_id1 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(id1), "userName");
+    auto tok_id2 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(id2), "user_name");
+    auto tok_id3 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(id3), "userName");
     
-    auto tok_url1 = atom_table.registerAtom(AtomType::ATOM_URL, AtomValue(url1), "https://example.com/api");
-    auto tok_url2 = atom_table.registerAtom(AtomType::ATOM_URL, AtomValue(url2), "http://test.org:8080/data");
+    auto tok_url1 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(url1), "https://example.com/api");
+    auto tok_url2 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(url2), "http://test.org:8080/data");
     
     // Verify all tokens are in atom range [ATOM_TOKEN_OFFSET, ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE)
     SB_ASSERT_TRUE(tok1 >= static_cast<int>(ATOM_TOKEN_OFFSET) && tok1 < static_cast<int>(ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE), "Integer token should be in atom range");
@@ -743,7 +743,7 @@ bool testAtomTableTypeMapping(std::string& message) {
     // Verify retrieval
     auto entry1 = atom_table.getAtomEntry(tok1);
     SB_ASSERT_TRUE(entry1 != nullptr, "Should retrieve registered atom");
-    SB_ASSERT_TRUE(entry1->type == AtomType::ATOM_INTEGER, "Retrieved atom should have correct type");
+    SB_ASSERT_TRUE(entry1->type == AtomType::ATOM_NUM, "Retrieved atom should have correct type");
     
     logDiagnostic("AtomTable type mapping validated: unique tokens, deduplication works");
     
@@ -769,9 +769,9 @@ bool testIntegerEmbeddingVariance(std::string& message) {
     AtomInteger int731{731, 10, false};
     AtomInteger int_neg{-42, 10, true};
     
-    auto tok12 = atom_table.registerAtom(AtomType::ATOM_INTEGER, AtomValue(int12), "12");
-    auto tok731 = atom_table.registerAtom(AtomType::ATOM_INTEGER, AtomValue(int731), "731");
-    auto tok_neg = atom_table.registerAtom(AtomType::ATOM_INTEGER, AtomValue(int_neg), "-42");
+    auto tok12 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(int12), "12");
+    auto tok731 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(int731), "731");
+    auto tok_neg = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(int_neg), "-42");
     
     // Upload to GPU
     atom_table.uploadToGPU();
@@ -889,10 +889,10 @@ bool testIdentifierPreservation(std::string& message) {
     AtomIdentifier id3{"UserName", AtomIdentifier::PASCAL_CASE};
     AtomIdentifier id4{"USER_NAME", AtomIdentifier::SCREAMING_SNAKE};
     
-    auto tok1 = atom_table.registerAtom(AtomType::ATOM_IDENTIFIER, AtomValue(id1), "userName");
-    auto tok2 = atom_table.registerAtom(AtomType::ATOM_IDENTIFIER, AtomValue(id2), "user_name");
-    auto tok3 = atom_table.registerAtom(AtomType::ATOM_IDENTIFIER, AtomValue(id3), "UserName");
-    auto tok4 = atom_table.registerAtom(AtomType::ATOM_IDENTIFIER, AtomValue(id4), "USER_NAME");
+    auto tok1 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(id1), "userName");
+    auto tok2 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(id2), "user_name");
+    auto tok3 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(id3), "UserName");
+    auto tok4 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(id4), "USER_NAME");
     
     // Verify all are different tokens (style matters!)
     std::unordered_set<uint32_t> unique_tokens = {tok1, tok2, tok3, tok4};
@@ -904,7 +904,7 @@ bool testIdentifierPreservation(std::string& message) {
     
     // AtomEntry stores compact GPU data, not full AtomValue
     // Check type and flags which encode the identifier style
-    SB_ASSERT_TRUE(entry1->type == AtomType::ATOM_IDENTIFIER, "Should be identifier type");
+    SB_ASSERT_TRUE(entry1->type == AtomType::ATOM_NUM, "Should be identifier type");
     SB_ASSERT_EQ(entry1->flags, static_cast<uint32_t>(AtomIdentifier::CAMEL_CASE), "Identifier style should be preserved in flags");
     
     // Verify raw text is retrievable through string pool
@@ -935,9 +935,9 @@ bool testStringConsistentEmbeddings(std::string& message) {
     AtomString str2{"consistent", '"', false};
     AtomString str3{"different", '"', false};
     
-    auto tok1a = atom_table.registerAtom(AtomType::ATOM_STRING_LITERAL, AtomValue(str1), "\"consistent\"");
-    auto tok1b = atom_table.registerAtom(AtomType::ATOM_STRING_LITERAL, AtomValue(str2), "\"consistent\"");
-    auto tok2 = atom_table.registerAtom(AtomType::ATOM_STRING_LITERAL, AtomValue(str3), "\"different\"");
+    auto tok1a = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(str1), "\"consistent\"");
+    auto tok1b = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(str2), "\"consistent\"");
+    auto tok2 = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(str3), "\"different\"");
     
     // Same string should get same token (deduplication)
     SB_ASSERT_EQ(tok1a, tok1b, "Identical strings should deduplicate to same token");
@@ -1029,10 +1029,10 @@ bool testAtomSemanticReasoning(std::string& message) {
     AtomFloat small_float{5.0, false, 0};
     AtomFloat large_float{5000.0, false, 0};
     
-    auto tok_small_int = atom_table.registerAtom(AtomType::ATOM_INTEGER, AtomValue(small_int), "5");
-    auto tok_large_int = atom_table.registerAtom(AtomType::ATOM_INTEGER, AtomValue(large_int), "5000");
-    auto tok_small_float = atom_table.registerAtom(AtomType::ATOM_FLOAT, AtomValue(small_float), "5.0");
-    auto tok_large_float = atom_table.registerAtom(AtomType::ATOM_FLOAT, AtomValue(large_float), "5000.0");
+    auto tok_small_int = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(small_int), "5");
+    auto tok_large_int = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(large_int), "5000");
+    auto tok_small_float = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(small_float), "5.0");
+    auto tok_large_float = atom_table.registerAtom(AtomType::ATOM_NUM, AtomValue(large_float), "5000.0");
     
     atom_table.uploadToGPU();
     
@@ -1179,9 +1179,9 @@ bool testRoundTripEncoding_FULL(std::string& message) {
         atom_counts[atom.atom_type]++;
     }
     
-    SB_ASSERT_TRUE(atom_counts[AtomType::ATOM_EMAIL] > 0, "Should detect email");
-    SB_ASSERT_TRUE(atom_counts[AtomType::ATOM_URL] > 0, "Should detect URL");
-    SB_ASSERT_TRUE(atom_counts[AtomType::ATOM_INTEGER] > 0, "Should detect integers");
+    SB_ASSERT_TRUE(atom_counts[AtomType::ATOM_NUM] > 0, "Should detect email");
+    SB_ASSERT_TRUE(atom_counts[AtomType::ATOM_NUM] > 0, "Should detect URL");
+    SB_ASSERT_TRUE(atom_counts[AtomType::ATOM_NUM] > 0, "Should detect integers");
     
     std::ostringstream oss;
     oss << "Round-trip encoding detected " << result.atoms.size() << " atoms: ";

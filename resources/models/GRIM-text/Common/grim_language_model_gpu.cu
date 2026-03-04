@@ -789,27 +789,21 @@ GeneratedSequence LanguageModel::generateSequenceGPU(const std::vector<int>& pro
         }
         
         // =====================================================================
-        // ScratchBlock Reasoning: Classify generated token for atom metadata
+        // ScratchBlock Reasoning: numeric head prediction for <NUM> tokens
         //
-        // During training, the tokenizer produces atom_mask and numeric_values
-        // alongside token_ids. During autoregressive generation, we must
-        // reconstruct this metadata for each generated token so that
-        // ScratchBlock's atom detection kernel receives correct input.
-        //
-        // Atom tokens live in range [ATOM_TOKEN_OFFSET, UNIGRAM_VOCAB_OFFSET).
-        // The atom type is encoded as: type = token_id - ATOM_TOKEN_OFFSET.
-        // For atom tokens, we set atom_mask=1 so ScratchBlock activates.
+        // The numeric head ran alongside the LM head in the same forward pass
+        // that produced these logits. Its last-token output is already cached
+        // in training_state_.cached_numeric_pred[2] (D2H copy happened in
+        // executeInferenceForward_). We read it BEFORE forwardStep appends
+        // the new token, because the cached prediction corresponds to the
+        // hidden state that produced the sampled token.
         // =====================================================================
         float token_numeric_value = 0.0f;
         uint8_t token_atom_mask_val = 0;
-        
+
         if (scratchblock_active && GRIM::Tokenizer::isAtomToken(sample.token_id)) {
-            // This generated token IS an atom placeholder — tell ScratchBlock
             token_atom_mask_val = 1;
-            // Numeric value is extracted at tokenization time and stored in
-            // the sequence; for generated atoms we don't have the original
-            // text, so we leave numeric_value=0. The ScratchBlock layer uses
-            // atom type embeddings (from the token ID) as the primary signal.
+            token_numeric_value = predictNumericValue();
         }
         
         // Check for EOS BEFORE processing next step

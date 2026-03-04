@@ -267,8 +267,7 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
             }
 
             if (g_tokenizer->isAtomToken(tid)) {
-                // All atom types use the same retrieval path: atom_table raw text.
-                // numeric_values exists for ScratchBlock input, not for decoding.
+                // Context atoms: use atom table raw text
                 if (atom_tbl && i < seq.atom_entry_ids.size() &&
                     seq.atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone) {
                     const auto* entry = atom_tbl->getAtom(seq.atom_entry_ids[i]);
@@ -278,7 +277,13 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
                     }
                 }
 
-                // Fallback: model-generated atom with no registered entry
+                // Model-generated <NUM>: format the predicted numeric value
+                if (i < seq.token_atom_mask.size() && seq.token_atom_mask[i] != 0 &&
+                    i < seq.token_numeric_values.size()) {
+                    output += GRIM::Tokenizer::formatNumericValue(seq.token_numeric_values[i]);
+                    continue;
+                }
+
                 output += g_tokenizer->tokenToString(tid);
                 continue;
             }

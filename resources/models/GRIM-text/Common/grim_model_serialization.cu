@@ -13,6 +13,7 @@
 #include "../training/schemas/grim_transformer_model_generated.h"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Layers/Serialization/Serialization_GPU.hpp"
+#include "../Shared/UnigramByte/Unigram.hpp"
 #include "grim_model_serialization_version.hpp"
 
 
@@ -215,7 +216,7 @@ bool LanguageModel::save(const std::string& path) {
 
     // Process ScratchBlock weights (if enabled)
     if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
-        constexpr int kNumAtomTypes = 16;  // AtomType enum size
+        const int kNumAtomTypes = Tokenizer::kAtomTypeCount;
         const int atom_emb_dim = config_.scratch_block_atom_embedding_dim;
         
         request.sources.scratch_block.enabled = true;
@@ -241,6 +242,18 @@ bool LanguageModel::save(const std::string& path) {
         EmitModuleInfo(ModuleId::Checkpoint, "Processing ScratchBlock (atom_emb=" + 
                        std::to_string(request.sources.scratch_block.atom_type_embeddings.count) +
                        ", atom_proj=" + std::to_string(request.sources.scratch_block.atom_projection.count) + ")");
+    }
+
+    // NumericHead weights
+    if (numeric_head_layer_) {
+        request.sources.numeric_head.enabled = true;
+        request.sources.numeric_head.d_model = config_.d_model;
+        request.sources.numeric_head.weights.ptr = numeric_head_layer_->weights().data;
+        request.sources.numeric_head.weights.count = static_cast<std::size_t>(2 * config_.d_model);
+        request.sources.numeric_head.bias.ptr = numeric_head_layer_->bias().data;
+        request.sources.numeric_head.bias.count = 2;
+        EmitModuleInfo(ModuleId::Checkpoint, "Processing NumericHead weights (d_model=" +
+                       std::to_string(config_.d_model) + ")");
     }
 
     // Issue #33: Final RMSNorm gamma (normalizes encoder output before LM head) — owned by LMHeadLayer
@@ -349,7 +362,7 @@ bool LanguageModel::load(const std::string& path) {
 
     // Set up ScratchBlock weight destinations (if enabled)
     if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
-        constexpr int kNumAtomTypes = 17;
+        const int kNumAtomTypes = Tokenizer::kAtomTypeCount;
         const int atom_emb_dim = config_.scratch_block_atom_embedding_dim;
         
         if (scratch_block_layer_->atomTypeEmbeddings().data) {
@@ -369,6 +382,17 @@ bool LanguageModel::load(const std::string& path) {
         
         request.scratch_block.num_atom_types = kNumAtomTypes;
         request.scratch_block.atom_embedding_dim = atom_emb_dim;
+    }
+
+    // NumericHead weight destinations
+    if (numeric_head_layer_) {
+        assignWrite(request.numeric_head.weights,
+                    numeric_head_layer_->weights().data,
+                    static_cast<std::size_t>(2 * config_.d_model));
+        assignWrite(request.numeric_head.bias,
+                    numeric_head_layer_->bias().data,
+                    2);
+        request.numeric_head.d_model = config_.d_model;
     }
 
     // Issue #33: Final RMSNorm gamma destination — owned by LMHeadLayer

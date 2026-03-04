@@ -158,13 +158,13 @@ constexpr int UPSILON_REFERENCE_LAYERS = 12;      // Reference layer count (L_re
 
 //======================================================//
 // Tokenizer / Atom Token Configuration
-// Token layout: [0-3] Special, [4-259] Byte, [260+] Atom, [280+] Unigram
+// Token layout: [0-3] Special, [4-259] Byte, [260-261] Atom (NONE+NUM), [262+] Unigram
 //======================================================//
-constexpr int BYTE_TOKEN_END = Tokenizer::BYTE_TOKEN_OFFSET + Tokenizer::BYTE_VOCAB_SIZE;  // 260 (first byte to NOT be a byte token)
+constexpr int BYTE_TOKEN_END = Tokenizer::BYTE_TOKEN_OFFSET + Tokenizer::BYTE_VOCAB_SIZE;  // 260
 constexpr int ATOM_TOKEN_START = BYTE_TOKEN_END;  // First atom token ID (immediately after bytes)
-constexpr int NUM_ATOM_TYPES = Tokenizer::kAtomTypeCount;  // Number of distinct atom types
-constexpr int ATOM_SLOTS_PER_TYPE = 1;            // One slot per atom type
-constexpr int ATOM_TOKEN_END = ATOM_TOKEN_START + (NUM_ATOM_TYPES * ATOM_SLOTS_PER_TYPE);
+constexpr int NUM_ATOM_TYPES = 1;                 // Only ATOM_NUM (ATOM_NONE is a sentinel, not a real type)
+constexpr int ATOM_SLOTS_PER_TYPE = 1;
+constexpr int ATOM_TOKEN_END = ATOM_TOKEN_START + Tokenizer::kAtomTypeCount;  // 260 + 2 = 262
 constexpr uint32_t MAX_REASONABLE_VOCAB_SIZE = 2000000; // Sanity check for vocab detection
 
 //======================================================//
