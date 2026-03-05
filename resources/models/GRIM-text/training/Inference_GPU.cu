@@ -85,6 +85,10 @@ Vector LanguageModel::executeInferenceForward_(int seq_len) {
     }
     cudaStreamSynchronize(stream);
 
+    // Free all autograd intermediates — inference never runs backward.
+    // Without this, grad_fn chains and cached tensors leak across generation steps.
+    training_state_.autograd_intermediates.clear();
+
     return logits;
 }
 

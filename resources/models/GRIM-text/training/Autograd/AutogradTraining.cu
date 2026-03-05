@@ -233,7 +233,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     if (!emb_weights.data) {
         throw std::runtime_error("AutogradForward: embedding token_weights.data is NULL");
     }
-    emb_weights.requires_grad = true;
+    emb_weights.requires_grad = ctx.is_training;
     
     // Rule 20: Fail loud on invalid shape - EmbeddingLayer constructor MUST initialize correctly
     if (!emb_weights.shape.is_valid()) {
@@ -284,7 +284,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             throw std::runtime_error(
                 "AutogradForward: positional_encoding=NONE requires position_weights.data, but it is NULL");
         }
-        pos_weights.requires_grad = true;
+        pos_weights.requires_grad = ctx.is_training;
         
         // Ensure position embedding weights have correct shape [max_seq_len, d_model]
         if (!pos_weights.shape.is_valid()) {
@@ -358,13 +358,6 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     
     if (ctx.scratch_block && ctx.scratch_block->isEnabled()) {
         AG_INFO("Step 1.5: Running ScratchBlock injection...");
-        // Drain any deferred CUDA error from earlier in this forward pass (e.g. embedding).
-        // Otherwise we misattribute "invalid argument" to ScratchBlock when the real
-        // failure was before it (e.g. inference path with batch=1).
-        if (!ctx.is_training) {
-            cudaStreamSynchronize(ctx.stream);
-        }
-        (void)cudaGetLastError();
 
         intermediates.embedding_tensor = autograd::scratch_block_inject(
             intermediates.embedding_tensor,
