@@ -174,10 +174,10 @@ private:
         
         vocab_size_ = vocab_size; // Store vocab size from file
         
-        // GRMT v8 required — atom_flags side channel
-        if (version != 8) {
+        // GRMT v9 required — single <NUM> atom, new token layout (matches DataLoader.cu kExpectedGrmtVersion)
+        if (version != 9) {
             std::cerr << "[DataLoader] FATAL: Unsupported GRMT version " << version
-                      << " (required: 8). Delete .grmt files and regenerate training data." << std::endl;
+                      << " (required: 9). Delete .grmt files and regenerate training data." << std::endl;
             return false;
         }
 

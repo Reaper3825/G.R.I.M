@@ -364,7 +364,7 @@
             "attention_dropout": 0.1,
             "dropout_rate": 0.1,
             "residual_dropout_rate": 0.1,
-            "force_rebuild_vocab": false,
+            "force_rebuild_vocab": true,
             "lm_head_centering": {
                 "enabled": true,
                 "center_hidden_states": true,
