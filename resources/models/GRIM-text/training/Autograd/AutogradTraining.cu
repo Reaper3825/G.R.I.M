@@ -358,7 +358,14 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     
     if (ctx.scratch_block && ctx.scratch_block->isEnabled()) {
         AG_INFO("Step 1.5: Running ScratchBlock injection...");
-        
+        // Drain any deferred CUDA error from earlier in this forward pass (e.g. embedding).
+        // Otherwise we misattribute "invalid argument" to ScratchBlock when the real
+        // failure was before it (e.g. inference path with batch=1).
+        if (!ctx.is_training) {
+            cudaStreamSynchronize(ctx.stream);
+        }
+        (void)cudaGetLastError();
+
         intermediates.embedding_tensor = autograd::scratch_block_inject(
             intermediates.embedding_tensor,
             *ctx.scratch_block,
@@ -369,13 +376,13 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             reinterpret_cast<const uint32_t*>(ts->cached_token_atom_flags.data),
             total_tokens,
             ctx.stream);
-        
+
         cudaError_t cuda_err = cudaGetLastError();
         if (cuda_err != cudaSuccess) {
-            throw std::runtime_error("AutogradForward: ScratchBlock CUDA error: " + 
+            throw std::runtime_error("AutogradForward: ScratchBlock CUDA error: " +
                                      std::string(cudaGetErrorString(cuda_err)));
         }
-        
+
         AG_INFO("Step 1.5: ScratchBlock complete");
     }
     

@@ -693,12 +693,14 @@ void ScratchBlockLayer::runForwardKernels(
     cudaMemsetAsync(d_num_atoms_, 0, sizeof(int), stream);
 
     const int detect_block = 256;
-    const int detect_grid = (total_tokens + detect_block - 1) / detect_block;
-    kernelDetectAtomTokens<<<detect_grid, detect_block, 0, stream>>>(
-        token_ids, total_tokens,
-        d_atom_positions_, d_num_atoms_,
-        config_.max_atoms,
-        config_.atom_token_start, config_.atom_token_end);
+    const int detect_grid = total_tokens > 0 ? (total_tokens + detect_block - 1) / detect_block : 0;
+    if (detect_grid > 0) {
+        kernelDetectAtomTokens<<<detect_grid, detect_block, 0, stream>>>(
+            token_ids, total_tokens,
+            d_atom_positions_, d_num_atoms_,
+            config_.max_atoms,
+            config_.atom_token_start, config_.atom_token_end);
+    }
 
     const int atom_blocks = std::min(config_.max_atoms, total_tokens);
     if (atom_blocks <= 0) return;

@@ -364,11 +364,11 @@
             "attention_dropout": 0.1,
             "dropout_rate": 0.1,
             "residual_dropout_rate": 0.1,
-            "force_rebuild_vocab": true,
+            "force_rebuild_vocab": false,
             "lm_head_centering": {
                 "enabled": true,
                 "center_hidden_states": true,
-                "project_out_pc1": true,
+                "project_out_pc1": false,
                 "pc1_power_iters": 5,
                 "center_logits": false,
                 "center_encoder_residuals": true
