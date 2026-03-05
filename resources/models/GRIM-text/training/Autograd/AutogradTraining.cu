@@ -540,6 +540,11 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             if (!enc_layer) {
                 throw std::runtime_error("AutogradForward: Encoder layer " + std::to_string(layer_idx) + " is NULL");
             }
+            // Sync before clear so we never free Q/K buffers while previous layer's
+            // kernels (RoPE, etc.) are still in flight — avoids illegal memory access.
+            if (layer_idx > 0) {
+                cudaStreamSynchronize(ctx.stream);
+            }
             no_grad_layer_storage.clear();
             Tensor& layer_input = (layer_idx == 0) ? intermediates.embedding_tensor : running;
             running = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, no_grad_layer_storage, ctx.step, layer_idx);
