@@ -626,7 +626,11 @@ void launchRoPERotationGQA(
         // Check Q kernel launch immediately (Rule: per-kernel error check)
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
-            std::cerr << kTag << " Q rotation kernel launch error: " << cudaGetErrorString(err) << std::endl;
+            std::cerr << kTag << " Q rotation kernel launch error: " << cudaGetErrorString(err)
+                      << " (grid=(" << blocks_seq << "," << num_q_heads << "," << batch_size
+                      << ") block=" << threads_per_block
+                      << " seq=" << seq_len << " head_dim=" << head_dim
+                      << " rotary=" << rotary_dim << ")" << std::endl;
             return;
         }
     }
@@ -645,7 +649,10 @@ void launchRoPERotationGQA(
         // Check K kernel launch immediately
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
-            std::cerr << kTag << " K rotation kernel launch error: " << cudaGetErrorString(err) << std::endl;
+            std::cerr << kTag << " K rotation kernel launch error: " << cudaGetErrorString(err)
+                      << " (grid=(" << blocks_seq << "," << num_kv_heads << "," << batch_size
+                      << ") block=" << threads_per_block
+                      << " seq=" << seq_len << ")" << std::endl;
         }
     }
 }

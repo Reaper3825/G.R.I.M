@@ -261,6 +261,22 @@ void logInferenceSample(TrainingContext& ctx, TrainingLoopState& state) {
         return;
     }
 
+    // Drain deferred CUDA errors from training before launching inference kernels.
+    // Without this, async errors from the optimizer/backward pass manifest as
+    // "invalid argument" on the first inference kernel launch (RoPE, ScratchBlock).
+    {
+        cudaError_t sync_err = cudaDeviceSynchronize();
+        if (sync_err != cudaSuccess) {
+            ctx.logging.logger->log("[Sample] WARNING: cudaDeviceSynchronize before generate: " +
+                std::string(cudaGetErrorString(sync_err)));
+        }
+        cudaError_t deferred = cudaGetLastError();
+        if (deferred != cudaSuccess) {
+            ctx.logging.logger->log("[Sample] WARNING: Cleared deferred CUDA error before generate: " +
+                std::string(cudaGetErrorString(deferred)));
+        }
+    }
+
     const std::string prompt = readEnvString("GRIM_SAMPLE_PROMPT", "What is a Planet and why is the value 80 less than 100?");
     const int max_new_tokens = readEnvInt("GRIM_SAMPLE_TOKENS", 80);
     const int max_chars = readEnvInt("GRIM_SAMPLE_MAX_CHARS", 300);
