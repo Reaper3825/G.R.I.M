@@ -228,6 +228,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/HardcodedStates/HardcodedStates_GPU.cu
     ../../Layers/Embedding/Embedding_GPU.cu
     ../../Layers/LMHead/lm_head_GPU.cu
+    ../../Layers/NumericHead/numeric_head_GPU.cu
     ../../Layers/Quantization/Quantization_GPU.cu
     ../../Shared/DynaSeqs/DynaSeq_GPU.cu
     ../../Shared/Batching/Batching_GPU.cu
