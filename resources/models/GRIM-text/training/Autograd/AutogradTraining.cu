@@ -547,11 +547,12 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             no_grad_layer_storage.clear();
             Tensor& layer_input = (layer_idx == 0) ? intermediates.embedding_tensor : running;
             running = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, no_grad_layer_storage, ctx.step, layer_idx);
-            // Encoder returns a non-owning view of no_grad_layer_storage.output. Next iteration
-            // we clear() that storage and free that buffer — so running would become a dangling
-            // pointer and the next layer would read freed memory (root cause of inference-only
-            // "invalid argument"). Make running own a copy so clear() is safe.
-            if (layer_idx < num_layers - 1) {
+            // Encoder returns a non-owning view of no_grad_layer_storage.output. That storage
+            // is cleared next iteration (or destroyed when the loop exits). So running would
+            // become a dangling pointer for the next layer OR for post-encoder use (final RMS,
+            // LM head) — root cause of inference illegal memory access. Always make running own
+            // a copy so we never hold a pointer into no_grad_layer_storage.
+            {
                 Tensor owned = Tensor::empty(running.shape, false, ctx.stream, "no_grad_layer_output");
                 const size_t bytes = static_cast<size_t>(running.shape.total_elements()) * sizeof(float);
                 cudaError_t cp_err = cudaMemcpyAsync(owned.data, running.data, bytes, cudaMemcpyDeviceToDevice, ctx.stream);
@@ -559,7 +560,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     throw std::runtime_error("AutogradForward(no_grad): copy layer output failed: " +
                         std::string(cudaGetErrorString(cp_err)));
                 }
-                // Ensure copy completes before next iteration's clear() frees the source buffer.
+                // Ensure copy completes before next iteration's clear() (or storage destructor) frees the source.
                 cudaError_t sync_err = cudaStreamSynchronize(ctx.stream);
                 if (sync_err != cudaSuccess) {
                     throw std::runtime_error("AutogradForward(no_grad): sync after layer output copy failed: " +
