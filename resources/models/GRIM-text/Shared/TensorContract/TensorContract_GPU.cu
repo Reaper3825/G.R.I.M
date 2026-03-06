@@ -5993,9 +5993,9 @@ __global__ void kernel_split_qkv(
     // Separate kernel launch or just use offset
 }
 
-// More efficient: one kernel that handles all elements.
-// Uses 256 threads per block (CUDA_BLOCK_SIZE_STANDARD) so launch is valid on all
-// devices; 768 threads per block can trigger "invalid argument" on some drivers.
+// One kernel: split qkv [tokens, qkv_dim] -> Q_bsm, K_bsm, V_bsm (same logic as before).
+// Uses 1D grid only (blocks_split, 256) so launch is valid on all drivers; 2D grid
+// and 768 threads/block can trigger "invalid argument".
 __global__ void kernel_split_qkv_all(
     const float* __restrict__ qkv,     // [tokens, qkv_dim]
     float* __restrict__ Q,              // [tokens, d_model]
@@ -6003,25 +6003,21 @@ __global__ void kernel_split_qkv_all(
     float* __restrict__ V,              // [tokens, kv_dim]
     int tokens, int d_model, int kv_dim
 ) {
-    constexpr int kBlockSize = 256;
-    const int col = blockIdx.x * kBlockSize + threadIdx.x;
-    const int token = blockIdx.y;
+    const int max_cols = (d_model >= kv_dim) ? d_model : kv_dim;
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int token = idx / max_cols;
+    const int col = idx % max_cols;
     if (token >= tokens) return;
     
     const int total_qkv_dim = d_model + 2 * kv_dim;
     const float* row = qkv + token * total_qkv_dim;
     
-    // Copy Q columns [0, d_model)
     if (col < d_model) {
         Q[token * d_model + col] = row[col];
     }
-    
-    // Copy K columns [d_model, d_model + kv_dim)
     if (col < kv_dim) {
         K[token * kv_dim + col] = row[d_model + col];
     }
-    
-    // Copy V columns [d_model + kv_dim, end)
     if (col < kv_dim) {
         V[token * kv_dim + col] = row[d_model + kv_dim + col];
     }
@@ -6227,20 +6223,19 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     Tensor K_bsm = Tensor::zeros(TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream, "qkv_split_K_bsm");
     Tensor V_bsm = Tensor::zeros(TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream, "qkv_split_V_bsm");
     
-    // Forward: split qkv_out into Q, K, V (BSM layout)
-    // Use 256 threads per block (safe on all devices); grid covers (cols_per_block, tokens)
+    // Forward: split qkv_out into Q, K, V (BSM layout) — 1D grid only for driver compatibility
     constexpr int kSplitBlockSize = 256;
-    const int blocks_col = (std::max(d_model, kv_dim) + kSplitBlockSize - 1) / kSplitBlockSize;
-    dim3 grid_split(blocks_col, tokens);
-    dim3 block_split(kSplitBlockSize);
-    kernel_split_qkv_all<<<grid_split, block_split, 0, stream>>>(
+    const int max_cols = std::max(d_model, kv_dim);
+    const int total_threads = tokens * max_cols;
+    const int blocks_split = (total_threads + kSplitBlockSize - 1) / kSplitBlockSize;
+    kernel_split_qkv_all<<<blocks_split, kSplitBlockSize, 0, stream>>>(
         qkv_out.data, Q_bsm.data, K_bsm.data, V_bsm.data, tokens, d_model, kv_dim);
     {
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
             throw std::runtime_error("split_and_reshape_qkv: kernel_split_qkv_all launch failed: " +
                 std::string(cudaGetErrorString(err)) +
-                " (grid=(" + std::to_string(blocks_col) + "," + std::to_string(tokens) + ") block=" + std::to_string(kSplitBlockSize) + ")");
+                " (blocks=" + std::to_string(blocks_split) + " block=" + std::to_string(kSplitBlockSize) + ")");
         }
     }
     
