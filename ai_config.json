@@ -367,15 +367,15 @@
             "force_rebuild_vocab": false,
             "lm_head_centering": {
                 "enabled": true,
-                "center_hidden_states": true,
-                "project_out_pc1": false,
+                "center_hidden_states": true,  
+                "project_out_pc1": true,
                 "pc1_power_iters": 5,
                 "center_logits": false,
                 "center_encoder_residuals": true
             },
             "layer_scale": {
-                "enabled": true,
-                "init_value": 1.0
+                "enabled": true,  
+                "init_value": 1.0  
             },
             "hardcoded_hidden_states": {
                 "enabled": false,

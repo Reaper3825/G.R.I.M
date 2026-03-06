@@ -358,6 +358,8 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     
     if (ctx.scratch_block && ctx.scratch_block->isEnabled()) {
         AG_INFO("Step 1.5: Running ScratchBlock injection...");
+        // Drain stale error from embedding/dropout so we only report ScratchBlock failures
+        (void)cudaGetLastError();
 
         intermediates.embedding_tensor = autograd::scratch_block_inject(
             intermediates.embedding_tensor,
@@ -545,7 +547,20 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             no_grad_layer_storage.clear();
             Tensor& layer_input = (layer_idx == 0) ? intermediates.embedding_tensor : running;
             running = enc_layer->forward(layer_input, ctx.seq_len, ctx.stream, no_grad_layer_storage, ctx.step, layer_idx);
-            // No residual dropout when !ctx.is_training
+            // Encoder returns a non-owning view of no_grad_layer_storage.output. Next iteration
+            // we clear() that storage and free that buffer — so running would become a dangling
+            // pointer and the next layer would read freed memory (root cause of inference-only
+            // "invalid argument"). Make running own a copy so clear() is safe.
+            if (layer_idx < num_layers - 1) {
+                Tensor owned = Tensor::empty(running.shape, false, ctx.stream, "no_grad_layer_output");
+                const size_t bytes = static_cast<size_t>(running.shape.total_elements()) * sizeof(float);
+                cudaError_t cp_err = cudaMemcpyAsync(owned.data, running.data, bytes, cudaMemcpyDeviceToDevice, ctx.stream);
+                if (cp_err != cudaSuccess) {
+                    throw std::runtime_error("AutogradForward(no_grad): copy layer output failed: " +
+                        std::string(cudaGetErrorString(cp_err)));
+                }
+                running = std::move(owned);
+            }
         }
         
         encoder_output = running.data;
