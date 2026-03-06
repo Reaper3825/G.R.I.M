@@ -559,7 +559,22 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
                     throw std::runtime_error("AutogradForward(no_grad): copy layer output failed: " +
                         std::string(cudaGetErrorString(cp_err)));
                 }
+                // Ensure copy completes before next iteration's clear() frees the source buffer.
+                cudaError_t sync_err = cudaStreamSynchronize(ctx.stream);
+                if (sync_err != cudaSuccess) {
+                    throw std::runtime_error("AutogradForward(no_grad): sync after layer output copy failed: " +
+                        std::string(cudaGetErrorString(sync_err)));
+                }
                 running = std::move(owned);
+            }
+        }
+        
+        // Surface any device error from the encoder loop before we use encoder_output.
+        {
+            cudaError_t enc_sync = cudaStreamSynchronize(ctx.stream);
+            if (enc_sync != cudaSuccess) {
+                throw std::runtime_error("AutogradForward(no_grad): CUDA error after encoder layers: " +
+                    std::string(cudaGetErrorString(enc_sync)) + " (illegal access usually means a kernel wrote/read out of bounds)");
             }
         }
         

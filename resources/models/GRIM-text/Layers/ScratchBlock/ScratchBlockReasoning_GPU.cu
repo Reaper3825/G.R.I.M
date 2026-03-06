@@ -459,18 +459,23 @@ Tensor scratch_block_inject(
 {
     const auto& cfg = layer.config();
 
-    // Rule 20: No fallbacks
+    // Rule 20: No fallbacks — require all pointers so we fail fast and surface missing buffers (e.g. inference path).
     if (!input.data) throw std::runtime_error("scratch_block_inject: input.data is NULL");
     if (!token_ids)  throw std::runtime_error("scratch_block_inject: token_ids is NULL");
     if (!stream)     throw std::runtime_error("scratch_block_inject: stream is NULL");
-    if (!numeric_values) {
-        throw std::runtime_error("scratch_block_inject: numeric_values is NULL");
-    }
+    if (!numeric_values) throw std::runtime_error("scratch_block_inject: numeric_values is NULL");
+    if (!atom_mask)  throw std::runtime_error("scratch_block_inject: atom_mask is NULL");
+    if (!text_features) throw std::runtime_error("scratch_block_inject: text_features is NULL");
+    if (!atom_flags) throw std::runtime_error("scratch_block_inject: atom_flags is NULL");
 
     // Create output tensor (copy of input — injection is additive in-place)
     const size_t data_bytes = static_cast<size_t>(total_tokens) * cfg.d_model * sizeof(float);
     Tensor output;
-    cudaMalloc(&output.data, data_bytes);
+    cudaError_t alloc_err = cudaMalloc(&output.data, data_bytes);
+    if (alloc_err != cudaSuccess || !output.data) {
+        throw std::runtime_error("scratch_block_inject: cudaMalloc failed: " +
+                                 std::string(cudaGetErrorString(alloc_err)));
+    }
     cudaMemcpyAsync(output.data, input.data, data_bytes, cudaMemcpyDeviceToDevice, stream);
     output.shape = input.shape;
     output.owns_data = true;
