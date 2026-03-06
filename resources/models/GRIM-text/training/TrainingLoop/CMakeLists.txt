@@ -153,6 +153,7 @@ set_target_properties(grim_flash_attention PROPERTIES
 )
 target_compile_options(grim_flash_attention PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:-diag-suppress=177>
     $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>>:-Xcompiler=/FS>
 )
 target_compile_definitions(grim_flash_attention PRIVATE
