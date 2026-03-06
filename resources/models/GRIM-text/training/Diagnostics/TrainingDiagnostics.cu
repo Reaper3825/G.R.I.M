@@ -54,15 +54,12 @@ WeightSample sampleWeightStats(const GRIM::LMHeadLayer* lm_head, const GRIM::Tra
         return sample;
     }
 
-    // Only sync when explicitly requested - hot path must not block
-    cudaDeviceSynchronize();
-
     cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
     cudaMemcpyAsync(sample.values, lm_head->weights().data,
                     kWeightSampleSize * sizeof(float),
                     cudaMemcpyDeviceToHost, stream);
-    // Need a sync point to read the values, but only for this small copy
-    cudaStreamSynchronize(stream);  // Sync primary stream only, not all streams
+    // Sync primary stream only (not full device) so we can read the values
+    cudaStreamSynchronize(stream);
     
     float sum_sq = 0.0f;
     for (int i = 0; i < kWeightSampleSize; ++i) {

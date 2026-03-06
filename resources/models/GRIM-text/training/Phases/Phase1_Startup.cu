@@ -24,12 +24,10 @@
 // MUST be first - defines GRIM_CONFIG_AI_CONFIG_PATHS_HPP_INCLUDED
 #include "../../../../../control/ai_config_paths.hpp"
 
-#include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/EquationLogging/EquationLogging.hpp"
-#include "../../Layers/GRIMTS/GRIM-TS.hpp"
 
 #include <nlohmann/json.hpp>
 #include <iostream>

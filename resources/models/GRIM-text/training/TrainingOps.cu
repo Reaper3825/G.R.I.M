@@ -17,7 +17,6 @@
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
-#include "../Common/grim_scale_buffer.hpp"
 #include "../Shared/StreamController/StreamController_GPU.hpp"
 #include "../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "module_logger.hpp"

@@ -122,6 +122,10 @@ int detectVocabSizeFromBinary(const std::string& path) {
     if (!file.read(reinterpret_cast<char*>(&byte_fallback), sizeof(byte_fallback))) {
         return -1;
     }
+    (void)max_length;
+    (void)nfkc;
+    (void)lower;
+    (void)byte_fallback;
 
     uint32_t vocab_size = 0;
     if (!file.read(reinterpret_cast<char*>(&vocab_size), sizeof(vocab_size))) {

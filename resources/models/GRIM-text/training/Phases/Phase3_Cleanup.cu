@@ -110,6 +110,7 @@ TrainingSummary computeTrainingSummary(const TrainingContext& ctx) {
     summary.auto_stop_epoch = ctx.auto_stop_epoch;
     
     auto [gpu_used, gpu_total] = getGPUMemoryStats();
+    (void)gpu_total;
     summary.peak_gpu_memory_mb = gpu_used;
     
     if (summary.total_steps > 0 && summary.total_duration_seconds > 0) {

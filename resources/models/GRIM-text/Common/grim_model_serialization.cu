@@ -2,11 +2,9 @@
 #define USE_CUDA
 #endif
 
-#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <mutex>
-#include <cstring>
 #include <sstream>
 #include "../GRIM/grim_language_model_cuda.hpp"
 #include "../Shared/LogRecorder/LogRecorder.hpp"
@@ -217,26 +215,29 @@ bool LanguageModel::save(const std::string& path) {
     request.sources.lm_head.bias.count = lm_head_layer_->bias().data ? static_cast<std::size_t>(config_.vocab_size) : 0;
 
     // Process ScratchBlock weights (if enabled)
+    // Use the layer's actual tensor sizes so copy count never exceeds allocation.
+    // ScratchBlock allocates with HyperParameters::NUM_ATOM_TYPES, not Tokenizer::kAtomTypeCount.
     if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
-        const int kNumAtomTypes = Tokenizer::kAtomTypeCount;
-        const int atom_emb_dim = config_.scratch_block_atom_embedding_dim;
+        Tensor& ate = scratch_block_layer_->atomTypeEmbeddings();
+        Tensor& ap = scratch_block_layer_->atomProjection();
         
         request.sources.scratch_block.enabled = true;
-        request.sources.scratch_block.num_atom_types = kNumAtomTypes;
-        request.sources.scratch_block.atom_embedding_dim = atom_emb_dim;
         request.sources.scratch_block.d_model = config_.d_model;
         request.sources.scratch_block.atom_scale = config_.scratch_block_atom_scale;
         
-        if (scratch_block_layer_->atomTypeEmbeddings().data) {
-            request.sources.scratch_block.atom_type_embeddings.ptr = scratch_block_layer_->atomTypeEmbeddings().data;
-            request.sources.scratch_block.atom_type_embeddings.count = 
-                static_cast<std::size_t>(kNumAtomTypes * atom_emb_dim);
+        if (ate.data && ate.shape.is_2d_layout()) {
+            const size_t ate_numel = ate.numel();
+            const int num_atom_types = ate.shape.as_2d().rows;
+            const int atom_emb_dim = ate.shape.as_2d().cols;
+            request.sources.scratch_block.atom_type_embeddings.ptr = ate.data;
+            request.sources.scratch_block.atom_type_embeddings.count = ate_numel;
+            request.sources.scratch_block.num_atom_types = num_atom_types;
+            request.sources.scratch_block.atom_embedding_dim = atom_emb_dim;
         }
         
-        if (scratch_block_layer_->atomProjection().data) {
-            request.sources.scratch_block.atom_projection.ptr = scratch_block_layer_->atomProjection().data;
-            request.sources.scratch_block.atom_projection.count = 
-                static_cast<std::size_t>(atom_emb_dim * config_.d_model);
+        if (ap.data && ap.shape.is_2d_layout()) {
+            request.sources.scratch_block.atom_projection.ptr = ap.data;
+            request.sources.scratch_block.atom_projection.count = ap.numel();
         }
         
         // text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
@@ -363,27 +364,24 @@ bool LanguageModel::load(const std::string& path) {
     request.lm_head.expect_bias = config_.use_bias;
 
     // Set up ScratchBlock weight destinations (if enabled)
+    // Use the layer's actual tensor sizes so load size matches saved checkpoint (same as save path).
     if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
-        const int kNumAtomTypes = Tokenizer::kAtomTypeCount;
-        const int atom_emb_dim = config_.scratch_block_atom_embedding_dim;
+        Tensor& ate = scratch_block_layer_->atomTypeEmbeddings();
+        Tensor& ap = scratch_block_layer_->atomProjection();
         
-        if (scratch_block_layer_->atomTypeEmbeddings().data) {
-            assignWrite(request.scratch_block.atom_type_embeddings,
-                        scratch_block_layer_->atomTypeEmbeddings().data,
-                        static_cast<std::size_t>(kNumAtomTypes * atom_emb_dim));
+        if (ate.data) {
+            assignWrite(request.scratch_block.atom_type_embeddings, ate.data, ate.numel());
+            if (ate.shape.is_2d_layout()) {
+                request.scratch_block.num_atom_types = ate.shape.as_2d().rows;
+                request.scratch_block.atom_embedding_dim = ate.shape.as_2d().cols;
+            }
         }
-        
-        if (scratch_block_layer_->atomProjection().data) {
-            assignWrite(request.scratch_block.atom_projection,
-                        scratch_block_layer_->atomProjection().data,
-                        static_cast<std::size_t>(atom_emb_dim * config_.d_model));
+        if (ap.data) {
+            assignWrite(request.scratch_block.atom_projection, ap.data, ap.numel());
         }
         
         // text_feature_projection ELIMINATED — text features merged into atom embeddings (dims 48-63)
         // Old checkpoints may contain text_feature_projection — silently ignored on load.
-        
-        request.scratch_block.num_atom_types = kNumAtomTypes;
-        request.scratch_block.atom_embedding_dim = atom_emb_dim;
     }
 
     // NumericHead weight destinations

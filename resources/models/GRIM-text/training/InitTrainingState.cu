@@ -377,13 +377,10 @@ void LanguageModel::initTrainingState() {
     training_state_.grad_encoder_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(static_cast<int>(max_tokens), cfg.d_model),
         false, grad_stream, "grad_encoder_out");
-    
-    const size_t tokens_per_batch = max_batch_size * max_seq_len_cache;
 
     // ═══════════════════════════════════════════════════════════════
     //  ENCODER BACKWARD TEMPORARIES (Issue #45 FIX: Tensor allocation)
     // ═══════════════════════════════════════════════════════════════
-    const int head_dim = cfg.head_dim;  // Use pre-computed value from config
     const int max_tokens_int = static_cast<int>(max_tokens);
     
     // FFN backward temporaries

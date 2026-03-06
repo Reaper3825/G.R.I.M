@@ -18,7 +18,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <iostream>
 
 namespace GRIM::Telemetry {
 

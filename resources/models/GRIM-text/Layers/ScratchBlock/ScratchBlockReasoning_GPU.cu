@@ -16,10 +16,8 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <device_launch_parameters.h>
-#include <cstring>
 #include <cmath>
 #include <algorithm>
-#include <chrono>
 #include <sstream>
 #include <iomanip>
 #include <stdexcept>

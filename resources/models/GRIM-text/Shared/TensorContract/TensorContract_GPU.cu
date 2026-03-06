@@ -9,15 +9,12 @@
 #include "../../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
 #include "../../Layers/Attention/QKV_Projector.hpp"  // ISSUE #62: For launchReshapeFromBHSD
 #include "../PBM/PositionalBiasMethod.hpp"  // ISSUE #119: For RoPE autograd backward
-#include "../EquationLogging/EquationLogging.hpp"
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <cuda_bf16.h>
 #include <curand_kernel.h>  // Issue #107: Philox PRNG for Xavier init
 #include <device_launch_parameters.h>
-#include <cassert>
 #include <cstdio>
-#include <cstdlib>
 #include <sstream>
 #include <cmath>
 #include <cfloat>

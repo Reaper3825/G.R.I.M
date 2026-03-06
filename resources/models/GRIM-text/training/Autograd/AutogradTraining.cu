@@ -930,13 +930,18 @@ __global__ void kernelNumericLoss(
     atomicAdd(atom_count_out, 1);
 }
 
-static float computeNumericLoss(
+// Launches numeric loss kernel and issues async D2H copies; caller must sync and free d_loss/d_count.
+static void computeNumericLossAsync(
     const Tensor& numeric_head_output,
     const float* cached_numeric_values,
     const int* cached_targets,
     int total_tokens,
     int num_token_id,
-    cudaStream_t stream
+    cudaStream_t stream,
+    float* h_loss_out,
+    int* h_count_out,
+    float** d_loss_out,
+    int** d_count_out
 ) {
     float* d_loss = nullptr;
     int*   d_count = nullptr;
@@ -955,15 +960,30 @@ static float computeNumericLoss(
         num_token_id,
         d_loss, d_count);
 
+    cudaMemcpyAsync(h_loss_out, d_loss, sizeof(float), cudaMemcpyDeviceToHost, stream);
+    cudaMemcpyAsync(h_count_out, d_count, sizeof(int), cudaMemcpyDeviceToHost, stream);
+    *d_loss_out = d_loss;
+    *d_count_out = d_count;
+}
+
+static float computeNumericLoss(
+    const Tensor& numeric_head_output,
+    const float* cached_numeric_values,
+    const int* cached_targets,
+    int total_tokens,
+    int num_token_id,
+    cudaStream_t stream
+) {
     float h_loss = 0.0f;
     int h_count = 0;
-    cudaMemcpyAsync(&h_loss, d_loss, sizeof(float), cudaMemcpyDeviceToHost, stream);
-    cudaMemcpyAsync(&h_count, d_count, sizeof(int), cudaMemcpyDeviceToHost, stream);
+    float* d_loss = nullptr;
+    int* d_count = nullptr;
+    computeNumericLossAsync(numeric_head_output, cached_numeric_values, cached_targets,
+                            total_tokens, num_token_id, stream,
+                            &h_loss, &h_count, &d_loss, &d_count);
     cudaStreamSynchronize(stream);
-
     cudaFree(d_loss);
     cudaFree(d_count);
-
     return (h_count > 0) ? h_loss / static_cast<float>(h_count) : 0.0f;
 }
 
@@ -1038,35 +1058,48 @@ LossResult computeAutogradLoss(
     // Move loss tensor to intermediates (TrainingState owns it during backward)
     intermediates.loss_tensor = std::move(loss_tensor);
     
-    // Copy scalar loss to host
+    // Issue both loss D2H copies before a single sync (batch sync for text + numeric)
     float text_loss = 0.0f;
-    cudaMemcpyAsync(&text_loss, intermediates.loss_tensor.data, sizeof(float), 
+    cudaMemcpyAsync(&text_loss, intermediates.loss_tensor.data, sizeof(float),
                     cudaMemcpyDeviceToHost, ctx.stream);
-    cudaStreamSynchronize(ctx.stream);
-    
-    if (!std::isfinite(text_loss)) {
-        throw std::runtime_error("computeAutogradLoss: text_loss is non-finite (" + std::to_string(text_loss) + ")");
-    }
-    
-    result.text_loss = text_loss;
-    result.valid_tokens = valid_tokens;
-    ts->cached_loss_value = text_loss;
-    ts->cached_text_loss = text_loss;
-    ts->cached_valid_tokens = valid_tokens;
-    
-    // Numeric loss: when numeric head is active
-    float numeric_loss = 0.0f;
-    if (ctx.numeric_head && intermediates.numeric_head_output.data) {
+
+    float numeric_h_loss = 0.0f;
+    int numeric_h_count = 0;
+    float* d_numeric_loss = nullptr;
+    int* d_numeric_count = nullptr;
+    const bool have_numeric = (ctx.numeric_head && intermediates.numeric_head_output.data);
+    if (have_numeric) {
         const int num_token_id = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_NUM);
-        numeric_loss = computeNumericLoss(
+        computeNumericLossAsync(
             intermediates.numeric_head_output,
             ts->cached_token_numeric_values.data,
             reinterpret_cast<const int*>(ts->cached_targets_tensor.data),
             total_tokens,
             num_token_id,
-            ctx.stream);
+            ctx.stream,
+            &numeric_h_loss, &numeric_h_count,
+            &d_numeric_loss, &d_numeric_count);
     }
-    
+
+    cudaStreamSynchronize(ctx.stream);
+
+    if (have_numeric) {
+        cudaFree(d_numeric_loss);
+        cudaFree(d_numeric_count);
+    }
+
+    if (!std::isfinite(text_loss)) {
+        throw std::runtime_error("computeAutogradLoss: text_loss is non-finite (" + std::to_string(text_loss) + ")");
+    }
+
+    result.text_loss = text_loss;
+    result.valid_tokens = valid_tokens;
+    ts->cached_loss_value = text_loss;
+    ts->cached_text_loss = text_loss;
+    ts->cached_valid_tokens = valid_tokens;
+
+    float numeric_loss = (numeric_h_count > 0) ? numeric_h_loss / static_cast<float>(numeric_h_count) : 0.0f;
+
     constexpr float kNumericLossWeight = 0.1f;
     result.numeric_loss = numeric_loss;
     result.loss_value = text_loss + kNumericLossWeight * numeric_loss;

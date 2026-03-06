@@ -40,7 +40,6 @@
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Shared/LogRecorder/LogRecorder.hpp"
 #include "../Shared/TensorContract/TensorContract_GPU.hpp"
-#include "../../../control/ai_config_paths.hpp"
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
 
 namespace GRIM {

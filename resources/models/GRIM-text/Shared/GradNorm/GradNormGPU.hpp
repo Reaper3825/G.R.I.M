@@ -119,6 +119,28 @@ struct GradNormScratch {
 GradNormScratch* allocateGradNormScratch(size_t max_groups, cudaStream_t stream);
 
 /**
+ * Launch gradient norm kernels and async D2H copy (no sync).
+ * Caller must cudaStreamSynchronize(stream) then measureGradientNormsFinalize() before reading h_metrics.
+ * Use this to overlap CPU work (e.g. logging) with GPU work.
+ */
+GradNormStatus measureGradientNormsLaunch(
+    const GRIM::ParameterGroup* groups,
+    size_t num_groups,
+    GradNormScratch* scratch,
+    cudaStream_t stream
+);
+
+/**
+ * Finalize metrics on CPU after D2H has completed (call after sync).
+ * Reads scratch->h_partial_sums, writes scratch->h_metrics.
+ */
+GradNormStatus measureGradientNormsFinalize(
+    const GRIM::ParameterGroup* groups,
+    size_t num_groups,
+    GradNormScratch* scratch
+);
+
+/**
  * Measure gradient norms for all parameter groups.
  * Launches GPU sum-of-squares kernel, async D2H copy, syncs stream,
  * then finalizes metrics on CPU (per-type aggregation, NaN/Inf detection).

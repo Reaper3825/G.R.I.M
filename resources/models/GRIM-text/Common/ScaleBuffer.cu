@@ -5,7 +5,6 @@
 #include <string>
 #include <cuda_runtime.h>
 
-#include "../Shared/GPUBuffer/GPUBuffer.hpp"
 #include "../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "grim_scale_buffer.hpp"
 
