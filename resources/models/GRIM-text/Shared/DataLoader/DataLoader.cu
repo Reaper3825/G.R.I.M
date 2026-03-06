@@ -16,6 +16,7 @@
 #include <exception>
 
 #include <nlohmann/json.hpp>
+#include "../../Common/grim_model_serialization_version.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../../../control/ai_config_paths.hpp"
@@ -251,7 +252,6 @@ bool PrepareTrainingDataFromCache(
 		// Read vocab size from GRMT file
 		std::ifstream grmt_file(out_training_data_path, std::ios::binary);
 		if (grmt_file.is_open()) {
-	constexpr uint32_t kExpectedGrmtVersion = 9;  // GRMT v9: single <NUM> atom, new token layout
 			uint32_t magic = 0, version = 0, num_sequences = 0, grmt_vocab_size = 0;
 			grmt_file.read(reinterpret_cast<char*>(&magic), 4);
 			grmt_file.read(reinterpret_cast<char*>(&version), 4);
@@ -262,7 +262,7 @@ bool PrepareTrainingDataFromCache(
 				// Truncated or corrupted GRMT file — force rebuild
 				std::cerr << "[DataLoader] GRMT header read failed (truncated file?); forcing rebuild." << std::endl;
 				grmt_version_mismatch = true;
-			} else if (magic != 0x474D5254 || version != kExpectedGrmtVersion) {
+			} else if (magic != 0x474D5254 || version != GRIM::GRMT_FORMAT_VERSION) {
 				grmt_version_mismatch = true;
 			}
 
@@ -652,7 +652,7 @@ bool PrepareTrainingDataFromCache(
 		}
 
 		uint32_t magic = 0x474D5254; // "GRMT"
-		uint32_t version = 9;  // GRMT v9: single <NUM> atom, new token layout
+		uint32_t version = GRIM::GRMT_FORMAT_VERSION;
 		uint32_t num_sequences = static_cast<uint32_t>(valid_seq_count);
 		// CRITICAL: Use totalVocabSize() to include byte (256) + atom (256) + unigram tokens
 		uint32_t vocab_size = static_cast<uint32_t>(tokenizer.totalVocabSize());

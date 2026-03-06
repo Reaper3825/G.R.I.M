@@ -135,6 +135,7 @@ bool LanguageModel::save(const std::string& path) {
 
     EmitModuleInfo(ModuleId::Checkpoint, "Processing embeddings");
     if (config_.use_gpu && embedding_layer_ && embedding_layer_->tokenWeights().data) {
+        EmitModuleInfo(ModuleId::Checkpoint, "Embedding source: GPU");
         EmitModuleInfo(ModuleId::Checkpoint, "Using EmbeddingLayer token weights (vocab=" + std::to_string(config_.vocab_size) + ", d_model=" + std::to_string(config_.d_model) + ")");
         assignRead(request.sources.gpu_embedding.token_embeddings,
                    embedding_layer_->tokenWeights().data,
@@ -149,6 +150,7 @@ bool LanguageModel::save(const std::string& path) {
             request.sources.gpu_embedding.has_rms_norm = true;
         }
     } else {
+        EmitModuleInfo(ModuleId::Checkpoint, "Embedding source: CPU");
         EmitModuleInfo(ModuleId::Checkpoint, "Using CPU embedder snapshot");
         request.sources.cpu_embedding = snapshotCpuEmbedding(getEmbedderPtr());
         if (request.sources.cpu_embedding.token_data.empty()) {

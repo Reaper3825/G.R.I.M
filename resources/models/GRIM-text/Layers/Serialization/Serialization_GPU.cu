@@ -407,6 +407,8 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
     flatbuffers::Offset<flatbuffers::Vector<float>> fb_rms_gamma = 0;
     bool use_rms = true;
 
+    GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[save] Downloading weights: embeddings + ", cfg.num_layers, " encoder layers (GPU->CPU)..."));
+
     if (cfg.use_gpu && request.sources.gpu_embedding.token_embeddings.ptr) {
         auto token_embed_data = download_device_vector(request.sources.gpu_embedding.token_embeddings, "token embeddings");
         if (token_embed_data.empty() && request.sources.gpu_embedding.token_embeddings.count > 0) {
@@ -454,6 +456,9 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
     };
 
     for (int layer_idx = 0; layer_idx < cfg.num_layers; ++layer_idx) {
+        if (layer_idx % 6 == 0 || layer_idx == cfg.num_layers - 1) {
+            GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[save] Downloading encoder layer ", layer_idx + 1, "/", cfg.num_layers));
+        }
         const auto& layer_view = request.sources.encoder_layers[layer_idx];
 
         std::vector<float> h_W_qkv;
@@ -674,6 +679,8 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         timestamp);
 
     builder.Finish(fb_model, "GRMT");
+
+    GRIM::Logging::EmitModuleInfo(kLogModule, Msg("[save] Writing checkpoint to disk (", builder.GetSize() / (1024 * 1024), " MB)..."));
 
     const std::string final_path = request.path;
     const std::string temp_path = final_path + config_.temp_suffix;

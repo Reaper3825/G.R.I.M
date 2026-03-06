@@ -256,7 +256,7 @@
             },
 
             "embedding_freeze": {
-                "enabled": true,
+                "enabled": false,
                 "freeze_after_step": 0
             },
 

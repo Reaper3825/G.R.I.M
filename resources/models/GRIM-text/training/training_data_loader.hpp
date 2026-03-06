@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <optional>
 #include <unordered_map>
+#include "../Common/grim_model_serialization_version.hpp"
 #include "../Shared/DynaSeqs/DynaSeq_GPU.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"  // For kTextFeatureDim
 
@@ -174,10 +175,10 @@ private:
         
         vocab_size_ = vocab_size; // Store vocab size from file
         
-        // GRMT v9 required — single <NUM> atom, new token layout (matches DataLoader.cu kExpectedGrmtVersion)
-        if (version != 9) {
+        // GRMT format version must match GRMT_FORMAT_VERSION (single source of truth in grim_model_serialization_version.hpp)
+        if (version != GRIM::GRMT_FORMAT_VERSION) {
             std::cerr << "[DataLoader] FATAL: Unsupported GRMT version " << version
-                      << " (required: 9). Delete .grmt files and regenerate training data." << std::endl;
+                      << " (required: " << GRIM::GRMT_FORMAT_VERSION << "). Delete .grmt files and regenerate training data." << std::endl;
             return false;
         }
 
