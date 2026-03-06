@@ -6228,11 +6228,26 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     const int threads = std::max(d_model, kv_dim);
     kernel_split_qkv_all<<<tokens, threads, 0, stream>>>(
         qkv_out.data, Q_bsm.data, K_bsm.data, V_bsm.data, tokens, d_model, kv_dim);
+    {
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            throw std::runtime_error("split_and_reshape_qkv: kernel_split_qkv_all launch failed: " +
+                std::string(cudaGetErrorString(err)) +
+                " (tokens=" + std::to_string(tokens) + " threads=" + std::to_string(threads) + ")");
+        }
+    }
     
     // Reshape BSM -> BHSD using TensorConversion (handles block sizing internally)
     TensorConversion::convert_BSM_to_BHSD(Q_bsm.data, Q_bhsd.data, batch, seq, num_heads, head_dim, stream);
     TensorConversion::convert_BSM_to_BHSD(K_bsm.data, K_bhsd.data, batch, seq, num_kv_heads, head_dim, stream);
     TensorConversion::convert_BSM_to_BHSD(V_bsm.data, V_bhsd.data, batch, seq, num_kv_heads, head_dim, stream);
+    {
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            throw std::runtime_error("split_and_reshape_qkv: BSM_to_BHSD conversion failed: " +
+                std::string(cudaGetErrorString(err)));
+        }
+    }
     
     // Q_bsm, K_bsm, V_bsm will be freed automatically when they go out of scope (RAII)
     

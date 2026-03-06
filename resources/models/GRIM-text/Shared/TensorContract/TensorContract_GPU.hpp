@@ -1123,7 +1123,12 @@ struct Tensor {
             TENSOR_LOG_LIFECYCLE(free_counter,
                 "[Tensor::release] #F%d cudaFree data=%p name=%s\n",
                 (void*)data, name ? name : "unnamed");
-            cudaFree(data);
+            cudaError_t free_err = cudaFree(data);
+            if (free_err != cudaSuccess) {
+                fprintf(stderr, "[Tensor::release] cudaFree(%p) failed: %s (name=%s)\n",
+                        (void*)data, cudaGetErrorString(free_err),
+                        name ? name : "unnamed");
+            }
         }
         grad_.reset();
         grad_fn.reset();

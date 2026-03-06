@@ -536,7 +536,11 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
             // Sync before clear so we never free Q/K buffers while previous layer's
             // kernels (RoPE, etc.) are still in flight — avoids illegal memory access.
             if (layer_idx > 0) {
-                cudaStreamSynchronize(ctx.stream);
+                cudaError_t sync_err = cudaStreamSynchronize(ctx.stream);
+                if (sync_err != cudaSuccess) {
+                    throw std::runtime_error("AutogradForward(no_grad): cudaStreamSynchronize failed after layer " +
+                        std::to_string(layer_idx - 1) + ": " + cudaGetErrorString(sync_err));
+                }
             }
             no_grad_layer_storage.clear();
             Tensor& layer_input = (layer_idx == 0) ? intermediates.embedding_tensor : running;
