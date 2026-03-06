@@ -6223,6 +6223,11 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     Tensor K_bsm = Tensor::zeros(TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream, "qkv_split_K_bsm");
     Tensor V_bsm = Tensor::zeros(TensorContract::TensorShape::make_BSM(tokens, kv_dim), false, stream, "qkv_split_V_bsm");
     
+    // Inference-only: drain stale CUDA error from earlier in this layer (rms_norm, matmul,
+    // broadcast_add) or from no_grad_layer_storage.clear() in the loop. Without this,
+    // cudaGetLastError() after the launch reports that stale error and we throw incorrectly.
+    (void)cudaGetLastError();
+    
     // Forward: split qkv_out into Q, K, V (BSM layout) — 1D grid only for driver compatibility
     constexpr int kSplitBlockSize = 256;
     const int max_cols = std::max(d_model, kv_dim);
