@@ -1389,8 +1389,18 @@ ValidationResult runValidation(TrainingContext& ctx) {
 
     // Match GPU state to "start of training step" so validation has same memory as training.
     ctx.model->getTrainingState().autograd_intermediates.clear();
+    flushDeferredCleanup();
     cudaDeviceSynchronize();
     (void)cudaGetLastError();
+
+    // Log available GPU memory before validation for diagnostics
+    {
+        size_t free_mem = 0, total_mem = 0;
+        cudaMemGetInfo(&free_mem, &total_mem);
+        ctx.logging.logger->log("[Val] GPU memory: " +
+            std::to_string(free_mem / (1024*1024)) + " MB free / " +
+            std::to_string(total_mem / (1024*1024)) + " MB total");
+    }
 
     // Use the same batch limits as training so validation uses the same memory path.
     // Training runs 4000+ batches with these limits; validation must not use different (e.g. halved) limits.
@@ -1442,6 +1452,7 @@ ValidationResult runValidation(TrainingContext& ctx) {
             
             float batch_val_loss = ctx.model->computeLossBatch(val_payload, /*is_training=*/false);
             ctx.model->getTrainingState().autograd_intermediates.clear();
+            flushDeferredCleanup();
 
             // Check for deferred CUDA errors after each batch
             cudaError_t batch_err = cudaGetLastError();
@@ -1474,8 +1485,9 @@ ValidationResult runValidation(TrainingContext& ctx) {
             // Clear autograd intermediates to prevent memory buildup after failed batch
             ctx.model->getTrainingState().autograd_intermediates.clear();
             
-            // Sync and clear CUDA state for recovery
+            // Sync and clear CUDA state for recovery — also flushes deferred GPU frees
             cudaDeviceSynchronize();
+            flushDeferredCleanup();
             cudaGetLastError();
             
             // If too many batches fail (>10%), abort validation with partial results

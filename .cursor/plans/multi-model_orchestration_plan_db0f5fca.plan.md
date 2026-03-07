@@ -181,13 +181,9 @@ If serialized over the wire, this should be a **fixed registry-backed tool contr
 If the model has not seen an appropriate tool pattern — or if no registry entry actually matches the needed capability — it should not bluff. It should enter a **tool-gap** flow.
 
 - **Step 1: tool-gap proposal** — Model emits a structured tool-gap proposal identifying why the current tool surface is insufficient, what missing capability is required, what permissions/policy envelope the new tool would need, and a proposed tool spec / affordance signature.
-
 - **Step 2: user-visible rationale** — Body explains in plain language **why the task cannot be completed safely with current tools**.
-
 - **Step 3: explicit user confirmation** — Only if the user confirms does the system enter **tool creation**.
-
 - **Step 4: body-owned creation** — Tool creation is body-owned and policy-gated. The model may help author the tool spec, but it does not silently self-install arbitrary binaries.
-
 - **Step 5: hot-load and retry** — Once created, the new plugin/tool is hot-loaded, ToolRegistry updates atomically, and the task may be retried through the same gate.
 
 ### Reality check: current repo vs desired plugin creation flow
@@ -365,26 +361,26 @@ Blending those together would make routing, referent resolution, and action poli
 
 #### Required core structures
 
-- **`TurnRecord`**
+- `**TurnRecord`**
   - `session_id`, `turn_id`, timestamps
   - `user_input.raw`, `user_input.normalized`
   - `nlp_annotation_summary`
   - `router_tags`, `memory_tags`, `risk_tags`
   - selected route / proposed command / final outcome
-- **`ReferentBinding`**
+- `**ReferentBinding**`
   - canonical entity id/value
   - entity type (`app`, `file`, `path`, `url`, `person`, `window`, etc.)
   - source turn, confidence, expiry/TTL
-- **`PendingInteraction`**
+- `**PendingInteraction**`
   - `kind = missing_slot | clarification | confirmation | correction | follow_up`
   - original proposal / missing fields / prompt shown to user
   - expiry and session ownership
-- **`ActionEpisode`**
+- `**ActionEpisode**`
   - proposed command/plugin
   - `GC_action_risk`, `GC_action_confidence`
   - whether the user rejected/corrected it
   - final accepted action and outcome
-- **`ContextSnapshotV2`**
+- `**ContextSnapshotV2**`
   - the compact projection consumed by `FastClassifier`, router metadata builder, memory retrieval, and Training Wheels.
 
 #### `ContextSnapshotV2` must include more than the current snapshot
@@ -530,9 +526,9 @@ If the goal is **modular**, **performance-light**, and still feature-complete en
 
 #### Module split
 
-1. **`HardwareInventory`** — immutable startup snapshot
-2. **`ResourceSignal`** — one shared live snapshot publisher
-3. **`ResourceCoordinator`** — admission / reservation / pressure authority
+1. `**HardwareInventory`** — immutable startup snapshot
+2. `**ResourceSignal**` — one shared live snapshot publisher
+3. `**ResourceCoordinator**` — admission / reservation / pressure authority
 4. **resource-aware consumers** — `ModelLoader`, process manager, plugin/tool loader, perception manager
 
 That is enough. Do **not** start with a sprawling micro-framework of ten resource subsystems.
@@ -585,12 +581,10 @@ ResourceDecision
 - **One bootstrap inventory pass**
   - expensive hardware/topology queries happen once at startup
   - refresh only on genuine topology-change events (monitor hotplug, GPU reset, audio device arrival, etc.)
-
 - **One shared sampler loop**
   - one background thread / service owns dynamic sampling
   - publish the latest `ResourceSnapshot` atomically
   - consumers read the latest snapshot cheaply; they do not trigger expensive probes themselves
-
 - **One admission authority**
   - `ResourceCoordinator` decides whether a model/tool/process may start, should wait, or must evict/throttle something first
   - loaders and managers submit claims; they do not reinvent policy
@@ -600,23 +594,18 @@ ResourceDecision
 - **No WMI / DXGI / full hardware scans in hot paths**
   - startup inventory only
   - runtime loops sample lightweight counters only
-
 - **Single sampler thread, not one thread per subsystem**
   - model loading, tools, and perception should consume the same snapshot
-
 - **Adaptive polling**
   - idle/default: slower polling (e.g. 500–1000 ms)
   - pressured/loading: faster polling (e.g. 100–250 ms)
   - return to slow polling after stabilization
-
 - **Event-assisted refresh when possible**
   - local state changes (model loaded, tool started, capture enabled) should update runtime occupancy immediately
   - OS topology changes should trigger inventory refresh only when needed
-
 - **Atomic snapshot reads**
   - consumers should read `ResourceSnapshot` without heavy locking
   - reserve locks/mutexes for claim mutation/admission decisions, not read-mostly observation
-
 - **Reservations, not guesses**
   - before a model or tool starts, request a claim with estimated RAM/VRAM/CPU needs
   - after start, actual usage can update the runtime state
@@ -685,6 +674,8 @@ sequenceDiagram
   Boot-->>Main: bootstrap complete
 ```
 
+
+
 ```mermaid
 flowchart TD
   Consumer[Consumer wants resources] --> Claim[Build ResourceClaim]
@@ -707,6 +698,8 @@ flowchart TD
   Reserve --> Start[Consumer starts or loads]
   Start --> Update[Publish updated runtime occupancy]
 ```
+
+
 
 ---
 
@@ -834,6 +827,8 @@ flowchart LR
   Toggle[Runtime toggle] --> EmotionCtrl
 ```
 
+
+
 ---
 
 ## Model loading: resource-aware state machine, use-degrading
@@ -873,6 +868,8 @@ stateDiagram-v2
   Unloading --> Unloaded: resources released
 ```
 
+
+
 ---
 
 ## Current State
@@ -892,7 +889,6 @@ stateDiagram-v2
 - **Plugin commands currently bypass the metadata registry.** `[core/plugin_api_impl.cpp](core/plugin_api_impl.cpp)` registers plugin commands directly into `commandMap`; it does not currently populate `CommandRegistry`, even though `ToolMetadata` already has `fromPlugin` / `pluginName` fields.
 - **Context state today is fragmented** — `[memory/context_manager.cpp](memory/context_manager.cpp)` keeps static `recentContext` + one `PendingIntent`, `[commands/commands_feedback.cpp](commands/commands_feedback.cpp)` separately stores pending clarification/feedback, `[commands/commands_core.cpp](commands/commands_core.cpp)` still hardcodes referent resolution for strings like `"that app"`, and `[ai/fast_classifier.cpp](ai/fast_classifier.cpp)` only consumes `lastNlpCategory` as its context signal.
 - **Visual context today is mostly digital.** `[perception/perception_context.hpp](perception/perception_context.hpp)` already exposes `VisualContext` for monitor/window/OCR/object/scene state, but the MMO payload should reserve a separate branch for future or optional **physical visual semantic input** instead of stuffing everything into one undifferentiated visual blob.
-
 
 ---
 
@@ -1014,7 +1010,7 @@ NLP should inform action policy, not replace it.
 
 ### Suggested NLP architecture changes
 
-- Keep `nlp/nlp.*`, but split its responsibilities into clearer subcomponents:
+- Keep `nlp/nlp.`*, but split its responsibilities into clearer subcomponents:
   - `nlp/NlpAnnotation.hpp` / `.cpp`
   - `nlp/EntityTagger.hpp` / `.cpp`
   - `nlp/MemoryTagger.hpp` / `.cpp`
@@ -1102,7 +1098,7 @@ flowchart LR
 - Add `MMO/Core/HardwareInventory.hpp/.cpp` plus a richer bootstrap-owned inventory contract that extends today’s `SystemInfo` into the canonical machine snapshot for the run.
 - Add `MMO/Core/ResourceSignal.hpp/.cpp` and `MMO/Core/ResourceCoordinator.hpp/.cpp` so bootstrap can start a live resource loop and expose one admission/reservation authority for model loading, tool loading, process startup, and perception capture.
 - Add `MMO/UI/UISurfaceSpec.hpp/.cpp`, `MMO/UI/UISurfaceRegistry.hpp/.cpp`, and `MMO/UI/EmotionPresentationController.hpp/.cpp` so UI surfaces and emotion presentation become first-class runtime contracts rather than ad-hoc startup wiring.
-- Rework `memory/context_manager.*` into the session-scoped interaction authority (or rename it to `SessionContextManager`), with `TurnRecord`, `ReferentBinding`, `PendingInteraction`, `ActionEpisode`, and `ContextSnapshotV2`. Keep `getSnapshot()` as a compatibility projection during migration.
+- Rework `memory/context_manager.`* into the session-scoped interaction authority (or rename it to `SessionContextManager`), with `TurnRecord`, `ReferentBinding`, `PendingInteraction`, `ActionEpisode`, and `ContextSnapshotV2`. Keep `getSnapshot()` as a compatibility projection during migration.
 - Define the context payload contract so `ContextSnapshotV2` and router metadata include both `visual_context.physical_semantics` and `visual_context.digital_visual`, with current repo support coming primarily from the digital side (`PerceptionContextManager::VisualContext`).
 - Add `MMO/Core/ToolRegistry.hpp/.cpp` as the canonical registry over built-in commands and plugin tools, replacing the current split between `CommandRegistry` metadata and plugin direct registration.
 - Add `MMO/Core/ToolTrainingParser.hpp/.cpp` (or equivalent offline pipeline) to parse explicit tool-usage training data into symbolic exemplars / affordance-token mappings.
@@ -1205,6 +1201,8 @@ sequenceDiagram
   end
 ```
 
+
+
 ---
 
 ## Phase 2: Body – Resource-aware loader, orchestrator, memory integration
@@ -1296,12 +1294,10 @@ Before the body emits an answer or invokes any **command or plugin** (after reso
 
 - **Risk signal**
   - **GC_action_risk** is body-owned and derived from `ActionPolicyRegistry`, plugin permission bits, target/resource sensitivity, side-effect scope, reversibility, and any destructive/system/network flags.
-
 - **Confidence signal**
   - **GC_action_confidence** captures how grounded the current answer/action is.
   - It must drop when the router lacks enough information, when retrieval coverage is weak, when slots/referents are unresolved, when tool preconditions are uncertain, or when output grounding is incomplete.
   - In other words, the **knowledge-gap edge case is represented as a confidence-gap**, not a third gate.
-
 - **Primary inputs (body-side)**  
   - **Command/router parse certainty** – How confident the body is that the current user intent and slots were parsed correctly.  
   - **Memory match quality** – Relevance/strength of retrieved memories for this context.  
@@ -1332,9 +1328,9 @@ Before the body emits an answer or invokes any **command or plugin** (after reso
 When the unified verification gate fires because of **high risk**, **low confidence / missing information**, or both:
 
 1. Body presents a **verification prompt** appropriate to the reason:
-   - **risk-dominant**: confirmation prompt, e.g. "I want to run [command] with [args]. Is this what you want?"
-   - **confidence-gap / knowledge-gap dominant**: clarification / grounding prompt, e.g. "I don’t have enough information to finish this safely. Did you mean X, or can you provide Y?"
-   - **both**: combined verify + clarify prompt.
+  - **risk-dominant**: confirmation prompt, e.g. "I want to run [command] with [args]. Is this what you want?"
+  - **confidence-gap / knowledge-gap dominant**: clarification / grounding prompt, e.g. "I don’t have enough information to finish this safely. Did you mean X, or can you provide Y?"
+  - **both**: combined verify + clarify prompt.
    No freeform "run this" is ever shown or executed.
 2. **User confirms (yes)**: Body executes the action (allowlist + sandbox already validated). RL receives a **positive reward** via `GRIM::RL::processCommandResult()` and `GRIM::RewardLearning::sendCommandFeedback()`. Outcome is used to update **calibrated_router_intent_conf** (bucket calibration) and LoRA training data.
 3. **User rejects (no / not what I wanted)**: The originally proposed action is **cancelled**. RL receives a **negative reward (punishment)** for that rejected proposal. This negative signal belongs to the misaligned proposal, not to the entire interaction.
@@ -1434,7 +1430,7 @@ flowchart TD
 
 - **Contracts** — `MMO/Core/Contracts.hpp`, `MMO/Core/Contracts.cpp` (route/synthesize/sub-model envelopes, schema validation, structured errors).
 - **Request context** — `MMO/Core/RequestContext.hpp`, `MMO/Core/RequestContext.cpp` (`request_id`, `session_id`, `turn_id`, deadlines, session-scoped history).
-- **Session/interaction context** — rework `memory/context_manager.hpp/.cpp` (or rename to `MMO/Core/SessionContextManager.*`) so it owns `TurnRecord`, `ReferentBinding`, `PendingInteraction`, `ActionEpisode`, and `ContextSnapshotV2`, with a compatibility bridge for existing `getSnapshot()` consumers.
+- **Session/interaction context** — rework `memory/context_manager.hpp/.cpp` (or rename to `MMO/Core/SessionContextManager.`*) so it owns `TurnRecord`, `ReferentBinding`, `PendingInteraction`, `ActionEpisode`, and `ContextSnapshotV2`, with a compatibility bridge for existing `getSnapshot()` consumers.
 - **Hardware inventory** — `MMO/Core/HardwareInventory.hpp`, `MMO/Core/HardwareInventory.cpp` (canonical immutable machine/topology snapshot for the current run; extends today’s `SystemInfo`).
 - **Resource signal / coordinator** — `MMO/Core/ResourceSignal.hpp`, `MMO/Core/ResourceSignal.cpp`, `MMO/Core/ResourceCoordinator.hpp`, `MMO/Core/ResourceCoordinator.cpp` (live resource loop, pressure evaluation, reservations/claims, and admission hooks for model/tool/process loading).
 - **UI surface model** — `MMO/UI/UISurfaceSpec.hpp`, `MMO/UI/UISurfaceSpec.cpp`, `MMO/UI/UISurfaceRegistry.hpp`, `MMO/UI/UISurfaceRegistry.cpp` (validated UI surface contract + runtime registry over overlay/popup/modal/tool surfaces).
@@ -1444,16 +1440,16 @@ flowchart TD
 - **Tool gap planner** — `MMO/Core/ToolGapPlanner.hpp`, `MMO/Core/ToolGapPlanner.cpp` (structured tool-gap proposals, user-confirmed tool creation flow, and retry semantics).
 - **NLP annotation core** — `nlp/NlpAnnotation.hpp`, `nlp/NlpAnnotation.cpp` (canonical annotation payload shared by memory + router metadata).
 - **NLP metadata builder** — `nlp/RouterMetadataBuilder.hpp`, `nlp/RouterMetadataBuilder.cpp` (builds router-facing metadata from annotations + context).
-- **NLP taggers** — `nlp/EntityTagger.*`, `nlp/MemoryTagger.*`, and compatibility wrappers around current `nlp/nlp.*`, `ai/intent_gate.*`, and `ai/fast_classifier.*`.
+- **NLP taggers** — `nlp/EntityTagger.`*, `nlp/MemoryTagger.*`, and compatibility wrappers around current `nlp/nlp.*`, `ai/intent_gate.*`, and `ai/fast_classifier.*`.
 - **Backend interface** — `ai/backends/IGenerationBackend.hpp`, router backend (precomposed in → route response; synthesize(sub_model_outputs) → final structured response), sub-model backends (frozen bricks, composed_generation in only).
 - **MMD** — `MMO/Shared/MMD.hpp` (existing), `MMO/Shared/MMD.cpp` (`getSubjectTags`).
 - **Registry** — `MMO/Core/ModelRegistry.hpp`, `MMO/Core/ModelRegistry.cpp` (router + sub_models, router-only `lora_path` / `hard_copy_path`).
 - **Router (thin)** — `MMO/Router/ModelRouter.hpp`, `MMO/Router/ModelRouter.cpp` (parse grim-text router response).
 - **ModelLoader** — `MMO/Core/ModelLoader.hpp`, `MMO/Core/ModelLoader.cpp` (use-degrading state machine, resource-aware load/unload driven by ResourceCoordinator).
-- **Process manager** — Generalize `ai/grim_text_server_manager.*` into a model-keyed process manager for router + sub-model servers.
+- **Process manager** — Generalize `ai/grim_text_server_manager.`* into a model-keyed process manager for router + sub-model servers.
 - **Bootstrap / detection** — refactor `bootstrap/bootstrap.cpp` into phased startup orchestration and evolve `system_detect.hpp/.cpp` into the static hardware inventory detector rather than the entire resource story.
-- **UI host** — refactor `ui/ui_root.*`, `ui/ui_panel.*`, and `popup_ui/*` so built-in panels and popup windows register into one modular UI-surface model instead of staying as manual startup wiring.
-- **Plugin manager** — generalize `core/plugin_manager.*` so DLL hot reload is synchronized with ToolRegistry updates and tool-surface invalidation.
+- **UI host** — refactor `ui/ui_root.`*, `ui/ui_panel.*`, and `popup_ui/*` so built-in panels and popup windows register into one modular UI-surface model instead of staying as manual startup wiring.
+- **Plugin manager** — generalize `core/plugin_manager.`* so DLL hot reload is synchronized with ToolRegistry updates and tool-surface invalidation.
 - **Orchestrator** — `MMO/Core/Orchestrator.hpp`, `MMO/Core/Orchestrator.cpp` (memory retrieval + precompose, including split physical/digital visual context → router → sub-model with only composed_generation → synthesize).
 - **Memory façade** — `MMO/Core/MemoryFacade.hpp`, `MMO/Core/MemoryFacade.cpp` (adapter over `MemoryStorage`, `UnifiedMemoryStorage`, `ContextManager`, `MemoryRouter`).
 - **Memory retrieval** — Body-side: uses existing `UnifiedMemoryStorage::search/getByTag/getByTags/semanticSearch`, `ContextSnapshotV2` (with compatibility via `ContextManager::getSnapshot()` during migration), and `MemoryRouter::evaluate()` for relevance. Composes found memories plus retrieval breadcrumbs and split visual context into the precomposed payload. Model never writes.
@@ -1470,7 +1466,6 @@ flowchart TD
 - **Confidence** — `Reward_Learning/grim_confidence.hpp/.cpp` (existing) with router confidence scores integrated into gating only after calibration warm-up.
 - **Integration** — `ai/ai.cpp` (orchestrator.generate with precomposed context + memory), `bootstrap/bootstrap.cpp` (config bootstrap + hardware inventory + resource signal + orchestrator/loader/Training Wheels init), `main.cpp` (shutdown).
 - **Config** — `ai_config.json`: `mmo`, `router`, `sub_models`, `routing`, `model_loader`, `resource_monitor`, `ui`, `emotion_presentation`, `memory` (lora_path, hard_copy_path, buffer config), `training_wheels` (`risk_threshold`, `per_category_risk_thresholds`, `min_confidence_floor`, enabled, calibration), `action_policy`, `tools`, sandbox (paths).
-
 
 ---
 
