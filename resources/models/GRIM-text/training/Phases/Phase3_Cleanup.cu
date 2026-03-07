@@ -100,6 +100,8 @@ TrainingSummary computeTrainingSummary(const TrainingContext& ctx) {
         summary.end_time - summary.start_time).count();
     
     summary.total_steps = ctx.global_step;
+    summary.epochs_completed = ctx.epochs_completed;
+    summary.total_batches_processed = ctx.global_step;
     summary.best_val_loss = ctx.best_val_loss;
     summary.best_perplexity = (std::isfinite(ctx.best_val_loss) && ctx.best_val_loss < 50.0f)
         ? std::exp(ctx.best_val_loss)
@@ -258,8 +260,17 @@ void writeFinalStatus(
 
 void releaseResources(TrainingContext& ctx) {
     EmitModuleInfo(ModuleId::Training, "Releasing resources...", ctx.global_step);
-    
-    // Release model
+
+#ifdef USE_CUDA
+    // Clear autograd intermediates before destroying model so all grad_fns and layer
+    // intermediates are released in a controlled order (avoids relying only on destructor order).
+    if (ctx.model) {
+        ctx.model->getTrainingState().autograd_intermediates.clear();
+        EmitModuleInfo(ModuleId::Training, "✓ Autograd intermediates cleared", ctx.global_step);
+    }
+#endif
+
+    // Release model (TrainingState destructor frees all Tensor buffers, PBM, TeacherLogits, etc.)
     if (ctx.model) {
         ctx.model.reset();
         EmitModuleInfo(ModuleId::Training, "✓ Model released", ctx.global_step);

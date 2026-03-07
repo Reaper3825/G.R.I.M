@@ -4946,14 +4946,28 @@ bool executePhase2(TrainingContext& ctx) {
             ctx.global_step);
     }
     
+    const int num_epochs = std::max(1, hp.epochs);
+    EmitModuleInfo(ModuleId::Training,
+        std::string("Total epochs to run: ") + std::to_string(num_epochs), ctx.global_step);
+    
     try {
-        for (int epoch = 0; epoch < hp.epochs; ++epoch) {
+        for (int epoch = 0; epoch < num_epochs; ++epoch) {
             EpochResult epoch_result = runEpoch(ctx, state, epoch);
+            ctx.epochs_completed = epoch + 1;
             
             if (epoch_result.auto_stop_triggered) {
-                EmitModuleInfo(ModuleId::Training, 
-                    std::string("Auto-stop engaged after epoch ") + std::to_string(epoch + 1), ctx.global_step);
+                EmitModuleInfo(ModuleId::Training,
+                    std::string("Auto-stop engaged after epoch ") + std::to_string(epoch + 1) +
+                    " (" + epoch_result.auto_stop_reason + "). Skipping remaining epochs.", ctx.global_step);
                 break;
+            }
+            if (epoch + 1 < num_epochs) {
+                EmitModuleInfo(ModuleId::Training,
+                    "[Epoch boundary] Epoch " + std::to_string(epoch + 1) + "/" + std::to_string(num_epochs) +
+                    " complete. Transitioning to epoch " + std::to_string(epoch + 2) + ".", ctx.global_step);
+            } else {
+                EmitModuleInfo(ModuleId::Training,
+                    "[Epoch boundary] All " + std::to_string(num_epochs) + " epochs complete.", ctx.global_step);
             }
         }
     } catch (const std::exception& e) {
@@ -4966,7 +4980,7 @@ bool executePhase2(TrainingContext& ctx) {
         
         ctx.logging.status_writer->writeStatus(
             GRIMText::Control::TrainingState_Error,
-            0, hp.epochs, 0, 0,
+            0, num_epochs, 0, 0,
             0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
             "Training error", std::string(e.what()));
         

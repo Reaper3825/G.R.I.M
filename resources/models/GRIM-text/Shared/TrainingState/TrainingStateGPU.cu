@@ -34,7 +34,11 @@ TrainingState::~TrainingState() {
 	
 	// Rule 20: NO encoder_layer_caches - intermediate tensors now managed via AutogradIntermediates
 	// (owned and zero'd separately during training, NOT in destructor)
-	
+
+	// Release PBM GPU buffers (alibi_slopes, rope_inv_freq) so they are freed before Tensor members destruct
+	GRIM::PBM::releasePBM(pbm_state);
+	pbm_initialized = false;
+
 	// TeacherLogits has its own release function (not Tensor-based yet)
 	TeacherLogits::release(teacher_logits);
 	TeacherLogits::release(reference_logits);

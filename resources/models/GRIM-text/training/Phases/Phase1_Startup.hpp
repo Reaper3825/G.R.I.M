@@ -295,6 +295,8 @@ struct TrainingContext {
     // State tracking
     int global_step = 0;
     float best_val_loss = std::numeric_limits<float>::infinity();
+    /** Number of epochs actually completed (set by Phase 2; used by Phase 3 for summary). */
+    int epochs_completed = 0;
     
     // Auto-stop state
     bool auto_stop_triggered = false;
